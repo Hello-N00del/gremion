@@ -21,6 +21,14 @@ Makefile    text eol=lf
 # and a hook that dies on its own line endings is a guard that enforces nothing.
 gremion-ui/scripts/hooks/** text eol=lf
 
+# infra/host/bin/gremion-* programs are the SAME extensionless-hook situation:
+# no rule above covers a bare filename with no dot, so core.autocrlf=true would
+# check them out with CRLF on Windows and break the shebang on the real Linux
+# host. test_helper/host.bash is sourced by bats the same way — `.bash`, not
+# `.sh`, so *.sh above does not catch it either.
+infra/host/bin/**            text eol=lf
+test/host/test_helper/*.bash text eol=lf
+
 # Codegen barrels are emitted with LF by their generator scripts (e.g.
 # scripts/build-module-manifest.mjs). Pin them to LF so the working tree matches
 # the generator output on Windows (core.autocrlf=true) — otherwise `pnpm build`
