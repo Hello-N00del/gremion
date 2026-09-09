@@ -1,0 +1,17 @@
+---
+# `blank_issues_enabled: false` forces every issue through a template. The
+# reason is the contact link below: with blank issues on, the fastest path for
+# a reporter is a blank public issue, which is exactly the wrong place for a
+# vulnerability. Steering that traffic is the whole point of this file.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/Hello-N00del/gremion/security/advisories/new
+    about: >-
+      Do NOT open a public issue for a security problem. Use GitHub's private
+      vulnerability reporting, or the address in SECURITY.md.
+  - name: Questions and discussion
+    url: https://github.com/Hello-N00del/gremion/issues
+    about: >-
+      There is no Discussions tab yet. Open an issue with the "Question or
+      idea" template.

@@ -1,0 +1,7 @@
+# Production storage size overrides
+# Adjust to actual cluster capacity before deploying
+# (target is specified in ../../kustomization.yaml's patches: entry — kustomize
+# JSON6902 patches require an explicit target there, not embedded per-op)
+- op: replace
+  path: /spec/resources/requests/storage
+  value: "200Gi"

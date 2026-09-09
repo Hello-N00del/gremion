@@ -1,0 +1,46 @@
+# Repository label roster.
+#
+# WHY THIS FILE EXISTS: `.github/dependabot.yml` applies labels to the PRs it
+# opens. GitHub does NOT create a missing label — it silently drops it, so a
+# typo'd or never-created label means Dependabot PRs land unlabelled and any
+# filter or automation keyed on that label quietly matches nothing. All four
+# labels dependabot.yml referenced (`dependencies`, `ci`, `root`, `docker`) were
+# missing from this repository until 2026-07-29.
+#
+# This roster is the checked-in source of truth. Apply it with:
+#
+#   make labels
+#
+# `scripts/kernel-hygiene-check.mjs` (check f6) asserts that every label
+# referenced anywhere under .github/ is declared here, so the two cannot drift
+# apart again. That is BOTH dependabot.yml's `labels: [...]` blocks AND
+# `gh pr create --label <name>` inside a workflow. The second leg was added
+# after `--label automated` was found referencing a label that existed in
+# neither place: `gh pr create` fails on it, and it fails AFTER `git push` has
+# already created the branch, leaving orphan ci/* branches behind.
+#
+# Colors follow GitHub's default palette conventions: blue-ish for tooling,
+# grey for scope/area.
+
+labels:
+  # ── Dependabot ────────────────────────────────────────────────────────────
+  - name: dependencies
+    color: "0366d6"
+    description: Dependency updates (opened by Dependabot)
+
+  - name: ci
+    color: "1d76db"
+    description: CI/CD workflows and GitHub Actions
+
+  - name: root
+    color: "c5def5"
+    description: Root pnpm workspace (the authoritative lockfile)
+
+  - name: docker
+    color: "0db7ed"
+    description: Dockerfiles and container base images
+
+  # ── Workflow-opened PRs ─────────────────────────────────────────────
+  - name: automated
+    color: "ededed"
+    description: Opened by a workflow rather than a person

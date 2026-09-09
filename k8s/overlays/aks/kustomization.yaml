@@ -1,0 +1,53 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# `resources:` is the successor to the deprecated `bases:` — same semantics,
+# no rendered-output change.
+resources:
+  - ../production
+
+patches:
+  # AKS StorageClass: managed-premium (SSD LRS)
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: managed-premium
+  # AKS uses nginx-ingress natively — no extra annotations needed.
+  # If using Azure Application Gateway Ingress Controller (AGIC):
+  # - op: add
+  #   path: /metadata/annotations/kubernetes.io~1ingress.class
+  #   value: azure/application-gateway
+
+# ── Registry override (A-020/#431) ───────────────────────────────────────────
+# The four first-party images (ghcr.io/hello-n00del/gremion-{ui,public,legal,
+# vector}) are pinned in k8s/base to the kernel version — see the IMAGE
+# REFERENCES block in k8s/base/kustomization.yaml. They are built from this
+# repo and published to no registry, so retag them into a registry you control
+# and point this overlay at it HERE rather than editing base; that keeps
+# `git pull` conflict-free.
+#
+# Prefer `digest:` over `newTag:` — a digest is immutable, so a rollback is
+# reproducible. Leave this commented until the digests are real: an
+# unresolvable reference renders a Deployment that cannot be pulled, and
+# nothing rejects it at `kubectl apply` time (the pod just sits in
+# ImagePullBackOff). Uncomment and fill in:
+#
+# images:
+#   - name: ghcr.io/hello-n00del/gremion-ui
+#     newName: registry.example.org/<your-namespace>/gremion-ui
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-public
+#     newName: registry.example.org/<your-namespace>/gremion-public
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-legal
+#     newName: registry.example.org/<your-namespace>/gremion-legal
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-vector
+#     newName: registry.example.org/<your-namespace>/gremion-vector
+#     digest: sha256:<digest of the image you pushed>
+#
+# This overlay layers on ../production, so an `images:` block here overrides
+# whatever that layer resolved.

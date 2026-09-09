@@ -1,0 +1,313 @@
+##############################################################
+# docker-compose.prod.yml
+#
+# Production-only overrides — NOT auto-loaded.
+# Load explicitly when deploying to production:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Adds port mappings for services where the base docker-compose.yml
+# intentionally omits them (Docker Compose merges port lists, so
+# putting environment-specific ranges in the base would pollute
+# every environment — including Windows local dev where the large
+# UDP ranges fall in the reserved ephemeral zone 49152-65535).
+#
+# Also wires Traefik path routing for the core services (Phase 0).
+# Base docker-compose.yml defines NO labels for these services, so
+# these labels are purely additive (no Compose label-merge conflict).
+# TLS is the Cloudflare Origin Certificate served by Traefik's file
+# provider (docker/traefik/dynamic/tls.yml) — `tls=true`, no resolver.
+##############################################################
+
+services:
+
+  # ----------------------------------------------------------
+  # P2.1b T11 (#202): pin max_connections to the exact value the app's
+  # connection-budget invariant asserts (MAX_CONNECTIONS in
+  # gremion-ui/src/lib/server/db/pool-registry.ts, unit-tested) so the budget
+  # reflects runtime reality instead of relying on the image default
+  # (postgres:16-alpine also defaults to 100 — this pin makes the contract
+  # explicit and survives image-default changes).
+  # NOTE: `command` only takes effect on container RECREATE, not restart.
+  # Runtime verification deferred to S4 — docs/runbooks/pgbouncer.md.
+  # ----------------------------------------------------------
+  postgres:
+    command: ["postgres", "-c", "max_connections=100"]
+
+  # ----------------------------------------------------------
+  # P2.1b T11 (#202, tenancy D4): PgBouncer — transaction-pooling front
+  # for the app's data-plane connections. gremion-ui's DATABASE_URL (below)
+  # points here in production; dev/CI keep the direct postgres URL from
+  # the base file. Config: docker/pgbouncer/pgbouncer.ini; auth =
+  # scram-sha-256 + auth_query (docker/pgbouncer/pgbouncer-auth.sql);
+  # userlist.txt is rendered from userlist.txt.example at deploy
+  # (gitignored). Deploy/verify/rollback: docs/runbooks/pgbouncer.md
+  # (runtime verification deferred to S4 — deploy freeze).
+  # ----------------------------------------------------------
+  pgbouncer:
+    # G-037: externally-pulled image digest-pinned (PgBouncer 1.25.2).
+    image: edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    volumes:
+      - ./docker/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./docker/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - gremion-net
+
+  # ----------------------------------------------------------
+  # Core service path routing (Phase 0).
+  # Apex host ${DOMAIN}; gremion-ui catch-all at priority 10.
+  # ----------------------------------------------------------
+
+  keycloak:
+    # Keycloak sits behind Traefik (TLS termination) + Cloudflare. Trust the
+    # X-Forwarded-* headers so Keycloak emits https:// issuer/endpoint URLs
+    # instead of http:// — otherwise OIDC iss-claim validation fails.
+    environment:
+      KC_PROXY_HEADERS: xforwarded
+      # Theme static resources get a SHORT max-age so a CDN (Cloudflare) can't
+      # pin an edited login theme for 30 days. Keycloak serves theme assets under
+      # a fixed /resources/<resourceVersion>/ URL whose version does NOT change
+      # when you edit a theme file, so the default 30-day immutable-style cache
+      # makes edits invisible behind a CDN until a manual purge. 60s keeps a tiny
+      # cache while letting theme changes propagate on the next request.
+      KC_SPI_THEME_STATIC_MAX_AGE: "60"
+      # G-080: internal TLS listener on :8443 with the internal-CA-signed cert
+      # (SAN keycloak,localhost,127.0.0.1) minted by gen-internal-ca.sh. Server-
+      # to-server callers (gremion-ui) reach KC at https://keycloak:8443 and trust
+      # the internal CA. The plain :8080 listener stays for the Traefik edge hop,
+      # which arrives with X-Forwarded-Proto=https (KC_PROXY_HEADERS above) and so
+      # satisfies sslRequired=all. The realm itself defaults to sslRequired=all
+      # (KC_REALM_SSL_REQUIRED in the base file).
+      KC_HTTPS_CERTIFICATE_FILE:     /opt/keycloak/certs/keycloak.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/certs/keycloak.key
+    volumes:
+      # G-080: internal CA + KC server cert for the :8443 listener (git-ignored).
+      - ./docker/keycloak/certs:/opt/keycloak/certs:ro
+    labels:
+      - "traefik.enable=true"
+      # G-082 (Mediums Cluster 4 / T2.1): the public-facing Keycloak surface
+      # is split into TWO routers so /auth/admin can sit behind an IP
+      # allowlist while end-user OIDC flows stay open to the world.
+      #
+      # Match ONLY Keycloak's own path namespaces, not all of /auth. The
+      # gremion-ui app (Auth.js) owns /auth/login, /auth/signin, /auth/callback,
+      # /auth/session etc. on the same host; a broad PathPrefix(/auth) router
+      # would shadow them and every app login hit Keycloak's 404 page.
+      #
+      # PUBLIC router — OIDC discovery, JWKS, login/callback flows, branded
+      # account console, account-recovery emails. No /auth/admin here.
+      # P2.1c T2 (#202) D-ISSUER-HOST: generalized to tenant hosts — KC path
+      # routing is realm-agnostic, so <slug>.${DOMAIN}/auth/realms/<realm>
+      # reaches the tenant realm (new tenants get tenant-subdomain issuers).
+      # DOMAIN_REGEX: see the gremion-ui router note — unset/empty collapses this
+      # leg to `^[a-z0-9-]+\.$` (tenant subdomains 404; apex unaffected), a
+      # silent misconfig, NOT a safe fail-closed. REQUIRED in prod.
+      - "traefik.http.routers.keycloak.rule=(Host(`${DOMAIN}`) || HostRegexp(`^[a-z0-9-]+\\.${DOMAIN_REGEX:-}$$`)) && (PathPrefix(`/auth/realms`) || PathPrefix(`/auth/resources`) || PathPrefix(`/auth/js`))"
+      - "traefik.http.routers.keycloak.entrypoints=websecure"
+      - "traefik.http.routers.keycloak.tls=true"
+      - "traefik.http.routers.keycloak.priority=100"
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+      # ADMIN router — Keycloak admin console + Admin REST API. Protected by
+      # the kc-admin-allowlist IPAllowList middleware below.
+      #
+      # KC_ADMIN_ALLOWLIST_CIDRS defaults to 127.0.0.1/32 in .env, so by
+      # default no external request matches — the admin path returns 403
+      # from public ingress and operators reach the console via
+      # `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh ...` or
+      # `kubectl port-forward`. To allow a bastion / VPN, set
+      # KC_ADMIN_ALLOWLIST_CIDRS to a comma-separated CIDR list
+      # (e.g. "203.0.113.10/32,198.51.100.0/24") in .env on the prod host.
+      # P2.1c T2 (#202): same tenant-host generalization as the public router
+      # — the kc-admin-allowlist IPAllowList still gates every match.
+      - "traefik.http.routers.keycloak-admin.rule=(Host(`${DOMAIN}`) || HostRegexp(`^[a-z0-9-]+\\.${DOMAIN_REGEX:-}$$`)) && PathPrefix(`/auth/admin`)"
+      - "traefik.http.routers.keycloak-admin.entrypoints=websecure"
+      - "traefik.http.routers.keycloak-admin.tls=true"
+      - "traefik.http.routers.keycloak-admin.priority=110"
+      - "traefik.http.routers.keycloak-admin.service=keycloak"
+      - "traefik.http.routers.keycloak-admin.middlewares=kc-admin-allowlist"
+      - "traefik.http.middlewares.kc-admin-allowlist.ipallowlist.sourcerange=${KC_ADMIN_ALLOWLIST_CIDRS:-127.0.0.1/32}"
+
+  legal:
+    labels:
+      - "traefik.enable=true"
+      # /legal is now served by gremion-ui — the v4 config-driven legal pages
+      # (config.legal.*_html, edited via Settings → Rechtliches) rendered by the
+      # gremion-ui apex catch-all router (priority 10). The static `legal` nginx no
+      # longer has a /legal router; it is retained for the legal/imprint pages and
+      # is reached internally by gremion-ui. (v4 re-audit slice 7.)
+      # A-021 wave 2: legal nginx serves on :8080 (non-root).
+      - "traefik.http.services.legal.loadbalancer.server.port=8080"
+
+  gremion-ui:
+    environment:
+      # Keep dev *_seed.sql migrations out of production — they insert test
+      # committees/members keyed by dev-only Keycloak UUIDs.
+      GREMION_DISABLE_SEEDS: "true"
+      # G-080: trust the internal CA so undici (global fetch) + jose
+      # (createRemoteJWKSet) verify the keycloak:8443 cert. NODE_EXTRA_CA_CERTS
+      # ADDS to Node's built-in roots, so public TLS (the apex host) still works.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/internal/internal-ca.pem
+      # P2.1b T11 (#202): the app's data-plane connections go through
+      # PgBouncer (transaction pooling, pgbouncer:6432) instead of raw
+      # postgres:5432 — overrides the base-file URL; dev/CI are unchanged.
+      # Remember the compose-env lesson: this only lands on the container
+      # via `up -d --force-recreate gremion-ui`, never plain `restart`.
+      # Deploy/verify/rollback: docs/runbooks/pgbouncer.md (S4).
+      DATABASE_URL: postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@pgbouncer:6432/${GREMION_DB_NAME:-gremion}
+      # P2.1c T1 (#202) D-CONTROLDIRECT: CONTROL_DATABASE_URL is deliberately
+      # NOT overridden here — production inherits the base-file value, which
+      # targets postgres:5432 DIRECTLY. The control plane must never be
+      # re-pointed through PgBouncer (it is the direct "+ control" term in
+      # P2.1b's connection budget; registry reads are cached). Do not add a
+      # CONTROL_DATABASE_URL key to this overlay.
+      # P2.1c T5 (#202): the APP reads TENANT_PROXY_SHARED_SECRET to enforce the
+      # proxy-trust gate (resolve.ts isProxyTrusted). It MUST equal the value the
+      # gremion-ui-proxytrust Traefik middleware (below) injects — both interpolate
+      # the same .env var. Without this env line the middleware stamps an
+      # x-proxy-trust header the app never checks, so the gate is a silent no-op
+      # even with the secret set (found during the S4 deploy).
+      TENANT_PROXY_SHARED_SECRET: ${TENANT_PROXY_SHARED_SECRET:-}
+      # Per-tenant origin (#202 multi-tenant CSRF fix): the base file leaves
+      # ORIGIN unset so adapter-node derives the origin from the REAL inbound
+      # Host header (preserved per-tenant by Traefik passHostHeader), making
+      # event.url.origin == the tenant's own host. That fixes the SvelteKit CSRF
+      # 403 that previously blocked every non-default tenant's SSO/form POST and
+      # gives Auth.js per-tenant signin/callback URLs. PROTOCOL_HEADER forces the
+      # scheme to https from Traefik's x-forwarded-proto (TLS terminates at the
+      # edge; the backend hop is plaintext, so without this the origin would be
+      # http:// and still mismatch the browser's https Origin).
+      PROTOCOL_HEADER: x-forwarded-proto
+    volumes:
+      # G-080: internal CA trust anchor (git-ignored; minted by
+      # docker/keycloak/certs/gen-internal-ca.sh before bringing up the stack).
+      - ./docker/keycloak/certs/internal-ca.pem:/etc/ssl/internal/internal-ca.pem:ro
+    labels:
+      - "traefik.enable=true"
+      # P2.1c T2 (#202) deploy blocker 1: tenant subdomains reach gremion-ui.
+      # The HostRegexp leg accepts <slug>.${DOMAIN}; Traefik forwards the
+      # ORIGINAL Host as X-Forwarded-Host natively, which the tenant resolver
+      # reads (extractLeftmostLabel -> slug). DOMAIN_REGEX = the regexp-escaped
+      # DOMAIN (e.g. council\.example — set in .env next to DOMAIN, REQUIRED in
+      # production). LOAD-BEARING: when DOMAIN_REGEX is unset/empty this leg
+      # renders `HostRegexp(^[a-z0-9-]+\.$)`, which matches NO real tenant host
+      # — so EVERY tenant subdomain 404s at Traefik (no router). This is NOT a
+      # safe fail-closed: it is a SILENT MISCONFIG that the apex/default router
+      # (Host(`${DOMAIN}`), still matches) masks. S4 MUST set DOMAIN_REGEX
+      # before the recreate (runbook tenant-edge.md step 0a); the `check`
+      # script (gremion-ui/scripts/check-domain-regex.mjs) fails the build/deploy
+      # if a real prod DOMAIN is set with an empty DOMAIN_REGEX.
+      - "traefik.http.routers.gremion-ui.rule=Host(`${DOMAIN}`) || HostRegexp(`^[a-z0-9-]+\\.${DOMAIN_REGEX:-}$$`)"
+      - "traefik.http.routers.gremion-ui.entrypoints=websecure"
+      - "traefik.http.routers.gremion-ui.tls=true"
+      - "traefik.http.routers.gremion-ui.priority=10"
+      - "traefik.http.services.gremion-ui.loadbalancer.server.port=3000"
+      # P2.1c T2 (#202) D-APEX: the apex (2-label host) maps to the DEFAULT
+      # tenant via an injected forwarded host: this apex-only router prepends
+      # the gremion-ui-apexhost middleware, which sets
+      # X-Forwarded-Host: default.${DOMAIN} (3 labels -> extractLeftmostLabel
+      # resolves slug `default`). A SECOND router is required because
+      # customrequestheaders is static per middleware — the apex needs the
+      # synthetic value while subdomains must keep the real Host. Priority 20
+      # beats the wildcard router (10) on the apex only; the keycloak path
+      # routers (100/110) still win their paths. No resolver special-case for
+      # 2-label hosts — fail-closed intact.
+      - "traefik.http.routers.gremion-ui-apex.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.gremion-ui-apex.entrypoints=websecure"
+      - "traefik.http.routers.gremion-ui-apex.tls=true"
+      - "traefik.http.routers.gremion-ui-apex.priority=20"
+      - "traefik.http.routers.gremion-ui-apex.service=gremion-ui"
+      - "traefik.http.routers.gremion-ui-apex.middlewares=gremion-ui-apexhost,gremion-ui-proxytrust,gremion-ui-starting"
+      - "traefik.http.middlewares.gremion-ui-apexhost.headers.customrequestheaders.X-Forwarded-Host=default.${DOMAIN}"
+      # P2.1c T5 (#202): executable proxy-trust. The edge stamps a shared-secret
+      # x-proxy-trust header on EVERY request reaching gremion-ui; the tenant
+      # resolver (resolve.ts isProxyTrusted) 403s any request lacking it once
+      # TENANT_PROXY_SHARED_SECRET is set — so x-forwarded-host trust no longer
+      # rests on topology alone. Applied to BOTH gremion-ui routers (apex +
+      # wildcard). Unset secret = the resolver gate is a no-op (S4 sets env +
+      # this label together). The header is set (overwriting any client value),
+      # not merely added.
+      - "traefik.http.middlewares.gremion-ui-proxytrust.headers.customrequestheaders.x-proxy-trust=${TENANT_PROXY_SHARED_SECRET}"
+      # PR-C (reboot-404): when gremion-ui is down/unhealthy (cold start, crash
+      # loop) Traefik would otherwise return a raw 5xx/404. The errors
+      # middleware intercepts 502-504 and serves the static "starting" fallback
+      # service instead, so a cold start shows a friendly auto-refreshing page.
+      - "traefik.http.routers.gremion-ui.middlewares=gremion-ui-proxytrust,gremion-ui-starting"
+      - "traefik.http.middlewares.gremion-ui-starting.errors.status=502-504"
+      - "traefik.http.middlewares.gremion-ui-starting.errors.service=fallback"
+      - "traefik.http.middlewares.gremion-ui-starting.errors.query=/"
+
+  # ----------------------------------------------------------
+  # PR-C (reboot-404): static "starting" fallback. A low-priority (1)
+  # apex router that gremion-ui (priority 10) normally shadows; it only
+  # serves traffic the gremion-ui-starting errors middleware redirects to
+  # it (502-504) — i.e. when gremion-ui is mid-cold-start or crash-looping.
+  # Replaces a raw Traefik 404/5xx with a friendly auto-refreshing page.
+  # ----------------------------------------------------------
+  fallback:
+    profiles: [production]
+    build:
+      context: ./docker/fallback
+      dockerfile: Dockerfile
+    image: ghcr.io/hello-n00del/gremion-fallback:latest
+    restart: unless-stopped
+    networks:
+      - gremion-net
+    labels:
+      - "traefik.enable=true"
+      # P2.1c T2 (#202): tenant-host generalization so a cold start shows the
+      # friendly starting page on tenant subdomains too. Priority stays 1.
+      - "traefik.http.routers.fallback.rule=Host(`${DOMAIN}`) || HostRegexp(`^[a-z0-9-]+\\.${DOMAIN_REGEX:-}$$`)"
+      - "traefik.http.routers.fallback.entrypoints=websecure"
+      - "traefik.http.routers.fallback.tls=true"
+      - "traefik.http.routers.fallback.priority=1"
+      - "traefik.http.routers.fallback.service=fallback"
+      - "traefik.http.services.fallback.loadbalancer.server.port=80"
+
+  # ----------------------------------------------------------
+  # Cloudflare Tunnel connector (Phase: production cutover).
+  # Establishes outbound-only connections to Cloudflare's edge —
+  # no inbound ports opened on the host. Public hostnames
+  # (the apex and the public-portal host) are configured on the
+  # tunnel in the Zero Trust dashboard, both -> https://traefik:443.
+  # Requires CF_TUNNEL_TOKEN in .env (gitignored).
+  # ----------------------------------------------------------
+  cloudflared:
+    # G-037 (Wave 3b T5.1): externally-pulled image MUST be digest-pinned.
+    # Version: 2024.10.0 (Cloudflare Tunnel daemon).
+    # Bump policy: Dependabot opens a PR on new cloudflared releases;
+    # verify the tunnel still authenticates against the configured token
+    # before merging.
+    image: cloudflare/cloudflared:2024.10.0@sha256:060f16531b1ed6dcb382cd2b35d1a845f8dbcb445003b9ec48eef0078cb08bf4
+    restart: unless-stopped
+    # #258-F4: pass the tunnel token via env, not --token on the command line.
+    # compose used to substitute the real token into the container's argv, where
+    # it was readable for the connector's whole lifetime via `docker inspect`
+    # and the host `/proc/<pid>/cmdline`. cloudflared reads TUNNEL_TOKEN from the
+    # environment natively, so dropping the flag is behaviourally identical.
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run
+    volumes:
+      # Public Cloudflare Origin CA root — lets cloudflared verify the
+      # origin certificate Traefik serves. The tunnel's per-hostname TLS
+      # "CA Pool" field (Zero Trust dashboard) must be set to this exact
+      # container path: /etc/cloudflared/origin-ca.pem
+      - ./docker/cloudflared/origin-ca-root.pem:/etc/cloudflared/origin-ca.pem:ro
+    depends_on:
+      - traefik
+    networks:
+      - gremion-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

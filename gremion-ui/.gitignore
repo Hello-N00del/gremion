@@ -1,0 +1,13 @@
+node_modules/
+.svelte-kit/
+build/
+.env
+.env.*
+!.env.example
+
+# Test coverage reports
+coverage/
+
+# Local storage backend root (STORAGE_BACKEND=local, default
+# RECEIPT_STORAGE_DIR=./var/storage) — receipts land here in dev.
+var/

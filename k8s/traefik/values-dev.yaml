@@ -1,0 +1,7 @@
+# k8s/traefik/values-dev.yaml
+# Dev: no ACME; use Traefik's self-signed cert
+ports:
+  websecure:
+    tls:
+      enabled: true
+# No certificatesResolvers — Traefik serves its default self-signed cert

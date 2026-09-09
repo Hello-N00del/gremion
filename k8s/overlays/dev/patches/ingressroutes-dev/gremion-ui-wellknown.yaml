@@ -1,0 +1,4 @@
+# Dev overlay: gremion-ui .well-known HTTP
+- op: replace
+  path: /spec/routes/0/match
+  value: (Host(`stura.localhost`) || HostRegexp(`^[a-z0-9-]+\.stura\.localhost$`)) && PathPrefix(`/.well-known/`)

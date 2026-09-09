@@ -1,0 +1,6 @@
+# Dev overlay: keycloak (D-ISSUER-HOST: tenant hosts reach their realm under /auth)
+- op: replace
+  path: /spec/routes/0/match
+  value: (Host(`stura.localhost`) || HostRegexp(`^[a-z0-9-]+\.stura\.localhost$`)) && PathPrefix(`/auth`)
+- op: remove
+  path: /spec/tls/certResolver

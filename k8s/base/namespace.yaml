@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gremion-system
+  labels:
+    app.kubernetes.io/part-of: gremion
+    app.kubernetes.io/managed-by: kustomize
+    # G-036 (Wave 3b T4.1): Pod Security Standards.
+    #
+    # A-021 (addendum-4) shipped the first half of the Dockerfile USER cleanup:
+    # gremion-ui, gremion-public and helios now run as uid 1000 and their Pods are
+    # restricted-PSS compliant (runAsNonRoot + the existing baseline hardening).
+    #
+    # ENFORCE stays at baseline because the remaining workloads in THIS
+    # namespace genuinely require root and PSA has no per-Pod exemption (it is
+    # namespace-wide, all-or-nothing): synapse + nextcloud start as root to
+    # chown their data volume before dropping privileges, postgres/mariadb need
+    # root for initdb's permission fixing, and vector is a DaemonSet reading
+    # root-owned host logs. (legal + element-call were de-rooted in A-021 wave 2
+    # (#126) — they now run nginx-unprivileged as uid 101; see addendum-4 §2.2.)
+    # Flipping enforce→restricted would refuse the still-root Pods above at
+    # admission. The path to enforce=restricted is a namespace split (app tier
+    # → restricted ns, root-required infra → baseline ns); see addendum-4 §3.
+    #
+    # Strategy: ENFORCE baseline (rejects privileged, hostPath, hostNetwork,
+    # hostPID, hostIPC, AppArmor/SELinux escapes, etc. — universally
+    # compatible) and AUDIT/WARN at restricted (surfaces the remaining
+    # violations via Event/UI without blocking deploys).
+    #
+    # `*-version: latest` is intentional — we want the strictest currently
+    # shipped policy with every Kubernetes upgrade.
+    # https://kubernetes.io/docs/concepts/security/pod-security-standards/
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest

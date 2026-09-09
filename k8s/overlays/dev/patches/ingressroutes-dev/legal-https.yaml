@@ -1,0 +1,6 @@
+# Dev overlay: legal pages
+- op: replace
+  path: /spec/routes/0/match
+  value: Host(`stura.localhost`) && (Path(`/datenschutz`) || Path(`/impressum`) || Path(`/barrierefreiheit`) || Path(`/nutzungsbedingungen`) || PathPrefix(`/legal`))
+- op: remove
+  path: /spec/tls/certResolver

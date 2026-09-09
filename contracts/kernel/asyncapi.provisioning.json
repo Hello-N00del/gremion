@@ -1,0 +1,93 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "Gremion kernel — provisioning lifecycle events",
+    "version": "0.1.0",
+    "description": "First event class of the governance kernel (design 2026-06-08 §3.2/§4.4/§4.5, P0.4 deliverable). DESIGN-FORWARD: no broker runs yet; NATS JetStream lands in P1 scoped to the newsletter leaf. Envelope and subject grammar are binding; payload status enums are PROVISIONAL until reconciled with the merged P0.3a ledger semantics (provisioning_resources + provisioning_member_ops). JetStream mapping: Nats-Msg-Id = envelope.eventId (consumer dedup window + per-consumer idempotency-key table per design §4.4). tenant_id rides in BOTH subject and envelope (design §4.5) and is 'default' until Pillar 2 activates more tenants."
+  },
+  "defaultContentType": "application/json",
+  "channels": {
+    "provisioningLifecycle": {
+      "address": "gremion.{tenantId}.provisioning.{aggregate}.{event}",
+      "description": "Subject grammar (NATS). aggregate: org-unit | member. event: requested | succeeded | failed | abandoned. Tenant-first so one poisoned tenant cannot head-of-line-block others (design §5).",
+      "parameters": {
+        "tenantId": { "description": "Tenant slug; 'default' until Pillar 2 multi-tenancy activates." },
+        "aggregate": { "enum": ["org-unit", "member"] },
+        "event": { "enum": ["requested", "succeeded", "failed", "abandoned"] }
+      },
+      "messages": {
+        "orgUnitProvisioningEvent": { "$ref": "#/components/messages/OrgUnitProvisioningEvent" },
+        "memberOpEvent": { "$ref": "#/components/messages/MemberOpEvent" }
+      }
+    }
+  },
+  "operations": {
+    "publishProvisioningLifecycle": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/provisioningLifecycle" },
+      "summary": "Kernel publishes provisioning state transitions from the ledger-as-outbox (P0.3) via the BrokerPort (P0.5; wired in P1)."
+    },
+    "consumeProvisioningLifecycle": {
+      "action": "receive",
+      "channel": { "$ref": "#/channels/provisioningLifecycle" },
+      "summary": "Future consumers (first: idempotent audit consumer, P1). At-least-once delivery; consumers MUST dedupe on eventId."
+    }
+  },
+  "components": {
+    "messages": {
+      "OrgUnitProvisioningEvent": {
+        "name": "OrgUnitProvisioningEvent",
+        "title": "Org-unit external-resource provisioning state change",
+        "payload": { "$ref": "#/components/schemas/EnvelopeOrgUnit" }
+      },
+      "MemberOpEvent": {
+        "name": "MemberOpEvent",
+        "title": "Durable membership add/remove operation state change (P0.3a member-ops ledger)",
+        "payload": { "$ref": "#/components/schemas/EnvelopeMemberOp" }
+      }
+    },
+    "schemas": {
+      "EventEnvelope": {
+        "type": "object",
+        "required": ["eventId", "eventType", "tenantId", "occurredAt", "payload"],
+        "properties": {
+          "eventId": { "type": "string", "format": "uuid", "description": "Also the Nats-Msg-Id (JetStream dedup)." },
+          "eventType": { "type": "string", "description": "Mirrors the subject's <aggregate>.<event>." },
+          "tenantId": { "type": "string", "description": "'default' for now; duplicated from the subject for envelope-only consumers." },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "correlationId": { "type": ["string", "null"], "description": "x-correlation-id of the originating request." },
+          "payload": { "type": "object" }
+        }
+      },
+      "EnvelopeOrgUnit": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          { "type": "object", "properties": { "payload": {
+            "type": "object",
+            "required": ["orgUnitId", "subsystem", "status"],
+            "properties": {
+              "orgUnitId": { "type": "string", "format": "uuid" },
+              "subsystem": { "enum": ["keycloak", "matrix", "nextcloud"], "description": "PROVISIONAL — the provisioning ledger's subsystem set at 1f95d30a." },
+              "status": { "enum": ["pending", "ok", "failed", "abandoned"], "description": "PROVISIONAL — reconcile with merged P0.3a ledger states at P1 wiring." },
+              "attempts": { "type": "integer" },
+              "error": { "type": ["string", "null"] }
+            } } } }
+        ]
+      },
+      "EnvelopeMemberOp": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          { "type": "object", "properties": { "payload": {
+            "type": "object",
+            "required": ["orgUnitId", "userId", "op", "status"],
+            "properties": {
+              "orgUnitId": { "type": "string", "format": "uuid" },
+              "userId": { "type": "string" },
+              "op": { "enum": ["remove"], "description": "P0.3a ships remove-only; add-ops self-heal via reconcileMembers (design D2) — extend if an add-op queue ever lands." },
+              "status": { "enum": ["pending", "ok", "failed", "abandoned"], "description": "PROVISIONAL — 'abandoned' is the event-level abstraction for terminal-aged ops (first_failed_at > GIVE_UP_AFTER_SECONDS); the P0.3a ledger stores only pending/ok/failed." }
+            } } } }
+        ]
+      }
+    }
+  }
+}

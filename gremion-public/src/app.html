@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+
+    <!-- v12 — icon family. `%sveltekit.assets%` already resolves through
+         kit.paths.base, so these follow the portal wherever it is mounted
+         (`/brand/…` by default, `/portal/brand/…` under BASE_PATH=/portal).
+
+         THE KERNEL SHIPS NO ICON FILES ON PURPOSE. Gremion is an unbranded
+         governance kernel; the icon set produced for the first deployment built
+         on it carries that instance's "S" mark, and a self-hosted kernel must not put
+         another organisation's glyph in the operator's browser tab. The
+         plumbing is here and honours anything dropped into `static/brand/`
+         under exactly these three filenames — see static/brand/README.md.
+         Until an operator drops files in, these references 404, the same way
+         the single `favicon.png` reference they replace already did (this app
+         has never had a static/ directory). -->
+    <link rel="icon" type="image/png" sizes="32x32" href="%sveltekit.assets%/brand/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="%sveltekit.assets%/brand/favicon-512.png" />
+    <link rel="apple-touch-icon" href="%sveltekit.assets%/brand/apple-touch-icon.png" />
+
+    <!-- v12 specifies theme-color PER SURFACE. This is the portal's own paper
+         token from src/app.css (#fafaf7) — NOT the product's portal clay
+         (#f4ede2), which belongs to a palette the kernel has not taken. Keep
+         this value in step with `--paper` in this app's app.css. -->
+    <meta name="theme-color" content="#fafaf7" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

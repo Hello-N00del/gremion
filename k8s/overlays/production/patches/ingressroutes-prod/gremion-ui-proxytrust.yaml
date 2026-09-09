@@ -1,0 +1,36 @@
+# Production overlay: P2.1c T5 (#202) executable proxy-trust — substitute
+# the base sentinel with the real shared secret (parity: compose
+# ${TENANT_PROXY_SHARED_SECRET}). This value MUST be byte-equal to the
+# gremion-ui-secret `TENANT_PROXY_SHARED_SECRET` key the operator
+# provisions, or the app 403s every edge request.
+#
+# ┌─ SECRET-HYGIENE WARNING (#202 P2.1c FIX4) ────────────────────────────────┐
+# │ THIS FILE IS GIT-TRACKED AND **NOT** GITIGNORED. The `__TENANT_PROXY_      │
+# │ SHARED_SECRET__` placeholder below is a fail-closed SENTINEL and MUST stay │
+# │ in git verbatim. DO NOT run the `sed -i` recipe against THIS path and then │
+# │ commit — that materialises the REAL shared secret into git history.        │
+# │                                                                            │
+# │ Correct workflow — copy the patch to a GITIGNORED overlay-local file       │
+# │ FIRST, then sed + build the COPY (the secrets/*.yaml plaintext glob is     │
+# │ already gitignored; keep the working copy alongside it):                   │
+# │   cp k8s/overlays/production/patches/ingressroutes-prod/gremion-ui-proxytrust.yaml \ │
+# │      k8s/overlays/production/secrets/ingressroutes-prod-proxytrust.local.yaml │
+# │   sed -i 's|__TENANT_PROXY_SHARED_SECRET__|<openssl rand -base64 32>|' \   │
+# │      k8s/overlays/production/secrets/ingressroutes-prod-proxytrust.local.yaml │
+# │   # point the overlay kustomization at the .local copy for the build,      │
+# │   # then discard it — NEVER `git add` the substituted value. The committed │
+# │   # file keeps the sentinel.                                               │
+# │                                                                            │
+# │ The CI `Proxy-trust sentinel guard` step in .github/workflows/ci.yml       │
+# │ REJECTS any commit whose committed x-proxy-trust value is not the          │
+# │ sentinel, mirroring the Domain-sentinel / CHANGE_ME_ guards.               │
+# └────────────────────────────────────────────────────────────────────────────┘
+#
+# (use the SAME value you put in secrets/gremion-ui-secret.yaml). The header value
+# is a static Traefik manifest literal — it cannot reference a k8s Secret, so the
+# secret is materialised at deploy time exactly like the domain sentinels above.
+# The base sentinel value is __OVERRIDE_FROM_OVERLAY_TENANT_PROXY_SHARED_SECRET__
+# (in k8s/base/traefik/middlewares.yaml), which fails CLOSED if left unpatched.
+- op: replace
+  path: /spec/headers/customRequestHeaders/x-proxy-trust
+  value: __TENANT_PROXY_SHARED_SECRET__

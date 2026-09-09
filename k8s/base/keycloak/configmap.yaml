@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-config
+  labels:
+    app: keycloak
+data:
+  # The deployment apex host. Consumed by the `substitute-realm-secrets`
+  # initContainer (k8s/base/keycloak/deployment.yaml), which resolves the realm
+  # template's `__APEX_DOMAIN__` sentinel from it — that sentinel is what the
+  # imported realm's redirect URIs, web origins and CSP frame-ancestors are
+  # built from, so a wrong value here means OIDC login is refused at the realm.
+  # REQUIRED, not optional: the script fails fast if it is unset.
+  #
+  # `stura.example.com` is an RFC 2606 placeholder, exactly as in
+  # k8s/base/traefik/ingressroutes.yaml. EVERY overlay MUST patch it in step
+  # with the hosts it patches there:
+  #   - k8s/overlays/dev/patches/keycloak-domain.yaml         (stura.localhost)
+  #   - k8s/overlays/production/patches/keycloak-domain.yaml  (__GREMION_DOMAIN__)
+  DOMAIN: stura.example.com
+  KC_HTTP_RELATIVE_PATH: /auth
+  KC_HTTP_ENABLED: "true"
+  KC_HTTPS_ENABLED: "false"
+  # KC_PROXY=edge is deprecated since KC 24+ — use KC_PROXY_HEADERS instead.
+  # KC_PROXY_HEADERS=xforwarded: trust X-Forwarded-* from Traefik.
+  KC_PROXY_HEADERS: xforwarded
+  KC_HOSTNAME_STRICT: "false"
+  KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+  KC_HEALTH_ENABLED: "true"
+  # G-081 (Mediums Cluster 4 / T3.1): metrics endpoint disabled because no
+  # Prometheus / ServiceMonitor / PodMonitor is deployed in this cluster.
+  # Re-enable in tandem with the management port on k8s/base/keycloak/service.yaml
+  # and an accompanying NetworkPolicy restricting port 9000 ingress to the
+  # scraper pod.
+  KC_METRICS_ENABLED: "false"
+  KC_DB: postgres
+  KC_DB_URL: jdbc:postgresql://postgres/keycloak
+  # WARN suppresses INFO-level audit events that include the client IP address.
+  KC_LOG_LEVEL: WARN
+  KC_LOG_CONSOLE_OUTPUT: json
+  JAVA_OPTS_APPEND: "-Xms256m -Xmx512m"
+  # Disable jboss-logging event listener for successful login/registration events.
+  # These events log the client IP at INFO level; suppressing them prevents IP exposure
+  # in logs. Error-level events (failed logins) are retained for security monitoring.
+  # Note: KC still stores IPs in USER_SESSION / EVENT_ENTITY DB tables; configure
+  # eventsExpiration in the Keycloak realm settings (recommended: 2592000 = 30 days).
+  KC_SPI_EVENTS_LISTENER_JBOSS_LOGGING_SUCCESS_LEVEL: "off"

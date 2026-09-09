@@ -1,0 +1,103 @@
+---
+# Dependabot configuration — closes G-043 (in-repo supply-chain visibility).
+#
+# Working in tandem with the SHA-pin programme from G-040: the github-actions
+# ecosystem below opens a weekly PR whenever an Action's pinned SHA rots, so
+# the pins stay fresh without manual re-bumping. Without this config the G-040
+# pins are reproducible but stagnant — security patches in upstream Actions
+# never land.
+#
+# Current limits: github-actions 5, npm 10, docker 5 (both blocks). Nothing is
+# paused. Schedule cadence is weekly across the board to avoid PR-bombing
+# reviewers; development-only dependencies are grouped into one PR per
+# ecosystem, while runtime dependencies still get individual PRs so their
+# changelogs can be evaluated case by case.
+#
+# Two entries are shaped by the open-core carve rather than by preference:
+# the multi-Dockerfile `directories:` list names only the paths that survive
+# the carve, and the `/gremion-ui` npm ecosystem is deliberately absent —
+# pnpm in workspace mode only ever updates the ROOT lockfile, so a per-app npm
+# entry produced nothing but workspace-duplicate PRs.
+#
+# PAUSING AN ECOSYSTEM: set `open-pull-requests-limit: 0` with an inline
+# `# PAUSED — restore to N` comment. That comment is not decoration —
+# .github/workflows/dependabot-unpause.yml parses N back out of it to restore
+# the limit. A pause without the hint cannot be undone by that workflow.
+#
+# Every label referenced below must be declared in .github/labels.yml. GitHub
+# does NOT create a missing label; it silently drops it, so a PR lands
+# unlabelled and any filter keyed on that label quietly matches nothing.
+# kernel-hygiene check f6 enforces the pairing.
+
+version: 2
+updates:
+  # GitHub Actions — keep the G-040 SHA pins fresh. Security patches to
+  # upstream Actions ride in via these bumps; without them the pins are
+  # reproducible but stagnant. Volume is low (typically 1–3 actions/version
+  # per week) and a bump PR only runs the workflows whose `paths:` filter
+  # matches its own YAML edit.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, ci]
+
+  # Root pnpm workspace — the authoritative lockfile in workspace mode, and
+  # the only npm entry there should be (see the header).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels: [dependencies, root]
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        # Bundle only safe bumps. Major framework jumps (vite, vitest,
+        # typescript, tailwindcss, svelte-check, jsdom, @types/node,
+        # @sveltejs/vite-plugin-svelte) must land as individual PRs so
+        # their changelogs can be reviewed case-by-case. See closed #43
+        # for why a single dev-deps mega-bundle is unmaintainable.
+        update-types: [patch, minor]
+
+  # Docker images — every Dockerfile in docker/ plus the gremion-ui one.
+  # `directories:` (plural) with explicit paths is more reliable than a glob
+  # for Dependabot v2; the alternative `directory: /` only finds /Dockerfile.
+  # The list names exactly the Dockerfile directories this repository has — a
+  # path that does not exist is not an error Dependabot reports, it is simply
+  # an ecosystem that never opens a PR.
+  #
+  # /gremion-public is split into its own entry below so it can carry a
+  # node-major ignore rule without affecting the other Dockerfiles' cadence.
+  - package-ecosystem: docker
+    directories:
+      - /docker/legal
+      - /docker/vector
+      - /gremion-ui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, docker]
+
+  # /gremion-public — split out from the multi-Dockerfile entry above so it
+  # can carry its own ignore rule. Node-major bumps to the /gremion-public
+  # base image are PINNED at the current major (node:22-alpine) because they
+  # need a full rebuild plus a boot smoke before merge: the schema-rename
+  # staleness bug fixed in PR #88 was caught only because a rebuild forced the
+  # cached pre-rename DDL to flush.
+  #
+  # Lifting this pin is gated on gremion-public having a CI job that actually
+  # boots the built image and hits it — gremion-public.yml today runs check,
+  # unit tests and build, none of which would have caught #88. Patch and minor
+  # node bumps still flow through, as do non-node bumps.
+  # See: [[wiki/concepts/build-dockerfile-image-staleness-after-schema-rename]]
+  - package-ecosystem: docker
+    directory: /gremion-public
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, docker]
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]

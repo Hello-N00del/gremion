@@ -1,0 +1,237 @@
+##############################################################
+# Gremion — NetworkPolicies (governance-only kernel)
+#
+# Default deny all → allow only required inter-pod traffic.
+# Requires a CNI plugin that supports NetworkPolicy
+# (Calico, Cilium, Weave — all managed clusters support this).
+#
+# Ingress controller: Traefik (namespace: traefik-system)
+##############################################################
+
+# ── Default deny all ingress in the gremion-system namespace ───
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+---
+# ── Allow Traefik → gremion-ui ──────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-to-gremion-ui
+spec:
+  podSelector:
+    matchLabels:
+      app: gremion-ui
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik-system
+      ports:
+        - port: 3000
+
+---
+# ── Allow Traefik → gremion-public ──────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-to-gremion-public
+spec:
+  podSelector:
+    matchLabels:
+      app: gremion-public
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik-system
+      ports:
+        - port: 3000
+
+---
+# ── Allow Traefik → Keycloak ──────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-to-keycloak
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik-system
+      ports:
+        - port: 8080
+
+---
+# ── Allow Traefik → Legal pages ───────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-to-legal
+spec:
+  podSelector:
+    matchLabels:
+      app: legal
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik-system
+      ports:
+        # A-021 wave 2 (#126): legal nginx now serves on the unprivileged :8080.
+        - port: 8080
+
+---
+# ── Allow Keycloak + gremion-ui + gremion-public → PostgreSQL ──
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-apps-to-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: keycloak
+        - podSelector:
+            matchLabels:
+              app: gremion-ui
+        - podSelector:
+            matchLabels:
+              app: gremion-public
+      ports:
+        - port: 5432
+
+---
+# ── Default deny all egress ────────────────────────────────
+# Prevents compromised pods from exfiltrating data externally.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+
+---
+# ── Allow DNS egress for all pods ─────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── Allow inter-pod egress (apps → database) ──────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-egress-internal
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [keycloak, gremion-ui, gremion-public]
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: keycloak
+      ports:
+        - port: 8080
+
+---
+# ── Allow gremion-ui → Keycloak (OIDC) ─────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gremion-ui-to-keycloak
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gremion-ui
+      ports:
+        - port: 8080
+
+---
+# ── Allow Keycloak external egress (SMTP) ─────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak-external-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 587
+          protocol: TCP
+
+---
+# ── Allow backup job external egress (S3 / GCS / rclone) ─
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backup-external-egress
+spec:
+  podSelector:
+    matchLabels:
+      job-name: database-backup
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 443
+          protocol: TCP

@@ -1,0 +1,313 @@
+name: Gremion UI
+
+on:
+  # `push` is main-only so feature-branch commits do NOT double-fire
+  # alongside `pull_request`. Before this constraint, every PR commit
+  # produced two identical workflow runs (one from each trigger), burning
+  # ~2× the GitHub Actions minutes on this workflow alone.
+  push:
+    branches: [main]
+    paths:
+      - 'gremion-ui/**'
+      # The shared @gremion/db wrapper's unit specs run ONLY through this
+      # workflow's vitest (see gremion-ui/vite.config.ts include globs), and
+      # workspace/lockfile changes affect every resolved dependency — so a
+      # change to any of these must trigger this pipeline too.
+      - 'packages/db/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/gremion-ui.yml'
+  pull_request:
+    paths:
+      - 'gremion-ui/**'
+      - 'packages/db/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  # On-demand run against any ref (the docker job below also fires on
+  # workflow_dispatch so a manual run matches a main push's coverage).
+  workflow_dispatch:
+
+# Least-privilege token: read-only on the repo. Test + integration + docker
+# jobs are pure consumers — no release uploads, no PR comment automation.
+permissions:
+  contents: read
+
+# Cancel superseded runs on PR branches; let main pushes complete in full
+# so every merged commit has a green pipeline of record. `github.ref` is the
+# branch ref on push events and `refs/pull/<n>/merge` on PRs, so identity
+# grouping per-ref naturally separates each PR's run history from main's.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gremion-ui
+    # G-099 smoke step needs a real Postgres because hooks.server.ts boot()
+    # invokes runMigrations() before the authGuard will serve traffic. With
+    # no Postgres, boot fails, the guard returns 503 forever, and every
+    # smoke assertion would fail with a meaningless "Service Unavailable".
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gremion
+          POSTGRES_PASSWORD: gremion_test
+          POSTGRES_DB: gremion
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gremion"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AUTH_SECRET: test-secret-for-ci-32-chars-minimum
+      AUTH_KEYCLOAK_ID: gremion-ui
+      AUTH_KEYCLOAK_SECRET: test-secret
+      AUTH_KEYCLOAK_ISSUER: http://localhost/realms/sturaos
+      CALDAV_URL: http://localhost/remote.php/dav
+      DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/gremion
+      # ── Multi-tenant control plane (#285 / G-099) ──────────────────────────
+      # CONTROL_DATABASE_URL / CONFIG_PATH / GREMION_DISABLE_SEEDS /
+      # KEYCLOAK_ADMIN_CLIENT_SECRET are set at STEP level on the two steps that
+      # need them (the `pnpm migrate` seed step + the `pnpm preview` boot) — NOT
+      # here at job level. The `Unit tests` step must run with CONTROL_DATABASE_URL
+      # UNSET: control-db.test.ts asserts getControlDb() throws "CONTROL_DATABASE_URL
+      # not configured" when it is absent, and a job-level value caches a control
+      # connection that defeats that test.
+      # Tell playwright.config.ts to stamp x-forwarded-host on every smoke request
+      # so `/` and `/finance` resolve the seeded `default` tenant (see the
+      # "Run Playwright smoke suite" step). The slug is the LEFTMOST label, and the
+      # resolver requires >=3 labels (extractLeftmostLabel: `need sub.example.org`),
+      # so a 2-label `default.localhost` would 404 — use a 3-label loopback FQDN
+      # whose leftmost label is the ACTIVE slug `default`.
+      SMOKE_TENANT_HOST: default.localhost.localdomain
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # THE POST-CONDITION, not a model of it. `pnpm deploy --prod --legacy` is
+      # the exact command gremion-ui/Dockerfile:29 uses to assemble the image's
+      # /app/node_modules, and it applies each workspace package's `files`
+      # allowlist while packing. A publish-shaped allowlist (`["dist", …]`,
+      # dist/ being gitignored and never built during a Docker build) copies
+      # @gremion/db and @gremion/ports into the image as empty shells whose
+      # exports still point at ./src/*.ts. That ships silently today because
+      # vite.config.ts marks both packages `ssr.noExternal`, so every import is
+      # inlined into build/ and the package is never resolved at runtime — one
+      # dynamic import away from ERR_MODULE_NOT_FOUND on boot.
+      #
+      # ~4 s, and it covers BOTH packages: gremion-ui is the only app that
+      # depends on @gremion/ports as well as @gremion/db. ci.yml runs the same
+      # script in `--static` mode on every run, including ports-only changes
+      # that do not trigger this workflow.
+      - name: The deploy payload must contain what the packages export
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/deploy-check"
+          pnpm --filter gremion-ui deploy --prod --legacy "$RUNNER_TEMP/deploy-check"
+          node scripts/check-shipped-package-files.mjs --deploy "$RUNNER_TEMP/deploy-check"
+
+      # `pnpm check` runs check-app-port-binding.mjs (P2.1c), which renders the
+      # compose files at the repo root via `docker compose config`. Without an
+      # .env + legal/legal.env that render errors (missing env_file / unset
+      # vars) and the guard fails. Provide the stubs — mirrors ci.yml's lint job.
+      - name: Set up compose prerequisites for the port-binding guard
+        working-directory: ${{ github.workspace }}
+        run: |
+          cp .env.example .env
+          mkdir -p legal && touch legal/legal.env
+
+      - name: Type check
+        run: pnpm check
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      - name: Build
+        run: pnpm build
+
+      # #285 / G-099: stand up the control plane the resolver needs. Mirrors the
+      # Integration Tests (DB) job: create the `control` DB, then `pnpm migrate`
+      # (control migrations -> register the `default` tenant -> fleet-migrate its
+      # data plane inside runWithTenant). After this the resolver can build an
+      # ACTIVE TenantContext for the default-tenant x-forwarded-host, so the smoke
+      # `/` and `/finance` requests resolve a tenant instead of 404-ing the apex.
+      # Runs AFTER `pnpm build` because prebuild generates the migration manifests
+      # (build-migration-manifest.mjs) that runMigrations() G-012-verifies.
+      - name: Create control database
+        run: psql "postgres://gremion:gremion_test@localhost:5432/postgres" -c 'CREATE DATABASE control'
+
+      - name: Seed control plane + default tenant (G-099 resolver dependency)
+        run: pnpm migrate
+        env:
+          CONTROL_DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/control
+          CONFIG_PATH: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/default-config.json
+          GREMION_DISABLE_SEEDS: 'true'
+          KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      # G-099: previously this step ran `playwright test --list`, which only
+      # parses spec files and exits without ever starting the SvelteKit
+      # server. A completely broken build (server crashes on boot, root
+      # page throws, login page blanks) shipped green. The replacement
+      # boots `pnpm preview`, waits for it to accept connections, then
+      # runs the `@smoke`-tagged subset of the e2e suite. Job duration
+      # going from ~3 s to ~30 s+ is the visible signal that the gate
+      # is actually executing.
+      - name: Start app for smoke tests
+        run: |
+          nohup pnpm preview --port 4173 > /tmp/preview.log 2>&1 &
+          echo $! > /tmp/preview.pid
+          # Wait up to 60 s for the server to ACCEPT a connection and emit ANY
+          # HTTP status line. #285 / G-099: the bare apex now 404s by design —
+          # the multi-tenant resolver (resolve.ts, sequence element 0) returns
+          # 404 for a request with no x-forwarded-host tenant subdomain. That is
+          # CORRECT behaviour, not a broken build, so the readiness probe must
+          # NOT require 2xx/3xx. We drop curl's -f (which would treat the 404 as
+          # failure and loop until the 60 s timeout) and instead require only a
+          # non-empty HTTP status code — i.e. the server bound the port and the
+          # request pipeline produced a response. A server that crashes on boot
+          # or never binds yields an empty body (connection refused) and the loop
+          # keeps the original G-099 intent of failing on a server that never
+          # comes up. The actual 2xx/3xx route assertions move to the @smoke
+          # suite below, which sends x-forwarded-host so routes resolve a tenant.
+          timeout 60 bash -c 'until [ -n "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4173/ 2>/dev/null)" ] && [ "000" != "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4173/ 2>/dev/null)" ]; do sleep 1; done'
+        env:
+          # `pnpm preview` boots the app, which runs runMigrations() + serves the
+          # resolver — so the boot needs the same control-plane env as the migrate
+          # step (set here, not job-level, to keep the Unit tests step clean).
+          CONTROL_DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/control
+          CONFIG_PATH: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/default-config.json
+          GREMION_DISABLE_SEEDS: 'true'
+          KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
+
+      - name: Run Playwright smoke suite
+        run: pnpm exec playwright test --grep '@smoke'
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:4173
+          # #285 / G-099: playwright.config.ts reads SMOKE_TENANT_HOST and stamps
+          # it as x-forwarded-host on every request, so the resolver selects the
+          # seeded `default` tenant for `/` and `/finance` (302 -> /auth/login).
+          SMOKE_TENANT_HOST: ${{ env.SMOKE_TENANT_HOST }}
+
+      - name: Stop preview server
+        if: always()
+        run: |
+          if [ -f /tmp/preview.pid ]; then
+            kill "$(cat /tmp/preview.pid)" 2>/dev/null || true
+          fi
+          echo "=== preview.log (last 100 lines) ==="
+          tail -100 /tmp/preview.log || true
+
+      - name: Upload Playwright report
+        if: failure()
+        # Pin matches mobile.yml's existing actions/upload-artifact pin so
+        # both workflows stay on the same audited release.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: playwright-report
+          path: gremion-ui/playwright-report/
+          retention-days: 7
+
+  integration:
+    name: Integration Tests (DB)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gremion-ui
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gremion
+          POSTGRES_PASSWORD: gremion_test
+          POSTGRES_DB: gremion
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gremion"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/gremion
+      CONTROL_DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/control
+      # The migrate step is a standalone tsx process (NOT vitest), so it does not
+      # load vitest.integration.config.ts. It mirrors boot's fleet migration,
+      # which resolves the default tenant's CONFIG_PATH + KC/auth env. These
+      # values match vitest.integration.config.ts's defaults so the migrate step
+      # and the test run share one tenant context. GREMION_DISABLE_SEEDS keeps
+      # runMigrations() from applying the dev *_seed.sql files (they reference
+      # dev-realm UUIDs the harness doesn't populate).
+      CONFIG_PATH: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/default-config.json
+      GREMION_DISABLE_SEEDS: 'true'
+      KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
+      AUTH_KEYCLOAK_SECRET: test-ui-client-secret
+      AUTH_KEYCLOAK_ISSUER: https://council.example/auth/realms/sturaos
+      AUTH_KEYCLOAK_BASE: https://council.example/auth/realms/sturaos
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create control database
+        run: psql "postgres://gremion:gremion_test@localhost:5432/postgres" -c 'CREATE DATABASE control'
+
+      - name: Apply migrations (control plane + default-tenant data fleet)
+        # `pnpm migrate` mirrors hooks.server.ts boot(): control migrations →
+        # register the `default` tenant → fleet-migrate it inside runWithTenant
+        # (getDb() is fail-closed post-P2.1b, so the data plane can only migrate
+        # inside a tenant scope). It still keeps the A-016 path — the fleet calls
+        # runMigrations(), which does SHA-256 manifest verification (G-012) +
+        # atomic schema_migrations bookkeeping (G-078). This now also runs the
+        # control migrations, so the old separate `pnpm migrate:control` step is
+        # redundant and has been removed.
+        run: pnpm migrate
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    # Only build the image on main pushes — PR-time docker builds are pure
+    # smoke-test redundancy (the actual prod image is built/pushed from main)
+    # and burn ~3–5 min of runner time per PR commit. Breakage in the
+    # Dockerfile surfaces on the merged commit; the merge can be reverted if
+    # the main build fails. Restore PR coverage by removing this `if:` if
+    # Dockerfile churn becomes risky enough to warrant the cost.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Build Docker image
+        # The Dockerfile is monorepo-aware (COPY packages/db, pnpm-workspace.yaml),
+        # so the build context must be the repo root, not gremion-ui/.
+        run: docker build -f gremion-ui/Dockerfile -t ghcr.io/hello-n00del/gremion-ui:test .

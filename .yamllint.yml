@@ -1,0 +1,39 @@
+---
+# yamllint configuration for Gremion
+# Run: yamllint -c .yamllint.yml .
+extends: default
+
+rules:
+  line-length:
+    max: 160        # Docker Compose and K8s manifests often have long lines
+    level: warning
+
+  document-start: disable  # docker-compose files conventionally omit ---
+
+  colons:
+    max-spaces-before: 0
+    max-spaces-after: -1  # allow alignment spaces in env blocks
+
+  truthy:
+    allowed-values: ['true', 'false', 'yes', 'no', 'on', 'off']
+    check-keys: false
+
+  comments:
+    min-spaces-from-content: 1  # Allow tight inline comments
+
+  comments-indentation: disable  # Too strict for heavily-commented compose files
+
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 0
+
+ignore: |
+  .git/
+  test/bats/
+  test/test_helper/
+  node_modules/
+  vendor/

@@ -1,0 +1,84 @@
+##############################################################
+# Daily database backup CronJob
+#
+# Dumps all databases and uploads to cloud object storage.
+# Requires:
+#   - A Secret named "backup-secret" containing:
+#       BACKUP_S3_BUCKET, BACKUP_S3_PREFIX,
+#       AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (for S3/EFS)
+#       or GCS_BUCKET + GOOGLE_APPLICATION_CREDENTIALS (for GCS)
+#   - awscli or gsutil in the backup image
+#
+# Adjust BACKUP_PROVIDER env var to: s3 | gcs | azure
+##############################################################
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: database-backup
+  namespace: gremion-system
+spec:
+  schedule: "0 2 * * *"    # Daily at 02:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:16-alpine   # Has pg_dump; add aws/gcloud CLI as needed
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  DATE=$(date +%Y%m%d-%H%M%S)
+                  BACKUP_DIR="/tmp/backups"
+                  mkdir -p "$BACKUP_DIR"
+
+                  echo "Backing up PostgreSQL databases..."
+                  for DB in keycloak gremion control; do
+                    PGPASSWORD=$POSTGRES_PASSWORD pg_dump \
+                      -h postgres -U $POSTGRES_USER $DB \
+                      | gzip > "${BACKUP_DIR}/${DB}-${DATE}.sql.gz"
+                    echo "  Dumped: ${DB}"
+                  done
+
+                  echo "Encrypting backups (AES-256-CBC)..."
+                  if [[ -z "${BACKUP_ENCRYPTION_KEY:-}" ]]; then
+                    echo "ERROR: BACKUP_ENCRYPTION_KEY not set — refusing to upload unencrypted backups"
+                    exit 1
+                  fi
+                  for f in "${BACKUP_DIR}"/*.sql.gz; do
+                    openssl enc -aes-256-cbc -pbkdf2 -iter 600000 \
+                      -pass "pass:${BACKUP_ENCRYPTION_KEY}" \
+                      -in "$f" -out "${f}.enc"
+                    rm -f "$f"
+                    echo "  Encrypted: $(basename "${f}.enc")"
+                  done
+
+                  echo "Uploading backups to object storage..."
+                  if [[ -n "${BACKUP_S3_BUCKET:-}" ]]; then
+                    for f in "${BACKUP_DIR}"/*.sql.gz.enc; do
+                      aws s3 cp "$f" "s3://${BACKUP_S3_BUCKET}/${BACKUP_S3_PREFIX:-backups}/$(basename "$f")"
+                      echo "  Uploaded: $(basename "$f") to S3"
+                    done
+                  elif [[ -n "${BACKUP_GCS_BUCKET:-}" ]]; then
+                    for f in "${BACKUP_DIR}"/*.sql.gz.enc; do
+                      gsutil cp "$f" "gs://${BACKUP_GCS_BUCKET}/backups/$(basename "$f")"
+                      echo "  Uploaded: $(basename "$f") to GCS"
+                    done
+                  else
+                    echo "WARNING: No BACKUP_S3_BUCKET or BACKUP_GCS_BUCKET set — backups not uploaded!"
+                    exit 1
+                  fi
+
+                  echo "Backup complete."
+                  ls -lh "${BACKUP_DIR}"/*.sql.gz.enc
+              envFrom:
+                - secretRef:
+                    name: postgres-secret
+                - secretRef:
+                    name: backup-secret

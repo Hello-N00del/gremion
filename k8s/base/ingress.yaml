@@ -1,0 +1,48 @@
+##############################################################
+# Gremion — Path-based Ingress (legacy nginx-ingress example)
+#
+# Routes:
+#   /auth(/|$)(.*)   → keycloak:8080
+#
+# NOTE: the live routing uses the Traefik IngressRoutes in
+# k8s/base/traefik/ — this nginx-ingress manifest is a legacy
+# example and is NOT wired into any kustomization.
+#
+# Requires nginx-ingress-controller and cert-manager.
+# TLS certificate is issued by Let's Encrypt (letsencrypt-prod).
+#
+# IMPORTANT: The host "stura.example.com" is a placeholder.
+# Override it in your environment overlay:
+#   - k8s/overlays/dev/patches/ingress-dev.yaml    (stura.localhost)
+##############################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gremion-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # HTTPS redirect (disabled in dev overlay)
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # cert-manager — issues TLS cert automatically (override issuer per environment)
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - stura.example.com
+      secretName: gremion-tls
+  rules:
+    - host: stura.example.com
+      http:
+        paths:
+          # Keycloak — /auth (no rewrite; Keycloak handles its own subpath)
+          - path: /auth(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080

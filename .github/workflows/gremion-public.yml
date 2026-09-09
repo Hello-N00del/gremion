@@ -1,0 +1,78 @@
+name: Gremion Public
+
+on:
+  # `push` is main-only so feature-branch commits do NOT double-fire
+  # alongside `pull_request` (mirrors gremion-ui.yml). Before this constraint
+  # every PR commit produced two identical runs, one per trigger.
+  push:
+    branches: [main]
+    paths:
+      - 'gremion-public/**'
+      # The public portal imports the shared @gremion/db wrapper, and
+      # workspace/lockfile changes affect every resolved dependency — so a
+      # change to any of these must trigger this pipeline too.
+      - 'packages/db/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/gremion-public.yml'
+  pull_request:
+    paths:
+      - 'gremion-public/**'
+      - 'packages/db/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  # On-demand run against any ref.
+  workflow_dispatch:
+
+# Least-privilege token: read-only on the repo. The check/test/build job is a
+# pure consumer — no release uploads, no PR comment automation.
+permissions:
+  contents: read
+
+# Cancel superseded runs on PR branches; let main pushes complete in full
+# so every merged commit has a green pipeline of record. `github.ref` is the
+# branch ref on push events and `refs/pull/<n>/merge` on PRs, so identity
+# grouping per-ref naturally separates each PR's run history from main's.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gremion-public
+    # The gremion-public vitest suite mocks `postgres` + `$env/dynamic/private`
+    # (see src/**/*.test.ts), so — unlike gremion-ui — it needs NO Postgres
+    # service. The Playwright e2e suite lives under tests/e2e/ and is excluded
+    # by the vite.config.ts test include glob (src/**/*.test.ts), so `pnpm test`
+    # runs the pure-unit vitest set here.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          # 22, NOT the 26 in .node-version, and that is deliberate rather than
+          # drift: gremion-public/Dockerfile builds and runs on node:22-alpine,
+          # and dependabot.yml pins that base image at the current major. CI
+          # should exercise the runtime this app actually ships on. The repo's
+          # floor is `engines.node: >=22` in the root package.json; .node-version
+          # / .nvmrc name 26 as the version to develop against.
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm check
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

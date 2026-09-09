@@ -1,0 +1,128 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# `labels` + includeSelectors: true is the exact successor to the deprecated
+# `commonLabels` (which always wrote into selectors), mirroring k8s/base.
+# Keep includeSelectors — dropping it changes the rendered selectors, which on
+# an already-deployed Deployment/StatefulSet is an immutable-field error.
+labels:
+  - includeSelectors: true
+    pairs:
+      environment: production
+
+patches:
+  - path: patches/resource-limits.yaml
+  - path: patches/backup-cronjob.yaml
+  - path: patches/pvc-sizes.yaml
+    target:
+      kind: PersistentVolumeClaim
+      name: backup-data
+  # Apex host for the imported Keycloak realm. Carries the same
+  # __GREMION_DOMAIN__ sentinel as the ingressroute patches below and is
+  # substituted by the SAME sed recipe — see the header of
+  # patches/ingressroutes-prod/gremion-ui-https.yaml.
+  - path: patches/keycloak-domain.yaml
+  # Traefik IngressRoute/Middleware domain-sentinel patches — one file per
+  # target (kustomize JSON6902 patches require an explicit target per patch;
+  # see k8s/overlays/production/patches/ingressroutes-prod/ for the
+  # per-resource ops and the __GREMION_DOMAIN__ substitution recipe).
+  - path: patches/ingressroutes-prod/gremion-ui-https.yaml
+    target:
+      kind: IngressRoute
+      name: gremion-ui-https
+  - path: patches/ingressroutes-prod/gremion-ui-apexhost.yaml
+    target:
+      kind: Middleware
+      name: gremion-ui-apexhost
+  - path: patches/ingressroutes-prod/gremion-ui-proxytrust.yaml
+    target:
+      kind: Middleware
+      name: gremion-ui-proxytrust
+  - path: patches/ingressroutes-prod/gremion-ui-wellknown.yaml
+    target:
+      kind: IngressRoute
+      name: gremion-ui-wellknown
+  - path: patches/ingressroutes-prod/keycloak-https.yaml
+    target:
+      kind: IngressRoute
+      name: keycloak-https
+  - path: patches/ingressroutes-prod/legal-https.yaml
+    target:
+      kind: IngressRoute
+      name: legal-https
+
+# Production secrets — SOPS age-encrypted files in secrets/.
+#
+# G-028 closure (Wave 3b T0.1):
+#   1. One-time bootstrap (per operator workstation):
+#        bash secrets/bootstrap-sops.sh
+#      — generates age key, prints public half, walks vault handoff.
+#   2. For each Secret you want to provision:
+#        # Copy the template document out of secrets/_templates.example.yaml,
+#        # edit it (replace every <PLACEHOLDER>), then encrypt:
+#        bash secrets/encrypt-all.sh
+#      — writes secrets/<name>.enc.yaml and removes the plaintext.
+#   3. Uncomment the matching block below.
+#   4. Apply (requires kustomize-sops + SOPS_AGE_KEY env or default keyring):
+#        kustomize build --enable-alpha-plugins k8s/overlays/production | kubectl apply -f -
+#
+# DO NOT uncomment a block until its .enc.yaml file actually exists; kustomize
+# build will fail otherwise. The CI grep guard at .github/workflows/ci.yml
+# checks that this file references no missing .enc.yaml paths.
+
+# secretGenerator:
+#   - name: postgres-secret
+#     files:
+#       - secrets/postgres-secret.enc.yaml
+#   - name: keycloak-secret
+#     files:
+#       - secrets/keycloak-secret.enc.yaml
+#   - name: gremion-ui-secret
+#     files:
+#       - secrets/gremion-ui-secret.enc.yaml
+#   - name: backup-secret
+#     files:
+#       - secrets/backup-secret.enc.yaml
+#   - name: vector-ipcrypt-secret
+#     files:
+#       - secrets/vector-ipcrypt-secret.enc.yaml
+#   - name: restic-secret
+#     files:
+#       - secrets/restic-secret.enc.yaml
+#   - name: gremion-public-secret
+#     files:
+#       - secrets/gremion-public-secret.enc.yaml
+#   - name: legal-config
+#     files:
+#       - secrets/legal-config.enc.yaml
+
+# ── Registry override (A-020/#431) ───────────────────────────────────────────
+# The four first-party images (ghcr.io/hello-n00del/gremion-{ui,public,legal,
+# vector}) are pinned in k8s/base to the kernel version — see the IMAGE
+# REFERENCES block in k8s/base/kustomization.yaml. They are built from this
+# repo and published to no registry, so retag them into a registry you control
+# and point this overlay at it HERE rather than editing base; that keeps
+# `git pull` conflict-free.
+#
+# Prefer `digest:` over `newTag:` — a digest is immutable, so a rollback is
+# reproducible. Leave this commented until the digests are real: an
+# unresolvable reference renders a Deployment that cannot be pulled, and
+# nothing rejects it at `kubectl apply` time (the pod just sits in
+# ImagePullBackOff). Uncomment and fill in:
+#
+# images:
+#   - name: ghcr.io/hello-n00del/gremion-ui
+#     newName: registry.example.org/<your-namespace>/gremion-ui
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-public
+#     newName: registry.example.org/<your-namespace>/gremion-public
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-legal
+#     newName: registry.example.org/<your-namespace>/gremion-legal
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-vector
+#     newName: registry.example.org/<your-namespace>/gremion-vector
+#     digest: sha256:<digest of the image you pushed>

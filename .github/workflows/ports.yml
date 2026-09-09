@@ -1,0 +1,147 @@
+name: Ports
+
+# CI coverage for the shared @gremion/ports package (broker contract, tracer,
+# and the canonical NatsBroker). Before this workflow the package had NO runner
+# of its own in this repo (audit #434 finding 1):
+#
+#   * `grep -rn 'NATS_TEST_URL\|packages/ports' .github/workflows/` returned
+#     nothing at all;
+#   * the unit specs were collected only incidentally, through gremion-ui's vitest
+#     include glob (`../packages/ports/src/**/*.test.ts`), and gremion-ui.yml does
+#     not even path-filter on `packages/ports/**` — so a ports-only change
+#     triggered ZERO pipelines;
+#   * nats-broker.integration.test.ts was collected by nothing whatsoever, since
+#     gremion-ui's vite.config.ts excludes `**/*.integration.test.ts` by glob.
+#
+# That last gap is the one that mattered. This is the kernel-only carve — there
+# is no services/ directory here (pnpm-workspace.yaml lists `services/*` for
+# parity with the downstream repo, but nothing resolves), so the leaf
+# integration matrix that exercises NatsBroker against real NATS lives in a
+# DIFFERENT repository and covers a DIFFERENT copy of the class. The copy at
+# packages/ports/src/nats-broker.ts is the canonical one the kernel publishes,
+# and this file is its only real-server proof. It proves things an in-memory
+# double structurally cannot:
+#   1. the ordered-consumer `filter_subjects` snake_case option — the camelCase
+#      spelling from the upstream README silently installs an UNFILTERED
+#      consumer, a runtime-only footgun invisible to tsc and to any fake;
+#   2. audit #417: a throwing handler must not kill the `for await` loop;
+#   3. the JetStream Nats-Msg-Id dedup window rejecting an exact replay;
+#   4. (T01) what the SERVER does — and does not say — when a stream's filter
+#      does not cover a subscription, when it is repointed, when a connection
+#      closes under a consumer, when the stream or the consumer is deleted
+#      under one, and that the client-side guards for each fire inside the
+#      bounds the broker exports.
+# So the test is wired up here rather than deleted.
+on:
+  # `push` is main-only so feature-branch commits do NOT double-fire alongside
+  # `pull_request` (mirrors gremion-ui.yml / gremion-public.yml).
+  push:
+    branches: [main]
+    paths:
+      - 'packages/ports/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/ports.yml'
+  pull_request:
+    paths:
+      - 'packages/ports/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/ports.yml'
+  # On-demand run against any ref (e.g. confirm main is green after a CI pause).
+  workflow_dispatch:
+
+# Least-privilege token: this job is a pure consumer (typecheck + test) — no
+# release uploads, no PR-comment automation.
+permissions:
+  contents: read
+
+# Cancel superseded runs on PR branches; let main pushes complete in full so
+# every merged commit has a green pipeline of record.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ports:
+    name: Ports (@gremion/ports) tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          # 26 matches the package's declared @types/node (^26.1.1) and the
+          # gremion-ui workflow's runtime.
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        # packages/ports/tsconfig.json is noEmit — it exists purely as this gate.
+        run: pnpm --filter @gremion/ports exec tsc --noEmit
+
+      - name: Start NATS (JetStream) for the nats-broker integration proofs
+        # nats-broker.integration.test.ts SKIPS loudly unless NATS_TEST_URL is
+        # set. JetStream needs the `-js` positional arg, which GitHub's
+        # `services:` schema cannot pass to an image — so it is started as a
+        # step instead. This is deliberately the same recipe the downstream
+        # repo's leaf-integration legs use (services.yml, "Start NATS
+        # (JetStream) for the nats-broker round-trip"): same image tag, same
+        # `-js` flag, same /dev/tcp readiness probe, same $GITHUB_ENV export —
+        # so the two repos stay diff-able. Host port 4222 is free on a GitHub
+        # runner; only the local dev recipe in the test header uses 4224, to
+        # dodge a developer's already-running stack.
+        run: |
+          docker run -d --name nats-js -p 4222:4222 nats:2.12-alpine -js
+          echo "Waiting for NATS to accept connections on :4222 ..."
+          for i in $(seq 1 30); do
+            if timeout 1 bash -c '</dev/tcp/127.0.0.1/4222' 2>/dev/null; then
+              echo "NATS ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          echo "NATS_TEST_URL=nats://localhost:4222" >> "$GITHUB_ENV"
+
+      - name: Ports tests (unit + NATS integration), asserted by the shared post-condition
+        # packages/ports/vitest.config.ts includes `src/**/*.test.ts` with NO
+        # integration exclude, so this ONE command collects every unit spec AND
+        # nats-broker.integration.test.ts; with NATS_TEST_URL exported above
+        # the integration block runs instead of skipping. The verbose log is
+        # then handed to nats-test.sh's post-condition (NATS_TEST_CHECK_LOG
+        # mode): the SAME rule `make test-ports-nats` applies, to the same
+        # shape of run — no file skipped, no test skipped, and the integration
+        # file itself contributed at least MIN_PROOFS passing tests, a MINIMUM
+        # that lives in ONE place (the script). The integration suite is
+        # self-skipping by design, so without the post-condition a broken NATS
+        # step would turn this job green while proving nothing — the silent-
+        # pass failure mode #434 finding 1 is about.
+        #
+        # ONE run. Round 4 ran the package's `test` script and then the
+        # integration file a SECOND time against the already-used server, and
+        # handed only that second log to the check: the mutating proofs
+        # (repoints, stream and consumer deletions) ran twice per job, and the
+        # second pass was where the deletion flake bit hardest. One run, one
+        # log, one rule.
+        env:
+          # The script matches vitest's summary and per-test lines. picocolors
+          # enables ANSI when CI is set even on a non-TTY pipe, which would put
+          # escape codes inside those lines and fail a green run. Pin colour
+          # off exactly as the local gate does (both variables), so the runner's
+          # log is byte-comparable with the one nats-test.sh checks locally.
+          NO_COLOR: '1'
+          FORCE_COLOR: '0'
+        run: |
+          set -euo pipefail
+          pnpm --filter @gremion/ports exec vitest run --reporter=verbose 2>&1 | tee /tmp/ports-run.log
+          NATS_TEST_CHECK_LOG=/tmp/ports-run.log bash packages/ports/scripts/nats-test.sh
+
+      - name: Stop NATS
+        if: always()
+        run: docker rm -f nats-js || true

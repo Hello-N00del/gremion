@@ -1,0 +1,21 @@
+-- 048_resolution_decided_at.sql
+-- Civitas Governance Core INV-5 (#320, ported gremion#22 M3b): record WHEN a
+-- resolution's binding decision was finalised. Adoption happens at protocol
+-- publish — the quorum-hard path — where the server stamps decided_at = now()
+-- on each adopted (non-withdrawn) resolution and appends a tamper-evident
+-- audit_log entry (INV-1). Nullable because every resolution that predates
+-- this change was decided before the column existed (no historical adoption
+-- timestamp to backfill); a NULL decided_at simply means "adopted before
+-- decision-time was recorded", never "not decided".
+-- Additive expand-only (a new nullable column) — no code reads it as
+-- required, so it is safe under the per-tenant fleet runner (README
+-- "Expand/contract").
+-- Rollback (manual): ALTER TABLE protocol_resolutions DROP COLUMN decided_at;
+-- No file-level BEGIN/COMMIT (README rule 3): the runner's applyMigrationFile
+-- (db.ts, G-078) already wraps each file + its schema_migrations bookkeeping
+-- insert in one sql.begin tx; a file-level COMMIT would split the DDL from
+-- the bookkeeping. DDL is idempotent (IF NOT EXISTS) so re-running is a no-op.
+-- Never edit this file after it ships — add a new migration instead
+-- (append-only + hash-locked via manifest.json).
+ALTER TABLE protocol_resolutions
+  ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;

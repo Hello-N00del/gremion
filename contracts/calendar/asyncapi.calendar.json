@@ -1,0 +1,190 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "Gremion calendar module — event lifecycle + CalDAV sync events",
+    "version": "0.1.0",
+    "description": "Terminal events emitted by the calendar module (which lives in the module repo, not here) for event lifecycle changes and CalDAV push sync failures. Four events: event.created, event.updated, event.deleted, caldav.sync.failed. Subject grammar: gremion.{tenantId}.calendar.{event} — built by calendarSubject() in @gremion/ports/broker (single source of truth for the wire subject, mirroring D-P1-7's newsletterSubject() pattern). EventEnvelope field-matched to packages/ports/src/broker.ts EventEnvelope interface. JetStream mapping: Nats-Msg-Id = envelope.eventId. The leaf's egress publish emits; its audit consumer — which lives in the module repo, not here — consumes on gremion.*.calendar.> (5-token subjects, '>' extension per broker.ts subjectMatches). The AsyncAPI channel addresses are verified at test time against calendarSubject() — see packages/ports/src/calendar-contract.test.ts."
+  },
+  "defaultContentType": "application/json",
+  "channels": {
+    "calendarEventCreated": {
+      "address": "gremion.{tenantId}.calendar.event.created",
+      "description": "Published when a calendar event is created. Subject built by calendarSubject(tenantId, 'event.created') — never construct the subject string directly.",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID (resolved by UUID, not slug — #173)." }
+      },
+      "messages": {
+        "calendarEventCreatedEvent": { "$ref": "#/components/messages/CalendarEventCreatedEvent" }
+      }
+    },
+    "calendarEventUpdated": {
+      "address": "gremion.{tenantId}.calendar.event.updated",
+      "description": "Published when a calendar event is updated. Subject built by calendarSubject(tenantId, 'event.updated') — never construct the subject string directly.",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID (resolved by UUID, not slug — #173)." }
+      },
+      "messages": {
+        "calendarEventUpdatedEvent": { "$ref": "#/components/messages/CalendarEventUpdatedEvent" }
+      }
+    },
+    "calendarEventDeleted": {
+      "address": "gremion.{tenantId}.calendar.event.deleted",
+      "description": "Published when a calendar event is deleted. Subject built by calendarSubject(tenantId, 'event.deleted') — never construct the subject string directly.",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID (resolved by UUID, not slug — #173)." }
+      },
+      "messages": {
+        "calendarEventDeletedEvent": { "$ref": "#/components/messages/CalendarEventDeletedEvent" }
+      }
+    },
+    "calendarCaldavSyncFailed": {
+      "address": "gremion.{tenantId}.calendar.caldav.sync.failed",
+      "description": "Published when the leaf's CalDAV push ticker (caldav-sync) fails to push an event to Nextcloud. Subject built by calendarSubject(tenantId, 'caldav.sync.failed') — never construct the subject string directly.",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID (resolved by UUID, not slug — #173)." }
+      },
+      "messages": {
+        "calendarCaldavSyncFailedEvent": { "$ref": "#/components/messages/CalendarCaldavSyncFailedEvent" }
+      }
+    }
+  },
+  "operations": {
+    "publishCalendarEventCreated": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/calendarEventCreated" },
+      "summary": "Calendar leaf publishes event.created when a new event is inserted."
+    },
+    "publishCalendarEventUpdated": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/calendarEventUpdated" },
+      "summary": "Calendar leaf publishes event.updated when an existing event is modified."
+    },
+    "publishCalendarEventDeleted": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/calendarEventDeleted" },
+      "summary": "Calendar leaf publishes event.deleted when an event is removed (incl. bulk delete-by-external-id)."
+    },
+    "publishCalendarCaldavSyncFailed": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/calendarCaldavSyncFailed" },
+      "summary": "Calendar leaf publishes caldav.sync.failed when a queued CalDAV push exhausts retries against Nextcloud."
+    },
+    "consumeCalendarEvents": {
+      "action": "receive",
+      "channel": { "$ref": "#/channels/calendarEventCreated" },
+      "summary": "Consumed by the calendar audit consumer, which writes the audit trail and lives in the module repo, not here. At-least-once delivery; consumers MUST dedupe on eventId. Consumer pattern: gremion.*.calendar.> (5-token subjects)."
+    }
+  },
+  "components": {
+    "messages": {
+      "CalendarEventCreatedEvent": {
+        "name": "CalendarEventCreatedEvent",
+        "title": "Calendar event created",
+        "payload": { "$ref": "#/components/schemas/EnvelopeCalendarEventCreated" }
+      },
+      "CalendarEventUpdatedEvent": {
+        "name": "CalendarEventUpdatedEvent",
+        "title": "Calendar event updated",
+        "payload": { "$ref": "#/components/schemas/EnvelopeCalendarEventUpdated" }
+      },
+      "CalendarEventDeletedEvent": {
+        "name": "CalendarEventDeletedEvent",
+        "title": "Calendar event deleted",
+        "payload": { "$ref": "#/components/schemas/EnvelopeCalendarEventDeleted" }
+      },
+      "CalendarCaldavSyncFailedEvent": {
+        "name": "CalendarCaldavSyncFailedEvent",
+        "title": "Calendar CalDAV sync failed",
+        "payload": { "$ref": "#/components/schemas/EnvelopeCalendarCaldavSyncFailed" }
+      }
+    },
+    "schemas": {
+      "EventEnvelope": {
+        "type": "object",
+        "required": ["eventId", "eventType", "tenantId", "occurredAt", "payload"],
+        "properties": {
+          "eventId": { "type": "string", "format": "uuid", "description": "Also the Nats-Msg-Id (JetStream dedup). Matches @gremion/ports EventEnvelope.eventId." },
+          "eventType": { "type": "string", "description": "Short event type. Values: 'event.created' | 'event.updated' | 'event.deleted' | 'caldav.sync.failed'. Matches @gremion/ports CalendarEvent." },
+          "tenantId": { "type": "string", "format": "uuid", "description": "Tenant UUID, duplicated from the subject for envelope-only consumers (#173: by UUID, not slug). Matches @gremion/ports EventEnvelope.tenantId." },
+          "occurredAt": { "type": "string", "format": "date-time", "description": "ISO 8601 timestamp. Matches @gremion/ports EventEnvelope.occurredAt." },
+          "correlationId": { "type": ["string", "null"], "description": "x-correlation-id of the originating request. Matches @gremion/ports EventEnvelope.correlationId." },
+          "payload": { "type": "object", "description": "Event-specific payload (see envelope sub-schemas). Matches @gremion/ports EventEnvelope.payload." }
+        }
+      },
+      "EnvelopeCalendarEventCreated": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "type": "object",
+                "required": ["eventDbId"],
+                "properties": {
+                  "eventDbId": { "type": "string", "description": "The calendar_events row id." },
+                  "committeeId": { "type": ["string", "null"], "description": "Owning committee id, if any." },
+                  "source": { "type": "string", "description": "Event source (manual | helios | holiday | imported etc.)." }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeCalendarEventUpdated": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "type": "object",
+                "required": ["eventDbId"],
+                "properties": {
+                  "eventDbId": { "type": "string", "description": "The calendar_events row id." },
+                  "changedFields": { "type": "array", "items": { "type": "string" }, "description": "Names of fields that changed in this update." }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeCalendarEventDeleted": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "type": "object",
+                "required": ["eventDbId"],
+                "properties": {
+                  "eventDbId": { "type": "string", "description": "The calendar_events row id of the deleted event." },
+                  "externalId": { "type": ["string", "null"], "description": "External id, if the delete was a bulk deleteEventsByExternalId operation." }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeCalendarCaldavSyncFailed": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "type": "object",
+                "required": ["eventDbId", "error"],
+                "properties": {
+                  "eventDbId": { "type": "string", "description": "The calendar_events row id whose CalDAV push failed." },
+                  "queueEntryId": { "type": "string", "description": "The caldav_sync_queue row id." },
+                  "error": { "type": "string", "description": "Human-readable error message from the failed push attempt." }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Barrierefreiheit — ${ORG_NAME}</title>
+  <style>
+    body{font-family:system-ui,sans-serif;margin:0;background:#f5f5f5;color:#222}
+    main{max-width:800px;margin:2rem auto;padding:2rem;background:#fff;border-radius:8px}
+    h1{font-size:1.5rem}h2{font-size:1.1rem;margin-top:2rem;border-bottom:1px solid #eee;padding-bottom:.3rem}
+    a{color:#1a3c8f}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Erklärung zur Barrierefreiheit</h1>
+
+    <p>
+      ${ORG_NAME} ist bemüht, seine Webangebote im Einklang mit dem Behindertengleichstellungsgesetz (BGG)
+      sowie der Barrierefreie-Informationstechnik-Verordnung (BITV 2.0) barrierefrei zugänglich zu machen.
+    </p>
+
+    <h2>Vereinbarkeitsstatus</h2>
+    <p>
+      Dieses Webangebot ist <strong>${ACCESSIBILITY_STATUS}</strong> mit der BITV 2.0 vereinbar.
+    </p>
+
+    <h2>Nicht barrierefreie Inhalte</h2>
+    <ul>
+      <li>Ältere hochgeladene Dokumente (PDF, DOCX) sind möglicherweise nicht vollständig mit
+          Screenreadern kompatibel.</li>
+    </ul>
+
+    <h2>Erstellung dieser Erklärung</h2>
+    <p>Diese Erklärung wurde am ${ACCESSIBILITY_DATE} erstellt.</p>
+
+    <h2>Feedback und Kontakt</h2>
+    <p>
+      Wenn Ihnen Mängel in der barrierefreien Gestaltung auffallen:<br>
+      <a href="mailto:${ORG_EMAIL}">${ORG_EMAIL}</a>
+    </p>
+
+    <h2>Durchsetzungsverfahren</h2>
+    <p>
+      Wenn Sie auf Anfragen zur Barrierefreiheit keine zufriedenstellende Antwort erhalten haben,
+      können Sie die zuständige Aufsichtsstelle einschalten.
+    </p>
+  </main>
+  ${FOOTER}
+</body>
+</html>

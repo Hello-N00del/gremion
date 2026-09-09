@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gremion-public-config
+  labels:
+    app: gremion-public
+data:
+  # Public URLs (prod overlay patches these to the real domain)
+  PUBLIC_BASE_URL: "https://stura.example.com"
+  ORIGIN: "https://public.stura.example.com"
+
+  # AGPL-3.0 section 13: the Corresponding Source offer rendered in the footer.
+  # Set this to YOUR repository if you modified Gremion — upstream is not the
+  # corresponding source of a modified version, so an offer pointing there is
+  # false. Empty falls back to upstream, correct for an unmodified deployment.
+  PUBLIC_SOURCE_URL: ""
+
+  NODE_ENV: "production"
+  PORT: "3001"

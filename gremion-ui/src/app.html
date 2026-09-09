@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+
+    <!-- v12 — icon family. THE KERNEL SHIPS NO ICON FILES ON PURPOSE: Gremion
+         is an unbranded governance kernel, and the icon set produced for the
+         first deployment built on it carries that instance's "S" mark. The plumbing is here
+         and honours anything dropped into `static/brand/` under exactly these
+         three filenames — see static/brand/README.md. Until then these
+         references 404, the same way the single `favicon.png` reference they
+         replace already did (this app has never had a static/ directory). -->
+    <link rel="icon" type="image/png" sizes="32x32" href="%sveltekit.assets%/brand/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="%sveltekit.assets%/brand/favicon-512.png" />
+    <link rel="apple-touch-icon" href="%sveltekit.assets%/brand/apple-touch-icon.png" />
+
+    <!-- v12 theme-color, per surface: the app's paper token from src/app.css.
+         Keep in step with `--paper` there. -->
+    <meta name="theme-color" content="#fafaf7" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- #177: fonts are self-hosted via @fontsource (imported in routes/+layout.svelte).
+         No third-party Google Fonts request (GDPR) and nothing for the CSP to block. -->
+    <script>
+      try {
+        // B8 (design-review 2026-07 T5): preferences live under namespaced
+        // gremion.* keys; the legacy stura-* keys are read ONCE as a fallback
+        // (value honored + migrated to the new key) and never written again.
+        var read = function (key, legacyKey, dflt) {
+          var v = localStorage.getItem(key);
+          if (v === null) {
+            v = localStorage.getItem(legacyKey);
+            if (v !== null) {
+              localStorage.setItem(key, v);
+              localStorage.removeItem(legacyKey);
+            }
+          }
+          return v === null ? dflt : v;
+        };
+        var t = read('gremion.theme', 'stura-theme', 'light');
+        var cb = read('gremion.colorblind', 'stura-colorblind', 'none');
+        var l = read('gremion.lang', 'stura-lang', 'de');
+        var h = document.documentElement;
+        if (t === 'dark') h.classList.add('dark');
+        if (cb === 'rg') h.classList.add('cb-rg');
+        else if (cb === 'by') h.classList.add('cb-by');
+        h.lang = l;
+      } catch (e) {}
+    </script>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

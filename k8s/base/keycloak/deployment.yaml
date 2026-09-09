@@ -1,0 +1,158 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      # G-036 (Wave 3b T4.1): pod-level baseline-PSS hardening.
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Wait for PostgreSQL to accept connections before Keycloak starts
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          # G-036: container-level baseline-PSS hardening.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432 -U $(KC_DB_USERNAME); do
+                echo "Waiting for PostgreSQL..."; sleep 3;
+              done
+          envFrom:
+            - secretRef:
+                name: keycloak-secret
+
+        # C10: Substitute OIDC client-secret sentinel tokens in the realm
+        # import file with real values from keycloak-secret. The Secret must
+        # provide GREMION_UI_OIDC_CLIENT_SECRET and GREMION_ADMIN_OIDC_CLIENT_SECRET.
+        # The resulting file is written to the realm-import emptyDir which is
+        # what Keycloak actually imports from.
+        - name: substitute-realm-secrets
+          image: alpine:3.20
+          # G-036: container-level baseline-PSS hardening.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - /bin/sh
+            - -c
+            - |
+              apk add --no-cache gettext 2>/dev/null || true
+              /scripts/substitute-realm-secrets.sh /realm-template/realm-export.json /realm-import/realm-export.json
+          env:
+            # G-080: the realm template's sslRequired is now parametrized
+            # (__SSL_REQUIRED__). k8s has NO internal TLS yet (KC_HTTPS_ENABLED=false
+            # in keycloak-config), so pin the realm to "external" until a KC :8443
+            # listener + server-cert Secret + per-pod CA trust are added here.
+            # The compose/staging runtime defaults to "all" (docker-compose.prod.yml).
+            - name: KC_REALM_SSL_REQUIRED
+              value: "external"
+          envFrom:
+            # DOMAIN lives here: the script resolves the realm template's
+            # __APEX_DOMAIN__ sentinel from it and REFUSES TO RUN without it, so
+            # the pod would die in init if this ConfigMap were not mounted.
+            # (An explicit `env:` entry above still wins over the same key from
+            # envFrom, which is why KC_REALM_SSL_REQUIRED stays "external" here.)
+            - configMapRef:
+                name: keycloak-config
+            - secretRef:
+                name: keycloak-secret
+          volumeMounts:
+            - name: realm-template
+              mountPath: /realm-template
+              readOnly: true
+            - name: realm-import
+              mountPath: /realm-import
+            - name: keycloak-scripts
+              mountPath: /scripts
+              readOnly: true
+
+      containers:
+        - name: keycloak
+          # gremion#22: converge on 26.6.1 — the live compose-tested version
+          # (docker-compose.yml). k8s previously pinned the older 26.1; there is
+          # no known incompatibility, this was drift from the compose bump.
+          image: quay.io/keycloak/keycloak:26.6.1
+          # G-036: container-level baseline-PSS hardening.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - start
+            - --optimized
+            - --import-realm
+          envFrom:
+            - configMapRef:
+                name: keycloak-config
+            - secretRef:
+                name: keycloak-secret
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9000
+              name: management
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /auth/health/ready
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /auth/health/live
+              port: 8080
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            # C10: read from the post-substitution emptyDir, NOT from the
+            # raw ConfigMap — the ConfigMap still contains sentinel tokens.
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+
+      volumes:
+        # Raw realm template (with __SECRET__ sentinels) from the
+        # keycloak-realm ConfigMap — only mounted into the init container.
+        - name: realm-template
+          configMap:
+            name: keycloak-realm
+        # Writable scratch volume that receives the substituted realm file
+        # (and, in the dev overlay, dev-users.json).
+        - name: realm-import
+          emptyDir: {}
+        # Substitution shell script mounted executable.
+        - name: keycloak-scripts
+          configMap:
+            name: keycloak-scripts
+            defaultMode: 0755

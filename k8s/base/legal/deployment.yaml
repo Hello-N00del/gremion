@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legal
+  labels:
+    app: legal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: legal
+  template:
+    metadata:
+      labels:
+        app: legal
+    spec:
+      # G-036 (Wave 3b T4.1): pod-level baseline-PSS hardening.
+      # A-021 wave 2: image now runs nginx-unprivileged as uid 101, so the Pod
+      # can declare runAsNonRoot — the last piece needed for restricted-PSS
+      # compliance (drop ALL / no-privesc / seccomp already in place).
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+      containers:
+        - name: legal
+          # A-020/#431: pinned to the kernel version, never `:latest`.
+          # First-party image, built from this repo — see the IMAGE REFERENCES
+          # block in ../kustomization.yaml for how to point it at your registry.
+          image: ghcr.io/hello-n00del/gremion-legal:0.1.0
+          # G-036: container-level baseline-PSS hardening. A-021 wave 2: nginx
+          # now binds the unprivileged port :8080, so NET_BIND_SERVICE is no
+          # longer needed — drop ALL caps and add none back.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: legal-config
+          readinessProbe:
+            httpGet:
+              path: /impressum
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /impressum
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi

@@ -1,0 +1,70 @@
+name: Semgrep
+
+# Closes G-043 (in-repo SAST visibility). Originally wired with CodeQL, but
+# CodeQL on private repos requires GitHub Advanced Security (paid). Semgrep
+# runs without that constraint — same SAST role, different engine.
+#
+# Two rulesets:
+#   - p/security-audit : general security smells (injection, unsafe deserialization, ...)
+#   - p/secrets        : hardcoded credential patterns
+#
+# Findings on these rulesets fail the build (`--error`); add more permissive
+# rulesets (`p/owasp-top-ten`, `p/javascript`, ...) once the baseline is clean.
+#
+# There is no Dart/Flutter code and no mobile.yml in this repository — the
+# Flutter app left with the open-core carve. The `--exclude 'mobile/**'` below
+# is harmless but equally vestigial; it stays only so this file does not have
+# to be re-reasoned about if a mobile tree ever returns.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Weekly to catch newly-published rule updates.
+    - cron: '23 4 * * 1'
+  # On-demand run against any ref (e.g. confirm main is green after a CI pause).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep static analysis
+    runs-on: ubuntu-latest
+    # Run inside the official semgrep image. Avoids the supply-chain risk of
+    # a remote setup-action; the image itself is the action surface, so it is
+    # pinned by immutable digest (matching the repo's G-037/G-038 digest-pin
+    # policy for externally-pulled images) — the `1.97.0` tag is mutable and
+    # could be re-pushed under the same name.
+    #
+    # Digest is the multi-arch manifest-list digest for semgrep/semgrep:1.97.0
+    # (resolves to the correct per-arch image; GitHub runners are amd64).
+    # NOTE: Dependabot's docker ecosystem scans Dockerfiles, NOT `container:`
+    # images embedded in workflow YAML, so this pin is NOT auto-updated. Bump
+    # the tag + digest together by hand (or via a tracked Dockerfile under a
+    # path Dependabot's docker ecosystem watches) when updating Semgrep.
+    container:
+      image: semgrep/semgrep:1.97.0@sha256:a265d09a9ca712e6624aca09056304ce4314a695b7028d65c041dd53fd44c700
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Semgrep scan (security + secrets)
+        run: |
+          semgrep scan \
+            --config p/security-audit \
+            --config p/secrets \
+            --error \
+            --metrics=off \
+            --exclude '**/node_modules/**' \
+            --exclude '**/.dart_tool/**' \
+            --exclude '**/build/**' \
+            --exclude '**/.next/**' \
+            --exclude 'docs/**' \
+            --exclude 'mobile/**'

@@ -1,0 +1,260 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "Gremion content module — publish lifecycle events",
+    "version": "0.1.0",
+    "description": "Lifecycle events emitted by the content module (which lives in the module repo, not here) after each publish attempt and per-channel dispatch. Five events: publish.succeeded, publish.failed, channel.email.sent, channel.portal.sent, channel.instagram.enqueued. Subject grammar: gremion.{tenantId}.content.{event} — built by contentSubject() in @gremion/ports/broker (single source of truth for the wire subject). EventEnvelope field-matched to packages/ports/src/broker.ts EventEnvelope interface. JetStream mapping: Nats-Msg-Id = envelope.eventId. The relay publishes; its audit consumer — which lives in the module repo, not here — subscribes on gremion.*.content.> (6+ token subjects). The AsyncAPI channel address is verified at test time against contentSubject() — see packages/ports/src/content-contract.test.ts assertion."
+  },
+  "defaultContentType": "application/json",
+  "channels": {
+    "gremion.{tenantId}.content.publish.succeeded": {
+      "address": "gremion.{tenantId}.content.publish.succeeded",
+      "description": "Published when all channels for a content post complete successfully. Subject built by contentSubject(tenantId, 'publish.succeeded') — never construct the subject string directly.",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID; resolved by UUID (#173 global constraint) — no slug-based routing." }
+      },
+      "messages": {
+        "contentPublishSucceededEvent": { "$ref": "#/components/messages/ContentPublishSucceededEvent" }
+      }
+    },
+    "gremion.{tenantId}.content.publish.failed": {
+      "address": "gremion.{tenantId}.content.publish.failed",
+      "description": "Published when a content post publish attempt fails terminally (after all channel attempts). Subject built by contentSubject(tenantId, 'publish.failed').",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID." }
+      },
+      "messages": {
+        "contentPublishFailedEvent": { "$ref": "#/components/messages/ContentPublishFailedEvent" }
+      }
+    },
+    "gremion.{tenantId}.content.channel.email.sent": {
+      "address": "gremion.{tenantId}.content.channel.email.sent",
+      "description": "Published when the email channel dispatch for a content post completes successfully. Subject built by contentSubject(tenantId, 'channel.email.sent').",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID." }
+      },
+      "messages": {
+        "contentChannelEmailSentEvent": { "$ref": "#/components/messages/ContentChannelEmailSentEvent" }
+      }
+    },
+    "gremion.{tenantId}.content.channel.portal.sent": {
+      "address": "gremion.{tenantId}.content.channel.portal.sent",
+      "description": "Published when the portal channel dispatch for a content post completes successfully (news post created/updated via kernel portal-publish callback). Subject built by contentSubject(tenantId, 'channel.portal.sent').",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID." }
+      },
+      "messages": {
+        "contentChannelPortalSentEvent": { "$ref": "#/components/messages/ContentChannelPortalSentEvent" }
+      }
+    },
+    "gremion.{tenantId}.content.channel.instagram.enqueued": {
+      "address": "gremion.{tenantId}.content.channel.instagram.enqueued",
+      "description": "Published when the Instagram channel dispatch for a content post has been enqueued (L3, disabled-by-default). Subject built by contentSubject(tenantId, 'channel.instagram.enqueued').",
+      "parameters": {
+        "tenantId": { "description": "Tenant UUID." }
+      },
+      "messages": {
+        "contentChannelInstagramEnqueuedEvent": { "$ref": "#/components/messages/ContentChannelInstagramEnqueuedEvent" }
+      }
+    }
+  },
+  "operations": {
+    "publishContentPublishSucceeded": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/gremion.%7BtenantId%7D.content.publish.succeeded" },
+      "summary": "Content leaf publishes publish.succeeded when all channel dispatches complete."
+    },
+    "publishContentPublishFailed": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/gremion.%7BtenantId%7D.content.publish.failed" },
+      "summary": "Content leaf publishes publish.failed when publish attempt fails terminally."
+    },
+    "publishContentChannelEmailSent": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/gremion.%7BtenantId%7D.content.channel.email.sent" },
+      "summary": "Content leaf publishes channel.email.sent when email channel dispatch completes."
+    },
+    "publishContentChannelPortalSent": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/gremion.%7BtenantId%7D.content.channel.portal.sent" },
+      "summary": "Content leaf publishes channel.portal.sent when portal channel dispatch completes."
+    },
+    "publishContentChannelInstagramEnqueued": {
+      "action": "send",
+      "channel": { "$ref": "#/channels/gremion.%7BtenantId%7D.content.channel.instagram.enqueued" },
+      "summary": "Content leaf publishes channel.instagram.enqueued when Instagram dispatch is enqueued."
+    },
+    "consumeContentEvents": {
+      "action": "receive",
+      "channel": { "$ref": "#/channels/gremion.%7BtenantId%7D.content.publish.succeeded" },
+      "summary": "The module repo's audit consumer — not in this repo — subscribes on gremion.*.content.> (6+ token subjects). At-least-once delivery; consumers MUST dedupe on eventId."
+    }
+  },
+  "components": {
+    "messages": {
+      "ContentPublishSucceededEvent": {
+        "name": "ContentPublishSucceededEvent",
+        "title": "Content publish succeeded",
+        "payload": { "$ref": "#/components/schemas/EnvelopeContentPublishSucceeded" }
+      },
+      "ContentPublishFailedEvent": {
+        "name": "ContentPublishFailedEvent",
+        "title": "Content publish failed",
+        "payload": { "$ref": "#/components/schemas/EnvelopeContentPublishFailed" }
+      },
+      "ContentChannelEmailSentEvent": {
+        "name": "ContentChannelEmailSentEvent",
+        "title": "Content channel email sent",
+        "payload": { "$ref": "#/components/schemas/EnvelopeContentChannelEmailSent" }
+      },
+      "ContentChannelPortalSentEvent": {
+        "name": "ContentChannelPortalSentEvent",
+        "title": "Content channel portal sent",
+        "payload": { "$ref": "#/components/schemas/EnvelopeContentChannelPortalSent" }
+      },
+      "ContentChannelInstagramEnqueuedEvent": {
+        "name": "ContentChannelInstagramEnqueuedEvent",
+        "title": "Content channel instagram enqueued",
+        "payload": { "$ref": "#/components/schemas/EnvelopeContentChannelInstagramEnqueued" }
+      }
+    },
+    "schemas": {
+      "EventEnvelope": {
+        "type": "object",
+        "required": ["eventId", "eventType", "tenantId", "occurredAt", "payload"],
+        "properties": {
+          "eventId": { "type": "string", "format": "uuid", "description": "Also the Nats-Msg-Id (JetStream dedup). Matches @gremion/ports EventEnvelope.eventId." },
+          "eventType": { "type": "string", "description": "Short event type. Values: ContentEvent union from @gremion/ports/broker. Matches @gremion/ports ContentEvent." },
+          "tenantId": { "type": "string", "format": "uuid", "description": "Tenant UUID (resolved by UUID per #173). Matches @gremion/ports EventEnvelope.tenantId." },
+          "occurredAt": { "type": "string", "format": "date-time", "description": "ISO 8601 timestamp (UTC, Z-suffixed). Matches @gremion/ports EventEnvelope.occurredAt." },
+          "correlationId": { "type": ["string", "null"], "description": "Content post UUID (the leaf's post id). Matches @gremion/ports EventEnvelope.correlationId." },
+          "payload": { "type": "object", "description": "Event-specific payload (see envelope sub-schemas). Matches @gremion/ports EventEnvelope.payload." }
+        }
+      },
+      "ContentPublishPayloadBase": {
+        "type": "object",
+        "required": ["postId"],
+        "properties": {
+          "postId": { "type": "string", "format": "uuid", "description": "The content leaf's post UUID." },
+          "externalRef": { "type": ["string", "null"], "description": "External reference from the most recent successful publish (e.g. kernel news_posts.id for portal)." }
+        }
+      },
+      "EnvelopeContentPublishSucceeded": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  { "$ref": "#/components/schemas/ContentPublishPayloadBase" },
+                  {
+                    "type": "object",
+                    "required": ["channels"],
+                    "properties": {
+                      "channels": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of channel identifiers that succeeded (e.g. 'email', 'portal', 'instagram')."
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeContentPublishFailed": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  { "$ref": "#/components/schemas/ContentPublishPayloadBase" },
+                  {
+                    "type": "object",
+                    "required": ["error"],
+                    "properties": {
+                      "error": { "type": "string", "description": "Human-readable error message from the terminal publish failure." }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeContentChannelEmailSent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  { "$ref": "#/components/schemas/ContentPublishPayloadBase" },
+                  {
+                    "type": "object",
+                    "required": ["channel"],
+                    "properties": {
+                      "channel": { "type": "string", "const": "email", "description": "Always 'email'." },
+                      "deliveredCount": { "type": "integer", "description": "Number of recipients successfully delivered to via email." }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeContentChannelPortalSent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  { "$ref": "#/components/schemas/ContentPublishPayloadBase" },
+                  {
+                    "type": "object",
+                    "required": ["channel"],
+                    "properties": {
+                      "channel": { "type": "string", "const": "portal", "description": "Always 'portal'." },
+                      "externalRef": { "type": "string", "description": "The kernel news post id created/updated by the portal-publish callback (content_origin_post_id anchor)." }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeContentChannelInstagramEnqueued": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EventEnvelope" },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  { "$ref": "#/components/schemas/ContentPublishPayloadBase" },
+                  {
+                    "type": "object",
+                    "required": ["channel"],
+                    "properties": {
+                      "channel": { "type": "string", "const": "instagram", "description": "Always 'instagram'." }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

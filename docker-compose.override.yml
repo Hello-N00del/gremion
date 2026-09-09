@@ -1,0 +1,124 @@
+##############################################################
+# docker-compose.override.yml
+#
+# Local development overrides — auto-loaded by docker compose.
+# DO NOT commit secrets to this file.
+# Exposes service ports on localhost for direct access.
+#
+# Dual-stack note: every host-facing port binds both IPv4
+# (127.0.0.1) and IPv6 (::1). Modern browsers (Chrome, Firefox,
+# Edge) often resolve `localhost` to ::1 first and don't always
+# fall back to 127.0.0.1 if the IPv6 connection is refused.
+# Without the [::1] line, iframes loading http://localhost:<port>
+# from a browser would silently get net::ERR_CONNECTION_REFUSED
+# even though `curl` works fine (curl prefers IPv4).
+##############################################################
+
+services:
+
+  postgres:
+    ports:
+      - "127.0.0.1:5433:5432"
+      - "[::1]:5433:5432"
+
+  # Mailpit web UI (#162) — read trapped mail at http://localhost:8026.
+  # SMTP (:1025) stays internal-only; only the web UI is host-exposed.
+  # 8026 chosen to avoid 8025 collisions and stay clear of the other
+  # 808x host ports (legal 8083, keycloak 8082).
+  mailpit:
+    ports:
+      - "127.0.0.1:8026:8025"
+      - "[::1]:8026:8025"
+
+  gremion-ui:
+    ports:
+      # P2.1c T5 (#202) D-PORTBIND: bind the dev port to LOOPBACK only. A bare
+      # `3001:3000` publishes on 0.0.0.0 (all interfaces), which would let an
+      # off-host client set x-forwarded-host and select ANY tenant (the SECURITY
+      # INVARIANT in resolve.ts). Loopback keeps the app reachable for local dev
+      # without exposing the tenant-selection seam. The [::1] line is the IPv6
+      # parity binding. check-app-port-binding.mjs enforces this in `check`.
+      - "127.0.0.1:3001:3000"
+      - "[::1]:3001:3000"
+    environment:
+      ORIGIN: "http://localhost:3001"
+      PUBLIC_BASE_URL: "http://localhost:3001"
+      # Keycloak 26 hostname v2: iss = KC_HOSTNAME/realms/{realm}.
+      # KC_HOSTNAME includes /auth, so iss = http://localhost:8082/auth/realms/sturaos.
+      AUTH_KEYCLOAK_ISSUER: "http://localhost:8082/auth/realms/sturaos"
+      AUTH_KEYCLOAK_BASE: "http://localhost:8082/auth/realms/sturaos"
+      # Server-side token refresh uses Docker-internal URL (avoids localhost from inside container).
+      # G-080: dev keeps plain http (dev realm = sslRequired:external); base
+      # defaults both of these to https://keycloak:8443 for prod internal TLS.
+      AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/sturaos"
+      KEYCLOAK_ADMIN_URL: "http://keycloak:8080/auth"
+      # The structure-aware seeder (POST /api/setup/seed) is now the single
+      # seeding path — disable the 011 dev-seed migration in dev too.
+      GREMION_DISABLE_SEEDS: "true"
+
+  gremion-public:
+    ports:
+      - "127.0.0.1:3002:3000"
+      - "[::1]:3002:3000"
+    environment:
+      ORIGIN: "http://localhost:3002"
+      PUBLIC_MAIN_APP_URL: "http://localhost:3001"
+
+  keycloak:
+    ports:
+      # #260 D-PORTBIND: loopback-only like every peer service. Port 8082 serves
+      # the full Keycloak admin console (/auth/admin) with bootstrap-admin
+      # credentials configured — a 0.0.0.0 bind exposed the IdP control plane to
+      # the LAN. [::1] is IPv6 parity.
+      - "127.0.0.1:8082:8080"
+      - "[::1]:8082:8080"
+    # Override base 'start' with 'start-dev' for local development (no TLS
+    # required). The entrypoint from docker-compose.yml runs
+    # substitute-realm-secrets.sh then execs kc.sh "$@" — these args are
+    # $@ for that exec, so the list form is required (folded string would
+    # collapse into a single $1).
+    command:
+      - start-dev
+      - --import-realm
+      - --http-relative-path
+      - /auth
+      - --hostname-strict=false
+    environment:
+      # Keycloak 26 hostname v2: iss = KC_HOSTNAME/realms/{realm}.
+      # KC_HOSTNAME must include /auth so KC generates iss AND form action URLs
+      # as http://localhost:8082/auth/realms/... consistently.
+      KC_HOSTNAME: "http://localhost:8082/auth"
+      KC_HTTP_ENABLED: "true"
+      # G-080: keep the dev realm at sslRequired:external so pure-local browser
+      # login over http://localhost:8082 works without per-developer cert trust.
+      # Prod/staging default to "all" (KC_REALM_SSL_REQUIRED in base) + internal
+      # TLS from docker-compose.prod.yml.
+      KC_REALM_SSL_REQUIRED: "external"
+      # Allow server-to-server (backchannel) callers that use the internal
+      # Docker hostname (keycloak:8080) to get internal-hostname endpoints in
+      # the discovery document, so e.g. the gremion-ui server can exchange the
+      # auth code without trying to connect to localhost:8082 from inside the
+      # container.
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    # A-019 follow-up - wire the dev-csp Traefik middleware (defined in
+    # docker/traefik/dynamic/dev-csp.yaml) onto the keycloak router so
+    # that the prod-narrowed `frame-ancestors 'self' https://${DOMAIN}`
+    # CSP (from realm-export.json, shared between dev and prod) is
+    # overwritten with a dev-permissive policy that re-allows iframe
+    # embeds from http://localhost:* during local development.
+    #
+    # These labels are a no-op until/unless Traefik is the active
+    # router for keycloak in dev - today keycloak is reached directly
+    # on port 8082 (mapping above), so the labels sit dormant. They
+    # become live the moment an operator brings up Traefik locally
+    # (e.g. by adding traefik to the dev stack), without any change
+    # to base docker-compose.yml or docker-compose.prod.yml.
+    #
+    # `@file` resolves to the Traefik file provider (see
+    # docker/traefik/traefik.yml), which is where dev-csp.yaml is
+    # loaded from.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.keycloak-dev.rule=Host(`localhost`) && (PathPrefix(`/auth/realms`) || PathPrefix(`/auth/resources`) || PathPrefix(`/auth/admin`) || PathPrefix(`/auth/js`))"
+      - "traefik.http.routers.keycloak-dev.middlewares=dev-csp@file"
+      - "traefik.http.services.keycloak-dev.loadbalancer.server.port=8080"

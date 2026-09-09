@@ -1,0 +1,90 @@
+##############################################################
+# Vector log pipeline configuration for Gremion (K8s)
+#
+# Reads Traefik container logs from the node's /var/log/pods,
+# pseudonymises IP addresses via the ipcrypt-nd binary baked
+# into the custom Vector image, and applies retention filtering.
+#
+# The ipcrypt key is loaded at start from /run/secrets/ipcrypt_key
+# (mounted from the vector-ipcrypt-secret Secret).
+##############################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: gremion-system
+data:
+  vector.toml: |
+    [api]
+    enabled = false
+
+    # ── Source: Traefik container logs on this node ───────────────
+    [sources.traefik_logs]
+    type = "kubernetes_logs"
+    extra_label_selector = "app.kubernetes.io/name=traefik"
+    auto_partial_merge = true
+
+    # ── Transform: parse Traefik JSON access log ──────────────────
+    [transforms.parse_access_log]
+    type = "remap"
+    inputs = ["traefik_logs"]
+    source = '''
+      . = parse_json!(.message)
+    '''
+    drop_on_error = true
+
+    # ── Transform: pseudonymise ClientHost via ipcrypt-nd ─────────
+    # Calls the ipcrypt binary bundled in the Vector image.
+    # The key is sourced from IPCRYPT_KEY env var (loaded from secret).
+    [transforms.pseudonymise_ip]
+    type = "lua"
+    inputs = ["parse_access_log"]
+    version = "2"
+    hooks.process = """
+    function (event, emit)
+      local ip = event.log.ClientHost or ""
+      if ip ~= "" then
+        local cmd = "ipcrypt nd-encrypt " .. os.getenv("IPCRYPT_KEY") .. " " .. ip
+        local h = io.popen(cmd)
+        if h then
+          local result = h:read("*l")
+          h:close()
+          if result then
+            event.log.ClientHost = result
+          end
+        end
+      end
+      emit(event)
+    end
+    """
+
+    # ── Transform: enforce retention window ───────────────────────
+    [transforms.enforce_retention]
+    type = "filter"
+    inputs = ["pseudonymise_ip"]
+    condition = '''
+      now() - to_timestamp!(.time) < to_float(env("LOG_RETENTION_SECONDS"))
+    '''
+
+    # ── Transform: security path routing ─────────────────────────
+    # Separate security-relevant paths to a longer-retention sink.
+    [transforms.route_security]
+    type = "route"
+    inputs = ["enforce_retention"]
+
+      [transforms.route_security.route]
+      security = 'match(string!(.RequestPath), r\'(?i)/auth|/realms|/api|/admin\')'
+
+    # ── Sink: access logs (short retention — all paths) ───────────
+    [sinks.access_log_file]
+    type = "file"
+    inputs = ["enforce_retention"]
+    path = "/logs/access/%Y-%m-%d.log"
+    encoding.codec = "json"
+
+    # ── Sink: security logs (longer retention) ────────────────────
+    [sinks.security_log_file]
+    type = "file"
+    inputs = ["route_security.security"]
+    path = "/logs/security/%Y-%m-%d.log"
+    encoding.codec = "json"

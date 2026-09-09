@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nutzungsbedingungen — ${ORG_NAME}</title>
+  <style>
+    body{font-family:system-ui,sans-serif;margin:0;background:#f5f5f5;color:#222}
+    main{max-width:800px;margin:2rem auto;padding:2rem;background:#fff;border-radius:8px}
+    h1{font-size:1.5rem}h2{font-size:1.1rem;margin-top:2rem;border-bottom:1px solid #eee;padding-bottom:.3rem}
+    a{color:#1a3c8f}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Nutzungsbedingungen</h1>
+    <p><em>Stand: ${YEAR} — ${ORG_NAME}</em></p>
+
+    <h2>1. Geltungsbereich</h2>
+    <p>
+      Diese Nutzungsbedingungen gelten für alle unter <strong>${DOMAIN}</strong> bereitgestellten
+      Dienste (Gremienverwaltung, Keycloak). Mit der Nutzung erkennen Sie diese Bedingungen an.
+    </p>
+
+    <h2>2. Nutzungsberechtigte</h2>
+    <p>
+      Die Nutzung ist ausschließlich Mitgliedern und Beauftragten des ${ORG_NAME} gestattet.
+      Zugangsdaten dürfen nicht weitergegeben werden.
+    </p>
+
+    <h2>3. Pflichten</h2>
+    <ul>
+      <li>Keine rechtswidrigen, diskriminierenden oder beleidigenden Inhalte hochladen oder verbreiten.</li>
+      <li>Zugangsdaten sicher aufbewahren; bei Missbrauchsverdacht umgehend melden.</li>
+      <li>Die Systeme nicht für private gewerbliche Zwecke nutzen.</li>
+    </ul>
+
+    <h2>4. Verfügbarkeit</h2>
+    <p>
+      Der Betrieb erfolgt auf Best-Effort-Basis ohne garantierte Verfügbarkeit.
+      Wartungsarbeiten werden nach Möglichkeit angekündigt.
+    </p>
+
+    <h2>5. Datenschutz</h2>
+    <p>Die Verarbeitung personenbezogener Daten erfolgt gemäß unserer
+    <a href="/datenschutz">Datenschutzerklärung</a>.</p>
+
+    <h2>6. Änderungen</h2>
+    <p>
+      ${ORG_NAME} behält sich vor, diese Nutzungsbedingungen anzupassen.
+      Änderungen werden über die Plattform bekanntgegeben.
+    </p>
+
+    <h2>7. Kontakt</h2>
+    <p><a href="mailto:${ORG_EMAIL}">${ORG_EMAIL}</a></p>
+  </main>
+  ${FOOTER}
+</body>
+</html>

@@ -1,0 +1,651 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  # On-demand run against any ref (e.g. to confirm main is green after a CI
+  # pause). The push-only jobs below also fire on workflow_dispatch so a manual
+  # run gives the same coverage as a main push.
+  workflow_dispatch:
+
+# Least-privilege token: read-only on the repo. No job in this workflow needs
+# write access (no release uploads, no issue/PR-comment steps). If a future
+# step needs write — e.g. publishing artifacts to a release — add a per-job
+# `permissions:` block on that single job rather than elevating workflow-wide.
+permissions:
+  contents: read
+
+# Cancel superseded runs on PR branches; let main/develop pushes complete
+# in full so the protected branches always have a green pipeline of record.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 1: Lint — fast, no Docker needed
+  # ──────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read  # gitleaks-action needs this to GET /repos/.../pulls/N/commits
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # gitleaks needs full history to diff base..head
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint shell scripts
+        run: |
+          shellcheck -x scripts/*.sh
+          shellcheck -x docker/postgres/init-databases.sh
+          shellcheck -x docker/legal/entrypoint.sh
+
+      - name: Lint YAML files
+        run: |
+          yamllint -c .yamllint.yml docker-compose.yml docker-compose.override.yml
+          yamllint -c .yamllint.yml k8s/
+
+      - name: Validate JSON files
+        run: |
+          python3 -m json.tool docker/keycloak/realm-export.json > /dev/null
+          echo "realm-export.json: valid"
+
+      # `files` in a workspace package.json is not only "what npm publish
+      # sends": pnpm applies the same allowlist when it packs a workspace
+      # dependency, and `pnpm deploy --prod --legacy` — how both runtime
+      # Dockerfiles assemble /app/node_modules — goes through that path. A
+      # publish-shaped `files` therefore silently empties the package inside
+      # the shipped image. This is the cheap half of the guard (no install,
+      # no build); gremion-ui.yml runs the same script against a REAL deploy
+      # payload. Both halves live in one script so the rule has one home.
+      - name: Workspace packages must ship what their exports name
+        run: node scripts/check-shipped-package-files.mjs --static
+
+      - name: Validate Docker Compose config
+        run: |
+          # Provide stubs so docker compose config can resolve all references
+          cp .env.example .env
+          mkdir -p legal && touch legal/legal.env
+          docker compose config > /dev/null
+
+      # G-043: in-repo secret scanning. Allowlist for CHANGE_ME_* and docs/
+      # lives in .gitleaks.toml. GITLEAKS_LICENSE is optional (the basic
+      # ruleset runs without it; some org-only features are gated behind it).
+      # If the secret isn't configured, the `|| ''` fallback prevents the
+      # workflow context-validator from flagging an unknown secret reference.
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE || '' }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      - name: Supply-chain :latest tag guard for k8s manifests (G-038)
+        run: |
+          set -euo pipefail
+          # NO image in k8s/ may carry :latest — not even a first-party one.
+          # Every manifest here is applied by an operator against a cluster, so
+          # a floating tag is unreproducible no matter who owns the namespace.
+          # The four first-party images are pinned to the kernel version
+          # instead (ghcr.io/hello-n00del/gremion-*:<package.json version>),
+          # which scripts/kernel-hygiene-check.mjs check g5 enforces.
+          #
+          # Two exemptions used to live here and both were dead when removed:
+          #   * `gremion/[a-z-]+:latest` — k8s/base has pinned every first-party
+          #     image to a version for as long as the kustomization IMAGE note
+          #     has existed, so nothing ever matched it;
+          #   * `ghcr.io/your-org/helios` — helios is not in this repository at
+          #     all (`git ls-files | grep -i helios` is empty), and the sentinel
+          #     it described does not exist either.
+          # An exemption nothing can trip is an exemption nobody notices is wrong.
+          #
+          # The pattern accepts both `image:` on its own indented line (how every
+          # manifest in this repo writes it) and the `- image:` list-item form.
+          # The original only accepted the former and silently ignored the latter.
+          #
+          # Vacuity guard first: this check greps a path, and a path that stops
+          # matching turns "no violations found" into "nothing was scanned".
+          scanned=$(grep -rhcE '^[[:space:]]*-?[[:space:]]*image:[[:space:]]' k8s/ --include='*.yaml' \
+                    | awk '{n+=$1} END{print n+0}')
+          if [ "$scanned" -lt 8 ]; then
+            echo "ERROR: only $scanned 'image:' lines found under k8s/ — this guard is not scanning what it thinks it is."
+            exit 1
+          fi
+          echo "Scanning $scanned image: lines under k8s/ ..."
+          if grep -rE '^[[:space:]]*-?[[:space:]]*image:[[:space:]]+[^[:space:]]+:latest($|[[:space:]]|"|'"'"')' k8s/ \
+               --include='*.yaml' > /tmp/k8s-latest 2>/dev/null; then
+            echo "ERROR: :latest image tags in k8s/:"
+            cat /tmp/k8s-latest
+            echo
+            echo "Pin first-party images to the kernel version, and externally-pulled"
+            echo "ones to <tag>@sha256:<digest> — see G-037 / G-038."
+            exit 1
+          fi
+          echo "OK — no :latest images in k8s/."
+
+      - name: Supply-chain :latest tag guard for compose (G-037)
+        run: |
+          set -euo pipefail
+          # Externally-pulled images in the production-merged compose render
+          # must be digest-pinned (image: name:tag@sha256:…). The kernel's own
+          # three images (gremion-ui, gremion-vector, gremion-fallback) may
+          # carry :latest — but ONLY because they are built here, and this step
+          # PROVES that rather than asserting it.
+          #
+          # The old exemption was `image: gremion/` with the comment "built from
+          # this repo and never pulled from a public registry". Both halves were
+          # wrong. `gremion/ui` is an unqualified name, so Docker resolves it to
+          # docker.io/gremion/ui — a Docker Hub namespace owned by an unrelated
+          # third party — and `docker compose pull` / `up --pull always` are
+          # exactly the commands a self-hoster runs. The images are now named
+          # under a namespace we control (ghcr.io/hello-n00del/gremion-*), and
+          # the exemption below is conditional on a `build:` section existing
+          # for that service in the rendered config.
+          cp .env.example .env
+          mkdir -p legal && touch legal/legal.env
+          # --profile production is required: `traefik` lives in that profile,
+          # and `cloudflared` (no profile) depends on it. Without the flag the
+          # render fails with `undefined service "traefik"`.
+          compose=(docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile production)
+          render=$("${compose[@]}" config)
+          json=$("${compose[@]}" config --format json)
+
+          # (1) Vacuity guard — a render that stopped containing our images
+          # would turn every check below into a silent pass.
+          first_party=$(echo "$json" | jq '[.services[] | select((.image // "") | startswith("ghcr.io/hello-n00del/gremion-"))] | length')
+          if [ "$first_party" -lt 5 ]; then
+            echo "ERROR: the render names only $first_party first-party image(s); expected at least 5 (ui, public, legal, vector, fallback)."
+            echo "Either an image was renamed away from ghcr.io/hello-n00del/gremion-*, or this guard is reading the wrong render."
+            exit 1
+          fi
+          echo "Render carries $first_party first-party image(s)."
+
+          # (2) The exemption's premise: every first-party image is BUILT here.
+          unbuilt=$(echo "$json" | jq -r '.services | to_entries[]
+            | select((.value.image // "") | startswith("ghcr.io/hello-n00del/gremion-"))
+            | select(.value.build == null)
+            | "\(.key): \(.value.image)"')
+          if [ -n "$unbuilt" ]; then
+            echo "ERROR: first-party image(s) with no build: section — they would be PULLED, so :latest is not safe:"
+            echo "$unbuilt"
+            exit 1
+          fi
+          echo "OK — every first-party image has a build: section."
+
+          # (3) The actual :latest check, exempting only the images just proven
+          # to be built from this repo.
+          if echo "$render" | grep -E '^[[:space:]]*image:[[:space:]]*[^[:space:]]+:latest($|[[:space:]])' \
+             | grep -vE 'image:[[:space:]]*ghcr\.io/hello-n00del/gremion-' > /tmp/latest-violators 2>/dev/null; then
+            echo "ERROR: :latest tags on externally-pulled images:"
+            cat /tmp/latest-violators
+            echo
+            echo "Pin to <tag>@sha256:<digest> — see G-037 / G-038."
+            exit 1
+          fi
+          echo "OK — no externally-pulled :latest images in compose."
+
+      - name: SOPS / production-overlay plaintext-secret guard (G-028/G-029/G-030/G-031)
+        run: |
+          set -euo pipefail
+          echo "Scanning production overlay for plaintext secret placeholders..."
+
+          # 1. Production overlay's secrets/ directory must contain no plaintext
+          #    *.yaml files. The .gitignore excludes them; this guard catches the
+          #    case where someone accidentally `git add -f` adds one.
+          plaintext=$(find k8s/overlays/production/secrets -maxdepth 1 -type f \
+                        -name '*.yaml' \
+                        ! -name '*.enc.yaml' \
+                        ! -name '*.example.yaml' || true)
+          if [[ -n "$plaintext" ]]; then
+            echo "ERROR: plaintext secret files in production overlay:"
+            echo "$plaintext"
+            exit 1
+          fi
+
+          # 2. The production overlay's kustomization.yaml must not reference an
+          #    .enc.yaml that doesn't exist on disk. Iterate over every
+          #    uncommented `secrets/.*\.enc\.yaml` mention. Commented references
+          #    are documentary and don't need backing files yet.
+          if grep -E '^[^#]*secrets/.*\.enc\.yaml' k8s/overlays/production/kustomization.yaml > /tmp/refs 2>/dev/null; then
+            while IFS= read -r ref; do
+              path=$(echo "$ref" | grep -oE 'secrets/[a-zA-Z0-9_-]+\.enc\.yaml' || true)
+              [[ -z "$path" ]] && continue
+              full="k8s/overlays/production/$path"
+              if [[ ! -f "$full" ]]; then
+                echo "ERROR: kustomization.yaml references missing file $full"
+                exit 1
+              fi
+            done < /tmp/refs
+          fi
+
+          # 3. Base k8s/ Secret manifests must not carry plaintext CHANGE_ME_
+          #    values. Sentinel placeholders (__FOO__, <YOUR_…>) are allowed
+          #    because they're meant to be replaced by overlay-provided SOPS
+          #    Secrets at deploy time. CHANGE_ME_ is forbidden because it's the
+          #    legacy plaintext form callers might mistake for ready-to-deploy.
+          if grep -rn 'CHANGE_ME_' k8s/base/ --include='*.yaml' > /tmp/changeme 2>/dev/null; then
+            echo "ERROR: CHANGE_ME_ plaintext placeholders found in k8s/base/:"
+            cat /tmp/changeme
+            echo
+            echo "Replace with __SENTINEL__ form + comment pointing at the SOPS overlay."
+            exit 1
+          fi
+
+          echo "OK — no plaintext production secrets detected."
+
+      - name: Domain-sentinel guard for k8s overlays (G-083)
+        run: |
+          set -euo pipefail
+          # Two things must not be committed under k8s/:
+          #   1. the legacy `yourdomain.com` placeholder (a non-routable
+          #      hostname that would apply silently);
+          #   2. a `__GREMION_*_DOMAIN__` sentinel in a file the operator's
+          #      substitution recipe does not reach — because the recipe is
+          #      what turns those sentinels into a real domain, and one left
+          #      behind produces a router that matches nothing. The failure is
+          #      late and silent: an IngressRoute `match` is an unconstrained
+          #      string, so the API server admits it and Traefik simply routes
+          #      nothing there.
+          #
+          # This guard used to exempt exactly one path,
+          # `patches/ingressroutes-prod.yaml`. That file no longer exists — the
+          # patches were split into a `patches/ingressroutes-prod/` DIRECTORY —
+          # so the exemption matched nothing and the guard flagged the repo's
+          # own intended state, 16 sentinel lines across 7 files. It failed
+          # closed rather than open, which is the better direction, but it was
+          # still a guard that could not pass.
+          #
+          # The exempt set is now DERIVED FROM THE RECIPE instead of hardcoded,
+          # so the two cannot drift apart again: whatever paths the operator
+          # recipe sed's over are exactly the paths allowed to carry sentinels.
+          violations=0
+          if grep -rn 'yourdomain\.com' k8s/ > /tmp/yourdomain 2>/dev/null; then
+            echo "ERROR: legacy 'yourdomain.com' placeholder found in k8s/:"
+            cat /tmp/yourdomain
+            violations=1
+          fi
+
+          recipe=k8s/overlays/production/patches/ingressroutes-prod/gremion-ui-https.yaml
+          if [ ! -f "$recipe" ]; then
+            echo "ERROR: the substitution recipe $recipe is missing — this guard derives its exempt set from it."
+            exit 1
+          fi
+          # Every k8s/overlays/production/patches/... path the recipe names,
+          # glob-expanded against the tree.
+          #
+          # ANCHORED TO THE RECIPE'S ARGUMENT LINES, not to the whole file. The
+          # extraction used to be `grep -oE '<path pattern>' "$recipe"` over
+          # every line, prose included — so a path merely MENTIONED in a comment
+          # silently widened the exempt set, which is the opposite of what this
+          # derivation is for. (The recipe file documented that footgun instead
+          # of fixing it: "Do not write another such path into this comment
+          # block — the guard cannot tell prose from recipe.") A recipe argument
+          # line is a comment containing NOTHING but the path and an optional
+          # trailing line-continuation backslash, so that is what is matched.
+          allowed=$(mktemp)
+          grep -E '^#[[:space:]]+k8s/overlays/production/patches/[A-Za-z0-9_./*-]+[[:space:]]*[\]?[[:space:]]*$' "$recipe" \
+            | sed -E 's/^#[[:space:]]+//; s/[[:space:]]*[\]?[[:space:]]*$//' \
+            | sort -u \
+            | while read -r pat; do
+                # shellcheck disable=SC2086
+                for f in $pat; do [ -f "$f" ] && echo "$f"; done
+              done \
+            | sort -u > "$allowed"
+          n_allowed=$(grep -c . "$allowed" || true)
+          if [ "${n_allowed:-0}" -lt 2 ]; then
+            echo "ERROR: derived only ${n_allowed:-0} substitutable path(s) from $recipe."
+            echo "Either the recipe stopped naming its paths, or they moved — the exempt set is not real."
+            exit 1
+          fi
+          echo "Recipe covers $n_allowed file(s):"
+          sed 's/^/  /' "$allowed"
+
+          # Sentinels in COMMENTS are documentation (the recipe quotes its own
+          # sentinel names); only a sentinel in a value gets substituted, so
+          # only those are checked.
+          : > /tmp/unreplaced-strict
+          if grep -rnE '__GREMION_[A-Z_]*DOMAIN__' k8s/overlays/production/ 2>/dev/null \
+             | grep -vE ':[[:space:]]*#' > /tmp/unreplaced; then
+            while IFS= read -r hit; do
+              f=${hit%%:*}
+              grep -qxF "$f" "$allowed" || printf '%s\n' "$hit" >> /tmp/unreplaced-strict
+            done < /tmp/unreplaced
+          fi
+          if [ -s /tmp/unreplaced-strict ]; then
+            echo "ERROR: __GREMION_*_DOMAIN__ sentinel in a file the substitution recipe does not reach:"
+            cat /tmp/unreplaced-strict
+            echo
+            echo "Add the file to the sed recipe at the top of $recipe,"
+            echo "or move the sentinel into a file the recipe already covers."
+            violations=1
+          fi
+
+          if [[ "$violations" -ne 0 ]]; then
+            exit 1
+          fi
+          echo "OK — no yourdomain.com, and every domain sentinel is inside the substitution recipe's reach."
+
+      - name: Proxy-trust sentinel guard (#202 P2.1c FIX4-CLI-CI)
+        run: |
+          set -euo pipefail
+          # The tenant proxy-trust shared secret is materialised into the
+          # x-proxy-trust Middleware header by an `op: replace` in a
+          # git-tracked patch. UNLIKE the SOPS Secrets, that patch is NOT
+          # gitignored, so an operator who runs the substitution in place and
+          # commits would push the real shared secret into the history of a
+          # public repository. This guard rejects any committed value that is
+          # not one of the fail-closed sentinels.
+          #
+          # The patch used to be one file, k8s/overlays/production/patches/
+          # ingressroutes-prod.yaml, and this step still named it after the
+          # split into a DIRECTORY of per-resource patches. `grep` on a missing
+          # file produced an empty value, which the check below reported as
+          # "could not locate" — so the guard failed on every run for a reason
+          # that had nothing to do with a leaked secret. It is now discovered
+          # by content: whichever tracked file carries the op is the file
+          # checked, and if a second one appears it is checked too.
+          mapfile -t patches < <(grep -rl 'path: /spec/headers/customRequestHeaders/x-proxy-trust' \
+                                   k8s/ --include='*.yaml' | sort)
+          if [ "${#patches[@]}" -eq 0 ]; then
+            echo "ERROR: no file under k8s/ carries the x-proxy-trust op."
+            echo "Either the patch was removed (then remove this guard deliberately) or it moved again."
+            exit 1
+          fi
+          # The two accepted sentinels: the overlay placeholder the patch ships
+          # with, and the base Middleware's fail-closed value. Either is a
+          # no-secret marker; anything else is a materialised real secret.
+          accepted='^(__TENANT_PROXY_SHARED_SECRET__|__OVERRIDE_FROM_OVERLAY_TENANT_PROXY_SHARED_SECRET__)$'
+          for patch in "${patches[@]}"; do
+            # The `value:` line immediately under the `path:` op (-A2 covers it).
+            val=$(grep -A2 'path: /spec/headers/customRequestHeaders/x-proxy-trust' "$patch" \
+                    | grep -E '^\s*value:' \
+                    | head -n1 \
+                    | sed -E 's/^\s*value:\s*//; s/^["'\'']//; s/["'\'']\s*$//' || true)
+            if [[ -z "$val" ]]; then
+              echo "ERROR: found the x-proxy-trust op in $patch but no 'value:' under it."
+              echo "If the patch shape changed, update this guard deliberately."
+              exit 1
+            fi
+            if ! echo "$val" | grep -qE "$accepted"; then
+              echo "ERROR: the x-proxy-trust value in $patch is not a fail-closed sentinel:"
+              echo "  found: $val"
+              echo
+              echo "A real proxy-trust secret must NEVER be committed. Copy the patch to a"
+              echo "gitignored overlay-local file before substituting (see the header note in"
+              echo "$patch); the committed file must keep __TENANT_PROXY_SHARED_SECRET__."
+              exit 1
+            fi
+            echo "OK — $patch carries the fail-closed sentinel ($val)."
+          done
+          echo "OK — checked ${#patches[@]} x-proxy-trust patch file(s)."
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 1b: DCO — the inbound=outbound guarantee, actually checked
+  #
+  # CONTRIBUTING.md requires a Signed-off-by trailer on every commit, and the
+  # docs market DCO-not-CLA as this project's provenance story. Nothing
+  # enforced it: no DCO app on the repository, no job here, no checkbox on the
+  # PR template. The guarantee was documentation only.
+  #
+  # SCOPE — stated plainly, so nobody reads this as a repository-wide gate:
+  #
+  #   * It judges pull requests whose head branch lives in ANOTHER repository —
+  #     i.e. every third-party contribution, which is the case the DCO exists
+  #     for: the contributor is not the copyright holder, so the certification
+  #     has to come from them, per commit, in the commit message.
+  #
+  #   * It does NOT judge branches pushed inside this repository. Only
+  #     maintainers can push here, and the history written before the public
+  #     flip was authored by the copyright holder rather than contributed
+  #     under the DCO — almost none of it carries the trailer. The check is
+  #     `git log --format=%b | grep -c Signed-off-by` against
+  #     `git rev-list --count HEAD`; no fixed number is quoted here because it
+  #     moves with every commit and a stale count in a public file is worse
+  #     than none. A gate over
+  #     in-repo branches would have failed its own introducing pull request
+  #     for a reason unrelated to that diff, and a gate that goes red for an
+  #     unrelated reason is how people learn to ignore a gate.
+  #
+  # This is a REAL narrowing, not a formality, so it is written down in both
+  # places a reader meets it: the job name says "(external pull requests)" and
+  # .github/PULL_REQUEST_TEMPLATE.md says the same. CONTRIBUTING.md still asks
+  # maintainers to sign off (`git commit -s`) — for them it is a habit this job
+  # does not police. To gate maintainer commits too, delete the `full_name`
+  # clause below; sign off the outstanding branches first, or the next pull
+  # request is red on arrival for a reason unrelated to its diff.
+  # ──────────────────────────────────────────────────────────────────────────
+  dco:
+    name: DCO sign-off (external pull requests)
+    runs-on: ubuntu-latest
+    # `head.repo.full_name != github.repository` rather than `head.repo.fork`:
+    # the two agree today, but `.fork` describes the HEAD repository's own
+    # nature, so if this repository ever becomes a fork itself every
+    # same-repo pull request would start matching. Comparing full names asks
+    # the question the scope note actually poses — did this branch come from
+    # somewhere else?
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # need the full range to walk every commit in the PR
+
+      - name: Every commit in this PR must be signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          range="$BASE..$HEAD"
+          mapfile -t commits < <(git rev-list "$range")
+          # Vacuity guard: a pull request always contains at least one commit.
+          # Zero here means the range is wrong, not that everything passed.
+          if [ "${#commits[@]}" -eq 0 ]; then
+            echo "::error::no commits found in $range — this check is not looking at the PR"
+            exit 1
+          fi
+          echo "Checking ${#commits[@]} commit(s) in $range"
+          missing=0
+          for c in "${commits[@]}"; do
+            # Merge commits are created by GitHub, not by the contributor.
+            if [ "$(git rev-list --parents -n 1 "$c" | wc -w)" -gt 2 ]; then
+              echo "  skip (merge)  $(git log -1 --format='%h %s' "$c")"
+              continue
+            fi
+            if git log -1 --format='%B' "$c" | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then
+              echo "  ok            $(git log -1 --format='%h %s' "$c")"
+            else
+              echo "  NOT SIGNED    $(git log -1 --format='%h %s' "$c")"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            echo
+            echo "::error::$missing commit(s) have no Signed-off-by trailer."
+            echo "Sign off with 'git commit -s'; for commits already made:"
+            echo "  git rebase --signoff $BASE"
+            echo "CONTRIBUTING.md says what signing off certifies (DCO 1.1)."
+            exit 1
+          fi
+          echo "OK — every commit is signed off."
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 2: Unit tests — no Docker needed. BATS is an EXTERNAL prerequisite
+  # installed here from npm; it is not vendored into this repo.
+  # ──────────────────────────────────────────────────────────────────────────
+  unit-test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install BATS and test dependencies
+        run: |
+          # Install envsubst (needed by legal.bats template rendering tests)
+          sudo apt-get install -y gettext-base
+          sudo npm install -g bats
+
+      - name: Run unit tests
+        run: |
+          bats test/setup.bats test/backup.bats test/restore.bats \
+            test/configure-keycloak.bats test/legal.bats
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 3: Docker build validation.
+  # Only the legal image is built here. It is the one first-party image whose
+  # build is cheap (an nginx base plus three COPYs) — gremion-ui's is covered by
+  # gremion-ui.yml's own docker job, and vector's build clones and compiles
+  # ipcrypt2, which is not worth a per-commit gate.
+  # Runs in parallel with unit-test (both depend on lint only).
+  # ──────────────────────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Image Builds
+    runs-on: ubuntu-latest
+    needs: lint
+    # Master/develop pushes only — PR-time docker builds duplicate work that
+    # is recovered the moment the PR merges. Saves ~3–5 min of runner time
+    # per PR commit. The `integration-test` job below already follows the
+    # same `push`-only pattern.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Build Legal image
+        run: docker build -t ghcr.io/hello-n00del/gremion-legal:ci docker/legal/
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 4: Integration tests — requires live Docker Compose stack
+  # Only runs on push to main/develop (not on every PR to save CI time)
+  # ──────────────────────────────────────────────────────────────────────────
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install BATS and test dependencies
+        run: |
+          sudo apt-get install -y gettext-base
+          sudo npm install -g bats
+
+      - name: Set up .env
+        run: |
+          cp .env.example .env
+          mkdir -p legal && touch legal/legal.env
+          # Replace EVERY CHANGE_ME_* placeholder so no predictable seeder /
+          # OIDC / DB / restic / admin secret leaks into a CI container's env
+          # (G-042). The hand-curated sed list previously here covered 11 of
+          # ~22 placeholders; this loop is self-maintaining as .env.example
+          # grows. The guard rail at the end converts any future drift from a
+          # silent failure into a CI-blocking error.
+          gen() { openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 32; }
+          # 1) Special-case the discovery URI's CHANGE_ME_domain (hostname, not
+          #    a secret) — substitute first so it does not match the generic
+          #    placeholder rewrite below.
+          sed -i 's|CHANGE_ME_domain|ci.local|g' .env
+          # 2) Every remaining CHANGE_ME_<name>: rewrite each DISTINCT token to
+          #    a fresh random value, with the same value applied everywhere the
+          #    token appears (e.g. PUBLIC_DB_PASSWORD and the embedded
+          #    password in GREMION_PUBLIC_DB_URL share CHANGE_ME_public_reader).
+          for name in $(grep -oE 'CHANGE_ME_[a-zA-Z0-9_]+' .env | sort -u); do
+            val=$(gen)
+            sed -i "s|${name}|${val}|g" .env
+          done
+          # 3) Guard rail — no CHANGE_ME_ may survive in a VALUE line. Fail
+          #    loudly if drift introduces a placeholder the loop above missed.
+          #    Comment lines may legitimately mention CHANGE_ME_ in prose (e.g.
+          #    the G-087 note explaining the sentinel system), so ignore them.
+          if grep -vE '^[[:space:]]*#' .env | grep -q 'CHANGE_ME_'; then
+            echo "::error::CHANGE_ME_ token survived .env sweep (in a value line):"
+            grep -nE '^[[:space:]]*[^#].*CHANGE_ME_' .env
+            exit 1
+          fi
+          echo "Rewrote .env placeholders; $(grep -c '^[A-Z_]*=' .env) settings populated"
+
+      - name: Pull Docker images
+        run: docker compose pull postgres keycloak
+
+      - name: Start databases
+        run: docker compose up -d postgres
+
+      - name: Wait for PostgreSQL to be healthy
+        run: |
+          echo "Waiting for PostgreSQL..."
+          timeout 120 bash -c 'until docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-postgres}" >/dev/null 2>&1; do sleep 3; printf "."; done'
+          echo " ready"
+
+      - name: Start Keycloak
+        run: docker compose up -d keycloak
+
+      - name: Wait for Keycloak to be healthy
+        run: |
+          echo "Waiting for Keycloak..."
+          # Health endpoint is on management port 9000 (not mapped); check the main
+          # API at /auth/realms/master — only available once realm import completes.
+          timeout 300 bash -c 'until curl -sf http://localhost:8082/auth/realms/master 2>/dev/null | grep -q "\"realm\""; do sleep 5; printf "."; done'
+          echo " ready"
+
+      - name: Run integration tests (health)
+        run: bats test/integration/health.bats test/integration/oidc.bats
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          # Build a redaction filter from the current .env so all CI-generated
+          # secrets (G-042 random values) are scrubbed from any log output
+          # before it lands in the GHA job log. GitHub's own log masking only
+          # covers declared workflow secrets; the values populated by the
+          # "Set up .env" step are generated at runtime and therefore NOT
+          # masked. This step closes G-044.
+          #
+          # Special cases excluded from the .env-derived filter:
+          #   - values shorter than 12 chars (collide with English words)
+          #   - the literal "ci.local" (G-044 hostname, not a secret)
+          #   - values containing "localhost" (URLs, paths)
+          redact() {
+            local sed_args=()
+            while IFS='=' read -r _ value; do
+              # Strip surrounding quotes, then filter obvious non-secrets
+              value="${value%\"}"; value="${value#\"}"
+              if [[ ${#value} -ge 12 && "$value" != *"localhost"* && "$value" != "ci.local" && "$value" != *"|"* ]]; then
+                sed_args+=(-e "s|${value}|[REDACTED]|g")
+              fi
+            done < <(grep -E '^[A-Z_]+=' .env)
+            # Belt-and-braces: redact common token patterns regardless of
+            # whether their value happened to be in .env (e.g. tokens minted
+            # at runtime by Keycloak's OIDC flow during integration tests).
+            sed_args+=(
+              -e 's|Bearer [A-Za-z0-9._\-]\+|Bearer [REDACTED]|g'
+              -e 's|"access_token":"[^"]*"|"access_token":"[REDACTED]"|g'
+              -e 's|"refresh_token":"[^"]*"|"refresh_token":"[REDACTED]"|g'
+              -e 's|"client_secret":"[^"]*"|"client_secret":"[REDACTED]"|g'
+              -e 's|password=[^ &]*|password=[REDACTED]|g'
+            )
+            sed "${sed_args[@]}"
+          }
+
+          echo "=== docker compose ps ==="
+          docker compose ps                              | redact
+          echo "=== keycloak logs ==="
+          docker compose logs --tail=50 keycloak         | redact
+          echo "=== postgres logs ==="
+          docker compose logs --tail=30 postgres         | redact
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v

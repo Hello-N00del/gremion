@@ -1,0 +1,29 @@
+---
+name: Question or idea
+description: Ask about the kernel, or propose a change to it.
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Gremion is a governance kernel: it deliberately carries no
+        product-specific behaviour. If a proposal is about how one deployment
+        wants to work rather than about the governance primitives, it probably
+        belongs in a module rather than here — say which you think it is and
+        why, and we can disagree about it.
+  - type: textarea
+    id: body
+    attributes:
+      label: What are you trying to do
+      description: >-
+        The goal, not just the proposed mechanism. What you tried, and what the
+        docs told you.
+    validations:
+      required: true
+  - type: textarea
+    id: kernel-or-module
+    attributes:
+      label: Kernel or module
+      description: >-
+        If this is a change proposal: does it belong in the kernel (governance
+        primitives, shared contracts, the runtime registry) or in a module?

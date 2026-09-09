@@ -1,0 +1,28 @@
+# .sops.yaml — SOPS encryption rules for Gremion
+# See: https://github.com/getsops/sops
+#
+# G-028 closure: the operator-managed age public key MUST be substituted in
+# place of the <OPERATOR_AGE_PUBLIC_KEY_…> sentinel below BEFORE any
+# `sops --encrypt` invocation will succeed. The private half MUST live in
+# the operator vault (1Password / Bitwarden) — NEVER commit it.
+#
+# Bootstrap (one-time, per operator workstation):
+#   bash k8s/overlays/production/secrets/bootstrap-sops.sh
+# That script:
+#   - Generates an age key at ~/.config/sops/age/keys.txt (if absent)
+#   - Prints the public key for you to paste into the `age:` value below
+#   - Prints the private-key handoff procedure (vault upload + scrub)
+#
+# Verification (after substituting the real key):
+#   sops --encrypt k8s/overlays/production/secrets/redis-secret.example.yaml \
+#        > /tmp/test.enc.yaml && sops --decrypt /tmp/test.enc.yaml \
+#        && rm /tmp/test.enc.yaml
+#
+# Production deploy uses kustomize-sops (ksops):
+#   https://github.com/viaduct-ai/kustomize-sops
+# Each .enc.yaml is decrypted at `kustomize build --enable-alpha-plugins` time.
+
+creation_rules:
+  - path_regex: k8s/overlays/production/secrets/.*\.enc\.yaml$
+    age: >-
+      <OPERATOR_AGE_PUBLIC_KEY_REPLACE_VIA_BOOTSTRAP_SOPS_SH>

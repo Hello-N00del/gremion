@@ -1,0 +1,48 @@
+{
+  "name": "@gremion/db",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Postgres client factory and shared row types for the Gremion governance kernel",
+  "type": "module",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hello-N00del/gremion.git",
+    "directory": "packages/db"
+  },
+  "homepage": "https://github.com/Hello-N00del/gremion/tree/main/packages/db",
+  "bugs": "https://github.com/Hello-N00del/gremion/issues",
+  "files": ["dist", "src", "!src/**/*.test.ts", "README.md", "LICENSE"],
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    },
+    "./public-types": {
+      "import": "./src/public-types.ts"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./public-types": {
+        "types": "./dist/public-types.d.ts",
+        "import": "./dist/public-types.js"
+      }
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "postgres": "^3.4.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

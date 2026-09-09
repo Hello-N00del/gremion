@@ -1,0 +1,5 @@
+# Production overlay: gremion-ui .well-known HTTP. See gremion-ui-https.yaml
+# for the __GREMION_DOMAIN__ sentinel substitution recipe.
+- op: replace
+  path: /spec/routes/0/match
+  value: (Host(`__GREMION_DOMAIN__`) || HostRegexp(`^[a-z0-9-]+\.__GREMION_DOMAIN_REGEX__$`)) && PathPrefix(`/.well-known/`)

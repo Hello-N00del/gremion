@@ -1,0 +1,194 @@
+---
+# Dependabot un-pause helper — MANUAL ONLY.
+#
+# WHAT IT DOES: rewrites `open-pull-requests-limit: 0  # PAUSED — restore to N`
+# lines in .github/dependabot.yml back to N, and opens a PR with the result. It
+# does not merge anything.
+#
+# WHEN TO RUN IT: after an ecosystem has been deliberately paused with those
+# inline hint comments and you want it back. As this file stands, nothing in
+# dependabot.yml is paused and no hint comments exist, so a run finds nothing
+# to do and exits clean. That is the correct state, not a broken tool.
+#
+# WHY IT IS NO LONGER ON A CRON. It used to run every Monday, and its "should I
+# un-pause?" signal was the latency between a run being queued and its first
+# job starting: high latency was read as billing throttling, low latency as
+# recovery. That premise does not survive contact with reality here.
+#
+#   * The pause it was written for (2026-05-27) was an Actions quota
+#     exhaustion. This repository is public, and public repositories get free
+#     standard-runner minutes — the condition it probes for cannot occur.
+#   * With the condition gone, the probe reads "recovered" on essentially every
+#     run. A weekly cron whose branch always evaluates true is a weekly cron
+#     that opens a PR on a false positive, unattended.
+#
+# So it keeps its logic and loses its schedule: `workflow_dispatch` only, run by
+# a person who has a reason. The latency probe is kept because it is the record
+# of what the un-pause decision was based on, and it is reported rather than
+# acted on unless a human dispatched the run in the first place.
+#
+# The PR it opens is labelled `dependencies, ci, automated`. All three are
+# declared in .github/labels.yml, and kernel-hygiene check f6 now reads
+# `--label` flags out of workflow files to keep it that way: `automated` used
+# to exist in neither the roster nor the repository, so `gh pr create` would
+# have failed AFTER `git push` had already created the branch.
+
+name: dependabot-unpause
+
+on:
+  # Dispatch only — see the header. There was a `schedule: cron '0 9 * * 1'`
+  # here; it is deliberately gone, not commented out, because a commented cron
+  # is an invitation to uncomment it without re-reading why it left.
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: dependabot-unpause
+  cancel-in-progress: false
+
+jobs:
+  # ── Job 1: measure Actions job-start latency ─────────────────────────
+  measure:
+    runs-on: ubuntu-latest
+    outputs:
+      latency_seconds: ${{ steps.compute.outputs.latency_seconds }}
+      recovered: ${{ steps.compute.outputs.recovered }}
+    steps:
+      - name: Probe job-start latency via Actions API
+        id: compute
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Fetch the run record. created_at = when the workflow was
+          # queued; run_started_at = when the first job actually picked
+          # it up. The diff is the queue depth in seconds.
+          run_json=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}")
+          created=$(echo "$run_json" | jq -r '.created_at')
+          started=$(echo "$run_json" | jq -r '.run_started_at')
+          [[ -n "$created" && "$created" != "null" ]] || { echo "::error::no created_at"; exit 1; }
+          [[ -n "$started" && "$started" != "null" ]] || { echo "::error::no run_started_at"; exit 1; }
+          c_epoch=$(date -d "$created" +%s)
+          s_epoch=$(date -d "$started" +%s)
+          latency=$(( s_epoch - c_epoch ))
+          echo "Queued at:  $created ($c_epoch)"
+          echo "Started at: $started ($s_epoch)"
+          echo "Latency:    ${latency}s"
+          # Queue-latency reading. This was once the automatic recovery signal:
+          # under heavy quota throttling GitHub queues jobs for MINUTES, under
+          # normal operation a dispatched job starts within seconds, so LOW
+          # latency ⇒ recovered. On a public repository, where standard-runner
+          # minutes are free, it now reads "recovered" essentially always —
+          # which is precisely why this workflow no longer runs on a schedule.
+          #
+          # It is kept as the RECORD of what a manual un-pause was decided
+          # against, printed into the PR body. A person dispatched this run;
+          # the number is evidence for them, not a trigger on its own.
+          #
+          # The threshold tolerates ordinary scheduler jitter (cold runners).
+          THRESHOLD=120
+          if (( latency <= THRESHOLD )); then
+            echo "Runner queue is healthy (latency ${latency}s ≤ ${THRESHOLD}s threshold)."
+            echo "recovered=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "Runner queue is congested (latency ${latency}s > ${THRESHOLD}s) — not proposing an un-pause."
+            echo "recovered=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "latency_seconds=${latency}" >> "$GITHUB_OUTPUT"
+
+  # ── Job 2: open the un-pause PR (only when recovered) ────────────────
+  unpause:
+    needs: measure
+    if: needs.measure.outputs.recovered == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Restore any paused open-pull-requests-limit
+        id: edit
+        run: |
+          set -euo pipefail
+          f=.github/dependabot.yml
+          [[ -f "$f" ]] || { echo "::error::$f missing"; exit 1; }
+          # A paused ecosystem is `open-pull-requests-limit: 0` carrying an
+          # inline '# PAUSED — restore to N' hint comment; N is the original
+          # limit and is parsed back out of it. Nothing is paused today, so a
+          # run reports "nothing to do" — that is the expected outcome, not a
+          # failure. (The `pub` ecosystem this once also covered was deleted
+          # with the Flutter app in the open-core carve; it no longer exists.)
+          changed=0
+          tmp=$(mktemp)
+          ws='[[:space:]]*'
+          pat="^(${ws})open-pull-requests-limit:${ws}0${ws}#${ws}PAUSED${ws}"
+          pat+="—?${ws}restore${ws}to${ws}([0-9]+)"
+          while IFS= read -r line; do
+            if [[ "$line" =~ $pat ]]; then
+              indent="${BASH_REMATCH[1]}"
+              n="${BASH_REMATCH[2]}"
+              printf '%sopen-pull-requests-limit: %s\n' "$indent" "$n" >> "$tmp"
+              changed=$(( changed + 1 ))
+            else
+              printf '%s\n' "$line" >> "$tmp"
+            fi
+          done < "$f"
+          if (( changed == 0 )); then
+            echo "No paused ecosystems found — nothing to do."
+            echo "made_changes=false" >> "$GITHUB_OUTPUT"
+            rm -f "$tmp"
+            exit 0
+          fi
+          mv "$tmp" "$f"
+          echo "Restored ${changed} ecosystems."
+          echo "made_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open un-pause PR
+        if: steps.edit.outputs.made_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATENCY: ${{ needs.measure.outputs.latency_seconds }}
+        run: |
+          set -euo pipefail
+          branch="ci/dependabot-unpause-$(date +%Y%m%d)"
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          git add .github/dependabot.yml
+          # Build commit + PR body in tempfiles so the multiline strings
+          # don't fight the YAML block-scalar indentation.
+          commit_msg=$(mktemp)
+          {
+            echo "ci(dependabot): un-pause the paused ecosystems"
+            echo ""
+            echo "Runner queue latency at dispatch: ${LATENCY}s (≤ 120s threshold)."
+            echo "Restored the original open-pull-requests-limit values from the"
+            echo "inline 'restore to N' hint comments in dependabot.yml."
+            echo ""
+            echo "Dispatched manually; this workflow has no schedule."
+            echo ""
+            echo "Automated by .github/workflows/dependabot-unpause.yml."
+          } > "$commit_msg"
+          git commit -F "$commit_msg"
+          git push --set-upstream origin "$branch"
+          pr_body=$(mktemp)
+          {
+            echo "Runner queue latency at dispatch: \`${LATENCY}s\` (≤ 120s threshold)."
+            echo ""
+            echo "Restores the inline 'restore to N' values for paused ecosystems"
+            echo "in \`.github/dependabot.yml\`. github-actions stays at its current"
+            echo "value (un-paused earlier)."
+            echo ""
+            echo "Automated by \`.github/workflows/dependabot-unpause.yml\`."
+            echo ""
+            echo "Merge once a maintainer confirms there's no urgent reason to stay paused."
+          } > "$pr_body"
+          gh pr create \
+            --title 'ci(dependabot): un-pause the paused ecosystems' \
+            --body-file "$pr_body" \
+            --label dependencies --label ci --label automated

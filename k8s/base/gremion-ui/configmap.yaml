@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gremion-ui-config
+  labels:
+    app: gremion-ui
+data:
+  # P2.1c (#202): the in-cluster origin internalFetch's server-to-server hop
+  # targets — resolveInternalBaseUrl() (internal-fetch.ts) returns THIS instead
+  # of falling through to PUBLIC_BASE_URL = the public apex. LOAD-BEARING for
+  # tenant isolation: the inner hop must NOT traverse the apex Traefik router
+  # (the gremion-ui-apexhost Middleware UNCONDITIONALLY sets
+  # X-Forwarded-Host=default.<DOMAIN> and would OVERWRITE the <slug>.<apex>
+  # value T4 stamps -> a 2nd tenant's self-call would resolve `default` and hit
+  # the DEFAULT tenant's data plane). The gremion-ui Service (port 3000,
+  # k8s/base/gremion-ui/service.yaml) reaches the pods directly, bypassing the
+  # IngressRoute. Do NOT point this at the public apex.
+  INTERNAL_BASE_URL: "http://gremion-ui:3000"
+  # P2.1c T1 (#202) kcAdminUrl parity: MUST include the /auth relative path —
+  # compose uses https://keycloak:8443/auth (docker-compose.yml, G-080 internal
+  # TLS). The k8s leg has no internal-TLS keycloak listener: the keycloak
+  # Service serves plain HTTP on 8080 (k8s/base/keycloak/service.yaml) with
+  # KC_HTTP_RELATIVE_PATH=/auth (k8s/base/keycloak/configmap.yaml) — so the
+  # in-cluster scheme here is http, but the path is byte-identical.
+  KEYCLOAK_ADMIN_URL: "http://keycloak:8080/auth"
+
+  # P2.1c T1 (#202): control-plane registry DB (tenant registry + fleet-
+  # migration ledger) — without it boot()'s runControlMigrations() dies and
+  # every request 503s. Sentinel credentials only (the CI plaintext-placeholder
+  # guard forbids the legacy form): production MUST override this key via gremion-ui-secret
+  # (envFrom lists the secretRef AFTER this ConfigMap in deployment.yaml, so
+  # the Secret value wins). D-CONTROLDIRECT:
+  # always direct to postgres:5432 — k8s has no PgBouncer leg, keep it that way
+  # for the control plane even if one is added for the data plane.
+  CONTROL_DATABASE_URL: "postgresql://control:__CONTROL_DB_PASSWORD__@postgres:5432/control"
+
+  # Auth
+  AUTH_KEYCLOAK_ISSUER: "https://stura.example.com/auth/realms/sturaos"
+  # P2.1c T1 (#202): Docker-internal/in-cluster issuer URL for server-to-server
+  # OIDC (token/userinfo/jwks/refresh). Previously unset under k8s, so those
+  # calls fell back to the PUBLIC issuer and left the cluster. Same http
+  # scheme rationale as KEYCLOAK_ADMIN_URL above.
+  AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/sturaos"
+  AUTH_TRUST_HOST: "true"
+
+  # Public URLs (prod overlay patches these to the real domain)
+  PUBLIC_BASE_URL: "https://stura.example.com"
+  ORIGIN: "https://stura.example.com"
+  AUTH_URL: "https://stura.example.com"
+
+  # AGPL-3.0 section 13: the Corresponding Source offer rendered in the footer.
+  # Set this to YOUR repository if you modified Gremion — upstream is not the
+  # corresponding source of a modified version, so an offer pointing there is
+  # false. Empty falls back to upstream, correct for an unmodified deployment.
+  PUBLIC_SOURCE_URL: ""
+
+  # Session
+  NODE_ENV: "production"
+  PORT: "3000"

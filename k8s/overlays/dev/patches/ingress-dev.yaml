@@ -1,0 +1,33 @@
+# NOTE: patches the legacy nginx-ingress example in k8s/base/ingress.yaml,
+# which is NOT wired into k8s/base/kustomization.yaml's resources (the live
+# routing uses the Traefik IngressRoutes — see patches/ingressroutes-dev.yaml,
+# which IS active in this overlay's `patches:` list). This file is kept as a
+# reference for operators who wire nginx-ingress in instead of Traefik; it is
+# intentionally NOT referenced from kustomization.yaml, since its target
+# resource does not exist in the accumulated output.
+#
+# Dev ingress: use self-signed TLS issuer and a local domain
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gremion-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: selfsigned-issuer   # Use self-signed cert in dev
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"   # Allow plain HTTP in dev
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+spec:
+  tls:
+    - hosts:
+        - stura.localhost
+      secretName: gremion-tls-dev
+  rules:
+    - host: stura.localhost
+      http:
+        paths:
+          - path: /auth(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080

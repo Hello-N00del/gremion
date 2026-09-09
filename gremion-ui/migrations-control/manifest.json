@@ -1,0 +1,5 @@
+{
+  "001_tenant_registry.sql": "c0faf73b5256839986a839bc68a9a81385b6b07da6cbe93aa4993363ac076b43",
+  "002_tenant_migration_runs.sql": "f45d2b3939b38ec617dd30d1b1a3dd94a37b10072707d0b30eee5791491828bd",
+  "003_tenant_uniques.sql": "05298f32e923ad42754a1361a60a2bdb4df532180028b6d7d1569c2a0a5f69fc"
+}

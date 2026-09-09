@@ -1,0 +1,9 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [{
+      "appID": "TEAMID.com.stura.app",
+      "paths": ["/auth/callback"]
+    }]
+  }
+}

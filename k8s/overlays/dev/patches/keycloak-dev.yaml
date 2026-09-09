@@ -1,0 +1,18 @@
+##############################################################
+# Dev overlay — relax Keycloak hostname enforcement.
+# NEVER apply this in production.
+##############################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+spec:
+  template:
+    spec:
+      containers:
+        - name: keycloak
+          env:
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_HOSTNAME_STRICT_HTTPS
+              value: "false"

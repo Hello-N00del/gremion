@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: legal
+spec:
+  selector:
+    app: legal
+  ports:
+    # External contract stays :80; A-021 wave 2 moved the container to :8080.
+    - port: 80
+      targetPort: 8080

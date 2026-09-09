@@ -1,0 +1,63 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# `resources:` is the successor to the deprecated `bases:` — same semantics,
+# no rendered-output change.
+resources:
+  - ../production
+
+patches:
+  # GKE StorageClass: premium-rwo (SSD, zonal)
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: premium-rwo
+  # GKE Ingress annotation for NEG (container-native load balancing) — NOTE:
+  # this targets the legacy nginx-ingress example (k8s/base/ingress.yaml),
+  # which is NOT wired into k8s/base/kustomization.yaml's resources; live
+  # routing uses the Traefik IngressRoutes patched in
+  # ../production/patches/ingressroutes-prod.yaml. Left commented (mirrors
+  # the AGIC block in ../aks) as reference for operators who wire
+  # k8s/base/ingress.yaml into base resources and run GKE's native Ingress
+  # controller instead of Traefik.
+  # - target:
+  #     kind: Ingress
+  #     name: gremion-ingress
+  #   patch: |
+  #     - op: add
+  #       path: /metadata/annotations/cloud.google.com~1neg
+  #       value: '{"ingress": true}'
+
+# ── Registry override (A-020/#431) ───────────────────────────────────────────
+# The four first-party images (ghcr.io/hello-n00del/gremion-{ui,public,legal,
+# vector}) are pinned in k8s/base to the kernel version — see the IMAGE
+# REFERENCES block in k8s/base/kustomization.yaml. They are built from this
+# repo and published to no registry, so retag them into a registry you control
+# and point this overlay at it HERE rather than editing base; that keeps
+# `git pull` conflict-free.
+#
+# Prefer `digest:` over `newTag:` — a digest is immutable, so a rollback is
+# reproducible. Leave this commented until the digests are real: an
+# unresolvable reference renders a Deployment that cannot be pulled, and
+# nothing rejects it at `kubectl apply` time (the pod just sits in
+# ImagePullBackOff). Uncomment and fill in:
+#
+# images:
+#   - name: ghcr.io/hello-n00del/gremion-ui
+#     newName: registry.example.org/<your-namespace>/gremion-ui
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-public
+#     newName: registry.example.org/<your-namespace>/gremion-public
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-legal
+#     newName: registry.example.org/<your-namespace>/gremion-legal
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-vector
+#     newName: registry.example.org/<your-namespace>/gremion-vector
+#     digest: sha256:<digest of the image you pushed>
+#
+# This overlay layers on ../production, so an `images:` block here overrides
+# whatever that layer resolved.

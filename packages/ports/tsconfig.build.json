@@ -1,0 +1,35 @@
+{
+  // Emit config for `npm publish`. tsconfig.json is the NO-EMIT typecheck gate
+  // (ports.yml runs `tsc --noEmit` against it); this one produces dist/.
+  //
+  // Three things this file gets deliberately right, because getting any of
+  // them wrong is silent:
+  //
+  //   1. `include` is EXPLICIT. Without it tsc's default include is `**/*`,
+  //      which sweeps vitest.config.ts into the program; with `rootDir: src`
+  //      that is TS6059 ("not under rootDir"), and without rootDir it would
+  //      quietly emit dist/src/*.js and dist/vitest.config.js, breaking every
+  //      path in `publishConfig.exports`.
+  //   2. `rootDir` is `src`, so `src/broker.ts` emits as `dist/broker.js` —
+  //      the exact path the exports map names.
+  //   3. Tests are excluded. They are not part of the published surface and
+  //      they pull in vitest types this config does not carry.
+  //
+  // module/moduleResolution are nodenext here, not the bundler setting the
+  // typecheck config uses: the published artifact is consumed by plain Node,
+  // and every relative import in src/ already carries a `.js` extension, which
+  // is what nodenext requires.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

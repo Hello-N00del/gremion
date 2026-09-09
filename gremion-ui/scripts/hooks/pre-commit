@@ -1,0 +1,39 @@
+#!/bin/sh
+# gremion-ui/scripts/hooks/pre-commit
+# Boundary-lint + contracts gate (design 2026-06-08 §7).
+# Installed into the hooks dir by gremion-ui/scripts/install-git-hooks.mjs.
+#
+# This hook FAILS CLOSED. It previously degraded to `exit 0` whenever it could
+# not run — and that is exactly how such a guard dies: an installed hook that
+# delegates to a stale path is present, executable, and enforces nothing on
+# every commit for months. A guard that skips silently is worse than no guard,
+# because it looks installed. Every unrunnable condition below blocks the
+# commit with an instruction; `git commit --no-verify` remains the single,
+# VISIBLE bypass.
+if ! ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  echo "[boundary-lint] commit blocked: could not locate the repo root (git rev-parse --show-toplevel failed), so no boundary lint ran." >&2
+  echo "[boundary-lint] Commit from inside a checkout of this repository. Deliberate bypass: git commit --no-verify." >&2
+  exit 1
+fi
+LINT="$ROOT/gremion-ui/scripts/boundary-lint.ts"
+if [ ! -f "$LINT" ]; then
+  echo "[boundary-lint] commit blocked: $LINT is missing, so no boundary lint ran." >&2
+  echo "[boundary-lint] The installed hook is stale or points at a renamed path — reinstall it with: node gremion-ui/scripts/install-git-hooks.mjs" >&2
+  echo "[boundary-lint] Deliberate bypass: git commit --no-verify." >&2
+  exit 1
+fi
+if [ ! -d "$ROOT/gremion-ui/node_modules" ]; then
+  echo "[boundary-lint] commit blocked: gremion-ui/node_modules is missing, so the boundary lint could not run." >&2
+  echo "[boundary-lint] Run: pnpm install --frozen-lockfile   (fresh clones and fresh agent worktrees need this), then re-commit." >&2
+  echo "[boundary-lint] Deliberate bypass: git commit --no-verify." >&2
+  exit 1
+fi
+cd "$ROOT" || exit 1
+pnpm -C gremion-ui --silent exec tsx scripts/boundary-lint.ts --staged
+status=$?
+if [ $status -ne 0 ]; then
+  echo "" >&2
+  echo "[boundary-lint] commit blocked. Fix the violation, or for an INTENTIONAL contract break: CONTRACTS_ALLOW_BREAKING=1 git commit … (and bump info.version)." >&2
+  echo "[boundary-lint] (--no-verify bypasses this hook; the periodic scheduled task + the unit-suite real-tree test will still catch it.)" >&2
+fi
+exit $status

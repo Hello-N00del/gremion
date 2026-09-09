@@ -1,0 +1,26 @@
+{
+  // Typecheck gate for @gremion/db. The package had NO tsconfig at all: its
+  // sources were only ever type-checked incidentally, as part of gremion-ui's
+  // svelte-check run. `pnpm --filter @gremion/db typecheck` is now a gate of
+  // its own, and tsconfig.build.json extends this one to emit dist/.
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"],
+  // *.test.ts is excluded here for a concrete reason, not tidiness: the specs
+  // import `vitest`, which is NOT a devDependency of this package — they are
+  // collected by gremion-ui's vitest (see its vite.config.ts include globs),
+  // where vitest resolves. Including them here would make this gate fail on
+  // TS2307 for a module the package legitimately does not depend on.
+  "exclude": ["src/**/*.test.ts"]
+}

@@ -1,0 +1,54 @@
+packages:
+  - 'gremion-ui'
+  - 'gremion-public'
+  - 'packages/*'
+
+# CVE floors. `scripts/check-cve-floors.mjs` (wired into `make lint`) pins each entry
+# against a committed floor table, asserts the lockfile absorbed it, asserts the
+# resolved tree honours it, and rejects an UNBOUNDED replacement — a bare
+# `>=x.y.z` raises the floor but removes the ceiling, admitting the next major.
+overrides:
+  # GHSA — cookie <0.7.0. The ceiling is NEW: while this read a bare '>=0.7.2'
+  # it forced cookie 1.1.1 into @sveltejs/kit, which declares 'cookie: ^0.6.0' —
+  # two majors outside its own range. '<1' still clears the advisory (0.7.2 is
+  # the first patched release) without the unrequested major jump.
+  cookie@<0.7.0: '>=0.7.2 <1'
+  # GHSA — dompurify <=3.4.12: mXSS sanitiser bypass (Dependabot #58). Reached
+  # through isomorphic-dompurify in both workspace apps; nothing depends on the
+  # exact pin, so the floor just moves to the first patched release.
+  dompurify: 3.4.13
+  # GHSA — undici <7.29.0: TLS certificate validation bypass via dispatcher,
+  # cross-origin request routing via SOCKS5, WebSocket client DoS, plus four
+  # lower-severity issues (5 open Dependabot alerts, 1 HIGH). Pulled in transitively
+  # by jsdom (test dependency); nothing declares it directly, so only an
+  # override moves it. The TLS bypass is the one that matters here: the app
+  # talks to Keycloak over HTTPS pinned to an internal CA (G-080), so a
+  # dispatcher-level verification bypass undermines that trust anchor.
+  # The same override is applied in every repository that consumes this workspace.
+  undici: 7.29.0
+  # GHSA-g7r4-m6w7-qqqr — esbuild dev-server arbitrary file read on Windows.
+  # Pulled in via tsx's own `esbuild: ~0.28.0` dependency, which is patched
+  # only starting at 0.28.1 (patch bump within tsx's own allowed range).
+  esbuild@>=0.27.3 <0.28.1: '>=0.28.1 <0.29'
+  # GHSA — @sveltejs/kit <=2.70.1: prototype pollution in the remote-function
+  # file-input deletion path, and large remote-form payloads can crash the Node
+  # process. gremion-public trailed gremion-ui on this; the override keeps both
+  # workspace apps (and any transitive copy) on the patched line.
+  #
+  # KEEP THIS FLOOR IN LOCKSTEP WITH THE TWO APP MANIFESTS. A pnpm override
+  # REPLACES the manifest range rather than intersecting with it: the lockfile
+  # records `specifier: '>=2.70.2'` for both importers, NOT the `^x.y.z` written
+  # in gremion-ui/package.json and gremion-public/package.json. So while this
+  # said `>=2.69.1`, bumping the manifests to ^2.70.1 resolved to 2.70.0 anyway
+  # (2.70.0 already satisfies >=2.69.1, so pnpm had no reason to move) and the
+  # manifests silently claimed a floor the installed tree did not honour. Any
+  # future kit bump must raise this line too, or it is inert.
+  '@sveltejs/kit': '>=2.70.2 <3'
+  # GHSA — nanoid <3.3.18 (Dependabot #61, HIGH): predictable IDs from a biased
+  # random source. Only the 3.x line is affected and it arrives transitively via
+  # postcss's `nanoid: ^3.3.11`, so the selector is scoped to <3.3.18 — an
+  # unscoped override would drag postcss onto nanoid 6.x, outside its range.
+  nanoid@<3.3.18: '>=3.3.18 <4'
+  # GHSA — postcss <=8.5.22 (Dependabot #60). Transitive through the Svelte/Vite
+  # toolchain; scoped selector so the bump stays inside the 8.x line.
+  postcss@<8.5.23: '>=8.5.23 <9'

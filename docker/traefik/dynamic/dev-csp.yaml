@@ -1,0 +1,66 @@
+# docker/traefik/dynamic/dev-csp.yaml
+#
+# A-019 follow-up — dev-only CSP middleware (Traefik file provider).
+#
+# Background:
+#   PR #18 narrowed the Keycloak realm-export.json `browserSecurityHeaders`
+#   `contentSecurityPolicy` to `frame-ancestors 'self' https://${DOMAIN}`
+#   to close G-035. Because the realm export is shared between dev and
+#   prod, dev workstations can no longer iframe-embed Keycloak from
+#   http://localhost:3001 (gremion-ui dev) or http://localhost:8001
+#   (helios dev), which breaks the embedded login flow during local
+#   development. Vite HMR sockets, browser devtools blob: previews, and
+#   eval-style devtooling are also routinely needed for dev workflows.
+#
+# What this file does:
+#   Defines a single Traefik dynamic middleware, `dev-csp`, whose only
+#   job is to overwrite the upstream `Content-Security-Policy` response
+#   header with a development-permissive policy. Attach it to a router
+#   ONLY via docker-compose.override.yml (the file Compose auto-loads
+#   for dev) — never in the base docker-compose.yml or the production
+#   compose stack. The prod CSP path is unchanged.
+#
+# CSP relaxations vs prod:
+#   - frame-ancestors: include http://localhost:* so dev pages on any
+#     port (3001 gremion-ui, 8001 helios, ...) can iframe-embed Keycloak.
+#   - script-src: add 'unsafe-eval' for Vite HMR and devtools-driven
+#     eval (e.g. Svelte/React inspector overlays).
+#   - connect-src: add ws: and wss: for Vite HMR / devtool WebSockets,
+#     plus http://localhost:* for cross-port dev API calls.
+#   - img-src / font-src: allow data: + blob: for devtool screenshot
+#     previews, on-the-fly canvas exports, and source-map blobs.
+#   - object-src stays 'none' (no plugin elements ever, even in dev).
+#
+# Loading:
+#   This file lives in /etc/traefik/dynamic (mounted from
+#   docker/traefik/dynamic via docker-compose.yml). The Traefik file
+#   provider in docker/traefik/traefik.yml currently points at the
+#   single file tls.yml; to also load this middleware in dev, switch
+#   the file provider to `directory: /etc/traefik/dynamic` in dev or
+#   add a second `file:` entry. Doing that switch is intentionally
+#   left as an operator step so this artifact is a no-op in any
+#   environment where Traefik isn't actively routing the keycloak
+#   service (e.g. local dev today, where keycloak is reached directly
+#   on port 8082 without going through Traefik at all).
+
+http:
+  middlewares:
+    dev-csp:
+      headers:
+        # customResponseHeaders OVERWRITES the upstream header when the
+        # key already exists, so Keycloak's narrower prod CSP is
+        # replaced with this dev-permissive one on responses that pass
+        # through this middleware.
+        customResponseHeaders:
+          Content-Security-Policy: >-
+            default-src 'self';
+            script-src 'self' 'unsafe-inline' 'unsafe-eval';
+            style-src 'self' 'unsafe-inline';
+            img-src 'self' data: blob: https:;
+            font-src 'self' data:;
+            connect-src 'self' http://localhost:* https: ws: wss:;
+            frame-src 'self' http://localhost:*;
+            frame-ancestors 'self' http://localhost:*;
+            base-uri 'self';
+            form-action 'self' http://localhost:*;
+            object-src 'none';

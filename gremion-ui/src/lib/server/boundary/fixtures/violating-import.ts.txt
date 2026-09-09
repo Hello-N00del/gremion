@@ -1,0 +1,4 @@
+// P0.4 NEGATIVE FIXTURE (.txt so svelte-check/vitest/vite never pick it up).
+// Scanned by engine.test.ts AS IF it were src/lib/server/governance/probe.ts.
+import { getFinanceBackend } from '$lib/server/finance/seam'
+export const probe = getFinanceBackend

@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  labels:
+    app: keycloak
+spec:
+  type: ClusterIP
+  selector:
+    app: keycloak
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+    # G-081 (Mediums Cluster 4 / T3.1): Keycloak's management/metrics port
+    # 9000 used to be exposed on the Service ClusterIP with no NetworkPolicy
+    # restricting ingress. No Prometheus / ServiceMonitor / PodMonitor exists
+    # in k8s/, so the port served no purpose while remaining cluster-readable.
+    # The port is therefore not declared on the Service AND
+    # KC_METRICS_ENABLED is flipped to "false" in the keycloak-config
+    # ConfigMap (so kc itself doesn't bind 9000 inside the pod either).
+    #
+    # To re-enable when Prometheus is deployed:
+    #   1. Flip KC_METRICS_ENABLED back to "true" in
+    #      k8s/base/keycloak/configmap.yaml.
+    #   2. Re-add the management port here:
+    #        - port: 9000
+    #          targetPort: 9000
+    #          protocol: TCP
+    #          name: management
+    #   3. Add a NetworkPolicy at k8s/base/network-policies/keycloak-metrics.yaml
+    #      restricting ingress on port 9000 to pods in the monitoring namespace
+    #      (or whatever pod selector the scraper uses). Without that
+    #      NetworkPolicy any pod in the cluster can scrape /metrics, which
+    #      includes JVM/HTTP signal that can be used for side-channel attacks.

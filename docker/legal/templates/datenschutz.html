@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Datenschutzerklärung — ${ORG_NAME}</title>
+  <style>
+    body{font-family:system-ui,sans-serif;margin:0;background:#f5f5f5;color:#222}
+    main{max-width:800px;margin:2rem auto;padding:2rem;background:#fff;border-radius:8px}
+    h1{font-size:1.5rem}h2{font-size:1.1rem;margin-top:2rem;border-bottom:1px solid #eee;padding-bottom:.3rem}
+    a{color:#1a3c8f}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Datenschutzerklärung</h1>
+
+    <h2>1. Verantwortlicher</h2>
+    <p>
+      <strong>${ORG_NAME}</strong><br>
+      ${ORG_ADDRESS}<br>
+      E-Mail: <a href="mailto:${ORG_EMAIL}">${ORG_EMAIL}</a>
+    </p>
+    <p>
+      Datenschutzverantwortliche/r: ${RESPONSIBLE_PERSON}<br>
+      E-Mail: <a href="mailto:${RESPONSIBLE_PERSON_EMAIL}">${RESPONSIBLE_PERSON_EMAIL}</a>
+    </p>
+
+    <h2>2. Rechtsgrundlagen</h2>
+    <p>
+      Die Verarbeitung erfolgt auf Grundlage von Art. 6 Abs. 1 lit. e DSGVO
+      (Wahrnehmung einer Aufgabe im öffentlichen Interesse) sowie Art. 6 Abs. 1 lit. b DSGVO
+      (Vertragserfüllung).
+    </p>
+
+    <h2>3. Verarbeitete Daten</h2>
+    <ul>
+      <li><strong>Identitätsdaten</strong> (Name, E-Mail, Hochschul-Kennung): Authentifizierung über Keycloak.</li>
+      <li><strong>Gremiendaten</strong> (Mitglieder, Gremien, Protokolle, Beschlüsse): Abwicklung der Gremienarbeit.</li>
+      <li><strong>Protokolldaten</strong> (anonymisierte IP, Zeitstempel): Systemsicherheit und Fehlerbehebung. Das letzte Oktett der IP-Adresse wird vor der Speicherung auf 0 gesetzt.</li>
+    </ul>
+
+    <h2>4. Speicherdauer</h2>
+    <ul>
+      <li>Sitzungsdaten (Keycloak): ${DATA_RETENTION_KEYCLOAK_SESSIONS} Inaktivität, danach automatisch gelöscht.</li>
+    </ul>
+
+    <h2>5. Weitergabe an Dritte</h2>
+    <p>
+      Daten werden nicht an Dritte weitergegeben. Alle Dienste laufen auf eigener Infrastruktur (Self-Hosted).
+      Es erfolgt kein Datentransfer außerhalb der EU/des EWR.
+    </p>
+
+    <h2>6. Ihre Rechte</h2>
+    <p>Sie haben das Recht auf Auskunft (Art. 15), Berichtigung (Art. 16), Löschung (Art. 17),
+    Einschränkung (Art. 18), Datenübertragbarkeit (Art. 20) und Widerspruch (Art. 21) gemäß DSGVO.</p>
+    <p>Anfragen richten Sie bitte an: <a href="mailto:${RESPONSIBLE_PERSON_EMAIL}">${RESPONSIBLE_PERSON_EMAIL}</a></p>
+
+    <h2>7. Beschwerderecht</h2>
+    <p>
+      Sie haben das Recht, sich bei der zuständigen Datenschutzaufsichtsbehörde zu beschweren.
+      Die zuständige Behörde richtet sich nach dem Bundesland des ${ORG_NAME}.
+    </p>
+  </main>
+  ${FOOTER}
+</body>
+</html>

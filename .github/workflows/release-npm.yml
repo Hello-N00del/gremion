@@ -1,0 +1,199 @@
+---
+# Publish @gremion/db and @gremion/ports to npm.
+#
+# Tag-driven: push a `v*` tag and this runs. Nothing publishes on a branch
+# push, and a manual run defaults to a dry run, so the only way to reach a real
+# `npm publish` by accident is to push a version tag by accident.
+#
+# CREDENTIALS: none. This uses npm trusted publishing (OIDC) — `id-token:
+# write` mints a short-lived credential at publish time. There is deliberately
+# no NPM_TOKEN in this repository's secrets, so a leaked workflow file grants
+# nothing.
+#
+# TWO OPERATOR STEPS BEFORE THE FIRST RELEASE, in this order:
+#
+#   1. The `@gremion` npm scope is currently UNCLAIMED. Publish a placeholder
+#      by hand from a laptop (`npm publish --access public` on a 0.0.1 stub)
+#      for each of @gremion/db and @gremion/ports. This claims the scope —
+#      until it is claimed, anyone can take it and publish under the names this
+#      repository advertises in its README.
+#   2. On npmjs.com, for each package: Settings -> Trusted Publisher -> GitHub
+#      Actions, register repository `Hello-N00del/gremion` and workflow file
+#      `release-npm.yml`.
+#
+#   Step 1 is listed first on purpose. npm has been adding a pre-publish
+#   trusted-publisher flow for packages that do not exist yet, and it may well
+#   work — but that is not verified here, and "claim the scope, then wire CI"
+#   is correct either way.
+#
+# WHY A BUILD STEP AT ALL: the packages' `exports` point at `./src/*.ts` for
+# the workspace, which a consumer running plain node cannot load and which
+# ships no `.d.ts`. `publishConfig.exports` in each package.json overrides the
+# map to `./dist/*.js` + types at PACK time — that override is a pnpm feature,
+# which is why this workflow packs with `pnpm pack` and then hands the finished
+# tarball to `npm publish`. `pnpm publish` is not used: pnpm 10.33.0 has no
+# `--provenance` flag (checked against `pnpm publish --help`), and provenance
+# is the point.
+#
+# WHAT IS IN THE TARBALL: dist/ (js + .d.ts + maps), src/*.ts minus the specs,
+# README.md and LICENSE. src/ is there for two reasons, and the second is the
+# load-bearing one. It makes the emitted declaration maps resolve, so a
+# consumer's "go to definition" lands on real TypeScript instead of a dead
+# path; and `files` is ALSO what pnpm applies when it packs a workspace
+# dependency for `pnpm deploy`, which is how both runtime Dockerfiles build
+# /app/node_modules. A dist-only allowlist put empty packages in the shipped
+# images — see scripts/check-shipped-package-files.mjs, which is run by ci.yml
+# on every run and against a real deploy payload by gremion-ui.yml.
+
+name: Release (npm)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Pack and validate, but do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write  # REQUIRED for npm trusted publishing (OIDC)
+
+concurrency:
+  group: release-npm
+  cancel-in-progress: false  # never cancel a half-finished publish
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.pkg }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true   # do not publish ports if db failed
+      max-parallel: 1
+      matrix:
+        include:
+          - pkg: '@gremion/db'
+            dir: packages/db
+            # @gremion/db has NO test script and no vitest dependency: its
+            # specs are collected by gremion-ui's vitest run (see that
+            # package's README). Its gate here is typecheck plus the
+            # emitted-dist post-condition below. Said out loud rather than
+            # papered over with `--if-present`, which would hide the same gap
+            # in silence.
+            has_tests: false
+          - pkg: '@gremion/ports'
+            dir: packages/ports
+            has_tests: true
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 26
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # OIDC trusted publishing needs npm >= 11.5.1. Node 26 ships an older
+      # npm, so upgrade explicitly rather than assuming the bundled one is new
+      # enough — a too-old npm ignores the OIDC path and fails asking for a
+      # token.
+      - name: Ensure an npm new enough for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A v-tag says which version is being released. If it disagrees with the
+      # manifest, either the tag is wrong or the bump was forgotten — stop
+      # before anything is published, because npm versions are immutable.
+      - name: Tag and manifest must agree
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(node -p "require('./${{ matrix.dir }}/package.json').version")
+          echo "tag=$tag manifest=$manifest"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag v$tag does not match ${{ matrix.dir }}/package.json version $manifest"
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: pnpm --filter ${{ matrix.pkg }} typecheck
+
+      # UNIT SPECS ONLY, said out loud. packages/ports/vitest.config.ts collects
+      # nats-broker*.integration.test.ts with no integration exclude, and those
+      # files self-skip unless NATS_TEST_URL is set. This step sets no NATS
+      # service and does not run packages/ports/scripts/nats-test.sh, so the
+      # JetStream proofs DO NOT execute here and the tarball is signed off
+      # without them. .github/workflows/ports.yml is the job that runs them with
+      # a real server and asserts a post-condition on the run (no file skipped,
+      # no test skipped, a minimum number of integration proofs executed) — a
+      # publish should follow a green ports.yml on the same commit, not this
+      # step alone.
+      - name: Test (unit only — see the note above)
+        if: matrix.has_tests
+        run: pnpm --filter ${{ matrix.pkg }} test
+
+      - name: Build
+        run: pnpm --filter ${{ matrix.pkg }} build
+
+      # Post-condition, not exit code: tsc can succeed having emitted nothing
+      # (a mis-scoped `include` is the usual way), and an empty dist/ publishes
+      # a package that imports as undefined.
+      - name: Assert the build emitted JS and declarations
+        run: |
+          set -euo pipefail
+          d="${{ matrix.dir }}/dist"
+          js=$(find "$d" -name '*.js' | wc -l)
+          dt=$(find "$d" -name '*.d.ts' | wc -l)
+          echo "$d: $js .js, $dt .d.ts"
+          if [ "$js" -lt 1 ] || [ "$dt" -lt 1 ]; then
+            echo "::error::$d has no emitted output"
+            exit 1
+          fi
+
+      # pnpm pack applies each package.json's `publishConfig` manifest
+      # overrides, so the tarball's own package.json points at dist/. npm does
+      # not apply those overrides, which is why the tarball — not the directory
+      # — is what gets published.
+      - name: Pack
+        working-directory: ${{ matrix.dir }}
+        run: pnpm pack --pack-destination "$RUNNER_TEMP"
+
+      # Prove the override landed before uploading anything. A tarball whose
+      # exports still point at ./src/*.ts is the exact broken artifact this
+      # workflow exists to avoid, and it would publish without error.
+      - name: Assert the packed manifest points at dist/
+        run: |
+          set -euo pipefail
+          tgz=$(find "$RUNNER_TEMP" -maxdepth 1 -name '*.tgz' | head -n1)
+          if [ -z "$tgz" ]; then
+            echo "::error::no tarball produced"
+            exit 1
+          fi
+          echo "tarball: $tgz"
+          tar -xzOf "$tgz" package/package.json > "$RUNNER_TEMP/packed.json"
+          node scripts/check-packed-manifest.mjs "$RUNNER_TEMP/packed.json"
+          echo "TARBALL=$tgz" >> "$GITHUB_ENV"
+
+      - name: Publish
+        # No NODE_AUTH_TOKEN. Trusted publishing mints a short-lived OIDC
+        # credential; there is no npm token anywhere in this repo's secrets.
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+             && [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "Dry run — validating the tarball without publishing."
+            npm publish "$TARBALL" --provenance --access public --dry-run
+          else
+            npm publish "$TARBALL" --provenance --access public
+          fi

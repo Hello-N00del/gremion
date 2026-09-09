@@ -1,0 +1,89 @@
+# Production overlay: patch gremion-ui-https IngressRoute hostnames to real domains
+#
+# G-083 (Mediums Cluster 4 / T3.2): the previous version of this file
+# hard-coded the legacy <your-domain>.com placeholder string, which would
+# silently break the production ingress if applied unmodified. This file
+# now uses the `__GREMION_*_DOMAIN__` sentinel pattern, alongside the
+# `__OVERRIDE_FROM_OVERLAY_SOPS_*_SECRET__` Secret sentinels.
+#
+# What the sentinel does and does NOT buy you — read this before copying the
+# pattern anywhere else:
+#
+#   - It does NOT make `kubectl apply` fail. An IngressRoute `match` is an
+#     unconstrained string; the API server admits Host(`__GREMION_DOMAIN__`)
+#     happily and Traefik then routes nothing to it. The failure is LATE and
+#     SILENT, not fast.
+#   - What it DOES buy is a greppable marker, enforced at lint/CI time — the
+#     only layer that can actually reject it. See below.
+#
+# This header used to cite Wave 3b's A-020 image sentinel
+# (`OVERLAY_MUST_PROVIDE_DIGEST_PINNED_TAG`) as precedent for a fail-fast at
+# apply time. That sentinel has since been REMOVED from k8s/base: `image:` is
+# likewise an unconstrained string, so the sentinel never failed fast either —
+# it just made all five overlays render an unpullable image reference, turning
+# a soft problem (a mutable tag) into a hard one (nothing deploys). The base
+# images are pinned to the kernel version instead; see the IMAGE REFERENCES
+# block in k8s/base/kustomization.yaml. Do not reintroduce the pattern.
+#
+# Operator substitution (one-time per cluster, before `kustomize build`):
+#
+#   sed -i \
+#     -e 's|__GREMION_DOMAIN__|council.example|g' \
+#     -e 's|__GREMION_DOMAIN_REGEX__|council\\.example|g' \
+#     k8s/overlays/production/patches/ingressroutes-prod/*.yaml \
+#     k8s/overlays/production/patches/keycloak-domain.yaml
+#
+# keycloak-domain.yaml is in that list for a reason: it carries the SAME apex
+# sentinel as DOMAIN for the Keycloak realm import, and the realm's redirect
+# URIs are built from it. Substitute the routes without it and Traefik serves
+# your apex while Keycloak refuses every login on it.
+#
+# BOTH sentinels must resolve to the SAME domain — the second one is just the
+# first with every literal dot backslash-escaped. They are consumed by the same
+# routers (see the three ops at the bottom of this file), so substituting only
+# one leaves `Host(<your apex>)` beside a `HostRegexp` anchored on some OTHER
+# domain: the apex answers, every tenant subdomain 404s at Traefik, and nothing
+# logs an error. That is the same LOAD-BEARING silent misconfig .env.example
+# documents for compose's `DOMAIN_REGEX`. The `j1` check in
+# scripts/kernel-hygiene-check.mjs fails if the two disagree after substitution.
+#
+# P2.1c T2 (#202): __GREMION_DOMAIN_REGEX__ = the regexp-escaped app domain for
+# the tenant wildcard legs (Traefik v3 HostRegexp takes a Go regexp — dots
+# escaped). 4-LABEL NOTE (D-K8SHOST): in the BASE, tenant hosts nest UNDER
+# the app host (4 labels). NEVER strip the priority fields when patching matches.
+#
+# The CI `Domain-sentinel guard` step at .github/workflows/ci.yml greps k8s/
+# for the legacy placeholder string and for `__GREMION_*_DOMAIN__` sentinels
+# outside the substitution recipe's reach.
+#
+# THE SED BLOCK ABOVE IS LOAD-BEARING FOR THAT GUARD. It does not merely
+# document the substitution: the guard PARSES the overlay-patch paths out of
+# it, glob-expands them, and treats exactly those files as the ones allowed to
+# carry sentinels. The extraction is anchored to the recipe's ARGUMENT LINES —
+# a comment line containing nothing but a path and an optional trailing
+# backslash — so a path mentioned in prose no longer widens the exempt set.
+# Keep the sed block in that shape: one path per line, nothing else on it.
+# Add a
+# sentinel to a new file without adding that file to the recipe and CI rejects
+# it — which is the point, since an unsubstituted sentinel produces a router
+# that matches nothing, silently. Conversely, if the recipe ever stops naming
+# real paths the guard fails on its own vacuity rather than passing empty.
+#
+# (This paragraph previously recorded a KNOWN GAP: the guard exempted the
+# single pre-split path `patches/ingressroutes-prod.yaml`, so it flagged the
+# repo's own intended state. Fixed — the exempt set is derived from this
+# recipe now, so the two cannot drift apart again.)
+#
+# Route indices match k8s/base/traefik/ingressroutes.yaml:
+# 0 = setup wizard (KEEP the PathPrefix: with the P2.1c explicit priorities a
+# plain-Host value here would swallow ALL apex traffic into the setup rate
+# limit), 1 = apex-host injection route (D-APEX), 2 = tenant wildcard.
+- op: replace
+  path: /spec/routes/0/match
+  value: Host(`__GREMION_DOMAIN__`) && PathPrefix(`/setup`)
+- op: replace
+  path: /spec/routes/1/match
+  value: Host(`__GREMION_DOMAIN__`)
+- op: replace
+  path: /spec/routes/2/match
+  value: Host(`__GREMION_DOMAIN__`) || HostRegexp(`^[a-z0-9-]+\.__GREMION_DOMAIN_REGEX__$`)

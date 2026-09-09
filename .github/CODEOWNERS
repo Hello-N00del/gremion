@@ -1,0 +1,20 @@
+# Review routing for Hello-N00del/gremion.
+#
+# A public repository with no CODEOWNERS routes nothing: a pull request from a
+# first-time contributor sits with no reviewer requested until someone happens
+# to look at the tab. One catch-all owner is the minimum that fixes that.
+#
+# GitHub only ENFORCES this via branch protection ("Require review from Code
+# Owners"). Without that setting it is a routing hint, not a gate — worth
+# knowing before assuming a file is protected because it is listed here.
+
+*                       @Hello-N00del
+
+# Surfaces where a wrong change is expensive and quiet.
+/LICENSE                @Hello-N00del
+/NOTICE                 @Hello-N00del
+/SECURITY.md            @Hello-N00del
+/.github/               @Hello-N00del
+/k8s/                   @Hello-N00del
+/scripts/               @Hello-N00del
+/docker/keycloak/       @Hello-N00del

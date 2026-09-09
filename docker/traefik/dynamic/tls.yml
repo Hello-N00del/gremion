@@ -1,0 +1,16 @@
+# docker/traefik/dynamic/tls.yml
+# Dynamic TLS configuration (Traefik file provider).
+# Presents the Cloudflare Origin Certificate on the websecure entrypoint.
+# The cloudflared tunnel connects to https://traefik:443 with originServerName
+# the apex host and validates this cert against the Cloudflare Origin CA root.
+# Cert/key are gitignored (secrets/) and mounted read-only at /certs.
+
+tls:
+  certificates:
+    - certFile: /certs/cf-origin.pem
+      keyFile: /certs/cf-origin.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/cf-origin.pem
+        keyFile: /certs/cf-origin.key

@@ -1,0 +1,29 @@
+# k8s/traefik/values-base.yaml
+# Install: helm upgrade --install traefik traefik/traefik \
+#   -n traefik-system --create-namespace \
+#   -f k8s/traefik/values-base.yaml \
+#   -f k8s/traefik/values-<env>.yaml
+deployment:
+  replicas: 1
+service:
+  type: LoadBalancer
+ports:
+  web:
+    redirectTo:
+      port: websecure
+  websecure:
+    tls:
+      enabled: true
+providers:
+  kubernetesCRD:
+    enabled: true
+    namespaces:
+      - gremion-system
+  kubernetesIngress:
+    enabled: false   # Traefik CRDs only; no nginx-ingress compatibility layer
+log:
+  level: INFO
+accessLog:
+  enabled: true
+  filePath: /var/log/traefik/access.log
+  bufferingSize: 100

@@ -1,0 +1,1936 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gremion kernel — governance surface",
+    "version": "0.2.0",
+    "description": "Documents the governance/groups/health HTTP surface of the Gremion governance kernel. v0.2.0 (breaking): the users-admin API (/api/users*) left the kernel with the users-admin module during the open-core carve. Contract-first: edit this spec in the same change as the route. Error envelope: {success:false, error:string}. Coverage and breaking-change gates: see contracts/README.md."
+  },
+  "servers": [
+    {
+      "url": "https://{host}",
+      "description": "The deployment this kernel is served from. Gremion is self-hosted: there is no canonical public instance, so `host` is a template variable and its default is an RFC 2606 example name, not a resolvable address. Set it to your own deployment host.",
+      "variables": {
+        "host": {
+          "default": "council.example"
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "cookieSession": []
+    },
+    {
+      "bearerJwt": []
+    }
+  ],
+  "paths": {
+    "/api/governance/committees": {
+      "get": {
+        "summary": "List all org-units (committees/groups/council) — returns id+name+kind+visibility etc.; gated on Guest role (used by calendar filter chips)",
+        "tags": [
+          "governance"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OrgUnit"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not authenticated or missing Guest role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a committee org-unit (placement validated against the tenant org-schema) and provision its external resources (Keycloak group, Matrix room, Nextcloud folder)",
+        "tags": [
+          "governance"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "nullable": true,
+                    "default": null
+                  },
+                  "parentId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "nullable": true,
+                    "default": null,
+                    "description": "Must reference an existing org-unit; its kind is checked by validateCreatePlacement against the tenant org-unit-kind catalog (P2.2 #202). Committees cannot be roots in the StuRa catalog, so null is rejected by the placement check."
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "all_members",
+                      "committee_only"
+                    ],
+                    "default": "all_members"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created and provisioned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "unit",
+                        "report"
+                      ],
+                      "properties": {
+                        "unit": {
+                          "$ref": "#/components/schemas/OrgUnit"
+                        },
+                        "report": {
+                          "$ref": "#/components/schemas/ProvisioningReport"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure, parentId not found ('Übergeordnete Einheit nicht gefunden.'), or tenant org-schema placement rejection (validateCreatePlacement — P2.2 #202)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "External provisioning failed — resources torn down, DB row removed (best-effort teardown guard)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}": {
+      "get": {
+        "summary": "Get a single org-unit with its members, roles, and child org-units",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "OrgUnit fields spread with members (OrgUnitMember[]), roles (CommitteeRole[]), children (OrgUnit[]) — see getOrgUnit + listOrgUnitMembers + listRoles + getChildOrgUnits"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not Member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Org-unit not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update an org-unit's name, description, or visibility",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "nullable": true
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "all_members",
+                      "committee_only"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/OrgUnit"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Org-unit not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an org-unit and deprovision its external resources; blocked if members/children/elections/protocols exist",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "207": {
+            "description": "Partial: some subsystem deprovisioning failed — row retained for retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "error",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "report"
+                      ],
+                      "properties": {
+                        "report": {
+                          "$ref": "#/components/schemas/ProvisioningReport"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Org-unit not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: has members, child orgunits, elections, or protocols",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}/history": {
+      "get": {
+        "summary": "List role-assignment history for an org-unit; user_keycloak_id is redacted for non-members unless caller is CouncilAdmin",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RoleAssignmentHistoryEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not Member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Org-unit not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}/members": {
+      "get": {
+        "summary": "List members of an org-unit, enriched with Keycloak display name and email",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CommitteeMember"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not Member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add a member to an org-unit and provision them in external subsystems",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "userKeycloakId"
+                ],
+                "properties": {
+                  "userKeycloakId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "membershipType": {
+                    "type": "string",
+                    "enum": [
+                      "elected",
+                      "unelected",
+                      "employee"
+                    ],
+                    "default": "unelected"
+                  },
+                  "termStart": {
+                    "type": "string",
+                    "format": "date",
+                    "nullable": true,
+                    "default": null
+                  },
+                  "termEnd": {
+                    "type": "string",
+                    "format": "date",
+                    "nullable": true,
+                    "default": null
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Member added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "report"
+                      ],
+                      "properties": {
+                        "report": {
+                          "$ref": "#/components/schemas/ProvisioningReport"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Org-unit not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}/members/{userId}": {
+      "delete": {
+        "summary": "Remove a member from an org-unit and deprovision them in external subsystems",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Member removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "report"
+                      ],
+                      "properties": {
+                        "report": {
+                          "$ref": "#/components/schemas/ProvisioningReport"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}/provision": {
+      "post": {
+        "summary": "Manually retry or reconcile provisioning for an org-unit",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provisioning report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ProvisioningReport"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Org-unit not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}/roles": {
+      "get": {
+        "summary": "List committee roles for an org-unit, each enriched with its current active assignment",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "description": "CommitteeRole fields spread with currentAssignment (RoleAssignment | null) — see listRoles + getActiveAssignment"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not Member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a new committee role on an org-unit",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "electionMethod": {
+                    "type": "string",
+                    "enum": [
+                      "helios",
+                      "poll",
+                      "manual"
+                    ],
+                    "default": "manual"
+                  },
+                  "isElected": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "gracePeriodDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 90,
+                    "default": 14
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Role created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/CommitteeRole"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/groups": {
+      "get": {
+        "summary": "List standalone groups (kind='group' org-units) with provisioning resource status",
+        "tags": [
+          "governance"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "description": "id/name/kind + resources[{subsystem,status}] — see listOrgUnits + getResources"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a standalone (root, kind='group') org-unit — root placement validated against the tenant org-schema — and provision its external resources",
+        "tags": [
+          "governance"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created and provisioned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "report"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "report": {
+                          "$ref": "#/components/schemas/ProvisioningReport"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure, or tenant org-schema placement rejection — the org-unit-kind catalog must allow kind='group' as a root (validateCreatePlacement, P2.2 #202)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "External provisioning failed — resources torn down, DB row removed (best-effort teardown guard)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/groups/{id}": {
+      "get": {
+        "summary": "Get a Keycloak group by ID",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "Keycloak group object — see kc.getGroup"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Group not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update a Keycloak group's name",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceOk"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a Keycloak group by ID; requires it-admin role",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceOk"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not ITAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Public boot-status probe — 200 when boot is complete, 503 while migrating or if boot failed",
+        "tags": [
+          "meta"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Boot complete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Boot still in progress or boot failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "booting"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/committees/{id}/child-term": {
+      "patch": {
+        "summary": "Update the child_term label of a committee org-unit (e.g. 'Referate' or 'Arbeitsgruppen'); an empty string clears the override back to the kind-catalog default",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "childTerm"
+                ],
+                "properties": {
+                  "childTerm": {
+                    "type": "string",
+                    "maxLength": 80,
+                    "description": "'' clears the override: stored as NULL so the unit reverts to the tenant kind-catalog default child term (P2.2 #202)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated — child_term is null after a clear ('' request body)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "child_term"
+                  ],
+                  "properties": {
+                    "child_term": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "childTerm not a string or exceeds 80 chars (SvelteKit throw error body)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SvelteKitHttpError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin or ITAdmin (SvelteKit throw error body)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SvelteKitHttpError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Org-unit not found (SvelteKit throw error body)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SvelteKitHttpError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}/roles/{roleId}/assign": {
+      "post": {
+        "summary": "Assign a user to a committee role; archives the existing active assignment if present and schedules term-reminder notifications",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "roleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "userKeycloakId",
+                  "startDate",
+                  "endDate"
+                ],
+                "properties": {
+                  "userKeycloakId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "startDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "endDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "heliosElectionId": {
+                    "type": "string",
+                    "nullable": true,
+                    "default": null
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Assignment created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/RoleAssignment"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "cookieSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "authjs.session-token",
+        "description": "Auth.js browser session (hooks.server.ts)"
+      },
+      "bearerJwt": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Keycloak-issued JWT for gremion-mobile (jwt-verify.ts; config-driven audience since P0.1)"
+      }
+    },
+    "schemas": {
+      "GovernanceError": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "GovernanceOk": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "success": {
+            "const": true
+          }
+        }
+      },
+      "OrgUnit": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "authority",
+          "visibility",
+          "wants_matrix_room",
+          "wants_nextcloud_folder",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "description": "Tenant org-unit-kind catalog key (FK org_unit_kind.key, migration 038; P2.2 #202) — per-tenant catalog, not a closed union. StuRa default catalog: council | committee | group."
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "child_term": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind_label": {
+            "type": "string",
+            "nullable": true,
+            "description": "Per-unit display-label override; null → tenant kind-catalog label (P2.2 #202, D-KL; migration 038)"
+          },
+          "authority": {
+            "type": "string",
+            "enum": [
+              "advisory",
+              "deciding"
+            ],
+            "description": "beratend vs beschließend (P2.2 #202, §3.5(d)); NOT NULL DEFAULT 'deciding' (migration 038)"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "all_members",
+              "committee_only"
+            ]
+          },
+          "wants_matrix_room": {
+            "type": "boolean"
+          },
+          "wants_nextcloud_folder": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OrgUnitMember": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_unit_id",
+          "user_keycloak_id",
+          "membership_type",
+          "voting",
+          "joined_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "org_unit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_keycloak_id": {
+            "type": "string"
+          },
+          "membership_type": {
+            "type": "string",
+            "enum": [
+              "elected",
+              "unelected",
+              "employee"
+            ]
+          },
+          "term_start": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "term_end": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "voting": {
+            "type": "boolean",
+            "description": "Member sits with a vote; sachkundige Bürger sit without one (P2.2 #202, §3.5(d)); NOT NULL DEFAULT true (migration 038)"
+          },
+          "joined_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CommitteeMember": {
+        "description": "OrgUnitMember enriched with Keycloak display name and email (null on lookup failure)",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OrgUnitMember"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "format": "email",
+                "nullable": true
+              },
+              "name": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        ]
+      },
+      "CommitteeRole": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_unit_id",
+          "name",
+          "election_method",
+          "is_elected",
+          "grace_period_days"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "org_unit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "election_method": {
+            "type": "string",
+            "enum": [
+              "helios",
+              "poll",
+              "manual"
+            ]
+          },
+          "is_elected": {
+            "type": "boolean"
+          },
+          "grace_period_days": {
+            "type": "integer"
+          }
+        }
+      },
+      "RoleAssignment": {
+        "type": "object",
+        "required": [
+          "id",
+          "role_id",
+          "user_keycloak_id",
+          "status",
+          "assigned_by_keycloak_id",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_keycloak_id": {
+            "type": "string"
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "grace",
+              "expired",
+              "vacated"
+            ]
+          },
+          "assigned_by_keycloak_id": {
+            "type": "string"
+          },
+          "helios_election_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RoleAssignmentHistoryEntry": {
+        "description": "Archived role assignment; user_keycloak_id is '[redacted]' for non-members or '[gelöschtes Mitglied]' after GDPR erasure — see listHistory",
+        "type": "object",
+        "required": [
+          "id",
+          "role_id",
+          "start_date",
+          "end_date",
+          "ended_reason",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_keycloak_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Keycloak user id, '[redacted]' for non-members, or '[gelöschtes Mitglied]' after GDPR hard erasure"
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_reason": {
+            "type": "string",
+            "enum": [
+              "expired",
+              "resigned",
+              "removed"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SubsystemResult": {
+        "type": "object",
+        "required": [
+          "subsystem",
+          "status",
+          "willRetry"
+        ],
+        "properties": {
+          "subsystem": {
+            "type": "string",
+            "enum": [
+              "keycloak",
+              "matrix",
+              "nextcloud"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "failed",
+              "skipped"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "willRetry": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SvelteKitHttpError": {
+        "description": "SvelteKit HttpError body produced by throw error(status, message) — shape {message:string}, NOT the GovernanceError envelope",
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ProvisioningReport": {
+        "description": "Result of a provisioning or deprovisioning orchestration run — see provisioning/types.ts ProvisioningReport",
+        "type": "object",
+        "required": [
+          "orgUnitId",
+          "overall",
+          "subsystems"
+        ],
+        "properties": {
+          "orgUnitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "overall": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "failed"
+            ]
+          },
+          "subsystems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubsystemResult"
+            }
+          }
+        }
+      }
+    }
+  }
+}

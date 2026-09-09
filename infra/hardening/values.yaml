@@ -1,0 +1,25 @@
+# infra/hardening/values.yaml
+# Single source of truth for hardening config.
+# Run `make -C infra/hardening hardening-config` after editing to regenerate
+# docker-compose and K8s outputs.
+
+retention:
+  access_logs_days: 14        # Tier 1 — hard cap 30 (BayLDA)
+  app_logs_days: 30           # Tier 2 — hard cap 90
+  security_logs_days: 90      # Tier 3 — hard cap 180 (BSI Mindeststandard v2.1)
+  security_nopii_logs_days: 90 # Tier 4 — hard cap 365
+
+backup:
+  local_retention_days: 30
+  remote_retention_days: 365
+  financial_retention_days: 3650  # 10 years (HGB §257 / AO §147)
+  cron_start: "0 2 * * *"         # 02:00 UTC daily chain start
+  restic_check_subset: "10%"
+
+vector:
+  image: ghcr.io/hello-n00del/gremion-vector:latest
+  log_volume: traefik-logs
+  processed_volume: vector-processed-logs
+
+ipcrypt:
+  rotation_days: 14

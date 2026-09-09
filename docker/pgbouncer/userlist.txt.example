@@ -1,0 +1,12 @@
+;; docker/pgbouncer/userlist.txt.example — TEMPLATE (P2.1b T11)
+;;
+;; The real file is docker/pgbouncer/userlist.txt (gitignored — it carries a
+;; credential). Only the auth_user needs an entry: every other role
+;; (gremion, future per-tenant roles) is verified via auth_query against the
+;; SCRAM verifier stored in Postgres (docker/pgbouncer/pgbouncer-auth.sql).
+;;
+;; Render at deploy (S4) from .env's PGBOUNCER_AUTH_PASSWORD — see
+;; docs/runbooks/pgbouncer.md. Plaintext is accepted here: PgBouncer uses it
+;; to log in to Postgres as pgbouncer_auth (and for its admin console).
+;; chmod 600 the rendered file.
+"pgbouncer_auth" "CHANGE_ME_pgbouncer_auth"

@@ -1,0 +1,251 @@
+/* StuRaOS — Keycloak login theme (v4). Self-contained: the custom login.ftl /
+   login-otp.ftl / login-reset-password.ftl emit the .auth-* markup below.
+   Design tokens are defined here with literal values (the app's tokens.css is
+   not loaded inside Keycloak). Ported from design_handoff_stura_v4/StuRaOS
+   Login.html. Light + dark: dark tokens follow the OS via prefers-color-scheme
+   (and mirror under .dark for a future explicit toggle) — see the block after
+   :root (Deck Board audit §4). */
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@400;500;600;700&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --paper: #fafaf7;
+  --surface: #ffffff;
+  --surface-2: #f4f3ee;
+  --ink: #161513;
+  --ink-2: #3a3831;
+  --ink-muted: #6b685f;
+  --ink-faint: #9a968b;
+  --border: rgba(22, 21, 19, 0.09);
+  --border-strong: rgba(22, 21, 19, 0.16);
+  --accent: oklch(42% 0.11 252);
+  --accent-ink: oklch(36% 0.11 252);
+  --accent-soft: oklch(93% 0.035 252);
+  --accent-faint: oklch(96% 0.02 252);
+  --ember: oklch(56% 0.14 52);
+  --rust: oklch(52% 0.15 29);
+  --rust-soft: oklch(94% 0.05 29);
+  --font-display: "Archivo Narrow", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r-sm: 6px;
+  --r-lg: 14px;
+  --sh-3: 0 2px 0 rgba(22, 21, 19, 0.06), 0 14px 40px -14px rgba(22, 21, 19, 0.16);
+  --d-fast: 140ms;
+  --e-out: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Dark mode (Deck Board audit §4). The KC login is server-rendered FreeMarker
+ * with no app-level `.dark` toggle, so the reliable trigger is the OS/browser
+ * preference; we also mirror the same tokens under `.dark` so a future explicit
+ * toggle keeps working. Values are app.css `.dark` verbatim (source of truth) —
+ * only the subset this theme consumes. No markup changes: `.auth-btn` (ink bg /
+ * paper text) intentionally inverts to a light button, matching `.btn-primary`. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0e0f10;
+    --surface: #161719;
+    --surface-2: #1d1e21;
+    --ink: #edece7;
+    --ink-2: #c4c2ba;
+    --ink-muted: #8c8a82;
+    --ink-faint: #5e5c55;
+    --border: rgba(237, 236, 231, 0.08);
+    --border-strong: rgba(237, 236, 231, 0.16);
+    --accent: oklch(72% 0.13 252);
+    --accent-ink: oklch(78% 0.11 252);
+    --accent-soft: oklch(28% 0.06 252);
+    --accent-faint: oklch(22% 0.04 252);
+    --ember: oklch(74% 0.14 60);
+    --rust: oklch(70% 0.14 29);
+    --rust-soft: oklch(28% 0.08 29);
+    --sh-3: 0 2px 0 rgba(0, 0, 0, 0.6), 0 14px 40px -14px rgba(0, 0, 0, 0.6);
+  }
+}
+:root.dark, .dark {
+  --paper: #0e0f10;
+  --surface: #161719;
+  --surface-2: #1d1e21;
+  --ink: #edece7;
+  --ink-2: #c4c2ba;
+  --ink-muted: #8c8a82;
+  --ink-faint: #5e5c55;
+  --border: rgba(237, 236, 231, 0.08);
+  --border-strong: rgba(237, 236, 231, 0.16);
+  --accent: oklch(72% 0.13 252);
+  --accent-ink: oklch(78% 0.11 252);
+  --accent-soft: oklch(28% 0.06 252);
+  --accent-faint: oklch(22% 0.04 252);
+  --ember: oklch(74% 0.14 60);
+  --rust: oklch(70% 0.14 29);
+  --rust-soft: oklch(28% 0.08 29);
+  --sh-3: 0 2px 0 rgba(0, 0, 0, 0.6), 0 14px 40px -14px rgba(0, 0, 0, 0.6);
+}
+
+* { box-sizing: border-box; }
+
+body.auth-body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+.auth-bg {
+  position: fixed; inset: 0; z-index: -1;
+  background:
+    radial-gradient(120% 80% at 50% -10%, var(--accent-faint), transparent 60%),
+    var(--paper);
+}
+
+.auth-wrap { width: 100%; max-width: 408px; }
+
+.auth-brand {
+  display: flex; align-items: center; gap: 11px;
+  justify-content: center; margin-bottom: 22px;
+}
+.auth-brand .logo {
+  width: 38px; height: 38px; border-radius: 8px;
+  background: var(--ink); color: var(--paper);
+  display: grid; place-items: center;
+  font-family: var(--font-display); font-weight: 700; font-size: 18px;
+  letter-spacing: -0.02em; position: relative;
+}
+.auth-brand .logo::after {
+  content: ''; position: absolute; right: -3px; bottom: -3px;
+  width: 10px; height: 10px; background: var(--ember); border-radius: 3px;
+}
+.auth-brand .n { font-family: var(--font-display); font-weight: 600; font-size: 18px; letter-spacing: -0.01em; line-height: 1.05; }
+.auth-brand .s { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--ink-muted); text-transform: uppercase; margin-top: 2px; }
+
+.auth-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-3);
+  padding: 28px 28px 22px;
+}
+.auth-head h1 { font-family: var(--font-display); font-size: 23px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.auth-head p { color: var(--ink-muted); font-size: 13px; margin: 6px 0 0; line-height: 1.5; }
+
+.auth-form { margin: 0; }
+.auth-field { margin-top: 16px; }
+.auth-field > label {
+  display: flex; align-items: center; justify-content: space-between;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-muted); margin-bottom: 6px;
+}
+.auth-field > label a { color: var(--accent-ink); text-decoration: none; text-transform: none; letter-spacing: 0; font-size: 11.5px; font-family: var(--font-body); }
+.auth-field > label a:hover { text-decoration: underline; }
+.auth-input {
+  width: 100%; padding: 11px 13px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink);
+  font-family: var(--font-body); font-size: 14px;
+}
+.auth-input::placeholder { color: var(--ink-faint); }
+/* §4.3.1 — ring uses the full --accent (in dark, --accent-soft is a near-black
+ * navy lost against the dark field); --accent is a fine ring in light too. */
+.auth-input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+.auth-input[aria-invalid="true"] { border-color: var(--rust); }
+.auth-input.mono { font-family: var(--font-mono); letter-spacing: 0.3em; text-align: center; font-size: 20px; }
+
+.auth-check {
+  display: flex; align-items: center; gap: 8px; margin-top: 14px;
+  font-size: 12.5px; color: var(--ink-2); cursor: pointer; user-select: none;
+}
+.auth-check input { width: 15px; height: 15px; accent-color: var(--accent); }
+
+.auth-btn {
+  width: 100%; margin-top: 18px; padding: 12px;
+  border: none; border-radius: var(--r-sm);
+  background: var(--ink); color: var(--paper);
+  font-family: var(--font-body); font-size: 14px; font-weight: 500;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+  transition: background var(--d-fast) var(--e-out);
+}
+.auth-btn:hover { background: var(--ink-2); }
+.auth-btn .arr { font-family: var(--font-mono); }
+
+.auth-divider {
+  display: flex; align-items: center; gap: 12px; margin: 20px 0 16px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em;
+  color: var(--ink-faint); text-transform: uppercase;
+}
+.auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+.auth-idp {
+  width: 100%; padding: 11px 14px; margin-top: 8px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink); text-decoration: none;
+  display: flex; align-items: center; gap: 11px;
+  font-size: 13.5px; font-weight: 500; cursor: pointer;
+  transition: background var(--d-fast) var(--e-out);
+}
+.auth-idp:hover { background: var(--surface-2); }
+.auth-idp .badge {
+  width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+  background: var(--accent); color: var(--paper);
+  display: grid; place-items: center;
+  font-family: var(--font-display); font-weight: 700; font-size: 12px;
+}
+.auth-idp .chev { margin-left: auto; color: var(--ink-faint); font-family: var(--font-mono); }
+
+.auth-alert {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin-top: 16px; padding: 11px 13px;
+  background: var(--rust-soft); border-radius: var(--r-sm);
+  border-left: 2px solid var(--rust);
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.45;
+}
+.auth-alert .ic { color: var(--rust); flex-shrink: 0; margin-top: 1px; font-weight: 700; }
+.auth-alert.auth-alert-success { background: var(--accent-faint); border-left-color: var(--accent); }
+.auth-alert.auth-alert-success .ic { color: var(--accent-ink); }
+.auth-alert.auth-alert-info { background: var(--surface-2); border-left-color: var(--border-strong); }
+.auth-alert.auth-alert-info .ic { color: var(--ink-muted); }
+
+.auth-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 16px; font-size: 12.5px; color: var(--ink-muted);
+  text-decoration: none; cursor: pointer;
+}
+.auth-back:hover { color: var(--ink); }
+
+/* v12 (apex topology) — portal escape hatch, rendered by portal-back.ftl in
+ * EVERY auth state (login / otp / reset / error), between the card and the
+ * legal footer. Deliberately graphite/neutral (--ink-muted -> --ink), not an
+ * accent: a secondary way out, not a brand moment. Both tokens are defined in
+ * the light :root AND in the two dark blocks above, so this reads correctly in
+ * either scheme with no scheme-specific rule. The markup only exists when the
+ * realm sets a valid `gremion.portal-url`, so on a kernel realm without it
+ * these rules simply never match anything. */
+.auth-portal {
+  display: flex; justify-content: center; margin-top: 16px;
+}
+.auth-portal a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--ink-muted); text-decoration: none;
+  transition: color var(--d-fast) var(--e-out);
+}
+.auth-portal a:hover { color: var(--ink); }
+.auth-portal a:focus-visible { outline: 2px solid var(--ink-muted); outline-offset: 3px; border-radius: var(--r-sm); }
+.auth-portal .arr { font-family: var(--font-mono); }
+
+.auth-foot {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin-top: 20px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+.auth-foot a { color: var(--ink-muted); text-decoration: none; }
+.auth-foot a:hover { color: var(--ink); }
+.auth-foot .sep { opacity: 0.5; }
+
+.auth-secured {
+  text-align: center; margin-top: 10px;
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.08em;
+  color: var(--ink-faint); text-transform: uppercase;
+}

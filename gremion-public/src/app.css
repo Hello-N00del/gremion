@@ -1,0 +1,344 @@
+/* Gremion public portal — design tokens (2026-05-28 refresh, PR 0a)
+ * Mirrors gremion-ui/src/app.css. #436: gremion-public was the last Tailwind v3
+ * (JS-config) surface in the kernel and is now v4 CSS-first, exactly like
+ * gremion-ui — @import 'tailwindcss' + @variant + @theme here, the
+ * @tailwindcss/vite plugin in vite.config.ts. tailwind.config.ts and
+ * postcss.config.js are gone; their content lives in the @theme block below.
+ * The public portal downstream went through the same token migration.
+ *
+ * Two deliberate divergences from the bundle:
+ *   - Display font: Outfit (production) NOT Archivo Narrow (prototype)
+ *   - Dark-mode selector: .dark (shadcn convention) NOT .theme-dark
+ */
+
+@import 'tailwindcss';
+
+/* v3 `darkMode: 'class'` → v4 custom variant. Identical to gremion-ui's. */
+@variant dark (&:where(.dark, .dark *));
+
+/* #436 — HOVER GATING, restored to the v3 behaviour on purpose.
+ *
+ * v3 compiled `hover:` to a plain `&:hover` unless you opted into the
+ * `hoverOnlyWhenSupported` future flag; the deleted tailwind.config.ts had no
+ * `future` block, so this app was on plain `&:hover`. v4 applies the gate
+ * unconditionally and wraps every hover utility in `@media (hover: hover)`,
+ * which silently disables 20 utilities on touch devices — 16 `hover:*` (text,
+ * border, opacity, shadow, translate) + 4 `group-hover:*` — including the
+ * contact-form submit button's `hover:opacity-85` and every nav/footer link's
+ * `hover:text-ink`. On a public-facing portal that is a real, user-visible UX
+ * change, so it must not arrive as a side-effect of a dependency bump.
+ *
+ * This line makes the v4 migration behaviour-preserving. It is NOT a claim
+ * that v3 was right: gating hover to devices that actually support it is
+ * arguably the better modern default, and it also stops sticky :hover states
+ * on tap. Flipping to v4's default is a deliberate UX change that needs a
+ * Design ruling — raise it there, then delete this line if Design says yes.
+ *
+ * (`@custom-variant` is the canonical v4 spelling; the `@variant` above is the
+ * legacy alias v4 rewrites to the same thing at top level.) */
+@custom-variant hover (&:hover);
+
+/* #436 — the former tailwind.config.ts `theme.extend` block, carried over 1:1.
+ * Colors keep pointing at the raw var(--token)s declared in :root / .dark
+ * below, so the .dark + cb-rg/cb-by overrides still cascade through. Spacing
+ * keeps Tailwind's defaults (same choice as gremion-ui).
+ *
+ * `static` (not plain `@theme`) because v4 drops theme variables it sees no
+ * utility for, and the base layer below reads --font-body / --font-display
+ * through var(). Under plain `@theme` those :root declarations would survive
+ * only as long as some template still spells `font-body` / `font-display`, so
+ * deleting the last such class would silently unset the page font. */
+@theme static {
+  --color-paper:         var(--paper);
+  --color-surface:       var(--surface);
+  --color-surface-2:     var(--surface-2);
+  --color-surface-3:     var(--surface-3);
+  --color-ink:           var(--ink);
+  --color-ink-2:         var(--ink-2);
+  --color-ink-muted:     var(--ink-muted);
+  --color-ink-faint:     var(--ink-faint);
+  --color-border:        var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent:        var(--accent);
+  --color-accent-ink:    var(--accent-ink);
+  --color-accent-soft:   var(--accent-soft);
+  --color-accent-faint:  var(--accent-faint);
+  --color-ember:         var(--ember);
+  --color-ember-soft:    var(--ember-soft);
+  --color-ember-ink:     var(--ember-ink);
+  --color-pine:          var(--pine);
+  --color-pine-soft:     var(--pine-soft);
+  --color-pine-ink:      var(--pine-ink);
+  --color-rust:          var(--rust);
+  --color-rust-soft:     var(--rust-soft);
+  --color-rust-ink:      var(--rust-ink);
+
+  /* Type. These carry the v3 `theme.extend.fontFamily` keys (font-display /
+     font-body / font-mono are all used in the templates) AND double as the
+     raw tokens the base layer reads via var() — v4 emits them into :root, so
+     unlike the color tokens there is no separate un-namespaced copy. */
+  --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-body:    "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+
+  --shadow-1: var(--sh-1);
+  --shadow-2: var(--sh-2);
+  --shadow-3: var(--sh-3);
+}
+
+:root {
+  /* Neutrals — light */
+  --paper:         #fafaf7;
+  --surface:       #ffffff;
+  --surface-2:     #f4f3ee;
+  --surface-3:     #ebe9e1;
+  --ink:           #161513;
+  --ink-2:         #3a3831;
+  --ink-muted:     #6b685f;
+  --ink-faint:     #9a968b;
+  --border:        rgba(22, 21, 19, 0.09);
+  --border-strong: rgba(22, 21, 19, 0.16);
+
+  /* Accents — light, oklch */
+  --accent:        oklch(42% 0.11 252);
+  --accent-ink:    oklch(36% 0.11 252);
+  --accent-soft:   oklch(93% 0.035 252);
+  --accent-faint:  oklch(96% 0.02 252);
+  --ember:         oklch(56% 0.14 56);
+  --ember-soft:    oklch(94% 0.05 56);
+  --ember-ink:     oklch(40% 0.14 56);     /* §16 finding 1: pill text ink */
+  --pine:          oklch(48% 0.11 165);
+  --pine-soft:     oklch(94% 0.04 165);
+  --pine-ink:      oklch(36% 0.11 165);
+  --rust:          oklch(52% 0.15 29);
+  --rust-soft:     oklch(94% 0.05 29);
+  --rust-ink:      oklch(38% 0.15 29);
+
+  /* Shadows — light, very subtle */
+  --sh-1: 0 1px 0 rgba(22, 21, 19, 0.04), 0 1px 2px rgba(22, 21, 19, 0.04);
+  --sh-2: 0 1px 0 rgba(22, 21, 19, 0.05), 0 4px 14px -4px rgba(22, 21, 19, 0.08);
+  --sh-3: 0 2px 0 rgba(22, 21, 19, 0.06), 0 14px 40px -14px rgba(22, 21, 19, 0.16);
+
+  /* Radii */
+  --r-xs: 3px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+
+  /* Spacing */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+  --s-5: 20px; --s-6: 24px; --s-7: 32px; --s-8: 48px;
+
+  /* Motion */
+  --e-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --d-fast: 120ms;
+  --d-med:  220ms;
+
+  /* §16 finding 3 — touch-target floor */
+  --touch-target-min: 44px;
+
+  /* §16 implied — focus ring */
+  --focus-ring: var(--accent);
+}
+
+.dark {
+  --paper:         #0e0f10;
+  --surface:       #161719;
+  --surface-2:     #1d1e21;
+  --surface-3:     #25262a;
+  --ink:           #edece7;
+  --ink-2:         #c4c2ba;
+  --ink-muted:     #8c8a82;
+  --ink-faint:     #5e5c55;
+  --border:        rgba(237, 236, 231, 0.08);
+  --border-strong: rgba(237, 236, 231, 0.16);
+
+  --accent:       oklch(72% 0.13 252);
+  --accent-ink:   oklch(78% 0.11 252);
+  --accent-soft:  oklch(28% 0.06 252);
+  --accent-faint: oklch(22% 0.04 252);
+  --ember:        oklch(74% 0.14 56);
+  --ember-soft:   oklch(28% 0.07 56);
+  --ember-ink:    oklch(82% 0.10 56);
+  --pine:         oklch(70% 0.12 165);
+  --pine-soft:    oklch(26% 0.06 165);
+  --pine-ink:     oklch(82% 0.10 165);
+  --rust:         oklch(70% 0.14 29);
+  --rust-soft:    oklch(28% 0.08 29);
+  --rust-ink:     oklch(82% 0.10 29);
+
+  --sh-1: 0 1px 0 rgba(0,0,0,0.4);
+  --sh-2: 0 1px 0 rgba(0,0,0,0.5), 0 4px 14px -4px rgba(0, 0, 0, 0.4);
+  --sh-3: 0 2px 0 rgba(0,0,0,0.6), 0 14px 40px -14px rgba(0, 0, 0, 0.6);
+}
+
+/* Density / radius toggles (retained from prior repo + bundle convention) */
+html.radius-sharp    { --r-xs: 0; --r-sm: 2px; --r-md: 3px; --r-lg: 5px; }
+html.density-compact { --s-3: 8px; --s-4: 12px; --s-5: 16px; --s-6: 18px; }
+
+/* Colorblind variants */
+html.cb-rg {
+  --pine:       oklch(52% 0.14 220);
+  --pine-soft:  oklch(93% 0.04 220);
+  --pine-ink:   oklch(36% 0.14 220);
+  --rust:       oklch(58% 0.17 38);
+  --rust-soft:  oklch(94% 0.06 40);
+  --rust-ink:   oklch(40% 0.17 38);
+  --ember:      oklch(62% 0.16 62);
+  --ember-soft: oklch(95% 0.05 68);
+  --ember-ink:  oklch(42% 0.16 62);
+}
+html.cb-rg.dark, html.cb-rg .dark {
+  --pine:       oklch(68% 0.14 220);
+  --pine-soft:  oklch(28% 0.05 220);
+  --rust:       oklch(70% 0.17 38);
+  --rust-soft:  oklch(28% 0.06 40);
+  --ember:      oklch(74% 0.14 66);
+  --ember-soft: oklch(28% 0.05 68);
+}
+html.cb-by {
+  --accent:        oklch(48% 0.16 340);
+  --accent-ink:    oklch(40% 0.16 340);
+  --accent-soft:   oklch(93% 0.04 340);
+  --accent-faint:  oklch(96% 0.02 340);
+  /* §16 finding 2 — shift ember away from rust hue in cb-by */
+  --ember:         oklch(56% 0.14 95);
+  --ember-soft:    oklch(94% 0.05 95);
+  --ember-ink:     oklch(40% 0.14 95);
+}
+html.cb-by.dark, html.cb-by .dark {
+  --accent:        oklch(66% 0.16 340);
+  --accent-ink:    oklch(76% 0.12 340);
+  --accent-soft:   oklch(30% 0.08 340);
+  --accent-faint:  oklch(22% 0.04 340);
+  --ember:         oklch(70% 0.14 95);
+  --ember-soft:    oklch(28% 0.06 95);
+}
+
+/* §16 finding 4 — prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  :root, .dark { --d-fast: 1ms; --d-med: 1ms; --e-out: linear; }
+  *, *::before, *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* #436 — everything below is wrapped in `@layer base`. Under Tailwind v3 the
+   output carried no real cascade layers, so these element rules and the
+   utilities competed on plain specificity and `.font-bold` (0,1,0) beat
+   `h1,h2,h3,h4` (0,0,1). v4 emits utilities inside `@layer utilities`, and an
+   UNLAYERED rule outranks every layer regardless of specificity — leaving this
+   block unlayered would silently override `font-bold` / `text-paper` /
+   `tracking-tight` on every heading (e.g. the dark hero h2 on +page.svelte
+   would flip from --paper to --ink and vanish). `@layer base` restores the v3
+   ordering exactly: base loses to utilities, ties inside base resolve by
+   specificity and source order as before. */
+@layer base {
+  /* ------------------------------------------------------------------------
+   * #436 — v3→v4 PREFLIGHT COMPAT RULES. Keep these three together and keep
+   * them. They are NOT redundant with the utilities: each one restores a
+   * declaration that Tailwind v3's preflight emitted and v4's does not, and
+   * each is the rule the official v4 upgrade guide prescribes. Deleting any of
+   * them silently changes how the live portal renders. Verify against the
+   * BUILT css (`.svelte-kit/output/client/_app/immutable/assets/*.css`), never
+   * against class tokens in the templates — the v3/v4 delta lives entirely in
+   * preflight, so no template class mentions it.
+   * ---------------------------------------------------------------------- */
+
+  /* (a) BORDER COLOUR. v3 preflight set `border: 0 solid #e5e7eb`; v4's sets
+     `border: 0 solid` (⇒ currentColor). gremion-public leans on that default in
+     26 places — `border-ink-subtle` is a dead token that resolves to nothing in
+     BOTH majors, so those elements are painted purely by the preflight colour.
+     Restoring the v3 default keeps them identical instead of turning every
+     hairline near-black. (The dead token is a pre-existing design bug, tracked
+     separately — not repainted here.) */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: #e5e7eb;
+  }
+
+  /* (b) BUTTON CURSOR. v3 preflight emitted `button, [role="button"] { cursor:
+     pointer }` plus `:disabled { cursor: default }`; v4's preflight emits no
+     cursor declaration at all, so buttons fall back to the UA default arrow.
+     The portal's only <button> is the contact-form submit on +page.svelte, and
+     it has no `.btn`-style class to carry the cursor (gremion-ui does not hit
+     this because its app.css declares `.btn { cursor: pointer }`; gremion-public
+     has no `.btn` rule at all, so this compat rule is load-bearing here, not
+     redundant). This is the upgrade-guide rule: the `:not(:disabled)` guard
+     folds in v3's separate `:disabled` reset, so disabled controls keep the UA
+     cursor. */
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* (c) PLACEHOLDER COLOUR. v3 preflight emitted `input::placeholder,
+     textarea::placeholder { opacity: 1; color: theme(colors.gray.400, #9ca3af) }`
+     — and the deleted tailwind.config.ts never overrode gray.400, so that
+     resolved to the literal #9ca3af. v4 instead emits
+     `::placeholder { color: color-mix(in oklab, currentcolor 50%, transparent) }`,
+     i.e. half-strength --ink, which reads noticeably darker on the four contact
+     inputs. Literal hex, NOT the upgrade guide's theme-var form: the guide
+     assumes the default palette is in play, but this app's `@theme static`
+     block declares no grays and v4 tree-shakes default-theme colours it sees no
+     utility for, so the gray-400 theme var is absent here and a var() reference
+     would resolve to nothing. Do not "fix" that by spelling the var out — v4
+     scans this stylesheet for theme-var references INCLUDING INSIDE COMMENTS,
+     so merely naming it in var() form resurrects a dead 1-line declaration in
+     the built @layer theme (measured). `opacity: 1` is not repeated — v4's
+     preflight already sets it. */
+  input::placeholder,
+  textarea::placeholder {
+    color: #9ca3af;
+  }
+
+  /* Body baseline */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html {
+    font-family: var(--font-body);
+    background-color: var(--paper);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink);
+    background: var(--paper);
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01", "cv11";
+  }
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  ::selection { background: var(--accent-faint); color: var(--ink); }
+
+  .icon-btn, .sb-item {
+    min-width: var(--touch-target-min);
+    min-height: var(--touch-target-min);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+}

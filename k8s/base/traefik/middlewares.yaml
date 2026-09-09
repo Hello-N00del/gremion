@@ -1,0 +1,89 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hsts
+  namespace: gremion-system
+spec:
+  headers:
+    stsSeconds: 31536000
+    stsIncludeSubdomains: true
+    stsPreload: true
+    forceSTSHeader: true
+---
+# Rate-limit the setup wizard routes — unauthenticated, so tighter limits prevent
+# brute-force admin account creation or SMTP relay abuse during the setup window.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit-setup
+  namespace: gremion-system
+spec:
+  rateLimit:
+    average: 10
+    burst: 20
+    period: 1m
+---
+# P2.1c T2 (#202) D-APEX twin (k8s leg): injects the synthetic forwarded host
+# so the DEFAULT tenant resolves on the app host. The k8s app host
+# (stura.example.com) is already 3 labels with leftmost label `stura`, not
+# `default` — without this injection the tenant resolver 404s the main host.
+# Attached to the app-host-only gremion-ui routes (priorities 30/20 in
+# ingressroutes.yaml); the 4-label tenant wildcard route (priority 10) keeps
+# Traefik's NATIVE X-Forwarded-Host (the real tenant host).
+# Parity: docker-compose.prod.yml middleware `gremion-ui-apexhost`
+# (X-Forwarded-Host: default.${DOMAIN}). Overlays that substitute the real
+# app host MUST patch this value in step (design §4.7 drift concern).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: gremion-ui-apexhost
+  namespace: gremion-system
+spec:
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Host: "default.stura.example.com"
+---
+# P2.1c T5 (#202) executable proxy-trust — k8s leg (parity twin of the
+# docker-compose.prod.yml `gremion-ui-proxytrust` middleware). The edge stamps a
+# shared-secret `x-proxy-trust` header on EVERY request reaching gremion-ui; the
+# tenant resolver (resolve.ts isProxyTrusted) 403s any request lacking it ONCE
+# the app's TENANT_PROXY_SHARED_SECRET env is set (wired into gremion-ui-config /
+# gremion-ui-secret) — so x-forwarded-host trust no longer rests on topology alone.
+# The header is SET (overwriting any client-supplied value), not merely added.
+# Attached to ALL gremion-ui app-host routes in ingressroutes.yaml (priorities
+# 30/20/10), mirroring compose where BOTH gremion-ui routers list it.
+#
+# ⚠️ VALUE WIRING (a Traefik Middleware header value is a STATIC manifest literal
+# and CANNOT reference a k8s Secret). The base ships a fail-fast sentinel; the
+# production overlay MUST patch this value via patches/ingressroutes-prod.yaml
+# (mirroring the gremion-ui-apexhost domain patch) to the SAME secret it puts in
+# the gremion-ui-secret `TENANT_PROXY_SHARED_SECRET` key — the two MUST stay
+# byte-equal or the app 403s every edge request. With the sentinel left in place
+# the gate is effectively a deny-all once the app secret is set, so it is
+# enforcement-active by default and fails CLOSED, never open. (This is the
+# multi-tenant-deploy step: secret + header land together at S4, exactly like
+# compose's `env + label` pairing.)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: gremion-ui-proxytrust
+  namespace: gremion-system
+spec:
+  headers:
+    customRequestHeaders:
+      x-proxy-trust: "__OVERRIDE_FROM_OVERLAY_TENANT_PROXY_SHARED_SECRET__"
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: app-links-no-redirect
+  namespace: gremion-system
+spec:
+  # This middleware is applied to the /.well-known/ HTTP-only route.
+  # By using entryPoint: web (HTTP) without a redirect middleware,
+  # Android App Links and Apple Universal Links verification bots
+  # can reach assetlinks.json / apple-app-site-association over HTTP.
+  # Do NOT attach any HTTPS redirect middleware to this specific route.
+  headers:
+    customResponseHeaders:
+      Cache-Control: "no-store"

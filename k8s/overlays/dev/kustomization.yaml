@@ -1,0 +1,95 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# `labels` + includeSelectors: true is the exact successor to the deprecated
+# `commonLabels` (which always wrote into selectors), mirroring k8s/base.
+# Keep includeSelectors — dropping it changes the rendered selectors, which on
+# an already-deployed Deployment/StatefulSet is an immutable-field error.
+labels:
+  - includeSelectors: true
+    pairs:
+      environment: dev
+
+patches:
+  - path: patches/resource-limits.yaml
+  - path: patches/keycloak-dev.yaml
+  # Apex host for the imported realm — keep in step with the ingressroute hosts
+  # patched below, or OIDC login is refused for the host Traefik actually serves.
+  - path: patches/keycloak-domain.yaml
+  # Traefik IngressRoute/Middleware hostname patches — one file per target
+  # (kustomize JSON6902 patches require an explicit target per patch; see
+  # k8s/overlays/dev/patches/ingressroutes-dev/ for the per-resource ops).
+  - path: patches/ingressroutes-dev/gremion-ui-https.yaml
+    target:
+      kind: IngressRoute
+      name: gremion-ui-https
+  - path: patches/ingressroutes-dev/gremion-ui-apexhost.yaml
+    target:
+      kind: Middleware
+      name: gremion-ui-apexhost
+  - path: patches/ingressroutes-dev/gremion-ui-wellknown.yaml
+    target:
+      kind: IngressRoute
+      name: gremion-ui-wellknown
+  - path: patches/ingressroutes-dev/keycloak-https.yaml
+    target:
+      kind: IngressRoute
+      name: keycloak-https
+  - path: patches/ingressroutes-dev/legal-https.yaml
+    target:
+      kind: IngressRoute
+      name: legal-https
+
+# Dev secrets from local .env — do NOT use in production
+secretGenerator:
+  - name: postgres-secret
+    envs: [../../../.env]
+    options:
+      disableNameSuffixHash: true
+  - name: keycloak-secret
+    envs: [../../../.env]
+    options:
+      disableNameSuffixHash: true
+  - name: gremion-ui-secret
+    envs: [../../../.env]
+    options:
+      disableNameSuffixHash: true
+  - name: backup-secret
+    envs: [../../../.env]
+    options:
+      disableNameSuffixHash: true
+  - name: legal-config
+    envs: [../../../legal/legal.env]
+    options:
+      disableNameSuffixHash: true
+
+# ── Registry override (A-020/#431) ───────────────────────────────────────────
+# The four first-party images (ghcr.io/hello-n00del/gremion-{ui,public,legal,
+# vector}) are pinned in k8s/base to the kernel version — see the IMAGE
+# REFERENCES block in k8s/base/kustomization.yaml. They are built from this
+# repo and published to no registry, so retag them into a registry you control
+# and point this overlay at it HERE rather than editing base; that keeps
+# `git pull` conflict-free.
+#
+# Prefer `digest:` over `newTag:` — a digest is immutable, so a rollback is
+# reproducible. Leave this commented until the digests are real: an
+# unresolvable reference renders a Deployment that cannot be pulled, and
+# nothing rejects it at `kubectl apply` time (the pod just sits in
+# ImagePullBackOff). Uncomment and fill in:
+#
+# images:
+#   - name: ghcr.io/hello-n00del/gremion-ui
+#     newName: registry.example.org/<your-namespace>/gremion-ui
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-public
+#     newName: registry.example.org/<your-namespace>/gremion-public
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-legal
+#     newName: registry.example.org/<your-namespace>/gremion-legal
+#     digest: sha256:<digest of the image you pushed>
+#   - name: ghcr.io/hello-n00del/gremion-vector
+#     newName: registry.example.org/<your-namespace>/gremion-vector
+#     digest: sha256:<digest of the image you pushed>

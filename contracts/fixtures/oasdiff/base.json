@@ -1,0 +1,16 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "oasdiff gate fixture", "version": "1.0.0" },
+  "paths": {
+    "/widgets": {
+      "get": {
+        "summary": "List widgets",
+        "parameters": [{ "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "ok", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" } } } } } } } }
+      }
+    },
+    "/widgets/{id}": {
+      "delete": { "summary": "Delete a widget", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "204": { "description": "deleted" } } }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+# Force LF line endings for files that run inside Linux containers.
+# Without this, Windows git (core.autocrlf=true) converts to CRLF,
+# which breaks shebangs and causes "exec: no such file or directory".
+
+*.sh        text eol=lf
+*.bats      text eol=lf
+*.sql       text eol=lf
+Dockerfile* text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.php       text eol=lf
+*.conf      text eol=lf
+*.html      text eol=lf
+*.env*      text eol=lf
+Makefile    text eol=lf
+
+# Versioned git hooks are EXTENSIONLESS, so none of the rules above cover them
+# and core.autocrlf=true checks them out with CRLF. Git-for-Windows' bundled sh
+# still runs a CRLF copy, but other sh implementations are less forgiving —
+# and a hook that dies on its own line endings is a guard that enforces nothing.
+gremion-ui/scripts/hooks/** text eol=lf
+
+# Codegen barrels are emitted with LF by their generator scripts (e.g.
+# scripts/build-module-manifest.mjs). Pin them to LF so the working tree matches
+# the generator output on Windows (core.autocrlf=true) — otherwise `pnpm build`
+# regenerates LF and leaves a CRLF/LF dirty diff, and the codegen staleness guard
+# (registry.test.ts) sees a spurious byte mismatch.
+*.generated.ts text eol=lf

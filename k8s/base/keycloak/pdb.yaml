@@ -1,0 +1,11 @@
+# PodDisruptionBudget — prevent all Keycloak pods from being evicted
+# simultaneously during node maintenance.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: keycloak-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: keycloak

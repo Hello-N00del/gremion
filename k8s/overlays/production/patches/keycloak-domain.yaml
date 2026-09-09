@@ -1,0 +1,21 @@
+##############################################################
+# Production overlay — the apex host the imported Keycloak realm trusts.
+#
+# Must match the host substituted into the Traefik routes
+# (patches/ingressroutes-prod/*.yaml). The realm template carries it as the
+# __APEX_DOMAIN__ sentinel; the substitute-realm-secrets initContainer resolves
+# it from DOMAIN and REFUSES TO BOOT if it is unset, so this file is part of the
+# same one-time `sed` recipe — see the header of
+# patches/ingressroutes-prod/gremion-ui-https.yaml.
+#
+# Leaving the sentinel unsubstituted does NOT fail `kubectl apply`: the realm
+# import then writes redirect URIs for a host nobody resolves and every OIDC
+# login is refused. The `Domain-sentinel guard` CI step and the `j1` check in
+# scripts/kernel-hygiene-check.mjs are what actually reject it.
+##############################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-config
+data:
+  DOMAIN: __GREMION_DOMAIN__

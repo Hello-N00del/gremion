@@ -1,0 +1,230 @@
+##############################################################
+# Nightly backup CronJob for Gremion — restic + rclone
+#
+# Flow:
+#   1. Dump PostgreSQL (Keycloak, gremion, control)
+#   2. restic backup → encrypted local PVC repository
+#   3. restic forget --prune  (local retention window)
+#   4. rclone sync → provider-agnostic remote storage
+#   5. restic check --read-data-subset  (integrity sampling)
+#   6. Write step-duration JSON log to /backup/logs/
+#
+# Secrets required:
+#   restic-secret:  RESTIC_PASSWORD
+#   rclone-secret:  RCLONE_CONFIG_<REMOTE>_* keys (provider-specific)
+#   postgres-secret: POSTGRES_USER, POSTGRES_PASSWORD
+##############################################################
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: database-backup
+  namespace: gremion-system
+spec:
+  schedule: "0 2 * * *"   # 02:00 UTC daily
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Allow generous time for large backups + rclone sync
+      activeDeadlineSeconds: 14400   # 4 hours hard limit
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          # G-036 (Wave 3b T4.1): pod-level baseline-PSS hardening.
+          automountServiceAccountToken: false
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            # Separate init container installs rclone so the main image stays
+            # as small as possible and the install is cached in the emptyDir.
+            - name: install-tools
+              image: curlimages/curl:8.7.1
+              # G-036: container-level baseline-PSS hardening.
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+                       -o /tmp/rclone.zip && \
+                  unzip -q /tmp/rclone.zip -d /tmp && \
+                  cp /tmp/rclone-*/rclone /tools/rclone && \
+                  chmod +x /tools/rclone
+              volumeMounts:
+                - name: tools
+                  mountPath: /tools
+          containers:
+            - name: backup
+              image: restic/restic:0.17.3
+              # G-036: container-level baseline-PSS hardening.
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  export PATH="/tools:$PATH"
+                  BACKUP_DIR=/backup
+                  DUMP_DIR="$BACKUP_DIR/current"
+                  LOG_DIR="$BACKUP_DIR/logs"
+                  RESTIC_REPOSITORY="$BACKUP_DIR/repo"
+                  DATE=$(date +%Y%m%d-%H%M%S)
+                  RUN_ID="backup-$DATE"
+                  export RESTIC_REPOSITORY
+
+                  mkdir -p "$DUMP_DIR" "$LOG_DIR"
+
+                  info()  { echo "[backup] $*"; }
+                  t0=""
+                  STEPS=""
+
+                  record() {
+                    local name=$1 start=$2 status=$3 extra=${4:-}
+                    local dur=$(( $(date +%s) - start ))
+                    local e="{\"step\":\"$name\",\"duration_s\":$dur,\"status\":\"$status\""
+                    [ -n "$extra" ] && e="$e,$extra"
+                    e="$e}"
+                    STEPS="${STEPS:+$STEPS,}$e"
+                    info "  $name: ${dur}s [$status]"
+                  }
+
+                  write_log() {
+                    local status=$1
+                    local total=$(( $(date +%s) - OVERALL_START ))
+                    printf '{"run_id":"%s","timestamp":"%s","total_duration_s":%d,"status":"%s","steps":[%s]}\n' \
+                      "$RUN_ID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$status" "$STEPS" \
+                      > "$LOG_DIR/$RUN_ID.json"
+                    info "Log: $LOG_DIR/$RUN_ID.json"
+                  }
+
+                  OVERALL_START=$(date +%s)
+                  trap 'write_log error' EXIT
+
+                  # ── Phase 1: Dumps ──────────────────────────
+                  info "=== Phase 1: Dumping databases ==="
+
+                  # #310: gremion (app data) + control (tenant registry) live on
+                  # the shared `postgres` host alongside keycloak.
+                  for db in keycloak gremion control; do
+                    t0=$(date +%s)
+                    info "  Dumping PostgreSQL: $db..."
+                    PGPASSWORD="$POSTGRES_PASSWORD" pg_dump \
+                      -h postgres -U "$POSTGRES_USER" "$db" \
+                      | gzip > "$DUMP_DIR/$db.sql.gz" 2>/dev/null || true
+                    sz=$(du -sb "$DUMP_DIR/$db.sql.gz" 2>/dev/null | cut -f1 || echo 0)
+                    record "dump_postgres_$db" "$t0" "ok" "\"size_bytes\":$sz"
+                  done
+
+                  # ── Phase 2: restic backup ──────────────────
+                  info "=== Phase 2: restic backup ==="
+                  restic snapshots --quiet >/dev/null 2>&1 || restic init --quiet
+                  t0=$(date +%s)
+                  restic backup "$DUMP_DIR" \
+                    --tag "$RUN_ID" --tag stura-os \
+                    --compression max --quiet
+                  record "restic_backup" "$t0" "ok"
+
+                  # ── Phase 3: forget + prune ─────────────────
+                  info "=== Phase 3: restic forget + prune ==="
+                  t0=$(date +%s)
+                  restic forget \
+                    --keep-within "${BACKUP_LOCAL_RETENTION_DAYS:-30}d" \
+                    --prune --quiet
+                  record "restic_forget_prune" "$t0" "ok"
+
+                  # ── Phase 4: rclone sync ────────────────────
+                  if [ -n "${RCLONE_BUCKET:-}" ]; then
+                    info "=== Phase 4: rclone sync ==="
+                    RCLONE_REMOTE="${RCLONE_REMOTE:-backup}"
+                    RCLONE_REMOTE_PATH="${RCLONE_REMOTE_PATH:-stura-restic}"
+                    t0=$(date +%s)
+                    /tools/rclone sync "$RESTIC_REPOSITORY" \
+                      "$RCLONE_REMOTE:$RCLONE_BUCKET/$RCLONE_REMOTE_PATH" \
+                      --transfers 4 --checkers 8 --quiet
+                    record "rclone_sync" "$t0" "ok"
+                  else
+                    info "=== Phase 4: skipped (RCLONE_BUCKET not set) ==="
+                    STEPS="${STEPS:+$STEPS,}{\"step\":\"rclone_sync\",\"duration_s\":0,\"status\":\"skipped\"}"
+                  fi
+
+                  # ── Phase 5: integrity check ────────────────
+                  info "=== Phase 5: restic check ==="
+                  t0=$(date +%s)
+                  restic check \
+                    --read-data-subset="${RESTIC_CHECK_SUBSET:-10%}" \
+                    --quiet
+                  record "restic_check" "$t0" "ok"
+
+                  trap - EXIT
+                  write_log ok
+                  info "Backup complete: $RUN_ID"
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-secret
+                      key: POSTGRES_USER
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-secret
+                      key: POSTGRES_PASSWORD
+                - name: RESTIC_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: restic-secret
+                      key: RESTIC_PASSWORD
+                - name: RCLONE_BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: rclone-secret
+                      key: RCLONE_BUCKET
+                      optional: true
+                - name: RCLONE_REMOTE
+                  valueFrom:
+                    secretKeyRef:
+                      name: rclone-secret
+                      key: RCLONE_REMOTE
+                      optional: true
+                - name: RCLONE_REMOTE_PATH
+                  valueFrom:
+                    secretKeyRef:
+                      name: rclone-secret
+                      key: RCLONE_REMOTE_PATH
+                      optional: true
+                - name: BACKUP_LOCAL_RETENTION_DAYS
+                  value: "30"
+                - name: RESTIC_CHECK_SUBSET
+                  value: "10%"
+              envFrom:
+                # Loads RCLONE_CONFIG_<REMOTE>_* keys for rclone
+                - secretRef:
+                    name: rclone-secret
+                    optional: true
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backup
+                - name: tools
+                  mountPath: /tools
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: backup-data
+            - name: tools
+              emptyDir: {}

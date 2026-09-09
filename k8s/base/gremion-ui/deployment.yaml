@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gremion-ui
+  labels:
+    app: gremion-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gremion-ui
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: gremion-ui
+    spec:
+      # G-036 (Wave 3b T4.1): pod-level baseline-PSS hardening.
+      # A-021 (addendum-4): runAsNonRoot/runAsUser now that the image ships a
+      # non-root `node` user (uid/gid 1000); this makes the Pod restricted-PSS
+      # compliant. No PVC → no fsGroup (the per-tenant config at /data is
+      # chowned to node in the image).
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gremion-ui
+          # A-020/#431: pinned to the kernel version, never `:latest`.
+          # First-party image, built from this repo — see the IMAGE REFERENCES
+          # block in ../kustomization.yaml for how to point it at your registry.
+          image: ghcr.io/hello-n00del/gremion-ui:0.1.0
+          # G-036: container-level baseline-PSS hardening.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: gremion-ui-config
+            - secretRef:
+                name: gremion-ui-secret
+          # P2.1c T1 (#202) D-SECMOUNT twin: compose uses a LIVE host bind
+          # mount (${TENANT_SECRETS_DIR:-./secrets/tenants} ->
+          # /run/secrets/tenants:ro on gremion-ui). Under k8s the twin is a
+          # Secret-backed projected volume, chosen over hostPath because
+          # (a) this pod is restricted-PSS compliant (A-021) and hostPath
+          # breaks that, and (b) kubelet refreshes Secret volume contents
+          # live (~1 min sync), preserving the "new per-tenant secret files
+          # appear without a recreate" property. The T7 `file:` secret-ref
+          # allowlist is pinned to the container prefix /run/secrets/.
+          volumeMounts:
+            - name: tenant-secrets
+              mountPath: /run/secrets/tenants
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        # D-SECMOUNT (see volumeMounts comment above). `optional: true` so the
+        # pod can boot before the first per-tenant secret exists — exactly like
+        # the compose bind mount of an empty host dir; fail-closed enforcement
+        # happens at resolveSecret() read time, not at mount time. The
+        # provisioner (T10) writes each tenant's keys into this Secret.
+        - name: tenant-secrets
+          secret:
+            secretName: tenant-secrets
+            optional: true

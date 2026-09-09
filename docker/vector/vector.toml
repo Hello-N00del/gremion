@@ -1,0 +1,34 @@
+# docker/vector/vector.toml
+# Vector handles retention enforcement only.
+# IP pseudonymisation is handled upstream by process-logs.sh.
+
+[sources.processed_logs]
+type = "file"
+include = ["/logs/processed/security.log"]
+read_from = "end"
+
+[transforms.parse_json]
+type = "remap"
+inputs = ["processed_logs"]
+source = '''
+  . = parse_json!(.message)
+'''
+
+[transforms.enforce_retention]
+type = "filter"
+inputs = ["parse_json"]
+# Drop events older than LOG_RETENTION_SECONDS (injected via env at container start).
+# LOG_RETENTION_SECONDS must be a plain integer (seconds) — e.g. 1209600 for 14 days.
+condition = '''
+  # Unparseable timestamps fall back to now() — event treated as fresh (kept).
+  # The ?? fallback also guarantees ts is non-null, so to_unix_timestamp is
+  # infallible (VRL does not narrow a timestamp|null type via an err check).
+  ts = parse_timestamp(.RequestReceivedAt, "%+") ?? now()
+  to_unix_timestamp(now()) - to_unix_timestamp(ts) < to_float!(get_env_var!("LOG_RETENTION_SECONDS"))
+'''
+
+[sinks.security_log_file]
+type = "file"
+inputs = ["enforce_retention"]
+path = "/logs/processed/retained-%Y-%m-%d.log"
+encoding.codec = "json"

@@ -1,0 +1,53 @@
+# docker/traefik/traefik.yml
+# Traefik static configuration for Gremion production.
+# TLS is terminated with the Cloudflare Origin Certificate (15-yr, loaded
+# via the file provider — see docker/traefik/dynamic/tls.yml). Let's Encrypt
+# is intentionally removed: the public edge is Cloudflare (Full strict),
+# Traefik only needs to present the origin cert to the cloudflared tunnel.
+# Access logs are written as JSON to the traefik-logs volume so the Vector
+# container can tail and process them.
+
+api:
+  dashboard: false
+
+entryPoints:
+  websecure:
+    address: ":443"
+    # #251: the sole ingress is the cloudflared tunnel, which connects from the
+    # internal docker network — so trust the private RFC1918 ranges to read the
+    # real client IP from the forwarded headers (X-Forwarded-For / CF-Connecting-IP)
+    # instead of the tunnel container's IP. Without this, access logs and the
+    # default rate-limit key both collapse onto one tunnel IP. No public client can
+    # reach Traefik directly (cloudflared is the only ingress), so trusting the
+    # internal ranges is safe.
+    forwardedHeaders:
+      trustedIPs:
+        - "127.0.0.1/32"
+        - "10.0.0.0/8"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+
+providers:
+  docker:
+    # Reach the Docker API through the read-only docker-socket-proxy (#244) — the
+    # raw /var/run/docker.sock is no longer mounted into this internet-facing
+    # proxy. The proxy exposes only the GET endpoints this provider needs.
+    endpoint: "tcp://docker-socket-proxy:2375"
+    exposedByDefault: false
+    network: gremion_net
+  file:
+    filename: /etc/traefik/dynamic/tls.yml
+    watch: true
+
+# JSON access log to shared volume — Vector tails this file.
+# Drop ClientUsername (never useful, reduces PII surface).
+accessLog:
+  filePath: "/logs/access.log"
+  format: json
+  bufferingSize: 100
+  fields:
+    defaultMode: keep
+    names:
+      ClientUsername: drop
+    headers:
+      defaultMode: drop

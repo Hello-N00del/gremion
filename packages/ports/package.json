@@ -1,0 +1,67 @@
+{
+  "name": "@gremion/ports",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Broker, tracer and contract ports for the Gremion governance kernel",
+  "type": "module",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hello-N00del/gremion.git",
+    "directory": "packages/ports"
+  },
+  "homepage": "https://github.com/Hello-N00del/gremion/tree/main/packages/ports",
+  "bugs": "https://github.com/Hello-N00del/gremion/issues",
+  "files": ["dist", "src", "!src/**/*.test.ts", "README.md", "LICENSE"],
+  "exports": {
+    "./broker": {
+      "import": "./src/broker.ts"
+    },
+    "./tracer": {
+      "import": "./src/tracer.ts"
+    },
+    "./nats": {
+      "import": "./src/nats-broker.ts"
+    },
+    "./content-portal-contract": {
+      "import": "./src/content-portal-contract.ts"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./broker": {
+        "types": "./dist/broker.d.ts",
+        "import": "./dist/broker.js"
+      },
+      "./tracer": {
+        "types": "./dist/tracer.d.ts",
+        "import": "./dist/tracer.js"
+      },
+      "./nats": {
+        "types": "./dist/nats-broker.d.ts",
+        "import": "./dist/nats-broker.js"
+      },
+      "./content-portal-contract": {
+        "types": "./dist/content-portal-contract.d.ts",
+        "import": "./dist/content-portal-contract.js"
+      }
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.10"
+  }
+}

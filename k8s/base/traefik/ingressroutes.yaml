@@ -1,0 +1,161 @@
+##############################################################
+# Traefik IngressRoute resources for Gremion
+#
+# All hostnames use stura.example.com as placeholder.
+# Override per environment:
+#   k8s/overlays/dev/patches/ingressroutes-dev.yaml   (*.localhost)
+#   k8s/overlays/production/patches/ingressroutes-prod.yaml (real domain)
+#
+# TLS certResolver: letsencrypt — patched out in dev overlay
+##############################################################
+
+# ── gremion-ui (main domain — HTTPS) ───────────────────────────
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gremion-ui-https
+  namespace: gremion-system
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    # Setup wizard — rate-limited (unauthenticated). P2.1c T2 (#202):
+    # explicit priority 30 so it beats the apex-host route (20) for /setup;
+    # app-host-only on purpose (the wizard bootstraps the DEFAULT tenant), so
+    # it also carries the apexhost injection. NOTE: the overlay patch files
+    # replace /spec/routes/0/match by INDEX — this route MUST stay index 0.
+    - match: Host(`stura.example.com`) && PathPrefix(`/setup`)
+      kind: Rule
+      priority: 30
+      services:
+        - name: gremion-ui
+          port: 3000
+      middlewares:
+        - name: hsts
+        - name: rate-limit-setup
+        - name: gremion-ui-apexhost
+        # P2.1c T5 (#202) proxy-trust parity: this app-host route serves
+        # gremion-ui traffic, so it carries the proxy-trust header like the
+        # other two gremion-ui routes (compose puts proxytrust on every
+        # gremion-ui router). See middlewares.yaml gremion-ui-proxytrust.
+        - name: gremion-ui-proxytrust
+    # P2.1c T2 (#202) D-APEX twin (k8s leg): the k8s app host is ALREADY
+    # 3 labels with leftmost label `stura` != `default`, so without this
+    # injection the tenant resolver would 404 the main host. This app-host-only
+    # route attaches the gremion-ui-apexhost headers Middleware
+    # (X-Forwarded-Host: default.stura.example.com); priority 20 beats the
+    # wildcard route (10) on the app host only.
+    # Parity: docker-compose.prod.yml `gremion-ui-apex` router (priority 20) +
+    # `gremion-ui-apexhost` middleware (design §4.7 drift concern).
+    - match: Host(`stura.example.com`)
+      kind: Rule
+      priority: 20
+      services:
+        - name: gremion-ui
+          port: 3000
+      middlewares:
+        - name: hsts
+        - name: gremion-ui-apexhost
+        # P2.1c T5 (#202) proxy-trust parity (compose `gremion-ui-apex` router).
+        - name: gremion-ui-proxytrust
+    # P2.1c T2 (#202) D-K8SHOST: tenant hosts nest UNDER the app host
+    # (4 labels, e.g. t2.stura.example.com), so this wildcard is structurally
+    # disjoint from the satellite SIBLING hosts (cloud./matrix./elections.
+    # example.com). extractLeftmostLabel is label-count-agnostic — the
+    # leftmost label still resolves the slug. Tenant requests keep Traefik's
+    # NATIVE X-Forwarded-Host (the real tenant host) — no injection here.
+    # 4-LABEL NOTE for the dev/prod overlay patches: when an overlay
+    # substitutes real domains where the satellites become SIBLINGS of the
+    # tenant hosts (e.g. apex council.example with cloud.council.example), the
+    # explicit priorities are what keeps the satellites unshadowed
+    # (satellites 20 > wildcard 10) — keep them when patching matches.
+    # Parity: docker-compose.prod.yml `gremion-ui` router (priority 10).
+    - match: Host(`stura.example.com`) || HostRegexp(`^[a-z0-9-]+\.stura\.example\.com$`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: gremion-ui
+          port: 3000
+      middlewares:
+        - name: hsts
+        # P2.1c T5 (#202) proxy-trust parity (compose `gremion-ui` wildcard
+        # router). Tenant + apex traffic both flow through this route, so the
+        # proxy-trust gate guards the multi-tenant wildcard leg too.
+        - name: gremion-ui-proxytrust
+  tls:
+    certResolver: letsencrypt
+
+---
+# ── gremion-ui App Links bypass (/.well-known — HTTP only, no redirect) ────────
+# Required for Android App Links and Apple Universal Links verification bots.
+# Must NOT redirect to HTTPS — verification bots do not follow redirects.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gremion-ui-wellknown
+  namespace: gremion-system
+spec:
+  entryPoints:
+    - web   # HTTP only — no TLS, no redirect
+  routes:
+    # P2.1c T2 (#202): generalized to tenant hosts (D-K8SHOST 4-label
+    # nesting); priority 200 mirrors the compose `wellknown` router as
+    # drift-proofing (sole route on the `web` entrypoint today).
+    - match: (Host(`stura.example.com`) || HostRegexp(`^[a-z0-9-]+\.stura\.example\.com$`)) && PathPrefix(`/.well-known/`)
+      kind: Rule
+      priority: 200
+      services:
+        - name: gremion-ui
+          port: 3000
+      middlewares:
+        - name: app-links-no-redirect
+
+---
+# ── keycloak (/auth subpath) ──────────────────────────────────
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: keycloak-https
+  namespace: gremion-system
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    # P2.1c T2 (#202) D-ISSUER-HOST: KC path routing is realm-agnostic, so
+    # tenant hosts reach their realm at https://<slug>.<app-host>/auth/...
+    # (4-label nesting, D-K8SHOST). Priority 100 mirrors the compose
+    # `keycloak` router (parity comment, design §4.7).
+    - match: (Host(`stura.example.com`) || HostRegexp(`^[a-z0-9-]+\.stura\.example\.com$`)) && PathPrefix(`/auth`)
+      kind: Rule
+      priority: 100
+      services:
+        - name: keycloak
+          port: 8080
+      middlewares:
+        - name: hsts
+  tls:
+    certResolver: letsencrypt
+
+---
+# ── legal pages (main domain — /datenschutz, /impressum, etc.) ───────────────
+# Legal pages are served from the stura.example.com domain.
+# Uses Exact and Prefix matching to avoid conflicts with gremion-ui routes.
+# No path rewriting — legal service handles clean URLs itself.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: legal-https
+  namespace: gremion-system
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`stura.example.com`) && (Path(`/datenschutz`) || Path(`/impressum`) || Path(`/barrierefreiheit`) || Path(`/nutzungsbedingungen`) || PathPrefix(`/legal`))
+      kind: Rule
+      services:
+        - name: legal
+          port: 80
+      middlewares:
+        - name: hsts
+  tls:
+    certResolver: letsencrypt

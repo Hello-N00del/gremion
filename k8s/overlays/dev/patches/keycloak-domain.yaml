@@ -1,0 +1,14 @@
+##############################################################
+# Dev overlay — the apex host the imported Keycloak realm trusts.
+#
+# Must match the host this overlay patches into the Traefik routes
+# (patches/ingressroutes-dev/*.yaml → stura.localhost). The realm template
+# carries it as the __APEX_DOMAIN__ sentinel; the substitute-realm-secrets
+# initContainer resolves it from DOMAIN and fails fast if it is unset.
+##############################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-config
+data:
+  DOMAIN: stura.localhost

@@ -1,0 +1,5 @@
+# Dev overlay: gremion-ui apex-host injection (D-APEX twin) — patched in step
+# with the app host (parity: compose default.${DOMAIN}).
+- op: replace
+  path: /spec/headers/customRequestHeaders/X-Forwarded-Host
+  value: default.stura.localhost

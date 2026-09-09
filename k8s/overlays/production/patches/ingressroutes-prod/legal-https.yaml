@@ -1,0 +1,5 @@
+# Production overlay: legal pages. See gremion-ui-https.yaml for the
+# __GREMION_DOMAIN__ sentinel substitution recipe.
+- op: replace
+  path: /spec/routes/0/match
+  value: Host(`__GREMION_DOMAIN__`) && (Path(`/datenschutz`) || Path(`/impressum`) || Path(`/barrierefreiheit`) || Path(`/nutzungsbedingungen`) || PathPrefix(`/legal`))

@@ -1,0 +1,13 @@
+# k8s/traefik/values-prod.yaml
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: it@stura.example.com   # TODO: replace with real email
+      storage: /data/acme.json
+      httpChallenge:
+        entryPoint: web
+deployment:
+  replicas: 1
+persistence:
+  enabled: true
+  size: 128Mi

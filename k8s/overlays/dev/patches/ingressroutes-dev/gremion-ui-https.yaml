@@ -1,0 +1,22 @@
+# Dev overlay: patch gremion-ui-https IngressRoute hostnames to *.localhost
+# and remove TLS certResolver (use Traefik's self-signed cert).
+#
+# P2.1c T2 (#202) 4-LABEL NOTE (D-K8SHOST): in the base, tenant hosts nest
+# UNDER the app host (4 labels, <slug>.stura.example.com). This overlay keeps
+# the nesting (<slug>.stura.localhost).
+# Route indices match k8s/base/traefik/ingressroutes.yaml — keep in step.
+#
+# 0 = setup wizard (keep the PathPrefix: with the P2.1c explicit priorities a
+# plain-Host value here would swallow all app-host traffic into the setup
+# rate limit), 1 = apex (D-APEX injection), 2 = tenant wildcard.
+- op: replace
+  path: /spec/routes/0/match
+  value: Host(`stura.localhost`) && PathPrefix(`/setup`)
+- op: replace
+  path: /spec/routes/1/match
+  value: Host(`stura.localhost`)
+- op: replace
+  path: /spec/routes/2/match
+  value: Host(`stura.localhost`) || HostRegexp(`^[a-z0-9-]+\.stura\.localhost$`)
+- op: remove
+  path: /spec/tls/certResolver

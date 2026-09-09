@@ -1,0 +1,71 @@
+# gitleaks configuration — closes G-043 (in-repo secret-scanning).
+#
+# Extends the default ruleset rather than replacing it, so all the AWS/GCP/
+# Slack/PEM/etc. patterns ship with this scan. The local allowlist exists
+# only to silence expected false positives:
+#
+#   1. CHANGE_ME_* placeholders (they are documentation strings for operators,
+#      not real secrets — the integration-test job replaces every one at
+#      runtime per G-042 and Wave 3e T2.1). This regex applies repo-wide, so it
+#      also covers example tokens quoted in docs/ security write-ups (Wave 3a /
+#      Wave 3e notes, the gap list) WITHOUT blanket-exempting the docs/ tree.
+#   2. The single .env.example file (the canonical placeholder catalogue).
+#   3. Test + seed FIXTURES carry synthetic strings (sentinel Keycloak UUIDs,
+#      throwaway tenancy / internal-fetch tokens) — not real secrets. These only
+#      ever surface on a full-history scan (the `workflow_dispatch`/manual run
+#      path); the normal pull_request scan diffs base..head and never sees
+#      them.
+#      These are allowlisted BY VALUE, not by path: see the flip note below.
+#
+# #258-F1: the previous blanket '''^docs/''' path exemption masked any real
+# secret pasted into a runbook/operations write-up (docs/ is exactly where
+# operators paste live command transcripts), and '''^wiki/''' was dead (no such
+# tracked tree). Both removed; docs/ is now scanned, with the repo-wide
+# CHANGE_ME_ regex still covering legitimate placeholder tokens it quotes.
+#
+# FLIP NOTE (public release): the fixture exemption for server tests used to be
+# the path prefix '''^gremion-ui/src/lib/server/.*\.test\.ts$''', which exempted
+# 107 tracked files wholesale — a real secret pasted into ANY server test was
+# invisible to the only in-repo scanner, in a repo whose secret-scan result is a
+# release pre-condition. That is the same failure the '''^docs/''' exemption was
+# removed for in #258-F1. It is replaced below by regexes matching the actual
+# synthetic constants those tests use. Not yet re-verified with a full-history
+# `gitleaks detect` — gitleaks is not installed on the machine this change was
+# made on, so the narrowed config must be run once before the flip; expect
+# NOISE (new true-positive-shaped findings), not silence.
+#
+# The same treatment has now been applied to the second path allowlist,
+# '''_seed\.sql$'''. That one exempted three migration files WHOLESALE — and a
+# seed file is precisely where a published account/password pair once hid from
+# this scanner. Every identifier in those files is a sentinel of the shape
+# <repeated hex digit x8>-0000-0000-0000-<12 digits> (families 1111…, 2222…,
+# 3333…, 4444…, 5555…, aaaa…), which no real UUID takes, so the shape itself is
+# the allowlist. A real credential pasted into a seed migration now fails the
+# scan.
+#
+# Any other regex hit in production source is a real finding and must fail CI.
+
+title = "Gremion gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlist for known-safe placeholders and documentation"
+regexes = [
+  '''CHANGE_ME_[a-zA-Z0-9_]+''',
+  # Synthetic fixture constants used by the server unit/integration tests. Value
+  # allowlist, deliberately NOT a path allowlist: a real secret pasted into a
+  # test file still fails the scan.
+  '''(test|proxy|internal|dev)-secret(-32-bytes-of-padding[-!x]*)?''',
+  '''test-(kc-admin|ui-client)-secret''',
+  '''-32-bytes-of-padding''',
+  # Sentinel identifiers in the seed migrations. Three all-zero groups plus a
+  # decimal tail is not a shape a generated UUID takes, so this matches the
+  # fixtures and nothing else. Replaces the '''_seed\.sql$''' path exemption.
+  '''\b(?:0{8}|1{8}|2{8}|3{8}|4{8}|5{8}|6{8}|7{8}|8{8}|9{8}|a{8}|b{8}|c{8}|d{8}|e{8}|f{8})-0000-0000-0000-[0-9]{12}\b''',
+]
+paths = [
+  '''^\.env\.example$''',
+  '''^docker/vector/test-process-logs\.sh$''',    # log-pipeline test harness
+]

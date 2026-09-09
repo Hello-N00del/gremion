@@ -1,0 +1,44 @@
+# Generator root for the config files that docker-compose and Kubernetes SHARE.
+#
+# This directory is the single source of truth for the Keycloak realm export and
+# the realm-secret substitution script. k8s/base needs them as ConfigMaps, but
+# kustomize's default LoadRestrictionsRootOnly refuses to read any FILE above
+# the kustomization root — so `configMapGenerator` entries in k8s/base pointing
+# at `../../docker/...` made base (and every overlay) unbuildable without the
+# non-default `--load-restrictor LoadRestrictionsNone` flag (#431).
+#
+# A kustomization is a root for the files BELOW it, so putting the generators
+# here — next to the files they read — is in-root by construction. k8s/base
+# pulls them in with `resources: [../../docker]`; referencing a DIRECTORY above
+# the root is the ordinary overlay mechanism and is always permitted. Only FILE
+# loads are root-restricted.
+#
+# The alternative was to copy the two files under k8s/, which would fork them
+# from the compose originals. Nothing is copied: there is still exactly one
+# realm-export.json and one substitute-realm-secrets.sh.
+#
+# The same defect was fixed the same way in the downstream distribution that
+# consumes this kernel; the two are kept in step deliberately.
+#
+# This kustomization emits ConfigMaps only. It is not meant to be applied on
+# its own — always build k8s/base or an overlay.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# NOTE (C10): Client secrets in realm-export.json are envsubst sentinels
+# (__GREMION_UI_OIDC_CLIENT_SECRET__, __GREMION_ADMIN_OIDC_CLIENT_SECRET__) that
+# are replaced at pod start by the `substitute-realm-secrets` initContainer
+# using values from the `keycloak-secret` Secret. The `keycloak-scripts`
+# ConfigMap ships the substitution shell script used by that initContainer.
+#
+# NOTE (C9): realm-export.json intentionally contains NO users. Hard-coded dev
+# accounts live ONLY in the dev overlay via a separate `keycloak-dev-users`
+# ConfigMap. Do not add dev-users.json here — everything generated in this file
+# lands in EVERY overlay, production included.
+configMapGenerator:
+  - name: keycloak-realm
+    files:
+      - realm-export.json=keycloak/realm-export.json
+  - name: keycloak-scripts
+    files:
+      - substitute-realm-secrets.sh=keycloak/substitute-realm-secrets.sh
