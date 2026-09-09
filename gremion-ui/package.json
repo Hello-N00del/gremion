@@ -31,7 +31,7 @@
     "@testing-library/svelte": "^5.4.2",
     "@types/node": "^26.1.1",
     "@types/node-cron": "^3.0.11",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.0.0",
     "msw": "^2.15.0",
     "svelte": "^5.56.8",
     "svelte-check": "^4.7.3",
