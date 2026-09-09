@@ -205,12 +205,13 @@ copy_host_src() {
     key="$(value_of "${ENV_DIR}/state.env" STALWART_API_KEY)"
     [ -n "$pw" ] && [ -n "$key" ]
     [ "$(value_of "${ENV_DIR}/mail.env"     PLATFORM_SMTP_PASSWORD)" = "$pw" ]
-    [ "$(value_of "${ENV_DIR}/ops.env"      PLATFORM_SMTP_PASSWORD)" = "$pw" ]
+    [ "$(value_of "${ENV_DIR}/ops.env"      ALERT_SMTP_PASSWORD)" = "$pw" ]
     [ "$(value_of "${ENV_DIR}/app-blue.env" PLATFORM_SMTP_PASSWORD)" = "$pw" ]
     [ "$(value_of "${ENV_DIR}/mail.env"     STALWART_API_KEY)" = "$key" ]
     [ "$(value_of "${ENV_DIR}/ops.env"      STALWART_API_KEY)" = "$key" ]
-    # Task 11's render-ops.sh reads PLATFORM_SMTP_PASSWORD, not ALERT_SMTP_PASSWORD.
-    ! grep -q '^ALERT_SMTP_PASSWORD=' "${ENV_DIR}/ops.env"
+    # Task 11's render-ops.sh reads ALERT_SMTP_PASSWORD from ops.env and
+    # appends no copy of it (load_env would refuse the duplicate with exit 2).
+    [ "$(grep -c '^ALERT_SMTP_PASSWORD=' "${ENV_DIR}/ops.env")" = 1 ]
 }
 
 @test "two roots receive different secrets" {
