@@ -14,7 +14,7 @@ COPY ipcrypt-cli.c /src/ipcrypt-cli.c
 RUN cc -O2 -Wall -I /src/ipcrypt2/src/include /src/ipcrypt-cli.c \
        /src/ipcrypt2/libipcrypt2.a -o /usr/local/bin/ipcrypt
 
-FROM timberio/vector:0.57.0-debian
+FROM timberio/vector:0.58.0-debian
 # logrotate drives the rotation loop in entrypoint.sh (raw access.log +
 # appended security.log). Installed in the final image so the COPYed
 # /etc/logrotate.d/vector-logs config is actually executable.
