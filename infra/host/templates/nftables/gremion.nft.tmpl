@@ -1,0 +1,75 @@
+#!/usr/sbin/nft -f
+# Rendered from infra/host/templates/nftables/gremion.nft.tmpl by
+# infra/host/bootstrap.sh (stage: firewall). Do not hand-edit.
+#
+# This host owns exactly ONE table, and the kernel ruleset is deliberately
+# never flushed wholesale: Docker keeps its DNAT and masquerade rules in its
+# own tables in the same kernel ruleset, and flushing them removes every
+# published port's DNAT with no error anywhere.
+#
+# The guard that enforces that greps this render for the literal two-word
+# directive, so the prose above deliberately does not spell it out.
+#
+# The two lines below are the atomic replace idiom: create the table if it is
+# absent, delete it, then define it — all inside the single `nft -f`
+# transaction, so the host is never momentarily unfiltered.
+table inet gremion {}
+delete table inet gremion
+
+table inet gremion {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif lo accept
+        ct state established,related accept
+        ct state invalid drop
+
+        # Path-MTU discovery and IPv6 neighbour discovery. Dropping these
+        # looks like random hangs, not like a firewall.
+        meta l4proto icmp accept
+        meta l4proto ipv6-icmp accept
+
+        # Edge address (IP-A): ssh, http/https, LiveKit media. Nothing else.
+        ip  daddr ${EDGE_BIND_IP}  tcp dport ${SSH_PORT} accept comment "ssh v4"
+        ip6 daddr ${EDGE_BIND_IP6} tcp dport ${SSH_PORT} accept comment "ssh v6"
+        ip  daddr ${EDGE_BIND_IP}  tcp dport { ${EDGE_HTTP_PORT}, ${EDGE_HTTPS_PORT} } accept comment "edge http v4"
+        ip6 daddr ${EDGE_BIND_IP6} tcp dport { ${EDGE_HTTP_PORT}, ${EDGE_HTTPS_PORT} } accept comment "edge http v6"
+        ip  daddr ${EDGE_BIND_IP}  tcp dport ${LIVEKIT_TCP_PORT} accept comment "livekit tcp v4"
+        ip6 daddr ${EDGE_BIND_IP6} tcp dport ${LIVEKIT_TCP_PORT} accept comment "livekit tcp v6"
+        ip  daddr ${EDGE_BIND_IP}  udp dport ${LIVEKIT_UDP_RANGE} accept comment "livekit udp v4"
+        ip6 daddr ${EDGE_BIND_IP6} udp dport ${LIVEKIT_UDP_RANGE} accept comment "livekit udp v6"
+
+        # Mail address (IP-B) only.
+        ip  daddr ${MAIL_BIND_IP}  tcp dport { 25, 80, 443, 465, 587, 993 } accept comment "mail v4"
+        ip6 daddr ${MAIL_BIND_IP6} tcp dport { 25, 80, 443, 465, 587, 993 } accept comment "mail v6"
+
+        counter comment "dropped by policy"
+    }
+
+    chain forward {
+        # priority filter - 10: ahead of Docker's own forward chains, whichever
+        # firewall backend Docker 29 uses on this host (spike S3 records it).
+        type filter hook forward priority filter - 10; policy accept;
+
+        # Egress TCP/25 belongs to the mail subnet and to nothing else.
+        #
+        # `oifname` is what makes this an EGRESS rule. An inbound message to
+        # Stalwart is DNATed in prerouting and then also traverses `forward`
+        # with dport 25 and an internet source address; its output interface is
+        # the mail bridge, not the external one. Without the oifname match this
+        # rule would drop all inbound mail.
+        oifname "${EXT_IFACE}" meta nfproto ipv4 tcp dport 25 ip  saddr != ${MAIL_V4_SUBNET} counter drop comment "egress25-nonmail v4"
+        oifname "${EXT_IFACE}" meta nfproto ipv6 tcp dport 25 ip6 saddr != ${MAIL_V6_SUBNET} counter drop comment "egress25-nonmail v6"
+    }
+
+    chain postrouting {
+        # priority srcnat - 1: ahead of Docker's MASQUERADE, which would
+        # otherwise rewrite outbound mail to the edge address and break SPF and
+        # FCrDNS. A nat hook in an inet table needs kernel >= 5.2 (Debian 13
+        # ships 6.x); spike S3 confirms it on the host.
+        type nat hook postrouting priority srcnat - 1; policy accept;
+
+        oifname "${EXT_IFACE}" ip  saddr ${MAIL_V4_SUBNET} counter snat ip  to ${MAIL_BIND_IP} comment "mail snat v4"
+        oifname "${EXT_IFACE}" ip6 saddr ${MAIL_V6_SUBNET} counter snat ip6 to ${MAIL_BIND_IP6} comment "mail snat v6"
+    }
+}

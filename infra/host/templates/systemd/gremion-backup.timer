@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Gremion backup
+
+[Timer]
+OnCalendar=${BACKUP_ONCALENDAR}
+# A host that was down at 02:00 still takes its backup on the next boot.
+Persistent=true
+RandomizedDelaySec=15m
+Unit=gremion-backup.service
+
+[Install]
+WantedBy=timers.target

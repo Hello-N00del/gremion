@@ -35,3 +35,11 @@ test/host/test_helper/*.bash text eol=lf
 # regenerates LF and leaves a CRLF/LF dirty diff, and the codegen staleness guard
 # (registry.test.ts) sees a spurious byte mismatch.
 *.generated.ts text eol=lf
+
+# Task 2: infra/host/templates/ carries an nftables ruleset (.tmpl) and four
+# systemd units (.service/.timer). None of the rules above matches those
+# extensions, so core.autocrlf=true checks them out with CRLF on Windows — and
+# `nft -f` then refuses to parse the ruleset, while systemd reads every unit
+# value with a trailing carriage return. templates/env/*.env.tmpl already
+# matched *.env* above; this covers the rest of the directory.
+infra/host/templates/** text eol=lf
