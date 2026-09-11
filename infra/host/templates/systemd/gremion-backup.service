@@ -1,17 +1,28 @@
 [Unit]
-Description=Gremion backup (restic repository + off-site copy)
+Description=Gremion nightly backup (databases, volumes, buckets, etc)
+Documentation=file:${GREMION_ROOT}/current/docs/ops/host-tooling.md
 After=docker.service
-Wants=docker.service
+Requires=docker.service
 
 [Service]
 Type=oneshot
 User=${DEPLOY_USER}
 Group=${DEPLOY_USER}
+# gremion-backup drives the engine directly (volume ls/inspect, compose exec,
+# the archive container), so the deploy user needs the docker group here even
+# when its own group membership is correct.
 SupplementaryGroups=docker
+Environment=GREMION_ROOT=${GREMION_ROOT}
+WorkingDirectory=${GREMION_ROOT}
 ExecStart=${GREMION_ROOT}/bin/gremion-backup --class daily
+# A full run dumps every database, archives every volume, mirrors the
+# repository off-site and reads 5% of it back; systemd's 90 s default would
+# kill it mid-restic and leave a half-written repository.
+TimeoutStartSec=6h
 # A backup must never compete with the platform for IO.
 Nice=10
 IOSchedulingClass=idle
-TimeoutStartSec=6h
 ProtectSystem=full
 NoNewPrivileges=true
+StandardOutput=append:${GREMION_ROOT}/logs/backup.log
+StandardError=append:${GREMION_ROOT}/logs/backup.log

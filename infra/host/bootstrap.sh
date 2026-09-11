@@ -435,12 +435,19 @@ stage_base() {
     apt-get install -y -qq \
         ca-certificates curl gnupg git nftables fail2ban \
         unattended-upgrades apt-listchanges systemd-timesyncd \
-        ifupdown dnsutils openssl htop ncdu jq rsync gettext-base
+        ifupdown dnsutils openssl htop ncdu jq rsync gettext-base \
+        restic rclone
 
     local c
     for c in git jq nft dig openssl fail2ban-client envsubst; do
         assert "${c} on PATH" command -v "$c"
     done
+    # gremion-backup (§J) is a host program, not a container: restic writes the
+    # repository and rclone mirrors it off-site. `apt-get install` returning 0
+    # does not mean the binaries work, so restic is also executed once.
+    assert "restic on PATH"          command -v restic
+    assert "rclone on PATH"          command -v rclone
+    assert "restic version runs"     restic version
 
     info "timezone -> ${TIMEZONE}"
     timedatectl set-timezone "${TIMEZONE}"
