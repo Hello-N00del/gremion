@@ -36,7 +36,13 @@ services:
       - "${EDGE_BIND_IP}:${INTERNALTEST_PORT}:8081"
       - "${EDGE_BIND_IP}:${TRAEFIK_API_PORT}:8080"
     volumes:
-      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      # The STATIC configuration is mounted from the throwaway root, not from the
+      # tracked ./traefik.yml beside it: the driver copies the tracked file there
+      # at start-up and the acme-red drill rewrites the COPY (it removes the ACME
+      # resolver, which is the only way to make the challenge path shadowable —
+      # see edge-proto.sh:red_acme). A drill that edited the tracked fixture in
+      # place would leave the repository dirty whenever it was interrupted.
+      - ./.proto-root/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./.proto-root/etc/edge:/etc/traefik/dynamic:ro
       - ./.proto-root/etc/edge-certs:/etc/traefik/certs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro

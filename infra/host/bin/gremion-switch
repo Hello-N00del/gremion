@@ -116,6 +116,18 @@ evict_fanout() {
 
 # The switch is only done when TRAEFIK says it is. Reading back the file we just
 # wrote would prove nothing about the running edge.
+#
+# WHAT THIS DOES NOT PROVE: that a tenant router is serving. This confirms one
+# thing — the file provider has published app@file with the new server URL. The
+# middlewares those tenant routers chain come from the DOCKER provider (the
+# Traefik container's own labels, §C), which converges on its own schedule; on a
+# COLD Traefik it trails the file provider by seconds, and until it lands every
+# tenant router is status=disabled and the entrypoint answers 404. That window
+# belongs to Traefik's start-up, not to a switch on a running edge, which is why
+# it is not polled for here. `gremion-verify` is what asserts the serving edge —
+# it reads the whole router/middleware graph and fails on an absent middleware —
+# and it is the post-condition of a deploy, not this call. The S10/S11 prototype
+# waits for that convergence explicitly (edge-proto.sh: wait_edge_ready).
 poll_traefik() {
     local expect_url="$1" deadline observed=""
     deadline=$(( $(date +%s) + SWITCH_POLL_SECONDS ))

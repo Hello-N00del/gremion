@@ -23,6 +23,13 @@
 # a host-independent body would make the pin drill unfalsifiable — and
 # gremion-verify would say so, by failing check_marker_discriminates.
 #
+# TWO PRECONDITIONS run before any spike, because both failed here as spikes
+# before they were named: the file provider must actually WATCH its directory
+# (assert_file_watch — Docker Desktop on Windows delivers no inotify into a bind
+# mount, exit 3), and the edge must have CONVERGED — the docker provider
+# registers the middlewares the tenant routers chain seconds after the file
+# provider registers the routers themselves (wait_edge_ready).
+#
 # Prints for Task 15's runbook:
 #   EDGE-PROTO: s10=ok s11=ok pin-red=ok cert-red=ok acme-red=ok mw-red=ok
 #
@@ -46,6 +53,14 @@ export INTERNALTEST_PORT="8081"
 export VERIFY_MARKER_PATH="/whoami"
 export SWITCH_POLL_SECONDS="30"
 
+# Traefik's providers converge independently and asynchronously (see
+# wait_edge_ready below). EDGE_READY_SECONDS bounds the cold-start convergence of
+# the whole edge; EDGE_SETTLE_SECONDS bounds one HTTP probe's convergence after a
+# switch. Both are budgets for a transient, never a licence for a wrong answer: a
+# configuration that is actually wrong never converges and still fails.
+EDGE_READY_SECONDS="${EDGE_READY_SECONDS:-120}"
+EDGE_SETTLE_SECONDS="${EDGE_SETTLE_SECONDS:-30}"
+
 HOSTS_FILE="$PROTO_ROOT/hosts.txt"
 RESULT_S10="fail" RESULT_S11="fail"
 RESULT_PIN="fail" RESULT_CERT="fail" RESULT_ACME="fail" RESULT_MW="fail"
@@ -65,6 +80,9 @@ prepare_root() {
     mkdir -p "$PROTO_ROOT"/{etc/env,etc/edge,etc/edge-certs,runtime,logs,bin}
     cp "$FIXTURE_DIR"/dynamic/tenant-a.yml "$PROTO_ROOT/etc/edge/tenant-a.yml"
     cp "$FIXTURE_DIR"/dynamic/tenant-b.yml "$PROTO_ROOT/etc/edge/tenant-b.yml"
+    # The static config is served to the container from HERE, so that red_acme can
+    # rewrite it without ever touching the tracked fixture.
+    cp "$FIXTURE_DIR"/traefik.yml "$PROTO_ROOT/traefik.yml"
     printf 'tenant-a.example.org\ntenant-b.example.org\n' > "$HOSTS_FILE"
     printf '[]\n' > "$PROTO_ROOT/runtime/evict-targets.json"
 
@@ -132,6 +150,17 @@ tls:
 EOF
 }
 
+# Traefik's API answers (after a start, and after each restart the acme drill does).
+wait_api_up() {
+    local deadline
+    deadline=$(( $(date +%s) + 60 ))
+    while :; do
+        curl -fsS --max-time 2 "${TRAEFIK_API}/api/rawdata" >/dev/null 2>&1 && return 0
+        [[ "$(date +%s)" -lt "$deadline" ]] || return 1
+        sleep 1
+    done
+}
+
 # Poll Traefik's API until <jq filter> equals <expected>, or fail after 30s.
 wait_api() {
     local path="$1" filter="$2" expected="$3" deadline observed=""
@@ -180,6 +209,69 @@ EOF
     ok "traefik notices new files in its dynamic directory"
 }
 
+# PRECONDITION, not an assertion about the design.
+#
+# Traefik's two providers converge INDEPENDENTLY. The file provider publishes the
+# per-tenant routers as soon as it has read their files; the DOCKER provider —
+# which owns every middleware those routers chain (edge-ratelimit@docker,
+# edge-hostpin-*@docker, all declared on the Traefik container's own labels, §C)
+# — publishes them later. In the window between the two, Traefik reports
+#
+#   tenant-a@file  status=disabled
+#   ERR error="middleware \"edge-ratelimit@docker\" does not exist" router=tenant-a@file
+#
+# and the public entrypoint answers 404 for every tenant. Measured on a Debian
+# host with this exact fixture: file provider at t=0s, docker provider at t=6s.
+#
+# A probe fired inside that window reads a cold-start transient and reports it as
+# a failed spike — which is exactly what this driver did before: `FAIL public
+# entrypoint served: 404 page not found`, with S10 and everything after it never
+# reached. So the docker provider is waited for FIRST. This is a precondition
+# with its own message, not a blanket retry: if a middleware never arrives, that
+# is a real fault of the S11 claim and it is named as one.
+#
+# Only the MIDDLEWARES are waited for here. The tenant routers cannot be enabled
+# yet whatever the docker provider does: they target app@file, which does not
+# exist until the first gremion-switch writes the switch file. Their `enabled`
+# post-condition therefore belongs after that switch (prove_s10), not here.
+wait_edge_ready() {
+    local deadline mw missing m
+    deadline=$(( $(date +%s) + EDGE_READY_SECONDS ))
+    while :; do
+        mw="$(curl -fsS --max-time 3 "${TRAEFIK_API}/api/http/middlewares" 2>/dev/null \
+              | jq -r '[.[].name] | join(" ")' 2>/dev/null || printf '')"
+        missing=""
+        for m in edge-ratelimit@docker edge-hostpin-tenant-a@docker edge-hostpin-tenant-b@docker; do
+            [[ " ${mw} " == *" ${m} "* ]] || missing="${missing} ${m}"
+        done
+        if [[ -z "$missing" ]]; then
+            ok "edge converged: the docker provider has registered the tenant middlewares"
+            return 0
+        fi
+        [[ "$(date +%s)" -lt "$deadline" ]] || break
+        sleep 1
+    done
+    die "the docker provider did not register within ${EDGE_READY_SECONDS}s; unregistered middleware(s):${missing:- none} (registered: ${mw:-none})" 1
+}
+
+# One HTTP probe through the edge, polled to convergence instead of sampled once.
+# Traefik applies a new configuration asynchronously, so the instant after
+# gremion-switch's own confirmation the entrypoint may still answer from the
+# previous generation. The assertion keeps its teeth: a wrong configuration never
+# converges, and the loop ends in `die` quoting the last body it actually saw.
+wait_body() {
+    local label="$1" expect="$2"; shift 2
+    local deadline body=""
+    deadline=$(( $(date +%s) + EDGE_SETTLE_SECONDS ))
+    while :; do
+        body="$("$@" 2>&1 || printf '')"
+        [[ "$body" == *"$expect"* ]] && return 0
+        [[ "$(date +%s)" -lt "$deadline" ]] || break
+        sleep 1
+    done
+    die "${label} served: ${body:-<empty>} (expected '${expect}' within ${EDGE_SETTLE_SECONDS}s)" 1
+}
+
 verify() { "$BIN_DIR/gremion-verify" --hosts "$HOSTS_FILE"; }
 switch()  { "$BIN_DIR/gremion-switch" "$@"; }
 
@@ -192,23 +284,31 @@ prove_s10() {
     assert "traefik reports app-next@file -> green" \
         wait_api /api/http/services/app-next@file '.loadBalancer.servers[0].url' 'http://gremion-ui-green:3000'
 
-    local public internal
-    public="$(curl -k -sS --resolve tenant-a.example.org:8443:127.0.0.1 \
-                 https://tenant-a.example.org:8443/whoami)"
-    internal="$(curl -sS -H 'Host: tenant-a.example.org' http://127.0.0.1:8081/whoami)"
-    [[ "$public"   == *"colour=blue"*  ]] || die "public entrypoint served: ${public}" 1
-    [[ "$internal" == *"colour=green"* ]] || die "internaltest served: ${internal}" 1
+    # Now — and not before — both halves of a tenant router exist: the service the
+    # switch file just published, and the middlewares the docker provider owns. A
+    # router still `disabled` here has a real, named cause; a body probe would only
+    # report the 404 it produces.
+    assert "tenant-a@file is enabled once app@file and its middlewares both exist" \
+        wait_api /api/http/routers/tenant-a@file '.status' 'enabled'
+    assert "tenant-b@file is enabled once app@file and its middlewares both exist" \
+        wait_api /api/http/routers/tenant-b@file '.status' 'enabled'
+
+    wait_body "public entrypoint" "colour=blue" \
+        curl -k -sS --resolve tenant-a.example.org:8443:127.0.0.1 \
+             https://tenant-a.example.org:8443/whoami
+    wait_body "internaltest entrypoint" "colour=green" \
+        curl -sS -H 'Host: tenant-a.example.org' http://127.0.0.1:8081/whoami
     ok "public=blue internaltest=green"
 
     info "S10: flipping the switch file flips both"
     switch green --no-evict
     assert "traefik reports app@file -> green" \
         wait_api /api/http/services/app@file '.loadBalancer.servers[0].url' 'http://gremion-ui-green:3000'
-    public="$(curl -k -sS --resolve tenant-a.example.org:8443:127.0.0.1 \
-                 https://tenant-a.example.org:8443/whoami)"
-    internal="$(curl -sS -H 'Host: tenant-a.example.org' http://127.0.0.1:8081/whoami)"
-    [[ "$public"   == *"colour=green"* ]] || die "after switch, public served: ${public}" 1
-    [[ "$internal" == *"colour=blue"*  ]] || die "after switch, internaltest served: ${internal}" 1
+    wait_body "after switch, public entrypoint" "colour=green" \
+        curl -k -sS --resolve tenant-a.example.org:8443:127.0.0.1 \
+             https://tenant-a.example.org:8443/whoami
+    wait_body "after switch, internaltest entrypoint" "colour=blue" \
+        curl -sS -H 'Host: tenant-a.example.org' http://127.0.0.1:8081/whoami
     ok "public=green internaltest=blue"
 
     switch blue --no-evict
@@ -292,6 +392,20 @@ red_cert() {
     RESULT_CERT="ok"
 }
 
+# A catch-all redirect on the `web` entrypoint is NOT enough to shadow the ACME
+# challenge path, and discovering that is half of this drill. Measured here
+# against traefik:v3.7: while an httpChallenge resolver is configured, Traefik
+# publishes its own `acme-http@internal` router at priority 9223372036854775807
+# (MaxInt64) — so a file-provider catch-all at priority 100000 redirects `/` with
+# 301 while `/.well-known/acme-challenge/probe` still answers 404 from the
+# internal router, and a rival router that claims MaxInt64 itself is rejected by
+# Traefik as `status=disabled`.
+#
+# The configuration this guard actually protects against is therefore the one
+# where that internal router is GONE — an edge whose ACME resolver was removed,
+# renamed or switched to a non-HTTP challenge — and something on `web` redirects
+# everything. That is what the drill builds: the resolver is stripped from a COPY
+# of the static config and Traefik is restarted with the redirect in place.
 red_acme() {
     info "RED: shadow the ACME challenge path with a hand-written redirect"
     cat > "$PROTO_ROOT/etc/edge/redirect-red.yml" <<'EOF'
@@ -309,7 +423,21 @@ http:
       service: "app@file"
       middlewares: ["red-to-https"]
 EOF
-    sleep 3
+    # Drop the whole certificatesResolvers block from the copy Traefik reads, so
+    # that no acme-http@internal router is published on the next start.
+    awk '
+        /^certificatesResolvers:/            { skip = 1; next }
+        skip && /^[A-Za-z]/                  { skip = 0 }
+        !skip
+    ' "$FIXTURE_DIR/traefik.yml" > "$PROTO_ROOT/traefik.yml"
+    compose restart traefik >/dev/null
+    assert "traefik answers its API again" wait_api_up
+    assert "the internal ACME router is gone" \
+        wait_api /api/http/routers '[.[] | select(.name == "acme-http@internal")] | length' '0'
+    wait_edge_ready
+    assert "tenant-a@file is enabled again after the restart" \
+        wait_api /api/http/routers/tenant-a@file '.status' 'enabled'
+
     if verify > "$PROTO_ROOT/logs/red-acme.log" 2>&1; then
         bad "gremion-verify passed with the ACME path shadowed"
         return 1
@@ -318,8 +446,16 @@ EOF
         "$PROTO_ROOT/logs/red-acme.log" \
         || { bad "expected an ACME-path failure; got:"; cat "$PROTO_ROOT/logs/red-acme.log"; return 1; }
     ok "ACME-path guard went RED"
+
     rm -f "$PROTO_ROOT/etc/edge/redirect-red.yml"
-    sleep 3
+    cp "$FIXTURE_DIR/traefik.yml" "$PROTO_ROOT/traefik.yml"
+    compose restart traefik >/dev/null
+    assert "traefik answers its API after the restore" wait_api_up
+    assert "the internal ACME router is back" \
+        wait_api /api/http/routers/acme-http@internal '.status' 'enabled'
+    wait_edge_ready
+    assert "tenant-a@file is enabled again after the restore" \
+        wait_api /api/http/routers/tenant-a@file '.status' 'enabled'
     assert "green again with the redirect removed" verify
     RESULT_ACME="ok"
 }
@@ -357,12 +493,9 @@ main() {
     prepare_root
     make_cert 30
     compose up -d
-    # Single quotes deliberate: $0 is the inner shell's first argument.
-    # shellcheck disable=SC2016
-    assert "traefik answers its API" bash -c '
-        for _ in $(seq 60); do curl -fsS --max-time 2 "$0/api/rawdata" >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1
-    ' "$TRAEFIK_API"
+    assert "traefik answers its API" wait_api_up
     assert_file_watch
+    wait_edge_ready
 
     prove_s10
     prove_s11
