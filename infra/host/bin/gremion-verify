@@ -1,0 +1,565 @@
+#!/usr/bin/env bash
+#
+# gremion-verify [--colour <blue|green>] [--hosts FILE] [--reboot]
+#
+# The spec-A §C verification contract. Every assertion reads the RUNNING system:
+# Traefik's own API for the router/service/middleware graph, the certificate the
+# edge actually presents, real HTTP requests through the edge, and
+# `docker inspect` / `docker exec` for the containers behind it. Nothing here
+# reads a config file to decide whether the edge is correct — that is the failure
+# class this project has paid for most often.
+#
+# It collects every failure instead of stopping at the first, so one run produces
+# the whole picture, and writes it to runtime/last-verify.json for the control
+# plane and the release procedure.
+#
+# THE MARKER PATH IS PART OF THE CONTRACT. VERIFY_MARKER_PATH must name an
+# endpoint whose body is
+#   (a) BYTE-STABLE  — two requests for the same host return byte-identical
+#       bytes: no timestamp, no nonce, no CSRF token, no request id. A page that
+#       changes on every request makes the host-pin comparison below fail on
+#       every run, and a guard that cries wolf gets switched off; and
+#   (b) HOST-DISCRIMINATING — a function of the tenant the edge resolved, so two
+#       different hosts return different bytes. A body that is identical for
+#       every host makes the host-pin comparison unfalsifiable.
+# The default /healthz satisfies both (spec B: {"ok":true,"tenant":…,"colour":…}).
+# check_marker_discriminates() asserts (b) at run time so the pin universal can
+# never pass vacuously.
+#
+# Exit codes: 0 ok · 1 an assertion failed · 2 usage or missing precondition.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+TRAEFIK_API="${TRAEFIK_API:-http://127.0.0.1:8080}"
+INTERNALTEST_PORT="${INTERNALTEST_PORT:-8081}"
+CERT_MIN_DAYS="${CERT_MIN_DAYS:-20}"
+HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
+REBOOT_SETTLE_SECONDS="${REBOOT_SETTLE_SECONDS:-30}"
+GREMION_LEAVES="${GREMION_LEAVES:-content finance files votes messages newsletter calendar board vault}"
+
+# Precedence for the marker path: an explicit environment override (an operator
+# probing one endpoint by hand, or a test) beats etc/env/state.env, which beats
+# the built-in default. load_env runs later and would otherwise clobber the
+# override, so the override is captured before it does.
+VERIFY_MARKER_PATH_OVERRIDE="${VERIFY_MARKER_PATH:-}"
+VERIFY_MARKER_PATH="${VERIFY_MARKER_PATH:-/healthz}"
+
+COLOUR=""
+HOSTS_FILE=""
+REBOOT=0
+
+ROUTERS_JSON=""
+SERVICES_JSON=""
+MIDDLEWARES_JSON=""
+
+declare -a FAILURES=()
+declare -a ROUTER_ROWS=()
+declare -A ROUTER_CLASS=()
+declare -A ROUTER_HOST=()
+declare -A ROUTER_SERVICE=()
+declare -A SERVICES_TO_CHECK=()
+declare -A SERVICE_HEALTHY=()
+declare -A SAN_OK=()
+declare -A MARKER_SHA=()
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-verify [--colour <blue|green>] [--hosts FILE] [--reboot]
+
+  --colour c   additionally verify the INACTIVE colour c through the loopback
+               internaltest entrypoint and from inside its own containers
+  --hosts F    one hostname per line; default is PLATFORM_DOMAIN,
+               control.PLATFORM_DOMAIN and every line of etc/tenant-hosts.txt
+  --reboot     reboot gate: on failure restart the active colour once, re-verify,
+               and report the outcome to ALERT_WEBHOOK_URL
+EOF
+    exit 2
+}
+
+fail() { FAILURES+=("$1"); bad "$1"; }
+
+api() {
+    local path="$1" out
+    if ! out="$(curl -fsS --max-time "$HTTP_TIMEOUT" "${TRAEFIK_API}${path}" 2>/dev/null)"; then
+        die "traefik API unreachable: ${TRAEFIK_API}${path}" 2
+    fi
+    printf '%s' "$out"
+}
+
+# `api` runs inside a command substitution, i.e. in a SUBSHELL, so the `exit` in
+# its `die` can only end that subshell — it cannot end this program. Worse,
+# run_pass is invoked as `if run_pass`, which disables `set -e` for everything it
+# calls, so an unreachable Traefik API would otherwise leave all three variables
+# empty, give `check_routers` nothing to iterate, and be reported as GREEN.
+# Each substitution therefore propagates its own status explicitly.
+fetch_api() {
+    ROUTERS_JSON="$(api /api/http/routers)"         || exit $?
+    SERVICES_JSON="$(api /api/http/services)"       || exit $?
+    MIDDLEWARES_JSON="$(api /api/http/middlewares)" || exit $?
+}
+
+# The literal host a router's rule pins, or "*" for the catch-all internaltest
+# routers. An empty answer means the rule names no host at all, which §C forbids.
+rule_host() {
+    local rule="$1"
+    if [[ "$rule" =~ Host\(\`([^\`]+)\` ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+        return 0
+    fi
+    if [[ "$rule" == *"HostRegexp("* ]]; then
+        printf '*'
+        return 0
+    fi
+    printf ''
+}
+
+check_routers() {
+    local svc_names mw_names n i name status service rule qualified host mws m base eps
+    svc_names="$(printf '%s' "$SERVICES_JSON" | jq -r '.[].name')"
+    mw_names="$(printf '%s' "$MIDDLEWARES_JSON" | jq -r '.[].name' | sed 's/@.*//')"
+    n="$(printf '%s' "$ROUTERS_JSON" | jq -r 'length')"
+
+    for (( i = 0; i < n; i++ )); do
+        name="$(printf '%s' "$ROUTERS_JSON" | jq -r ".[$i].name")"
+        case "$name" in *@internal) continue ;; esac
+
+        status="$(printf  '%s' "$ROUTERS_JSON" | jq -r ".[$i].status // \"missing\"")"
+        service="$(printf '%s' "$ROUTERS_JSON" | jq -r ".[$i].service // \"\"")"
+        rule="$(printf    '%s' "$ROUTERS_JSON" | jq -r ".[$i].rule // \"\"")"
+        eps="$(printf     '%s' "$ROUTERS_JSON" | jq -r ".[$i].entryPoints // [] | join(\",\")")"
+
+        [[ "$status" == "enabled" ]] || fail "router $name: status=$status (expected enabled)"
+
+        # Traefik reports a router's service without a provider suffix whenever
+        # the router and its service come from the same provider, and resolves
+        # the bare name against THAT provider — not against the file provider.
+        # Defaulting to @file therefore marks every docker-provider router
+        # UNCLASSIFIED, which on the real edge is most of the state tier. The
+        # router's own name carries the provider, so use it.
+        qualified="$service"
+        case "$qualified" in *@*) ;; *) qualified="${service}@${name##*@}" ;; esac
+        ROUTER_SERVICE["$name"]="$qualified"
+
+        if ! printf '%s\n' "$svc_names" | grep -qx "$qualified"; then
+            ROUTER_CLASS["$name"]="unclassified"
+            fail "UNCLASSIFIED router $name: service '$service' is not known to traefik"
+        else
+            case "$qualified" in
+                app@file|public@file|app-next@file|public-next@file)
+                    ROUTER_CLASS["$name"]="colour-bound" ;;
+                *)  ROUTER_CLASS["$name"]="state-bound" ;;
+            esac
+        fi
+
+        host="$(rule_host "$rule")"
+        [[ -n "$host" ]] || fail "router $name: rule names no host ($rule)"
+        ROUTER_HOST["$name"]="$host"
+
+        mws="$(printf '%s' "$ROUTERS_JSON" | jq -r ".[$i].middlewares // [] | .[]")"
+        for m in $mws; do
+            base="${m%%@*}"
+            printf '%s\n' "$mw_names" | grep -qx "$base" \
+                || fail "router $name: middleware $m is referenced but absent"
+        done
+
+        # A router that lives ONLY on the loopback internaltest entrypoint serves
+        # the inactive colour. Outside a deploy that colour is legitimately down,
+        # so its containers are censused only under --colour.
+        if [[ "$eps" == "internaltest" && -z "$COLOUR" ]]; then
+            continue
+        fi
+        SERVICES_TO_CHECK["$qualified"]=1
+    done
+}
+
+host_list() {
+    local tf
+    if [[ -n "$HOSTS_FILE" ]]; then
+        [[ -f "$HOSTS_FILE" ]] || die "hosts file not found: $HOSTS_FILE" 2
+        grep -Ev '^[[:space:]]*(#|$)' "$HOSTS_FILE"
+        return 0
+    fi
+    printf '%s\n' "$PLATFORM_DOMAIN" "control.${PLATFORM_DOMAIN}"
+    tf="$(gremion_root)/etc/tenant-hosts.txt"
+    if [[ -f "$tf" ]]; then
+        grep -Ev '^[[:space:]]*(#|$)' "$tf" || true
+    fi
+}
+
+# The leaf certificate the edge actually presents for <host>, prefixed with a
+# "# host=" comment line. openssl skips the preamble; the comment is what lets a
+# later `openssl x509 -in` call know which host the PEM came from.
+cert_file() {
+    local h="$1" f
+    f="$(mktemp)"
+    {
+        printf '# host=%s\n' "$h"
+        openssl s_client -servername "$h" \
+            -connect "${EDGE_BIND_IP}:${EDGE_HTTPS_PORT}" </dev/null 2>/dev/null || true
+    } > "$f"
+    printf '%s' "$f"
+}
+
+check_cert() {
+    local h="$1" f san
+    f="$(cert_file "$h")"
+    san="$(openssl x509 -in "$f" -noout -ext subjectAltName 2>/dev/null || true)"
+    # openssl prints a HEADER line before the entries:
+    #     X509v3 Subject Alternative Name:
+    #         DNS:a.example.org, DNS:b.example.org
+    # Once the whitespace is squeezed out, that header is glued to the FIRST
+    # entry ("X509v3SubjectAlternativeName:DNS:a.example.org"), so an exact-line
+    # match finds every SAN except the first one. For a single-SAN certificate
+    # — the normal case — the check could therefore never pass, and a guard that
+    # fails on every correct certificate is a guard somebody turns off. Drop
+    # everything up to the last "Name:" to leave the bare entries. (A hostname
+    # cannot contain ':', so this cannot eat part of a name.)
+    if printf '%s' "$san" | tr -d '[:space:]' | tr ',' '\n' | sed 's/^.*Name://' \
+        | grep -qxF "DNS:${h}"; then
+        SAN_OK["$h"]=true
+    else
+        SAN_OK["$h"]=false
+        fail "certificate for ${h} has no matching SAN (got: $(printf '%s' "$san" | tr '\n' ' '))"
+    fi
+    if ! openssl x509 -in "$f" -noout -checkend "$(( CERT_MIN_DAYS * 86400 ))" >/dev/null 2>&1; then
+        fail "certificate for ${h} expires within ${CERT_MIN_DAYS} days"
+    fi
+    rm -f "$f"
+}
+
+sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
+
+# -k is deliberate: the certificate is asserted on its own by check_cert, and a
+# staging unit presents an internal-CA certificate that this arm must not fail on
+# for the wrong reason.
+#
+# The host-pin universal compares the marker body served for <h> with the body
+# served for <h> when the request carries a forged X-Forwarded-Host naming
+# another tenant. Equal bytes = the header was ignored = the pin holds. This is
+# only meaningful because VERIFY_MARKER_PATH is byte-stable per host (otherwise
+# every run would differ) AND differs between hosts (otherwise nothing could ever
+# differ). check_marker_discriminates asserts the second property.
+check_host_http() {
+    local h="$1" other="$2" clean forged code fcode acme
+    clean="$(mktemp)"; forged="$(mktemp)"
+
+    code="$(curl -k -sS --max-time "$HTTP_TIMEOUT" \
+                --resolve "${h}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" \
+                -o "$clean" -w '%{http_code}' \
+                "https://${h}:${EDGE_HTTPS_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || echo '000')"
+    if [[ "$code" == "000" || "$code" -ge 400 ]]; then
+        fail "https://${h}${VERIFY_MARKER_PATH} returned ${code} (expected < 400)"
+    elif [[ ! -s "$clean" ]]; then
+        fail "https://${h}${VERIFY_MARKER_PATH} returned an empty body"
+    fi
+    MARKER_SHA["$h"]="$(sha256_of "$clean")"
+
+    fcode="$(curl -k -sS --max-time "$HTTP_TIMEOUT" \
+                --resolve "${h}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" \
+                -H "X-Forwarded-Host: ${other}" \
+                -o "$forged" -w '%{http_code}' \
+                "https://${h}:${EDGE_HTTPS_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || echo '000')"
+    if [[ "${MARKER_SHA[$h]}" != "$(sha256_of "$forged")" ]]; then
+        fail "host-pin: forged X-Forwarded-Host: ${other} changed the response for ${h} (${code}/${fcode})"
+    fi
+
+    acme="$(curl -sS --max-time "$HTTP_TIMEOUT" \
+                --resolve "${h}:${EDGE_HTTP_PORT}:${EDGE_BIND_IP}" \
+                -o /dev/null -w '%{http_code}' \
+                "http://${h}:${EDGE_HTTP_PORT}/.well-known/acme-challenge/probe" 2>/dev/null || echo '000')"
+    [[ "$acme" == "404" ]] \
+        || fail "acme-challenge probe for ${h} returned ${acme} (expected 404 from acme-http@internal, never a redirect)"
+
+    rm -f "$clean" "$forged"
+}
+
+# A marker endpoint that answers the same bytes for every host makes the host-pin
+# comparison unfalsifiable: it would pass with every middleware removed. Refuse
+# to report green on evidence that cannot distinguish the two cases.
+check_marker_discriminates() {
+    local h first="" all_same=1
+    (( ${#MARKER_SHA[@]} >= 2 )) || return 0
+    for h in "${!MARKER_SHA[@]}"; do
+        if [[ -z "$first" ]]; then
+            first="${MARKER_SHA[$h]}"
+            continue
+        fi
+        if [[ "${MARKER_SHA[$h]}" != "$first" ]]; then
+            all_same=0
+            break
+        fi
+    done
+    if (( all_same )); then
+        fail "marker path ${VERIFY_MARKER_PATH} returns identical bytes for every host; the host-pin universal cannot fail and proves nothing"
+    fi
+    return 0
+}
+
+check_hosts() {
+    local hosts=() i h other
+    mapfile -t hosts < <(host_list)
+    (( ${#hosts[@]} > 0 )) || die "no hosts to verify" 2
+    for (( i = 0; i < ${#hosts[@]}; i++ )); do
+        h="${hosts[$i]}"
+        if (( ${#hosts[@]} > 1 )); then
+            other="${hosts[$(( (i + 1) % ${#hosts[@]} ))]}"
+        else
+            other="forged.${PLATFORM_DOMAIN}"
+        fi
+        check_cert "$h"
+        check_host_http "$h" "$other"
+    done
+    check_marker_discriminates
+}
+
+# A backend URL names a network ALIAS, not necessarily a container name, and an
+# exempt one-shot container has already exited — so `docker ps -a`.
+#
+# It may also name neither. Traefik's DOCKER provider addresses a container by
+# its IP, so every state-tier service discovered from labels arrives here as
+# "10.90.1.7", not as a name — and a census that only knew names reported "no
+# container answers to '10.90.250.4'" for each of them against the running
+# prototype. Addresses are matched as well as names and aliases.
+container_for_alias() {
+    local want="$1" id name aliases ips
+    for id in $(docker ps -a -q 2>/dev/null); do
+        name="$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's|^/||')"
+        if [[ "$name" == "$want" ]]; then
+            printf '%s' "$name"
+            return 0
+        fi
+        aliases="$(docker inspect \
+            --format '{{range $k, $v := .NetworkSettings.Networks}}{{range $v.Aliases}}{{.}} {{end}}{{end}}' \
+            "$id" 2>/dev/null || true)"
+        case " $aliases " in
+            *" $want "*) printf '%s' "$name"; return 0 ;;
+        esac
+        ips="$(docker inspect \
+            --format '{{range $k, $v := .NetworkSettings.Networks}}{{$v.IPAddress}} {{end}}' \
+            "$id" 2>/dev/null || true)"
+        case " $ips " in
+            *" $want "*) printf '%s' "$name"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+is_exempt() {
+    local a="$1" e
+    for e in ${HEALTH_EXEMPT_SERVICES:-}; do
+        case "$a" in *"$e"*) return 0 ;; esac
+    done
+    return 1
+}
+
+check_container_health() {
+    local c="$1" alias="$2" sname="$3" status health code
+    status="$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null || echo unknown)"
+    health="$(docker inspect \
+        --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+        "$c" 2>/dev/null || echo none)"
+
+    if is_exempt "$alias"; then
+        code="$(docker inspect --format '{{.State.ExitCode}}' "$c" 2>/dev/null || echo 1)"
+        if [[ "$status" == "exited" && "$code" == "0" ]]; then
+            ok "exempt container ${c} exited 0"
+        else
+            SERVICE_HEALTHY["$sname"]=false
+            fail "exempt container ${c}: status=${status} exit=${code} (expected exited 0)"
+        fi
+        return 0
+    fi
+
+    if [[ "$health" == "healthy" ]]; then
+        ok "container ${c} healthy"
+    else
+        SERVICE_HEALTHY["$sname"]=false
+        fail "container ${c} (${alias}): health=${health} status=${status} (expected healthy)"
+    fi
+}
+
+check_containers() {
+    local sname servers url hostpart cname
+    for sname in "${!SERVICES_TO_CHECK[@]}"; do
+        case "$sname" in *@internal) continue ;; esac
+        SERVICE_HEALTHY["$sname"]=true
+        servers="$(printf '%s' "$SERVICES_JSON" \
+            | jq -r --arg n "$sname" '.[] | select(.name == $n) | .loadBalancer.servers // [] | .[].url')"
+        if [[ -z "$servers" ]]; then
+            SERVICE_HEALTHY["$sname"]=false
+            fail "service ${sname} has no servers"
+            continue
+        fi
+        for url in $servers; do
+            hostpart="${url#*://}"
+            hostpart="${hostpart%%/*}"
+            hostpart="${hostpart%%:*}"
+            if ! cname="$(container_for_alias "$hostpart")"; then
+                SERVICE_HEALTHY["$sname"]=false
+                fail "service ${sname}: no container answers to '${hostpart}'"
+                continue
+            fi
+            check_container_health "$cname" "$hostpart" "$sname"
+        done
+    done
+}
+
+build_rows() {
+    local name cls host svc healthy san
+    for name in "${!ROUTER_CLASS[@]}"; do
+        cls="${ROUTER_CLASS[$name]}"
+        host="${ROUTER_HOST[$name]:-}"
+        svc="${ROUTER_SERVICE[$name]:-}"
+        healthy="${SERVICE_HEALTHY[$svc]:-null}"
+        san="${SAN_OK[$host]:-null}"
+        ROUTER_ROWS+=("$(jq -nc \
+            --arg name "$name" --arg class "$cls" --arg host "$host" \
+            --argjson san "$san" --argjson healthy "$healthy" \
+            '{name: $name, class: $class, host: $host, san: $san, healthy: $healthy}')")
+    done
+}
+
+write_report() {
+    local ts okflag rows fjson
+    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if (( ${#FAILURES[@]} == 0 )); then
+        okflag=true
+        fjson='[]'
+    else
+        okflag=false
+        fjson="$(printf '%s\n' "${FAILURES[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+    fi
+    if (( ${#ROUTER_ROWS[@]} == 0 )); then
+        rows='[]'
+    else
+        rows="$(printf '%s\n' "${ROUTER_ROWS[@]}" | jq -sc '.')"
+    fi
+    jq -nc --arg ts "$ts" --argjson ok "$okflag" \
+           --argjson routers "$rows" --argjson failures "$fjson" \
+        '{ts: $ts, ok: $ok, routers: $routers, failures: $failures}' \
+        | atomic_write "$(gremion_root)/runtime/last-verify.json" 0644
+}
+
+# Everything here is read from INSIDE the new colour's own container: the env the
+# process actually has and the names its resolver actually answers. A compose file
+# saying the right thing is not evidence (§E).
+check_colour() {
+    local c="$1" want_url observed code ui leaf bad_urls
+    want_url="http://gremion-ui-${c}:3000"
+
+    observed="$(printf '%s' "$SERVICES_JSON" \
+        | jq -r '.[] | select(.name == "app-next@file") | .loadBalancer.servers[0].url // ""')"
+    [[ "$observed" == "$want_url" ]] \
+        || fail "app-next@file points at '${observed:-none}' (expected ${want_url})"
+
+    code="$(curl -sS --max-time "$HTTP_TIMEOUT" -H "Host: ${PLATFORM_DOMAIN}" \
+                -o /dev/null -w '%{http_code}' \
+                "http://127.0.0.1:${INTERNALTEST_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || echo '000')"
+    [[ "$code" != "000" && "$code" -lt 400 ]] \
+        || fail "internaltest entrypoint returned ${code} for ${PLATFORM_DOMAIN} (expected < 400)"
+
+    if ! ui="$(container_for_alias "gremion-ui-${c}")"; then
+        fail "gremion-ui-${c}: no container"
+        return 0
+    fi
+
+    docker exec "$ui" env 2>/dev/null | grep -qx "INTERNAL_BASE_URL=${want_url}" \
+        || fail "${ui}: INTERNAL_BASE_URL is not ${want_url}"
+
+    for leaf in $GREMION_LEAVES; do
+        docker exec "$ui" getent hosts "${leaf}-service-${c}" >/dev/null 2>&1 \
+            || fail "${ui}: ${leaf}-service-${c} does not resolve"
+    done
+
+    bad_urls="$(docker exec "$ui" env 2>/dev/null \
+        | grep -E '_(SERVICE_URL|BASE_URL)=' | grep -F "$PLATFORM_DOMAIN" || true)"
+    [[ -z "$bad_urls" ]] \
+        || fail "${ui}: internal URL names the public domain: $(printf '%s' "$bad_urls" | tr '\n' ' ')"
+}
+
+alert_verify() {
+    local okflag="$1"
+    if [[ -z "${ALERT_WEBHOOK_URL:-}" ]]; then
+        info "no ALERT_WEBHOOK_URL set; not alerting"
+        return 0
+    fi
+    curl -sS --max-time "$HTTP_TIMEOUT" -X POST -H 'Content-Type: application/json' \
+        --data "$(jq -nc --argjson ok "$okflag" --arg domain "$PLATFORM_DOMAIN" \
+                    '{event: "verify-reboot", ok: $ok, domain: $domain}')" \
+        "$ALERT_WEBHOOK_URL" >/dev/null 2>&1 \
+        || bad "alert POST to ALERT_WEBHOOK_URL failed"
+}
+
+run_pass() {
+    FAILURES=(); ROUTER_ROWS=()
+    ROUTER_CLASS=(); ROUTER_HOST=(); ROUTER_SERVICE=()
+    SERVICES_TO_CHECK=(); SERVICE_HEALTHY=(); SAN_OK=(); MARKER_SHA=()
+    fetch_api
+    check_routers
+    check_hosts
+    check_containers
+    [[ -z "$COLOUR" ]] || check_colour "$COLOUR"
+    build_rows
+    write_report
+    (( ${#FAILURES[@]} == 0 ))
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --colour) COLOUR="${2:-}"; shift 2 ;;
+            --hosts)  HOSTS_FILE="${2:-}"; shift 2 ;;
+            --reboot) REBOOT=1; shift ;;
+            -h|--help) usage ;;
+            *) bad "unknown argument: $1"; usage ;;
+        esac
+    done
+    [[ -z "$COLOUR" || "$COLOUR" == "blue" || "$COLOUR" == "green" ]] \
+        || { bad "--colour must be blue or green"; usage; }
+
+    need_cmd curl jq openssl docker sha256sum
+    load_env "$(gremion_root)/etc/env/state.env"
+    VERIFY_MARKER_PATH="${VERIFY_MARKER_PATH_OVERRIDE:-${VERIFY_MARKER_PATH:-/healthz}}"
+    local k
+    for k in PLATFORM_DOMAIN EDGE_BIND_IP EDGE_HTTP_PORT EDGE_HTTPS_PORT; do
+        [[ -n "${!k:-}" ]] || die "$k is not set in etc/env/state.env" 2
+    done
+
+    if run_pass; then
+        ok "gremion-verify: all checks passed"
+        (( REBOOT )) && alert_verify true
+        exit 0
+    fi
+
+    if (( ! REBOOT )); then
+        bad "gremion-verify: ${#FAILURES[@]} failure(s)"
+        exit 1
+    fi
+
+    # Reboot gate (§F.8): 40 containers coming up at once beat each other to the
+    # database. Restart the active colour ONCE, then believe the second answer.
+    local colour
+    colour="$(cat "$(gremion_root)/runtime/active-colour" 2>/dev/null || echo none)"
+    if [[ "$colour" != "blue" && "$colour" != "green" ]]; then
+        alert_verify false
+        die "reboot gate: active-colour is '${colour}'; nothing to restart" 1
+    fi
+    info "reboot gate: verification failed; restarting ${STACK}-app-${colour} once"
+    docker compose --env-file "$(gremion_root)/etc/env/app-${colour}.env" restart || true
+    [[ "$REBOOT_SETTLE_SECONDS" == "0" ]] || sleep "$REBOOT_SETTLE_SECONDS"
+
+    if run_pass; then
+        ok "gremion-verify: passed after one restart of the ${colour} colour"
+        alert_verify true
+        exit 0
+    fi
+    alert_verify false
+    bad "gremion-verify: still failing after one restart (${#FAILURES[@]} failure(s))"
+    exit 1
+}
+
+main "$@"

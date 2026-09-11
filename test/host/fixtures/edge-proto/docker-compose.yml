@@ -1,0 +1,134 @@
+# Bare-Traefik prototype for spikes S10 and S11.
+#
+#   S10  a loopback-only `internaltest` entrypoint reaches the INACTIVE colour
+#        while the public entrypoint reaches the ACTIVE one.
+#   S11  per-tenant routers written as file-provider files stay live when the
+#        colour containers carry `traefik.enable=false` and every middleware they
+#        chain is declared on the Traefik container's own labels.
+#
+# The stubs serve two paths: /healthz (static, byte-stable) and /whoami (echoes
+# the X-Forwarded-Host Traefik forwarded). /whoami is what the prototype points
+# VERIFY_MARKER_PATH at, because it plays the role spec B's real /healthz plays on
+# a live host: byte-stable per host AND a function of the host the edge resolved.
+# A static /healthz here would make the host-pin drill unfalsifiable — which is
+# exactly what gremion-verify's marker-discrimination assertion refuses.
+#
+# EVERY `$` in the stub commands is doubled. Compose interpolates `$VAR` in the
+# YAML before the container ever sees it, so a single-dollar `$http_x_forwarded_host`
+# is replaced with the empty string and /whoami then answers the SAME bytes for
+# every host. That is precisely the vacuous marker gremion-verify refuses, so the
+# mistake does not fail quietly — it fails the prototype — but it is worth not
+# making: `docker compose config` shows the interpolated text.
+#
+# Driven only by test/host/integration/edge-proto.sh, which writes .proto-root/
+# (env file, dynamic directory, certificates) and removes it again. This is a
+# throwaway test fixture, not part of any production composition: images carry
+# tags rather than digests and Traefik reads the docker socket directly instead of
+# through the socket proxy.
+services:
+  traefik:
+    image: traefik:v3.7
+    restart: "no"
+    command: ["--configFile=/etc/traefik/traefik.yml"]
+    ports:
+      - "${EDGE_BIND_IP}:${EDGE_HTTP_PORT}:80"
+      - "${EDGE_BIND_IP}:${EDGE_HTTPS_PORT}:443"
+      - "${EDGE_BIND_IP}:${INTERNALTEST_PORT}:8081"
+      - "${EDGE_BIND_IP}:${TRAEFIK_API_PORT}:8080"
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./.proto-root/etc/edge:/etc/traefik/dynamic:ro
+      - ./.proto-root/etc/edge-certs:/etc/traefik/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      edge:
+        aliases: ["traefik"]
+    labels:
+      traefik.enable: "true"
+      traefik.http.services.traefik.loadbalancer.server.port: "8080"
+      traefik.http.middlewares.edge-hostpin-tenant-a.headers.customrequestheaders.X-Forwarded-Host: "tenant-a.example.org"
+      traefik.http.middlewares.edge-hostpin-tenant-b.headers.customrequestheaders.X-Forwarded-Host: "tenant-b.example.org"
+      traefik.http.middlewares.edge-ratelimit.ratelimit.average: "300"
+      traefik.http.middlewares.edge-ratelimit.ratelimit.burst: "100"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: "5s"
+      timeout: "3s"
+      retries: 12
+
+  stub-blue:
+    image: nginx:1.29-alpine
+    restart: "no"
+    environment:
+      STUB_COLOUR: "blue"
+    volumes:
+      - ./stub/index.html:/seed/index.html:ro
+    networks:
+      edge:
+        aliases: ["gremion-ui-blue", "gremion-public-blue"]
+    labels:
+      traefik.enable: "false"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        sed "s/__COLOUR__/$$STUB_COLOUR/g" /seed/index.html > /usr/share/nginx/html/index.html
+        cat > /etc/nginx/conf.d/default.conf <<'CONF'
+        server {
+          listen 3000;
+          location = /healthz { add_header Content-Type text/plain; return 200 "ok\n"; }
+          location = /whoami  { add_header Content-Type text/plain; return 200 "colour=__COLOUR__ xfh=$$http_x_forwarded_host\n"; }
+          location / { root /usr/share/nginx/html; index index.html; }
+        }
+        CONF
+        sed -i "s/__COLOUR__/$$STUB_COLOUR/g" /etc/nginx/conf.d/default.conf
+        exec nginx -g 'daemon off;'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000/healthz"]
+      interval: "5s"
+      timeout: "3s"
+      retries: 12
+
+  stub-green:
+    image: nginx:1.29-alpine
+    restart: "no"
+    environment:
+      STUB_COLOUR: "green"
+    volumes:
+      - ./stub/index.html:/seed/index.html:ro
+    networks:
+      edge:
+        aliases: ["gremion-ui-green", "gremion-public-green"]
+    labels:
+      traefik.enable: "false"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        sed "s/__COLOUR__/$$STUB_COLOUR/g" /seed/index.html > /usr/share/nginx/html/index.html
+        cat > /etc/nginx/conf.d/default.conf <<'CONF'
+        server {
+          listen 3000;
+          location = /healthz { add_header Content-Type text/plain; return 200 "ok\n"; }
+          location = /whoami  { add_header Content-Type text/plain; return 200 "colour=__COLOUR__ xfh=$$http_x_forwarded_host\n"; }
+          location / { root /usr/share/nginx/html; index index.html; }
+        }
+        CONF
+        sed -i "s/__COLOUR__/$$STUB_COLOUR/g" /etc/nginx/conf.d/default.conf
+        exec nginx -g 'daemon off;'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000/healthz"]
+      interval: "5s"
+      timeout: "3s"
+      retries: 12
+
+# Project-scoped, no `name:` — §E. The subnet is pinned so traefik.yml can trust
+# it by CIDR; it is the prototype's own range and appears nowhere in production.
+networks:
+  edge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "10.90.250.0/24"

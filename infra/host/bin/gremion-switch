@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+#
+# gremion-switch <blue|green> [--no-evict]
+#
+# Rewrites the Traefik switch file (etc/edge/active.yml) so that the colour-bound
+# services app@file / public@file point at <colour> and app-next@file /
+# public-next@file point at the other colour (spec A §F.4.10).
+#
+# ORDER IS THE CONTRACT: the tenant-cache eviction fan-out (§H.2) runs BEFORE the
+# file is written, so a failed eviction leaves the edge exactly as it was. Nothing
+# here is asserted from a config file: the switch is only complete once Traefik's
+# own API reports the new server URL.
+#
+# Requires `envsubst` (Debian package gettext-base, installed by bootstrap's
+# `base` stage).
+#
+# Exit codes: 0 ok · 1 assertion/post-condition failed · 2 usage/precondition · 3 blocked.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+TRAEFIK_API="${TRAEFIK_API:-http://127.0.0.1:8080}"
+SWITCH_POLL_SECONDS="${SWITCH_POLL_SECONDS:-10}"
+EVICT_TIMEOUT="${EVICT_TIMEOUT:-5}"
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-switch <blue|green> [--no-evict]
+
+  <colour>     the colour that becomes ACTIVE (app@file / public@file)
+  --no-evict   skip the tenant-cache eviction fan-out. Use only when no app-tier
+               process holds a tenant-resolution cache (the first deploy). The
+               skip is recorded in logs/switch.log.
+EOF
+    exit 2
+}
+
+other_colour() {
+    if [[ "$1" == "blue" ]]; then echo "green"; else echo "blue"; fi
+}
+
+# The template ships next to the script in the repo tree and under
+# current/infra/host/ on a bootstrapped host. GREMION_EDGE_TEMPLATE overrides both.
+active_template_path() {
+    local candidates c
+    candidates=(
+        "${GREMION_EDGE_TEMPLATE:-}"
+        "$SCRIPT_DIR/../templates/edge/active.yml.tmpl"
+        "$(gremion_root)/current/infra/host/templates/edge/active.yml.tmpl"
+    )
+    for c in "${candidates[@]}"; do
+        if [[ -n "$c" && -f "$c" ]]; then
+            echo "$c"
+            return 0
+        fi
+    done
+    die "active.yml.tmpl not found (looked in: ${candidates[*]})" 2
+}
+
+render_active() {
+    local colour="$1" next="$2" tmpl
+    # `|| exit $?` and not bare `set -e`: active_template_path's die runs in a
+    # SUBSHELL, so its exit code has to be propagated by hand at every hop or the
+    # render carries on with an empty template path.
+    tmpl="$(active_template_path)" || exit $?
+    # The single quotes are load-bearing: envsubst takes the restriction list
+    # as a LITERAL argument. Expanding it here would substitute every variable
+    # in the template instead of exactly these two.
+    # shellcheck disable=SC2016
+    ACTIVE_COLOUR="$colour" INACTIVE_COLOUR="$next" \
+        envsubst '${ACTIVE_COLOUR} ${INACTIVE_COLOUR}' < "$tmpl"
+}
+
+switch_log() {
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" \
+        >> "$(gremion_root)/logs/switch.log"
+}
+
+# Evict every tenant-resolution cache that will serve the new colour (§H.2).
+# Every listed target must answer 204; anything else aborts before a byte of the
+# switch file is written. A MISSING targets file is a precondition failure, not
+# an empty list: an unenumerated fan-out is a silently skipped fan-out, and the
+# skip has to be an explicit operator decision (--no-evict).
+evict_fanout() {
+    local file n i container url code
+    file="$(gremion_root)/runtime/evict-targets.json"
+    [[ -f "$file" ]] || die "evict targets file missing: $file" 2
+    [[ -n "${INTERNAL_PUSH_SECRET:-}" ]] || die "INTERNAL_PUSH_SECRET is not set in state.env" 2
+
+    n="$(jq -r 'length' "$file")"
+    if [[ "$n" == "0" ]]; then
+        info "evict fan-out: no targets listed in $file"
+        switch_log "evict fan-out: 0 targets"
+        return 0
+    fi
+
+    for (( i = 0; i < n; i++ )); do
+        container="$(jq -r ".[$i].container" "$file")"
+        url="$(jq -r ".[$i].url" "$file")"
+        code="$(curl -sS -o /dev/null -w '%{http_code}' \
+                    --max-time "$EVICT_TIMEOUT" \
+                    -X POST \
+                    -H "Authorization: Bearer ${INTERNAL_PUSH_SECRET}" \
+                    -H 'Content-Type: application/json' \
+                    --data '{"tenant":"*"}' \
+                    "$url" 2>/dev/null || echo '000')"
+        [[ "$code" == "204" ]] \
+            || die "evict fan-out: ${container} (${url}) answered ${code}, expected 204" 1
+        ok "evicted ${container}"
+    done
+    switch_log "evict fan-out: ${n} target(s) acknowledged"
+}
+
+# The switch is only done when TRAEFIK says it is. Reading back the file we just
+# wrote would prove nothing about the running edge.
+poll_traefik() {
+    local expect_url="$1" deadline observed=""
+    deadline=$(( $(date +%s) + SWITCH_POLL_SECONDS ))
+    while :; do
+        observed="$(curl -fsS --max-time 3 "${TRAEFIK_API}/api/http/services/app@file" 2>/dev/null \
+                    | jq -r '.loadBalancer.servers[0].url // ""' 2>/dev/null || echo '')"
+        if [[ "$observed" == "$expect_url" ]]; then
+            ok "traefik reports app@file -> ${observed}"
+            return 0
+        fi
+        [[ "$(date +%s)" -lt "$deadline" ]] || break
+        sleep 1
+    done
+    die "traefik did not report app@file -> ${expect_url} within ${SWITCH_POLL_SECONDS}s (last: ${observed:-none})" 1
+}
+
+main() {
+    local colour="" do_evict=1
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            blue|green)
+                [[ -z "$colour" ]] || usage
+                colour="$1"
+                ;;
+            --no-evict) do_evict=0 ;;
+            -h|--help)  usage ;;
+            *)          bad "unknown argument: $1"; usage ;;
+        esac
+        shift
+    done
+    [[ -n "$colour" ]] || usage
+
+    need_cmd curl jq envsubst
+    load_env "$(gremion_root)/etc/env/state.env"
+
+    local next edge_dir
+    next="$(other_colour "$colour")"
+    edge_dir="$(gremion_root)/etc/edge"
+    [[ -d "$edge_dir" ]] || die "edge directory missing: $edge_dir" 2
+
+    if (( do_evict )); then
+        evict_fanout
+    else
+        info "evict fan-out SKIPPED (--no-evict)"
+        switch_log "switch to ${colour}: evict fan-out SKIPPED (--no-evict)"
+    fi
+
+    # Render FULLY before writing anything. Piping render_active straight into
+    # atomic_write would run the render in a subshell, where the `die` in
+    # active_template_path can only end that subshell — atomic_write would go on
+    # to rename an EMPTY file over active.yml and Traefik would lose app@file
+    # altogether. Capturing first means a failed render writes nothing at all.
+    local rendered
+    rendered="$(render_active "$colour" "$next")" || exit $?
+    printf '%s\n' "$rendered" | atomic_write "${edge_dir}/active.yml" 0644
+    ok "wrote ${edge_dir}/active.yml (active=${colour}, next=${next})"
+
+    poll_traefik "http://gremion-ui-${colour}:3000"
+
+    printf '%s\n' "$colour" | atomic_write "$(gremion_root)/runtime/active-colour" 0644
+    switch_log "switch to ${colour}: ok"
+    ok "active colour is now ${colour}"
+}
+
+main "$@"

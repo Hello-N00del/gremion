@@ -1,0 +1,76 @@
+# active.yml — the Traefik switch file (spec A §F.4.10).
+#
+# Rendered by gremion-switch and written ATOMICALLY into ${GREMION_ROOT}/etc/edge/,
+# which Traefik watches as its dynamic-configuration directory.
+#
+# It defines exactly four file-provider services and the two loopback-only test
+# routers. ONLY colour-bound routers reference app@file / public@file: the static
+# `app` and `portal` routers and the per-tenant `app` routers. Every other router
+# targets a state-tier service by its stable name and is untouched by a switch.
+#
+# NO MIDDLEWARE MAY BE DECLARED HERE. This file is rewritten on every switch; a
+# middleware declared here would vanish for the instant between the two writes and
+# orphan every router that chains it. Middlewares live on the Traefik container's
+# own labels (spec A §C) — the only container guaranteed to exist whenever a
+# router does.
+#
+# DELIBERATE DEVIATION FROM THE PLAN SKELETON. The skeleton gives both test
+# routers the rule HostRegexp(`.+`). Two routers on the SAME entrypoint with the
+# SAME rule and the same priority collide: Traefik breaks the tie by rule length
+# and one of them becomes permanently unreachable, with no error anywhere. So
+# test-public is scoped by path (/portal) and given the higher priority, while
+# test-app keeps the catch-all. Both routers still live on `internaltest` and
+# still target the -next services, which is what the skeleton is actually
+# specifying. This comment exists so the difference reads as a decision, not as
+# drift.
+#
+# Tokens: ${ACTIVE_COLOUR}, ${INACTIVE_COLOUR}. Nothing else is substituted.
+http:
+  services:
+    app:
+      loadBalancer:
+        healthCheck:
+          path: /healthz
+          interval: "10s"
+          timeout: "3s"
+        servers:
+          - url: "http://gremion-ui-${ACTIVE_COLOUR}:3000"
+    public:
+      loadBalancer:
+        healthCheck:
+          path: /healthz
+          interval: "10s"
+          timeout: "3s"
+        servers:
+          - url: "http://gremion-public-${ACTIVE_COLOUR}:3000"
+    app-next:
+      loadBalancer:
+        healthCheck:
+          path: /healthz
+          interval: "10s"
+          timeout: "3s"
+        servers:
+          - url: "http://gremion-ui-${INACTIVE_COLOUR}:3000"
+    public-next:
+      loadBalancer:
+        healthCheck:
+          path: /healthz
+          interval: "10s"
+          timeout: "3s"
+        servers:
+          - url: "http://gremion-public-${INACTIVE_COLOUR}:3000"
+
+  routers:
+    # Loopback-only verification of the INACTIVE colour (spike S10). The
+    # internaltest entrypoint is bound to 127.0.0.1 by the state project, so these
+    # two routers are unreachable from anywhere but the host itself.
+    test-app:
+      entryPoints: ["internaltest"]
+      rule: "HostRegexp(`.+`)"
+      service: "app-next"
+      priority: 1
+    test-public:
+      entryPoints: ["internaltest"]
+      rule: "HostRegexp(`.+`) && PathPrefix(`/portal`)"
+      service: "public-next"
+      priority: 100

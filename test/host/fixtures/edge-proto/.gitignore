@@ -1,0 +1,3 @@
+# The prototype driver writes its throwaway host root here: env files, a
+# self-signed key/certificate and logs. None of it belongs in the repository.
+.proto-root/
