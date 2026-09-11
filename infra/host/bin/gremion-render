@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+# infra/host/bin/gremion-render — render the host-owned files a release needs.
+#
+# Spec A §E: the files that cannot live inside an image, because they carry
+# host identity or host secrets, are produced here, and EVERY output is
+# asserted from disk — a regular file, not a directory, non-empty — before
+# any `docker compose ... up` runs. An exit code is not evidence; the file is.
+#
+#   1. <release>/docker/pgbouncer/userlist.txt      from PGBOUNCER_AUTH_PASSWORD
+#   2. <release>/docker/keycloak/certs/*            minted ONCE, persisted in
+#                                                   etc/secrets/keycloak
+#   3. etc/secrets/ipcrypt_key.txt                  generated once, never
+#                                                   rotated here
+#   4. every release template ending in .tmpl       through an explicit
+#                                                   variable allow-list
+#   5. etc/edge/extra-hosts.yml                     --staging only
+#
+# Exit codes: 0 ok · 1 post-condition failed · 2 usage/missing precondition ·
+#             3 blocked.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+RELEASE_DIR=""
+STAGING=0
+OUTPUTS=0
+
+# The ONLY variables a release template may name. A template referencing
+# anything else is a mistake we refuse to guess at. LiveKit and Element Call
+# keys are listed before their templates exist (spec B ports them): a key is
+# REQUIRED only when a template actually names it, so the list costs nothing
+# until then.
+RENDER_ALLOWED_VARS=(
+    STACK PLATFORM_DOMAIN ACME_EMAIL TRAEFIK_CERT_RESOLVER
+    EDGE_BIND_IP EDGE_BIND_IP6 EDGE_HTTP_PORT EDGE_HTTPS_PORT
+    MAIL_BIND_IP MAIL_BIND_IP6
+    EDGE_V4_SUBNET EDGE_V6_SUBNET STATE_V4_SUBNET STATE_V6_SUBNET
+    IMAGE_TAG
+    LIVEKIT_API_KEY LIVEKIT_API_SECRET LIVEKIT_TURN_SECRET
+    ELEMENT_CALL_LIVEKIT_URL
+)
+
+KC_ARTEFACTS=(internal-ca.crt internal-ca.pem internal-ca.key keycloak.crt keycloak.key)
+
+usage() {
+    cat <<'EOF'
+usage: gremion-render [--release DIR] [--staging]
+
+  --release DIR   release tree to render into (default: <gremion root>/current)
+  --staging       additionally write etc/edge/extra-hosts.yml, the compose
+                  fragment that resolves the production hostnames to this
+                  unit's own edge address from inside every container.
+                  Requires TRAEFIK_CERT_RESOLVER to be EMPTY in state.env:
+                  a staging unit never requests public certificates.
+EOF
+}
+
+var_allowed() {
+    local needle="$1" v
+    for v in "${RENDER_ALLOWED_VARS[@]}"; do
+        if [[ "$v" == "$needle" ]]; then return 0; fi
+    done
+    return 1
+}
+
+# assert_rendered <path> — the §E post-condition, observed from disk.
+assert_rendered() {
+    local p="$1"
+    if [[ -d "$p" ]]; then die "render output is a directory: $p"; fi
+    if [[ ! -f "$p" ]]; then die "render output missing: $p"; fi
+    if [[ ! -s "$p" ]]; then die "render output is empty: $p"; fi
+    OUTPUTS=$((OUTPUTS + 1))
+    ok "rendered $p"
+}
+
+# 1. pgbouncer's auth_user credential. Every other role is resolved through
+#    auth_query against Postgres' SCRAM verifier, so this one line is the whole
+#    file (docker/pgbouncer/userlist.txt.example says so in the kernel tree).
+render_pgbouncer_userlist() {
+    local dir out
+    dir="${RELEASE_DIR}/docker/pgbouncer"
+    if [[ ! -d "$dir" ]]; then
+        die "release tree has no docker/pgbouncer directory: $dir" 2
+    fi
+    if [[ -z "${PGBOUNCER_AUTH_PASSWORD:-}" ]]; then
+        die "missing env key PGBOUNCER_AUTH_PASSWORD" 2
+    fi
+    out="${dir}/userlist.txt"
+    printf '"pgbouncer_auth" "%s"\n' "$PGBOUNCER_AUTH_PASSWORD" | atomic_write "$out" 0600
+    assert_rendered "$out"
+    if ! grep -q '^"pgbouncer_auth" "' "$out"; then
+        die "userlist.txt does not carry the pgbouncer_auth entry: $out"
+    fi
+    if grep -q 'CHANGE_ME_' "$out"; then
+        die "userlist.txt still carries a CHANGE_ME_ sentinel: $out"
+    fi
+}
+
+# 2. The internal CA. Keycloak lives in the STATE project and is not recreated
+#    by an app-only deploy, so a CA minted per release would leave its server
+#    cert trusted by nobody. The CA is therefore minted once, persisted under
+#    etc/secrets/keycloak, and every later release tree is seeded FROM the
+#    store — after which gen-internal-ca.sh is a no-op by its own idempotence.
+render_keycloak_certs() {
+    local tree store gen f
+    tree="${RELEASE_DIR}/docker/keycloak/certs"
+    store="$(gremion_root)/etc/secrets/keycloak"
+    gen="${tree}/gen-internal-ca.sh"
+    if [[ ! -x "$gen" ]]; then
+        die "release tree has no executable docker/keycloak/certs/gen-internal-ca.sh: $gen" 2
+    fi
+    mkdir -p "$store"
+    chmod 0700 "$store"
+    for f in "${KC_ARTEFACTS[@]}"; do
+        if [[ -f "${store}/${f}" ]]; then cp -p "${store}/${f}" "${tree}/${f}"; fi
+    done
+    if ! "$gen"; then die "gen-internal-ca.sh failed in ${tree}"; fi
+    for f in "${KC_ARTEFACTS[@]}"; do
+        assert_rendered "${tree}/${f}"
+        cp -p "${tree}/${f}" "${store}/${f}"
+    done
+    chmod 0600 "${store}/internal-ca.key" "${store}/keycloak.key"
+}
+
+# 3. The ipcrypt key that pseudonymises client IPs in the vector pipeline.
+#    It lives in etc/secrets (§A) and is generated ONCE: rotation belongs to
+#    scripts/rotate-ipcrypt-key.sh, which truncates this same inode in place so
+#    the running container sees the new value. A render must never undo that.
+ensure_ipcrypt_key() {
+    local dir key epoch
+    dir="$(gremion_root)/etc/secrets"
+    key="${dir}/ipcrypt_key.txt"
+    epoch="${dir}/ipcrypt_epoch.txt"
+    mkdir -p "$dir"
+    if [[ ! -f "$key" ]]; then
+        openssl rand -hex 16 | atomic_write "$key" 0600
+        info "generated a new ipcrypt key"
+    fi
+    if [[ ! -f "$epoch" ]]; then
+        printf '0\n' | atomic_write "$epoch" 0600
+    fi
+    assert_rendered "$key"
+    assert_rendered "$epoch"
+    if ! grep -Eq '^[0-9a-f]{32}$' "$key"; then
+        die "ipcrypt key is not 32 hex characters: $key"
+    fi
+}
+
+# 4. Release templates. Substitution is done in bash, not by envsubst and not
+#    by eval: the template's own text is never executed, only allow-listed
+#    variables are replaced, and the host needs no gettext-base package. An
+#    unknown name is refused rather than silently left in place, which is how
+#    a config ships with a literal ${SECRET} in it.
+render_template() {
+    local tpl="$1" out="$2" body var
+    if [[ ! -s "$tpl" ]]; then die "release template is empty: $tpl" 2; fi
+    body="$(cat "$tpl")"
+    # The single-quoted strings in this loop are LITERAL patterns handed to
+    # grep and tr: a dollar-brace that must NOT expand here is the point.
+    # shellcheck disable=SC2016
+    while IFS= read -r var; do
+        if [[ -z "$var" ]]; then continue; fi
+        if ! var_allowed "$var"; then
+            die "unknown variable \${${var}} in ${tpl} (not in the render allow-list)" 2
+        fi
+        if [[ -z "${!var:-}" ]]; then
+            die "missing env key ${var} required by ${tpl}" 2
+        fi
+        body="${body//\$\{${var}\}/${!var}}"
+    done < <(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$tpl" | tr -d '${}' | sort -u)
+    printf '%s\n' "$body" | atomic_write "$out" 0644
+    assert_rendered "$out"
+    # shellcheck disable=SC2016
+    if grep -q '\${' "$out"; then
+        die "unsubstituted \${...} left in ${out}"
+    fi
+}
+
+render_release_templates() {
+    local tpl found=0
+    while IFS= read -r tpl; do
+        if [[ -z "$tpl" ]]; then continue; fi
+        found=$((found + 1))
+        render_template "$tpl" "${tpl%.tmpl}"
+    done < <(find "${RELEASE_DIR}/docker" -type f -name '*.tmpl' | sort)
+    info "release templates rendered: ${found}"
+}
+
+# 5. Staging only: resolve the PRODUCTION hostnames to this unit's own edge
+#    address from inside every container (§E/N9), so a staging unit exercises
+#    the real names without public DNS and without public certificates.
+#    TRAEFIK_CERT_RESOLVER must therefore be EMPTY. Task 1's state.env.tmpl
+#    ships le-http, so a staging root has to blank the key first; refusing
+#    here is how a forgotten blanking is caught before the fragment lands.
+#    KNOWN, ACCEPTED: etc/edge is also Traefik's dynamic directory, so a
+#    staging Traefik logs one "field not found, node: services" for this file
+#    per reload and ignores it. Routing is unaffected and the file never
+#    exists on a production host.
+render_staging_extra_hosts() {
+    local out tfile services line host svc
+    local hosts=()
+    if [[ -n "${TRAEFIK_CERT_RESOLVER:-}" ]]; then
+        die "--staging refuses a render whose TRAEFIK_CERT_RESOLVER is set: staging never holds public certificates" 2
+    fi
+    if [[ -z "${PLATFORM_DOMAIN:-}" ]]; then die "missing env key PLATFORM_DOMAIN" 2; fi
+    if [[ -z "${EDGE_BIND_IP:-}" ]]; then die "missing env key EDGE_BIND_IP" 2; fi
+    need_cmd docker
+
+    hosts+=("${PLATFORM_DOMAIN}" "control.${PLATFORM_DOMAIN}" "mail.${PLATFORM_DOMAIN}")
+    tfile="$(gremion_root)/etc/tenant-hosts.txt"
+    if [[ -f "$tfile" ]]; then
+        while IFS= read -r line; do
+            host="${line%%#*}"
+            host="$(printf '%s' "$host" | tr -d '[:space:]')"
+            if [[ -n "$host" ]]; then hosts+=("$host"); fi
+        done < "$tfile"
+    else
+        info "no ${tfile}: rendering the three platform hosts only"
+    fi
+
+    services="$(cd "$RELEASE_DIR" && docker compose --env-file "$(gremion_root)/etc/env/state.env" config --services)"
+    if [[ -z "$services" ]]; then
+        die "staging extra_hosts: compose reported zero services"
+    fi
+
+    out="$(gremion_root)/etc/edge/extra-hosts.yml"
+    mkdir -p "$(dirname "$out")"
+    {
+        echo "# Generated by gremion-render --staging. Do not edit: every run overwrites it."
+        echo "# Staging resolves the production hostnames to this unit's own edge address"
+        echo "# from inside the containers (spec A section E). Traefik's file provider also"
+        echo "# watches this directory and logs one 'field not found, node: services' error"
+        echo "# for this file on each reload; that is accepted, staging-only noise."
+        echo "services:"
+        while IFS= read -r svc; do
+            if [[ -z "$svc" ]]; then continue; fi
+            echo "  ${svc}:"
+            echo "    extra_hosts:"
+            for host in "${hosts[@]}"; do
+                echo "      - \"${host}:${EDGE_BIND_IP}\""
+            done
+        done <<< "$services"
+    } | atomic_write "$out" 0644
+    assert_rendered "$out"
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --release)
+                if [[ $# -lt 2 ]]; then die "--release needs a directory" 2; fi
+                RELEASE_DIR="$2"; shift 2 ;;
+            --staging) STAGING=1; shift ;;
+            -h|--help) usage; exit 0 ;;
+            *) usage >&2; die "unknown argument: $1" 2 ;;
+        esac
+    done
+
+    if [[ -z "$RELEASE_DIR" ]]; then RELEASE_DIR="$(gremion_root)/current"; fi
+    if [[ ! -d "$RELEASE_DIR" ]]; then die "release tree not found: $RELEASE_DIR" 2; fi
+    if [[ ! -d "${RELEASE_DIR}/docker" ]]; then
+        die "release tree has no docker/ directory: ${RELEASE_DIR}/docker" 2
+    fi
+
+    local env_file staging_word
+    env_file="$(gremion_root)/etc/env/state.env"
+    if [[ ! -f "$env_file" ]]; then die "state env file not found: $env_file" 2; fi
+    load_env "$env_file"
+    need_cmd openssl
+
+    render_pgbouncer_userlist
+    render_keycloak_certs
+    ensure_ipcrypt_key
+    render_release_templates
+    if [[ "$STAGING" -eq 1 ]]; then
+        render_staging_extra_hosts
+    fi
+
+    staging_word=no
+    if [[ "$STAGING" -eq 1 ]]; then staging_word=yes; fi
+    printf 'RENDER: outputs=%d release=%s staging=%s\n' \
+        "$OUTPUTS" "$RELEASE_DIR" "$staging_word"
+}
+
+main "$@"
