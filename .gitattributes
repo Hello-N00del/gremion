@@ -43,3 +43,10 @@ test/host/test_helper/*.bash text eol=lf
 # value with a trailing carriage return. templates/env/*.env.tmpl already
 # matched *.env* above; this covers the rest of the directory.
 infra/host/templates/** text eol=lf
+
+# Task 8: infra/host/mail/ carries the Stalwart config TEMPLATE (config.toml.tmpl),
+# which gremion-mail-bringup renders and bind-mounts into a Linux container. No
+# rule above matches *.toml.tmpl — Task 2's rule covers infra/host/templates/**,
+# not this directory — so core.autocrlf=true would check the template out with
+# CRLF on Windows and every rendered value would carry a trailing carriage return.
+infra/host/mail/** text eol=lf

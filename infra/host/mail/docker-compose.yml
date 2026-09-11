@@ -1,0 +1,97 @@
+# infra/host/mail/docker-compose.yml
+# Compose project ${STACK}-mail (§I). The ONLY permitted invocation on any host:
+#   docker compose --env-file /opt/gremion/etc/env/mail.env <verb>
+# No -f, no --profile, no -p (N20): COMPOSE_FILE and COMPOSE_PROFILES live in
+# the env file. Stalwart binds IP-B only; Traefik never touches IP-B, which is
+# what leaves :80 free for Stalwart's own ACME (§C).
+
+# Required-variable guard. Compose interpolates the WHOLE document, extension
+# fields included, so an unset or empty variable named here aborts every
+# `docker compose` verb before a container starts. The guard cannot be written
+# inline on the ports entries: an empty MAIL_BIND_IP renders "- :25:25", which
+# publishes on 0.0.0.0 — precisely what §A forbids — and the ${VAR:?…} form
+# would also make the bind address unreadable to the literal check in
+# test/host/mail-bringup.bats. So the ports stay plain and the requirement is
+# asserted once, here.
+x-required-env:
+  stack: "${STACK:?STACK required}"
+  platform-domain: "${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}"
+  mail-bind-ip: "${MAIL_BIND_IP:?MAIL_BIND_IP required}"
+  mail-bind-ip6: "${MAIL_BIND_IP6:?MAIL_BIND_IP6 required}"
+  mail-v4-subnet: "${MAIL_V4_SUBNET:?MAIL_V4_SUBNET required}"
+  mail-v6-subnet: "${MAIL_V6_SUBNET:?MAIL_V6_SUBNET required}"
+  mail-log-retention-days: "${MAIL_LOG_RETENTION_DAYS:?MAIL_LOG_RETENTION_DAYS required}"
+
+services:
+  stalwart:
+    image: ${STALWART_IMAGE:?STALWART_IMAGE required}
+    container_name: ${STACK}-mail-stalwart
+    hostname: mail.${PLATFORM_DOMAIN}
+    restart: unless-stopped
+    # No command: override. The pinned image's entrypoint already execs
+    #   stalwart --config /opt/stalwart/etc/config.toml
+    # which is exactly the path the rendered config is mounted at, and it only
+    # self-initialises a config when that file is ABSENT. Repeating the flag
+    # here would be inert (the entrypoint ignores its arguments) while reading
+    # like the authority — see spike S4.
+    environment:
+      STALWART_PATH: /opt/stalwart
+    ports:
+      # IP-B only, both families. Nothing here binds 0.0.0.0 (§A).
+      - "${MAIL_BIND_IP}:25:25"
+      - "[${MAIL_BIND_IP6}]:25:25"
+      - "${MAIL_BIND_IP}:465:465"
+      - "[${MAIL_BIND_IP6}]:465:465"
+      - "${MAIL_BIND_IP}:587:587"
+      - "[${MAIL_BIND_IP6}]:587:587"
+      - "${MAIL_BIND_IP}:993:993"
+      - "[${MAIL_BIND_IP6}]:993:993"
+      - "${MAIL_BIND_IP}:80:80"
+      - "[${MAIL_BIND_IP6}]:80:80"
+      - "${MAIL_BIND_IP}:443:443"
+      - "[${MAIL_BIND_IP6}]:443:443"
+      # management API: loopback only, consumed by provision-roles.sh
+      - "127.0.0.1:8086:8080"
+    volumes:
+      - mail_data:/opt/stalwart
+      - ${GREMION_ROOT:-/opt/gremion}/etc/mail/config.toml:/opt/stalwart/etc/config.toml:ro
+      - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/mail:/opt/stalwart/etc/dkim:ro
+    networks:
+      mail:
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS -o /dev/null http://127.0.0.1:8080/healthz/live 2>/dev/null || wget -q -O /dev/null http://127.0.0.1:8080/healthz/live
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        # Stalwart rotates its own connection log daily and the driver keeps
+        # this many files, so retention is bounded at N days (§I).
+        max-file: "${MAIL_LOG_RETENTION_DAYS}"
+
+networks:
+  # Project-scoped: realised as ${STACK}-mail_mail. Carries no name: (§E), so
+  # only ${STACK}_edge and ${STACK}_state are global.
+  mail:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: ${MAIL_V4_SUBNET}
+        - subnet: ${MAIL_V6_SUBNET}
+
+volumes:
+  # The external volume is stack-scoped, and its real name is carried by name:,
+  # not by the key. Compose validates the document's KEYS against its schema
+  # BEFORE interpolating, so a key spelled with a variable is rejected outright:
+  #   validating docker-compose.yml: volumes additional properties
+  #   '${STACK}_mail_data' not allowed
+  # (observed with Compose v5.5.1). The key is therefore a fixed local alias and
+  # name: carries the stack-scoped identity Task 2's networks stage creates.
+  mail_data:
+    external: true
+    name: ${STACK}_mail_data
