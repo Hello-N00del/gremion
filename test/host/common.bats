@@ -132,6 +132,46 @@ run_with() {
     [[ "$output" != *"after"* ]]
 }
 
+@test "assert prints the failed command's output before it dies" {
+    # A post-condition that fails while swallowing the command's own diagnosis
+    # buys a second trip to the host to find out why. The wrapped command's
+    # stdout AND stderr are captured and echoed, prefixed, before the FAIL.
+    cat > "${GREMION_ROOT}/noisy" <<'PROBE'
+#!/usr/bin/env bash
+echo "stdout-evidence"
+echo "stderr-evidence" >&2
+exit 3
+PROBE
+    chmod +x "${GREMION_ROOT}/noisy"
+    run_with 'assert "the noisy probe holds" "$1"; echo after' "${GREMION_ROOT}/noisy"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"the noisy probe holds"* ]]
+    [[ "$output" == *"stdout-evidence"* ]]
+    [[ "$output" == *"stderr-evidence"* ]]
+    [[ "$output" != *"after"* ]]
+}
+
+@test "assert bounds the captured output to the last 40 lines" {
+    cat > "${GREMION_ROOT}/verbose" <<'PROBE'
+#!/usr/bin/env bash
+seq 1 100
+exit 1
+PROBE
+    chmod +x "${GREMION_ROOT}/verbose"
+    run_with 'assert "the verbose probe holds" "$1"' "${GREMION_ROOT}/verbose"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"| 100"* ]]
+    [[ "$output" == *"| 61"* ]]
+    [[ "$output" != *"| 60"* ]]
+}
+
+@test "assert stays quiet about the command's output when the post-condition holds" {
+    run_with 'assert "the quiet probe holds" bash -c "echo should-not-be-shown"'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the quiet probe holds"* ]]
+    [[ "$output" != *"should-not-be-shown"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # common.sh — load_env
 # ---------------------------------------------------------------------------
@@ -224,4 +264,36 @@ run_with() {
     fs_carries_modes "$GREMION_ROOT" && expected=0
     run_with 'fs_carries_modes "$1"' "$GREMION_ROOT"
     [ "$status" -eq "$expected" ]
+}
+
+@test "fs_carries_modes dies when chmod itself fails instead of reporting no modes" {
+    # The probe answers exactly one question: does this filesystem PERSIST a
+    # mode it was given? A chmod that never ran answers nothing. Reading that
+    # as "no modes here" is how every 0600/0700 post-condition quietly stops
+    # being asserted on a host that does carry modes — the guard is still
+    # installed, still green, and enforcing nothing.
+    # The stub fails ONLY the mode probe and execs the real chmod for everything
+    # else, so nothing but the probe changes behaviour.
+    local real_chmod; real_chmod="$(command -v chmod)"
+    shim chmod "case \"\$*\" in *.mode-probe.*) exit 1 ;; esac; exec ${real_chmod} \"\$@\""
+    run_with 'if fs_carries_modes "$1"; then echo "probe=yes"; else echo "probe=no"; fi' \
+        "$GREMION_ROOT"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"chmod"* ]]
+    [[ "$output" != *"probe="* ]]
+}
+
+@test "the helper's fs_carries_modes fails the calling test instead of skipping when chmod fails" {
+    # Same failure mode on the test side, where reading it as "no modes" turns
+    # a real mode assertion into a permanent `skip` nobody reads.
+    local real_chmod; real_chmod="$(command -v chmod)"
+    shim chmod "case \"\$*\" in *.mode-probe.*) exit 1 ;; esac; exec ${real_chmod} \"\$@\""
+    run bash -c '
+        set -euo pipefail
+        . "$0"
+        if fs_carries_modes "$1"; then echo "probe=yes"; else echo "probe=no"; fi
+    ' "${HOST_TEST_DIR}/test_helper/host.bash" "$GREMION_ROOT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"chmod"* ]]
+    [[ "$output" != *"probe="* ]]
 }

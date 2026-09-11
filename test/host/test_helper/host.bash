@@ -52,13 +52,19 @@ teardown_host_root() {
 # "<cmd> <args...>" to $SHIM_LOG. With no <script> the stub exits 0; with a
 # <script> the stub runs it INSTEAD of the implicit `exit 0`, so a stub is free
 # to print output or exit non-zero.
+#
+# The stub is written to <path>.new, made executable, and only then moved into
+# place. That order is what lets a test shim `chmod` itself: while <path>.new is
+# still invisible to PATH lookup the `chmod +x` below resolves to the REAL
+# chmod, so the stub never has to make itself executable.
 shim() {
-    local cmd="$1" body="${2:-}" path
+    local cmd="$1" body="${2:-}" path tmp
     if [[ -z "${SHIM_DIR:-}" ]]; then
         echo "shim: call setup_host_root first" >&2
         return 1
     fi
     path="${SHIM_DIR}/${cmd}"
+    tmp="${path}.new"
     {
         echo '#!/usr/bin/env bash'
         # Deliberate: this format string is written into the shim script
@@ -66,13 +72,14 @@ shim() {
         # later, when the generated shim itself runs.
         # shellcheck disable=SC2016
         printf 'printf "%%s %%s\\n" %q "$*" >> "$SHIM_LOG"\n' "$cmd"
-    } > "$path"
+    } > "$tmp"
     if [[ -n "$body" ]]; then
-        printf '%s\n' "$body" >> "$path"
+        printf '%s\n' "$body" >> "$tmp"
     else
-        echo 'exit 0' >> "$path"
+        echo 'exit 0' >> "$tmp"
     fi
-    chmod +x "$path"
+    chmod +x "$tmp"
+    mv -f "$tmp" "$path"
 }
 
 # assert_recorded <cmd> <substring>
@@ -102,11 +109,21 @@ refute_recorded() {
 # 0 when the filesystem under <dir> actually stores POSIX permission bits.
 # Git Bash on NTFS does NOT: `chmod 600` there reads back as 644, so a mode
 # assertion is meaningless on this box and is proven on the Debian host instead.
+#
+# Callers use it as `if ! fs_carries_modes "$d"; then skip …; fi`, so a chmod
+# that FAILED must not come back as "no modes": that would turn a real mode
+# assertion into a permanent skip nobody reads. An inconclusive probe exits the
+# test body non-zero, which bats reports as a FAILURE, not a skip.
 fs_carries_modes() {
     local dir="$1" probe rc=1
     probe="${dir}/.mode-probe.$$"
     : > "$probe" 2>/dev/null || return 1
-    chmod 600 "$probe" 2>/dev/null || true
+    if ! chmod 600 "$probe" 2>/dev/null; then
+        rm -f "$probe"
+        printf 'FAIL: fs_carries_modes: chmod 600 failed on %s — the mode probe is inconclusive, not negative\n' \
+            "$probe" >&2
+        exit 1
+    fi
     [[ "$(stat -c '%a' "$probe" 2>/dev/null)" == "600" ]] && rc=0
     rm -f "$probe"
     return "$rc"

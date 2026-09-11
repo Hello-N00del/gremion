@@ -103,8 +103,8 @@ without a reconciliation step.
 It renders the five files, generates every secret, refuses to overwrite an
 existing file without `--force`, asserts its own post-conditions (non-empty, no
 surviving generated sentinel, no unsubstituted placeholder, no duplicated key,
-mode 600, `etc/` mode 700) and prints the list of keys you must still fill in,
-ending with:
+mode 600, `etc/` **and every directory under it** mode 700) and prints the list
+of keys you must still fill in, ending with:
 
 ```
 INIT-SECRETS: files=5 generated=<n> operator-pending=<m>
@@ -153,3 +153,15 @@ One class of assertion is skipped on Windows and only there: Git Bash on NTFS
 does not store POSIX permission bits, so a `chmod 600` reads back as 644. Those
 tests `skip` with a reason, and the same post-condition is asserted for real on
 the Debian host.
+
+The probe behind that skip — `fs_carries_modes` in both `lib/common.sh` and
+`test/host/test_helper/host.bash` — asks one question: does this filesystem
+*persist* a mode it was given? Only a `chmod` that **succeeds** and does not
+stick answers "no modes". A `chmod` that **fails** is fatal (`exit 1` naming
+`chmod`, a test FAILURE rather than a skip), because reading it as "no modes"
+would silently switch off every 0600/0700 post-condition on a host that does
+carry them — the guard still installed, still green, enforcing nothing.
+
+When a post-condition does not hold, `assert` reproduces the wrapped command's
+stdout and stderr (prefixed, last 40 lines) before the `FAIL` line, so the
+failure carries its own diagnosis instead of costing a second trip to the host.

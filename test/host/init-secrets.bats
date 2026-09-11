@@ -53,6 +53,32 @@ copy_host_src() {
     [[ "$output" == *"--stack"* ]]
 }
 
+@test "a truncated --root prints usage and exits 2" {
+    # `--root` as the last argument used to leave ROOT empty and then die inside
+    # `shift 2` under set -e: exit 1, no message, no usage. A usage error must
+    # look like a usage error or the operator retries the same broken command.
+    run "$INIT" --stack gremion --root
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"usage: gremion-init-secrets"* ]]
+    [[ "$output" == *"--root"* ]]
+}
+
+@test "a truncated --stack prints usage and exits 2" {
+    run env -u STACK "$INIT" --root "$GREMION_ROOT" --stack
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"usage: gremion-init-secrets"* ]]
+    [[ "$output" == *"--stack"* ]]
+}
+
+@test "the preflight names every external tool the render pipeline needs, tr included" {
+    # gen_alnum32 pipes through tr twice and the colour upcase uses it again. A
+    # tool that is used but not declared turns a host missing the package into a
+    # mid-render failure over a half-written etc/env, instead of a clean exit 2
+    # before anything is written.
+    grep -qE '^[[:space:]]*need_cmd .*\btr\b' "$INIT" \
+        || { echo "need_cmd does not name tr"; return 1; }
+}
+
 @test "renders exactly the five project env files" {
     render
     [ "$status" -eq 0 ]
@@ -169,6 +195,36 @@ copy_host_src() {
     grep -q 'CHANGE_ME_OPERATOR_platform_domain' "${ENV_DIR}/state.env"
     [[ "$output" == *"state.env: PLATFORM_DOMAIN"* ]]
     [[ "$output" == *"state.env: EDGE_BIND_IP"* ]]
+    [[ "$output" == *"ops.env: EDGE_BIND_IP6"* ]]
+}
+
+@test "ops.env declares EDGE_BIND_IP6 beside EDGE_BIND_IP, both operator-pending" {
+    # Task 11 reads EDGE_BIND_IP6 out of ops.env. A key declared only in
+    # state.env is not in the file its consumer loads: the ops render would
+    # bind its v6 listener to an empty string, or to every address.
+    render
+    [ "$status" -eq 0 ]
+    [ "$(value_of "${ENV_DIR}/ops.env" EDGE_BIND_IP)"  = "CHANGE_ME_OPERATOR_edge_bind_ip" ]
+    [ "$(value_of "${ENV_DIR}/ops.env" EDGE_BIND_IP6)" = "CHANGE_ME_OPERATOR_edge_bind_ip6" ]
+    [[ "$output" == *"ops.env: EDGE_BIND_IP6"* ]]
+}
+
+@test "the proof line's operator-pending counts every CHANGE_ME_OPERATOR_ key rendered" {
+    # Derived, not hard-coded: Task 8 extends mail.env.tmpl and would break a
+    # frozen number. What must hold is that the count the operator reads equals
+    # the keys actually left unfilled on disk — an undercount is a key nobody
+    # is told to fill.
+    render
+    [ "$status" -eq 0 ]
+    local expected actual
+    # `grep -c` over several files prints one count PER FILE; the total wanted
+    # here is the number of matching lines across all five.
+    # shellcheck disable=SC2126
+    expected="$(grep -hE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME_OPERATOR_' "${ENV_DIR}"/*.env | wc -l)"
+    expected="${expected//[[:space:]]/}"
+    actual="$(printf '%s\n' "$output" | sed -n 's/.*operator-pending=\([0-9][0-9]*\).*/\1/p' | tail -n1)"
+    [ "$expected" -gt 0 ]
+    [ "$actual" = "$expected" ] || { echo "proof line says ${actual}, files hold ${expected}"; return 1; }
 }
 
 @test "hex32 groups render 64 hex characters and alnum32 groups 32 alnum characters" {
@@ -330,4 +386,33 @@ copy_host_src() {
             || { echo "${f} is $(stat -c '%a' "${ENV_DIR}/${f}"), not 600"; return 1; }
     done
     [ "$(stat -c '%a' "${GREMION_ROOT}/etc")" = "700" ]
+}
+
+@test "ensure_layout locks down every child directory of etc/, etc/edge included" {
+    # Observed as what the program TRIED to do, so the guard is real on a
+    # filesystem that does not carry modes too. etc/edge holds the rendered
+    # Traefik dynamic configuration and the ACME account key; 0700 on etc/ alone
+    # does not protect it once a later task installs a service user.
+    local real_chmod
+    real_chmod="$(command -v chmod)"
+    shim chmod "exec ${real_chmod} \"\$@\""
+    run "$INIT" --root "$GREMION_ROOT" --stack gremion
+    [ "$status" -eq 0 ]
+    assert_recorded chmod "${GREMION_ROOT}/etc/edge"
+    assert_recorded chmod "${GREMION_ROOT}/etc/secrets"
+    assert_recorded chmod "${GREMION_ROOT}/etc/env"
+}
+
+@test "every child directory of etc/ carries 700 when the filesystem carries modes" {
+    render
+    [ "$status" -eq 0 ]
+    if ! fs_carries_modes "$ENV_DIR"; then
+        skip "filesystem does not carry POSIX modes (proven on the host instead)"
+    fi
+    local d
+    for d in "${GREMION_ROOT}/etc"/*/; do
+        [[ -d "$d" ]] || continue
+        [ "$(stat -c '%a' "${d%/}")" = "700" ] \
+            || { echo "${d} is $(stat -c '%a' "${d%/}"), not 700"; return 1; }
+    done
 }

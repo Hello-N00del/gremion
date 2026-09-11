@@ -44,14 +44,35 @@ die() {
     exit "${2:-$GREMION_EXIT_ASSERT}"
 }
 
+# How many trailing lines of a failed command's output assert reproduces. Enough
+# for a compose or openssl error, short enough that the FAIL line stays readable.
+GREMION_ASSERT_TAIL_LINES=40
+
 # assert <description> <command...>
 # <description> names the POST-CONDITION being observed, not the action taken.
 # "apt-get install returned 0" is not an assertion; "git is on PATH" is.
+#
+# The command's stdout AND stderr are captured and, when the post-condition does
+# NOT hold, reproduced (prefixed, last $GREMION_ASSERT_TAIL_LINES lines) before
+# the exit. A guard that reports only "X does not hold" and discards the reason
+# costs a second trip to the host to find out why. On success the output is
+# dropped: a passing assertion prints one line.
 assert() {
     local what="$1"; shift
-    if "$@" >/dev/null 2>&1; then
+    local cap rc=0
+    cap="$(mktemp)" || die "assert: could not create a temp file for command output" \
+        "$GREMION_EXIT_ASSERT"
+    if "$@" >"$cap" 2>&1; then
+        rm -f "$cap"
         ok "$what"
     else
+        rc=$?
+        if [[ -s "$cap" ]]; then
+            printf '       ---- output of: %s (exit %d, last %d lines) ----\n' \
+                "$*" "$rc" "$GREMION_ASSERT_TAIL_LINES" >&2
+            tail -n "$GREMION_ASSERT_TAIL_LINES" "$cap" | sed 's/^/       | /' >&2
+        fi
+        rm -f "$cap"
         die "$what" "$GREMION_EXIT_ASSERT"
     fi
 }
@@ -79,11 +100,22 @@ gremion_root() {
 # 0 when the filesystem under <dir> really stores POSIX permission bits.
 # Git Bash on NTFS does not, so a 0600 assertion there would be a lie; the mode
 # post-condition is asserted on Debian and skipped (loudly) elsewhere.
+#
+# The probe answers exactly one question: does this filesystem PERSIST a mode it
+# was given? A chmod that failed answers nothing, so it is fatal here rather
+# than folded into "no modes". Read the other way it would silently disable
+# every 0600/0700 post-condition on a host that does carry modes — the guard
+# still installed, still green, enforcing nothing. Only a chmod that SUCCEEDS
+# and does not stick returns 1.
 fs_carries_modes() {
     local dir="$1" probe rc=1
     probe="${dir}/.mode-probe.$$"
     : > "$probe" 2>/dev/null || return 1
-    chmod 600 "$probe" 2>/dev/null || true
+    if ! chmod 600 "$probe" 2>/dev/null; then
+        rm -f "$probe"
+        die "fs_carries_modes: chmod 600 failed on ${probe} — the mode probe is inconclusive, not negative" \
+            "$GREMION_EXIT_ASSERT"
+    fi
     [[ "$(stat -c '%a' "$probe" 2>/dev/null)" == "600" ]] && rc=0
     rm -f "$probe"
     return "$rc"
