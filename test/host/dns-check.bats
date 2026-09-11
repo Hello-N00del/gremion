@@ -25,6 +25,13 @@ setup() {
     install_dig_shim
 }
 
+# Fix round 2: the two sibling suites (common.bats, init-secrets.bats)
+# both tear the throwaway root down; this file did not, so every run left
+# one mktemp directory per test behind.
+teardown() {
+    teardown_host_root
+}
+
 # --- fixture helpers -----------------------------------------------------
 
 # A stand-in for dig(1) that answers from $TEST_ZONE. Fixture lines are
@@ -534,4 +541,104 @@ seed_steady_state() {
     [ "$status" -eq 1 ]
     assert_row "MISSING 2 control.${D} A '${EDGE4}' '(none)'"
     assert_row "DNS-CHECK: edit=all checked=39 ok=38 missing=1 wrong=0"
+}
+
+# --- fix round 2: failures that must not be reported as verdicts -----------
+#
+# Everything below this line was added in fix round 2. The common shape: a
+# query, a read or a command line that FAILED tells us nothing about the zone,
+# so it must end the run with exit 2 (precondition) and never be dressed up as
+# a record verdict — least of all as an OK.
+
+@test "a resolver that does not answer exits 2, it does not report MISSING" {
+    seed_edit1
+    shim dig 'exit 9'          # dig(1) exit 9 = no reply from the server
+    dns_check --edit 1
+    [ "$status" -eq 2 ]
+    printf '%s\n' "$output" | grep -q 'did not answer'
+    refute_row "MISSING 1 ${D} MX"
+    refute_row "DNS-CHECK:"
+}
+
+@test "the wildcard-absent row is never OK when the resolver fails" {
+    # The 'absent' verdict is satisfied by an EMPTY answer, and an unreachable
+    # resolver produces exactly that. Without the exit-status check this row
+    # reads 'OK 2 *.example.org A ABSENT (none)' — a guard that reports the
+    # zone wildcard gone because nobody answered the question.
+    seed_edit2
+    shim dig 'exit 9'
+    dns_check --edit 2
+    [ "$status" -eq 2 ]
+    refute_row "OK 2 *.${D} A 'ABSENT'"
+}
+
+@test "a value-taking option given as the last argument exits 2" {
+    # A bare `shift 2` with one argument left returns non-zero and set -e ends
+    # the program with exit 1 and no message at all — and exit 1 means "an
+    # assertion failed", so a truncated command line would read as a failed
+    # DNS check. Same fix, same wording as gremion-init-secrets.
+    local flag
+    for flag in --domain --edge-ip --edge-ip6 --mail-ip --mail-ip6 --edit \
+                --tenant-hosts --resolver; do
+        run "$DNS_CHECK" --domain "$D" --edge-ip "$EDGE4" --mail-ip "$MAIL4" "$flag"
+        if [ "$status" -ne 2 ]; then
+            echo "FAIL: ${flag} as the last argument exited ${status}, want 2" >&2
+            printf '%s\n' "$output" >&2
+            return 1
+        fi
+        if ! printf '%s\n' "$output" | grep -q -- "${flag} requires a value"; then
+            echo "FAIL: no usage message for a truncated ${flag}" >&2
+            printf '%s\n' "$output" >&2
+            return 1
+        fi
+    done
+}
+
+@test "preflights every external command it runs, not just dig" {
+    # Task 1's polish left a standing instruction for every new gremion-*
+    # program: preflight what it actually shells out to. This one runs dig,
+    # sed, tr, grep and cat. Proven by calling require_args with an empty
+    # PATH, so `command -v` finds none of them.
+    # shellcheck disable=SC1090
+    source "$DNS_CHECK"
+    # shellcheck disable=SC2034  # read by the require_args that was sourced above
+    { DOMAIN="$D"; EDGE_IP="$EDGE4"; MAIL_IP="$MAIL4"; EDIT=1; TENANT_HOSTS=""; }
+    local out c st=0
+    out="$( PATH=/nonexistent require_args 2>&1 )" || st=$?
+    [ "$st" -eq 2 ]
+    for c in dig sed tr grep cat; do
+        case " $out " in
+            *" $c "*|*" ${c}"*) : ;;
+            *) echo "FAIL: the preflight does not name ${c}: ${out}" >&2; return 1 ;;
+        esac
+    done
+}
+
+@test "a tenant-hosts list that cannot be read exits 2, it checks no hosts silently" {
+    # The read used to end in '|| true', so a list the program could not read
+    # yielded an empty host list and a clean summary: every tenant host
+    # "verified" without a single query. sed is shimmed to fail here because
+    # an unreadable file is not reproducible as root in the test container.
+    seed_edit2
+    printf '%s\n' "pilot.${D}" >"${GREMION_ROOT}/tenant-hosts.txt"
+    shim sed 'exit 4'
+    dns_check --edit 2 --tenant-hosts "${GREMION_ROOT}/tenant-hosts.txt"
+    [ "$status" -eq 2 ]
+    printf '%s\n' "$output" | grep -q 'cannot read tenant-hosts file'
+    refute_row "DNS-CHECK:"
+}
+
+@test "a readable tenant-hosts list still reaches every host after the read fix" {
+    # The companion of the test above: the refusal must not have cost the
+    # ordinary path. Same expectations as the --tenant-hosts test of edit 2.
+    seed_edit2
+    printf '# pilot\n%s\n\n  %s  \n' "pilot.${D}" "stura.example.net" \
+        >"${GREMION_ROOT}/tenant-hosts.txt"
+    zone "pilot.${D}" A "$EDGE4"
+    zone "pilot.${D}" AAAA "$EDGE6"
+    dns_check --edit 2 --tenant-hosts "${GREMION_ROOT}/tenant-hosts.txt"
+    [ "$status" -eq 1 ]
+    assert_row "OK 2 pilot.${D} A '${EDGE4}'"
+    assert_row "MISSING 2 stura.example.net A '${EDGE4}' '(none)'"
+    assert_row "DNS-CHECK: edit=2 checked=15 ok=13 missing=2 wrong=0"
 }

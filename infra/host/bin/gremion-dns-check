@@ -150,12 +150,22 @@ normalise_txt() {
         | sed -e 's/; /;/g' -e 's/^ //' -e 's/ $//'
 }
 
+# dig_answers <name> <type> — the published answers, one per line.
+# dig_ptr <addr>            — the same for the reverse name of <addr>.
+#
+# NEITHER SWALLOWS DIG'S EXIT STATUS. `dig +short` answers an NXDOMAIN with no
+# output and exit 0, so "the zone does not publish this" and "nobody answered
+# the question" printed the same empty string; the caller then reported MISSING
+# for every row and — far worse — OK for every 'absent' row, because an absent
+# expectation is satisfied by an empty answer. A resolver outage would have
+# reported the zone wildcard deleted. The status is propagated instead and the
+# caller ends the run with exit 2 (a precondition failure, not a verdict).
 dig_answers() {
-    dig +short +time=5 +tries=2 "@${RESOLVER}" "$1" "$2" 2>/dev/null || true
+    dig +short +time=5 +tries=2 "@${RESOLVER}" "$1" "$2" 2>/dev/null
 }
 
 dig_ptr() {
-    dig +short +time=5 +tries=2 "@${RESOLVER}" -x "$1" 2>/dev/null || true
+    dig +short +time=5 +tries=2 "@${RESOLVER}" -x "$1" 2>/dev/null
 }
 
 # check_record <edit> <name> <type> <mode> <expected> [query-name]
@@ -175,12 +185,18 @@ dig_ptr() {
 check_record() {
     local edit="$1" name="$2" type="$3" mode="$4" expected="$5"
     local query="${6:-$2}"
-    local raw line norm observed="" status="MISSING" shown="$expected"
+    local raw line norm observed="" status="MISSING" shown="$expected" rc=0
 
     if [ "$type" = "PTR" ]; then
-        raw="$(dig_ptr "$query")"
+        raw="$(dig_ptr "$query")" || rc=$?
     else
-        raw="$(dig_answers "$query" "$type")"
+        raw="$(dig_answers "$query" "$type")" || rc=$?
+    fi
+    # A query that FAILED says nothing about the zone. Printing MISSING would
+    # be a guess and printing OK for an 'absent' expectation would be a lie, so
+    # the run stops here with the precondition code instead.
+    if [ "$rc" -ne 0 ]; then
+        die "resolver ${RESOLVER} did not answer ${query} ${type} (dig exit ${rc})" 2
     fi
 
     while IFS= read -r line; do
@@ -257,9 +273,16 @@ check_edge_host() {
 }
 
 # One FQDN per line; '#' comments, blank lines and stray whitespace ignored.
+# Returns non-zero when the list could not be READ. That used to end in
+# '|| true', which turned an unreadable list into an empty one: zero tenant
+# hosts queried, and a clean summary claiming they were all verified.
 read_tenant_hosts() {
     if [ -z "$TENANT_HOSTS" ]; then return 0; fi
-    sed -e 's/#.*$//' -e 's/[[:space:]]//g' "$TENANT_HOSTS" | grep -v '^$' || true
+    local stripped
+    stripped="$(sed -e 's/#.*$//' -e 's/[[:space:]]//g' "$TENANT_HOSTS")" || return 1
+    # grep exits 1 when every line was a comment or blank. That is an empty
+    # list, not a failure, and it is the one case '|| true' may cover.
+    printf '%s\n' "$stripped" | grep -v '^$' || true
 }
 
 # A wildcard is only proven absent by asking for a name nobody would ever
@@ -269,15 +292,22 @@ wildcard_probe_label() {
 }
 
 edit_2() {
-    local host
+    local host tenant_hosts=""
     check_edge_host 2 "$DOMAIN"
     for host in www control rs1; do
         check_edge_host 2 "${host}.${DOMAIN}"
     done
+    # Read in THIS shell, not in a process substitution: a `die` inside the
+    # subshell of `< <(…)` ends the subshell and the program carries on with an
+    # empty list, which is the failure this refusal exists to prevent.
+    if [ -n "$TENANT_HOSTS" ]; then
+        tenant_hosts="$(read_tenant_hosts)" \
+            || die "cannot read tenant-hosts file: ${TENANT_HOSTS}" 2
+    fi
     while IFS= read -r host; do
         if [ -z "$host" ]; then continue; fi
         check_edge_host 2 "$host"
-    done < <(read_tenant_hosts)
+    done <<<"$tenant_hosts"
 
     # "in the same edit delete the zone wildcard" (§C edit 2)
     check_record 2 "*.${DOMAIN}" A absent ABSENT "$(wildcard_probe_label).${DOMAIN}"
@@ -339,17 +369,26 @@ edit_4b() {
     check_record 4b "$DOMAIN" MX not-exact '0 .'
 }
 
+# need_value <flag> <remaining-arg-count>
+# A value-taking flag given as the LAST argument used to die inside `shift 2`:
+# under `set -e` that is exit 1 with no message and no usage. Exit 1 means "an
+# assertion failed" in the house contract, so a truncated command line read as
+# a failed DNS check. Same helper, same shape as gremion-init-secrets.
+need_value() {
+    [ "$2" -ge 2 ] || { usage >&2; die "${1} requires a value" 2; }
+}
+
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            --domain)        DOMAIN="${2:-}"; shift 2 ;;
-            --edge-ip)       EDGE_IP="${2:-}"; shift 2 ;;
-            --edge-ip6)      EDGE_IP6="${2:-}"; shift 2 ;;
-            --mail-ip)       MAIL_IP="${2:-}"; shift 2 ;;
-            --mail-ip6)      MAIL_IP6="${2:-}"; shift 2 ;;
-            --edit)          EDIT="${2:-}"; shift 2 ;;
-            --tenant-hosts)  TENANT_HOSTS="${2:-}"; shift 2 ;;
-            --resolver)      RESOLVER="${2:-}"; shift 2 ;;
+            --domain)        need_value --domain "$#";       DOMAIN="$2"; shift 2 ;;
+            --edge-ip)       need_value --edge-ip "$#";      EDGE_IP="$2"; shift 2 ;;
+            --edge-ip6)      need_value --edge-ip6 "$#";     EDGE_IP6="$2"; shift 2 ;;
+            --mail-ip)       need_value --mail-ip "$#";      MAIL_IP="$2"; shift 2 ;;
+            --mail-ip6)      need_value --mail-ip6 "$#";     MAIL_IP6="$2"; shift 2 ;;
+            --edit)          need_value --edit "$#";         EDIT="$2"; shift 2 ;;
+            --tenant-hosts)  need_value --tenant-hosts "$#"; TENANT_HOSTS="$2"; shift 2 ;;
+            --resolver)      need_value --resolver "$#";     RESOLVER="$2"; shift 2 ;;
             -h|--help)       usage; exit 0 ;;
             *)               usage >&2; die "unknown option: $1" 2 ;;
         esac
@@ -367,7 +406,11 @@ require_args() {
     if [ -n "$TENANT_HOSTS" ] && [ ! -f "$TENANT_HOSTS" ]; then
         die "tenant-hosts file not found: ${TENANT_HOSTS}" 2
     fi
-    need_cmd dig
+    # Everything this program shells out to, not just the interesting one:
+    # dig queries, sed and tr normalise, grep filters the tenant list and cat
+    # prints the usage text. A program that preflights one of five fails half
+    # way through a run on a host missing the others.
+    need_cmd dig sed tr grep cat
 }
 
 main() {
