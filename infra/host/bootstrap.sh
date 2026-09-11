@@ -776,45 +776,106 @@ stage_firewall() {
 # ──────────────────────────────────────────────────────────────────────────
 # agent — gremion-hostd + the restricted deploy key
 # ──────────────────────────────────────────────────────────────────────────
+# assert_key_forced_only <authorized_keys-file> <rendered-forced-command-line>
+# The deploy key must be reachable ONLY through the forced command. Nothing in
+# sshd stops a SECOND entry for the same key sitting further down the file
+# without a `command=` prefix, and such an entry hands CI a full login shell on
+# this host — the forced command above it is never consulted.
+#
+# The check is on the KEY MATERIAL (the base64 blob), not on the line's last
+# field, and not on a fixed field index either. The previous form took "${line##* }",
+# which is the trailing COMMENT, so an unrestricted copy of the same key under
+# a different comment — or with no comment at all — counted as absent and this
+# guard could not fire.
+assert_key_forced_only() {
+    local ak="${1:-}" line="${2:-}" blob carriers forced
+    [[ -f "$ak" ]] || die "authorized_keys not found: ${ak}" 2
+    # NOT a fixed field index: the forced command itself contains a space
+    # ("… --ssh"), so awk's $3 is the key TYPE on a rendered line and the blob
+    # on a bare one. The key material is the first field that starts with the
+    # base64 of an SSH wire-format type string, which is always "AAAA".
+    blob="$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /^AAAA/) { print $i; exit } }' <<<"$line")"
+    [[ "$blob" == AAAA* ]] \
+        || die "could not read the key material out of the rendered forced-command line" 2
+
+    carriers="$(grep -cF -- "$blob" "$ak" 2>/dev/null || true)"
+    [[ "${carriers:-0}" -eq 1 ]] \
+        || die "the deploy key also appears in ${ak} without the forced command (${carriers:-0} line(s) carry the key material)"
+
+    forced="$(grep -cF -- "command=\"$(gremion_root)/bin/gremion-hostd --ssh\"" "$ak" 2>/dev/null || true)"
+    [[ "${forced:-0}" -eq 1 ]] \
+        || die "expected exactly one forced-command entry in ${ak}, found ${forced:-0}"
+    ok "the deploy key is reachable only through '$(gremion_root)/bin/gremion-hostd --ssh'"
+}
+
 stage_agent() {
     require_root
     local root; root="$(gremion_root)"
-    [[ -x "${root}/bin/gremion-hostd" ]] \
-        || die "precondition: ${root}/bin/gremion-hostd is not installed (release checkout)" 2
+
+    # This stage INSTALLS the agent, so its precondition is the SOURCE tree it
+    # installs from, not an already-installed program.
+    [[ -f "$SCRIPT_DIR/bin/gremion-hostd" ]] \
+        || die "precondition: $SCRIPT_DIR/bin/gremion-hostd is missing from the source tree" 2
+    [[ -f "$SCRIPT_DIR/lib/common.sh" ]] \
+        || die "precondition: $SCRIPT_DIR/lib/common.sh is missing from the source tree" 2
     [[ -n "${DEPLOY_PUBKEY_FILE}" ]] \
         || die "DEPLOY_PUBKEY_FILE is not set (pass --deploy-pubkey)" 2
 
-    local line ak
-    # Build the line BEFORE touching systemd: an invalid key file must fail
-    # before anything is installed.
+    local line
+    # Build the line BEFORE touching apt or systemd: an invalid key file must
+    # fail before anything is installed.
     line="$(authorized_keys_line "${DEPLOY_PUBKEY_FILE}")"
 
+    # socat is the per-connection front end for `gremion-hostd --socket`.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y socat >/dev/null
+    assert "socat on PATH" command -v socat
+
+    # bin/ and lib/ are installed as REAL FILES side by side: gremion-hostd
+    # resolves ../lib/common.sh from ${BASH_SOURCE[0]}, so a symlinked bin/
+    # would resolve to a directory that does not exist.
+    install -d -m 755 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/bin" "${root}/lib" "${root}/logs"
+    install -m 0755 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" \
+        "$SCRIPT_DIR/bin/gremion-hostd" "${root}/bin/gremion-hostd"
+    install -m 0644 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" \
+        "$SCRIPT_DIR/lib/common.sh" "${root}/lib/common.sh"
+    assert "gremion-hostd is executable" test -x "${root}/bin/gremion-hostd"
+    assert "common.sh is beside bin/" test -f "${root}/lib/common.sh"
+
     info "installing gremion-hostd.service"
+    # render_unit takes TWO arguments: the unit's NAME and the destination. A
+    # path as the first argument resolves ${TEMPLATE_DIR}/systemd/<abs path>,
+    # dies, and writes nothing.
     render_unit gremion-hostd.service /etc/systemd/system/gremion-hostd.service
     systemctl daemon-reload
     systemctl enable --now gremion-hostd.service
 
+    assert "gremion-hostd enabled at boot" systemctl is-enabled --quiet gremion-hostd.service
     assert "gremion-hostd is active" systemctl is-active --quiet gremion-hostd.service
-    [[ -S /run/gremion/hostd.sock ]] \
-        || die "gremion-hostd is active but /run/gremion/hostd.sock does not exist"
-    local mode grp
-    mode="$(stat -c '%a' /run/gremion/hostd.sock)"
-    grp="$(stat -c '%G' /run/gremion/hostd.sock)"
-    [[ "$mode" == "660" ]] || die "hostd.sock is mode ${mode}, expected 660"
-    [[ "$grp" == "${DEPLOY_USER}" ]] || die "hostd.sock group is ${grp}, expected ${DEPLOY_USER}"
-    ok "hostd.sock is ${grp} ${mode}"
+    # POST-CONDITION, not the exit code of systemctl: the socket must exist with
+    # the mode and group the control plane's container needs to open it.
+    local perms
+    perms="$(stat -c '%a %G' /run/gremion/hostd.sock 2>/dev/null || echo absent)"
+    [[ "$perms" == "660 ${DEPLOY_USER}" ]] \
+        && ok "hostd.sock is ${perms}" \
+        || die "hostd.sock is '${perms}', expected '660 ${DEPLOY_USER}'"
 
-    ak="/home/${DEPLOY_USER}/.ssh/authorized_keys"
-    touch "$ak"
-    grep -qxF "$line" "$ak" || printf '%s\n' "$line" >> "$ak"
-    chmod 600 "$ak"
+    # The deploy key's authorized_keys entry. Rewritten through a 0600 temp in
+    # the SAME directory: a plain `>` redirect creates the file with root's
+    # umask (0644), and sshd's StrictModes refuses a group-readable
+    # authorized_keys for the whole window before a later chmod lands.
+    local ak="/home/${DEPLOY_USER}/.ssh/authorized_keys"
+    install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "/home/${DEPLOY_USER}/.ssh"
+    [[ -f "$ak" ]] || install -m 0600 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" /dev/null "$ak"
+    install -m 0600 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" /dev/null "${ak}.tmp"
+    # Drop any previous forced-command entry (a rotated key leaves one behind)
+    # and re-add exactly one.
+    grep -vF 'gremion-hostd --ssh' "$ak" >> "${ak}.tmp" || true
+    printf '%s\n' "$line" >> "${ak}.tmp"
+    mv -f "${ak}.tmp" "$ak"
     chown "${DEPLOY_USER}:${DEPLOY_USER}" "$ak"
-    [[ "$(grep -cxF "$line" "$ak")" == "1" ]] \
-        || die "the forced-command deploy key is not present exactly once in ${ak}"
-    # The deploy key must never also be present unrestricted.
-    local bare; bare="${line##* }"
-    [[ "$(grep -cF "$bare" "$ak")" == "1" ]] \
-        || die "the deploy key also appears in ${ak} without the forced command"
+    chmod 0600 "$ak"
+
+    assert_key_forced_only "$ak" "$line"
     ok "deploy key installed, forced to '${root}/bin/gremion-hostd --ssh'"
 }
 
