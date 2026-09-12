@@ -232,6 +232,89 @@ gate_section() {
     fi
 }
 
+# A deploy.log line is written by infra/host/bin/gremion-deploy's log_step and
+# by nothing else. Its format is not "STEP n name ok": log_step prepends an
+# ISO-8601 timestamp, so every line begins with the date. A gate pattern
+# anchored at ^STEP therefore matches nothing — and the half of the proof that
+# counts FAILED steps then prints 0 on a deploy in which every step failed,
+# which is a guard that lies in the direction the gate exists to prevent.
+#
+# The fixture is produced by lifting log_step out of the real program and
+# running it. Writing a sample line here instead would only move the drift:
+# the gate's pattern would be checked against this file's idea of a log line
+# rather than the program's.
+real_deploy_log() {                              # <path to write>
+    local body
+    body="$(awk '/^log_step\(\) \{/ { inb = 1 }
+                 inb            { print }
+                 inb && /^\}/   { exit }' "${BIN_DIR}/gremion-deploy")"
+    [ -n "$body" ] || return 1
+    # shellcheck disable=SC2034  # DEPLOY_LOG is read by the eval'd log_step body,
+    # which shellcheck cannot see; empty means "print, do not append to a file".
+    ( DEPLOY_LOG=""; eval "$body"; log_step 3 checkout ok; log_step 4 render fail ) > "$1"
+}
+
+# Extracts the quoted regex from every grep the gate aims at deploy.log,
+# single- or double-quoted.
+deploy_log_patterns() {
+    grep -F 'deploy.log' "$GATE_TEXT" | grep -F 'grep' \
+        | sed -nE -e "s/.*grep[^']*'([^']*)'.*/\1/p" \
+                  -e 's/.*grep[^"]*"([^"]*)".*/\1/p'
+}
+
+@test "every deploy.log pattern the gate greps matches a line gremion-deploy writes" {
+    [ -f "$GATE_DOC" ]
+    [ -f "${BIN_DIR}/gremion-deploy" ]
+
+    local fixture="${BATS_TEST_TMPDIR}/deploy.log"
+    real_deploy_log "$fixture" || { echo "could not lift log_step out of gremion-deploy" >&2; return 1; }
+
+    # Positive control on the fixture: two lines, one ok, one fail. If log_step
+    # ever stops producing them this test must fail here, not silently pass
+    # because every pattern matched an empty file.
+    [ "$(wc -l < "$fixture")" -eq 2 ]
+    local ok_line fail_line
+    ok_line="$(sed -n 1p "$fixture")"
+    fail_line="$(sed -n 2p "$fixture")"
+    [[ "$ok_line" == *" ok" ]]
+    [[ "$fail_line" == *" fail" ]]
+
+    local re pats=() dead=() sees_fail=0
+    while IFS= read -r re; do
+        [ -n "$re" ] || continue
+        pats+=("$re")
+    done < <(deploy_log_patterns)
+
+    # Positive control on the extractor: the gate quotes an ok-count and a
+    # fail-count. Fewer than two means the extractor is reading nothing and
+    # the loop below would pass vacuously.
+    if [ "${#pats[@]}" -lt 2 ]; then
+        echo "found ${#pats[@]} deploy.log grep pattern(s) in the gate, expected at least 2" >&2
+        return 1
+    fi
+
+    for re in "${pats[@]}"; do
+        if ! grep -qE -- "$re" "$fixture"; then
+            dead+=("$re")
+        fi
+        if grep -qE -- "$re" <<<"$fail_line"; then
+            sees_fail=1
+        fi
+    done
+
+    if [ "${#dead[@]}" -ne 0 ]; then
+        echo "gate greps deploy.log with pattern(s) no real log line matches:" >&2
+        printf '  %s\n' "${dead[@]}" >&2
+        echo "a real line looks like: ${ok_line}" >&2
+        return 1
+    fi
+    if [ "$sees_fail" -ne 1 ]; then
+        echo "no deploy.log pattern in the gate matches a FAILED step — the fail-count proof would read 0 on a fully-failed deploy" >&2
+        echo "a real failed line looks like: ${fail_line}" >&2
+        return 1
+    fi
+}
+
 @test "no compose invocation in the gate uses -f, --profile or -p" {
     [ -f "$GATE_DOC" ]
     run grep -nE 'docker compose[^|#]*( -f | --profile | -p )' "$GATE_TEXT"

@@ -287,8 +287,13 @@ may only be passed after that has actually been done.
 ```bash
 gremion-fw-proof --scp-smtp-unblocked
 # must print: FW-PROOF: egress25-app=refused egress25-mail=allowed snat-mail=<mail bind address> docker-nat-table=present
-grep -cE '^STEP [0-9]+ [a-z-]+ ok$'   /opt/gremion/runtime/deploy.log   # 12
-grep -cE '^STEP [0-9]+ [a-z-]+ fail$' /opt/gremion/runtime/deploy.log   # 0
+# deploy.log lines are written by gremion-deploy's log_step as
+# "<ISO-8601 timestamp> STEP <n> <name> <ok|fail>", so both patterns below
+# require the leading space and must NOT be anchored at ^. An anchored
+# pattern matches nothing, and the fail-count then reads 0 on a deploy in
+# which every step failed.
+grep -cE ' STEP [0-9]+ [a-z-]+ ok$'   /opt/gremion/runtime/deploy.log   # 12
+grep -cE ' STEP [0-9]+ [a-z-]+ fail$' /opt/gremion/runtime/deploy.log   # 0
 grep -q '"auths": {[^}]' /home/gremion/.docker/config.json
 echo "auths-present exit=$?    # 1 means no registry credential survived the deploy"
 bats test/host                 # from a checkout of the deployed tag: every guard suite green
