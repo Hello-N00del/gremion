@@ -1,0 +1,378 @@
+#!/usr/bin/env bash
+#
+# gremion-hostd — the host's only remote command surface.
+#
+# WHY THIS EXISTS: the deploy transport must not be a shell. CI authenticates
+# with a key whose authorized_keys entry forces this program, and the control
+# plane talks to the same allow-list over a unix socket. A verb that is not in
+# the allow-list never reaches a program; a tag, colour or label that does not
+# match its pattern never reaches a program either. Nothing is eval'd, the
+# request line is split by the shell's word splitting with globbing disabled,
+# and every request is written to an append-only audit log before it runs.
+#
+# PROTOCOL (one request per connection, LF-terminated lines):
+#   TOKEN <value>        optional; the registry token for the command that
+#                        follows. Consumed silently, never logged, never
+#                        written to disk, handed to gremion-deploy on stdin.
+#   <CMD> [ARG...]       one verb from the allow-list. Its merged stdout+stderr
+#                        is streamed back, then a final line `EXIT <code>`.
+#   Only the first command line of a connection is executed.
+#
+# ALLOW-LIST
+#   noop                    prove the transport, run nothing
+#   deploy <dist-vX.Y.Z>    needs a TOKEN line, before it or as the next line
+#   switch <blue|green>
+#   rollback
+#   snapshot <label>
+#   verify [--colour <blue|green>]
+#   backup
+#
+# MODES
+#   --ssh      forced-command mode; $SSH_ORIGINAL_COMMAND when non-empty is the
+#              request line, otherwise the request is read from stdin.
+#   --socket   listen on $HOSTD_SOCKET (0660, group $HOSTD_SOCKET_GROUP).
+#   --serve    serve exactly one request on stdin/stdout (internal; what
+#              --socket hands each accepted connection).
+#
+# EXIT CODES  0 ok · 1 the invoked program failed · 2 usage, precondition or
+#             refusal · 3 the invoked program is blocked. 1 and 3 are passed
+#             through unchanged; the process status equals the EXIT line.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../lib/common.sh"
+
+readonly TAG_RE='^dist-v[0-9]+\.[0-9]+\.[0-9]+$'
+readonly COLOUR_RE='^(blue|green)$'
+readonly LABEL_RE='^[A-Za-z0-9._-]{1,64}$'
+readonly TOKEN_RE='^[A-Za-z0-9_.:-]{8,512}$'
+readonly MAX_LINE=4096
+
+HOSTD_SOCKET="${HOSTD_SOCKET:-/run/gremion/hostd.sock}"
+HOSTD_SOCKET_GROUP="${HOSTD_SOCKET_GROUP:-gremion}"
+HOSTD_SOCAT="${HOSTD_SOCAT:-socat}"
+
+MODE="none"
+LOG_FILE=""
+REQ_LINE=""
+PENDING_TOKEN=""
+
+# Protocol diagnostics go to stdout so the client sees them in order, ahead of
+# the EXIT line, on both transports.
+emit() { printf 'hostd: %s\n' "$*"; }
+
+# bad_usage <why> <usage-text>
+# A verb called with the wrong shape is a REFUSAL, not a typo: `backup && id`
+# reaches dispatch as the verb `backup` with the surplus words `&&` and `id`,
+# and the client must be told the surplus was not permitted rather than be left
+# to read a bare usage line as advice. Both lines are printed: the refusal names
+# what was rejected, the usage line names what would have been accepted.
+bad_usage() {
+    emit "not permitted: $1"
+    emit "usage: $2"
+}
+
+# ---------------------------------------------------------------------------
+# audit log
+# ---------------------------------------------------------------------------
+
+log_open() {
+    local dir
+    dir="$(gremion_root)/logs"
+    mkdir -p "$dir" 2>/dev/null || true
+    LOG_FILE="$dir/hostd.log"
+    if ! printf '' >>"$LOG_FILE" 2>/dev/null; then
+        emit "audit log is not writable: $LOG_FILE"
+        exit 2
+    fi
+}
+
+log_event() {
+    printf '%s mode=%s pid=%d %s\n' \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$MODE" "$$" "$*" >>"$LOG_FILE"
+}
+
+# ---------------------------------------------------------------------------
+# request reading and validation
+# ---------------------------------------------------------------------------
+
+# Reads one line into REQ_LINE. Returns 1 at end of input.
+read_request_line() {
+    local line="" rc=0
+    IFS= read -r line || rc=$?
+    if (( rc != 0 )) && [[ -z "$line" ]]; then
+        return 1
+    fi
+    REQ_LINE="${line%$'\r'}"
+    return 0
+}
+
+line_is_sane() {
+    local line="$1"
+    if (( ${#line} > MAX_LINE )); then
+        return 1
+    fi
+    case "$line" in
+        *[![:print:]]*) return 1 ;;
+    esac
+    return 0
+}
+
+# Answer a line that never reaches dispatch. Kept in one place so the two
+# readers (the stdin loop and the forced-command entry) cannot drift.
+reject_malformed() {
+    log_event 'REJECT reason=malformed'
+    emit "malformed request line"
+    log_event 'EXIT cmd="<malformed>" code=2'
+    printf 'EXIT %d\n' 2
+}
+
+take_token() {
+    local line="$1" value
+    if [[ "$line" != "TOKEN "* ]]; then
+        emit "expected: TOKEN <value>"
+        return 1
+    fi
+    value="${line#TOKEN }"
+    if [[ ! "$value" =~ $TOKEN_RE ]]; then
+        emit "refused token: shape"
+        return 1
+    fi
+    PENDING_TOKEN="$value"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# running an allowed program
+# ---------------------------------------------------------------------------
+
+# run_program <program> [args...] — stream merged output, return its status.
+# PATH has $(gremion_root)/bin prepended by main, so the host's own programs win.
+run_program() {
+    local prog="$1"; shift
+    if ! command -v "$prog" >/dev/null 2>&1; then
+        emit "$prog is not installed on this host"
+        return 2
+    fi
+    local rc=0
+    "$prog" "$@" 2>&1 || rc=$?
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# the allow-list
+# ---------------------------------------------------------------------------
+
+cmd_noop() {
+    if (( $# != 0 )); then bad_usage "noop takes no arguments" "noop"; return 2; fi
+    printf 'noop ok\n'
+    return 0
+}
+
+cmd_deploy() {
+    if (( $# != 1 )); then
+        bad_usage "deploy takes exactly one argument" "deploy <dist-vX.Y.Z>"
+        return 2
+    fi
+    local tag="$1"
+    if [[ ! "$tag" =~ $TAG_RE ]]; then emit "refused tag: $tag"; return 2; fi
+    if [[ -z "$PENDING_TOKEN" ]]; then
+        if ! read_request_line; then emit "deploy needs a TOKEN line"; return 2; fi
+        if ! take_token "$REQ_LINE"; then return 2; fi
+    fi
+    local rc=0
+    printf '%s\n' "$PENDING_TOKEN" | run_program gremion-deploy "$tag" || rc=$?
+    PENDING_TOKEN=""
+    return "$rc"
+}
+
+cmd_switch() {
+    if (( $# != 1 )); then
+        bad_usage "switch takes exactly one argument" "switch <blue|green>"
+        return 2
+    fi
+    if [[ ! "$1" =~ $COLOUR_RE ]]; then emit "refused colour: $1"; return 2; fi
+    local rc=0
+    run_program gremion-switch "$1" || rc=$?
+    return "$rc"
+}
+
+cmd_rollback() {
+    if (( $# != 0 )); then
+        bad_usage "rollback takes no arguments" "rollback"
+        return 2
+    fi
+    local rc=0
+    run_program gremion-rollback || rc=$?
+    return "$rc"
+}
+
+cmd_snapshot() {
+    if (( $# != 1 )); then
+        bad_usage "snapshot takes exactly one argument" "snapshot <label>"
+        return 2
+    fi
+    if [[ ! "$1" =~ $LABEL_RE ]]; then emit "refused label: $1"; return 2; fi
+    local rc=0
+    run_program gremion-snapshot "$1" || rc=$?
+    return "$rc"
+}
+
+cmd_verify() {
+    local -a args=()
+    if (( $# == 2 )); then
+        if [[ "$1" != "--colour" ]]; then
+            bad_usage "verify accepts only --colour" "verify [--colour <blue|green>]"
+            return 2
+        fi
+        if [[ ! "$2" =~ $COLOUR_RE ]]; then emit "refused colour: $2"; return 2; fi
+        args=( --colour "$2" )
+    elif (( $# != 0 )); then
+        bad_usage "verify accepts only --colour <blue|green>" "verify [--colour <blue|green>]"
+        return 2
+    fi
+    local rc=0
+    run_program gremion-verify "${args[@]}" || rc=$?
+    return "$rc"
+}
+
+cmd_backup() {
+    if (( $# != 0 )); then
+        bad_usage "backup takes no arguments" "backup"
+        return 2
+    fi
+    local rc=0
+    run_program gremion-backup || rc=$?
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# dispatch
+# ---------------------------------------------------------------------------
+
+dispatch() {
+    local line="$1"
+    local -a argv=()
+    set -f
+    # shellcheck disable=SC2206  # deliberate word splitting with globbing off
+    argv=( $line )
+    set +f
+    local cmd="${argv[0]:-}"
+    case "$cmd" in
+        noop)     cmd_noop     "${argv[@]:1}" ;;
+        deploy)   cmd_deploy   "${argv[@]:1}" ;;
+        switch)   cmd_switch   "${argv[@]:1}" ;;
+        rollback) cmd_rollback "${argv[@]:1}" ;;
+        snapshot) cmd_snapshot "${argv[@]:1}" ;;
+        verify)   cmd_verify   "${argv[@]:1}" ;;
+        backup)   cmd_backup   "${argv[@]:1}" ;;
+        "")       emit "empty request"; return 2 ;;
+        *)        emit "not permitted: $cmd"; return 2 ;;
+    esac
+}
+
+handle_line() {
+    local line="$1" rc=0 word
+    if ! line_is_sane "$line"; then
+        reject_malformed
+        return 2
+    fi
+    word="${line%% *}"
+    log_event "RECV cmd=\"$line\""
+    dispatch "$line" || rc=$?
+    log_event "EXIT cmd=\"$word\" code=$rc"
+    printf 'EXIT %d\n' "$rc"
+    return "$rc"
+}
+
+# serve_one [first-line] — serve exactly one request.
+serve_one() {
+    local first="${1:-}" rc=0
+    if [[ -n "$first" ]]; then
+        handle_line "${first%$'\r'}" || rc=$?
+        return "$rc"
+    fi
+    while read_request_line; do
+        if ! line_is_sane "$REQ_LINE"; then
+            reject_malformed
+            return 2
+        fi
+        if [[ "$REQ_LINE" == "TOKEN" || "$REQ_LINE" == "TOKEN "* ]]; then
+            log_event 'RECV cmd="TOKEN <redacted>"'
+            if ! take_token "$REQ_LINE"; then
+                log_event 'EXIT cmd="TOKEN" code=2'
+                printf 'EXIT %d\n' 2
+                return 2
+            fi
+            continue
+        fi
+        handle_line "$REQ_LINE" || rc=$?
+        return "$rc"
+    done
+    log_event 'REJECT reason=empty-request'
+    emit "empty request"
+    printf 'EXIT %d\n' 2
+    return 2
+}
+
+# ---------------------------------------------------------------------------
+# modes
+# ---------------------------------------------------------------------------
+
+mode_ssh() {
+    MODE="ssh"
+    log_open
+    local rc=0
+    serve_one "${SSH_ORIGINAL_COMMAND:-}" || rc=$?
+    return "$rc"
+}
+
+mode_serve() {
+    MODE="serve"
+    log_open
+    local rc=0
+    serve_one "" || rc=$?
+    return "$rc"
+}
+
+mode_socket() {
+    MODE="socket"
+    log_open
+    local dir
+    dir="$(dirname "$HOSTD_SOCKET")"
+    if [[ ! -d "$dir" ]]; then
+        die "socket directory $dir does not exist (the unit's RuntimeDirectory= owns it)" 2
+    fi
+    if ! command -v "$HOSTD_SOCAT" >/dev/null 2>&1; then
+        die "$HOSTD_SOCAT is not installed (bootstrap.sh 'agent' installs it)" 2
+    fi
+    # socat's EXEC address splits its argument on spaces, so an install path
+    # with whitespace would silently mis-spawn the per-connection handler.
+    case "$SCRIPT_DIR" in
+        *[[:space:]]*) die "install path contains whitespace: $SCRIPT_DIR" 2 ;;
+    esac
+    log_event "LISTEN socket=$HOSTD_SOCKET group=$HOSTD_SOCKET_GROUP"
+    exec "$HOSTD_SOCAT" \
+        "UNIX-LISTEN:${HOSTD_SOCKET},fork,unlink-early,mode=0660,group=${HOSTD_SOCKET_GROUP}" \
+        "EXEC:${SCRIPT_DIR}/gremion-hostd --serve,stderr"
+}
+
+main() {
+    PATH="$(gremion_root)/bin:$PATH"
+    export PATH
+    local rc=0
+    case "${1:-}" in
+        --ssh)    mode_ssh    || rc=$? ;;
+        --socket) mode_socket || rc=$? ;;
+        --serve)  mode_serve  || rc=$? ;;
+        *)
+            emit "usage: gremion-hostd --ssh | --socket | --serve"
+            rc=2
+            ;;
+    esac
+    return "$rc"
+}
+
+main "$@"

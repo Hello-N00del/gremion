@@ -1,0 +1,703 @@
+#!/usr/bin/env bash
+#
+# gremion-backup — §J of the netcup distribution-host design.
+#
+# Enumerates the artefact set FROM THE RUNNING SYSTEM (databases, state- and
+# mail-project volumes, object-storage buckets, /opt/gremion/etc minus the
+# per-tenant backup keys), stages it under $(gremion_root)/backups/current,
+# writes one restic snapshot, mirrors the repository off-site, verifies the
+# off-site copy by reading it back, writes runtime/last-backup.json and
+# reports to the alert channel on BOTH outcomes.
+#
+# Exit codes: 0 ok · 1 assertion/post-condition failed · 2 usage or missing
+#             precondition · 3 blocked on an external step.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+# 10 GiB floor for the very first run, when there is no previous size to
+# scale from. Not an env key: a floor the operator can lower is not a floor.
+BACKUP_FIRST_RUN_FLOOR_BYTES=10737418240
+BACKUP_FREE_FACTOR_NUM=3          # 1.5x expressed as 3/2 for integer maths
+BACKUP_FREE_FACTOR_DEN=2
+# Release snapshots are never forgotten by retention (§J). Past this many the
+# operator is told, in the log and on the alert channel's next report, which
+# exact command forgets one. Task 13 documents the same command.
+BACKUP_SNAPSHOT_CLASS_WARN_DEFAULT=20
+LABEL_RE='^[A-Za-z0-9._-]{1,64}$'
+
+# Report fields. Initialised before the EXIT trap is installed so a failure
+# in any phase still produces a complete report.
+OK=false
+OFFSITE=false
+DB_COUNT=0
+VOLUME_COUNT=0
+BUCKET_COUNT=0
+REPO_BYTES=0
+ARCHIVE_IMAGE_DIGEST=""
+DATABASES=""
+VOLUMES=""
+SNAP_BEFORE=""
+
+usage() {
+    cat >&2 <<'USAGE'
+usage: gremion-backup [--label L] [--class daily|snapshot]
+
+  --label L   restic tag label=L, [A-Za-z0-9._-]{1,64}
+              (default: auto-<UTC timestamp>)
+  --class C   daily    — subject to BACKUP_RETENTION_* forget/prune
+              snapshot — retained until forgotten explicitly
+              (default: daily)
+
+exit: 0 ok · 1 assertion failed · 2 usage/precondition · 3 blocked
+USAGE
+}
+
+parse_args() {
+    LABEL="auto-$(date -u +%Y%m%dT%H%M%SZ)"
+    CLASS="daily"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --label) [ $# -ge 2 ] || { usage; die "--label needs a value" 2; }
+                     LABEL="$2"; shift 2 ;;
+            --class) [ $# -ge 2 ] || { usage; die "--class needs a value" 2; }
+                     CLASS="$2"; shift 2 ;;
+            -h|--help) usage; exit 0 ;;
+            *) usage; die "unknown argument: $1" 2 ;;
+        esac
+    done
+    [[ "$LABEL" =~ $LABEL_RE ]] || die "invalid --label: ${LABEL}" 2
+    case "$CLASS" in
+        daily|snapshot) : ;;
+        *) die "invalid --class: ${CLASS}" 2 ;;
+    esac
+}
+
+# cmp and comm are in the list because this program uses them as guards (the
+# kernel-script copy check and the release-snapshot survival check); a missing
+# coreutils tool must be named here, not discovered mid-run.
+require_tools() {
+    need_cmd docker restic rclone rsync jq curl openssl awk find df du gzip cmp comm
+}
+
+load_state_env() {
+    STATE_ENV="$(gremion_root)/etc/env/state.env"
+    [ -f "$STATE_ENV" ] || die "missing ${STATE_ENV}" 2
+    load_env "$STATE_ENV"
+}
+
+# The five RCLONE_CONFIG_BACKUP_* keys are rclone's own env convention for the
+# `backup` remote. rclone does not fail on a missing one: it falls through to
+# ~/.config/rclone/rclone.conf, which the gremion user does not have, and the
+# error surfaces at the sync — after a full backup has been staged. They are
+# validated here so a half-configured remote fails before any work is done.
+require_keys() {
+    local k missing=()
+    for k in STACK COMPOSE_PROJECT_NAME COMPOSE_FILE POSTGRES_USER \
+             RESTIC_REPOSITORY RESTIC_PASSWORD RCLONE_REMOTE RCLONE_BUCKET \
+             RCLONE_REMOTE_PATH \
+             RCLONE_CONFIG_BACKUP_TYPE RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID \
+             RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY \
+             RCLONE_CONFIG_BACKUP_ENDPOINT RCLONE_CONFIG_BACKUP_REGION \
+             BACKUP_RETENTION_DAILY BACKUP_RETENTION_WEEKLY \
+             BACKUP_RETENTION_MONTHLY ALERT_WEBHOOK_URL; do
+        [ -n "${!k:-}" ] || missing+=("$k")
+    done
+    [ ${#missing[@]} -eq 0 ] \
+        || die "state.env is missing required keys: ${missing[*]}" 2
+    export RESTIC_REPOSITORY RESTIC_PASSWORD
+}
+
+# §J: "the remote is validated at start and its absence fails the run".
+assert_offsite_reachable() {
+    rclone lsd "${RCLONE_REMOTE}:${RCLONE_BUCKET}" >/dev/null 2>&1 \
+        || die "offsite remote unreachable: ${RCLONE_REMOTE}:${RCLONE_BUCKET}" 2
+    ok "offsite remote reachable: ${RCLONE_REMOTE}:${RCLONE_BUCKET}"
+}
+
+free_bytes() { df -P -B1 "$1" | awk 'NR==2 {print $4}'; }
+
+# Only a run that reported ok:true is a usable size baseline; a failed run's
+# repository size is whatever it managed to write before dying.
+last_ok_bytes() {
+    local rt f v
+    rt="$(gremion_root)/runtime"
+    for f in "${rt}/last-backup-daily.json" "${rt}/last-backup.json"; do
+        [ -f "$f" ] || continue
+        jq -e '.ok == true' "$f" >/dev/null 2>&1 || continue
+        v="$(jq -r '.bytes // 0' "$f")"
+        case "$v" in ''|*[!0-9]*) continue ;; esac
+        printf '%s\n' "$v"
+        return 0
+    done
+    printf '0\n'
+}
+
+required_free_bytes() {
+    local prev
+    prev="$(last_ok_bytes)"
+    if [ "$prev" -eq 0 ]; then
+        printf '%s\n' "$BACKUP_FIRST_RUN_FLOOR_BYTES"
+    else
+        printf '%s\n' "$(( prev * BACKUP_FREE_FACTOR_NUM / BACKUP_FREE_FACTOR_DEN ))"
+    fi
+}
+
+assert_free_space() {
+    local root free need
+    root="$(gremion_root)"
+    free="$(free_bytes "$root")"
+    need="$(required_free_bytes)"
+    [ "$free" -ge "$need" ] \
+        || die "free space ${free}B below required ${need}B on ${root}" 1
+    ok "free space ${free}B >= required ${need}B"
+}
+
+# `docker volume ls --filter label=A --filter label=B` ANDs the two labels, so
+# a single call with both projects returns the empty set. One call per project.
+project_volumes() { docker volume ls -q --filter "label=com.docker.compose.project=$1"; }
+
+external_volumes() {
+    printf '%s\n' "${STACK}_traefik_acme" "${STACK}_tenant_secrets" "${STACK}_mail_data"
+}
+
+# TASK 9, corrected against the brief: the "enumeration failed" condition is
+# read from the PROJECT queries alone. external_volumes is a static list that
+# is never empty, so a union that included it could never be empty either and
+# the §J refusal would be a guard that cannot fire.
+enumerate_project_volumes() {
+    { project_volumes "${STACK}-state"
+      project_volumes "${STACK}-mail"
+    } | sed '/^[[:space:]]*$/d'
+}
+
+assert_volume_enumeration() {
+    local v n project_vols
+    project_vols="$(enumerate_project_volumes)"
+    [ -n "$project_vols" ] || die "volume enumeration returned zero volumes" 1
+    VOLUMES="$( { printf '%s\n' "$project_vols"; external_volumes; } \
+                | sed '/^[[:space:]]*$/d' | sort -u )"
+    while read -r v <&3; do
+        [ -n "$v" ] || continue
+        docker volume inspect "$v" >/dev/null 2>&1 \
+            || die "enumerated volume absent: ${v}" 1
+    done 3<<<"$VOLUMES"
+    # grep -c prints the count AND exits 1 on zero, so it is guarded rather
+    # than allowed to kill the run under `set -e`.
+    n="$(printf '%s\n' "$VOLUMES" | grep -c . || true)"
+    ok "volumes enumerated: ${n:-0}"
+}
+
+# scripts/backup.sh runs from the driver root, so every relative element of
+# COMPOSE_FILE has to be re-anchored on the release tree.
+compose_file_abs() {
+    local out="" f
+    local IFS=':'
+    # shellcheck disable=SC2086  # deliberate word split on ':'
+    for f in ${COMPOSE_FILE}; do
+        case "$f" in /*) : ;; *) f="${RELEASE_DIR}/${f}" ;; esac
+        out="${out:+${out}:}${f}"
+    done
+    printf '%s\n' "$out"
+}
+
+# The kernel script resolves its own root as $(dirname "$0")/.. and reads .env
+# there, so it is driven from a generated root that holds a byte-identical
+# copy of it and an .env this script controls. Its restic phase is pointed at
+# a per-run scratch repository (its `forget --keep-within 30d --prune` would
+# otherwise delete this repository's weekly and monthly snapshots) and its
+# rclone phase is disabled with an empty RCLONE_BUCKET. Only its *.sql.gz
+# output, written into ${STAGE_DIR}/current, is consumed.
+run_kernel_dumps() {
+    local driver src scratch
+    driver="$(gremion_root)/runtime/kernel-backup"
+    src="${RELEASE_DIR}/scripts/backup.sh"
+    scratch="${driver}/scratch-repo"
+    [ -f "$src" ] || die "kernel dump script absent: ${src}" 2
+    rm -rf "$driver"
+    mkdir -p "${driver}/scripts" "$DUMP_DIR"
+    cp "$src" "${driver}/scripts/backup.sh"
+    cmp -s "$src" "${driver}/scripts/backup.sh" \
+        || die "kernel dump script copy differs from ${src}" 1
+    ( umask 077
+      cat >"${driver}/.env" <<ENV
+POSTGRES_USER=${POSTGRES_USER}
+BACKUP_DIR=${STAGE_DIR}
+RESTIC_REPOSITORY=${scratch}
+RESTIC_PASSWORD=$(openssl rand -hex 32)
+BACKUP_LOCAL_RETENTION_DAYS=1
+RESTIC_CHECK_SUBSET=1%
+RCLONE_BUCKET=
+COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+COMPOSE_FILE=$(compose_file_abs)
+ENV
+    )
+    ( cd "$driver" && bash scripts/backup.sh ) || die "kernel dump script failed" 1
+    rm -rf "$scratch" "${driver}/.env"
+    ok "kernel dumps complete in ${DUMP_DIR}"
+}
+
+postgres_services() {
+    # shellcheck disable=SC2086  # one service per word
+    printf '%s\n' ${BACKUP_POSTGRES_SERVICES:-postgres}
+}
+
+list_databases() {   # $1 = compose service name
+    ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
+        psql -U "$POSTGRES_USER" -tAc \
+        "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY 1" </dev/null ) \
+      | tr -d '\r' | sed '/^[[:space:]]*$/d'
+}
+
+# The server's own count of the same set, read separately so a truncated name
+# stream cannot pass unnoticed.
+list_database_count() {   # $1 = compose service name
+    ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
+        psql -U "$POSTGRES_USER" -tAc \
+        "SELECT count(*) FROM pg_database WHERE datallowconn AND NOT datistemplate" </dev/null ) \
+      | tr -d '\r' | sed '/^[[:space:]]*$/d'
+}
+
+# `docker compose exec -T` FORWARDS ITS STDIN into the container. Called from
+# inside `while read -r db; do … done <<<"$names"`, that stdin is the rest of
+# the database list, and the first database that actually needed a dump ate it:
+# the Step 25 integration run staged four of five databases and still reported
+# ok, because every database it still knew about had a dump. Two independent
+# fixes, because either alone is one forgotten redirect away from the same
+# silent data loss: every compose call is handed /dev/null, and every loop that
+# runs a command reads its list from fd 3.
+# TASK 9, review round 3: the write is ATOMIC. Writing the gzip stream straight
+# to its final name left a truncated-but-decompressible .sql.gz sitting exactly
+# where a finished dump belongs whenever a run was killed mid-dump
+# (TimeoutStartSec=6h, OOM, power loss), and dump_has_content cannot tell that
+# file from a complete one. The final name therefore only ever appears by mv of
+# a dump that ran to completion, and a pg_dump that fails says so by name.
+dump_database() {    # $1 = service, $2 = database
+    local dst tmp
+    dst="${DUMP_DIR}/$2.sql.gz"
+    tmp="${dst}.part"
+    rm -f "$tmp"
+    if ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
+            pg_dump -U "$POSTGRES_USER" "$2" </dev/null ) | gzip >"$tmp"; then
+        mv -f "$tmp" "$dst"
+    else
+        rm -f "$tmp"
+        die "pg_dump failed for database ${2} on service ${1}" 1
+    fi
+}
+
+# TASK 9, corrected against the brief: `gzip` of ZERO bytes is still a ~20-byte
+# file, so `[ -s dump.sql.gz ]` is true for a dump that contains nothing — the
+# coverage guard would pass on a pg_dump that produced no output at all. The
+# first decompressed byte is read instead; `head -c 1` keeps it O(1) on a
+# multi-gigabyte dump, and the pipeline is guarded because head's early exit
+# gives gzip a SIGPIPE that `set -o pipefail` would otherwise turn into a
+# silent abort.
+dump_has_content() {   # $1 = path to a .sql.gz
+    local n
+    [ -f "$1" ] || return 1
+    n="$(gzip -dc "$1" 2>/dev/null | head -c 1 | wc -c || true)"
+    n="${n//[!0-9]/}"
+    [ "${n:-0}" -ge 1 ]
+}
+
+# scripts/backup.sh covers keycloak, gremion and control. Everything else the
+# running server reports — per-tenant t_* and leaf databases (§J) — is dumped
+# here, into the same staging directory.
+# TASK 9, from the Step 25 integration run: `docker compose exec -T` handed its
+# last database name back WITHOUT a trailing newline once in five real runs,
+# and a `while read` over a process substitution DROPS an unterminated final
+# line — four of five databases were staged and the run still reported ok. The
+# enumeration is therefore captured first (a here-string always terminates its
+# last line, and a failing psql becomes a loud die instead of an empty stream)
+# and checked against the server's own count.
+dump_remaining_databases() {
+    local svc db names n_names n_count count=0
+    DATABASES=""
+    while read -r svc <&3; do
+        [ -n "$svc" ] || continue
+        names="$(list_databases "$svc")" \
+            || die "database enumeration failed for service ${svc}" 1
+        n_names="$(printf '%s\n' "$names" | grep -c . || true)"
+        n_names="${n_names:-0}"
+        n_count="$(list_database_count "$svc")" || n_count=""
+        n_count="${n_count//[!0-9]/}"
+        # An enumeration that produced nothing is the refusal of section J; a
+        # name list that is merely SHORTER than the server's own count is the
+        # truncation the integration run hit. Both fail, with the message that fits.
+        [ "$n_names" -gt 0 ] || die "database enumeration returned zero databases" 1
+        # The count query is a second, independent observation: a mismatch
+        # fails the run by number rather than quietly staging one database
+        # fewer.
+        [ -n "$n_count" ] && [ "$n_names" -eq "$n_count" ] \
+            || die "database enumeration truncated: ${n_names} name(s) for service ${svc}, server reports ${n_count:-<no count>}" 1
+        # Names, not only a count: the Step 25 integration run reported four
+        # databases for a server that had five, and a count alone cannot be
+        # triaged after the fact.
+        info "databases enumerated for ${svc}: $(printf '%s' "$names" | tr '\n' ' ')"
+        while read -r db <&3; do
+            [ -n "$db" ] || continue
+            DATABASES="${DATABASES}${db}"$'\n'
+            dump_has_content "${DUMP_DIR}/${db}.sql.gz" || dump_database "$svc" "$db"
+            count=$(( count + 1 ))
+        done 3<<<"$names"
+    done 3<<<"$(postgres_services)"
+    [ "$count" -gt 0 ] || die "database enumeration returned zero databases" 1
+    DB_COUNT="$count"
+}
+
+assert_dump_coverage() {
+    local db
+    while read -r db <&3; do
+        [ -n "$db" ] || continue
+        dump_has_content "${DUMP_DIR}/${db}.sql.gz" \
+            || die "no dump for enumerated database: ${db}" 1
+    done 3<<<"$DATABASES"
+    ok "every enumerated database has a non-empty dump (${DB_COUNT})"
+}
+
+archive_volumes() {
+    local v img
+    img="${BACKUP_ARCHIVE_IMAGE:-alpine:3.22}"
+    mkdir -p "${DUMP_DIR}/volumes"
+    docker pull --quiet "$img" >/dev/null 2>&1 \
+        || die "cannot pull archive image ${img}" 1
+    # Record what actually ran, resolved from the running engine, so the
+    # report names a digest and not a tag that moved.
+    ARCHIVE_IMAGE_DIGEST="$(docker image inspect \
+        --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$img")"
+    [ -n "$ARCHIVE_IMAGE_DIGEST" ] \
+        || die "archive image ${img} resolves to no repo digest" 1
+    VOLUME_COUNT=0
+    while read -r v <&3; do
+        [ -n "$v" ] || continue
+        docker run --rm -v "${v}:/v:ro" -v "${DUMP_DIR}/volumes:/out" "$img" \
+            tar -cf "/out/${v}.tar" -C /v . \
+            || die "archive failed for volume ${v}" 1
+        [ -s "${DUMP_DIR}/volumes/${v}.tar" ] \
+            || die "empty archive for volume ${v}" 1
+        VOLUME_COUNT=$(( VOLUME_COUNT + 1 ))
+    done 3<<<"$VOLUMES"
+    ok "archived ${VOLUME_COUNT} volume(s) with ${ARCHIVE_IMAGE_DIGEST}"
+}
+
+# MINIO_ENDPOINT is the host-reachable (loopback-published) endpoint; the mc
+# container runs on the host network so both tools use the same address.
+mirror_buckets() {
+    local k mc_host buckets b
+    BUCKET_COUNT=0
+    if [ -z "${MINIO_ENDPOINT:-}" ]; then
+        info "MINIO_ENDPOINT unset: object storage not in use (N11); file data is covered by the volume class (§J)"
+        return 0
+    fi
+    for k in BACKUP_MC_IMAGE MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
+        [ -n "${!k:-}" ] || die "MINIO_ENDPOINT is set but ${k} is not" 2
+    done
+    mc_host="MC_HOST_gremion=${MINIO_ENDPOINT%%://*}://${MINIO_ACCESS_KEY}:${MINIO_SECRET_KEY}@${MINIO_ENDPOINT#*://}"
+    # Guarded assignment: an enumeration that FAILS must say so, not exit the
+    # program silently on the assignment's own status under `set -e`.
+    buckets="$(docker run --rm --network host -e "$mc_host" \
+        "${BACKUP_MC_IMAGE}" ls gremion --json 2>/dev/null \
+        | jq -r 'select(.type == "folder") | .key' | tr -d '/' | sed '/^[[:space:]]*$/d')" \
+        || die "bucket enumeration failed against ${MINIO_ENDPOINT}" 1
+    [ -n "$buckets" ] \
+        || die "MINIO_ENDPOINT is set but bucket enumeration returned nothing" 1
+    mkdir -p "${DUMP_DIR}/buckets"
+    while read -r b <&3; do
+        [ -n "$b" ] || continue
+        RCLONE_CONFIG_MINIO_TYPE=s3 \
+        RCLONE_CONFIG_MINIO_PROVIDER=Minio \
+        RCLONE_CONFIG_MINIO_ENDPOINT="${MINIO_ENDPOINT}" \
+        RCLONE_CONFIG_MINIO_ACCESS_KEY_ID="${MINIO_ACCESS_KEY}" \
+        RCLONE_CONFIG_MINIO_SECRET_ACCESS_KEY="${MINIO_SECRET_KEY}" \
+        rclone sync "minio:${b}" "${DUMP_DIR}/buckets/${b}" \
+            --transfers 4 --checkers 8 --quiet \
+            || die "bucket mirror failed: ${b}" 1
+        BUCKET_COUNT=$(( BUCKET_COUNT + 1 ))
+    done 3<<<"$buckets"
+    ok "mirrored ${BUCKET_COUNT} bucket(s)"
+}
+
+# TASK 9, review round 3: $(gremion_root)/backups/current is a PERSISTENT host
+# path that no phase cleared, so `dump_has_content ... || dump_database ...` was
+# a cross-RUN cache rather than a same-run one. The kernel script rewrites
+# keycloak/gremion/control unconditionally every night, so those three were
+# safe - but every OTHER database, i.e. exactly the per-tenant t_* databases and
+# the leaf databases section J requires, was dumped ONCE on the first successful
+# run and skipped on every run after it, forever, while the run printed
+# `databases=N ok=true`. assert_dump_coverage shares the predicate, so it could
+# only ever fail on total absence, never on staleness. The staged tree is
+# therefore emptied wholesale before anything is produced - the pattern copy_etc
+# already uses for etc/ - so every artefact under current/ is made by the run
+# that reports it, and an artefact the running system no longer has (a dropped
+# tenant's dump, a removed volume's archive) cannot ride along for ever.
+# Deliberately AFTER the preconditions: a run that refuses to start must leave
+# the previous night's staged tree intact as a local restore source.
+reset_stage_dir() {
+    rm -rf "$DUMP_DIR"
+    mkdir -p "$DUMP_DIR"
+    # Post-condition read from the filesystem, not from rm's exit code. The
+    # find is checked too: a guard whose own command failed would report an
+    # empty tree for every tree there is.
+    local leftover
+    leftover="$(find "$DUMP_DIR" -mindepth 1 -print -quit)" \
+        || die "cannot inspect the staged tree: ${DUMP_DIR}" 1
+    [ -z "$leftover" ] \
+        || die "staged tree not empty after reset: ${DUMP_DIR}" 1
+    info "staged tree emptied: ${DUMP_DIR}"
+}
+
+# Two patterns on purpose: the first is the §J wording, the second closes the
+# depth hole — `secrets/tenants/*.backup-key` does not match a key one
+# directory deeper, and rotated keys live in per-tenant subdirectories.
+ETC_EXCLUDES=( --exclude 'secrets/tenants/*.backup-key' --exclude '*.backup-key' )
+
+copy_etc() {
+    local src dst
+    src="$(gremion_root)/etc"
+    dst="${DUMP_DIR}/etc"
+    rm -rf "$dst"
+    mkdir -p "$dst"
+    rsync -a --delete "${ETC_EXCLUDES[@]}" "${src}/" "${dst}/" \
+        || die "etc copy failed" 1
+    assert_no_backup_keys "$dst"
+}
+
+# Reads the produced tree, so it holds whatever route a key took to get there.
+assert_no_backup_keys() {
+    local found
+    found="$(find "$1" -name '*.backup-key' -print 2>/dev/null | head -n 5)"
+    if [ -n "$found" ]; then
+        bad "backup-key present in staged tree:"
+        printf '%s\n' "$found" >&2
+        die "per-tenant backup keys must never enter a backup (N21)" 1
+    fi
+    ok "no *.backup-key in the staged etc tree"
+}
+
+restic_init_if_absent() {
+    restic snapshots --quiet >/dev/null 2>&1 && return 0
+    info "initialising restic repository at ${RESTIC_REPOSITORY}"
+    restic init --quiet || die "restic init failed" 1
+}
+
+snapshot_ids_of_class() {   # $1 = daily|snapshot
+    restic snapshots --tag "class=$1" --json | jq -r '.[].short_id' | sort
+}
+
+snapshot_class_count() {
+    restic snapshots --tag "class=snapshot" --json | jq 'length'
+}
+
+restic_run() {
+    restic backup "$DUMP_DIR" \
+        --tag "label=${LABEL}" --tag "class=${CLASS}" \
+        --compression max --quiet \
+        || die "restic backup failed" 1
+    # Post-condition read from the repository, not restic's exit code.
+    restic snapshots --tag "label=${LABEL}" --json | jq -e 'length >= 1' >/dev/null \
+        || die "no restic snapshot carries label=${LABEL} after backup" 1
+    ok "restic snapshot present for label=${LABEL}"
+}
+
+# §J: release snapshots are kept until an explicit forget, so retention is
+# scoped to class=daily and never sees them. Nothing in this plan forgets a
+# class=snapshot: that is the operator procedure warn_snapshot_class_
+# accumulation prints and docs/ops/host-tooling.md documents.
+restic_forget_daily() {
+    if [ "$CLASS" != daily ]; then
+        info "class=${CLASS}: retention untouched (release snapshots are forgotten explicitly)"
+        return 0
+    fi
+    restic forget --tag "class=daily" \
+        --keep-daily "$BACKUP_RETENTION_DAILY" \
+        --keep-weekly "$BACKUP_RETENTION_WEEKLY" \
+        --keep-monthly "$BACKUP_RETENTION_MONTHLY" \
+        --prune --quiet \
+        || die "restic forget failed" 1
+}
+
+assert_release_snapshots_survived() {
+    local after missing
+    after="$(snapshot_ids_of_class snapshot)"
+    missing="$(comm -23 \
+        <(printf '%s\n' "$SNAP_BEFORE" | sed '/^[[:space:]]*$/d') \
+        <(printf '%s\n' "$after"       | sed '/^[[:space:]]*$/d'))"
+    [ -z "$missing" ] \
+        || die "retention dropped release snapshot(s): $(printf '%s' "$missing" | tr '\n' ' ' | sed 's/ $//')" 1
+    ok "every class=snapshot restic snapshot survived retention"
+}
+
+restic_check() {
+    restic check --read-data-subset=5% --quiet || die "restic check failed" 1
+    ok "restic check passed (5% read-data subset)"
+}
+
+mirror_offsite() {
+    rclone sync "$RESTIC_REPOSITORY" \
+        "${RCLONE_REMOTE}:${RCLONE_BUCKET}/${RCLONE_REMOTE_PATH}" \
+        --transfers 4 --checkers 8 --stats-one-line --quiet \
+        || die "offsite sync failed" 1
+    # N14: a missing off-site copy is a failure. Read the remote back rather
+    # than trusting the sync's exit code.
+    rclone lsjson "${RCLONE_REMOTE}:${RCLONE_BUCKET}/${RCLONE_REMOTE_PATH}" \
+        | jq -e '[.[] | select(.Name == "config")] | length == 1' >/dev/null \
+        || die "offsite copy has no restic config object after sync" 1
+    OFFSITE=true
+    ok "offsite copy verified at ${RCLONE_REMOTE}:${RCLONE_BUCKET}/${RCLONE_REMOTE_PATH}"
+}
+
+# Retention is class=daily-scoped and gremion-rollback (Task 12) runs no
+# restic command, so class=snapshot snapshots are forgotten by the operator
+# and by nobody else. Past the threshold, print the command that does it —
+# the same one docs/ops/host-tooling.md carries. Never fails the run: a
+# release backlog is an operator task, not a reason to lose tonight's backup.
+warn_snapshot_class_accumulation() {
+    local n limit
+    limit="${BACKUP_SNAPSHOT_CLASS_WARN:-$BACKUP_SNAPSHOT_CLASS_WARN_DEFAULT}"
+    n="$(snapshot_class_count)"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    if [ "$n" -gt "$limit" ]; then
+        bad "BACKUP-WARN: ${n} class=snapshot restic snapshots retained (threshold ${limit}); retention never forgets them"
+        bad "BACKUP-WARN: forget one with: restic -r ${RESTIC_REPOSITORY} forget --tag class=snapshot --tag label=<label> --prune"
+        return 0
+    fi
+    ok "class=snapshot snapshots retained: ${n} (threshold ${limit})"
+}
+
+# Runs from the EXIT trap, where nothing may be fatal. Under `set -euo pipefail`
+# a bare `mkdir` or `jq | atomic_write` that fails here ends the trap handler AT
+# THAT LINE: post_alert never runs — breaking §J's "reports to the alert channel
+# on BOTH outcomes" — and the process exits with mkdir's or cat's status instead
+# of the backup's, which is the code systemd and Task 15's runbook read. Every
+# step is therefore guarded and a report that could not be written is REPORTED,
+# by returning non-zero, never thrown.
+write_report() {
+    local rt f
+    rt="$(gremion_root)/runtime"
+    if ! mkdir -p "$rt"; then
+        bad "BACKUP-REPORT: cannot create ${rt} — report not written"
+        return 1
+    fi
+    # The repository may not exist yet: the run can die long before restic.
+    REPO_BYTES="$(du -sb "$RESTIC_REPOSITORY" 2>/dev/null | cut -f1)" || REPO_BYTES=""
+    case "$REPO_BYTES" in ''|*[!0-9]*) REPO_BYTES=0 ;; esac
+    f="${rt}/last-backup.json"
+    if ! jq -n \
+       --arg     ts        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+       --argjson ok        "$OK" \
+       --arg     lbl       "$LABEL" \
+       --arg     class     "$CLASS" \
+       --argjson databases "$DB_COUNT" \
+       --argjson volumes   "$VOLUME_COUNT" \
+       --argjson buckets   "$BUCKET_COUNT" \
+       --argjson offsite   "$OFFSITE" \
+       --argjson bytes     "$REPO_BYTES" \
+       '{ts:$ts, ok:$ok, label:$lbl, class:$class,
+         artefacts:{databases:$databases, volumes:$volumes, buckets:$buckets},
+         offsite:$offsite, bytes:$bytes}' \
+      | atomic_write "$f" 600; then
+        bad "BACKUP-REPORT: cannot write ${f} — report not written"
+        return 1
+    fi
+    # Only a successful daily is a baseline: gremion-snapshot compares artefact
+    # classes against it and required_free_bytes scales from its size.
+    if [ "$OK" = true ] && [ "$CLASS" = daily ]; then
+        if ! cp "$f" "${rt}/last-backup-daily.json"; then
+            bad "BACKUP-REPORT: cannot write ${rt}/last-backup-daily.json"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+post_alert() {   # $1 = exit code being reported
+    local body host
+    host="${HOSTNAME:-unknown}"
+    # jq builds the body. The printf fallback is what makes this the report of
+    # last resort: if jq is what broke the run, an alert with an empty body
+    # tells the operator nothing. LABEL is regex-validated and CLASS is one of
+    # two literals, so neither can break the hand-built JSON; a host name that
+    # is not plainly alphanumeric is reported as "unknown" rather than risking
+    # a body the alert channel cannot parse.
+    body="$(jq -n --argjson ok "$OK" --arg lbl "$LABEL" --arg class "$CLASS" \
+                  --argjson exit "$1" --arg host "$host" \
+            '{event:"backup", ok:$ok, label:$lbl, class:$class, exit:$exit, host:$host}')" \
+      || {
+        case "$host" in ''|*[!A-Za-z0-9._-]*) host=unknown ;; esac
+        body="$(printf '{"event":"backup","ok":%s,"label":"%s","class":"%s","exit":%s,"host":"%s"}' \
+                  "$OK" "$LABEL" "$CLASS" "$1" "$host")"
+    }
+    if printf '%s' "$body" | curl -fsS --max-time 15 -X POST \
+         -H 'Content-Type: application/json' --data-binary @- \
+         "$ALERT_WEBHOOK_URL" >/dev/null 2>&1; then
+        ok "alert delivered (ok=${OK})"
+        return 0
+    fi
+    bad "BACKUP-ALERT: delivery failed to ALERT_WEBHOOK_URL"
+    return 1
+}
+
+on_exit() {
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then OK=true; else OK=false; fi
+    trap - EXIT
+    # The report write is guarded and the alert is unconditional: §J requires a
+    # report on BOTH outcomes, and a report that could not be written is exactly
+    # what the operator has to hear about. A failed write escalates only a run
+    # that otherwise succeeded — the next run's free-space baseline and
+    # gremion-snapshot's artefact-class comparison both read that file, so a
+    # missing one is not a clean run — and never overwrites a more specific code.
+    if ! write_report; then
+        if [ "$rc" -eq 0 ]; then rc=1; fi
+    fi
+    if ! post_alert "$rc"; then
+        # An undeliverable report is a failure in its own right, but it must
+        # not overwrite a more specific code: the Step 25 integration run
+        # reported 1 for an unreachable off-site remote, hiding the 2 that
+        # said WHY the run stopped.
+        if [ "$rc" -eq 0 ]; then rc=1; fi
+    fi
+    exit "$rc"
+}
+
+main() {
+    parse_args "$@"
+    require_tools
+    load_state_env
+    require_keys
+    # From here every exit path reports: §J requires a report on BOTH outcomes,
+    # and an unreachable remote is the failure most worth hearing about.
+    trap on_exit EXIT
+    RELEASE_DIR="${GREMION_RELEASE_DIR:-$(gremion_root)/current}"
+    [ -d "$RELEASE_DIR" ] || die "release tree absent: ${RELEASE_DIR}" 2
+    # BACKUP_DIR for the kernel dump script; DUMP_DIR is the staged tree that
+    # restic backs up and that gremion-restore-into (Task 10) finds by the
+    # path '*/backups/current'. There is no 'staging/' level.
+    STAGE_DIR="$(gremion_root)/backups"
+    DUMP_DIR="${STAGE_DIR}/current"
+    assert_offsite_reachable
+    assert_free_space
+    assert_volume_enumeration
+    reset_stage_dir
+    run_kernel_dumps
+    dump_remaining_databases
+    assert_dump_coverage
+    archive_volumes
+    mirror_buckets
+    copy_etc
+    restic_init_if_absent
+    SNAP_BEFORE="$(snapshot_ids_of_class snapshot)"
+    restic_run
+    restic_forget_daily
+    assert_release_snapshots_survived
+    restic_check
+    warn_snapshot_class_accumulation
+    mirror_offsite
+    printf 'BACKUP: label=%s class=%s databases=%s volumes=%s buckets=%s offsite=%s ok=true\n' \
+        "$LABEL" "$CLASS" "$DB_COUNT" "$VOLUME_COUNT" "$BUCKET_COUNT" "$OFFSITE"
+}
+
+main "$@"
