@@ -44,11 +44,15 @@ jobs:
       - name: Install yamllint
         run: pip install yamllint
 
+      # One home for the rule. This step used to repeat a shellcheck argument
+      # list that `make lint-sh` also carried, and the two drifted: ci.yml
+      # linted docker/legal/entrypoint.sh and the Makefile did not, while the
+      # Makefile linted the pre-commit hook and nats-test.sh and ci.yml did not
+      # -- so a local `make lint` and a CI run disagreed about which files were
+      # checked. test/host/no-host-literals.bats fails if this step stops
+      # delegating. make is preinstalled on ubuntu-latest.
       - name: Lint shell scripts
-        run: |
-          shellcheck -x scripts/*.sh
-          shellcheck -x docker/postgres/init-databases.sh
-          shellcheck -x docker/legal/entrypoint.sh
+        run: make lint-sh
 
       - name: Lint YAML files
         run: |
@@ -495,12 +499,23 @@ jobs:
         run: |
           # Install envsubst (needed by legal.bats template rendering tests)
           sudo apt-get install -y gettext-base
+          # shellcheck and yamllint are needed by test/host/deploy-workflow.bats,
+          # which runs in THIS job. Both of its checks say "CI installs it" and
+          # then `skip` when the tool is absent -- true of the Lint job, which
+          # does not run bats, and false of this one until now. A guard that
+          # skips is a guard that passes, so the two assertions about the deploy
+          # workflow's extracted shell blocks and its YAML were never executed.
+          sudo apt-get install -y shellcheck
+          pip install yamllint
           sudo npm install -g bats
 
+      # Same reason as the Lint job's shell step: `make test-unit` globs
+      # test/*.bats and test/host/*.bats, so a new bats file is collected here
+      # the day it lands rather than the day someone remembers to extend a list
+      # in two places. test/host/no-host-literals.bats fails if this step stops
+      # delegating.
       - name: Run unit tests
-        run: |
-          bats test/setup.bats test/backup.bats test/restore.bats \
-            test/configure-keycloak.bats test/legal.bats
+        run: make test-unit
 
   # ──────────────────────────────────────────────────────────────────────────
   # Job 3: Docker build validation.
