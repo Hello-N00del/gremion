@@ -8,6 +8,8 @@ BACKUP="${PROJECT_ROOT}/infra/host/bin/gremion-backup"
 SNAPSHOT="${PROJECT_ROOT}/infra/host/bin/gremion-snapshot"
 BOOTSTRAP="${PROJECT_ROOT}/infra/host/bootstrap.sh"
 UNIT_DIR="${PROJECT_ROOT}/infra/host/templates/systemd"
+INIT_SECRETS="${PROJECT_ROOT}/infra/host/bin/gremion-init-secrets"
+STATE_TMPL="${PROJECT_ROOT}/infra/host/templates/env/state.env.tmpl"
 
 # ---------------------------------------------------------------------------
 # bootstrap base stage: the backup tooling is a host package, not a container
@@ -251,6 +253,91 @@ shim_baseline() {
     run "$BACKUP"
     [ "$status" -eq 2 ]
     [[ "$output" == *"release tree absent"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# T1 <-> T9: require_keys vs the state.env the render path ACTUALLY produces
+#
+# write_state_env above is a HAND-BUILT baseline, and a hand-built baseline is
+# free to declare a key templates/env/state.env.tmpl does not. It did: it set
+# RCLONE_CONFIG_BACKUP_REGION directly, so every test in this file passed while
+# gremion-init-secrets could not render that key at all and every real run
+# refused at the precondition. Nothing in the render/test chain surfaced it.
+#
+# Three tests close the seam: two drive the program against the RENDERED file,
+# and the third compares require_keys' own list against the template so the
+# next drift in either direction goes red without a live host.
+# ---------------------------------------------------------------------------
+
+# render_real_state_env — throw the hand-built fixture away, put the state.env
+# gremion-init-secrets actually renders in its place, then do the one thing the
+# operator does before the first run: give every CHANGE_ME_OPERATOR_ sentinel a
+# value. It only ever REPLACES a value, never adds a key, so a key the template
+# does not declare stays undeclared and require_keys gets to say so.
+render_real_state_env() {
+    "$INIT_SECRETS" --root "$GREMION_ROOT" --stack staging --force >/dev/null
+    local f="${GREMION_ROOT}/etc/env/state.env"
+    [ -f "$f" ]
+    sed -i 's/^\([A-Za-z_][A-Za-z0-9_]*\)=CHANGE_ME_OPERATOR_[A-Za-z0-9_]*$/\1=operator-filled/' "$f"
+    # Post-condition on the fixture itself, scoped to KEY=VALUE lines the way
+    # load_env's own gate is: with a sentinel left in a VALUE the tests below
+    # would be assertions about that gate rather than about require_keys. The
+    # template's prose explains the sentinel shapes and mentions CHANGE_ME_ in
+    # comments, which is why this cannot be a bare grep for the token.
+    ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME_' "$f"
+}
+
+# require_keys_list — the key list require_keys itself iterates, read out of
+# the program text so the guard cannot hold a stale copy of it.
+require_keys_list() {
+    sed -n '/^require_keys() {/,/^}/p' "$BACKUP" \
+        | sed -n '/for k in /,/; do$/p' \
+        | grep -oE '\b[A-Z][A-Z0-9_]*\b' \
+        | sort -u
+}
+
+@test "the precondition passes against the state.env gremion-init-secrets renders" {
+    shim_baseline
+    render_real_state_env
+    run "$BACKUP"
+    [[ "$output" != *"missing required keys"* ]] || { echo "$output"; return 1; }
+    # A POSITIVE post-condition, not just the absence of a message: this line
+    # comes from assert_offsite_reachable, the first phase after require_keys,
+    # so it is proof the precondition was both reached and passed. Without it
+    # the assertion above would also pass for a program that died earlier.
+    [[ "$output" == *"offsite remote reachable: backup:"* ]] || { echo "$output"; return 1; }
+}
+
+@test "a key dropped from the RENDERED state.env is named by the precondition" {
+    # Keeps the test above honest from the other side: require_keys is reached
+    # with the rendered file as the fixture, and it still fails loudly there.
+    shim_baseline
+    render_real_state_env
+    drop_state_key RCLONE_REMOTE_PATH
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"missing required keys: RCLONE_REMOTE_PATH"* ]]
+}
+
+@test "every key require_keys demands is declared by state.env.tmpl" {
+    local keys anchor key
+    keys="$(require_keys_list)"
+    # Extraction self-check FIRST: a range sed that matched nothing would leave
+    # the loop below iterating an empty list and passing without asserting a
+    # thing. STACK is the first token of require_keys' list and
+    # ALERT_WEBHOOK_URL the last, so matching both proves the whole loop header
+    # was captured, not a prefix of it.
+    for anchor in STACK ALERT_WEBHOOK_URL RESTIC_REPOSITORY; do
+        printf '%s\n' "$keys" | grep -qx "$anchor" \
+            || { echo "extraction broke: no ${anchor} in require_keys' list"; return 1; }
+    done
+    # A floor, not the exact count — the list holds 18 keys today and may
+    # legitimately gain one; a partial extraction is what this catches.
+    [ "$(printf '%s\n' "$keys" | wc -l)" -ge 15 ]
+    for key in $keys; do
+        grep -qE "^${key}=" "$STATE_TMPL" \
+            || { echo "require_keys demands ${key}; state.env.tmpl never declares it"; return 1; }
+    done
 }
 
 # ---------------------------------------------------------------------------
