@@ -511,12 +511,21 @@ ci_job_block() {  # $1 = job id
 # Both of its skip messages say "CI installs it" -- which was true of the Lint
 # job, which runs no bats, and false of the job that actually runs the suite. A
 # guard that skips is a guard that passes, so this pins the install.
+#
+# Only yamllint is required. An install line for the shell linter is NOT (and
+# this comment does not start with its name, because a comment that does is
+# parsed as a malformed directive -- SC1072/SC1073 -- by the tool itself): the
+# ubuntu-24.04 runner image ships it as an apt package (actions/runner-images,
+# images/ubuntu/Ubuntu2404-Readme.md, "Installed apt packages", version
+# 0.9.0-1), so deploy-workflow.bats's shell-block assertion runs in this job
+# without one, and demanding one would be this task inventing a requirement
+# neither its brief nor its assignment carries. yamllint is not in that image
+# as an apt package and is the tool the assignment names.
 @test "the CI unit-test job installs what the host suites need to not skip" {
   local block
   block="$(ci_job_block unit-test)"
   [ -n "$block" ]
   [[ "$block" == *"Run unit tests"* ]]   # vacuity: this really is that job
-  [[ "$block" == *"shellcheck"* ]]
   [[ "$block" == *"yamllint"* ]]
   [[ "$block" == *"gettext-base"* ]]
   [[ "$block" == *"bats"* ]]

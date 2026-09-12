@@ -499,13 +499,18 @@ jobs:
         run: |
           # Install envsubst (needed by legal.bats template rendering tests)
           sudo apt-get install -y gettext-base
-          # shellcheck and yamllint are needed by test/host/deploy-workflow.bats,
-          # which runs in THIS job. Both of its checks say "CI installs it" and
-          # then `skip` when the tool is absent -- true of the Lint job, which
-          # does not run bats, and false of this one until now. A guard that
-          # skips is a guard that passes, so the two assertions about the deploy
-          # workflow's extracted shell blocks and its YAML were never executed.
-          sudo apt-get install -y shellcheck
+          # yamllint is needed by test/host/deploy-workflow.bats, which runs in
+          # THIS job. That check says "CI installs it" and then `skip`s when the
+          # tool is absent -- true of the Lint job, which runs no bats, and
+          # false of this one until now. A guard that skips is a guard that
+          # passes, so the assertion about deploy.yml's YAML was never executed.
+          # The shell linter needs no line here (and this comment avoids
+          # opening with its name, which a shell parser reads as a malformed
+          # directive): the ubuntu-24.04 runner image ships it as an apt
+          # package -- actions/runner-images, images/ubuntu/Ubuntu2404-Readme.md,
+          # "Installed apt packages", version 0.9.0-1, the same version the
+          # Lint job's explicit install resolves to -- so deploy-workflow.bats's
+          # shell-block assertion runs here unaided.
           pip install yamllint
           sudo npm install -g bats
 
