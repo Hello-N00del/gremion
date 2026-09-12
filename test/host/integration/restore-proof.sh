@@ -343,10 +343,49 @@ grep -q "BLOCKED: restore.sh cannot target 'shared'" <<<"$RED4" || die "no BLOCK
     || die "a blocked snapshot still created the 'shared' database in instance B"
 info "RED 4 observed: $(grep -m1 'BLOCKED: restore.sh cannot target' <<<"$RED4")"
 
+# The neuter's live decision and its post-condition must apply the SAME rule as
+# the env rewrite, which retargets an SMTP host key by NAME whatever its value
+# is. A relay host that is not mail.example.org — an internal service name, a
+# raw IP, a third-party relay — is invisible to a value-only test. Here it also
+# cannot be cleaned up by the recreate, because the key is set IN THE
+# COMPOSITION rather than in the env file the rewrite owns, so the
+# post-condition read from the running container is the only thing left that can
+# catch it. Without it the program recreates nothing, prints
+# "docker exec env clean" and exits 0 while the container still relays.
+info "RED 5: a non-mail.example.org SMTP host in a running container must fail the neuter"
+awk '{print; if (index($0, "SMTP_HOST: ${SMTP_HOST:-null-sink}")) print "      EMAIL_HOST: 203.0.113.25"}' \
+    "${B}/current/docker-compose.yml" >"${WORK}/b-red5.yml"
+grep -q 'EMAIL_HOST: 203.0.113.25' "${WORK}/b-red5.yml" \
+    || die "RED 5 fixture: the composition was not amended"
+cp "${WORK}/b-red5.yml" "${B}/current/docker-compose.yml"
+icompose "$B" up -d --force-recreate nextcloud >/dev/null
+NCB="$(icompose "$B" ps -q nextcloud)"
+NCENV="$(docker exec "$NCB" env)"
+grep -q '^EMAIL_HOST=203.0.113.25$' <<<"$NCENV" \
+    || die "RED 5 fixture: the running container does not carry the relay host"
+set +e
+RED5="$("${BIN}/gremion-neuter" --stack proofb --root "$B" --release "${B}/current" 2>&1)"
+RC5=$?
+set -e
+[[ $RC5 -eq 1 ]] || die "expected exit 1 on a non-sink SMTP host in a running container, got ${RC5}"
+grep -q "EMAIL_HOST still names 203.0.113.25, not the null sink null-sink" <<<"$RED5" \
+    || die "the post-condition did not name the surviving relay host"
+grep -q "live mail/token value(s) survive neutering" <<<"$RED5" \
+    || die "no offender summary"
+# the same run PROVES the live decision too: the env-file key was recreated away
+NCB="$(icompose "$B" ps -q nextcloud)"
+NCENV="$(docker exec "$NCB" env)"
+grep -q '^SMTP_HOST=null-sink$' <<<"$NCENV" \
+    || die "RED 5: the recreate did not run, so the drill proved only half the rule"
+info "RED 5 observed: $(grep -m1 'EMAIL_HOST still names' <<<"$RED5")"
+grep -v 'EMAIL_HOST: 203.0.113.25' "${B}/current/docker-compose.yml" >"${WORK}/b-ok.yml"
+cp "${WORK}/b-ok.yml" "${B}/current/docker-compose.yml"
+icompose "$B" up -d --force-recreate nextcloud >/dev/null
+
 info "restoring: re-neutering instance B"
 "${BIN}/gremion-neuter" --stack proofb --root "$B" >/dev/null
 NCB="$(icompose "$B" ps -q nextcloud)"
 NCENV="$(docker exec "$NCB" env)"
 grep -q '^SMTP_HOST=null-sink$' <<<"$NCENV" \
     || die "re-neuter did not restore the null sink in the running container"
-info "RESTORE-PROOF INTEGRATION: green (4 guards watched RED and restored)"
+info "RESTORE-PROOF INTEGRATION: green (5 guards watched RED and restored)"

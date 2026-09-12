@@ -135,22 +135,45 @@ assert_mail_project_down() {
     ok "no ${STACK}-mail container is running"
 }
 
+# ── ONE definition of "neutered" ───────────────────────────────────────────
+# NEUTERED_VALUE is the value a key MUST carry once this program has run.
+# rewrite_env_stream writes it into the env files; env_line_is_live compares a
+# RUNNING container's env line against it. Both go through neutered_value_for,
+# so the file rewrite, the decision which services to recreate and the
+# post-condition cannot drift apart. A narrower rule in either of the latter two
+# leaves a container relaying through a host whose env file was already rewritten
+# to the sink underneath it, while this program prints "ok" — which is exactly
+# what the value-only test (does it name mail.${PLATFORM_DOMAIN}?) did to an
+# SMTP_HOST holding an internal service name, a raw IP or a third-party relay.
+NEUTERED_VALUE=""
+ENV_LIVE_REASON=""
+
+# neutered_value_for <key> <value> — sets NEUTERED_VALUE. A setter rather than a
+# command substitution: it runs once per env line of every container, and $( )
+# would fork for each one.
+neutered_value_for() {
+    local key="$1" val="$2"
+    if [[ "$key" =~ $NEUTER_TOKEN_KEYS_RE ]]; then
+        NEUTERED_VALUE=""
+    elif [[ "$key" =~ $NEUTER_HOST_KEYS_RE ]]; then
+        NEUTERED_VALUE="$NULL_SINK_HOST"
+    elif [[ "$key" =~ $NEUTER_PORT_KEYS_RE ]]; then
+        NEUTERED_VALUE="$NULL_SINK_PORT"
+    elif [[ "$val" == *"${MAIL_HOST}"* ]]; then
+        NEUTERED_VALUE="$NULL_SINK_HOST"
+    else
+        NEUTERED_VALUE="$val"
+    fi
+}
+
 # stdin: an env file · stdout: the neutered env file (comments and order kept)
 rewrite_env_stream() {
     local line key val
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
             key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
-            if [[ "$key" =~ $NEUTER_TOKEN_KEYS_RE ]]; then
-                val=""
-            elif [[ "$key" =~ $NEUTER_HOST_KEYS_RE ]]; then
-                val="$NULL_SINK_HOST"
-            elif [[ "$key" =~ $NEUTER_PORT_KEYS_RE ]]; then
-                val="$NULL_SINK_PORT"
-            elif [[ "$val" == *"${MAIL_HOST}"* ]]; then
-                val="$NULL_SINK_HOST"
-            fi
-            printf '%s=%s\n' "$key" "$val"
+            neutered_value_for "$key" "$val"
+            printf '%s=%s\n' "$key" "$NEUTERED_VALUE"
         else
             printf '%s\n' "$line"
         fi
@@ -212,11 +235,44 @@ container_env() {
     esac
 }
 
+# Does this env line of a RUNNING container still carry something the rewrite
+# would have changed? THE definition of "live" — used both to pick the services
+# to recreate (find_affected) and to assert the post-condition
+# (assert_env_clean), never copied into either of them. ENV_LIVE_REASON carries
+# WHY, so the post-condition can name the offending value without a second,
+# narrower set of rules of its own.
+#
+# One deliberate carve-out from neutered_value_for: an EMPTY value is never
+# live. It reaches nothing, it is the rule the token arm has always applied
+# (`-n "$val"`), and a key that the COMPOSITION supplies empty cannot be changed
+# by any recreate — treating it as live would make the post-condition
+# unsatisfiable rather than fail-closed.
 env_line_is_live() {   # <key> <value>
     local key="$1" val="$2"
-    if [[ "$val" == *"${MAIL_HOST}"* ]]; then return 0; fi
-    if [[ "$key" =~ $NEUTER_TOKEN_KEYS_RE ]] && [[ -n "$val" ]]; then return 0; fi
-    return 1
+    ENV_LIVE_REASON=""
+    # The real relay is live WHATEVER else is configured, and this test comes
+    # first for that reason: an operator who points --null-sink-host at
+    # mail.${PLATFORM_DOMAIN} has asked for a sink that is the real thing, and a
+    # container naming it is never clean — the one place this function is
+    # deliberately STRICTER than the env rewrite, which writes the sink host the
+    # operator chose. (The restore proof's RED 3 is exactly this case.)
+    if [[ "$val" == *"${MAIL_HOST}"* ]]; then
+        ENV_LIVE_REASON="still names ${MAIL_HOST}"
+        return 0
+    fi
+    neutered_value_for "$key" "$val"
+    [[ "$val" != "$NEUTERED_VALUE" ]] || return 1
+    [[ -n "$val" ]] || return 1
+    if [[ "$key" =~ $NEUTER_TOKEN_KEYS_RE ]]; then
+        ENV_LIVE_REASON="still carries a value"
+    elif [[ "$key" =~ $NEUTER_PORT_KEYS_RE ]]; then
+        ENV_LIVE_REASON="still carries port ${val}, not the null sink port ${NULL_SINK_PORT}"
+    elif [[ "$key" =~ $NEUTER_HOST_KEYS_RE ]]; then
+        ENV_LIVE_REASON="still names ${val}, not the null sink ${NULL_SINK_HOST}"
+    else
+        ENV_LIVE_REASON="still carries ${val}, which the env rewrite would have changed"
+    fi
+    return 0
 }
 
 # ${STACK}-app-blue -> app-blue ; ${STACK}-state -> state
@@ -398,13 +454,11 @@ assert_env_clean() {
             || die "cannot read the environment of ${service} (${id})" 1
         while IFS= read -r line; do
             key="${line%%=*}"; val="${line#*=}"
-            if [[ "$val" == *"${MAIL_HOST}"* ]]; then
-                bad "${service}: ${key} still names ${MAIL_HOST}"
-                offenders=$((offenders + 1))
-                continue
-            fi
-            if [[ "$key" =~ $NEUTER_TOKEN_KEYS_RE ]] && [[ -n "$val" ]]; then
-                bad "${service}: ${key} still carries a value"
+            # env_line_is_live, never a second copy of its rules: the rewrite,
+            # the recreate decision and this post-condition must agree on what
+            # "live" means or a rewritten env file hides a live container.
+            if env_line_is_live "$key" "$val"; then
+                bad "${service}: ${key} ${ENV_LIVE_REASON}"
                 offenders=$((offenders + 1))
             fi
         done <<<"$envtext"

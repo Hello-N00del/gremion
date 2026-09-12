@@ -461,3 +461,158 @@ exit 0'
     grep -q '^KEYCLOAK_SMTP_HOST=mail.example.org$' "${GREMION_ROOT}/etc/env/state.env"
     refute_recorded docker "force-recreate"
 }
+
+# ---------------------------------------------------------------------------
+# Round-4 finding: ONE definition of "live", shared by the file rewrite, the
+# recreate decision and the post-condition.
+#
+# rewrite_env_stream retargets an SMTP host/port key by NAME
+# (NEUTER_HOST_KEYS_RE, NEUTER_PORT_KEYS_RE) whatever its value is. The
+# recreate decision (env_line_is_live, via find_affected) and the documented
+# post-condition (assert_env_clean) used to ask a NARROWER question — does the
+# VALUE contain mail.${PLATFORM_DOMAIN}, or is the key a token key — so a
+# running container whose SMTP_HOST/EMAIL_HOST/SMTP_SERVER held anything else
+# (an internal service name, a raw IP, a third-party relay) was never selected
+# for recreation and never flagged as an offender, while its env file had been
+# rewritten to the null sink underneath it: the program printed
+# "docker exec env clean" and "NEUTER: ... ok" while the container kept
+# relaying through the real host from memory. Task 1's own
+# infra/host/templates/env/ops.env.tmpl ships exactly such a pair
+# (ALERT_SMTP_HOST=<the operator's relay>, ALERT_SMTP_PORT=587).
+
+# One ui container whose live mail values never name mail.example.org: a
+# third-party relay host and a submission port. The recreate picks up the
+# rewritten env file, so after it the container carries the sink.
+shim_docker_relay() {
+    shim docker '
+args="$*"
+clean="$GREMION_ROOT/runtime/.cleaned"
+case "$args" in
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*)
+      echo "cid-ui stg-app-blue gremion-ui"
+      echo "cid-pg stg-state postgres"
+      exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "inspect -f {{.State.Running}} cid-ui") echo true; exit 0 ;;
+  "exec cid-ui env")
+      echo "PATH=/usr/bin"
+      if [ -f "$clean" ]; then
+        echo "ALERT_SMTP_HOST=null-sink"; echo "ALERT_SMTP_PORT=1025"; exit 0
+      fi
+      echo "ALERT_SMTP_HOST=relay.mailprovider.example.net"
+      echo "ALERT_SMTP_PORT=587"
+      exit 0 ;;
+  "exec cid-pg env") echo "PATH=/usr/bin"; exit 0 ;;
+  *"up -d --force-recreate"*)
+      if [ ! -f docker-compose.yml ]; then
+        echo "COMPOSE_FILE is invalid from this cwd" >&2; exit 1
+      fi
+      : >"$clean"; exit 0 ;;
+  *"ps -q gremion-ui"*) echo cid-ui; exit 0 ;;
+  *"ps -q postgres"*)   echo cid-pg; exit 0 ;;
+  *to_regclass*) echo f; exit 0 ;;
+  *) exit 0 ;;
+esac'
+}
+
+# A ui container whose mail key CANNOT be fixed by a recreate, because the value
+# comes from the composition rather than from the env file the rewrite owns:
+# whatever runtime/.stuck-env holds is what `docker exec cid-ui env` answers,
+# before and after the recreate. The post-condition read from the running
+# container is therefore the only thing left that can catch it.
+shim_docker_stuck() {
+    shim docker '
+args="$*"
+case "$args" in
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*)
+      echo "cid-ui stg-app-blue gremion-ui"
+      echo "cid-pg stg-state postgres"
+      exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "inspect -f {{.State.Running}} cid-ui") echo true; exit 0 ;;
+  "exec cid-ui env")
+      echo "PATH=/usr/bin"; cat "$GREMION_ROOT/runtime/.stuck-env"; exit 0 ;;
+  "exec cid-pg env") echo "PATH=/usr/bin"; exit 0 ;;
+  *"up -d --force-recreate"*) exit 0 ;;
+  *"ps -q gremion-ui"*) echo cid-ui; exit 0 ;;
+  *"ps -q postgres"*)   echo cid-pg; exit 0 ;;
+  *to_regclass*) echo f; exit 0 ;;
+  *) exit 0 ;;
+esac'
+}
+
+# WATCH IT FAIL: the recreate decision. A relay host that is not
+# mail.${PLATFORM_DOMAIN} is still a live mail host, and the env file has just
+# been rewritten to the sink underneath the running container.
+@test "gremion-neuter recreates a container whose live SMTP host is not mail.example.org" {
+    shim_docker_relay
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    assert_recorded docker "--env-file ${GREMION_ROOT}/etc/env/app-blue.env up -d --force-recreate gremion-ui"
+    [[ "$output" == *"recreated in stg-app-blue: gremion-ui"* ]]
+    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=0 containers=2 ok"* ]]
+}
+
+# WATCH IT FAIL: the post-condition. A raw IP in an SMTP host key is a value no
+# mail.example.org substring can see.
+@test "gremion-neuter exits 1 when a container still carries a non-sink SMTP host" {
+    printf '%s\n' "EMAIL_HOST=203.0.113.25" >"${GREMION_ROOT}/runtime/.stuck-env"
+    shim_docker_stuck
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"gremion-ui: EMAIL_HOST still names 203.0.113.25, not the null sink null-sink"* ]]
+    [[ "$output" == *"live mail/token value(s) survive neutering"* ]]
+}
+
+# WATCH IT FAIL: the port arm on its own — the host key is already the sink, so
+# only the port can fail this run.
+@test "gremion-neuter exits 1 when a container still carries a non-sink SMTP port" {
+    printf '%s\n' "SMTP_HOST=null-sink" "KEYCLOAK_SMTP_PORT=587" \
+        >"${GREMION_ROOT}/runtime/.stuck-env"
+    shim_docker_stuck
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"gremion-ui: KEYCLOAK_SMTP_PORT still carries port 587, not the null sink port 1025"* ]]
+}
+
+# The other direction: "live" must not widen into "anything the rewrite would
+# touch". An EMPTY host, port or token key reaches nothing — the rule the token
+# arm has always applied — and a key the composition supplies empty cannot be
+# changed by any recreate, so treating it as live would make the post-condition
+# unsatisfiable. Such a container is neither recreated nor flagged.
+@test "gremion-neuter treats an empty or already-sunk mail key as clean" {
+    printf '%s\n' "SMTP_HOST=null-sink" "SMTP_PORT=1025" "EMAIL_HOST=" \
+        "SMTP_SERVER=" "INSTAGRAM_ACCESS_TOKEN=" >"${GREMION_ROOT}/runtime/.stuck-env"
+    shim_docker_stuck
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no running container carried a live value"* ]]
+    [[ "$output" == *"docker exec env clean on 2 container(s)"* ]]
+    refute_recorded docker "force-recreate"
+}
+
+# WATCH IT FAIL: the real relay is live whatever the sink is said to be. The
+# restore proof's RED 3 drives the env assert by pointing --null-sink-host AT
+# mail.example.org, so neither the rewrite nor the recreate can clean the value
+# up and only the post-condition can catch it. A "live" rule expressed purely as
+# "the rewrite would change this" loses that case — the rewrite writes the sink
+# host the operator asked for, and the value already equals it. The integration
+# found this; the unit suite pins it here.
+@test "gremion-neuter flags the real mail host even when the sink is pointed at it" {
+    printf '%s\n' "SMTP_HOST=mail.example.org" >"${GREMION_ROOT}/runtime/.stuck-env"
+    shim_docker_stuck
+    run "$NEUTER" --stack stg --null-sink-host mail.example.org
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"gremion-ui: SMTP_HOST still names mail.example.org"* ]]
+    [[ "$output" == *"live mail/token value(s) survive neutering"* ]]
+}
