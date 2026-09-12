@@ -332,10 +332,19 @@ neuter_registry_rows() {
         info "control database has no tenant table; no registry row to rewrite"
         return 0
     fi
-    sql="UPDATE tenant SET domain_profile = jsonb_set(domain_profile, '{services,smtp,host}', to_jsonb('${NULL_SINK_HOST}'::text), false), updated_at = now() WHERE domain_profile #>> '{services,smtp,host}' IS NOT NULL AND domain_profile #>> '{services,smtp,host}' <> '${NULL_SINK_HOST}';"
+    # The count of rewritten rows comes from the QUERY, never from psql's
+    # completion tag: `-q` suppresses "UPDATE n" entirely, so parsing the tag
+    # reported rows=0 after a genuine rewrite (review round 2). The CTE asks the
+    # server how many rows it wrote and prints that number as a normal result.
+    sql="WITH rewritten AS (UPDATE tenant SET domain_profile = jsonb_set(domain_profile, '{services,smtp,host}', to_jsonb('${NULL_SINK_HOST}'::text), false), updated_at = now() WHERE domain_profile #>> '{services,smtp,host}' IS NOT NULL AND domain_profile #>> '{services,smtp,host}' <> '${NULL_SINK_HOST}' RETURNING 1) SELECT count(*) FROM rewritten;"
     ROWS_REWRITTEN="$(docker exec -i "$cid" psql -tAq -v ON_ERROR_STOP=1 -U "$user" -d "$db" \
-                        -c "$sql" | sed -n 's/^UPDATE //p')"
-    ROWS_REWRITTEN="${ROWS_REWRITTEN:-0}"
+                        -c "$sql")" \
+        || die "the control registry rewrite failed on database ${db}" 1
+    ROWS_REWRITTEN="${ROWS_REWRITTEN//[$'\r\n\t ']/}"
+    # A count that cannot be read is a hard failure, never a silent 0: a restore
+    # proof that reports rows=0 after rewriting rows is a post-condition lying.
+    [[ "$ROWS_REWRITTEN" =~ ^[0-9]+$ ]] || \
+        die "unreadable rewritten-row count from database ${db}: ${ROWS_REWRITTEN}" 1
     live="$(docker exec -i "$cid" psql -tAq -v ON_ERROR_STOP=1 -U "$user" -d "$db" \
               -c "SELECT count(*) FROM tenant WHERE domain_profile #>> '{services,smtp,host}' IS NOT NULL AND domain_profile #>> '{services,smtp,host}' <> '${NULL_SINK_HOST}';")"
     live="${live//[^0-9]/}"

@@ -175,7 +175,9 @@ case "$args" in
   *"ps -q postgres"*)   echo cid-pg; exit 0 ;;
   *"node -"*) cat >/dev/null; echo "changed=2 live=0"; exit 0 ;;
   *to_regclass*) echo t; exit 0 ;;
-  *"UPDATE tenant"*) exit 0 ;;
+  # the rewrite asks the server for its own row count and gets it: this
+  # fixture has no tenant row carrying a live host, so the answer is 0.
+  *"UPDATE tenant"*) echo 0; exit 0 ;;
   *"SELECT count(*) FROM tenant"*) echo 0; exit 0 ;;
   *) exit 0 ;;
 esac'
@@ -311,4 +313,61 @@ esac'
     run "$NEUTER" --stack stg
     [ "$status" -eq 1 ]
     [[ "$output" == *"3 tenant config file(s) still name a live SMTP host"* ]]
+}
+
+# --- review round 2: the rewritten-row count must be the REAL count ----------
+#
+# `psql -q` suppresses the "UPDATE n" completion tag entirely, so a program that
+# parses that tag reports 0 after genuinely rewriting rows. This shim behaves
+# like the real psql: a bare UPDATE prints NOTHING, and only a query that asks
+# the server for its own row count sees the number. The count the shim serves
+# lives in runtime/.rowcount so one shim can drive both the happy path and the
+# unreadable-count guard.
+shim_docker_rows() {
+    shim docker '
+args="$*"
+sql=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-c" ]; then sql="$a"; fi
+  prev="$a"
+done
+case "$args" in
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*) echo "cid-pg stg-state postgres"; exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "exec cid-pg env") echo "PATH=/usr/bin"; exit 0 ;;
+  *"ps -q postgres"*) echo cid-pg; exit 0 ;;
+esac
+case "$sql" in
+  *to_regclass*)            echo t; exit 0 ;;
+  UPDATE*)                  exit 0 ;;
+  WITH*RETURNING*count*)    cat "$GREMION_ROOT/runtime/.rowcount"; exit 0 ;;
+  *"count(*) FROM tenant"*) echo 0; exit 0 ;;
+esac
+exit 0'
+}
+
+@test "gremion-neuter reports the real number of registry rows it rewrote" {
+    echo 6 >"${GREMION_ROOT}/runtime/.rowcount"
+    shim_docker_rows
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"control registry rows rewritten: 6"* ]]
+    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=6 containers=1 ok"* ]]
+    # the count is asked of the server; psql -q never prints the "UPDATE n" tag
+    assert_recorded docker "RETURNING"
+}
+
+# WATCH IT FAIL: a count that cannot be read is a hard failure, never a silent
+# 0 — a restore proof that reports rows=0 after rewriting rows is a lie.
+@test "gremion-neuter exits 1 when the rewritten-row count cannot be read" {
+    printf 'ERROR:  relation "tenant" does not exist\n' >"${GREMION_ROOT}/runtime/.rowcount"
+    shim_docker_rows
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"unreadable rewritten-row count"* ]]
 }
