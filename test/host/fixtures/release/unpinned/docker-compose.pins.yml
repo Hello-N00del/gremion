@@ -1,0 +1,7 @@
+services:
+  gremion-ui:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-ui:dist-v1.2.3
+  gremion-public:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-public@sha256:2222222222222222222222222222222222222222222222222222222222222222

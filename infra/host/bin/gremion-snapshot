@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# gremion-snapshot — the pre-release backup of §F.4.5.
+#
+# It is gremion-backup with a release label and the snapshot retention class,
+# plus §F.4.5's abort condition: "A snapshot that produces fewer artefact
+# classes than the last scheduled backup aborts the deploy."
+#
+# Retention never forgets a class=snapshot snapshot; forgetting one is the
+# operator procedure in docs/ops/host-tooling.md ("Forgetting a release
+# snapshot"), which gremion-backup also prints past its warn threshold.
+#
+# Exit codes: 0 ok · 1 assertion failed · 2 usage/precondition · 3 blocked.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+LABEL_RE='^[A-Za-z0-9._-]{1,64}$'
+
+usage() {
+    cat >&2 <<'USAGE'
+usage: gremion-snapshot <label>
+
+  <label>  release tag or other label, [A-Za-z0-9._-]{1,64}
+
+Runs: gremion-backup --label <label> --class snapshot
+Then asserts every artefact class is at least the last successful daily's.
+
+exit: 0 ok · 1 assertion failed · 2 usage/precondition · 3 blocked
+USAGE
+}
+
+assert_class_counts_not_below_last_daily() {
+    local rt now base k n b
+    rt="$(gremion_root)/runtime"
+    now="${rt}/last-backup.json"
+    base="${rt}/last-backup-daily.json"
+    [ -f "$now" ] || die "no snapshot report at ${now}" 1
+    jq -e '.ok == true' "$now" >/dev/null \
+        || die "snapshot report at ${now} is not ok" 1
+    if [ ! -f "$base" ]; then
+        info "no prior daily backup: artefact-class comparison skipped"
+        return 0
+    fi
+    for k in databases volumes buckets; do
+        n="$(jq -r ".artefacts.${k}" "$now")"
+        b="$(jq -r ".artefacts.${k}" "$base")"
+        [ "$n" -ge "$b" ] \
+            || die "snapshot artefact class ${k}: ${n} < last daily ${b}" 1
+    done
+    ok "artefact classes >= last daily (databases/volumes/buckets)"
+}
+
+main() {
+    case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+    [ $# -eq 1 ] || { usage; die "exactly one <label> argument required" 2; }
+    local label="$1"
+    [[ "$label" =~ $LABEL_RE ]] || die "invalid label: ${label}" 2
+    "${SCRIPT_DIR}/gremion-backup" --label "$label" --class snapshot
+    assert_class_counts_not_below_last_daily
+    printf 'SNAPSHOT: label=%s ok=true\n' "$label"
+}
+
+main "$@"

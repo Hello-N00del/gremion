@@ -503,7 +503,9 @@ exit 0'
 }
 
 @test "agent and timers refuse to run before their binaries exist" {
-    grep -qF 'precondition: ${root}/bin/gremion-hostd is not installed' "$BOOTSTRAP"
+    # Task 4 rewrote stage_agent: it installs gremion-hostd itself, so the agent
+    # stage now asserts the SOURCE file, not an already-installed binary.
+    grep -qF 'precondition: $SCRIPT_DIR/bin/gremion-hostd is missing from the source tree' "$BOOTSTRAP"
     grep -qF 'precondition: ${root}/bin/${b} is not installed' "$BOOTSTRAP"
 }
 

@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+#
+# gremion-rollback — spec A §F.5, the two rollback classes.
+#
+#   (a) the previous colour is still up and still holds the target tag:
+#       gremion-switch back to it. Seconds, no data loss.
+#   (b) it is gone (an overlap:false release stopped it, or the soak ended):
+#       gremion-deploy <target> --no-switch, then switch. Its duration is the
+#       measured redeploy time, and the migrations of the tag being left are NOT
+#       reverted — the snapshot-restore instruction is printed for the operator.
+#
+# USAGE
+#   gremion-rollback [--to-tag dist-vX.Y.Z] [--soak-minutes N]
+#
+# stdin is passed through UNTOUCHED to gremion-deploy, so a class (b) rollback
+# is driven as:  printf 'TOKEN %s\n' "$GHCR_TOKEN" | gremion-rollback
+# Class (a) needs no token and reads no stdin.
+#
+# RELEASE SNAPSHOTS. gremion-deploy step 5 takes `restic ... --tag class=snapshot
+# --tag label=<tag>` before every release, and Task 9 deliberately scopes its
+# `restic forget` retention to class=daily so those survive. THIS program is the
+# only thing that removes them, and it does so on exactly one branch:
+#   - the abandoned release applied NO migrations → its pre-release snapshot can
+#     restore nothing the rolled-back system does not already have, so it is
+#     forgotten here (`restic forget`, never `--prune`: §K forbids automatic
+#     reclamation, so freeing the space stays an explicit operator step);
+#   - it applied migrations → that snapshot IS the restore point named by
+#     SNAPSHOT-RESTORE-REQUIRED. It is KEPT, and the exact manual forget command
+#     is printed as SNAPSHOT-RETAINED for after the operator has decided.
+# Both branches are documented in docs/ops/host-tooling.md (Task 13).
+#
+# EXIT CODES  0 ok · 1 assertion failed · 2 usage/precondition · 3 blocked
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+TO_TAG=""
+SOAK_MINUTES_OPT=""
+ROOT=""
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-rollback [--to-tag dist-vX.Y.Z] [--soak-minutes N]
+       class (b) needs the GHCR token on stdin: printf 'TOKEN <value>\n' | gremion-rollback
+EOF
+    exit 2
+}
+
+# Every caller captures this into a variable BEFORE invoking the program it
+# names. Used inline as `"$(bin_path x)" arg`, its `die` runs in a command
+# substitution and can only end that subshell: the program would then try to
+# execute `arg` and exit 127 instead of the documented 2.
+bin_path() {
+    local n="$1" p
+    p="${GREMION_BIN_DIR:-$(gremion_root)/bin}/$n"
+    if [[ -x "$p" ]]; then printf '%s' "$p"; return 0; fi
+    p="$(command -v "$n" 2>/dev/null || true)"
+    [[ -n "$p" ]] || die "required program not found: $n" 2
+    printf '%s' "$p"
+}
+
+read_runtime() { # <file> <default>
+    local f="$ROOT/runtime/$1"
+    if [[ -f "$f" ]]; then tr -d '[:space:]' < "$f"; else printf '%s' "$2"; fi
+}
+
+colour_is_up() { # <colour>
+    local colour="$1" out
+    out="$(docker compose --env-file "$ROOT/etc/env/app-${colour}.env" ps -q 2>/dev/null || true)"
+    [[ -n "$out" ]]
+}
+
+assert_switched() { # <colour>
+    local now
+    now="$(read_runtime active-colour none)"
+    [[ "$now" == "$1" ]] || die "runtime/active-colour is '${now}' after switching to $1" 1
+}
+
+record_tags() { # <from> <to>
+    printf '%s\n' "$1" | atomic_write "$ROOT/runtime/previous-tag" 644
+    printf '%s\n' "$2" | atomic_write "$ROOT/runtime/current-tag" 644
+    local dir="$ROOT/releases/$2"
+    if [[ -d "$dir" ]]; then
+        ln -sfn "$dir" "$ROOT/current.tmp"
+        mv -Tf "$ROOT/current.tmp" "$ROOT/current"
+        [[ "$(readlink "$ROOT/current")" == "$dir" ]] \
+            || die "current symlink does not point at $dir" 1
+    fi
+}
+
+release_migration_count() { # <tag> → the number of migrations that tag applied
+    local rel="$ROOT/releases/$1/release.json" n
+    if [[ ! -f "$rel" ]]; then printf '%s' "unknown"; return 0; fi
+    n="$(jq -r '(.migrations // []) | length' "$rel" 2>/dev/null || printf unknown)"
+    [[ "$n" =~ ^[0-9]+$ ]] || n=unknown
+    printf '%s' "$n"
+}
+
+# The migrations of the tag we are LEAVING are not reverted by a redeploy.
+warn_unreverted_migrations() { # <from tag>
+    local n
+    n="$(release_migration_count "$1")"
+    if [[ "$n" == "unknown" ]]; then
+        printf 'SNAPSHOT-RESTORE-REQUIRED: %s release.json is gone; assume its migrations are applied.\n' "$1"
+        return 0
+    fi
+    [[ "$n" -gt 0 ]] || return 0
+    cat <<EOF
+SNAPSHOT-RESTORE-REQUIRED: $1 applied ${n} migration(s) that this rollback does not revert.
+  The pre-release snapshot is restic tag label=$1 class=snapshot (taken by gremion-deploy step 5).
+  Restoring it into production is an operator decision — everything written since that deploy is lost.
+  Rehearse it first: gremion-restore-into --stack staging --snapshot <id> --rto
+EOF
+}
+
+# resolve_snapshot_fate <abandoned tag> — see the header. Never silent.
+resolve_snapshot_fate() {
+    local tag="$1" n
+    n="$(release_migration_count "$tag")"
+    if [[ "$n" == "0" ]]; then
+        forget_release_snapshot "$tag"
+        return 0
+    fi
+    cat <<EOF
+SNAPSHOT-RETAINED: restic tag label=${tag} class=snapshot is the restore point for the ${n} migration(s) this rollback did not revert.
+  It is kept on purpose; Task 9's retention covers class=daily only, so nothing else will remove it.
+  Forget it only after deciding not to restore it:
+  restic -r \${RESTIC_REPOSITORY} forget --tag class=snapshot --tag label=${tag}
+EOF
+}
+
+forget_release_snapshot() { # <tag>
+    restic forget --tag class=snapshot --tag "label=$1" \
+        || die "restic forget failed for label=$1" 1
+    local left
+    left="$(restic snapshots --tag class=snapshot --tag "label=$1" --json 2>/dev/null || printf '[]')"
+    [[ "$(printf '%s' "$left" | jq 'length')" == "0" ]] \
+        || die "snapshot label=$1 class=snapshot survived forget" 1
+    ok "forgot the pre-release snapshot label=$1 (that release applied no migrations)"
+}
+
+rollback_class_a() { # <colour>
+    local prog; prog="$(bin_path gremion-switch)"
+    "$prog" "$1"
+    assert_switched "$1"
+    ok "switched back to ${1} (class a)"
+}
+
+rollback_class_b() { # <colour> <target tag>
+    local prog rc=0
+    prog="$(bin_path gremion-deploy)"
+    # `|| rc=$?` rather than toggling `set +e`/`set -e` around the call: the
+    # shell option stays on for everything else in this function.
+    "$prog" "$2" --no-switch --soak-minutes "${SOAK_MINUTES_OPT:-0}" || rc=$?
+    if [[ "$rc" -eq 2 ]]; then
+        die "class (b) rollback needs the registry token on stdin: printf 'TOKEN <value>\\n' | gremion-rollback --to-tag $2" 2
+    fi
+    [[ "$rc" -eq 0 ]] || exit "$rc"
+    prog="$(bin_path gremion-switch)"
+    "$prog" "$1"
+    assert_switched "$1"
+    ok "redeployed ${2} into ${1} and switched (class b)"
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            # See gremion-deploy's parser: the arity is checked before the
+            # shift, and the message names the option, because
+            # `X="${2:-}"; shift 2` exits 1 silently on a dangling final option.
+            --to-tag)       [[ $# -ge 2 ]] || die "option $1 needs a value" 2
+                            TO_TAG="$2"; shift 2 ;;
+            --soak-minutes) [[ $# -ge 2 ]] || die "option $1 needs a value" 2
+                            SOAK_MINUTES_OPT="$2"; shift 2 ;;
+            -h|--help)      usage ;;
+            *)              printf 'unexpected argument: %s\n' "$1" >&2; usage ;;
+        esac
+    done
+
+    need_cmd docker jq restic
+    ROOT="$(gremion_root)"
+    [[ -d "$ROOT" ]] || die "gremion root absent: $ROOT" 2
+    load_env "$ROOT/etc/env/state.env"
+    [[ -n "${RESTIC_REPOSITORY:-}" ]] \
+        || die "RESTIC_REPOSITORY absent from state.env — cannot settle the release snapshot" 2
+
+    local active other from_tag to_tag class
+    active="$(read_runtime active-colour none)"
+    # The colour we roll back INTO is the one that is not serving; this case also
+    # validates what runtime/active-colour holds.
+    case "$active" in
+        blue)  other=green ;;
+        green) other=blue ;;
+        *)     die "no active colour to roll back from (runtime/active-colour='${active}')" 2 ;;
+    esac
+
+    from_tag="$(read_runtime current-tag none)"
+    [[ "$from_tag" != "none" ]] || die "no current tag recorded — nothing to roll back from" 2
+    to_tag="$TO_TAG"
+    if [[ -z "$to_tag" ]]; then
+        to_tag="$(read_runtime previous-tag none)"
+        [[ "$to_tag" != "none" ]] || die "no previous tag recorded and no --to-tag given" 2
+    fi
+    [[ "$to_tag" =~ ^dist-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid tag: $to_tag" 2
+    [[ "$to_tag" != "$from_tag" ]] || die "already running $to_tag" 2
+
+    if [[ "$(read_runtime "colour-${other}-tag" none)" == "$to_tag" ]] && colour_is_up "$other"; then
+        class=a
+        info "class (a): ${other} still runs ${to_tag}"
+        rollback_class_a "$other"
+    else
+        class=b
+        info "class (b): ${other} does not hold ${to_tag} — redeploying it"
+        rollback_class_b "$other" "$to_tag"
+        warn_unreverted_migrations "$from_tag"
+    fi
+
+    record_tags "$from_tag" "$to_tag"
+    resolve_snapshot_fate "$from_tag"
+    printf 'ROLLBACK-RESULT: class=%s from=%s to=%s colour=%s\n' \
+        "$class" "$from_tag" "$to_tag" "$other"
+}
+
+main "$@"
