@@ -294,9 +294,44 @@ gremion-fw-proof --scp-smtp-unblocked
 # which every step failed.
 grep -cE ' STEP [0-9]+ [a-z-]+ ok$'   /opt/gremion/runtime/deploy.log   # 12
 grep -cE ' STEP [0-9]+ [a-z-]+ fail$' /opt/gremion/runtime/deploy.log   # 0
-grep -q '"auths": {[^}]' /home/gremion/.docker/config.json
-echo "auths-present exit=$?    # 1 means no registry credential survived the deploy"
 bats test/host                 # from a checkout of the deployed tag: every guard suite green
+```
+
+and, for N12, the operator's own read of the same fact. `gremion-deploy`
+asserts it itself, in a trap on every exit path; this step is the independent
+confirmation, run as root once the deploy has finished:
+
+```bash
+# The predicate is the one gremion-deploy's assert_no_docker_auths uses, not a
+# second implementation of it: jq, because docker writes config.json
+# pretty-printed, and a single-line pattern over it answers the same thing
+# whether a credential survived or the file is an empty {} — which is what
+# this step did for one revision of this document, in the one gate item whose
+# subject is guards that cannot fire. Every Docker config the program reads is
+# read here, plus the deploy user's own: the operator's shell is not the deploy
+# user's. test/host/go-live-gate.bats executes this block against real fixtures
+# and fails if it stops telling the two states apart, or drifts from the
+# program's predicate.
+found=0; dirty=0
+for f in "${DOCKER_CONFIG:-${HOME:-/root}/.docker}/config.json" \
+         /root/.docker/config.json \
+         /home/gremion/.docker/config.json; do
+  [ -f "$f" ] || continue
+  found=$((found + 1))
+  if jq -e '(.auths // {}) | length == 0' "$f" >/dev/null; then
+    echo "no-auths $f=clean"
+  else
+    dirty=$((dirty + 1))
+    echo "no-auths $f=credential-survived"
+  fi
+done
+if [ "$found" -eq 0 ]; then
+  echo "no-auths verdict=inconclusive   # no Docker config was read: this proves nothing"
+elif [ "$dirty" -eq 0 ]; then
+  echo "no-auths verdict=clean checked=$found"
+else
+  echo "no-auths verdict=credential-survived checked=$found dirty=$dirty"
+fi
 ```
 
 The annex's RED register lists, per guard, the break command, the observed

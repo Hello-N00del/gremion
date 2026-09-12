@@ -6,7 +6,10 @@
 # it quotes must be printed by something under infra/host, every runtime
 # artefact it cites must be written by something under infra/host, no compose
 # invocation may carry a flag the host forbids (N20), and no real address may
-# appear in a public document.
+# appear in a public document. One step in the gate is a check rather than a
+# citation — N12's registry-credential read — and that one is extracted from
+# the document and executed against real fixtures: it must give different
+# answers in different states, and must not read as green over nothing.
 #
 # DEVIATION, on purpose: every other suite under test/host/ loads
 # 'test_helper/host' for the docker/nft/ssh shims. This suite shims nothing —
@@ -311,6 +314,197 @@ deploy_log_patterns() {
     if [ "$sees_fail" -ne 1 ]; then
         echo "no deploy.log pattern in the gate matches a FAILED step — the fail-count proof would read 0 on a fully-failed deploy" >&2
         echo "a real failed line looks like: ${fail_line}" >&2
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# The N12 registry-credential step, RUN rather than read.
+#
+# gremion-deploy asserts this itself in a trap on every exit path, and
+# test/host/deploy.bats covers that guard. What the two tests below cover is the
+# runbook step an operator types by hand as the gate's independent read — which
+# for one revision of this document was a single-line grep for an "auths" key
+# over a file docker writes pretty-printed. That pattern answered 1 over a
+# config holding a live token and 1 over an empty {}: a guard whose answer is a
+# constant, in the one item whose whole subject is guards that cannot fire.
+#
+# So the step is extracted from the document and EXECUTED, against a real
+# pretty-printed config.json, in three states. Checking the document for a
+# blessed spelling instead would only move the drift: a rewrite of the step has
+# to keep discriminating, not keep a particular pattern. The extracted block's
+# absolute paths are rebased into BATS_TEST_TMPDIR before it runs, so it never
+# reads the real /root/.docker/config.json of the box running the suite — a
+# developer with a registry login would otherwise see a false RED.
+
+# Every fenced block of <section body> that names a Docker config file, each
+# preceded by a __BLOCK__ marker line so the caller can count them. More than
+# one, or none, is drift the caller must report rather than guess through.
+gate_docker_config_blocks() {                    # <section body>
+    awk '
+        /^```/ {
+            if (inb) { if (hit) printf "__BLOCK__\n%s", buf; inb = 0; hit = 0; buf = "" }
+            else     { inb = 1; hit = 0; buf = "" }
+            next
+        }
+        inb {
+            buf = buf $0 "\n"
+            if ($0 ~ /\.docker\/config\.json/) hit = 1
+        }
+    ' <<<"$1"
+}
+
+# The jq predicate inside gremion-deploy's own assert_no_docker_auths, lifted
+# out of the program the way real_deploy_log lifts log_step. Empty when the
+# function is gone or no longer uses jq, which fails the test that reads it —
+# naming the drift instead of passing on a stale expectation.
+program_auths_predicate() {
+    awk '/^assert_no_docker_auths\(\) \{/ { inb = 1 }
+         inb                              { print }
+         inb && /^\}/                     { exit }' "${BIN_DIR}/gremion-deploy" \
+        | sed -nE "s/.*jq -e '([^']*)'.*/\1/p" | head -1
+}
+
+# Writes the gate's N12 step, rebased into <sandbox>, to <path>.
+extract_n12_step() {                             # <sandbox> <path to write>
+    local sandbox="$1" out="$2" blocks markers
+    blocks="$(gate_docker_config_blocks "$(gate_section G8-GUARDS-RED)")"
+    markers="$(grep -c '^__BLOCK__$' <<<"$blocks" || true)"
+    if [ "${markers:-0}" != "1" ]; then
+        echo "G8-GUARDS-RED holds ${markers:-0} fenced block(s) naming a Docker config, expected exactly 1" >&2
+        return 1
+    fi
+    grep -v '^__BLOCK__$' <<<"$blocks" \
+        | sed -e "s#/root/#${sandbox}/root/#g" -e "s#/home/#${sandbox}/home/#g" > "$out"
+    [ -s "$out" ] || return 1
+    # This block gets EXECUTED, so it must hold the credential check and nothing
+    # else. Commentary may name a program; a command line may not. Without this,
+    # a check sharing one fence with the rest of the item has the test run
+    # gremion-fw-proof and a nested `bats test/host` — measured, against the
+    # revision of the document that held a single fence.
+    if grep -vE '^[[:space:]]*#' "$out" \
+       | grep -qE '(^|[[:space:]])(bats|gremion-[a-z0-9-]+)([[:space:]]|$)'; then
+        echo "the N12 credential check shares its fenced block with another program." >&2
+        echo "This test executes that block, so the check must have a fence of its own." >&2
+        return 1
+    fi
+}
+
+# Runs the extracted step with every Docker config location inside the sandbox.
+# The step is a check, so a non-zero exit is a result, not an error: the caller
+# asserts on what it printed.
+run_n12_step() {                                 # <sandbox> <script>
+    ( DOCKER_CONFIG="$1/dockercfg" HOME="$1/home/gremion" bash "$2" 2>&1 ) || true
+}
+
+@test "the gate's N12 credential step tells a surviving credential from a clean config" {
+    [ -f "$GATE_DOC" ]
+    [ -f "${BIN_DIR}/gremion-deploy" ]
+
+    local sandbox="${BATS_TEST_TMPDIR}/n12"
+    local step="${sandbox}/step.sh"
+    # Every location the program's docker_config_files can resolve to, all of
+    # them inside the sandbox: DOCKER_CONFIG, the deploy user's home, and
+    # root's. The fixture is written to all three, so a step that reads only one
+    # of them still sees a real credential and still has to say so. Which
+    # locations the step covers is the sibling test's subject, not this one's.
+    local cfgs=(
+        "${sandbox}/dockercfg/config.json"
+        "${sandbox}/home/gremion/.docker/config.json"
+        "${sandbox}/root/.docker/config.json"
+    )
+    local cfg
+    for cfg in "${cfgs[@]}"; do mkdir -p "$(dirname "$cfg")"; done
+    extract_n12_step "$sandbox" "$step" || return 1
+
+    # The auth blob is BUILT here, not pasted: a committed base64 literal of
+    # "<user>:<password>" is high-entropy enough that gitleaks reports the
+    # fixture itself as a finding, and this repo allowlists by value rather than
+    # by path so test files stay scanned. Pretty-printed, as docker writes it.
+    local blob
+    blob="$(printf 'x-access-token:not-a-real-token' | base64)"
+    for cfg in "${cfgs[@]}"; do
+        cat > "$cfg" <<EOF
+{
+  "auths": {
+    "ghcr.io": {
+      "auth": "${blob}"
+    }
+  }
+}
+EOF
+    done
+
+    # Positive control on the fixture: it must be the shape that defeats a
+    # single-line pattern, or the discrimination below proves nothing.
+    [ "$(wc -l < "${cfgs[0]}")" -gt 1 ]
+    run grep -q '"auths": {[^}]' "${cfgs[0]}"
+    [ "$status" -ne 0 ]
+
+    local dirty clean absent
+    dirty="$(run_n12_step "$sandbox" "$step")"
+    for cfg in "${cfgs[@]}"; do printf '{}\n' > "$cfg"; done
+    clean="$(run_n12_step "$sandbox" "$step")"
+    rm -f "${cfgs[@]}"
+    absent="$(run_n12_step "$sandbox" "$step")"
+
+    local red_re='(FAIL|fail|surviv|dirty=[1-9])'
+    local green_re='(^|[[:space:]=])clean([[:space:]]|$)'
+
+    if [ "$dirty" = "$clean" ]; then
+        echo "the gate's N12 step answers the same thing with and without a surviving credential:" >&2
+        echo "$dirty" >&2
+        return 1
+    fi
+    if ! grep -qE "$red_re" <<<"$dirty"; then
+        echo "a config.json holding a credential did not make the gate's N12 step say so:" >&2
+        echo "$dirty" >&2
+        return 1
+    fi
+    if ! grep -qE "$green_re" <<<"$clean"; then
+        echo "an empty {} config did not make the gate's N12 step report clean:" >&2
+        echo "$clean" >&2
+        return 1
+    fi
+    if grep -qE "$red_re" <<<"$clean"; then
+        echo "an empty {} config was reported as a surviving credential:" >&2
+        echo "$clean" >&2
+        return 1
+    fi
+    if grep -qE "$green_re" <<<"$absent"; then
+        echo "the gate's N12 step reports clean when it read no Docker config at all:" >&2
+        echo "$absent" >&2
+        echo "nothing read must not read as green — that is a pass by absence" >&2
+        return 1
+    fi
+}
+
+@test "the gate's N12 credential step uses gremion-deploy's own jq predicate" {
+    [ -f "$GATE_DOC" ]
+    [ -f "${BIN_DIR}/gremion-deploy" ]
+
+    local pred
+    pred="$(program_auths_predicate)"
+    if [ -z "$pred" ]; then
+        echo "no jq predicate could be lifted out of gremion-deploy's assert_no_docker_auths" >&2
+        return 1
+    fi
+
+    local sandbox="${BATS_TEST_TMPDIR}/n12pred" step="${BATS_TEST_TMPDIR}/n12pred/step.sh"
+    mkdir -p "$sandbox"
+    extract_n12_step "$sandbox" "$step" || return 1
+
+    if ! grep -qF -- "$pred" "$step"; then
+        echo "the gate's N12 step does not use the program's predicate: ${pred}" >&2
+        cat "$step" >&2
+        return 1
+    fi
+    # The program's docker_config_files checks /root as well as the deploy
+    # user's config. A step that reads one home only can report clean while a
+    # credential sits in the other.
+    if ! grep -qF -- "${sandbox}/root/.docker/config.json" "$step"; then
+        echo "the gate's N12 step does not read /root/.docker/config.json, which the program does" >&2
+        cat "$step" >&2
         return 1
     fi
 }
