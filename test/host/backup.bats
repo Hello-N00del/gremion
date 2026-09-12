@@ -1109,3 +1109,110 @@ exec ${real} \"\$@\""
     # and it carries the code the process actually exits with.
     grep -qF '"exit":1' "${GREMION_ROOT}/.alert-body"
 }
+
+# ---------------------------------------------------------------------------
+# The staged tree is produced by the run that reports it (review round 3)
+#
+# $(gremion_root)/backups/current is a PERSISTENT host path and no phase ever
+# cleared it, so `dump_has_content … || dump_database …` was a cross-RUN cache,
+# not a same-run one. The kernel script rewrites keycloak/gremion/control every
+# night unconditionally, so those three were safe — but every OTHER database,
+# i.e. exactly the per-tenant t_* databases and the leaf databases §J requires,
+# was dumped ONCE on the first successful run and skipped on every run after it,
+# forever, while the run printed `databases=N ok=true` and the alert channel
+# reported success. assert_dump_coverage uses the same predicate, so it could
+# only ever fail on total absence, never on staleness. From night two onwards
+# every restic snapshot carried night one's tenant data under tonight's label.
+# ---------------------------------------------------------------------------
+
+@test "a second run dumps the non-kernel databases again" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    run "$BACKUP" --class daily --label night-1
+    [ "$status" -eq 0 ]
+    assert_recorded docker "pg_dump -U postgres t_pilot"
+    : >"$SHIM_LOG"                     # only the SECOND run is under test
+    run "$BACKUP" --class daily --label night-2
+    [ "$status" -eq 0 ]
+    assert_recorded docker "pg_dump -U postgres t_pilot"
+    assert_recorded docker "pg_dump -U postgres postgres"
+}
+
+@test "a dump left behind by an earlier run is replaced, not adopted" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    mkdir -p "${GREMION_ROOT}/backups/current"
+    printf 'STALE-FROM-AN-EARLIER-RUN' \
+        | gzip >"${GREMION_ROOT}/backups/current/t_pilot.sql.gz"
+    run "$BACKUP" --label fresh-1
+    [ "$status" -eq 0 ]
+    # Read back from the staged tree, not from the program's exit code.
+    [ "$(gzip -dc "${GREMION_ROOT}/backups/current/t_pilot.sql.gz")" = "PGDUMP" ]
+}
+
+@test "an artefact the running system no longer has does not survive into the staged tree" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    mkdir -p "${GREMION_ROOT}/backups/current/volumes" \
+             "${GREMION_ROOT}/backups/current/buckets/gone"
+    printf 'dropped tenant' | gzip >"${GREMION_ROOT}/backups/current/t_dropped.sql.gz"
+    printf 'removed volume'        >"${GREMION_ROOT}/backups/current/volumes/staging_gone.tar"
+    printf 'removed object'        >"${GREMION_ROOT}/backups/current/buckets/gone/object"
+    run "$BACKUP" --label fresh-2
+    [ "$status" -eq 0 ]
+    [ ! -e "${GREMION_ROOT}/backups/current/t_dropped.sql.gz" ]
+    [ ! -e "${GREMION_ROOT}/backups/current/volumes/staging_gone.tar" ]
+    [ ! -e "${GREMION_ROOT}/backups/current/buckets/gone" ]
+    # and everything this run really did produce is there
+    [ -s "${GREMION_ROOT}/backups/current/t_pilot.sql.gz" ]
+    [ -s "${GREMION_ROOT}/backups/current/volumes/staging-state_pgdata.tar" ]
+    [ -s "${GREMION_ROOT}/backups/current/keycloak.sql.gz" ]
+}
+
+# A dump killed mid-stream (TimeoutStartSec=6h, OOM, power loss) used to be
+# written straight to its FINAL name by `… | gzip >"${DUMP_DIR}/$2.sql.gz"`, so
+# a truncated-but-decompressible file was left sitting exactly where a finished
+# dump belongs — and dump_has_content adopts it.
+shim_docker_pg_dump_dies() {
+    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+case "$1 $2" in
+  "volume ls")
+     case "$*" in
+       *"project=staging-state"*) printf "staging-state_pgdata\nstaging-state_nats\n" ;;
+       *"project=staging-mail"*)  printf "staging-mail_spool\n" ;;
+     esac ;;
+  "volume inspect") exit 0 ;;
+  "image inspect") echo "alpine@sha256:0000000000000000000000000000000000000000000000000000000000000001" ;;
+  "compose exec"|"compose "*)
+     case "$*" in
+       *count*)       printf "5\n" ;;
+       *pg_database*) printf "control\ngremion\nkeycloak\npostgres\nt_pilot\n" ;;
+       *"pg_dump -U postgres t_pilot"*) printf "PARTIAL-DUMP"; exit 1 ;;
+       *pg_dump*)     printf "PGDUMP" ;;
+     esac ;;
+  pull*) exit 0 ;;
+  run*)
+     prev=""; tarfile=""
+     for a in "$@"; do [ "$prev" = "-cf" ] && tarfile="$a"; prev="$a"; done
+     mkdir -p "$out"; printf "tar-stub" > "${out}/${tarfile#/out/}" ;;
+esac
+exit 0'
+}
+
+@test "a pg_dump that dies mid-stream leaves no file at the final dump name" {
+    shim_baseline; shim_docker_pg_dump_dies
+    shim_rsync_honouring_excludes; shim_restic_ok
+    run "$BACKUP" --label partial-1
+    [ "$status" -eq 1 ]
+    # The load-bearing half: nothing decompressible is left where a FINISHED
+    # dump belongs, so no later run can adopt a killed one.
+    [ ! -e "${GREMION_ROOT}/backups/current/t_pilot.sql.gz" ]
+    [[ "$output" == *"pg_dump failed for database t_pilot on service postgres"* ]]
+}
+
+@test "a reset whose own inspection fails does not report an empty staged tree" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    # A guard whose own command failed would report an empty tree for every
+    # tree there is, and the wholesale clear would be back to trusting rm.
+    shim find 'exit 1'
+    run "$BACKUP" --label find-1
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot inspect the staged tree: ${GREMION_ROOT}/backups/current"* ]]
+}

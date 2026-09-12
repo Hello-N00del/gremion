@@ -268,9 +268,24 @@ list_database_count() {   # $1 = compose service name
 # fixes, because either alone is one forgotten redirect away from the same
 # silent data loss: every compose call is handed /dev/null, and every loop that
 # runs a command reads its list from fd 3.
+# TASK 9, review round 3: the write is ATOMIC. Writing the gzip stream straight
+# to its final name left a truncated-but-decompressible .sql.gz sitting exactly
+# where a finished dump belongs whenever a run was killed mid-dump
+# (TimeoutStartSec=6h, OOM, power loss), and dump_has_content cannot tell that
+# file from a complete one. The final name therefore only ever appears by mv of
+# a dump that ran to completion, and a pg_dump that fails says so by name.
 dump_database() {    # $1 = service, $2 = database
-    ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
-        pg_dump -U "$POSTGRES_USER" "$2" </dev/null ) | gzip >"${DUMP_DIR}/$2.sql.gz"
+    local dst tmp
+    dst="${DUMP_DIR}/$2.sql.gz"
+    tmp="${dst}.part"
+    rm -f "$tmp"
+    if ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
+            pg_dump -U "$POSTGRES_USER" "$2" </dev/null ) | gzip >"$tmp"; then
+        mv -f "$tmp" "$dst"
+    else
+        rm -f "$tmp"
+        die "pg_dump failed for database ${2} on service ${1}" 1
+    fi
 }
 
 # TASK 9, corrected against the brief: `gzip` of ZERO bytes is still a ~20-byte
@@ -403,6 +418,35 @@ mirror_buckets() {
         BUCKET_COUNT=$(( BUCKET_COUNT + 1 ))
     done 3<<<"$buckets"
     ok "mirrored ${BUCKET_COUNT} bucket(s)"
+}
+
+# TASK 9, review round 3: $(gremion_root)/backups/current is a PERSISTENT host
+# path that no phase cleared, so `dump_has_content ... || dump_database ...` was
+# a cross-RUN cache rather than a same-run one. The kernel script rewrites
+# keycloak/gremion/control unconditionally every night, so those three were
+# safe - but every OTHER database, i.e. exactly the per-tenant t_* databases and
+# the leaf databases section J requires, was dumped ONCE on the first successful
+# run and skipped on every run after it, forever, while the run printed
+# `databases=N ok=true`. assert_dump_coverage shares the predicate, so it could
+# only ever fail on total absence, never on staleness. The staged tree is
+# therefore emptied wholesale before anything is produced - the pattern copy_etc
+# already uses for etc/ - so every artefact under current/ is made by the run
+# that reports it, and an artefact the running system no longer has (a dropped
+# tenant's dump, a removed volume's archive) cannot ride along for ever.
+# Deliberately AFTER the preconditions: a run that refuses to start must leave
+# the previous night's staged tree intact as a local restore source.
+reset_stage_dir() {
+    rm -rf "$DUMP_DIR"
+    mkdir -p "$DUMP_DIR"
+    # Post-condition read from the filesystem, not from rm's exit code. The
+    # find is checked too: a guard whose own command failed would report an
+    # empty tree for every tree there is.
+    local leftover
+    leftover="$(find "$DUMP_DIR" -mindepth 1 -print -quit)" \
+        || die "cannot inspect the staged tree: ${DUMP_DIR}" 1
+    [ -z "$leftover" ] \
+        || die "staged tree not empty after reset: ${DUMP_DIR}" 1
+    info "staged tree emptied: ${DUMP_DIR}"
 }
 
 # Two patterns on purpose: the first is the §J wording, the second closes the
@@ -637,6 +681,7 @@ main() {
     assert_offsite_reachable
     assert_free_space
     assert_volume_enumeration
+    reset_stage_dir
     run_kernel_dumps
     dump_remaining_databases
     assert_dump_coverage
