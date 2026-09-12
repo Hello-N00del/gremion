@@ -168,18 +168,29 @@ send = "daily"
 enable = [ { if = "rcpt == 'abuse@${PLATFORM_DOMAIN}' || rcpt == 'postmaster@${PLATFORM_DOMAIN}'", then = false },
            { else = true } ]
 
-# Connection-log retention is bounded at ${MAIL_LOG_RETENTION_DAYS} days:
-# Stalwart rotates daily and the compose json-file driver keeps that many
-# files. Written into the VVT entry (§I).
-[tracer."log"]
-type = "log"
-level = "info"
-path = "%{env:STALWART_PATH}%/logs"
-prefix = "stalwart.log"
-rotate = "daily"
-ansi = false
-enable = true
-
+# ONE log sink, stdout, captured by the container runtime and bounded by the
+# compose json-file driver at ${MAIL_LOG_RETENTION_DAYS} files of 50 MB.
+#
+# There is deliberately NO `type = "log"` file sink, which upstream's own
+# self-initialised config carries. Two measured reasons:
+#   1. It never wrote a line here. The sink needs <STALWART_PATH>/logs, and the
+#      only thing that creates that directory is `stalwart --init <path>` --
+#      which the image entrypoint runs only when etc/config.toml is ABSENT,
+#      i.e. never in this project, because the rendered config is mounted at
+#      exactly that path. Every boot of the pinned digest logged instead:
+#        WARN Log collector error (telemetry.log-error)
+#             details = "Failed to create log file"
+#             path = "/opt/stalwart/logs/stalwart.log.<date>"
+#             reason = "No such file or directory (os error 2)"
+#   2. Creating the directory would have been the WRONG repair. v0.15.5 has no
+#      retention key for the log tracer -- it rotates daily and prunes nothing --
+#      and the files would live in the mail data volume, which §J backs up for
+#      up to 6 months. The §I VVT entry bounds connection-log retention; an
+#      unprunable sink inside the backup set works against that bound, not for
+#      it. RESIDUAL, named in the report: the driver's bound is a SIZE bound,
+#      so a quiet host still keeps lines older than the declared window. A true
+#      time bound needs a periodic prune, which is a host timer, not a mail
+#      setting.
 [tracer."stdout"]
 type = "stdout"
 level = "info"

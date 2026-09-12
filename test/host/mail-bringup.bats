@@ -945,3 +945,41 @@ exit 0'
     [[ "$output" == *"KEYCLOAK_ADMIN"* ]]
     [[ "$output" == *"6b=BLOCKED"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Log sinks: exactly one, and it is the one the compose driver bounds
+# ---------------------------------------------------------------------------
+
+@test "config template declares no file-log tracer, whose directory nothing creates" {
+    # A `[tracer.<id>] type = "log"` sink writes <STALWART_PATH>/logs/<prefix>.<date>.
+    # That directory is created by `stalwart --init <path>` and by nothing else,
+    # and the pinned image's entrypoint runs --init only when etc/config.toml is
+    # ABSENT -- i.e. never in this project, which mounts a rendered config. Every
+    # boot of the digest therefore logged, before this guard existed:
+    #   WARN Log collector error (telemetry.log-error) details = "Failed to create
+    #   log file", path = "/opt/stalwart/logs/stalwart.log.<date>",
+    #   reason = "No such file or directory (os error 2)"
+    # Creating the directory instead would ENABLE a daily-rotated sink this build
+    # cannot prune -- v0.15.5 has no retention key for the log tracer -- inside the
+    # mail data volume, which §J backs up for up to 6 months. That is more
+    # connection-log retention than the §I VVT entry declares, not less.
+    [ -f "$MAIL_CONFIG_TMPL" ] || { echo "no config template at ${MAIL_CONFIG_TMPL}"; return 1; }
+    run grep -nE '^type = "log"$' "$MAIL_CONFIG_TMPL"
+    [ "$status" -ne 0 ] || { echo "file-log tracer still declared: $output"; return 1; }
+    run grep -c '^\[tracer\.' "$MAIL_CONFIG_TMPL"
+    [ "$output" = "1" ] || { echo "expected exactly one tracer, found ${output}"; return 1; }
+    grep -q '^\[tracer\."stdout"\]$' "$MAIL_CONFIG_TMPL" \
+        || { echo "the stdout tracer is gone: the project would log nothing at all"; return 1; }
+}
+
+@test "the container log is bounded by BOTH json-file limits" {
+    # stdout is the only sink, so the driver's bound is the whole retention
+    # story. max-file alone is inert: without max-size the json-file driver never
+    # rotates, so one file grows without limit and the file count is never
+    # reached.
+    [ -f "$MAIL_COMPOSE" ] || { echo "no compose file at ${MAIL_COMPOSE}"; return 1; }
+    grep -q 'max-size: "50m"' "$MAIL_COMPOSE" \
+        || { echo "no max-size: max-file alone never rotates"; return 1; }
+    grep -q 'max-file: "\${MAIL_LOG_RETENTION_DAYS}"' "$MAIL_COMPOSE" \
+        || { echo "no max-file bound"; return 1; }
+}

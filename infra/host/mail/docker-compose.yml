@@ -69,9 +69,16 @@ services:
     logging:
       driver: json-file
       options:
+        # Both limits are load-bearing. stdout is the project's ONLY log sink
+        # (config.toml.tmpl carries no file tracer, and says why), so this
+        # driver is the whole retention story -- and without max-size the
+        # json-file driver never rotates, which would make max-file inert and
+        # let one file grow without limit.
         max-size: "50m"
-        # Stalwart rotates its own connection log daily and the driver keeps
-        # this many files, so retention is bounded at N days (§I).
+        # A SIZE bound of ${MAIL_LOG_RETENTION_DAYS} x 50 MB, not a time bound:
+        # a quiet host keeps lines older than the window the §I VVT entry
+        # declares. Named as a residual; closing it needs a periodic prune,
+        # which is a host timer rather than a compose option.
         max-file: "${MAIL_LOG_RETENTION_DAYS}"
 
 networks:
