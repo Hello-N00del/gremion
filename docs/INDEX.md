@@ -47,6 +47,7 @@ repositories — one per module — and carry their own docs.
 | [ops/setup.md](./ops/setup.md) | The `scripts/setup.sh` setup runbook (secrets + governance realm + stack start) |
 | [ops/host-tooling.md](./ops/host-tooling.md) | The `/opt/gremion` host tooling: the per-project env contract, every `gremion-*` command, the restricted deploy channel and the `noop` dry-run |
 | [ops/restore-runbook.md](./ops/restore-runbook.md) | Database backup-restore runbook |
+| [ops/go-live-gate.md](./ops/go-live-gate.md) | The go-live gate: the eight conditions an operator-run instance must prove against the running system before it may hold real users or real personal data |
 | [runbooks/tenant-edge.md](./runbooks/tenant-edge.md) | Multi-tenancy edge: Traefik `x-forwarded-host` tenant resolution |
 | [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md) | Tenant create / provision / evict / delete (with crypto-shred) |
 | [runbooks/pgbouncer.md](./runbooks/pgbouncer.md) | PgBouncer transaction pooling (production profile) |

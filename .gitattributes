@@ -54,3 +54,12 @@ infra/host/templates/** text eol=lf
 # The pattern stays a directory glob so a future file here is covered too; the
 # overlap with *.yml and *.sh sets the same value and changes nothing.
 infra/host/mail/** text eol=lf
+
+# Task 15: test/host/go-live-gate.bats is the only host suite that loads the
+# KERNEL helper test/test_helper/common.bash (it shims nothing and needs only
+# PROJECT_ROOT). Task 1's rule above reaches test/host/test_helper/*.bash only,
+# so core.autocrlf=true checks the kernel helper out with CRLF on Windows, and
+# bash inside the Linux bats runner then dies on a carriage-return command-not-
+# found before a single test is collected. Measured: git ls-files --eol reported
+# w/crlf for it.
+test/test_helper/*.bash text eol=lf
