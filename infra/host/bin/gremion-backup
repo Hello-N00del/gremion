@@ -11,6 +11,31 @@
 #
 # Exit codes: 0 ok · 1 assertion/post-condition failed · 2 usage or missing
 #             precondition · 3 blocked on an external step.
+#
+# STAGED DUMP NAMING — two zones under $(gremion_root)/backups/current, both of
+# which Task 10's gremion-restore-into consumes:
+#
+#   <database>.sql.gz             the KERNEL zone: exactly the dumps the release
+#                                 tree's own scripts/backup.sh produces
+#                                 (keycloak, gremion, control). Those names are
+#                                 that script's contract, not this program's, so
+#                                 they are left where it puts them. Read back
+#                                 from the staged tree after it runs — never a
+#                                 hard-coded list.
+#   <service>__<database>.sql.gz  every dump THIS program makes: one artefact per
+#                                 (compose service, database) PAIR. Split at the
+#                                 FIRST '__' — what precedes it is the compose
+#                                 service from BACKUP_POSTGRES_SERVICES, the rest
+#                                 is the database name, which may itself contain
+#                                 '__'. A service name may not, and is refused.
+#
+# Keying the artefact on the database NAME alone (round 3 and earlier) meant a
+# database name present on two of the servers in BACKUP_POSTGRES_SERVICES
+# resolved to ONE path: the first server's dump was staged and every other
+# server's was skipped by the same-run cache check, with assert_dump_coverage
+# sharing the predicate and so vacuously satisfied. The run reported
+# `databases=N ok=true` and exit 0 with a whole server's database absent from
+# the snapshot.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +65,11 @@ ARCHIVE_IMAGE_DIGEST=""
 DATABASES=""
 VOLUMES=""
 SNAP_BEFORE=""
+# The database names scripts/backup.sh actually wrote, observed from the staged
+# tree, and the service its dumps belong to (the first configured one). Together
+# they decide which of the two naming zones a (service, database) pair lands in.
+KERNEL_DUMPS=""
+KERNEL_PG_SERVICE=""
 
 usage() {
     cat >&2 <<'USAGE'
@@ -236,7 +266,47 @@ ENV
     )
     ( cd "$driver" && bash scripts/backup.sh ) || die "kernel dump script failed" 1
     rm -rf "$scratch" "${driver}/.env"
+    record_kernel_dumps
     ok "kernel dumps complete in ${DUMP_DIR}"
+}
+
+# TASK 9, review round 4: which bare-named dumps the kernel script produced,
+# read from the staged tree the moment it returns. reset_stage_dir emptied that
+# tree and this is the first producer, so every *.sql.gz directly under
+# DUMP_DIR at this point is one of its dumps. Observed, never hard-coded: the
+# kernel script's database list is its own contract and Spec B may change it.
+record_kernel_dumps() {
+    local f b listing
+    KERNEL_DUMPS=""
+    # The die is OUTSIDE the command substitution on purpose: inside one it runs
+    # in a subshell and cannot end the program, and an unreadable staged tree
+    # would come back as "the kernel produced nothing".
+    listing="$(find "$DUMP_DIR" -maxdepth 1 -type f -name '*.sql.gz')" \
+        || die "cannot inspect the staged tree: ${DUMP_DIR}" 1
+    while read -r f <&3; do
+        [ -n "$f" ] || continue
+        b="${f##*/}"
+        KERNEL_DUMPS="${KERNEL_DUMPS}${b%.sql.gz}"$'\n'
+    done 3<<<"$listing"
+}
+
+is_kernel_dump() {   # $1 = database name
+    case $'\n'"$KERNEL_DUMPS" in
+        *$'\n'"$1"$'\n'*) return 0 ;;
+    esac
+    return 1
+}
+
+# The staged artefact for one (service, database) PAIR — see STAGED DUMP NAMING
+# in the header. The kernel zone is only ever the FIRST configured service's
+# dumps, and only those the kernel script really wrote: an enumerated database
+# whose kernel dump is absent or empty is dumped here like any other.
+staged_dump_path() {   # $1 = compose service, $2 = database
+    if [ "$1" = "$KERNEL_PG_SERVICE" ] && is_kernel_dump "$2"; then
+        printf '%s\n' "${DUMP_DIR}/${2}.sql.gz"
+    else
+        printf '%s\n' "${DUMP_DIR}/${1}__${2}.sql.gz"
+    fi
 }
 
 postgres_services() {
@@ -276,7 +346,7 @@ list_database_count() {   # $1 = compose service name
 # a dump that ran to completion, and a pg_dump that fails says so by name.
 dump_database() {    # $1 = service, $2 = database
     local dst tmp
-    dst="${DUMP_DIR}/$2.sql.gz"
+    dst="$(staged_dump_path "$1" "$2")"
     tmp="${dst}.part"
     rm -f "$tmp"
     if ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
@@ -314,10 +384,21 @@ dump_has_content() {   # $1 = path to a .sql.gz
 # last line, and a failing psql becomes a loud die instead of an empty stream)
 # and checked against the server's own count.
 dump_remaining_databases() {
-    local svc db names n_names n_count count=0
+    local svc db names n_names n_count path count=0
     DATABASES=""
+    KERNEL_PG_SERVICE=""
     while read -r svc <&3; do
         [ -n "$svc" ] || continue
+        # The staged name is split at the first '__' (see STAGED DUMP NAMING),
+        # so a service name carrying '__' is ambiguous for Task 10 and is a
+        # configuration error, not something to guess at.
+        case "$svc" in
+            *__*) die "invalid Postgres service name (contains '__'): ${svc}" 2 ;;
+        esac
+        # scripts/backup.sh dumps from the kernel's own Postgres, which is the
+        # first configured service; every other service's dumps are this
+        # program's own and are keyed on the pair.
+        [ -n "$KERNEL_PG_SERVICE" ] || KERNEL_PG_SERVICE="$svc"
         names="$(list_databases "$svc")" \
             || die "database enumeration failed for service ${svc}" 1
         n_names="$(printf '%s\n' "$names" | grep -c . || true)"
@@ -339,8 +420,13 @@ dump_remaining_databases() {
         info "databases enumerated for ${svc}: $(printf '%s' "$names" | tr '\n' ' ')"
         while read -r db <&3; do
             [ -n "$db" ] || continue
-            DATABASES="${DATABASES}${db}"$'\n'
-            dump_has_content "${DUMP_DIR}/${db}.sql.gz" || dump_database "$svc" "$db"
+            # DATABASES carries the PAIR, tab-separated: the coverage guard has
+            # to resolve the same path this loop wrote, and a database name on
+            # its own does not identify an artefact once there is more than one
+            # Postgres server.
+            DATABASES="${DATABASES}${svc}"$'\t'"${db}"$'\n'
+            path="$(staged_dump_path "$svc" "$db")"
+            dump_has_content "$path" || dump_database "$svc" "$db"
             count=$(( count + 1 ))
         done 3<<<"$names"
     done 3<<<"$(postgres_services)"
@@ -349,12 +435,23 @@ dump_remaining_databases() {
 }
 
 assert_dump_coverage() {
-    local db
-    while read -r db <&3; do
+    local svc db path paths="" n_files
+    while IFS=$'\t' read -r svc db <&3; do
         [ -n "$db" ] || continue
-        dump_has_content "${DUMP_DIR}/${db}.sql.gz" \
+        path="$(staged_dump_path "$svc" "$db")"
+        dump_has_content "$path" \
             || die "no dump for enumerated database: ${db}" 1
+        paths="${paths}${path}"$'\n'
     done 3<<<"$DATABASES"
+    # Counted from the resolved paths, not from the number of pairs: a naming
+    # rule that collapses two pairs onto one file satisfies the per-pair check
+    # above vacuously — which is exactly how a database name present on two
+    # Postgres servers was dumped once and skipped on the rest while the run
+    # reported success.
+    n_files="$(printf '%s' "$paths" | sed '/^[[:space:]]*$/d' | sort -u | grep -c . || true)"
+    n_files="${n_files:-0}"
+    [ "$n_files" -eq "$DB_COUNT" ] \
+        || die "staged dumps ${n_files} below enumerated databases ${DB_COUNT}: artefact names collide" 1
     ok "every enumerated database has a non-empty dump (${DB_COUNT})"
 }
 

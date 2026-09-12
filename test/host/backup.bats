@@ -389,8 +389,8 @@ exit 0"
     shim_baseline; shim_docker_with_pg "t_pilot"
     run "$BACKUP"
     [[ "$output" == *"every enumerated database has a non-empty dump (5)"* ]]
-    [ -s "${GREMION_ROOT}/backups/current/t_pilot.sql.gz" ]
-    [ -s "${GREMION_ROOT}/backups/current/postgres.sql.gz" ]
+    [ -s "${GREMION_ROOT}/backups/current/postgres__t_pilot.sql.gz" ]
+    [ -s "${GREMION_ROOT}/backups/current/postgres__postgres.sql.gz" ]
 }
 
 @test "the kernel three are not dumped twice" {
@@ -398,7 +398,11 @@ exit 0"
     run "$BACKUP"
     # keycloak/gremion/control came from the kernel script; pg_dump must only
     # have been asked for the databases it did not produce.
-    ! assert_recorded docker "pg_dump -U postgres keycloak"
+    # NOT `! assert_recorded`: a !-negated command is exempt from the ERR trap
+    # bats detects a failure with, so mid-body it asserts nothing at all. Drill
+    # D4 (review round 4) proved it — the kernel three WERE re-dumped and this
+    # test stayed green. refute_recorded (Task 1) is the real negative.
+    refute_recorded docker "pg_dump -U postgres keycloak"
     assert_recorded docker "pg_dump -U postgres t_pilot"
 }
 
@@ -968,7 +972,7 @@ exit 0'
     run "$BACKUP" --label trunc-1
     [ "$status" -eq 0 ]
     [[ "$output" == *"every enumerated database has a non-empty dump (5)"* ]]
-    [ -s "${GREMION_ROOT}/backups/current/t_pilot.sql.gz" ]
+    [ -s "${GREMION_ROOT}/backups/current/postgres__t_pilot.sql.gz" ]
     [ "$(jq -r '.artefacts.databases' "${GREMION_ROOT}/runtime/last-backup.json")" = "5" ]
 }
 
@@ -1039,7 +1043,7 @@ exit 0'
     run "$BACKUP" --label stdin-1
     [ "$status" -eq 0 ]
     [[ "$output" == *"every enumerated database has a non-empty dump (5)"* ]]
-    [ -s "${GREMION_ROOT}/backups/current/t_pilot.sql.gz" ]
+    [ -s "${GREMION_ROOT}/backups/current/postgres__t_pilot.sql.gz" ]
     [ "$(jq -r '.artefacts.databases' "${GREMION_ROOT}/runtime/last-backup.json")" = "5" ]
 }
 
@@ -1141,11 +1145,11 @@ exec ${real} \"\$@\""
     shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
     mkdir -p "${GREMION_ROOT}/backups/current"
     printf 'STALE-FROM-AN-EARLIER-RUN' \
-        | gzip >"${GREMION_ROOT}/backups/current/t_pilot.sql.gz"
+        | gzip >"${GREMION_ROOT}/backups/current/postgres__t_pilot.sql.gz"
     run "$BACKUP" --label fresh-1
     [ "$status" -eq 0 ]
     # Read back from the staged tree, not from the program's exit code.
-    [ "$(gzip -dc "${GREMION_ROOT}/backups/current/t_pilot.sql.gz")" = "PGDUMP" ]
+    [ "$(gzip -dc "${GREMION_ROOT}/backups/current/postgres__t_pilot.sql.gz")" = "PGDUMP" ]
 }
 
 @test "an artefact the running system no longer has does not survive into the staged tree" {
@@ -1161,7 +1165,7 @@ exec ${real} \"\$@\""
     [ ! -e "${GREMION_ROOT}/backups/current/volumes/staging_gone.tar" ]
     [ ! -e "${GREMION_ROOT}/backups/current/buckets/gone" ]
     # and everything this run really did produce is there
-    [ -s "${GREMION_ROOT}/backups/current/t_pilot.sql.gz" ]
+    [ -s "${GREMION_ROOT}/backups/current/postgres__t_pilot.sql.gz" ]
     [ -s "${GREMION_ROOT}/backups/current/volumes/staging-state_pgdata.tar" ]
     [ -s "${GREMION_ROOT}/backups/current/keycloak.sql.gz" ]
 }
@@ -1203,7 +1207,7 @@ exit 0'
     [ "$status" -eq 1 ]
     # The load-bearing half: nothing decompressible is left where a FINISHED
     # dump belongs, so no later run can adopt a killed one.
-    [ ! -e "${GREMION_ROOT}/backups/current/t_pilot.sql.gz" ]
+    [ ! -e "${GREMION_ROOT}/backups/current/postgres__t_pilot.sql.gz" ]
     [[ "$output" == *"pg_dump failed for database t_pilot on service postgres"* ]]
 }
 
@@ -1215,4 +1219,97 @@ exit 0'
     run "$BACKUP" --label find-1
     [ "$status" -eq 1 ]
     [[ "$output" == *"cannot inspect the staged tree: ${GREMION_ROOT}/backups/current"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# TASK 9, review round 4 — multi-Postgres-server dump naming
+#
+# The staged artefact used to be keyed on the DATABASE NAME alone
+# (`${DUMP_DIR}/${db}.sql.gz`), while the enumeration runs per (service,
+# database) pair. A database name that exists on two of the servers listed in
+# BACKUP_POSTGRES_SERVICES therefore resolved to ONE path: the first server's
+# dump was staged, the second server's was skipped by the very same-run cache
+# check that keeps the kernel three from being dumped twice, and
+# assert_dump_coverage — sharing the predicate — was vacuously satisfied. The
+# run reported `databases=2 … ok=true` and exit 0 with one server's database
+# missing from the staged tree and from the restic snapshot. §J requires every
+# database on EVERY Postgres server, and this task's brief requires
+# BACKUP_POSTGRES_SERVICES' behaviour to be asserted, never silently skipped.
+# ---------------------------------------------------------------------------
+
+# Two Postgres services, pg1 and pg2, each reporting exactly one database and
+# both calling it `postgres`. Each server's pg_dump prints its OWN marker, so
+# the staged files prove WHICH server each dump came from — a path check alone
+# would pass on two copies of the same server's data.
+shim_docker_two_pg_servers() {
+    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+case "$1 $2" in
+  "volume ls")
+     case "$*" in
+       *"project=staging-state"*) printf "staging-state_pgdata\nstaging-state_nats\n" ;;
+       *"project=staging-mail"*)  printf "staging-mail_spool\n" ;;
+     esac ;;
+  "volume inspect") exit 0 ;;
+  "image inspect") echo "alpine@sha256:0000000000000000000000000000000000000000000000000000000000000001" ;;
+  "compose exec"|"compose "*)
+     svc=""
+     for a in "$@"; do case "$a" in pg1|pg2) svc="$a" ;; esac; done
+     case "$*" in
+       *count*)       printf "1\n" ;;
+       *pg_database*) printf "postgres\n" ;;
+       *pg_dump*)     printf "PGDUMP-FROM-%s" "$svc" ;;
+     esac ;;
+  pull*) exit 0 ;;
+  run*)
+     prev=""; tarfile=""
+     for a in "$@"; do [ "$prev" = "-cf" ] && tarfile="$a"; prev="$a"; done
+     mkdir -p "$out"; printf "tar-stub" > "${out}/${tarfile#/out/}" ;;
+esac
+exit 0'
+}
+
+@test "a database name that exists on two Postgres servers is dumped once per server" {
+    shim_baseline; shim_docker_two_pg_servers
+    shim_rsync_honouring_excludes; shim_restic_ok
+    export BACKUP_POSTGRES_SERVICES='pg1 pg2'
+    run "$BACKUP" --class daily --label two-servers
+    [ "$status" -eq 0 ]
+    # Both servers were really asked for the dump…
+    assert_recorded docker "exec -T pg1 pg_dump -U postgres postgres"
+    assert_recorded docker "exec -T pg2 pg_dump -U postgres postgres"
+    # …and the staged tree carries one artefact per (service, database) pair,
+    # each holding ITS OWN server's bytes. Read back from the filesystem.
+    local d="${GREMION_ROOT}/backups/current"
+    [ "$(gzip -dc "${d}/pg1__postgres.sql.gz")" = "PGDUMP-FROM-pg1" ]
+    [ "$(gzip -dc "${d}/pg2__postgres.sql.gz")" = "PGDUMP-FROM-pg2" ]
+    [[ "$output" == *"every enumerated database has a non-empty dump (2)"* ]]
+    [[ "$output" == *"databases=2"* ]]
+}
+
+@test "the staged dump count is read from the filesystem, not from the pair count" {
+    shim_baseline; shim_docker_two_pg_servers
+    shim_rsync_honouring_excludes; shim_restic_ok
+    export BACKUP_POSTGRES_SERVICES='pg1 pg2'
+    run "$BACKUP" --class daily --label two-servers-count
+    [ "$status" -eq 0 ]
+    # Exactly two NON-kernel dumps, one per pair: a naming rule that collapsed
+    # both pairs onto one path would leave one file here and still satisfy the
+    # per-pair existence check.
+    local n
+    n="$(find "${GREMION_ROOT}/backups/current" -maxdepth 1 -type f -name '*__*.sql.gz' | wc -l)"
+    [ "$n" -eq 2 ]
+    # The kernel zone is untouched: scripts/backup.sh's own three dumps keep
+    # their bare names, which is the contract Task 10 consumes.
+    [ -s "${GREMION_ROOT}/backups/current/keycloak.sql.gz" ]
+    [ ! -e "${GREMION_ROOT}/backups/current/pg1__keycloak.sql.gz" ]
+}
+
+@test "a Postgres service name that would break the dump naming rule is refused" {
+    shim_baseline; shim_docker_with_pg "t_pilot"
+    # `<service>__<database>.sql.gz` is split at the FIRST '__', so a service
+    # name carrying '__' is ambiguous for Task 10's gremion-restore-into.
+    export BACKUP_POSTGRES_SERVICES='pg__odd'
+    run "$BACKUP" --class daily --label odd-service
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"invalid Postgres service name (contains '__'): pg__odd"* ]]
 }
