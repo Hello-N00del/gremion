@@ -267,6 +267,16 @@ teardown() {
     [[ "$output" == *"WantedBy=multi-user.target"* ]]
 }
 
+@test "render_unit reports a failed install to a caller that tests its status" {
+    # atomic_write's status used to be dropped behind `rm -f`: the render
+    # succeeded, the install did not, and a caller that tests the function
+    # (bats `run` here, `if`/`||` in a future stage) heard 0 with no unit.
+    mkdir -p "${GREMION_ROOT}/hostd.unit.tmp"
+    run render_unit gremion-hostd.service "${GREMION_ROOT}/hostd.unit"
+    [ "$status" -ne 0 ]
+    [[ ! -e "${GREMION_ROOT}/hostd.unit" ]]
+}
+
 @test "render_unit refuses a single argument" {
     # The one-argument, print-to-stdout form does not exist: a caller that
     # passed only a name would have its destination silently ignored.
@@ -543,6 +553,16 @@ exit 0'
     run atomic_render "${GREMION_ROOT}/out.nft" 644 bash -c 'exit 2'
     [ "$status" -eq 2 ]
     [[ "$(cat "${GREMION_ROOT}/out.nft")" == "GOOD RULESET" ]]
+}
+
+@test "atomic_render reports a failed install, not only a failed render" {
+    # Same shape as render_unit: `$rc` carried the renderer's status only,
+    # so a renderer that succeeded and an install that failed returned 0.
+    mkdir -p "${GREMION_ROOT}/out.nft.tmp"
+    run atomic_render "${GREMION_ROOT}/out.nft" 644 printf 'good
+'
+    [ "$status" -ne 0 ]
+    [[ ! -e "${GREMION_ROOT}/out.nft" ]]
 }
 
 @test "atomic_render refuses a call without a command" {

@@ -139,6 +139,14 @@ atomic_write() {
     # at <path>.tmp, a full disk) would otherwise fall through to chmod and
     # mv, rename whatever sits at <path>.tmp into place and return 0. The
     # caller would then report a written file that is not there.
+    #
+    # A symlink left at <path>.tmp would send the write through it and then
+    # install the link itself; it is removed first. `mv -T` refuses to move
+    # the file INTO a directory that occupies <path> (plain `mv -f` would,
+    # and return 0). Nothing here removes a directory it did not create.
+    if [[ -L "$tmp" ]] && ! rm -f -- "$tmp"; then
+        return 1
+    fi
     if ! cat > "$tmp"; then
         if [[ -f "$tmp" ]]; then rm -f -- "$tmp"; fi
         return 1
@@ -147,7 +155,10 @@ atomic_write() {
         rm -f -- "$tmp"
         return 1
     fi
-    mv -f "$tmp" "$path"
+    if ! mv -f -T "$tmp" "$path"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
 }
 
 # load_env <file>

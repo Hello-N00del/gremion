@@ -259,8 +259,13 @@ render_unit() {
     if [[ "$dest" == "-" || "$dest" == "/dev/stdout" ]]; then
         cat "$tmp"; rm -f "$tmp"; return 0
     fi
-    atomic_write "$dest" 644 < "$tmp"
+    # The install's status is the function's status; `rm -f` must not stand
+    # in for it. A caller that tests this function (bats `run`, `if`, `||`)
+    # would otherwise hear "installed" for a unit that is not there.
+    local rc=0
+    atomic_write "$dest" 644 < "$tmp" || rc=$?
     rm -f "$tmp"
+    return "$rc"
 }
 
 # §E: bootstrap refuses to create a shared external resource that is not
@@ -1018,8 +1023,11 @@ atomic_render() {
     # Subshell: a renderer that calls die() exits, and that must not take the
     # stage down before the scratch file is removed.
     ( "$@" ) > "$tmp" || rc=$?
+    # A failed INSTALL is reported like a failed render: atomic_write's
+    # status used to be dropped here, so a caller that tests this function
+    # heard 0 with nothing at <dest>.
     if [[ "$rc" -eq 0 ]]; then
-        atomic_write "$dest" "$mode" < "$tmp"
+        atomic_write "$dest" "$mode" < "$tmp" || rc=$?
     fi
     rm -f "$tmp"
     return "$rc"

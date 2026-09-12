@@ -361,11 +361,37 @@ PROBE
     # rather than the message: whether the pipeline failed anyway depended on
     # a race between the writer and the closing pipe.
     mkdir -p "${GREMION_ROOT}/out.txt.tmp"
-    run_with 'if ! printf "x
-" | atomic_write "$1" 600; then echo REFUSED; exit 1; fi; echo ACCEPTED'         "${GREMION_ROOT}/out.txt"
+    run_with 'if ! printf "x\n" | atomic_write "$1" 600; then echo REFUSED; exit 1; fi; echo ACCEPTED' \
+        "${GREMION_ROOT}/out.txt"
     [ "$status" -ne 0 ]
     [[ "$output" == *REFUSED* ]]
     [ ! -e "${GREMION_ROOT}/out.txt" ]
+}
+
+@test "atomic_write fails and installs nothing when a directory occupies the target path" {
+    # `mv -f file dir` moves the file INTO the directory and returns 0, so the
+    # caller heard "written" while <path> stayed a directory holding a stray
+    # <name>.tmp. Same errexit-ignored context as above.
+    mkdir -p "${GREMION_ROOT}/out.txt"
+    run_with 'if ! printf "x\n" | atomic_write "$1" 600; then echo REFUSED; exit 1; fi; echo ACCEPTED' \
+        "${GREMION_ROOT}/out.txt"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *REFUSED* ]]
+    [ -d "${GREMION_ROOT}/out.txt" ]
+    [ ! -e "${GREMION_ROOT}/out.txt/out.txt.tmp" ]
+    [ ! -e "${GREMION_ROOT}/out.txt.tmp" ]
+}
+
+@test "atomic_write does not write through a symlink left at its temp path" {
+    # A stale symlink at <path>.tmp would receive the body at ITS target and
+    # then be renamed into place as a link, not a mode-controlled file.
+    ln -s "${GREMION_ROOT}/elsewhere" "${GREMION_ROOT}/out.txt.tmp"
+    run_with 'printf "x\n" | atomic_write "$1" 600' "${GREMION_ROOT}/out.txt"
+    [ "$status" -eq 0 ]
+    [ ! -e "${GREMION_ROOT}/elsewhere" ]
+    [ ! -L "${GREMION_ROOT}/out.txt" ]
+    [ -f "${GREMION_ROOT}/out.txt" ]
+    [ "$(cat "${GREMION_ROOT}/out.txt")" = "x" ]
 }
 
 @test "atomic_write exits 2 when the parent directory is absent" {
