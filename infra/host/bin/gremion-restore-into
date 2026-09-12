@@ -1,0 +1,524 @@
+#!/usr/bin/env bash
+#
+# gremion-restore-into — restore a restic snapshot into a NON-PRODUCTION stack
+# and prove it by content (§J).
+#
+# It restores databases, data volumes and object buckets; it NEVER restores
+# /opt/gremion/etc — that path is in the backup set for disaster recovery of the
+# same host only, and a digest taken before the restore is re-read after it.
+# Then it neuters the instance and asserts, from the running system, one file
+# checksum, one database row and the ACME volume.
+#
+# Usage:
+#   gremion-restore-into --stack S --snapshot ID|latest
+#        [--root DIR] [--release DIR] [--src-stack NAME] [--rto]
+#        [--proof-file <container-path>:<sha256>]...
+#        [--proof-row db=<db> sql=<sql> want=<v>]...
+#        [--proof-file-service NAME]
+# Exit: 0 ok · 1 assertion/post-condition failed · 2 usage/precondition · 3 blocked
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+NEUTER_BIN="${NEUTER_BIN:-${SCRIPT_DIR}/gremion-neuter}"
+# Unpacks volume archives; the same helper Task 9 uses to create them.
+RESTORE_HELPER_IMAGE="${RESTORE_HELPER_IMAGE:-alpine:3.22}"
+# The digest-pinned MinIO client of the release; only needed when the snapshot
+# carries buckets/.
+MC_IMAGE="${MC_IMAGE:-}"
+# Volumes whose content is restored from the DUMPS instead of the archive. A
+# Postgres data directory unpacked under a running server is undefined, and it
+# would carry the SOURCE instance's roles and passwords into the target.
+RESTORE_VOLUME_SKIP_RE="${RESTORE_VOLUME_SKIP_RE:-(_pg-data|_postgres-data|_pgdata)$}"
+
+DB_COUNT=0; VOL_COUNT=0; VOL_SKIPPED=0; BUCKET_COUNT=0
+FILE_PROOFS=0; ROW_PROOFS=0; ACME_OK=false
+# The compose service the release tree's restore.sh restores INTO, read out of
+# the script itself; empty when it cannot be read unambiguously.
+RESTORE_PG_SERVICE=""
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-restore-into --stack S --snapshot ID|latest
+           [--root DIR] [--release DIR] [--src-stack NAME] [--rto]
+           [--proof-file <container-path>:<sha256>]...
+           [--proof-row db=<db> sql=<sql> want=<v>]...
+           [--proof-file-service NAME]
+  --stack S              target stack; must equal STACK in <root>/etc/env/state.env
+                         and must NOT carry a public certificate resolver
+  --snapshot ID|latest   restic snapshot to restore
+  --root DIR             instance root (default: $GREMION_ROOT, else /opt/gremion)
+  --release DIR          release tree holding scripts/restore.sh (default: <root>/current)
+  --src-stack NAME       stack the snapshot was taken from (default: read from the
+                         snapshot's own etc/env/state.env)
+  --rto                  print RTO-SECONDS=<n>
+  --proof-file P:SHA     assert sha256(P) inside the proof service (repeatable)
+  --proof-row            assert the one-value result of a query (repeatable), either
+                           --proof-row db=<db> sql=<sql> want=<v>     [preferred]
+                           --proof-row <db>:<sql>:<expected>          [legacy]
+                         The legacy colon form splits on the FIRST and the LAST
+                         colon, so it is REFUSED (exit 2) for any spec containing
+                         '::' — a cast such as v::text would otherwise truncate the
+                         expected value silently. Use the keyed form for casts.
+  --proof-file-service S service the proof files live in (default: nextcloud)
+
+environment:
+  RESTORE_VOLUME_SKIP_RE  ERE of volume names restored from the dumps instead of
+                          the archive (default: (_pg-data|_postgres-data|_pgdata)$)
+  MC_IMAGE                digest-pinned mc image; required only for buckets/
+  RESTORE_HELPER_IMAGE    image used to unpack volume archives (default alpine:3.22)
+EOF
+    exit 2
+}
+
+env_value() {
+    local file="$1" key="$2" hits
+    [[ -f "$file" ]] || die "env file not found: $file" 2
+    hits="$(grep -c "^${key}=" "$file" || true)"
+    [[ "$hits" -le 1 ]] || die "duplicate key ${key} in ${file}" 2
+    [[ "$hits" -eq 1 ]] || return 0
+    sed -n "s/^${key}=//p" "$file"
+}
+
+# --proof-row, keyed form: three argv words, order-free. A colon in the SQL is
+# just a character here, so casts are safe.
+add_proof_row_keyed() {   # db=<db> sql=<sql> want=<v>
+    local a db="" sql="" want=""
+    for a in "$@"; do
+        case "$a" in
+            db=*)   db="${a#db=}" ;;
+            sql=*)  sql="${a#sql=}" ;;
+            want=*) want="${a#want=}" ;;
+            *) die "malformed --proof-row word '${a}' (want db=… sql=… want=…)" 2 ;;
+        esac
+    done
+    [[ -n "$db" && -n "$sql" && -n "$want" ]] || \
+        die "--proof-row needs db=…, sql=… and want=… (got db='${db}' sql='${sql}' want='${want}')" 2
+    PROOF_ROW_DB+=("$db"); PROOF_ROW_SQL+=("$sql"); PROOF_ROW_WANT+=("$want")
+}
+
+# --proof-row, legacy colon form. Refused when it cannot be split unambiguously.
+add_proof_row_legacy() {   # <db>:<sql>:<expected>
+    local spec="$1" db rest sql want
+    case "$spec" in
+        *::*) die "--proof-row '${spec}' contains '::': the colon form splits on the LAST colon, so a cast such as v::text would be read as the expected value; use the keyed form: --proof-row db=<db> sql=<sql> want=<v>" 2 ;;
+    esac
+    db="${spec%%:*}"; rest="${spec#*:}"; want="${rest##*:}"; sql="${rest%:*}"
+    [[ -n "$db" && -n "$sql" && -n "$want" && "$rest" != "$want" ]] || \
+        die "malformed --proof-row '${spec}' (want <db>:<sql>:<expected> or db=… sql=… want=…)" 2
+    PROOF_ROW_DB+=("$db"); PROOF_ROW_SQL+=("$sql"); PROOF_ROW_WANT+=("$want")
+}
+
+parse_args() {
+    STACK_ARG=""; SNAPSHOT=""; ROOT=""; RELEASE_DIR=""; SRC_STACK_ARG=""
+    WANT_RTO=false; PROOF_FILE_SERVICE="nextcloud"
+    PROOF_FILES=(); PROOF_ROW_DB=(); PROOF_ROW_SQL=(); PROOF_ROW_WANT=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --stack)     [ $# -ge 2 ] || die "option $1 needs a value" 2
+                         STACK_ARG="$2"; shift 2 ;;
+            --snapshot)  [ $# -ge 2 ] || die "option $1 needs a value" 2
+                         SNAPSHOT="$2"; shift 2 ;;
+            --root)      [ $# -ge 2 ] || die "option $1 needs a value" 2
+                         ROOT="$2"; shift 2 ;;
+            --release)   [ $# -ge 2 ] || die "option $1 needs a value" 2
+                         RELEASE_DIR="$2"; shift 2 ;;
+            --src-stack) [ $# -ge 2 ] || die "option $1 needs a value" 2
+                         SRC_STACK_ARG="$2"; shift 2 ;;
+            --rto)       WANT_RTO=true; shift ;;
+            --proof-file) [ $# -ge 2 ] || die "option $1 needs a value" 2
+                         PROOF_FILES+=("$2"); shift 2 ;;
+            --proof-row)
+                [ $# -ge 2 ] || die "option $1 needs a value" 2
+                if [[ "$2" == db=* ]]; then
+                    [ $# -ge 4 ] || \
+                        die "--proof-row keyed form needs three words: db=… sql=… want=…" 2
+                    add_proof_row_keyed "$2" "$3" "$4"; shift 4
+                else
+                    add_proof_row_legacy "$2"; shift 2
+                fi ;;
+            --proof-file-service) [ $# -ge 2 ] || die "option $1 needs a value" 2
+                         PROOF_FILE_SERVICE="$2"; shift 2 ;;
+            -h|--help) usage ;;
+            *) bad "unknown argument: $1"; usage ;;
+        esac
+    done
+    [[ -n "$STACK_ARG" && -n "$SNAPSHOT" ]] || usage
+    ROOT="${ROOT:-$(gremion_root)}"
+    RELEASE_DIR="${RELEASE_DIR:-${ROOT}/current}"
+    RUNTIME_DIR="${ROOT}/runtime"
+    STATE_ENV="${ROOT}/etc/env/state.env"
+    [[ -f "$STATE_ENV" ]] || die "no state env for the instance: ${STATE_ENV}" 2
+    STACK="$(env_value "$STATE_ENV" STACK)"
+    [[ "$STACK" == "$STACK_ARG" ]] || \
+        die "--stack ${STACK_ARG} does not match STACK=${STACK} in ${STATE_ENV}" 2
+    if [[ ${#PROOF_FILES[@]} -eq 0 || ${#PROOF_ROW_DB[@]} -eq 0 ]]; then
+        die "restore proof requires at least one --proof-file and one --proof-row" 2
+    fi
+}
+
+# A unit with a public certificate resolver is a public unit; restore-into
+# DROPS AND RECREATES databases, so it targets non-public instances only (§E).
+assert_not_public() {
+    local resolver
+    resolver="$(env_value "$STATE_ENV" TRAEFIK_CERT_RESOLVER)"
+    [[ -z "$resolver" ]] || die "refusing to restore into ${STACK}: TRAEFIK_CERT_RESOLVER=${resolver} names a public certificate resolver" 2
+    ok "${STACK} is a non-public unit (empty TRAEFIK_CERT_RESOLVER)"
+}
+
+# compose_cid <env file> <service> — the first container id of a compose service.
+# A trailing `| head -n1` would be a pipeline whose head can close the pipe
+# before compose finished writing; under `set -o pipefail` that reads back as a
+# failure on the PASSING path. The output is captured first instead.
+compose_cid() {
+    local out
+    out="$(docker compose --env-file "$1" ps -q "$2")" || return 1
+    printf '%s\n' "${out%%$'\n'*}"
+}
+
+etc_digest() {
+    find "${ROOT}/etc" -type f -print0 | sort -z \
+      | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+assert_etc_untouched() {
+    local now
+    now="$(etc_digest)"
+    [[ "$now" == "$ETC_SHA_BEFORE" ]] || die "etc/ changed during the restore" 1
+    ok "etc/ untouched by the restore"
+}
+
+write_last_restore() {   # <true|false> <exit code>
+    local okflag="$1" rc="$2" rto="null"
+    if [[ "$WANT_RTO" == true ]]; then rto=$(( $(date +%s) - START_TS )); fi
+    printf '{"ts":"%s","ok":%s,"exit":%s,"stack":"%s","snapshot":"%s","srcStack":"%s","artefacts":{"databases":%s,"volumes":%s,"volumesSkipped":%s,"buckets":%s},"proofs":{"files":%s,"rows":%s,"acme":%s},"rtoSeconds":%s}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$okflag" "$rc" "$STACK" "$SNAPSHOT" \
+        "${SRC_STACK:-unknown}" "$DB_COUNT" "$VOL_COUNT" "$VOL_SKIPPED" "$BUCKET_COUNT" \
+        "$FILE_PROOFS" "$ROW_PROOFS" "$ACME_OK" "$rto" \
+      | atomic_write "${RUNTIME_DIR}/last-restore.json" 644
+}
+
+on_exit() {
+    local rc=$?
+    if [[ -n "${WORK:-}" && -d "${WORK:-}" ]]; then rm -rf "$WORK"; fi
+    if [[ $rc -ne 0 && -n "${RUNTIME_DIR:-}" && -d "${RUNTIME_DIR:-}" ]]; then
+        write_last_restore false "$rc" || true
+    fi
+    exit "$rc"
+}
+
+# Task 9 stages into <root>/backups/current, so a snapshot tree ends in
+# .../backups/current. A hand-made disaster-recovery tree may be the flat
+# .../backups. Accept both and take the DEEPEST match, so a stale flat tree in
+# the same snapshot never wins over the staged one.
+#
+# `| head -n1` is deliberately absent: head closes the pipe as soon as it has
+# its line, which under `set -o pipefail` turns the PASSING path into a 141.
+# One awk keeps the deepest path instead.
+find_dump_dir() {   # <restored root>
+    find "$1" -type d \( -path '*/backups/current' -o -path '*/backups' \) -print \
+      | awk -F/ 'NF > deepest { deepest = NF; best = $0 } END { if (best != "") print best }'
+}
+
+restic_restore() {
+    WORK="$(mktemp -d)"
+    chmod 700 "$WORK"
+    restic restore "$SNAPSHOT" --target "${WORK}/restored" --quiet
+    DUMP_DIR="$(find_dump_dir "${WORK}/restored")"
+    [[ -n "$DUMP_DIR" ]] || \
+        die "snapshot ${SNAPSHOT} carries no backups/current tree (expected the Task 9 layout <root>/backups/current)" 1
+    info "dump tree: ${DUMP_DIR#"${WORK}/restored"}"
+    SNAP_STATE_ENV="$(find "${WORK}/restored" -type f -path '*/etc/env/state.env' -print -quit)"
+    if [[ -n "$SRC_STACK_ARG" ]]; then
+        SRC_STACK="$SRC_STACK_ARG"
+    else
+        [[ -n "$SNAP_STATE_ENV" ]] || die "snapshot carries no etc/env/state.env; pass --src-stack" 2
+        SRC_STACK="$(env_value "$SNAP_STATE_ENV" STACK)"
+        [[ -n "$SRC_STACK" ]] || die "snapshot's state.env has no STACK; pass --src-stack" 2
+    fi
+    ok "snapshot ${SNAPSHOT} restored (source stack ${SRC_STACK})"
+}
+
+# ── the restore.sh call path ────────────────────────────────────────────────
+# restore.sh parses ./.env from its own repo root and confirms interactively.
+# A shadow root gives it the TARGET stack's env with COMPOSE_FILE absolutised,
+# so the compose exec it performs resolves the target project and nothing else.
+# Composition stays env-only (N20); nothing is written into the release tree;
+# the shadow root dies with the exit trap.
+absolutise_compose_file() {   # <release dir> <COMPOSE_FILE value>
+    local dir="$1" raw="$2" out="" part
+    local IFS=':'
+    # shellcheck disable=SC2086  # deliberate ':'-split of COMPOSE_FILE
+    for part in $raw; do
+        [[ -n "$part" ]] || continue
+        case "$part" in
+            /*) out="${out}:${part}" ;;
+            *)  out="${out}:${dir}/${part}" ;;
+        esac
+    done
+    printf '%s\n' "${out#:}"
+}
+
+build_shadow_root() {
+    local compose_raw
+    SHADOW_ROOT="${WORK}/shadow"
+    mkdir -p "${SHADOW_ROOT}/scripts"
+    [[ -f "${RELEASE_DIR}/scripts/restore.sh" ]] || \
+        die "restore.sh not found in the release tree: ${RELEASE_DIR}/scripts/restore.sh" 2
+    cp "${RELEASE_DIR}/scripts/restore.sh" "${SHADOW_ROOT}/scripts/restore.sh"
+    chmod 700 "${SHADOW_ROOT}/scripts/restore.sh"
+    compose_raw="$(env_value "$STATE_ENV" COMPOSE_FILE)"
+    [[ -n "$compose_raw" ]] || die "COMPOSE_FILE is empty in ${STATE_ENV}" 2
+    # `|| true`: grep -v exits 1 when it selects nothing, which is a legitimate
+    # (if degenerate) state env, not an error.
+    { grep -v '^COMPOSE_FILE=' "$STATE_ENV" || true
+      printf 'COMPOSE_FILE=%s\n' "$(absolutise_compose_file "$RELEASE_DIR" "$compose_raw")"
+    } >"${SHADOW_ROOT}/.env"
+    chmod 600 "${SHADOW_ROOT}/.env"
+}
+
+# The set of targets the release tree's restore.sh can actually address, read
+# from its own case arms — so a widened restore.sh (spec B) needs no change here.
+restore_sh_arm_list() {   # <script>
+    sed -n 's/^[[:space:]]*\([a-z|_-]*\))[[:space:]]*$/\1/p' "$1" | tr '|' '\n'
+}
+
+# `printf … | grep -qx` would be the shape that exits 141 under `set -o pipefail`
+# when grep closes the pipe on the MATCHING path; the arms are captured first
+# and matched in the shell instead.
+restore_sh_supports() {   # <script> <target>
+    local arms
+    arms="$(restore_sh_arm_list "$1")" || return 1
+    [[ $'\n'"$arms"$'\n' == *$'\n'"$2"$'\n'* ]]
+}
+
+# The compose SERVICE the release tree's restore.sh restores INTO, read out of
+# the script itself — the same technique gremion-backup uses to decide which
+# service its bare-named dumps came FROM, and for the same reason: it is a fact
+# of the script that ran, never an operator-ordered list position.
+#
+# The pattern is spelled with [[:space:]] classes rather than literal blanks on
+# purpose: test/host/restore-into.bats refuses any literal `docker compose <verb>`
+# in this file, and this line would otherwise be the guard's own false positive.
+# The classes also tolerate the double space the kernel script happens to use.
+restore_sh_pg_service() {   # <script>
+    sed -n 's/^[[:space:]]*docker[[:space:]]\{1,\}compose[[:space:]]\{1,\}exec[[:space:]]\{1,\}-T[[:space:]]\{1,\}\([A-Za-z0-9][A-Za-z0-9_.-]*\).*/\1/p' \
+        "$1" | sort -u
+}
+
+# Two failure directions, both deliberately safe: a script naming a service
+# other than the expected one is believed (it is the authority); a name that
+# cannot be read at all leaves RESTORE_PG_SERVICE empty, and every
+# <service>__<database> dump is then BLOCKED rather than restored into a server
+# it may not belong to.
+resolve_restore_pg_service() {   # <script>
+    local found n
+    # Assigned first, checked after: a `die` inside $( ) runs in a subshell and
+    # cannot end the program.
+    found="$(restore_sh_pg_service "$1")" || found=""
+    n="$(printf '%s\n' "$found" | grep -c . || true)"
+    n="${n:-0}"
+    if [[ "$n" -ne 1 ]]; then
+        RESTORE_PG_SERVICE=""
+        bad "RESTORE-WARN: cannot read the Postgres service from ${1} (${n} candidate(s)); every <service>__<database> dump is blocked"
+        return 0
+    fi
+    RESTORE_PG_SERVICE="$found"
+    info "restore.sh restores into Postgres service: ${RESTORE_PG_SERVICE}"
+}
+
+# Task 9's staged dump naming, consumed exactly as gremion-backup writes it:
+#   <database>.sql.gz             the KERNEL zone — the dumps the release tree's
+#                                 own scripts/backup.sh produced, under the names
+#                                 that script chose, from the service it execs.
+#   <service>__<database>.sql.gz  one artefact per (compose service, database)
+#                                 PAIR, split at the FIRST '__'. A service name
+#                                 may not contain '__' (gremion-backup refuses
+#                                 one that does); a database name may.
+# Keying on the database name alone is the round-5 finding this split exists to
+# prevent: one database name present on two Postgres servers then resolves to one
+# target and a whole server's data is silently replaced by another server's.
+resolve_dump() {   # <staged basename without .sql.gz>; sets DUMP_SVC and DUMP_DB
+    local name="$1"
+    if [[ "$name" == *__* ]]; then
+        DUMP_SVC="${name%%__*}"
+        DUMP_DB="${name#*__}"
+        [[ -n "$DUMP_SVC" && -n "$DUMP_DB" ]] || \
+            die "malformed staged dump name '${name}.sql.gz' (want <database> or <service>__<database>)" 2
+    else
+        DUMP_SVC="${RESTORE_PG_SERVICE:-<unread>}"
+        DUMP_DB="$name"
+    fi
+}
+
+restore_databases() {
+    local f name i blocked="" dumps=() targets=() DUMP_SVC="" DUMP_DB=""
+    while IFS= read -r f; do dumps+=("$f"); done \
+        < <(find "$DUMP_DIR" -maxdepth 1 -type f -name '*.sql.gz' | sort)
+    [[ ${#dumps[@]} -gt 0 ]] || die "snapshot ${SNAPSHOT} carries no *.sql.gz dump in ${DUMP_DIR}" 1
+    build_shadow_root
+    resolve_restore_pg_service "${SHADOW_ROOT}/scripts/restore.sh"
+
+    # PRE-FLIGHT. Every staged name is resolved to its (service, database) pair
+    # and announced, and every pair is checked, BEFORE the first database is
+    # dropped: restore.sh DESTROYS its target, so a snapshot that cannot be
+    # restored in full must leave the target untouched, not half-restored. The
+    # loop never breaks early — the resolution of every dump is part of the
+    # evidence that two same-named databases stayed distinct.
+    for f in "${dumps[@]}"; do
+        name="$(basename "$f" .sql.gz)"
+        resolve_dump "$name"
+        info "dump ${name}.sql.gz -> service ${DUMP_SVC} database ${DUMP_DB}"
+        targets+=("$DUMP_DB")
+        if [[ "$name" == *__* && "$DUMP_SVC" != "${RESTORE_PG_SERVICE:-}" ]]; then
+            [[ -n "$blocked" ]] || blocked="BLOCKED: restore.sh cannot target '${DUMP_DB}' (dump ${name}.sql.gz, compose service '${DUMP_SVC}'): the release tree's restore.sh restores into compose service '${RESTORE_PG_SERVICE:-<unread>}' only (spec B: restore.sh gains a service selector for a second Postgres server)"
+        elif ! restore_sh_supports "${SHADOW_ROOT}/scripts/restore.sh" "$DUMP_DB"; then
+            [[ -n "$blocked" ]] || blocked="BLOCKED: restore.sh cannot target '${DUMP_DB}' (dump ${name}.sql.gz): its case arms are [$(restore_sh_arm_list "${SHADOW_ROOT}/scripts/restore.sh" | tr '\n' ' ')] (spec B: restore.sh gains arms for per-tenant databases, buckets and volumes)"
+        fi
+    done
+    [[ -z "$blocked" ]] || die "$blocked" 3
+
+    for i in "${!dumps[@]}"; do
+        info "restoring database ${targets[$i]} into ${STACK}-state"
+        printf 'yes\n' | ( cd "$SHADOW_ROOT" && ./scripts/restore.sh "${targets[$i]}" "${dumps[$i]}" )
+        DB_COUNT=$((DB_COUNT + 1))
+    done
+    ok "databases restored: ${DB_COUNT}"
+}
+
+# ── volumes ────────────────────────────────────────────────────────────────
+# Returns non-zero rather than dying: a `die` inside the $( ) of its caller
+# would end only the subshell.
+retarget_volume() {   # <source volume name> -> the target stack's volume name
+    local v="$1"
+    case "$v" in
+        "${SRC_STACK}_"*) printf '%s_%s\n' "$STACK" "${v#"${SRC_STACK}_"}" ;;
+        "${SRC_STACK}-"*) printf '%s-%s\n' "$STACK" "${v#"${SRC_STACK}-"}" ;;
+        *) return 1 ;;
+    esac
+}
+
+restore_volumes() {
+    local vdir="${DUMP_DIR}/volumes" f src dst
+    [[ -d "$vdir" ]] || die "snapshot ${SNAPSHOT} carries no volumes/ directory" 1
+    while IFS= read -r f; do
+        src="$(basename "$f" .tar)"
+        if [[ "$src" =~ $RESTORE_VOLUME_SKIP_RE ]]; then
+            info "SKIP volume ${src}: database content is restored from the dumps, not from the data directory"
+            VOL_SKIPPED=$((VOL_SKIPPED + 1))
+            continue
+        fi
+        dst="$(retarget_volume "$src")" \
+            || die "volume ${src} carries no ${SRC_STACK} prefix; refusing to guess its target name" 1
+        case "$dst" in
+            "${STACK}"[-_]*) : ;;
+            *) die "refusing to write volume ${dst}: it is not scoped to ${STACK}" 1 ;;
+        esac
+        docker volume create "$dst" >/dev/null
+        docker run --rm -v "${dst}:/v" -v "${vdir}:/src:ro" "$RESTORE_HELPER_IMAGE" \
+            sh -c "rm -rf /v/..?* /v/.[!.]* /v/* 2>/dev/null; tar -xf '/src/${src}.tar' -C /v"
+        VOL_COUNT=$((VOL_COUNT + 1))
+    done < <(find "$vdir" -maxdepth 1 -type f -name '*.tar' | sort)
+    [[ "$VOL_COUNT" -gt 0 ]] || die "snapshot ${SNAPSHOT} carries no restorable volume archive (${VOL_SKIPPED} skipped)" 1
+    ok "volumes restored: ${VOL_COUNT} (${VOL_SKIPPED} skipped)"
+}
+
+# ── buckets ────────────────────────────────────────────────────────────────
+restore_buckets() {
+    local bdir="${DUMP_DIR}/buckets" b user pass
+    if [[ ! -d "$bdir" ]]; then
+        info "snapshot carries no buckets/ (object storage off, N11); buckets=0"
+        return 0
+    fi
+    [[ -n "$MC_IMAGE" ]] || \
+        die "BLOCKED: bucket restore needs MC_IMAGE (the digest-pinned mc image of the release); spec B pins the object-storage images" 3
+    user="$(env_value "$STATE_ENV" MINIO_ROOT_USER)"
+    pass="$(env_value "$STATE_ENV" MINIO_ROOT_PASSWORD)"
+    [[ -n "$user" && -n "$pass" ]] || \
+        die "BLOCKED: snapshot carries buckets/ but MINIO_ROOT_USER/MINIO_ROOT_PASSWORD are absent from ${STATE_ENV} (spec B: object-storage port-back, N11)" 3
+    while IFS= read -r b; do
+        b="$(basename "$b")"
+        docker run --rm --network "${STACK}_state" -v "${bdir}:/src:ro" \
+            -e "MC_HOST_target=http://${user}:${pass}@minio:9000" \
+            "$MC_IMAGE" mirror --overwrite "/src/${b}" "target/${b}" >/dev/null
+        BUCKET_COUNT=$((BUCKET_COUNT + 1))
+    done < <(find "$bdir" -mindepth 1 -maxdepth 1 -type d | sort)
+    ok "buckets mirrored: ${BUCKET_COUNT}"
+}
+
+# ── the proof, read from the RUNNING system ────────────────────────────────
+prove_file() {   # <container-path>:<sha256>
+    local spec="$1" p want cid got
+    p="${spec%:*}"; want="${spec##*:}"
+    [[ -n "$p" && -n "$want" && "$p" != "$want" ]] || \
+        die "malformed --proof-file '${spec}' (want <container-path>:<sha256>)" 2
+    cid="$(compose_cid "$STATE_ENV" "$PROOF_FILE_SERVICE")" \
+        || die "cannot resolve the ${PROOF_FILE_SERVICE} container of ${STACK}" 2
+    [[ -n "$cid" ]] || die "proof service ${PROOF_FILE_SERVICE} is not running in ${STACK}" 2
+    got="$(docker exec "$cid" sha256sum "$p" | awk '{print $1}')"
+    [[ "$got" == "$want" ]] || die "PROOF-FILE mismatch ${p}: expected ${want}, observed ${got:-<none>}" 1
+    FILE_PROOFS=$((FILE_PROOFS + 1))
+    ok "PROOF-FILE ${p} ${want}"
+}
+
+prove_row() {   # <db> <sql> <expected>
+    local db="$1" sql="$2" want="$3" cid user got
+    user="$(env_value "$STATE_ENV" POSTGRES_USER)"
+    [[ -n "$user" ]] || die "POSTGRES_USER is empty in ${STATE_ENV}" 2
+    cid="$(compose_cid "$STATE_ENV" postgres)" \
+        || die "cannot resolve the postgres container of ${STACK}" 2
+    [[ -n "$cid" ]] || die "postgres is not running in ${STACK}" 2
+    got="$(docker exec -i "$cid" psql -tAq -v ON_ERROR_STOP=1 -U "$user" -d "$db" -c "$sql")"
+    got="${got//[$'\r\n\t ']/}"
+    [[ "$got" == "$want" ]] || die "PROOF-ROW mismatch ${db}: expected ${want}, observed ${got:-<empty>}" 1
+    ROW_PROOFS=$((ROW_PROOFS + 1))
+    ok "PROOF-ROW ${db} ${want}"
+}
+
+prove_acme() {
+    local vol="${STACK}_traefik_acme" files
+    docker volume inspect "$vol" >/dev/null 2>&1 || die "ACME volume ${vol} absent after restore" 1
+    files="$(docker run --rm -v "${vol}:/v:ro" "$RESTORE_HELPER_IMAGE" \
+               sh -c 'find /v -type f | wc -l')"
+    files="${files//[^0-9]/}"
+    [[ -n "$files" && "$files" -gt 0 ]] || die "ACME volume ${vol} restored empty" 1
+    ACME_OK=true
+    ok "PROOF-ACME ${vol} carries ${files} file(s)"
+}
+
+run_neuter() {
+    [[ -x "$NEUTER_BIN" ]] || die "gremion-neuter not found: ${NEUTER_BIN}" 2
+    "$NEUTER_BIN" --stack "$STACK" --root "$ROOT"
+}
+
+main() {
+    parse_args "$@"
+    need_cmd docker restic sha256sum mktemp find awk sed grep sort tr xargs basename
+    START_TS="$(date +%s)"
+    trap on_exit EXIT
+    assert_not_public
+    ETC_SHA_BEFORE="$(etc_digest)"
+    restic_restore
+    restore_databases
+    restore_volumes
+    restore_buckets
+    assert_etc_untouched
+    run_neuter
+    local spec i
+    for spec in "${PROOF_FILES[@]}"; do prove_file "$spec"; done
+    for ((i = 0; i < ${#PROOF_ROW_DB[@]}; i++)); do
+        prove_row "${PROOF_ROW_DB[$i]}" "${PROOF_ROW_SQL[$i]}" "${PROOF_ROW_WANT[$i]}"
+    done
+    prove_acme
+    write_last_restore true 0
+    printf 'RESTORE-PROOF: stack=%s snapshot=%s databases=%s volumes=%s buckets=%s files=%s rows=%s acme=present\n' \
+        "$STACK" "$SNAPSHOT" "$DB_COUNT" "$VOL_COUNT" "$BUCKET_COUNT" \
+        "$FILE_PROOFS" "$ROW_PROOFS"
+    if [[ "$WANT_RTO" == true ]]; then
+        printf 'RTO-SECONDS=%s\n' "$(( $(date +%s) - START_TS ))"
+    fi
+}
+
+main "$@"

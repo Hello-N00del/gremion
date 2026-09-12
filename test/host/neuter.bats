@@ -1,0 +1,314 @@
+#!/usr/bin/env bats
+# Unit tests for infra/host/bin/gremion-neuter.
+# No real docker: every docker call goes through the recording shim of
+# test/host/test_helper/host.bash.
+
+load 'test_helper/host'
+
+KERNEL_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
+NEUTER="${KERNEL_ROOT}/infra/host/bin/gremion-neuter"
+
+setup() {
+    setup_host_root
+    write_state_env
+    write_app_env
+}
+
+teardown() {
+    teardown_host_root
+}
+
+# A state env with one live mail host, one token and one webhook.
+write_state_env() {
+    cat >"${GREMION_ROOT}/etc/env/state.env" <<'EOF'
+STACK=stg
+COMPOSE_PROJECT_NAME=stg-state
+COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+PLATFORM_DOMAIN=example.org
+TRAEFIK_CERT_RESOLVER=
+POSTGRES_USER=postgres
+CONTROL_DB_NAME=control
+KEYCLOAK_SMTP_HOST=mail.example.org
+KEYCLOAK_SMTP_PORT=587
+NEXTCLOUD_MAIL_RELAY=smtp://mail.example.org:465
+INSTAGRAM_ACCESS_TOKEN=IGQVJreal
+ALERT_WEBHOOK_URL=https://hooks.example.org/abc
+EMAIL_HOST_PASSWORD=hunter2
+EOF
+    chmod 600 "${GREMION_ROOT}/etc/env/state.env"
+}
+
+write_app_env() {
+    cat >"${GREMION_ROOT}/etc/env/app-blue.env" <<'EOF'
+STACK=stg
+COLOUR=blue
+COMPOSE_PROJECT_NAME=stg-app-blue
+COMPOSE_FILE=docker-compose.app.yml:docker-compose.pins.yml
+SMTP_HOST=mail.example.org
+SMTP_PORT=587
+EOF
+    chmod 600 "${GREMION_ROOT}/etc/env/app-blue.env"
+    echo none >"${GREMION_ROOT}/runtime/active-colour"
+}
+
+# A docker shim with nothing live: exercises the argument and file paths.
+shim_docker_empty() {
+    shim docker '
+args="$*"
+case "$args" in
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*)    echo "cid1 stg-state postgres"; exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "exec cid1 env") echo "PATH=/usr/bin"; echo "POSTGRES_USER=postgres"; exit 0 ;;
+  *"ps -q postgres"*) echo cid1 ; exit 0 ;;
+  *to_regclass*) echo f; exit 0 ;;
+  *) exit 0 ;;
+esac'
+}
+
+@test "gremion-neuter exists and is executable" {
+    [ -x "$NEUTER" ]
+}
+
+@test "gremion-neuter is strict-mode bash sourcing the host common library" {
+    grep -q '^#!/usr/bin/env bash$' "$NEUTER"
+    grep -q '^set -euo pipefail$' "$NEUTER"
+    grep -q '\. "\$SCRIPT_DIR/\.\./lib/common\.sh"' "$NEUTER"
+}
+
+# Task 14's guard requires the bare directive on its own line, with no
+# 'disable=' suffix. Assert it here so the guard cannot be the first to find out.
+@test "gremion-neuter carries the shellcheck source directive" {
+    grep -q '^# shellcheck source=\.\./lib/common\.sh$' "$NEUTER"
+}
+
+@test "gremion-neuter uses no forbidden compose flag" {
+    run grep -nE 'docker compose (-f|-p|--profile| [^-])' "$NEUTER"
+    [ "$status" -ne 0 ]
+    grep -q 'docker compose --env-file' "$NEUTER"
+}
+
+@test "gremion-neuter without --stack exits 2 with usage" {
+    run "$NEUTER"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"usage: gremion-neuter --stack S"* ]]
+}
+
+@test "gremion-neuter refuses a --stack that does not match STACK in state.env" {
+    shim_docker_empty
+    run "$NEUTER" --stack other
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--stack other does not match STACK=stg"* ]]
+}
+
+@test "gremion-neuter refuses to run while a mail container is up" {
+    shim docker '
+args="$*"
+case "$args" in
+  *"{{.Names}}"*) echo "stg-mail stg-mail-stalwart-1"; exit 0 ;;
+  *) exit 0 ;;
+esac'
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"refusing to neuter while the mail project is up"* ]]
+}
+
+@test "gremion-neuter rewrites every SMTP host, token and webhook in every env file" {
+    shim_docker_empty
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    grep -q '^KEYCLOAK_SMTP_HOST=null-sink$'   "${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^KEYCLOAK_SMTP_PORT=1025$'        "${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^NEXTCLOUD_MAIL_RELAY=null-sink$' "${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^INSTAGRAM_ACCESS_TOKEN=$'        "${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^ALERT_WEBHOOK_URL=$'             "${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^EMAIL_HOST_PASSWORD=$'           "${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^SMTP_HOST=null-sink$'            "${GREMION_ROOT}/etc/env/app-blue.env"
+    # non-mail keys are untouched
+    grep -q '^PLATFORM_DOMAIN=example.org$'    "${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^POSTGRES_USER=postgres$'         "${GREMION_ROOT}/etc/env/state.env"
+}
+
+@test "gremion-neuter starts the null sink on the state network with the alias" {
+    shim_docker_empty
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    assert_recorded docker "run -d --name stg-null-sink"
+    assert_recorded docker "--network stg_state"
+    assert_recorded docker "--network-alias null-sink"
+}
+
+# A shim with one live ui container and a postgres container: the full path
+# through recreate → configs → rows → assert. Every `inspect -f {{.State.Running}}`
+# of a service container answers `true`, so wait_running never spins.
+shim_docker_live() {
+    cat >"${GREMION_ROOT}/runtime/.ui-env" <<'EOF'
+PATH=/usr/bin
+SMTP_HOST=mail.example.org
+INSTAGRAM_ACCESS_TOKEN=IGQVJreal
+EOF
+    shim docker '
+args="$*"
+clean="$GREMION_ROOT/runtime/.cleaned"
+case "$args" in
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*)
+      echo "cid-ui stg-app-blue gremion-ui"
+      echo "cid-pg stg-state postgres"
+      exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "inspect -f {{.State.Running}} cid-ui") echo true; exit 0 ;;
+  "exec cid-ui env")
+      if [ -f "$clean" ]; then echo "PATH=/usr/bin"; echo "SMTP_HOST=null-sink"; echo "INSTAGRAM_ACCESS_TOKEN="; exit 0; fi
+      cat "$GREMION_ROOT/runtime/.ui-env"; exit 0 ;;
+  "exec cid-pg env") echo "PATH=/usr/bin"; exit 0 ;;
+  *"up -d --force-recreate"*) : >"$clean"; exit 0 ;;
+  *"ps -q gremion-ui"*) echo cid-ui; exit 0 ;;
+  *"ps -q postgres"*)   echo cid-pg; exit 0 ;;
+  *"node -"*) cat >/dev/null; echo "changed=2 live=0"; exit 0 ;;
+  *to_regclass*) echo t; exit 0 ;;
+  *"UPDATE tenant"*) exit 0 ;;
+  *"SELECT count(*) FROM tenant"*) echo 0; exit 0 ;;
+  *) exit 0 ;;
+esac'
+}
+
+# A shim whose minio-mc image ships no `env` binary.
+shim_docker_exempt() {
+    shim docker '
+args="$*"
+case "$args" in
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*)
+      echo "cid-mc stg-state minio-mc"
+      echo "cid-pg stg-state postgres"
+      exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "exec cid-mc env") echo "exec: env: not found" >&2; exit 127 ;;
+  *Config.Env*cid-mc) echo "PATH=/usr/bin"; echo "MC_HOST_local=http://minio:9000"; exit 0 ;;
+  "exec cid-pg env") echo "PATH=/usr/bin"; exit 0 ;;
+  *"ps -q postgres"*) echo cid-pg; exit 0 ;;
+  *to_regclass*) echo f; exit 0 ;;
+  *) exit 0 ;;
+esac'
+}
+
+@test "gremion-neuter recreates only the services whose running env was live" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    shim_docker_live
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    assert_recorded docker "--env-file ${GREMION_ROOT}/etc/env/app-blue.env up -d --force-recreate gremion-ui"
+    run grep -c "force-recreate" "$SHIM_LOG"
+    [ "$output" -eq 1 ]
+}
+
+@test "gremion-neuter rewrites the restored tenant config files through gremion-ui" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    shim_docker_live
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    assert_recorded docker "-e NEUTER_SINK_HOST=null-sink"
+    assert_recorded docker "cid-ui node -"
+    [[ "$output" == *"tenant config files rewritten: 2"* ]]
+}
+
+@test "gremion-neuter rewrites the control registry SMTP host" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    shim_docker_live
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    assert_recorded docker "UPDATE tenant SET domain_profile = jsonb_set"
+    assert_recorded docker "SELECT count(*) FROM tenant"
+}
+
+@test "gremion-neuter prints its proof line" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    shim_docker_live
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=2 rows=0 containers=2 ok"* ]]
+}
+
+# The exec-exempt fallback must be TAKEN and ANNOUNCED, not merely declared.
+@test "gremion-neuter falls back to docker inspect for a declared exempt service and says so" {
+    shim_docker_exempt
+    export NEUTER_EXEC_EXEMPT="minio-mc"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WARN inspect-fallback for minio-mc"* ]]
+    assert_recorded docker "{{range .Config.Env}}"
+    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=0 containers=2 ok"* ]]
+}
+
+# WATCH IT FAIL: an UNdeclared service that cannot be read is a hard failure,
+# never an empty env silently treated as clean.
+@test "gremion-neuter exits 1 when an undeclared service cannot be read with docker exec env" {
+    shim_docker_exempt
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot read env from minio-mc"* ]]
+}
+
+# WATCH IT FAIL: the env assert must reject a container that still names the
+# real mail host after the rewrite and the recreate.
+@test "gremion-neuter exits 1 when a container still names the live mail host" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    shim docker '
+args="$*"
+case "$args" in
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*) echo "cid-ui stg-app-blue gremion-ui"; exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "inspect -f {{.State.Running}} cid-ui") echo true; exit 0 ;;
+  "exec cid-ui env") echo "SMTP_HOST=mail.example.org"; exit 0 ;;
+  *"ps -q gremion-ui"*) echo cid-ui; exit 0 ;;
+  *"ps -q postgres"*) echo cid-pg; exit 0 ;;
+  *"node -"*) cat >/dev/null; echo "changed=0 live=0"; exit 0 ;;
+  *to_regclass*) echo f; exit 0 ;;
+  *) exit 0 ;;
+esac'
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"gremion-ui: SMTP_HOST still names mail.example.org"* ]]
+    [[ "$output" == *"live mail/token value(s) survive neutering"* ]]
+}
+
+@test "gremion-neuter exits 1 when the tenant config read-back still shows a live host" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    shim docker '
+args="$*"
+case "$args" in
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*) echo "cid-ui stg-app-blue gremion-ui"; exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "inspect -f {{.State.Running}} cid-ui") echo true; exit 0 ;;
+  "exec cid-ui env") echo "PATH=/usr/bin"; exit 0 ;;
+  *"ps -q gremion-ui"*) echo cid-ui; exit 0 ;;
+  *"node -"*) cat >/dev/null; echo "changed=1 live=3"; exit 0 ;;
+  *) exit 0 ;;
+esac'
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"3 tenant config file(s) still name a live SMTP host"* ]]
+}
