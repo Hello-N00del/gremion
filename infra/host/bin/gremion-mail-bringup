@@ -1,0 +1,708 @@
+#!/usr/bin/env bash
+#
+# gremion-mail-bringup — the §I mail bring-up, in the order N18 fixes.
+#
+# WHY THE ORDER MATTERS: the SMTP ports are unblocked in the SCP *while the
+# zone still carries the edit-1 null MX (`0 .`)*, so no sender can route mail
+# to the box while asserts 2-6 run. Publishing the real MX (DNS edit 4b) is the
+# LAST step of the bring-up, not the port unblock. This script refuses asserts
+# 2-6 unless gremion-dns-check still sees the null MX and DNS edit 3 is green,
+# and it withholds the "publish edit 4b" advice unless every assert is green.
+#
+# EXIT CODES
+#   0  every requested assert passed
+#   1  an assert failed
+#   2  usage, or a missing precondition (env key, tool, ordering guard)
+#   3  blocked on an external step (operator input, or a spec B contract)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+MAIL_TMPL_DIR="${MAIL_TMPL_DIR:-$SCRIPT_DIR/../mail}"
+
+TMPDIR_BRINGUP="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_BRINGUP"' EXIT
+
+# Every ${VAR} the config template may contain. The renderer substitutes these
+# and nothing else, and then proves no ${ survived.
+CONFIG_VARS=(MAIL_HOSTNAME PLATFORM_DOMAIN ACME_EMAIL
+             DKIM_SELECTOR_A DKIM_SELECTOR_B
+             MAIL_RATE_LIMIT_RCPT MAIL_LOG_RETENTION_DAYS
+             STALWART_ADMIN_USER STALWART_ADMIN_PASSWORD)
+
+ALL_ASSERTS=(1 2 3 4 5 6a 6b)
+PROBE_BODY="This message proves the host's DKIM signature against the published key."
+
+RENDER_ONLY=0
+CHECK_BINDS=0
+REQUESTED=""
+EXTERNAL_TO=""
+RESULTS_FILE=""
+# Seeded from the environment, never blanked: DNS_CHECK is the documented
+# override resolve_dns_check honours first, and a plain DNS_CHECK="" here would
+# silently discard it and run the real checker instead of the one the caller
+# named — which is exactly what happened the first time this program was driven
+# against a live container.
+DNS_CHECK="${DNS_CHECK:-}"
+declare -A RESULT=()
+
+usage() {
+    cat <<'USAGE'
+usage: gremion-mail-bringup [--render-config] [--check-binds]
+                            [--assert 1|2|3|4|5|6a|6b|all]
+                            [--external-to addr[,addr...]]
+                            [--results-file FILE]
+
+Exit 0 every requested assert ok - 1 an assert failed - 2 usage or a missing
+precondition (env key, tool, ordering guard) - 3 blocked on an external step.
+USAGE
+}
+
+# An option that is the LAST argument used to leave its variable empty and then
+# die inside `shift 2` under set -e: exit 1, no message, no usage. A usage error
+# has to look like one, or the operator retypes the same truncated command.
+need_value() {
+    [ "$2" -ge 2 ] || { usage >&2; die "${1} requires a value" "$GREMION_EXIT_USAGE"; }
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --render-config) RENDER_ONLY=1; shift ;;
+            --check-binds)   CHECK_BINDS=1; shift ;;
+            --assert)        need_value --assert       "$#"; REQUESTED="$2";    shift 2 ;;
+            --external-to)   need_value --external-to  "$#"; EXTERNAL_TO="$2";  shift 2 ;;
+            --results-file)  need_value --results-file "$#"; RESULTS_FILE="$2"; shift 2 ;;
+            -h|--help)       usage; exit "$GREMION_EXIT_OK" ;;
+            *)               usage >&2; die "unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    if [ "$RENDER_ONLY" -ne 1 ] && [ "$CHECK_BINDS" -ne 1 ] && [ -z "$REQUESTED" ]; then
+        usage >&2
+        die "nothing to do: pass --render-config, --check-binds, --assert, or a combination" \
+            "$GREMION_EXIT_USAGE"
+    fi
+}
+
+# Resolve gremion-dns-check through PATH first, so a shim (tests) or the
+# installed /opt/gremion/bin copy wins over the sibling in the source tree.
+resolve_dns_check() {
+    if [ -n "${DNS_CHECK:-}" ]; then printf '%s' "$DNS_CHECK"; return 0; fi
+    if command -v gremion-dns-check >/dev/null 2>&1; then
+        command -v gremion-dns-check
+        return 0
+    fi
+    printf '%s' "$SCRIPT_DIR/gremion-dns-check"
+}
+
+# render_template <file> <var...> — substitute only the named variables.
+# A trailing CR is stripped first: the template is a tracked file, and a
+# checkout on a filesystem that carries CRLF would otherwise put a carriage
+# return into every rendered value.
+render_template() {
+    local tmpl="$1"; shift
+    local line v
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        for v in "$@"; do
+            line="${line//\$\{$v\}/${!v}}"
+        done
+        printf '%s\n' "$line"
+    done < "$tmpl"
+}
+
+render_config() {
+    local tmpl="$MAIL_TMPL_DIR/config.toml.tmpl"
+    local out; out="$(gremion_root)/etc/mail/config.toml"
+    [ -f "$tmpl" ] || die "config template missing: $tmpl" "$GREMION_EXIT_USAGE"
+    local v
+    for v in "${CONFIG_VARS[@]}"; do
+        [ -n "${!v:-}" ] || die "config variable $v is empty in mail.env" "$GREMION_EXIT_USAGE"
+    done
+    mkdir -p "$(dirname "$out")" "$(gremion_root)/runtime"
+    render_template "$tmpl" "${CONFIG_VARS[@]}" | atomic_write "$out" 0640
+    assert "config.toml is a non-empty regular file" test -s "$out"
+    assert "config.toml is not a directory"          test ! -d "$out"
+    # The pattern is deliberately single-quoted: it is the LITERAL two
+    # characters a surviving render placeholder starts with, searched for in
+    # the rendered file — not something meant to expand here.
+    # shellcheck disable=SC2016
+    if grep -q '\${' "$out"; then
+        bad "unsubstituted variables in $out:"
+        grep -n '\${' "$out" >&2
+        die "config render incomplete" "$GREMION_EXIT_ASSERT"
+    fi
+    ok "config.toml has no unsubstituted variables"
+    local id; id="$(date -u +%Y%m%d%H%M%S)"
+    printf '%s\n' "$id" | atomic_write "$(gremion_root)/runtime/mta-sts-id" 0644
+    ok "MTA-STS policy id $id recorded in runtime/mta-sts-id"
+}
+
+# §A: nothing binds 0.0.0.0. The compose file carries an x-required-env block
+# that makes an EMPTY bind address fail interpolation, but that is a compose
+# EXTENSION field — a release that stopped interpolating unknown x- keys would
+# retire the guard in silence, and nothing executable ever read the realised
+# ports. This step asserts the post-condition on the document the daemon is
+# actually handed: `docker compose --env-file <file> config`, the only permitted
+# invocation (N20), run from the project's own directory because COMPOSE_FILE is
+# relative and no -f may be passed.
+check_port_binds() {
+    need_cmd docker jq
+    local envfile cfg offenders total
+    envfile="${MAIL_ENV:-$(gremion_root)/etc/env/mail.env}"
+    [ -f "$envfile" ] || die "mail env file missing: ${envfile}" "$GREMION_EXIT_USAGE"
+    [ -f "$MAIL_TMPL_DIR/docker-compose.yml" ] \
+        || die "mail compose file missing: ${MAIL_TMPL_DIR}/docker-compose.yml" "$GREMION_EXIT_USAGE"
+    cfg="$(cd "$MAIL_TMPL_DIR" && docker compose --env-file "$envfile" config --format json)" \
+        || die "docker compose could not render the mail project's config" "$GREMION_EXIT_USAGE"
+    total="$(printf '%s' "$cfg" \
+             | jq '[ .services[]? | (.ports // [])[] | select(.published != null) ] | length')" \
+        || die "the realised mail config is not readable JSON" "$GREMION_EXIT_USAGE"
+    if [ "${total:-0}" -lt 1 ]; then
+        bad "the realised mail config publishes no port at all — the bind guard read nothing"
+        return "$GREMION_EXIT_ASSERT"
+    fi
+    offenders="$(printf '%s' "$cfg" | jq -r --arg v4 "$MAIL_BIND_IP" --arg v6 "$MAIL_BIND_IP6" '
+        .services[]? | (.ports // [])[]
+        | select(.published != null)
+        | select(((.host_ip // "") | length) == 0
+                 or (.host_ip != $v4 and .host_ip != $v6 and .host_ip != "127.0.0.1"))
+        | "\(if (.host_ip // "") == "" then "0.0.0.0" else .host_ip end):\(.published) -> \(.target)"')"
+    if [ -n "$offenders" ]; then
+        bad "published mail port(s) not bound to ${MAIL_BIND_IP} / [${MAIL_BIND_IP6}] / 127.0.0.1:"
+        printf '%s\n' "$offenders"
+        return "$GREMION_EXIT_ASSERT"
+    fi
+    ok "PORT-BINDS: ${total} published port(s), every one on ${MAIL_BIND_IP} / [${MAIL_BIND_IP6}] / 127.0.0.1"
+}
+
+# run_dns_check <edit> — echoes the report, returns gremion-dns-check's own
+# exit code: 0 every expected record OK, 1 something MISSING or WRONG, 2 the
+# resolver did not answer. Two is NOT "not published" — treating a dead
+# resolver as a verdict is how a guard reports "safe" about a zone it never
+# read, so every caller below refuses on 2 as loudly as on 1.
+run_dns_check() {
+    "$DNS_CHECK" --domain "$PLATFORM_DOMAIN" \
+        --edge-ip "$EDGE_BIND_IP" --edge-ip6 "$EDGE_BIND_IP6" \
+        --mail-ip "$MAIL_BIND_IP" --mail-ip6 "$MAIL_BIND_IP6" \
+        --resolver "$MAIL_DNS_RESOLVER" --edit "$1" 2>&1
+}
+
+# The N18 ordering guard. Asserts 2-6 may only run while the send-nothing lock
+# is published and the mail hosts resolve. The expected/observed fields of
+# gremion-dns-check are single-quoted, so the pattern quotes them too.
+require_send_nothing_lock() {
+    local out rc dom_re
+    dom_re="${PLATFORM_DOMAIN//./\\.}"
+
+    rc=0; out="$(run_dns_check 1)" || rc=$?
+    if [ "$rc" -ge 2 ]; then
+        printf '%s\n' "$out" >&2
+        die "gremion-dns-check could not read the zone (exit ${rc}): the send-nothing lock is UNKNOWN, not absent — asserts 2-6 refused (N18)" \
+            "$GREMION_EXIT_USAGE"
+    fi
+    # The null-MX row is inspected BEFORE the exit code is turned into a
+    # verdict. Exit 1 only says "some expected record of edit 1 is missing or
+    # wrong"; exactly one of those records is the send-nothing lock, and that
+    # is the one the operator has to be told about by name.
+    if ! printf '%s\n' "$out" | grep -Eq "^OK 1 ${dom_re}\.? MX '0 \.' "; then
+        printf '%s\n' "$out" >&2
+        die "the edit-1 null MX (0 .) is not published; asserts 2-6 refused (N18)" \
+            "$GREMION_EXIT_USAGE"
+    fi
+    if [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$out" >&2
+        die "DNS edit 1 is not fully published; asserts 2-6 refused (N18)" "$GREMION_EXIT_USAGE"
+    fi
+    ok "send-nothing lock present: MX '0 .'"
+
+    rc=0; out="$(run_dns_check 3)" || rc=$?
+    if [ "$rc" -ge 2 ]; then
+        printf '%s\n' "$out" >&2
+        die "gremion-dns-check could not read the zone (exit ${rc}): DNS edit 3 is UNKNOWN — asserts 2-6 refused" \
+            "$GREMION_EXIT_USAGE"
+    fi
+    if [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$out" >&2
+        die "DNS edit 3 (mail hosts + PTR) is not green; asserts 2-6 refused" "$GREMION_EXIT_USAGE"
+    fi
+    ok "DNS edit 3 green"
+}
+
+# The tools each assert actually shells out to, declared per assert rather than
+# once for the whole program: a single up-front need_cmd makes `--assert 4`
+# fail on a host that merely has no dig, and replaces every assert's own
+# precondition message with "missing required command(s)".
+need_cmd_for_assert() {
+    case "$1" in
+        1)  need_cmd dig ;;
+        2)  need_cmd openssl ;;
+        3)  need_cmd dig openssl awk ;;  # curl: declared where it is used
+        4)  need_cmd openssl ;;
+        5)  need_cmd curl dig ;;
+        6a) : ;;  # docker, after the --external-to check inside the assert
+        6b) : ;;  # docker, after the spec-B contract check inside the assert
+    esac
+}
+
+dispatch_assert() {
+    need_cmd_for_assert "$1"
+    case "$1" in
+        1)  assert_1_fcrdns ;;
+        2)  assert_2_tls ;;
+        3)  assert_3_dkim ;;
+        4)  assert_4_no_relay ;;
+        5)  assert_5_mta_sts ;;
+        6a) assert_6a_external ;;
+        6b) assert_6b_keycloak ;;
+    esac
+}
+
+run_requested() {
+    local list=() a rc
+    if [ "$REQUESTED" = "all" ]; then
+        list=("${ALL_ASSERTS[@]}")
+    else
+        list=("$REQUESTED")
+    fi
+    for a in "${list[@]}"; do
+        case "$a" in
+            1|2|3|4|5|6a|6b) : ;;
+            *) usage >&2; die "unknown assert: $a" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    # Assert 1 (FCrDNS) is the precondition of the SCP port unblock, so it runs
+    # before the lock can be checked. Everything else is gated.
+    for a in "${list[@]}"; do
+        if [ "$a" != "1" ]; then require_send_nothing_lock; break; fi
+    done
+    for a in "${list[@]}"; do
+        info "assert ${a}"
+        rc=0
+        dispatch_assert "$a" || rc=$?
+        case "$rc" in
+            0) RESULT["$a"]="ok" ;;
+            3) RESULT["$a"]="BLOCKED" ;;
+            *) RESULT["$a"]="FAIL" ;;
+        esac
+    done
+    print_summary
+}
+
+print_summary() {
+    local line="MAIL-BRINGUP:" k any_fail=0 any_block=0 all_ok=1
+    for k in "${ALL_ASSERTS[@]}"; do
+        line="$line ${k}=${RESULT[$k]:-skipped}"
+        case "${RESULT[$k]:-skipped}" in
+            FAIL)    any_fail=1 ;;
+            BLOCKED) any_block=1 ;;
+        esac
+        [ "${RESULT[$k]:-}" = "ok" ] || all_ok=0
+    done
+    printf '%s\n' "$line"
+    if [ "$all_ok" -eq 1 ]; then
+        printf 'MX-PUBLICATION: GO — publish DNS edit 4b now (MX 10 %s.) and delete the edit-1 null MX in the same edit\n' "$MAIL_HOSTNAME"
+    else
+        printf 'MX-PUBLICATION: HOLD — asserts 1-6 are not all green; the null MX (0 .) stays published (N18)\n'
+    fi
+    [ "$any_fail" -eq 0 ] || exit "$GREMION_EXIT_ASSERT"
+    [ "$any_block" -eq 0 ] || exit "$GREMION_EXIT_BLOCKED"
+    exit "$GREMION_EXIT_OK"
+}
+
+# The seven assert functions are written in Steps 14 and 18; until then each
+# returns 3 so the ordering guard can be exercised on its own.
+# --- assert 1: FCrDNS on both families ------------------------------------
+# dig_short — every answer line for one query. A resolver that does not ANSWER
+# is not an answer of "nothing is published": it is UNKNOWN, and a guard that
+# reads it as "no record" reports a verdict on a zone it never saw. So a dig
+# failure ends the run with exit 2 (a precondition failure) instead of becoming
+# an assertion result. `die` inside $( ) can only end the subshell, so every
+# caller adds the explicit `|| exit $?`.
+dig_short() {
+    local out rc=0
+    out="$(dig +short "$@" 2>&1)" || rc=$?
+    [ "$rc" -eq 0 ] \
+        || die "resolver ${MAIL_DNS_RESOLVER} did not answer 'dig +short $*' (exit ${rc}): ${out}" \
+               "$GREMION_EXIT_USAGE"
+    printf '%s\n' "$out"
+}
+
+assert_1_fcrdns() {
+    local ip4 ip6 ptr4 ptr6 rc=0
+    ip4="$(dig_short "@${MAIL_DNS_RESOLVER}" A    "$MAIL_HOSTNAME" | tail -n1)" || exit $?
+    ip6="$(dig_short "@${MAIL_DNS_RESOLVER}" AAAA "$MAIL_HOSTNAME" | tail -n1)" || exit $?
+    if [ "$ip4" != "$MAIL_BIND_IP" ]; then
+        bad "A ${MAIL_HOSTNAME} = ${ip4:-<none>}, expected ${MAIL_BIND_IP}"; rc=1
+    fi
+    if [ "$ip6" != "$MAIL_BIND_IP6" ]; then
+        bad "AAAA ${MAIL_HOSTNAME} = ${ip6:-<none>}, expected ${MAIL_BIND_IP6}"; rc=1
+    fi
+    ptr4="$(dig_short "@${MAIL_DNS_RESOLVER}" -x "$MAIL_BIND_IP"  | tail -n1)" || exit $?
+    ptr6="$(dig_short "@${MAIL_DNS_RESOLVER}" -x "$MAIL_BIND_IP6" | tail -n1)" || exit $?
+    if [ "$ptr4" != "${MAIL_HOSTNAME}." ]; then
+        bad "PTR ${MAIL_BIND_IP} = ${ptr4:-<none>}, expected ${MAIL_HOSTNAME}."; rc=1
+    fi
+    if [ "$ptr6" != "${MAIL_HOSTNAME}." ]; then
+        bad "PTR ${MAIL_BIND_IP6} = ${ptr6:-<none>}, expected ${MAIL_HOSTNAME}."; rc=1
+    fi
+    [ "$rc" -eq 0 ] && ok "FCrDNS both families: ${MAIL_HOSTNAME} <-> ${ip4} / ${ip6}"
+    return "$rc"
+}
+
+# --- assert 2: the certificate on every mail port --------------------------
+TLS_PROBES=("25:starttls" "587:starttls" "465:implicit" "993:implicit")
+
+probe_cert_pem() {   # <port> <mode>
+    local port="$1" mode="$2" args=()
+    [ "$mode" = "starttls" ] && args=(-starttls smtp)
+    printf 'QUIT\r\n' \
+      | openssl s_client -connect "${MAIL_HOSTNAME}:${port}" \
+            -servername "$MAIL_HOSTNAME" "${args[@]}" -showcerts 2>/dev/null \
+      | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
+      | sed -n '1,/-----END CERTIFICATE-----/p'
+}
+
+assert_2_tls() {
+    local rc=0 spec port mode pem san notafter end now days prc
+    now="$(date -u +%s)"
+    for spec in "${TLS_PROBES[@]}"; do
+        port="${spec%%:*}"; mode="${spec##*:}"; prc=0; days=0
+        pem="$(probe_cert_pem "$port" "$mode" || true)"
+        if [ -z "$pem" ]; then
+            bad "no certificate presented on ${MAIL_HOSTNAME}:${port} (${mode})"
+            rc=1; continue
+        fi
+        san="$(printf '%s\n' "$pem" | openssl x509 -noout -ext subjectAltName 2>/dev/null || true)"
+        if ! printf '%s\n' "$san" | grep -q "DNS:${MAIL_HOSTNAME}"; then
+            bad "port ${port}: SAN does not contain ${MAIL_HOSTNAME}: ${san}"; prc=1
+        fi
+        notafter="$(printf '%s\n' "$pem" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)"
+        end="$(date -u -d "$notafter" +%s 2>/dev/null || echo 0)"
+        if [ -z "$notafter" ] || [ "$end" = "0" ]; then
+            bad "port ${port}: certificate has no readable notAfter (${notafter:-<none>})"; prc=1
+        else
+            days=$(( (end - now) / 86400 ))
+            if [ "$days" -le 20 ]; then
+                bad "port ${port}: certificate expires in ${days}d (need > 20)"; prc=1
+            fi
+        fi
+        if [ "$prc" -eq 0 ]; then
+            ok "port ${port}: SAN ${MAIL_HOSTNAME}, ${days}d remaining"
+        else
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
+# --- assert 3: DKIM ---------------------------------------------------------
+canonicalise_body_relaxed() {
+    # RFC 6376 relaxed body: strip trailing WSP, collapse internal WSP runs to
+    # one space, CRLF endings, trailing empty lines removed.
+    awk '{ sub(/[ \t\r]+$/, ""); gsub(/[ \t]+/, " "); l[NR]=$0 }
+         END { n=NR; while (n>0 && l[n]=="") n--; for (i=1;i<=n;i++) printf "%s\r\n", l[i] }'
+}
+
+# tag_value <tag> — read one tag out of a semicolon-separated DKIM-ish record
+# on stdin. A greedy `sed 's/.*p=\(...\)/'` is wrong here: base64 ends in '='
+# padding, so roughly one key in sixty-four ends "...p=" and the greedy match
+# then captures the empty tail and reports the key as unpublished.
+tag_value() {
+    local tag="$1" out
+    out="$(tr ';' '\n' | sed -n "s/^[[:space:]]*${tag}=//p")"
+    # The first match is taken in bash, not with `| head -n1`: head closes the
+    # pipe as soon as it has its line, and under `set -o pipefail` the SIGPIPE
+    # that gives the upstream sed turns a PASSING path into exit 141.
+    printf '%s\n' "${out%%$'\n'*}"
+}
+
+submit_loopback_probe() {   # echoes the round-tripped message
+    # curl is declared HERE and not in need_cmd_for_assert: assert 3's first
+    # arm — published DKIM key versus the host's signing key — is a complete
+    # verdict that needs only dig and openssl, and refusing to deliver it
+    # because the loopback probe's tool is absent would report a missing tool
+    # where a real key mismatch was already provable.
+    need_cmd curl
+    local id uid msg tries=0
+    id="bringup-$(date -u +%s)-$$@${PLATFORM_DOMAIN}"
+    {
+        printf 'From: platform@%s\r\n' "$PLATFORM_DOMAIN"
+        printf 'To: roles@%s\r\n' "$PLATFORM_DOMAIN"
+        printf 'Subject: gremion mail bring-up probe\r\n'
+        printf 'Message-ID: <%s>\r\n' "$id"
+        printf 'Date: %s\r\n' "$(date -uR)"
+        printf '\r\n'
+        printf '%s\r\n' "$PROBE_BODY"
+    } > "$TMPDIR_BRINGUP/probe.eml"
+    cat > "$TMPDIR_BRINGUP/probe.curl" <<EOF
+url = "smtp://${MAIL_HOSTNAME}:587"
+ssl-reqd
+mail-from = "platform@${PLATFORM_DOMAIN}"
+mail-rcpt = "roles@${PLATFORM_DOMAIN}"
+user = "platform@${PLATFORM_DOMAIN}:${PLATFORM_SMTP_PASSWORD}"
+upload-file = "${TMPDIR_BRINGUP}/probe.eml"
+EOF
+    curl -sS -K "$TMPDIR_BRINGUP/probe.curl" >/dev/null || return 1
+    while [ "$tries" -lt 15 ]; do
+        uid="$(curl -sS --url "imaps://${MAIL_HOSTNAME}:993/INBOX" \
+                 --user "roles@${PLATFORM_DOMAIN}:${ROLES_IMAP_PASSWORD}" \
+                 -X "SEARCH HEADER Message-ID \"<${id}>\"" 2>/dev/null \
+               | awk '/SEARCH/ { print $NF }' | tail -n1)"
+        if [ -n "${uid:-}" ] && [ "$uid" != "SEARCH" ]; then
+            msg="$(curl -sS --url "imaps://${MAIL_HOSTNAME}:993/INBOX;UID=${uid}" \
+                     --user "roles@${PLATFORM_DOMAIN}:${ROLES_IMAP_PASSWORD}" 2>/dev/null)"
+            [ -n "$msg" ] || return 1
+            printf '%s' "$msg"
+            return 0
+        fi
+        tries=$(( tries + 1 ))
+        sleep 2
+    done
+    return 1
+}
+
+assert_3_dkim() {
+    local sel="$DKIM_SELECTOR_A" rc=0 keyfile local_pub published msg hdr bh_pub bh_calc
+    keyfile="$(gremion_root)/etc/secrets/mail/${sel}.private"
+    if [ ! -f "$keyfile" ]; then
+        bad "DKIM private key missing: ${keyfile}"; return 1
+    fi
+    local_pub="$(openssl rsa -in "$keyfile" -pubout -outform DER 2>/dev/null | openssl base64 -A)"
+    published="$(dig_short "@${MAIL_DNS_RESOLVER}" TXT "${sel}._domainkey.${PLATFORM_DOMAIN}" \
+                 | tr -d '"' | tr -d ' ' | tag_value p)" || exit $?
+    if [ -z "$published" ]; then
+        bad "no p= value in ${sel}._domainkey.${PLATFORM_DOMAIN} TXT"; return 1
+    fi
+    if [ "$local_pub" != "$published" ]; then
+        bad "the published DKIM key for ${sel} does not match ${keyfile}"
+        return 1
+    fi
+    ok "published DKIM key ${sel} matches the host signing key"
+    if ! msg="$(submit_loopback_probe)"; then
+        bad "loopback submission or IMAP read-back failed"; return 1
+    fi
+    hdr="$(printf '%s\n' "$msg" | sed -n '/^DKIM-Signature:/,/^[^ \t]/p' | tr -d '\r\n')"
+    if ! printf '%s\n' "$hdr" | grep -q "d=${PLATFORM_DOMAIN};"; then
+        bad "DKIM-Signature d= is not ${PLATFORM_DOMAIN}: ${hdr}"; rc=1
+    fi
+    if ! printf '%s\n' "$hdr" | grep -q "s=${sel};"; then
+        bad "DKIM-Signature s= is not ${sel}: ${hdr}"; rc=1
+    fi
+    bh_pub="$(printf '%s\n' "$hdr" | tag_value bh)"
+    bh_calc="$(printf '%s\n' "$PROBE_BODY" | canonicalise_body_relaxed \
+               | openssl dgst -sha256 -binary | openssl base64 -A)"
+    if [ "$bh_pub" != "$bh_calc" ]; then
+        bad "DKIM body hash mismatch: signed=${bh_pub:-<none>} recomputed=${bh_calc}"; rc=1
+    fi
+    [ "$rc" -eq 0 ] && ok "loopback message signed by ${sel}, body hash verifies"
+    # The end-to-end signature verification is assert 6a's external
+    # `dkim=pass`; this arm proves the key, the selector and the body hash.
+    return "$rc"
+}
+
+# --- assert 4: no open relay ------------------------------------------------
+assert_4_no_relay() {
+    local out codes code="" n
+    local -a arr=()
+    # The RCPT domain must be one this server can NEVER host, or the probe stops
+    # testing what it claims: with a recipient in a documentation domain, a host
+    # whose platform domain happens to be that domain answers 550 "no such
+    # mailbox" and the assert reads it as "relay refused" — green with the relay
+    # policy removed. .invalid is reserved by RFC 2606 and is never local, so a
+    # 5xx here can only be the relay refusal.
+    out="$(printf 'EHLO probe.example.net\r\nMAIL FROM:<probe@example.net>\r\nRCPT TO:<relay-probe@relay-test.invalid>\r\nQUIT\r\n' \
+           | openssl s_client -connect "${MAIL_HOSTNAME}:25" -starttls smtp -crlf -quiet 2>/dev/null || true)"
+    codes="$(printf '%s\n' "$out" | grep -oE '^[0-9]{3}' || true)"
+    if [ -n "$codes" ]; then
+        # No `| tail -n2 | head -n1`: head closes the pipe and, under
+        # `set -o pipefail`, the SIGPIPE it sends upstream would make the
+        # PASSING path exit 141. The transcript ends with the RCPT response
+        # followed by the 221 answer to QUIT, so the RCPT code is the
+        # second-to-last.
+        mapfile -t arr <<< "$codes"
+        n="${#arr[@]}"
+        if [ "$n" -ge 2 ]; then code="${arr[n-2]}"; else code="${arr[n-1]}"; fi
+    fi
+    case "$code" in
+        5*) ok "external->external RCPT refused with ${code} (no open relay)"; return 0 ;;
+        "") bad "no SMTP response codes observed on ${MAIL_HOSTNAME}:25"; return 1 ;;
+        *)  bad "external->external RCPT answered ${code} — the server relays without AUTH"; return 1 ;;
+    esac
+}
+
+# --- assert 5: MTA-STS policy ----------------------------------------------
+assert_5_mta_sts() {
+    local url body rc=0 want got hdrs="$TMPDIR_BRINGUP/mta-sts.hdr"
+    url="https://mta-sts.${PLATFORM_DOMAIN}/.well-known/mta-sts.txt"
+    if ! body="$(curl -sS -D "$hdrs" "$url" 2>/dev/null)"; then
+        bad "${url} did not fetch"; return 1
+    fi
+    if ! grep -qi '^content-type:[[:space:]]*text/plain' "$hdrs"; then
+        bad "content-type is not text/plain: $(grep -i '^content-type' "$hdrs" | tr -d '\r')"; rc=1
+    fi
+    if ! printf '%s\n' "$body" | grep -q "^mx: ${MAIL_HOSTNAME}$"; then
+        bad "policy has no 'mx: ${MAIL_HOSTNAME}' line"; rc=1
+    fi
+    if ! printf '%s\n' "$body" | grep -q '^mode: testing$'; then
+        bad "policy mode is not 'testing'"; rc=1
+    fi
+    local idfile; idfile="$(gremion_root)/runtime/mta-sts-id"
+    if [ ! -s "$idfile" ]; then
+        die "runtime/mta-sts-id is missing; run --render-config first" "$GREMION_EXIT_USAGE"
+    fi
+    want="$(tr -d '[:space:]' < "$idfile")"
+    got="$(dig_short "@${MAIL_DNS_RESOLVER}" TXT "_mta-sts.${PLATFORM_DOMAIN}" \
+           | tr -d '"' | tag_value id)" || exit $?
+    if [ "$got" != "$want" ]; then
+        bad "_mta-sts id=${got:-<none>}, the rendered policy recorded id=${want}"; rc=1
+    fi
+    [ "$rc" -eq 0 ] && ok "MTA-STS policy served as text/plain, id ${got} matches the render"
+    return "$rc"
+}
+
+# --- assert 6a: authenticated submission to two external providers ----------
+assert_6a_external() {
+    [ -n "$EXTERNAL_TO" ] || die "--external-to is required for assert 6a" "$GREMION_EXIT_USAGE"
+    need_cmd docker
+    local net="${STACK}-app-blue_app"
+    if ! docker network inspect "$net" >/dev/null 2>&1; then
+        die "app-tier network ${net} is not up; assert 6a must send from an app subnet" \
+            "$GREMION_EXIT_USAGE"
+    fi
+    local addr id rc=0
+    # Deliberately unquoted: --external-to takes a comma-separated list and the
+    # comma-to-space substitution is what splits it into words.
+    # shellcheck disable=SC2086
+    for addr in ${EXTERNAL_TO//,/ }; do
+        id="bringup6a-$(date -u +%s)-${RANDOM}@${PLATFORM_DOMAIN}"
+        if docker run --rm -i --network "$net" --entrypoint sh "$PROBE_CURL_IMAGE" -s <<SH
+set -eu
+cat > /tmp/msg <<'MSG'
+From: no-reply@${PLATFORM_DOMAIN}
+To: ${addr}
+Subject: Gremion mail bring-up probe (assert 6a)
+Message-ID: <${id}>
+
+This message was submitted with AUTH over TLS from the application subnet.
+MSG
+cat > /tmp/cfg <<'CFG'
+url = "smtp://${MAIL_HOSTNAME}:587"
+ssl-reqd
+mail-from = "no-reply@${PLATFORM_DOMAIN}"
+mail-rcpt = "${addr}"
+user = "platform@${PLATFORM_DOMAIN}:${PLATFORM_SMTP_PASSWORD}"
+upload-file = "/tmp/msg"
+CFG
+curl -sS -K /tmp/cfg
+SH
+        then
+            ok "submitted <${id}> to ${addr} from ${net}"
+        else
+            bad "submission to ${addr} from ${net} failed"; rc=1
+        fi
+    done
+    [ "$rc" -eq 0 ] || return 1
+    if [ -z "$RESULTS_FILE" ]; then
+        printf 'BLOCKED: waiting for the Authentication-Results header of the delivered probe.\n'
+        printf 'Open each external mailbox, copy the Authentication-Results and Received headers\n'
+        printf 'into a file, and re-run:\n'
+        printf '  gremion-mail-bringup --assert 6a --external-to %s --results-file <file>\n' "$EXTERNAL_TO"
+        return 3
+    fi
+    [ -s "$RESULTS_FILE" ] || die "results file is empty: ${RESULTS_FILE}" "$GREMION_EXIT_USAGE"
+    local verdict
+    for verdict in dkim=pass spf=pass dmarc=pass; do
+        if ! grep -q "$verdict" "$RESULTS_FILE"; then
+            bad "the received headers do not show ${verdict}"; rc=1
+        fi
+    done
+    if ! grep -q "$MAIL_BIND_IP" "$RESULTS_FILE"; then
+        bad "no Received: line names the mail source address ${MAIL_BIND_IP}"; rc=1
+    fi
+    [ "$rc" -eq 0 ] && ok "external delivery: dkim=pass spf=pass dmarc=pass from ${MAIL_BIND_IP}"
+    return "$rc"
+}
+
+# --- assert 6b: a real Keycloak reset mail ---------------------------------
+assert_6b_keycloak() {
+    local kcdir; kcdir="$(gremion_root)/current/docker/keycloak"
+    if ! grep -rqls '"smtpServer"' "$kcdir" 2>/dev/null; then
+        printf 'BLOCKED: keycloak realm export has no smtpServer block (spec B, gremion#6)\n'
+        return 3
+    fi
+    # KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD belong to the STATE project's env
+    # file; mail.env has neither and load_env therefore exports neither. Read
+    # bare under `set -u` they end the whole run with "unbound variable" — no
+    # summary line, no MX-PUBLICATION verdict, exit 1 where the contract says 3.
+    # A precondition the operator can supply is a BLOCK, so it is printed as one.
+    local kc_missing=""
+    [ -n "${KEYCLOAK_ADMIN:-}" ]          || kc_missing="KEYCLOAK_ADMIN"
+    [ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ] || kc_missing="${kc_missing:+${kc_missing} and }KEYCLOAK_ADMIN_PASSWORD"
+    if [ -n "$kc_missing" ]; then
+        printf 'BLOCKED: %s not set. kcadm has no credential, and these are keys of the\n' "$kc_missing"
+        printf 'state project env file, not of mail.env, so the mail bring-up cannot read them.\n'
+        printf 'Supply them for this one call:\n'
+        printf '  KEYCLOAK_ADMIN=<user> KEYCLOAK_ADMIN_PASSWORD=<password> \\\n'
+        printf '    gremion-mail-bringup --assert 6b --results-file <file>\n'
+        return 3
+    fi
+    need_cmd docker
+    local kc="${STACK}-state-keycloak" uid
+    docker inspect "$kc" >/dev/null 2>&1 \
+        || die "keycloak container ${kc} is not running" "$GREMION_EXIT_USAGE"
+    docker exec "$kc" /opt/keycloak/bin/kcadm.sh config credentials \
+        --server http://127.0.0.1:8080 --realm master \
+        --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null \
+        || die "kcadm could not authenticate against ${kc}" "$GREMION_EXIT_USAGE"
+    uid="$(docker exec "$kc" /opt/keycloak/bin/kcadm.sh get users \
+             -r "$KEYCLOAK_PROBE_REALM" -q "username=${KEYCLOAK_PROBE_USER}" \
+             --fields id --format csv --noquotes | sed -n '1p')"
+    if [ -z "$uid" ]; then
+        bad "user ${KEYCLOAK_PROBE_USER} not found in realm ${KEYCLOAK_PROBE_REALM}"; return 1
+    fi
+    printf '["UPDATE_PASSWORD"]' | docker exec -i "$kc" \
+        /opt/keycloak/bin/kcadm.sh update "users/${uid}/execute-actions-email" \
+        -r "$KEYCLOAK_PROBE_REALM" -f - >/dev/null \
+        || { bad "Keycloak refused to send the reset mail"; return 1; }
+    ok "Keycloak reset mail dispatched to ${KEYCLOAK_PROBE_USER}"
+    if [ -z "$RESULTS_FILE" ]; then
+        printf 'BLOCKED: waiting for the Authentication-Results header of the Keycloak reset mail.\n'
+        printf '  gremion-mail-bringup --assert 6b --results-file <file>\n'
+        return 3
+    fi
+    local rc=0 verdict
+    for verdict in dkim=pass spf=pass dmarc=pass; do
+        grep -q "$verdict" "$RESULTS_FILE" || { bad "reset mail headers do not show ${verdict}"; rc=1; }
+    done
+    grep -q "$MAIL_BIND_IP" "$RESULTS_FILE" || { bad "reset mail was not sent from ${MAIL_BIND_IP}"; rc=1; }
+    [ "$rc" -eq 0 ] && ok "Keycloak reset mail: dkim=pass spf=pass dmarc=pass from ${MAIL_BIND_IP}"
+    return "$rc"
+}
+
+main() {
+    parse_args "$@"
+    # mktemp/tail: assert() captures the wrapped command's output through them.
+    # date: the MTA-STS policy id, and the certificate expiry arithmetic.
+    # The per-assert tools are declared by need_cmd_for_assert.
+    need_cmd mktemp tail date grep sed
+    load_env "${MAIL_ENV:-$(gremion_root)/etc/env/mail.env}"
+    # shellcheck disable=SC2034  # consumed by render_template via ${!v}
+    MAIL_HOSTNAME="mail.${PLATFORM_DOMAIN}"
+    DNS_CHECK="$(resolve_dns_check)"
+    if [ "$RENDER_ONLY" -eq 1 ]; then
+        render_config
+        # The render is what the daemon will be handed; checking the realised
+        # binds here is what makes the §A guard unskippable in the normal flow.
+        check_port_binds
+    elif [ "$CHECK_BINDS" -eq 1 ]; then
+        check_port_binds
+    fi
+    [ -n "$REQUESTED" ] || exit "$GREMION_EXIT_OK"
+    run_requested
+}
+
+main "$@"

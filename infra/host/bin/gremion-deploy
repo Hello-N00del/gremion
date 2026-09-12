@@ -1,0 +1,619 @@
+#!/usr/bin/env bash
+#
+# gremion-deploy — the host half of the release procedure (spec A §F.4, steps 1–12).
+#
+# USAGE
+#   printf 'TOKEN %s\n' "$GHCR_TOKEN" | gremion-deploy dist-v1.2.3 [--soak-minutes N] [--no-switch]
+#
+# The registry token arrives on stdin line 1 (bare, or prefixed "TOKEN ") and is
+# never written to disk: it goes straight into `docker login --password-stdin`
+# and `docker logout` runs in an EXIT trap on every path, after which a guard
+# asserts that no `auths` entry survives (N12).
+#
+# TWO READINGS OF THE SPEC, RESOLVED HERE
+#   1. §F.4.1 pulls first, §F.4.3 demands the free-space assert abort "before
+#      pulling". The only order that satisfies both is login → checkout → space
+#      → pull, so the pull sits at the end of step 3 and step 1's real
+#      post-condition (the credential works) is observed there by
+#      `docker manifest inspect`.
+#   2. §E wants the stack-isolation assert "before any up" over "every started
+#      container". Nothing can be inspected before it starts, so the assert runs
+#      immediately after `up -d` of the INACTIVE colour and before any switch; a
+#      violation tears that colour down again, so nothing foreign is ever routed to.
+#
+# BLOCKED: the app compose project, its pins layer, its release.json and its
+# `migrate` service are spec B's. Until they exist at the tag this program exits
+# 3 with `BLOCKED: <file> absent (spec B)`.
+#
+# EXIT CODES  0 ok · 1 assertion/post-condition failed · 2 usage/precondition · 3 blocked
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+TAG=""
+SOAK_MINUTES_OPT=""
+NO_SWITCH=0
+ROOT=""
+RELEASE_DIR=""
+OVERLAP=""
+PINNED_IMAGES=""
+NEW_COLOUR=""
+OLD_COLOUR=""
+DEPLOY_LOG=""
+LOGGED_IN=0
+CURRENT_STEP_NO=""
+CURRENT_STEP_NAME=""
+STEP_DONE=1
+
+REGISTRY_HOST="${REGISTRY_HOST:-ghcr.io}"
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-deploy <dist-vX.Y.Z> [--soak-minutes N] [--no-switch]
+       the GHCR token is read from stdin line 1, as "TOKEN <value>" or bare.
+EOF
+    exit 2
+}
+
+# blocked <what> — the spec-B contract that is absent. Printed exactly as the
+# runbook and the CI job grep for it.
+blocked() {
+    printf 'BLOCKED: %s\n' "$*" >&2
+    exit 3
+}
+
+log_step() { # <n> <name> <ok|fail>
+    local line
+    line="$(date -u +%Y-%m-%dT%H:%M:%SZ) STEP $1 $2 $3"
+    printf '%s\n' "$line"
+    if [[ -n "$DEPLOY_LOG" ]]; then printf '%s\n' "$line" >> "$DEPLOY_LOG"; fi
+    return 0
+}
+
+log_skip() { # <n> <name> <reason>
+    local line
+    line="$(date -u +%Y-%m-%dT%H:%M:%SZ) SKIP $1 $2 $3"
+    printf '%s\n' "$line"
+    if [[ -n "$DEPLOY_LOG" ]]; then printf '%s\n' "$line" >> "$DEPLOY_LOG"; fi
+    return 0
+}
+
+# run_step <n> <name> <function> [args…]
+# The step function runs with `set -e` in force (never inside a condition), so a
+# failure exits the program and on_exit logs the step as failed.
+run_step() {
+    CURRENT_STEP_NO="$1"; CURRENT_STEP_NAME="$2"
+    local fn="$3"; shift 3
+    STEP_DONE=0
+    "$fn" "$@"
+    STEP_DONE=1
+    log_step "$CURRENT_STEP_NO" "$CURRENT_STEP_NAME" ok
+}
+
+docker_config_files() {
+    printf '%s\n' "${DOCKER_CONFIG:-${HOME:-/root}/.docker}/config.json"
+    printf '%s\n' "/root/.docker/config.json"
+}
+
+# assert_no_docker_auths — N12's guard. jq, not grep: docker writes config.json
+# pretty-printed, so a single-line pattern like '"auths": {[^}]' never matches a
+# real surviving credential. A guard that cannot see the thing it guards is the
+# failure class this project has paid for most often.
+assert_no_docker_auths() {
+    local f
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        jq -e '(.auths // {}) | length == 0' "$f" >/dev/null 2>&1 || return 1
+    done < <(docker_config_files)
+    return 0
+}
+
+on_exit() {
+    local rc=$?
+    trap - EXIT
+    if [[ -n "$CURRENT_STEP_NO" && "$STEP_DONE" -eq 0 ]]; then
+        log_step "$CURRENT_STEP_NO" "$CURRENT_STEP_NAME" fail
+    fi
+    if [[ "$LOGGED_IN" -eq 1 ]]; then
+        docker logout "$REGISTRY_HOST" >/dev/null 2>&1 || true
+        if ! assert_no_docker_auths; then
+            bad "registry credential survived logout (N12)"
+            exit 1
+        fi
+    fi
+    exit "$rc"
+}
+
+read_token_from_stdin() {
+    local line=""
+    IFS= read -r line || true
+    line="${line%$'\r'}"
+    case "$line" in
+        "TOKEN "*) line="${line#TOKEN }" ;;
+    esac
+    [[ -n "$line" ]] || die "no registry token on stdin" 2
+    printf '%s' "$line"
+}
+
+bin_path() { # <name> → the installed sibling program, else PATH
+    local n="$1" p
+    p="${GREMION_BIN_DIR:-$(gremion_root)/bin}/$n"
+    if [[ -x "$p" ]]; then printf '%s' "$p"; return 0; fi
+    p="$(command -v "$n" 2>/dev/null || true)"
+    [[ -n "$p" ]] || die "required program not found: $n" 2
+    printf '%s' "$p"
+}
+
+# compose <project> <verb…> — the ONLY shape any compose command takes on a host
+# (N20): `docker compose --env-file etc/env/<project>.env <verb>`. No -f, no
+# --profile, no -p. Run from the release tree so COMPOSE_FILE resolves.
+compose() {
+    local project="$1"; shift
+    local envfile="$ROOT/etc/env/${project}.env" a
+    [[ -f "$envfile" ]] || die "env file absent: $envfile" 2
+    for a in "$@"; do
+        case "$a" in
+            -v|--volumes) die "refusing 'compose $a' — deploy never removes volumes" 1 ;;
+        esac
+    done
+    ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" "$@" )
+}
+
+require_spec_b_contracts() { # <release dir>
+    local dir="$1" f
+    for f in docker-compose.app.yml docker-compose.pins.yml release.json; do
+        [[ -f "$dir/$f" ]] || blocked "$f absent (spec B)"
+    done
+}
+
+# The inactive colour is the one not in runtime/active-colour; blue on a
+# first-ever deploy (active-colour absent or "none").
+resolve_colours() {
+    local f="$ROOT/runtime/active-colour" cur="none"
+    [[ ! -f "$f" ]] || cur="$(tr -d '[:space:]' < "$f")"
+    [[ -n "$cur" ]] || cur="none"
+    case "$cur" in
+        blue)  OLD_COLOUR=blue;  NEW_COLOUR=green ;;
+        green) OLD_COLOUR=green; NEW_COLOUR=blue ;;
+        none)  OLD_COLOUR="";    NEW_COLOUR=blue ;;
+        *)     die "runtime/active-colour holds '$cur' (want blue|green|none)" 1 ;;
+    esac
+    info "active colour: ${OLD_COLOUR:-none} → deploying into ${NEW_COLOUR}"
+}
+
+# ── step 1 — GHCR authentication (§F.4.1) ───────────────────────────────────
+# The post-condition of this step (the credential actually works) cannot be
+# observed here: nothing is known about the image set until step 2 has the pins.
+# It is observed in step 3 by `docker manifest inspect` over every pinned ref.
+step_1_login() { # <token>
+    printf '%s' "$1" | docker login "$REGISTRY_HOST" -u x-access-token --password-stdin >/dev/null
+    LOGGED_IN=1
+    ok "authenticated to ${REGISTRY_HOST} (logout armed in the EXIT trap)"
+}
+
+# ── step 2 — the config tree at the tag (§F.4.2) ────────────────────────────
+step_2_checkout() {
+    RELEASE_DIR="$ROOT/releases/$TAG"
+    if [[ -d "$RELEASE_DIR/.git" ]]; then
+        local head want
+        head="$(git -C "$RELEASE_DIR" rev-parse --verify HEAD)"
+        want="$(git -C "$RELEASE_DIR" rev-list -n 1 "$TAG" 2>/dev/null || true)"
+        [[ -n "$want" && "$head" == "$want" ]] \
+            || die "existing $RELEASE_DIR is not checked out at $TAG" 1
+        info "reusing existing checkout $RELEASE_DIR"
+    else
+        [[ ! -e "$RELEASE_DIR" ]] || die "$RELEASE_DIR exists and is not a git checkout" 1
+        git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$RELEASE_DIR" >/dev/null 2>&1 \
+            || die "cannot check out $TAG from $GREMION_SOURCE_URL" 1
+    fi
+    [[ -d "$RELEASE_DIR" ]] || die "release tree absent after checkout: $RELEASE_DIR" 1
+    require_spec_b_contracts "$RELEASE_DIR"
+    validate_release_tree "$RELEASE_DIR"
+    ok "release tree $RELEASE_DIR"
+}
+
+validate_release_tree() { # <dir>
+    local dir="$1" rel="$1/release.json" pins="$1/docker-compose.pins.yml"
+    jq -e . "$rel" >/dev/null 2>&1 || die "release.json does not parse: $rel" 1
+    local jtag
+    jtag="$(jq -r '.tag // empty' "$rel")"
+    [[ "$jtag" == "$TAG" ]] \
+        || die "release.json tag mismatch: want $TAG, tree says '${jtag:-<absent>}'" 1
+    jq -e '.overlap | type == "boolean"' "$rel" >/dev/null 2>&1 \
+        || die "release.json overlap is not a boolean (§F.6: overlap has no default)" 1
+    jq -e '.migrations | type == "array"' "$rel" >/dev/null 2>&1 \
+        || die "release.json migrations is not an array" 1
+    jq -e '.distManifestDigest | test("^sha256:[0-9a-f]{64}$")' "$rel" >/dev/null 2>&1 \
+        || die "release.json distManifestDigest is not a sha256 digest" 1
+    OVERLAP="$(jq -r '.overlap' "$rel")"
+
+    local bad_images
+    bad_images="$(grep -E '^[[:space:]]*image:' "$pins" | grep -v '@sha256:' || true)"
+    [[ -z "$bad_images" ]] \
+        || die "unpinned image in docker-compose.pins.yml: $(printf '%s' "$bad_images" | tr -s ' \n' ' ')" 1
+    local thirdparty
+    thirdparty="$(grep -E '^[[:space:]]*image:[[:space:]]*["'\'']?gremion/' "$pins" || true)"
+    [[ -z "$thirdparty" ]] \
+        || die "third-party gremion/ namespace in pins: $thirdparty" 1
+    local real_builds
+    real_builds="$(grep -E '^[[:space:]]*build:' "$pins" \
+        | grep -vE 'build:[[:space:]]*!reset[[:space:]]+null' || true)"
+    [[ -z "$real_builds" ]] \
+        || die "docker-compose.pins.yml carries a real build: key (§E: no build in production)" 1
+
+    # `|| true` is load-bearing: without it a pins file with NO image: line makes
+    # the substitution exit 1, set -e ends the program here, and the guard on the
+    # next line — the one that names the fault — can never run.
+    PINNED_IMAGES="$(grep -E '^[[:space:]]*image:' "$pins" \
+        | sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//' || true)"
+    [[ -n "$PINNED_IMAGES" ]] || die "docker-compose.pins.yml pins no images" 1
+    ok "release.json valid (overlap=$OVERLAP), $(printf '%s\n' "$PINNED_IMAGES" | wc -l | tr -d ' ') pinned image(s)"
+}
+
+# Steps 3–12 land complete in later steps of this task. Until then each is a
+# pass-through so the program is runnable end to end; every one is replaced
+# wholesale, and no test asserts anything about the pass-throughs.
+# ── step 3 — free space, then the pull (§F.4.3, then §F.4.1's pull) ─────────
+step_3_space_and_pull() {
+    local last="$ROOT/runtime/last-backup.json"
+    [[ -f "$last" ]] || die "precondition: $last absent — run gremion-backup before a deploy" 2
+    local prev_bytes
+    prev_bytes="$(jq -r '.bytes // empty' "$last")"
+    [[ "$prev_bytes" =~ ^[0-9]+$ ]] || die "last-backup.json has no numeric .bytes" 1
+
+    local image_bytes=0 ref sz
+    while IFS= read -r ref; do
+        [[ -n "$ref" ]] || continue
+        sz="$(docker manifest inspect "$ref" \
+              | jq '[.config.size // 0] + [(.layers // [])[].size] | add')" \
+            || die "cannot read the manifest for $ref (registry auth, or a bad digest)" 1
+        [[ "$sz" =~ ^[0-9]+$ ]] || die "manifest size for $ref is not numeric: '$sz'" 1
+        image_bytes=$(( image_bytes + sz ))
+    done <<< "$PINNED_IMAGES"
+
+    local need avail_kb avail
+    need=$(( image_bytes + (prev_bytes * 3 / 2) ))
+    avail_kb="$(df -Pk "$ROOT" | awk 'NR==2 {print $4}')"
+    [[ "$avail_kb" =~ ^[0-9]+$ ]] || die "cannot read free space for $ROOT" 1
+    avail=$(( avail_kb * 1024 ))
+    info "free space on $ROOT: need ${need} B (images ${image_bytes} + 1.5 × snapshot ${prev_bytes}), have ${avail} B"
+    [[ "$avail" -ge "$need" ]] \
+        || die "insufficient free space on $ROOT: need ${need} B, have ${avail} B" 1
+
+    compose state pull
+    compose "app-${NEW_COLOUR}" pull
+
+    while IFS= read -r ref; do
+        [[ -n "$ref" ]] || continue
+        docker image inspect "$ref" >/dev/null 2>&1 || die "image absent after pull: $ref" 1
+    done <<< "$PINNED_IMAGES"
+    ok "every pinned image present locally"
+}
+# ── step 4 — host-rendered files (§F.4.4) ───────────────────────────────────
+# bin_path is captured into a variable BEFORE it is invoked, in this step and
+# in 5, 9, 10 and 11. Called inline as `"$(bin_path x)" --flag`, its `die` runs
+# in a command substitution and can only end that subshell: the program would
+# then try to execute `--flag` and exit 127 instead of the documented 2.
+step_4_render() {
+    local prog; prog="$(bin_path gremion-render)"
+    "$prog" --release "$RELEASE_DIR"
+    ok "host-rendered files produced for $TAG"
+}
+
+# ── step 5 — pre-release snapshot (§F.4.5) ──────────────────────────────────
+# gremion-snapshot itself asserts that its artefact-class counts are >= the last
+# scheduled backup's; a shortfall aborts the deploy from inside that program.
+# The snapshot it takes is restic tag class=snapshot label=<TAG>; Task 9 keeps it
+# out of the daily retention, and gremion-rollback is what forgets it.
+step_5_snapshot() {
+    local prog; prog="$(bin_path gremion-snapshot)"
+    "$prog" "$TAG"
+    ok "pre-release snapshot taken with label $TAG"
+}
+
+# ── step 6 — overlap:false stops the old colour first (§F.4.6, §F.6) ────────
+step_6_stop_old_colour() {
+    if [[ "$OVERLAP" == "true" ]]; then
+        info "overlap: true — the old colour keeps serving until after the switch"
+        return 0
+    fi
+    if [[ -z "$OLD_COLOUR" ]]; then
+        info "no active colour — nothing to stop"
+        return 0
+    fi
+    compose "app-${OLD_COLOUR}" down
+    local left
+    left="$(compose "app-${OLD_COLOUR}" ps -q | grep -c . || true)"
+    [[ "$left" == "0" ]] \
+        || die "old colour ${OLD_COLOUR} still has ${left} container(s) after down" 1
+    ok "old colour ${OLD_COLOUR} stopped (overlap: false — this release has downtime)"
+}
+
+# ── step 7 — the migration job (§F.4.7) ─────────────────────────────────────
+# The lock-then-read semantics and the schema-ledger post-condition belong to
+# spec B's migrate image; what this program can observe from outside is that the
+# run left no container behind, i.e. that it really was the one-shot job.
+step_7_migrate() {
+    compose "app-${NEW_COLOUR}" run --rm migrate
+    local leftovers
+    leftovers="$(docker ps -a -q \
+        --filter "label=com.docker.compose.project=${STACK}-app-${NEW_COLOUR}" \
+        --filter "label=com.docker.compose.service=migrate" | grep -c . || true)"
+    [[ "$leftovers" == "0" ]] || die "migrate container survived --rm (${leftovers} left)" 1
+    ok "migrations applied for $TAG"
+}
+# ── step 8 — start the inactive colour (§F.4.8) ─────────────────────────────
+step_8_start_colour() {
+    # A previous deploy whose SSH session died can leave this colour half-up.
+    compose "app-${NEW_COLOUR}" down
+    compose "app-${NEW_COLOUR}" up -d
+    if ! assert_stack_isolation "$NEW_COLOUR"; then
+        compose "app-${NEW_COLOUR}" down || true
+        die "stack isolation violated — colour ${NEW_COLOUR} stopped, nothing was routed to it" 1
+    fi
+    wait_healthy "$NEW_COLOUR"
+    write_evict_targets "$NEW_COLOUR"
+    printf '%s\n' "$TAG" | atomic_write "$ROOT/runtime/colour-${NEW_COLOUR}-tag" 644
+    ok "colour ${NEW_COLOUR} up and healthy at $TAG"
+}
+
+# assert_stack_isolation <colour> — §E. Every mount and every network of every
+# container of this colour belongs to this STACK. Anonymous volumes (a bare
+# 64-hex name) belong to no stack and are allowed; a bind mount has no .Name and
+# produces no token at all.
+assert_stack_isolation() {
+    # Two statements, not one: `local a="$1" b="…$a…"` makes BOTH names local
+    # (and unset) before either assignment is expanded, so under `set -u` the
+    # second reference dies with "a: unbound variable".
+    local colour="$1"
+    local project="${STACK}-app-${colour}"
+    local allowed=" ${STACK}_edge ${STACK}_state ${project}_app "
+    local cid name mounts nets m n seen=0
+    while IFS= read -r cid; do
+        [[ -n "$cid" ]] || continue
+        seen=$(( seen + 1 ))
+        name="$(docker inspect --format '{{.Name}}' "$cid")"
+        mounts="$(docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' "$cid")"
+        for m in $mounts; do
+            case "$m" in
+                "${STACK}"_*|"${project}"_*) : ;;
+                *)
+                    if [[ "$m" =~ ^[0-9a-f]{64}$ ]]; then
+                        continue
+                    fi
+                    bad "container ${name} mounts foreign volume '${m}' (STACK=${STACK})"
+                    return 1 ;;
+            esac
+        done
+        nets="$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$cid")"
+        for n in $nets; do
+            case "$allowed" in
+                *" $n "*) : ;;
+                *) bad "container ${name} attached to foreign network '${n}' (STACK=${STACK})"
+                   return 1 ;;
+            esac
+        done
+    done < <(compose "app-${colour}" ps -q)
+    [[ "$seen" -ge 1 ]] || { bad "colour ${colour} started no containers"; return 1; }
+    ok "stack isolation: ${seen} container(s), every mount and network under ${STACK}"
+    return 0
+}
+
+# wait_healthy <colour> — §F.4.8. Docker-reported health, not an exit code.
+# A service on HEALTH_EXEMPT_SERVICES must have exited 0 (§K's one-shot rule);
+# a service with no healthcheck at all is a §K census failure, not a pass.
+wait_healthy() {
+    local colour="$1"
+    local exempt=" ${HEALTH_EXEMPT_SERVICES:-} "
+    local deadline=$(( SECONDS + HEALTH_TIMEOUT_SECONDS ))
+    local cid svc state code health pending
+    while :; do
+        pending=""
+        while IFS= read -r cid; do
+            [[ -n "$cid" ]] || continue
+            svc="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$cid")"
+            state="$(docker inspect --format '{{.State.Status}}' "$cid")"
+            code="$(docker inspect --format '{{.State.ExitCode}}' "$cid")"
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid")"
+            if [[ "$exempt" == *" $svc "* ]]; then
+                if [[ "$state" == "exited" && "$code" == "0" ]]; then continue; fi
+                if [[ "$state" == "running" ]]; then pending="$pending ${svc}(exempt,still-running)"; continue; fi
+                die "exempt service ${svc} is ${state} with exit code ${code} (want exited 0)" 1
+            fi
+            case "$health" in
+                healthy)  : ;;
+                starting) pending="$pending ${svc}(starting)" ;;
+                none)     die "service ${svc} declares no healthcheck (§K census) and is ${state}" 1 ;;
+                *)        die "service ${svc} health is ${health}" 1 ;;
+            esac
+        done < <(compose "app-${colour}" ps -a -q)
+        [[ -n "$pending" ]] || { ok "every container of ${colour} is healthy"; return 0; }
+        [[ "$SECONDS" -lt "$deadline" ]] || die "timed out waiting for:${pending}" 1
+        sleep "$HEALTH_POLL_SECONDS"
+    done
+}
+
+# write_evict_targets <colour> — OWNER of runtime/evict-targets.json.
+# Task 6's gremion-switch reads this file and dies (exit 2) when it is absent,
+# so it is produced here, from the running system, at the end of the step that
+# started the containers: `docker ps` over the colour's project, filtered by the
+# spec-B label `gremion.evict=true`. gremion-switch POSTs {"tenant":"*"} to each
+# url with the INTERNAL_PUSH_SECRET bearer, so the secret is required here as a
+# precondition but is NEVER written into the file.
+write_evict_targets() { # <colour>
+    # Split for the same reason as assert_stack_isolation's first two lines.
+    local colour="$1"
+    local project="${STACK}-app-${colour}"
+    [[ -n "${INTERNAL_PUSH_SECRET:-}" ]] \
+        || die "INTERNAL_PUSH_SECRET absent from state.env — gremion-switch could not evict" 2
+    local names name al port json="" n=0 f="$ROOT/runtime/evict-targets.json"
+    names="$(docker ps --filter "label=gremion.evict=true" \
+                       --filter "label=com.docker.compose.project=${project}" \
+                       --format '{{.Names}}')"
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        al="$(evict_alias "$name" "$colour")"
+        port="$(evict_port "$name")"
+        json="${json}${json:+,}$(printf '{"container":"%s","url":"http://%s:%s/api/internal/evict"}' \
+            "$name" "$al" "$port")"
+        n=$(( n + 1 ))
+    done <<< "$names"
+    [[ "$n" -ge 1 ]] \
+        || die "no container in ${project} carries label gremion.evict=true (§E/spec B) — gremion-switch would evict nothing" 1
+    printf '[%s]\n' "$json" | atomic_write "$f" 644
+    jq -e 'type == "array" and length >= 1 and (.[0] | has("container") and has("url"))' \
+        "$f" >/dev/null 2>&1 || die "runtime/evict-targets.json is not the [{container,url}] contract" 1
+    ok "evict targets: ${n} container(s) → runtime/evict-targets.json"
+}
+
+# The alias to POST to is the colour-suffixed network alias the app project
+# declares (§E: `<service>-<colour>` on ${STACK}_edge and ${STACK}_state).
+#
+# No `head -1` in these two pipelines: under `set -o pipefail` head closes the
+# pipe on the PASSING path and the producer can die of SIGPIPE (141), failing
+# the substitution. The first line is taken with a parameter expansion instead,
+# and `|| true` keeps a no-match from ending the program before the guard below
+# can name the fault.
+evict_alias() { # <container> <colour>
+    local a
+    a="$(docker inspect \
+         --format '{{range .NetworkSettings.Networks}}{{range .Aliases}}{{.}} {{end}}{{end}}' "$1" \
+         | tr ' ' '\n' | grep -E -- "-${2}\$" | sort -u || true)"
+    a="${a%%$'\n'*}"
+    [[ -n "$a" ]] || die "container $1 has no '-$2' network alias (§E colour-suffixed aliases)" 1
+    printf '%s' "$a"
+}
+
+# The port comes from the image's exposed ports, so no new label contract is
+# invented: the lowest exposed TCP port is the app port on every first-party image.
+evict_port() { # <container>
+    local p
+    p="$(docker inspect --format '{{range $k, $v := .Config.ExposedPorts}}{{$k}} {{end}}' "$1" \
+         | tr ' ' '\n' | grep -E '^[0-9]+/tcp$' | cut -d/ -f1 | sort -n || true)"
+    p="${p%%$'\n'*}"
+    [[ -n "$p" ]] || die "container $1 exposes no TCP port — cannot address its evict endpoint" 1
+    printf '%s' "$p"
+}
+# ── step 9 — verify the new colour through the internal entrypoint (§F.4.9) ─
+step_9_verify_colour() {
+    local prog; prog="$(bin_path gremion-verify)"
+    "$prog" --colour "$NEW_COLOUR"
+    ok "colour ${NEW_COLOUR} passes the §C contract on the internal entrypoint"
+}
+
+# ── step 10 — evict fan-out + the switch file (§F.4.10) ─────────────────────
+# gremion-switch owns the fan-out (over runtime/evict-targets.json, written in
+# step 8), the atomic write and the Traefik reload poll; what this step asserts
+# is the post-condition it leaves behind.
+step_10_switch() {
+    local prog; prog="$(bin_path gremion-switch)"
+    "$prog" "$NEW_COLOUR"
+    local now="none"
+    [[ ! -f "$ROOT/runtime/active-colour" ]] || now="$(tr -d '[:space:]' < "$ROOT/runtime/active-colour")"
+    [[ "$now" == "$NEW_COLOUR" ]] \
+        || die "runtime/active-colour is '${now:-none}' after switching to ${NEW_COLOUR}" 1
+    ok "public edge now serves ${NEW_COLOUR}"
+}
+
+# ── step 11 — verify the public routers (§F.4.11) ───────────────────────────
+step_11_verify_public() {
+    local prog; prog="$(bin_path gremion-verify)"
+    "$prog"
+    ok "public edge verified"
+}
+
+# ── step 12 — record, then the soak (§F.4.12) ───────────────────────────────
+# The soak runs in this process, so the CI job's SSH session stays open for its
+# duration. If the session dies, the old colour survives; the next deploy's
+# step 8 downs whatever it finds in the colour it is about to use, and
+# gremion-rollback can still switch back to it, so nothing is stranded.
+step_12_record() {
+    local prev="none"
+    [[ ! -f "$ROOT/runtime/current-tag" ]] || prev="$(tr -d '[:space:]' < "$ROOT/runtime/current-tag")"
+    printf '%s\n' "$prev" | atomic_write "$ROOT/runtime/previous-tag" 644
+    printf '%s\n' "$TAG"  | atomic_write "$ROOT/runtime/current-tag" 644
+    ln -sfn "$RELEASE_DIR" "$ROOT/current.tmp"
+    mv -Tf "$ROOT/current.tmp" "$ROOT/current"
+    [[ "$(readlink "$ROOT/current")" == "$RELEASE_DIR" ]] \
+        || die "current symlink does not point at $RELEASE_DIR" 1
+
+    if [[ -n "$OLD_COLOUR" && "$OVERLAP" == "true" ]]; then
+        printf 'SOAK-START minutes=%s colour=%s\n' "$SOAK_MINUTES" "$OLD_COLOUR"
+        sleep $(( SOAK_MINUTES * 60 ))
+        printf 'SOAK-END colour=%s\n' "$OLD_COLOUR"
+        compose "app-${OLD_COLOUR}" down
+        local left
+        left="$(compose "app-${OLD_COLOUR}" ps -q | grep -c . || true)"
+        [[ "$left" == "0" ]] || die "old colour ${OLD_COLOUR} still running after the soak" 1
+        rm -f "$ROOT/runtime/colour-${OLD_COLOUR}-tag"
+    fi
+    ok "recorded ${TAG} (previous ${prev})"
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            # `X="${2:-}"; shift 2` is the shape that exits 1 SILENTLY on a
+            # dangling final option (shift 2 with one argument left fails under
+            # set -e). The arity is checked first and names the option.
+            --soak-minutes) [[ $# -ge 2 ]] || die "option $1 needs a value" 2
+                            SOAK_MINUTES_OPT="$2"; shift 2 ;;
+            --no-switch)    NO_SWITCH=1; shift ;;
+            -h|--help)      usage ;;
+            -*)             printf 'unknown option: %s\n' "$1" >&2; usage ;;
+            *)              [[ -z "$TAG" ]] || usage; TAG="$1"; shift ;;
+        esac
+    done
+    [[ -n "$TAG" ]] || usage
+    [[ "$TAG" =~ ^dist-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid tag: $TAG" 2
+
+    need_cmd docker jq git df awk
+
+    local token
+    token="$(read_token_from_stdin)"
+
+    ROOT="$(gremion_root)"
+    [[ -d "$ROOT" ]] || die "gremion root absent: $ROOT" 2
+    mkdir -p "$ROOT/runtime" "$ROOT/releases"
+    DEPLOY_LOG="$ROOT/runtime/deploy.log"
+    load_env "$ROOT/etc/env/state.env"
+
+    SOAK_MINUTES="${SOAK_MINUTES:-30}"
+    [[ -z "$SOAK_MINUTES_OPT" ]] || SOAK_MINUTES="$SOAK_MINUTES_OPT"
+    [[ "$SOAK_MINUTES" =~ ^[0-9]+$ ]] || die "--soak-minutes must be a non-negative integer" 2
+    HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-600}"
+    HEALTH_POLL_SECONDS="${HEALTH_POLL_SECONDS:-5}"
+    GREMION_SOURCE_URL="${GREMION_SOURCE_URL:-https://github.com/Hello-N00del/gremion.git}"
+
+    trap on_exit EXIT
+
+    info "deploying $TAG (stack=${STACK:?STACK required in state.env})"
+    run_step 1 login step_1_login "$token"
+    token=""
+    run_step 2 checkout step_2_checkout
+    resolve_colours
+    run_step 3 space-and-pull step_3_space_and_pull
+    run_step 4 render step_4_render
+    run_step 5 snapshot step_5_snapshot
+    run_step 6 stop-old-colour step_6_stop_old_colour
+    run_step 7 migrate step_7_migrate
+    run_step 8 start-colour step_8_start_colour
+    run_step 9 verify-colour step_9_verify_colour
+    if [[ "$NO_SWITCH" -eq 1 ]]; then
+        log_skip 10 switch --no-switch
+        log_skip 11 verify-public --no-switch
+        log_skip 12 record --no-switch
+    else
+        run_step 10 switch step_10_switch
+        run_step 11 verify-public step_11_verify_public
+        run_step 12 record step_12_record
+    fi
+
+    printf 'DEPLOY-RESULT: tag=%s colour=%s overlap=%s switched=%s soak-minutes=%s\n' \
+        "$TAG" "$NEW_COLOUR" "$OVERLAP" \
+        "$([[ "$NO_SWITCH" -eq 1 ]] && printf no || printf yes)" "$SOAK_MINUTES"
+}
+
+main "$@"

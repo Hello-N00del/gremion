@@ -1,0 +1,460 @@
+#!/usr/bin/env bash
+#
+# gremion-dns-check — verify one edit of the DNS record table (spec A §C).
+#
+# The record table is entered BY HAND at the registrar (no API credential, by
+# decision), one edit at a time, and the mail bring-up order of §I depends on
+# which edit is live. This program is the machine-readable half of that
+# table: it asks a public resolver what is actually published and prints one
+# line per expected record, in exactly this format:
+#
+#   <STATUS> <edit> <name> <type> '<expected>' '<observed>'
+#
+# The expected and observed columns are SINGLE-QUOTED because legitimate
+# values contain spaces ('0 .', '10 mail.example.org.', '0 1 993 mail…').
+# Consumers (gremion-mail-bringup's ordering guard) grep the quoted form.
+#
+# STATUS is OK, MISSING (nothing is published for that name and type) or
+# WRONG (something is published, but not what the table prescribes). Several
+# published answers are joined with ','; nothing published prints '(none)'.
+# The run ends with
+#
+#   DNS-CHECK: edit=<edit> checked=<n> ok=<n> missing=<n> wrong=<n>
+#
+# Exit codes: 0 every expected record OK · 1 at least one MISSING or WRONG ·
+# 2 usage or a missing precondition. 3 ("blocked") is unused: this program
+# depends on no other spec.
+#
+# THE EDITS (§C):
+#   1   the send-nothing lock: CAA x3, null MX, SPF -all, DMARC p=reject
+#   2   the edge: apex + www/control/rs1 + tenant hosts A/AAAA, the PTR of
+#       the edge address, and the zone wildcard GONE
+#   3   the mail hosts: mail/mta-sts/autoconfig/autodiscover A/AAAA on the
+#       mail address and its PTR on both families — together the pair that
+#       §I assert 1 (FCrDNS) needs
+#   4a  the real mail policy: SPF, both DKIM selectors, DMARC p=none,
+#       MTA-STS, TLS-RPT, the SRV set
+#   4b  the real MX, and the edit-1 null MX gone
+#   all the steady state after 4b: the CAA triple (which survives edit 1)
+#       plus 2 + 3 + 4a + 4b. Edit 1's null MX, 'v=spf1 -all' and
+#       'p=reject' are deliberately NOT part of 'all': 4a and 4b replace
+#       them, and a checker demanding both could never be satisfied.
+#
+# DELIBERATELY NOT CHECKED: §C's row "<any subdomain that never sends> TXT
+# v=spf1 -all". That set has no closed membership — it is whatever names the
+# operator decides never send — so it stays an operator checklist item in
+# the runbook instead of a machine check that could never go green.
+#
+# Unit tests: test/host/dns-check.bats (dig is shimmed; no network).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+DOMAIN=""
+EDGE_IP=""
+EDGE_IP6=""
+MAIL_IP=""
+MAIL_IP6=""
+EDIT="all"
+TENANT_HOSTS=""
+RESOLVER="1.1.1.1"
+
+N_CHECKED=0
+N_OK=0
+N_MISSING=0
+N_WRONG=0
+
+usage() {
+    cat <<'EOF'
+usage: gremion-dns-check --domain D --edge-ip A [--edge-ip6 A6]
+                         --mail-ip B [--mail-ip6 B6]
+                         [--edit 1|2|3|4a|4b|all] [--tenant-hosts FILE]
+                         [--resolver ADDR]
+
+  --domain D          the platform domain (the zone being checked)
+  --edge-ip A         IP-A, the platform edge address (v4)
+  --edge-ip6 A6       IP-A (v6); omitted means AAAA and PTR(v6) edge rows
+                      are not checked
+  --mail-ip B         IP-B, the mail address (v4)
+  --mail-ip6 B6       IP-B (v6); omitted means AAAA and PTR(v6) mail rows
+                      are not checked
+  --edit E            which edit of the §C table to verify (default: all)
+  --tenant-hosts FILE one tenant FQDN per line; '#' comments and blank
+                      lines ignored (checked in edit 2)
+  --resolver ADDR     resolver to ask (default: 1.1.1.1)
+
+Prints one line per expected record and a DNS-CHECK summary line:
+  <STATUS> <edit> <name> <type> '<expected>' '<observed>'
+Exit 0 all OK · 1 at least one MISSING/WRONG · 2 usage/precondition.
+EOF
+}
+
+# expand_ip6 <addr> — the full eight-group, lower-case, zero-padded form, so
+# that 2001:DB8::A published as 2001:db8::a compares equal to what the
+# operator typed on the command line. A value that is not an IPv6 literal
+# (a PTR target, say) is passed through untouched.
+expand_ip6() {
+    local addr head tail joined="" i fill
+    local -a h=() t=() g=()
+
+    addr="$(printf '%s' "$1" | tr 'A-F' 'a-f')"
+    case "$addr" in
+        *:*) : ;;
+        *) printf '%s' "$1"; return 0 ;;
+    esac
+
+    if [ "${addr#*::}" != "$addr" ]; then
+        head="${addr%%::*}"
+        tail="${addr#*::}"
+    else
+        head="$addr"
+        tail=""
+        fill=0
+    fi
+
+    if [ -n "$head" ]; then IFS=':' read -r -a h <<<"$head"; fi
+    if [ -n "$tail" ]; then IFS=':' read -r -a t <<<"$tail"; fi
+
+    if [ "${fill:-x}" = "x" ]; then
+        fill=$(( 8 - ${#h[@]} - ${#t[@]} ))
+    fi
+    if [ "$fill" -lt 0 ]; then printf '%s' "$1"; return 0; fi
+
+    if [ ${#h[@]} -gt 0 ]; then g=( "${h[@]}" ); fi
+    for (( i = 0; i < fill; i++ )); do g+=( 0 ); done
+    if [ ${#t[@]} -gt 0 ]; then g+=( "${t[@]}" ); fi
+
+    if [ ${#g[@]} -ne 8 ]; then printf '%s' "$1"; return 0; fi
+
+    for (( i = 0; i < 8; i++ )); do
+        case "${g[i]}" in
+            *[!0-9a-f]*) printf '%s' "$1"; return 0 ;;
+        esac
+        joined="${joined}:$(printf '%04x' $(( 16#0${g[i]} )) )"
+    done
+    printf '%s' "${joined#:}"
+}
+
+# normalise_txt <line> — dig prints TXT answers quoted, and splits a string
+# longer than 255 bytes into several quoted chunks on one line. Join the
+# chunks, drop the quotes, collapse whitespace and close the space after a
+# ';', so 'v=DMARC1; p=none' and 'v=DMARC1;p=none' compare the same and the
+# policy tag can be anchored as ';p=none' (which 'sp=none' does not match).
+normalise_txt() {
+    printf '%s' "$1" \
+        | sed -e 's/" "//g' -e 's/^"//' -e 's/"$//' \
+        | tr -s '[:space:]' ' ' \
+        | sed -e 's/; /;/g' -e 's/^ //' -e 's/ $//'
+}
+
+# dig_answers <name> <type> — the published answers, one per line.
+# dig_ptr <addr>            — the same for the reverse name of <addr>.
+#
+# NEITHER SWALLOWS DIG'S EXIT STATUS. `dig +short` answers an NXDOMAIN with no
+# output and exit 0, so "the zone does not publish this" and "nobody answered
+# the question" printed the same empty string; the caller then reported MISSING
+# for every row and — far worse — OK for every 'absent' row, because an absent
+# expectation is satisfied by an empty answer. A resolver outage would have
+# reported the zone wildcard deleted. The status is propagated instead and the
+# caller ends the run with exit 2 (a precondition failure, not a verdict).
+dig_answers() {
+    dig +short +time=5 +tries=2 "@${RESOLVER}" "$1" "$2" 2>/dev/null
+}
+
+dig_ptr() {
+    dig +short +time=5 +tries=2 "@${RESOLVER}" -x "$1" 2>/dev/null
+}
+
+# check_record <edit> <name> <type> <mode> <expected> [query-name]
+#
+#   exact      one published answer must equal <expected>
+#   contains   one published answer must contain <expected>
+#   absent     nothing may be published for <name>/<type>
+#   not-exact  something may be published, but no answer may equal <expected>
+#
+# <query-name> defaults to <name>. It exists for the wildcard probe, which
+# is REPORTED as '*.<domain>' but has to be ASKED under a random label.
+#
+# THE OUTPUT FORMAT IS FIXED HERE (see the file header): the expected and
+# observed columns are single-quoted, because values such as '0 .' and
+# '10 mail.example.org.' contain spaces and an unquoted line cannot be
+# parsed by a consumer. gremion-mail-bringup greps the quoted form.
+check_record() {
+    local edit="$1" name="$2" type="$3" mode="$4" expected="$5"
+    local query="${6:-$2}"
+    local raw line norm observed="" status="MISSING" shown="$expected" rc=0
+
+    if [ "$type" = "PTR" ]; then
+        raw="$(dig_ptr "$query")" || rc=$?
+    else
+        raw="$(dig_answers "$query" "$type")" || rc=$?
+    fi
+    # A query that FAILED says nothing about the zone. Printing MISSING would
+    # be a guess and printing OK for an 'absent' expectation would be a lie, so
+    # the run stops here with the precondition code instead.
+    if [ "$rc" -ne 0 ]; then
+        die "resolver ${RESOLVER} did not answer ${query} ${type} (dig exit ${rc})" 2
+    fi
+
+    while IFS= read -r line; do
+        if [ -z "$line" ]; then continue; fi
+        case "$type" in
+            TXT)  norm="$(normalise_txt "$line")" ;;
+            AAAA) norm="$(expand_ip6 "$line")" ;;
+            *)    norm="$line" ;;
+        esac
+        observed="${observed:+${observed},}${norm}"
+        case "$mode" in
+            exact)
+                if [ "$norm" = "$expected" ]; then status="OK"; fi
+                ;;
+            contains)
+                case "$norm" in
+                    *"$expected"*) status="OK" ;;
+                esac
+                ;;
+        esac
+    done <<<"$raw"
+
+    case "$mode" in
+        absent)
+            shown="ABSENT"
+            if [ -z "$observed" ]; then status="OK"; else status="WRONG"; fi
+            ;;
+        not-exact)
+            shown="NOT ${expected}"
+            status="OK"
+            case ",${observed}," in
+                *",${expected},"*) status="WRONG" ;;
+            esac
+            ;;
+        *)
+            if [ "$status" != "OK" ] && [ -n "$observed" ]; then status="WRONG"; fi
+            ;;
+    esac
+
+    if [ -z "$observed" ]; then observed="(none)"; fi
+
+    N_CHECKED=$(( N_CHECKED + 1 ))
+    case "$status" in
+        OK)      N_OK=$(( N_OK + 1 )) ;;
+        MISSING) N_MISSING=$(( N_MISSING + 1 )) ;;
+        WRONG)   N_WRONG=$(( N_WRONG + 1 )) ;;
+    esac
+    printf "%s %s %s %s '%s' '%s'\n" "$status" "$edit" "$name" "$type" "$shown" "$observed"
+}
+
+# The CAA triple is published by edit 1 and SURVIVES every later edit, so it
+# is a function of its own: edit 1 and 'all' both use it.
+caa_rows() {
+    local edit="$1"
+    check_record "$edit" "$DOMAIN" CAA exact '0 issue "letsencrypt.org"'
+    check_record "$edit" "$DOMAIN" CAA exact '0 issuewild ";"'
+    check_record "$edit" "$DOMAIN" CAA exact "0 iodef \"mailto:security@${DOMAIN}\""
+}
+
+edit_1() {
+    caa_rows 1
+    check_record 1 "$DOMAIN" MX exact '0 .'
+    check_record 1 "$DOMAIN" TXT exact 'v=spf1 -all'
+    check_record 1 "_dmarc.${DOMAIN}" TXT contains 'v=DMARC1'
+    check_record 1 "_dmarc.${DOMAIN}" TXT contains ';p=reject'
+}
+
+check_edge_host() {
+    local edit="$1" host="$2"
+    check_record "$edit" "$host" A exact "$EDGE_IP"
+    if [ -n "$EDGE_IP6" ]; then
+        check_record "$edit" "$host" AAAA exact "$(expand_ip6 "$EDGE_IP6")"
+    fi
+}
+
+# One FQDN per line; '#' comments, blank lines and stray whitespace ignored.
+# Returns non-zero when the list could not be READ. That used to end in
+# '|| true', which turned an unreadable list into an empty one: zero tenant
+# hosts queried, and a clean summary claiming they were all verified.
+read_tenant_hosts() {
+    if [ -z "$TENANT_HOSTS" ]; then return 0; fi
+    local stripped
+    stripped="$(sed -e 's/#.*$//' -e 's/[[:space:]]//g' "$TENANT_HOSTS")" || return 1
+    # grep exits 1 when every line was a comment or blank. That is an empty
+    # list, not a failure, and it is the one case '|| true' may cover.
+    printf '%s\n' "$stripped" | grep -v '^$' || true
+}
+
+# A wildcard is only proven absent by asking for a name nobody would ever
+# publish, so the probe label is random on every run.
+wildcard_probe_label() {
+    printf 'wildcard-probe-%s%s' "${RANDOM}" "${RANDOM}"
+}
+
+edit_2() {
+    local host tenant_hosts=""
+    check_edge_host 2 "$DOMAIN"
+    for host in www control rs1; do
+        check_edge_host 2 "${host}.${DOMAIN}"
+    done
+    # Read in THIS shell, not in a process substitution: a `die` inside the
+    # subshell of `< <(…)` ends the subshell and the program carries on with an
+    # empty list, which is the failure this refusal exists to prevent.
+    if [ -n "$TENANT_HOSTS" ]; then
+        tenant_hosts="$(read_tenant_hosts)" \
+            || die "cannot read tenant-hosts file: ${TENANT_HOSTS}" 2
+    fi
+    while IFS= read -r host; do
+        if [ -z "$host" ]; then continue; fi
+        check_edge_host 2 "$host"
+    done <<<"$tenant_hosts"
+
+    # "in the same edit delete the zone wildcard" (§C edit 2)
+    check_record 2 "*.${DOMAIN}" A absent ABSENT "$(wildcard_probe_label).${DOMAIN}"
+
+    # The PTR is set in the provider panel, not in the zone, but it is
+    # verified here with the A/AAAA record it has to round-trip with.
+    check_record 2 "$EDGE_IP" PTR exact "rs1.${DOMAIN}."
+    if [ -n "$EDGE_IP6" ]; then
+        check_record 2 "$EDGE_IP6" PTR exact "rs1.${DOMAIN}."
+    fi
+}
+
+check_mail_host() {
+    local edit="$1" host="$2"
+    check_record "$edit" "$host" A exact "$MAIL_IP"
+    if [ -n "$MAIL_IP6" ]; then
+        check_record "$edit" "$host" AAAA exact "$(expand_ip6 "$MAIL_IP6")"
+    fi
+}
+
+# Edit 3 plus the PTRs is exactly the pair §I assert 1 (FCrDNS) needs: the
+# PTR resolves to mail.<domain> and mail.<domain> resolves back to IP-B.
+edit_3() {
+    local host
+    for host in mail mta-sts autoconfig autodiscover; do
+        check_mail_host 3 "${host}.${DOMAIN}"
+    done
+    check_record 3 "$MAIL_IP" PTR exact "mail.${DOMAIN}."
+    if [ -n "$MAIL_IP6" ]; then
+        check_record 3 "$MAIL_IP6" PTR exact "mail.${DOMAIN}."
+    fi
+}
+
+# The SRV set of §C edit 4a. Priority and weight follow RFC 6186's shape
+# (0 1 <port> <target>); POP3 is explicitly REFUSED with the "no such
+# service" target rather than left unpublished, so a client that probes it
+# gets a definite answer.
+edit_4a() {
+    check_record 4a "$DOMAIN" TXT exact "v=spf1 a:mail.${DOMAIN} -all"
+    check_record 4a "g2026a._domainkey.${DOMAIN}" TXT contains 'v=DKIM1'
+    check_record 4a "g2026b._domainkey.${DOMAIN}" TXT contains 'v=DKIM1'
+    check_record 4a "_dmarc.${DOMAIN}" TXT contains 'v=DMARC1'
+    check_record 4a "_dmarc.${DOMAIN}" TXT contains ';p=none'
+    check_record 4a "_mta-sts.${DOMAIN}" TXT contains 'v=STSv1;id='
+    check_record 4a "_smtp._tls.${DOMAIN}" TXT contains 'v=TLSRPTv1'
+    check_record 4a "_imaps._tcp.${DOMAIN}"        SRV exact "0 1 993 mail.${DOMAIN}."
+    check_record 4a "_submissions._tcp.${DOMAIN}"  SRV exact "0 1 465 mail.${DOMAIN}."
+    check_record 4a "_submission._tcp.${DOMAIN}"   SRV exact "0 1 587 mail.${DOMAIN}."
+    check_record 4a "_jmap._tcp.${DOMAIN}"         SRV exact "0 1 443 mail.${DOMAIN}."
+    check_record 4a "_autodiscover._tcp.${DOMAIN}" SRV exact "0 1 443 autodiscover.${DOMAIN}."
+    check_record 4a "_pop3._tcp.${DOMAIN}"         SRV exact "0 0 0 ."
+}
+
+# "delete the edit-1 null MX in the same edit" (§C edit 4b): publishing the
+# real MX beside the null MX is a broken zone, not a half-done edit, so the
+# survival of '0 .' is its own WRONG row.
+edit_4b() {
+    check_record 4b "$DOMAIN" MX exact "10 mail.${DOMAIN}."
+    check_record 4b "$DOMAIN" MX not-exact '0 .'
+}
+
+# need_value <flag> <remaining-arg-count>
+# A value-taking flag given as the LAST argument used to die inside `shift 2`:
+# under `set -e` that is exit 1 with no message and no usage. Exit 1 means "an
+# assertion failed" in the house contract, so a truncated command line read as
+# a failed DNS check. Same helper, same shape as gremion-init-secrets.
+need_value() {
+    [ "$2" -ge 2 ] || { usage >&2; die "${1} requires a value" 2; }
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --domain)        need_value --domain "$#";       DOMAIN="$2"; shift 2 ;;
+            --edge-ip)       need_value --edge-ip "$#";      EDGE_IP="$2"; shift 2 ;;
+            --edge-ip6)      need_value --edge-ip6 "$#";     EDGE_IP6="$2"; shift 2 ;;
+            --mail-ip)       need_value --mail-ip "$#";      MAIL_IP="$2"; shift 2 ;;
+            --mail-ip6)      need_value --mail-ip6 "$#";     MAIL_IP6="$2"; shift 2 ;;
+            --edit)          need_value --edit "$#";         EDIT="$2"; shift 2 ;;
+            --tenant-hosts)  need_value --tenant-hosts "$#"; TENANT_HOSTS="$2"; shift 2 ;;
+            --resolver)      need_value --resolver "$#";     RESOLVER="$2"; shift 2 ;;
+            -h|--help)       usage; exit 0 ;;
+            *)               usage >&2; die "unknown option: $1" 2 ;;
+        esac
+    done
+}
+
+require_args() {
+    if [ -z "$DOMAIN" ];  then usage >&2; die "--domain is required" 2; fi
+    if [ -z "$EDGE_IP" ]; then usage >&2; die "--edge-ip is required" 2; fi
+    if [ -z "$MAIL_IP" ]; then usage >&2; die "--mail-ip is required" 2; fi
+    case "$EDIT" in
+        1|2|3|4a|4b|all) : ;;
+        *) die "unknown --edit value: ${EDIT} (want 1|2|3|4a|4b|all)" 2 ;;
+    esac
+    if [ -n "$TENANT_HOSTS" ] && [ ! -f "$TENANT_HOSTS" ]; then
+        die "tenant-hosts file not found: ${TENANT_HOSTS}" 2
+    fi
+    # Everything this program shells out to, not just the interesting one:
+    # dig queries, sed and tr normalise, grep filters the tenant list and cat
+    # prints the usage text. A program that preflights one of five fails half
+    # way through a run on a host missing the others.
+    need_cmd dig sed tr grep cat
+}
+
+main() {
+    parse_args "$@"
+    require_args
+
+    if [ -z "$EDGE_IP6" ]; then
+        info "no --edge-ip6 given: the v6 address and PTR(v6) rows for the edge are not checked" >&2
+    fi
+    if [ -z "$MAIL_IP6" ]; then
+        info "no --mail-ip6 given: the v6 address and PTR(v6) rows for the mail host are not checked" >&2
+    fi
+
+    case "$EDIT" in
+        1)  edit_1 ;;
+        2)  edit_2 ;;
+        3)  edit_3 ;;
+        4a) edit_4a ;;
+        4b) edit_4b ;;
+        all)
+            # The steady state after edit 4b. The CAA triple survives edit
+            # 1 and keeps its own edit number in the report; edit 1's null
+            # MX, 'v=spf1 -all' and 'p=reject' are superseded by 4b and 4a
+            # and are NOT checked here.
+            caa_rows 1
+            edit_2
+            edit_3
+            edit_4a
+            edit_4b
+            ;;
+    esac
+
+    printf 'DNS-CHECK: edit=%s checked=%d ok=%d missing=%d wrong=%d\n' \
+        "$EDIT" "$N_CHECKED" "$N_OK" "$N_MISSING" "$N_WRONG"
+
+    if [ "$N_CHECKED" -eq 0 ]; then
+        die "no records checked for edit ${EDIT}" 2
+    fi
+    if [ "$N_MISSING" -gt 0 ] || [ "$N_WRONG" -gt 0 ]; then
+        exit 1
+    fi
+    exit 0
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

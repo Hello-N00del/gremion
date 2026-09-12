@@ -1,0 +1,402 @@
+#!/usr/bin/env bash
+#
+# gremion-fw-proof — behavioural proof of the host firewall contract (spec A §B).
+#
+# WHAT IT PROVES, from the running system, never from a config file:
+#   egress25-app      a container OUTSIDE the mail subnet cannot open TCP/25
+#   egress25-mail     a container INSIDE  the mail subnet can    open TCP/25
+#   snat-mail         mail-subnet traffic leaves with MAIL_BIND_IP / MAIL_BIND_IP6
+#   snat-app          non-mail traffic does NOT leave with the mail address
+#   docker-nat-table  Docker's own NAT plumbing is still present, i.e. nothing
+#                     ever wiped the whole ruleset underneath it
+#
+# It also records which firewall backend Docker uses and is therefore the
+# instrument for spike S3.
+#
+# CONTROL FIRST. The source-address reflector probe runs before the port-25
+# probe on the same network. Without outbound connectivity a "port 25 is
+# closed" result would mean nothing, so a silent reflector is a precondition
+# failure (exit 2), not a pass.
+#
+# READ-ONLY. This program adds, deletes and clears no rule; it creates two
+# throwaway Docker networks and removes exactly those. It never prunes.
+#
+# ROOT. `nft list` needs CAP_NET_ADMIN; run under sudo. A non-root run surfaces
+# as "table inet gremion is absent".
+#
+# The probe image is a throwaway diagnostic container, not part of any
+# production composition, so it is not digest-pinned by default; set
+# FW_PROOF_IMAGE=<ref>@sha256:... when a pinned probe is wanted.
+#
+# Exit: 0 every expectation met · 1 an expectation failed
+#       2 usage or missing precondition · 3 blocked on an operator step
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+PROBE_IMAGE="${FW_PROOF_IMAGE:-alpine:3.22}"
+PROOF_V4_SUBNET="${FW_PROOF_V4_SUBNET:-10.90.250.0/24}"
+PROOF_V6_SUBNET="${FW_PROOF_V6_SUBNET:-fd5a:fa::/64}"
+
+ENV_FILE=""
+APP_NET=""
+MAIL_NET=""
+MX_HOST="aspmx.l.google.com"
+REFLECTOR4="https://api.ipify.org"
+REFLECTOR6="https://api6.ipify.org"
+FAMILIES="both"
+TIMEOUT=8
+SCP_UNBLOCKED=0
+
+MX4=""
+MX6=""
+DOCKER_BACKEND="unknown"
+DOCKER_NAT4="absent"
+DOCKER_NAT6="absent"
+
+FW_CREATED_NETS=()
+FW_FAILURES=()
+FW_PROOF_LINES=()
+FW_DETAIL_LINES=()
+
+fw_usage() {
+    cat <<'USAGE'
+gremion-fw-proof — behavioural proof of the host firewall contract (spec A §B)
+
+Usage: gremion-fw-proof [options]
+
+  --env-file FILE        state env file (default <root>/etc/env/state.env)
+  --app-network NAME     existing network OUTSIDE the mail subnet
+                         (default: a scratch network, created and removed)
+  --mail-network NAME    existing network INSIDE the mail subnet
+                         (default: ${STACK}-mail_mail when it exists, else a
+                         scratch network on MAIL_V4_SUBNET/MAIL_V6_SUBNET)
+  --mx-host HOST         dual-stack SMTP target for the egress-25 probes
+                         (default aspmx.l.google.com)
+  --reflector4 URL       IPv4 source-address reflector (default https://api.ipify.org)
+  --reflector6 URL       IPv6 source-address reflector (default https://api6.ipify.org)
+  --families both|v4|v6  which families to probe (default both)
+  --timeout SECONDS      per-probe timeout (default 8)
+  --scp-smtp-unblocked   declare the provider-level SMTP block lifted; without
+                         it the egress-25 half is reported deferred and the run
+                         exits 3, because a provider block and an nft drop are
+                         indistinguishable from inside a container
+  -h, --help             this text
+
+Exit: 0 all expectations met · 1 an expectation failed
+      2 usage or missing precondition · 3 blocked on an operator step
+USAGE
+}
+
+fw_need_arg() {
+    local flag="$1" argc="$2"
+    (( argc >= 2 )) || die "${flag} needs a value" 2
+}
+
+fw_parse_args() {
+    while (( $# )); do
+        case "$1" in
+            --env-file)     fw_need_arg "$1" "$#"; ENV_FILE="$2";    shift 2 ;;
+            --app-network)  fw_need_arg "$1" "$#"; APP_NET="$2";     shift 2 ;;
+            --mail-network) fw_need_arg "$1" "$#"; MAIL_NET="$2";    shift 2 ;;
+            --mx-host)      fw_need_arg "$1" "$#"; MX_HOST="$2";     shift 2 ;;
+            --reflector4)   fw_need_arg "$1" "$#"; REFLECTOR4="$2";  shift 2 ;;
+            --reflector6)   fw_need_arg "$1" "$#"; REFLECTOR6="$2";  shift 2 ;;
+            --families)     fw_need_arg "$1" "$#"; FAMILIES="$2";    shift 2 ;;
+            --timeout)      fw_need_arg "$1" "$#"; TIMEOUT="$2";     shift 2 ;;
+            --scp-smtp-unblocked) SCP_UNBLOCKED=1; shift ;;
+            -h|--help)      fw_usage; exit 0 ;;
+            *)              fw_usage >&2; die "unknown argument: $1" 2 ;;
+        esac
+    done
+    case "$FAMILIES" in
+        both|v4|v6) ;;
+        *) die "--families must be both|v4|v6 (got: ${FAMILIES})" 2 ;;
+    esac
+    [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "--timeout must be an integer (got: ${TIMEOUT})" 2
+    [[ -n "$ENV_FILE" ]] || ENV_FILE="$(gremion_root)/etc/env/state.env"
+}
+
+fw_require_keys() {
+    local k missing=()
+    for k in "$@"; do
+        [[ -n "${!k:-}" ]] || missing+=("$k")
+    done
+    (( ${#missing[@]} == 0 )) || die "missing env keys in ${ENV_FILE}: ${missing[*]}" 2
+}
+
+fw_fail() {
+    FW_FAILURES+=("$1")
+    bad "$1"
+}
+
+# fw_expand_v6 <addr> — the full 8-group, zero-padded, lowercase form, so two
+# spellings of the same address compare equal. Non-zero and empty on garbage.
+fw_expand_v6() {
+    local addr="${1,,}" left right compressed=0
+    local -a lg=() rg=() all=()
+    if [[ "$addr" == *"::"* ]]; then
+        compressed=1
+        left="${addr%%::*}"
+        right="${addr#*::}"
+        [[ "$right" != *"::"* ]] || return 1
+    else
+        left="$addr"
+        right=""
+    fi
+    if [[ -n "$left"  ]]; then IFS=':' read -r -a lg <<<"$left";  fi
+    if [[ -n "$right" ]]; then IFS=':' read -r -a rg <<<"$right"; fi
+    local gap=0
+    if (( compressed )); then
+        gap=$(( 8 - ${#lg[@]} - ${#rg[@]} ))
+        (( gap >= 1 )) || return 1
+    fi
+    local i g
+    for (( i = 0; i < ${#lg[@]}; i++ )); do all+=("${lg[i]}"); done
+    for (( i = 0; i < gap;       i++ )); do all+=("0"); done
+    for (( i = 0; i < ${#rg[@]}; i++ )); do all+=("${rg[i]}"); done
+    (( ${#all[@]} == 8 )) || return 1
+    local out=""
+    for (( i = 0; i < 8; i++ )); do
+        g="${all[i]}"
+        [[ "$g" =~ ^[0-9a-f]{1,4}$ ]] || return 1
+        printf -v g '%04x' "$((16#$g))"
+        out+="${out:+:}${g}"
+    done
+    printf '%s\n' "$out"
+}
+
+# fw_same_addr <family> <a> <b>
+fw_same_addr() {
+    local fam="$1" a="$2" b="$3"
+    if [[ "$fam" == v6 ]]; then
+        a="$(fw_expand_v6 "$a" || true)"
+        b="$(fw_expand_v6 "$b" || true)"
+        [[ -n "$a" && -n "$b" ]] || return 1
+    fi
+    [[ "$a" == "$b" ]]
+}
+
+fw_check_tables() {
+    nft list table inet gremion >/dev/null 2>&1 \
+        || die "table inet gremion is absent — run bootstrap.sh firewall first (as root: nft needs CAP_NET_ADMIN)" 2
+
+    local rs
+    rs="$(nft list table inet gremion 2>/dev/null)"
+    grep -qE 'tcp dport 25' <<<"$rs" \
+        || fw_fail "rule-text: no tcp dport 25 rule in table inet gremion"
+    grep -qF -- "$MAIL_V4_SUBNET" <<<"$rs" \
+        || fw_fail "rule-text: MAIL_V4_SUBNET (${MAIL_V4_SUBNET}) appears in no rule of table inet gremion"
+    grep -qF -- "$MAIL_V6_SUBNET" <<<"$rs" \
+        || fw_fail "rule-text: MAIL_V6_SUBNET (${MAIL_V6_SUBNET}) appears in no rule of table inet gremion"
+    grep -qF -- "$MAIL_BIND_IP" <<<"$rs" \
+        || fw_fail "rule-text: MAIL_BIND_IP (${MAIL_BIND_IP}) appears in no rule of table inet gremion"
+    grep -qF -- "$MAIL_BIND_IP6" <<<"$rs" \
+        || fw_fail "rule-text: MAIL_BIND_IP6 (${MAIL_BIND_IP6}) appears in no rule of table inet gremion"
+
+    # Capture, then match against the capture. `nft … | grep -q` would let grep
+    # close the pipe on the first hit, and under `set -o pipefail` the SIGPIPE
+    # that kills nft (141) becomes the pipeline's status — turning a PASSING
+    # observation into a missing one, intermittently and only on big rulesets.
+    local tables nat4 nat6
+    tables="$(nft list tables 2>/dev/null || true)"
+    nat4="$(nft list table ip nat 2>/dev/null || true)"
+    nat6="$(nft list table ip6 nat 2>/dev/null || true)"
+
+    if grep -q 'chain DOCKER' <<<"$nat4"; then
+        DOCKER_BACKEND="iptables-nft"; DOCKER_NAT4="present"
+    elif grep -qE '^table (ip|inet) docker' <<<"$tables"; then
+        DOCKER_BACKEND="nftables"; DOCKER_NAT4="present"
+    else
+        DOCKER_BACKEND="unknown"; DOCKER_NAT4="absent"
+        fw_fail "docker-nat-table: no 'ip nat' with a DOCKER chain and no native 'docker' table — Docker's plumbing was flushed"
+    fi
+    # The v6 NAT table is reported, not asserted: a host that routes IPv6
+    # instead of NAT66-ing it legitimately has none.
+    if grep -q 'chain DOCKER' <<<"$nat6"; then
+        DOCKER_NAT6="present"
+    elif grep -qE '^table (ip6|inet) docker' <<<"$tables"; then
+        DOCKER_NAT6="present"
+    fi
+    ok "docker firewall backend: ${DOCKER_BACKEND} (ip nat=${DOCKER_NAT4}, ip6 nat=${DOCKER_NAT6})"
+}
+
+fw_resolve_mx() {
+    if [[ "$FAMILIES" != v6 ]]; then
+        MX4="$(getent ahostsv4 "$MX_HOST" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+        [[ -n "$MX4" ]] || die "--mx-host ${MX_HOST} has no A record" 2
+    fi
+    if [[ "$FAMILIES" != v4 ]]; then
+        MX6="$(getent ahostsv6 "$MX_HOST" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+        [[ -n "$MX6" ]] || die "--mx-host ${MX_HOST} has no AAAA record — pass a dual-stack MX or --families v4" 2
+    fi
+}
+
+fw_ensure_scratch_net() {
+    local name="$1" brname="$2" v4="$3" v6="$4"
+    if docker network inspect "$name" >/dev/null 2>&1; then
+        info "reusing the existing scratch network ${name}"
+        return 0
+    fi
+    docker network create --driver bridge --ipv6 --subnet "$v4" --subnet "$v6" \
+        --opt com.docker.network.bridge.name="$brname" "$name" >/dev/null 2>&1 \
+        || die "could not create the scratch network ${name} (${v4} ${v6})" 2
+    FW_CREATED_NETS+=("$name")
+    docker network inspect "$name" >/dev/null 2>&1 \
+        || die "scratch network ${name} was created but is not inspectable" 1
+    ok "scratch network ${name} (${v4} ${v6})"
+}
+
+fw_setup_networks() {
+    if [[ -n "$APP_NET" ]]; then
+        docker network inspect "$APP_NET" >/dev/null 2>&1 \
+            || die "--app-network ${APP_NET} does not exist" 2
+    else
+        APP_NET="gremion-fwproof-app"
+        fw_ensure_scratch_net "$APP_NET" "gremion-fwp0" "$PROOF_V4_SUBNET" "$PROOF_V6_SUBNET"
+    fi
+
+    if [[ -n "$MAIL_NET" ]]; then
+        docker network inspect "$MAIL_NET" >/dev/null 2>&1 \
+            || die "--mail-network ${MAIL_NET} does not exist" 2
+    elif docker network inspect "${STACK}-mail_mail" >/dev/null 2>&1; then
+        MAIL_NET="${STACK}-mail_mail"
+        info "using the live mail project network ${MAIL_NET}"
+    else
+        MAIL_NET="gremion-fwproof-mail"
+        fw_ensure_scratch_net "$MAIL_NET" "gremion-fwp1" "$MAIL_V4_SUBNET" "$MAIL_V6_SUBNET"
+    fi
+}
+
+fw_cleanup() {
+    local i n
+    for (( i = 0; i < ${#FW_CREATED_NETS[@]}; i++ )); do
+        n="${FW_CREATED_NETS[i]}"
+        docker network rm "$n" >/dev/null 2>&1 || bad "could not remove the scratch network ${n}"
+    done
+}
+
+fw_probe() {
+    local label="$1" net="$2" cmd="$3"
+    docker run --rm --network "$net" -e "FW_PROBE=${label}" "$PROBE_IMAGE" sh -c "$cmd" 2>/dev/null || true
+}
+
+# fw_tcp_probe <label> <network> <ip-literal> <port> → two lines, RC= and OUT=
+fw_tcp_probe() {
+    local label="$1" net="$2" addr="$3" port="$4" cmd
+    # $? and $(...) are for the container's shell, not this one.
+    # shellcheck disable=SC2016
+    printf -v cmd 'nc -w %s %s %s </dev/null >/tmp/o 2>/dev/null; echo "RC=$?"; echo "OUT=$(head -c 120 /tmp/o | tr -d "\\r\\n")"' \
+        "$TIMEOUT" "$addr" "$port"
+    fw_probe "$label" "$net" "$cmd"
+}
+
+# fw_reflector_probe <label> <network> <url> → the observed source address
+fw_reflector_probe() {
+    local label="$1" net="$2" url="$3" cmd
+    printf -v cmd 'wget -q -T %s -O - "%s" 2>/dev/null | head -c 64 | tr -d "\\r\\n"; echo' \
+        "$TIMEOUT" "$url"
+    fw_probe "$label" "$net" "$cmd" | tr -d '[:space:]'
+}
+
+fw_run_family() {
+    local fam="$1" mx reflector mail_bind edge_bind tag
+    if [[ "$fam" == v4 ]]; then
+        mx="$MX4"; reflector="$REFLECTOR4"; mail_bind="$MAIL_BIND_IP";  edge_bind="$EDGE_BIND_IP";  tag="FW-PROOF"
+    else
+        mx="$MX6"; reflector="$REFLECTOR6"; mail_bind="$MAIL_BIND_IP6"; edge_bind="$EDGE_BIND_IP6"; tag="FW-PROOF6"
+    fi
+
+    # ---- control: outbound connectivity on both probe networks -------------
+    local snat_app snat_mail
+    snat_app="$(fw_reflector_probe "reflector-${fam}-app" "$APP_NET" "$reflector")"
+    [[ -n "$snat_app" ]] \
+        || die "no ${fam} outbound connectivity from ${APP_NET} (${reflector} returned nothing) — the egress-25 result would be meaningless" 2
+    snat_mail="$(fw_reflector_probe "reflector-${fam}-mail" "$MAIL_NET" "$reflector")"
+    [[ -n "$snat_mail" ]] \
+        || die "no ${fam} outbound connectivity from ${MAIL_NET} (${reflector} returned nothing) — the egress-25 result would be meaningless" 2
+
+    # ---- snat-mail ---------------------------------------------------------
+    if fw_same_addr "$fam" "$snat_mail" "$mail_bind"; then
+        ok "snat-mail(${fam}): mail-subnet traffic leaves from ${snat_mail}"
+    else
+        fw_fail "snat-mail(${fam}): expected ${mail_bind}, observed ${snat_mail}"
+    fi
+
+    # ---- snat-app ----------------------------------------------------------
+    if fw_same_addr "$fam" "$snat_app" "$mail_bind"; then
+        fw_fail "snat-app(${fam}): traffic from ${APP_NET} also leaves from the mail address ${snat_app} — the SNAT rule is too broad"
+    else
+        ok "snat-app(${fam}): non-mail traffic leaves from ${snat_app}, not the mail address"
+    fi
+
+    # ---- egress 25 ---------------------------------------------------------
+    local eg_app="deferred" eg_mail="deferred" out
+    if (( SCP_UNBLOCKED == 1 )); then
+        out="$(fw_tcp_probe "egress25-${fam}-app" "$APP_NET" "$mx" 25)"
+        if grep -q '^OUT=220' <<<"$out"; then
+            eg_app="allowed"
+            fw_fail "egress25-app(${fam}): ${APP_NET} read an SMTP banner from ${MX_HOST}:25 [${out//$'\n'/ }] — the egress-25 drop is not in force"
+        else
+            eg_app="refused"
+            ok "egress25-app(${fam}): no SMTP banner from ${APP_NET} [${out//$'\n'/ }]"
+        fi
+
+        out="$(fw_tcp_probe "egress25-${fam}-mail" "$MAIL_NET" "$mx" 25)"
+        if grep -q '^OUT=220' <<<"$out"; then
+            eg_mail="allowed"
+            ok "egress25-mail(${fam}): banner read from ${MAIL_NET} [${out//$'\n'/ }]"
+        else
+            eg_mail="blocked"
+            fw_fail "egress25-mail(${fam}): ${MAIL_NET} read no SMTP banner from ${MX_HOST}:25 [${out//$'\n'/ }] — either the nft accept for ${MAIL_V4_SUBNET}/${MAIL_V6_SUBNET} is missing or the provider SMTP block is still in place"
+        fi
+    else
+        info "egress-25 (${fam}) deferred: --scp-smtp-unblocked was not given"
+    fi
+
+    local nat="$DOCKER_NAT4"
+    [[ "$fam" == v4 ]] || nat="$DOCKER_NAT6"
+
+    FW_PROOF_LINES+=("${tag}: egress25-app=${eg_app} egress25-mail=${eg_mail} snat-mail=${snat_mail} docker-nat-table=${nat}")
+    FW_DETAIL_LINES+=("FW-PROOF-DETAIL: family=${fam} snat-app=${snat_app} edge-bind=${edge_bind} mail-bind=${mail_bind} docker-fw-backend=${DOCKER_BACKEND} mx=${MX_HOST} probe-image=${PROBE_IMAGE}")
+}
+
+fw_report() {
+    local i
+    echo
+    for (( i = 0; i < ${#FW_PROOF_LINES[@]};  i++ )); do printf '%s\n' "${FW_PROOF_LINES[i]}";  done
+    for (( i = 0; i < ${#FW_DETAIL_LINES[@]}; i++ )); do printf '%s\n' "${FW_DETAIL_LINES[i]}"; done
+    echo
+}
+
+main() {
+    fw_parse_args "$@"
+    need_cmd docker nft getent awk
+    [[ -f "$ENV_FILE" ]] || die "env file not found: ${ENV_FILE}" 2
+    load_env "$ENV_FILE"
+    fw_require_keys STACK MAIL_V4_SUBNET MAIL_V6_SUBNET MAIL_BIND_IP MAIL_BIND_IP6 \
+                    EDGE_BIND_IP EDGE_BIND_IP6
+    fw_check_tables
+    fw_resolve_mx
+    trap fw_cleanup EXIT
+    fw_setup_networks
+    if [[ "$FAMILIES" != v6 ]]; then fw_run_family v4; fi
+    if [[ "$FAMILIES" != v4 ]]; then fw_run_family v6; fi
+    fw_report
+
+    if (( ${#FW_FAILURES[@]} > 0 )); then
+        bad "${#FW_FAILURES[@]} expectation(s) failed"
+        exit 1
+    fi
+    if (( SCP_UNBLOCKED == 0 )); then
+        echo "BLOCKED: provider SMTP block not declared lifted (--scp-smtp-unblocked); the egress-25 half of spec A §B is unproven"
+        exit 3
+    fi
+    ok "firewall contract proven"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

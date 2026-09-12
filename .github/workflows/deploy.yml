@@ -1,0 +1,187 @@
+name: Deploy
+
+run-name: deploy ${{ inputs.tag }} to ${{ inputs.target }}
+
+# The only path a release takes to a host.
+#
+# This workflow builds nothing. The annotated tag is the single artefact
+# (spec A F.1); everything here is (1) proving the tag is a real release tag
+# whose tree carries release.json and docker-compose.pins.yml, and (2) handing
+# `gremion-deploy <tag>` to the host's restricted agent over SSH with the job's
+# short-lived GHCR token on stdin.
+#
+# The host holds no standing registry credential (N12). GHCR_TOKEN below is
+# GITHUB_TOKEN, minted for this run and expiring with it; gremion-deploy logs
+# out of ghcr.io in a trap on every exit path and asserts that no `auths`
+# entry survives.
+#
+# No workflow expression is expanded inside a `run:` body: each one is bound
+# to an env key, to run-name, or to the concurrency group, so a crafted input
+# can never become shell. test/host/deploy-workflow.bats enforces that
+# mechanically, and extracts and executes both shell blocks below.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to deploy (dist-vX.Y.Z)'
+        required: true
+        type: string
+      target:
+        description: 'Deployment target'
+        required: true
+        type: choice
+        default: production
+        options:
+          - production
+
+# Read-only. `contents: read` reads the tag; `packages: read` is what lets the
+# host log in to ghcr.io with this job's token and pull the pinned images.
+permissions:
+  contents: read
+  packages: read
+
+# One deploy per target at a time, and never cancelled mid-flight: two
+# overlapping runs would race on runtime/active-colour and on the switch file,
+# and a cancelled run would abandon a half-switched edge.
+concurrency:
+  group: deploy-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to the distribution host
+    runs-on: ubuntu-latest
+    # The GitHub environment carries the required reviewer and the three
+    # deploy secrets. An unreviewed dispatch waits here and never reaches SSH.
+    environment: production
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          # Tags are what this workflow validates, and a shallow clone has none.
+          fetch-depth: 0
+
+      - name: Verify the tag is a release tag and carries its release artefacts
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          # --- release-tag-check begin ---
+          set -euo pipefail
+          : "${TAG:?TAG is required}"
+
+          if ! printf '%s' "$TAG" | grep -Eq '^dist-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "deploy: refusing '${TAG}' — a release tag is dist-vX.Y.Z" >&2
+            exit 2
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "deploy: tag '${TAG}' does not exist in this repository" >&2
+            exit 2
+          fi
+
+          if [ "$(git cat-file -t "refs/tags/${TAG}")" != tag ]; then
+            echo "deploy: tag '${TAG}' is lightweight; a release tag is annotated" >&2
+            exit 2
+          fi
+
+          for f in release.json docker-compose.pins.yml; do
+            if ! git cat-file -e "refs/tags/${TAG}^{tree}:${f}" 2>/dev/null; then
+              echo "deploy: tag '${TAG}' does not carry ${f} at its tree root" >&2
+              exit 2
+            fi
+          done
+
+          rel="$(mktemp)"
+          trap 'rm -f "$rel"' EXIT
+          git cat-file blob "refs/tags/${TAG}^{tree}:release.json" > "$rel"
+
+          REL_FILE="$rel" node -e '
+          const fs = require("fs");
+          const tag = process.env.TAG;
+          const fail = (m) => { console.error("deploy: " + m); process.exit(2); };
+          let r = null;
+          try { r = JSON.parse(fs.readFileSync(process.env.REL_FILE, "utf8")); }
+          catch (e) { fail("release.json does not parse: " + e.message); }
+          if (r.tag !== tag) fail("release.json names tag " + r.tag + ", dispatched tag is " + tag);
+          if (typeof r.overlap !== "boolean") fail("release.json has no explicit boolean overlap");
+          if (!Array.isArray(r.migrations)) fail("release.json migrations is not an array");
+          if (!/^sha256:[0-9a-f]{64}$/.test(String(r.distManifestDigest))) fail("release.json distManifestDigest is not a sha256 digest");
+          console.log("deploy: " + tag + " overlap=" + r.overlap + " migrations=" + r.migrations.length);
+          '
+          # --- release-tag-check end ---
+
+      - name: Run gremion-deploy on the host through the restricted agent
+        env:
+          TAG: ${{ inputs.tag }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          # --- deploy-channel begin ---
+          set -euo pipefail
+          umask 077
+
+          : "${TAG:?TAG is required}"
+          : "${DEPLOY_HOST:?DEPLOY_HOST is not set on the production environment}"
+          : "${DEPLOY_SSH_KEY:?DEPLOY_SSH_KEY is not set on the production environment}"
+          : "${DEPLOY_HOST_KEY:?DEPLOY_HOST_KEY is not set on the production environment}"
+          : "${GHCR_TOKEN:?GHCR_TOKEN is empty — the job token was not passed}"
+
+          work="$(mktemp -d)"
+          cleanup() {
+            ssh-agent -k >/dev/null 2>&1 || true
+            rm -rf "$work"
+          }
+          trap cleanup EXIT
+
+          # The deploy key never touches the runner disk: ssh-add reads it from
+          # stdin into an agent that dies with this step.
+          eval "$(ssh-agent -s)" >/dev/null
+          printf '%s\n' "$DEPLOY_SSH_KEY" | ssh-add - >/dev/null 2>&1
+
+          # StrictHostKeyChecking=yes against a known_hosts built from an
+          # environment secret. Trust-on-first-use here would mean a deploy
+          # token handed to whoever answered on that address.
+          printf '%s\n' "$DEPLOY_HOST_KEY" > "${work}/known_hosts"
+
+          out="${work}/hostd.out"
+          set +e
+          printf 'TOKEN %s\ndeploy %s\n' "$GHCR_TOKEN" "$TAG" \
+            | ssh -T \
+                -o StrictHostKeyChecking=yes \
+                -o UserKnownHostsFile="${work}/known_hosts" \
+                -o BatchMode=yes \
+                -o ConnectTimeout=30 \
+                -o ServerAliveInterval=30 \
+                -o ServerAliveCountMax=120 \
+                "gremion@${DEPLOY_HOST}" \
+            | tee "$out"
+          transport=${PIPESTATUS[1]}
+          set -e
+
+          # The agent's verdict is the EXIT trailer, not the ssh exit status:
+          # a dropped connection can end a stream on a success line.
+          trailer="$(grep -E '^EXIT [0-9]+$' "$out" | tail -n 1 || true)"
+          if [ -z "$trailer" ]; then
+            echo "deploy: the host agent produced no EXIT trailer (ssh status ${transport})" >&2
+            exit 1
+          fi
+
+          code="${trailer#EXIT }"
+          if [ "$code" != 0 ]; then
+            echo "deploy: gremion-deploy ${TAG} failed — the agent reported EXIT ${code}" >&2
+            exit 1
+          fi
+
+          if [ "$transport" != 0 ]; then
+            echo "deploy: the agent reported EXIT 0 but ssh exited ${transport}; failing the run" >&2
+            exit 1
+          fi
+
+          echo "deploy: ${TAG} applied — the host agent reported EXIT 0"
+          # --- deploy-channel end ---

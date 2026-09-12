@@ -1,0 +1,16 @@
+[Unit]
+Description=Gremion nightly backup
+
+[Timer]
+# BACKUP_ONCALENDAR is substituted by bootstrap.sh's render_unit, which owns
+# its default. Keeping the whole expression in one variable lets a staging root
+# move the window, and lets a timezone be written into the expression rather
+# than inherited from a host clock that may drift.
+OnCalendar=${BACKUP_ONCALENDAR}
+# A host that was down at 02:00 still takes its backup on the next boot.
+Persistent=true
+RandomizedDelaySec=15m
+Unit=gremion-backup.service
+
+[Install]
+WantedBy=timers.target

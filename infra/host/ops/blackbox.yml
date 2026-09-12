@@ -1,0 +1,57 @@
+# infra/host/ops/blackbox.yml — probe modules. Static; targets come from file SD.
+modules:
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200]
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: true
+
+  http_control:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: [200, 403]
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: true
+
+  http_404:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: [404]
+      follow_redirects: false
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: true
+
+  smtp_starttls:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: true
+      query_response:
+        - expect: "^220 "
+        - send: "EHLO prober.invalid\r"
+        - expect: "^250-STARTTLS"
+        - send: "STARTTLS\r"
+        - expect: "^220 "
+        - starttls: true
+        - send: "EHLO prober.invalid\r"
+        - expect: "^250 "
+        - send: "QUIT\r"
+
+  tcp_tls_connect:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      tls: true
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: true

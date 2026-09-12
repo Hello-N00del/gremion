@@ -1,0 +1,56 @@
+[Unit]
+Description=Gremion host agent (control socket)
+Documentation=https://github.com/Hello-N00del/gremion/blob/main/docs/ops/host-tooling.md
+After=docker.service
+Wants=docker.service
+
+[Service]
+# Type=exec, not simple: systemd then reports a start failure when the agent
+# cannot be exec'd at all, instead of reporting success for a unit that died
+# immediately. The socket post-condition in bootstrap's 'agent' stage is read
+# back from the filesystem either way, but a unit that lies about starting
+# makes every later `systemctl is-active` a false green.
+Type=exec
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+# The agent drives docker compose on behalf of a deploy.
+SupplementaryGroups=docker
+# gremion-hostd resolves its install root through gremion_root(), which reads
+# GREMION_ROOT and otherwise falls back to its compiled-in default. Systemd
+# units start with an EMPTY environment, so the root has to be stated here or
+# the agent would write its audit log somewhere other than this install root.
+# (The default path is deliberately not written out here: the suite greps this
+# directory for a hard-coded host path and a comment matches just as well.)
+Environment=GREMION_ROOT=${GREMION_ROOT}
+# The socket's group is exactly the identity the unit runs as. hostd's own
+# default is the literal 'gremion'; on a host whose deploy user is named
+# something else that default would create a socket the control plane's
+# container cannot open, and nothing would say so.
+Environment=HOSTD_SOCKET_GROUP=${DEPLOY_USER}
+Environment=PATH=${GREMION_ROOT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# /run/gremion, owned by the deploy user, mode 0750; the socket the agent
+# creates inside it is 0660 (UMask below). The agent is unprivileged and
+# cannot create /run/gremion itself — systemd owns that directory.
+RuntimeDirectory=gremion
+RuntimeDirectoryMode=0750
+UMask=0007
+ExecStart=${GREMION_ROOT}/bin/gremion-hostd --socket
+Restart=on-failure
+RestartSec=5s
+# Observed on the host: `systemctl stop` leaves the unit ActiveState=failed,
+# because the listener it execs exits 143 (128+SIGTERM) on a clean shutdown.
+# Without this, `systemctl is-failed gremion-hostd` answers "failed" after every
+# deliberate stop, and an ops alert that reads it cannot tell a stopped agent
+# from a crashed one.
+SuccessExitStatus=143
+NoNewPrivileges=true
+PrivateTmp=true
+# ProtectSystem=full keeps /usr, /boot and /etc read-only while leaving the
+# install root writable. It is deliberately not `strict`, and ProtectHome is
+# deliberately absent: a deploy writes ~/.docker/config.json on `docker login`
+# and the N12 guard reads it back after the logout trap.
+ProtectSystem=full
+ReadWritePaths=${GREMION_ROOT}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+# Fixture: the shape spec B's release workflow writes. Digests are obviously
+# synthetic; nothing in the unit tests contacts a registry.
+services:
+  gremion-ui:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-ui@sha256:1111111111111111111111111111111111111111111111111111111111111111
+  gremion-public:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-public@sha256:2222222222222222222222222222222222222222222222222222222222222222
+  migrate:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333

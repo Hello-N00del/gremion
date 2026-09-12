@@ -1,0 +1,106 @@
+# infra/host/ops/prometheus.yml — static. Prometheus does not interpolate the
+# environment, so every host-specific target comes from the file-SD lists that
+# render-ops.sh writes into runtime/ops/targets/ from the ops env file. Adding a
+# tenant host is a re-render; file SD is watched, so no reload is needed.
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: "blackbox-https"
+    metrics_path: /probe
+    params:
+      module: ["http_2xx"]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/blackbox-https.yml"]
+        refresh_interval: 30s
+    relabel_configs: &blackbox_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # control.<domain> answers 403 to an unallowlisted source (§C). A 403 proves
+  # the edge is up AND the allowlist is enforced, so it counts as success here.
+  - job_name: "blackbox-control"
+    metrics_path: /probe
+    params:
+      module: ["http_control"]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/blackbox-control.yml"]
+        refresh_interval: 30s
+    relabel_configs: *blackbox_relabel
+
+  # :80 must stay open forever for HTTP-01 and must answer 404 from
+  # acme-http@internal, never a 301 (§C). EdgePort80Down watches this job.
+  - job_name: "blackbox-acme"
+    metrics_path: /probe
+    params:
+      module: ["http_404"]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/blackbox-acme.yml"]
+        refresh_interval: 30s
+    relabel_configs: *blackbox_relabel
+
+  - job_name: "blackbox-smtp"
+    metrics_path: /probe
+    params:
+      module: ["smtp_starttls"]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/blackbox-smtp.yml"]
+        refresh_interval: 30s
+    relabel_configs: *blackbox_relabel
+
+  # Recorded, never alerted: §B drops egress TCP/25 for every source except the
+  # mail subnet, so this probe leaving the ops subnet is expected to fail. Port
+  # 25 reachability is the off-box probe's job (§K, N15) — see ops/README.md.
+  - job_name: "blackbox-smtp25"
+    metrics_path: /probe
+    params:
+      module: ["smtp_starttls"]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/blackbox-smtp25.yml"]
+        refresh_interval: 30s
+    relabel_configs: *blackbox_relabel
+
+  - job_name: "blackbox-tls"
+    metrics_path: /probe
+    params:
+      module: ["tcp_tls_connect"]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/blackbox-tls.yml"]
+        refresh_interval: 30s
+    relabel_configs: *blackbox_relabel
+
+  - job_name: "stalwart"
+    scheme: https
+    metrics_path: /metrics/prometheus
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/stalwart-api-key
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/stalwart.yml"]
+        refresh_interval: 30s

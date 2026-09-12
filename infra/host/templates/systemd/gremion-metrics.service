@@ -1,0 +1,17 @@
+[Unit]
+Description=Gremion node-exporter textfile metrics
+Documentation=file://${GREMION_ROOT}/current/infra/host/ops/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+# The collector runs `docker ps` and `docker exec` against the state project.
+SupplementaryGroups=docker
+Environment=GREMION_ROOT=${GREMION_ROOT}
+ExecStart=${GREMION_ROOT}/current/infra/host/ops/metrics-textfile.sh
+TimeoutStartSec=120
+ProtectSystem=full
+NoNewPrivileges=true

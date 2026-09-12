@@ -1,0 +1,30 @@
+# tenant-router.example.yml — the shape the control plane's router emitter
+# produces for one tenant, and the shape the S11 prototype fixtures copy.
+#
+# Two rules make a colour switch safe (§C, §F.4.10):
+#
+#   1. the router targets the COLOUR-BOUND service `app@file`. That service lives
+#      in active.yml and is rewritten by gremion-switch; the router itself is
+#      never touched by a switch.
+#   2. every middleware it chains is declared on the TRAEFIK container's own
+#      labels (`@docker`), never on an app-tier service. An app-tier service
+#      disappears on every switch and would take the middleware with it, leaving
+#      this router in an error state with no way back.
+#
+# Copy to /opt/gremion/etc/edge/tenant-<slug>.yml.
+#
+# `tls.certResolver` carries ${TRAEFIK_CERT_RESOLVER} on a public instance. When
+# that variable is empty (a staging unit on an internal CA) the whole `tls` key is
+# omitted — the render is all-or-nothing per §C, a mixed render fails the build.
+http:
+  routers:
+    tenant-example:
+      entryPoints: ["websecure"]
+      rule: "Host(`tenant.example.org`)"
+      service: "app@file"
+      priority: 10
+      middlewares:
+        - "edge-hostpin-tenant-example@docker"
+        - "edge-ratelimit@docker"
+      tls:
+        certResolver: "le-http"

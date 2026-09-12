@@ -1,0 +1,13 @@
+# S11 fixture: one hand-written per-tenant router. It targets the colour-bound
+# service app@file and chains only middlewares declared on the Traefik container.
+http:
+  routers:
+    tenant-a:
+      entryPoints: ["websecure"]
+      rule: "Host(`tenant-a.example.org`)"
+      service: "app@file"
+      priority: 10
+      middlewares:
+        - "edge-hostpin-tenant-a@docker"
+        - "edge-ratelimit@docker"
+      tls: {}

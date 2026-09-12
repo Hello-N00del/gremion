@@ -1,0 +1,198 @@
+# infra/host/mail/config.toml.tmpl
+# Rendered to <GREMION_ROOT>/etc/mail/config.toml by
+#   gremion-mail-bringup --render-config
+# Substitution is an explicit allow-list of brace-dollar placeholders, applied
+# in pure bash. Stalwart's own %{...}% macros contain no such placeholder and
+# are left untouched. The renderer then proves that NO placeholder survives
+# anywhere in the rendered file, this header included — which is why no comment
+# below writes one except where the value is genuinely meant to be substituted.
+
+[server]
+hostname = "${MAIL_HOSTNAME}"
+
+# Inbound MX. Never offers AUTH (see [session.auth] below).
+[server.listener.smtp]
+bind = ["[::]:25"]
+protocol = "smtp"
+
+[server.listener.submission]
+bind = ["[::]:587"]
+protocol = "smtp"
+
+[server.listener.submissions]
+bind = ["[::]:465"]
+protocol = "smtp"
+tls.implicit = true
+
+[server.listener.imaptls]
+bind = ["[::]:993"]
+protocol = "imap"
+tls.implicit = true
+
+# :80 on IP-B carries the ACME http-01 challenge and the MTA-STS policy.
+[server.listener.http]
+bind = ["[::]:80"]
+protocol = "http"
+
+[server.listener.https]
+bind = ["[::]:443"]
+protocol = "http"
+tls.implicit = true
+
+# Management API. Published on 127.0.0.1:8086 by the compose file only.
+[server.listener.management]
+bind = ["[::]:8080"]
+protocol = "http"
+
+[store."db"]
+type = "rocksdb"
+path = "%{env:STALWART_PATH}%/data"
+compression = "lz4"
+
+[storage]
+data = "db"
+fts = "db"
+blob = "db"
+lookup = "db"
+directory = "internal"
+
+[directory."internal"]
+type = "internal"
+store = "db"
+
+# Without a fallback admin the management API has no principal to authenticate
+# and provision-roles.sh cannot reach it at all — the API answers 401 to every
+# call and the thirteen role addresses are never created. The credential is the
+# one generated into mail.env, so there is a single authority for it; the
+# rendered config is mode 0640 inside etc/, which is mode 0700.
+[authentication.fallback-admin]
+user = "${STALWART_ADMIN_USER}"
+secret = "${STALWART_ADMIN_PASSWORD}"
+
+[certificate.default]
+default = true
+
+# Stalwart runs its own ACME on IP-B: Traefik binds IP-A only, so :80 here is
+# free and http-01 works without touching the platform edge (§C).
+[acme."le"]
+directory = "https://acme-v02.api.letsencrypt.org/directory"
+challenge = "http-01"
+contact = ["mailto:${ACME_EMAIL}"]
+domains = ["${MAIL_HOSTNAME}",
+           "mta-sts.${PLATFORM_DOMAIN}",
+           "autoconfig.${PLATFORM_DOMAIN}",
+           "autodiscover.${PLATFORM_DOMAIN}"]
+cache = "%{env:STALWART_PATH}%/etc/acme"
+
+# Two selectors from day one, so a rotation is a config change and never a new
+# DNS record (§C edit 4a). Keys live in /opt/gremion/etc/secrets/mail, mounted
+# read-only, and are in the backup set (§J).
+[signature."${DKIM_SELECTOR_A}"]
+private-key = "%{file:/opt/stalwart/etc/dkim/${DKIM_SELECTOR_A}.private}%"
+domain = "${PLATFORM_DOMAIN}"
+selector = "${DKIM_SELECTOR_A}"
+headers = ["From", "To", "Date", "Subject", "Message-ID"]
+algorithm = "rsa-sha256"
+canonicalization = "relaxed/relaxed"
+expire = "10d"
+report = true
+
+[signature."${DKIM_SELECTOR_B}"]
+private-key = "%{file:/opt/stalwart/etc/dkim/${DKIM_SELECTOR_B}.private}%"
+domain = "${PLATFORM_DOMAIN}"
+selector = "${DKIM_SELECTOR_B}"
+headers = ["From", "To", "Date", "Subject", "Message-ID"]
+algorithm = "rsa-sha256"
+canonicalization = "relaxed/relaxed"
+expire = "10d"
+report = true
+
+[auth.dkim]
+sign = [ { if = "is_local_domain('', sender_domain)", then = "['${DKIM_SELECTOR_A}']" },
+         { else = false } ]
+verify = "relaxed"
+
+# §I assert 4: an unauthenticated external -> external RCPT is refused.
+[session.rcpt]
+relay = [ { if = "!is_empty(authenticated_as)", then = true },
+          { else = false } ]
+max-recipients = 25
+
+# Submission requires TLS and AUTH; port 25 offers neither.
+[session.auth]
+directory = [ { if = "listener != 'smtp'", then = "'internal'" },
+              { else = false } ]
+require = [ { if = "listener != 'smtp'", then = true },
+            { else = false } ]
+allow-plain-text = false
+must-match-sender = true
+mechanisms = [ { if = "is_tls", then = "[plain, login]" },
+               { else = "[]" } ]
+
+[session.throttle."remote-rcpt"]
+key = ["remote_ip"]
+rate = "${MAIL_RATE_LIMIT_RCPT}"
+
+# Outbound is direct (M16): opportunistic STARTTLS to arbitrary MTAs, MTA-STS
+# enforced wherever the recipient publishes a policy.
+[queue.outbound.tls]
+starttls = "optimistic"
+mta-sts = "enforce"
+dane = "optional"
+
+# Served at https://mta-sts.${PLATFORM_DOMAIN}/.well-known/mta-sts.txt.
+# The policy carries no id; the id lives only in the _mta-sts TXT record, so
+# gremion-mail-bringup records the id it rendered in runtime/mta-sts-id and
+# assert 5 compares the published TXT against it.
+[mta-sts]
+mode = "testing"
+max-age = 604800
+
+# from-name is evaluated as an EXPRESSION, not taken as a literal: a bare
+# multi-word value is read as an identifier and rejected at boot with
+#   Failed to parse setting "report.tls.aggregate.from-name":
+#   Invalid variable or constant "Gremion"
+# (observed on the pinned build). The inner single quotes make it a string.
+[report.tls.aggregate]
+from-name = "'Gremion TLS report'"
+from-addr = "tls-reports@${PLATFORM_DOMAIN}"
+send = "daily"
+
+[report.dmarc.aggregate]
+from-name = "'Gremion DMARC report'"
+from-addr = "dmarc-reports@${PLATFORM_DOMAIN}"
+send = "daily"
+
+# §I: abuse@ and postmaster@ are never spam-filtered.
+[spam-filter]
+enable = [ { if = "rcpt == 'abuse@${PLATFORM_DOMAIN}' || rcpt == 'postmaster@${PLATFORM_DOMAIN}'", then = false },
+           { else = true } ]
+
+# ONE log sink, stdout, captured by the container runtime and bounded by the
+# compose json-file driver at ${MAIL_LOG_RETENTION_DAYS} files of 50 MB.
+#
+# There is deliberately NO `type = "log"` file sink, which upstream's own
+# self-initialised config carries. Two measured reasons:
+#   1. It never wrote a line here. The sink needs <STALWART_PATH>/logs, and the
+#      only thing that creates that directory is `stalwart --init <path>` --
+#      which the image entrypoint runs only when etc/config.toml is ABSENT,
+#      i.e. never in this project, because the rendered config is mounted at
+#      exactly that path. Every boot of the pinned digest logged instead:
+#        WARN Log collector error (telemetry.log-error)
+#             details = "Failed to create log file"
+#             path = "/opt/stalwart/logs/stalwart.log.<date>"
+#             reason = "No such file or directory (os error 2)"
+#   2. Creating the directory would have been the WRONG repair. v0.15.5 has no
+#      retention key for the log tracer -- it rotates daily and prunes nothing --
+#      and the files would live in the mail data volume, which §J backs up for
+#      up to 6 months. The §I VVT entry bounds connection-log retention; an
+#      unprunable sink inside the backup set works against that bound, not for
+#      it. RESIDUAL, named in the report: the driver's bound is a SIZE bound,
+#      so a quiet host still keeps lines older than the declared window. A true
+#      time bound needs a periodic prune, which is a host timer, not a mail
+#      setting.
+[tracer."stdout"]
+type = "stdout"
+level = "info"
+ansi = false
+enable = true
