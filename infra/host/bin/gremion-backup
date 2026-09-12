@@ -469,6 +469,15 @@ dump_remaining_databases() {
         # The count query is a second, independent observation: a mismatch
         # fails the run by number rather than quietly staging one database
         # fewer.
+        # A && B || C is the intent here: the run dies unless the count query
+        # returned a number AND that number matches the name list. shellcheck
+        # 0.9 -- the version ubuntu-latest installs, and therefore the one
+        # `make lint-sh` runs in CI -- reports SC2015 for the shape; 0.11, the
+        # version on the development box, no longer does. Carried in by Task
+        # 14, which routed ci.yml lint through `make lint-sh` and so brought
+        # infra/host under CI shellcheck for the first time. Comment only;
+        # the logic is unchanged.
+        # shellcheck disable=SC2015
         [ -n "$n_count" ] && [ "$n_names" -eq "$n_count" ] \
             || die "database enumeration truncated: ${n_names} name(s) for service ${svc}, server reports ${n_count:-<no count>}" 1
         # Names, not only a count: the Step 25 integration run reported four

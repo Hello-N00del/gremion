@@ -2,7 +2,7 @@
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
-        test test-unit test-integration test-all test-ports-nats \
+        test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages \
         health validate-env
@@ -100,9 +100,41 @@ fresh-start:
 BATS := bats
 
 # Run unit tests (no running containers needed)
+#
+# Globbed, not listed. A bats file nobody names is a bats file nobody runs --
+# the same defect the test-ports-nats comment below records. test/*.bats is the
+# kernel suite and test/host/*.bats the distribution-host suite;
+# test/integration/ is a subdirectory and is deliberately NOT matched, because
+# it needs a running stack. test/host/no-host-literals.bats asserts this recipe
+# still collects every file under test/host, so reverting to an explicit list
+# cannot quietly drop one.
 test-unit:
 	@echo "Running unit tests..."
-	@$(BATS) test/setup.bats test/backup.bats test/restore.bats test/configure-keycloak.bats test/legal.bats
+	@$(BATS) test/*.bats test/host/*.bats
+
+# Optional LOCAL runner for the distribution-host suite, in the Linux image
+# test/host/runner/Dockerfile builds. CI and the Debian host run `test-unit`
+# directly and never need this target.
+#
+# It exists because `make test-unit` cannot run on a Windows development box at
+# all: the npm bats shim is handed the C:/ path the recipe's shell reports as
+# its cwd and rejects it as "not an absolute path". The container is also where
+# the suite's 0600/0700 and executable-bit assertions run for real -- on NTFS
+# they would skip. On Windows, prefix the invocation with MSYS_NO_PATHCONV=1 so
+# the /wt mount target is not rewritten into a drive path.
+#
+# Run it from a real clone, not from a `git worktree`: a linked worktree's .git
+# is a FILE whose gitdir line is a host-absolute path, which the container
+# cannot resolve, and test/host/no-host-literals.bats is built on git grep.
+#
+# Scope is test/host/*.bats, which is what the image is provisioned for. The
+# kernel suites under test/*.bats also need python3 (test/configure-keycloak.bats
+# validates realm-export.json with `python3 -m json.tool`); they run under
+# `make test-unit` on Debian and in CI, where python3 is present.
+test-host-docker:
+	@echo "Building the bats runner image..."
+	@docker build -q -t gremion-bats:local test/host/runner
+	@docker run --rm -v "$(CURDIR):/wt" -w /wt gremion-bats:local test/host/*.bats
 
 # Run integration tests (requires running stack: make up or make setup + phases)
 test-integration:
@@ -136,10 +168,46 @@ test-ports-nats:
 # glob ever matched it — the one shell file that runs on every commit, and that
 # must fail closed, was unlinted. -s sh because it has no `.sh` suffix for
 # shellcheck to infer the dialect from.
+#
+# infra/host/** and test/host/integration/*.sh are the distribution-host
+# tooling. FOUR directories, not three: lib/ (common.sh), mail/
+# (provision-roles.sh), ops/ (the ops project's scripts) and bin/. ops/ is
+# spelled out because it is the one that is easiest to leave out --
+# test/host/no-host-literals.bats derives its expected file list from
+# `git ls-files -- infra/host test/host`, so a directory missing from this
+# recipe fails that test rather than going quiet. bin/gremion-* is
+# EXTENSIONLESS on purpose (these are commands on the host's PATH, not
+# libraries), so no `.sh` glob will ever match them -- hence the separate
+# -s bash arm.
+#
+# The host arms are a `for` loop, not a bare argument list, for one reason: a
+# glob that matches nothing is passed through literally by sh, and shellcheck
+# then fails on a filename that does not exist. infra/host/ops/ is written by a
+# task that has not landed yet, so the literal-glob form would fail the lint
+# today and the directory would have to be added later -- which is exactly the
+# "a file nothing lints" defect this target already records twice.
+#
+# --source-path=SCRIPTDIR lets -x resolve each script's
+# `. "$SCRIPT_DIR/../lib/common.sh"` relative to the script rather than to the
+# caller's working directory, so `make lint-sh` gives the same answer from
+# anywhere. .bats files are deliberately NOT linted here: bats' own idioms
+# (`run`, single-quoted shim bodies) raise SC2016/SC2314 infos by design, and
+# one file-level decision beats a scattering of inline disables.
+# docker/legal/entrypoint.sh is added here because ci.yml linted it and the
+# Makefile did not; ci.yml now calls this target, and the unification must not
+# lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck scripts/*.sh docker/postgres/init-databases.sh packages/ports/scripts/nats-test.sh
-	@shellcheck -s sh gremion-ui/scripts/hooks/pre-commit
+	@shellcheck -x scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
+	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
+	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
+		[ -e "$$f" ] || continue; \
+		shellcheck -x --source-path=SCRIPTDIR "$$f" || exit 1; \
+	done
+	@for f in infra/host/bin/gremion-*; do \
+		[ -e "$$f" ] || continue; \
+		shellcheck -x -s bash --source-path=SCRIPTDIR "$$f" || exit 1; \
+	done
 	@echo "  shellcheck: OK"
 
 # Lint YAML files with yamllint
