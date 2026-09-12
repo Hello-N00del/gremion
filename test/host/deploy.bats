@@ -151,7 +151,12 @@ stub_all() { stub_git; stub_docker; stub_siblings; }
 }
 
 @test "gremion-deploy refuses to remove volumes" {
-    ! grep -nE 'down .*(-v|--volumes)' "$DEPLOY"
+    # assert_absent, not `! grep`: this is the never-remove-volumes data-safety
+    # constraint, and mid-body a !-negated grep cannot fail. The sibling test
+    # above gets away with the same shape only because it is its body's last
+    # statement.
+    assert_absent 'down .*(-v|--volumes)' "$DEPLOY" \
+        'gremion-deploy must never pass a volume-destroying flag to compose down'
     grep -q 'deploy never removes volumes' "$DEPLOY"
 }
 
@@ -550,7 +555,10 @@ exit 0
         grep -qE " STEP ${n} [a-z-]+ ok$" "${GREMION_ROOT}/runtime/deploy.log" \
             || { echo "missing: STEP ${n} … ok"; return 1; }
     done
-    ! grep -q ' SKIP ' "${GREMION_ROOT}/runtime/deploy.log"
+    # The run that proves no step is skipped is exactly the run where a
+    # !-negated grep would report ok whatever the log said.
+    assert_absent ' SKIP ' "${GREMION_ROOT}/runtime/deploy.log" \
+        'a step was skipped in the run that exists to prove none are'
     [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "dist-v1.2.3" ]
     [[ "$output" == *"DEPLOY-RESULT: tag=dist-v1.2.3 colour=blue overlap=true switched=yes soak-minutes=0"* ]]
 }
@@ -597,7 +605,8 @@ exit 0
     grep -qE " SKIP 10 switch --no-switch$"        "${GREMION_ROOT}/runtime/deploy.log"
     grep -qE " SKIP 11 verify-public --no-switch$" "${GREMION_ROOT}/runtime/deploy.log"
     grep -qE " SKIP 12 record --no-switch$"        "${GREMION_ROOT}/runtime/deploy.log"
-    ! grep -q 'gremion-switch' "$SHIM_LOG"
+    assert_absent 'gremion-switch' "$SHIM_LOG" \
+        '--no-switch invoked gremion-switch anyway'
     [ ! -f "${GREMION_ROOT}/runtime/current-tag" ]
     [[ "$output" == *"switched=no"* ]]
 }

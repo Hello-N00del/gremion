@@ -74,50 +74,12 @@ make_release_repo() {
 
 VALID_RELEASE_JSON='{"tag":"dist-v1.4.0","overlap":true,"migrations":["1101_add_x"],"distManifestDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}'
 
-# assert_present <ere> <file> <why> / assert_absent <ere> <file> <why>
-#
-# WHY THESE EXIST rather than a bare `grep -q` / `! grep -q`:
-#
-#  1. `! cmd` switches `set -e` off for that command (POSIX: the -e setting is
-#     ignored when the command is preceded by `!`). A negated grep anywhere but
-#     the LAST line of a test body therefore fails silently and the guard stays
-#     green. Measured: with `-o StrictHostKeyChecking=accept-new` substituted
-#     into a scratch copy of deploy.yml, the host-key test still reported ok.
-#  2. An unanchored positive grep is satisfied by the COMMENT that explains the
-#     setting, so the guard survives the setting itself being changed. Same
-#     drill, same test: `grep -q StrictHostKeyChecking=yes` matched the comment
-#     above the ssh invocation.
-#  3. `! grep -q PATTERN file` is vacuously true when the file is absent, which
-#     is exactly the state these guards exist to catch first.
-#
-# Both helpers are ordinary commands, so a non-zero return trips bats' ERR
-# trap; both refuse to answer at all when the file is missing; and both print
-# the offending lines rather than only a status.
-assert_present() {
-    local re="$1" file="$2" why="${3:-pattern missing}"
-    if [ ! -f "$file" ]; then
-        echo "assert_present: no such file: ${file}" >&2
-        return 1
-    fi
-    grep -qE -- "$re" "$file" && return 0
-    echo "assert_present: ${why}: /${re}/ not found in ${file}" >&2
-    return 1
-}
-
-assert_absent() {
-    local re="$1" file="$2" why="${3:-pattern present}" hit
-    if [ ! -f "$file" ]; then
-        echo "assert_absent: no such file: ${file}" >&2
-        return 1
-    fi
-    # Captured first, never piped into grep: under `set -o pipefail` a
-    # `cmd | grep -q` can exit 141 on the passing path.
-    hit="$(grep -nE -- "$re" "$file" || true)"
-    [ -z "$hit" ] && return 0
-    echo "assert_absent: ${why}: /${re}/ found in ${file}" >&2
-    echo "$hit" >&2
-    return 1
-}
+# assert_present <ere> <file> <why> / assert_absent <ere> <file> <why> were
+# derived here and are now in test_helper/host.bash, loaded above: four other
+# files in this suite had re-derived the broken `! grep` shape they exist to
+# replace, so the whole suite needed them. Their rationale -- including the
+# measured drill where a negated grep left the host-key guard reporting ok --
+# travelled with them and is the comment above their definitions.
 
 # ---------------------------------------------------------------------------
 # Static contract

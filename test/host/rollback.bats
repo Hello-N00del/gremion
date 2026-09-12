@@ -122,7 +122,8 @@ stub_switch() {
     run "$ROLLBACK"
     [ "$status" -eq 0 ]
     assert_recorded gremion-switch "blue"
-    ! grep -q '^gremion-deploy' "$SHIM_LOG"
+    assert_absent '^gremion-deploy' "$SHIM_LOG" \
+        'class (a) is switch-only: it must not re-invoke gremion-deploy'
     [[ "$output" == *"ROLLBACK-RESULT: class=a from=dist-v1.2.3 to=dist-v1.0.0 colour=blue"* ]]
     [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "dist-v1.0.0" ]
     [ "$(cat "${GREMION_ROOT}/runtime/previous-tag")" = "dist-v1.2.3" ]
@@ -192,7 +193,10 @@ stub_switch() {
     printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/colour-blue-tag"
     run "$ROLLBACK"
     [ "$status" -eq 0 ]
-    ! grep -q '^restic forget' "$SHIM_LOG"
+    # A snapshot behind applied migrations is the only copy of the pre-release
+    # data. Mid-body, `! grep` could not have caught a forget that ran anyway.
+    assert_absent '^restic forget' "$SHIM_LOG" \
+        'the retained snapshot was forgotten (data loss)'
     [[ "$output" == *"SNAPSHOT-RETAINED: restic tag label=dist-v1.2.3 class=snapshot"* ]]
     [[ "$output" == *"restic -r \${RESTIC_REPOSITORY} forget --tag class=snapshot --tag label=dist-v1.2.3"* ]]
 }

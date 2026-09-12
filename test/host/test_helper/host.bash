@@ -105,6 +105,121 @@ refute_recorded() {
     return 0
 }
 
+# assert_present <ere> <file> [why] / assert_absent <ere> <file> [why]
+#
+# Promoted here from deploy-workflow.bats, which derived them first and was the
+# only file using them. Four other files had re-derived the broken shape they
+# replace, so the helpers now live where every file can load them.
+#
+# WHY THESE EXIST rather than a bare `grep -q` / `! grep -q`:
+#
+#  1. `! cmd` switches `set -e` off for that command (POSIX: the -e setting is
+#     ignored when the command is preceded by `!`). A negated grep anywhere but
+#     the LAST line of a test body therefore fails silently and the guard stays
+#     green. Measured: with `-o StrictHostKeyChecking=accept-new` substituted
+#     into a scratch copy of deploy.yml, the host-key test still reported ok.
+#  2. An unanchored positive grep is satisfied by the COMMENT that explains the
+#     setting, so the guard survives the setting itself being changed. Same
+#     drill, same test: `grep -q StrictHostKeyChecking=yes` matched the comment
+#     above the ssh invocation.
+#  3. `! grep -q PATTERN file` is vacuously true when the file is absent, which
+#     is exactly the state these guards exist to catch first.
+#
+# Both helpers are ordinary commands, so a non-zero return trips bats' ERR
+# trap; both refuse to answer at all when the file is missing; and both print
+# the offending lines rather than only a status.
+assert_present() {
+    local re="$1" file="$2" why="${3:-pattern missing}"
+    if [ ! -f "$file" ]; then
+        echo "assert_present: no such file: ${file}" >&2
+        return 1
+    fi
+    grep -qE -- "$re" "$file" && return 0
+    echo "assert_present: ${why}: /${re}/ not found in ${file}" >&2
+    return 1
+}
+
+assert_absent() {
+    local re="$1" file="$2" why="${3:-pattern present}" hit
+    if [ ! -f "$file" ]; then
+        echo "assert_absent: no such file: ${file}" >&2
+        return 1
+    fi
+    # Captured first, never piped into grep: under `set -o pipefail` a
+    # `cmd | grep -q` can exit 141 on the passing path.
+    hit="$(grep -nE -- "$re" "$file" || true)"
+    [ -z "$hit" ] && return 0
+    echo "assert_absent: ${why}: /${re}/ found in ${file}" >&2
+    echo "$hit" >&2
+    return 1
+}
+
+# scan_vacuous_negations <bats-file>...
+# Prints "<file>:<line>: <statement>" for every `!`-negated statement whose
+# failure bash would DISCARD, and prints nothing for a file that is clean. It
+# always exits 0: it is a scanner, so the caller decides what an offender means
+# and the canary test below can prove it still fires.
+#
+# THREE SHAPES ARE ACCEPTED, because in each of them the failure survives:
+#   1. the statement is the LAST one in its body -- the body's exit status IS
+#      the inverted status, which is what bats reports;
+#   2. the statement is part of an AND-OR list (`! cmd || { …; return 1; }`) --
+#      errexit applies to the list as a whole, so a short-circuit propagates;
+#   3. anything that is not a `!`-negated statement at all.
+# Everything else is an assertion that cannot fail, which is worse than no
+# assertion: it reads as coverage.
+#
+# HONEST LIMITS. This is a line scanner, not a bash parser.
+#   - It trusts this suite's house style that a body closes with `}` alone on
+#     its line; it does not match braces, and a `}` inside a string would fool
+#     it. It treats a function's closing brace as a body close too, which is
+#     right for these files: a helper's last statement becomes the helper's
+#     return value, and a bare call to it trips bats' ERR trap.
+#   - For shape 2 it checks only that the list HAS a `||`/`&&` leg, not that
+#     the leg actually fails the test. A leg that swallows the failure is a
+#     defect this scanner cannot see.
+#   - It only looks at `!` in the leading position of a statement line.
+scan_vacuous_negations() {
+    local f
+    for f in "$@"; do
+        awk -v FNAME="$f" '
+            function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+            { raw[NR] = $0 }
+            END {
+              for (n = 1; n <= NR; n++) {
+                t = trim(raw[n])
+                if (t != "!" && substr(t, 1, 2) != "! " && substr(t, 1, 2) != "!\t") continue
+                # Follow a continued statement to its real last line, so a
+                # negation spanning a backslash or a pipe is judged whole.
+                e = n
+                while (e < NR) {
+                  s = raw[e]; sub(/[ \t]+$/, "", s)
+                  c = (length(s) > 0) ? substr(s, length(s), 1) : ""
+                  if (c == "\\" || c == "|") { e++; continue }
+                  if (length(s) > 1 && substr(s, length(s) - 1, 2) == "&&") { e++; continue }
+                  break
+                }
+                andor = 0
+                for (k = n; k <= e; k++) {
+                  if (index(raw[k], "||") > 0 || index(raw[k], "&&") > 0) andor = 1
+                }
+                if (andor) continue
+                # The next line that is neither blank nor a comment.
+                nx = e + 1
+                while (nx <= NR) {
+                  s = trim(raw[nx])
+                  if (s == "" || substr(s, 1, 1) == "#") { nx++; continue }
+                  break
+                }
+                if (nx <= NR && trim(raw[nx]) == "}") continue
+                printf "%s:%d: %s\n", FNAME, n, t
+              }
+            }
+        ' "$f"
+    done
+    return 0
+}
+
 # fs_carries_modes <dir>
 # 0 when the filesystem under <dir> actually stores POSIX permission bits.
 # Git Bash on NTFS does NOT: `chmod 600` there reads back as 644, so a mode

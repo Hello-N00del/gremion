@@ -62,6 +62,105 @@ run_with() {
     [ "$status" -ne 0 ]
 }
 
+@test "assert_absent and assert_present fail instead of answering when the file is missing" {
+    local gone="${BATS_TEST_TMPDIR}/never-written"
+    run assert_absent 'anything' "$gone" 'the file must exist to be judged'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"assert_absent: no such file"* ]]
+    run assert_present 'anything' "$gone" 'the file must exist to be judged'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"assert_present: no such file"* ]]
+}
+
+@test "assert_absent reports the offending line and assert_present the missing pattern" {
+    local f="${BATS_TEST_TMPDIR}/subject"
+    printf 'alpha\ndown --volumes\n' > "$f"
+    run assert_absent 'down .*(-v|--volumes)' "$f" 'volumes must never be removed'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"volumes must never be removed"* ]]
+    [[ "$output" == *"2:down --volumes"* ]]
+    run assert_present 'omega' "$f" 'omega is required'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"omega is required"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Suite hygiene — a !-negated assertion bash throws away
+#
+# `! cmd` is exempt from errexit, so a negated assertion that is not its test
+# body's last statement is DISCARDED: the guard reports ok over the exact
+# regression it was written to catch. Nine of them had accumulated across four
+# files in this suite before the whole-branch review found them, including the
+# never-remove-volumes constraint and a no-forget guard over a snapshot that is
+# the only copy of the pre-release data.
+#
+# Lesson 2 from no-host-literals.bats applies here too: a scan that reaches
+# nothing reports clean. So the canary below proves the scanner still fires,
+# and the suite-wide test refuses to believe a clean answer until it has
+# counted the files it actually read.
+# ---------------------------------------------------------------------------
+
+@test "scan_vacuous_negations flags a discarded negation and clears the shapes that catch" {
+    local f="${BATS_TEST_TMPDIR}/sample.bats"
+    # The bang is substituted, never written literally: this file is itself in
+    # the scanned glob, so a fixture spelled out here would be reported as a
+    # real offender and the guard would be red on the day it landed. Same
+    # self-reference discipline as no-host-literals.bats.
+    local b='!'
+    printf '%s\n' \
+        '@test "mid-body: the failure is thrown away" {' \
+        "    ${b} grep -q needle subject" \
+        '    [ 1 -eq 1 ]' \
+        '}' \
+        '' \
+        '@test "last statement: the body status IS the inverted status" {' \
+        '    [ 1 -eq 1 ]' \
+        "    ${b} grep -q needle subject" \
+        '}' \
+        '' \
+        '@test "AND-OR list: the short circuit propagates" {' \
+        "    ${b} grep -q needle subject \\" \
+        '        || { echo "found it"; return 1; }' \
+        '    [ 1 -eq 1 ]' \
+        '}' \
+        '' \
+        '@test "a continued negation is judged whole, not by its first line" {' \
+        "    ${b} grep -q needle \\" \
+        '        subject' \
+        '    [ 1 -eq 1 ]' \
+        '}' \
+        > "$f"
+    run scan_vacuous_negations "$f"
+    [ "$status" -eq 0 ]
+    # Exactly two: the mid-body one on line 2 and the continued one on line 18.
+    # The last-statement and AND-OR shapes must NOT be reported.
+    [ "${#lines[@]}" -eq 2 ]
+    [[ "${lines[0]}" == *"sample.bats:2: ${b} grep -q needle subject" ]]
+    [[ "${lines[1]}" == *"sample.bats:18: ${b} grep -q needle"* ]]
+}
+
+@test "scan_vacuous_negations says nothing about a file with no negations at all" {
+    local f="${BATS_TEST_TMPDIR}/clean.bats"
+    printf '@test "plain" {\n    grep -q needle subject\n}\n' > "$f"
+    run scan_vacuous_negations "$f"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "no !-negated assertion in the host suite has its failure discarded" {
+    # Globbed, not listed: a file nobody scans is a file nobody guards.
+    local files=( "${HOST_TEST_DIR}"/*.bats )
+    [ "${#files[@]}" -ge 10 ]    # vacuity: the file list must not have emptied
+    run scan_vacuous_negations "${files[@]}"
+    [ "$status" -eq 0 ]
+    if [ -n "$output" ]; then
+        echo "these !-negated assertions can never fail — move each one to the" >&2
+        echo "end of its test body, or use assert_absent/refute_recorded:" >&2
+        echo "$output" >&2
+        return 1
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # common.sh — shape
 # ---------------------------------------------------------------------------

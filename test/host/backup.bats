@@ -448,7 +448,8 @@ exit 0'
     # Its own `restic forget --keep-within 30d --prune` must not be able to
     # reach the real repository, and its rclone phase must be skipped.
     [ -s "$SHIM_LOG" ]
-    ! grep -qF "kernel-backup RESTIC_REPOSITORY=${GREMION_ROOT}/backups/repo" "$SHIM_LOG"
+    # refute_recorded, not `! grep`: mid-body, a !-negated grep cannot fail.
+    refute_recorded kernel-backup "RESTIC_REPOSITORY=${GREMION_ROOT}/backups/repo"
     grep -qF "kernel-backup RESTIC_REPOSITORY=${GREMION_ROOT}/runtime/kernel-backup/scratch-repo" "$SHIM_LOG"
     grep -qF "kernel-backup RCLONE_BUCKET=[]" "$SHIM_LOG"
 }
@@ -745,7 +746,9 @@ exit 0'
 @test "class=snapshot runs no forget at all" {
     shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
     run "$BACKUP" --label dist-v1.2.3 --class snapshot
-    ! assert_recorded restic "forget"
+    # refute_recorded, NOT `run assert_recorded`: `run` would overwrite the
+    # $output the next line reads, and `! assert_recorded` could not fail here.
+    refute_recorded restic "forget"
     [[ "$output" == *"retention untouched"* ]]
 }
 
@@ -1007,8 +1010,11 @@ exit 0'
     grep -qF "StandardOutput=append:${GREMION_ROOT}/logs/backup.log" \
              "${GREMION_ROOT}/gremion-backup.service"
     grep -qF "OnCalendar=${BACKUP_ONCALENDAR}" "${GREMION_ROOT}/gremion-backup.timer"
-    # Nothing unsubstituted survives in either rendered unit.
-    ! grep -q '\${' "${GREMION_ROOT}/gremion-backup.service"
+    # Nothing unsubstituted survives in either rendered unit. The .service
+    # check is mid-body, where a !-negated grep cannot fail; the .timer one is
+    # the body's last statement, which is the only position where it can.
+    assert_absent '[$][{]' "${GREMION_ROOT}/gremion-backup.service" \
+        'an unsubstituted placeholder survived render_unit'
     ! grep -q '\${' "${GREMION_ROOT}/gremion-backup.timer"
 }
 

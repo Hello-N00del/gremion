@@ -139,7 +139,8 @@ EOF
     run "$SWITCH" blue --no-evict
     [ "$status" -eq 0 ]
     [[ "$output" == *"evict fan-out SKIPPED"* ]]
-    ! grep -q 'api/internal/evict' "$SHIM_LOG"
+    assert_absent 'api/internal/evict' "$SHIM_LOG" \
+        '--no-evict still POSTed to the eviction endpoint'
     grep -q 'evict fan-out SKIPPED' "${GREMION_ROOT}/logs/switch.log"
 }
 
