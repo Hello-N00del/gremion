@@ -47,9 +47,9 @@ GATE_FIELDS=('**Gate:**' '**Proof:**' '**Owner:**' '**Evidence:**')
 # entry DOES exist, so the merge that lands Task 10 must delete the entry or
 # the suite goes RED. An allowlist that cannot outlive its reason is the only
 # kind this file accepts.
-PENDING_BINS=(gremion-restore-into)              # Task 10
-PENDING_TOKENS=('RTO-SECONDS=')                  # Task 10
-PENDING_ARTEFACTS=(runtime/last-restore.json)    # Task 10
+PENDING_BINS=()                                  # Task 10 landed (gremion-restore-into)
+PENDING_TOKENS=()                                # Task 10 landed (RTO-SECONDS=)
+PENDING_ARTEFACTS=()                             # Task 10 landed (runtime/last-restore.json)
 
 is_pending() {                                   # <needle> <candidate>...
     local needle="$1"; shift
