@@ -352,6 +352,22 @@ PROBE
     [ "$(stat -c '%a' "${GREMION_ROOT}/out.txt")" = "600" ]
 }
 
+@test "atomic_write fails and installs nothing when the temp path cannot be written" {
+    # A directory at <path>.tmp makes cat's redirection fail. Under plain
+    # errexit that already ended the function; inside `if ! ...`, where bash
+    # ignores errexit, it fell through to chmod + mv, renamed that directory
+    # to <path> and returned 0 -- the caller's branch never fired. The check
+    # therefore runs in that context, and asserts the post-condition on disk
+    # rather than the message: whether the pipeline failed anyway depended on
+    # a race between the writer and the closing pipe.
+    mkdir -p "${GREMION_ROOT}/out.txt.tmp"
+    run_with 'if ! printf "x
+" | atomic_write "$1" 600; then echo REFUSED; exit 1; fi; echo ACCEPTED'         "${GREMION_ROOT}/out.txt"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *REFUSED* ]]
+    [ ! -e "${GREMION_ROOT}/out.txt" ]
+}
+
 @test "atomic_write exits 2 when the parent directory is absent" {
     run_with 'printf "x\n" | atomic_write "$1" 600' "${GREMION_ROOT}/nope/out.txt"
     [ "$status" -eq 2 ]

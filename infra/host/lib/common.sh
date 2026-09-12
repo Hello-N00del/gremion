@@ -133,8 +133,20 @@ atomic_write() {
     [[ -d "$dir" ]] \
         || die "atomic_write: directory does not exist: ${dir}" "$GREMION_EXIT_USAGE"
     tmp="${path}.tmp"
-    cat > "$tmp"
-    chmod "$mode" "$tmp"
+    # Every step is checked by hand. Callers run this as the tail of a
+    # pipeline, usually inside `if ! ... | atomic_write`, and bash ignores
+    # errexit in that context: a `cat` whose redirection fails (a directory
+    # at <path>.tmp, a full disk) would otherwise fall through to chmod and
+    # mv, rename whatever sits at <path>.tmp into place and return 0. The
+    # caller would then report a written file that is not there.
+    if ! cat > "$tmp"; then
+        if [[ -f "$tmp" ]]; then rm -f -- "$tmp"; fi
+        return 1
+    fi
+    if ! chmod "$mode" "$tmp"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
     mv -f "$tmp" "$path"
 }
 

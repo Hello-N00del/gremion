@@ -1223,8 +1223,12 @@ exec ${real} \"\$@\""
     [[ "$output" == *"BACKUP: label=report-2"*"ok=true"* ]]
     [[ "$output" == *"BACKUP-REPORT: cannot write ${GREMION_ROOT}/runtime/last-backup.json"* ]]
     assert_recorded curl "https://alerts.example.org/hook"
-    [ ! -f "${GREMION_ROOT}/runtime/last-backup.json" ]
-    [ ! -f "${GREMION_ROOT}/runtime/last-backup-daily.json" ]
+    # Nothing may masquerade as the report: atomic_write once renamed the
+    # .tmp directory into place, and whether the message above appeared then
+    # depended on a race between jq's write and the closing pipe (green in
+    # the local runner, red on the CI runner).
+    [ ! -e "${GREMION_ROOT}/runtime/last-backup.json" ]
+    [ ! -e "${GREMION_ROOT}/runtime/last-backup-daily.json" ]
     # A run whose report never landed is not a success: the next run's
     # free-space baseline and gremion-snapshot both read that file.
     [ "$status" -eq 1 ]
