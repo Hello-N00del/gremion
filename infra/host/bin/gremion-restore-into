@@ -64,6 +64,11 @@ usage: gremion-restore-into --stack S --snapshot ID|latest
                          expected value silently. Use the keyed form for casts.
   --proof-file-service S service the proof files live in (default: nextcloud)
 
+consumed from <root>/etc/env/state.env (not from your shell — sudo resets it):
+  RESTIC_REPOSITORY       the repository holding the snapshot; required, and
+  RESTIC_PASSWORD         exported for `restic restore`. Either one absent or
+                          empty is a precondition failure (exit 2).
+
 environment:
   RESTORE_VOLUME_SKIP_RE  ERE of volume names restored from the dumps instead of
                           the archive (default: (_pg-data|_postgres-data|_pgdata)$)
@@ -157,6 +162,37 @@ parse_args() {
     if [[ ${#PROOF_FILES[@]} -eq 0 || ${#PROOF_ROW_DB[@]} -eq 0 ]]; then
         die "restore proof requires at least one --proof-file and one --proof-row" 2
     fi
+    # Every compose call of this program and of the gremion-neuter it hands off
+    # to is made FROM this directory, because the rendered env files carry a
+    # RELATIVE COMPOSE_FILE. Checked here so a missing release tree fails before
+    # a snapshot is pulled, not after.
+    [[ -d "$RELEASE_DIR" ]] || \
+        die "release tree absent: ${RELEASE_DIR} (pass --release DIR)" 2
+}
+
+# restic takes its repository and password FROM THE ENVIRONMENT, and sudo's
+# env_reset drops whatever the operator exported in their own shell. Both keys
+# therefore come out of the instance's own state.env — the same contract
+# gremion-backup requires (and exports) and gremion-rollback dies on — read per
+# key with env_value, never load_env (design note 2: load_env would also export
+# COMPOSE_FILE/COMPOSE_PROJECT_NAME into this process and silently retarget
+# every later compose call). The password is never printed.
+load_restic_env() {
+    local repo pass
+    repo="$(env_value "$STATE_ENV" RESTIC_REPOSITORY)"
+    pass="$(env_value "$STATE_ENV" RESTIC_PASSWORD)"
+    [[ -n "$repo" ]] || die "RESTIC_REPOSITORY absent from ${STATE_ENV}" 2
+    [[ -n "$pass" ]] || die "RESTIC_PASSWORD absent from ${STATE_ENV}" 2
+    # load_env refuses any value beginning CHANGE_ME_ (common.sh, section G) and
+    # the templates ship RESTIC_PASSWORD as exactly such a sentinel; reading the
+    # keys per key has to carry that rule too, or the sentinel is exported and
+    # the run dies inside restic with a wrong-password error instead.
+    [[ "$repo" != CHANGE_ME_* && "$pass" != CHANGE_ME_* ]] || \
+        die "RESTIC_REPOSITORY/RESTIC_PASSWORD in ${STATE_ENV} still holds a CHANGE_ME_ sentinel; run gremion-init-secrets first" 2
+    RESTIC_REPOSITORY="$repo"
+    RESTIC_PASSWORD="$pass"
+    export RESTIC_REPOSITORY RESTIC_PASSWORD
+    ok "restic repository: ${RESTIC_REPOSITORY}"
 }
 
 # A unit with a public certificate resolver is a public unit; restore-into
@@ -172,9 +208,18 @@ assert_not_public() {
 # A trailing `| head -n1` would be a pipeline whose head can close the pipe
 # before compose finished writing; under `set -o pipefail` that reads back as a
 # failure on the PASSING path. The output is captured first instead.
+#
+# Run from the release tree like every other compose call on a host: the
+# rendered env files carry a RELATIVE COMPOSE_FILE. `ps -q` happens to be
+# cwd-independent on compose v5.5.1 (it answers from the project label), but the
+# file keeps ONE compose shape so no reader has to know which verbs are exempt,
+# and a cwd holding an unrelated docker-compose.yml cannot influence the answer.
+# RELEASE_DIR is validated in parse_args, so there is no `die` in here: this
+# function is called inside command substitutions, where a `die` would end only
+# the subshell.
 compose_cid() {
     local out
-    out="$(docker compose --env-file "$1" ps -q "$2")" || return 1
+    out="$( cd "$RELEASE_DIR" && docker compose --env-file "$1" ps -q "$2" )" || return 1
     printf '%s\n' "${out%%$'\n'*}"
 }
 
@@ -488,9 +533,12 @@ prove_acme() {
     ok "PROOF-ACME ${vol} carries ${files} file(s)"
 }
 
+# --release is handed on: gremion-neuter recreates the services whose running
+# env carried a live value, and its compose calls need the same release tree
+# this restore used — it cannot discover which one that was.
 run_neuter() {
     [[ -x "$NEUTER_BIN" ]] || die "gremion-neuter not found: ${NEUTER_BIN}" 2
-    "$NEUTER_BIN" --stack "$STACK" --root "$ROOT"
+    "$NEUTER_BIN" --stack "$STACK" --root "$ROOT" --release "$RELEASE_DIR"
 }
 
 main() {
@@ -499,6 +547,7 @@ main() {
     START_TS="$(date +%s)"
     trap on_exit EXIT
     assert_not_public
+    load_restic_env
     ETC_SHA_BEFORE="$(etc_digest)"
     restic_restore
     restore_databases

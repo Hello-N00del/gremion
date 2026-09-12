@@ -9,7 +9,7 @@
 # three, recreates the services that carried a live value, and then PROVES the
 # result from the running system with `docker exec <c> env`.
 #
-# Usage: gremion-neuter --stack S [--root DIR] [--null-sink-host H]
+# Usage: gremion-neuter --stack S [--root DIR] [--release DIR] [--null-sink-host H]
 # Exit:  0 ok · 1 assertion/post-condition failed · 2 usage/precondition · 3 blocked
 set -euo pipefail
 
@@ -38,9 +38,12 @@ CONTAINERS_CHECKED=0
 
 usage() {
     cat >&2 <<'EOF'
-usage: gremion-neuter --stack S [--root DIR] [--null-sink-host H]
+usage: gremion-neuter --stack S [--root DIR] [--release DIR] [--null-sink-host H]
   --stack S           stack to neuter; must equal STACK in <root>/etc/env/state.env
   --root DIR          instance root (default: $GREMION_ROOT, else /opt/gremion)
+  --release DIR       release tree every compose call is made FROM, because the
+                      rendered env files carry a RELATIVE COMPOSE_FILE
+                      (default: <root>/current)
   --null-sink-host H  network alias of the sink container (default: null-sink)
 
 environment:
@@ -65,13 +68,15 @@ env_value() {
 }
 
 parse_args() {
-    STACK_ARG=""; ROOT=""
+    STACK_ARG=""; ROOT=""; RELEASE_DIR=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --stack)          [ $# -ge 2 ] || die "option $1 needs a value" 2
                               STACK_ARG="$2"; shift 2 ;;
             --root)           [ $# -ge 2 ] || die "option $1 needs a value" 2
                               ROOT="$2"; shift 2 ;;
+            --release)        [ $# -ge 2 ] || die "option $1 needs a value" 2
+                              RELEASE_DIR="$2"; shift 2 ;;
             --null-sink-host) [ $# -ge 2 ] || die "option $1 needs a value" 2
                               NULL_SINK_HOST="$2"; shift 2 ;;
             -h|--help)        usage ;;
@@ -80,6 +85,7 @@ parse_args() {
     done
     [[ -n "$STACK_ARG" ]] || usage
     ROOT="${ROOT:-$(gremion_root)}"
+    RELEASE_DIR="${RELEASE_DIR:-${ROOT}/current}"
     STATE_ENV="${ROOT}/etc/env/state.env"
     [[ -f "$STATE_ENV" ]] || die "no state env for the instance: ${STATE_ENV}" 2
     STACK="$(env_value "$STATE_ENV" STACK)"
@@ -88,6 +94,33 @@ parse_args() {
     PLATFORM_DOMAIN="$(env_value "$STATE_ENV" PLATFORM_DOMAIN)"
     [[ -n "$PLATFORM_DOMAIN" ]] || die "PLATFORM_DOMAIN is empty in ${STATE_ENV}" 2
     MAIL_HOST="mail.${PLATFORM_DOMAIN}"
+}
+
+# compose_in_release <env file> <verb...> — the ONLY shape a compose command
+# takes on a host (N20): no -f, no -p, no --profile. It is run FROM THE RELEASE
+# TREE because the rendered env files carry a RELATIVE COMPOSE_FILE
+# (infra/host/templates/env/state.env.tmpl, app.env.tmpl), which compose
+# resolves against its OWN cwd: from the caller's cwd `up -d --force-recreate`
+# exits 1 with compose's own "cannot find the file" — after this program has
+# already rewritten etc/env/*.env — and from a cwd that happens to hold ANOTHER
+# docker-compose.yml it would recreate services from the wrong composition under
+# the right project name. Every sibling host program does the same
+# (gremion-deploy's compose(), gremion-backup, gremion-render,
+# gremion-mail-bringup). RELEASE_DIR is validated once by assert_release_tree,
+# before anything is mutated, so this helper carries no `die` of its own: it is
+# called inside command substitutions, where a `die` could not end the program.
+compose_in_release() {
+    local envfile="$1"; shift
+    ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" "$@" )
+}
+
+# Asserted BEFORE the first mutation: a compose call that cannot resolve its
+# composition must not be discovered after etc/env/*.env has been rewritten and
+# the instance is half neutered.
+assert_release_tree() {
+    [[ -d "$RELEASE_DIR" ]] || \
+        die "release tree absent: ${RELEASE_DIR} — compose cannot resolve the relative COMPOSE_FILE of ${STATE_ENV} from anywhere else (pass --release DIR)" 2
+    ok "compose runs from the release tree ${RELEASE_DIR}"
 }
 
 # A running mail project would deliver what a neutered instance generates.
@@ -226,7 +259,8 @@ recreate_affected() {
         envfile="${ROOT}/etc/env/$(project_env_name "$p").env"
         [[ -f "$envfile" ]] || die "no env file for project ${p}: ${envfile}" 2
         # shellcheck disable=SC2086  # svcs is a deliberate list of service names
-        docker compose --env-file "$envfile" up -d --force-recreate $svcs
+        compose_in_release "$envfile" up -d --force-recreate $svcs \
+            || die "could not recreate ${svcs} in ${p} from ${RELEASE_DIR}" 1
         ok "recreated in ${p}: ${svcs}"
     done <<<"$projects"
 }
@@ -247,7 +281,7 @@ wait_running() {   # <container id>
 # failure on the PASSING path. The output is captured first instead.
 first_cid() {
     local out
-    out="$(docker compose --env-file "$1" ps -q "$2")" || return 1
+    out="$(compose_in_release "$1" ps -q "$2")" || return 1
     printf '%s\n' "${out%%$'\n'*}"
 }
 
@@ -384,6 +418,7 @@ main() {
     parse_args "$@"
     need_cmd docker sha256sum mktemp sed grep awk sort
     assert_mail_project_down
+    assert_release_tree
     neuter_env_files
     ensure_null_sink
     recreate_affected

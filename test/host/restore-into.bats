@@ -31,6 +31,7 @@ TRAEFIK_CERT_RESOLVER=
 POSTGRES_USER=postgres
 CONTROL_DB_NAME=control
 RESTIC_REPOSITORY=/opt/gremion/backups/repo
+RESTIC_PASSWORD=fixturepw
 EOF
     chmod 600 "${GREMION_ROOT}/etc/env/state.env"
 }
@@ -70,8 +71,23 @@ EOF
 }
 
 # restic restore materialises the REAL Task 9 layout: backups/current.
+#
+# The shim also MODELS restic itself: restic takes its repository and password
+# from the environment and fails when either is missing, and sudo env_reset
+# drops whatever the operator exported in their own shell. A shim that ignored
+# both keys is what let the host path ship unable to run at all, so this one
+# fails the way restic does and records what it actually saw.
 shim_restic_ok() {
     shim restic '
+if [ -z "${RESTIC_REPOSITORY:-}" ]; then
+  echo "Fatal: Please specify repository location (-r or --repository-file)" >&2
+  exit 1
+fi
+if [ -z "${RESTIC_PASSWORD:-}" ]; then
+  echo "Fatal: resolving password failed: exhausted configured password sources" >&2
+  exit 1
+fi
+echo "repo=$RESTIC_REPOSITORY pass=$RESTIC_PASSWORD" >>"$GREMION_ROOT/runtime/restic-env.log"
 target=""; prev=""
 for a in "$@"; do
   if [ "$prev" = "--target" ]; then target="$a"; fi
@@ -383,7 +399,10 @@ exit 0'
     run "$RESTORE_INTO" --stack stg --snapshot latest \
         --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
     [ "$status" -eq 0 ]
-    grep -q -- "NEUTER-STUB --stack stg --root ${GREMION_ROOT}" "${GREMION_ROOT}/runtime/neuter.log"
+    # --release is handed on: gremion-neuter runs its own compose calls from the
+    # release tree, and it has no way to know which one this restore used.
+    grep -q -- "NEUTER-STUB --stack stg --root ${GREMION_ROOT} --release ${GREMION_ROOT}/current" \
+        "${GREMION_ROOT}/runtime/neuter.log"
 }
 
 @test "gremion-restore-into asserts the file checksum, the row and the ACME volume" {
@@ -488,4 +507,82 @@ esac'
         --proof-file "$PROOF_FILE" --proof-row "control:SELECT v::text"
     [ "$status" -eq 2 ]
     [[ "$output" == *"contains '::'"* ]]
+}
+
+# ── the restic environment (fix round 3) ──────────────────────────────────
+# `restic restore` reads its repository and password FROM THE ENVIRONMENT. The
+# host convention is that both live in the instance's own state.env
+# (infra/host/templates/env/state.env.tmpl ships RESTIC_REPOSITORY), which is
+# what gremion-backup requires and exports and what gremion-rollback dies on;
+# sudo's env_reset means an operator who exported them in their own shell loses
+# them. load_env is deliberately not used (design note 2), so both keys are read
+# per key with this file's own env_value helper.
+
+@test "gremion-restore-into takes the restic repository and password out of state.env" {
+    # A WRONG ambient value must not win over the instance's own state.env: the
+    # instance names the repository that holds its snapshots.
+    run env RESTIC_REPOSITORY=/ambient/wrong-repo RESTIC_PASSWORD=ambient-wrong \
+        "$RESTORE_INTO" --stack stg --snapshot latest \
+        --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
+    [ "$status" -eq 0 ]
+    run cat "${GREMION_ROOT}/runtime/restic-env.log"
+    [ "$output" = "repo=/opt/gremion/backups/repo pass=fixturepw" ]
+}
+
+# WATCH IT FAIL: without this guard the run dies INSIDE restic with "Please
+# specify repository location" (exit 1) and an ok:false last-restore.json, not
+# the exit-2 precondition failure the family contract calls for.
+@test "gremion-restore-into exits 2 when RESTIC_REPOSITORY is absent from state.env" {
+    sed -i '/^RESTIC_REPOSITORY=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
+        --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESTIC_REPOSITORY absent from ${GREMION_ROOT}/etc/env/state.env"* ]]
+    # the precondition is checked BEFORE restic is asked to do anything
+    refute_recorded restic "restore"
+    [ ! -f "${GREMION_ROOT}/runtime/restic-env.log" ]
+}
+
+@test "gremion-restore-into exits 2 when RESTIC_PASSWORD is absent from state.env" {
+    sed -i '/^RESTIC_PASSWORD=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
+        --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESTIC_PASSWORD absent from ${GREMION_ROOT}/etc/env/state.env"* ]]
+    refute_recorded restic "restore"
+}
+
+@test "gremion-restore-into documents the restic keys it consumes" {
+    run "$RESTORE_INTO"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESTIC_REPOSITORY"* ]]
+    [[ "$output" == *"RESTIC_PASSWORD"* ]]
+}
+
+# The release tree is where every compose call is made from, here and in the
+# neuter this program hands off to; a missing one is a precondition failure
+# before the snapshot is pulled, not a compose error afterwards.
+@test "gremion-restore-into exits 2 when the release tree is absent" {
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
+        --release "${GREMION_ROOT}/no-such-release" \
+        --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"release tree absent: ${GREMION_ROOT}/no-such-release"* ]]
+    refute_recorded restic "restore"
+}
+
+# infra/host/templates/env/state.env.tmpl ships
+# RESTIC_PASSWORD=CHANGE_ME_GEN_alnum32_restic_repo, and load_env — which is
+# deliberately NOT used here (design note 2) — is what refuses a value still
+# holding a CHANGE_ME_ sentinel. The per-key read has to carry that rule itself,
+# or a freshly rendered instance exports the sentinel and the run dies inside
+# restic with a wrong-password error instead of failing its precondition.
+@test "gremion-restore-into refuses a restic key that still holds a CHANGE_ME_ sentinel" {
+    sed -i 's/^RESTIC_PASSWORD=.*/RESTIC_PASSWORD=CHANGE_ME_GEN_alnum32_restic_repo/' \
+        "${GREMION_ROOT}/etc/env/state.env"
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
+        --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"still holds a CHANGE_ME_ sentinel"* ]]
+    refute_recorded restic "restore"
 }

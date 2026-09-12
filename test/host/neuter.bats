@@ -12,6 +12,15 @@ setup() {
     setup_host_root
     write_state_env
     write_app_env
+    write_release_tree
+    # Every test runs from a cwd that carries NO docker-compose.yml. The bats
+    # runner's own cwd is the kernel repo root, which DOES carry one, and that
+    # is exactly what hid the cwd dependency of the recreate call from this
+    # suite: compose resolves the RELATIVE COMPOSE_FILE the rendered env files
+    # ship against its OWN cwd, so a call made from the caller's cwd quietly
+    # used whatever composition happened to sit there. '/' is used rather than a
+    # directory under $GREMION_ROOT so teardown never removes the cwd.
+    cd /
 }
 
 teardown() {
@@ -49,6 +58,18 @@ SMTP_PORT=587
 EOF
     chmod 600 "${GREMION_ROOT}/etc/env/app-blue.env"
     echo none >"${GREMION_ROOT}/runtime/active-colour"
+}
+
+# A release tree carrying the compositions the rendered env files name by
+# RELATIVE path (infra/host/templates/env/state.env.tmpl ships
+# COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml). Each file carries a
+# marker so a test can tell WHICH docker-compose.yml compose actually resolved.
+write_release_tree() {
+    mkdir -p "${GREMION_ROOT}/current"
+    echo '# marker=release'      >"${GREMION_ROOT}/current/docker-compose.yml"
+    echo '# marker=release-prod' >"${GREMION_ROOT}/current/docker-compose.prod.yml"
+    echo '# marker=release-app'  >"${GREMION_ROOT}/current/docker-compose.app.yml"
+    echo '# marker=release-pins' >"${GREMION_ROOT}/current/docker-compose.pins.yml"
 }
 
 # A docker shim with nothing live: exercises the argument and file paths.
@@ -96,6 +117,8 @@ esac'
     run "$NEUTER"
     [ "$status" -eq 2 ]
     [[ "$output" == *"usage: gremion-neuter --stack S"* ]]
+    # the release tree every compose call is made from is operator-visible
+    [[ "$output" == *"--release DIR"* ]]
 }
 
 @test "gremion-neuter refuses a --stack that does not match STACK in state.env" {
@@ -170,7 +193,20 @@ case "$args" in
       if [ -f "$clean" ]; then echo "PATH=/usr/bin"; echo "SMTP_HOST=null-sink"; echo "INSTAGRAM_ACCESS_TOKEN="; exit 0; fi
       cat "$GREMION_ROOT/runtime/.ui-env"; exit 0 ;;
   "exec cid-pg env") echo "PATH=/usr/bin"; exit 0 ;;
-  *"up -d --force-recreate"*) : >"$clean"; exit 0 ;;
+  *"up -d --force-recreate"*)
+      # Modelled on the real compose (v5.5.1, verified on this box): the
+      # RELATIVE COMPOSE_FILE of the rendered env files is resolved against
+      # compose own cwd, so from a cwd without that file the recreate exits 1
+      # and recreates nothing, and from a cwd holding a DIFFERENT one it would
+      # recreate from the wrong composition under the right project name. The
+      # shim records the cwd and the marker of the file it resolved.
+      if [ ! -f docker-compose.yml ]; then
+        echo "compose file \"docker-compose.yml\" set by COMPOSE_FILE environment variable is invalid: stat docker-compose.yml: cannot find the file" >&2
+        exit 1
+      fi
+      echo "$PWD $(sed -n "s/^# marker=//p" docker-compose.yml)" \
+        >>"$GREMION_ROOT/runtime/.recreate-cwd"
+      : >"$clean"; exit 0 ;;
   *"ps -q gremion-ui"*) echo cid-ui; exit 0 ;;
   *"ps -q postgres"*)   echo cid-pg; exit 0 ;;
   *"node -"*) cat >/dev/null; echo "changed=2 live=0"; exit 0 ;;
@@ -370,4 +406,58 @@ exit 0'
     run "$NEUTER" --stack stg
     [ "$status" -eq 1 ]
     [[ "$output" == *"unreadable rewritten-row count"* ]]
+}
+
+# ── the release tree every compose call is made from (fix round 3) ─────────
+# The rendered env files carry a RELATIVE COMPOSE_FILE
+# (infra/host/templates/env/state.env.tmpl:22, app.env.tmpl:18), so every
+# compose call has to be made FROM the release tree — the convention every
+# sibling host program already follows (gremion-deploy's compose(),
+# gremion-backup, gremion-render, gremion-mail-bringup).
+
+# WATCH IT FAIL: run from the caller's cwd, the one MUTATING compose call of
+# this unit exits 1 with compose's own "cannot find the file" — and it does so
+# AFTER neuter_env_files has already rewritten etc/env/*.env, i.e. it leaves a
+# half-neutered instance behind.
+@test "gremion-neuter recreates from the release tree so the relative COMPOSE_FILE resolves" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    shim_docker_live
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    assert_recorded docker "--env-file ${GREMION_ROOT}/etc/env/app-blue.env up -d --force-recreate gremion-ui"
+    # the cwd and the composition compose really resolved, from the shim record
+    run cat "${GREMION_ROOT}/runtime/.recreate-cwd"
+    [ "$output" = "${GREMION_ROOT}/current release" ]
+}
+
+# WATCH IT FAIL: the silent half of the same defect. A cwd that happens to hold
+# ANOTHER docker-compose.yml (another release tree, the repo root) does not fail
+# — it recreates services from the wrong composition under the right project
+# name, which no exit code can reveal.
+@test "gremion-neuter ignores a docker-compose.yml in the caller's cwd" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    mkdir -p "${GREMION_ROOT}/decoy"
+    printf '# marker=decoy\n' >"${GREMION_ROOT}/decoy/docker-compose.yml"
+    shim_docker_live
+    cd "${GREMION_ROOT}/decoy"
+    run "$NEUTER" --stack stg --release "${GREMION_ROOT}/current"
+    [ "$status" -eq 0 ]
+    run cat "${GREMION_ROOT}/runtime/.recreate-cwd"
+    [ "$output" = "${GREMION_ROOT}/current release" ]
+    [[ "$output" != *decoy* ]]
+}
+
+# WATCH IT FAIL: a release tree that is not there is a precondition failure
+# BEFORE the first mutation, not a compose error after the env files are gone.
+@test "gremion-neuter refuses before it rewrites anything when the release tree is absent" {
+    local before after
+    shim_docker_empty
+    before="$(sha256sum <"${GREMION_ROOT}/etc/env/state.env")"
+    run "$NEUTER" --stack stg --release "${GREMION_ROOT}/no-such-release"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"release tree absent: ${GREMION_ROOT}/no-such-release"* ]]
+    after="$(sha256sum <"${GREMION_ROOT}/etc/env/state.env")"
+    [ "$before" = "$after" ]
+    grep -q '^KEYCLOAK_SMTP_HOST=mail.example.org$' "${GREMION_ROOT}/etc/env/state.env"
+    refute_recorded docker "force-recreate"
 }

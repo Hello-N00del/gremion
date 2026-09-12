@@ -43,10 +43,20 @@ A="${WORK}/a"; B="${WORK}/b"
 export RESTIC_PASSWORD="restore-proof-passphrase"
 export RESTIC_REPOSITORY="${WORK}/repo"
 
+# icompose <instance root> <verb…> — every compose call of this fixture, run
+# FROM THE INSTANCE'S RELEASE TREE, because the instances carry the RELATIVE
+# COMPOSE_FILE the rendered templates ship (state.env.tmpl, app.env.tmpl). A
+# fixture with an ABSOLUTE COMPOSE_FILE cannot see a program that forgot to cd,
+# which is how the recreate inside gremion-neuter shipped unable to run.
+icompose() {   # <instance root> <verb…>
+    local root="$1"; shift
+    ( cd "${root}/current" && docker compose --env-file "${root}/etc/env/state.env" "$@" )
+}
+
 cleanup() {
     [[ "$KEEP" == true ]] && { info "kept: ${WORK}"; return 0; }
-    docker compose --env-file "${A}/etc/env/state.env" down --volumes --remove-orphans >/dev/null 2>&1 || true
-    docker compose --env-file "${B}/etc/env/state.env" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    icompose "$A" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    icompose "$B" down --volumes --remove-orphans >/dev/null 2>&1 || true
     docker rm -f proofb-null-sink >/dev/null 2>&1 || true
     docker volume rm proofa_traefik_acme proofa_tenant_secrets proofa_mail_data >/dev/null 2>&1 || true
     docker volume rm proofb_traefik_acme proofb_tenant_secrets proofb_mail_data >/dev/null 2>&1 || true
@@ -114,10 +124,15 @@ write_instance() {   # <root> <stack> <smtp host>
     chmod 700 "${root}/etc"
     cp "${KERNEL_ROOT}/scripts/restore.sh" "${root}/current/scripts/restore.sh"
     chmod 755 "${root}/current/scripts/restore.sh"
+    # The composition lives IN the release tree and is named by a RELATIVE
+    # COMPOSE_FILE, exactly as the rendered env templates ship it.
+    cp "${WORK}/docker-compose.yml" "${root}/current/docker-compose.yml"
     cat >"${root}/etc/env/state.env" <<EOF
 STACK=${stack}
 COMPOSE_PROJECT_NAME=${stack}-state
-COMPOSE_FILE=${WORK}/docker-compose.yml
+COMPOSE_FILE=docker-compose.yml
+RESTIC_REPOSITORY=${RESTIC_REPOSITORY}
+RESTIC_PASSWORD=${RESTIC_PASSWORD}
 PLATFORM_DOMAIN=example.org
 TRAEFIK_CERT_RESOLVER=
 POSTGRES_USER=postgres
@@ -134,12 +149,12 @@ EOF
     docker volume create "${stack}_traefik_acme"   >/dev/null
     docker volume create "${stack}_tenant_secrets" >/dev/null
     docker volume create "${stack}_mail_data"      >/dev/null
-    docker compose --env-file "${root}/etc/env/state.env" up -d
+    icompose "$root" up -d
 }
 
 wait_pg() {   # <root> <service>
     local cid deadline=$((SECONDS + 180))
-    cid="$(docker compose --env-file "$1/etc/env/state.env" ps -q "$2")"
+    cid="$(icompose "$1" ps -q "$2")"
     [[ -n "$cid" ]] || die "no $2 container in $1"
     while (( SECONDS < deadline )); do
         if [[ "$(docker inspect -f '{{.State.Health.Status}}' "$cid")" == healthy ]]; then
@@ -189,7 +204,7 @@ CREATE TABLE whose_server (name text PRIMARY KEY);
 INSERT INTO whose_server VALUES ('analytics-postgres');
 SQL
 
-NCA="$(docker compose --env-file "${A}/etc/env/state.env" ps -q nextcloud)"
+NCA="$(icompose "$A" ps -q nextcloud)"
 docker exec "$NCA" sh -c 'printf "gremion restore proof\n" > /files/proof.txt'
 PROOF_SHA="$(docker exec "$NCA" sha256sum /files/proof.txt | awk '{print $1}')"
 docker run --rm -v proofa_traefik_acme:/v alpine:3.22 sh -c 'printf "{}\n" > /v/acme.json'
@@ -216,6 +231,10 @@ restic backup --quiet --tag "label=proof" --tag "class=snapshot" \
 info "restic snapshot taken from ${STAGE}"
 
 # ── instance B: restore into it ────────────────────────────────────────────
+# Every gremion-restore-into call below is made with the restic keys UNSET in
+# its environment (env -u): on the host, sudo's env_reset drops whatever the
+# operator exported in their own shell, so the program has to take both out of
+# the instance's own state.env or it cannot run at all.
 # The snapshot's etc lives under backups/etc-snapshot (not */etc/env/state.env),
 # so name the source stack explicitly. B starts with the LIVE mail host in its
 # state env, so the neuter inside the restore really has a service to recreate.
@@ -226,7 +245,7 @@ wait_pg "$B" analytics >/dev/null
 seed_roles "$PGB0"
 
 set +e
-OUT="$("${BIN}/gremion-restore-into" --stack proofb --root "$B" --release "${B}/current" \
+OUT="$(env -u RESTIC_REPOSITORY -u RESTIC_PASSWORD "${BIN}/gremion-restore-into" --stack proofb --root "$B" --release "${B}/current" \
         --src-stack proofa --snapshot latest --rto \
         --proof-file "/files/proof.txt:${PROOF_SHA}" \
         --proof-row db=control "sql=SELECT v::text FROM proof_row WHERE k='seed'" want=ratified 2>&1)"
@@ -243,8 +262,8 @@ grep -q "SKIP volume proofa-state_analytics_pgdata" <<<"$OUT" \
 grep -qE 'RTO-SECONDS=[0-9]+' <<<"$OUT" || die "no RTO measured"
 
 # post-conditions read from the RUNNING instance B, not from the program output
-PGB="$(docker compose --env-file "${B}/etc/env/state.env" ps -q postgres)"
-NCB="$(docker compose --env-file "${B}/etc/env/state.env" ps -q nextcloud)"
+PGB="$(icompose "$B" ps -q postgres)"
+NCB="$(icompose "$B" ps -q nextcloud)"
 [[ "$(docker exec -i "$PGB" psql -tAq -U postgres -d control -c "SELECT v FROM proof_row WHERE k='seed';")" == ratified ]] \
     || die "seeded row absent from instance B"
 [[ "$(docker exec "$NCB" sha256sum /files/proof.txt | awk '{print $1}')" == "$PROOF_SHA" ]] \
@@ -263,7 +282,7 @@ info "GREEN: content proof, neuter and null sink verified from the running syste
 # ── RED drills ─────────────────────────────────────────────────────────────
 info "RED 1: wrong checksum must fail the proof"
 set +e
-RED1="$("${BIN}/gremion-restore-into" --stack proofb --root "$B" --release "${B}/current" \
+RED1="$(env -u RESTIC_REPOSITORY -u RESTIC_PASSWORD "${BIN}/gremion-restore-into" --stack proofb --root "$B" --release "${B}/current" \
          --src-stack proofa --snapshot latest \
          --proof-file "/files/proof.txt:0000000000000000000000000000000000000000" \
          --proof-row "control:SELECT v FROM proof_row WHERE k='seed':ratified" 2>&1)"
@@ -275,7 +294,7 @@ info "RED 1 observed: $(grep -m1 'PROOF-FILE mismatch' <<<"$RED1")"
 
 info "RED 2: the colon proof-row form must refuse a cast rather than truncate it"
 set +e
-RED2="$("${BIN}/gremion-restore-into" --stack proofb --root "$B" --release "${B}/current" \
+RED2="$(env -u RESTIC_REPOSITORY -u RESTIC_PASSWORD "${BIN}/gremion-restore-into" --stack proofb --root "$B" --release "${B}/current" \
          --src-stack proofa --snapshot latest \
          --proof-file "/files/proof.txt:${PROOF_SHA}" \
          --proof-row "control:SELECT v::text FROM proof_row WHERE k='seed':ratified" 2>&1)"
@@ -291,7 +310,7 @@ info "RED 2 observed: $(grep -m1 "contains '::'" <<<"$RED2")"
 # clean it up and the post-condition is the only thing left to catch it.
 info "RED 3: neuter's env assert must reject a live mail host"
 sed -i 's/^SMTP_HOST=.*/SMTP_HOST=mail.example.org/' "${B}/etc/env/state.env"
-docker compose --env-file "${B}/etc/env/state.env" up -d --force-recreate nextcloud >/dev/null
+icompose "$B" up -d --force-recreate nextcloud >/dev/null
 set +e
 RED3="$("${BIN}/gremion-neuter" --stack proofb --root "$B" \
          --null-sink-host "mail.example.org" 2>&1)"
@@ -307,7 +326,7 @@ docker exec "$PGA" pg_dump -U postgres shared | gzip -c >"${STAGE}/postgres__sha
 docker exec "$ANA" pg_dump -U postgres shared | gzip -c >"${STAGE}/analytics__shared.sql.gz"
 restic backup --quiet --tag "label=proof-keyed" --tag "class=snapshot" "${STAGE}" >/dev/null
 set +e
-RED4="$("${BIN}/gremion-restore-into" --stack proofb --root "$B" --release "${B}/current" \
+RED4="$(env -u RESTIC_REPOSITORY -u RESTIC_PASSWORD "${BIN}/gremion-restore-into" --stack proofb --root "$B" --release "${B}/current" \
          --src-stack proofa --snapshot latest \
          --proof-file "/files/proof.txt:${PROOF_SHA}" \
          --proof-row db=control "sql=SELECT v::text FROM proof_row WHERE k='seed'" want=ratified 2>&1)"
@@ -326,7 +345,7 @@ info "RED 4 observed: $(grep -m1 'BLOCKED: restore.sh cannot target' <<<"$RED4")
 
 info "restoring: re-neutering instance B"
 "${BIN}/gremion-neuter" --stack proofb --root "$B" >/dev/null
-NCB="$(docker compose --env-file "${B}/etc/env/state.env" ps -q nextcloud)"
+NCB="$(icompose "$B" ps -q nextcloud)"
 NCENV="$(docker exec "$NCB" env)"
 grep -q '^SMTP_HOST=null-sink$' <<<"$NCENV" \
     || die "re-neuter did not restore the null sink in the running container"
