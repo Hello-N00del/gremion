@@ -1042,3 +1042,70 @@ exit 0'
     [ -s "${GREMION_ROOT}/backups/current/t_pilot.sql.gz" ]
     [ "$(jq -r '.artefacts.databases' "${GREMION_ROOT}/runtime/last-backup.json")" = "5" ]
 }
+
+# ---------------------------------------------------------------------------
+# The report write must never take the alert with it (review round 2)
+#
+# on_exit called write_report as a bare statement under `set -euo pipefail`, and
+# write_report's own `mkdir -p` and `jq | atomic_write` were unguarded. A report
+# that cannot be written (disk full, an unwritable runtime/, a stale file where
+# the directory belongs, a jq that cannot run) therefore ended the EXIT trap AT
+# THAT LINE: post_alert never ran — violating §J's "reports to the alert channel
+# on BOTH outcomes" — and the process exited with mkdir's or cat's status
+# instead of the backup's, which is the code systemd and Task 15's runbook read.
+# ---------------------------------------------------------------------------
+
+shim_jq_that_cannot_build_json() {
+    # `jq -n` is used by write_report and by post_alert and by nothing else in
+    # either program, so failing only on -n reproduces "jq cannot build the
+    # report" without breaking the snapshot and rclone readings the run makes
+    # on its way there.
+    local real
+    real="$(command -v jq)"
+    shim jq "case \"\$1\" in -n) exit 1 ;; esac
+exec ${real} \"\$@\""
+}
+
+@test "a runtime path that is not a directory still alerts and keeps the exit code" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    rm -rf "${GREMION_ROOT}/runtime"
+    : >"${GREMION_ROOT}/runtime"            # a stale file where the directory belongs
+    touch "${GREMION_ROOT}/.offsite-down"   # and the run itself stops with 2
+    run "$BACKUP" --label report-1
+    # The precondition's code survives a report that could not be written.
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"offsite remote unreachable"* ]]
+    [[ "$output" == *"BACKUP-REPORT: cannot create"* ]]
+    assert_recorded curl "https://alerts.example.org/hook"
+}
+
+@test "a report the filesystem refuses still alerts and fails the run loudly" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    # atomic_write writes <path>.tmp first, so a directory there makes its `cat`
+    # fail: the `jq | atomic_write` pipeline fails on an otherwise good run.
+    mkdir -p "${GREMION_ROOT}/runtime/last-backup.json.tmp"
+    run "$BACKUP" --label report-2
+    [[ "$output" == *"BACKUP: label=report-2"*"ok=true"* ]]
+    [[ "$output" == *"BACKUP-REPORT: cannot write ${GREMION_ROOT}/runtime/last-backup.json"* ]]
+    assert_recorded curl "https://alerts.example.org/hook"
+    [ ! -f "${GREMION_ROOT}/runtime/last-backup.json" ]
+    [ ! -f "${GREMION_ROOT}/runtime/last-backup-daily.json" ]
+    # A run whose report never landed is not a success: the next run's
+    # free-space baseline and gremion-snapshot both read that file.
+    [ "$status" -eq 1 ]
+}
+
+@test "a jq that cannot build the report still delivers a non-empty alert" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    shim curl 'cat >"$GREMION_ROOT/.alert-body"; exit 0'
+    shim_jq_that_cannot_build_json
+    run "$BACKUP" --label report-3
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BACKUP-REPORT: cannot write ${GREMION_ROOT}/runtime/last-backup.json"* ]]
+    [[ "$output" == *"alert delivered"* ]]
+    # The alert that reports the broken report is itself still readable JSON.
+    grep -qF '"event":"backup"' "${GREMION_ROOT}/.alert-body"
+    grep -qF '"label":"report-3"' "${GREMION_ROOT}/.alert-body"
+    # and it carries the code the process actually exits with.
+    grep -qF '"exit":1' "${GREMION_ROOT}/.alert-body"
+}

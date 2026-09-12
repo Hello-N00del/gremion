@@ -523,17 +523,25 @@ warn_snapshot_class_accumulation() {
     ok "class=snapshot snapshots retained: ${n} (threshold ${limit})"
 }
 
+# Runs from the EXIT trap, where nothing may be fatal. Under `set -euo pipefail`
+# a bare `mkdir` or `jq | atomic_write` that fails here ends the trap handler AT
+# THAT LINE: post_alert never runs — breaking §J's "reports to the alert channel
+# on BOTH outcomes" — and the process exits with mkdir's or cat's status instead
+# of the backup's, which is the code systemd and Task 15's runbook read. Every
+# step is therefore guarded and a report that could not be written is REPORTED,
+# by returning non-zero, never thrown.
 write_report() {
     local rt f
     rt="$(gremion_root)/runtime"
-    mkdir -p "$rt"
-    # Guarded on purpose: this runs from the EXIT trap, where the repository
-    # may not exist yet because the run died before restic. A `du` that fails
-    # must not take the report with it under `set -e`.
+    if ! mkdir -p "$rt"; then
+        bad "BACKUP-REPORT: cannot create ${rt} — report not written"
+        return 1
+    fi
+    # The repository may not exist yet: the run can die long before restic.
     REPO_BYTES="$(du -sb "$RESTIC_REPOSITORY" 2>/dev/null | cut -f1)" || REPO_BYTES=""
     case "$REPO_BYTES" in ''|*[!0-9]*) REPO_BYTES=0 ;; esac
     f="${rt}/last-backup.json"
-    jq -n \
+    if ! jq -n \
        --arg     ts        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
        --argjson ok        "$OK" \
        --arg     lbl       "$LABEL" \
@@ -546,19 +554,38 @@ write_report() {
        '{ts:$ts, ok:$ok, label:$lbl, class:$class,
          artefacts:{databases:$databases, volumes:$volumes, buckets:$buckets},
          offsite:$offsite, bytes:$bytes}' \
-      | atomic_write "$f" 600
+      | atomic_write "$f" 600; then
+        bad "BACKUP-REPORT: cannot write ${f} — report not written"
+        return 1
+    fi
     # Only a successful daily is a baseline: gremion-snapshot compares artefact
     # classes against it and required_free_bytes scales from its size.
     if [ "$OK" = true ] && [ "$CLASS" = daily ]; then
-        cp "$f" "${rt}/last-backup-daily.json"
+        if ! cp "$f" "${rt}/last-backup-daily.json"; then
+            bad "BACKUP-REPORT: cannot write ${rt}/last-backup-daily.json"
+            return 1
+        fi
     fi
+    return 0
 }
 
 post_alert() {   # $1 = exit code being reported
-    local body
+    local body host
+    host="${HOSTNAME:-unknown}"
+    # jq builds the body. The printf fallback is what makes this the report of
+    # last resort: if jq is what broke the run, an alert with an empty body
+    # tells the operator nothing. LABEL is regex-validated and CLASS is one of
+    # two literals, so neither can break the hand-built JSON; a host name that
+    # is not plainly alphanumeric is reported as "unknown" rather than risking
+    # a body the alert channel cannot parse.
     body="$(jq -n --argjson ok "$OK" --arg lbl "$LABEL" --arg class "$CLASS" \
-                  --argjson exit "$1" --arg host "${HOSTNAME:-unknown}" \
-            '{event:"backup", ok:$ok, label:$lbl, class:$class, exit:$exit, host:$host}')"
+                  --argjson exit "$1" --arg host "$host" \
+            '{event:"backup", ok:$ok, label:$lbl, class:$class, exit:$exit, host:$host}')" \
+      || {
+        case "$host" in ''|*[!A-Za-z0-9._-]*) host=unknown ;; esac
+        body="$(printf '{"event":"backup","ok":%s,"label":"%s","class":"%s","exit":%s,"host":"%s"}' \
+                  "$OK" "$LABEL" "$CLASS" "$1" "$host")"
+    }
     if printf '%s' "$body" | curl -fsS --max-time 15 -X POST \
          -H 'Content-Type: application/json' --data-binary @- \
          "$ALERT_WEBHOOK_URL" >/dev/null 2>&1; then
@@ -573,7 +600,15 @@ on_exit() {
     local rc=$?
     if [ "$rc" -eq 0 ]; then OK=true; else OK=false; fi
     trap - EXIT
-    write_report
+    # The report write is guarded and the alert is unconditional: §J requires a
+    # report on BOTH outcomes, and a report that could not be written is exactly
+    # what the operator has to hear about. A failed write escalates only a run
+    # that otherwise succeeded — the next run's free-space baseline and
+    # gremion-snapshot's artefact-class comparison both read that file, so a
+    # missing one is not a clean run — and never overwrites a more specific code.
+    if ! write_report; then
+        if [ "$rc" -eq 0 ]; then rc=1; fi
+    fi
     if ! post_alert "$rc"; then
         # An undeliverable report is a failure in its own right, but it must
         # not overwrite a more specific code: the Step 25 integration run
