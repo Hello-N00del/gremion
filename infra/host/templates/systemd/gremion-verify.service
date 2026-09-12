@@ -1,17 +1,26 @@
 [Unit]
-Description=Gremion reboot gate (verification contract)
-After=docker.service
-Wants=docker.service
+Description=Gremion reboot gate (verification contract, post-boot)
+Documentation=file://${GREMION_ROOT}/current/infra/host/ops/README.md
+After=docker.service network-online.target
+# Requires, not Wants: without a Docker daemon the gate has nothing to verify
+# and nothing to restart, and a gate that reports success on a host whose
+# engine never started is the exact shape of a guard that lies.
+Requires=docker.service
+Wants=network-online.target
 
 [Service]
 Type=oneshot
+RemainAfterExit=no
 User=${DEPLOY_USER}
 Group=${DEPLOY_USER}
 SupplementaryGroups=docker
-ExecStart=${GREMION_ROOT}/bin/gremion-verify
+Environment=GREMION_ROOT=${GREMION_ROOT}
+ExecStart=${GREMION_ROOT}/bin/gremion-verify --reboot
 TimeoutStartSec=30m
 ProtectSystem=full
 NoNewPrivileges=true
+StandardOutput=append:${GREMION_ROOT}/logs/reboot-gate.log
+StandardError=append:${GREMION_ROOT}/logs/reboot-gate.log
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,131 @@
+# infra/host/ops/alerts.test.yml — run by:
+#   promtool test rules alerts.test.yml   (from /etc/prometheus inside the pinned image)
+#
+# `alertname` leads every alert_rule_test entry on purpose: the bats guard
+# "alerts.test.yml exercises both directions of every rule" reads the rule name
+# as the third awk field of the "- alertname: X" line, which is only the rule
+# name while the key is first in the list item.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---- healthy: not one of the eight may fire -----------------------------
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{mountpoint="/",fstype="ext4",instance="node:9100"}'
+        values: '900+0x90'
+      - series: 'node_filesystem_size_bytes{mountpoint="/",fstype="ext4",instance="node:9100"}'
+        values: '1000+0x90'
+      - series: 'node_memory_MemAvailable_bytes{instance="node:9100"}'
+        values: '800+0x90'
+      - series: 'node_memory_MemTotal_bytes{instance="node:9100"}'
+        values: '1000+0x90'
+      - series: 'gremion_container_unhealthy{name="gremion-ui-blue",instance="node:9100"}'
+        values: '0+0x90'
+      - series: 'gremion_metrics_textfile_timestamp_seconds{instance="node:9100"}'
+        values: '0+60x90'
+      - series: 'probe_ssl_earliest_cert_expiry{job="blackbox-https",instance="https://example.org"}'
+        values: '5184000+0x90'
+      - series: 'gremion_backup_last_success_timestamp_seconds{instance="node:9100"}'
+        values: '0+0x90'
+      - series: 'stalwart_queue_oldest_message_seconds{job="stalwart",instance="mail.example.org"}'
+        values: '10+0x90'
+      - series: 'gremion_postgres_connections_used{instance="node:9100"}'
+        values: '10+0x90'
+      - series: 'gremion_postgres_connections_max{instance="node:9100"}'
+        values: '100+0x90'
+      - series: 'probe_success{job="blackbox-acme",instance="http://203.0.113.10:80/.well-known/acme-challenge/probe"}'
+        values: '1+0x90'
+    alert_rule_test:
+      - alertname: DiskAbove70
+        eval_time: 70m
+        exp_alerts: []
+      - alertname: MemoryPressure
+        eval_time: 70m
+        exp_alerts: []
+      - alertname: ContainerUnhealthy2m
+        eval_time: 70m
+        exp_alerts: []
+      - alertname: CertExpiresUnder20d
+        eval_time: 70m
+        exp_alerts: []
+      - alertname: BackupOlderThan26h
+        eval_time: 70m
+        exp_alerts: []
+      - alertname: MailQueueOldest1h
+        eval_time: 70m
+        exp_alerts: []
+      - alertname: PostgresConnections80pct
+        eval_time: 70m
+        exp_alerts: []
+      - alertname: EdgePort80Down
+        eval_time: 70m
+        exp_alerts: []
+
+  # ---- blind: every collector is gone, every rule must fire ---------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="prometheus",instance="127.0.0.1:9090"}'
+        values: '1+0x90'
+    alert_rule_test:
+      - alertname: DiskAbove70
+        eval_time: 70m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              mountpoint: "/"
+            exp_annotations:
+              summary: "Root filesystem above 70 percent, or node-exporter is blind"
+      - alertname: MemoryPressure
+        eval_time: 70m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Less than 10 percent memory available, or node-exporter is blind"
+      - alertname: ContainerUnhealthy2m
+        eval_time: 70m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "A container is unhealthy, or the textfile collector has stopped"
+      - alertname: CertExpiresUnder20d
+        eval_time: 70m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox-https
+            exp_annotations:
+              summary: "A served certificate expires in under 20 days, or the probe is blind"
+      - alertname: BackupOlderThan26h
+        eval_time: 70m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "No successful backup in the last 26 hours, or none has ever been recorded"
+      - alertname: MailQueueOldest1h
+        eval_time: 70m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Oldest queued message older than one hour, or the mail scrape is blind"
+      - alertname: PostgresConnections80pct
+        eval_time: 70m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Postgres connections above 80 percent of max, or the collector is blind"
+      - alertname: EdgePort80Down
+        eval_time: 70m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox-acme
+            exp_annotations:
+              summary: "Port 80 on the edge address is not answering the ACME challenge probe"

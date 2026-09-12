@@ -1,0 +1,104 @@
+# infra/host/ops/alerts.yml — spec A §K. Exactly eight rules; a ninth is a
+# reviewed change, because "alert on everything" is how an alert channel is
+# trained to be ignored.
+#
+# Every rule carries an `absent(...) == 1` clause. A rule whose series stops
+# arriving — node-exporter down, the textfile collector dead, the Stalwart
+# scrape unauthorised — must fire. Without that clause the quiet dashboard and
+# the healthy host look identical, which is the failure mode this project has
+# paid for most often.
+groups:
+  - name: gremion-host
+    rules:
+      - alert: DiskAbove70
+        expr: |
+          100 * (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
+                   / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}) > 70
+          or absent(node_filesystem_avail_bytes{mountpoint="/"}) == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root filesystem above 70 percent, or node-exporter is blind"
+
+      - alert: MemoryPressure
+        expr: |
+          (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 10
+          or absent(node_memory_MemAvailable_bytes) == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Less than 10 percent memory available, or node-exporter is blind"
+
+      - alert: ContainerUnhealthy2m
+        expr: |
+          max by (name) (gremion_container_unhealthy) > 0
+          or absent(gremion_metrics_textfile_timestamp_seconds) == 1
+          or (time() - max(gremion_metrics_textfile_timestamp_seconds)) > 600
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A container is unhealthy, or the textfile collector has stopped"
+
+      - alert: CertExpiresUnder20d
+        expr: |
+          min by (instance, job) (
+            probe_ssl_earliest_cert_expiry{job=~"blackbox-https|blackbox-control|blackbox-tls|blackbox-smtp"} - time()
+          ) / 86400 < 20
+          or absent(probe_ssl_earliest_cert_expiry{job="blackbox-https"}) == 1
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "A served certificate expires in under 20 days, or the probe is blind"
+
+      - alert: BackupOlderThan26h
+        expr: |
+          (time() - gremion_backup_last_success_timestamp_seconds) > 93600
+          or absent(gremion_backup_last_success_timestamp_seconds) == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful backup in the last 26 hours, or none has ever been recorded"
+
+      # UNVERIFIED SERIES. `stalwart_queue_oldest_message_seconds` is taken from
+      # Stalwart's documentation, not from a live scrape of this deployment's
+      # /metrics/prometheus endpoint. Do not read it as confirmed:
+      # series name unverified until §L step 7; see S4
+      # Task 8's S4 spike question table carries the row that resolves it
+      # ("what is the real name of the mail-queue age series?"). Correcting the
+      # name is a one-line edit here plus the matching input_series in
+      # alerts.test.yml. Until then the absent() clause makes the rule fire
+      # continuously, so a wrong name is loud, never silent.
+      - alert: MailQueueOldest1h
+        expr: |
+          max(stalwart_queue_oldest_message_seconds) > 3600
+          or absent(stalwart_queue_oldest_message_seconds) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oldest queued message older than one hour, or the mail scrape is blind"
+
+      - alert: PostgresConnections80pct
+        expr: |
+          (gremion_postgres_connections_used / gremion_postgres_connections_max) > 0.8
+          or absent(gremion_postgres_connections_used) == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres connections above 80 percent of max, or the collector is blind"
+
+      - alert: EdgePort80Down
+        expr: |
+          probe_success{job="blackbox-acme"} == 0
+          or absent(probe_success{job="blackbox-acme"}) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Port 80 on the edge address is not answering the ACME challenge probe"
