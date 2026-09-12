@@ -44,9 +44,13 @@ test/host/test_helper/*.bash text eol=lf
 # matched *.env* above; this covers the rest of the directory.
 infra/host/templates/** text eol=lf
 
-# Task 8: infra/host/mail/ carries the Stalwart config TEMPLATE (config.toml.tmpl),
-# which gremion-mail-bringup renders and bind-mounts into a Linux container. No
-# rule above matches *.toml.tmpl — Task 2's rule covers infra/host/templates/**,
-# not this directory — so core.autocrlf=true would check the template out with
-# CRLF on Windows and every rendered value would carry a trailing carriage return.
+# Task 8: infra/host/mail/config.toml.tmpl is the ONE tracked file here that no
+# rule above reaches. docker-compose.yml is covered by *.yml and
+# provision-roles.sh by *.sh; *.toml.tmpl matches nothing, and Task 2's rule
+# covers infra/host/templates/**, which is a different directory. Without this
+# line `git check-attr eol -- infra/host/mail/config.toml.tmpl` answers
+# "unspecified" (measured), so core.autocrlf=true checks the template out with
+# CRLF on Windows and every rendered value carries a trailing carriage return.
+# The pattern stays a directory glob so a future file here is covered too; the
+# overlap with *.yml and *.sh sets the same value and changes nothing.
 infra/host/mail/** text eol=lf

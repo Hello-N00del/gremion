@@ -37,6 +37,7 @@ ALL_ASSERTS=(1 2 3 4 5 6a 6b)
 PROBE_BODY="This message proves the host's DKIM signature against the published key."
 
 RENDER_ONLY=0
+CHECK_BINDS=0
 REQUESTED=""
 EXTERNAL_TO=""
 RESULTS_FILE=""
@@ -50,7 +51,7 @@ declare -A RESULT=()
 
 usage() {
     cat <<'USAGE'
-usage: gremion-mail-bringup [--render-config]
+usage: gremion-mail-bringup [--render-config] [--check-binds]
                             [--assert 1|2|3|4|5|6a|6b|all]
                             [--external-to addr[,addr...]]
                             [--results-file FILE]
@@ -71,6 +72,7 @@ parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --render-config) RENDER_ONLY=1; shift ;;
+            --check-binds)   CHECK_BINDS=1; shift ;;
             --assert)        need_value --assert       "$#"; REQUESTED="$2";    shift 2 ;;
             --external-to)   need_value --external-to  "$#"; EXTERNAL_TO="$2";  shift 2 ;;
             --results-file)  need_value --results-file "$#"; RESULTS_FILE="$2"; shift 2 ;;
@@ -78,9 +80,10 @@ parse_args() {
             *)               usage >&2; die "unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
         esac
     done
-    if [ "$RENDER_ONLY" -ne 1 ] && [ -z "$REQUESTED" ]; then
+    if [ "$RENDER_ONLY" -ne 1 ] && [ "$CHECK_BINDS" -ne 1 ] && [ -z "$REQUESTED" ]; then
         usage >&2
-        die "nothing to do: pass --render-config, --assert, or both" "$GREMION_EXIT_USAGE"
+        die "nothing to do: pass --render-config, --check-binds, --assert, or a combination" \
+            "$GREMION_EXIT_USAGE"
     fi
 }
 
@@ -136,6 +139,44 @@ render_config() {
     local id; id="$(date -u +%Y%m%d%H%M%S)"
     printf '%s\n' "$id" | atomic_write "$(gremion_root)/runtime/mta-sts-id" 0644
     ok "MTA-STS policy id $id recorded in runtime/mta-sts-id"
+}
+
+# §A: nothing binds 0.0.0.0. The compose file carries an x-required-env block
+# that makes an EMPTY bind address fail interpolation, but that is a compose
+# EXTENSION field — a release that stopped interpolating unknown x- keys would
+# retire the guard in silence, and nothing executable ever read the realised
+# ports. This step asserts the post-condition on the document the daemon is
+# actually handed: `docker compose --env-file <file> config`, the only permitted
+# invocation (N20), run from the project's own directory because COMPOSE_FILE is
+# relative and no -f may be passed.
+check_port_binds() {
+    need_cmd docker jq
+    local envfile cfg offenders total
+    envfile="${MAIL_ENV:-$(gremion_root)/etc/env/mail.env}"
+    [ -f "$envfile" ] || die "mail env file missing: ${envfile}" "$GREMION_EXIT_USAGE"
+    [ -f "$MAIL_TMPL_DIR/docker-compose.yml" ] \
+        || die "mail compose file missing: ${MAIL_TMPL_DIR}/docker-compose.yml" "$GREMION_EXIT_USAGE"
+    cfg="$(cd "$MAIL_TMPL_DIR" && docker compose --env-file "$envfile" config --format json)" \
+        || die "docker compose could not render the mail project's config" "$GREMION_EXIT_USAGE"
+    total="$(printf '%s' "$cfg" \
+             | jq '[ .services[]? | (.ports // [])[] | select(.published != null) ] | length')" \
+        || die "the realised mail config is not readable JSON" "$GREMION_EXIT_USAGE"
+    if [ "${total:-0}" -lt 1 ]; then
+        bad "the realised mail config publishes no port at all — the bind guard read nothing"
+        return "$GREMION_EXIT_ASSERT"
+    fi
+    offenders="$(printf '%s' "$cfg" | jq -r --arg v4 "$MAIL_BIND_IP" --arg v6 "$MAIL_BIND_IP6" '
+        .services[]? | (.ports // [])[]
+        | select(.published != null)
+        | select(((.host_ip // "") | length) == 0
+                 or (.host_ip != $v4 and .host_ip != $v6 and .host_ip != "127.0.0.1"))
+        | "\(if (.host_ip // "") == "" then "0.0.0.0" else .host_ip end):\(.published) -> \(.target)"')"
+    if [ -n "$offenders" ]; then
+        bad "published mail port(s) not bound to ${MAIL_BIND_IP} / [${MAIL_BIND_IP6}] / 127.0.0.1:"
+        printf '%s\n' "$offenders"
+        return "$GREMION_EXIT_ASSERT"
+    fi
+    ok "PORT-BINDS: ${total} published port(s), every one on ${MAIL_BIND_IP} / [${MAIL_BIND_IP6}] / 127.0.0.1"
 }
 
 # run_dns_check <edit> — echoes the report, returns gremion-dns-check's own
@@ -593,6 +634,22 @@ assert_6b_keycloak() {
         printf 'BLOCKED: keycloak realm export has no smtpServer block (spec B, gremion#6)\n'
         return 3
     fi
+    # KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD belong to the STATE project's env
+    # file; mail.env has neither and load_env therefore exports neither. Read
+    # bare under `set -u` they end the whole run with "unbound variable" — no
+    # summary line, no MX-PUBLICATION verdict, exit 1 where the contract says 3.
+    # A precondition the operator can supply is a BLOCK, so it is printed as one.
+    local kc_missing=""
+    [ -n "${KEYCLOAK_ADMIN:-}" ]          || kc_missing="KEYCLOAK_ADMIN"
+    [ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ] || kc_missing="${kc_missing:+${kc_missing} and }KEYCLOAK_ADMIN_PASSWORD"
+    if [ -n "$kc_missing" ]; then
+        printf 'BLOCKED: %s not set. kcadm has no credential, and these are keys of the\n' "$kc_missing"
+        printf 'state project env file, not of mail.env, so the mail bring-up cannot read them.\n'
+        printf 'Supply them for this one call:\n'
+        printf '  KEYCLOAK_ADMIN=<user> KEYCLOAK_ADMIN_PASSWORD=<password> \\\n'
+        printf '    gremion-mail-bringup --assert 6b --results-file <file>\n'
+        return 3
+    fi
     need_cmd docker
     local kc="${STACK}-state-keycloak" uid
     docker inspect "$kc" >/dev/null 2>&1 \
@@ -638,8 +695,13 @@ main() {
     DNS_CHECK="$(resolve_dns_check)"
     if [ "$RENDER_ONLY" -eq 1 ]; then
         render_config
-        [ -n "$REQUESTED" ] || exit "$GREMION_EXIT_OK"
+        # The render is what the daemon will be handed; checking the realised
+        # binds here is what makes the §A guard unskippable in the normal flow.
+        check_port_binds
+    elif [ "$CHECK_BINDS" -eq 1 ]; then
+        check_port_binds
     fi
+    [ -n "$REQUESTED" ] || exit "$GREMION_EXIT_OK"
     run_requested
 }
 

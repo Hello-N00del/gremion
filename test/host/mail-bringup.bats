@@ -16,6 +16,24 @@ MAIL_COMPOSE="${PROJECT_ROOT}/infra/host/mail/docker-compose.yml"
 MAIL_CONFIG_TMPL="${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
 MAIL_ENV_TMPL="${PROJECT_ROOT}/infra/host/templates/env/mail.env.tmpl"
 
+# The realised port list `docker compose --env-file … config --format json`
+# prints for the mail project when every bind address is the one §A allows:
+# IP-B on both families, plus the management port on loopback.
+COMPLIANT_PORTS_JSON='[{"host_ip":"203.0.113.25","target":25,"published":"25","protocol":"tcp"},{"host_ip":"2001:db8::25","target":25,"published":"25","protocol":"tcp"},{"host_ip":"127.0.0.1","target":8080,"published":"8086","protocol":"tcp"}]'
+
+# shim_compose_ports <json-array> — a docker whose `compose … config` prints a
+# realised mail config with exactly those published ports. Every other docker
+# call is the recording no-op of test_helper/host.bash.
+shim_compose_ports() {
+    shim docker '
+case " $* " in
+  *" config "*)
+      printf "%s\n" '"'"'{"services":{"stalwart":{"ports":'"$1"'}}}'"'"'
+      exit 0 ;;
+esac
+exit 0'
+}
+
 # Documentation-safe example values only: no host literal may enter the kernel
 # tree (test/host/no-host-literals.bats, Task 14).
 write_mail_env() {
@@ -58,6 +76,10 @@ EOF
 setup() {
     setup_host_root
     write_mail_env
+    # --render-config now ends in the executable bind check (--check-binds), so
+    # every render path needs a docker that can answer `compose … config`. The
+    # default fixture is the compliant one; the guard's own tests replace it.
+    shim_compose_ports "$COMPLIANT_PORTS_JSON"
 }
 
 teardown() {
@@ -678,6 +700,7 @@ case "$method" in
     n=$(printf "%s" "$body" | sed -n "s/.*\"name\":\"\([^\"]*\)\".*/\1/p")
     t=$(printf "%s" "$body" | sed -n "s/.*\"type\":\"\([^\"]*\)\".*/\1/p")
     e=$(printf "%s" "$body" | sed -n "s/.*\"emails\":\[\"\([^\"]*\)\".*/\1/p")
+    ro=$(printf "%s" "$body" | jq -c ".roles // []")
     if [ "$t" = domain ]; then
       printf "{\"data\":{\"name\":\"%s\",\"type\":\"domain\"}}" "$n" > "$API/$n.json"
       printf "{\"data\":1}" > "$out"; exit 0
@@ -685,9 +708,9 @@ case "$method" in
     dom="${e#*@}"
     if [ ! -f "$API/$dom.json" ]; then notfound "$dom"; fi
     if [ "$(cat "$API/supports_networks")" = yes ]; then
-      printf "{\"data\":{\"name\":\"%s\",\"emails\":[\"%s\"],\"secrets\":[],\"allowedNetworks\":[]}}" "$n" "$e" > "$API/$n.json"
+      printf "{\"data\":{\"name\":\"%s\",\"emails\":[\"%s\"],\"roles\":%s,\"secrets\":[],\"allowedNetworks\":[]}}" "$n" "$e" "$ro" > "$API/$n.json"
     else
-      printf "{\"data\":{\"name\":\"%s\",\"emails\":[\"%s\"],\"secrets\":[]}}" "$n" "$e" > "$API/$n.json"
+      printf "{\"data\":{\"name\":\"%s\",\"emails\":[\"%s\"],\"roles\":%s,\"secrets\":[]}}" "$n" "$e" "$ro" > "$API/$n.json"
     fi
     printf "{\"data\":2}" > "$out" ;;
   PATCH)
@@ -721,8 +744,8 @@ exit 0'
     shim_stalwart_api yes
     run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    [ -f "${GREMION_ROOT}/api/roles.json" ]
-    [ -f "${GREMION_ROOT}/api/platform.json" ]
+    [ -f "${GREMION_ROOT}/api/roles@example.org.json" ]
+    [ -f "${GREMION_ROOT}/api/platform@example.org.json" ]
 }
 
 @test "provision-roles.sh creates all thirteen §I role addresses" {
@@ -732,7 +755,7 @@ exit 0'
     local r
     for r in security abuse postmaster hostmaster hello signups no-reply \
              notifications newsletter bounces dmarc-reports tls-reports datenschutz; do
-        run jq -e --arg a "${r}@example.org" '.data.emails | index($a)' "${GREMION_ROOT}/api/roles.json"
+        run jq -e --arg a "${r}@example.org" '.data.emails | index($a)' "${GREMION_ROOT}/api/roles@example.org.json"
         [ "$status" -eq 0 ] || { echo "missing alias ${r}@example.org"; return 1; }
     done
     run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
@@ -744,10 +767,10 @@ exit 0'
     run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
     [ "$status" -eq 0 ]
     local before after
-    before="$(jq -c '.data.emails' "${GREMION_ROOT}/api/roles.json")"
+    before="$(jq -c '.data.emails' "${GREMION_ROOT}/api/roles@example.org.json")"
     run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
     [ "$status" -eq 0 ]
-    after="$(jq -c '.data.emails' "${GREMION_ROOT}/api/roles.json")"
+    after="$(jq -c '.data.emails' "${GREMION_ROOT}/api/roles@example.org.json")"
     [ "$before" = "$after" ]
     [[ "$output" == *"already present"* ]]
 }
@@ -755,7 +778,7 @@ exit 0'
 @test "provision-roles.sh sets the platform app password" {
     shim_stalwart_api yes
     run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
-    run jq -e '.data.secrets | map(select(startswith("$app$"))) | length == 1' "${GREMION_ROOT}/api/platform.json"
+    run jq -e '.data.secrets | map(select(startswith("$app$"))) | length == 1' "${GREMION_ROOT}/api/platform@example.org.json"
     [ "$status" -eq 0 ]
 }
 
@@ -763,9 +786,9 @@ exit 0'
     shim_stalwart_api yes
     run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
     [ "$status" -eq 0 ]
-    run jq -e '.data.allowedNetworks | index("10.90.2.0/24")' "${GREMION_ROOT}/api/platform.json"
+    run jq -e '.data.allowedNetworks | index("10.90.2.0/24")' "${GREMION_ROOT}/api/platform@example.org.json"
     [ "$status" -eq 0 ]
-    run jq -e '.data.allowedNetworks | index("10.90.3.0/24")' "${GREMION_ROOT}/api/platform.json"
+    run jq -e '.data.allowedNetworks | index("10.90.3.0/24")' "${GREMION_ROOT}/api/platform@example.org.json"
     [ "$status" -eq 0 ]
 }
 
@@ -782,4 +805,143 @@ exit 0'
     run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env" --allow-unrestricted
     [ "$status" -eq 0 ]
     [[ "$output" == *"source-restriction=residual"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# What SMTP AUTH actually needs from a provisioned principal
+# ---------------------------------------------------------------------------
+# Observed against the pinned build (v0.15.5-alpine) and confirmed in its own
+# source: the login name is resolved through NameToId (backend/internal
+# lookup.rs), so a principal must be NAMED by the address its clients use; and
+# a principal with no role has no permission to authenticate at all, so AUTH
+# succeeds and the next line is 550 5.7.1. Round 1 shipped bare-name principals
+# with no role and read the resulting 535 as a secret-format problem.
+# These tests pin all three fields, the secret representation included: a later
+# "fix" that rewrites the secret would otherwise look harmless.
+
+@test "provision-roles.sh names every mail principal by its full address" {
+    shim_stalwart_api yes
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local p
+    for p in platform roles; do
+        [ -f "${GREMION_ROOT}/api/${p}@example.org.json" ] \
+            || { echo "no principal named ${p}@example.org"; return 1; }
+        run jq -e --arg n "${p}@example.org" '.data.name == $n' \
+            "${GREMION_ROOT}/api/${p}@example.org.json"
+        [ "$status" -eq 0 ] \
+            || { echo "${p} is not NAMED by its address; SMTP AUTH cannot reach it"; return 1; }
+    done
+    [ ! -f "${GREMION_ROOT}/api/platform.json" ] \
+        || { echo "a bare-name principal was created as well"; return 1; }
+}
+
+@test "provision-roles.sh grants every mail principal the login role" {
+    shim_stalwart_api yes
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local p
+    for p in platform roles; do
+        run jq -e '(.data.roles // []) | index("user")' \
+            "${GREMION_ROOT}/api/${p}@example.org.json"
+        [ "$status" -eq 0 ] \
+            || { echo "${p}@example.org has no login role: AUTH ends in 550 5.7.1"; return 1; }
+    done
+}
+
+@test "provision-roles.sh converges a principal that predates the login role" {
+    # A host provisioned before this fix already has the principals, without a
+    # role. A re-run must ADD the role, not skip the principal as "present".
+    shim_stalwart_api yes
+    mkdir -p "${GREMION_ROOT}/api"
+    printf '{"data":{"name":"example.org","type":"domain"}}' \
+        > "${GREMION_ROOT}/api/example.org.json"
+    printf '{"data":{"name":"platform@example.org","emails":["platform@example.org"],"roles":[],"secrets":[],"allowedNetworks":[]}}' \
+        > "${GREMION_ROOT}/api/platform@example.org.json"
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run jq -e '(.data.roles // []) | index("user")' \
+        "${GREMION_ROOT}/api/platform@example.org.json"
+    [ "$status" -eq 0 ] \
+        || { echo "the pre-existing principal never got the login role"; return 1; }
+}
+
+@test "provision-roles.sh writes each app password in the accepted representation" {
+    shim_stalwart_api yes
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run jq -e --arg s '$app$gremion-platform$unit-test-platform-password' \
+        '(.data.secrets // []) | index($s)' "${GREMION_ROOT}/api/platform@example.org.json"
+    [ "$status" -eq 0 ] \
+        || { echo "the platform secret is not the representation verify_secret accepts"; return 1; }
+    run jq -e --arg s '$app$gremion-roles-imap$unit-test-roles-password' \
+        '(.data.secrets // []) | index($s)' "${GREMION_ROOT}/api/roles@example.org.json"
+    [ "$status" -eq 0 ] \
+        || { echo "the roles secret is not the representation verify_secret accepts"; return 1; }
+}
+
+# ---------------------------------------------------------------------------
+# --check-binds — the anti-0.0.0.0 guard as an executable step
+# ---------------------------------------------------------------------------
+# The compose file's x-required-env block only proves a bind address is not
+# EMPTY, and it is an extension field: a compose release that stopped
+# interpolating unknown x- keys would retire that guard in silence. This step
+# asserts the post-condition on the document the daemon is actually handed —
+# the realised `docker compose config` — so nothing rests on compose's
+# extension-field semantics alone.
+
+@test "--check-binds accepts a realised config bound to IP-B and loopback only" {
+    shim_compose_ports "$COMPLIANT_PORTS_JSON"
+    run "$BRINGUP" --check-binds
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"PORT-BINDS: 3 published port(s)"* ]]
+}
+
+@test "--check-binds refuses a realised config with a port on 0.0.0.0" {
+    shim_compose_ports '[{"host_ip":"203.0.113.25","target":25,"published":"25"},{"host_ip":"0.0.0.0","target":587,"published":"587"}]'
+    run "$BRINGUP" --check-binds
+    [ "$status" -eq 1 ] || { echo "status=${status}"; echo "$output"; return 1; }
+    [[ "$output" == *"0.0.0.0:587"* ]] || { echo "$output"; return 1; }
+}
+
+@test "--check-binds refuses a realised port that names no bind address" {
+    # An omitted host_ip is what docker publishes on every interface.
+    shim_compose_ports '[{"target":587,"published":"587"}]'
+    run "$BRINGUP" --check-binds
+    [ "$status" -eq 1 ] || { echo "status=${status}"; echo "$output"; return 1; }
+}
+
+@test "--check-binds refuses a realised config that publishes nothing" {
+    # A guard that passes on an empty list passes on a config it never read.
+    shim_compose_ports '[]'
+    run "$BRINGUP" --check-binds
+    [ "$status" -eq 1 ] || { echo "status=${status}"; echo "$output"; return 1; }
+    [[ "$output" == *"publishes no port at all"* ]]
+}
+
+@test "--render-config ends in the bind check, so the guard cannot be skipped" {
+    shim_compose_ports '[{"host_ip":"0.0.0.0","target":25,"published":"25"}]'
+    run "$BRINGUP" --render-config
+    [ "$status" -eq 1 ] || { echo "status=${status}"; echo "$output"; return 1; }
+    [[ "$output" == *"0.0.0.0:25"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# assert 6b: BLOCKED is a verdict, not an abort
+# ---------------------------------------------------------------------------
+
+@test "assert 6b is BLOCKED, not aborted, when mail.env has no Keycloak admin" {
+    # KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD are keys of the state project's
+    # env file, never of mail.env. Dereferenced bare under `set -u` they end the
+    # whole run with "unbound variable": no summary line, and the wrong code.
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
+    printf '{"smtpServer":{"host":"mail.example.org"}}\n' \
+        > "${GREMION_ROOT}/current/docker/keycloak/realm-platform.json"
+    run "$BRINGUP" --assert 6b
+    [ "$status" -eq 3 ] || { echo "status=${status}"; echo "$output"; return 1; }
+    [[ "$output" != *"unbound variable"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"BLOCKED:"* ]]
+    [[ "$output" == *"KEYCLOAK_ADMIN"* ]]
+    [[ "$output" == *"6b=BLOCKED"* ]]
 }

@@ -19,10 +19,28 @@
 # against a running Stalwart in Task 8's integration step; the unit shim in
 # test/host/mail-bringup.bats models the same contract.
 #
-# APP-PASSWORD FORMAT: `$app$<app-name>$<password>` is the form written into
-# the principal's `secrets` array. The API stores it verbatim (observed), but
-# SMTP AUTH accepted none of the representations tried on the pinned build —
-# see spike S4 row 11. Do not change this without redoing that observation.
+# WHAT SMTP AUTH ACTUALLY NEEDS (round 2; spike S4 rows 12-14). Two principal
+# FIELDS, not a different secret format:
+#
+#   1. THE PRINCIPAL'S NAME IS THE LOGIN. The internal directory resolves an
+#      SMTP/IMAP login through NameToId — crates/directory backend/internal
+#      lookup.rs, QueryBy::Credentials -> get_principal_id(username) — and never
+#      through the `emails` array. A principal NAMED `platform` that merely
+#      CARRIES platform@<domain> in emails answers 535 5.7.8 to that address.
+#      So every principal here is NAMED by its full address.
+#
+#   2. A PRINCIPAL WITH NO ROLE HAS NO PERMISSIONS. Created without `roles`, the
+#      credential authenticates and the very next line is
+#      `550 5.7.1 Your account is not authorized to use this service`
+#      (security.unauthorized, details "authenticate"). MAIL_LOGIN_ROLE is what
+#      grants it.
+#
+# The `$app$<app-name>$<password>` representation was correct all along:
+# verify_secret strips `$app$<name>$` and compares the remainder, plaintext
+# included (crates/directory core/secret.rs). Round 1 read the 535 as a
+# secret-format problem; it was a principal-shape problem. Both observations are
+# from the pinned build v0.15.5-alpine and were re-proven end to end (235 on 587
+# STARTTLS and on 465 implicit TLS, 535 on a wrong password).
 #
 # EXIT CODES: 0 converged · 1 an API call or post-condition failed ·
 #             2 usage/precondition · 3 blocked (no per-principal source
@@ -37,6 +55,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLE_ALIASES=(security abuse postmaster hostmaster hello signups no-reply
               notifications newsletter bounces dmarc-reports tls-reports
               datenschutz)
+
+# Stalwart's built-in role carrying the authenticate/send/receive permissions.
+# A principal without it authenticates and is then refused with 550 5.7.1.
+MAIL_LOGIN_ROLE="user"
 
 ALLOW_UNRESTRICTED=0
 ENV_FILE=""
@@ -109,12 +131,34 @@ ensure_principal() {   # <name> <type> <primary-address>
     api_absent || die "GET /api/principal/${name} failed: $(api_error)" "$GREMION_EXIT_ASSERT"
     api POST "/api/principal" \
         "$(jq -nc --arg n "$name" --arg t "$type" --arg e "$email" \
-               --argjson q "$MAIL_ACCOUNT_QUOTA" \
-               '{type:$t, name:$n, emails:[$e], quota:$q}')"
+               --arg r "$MAIL_LOGIN_ROLE" --argjson q "$MAIL_ACCOUNT_QUOTA" \
+               '{type:$t, name:$n, emails:[$e], roles:[$r], quota:$q}')"
     api_ok || die "creating principal ${name} failed: $(api_error)" "$GREMION_EXIT_ASSERT"
     api GET "/api/principal/${name}"
     api_ok || die "principal ${name} absent after create: $(api_error)" "$GREMION_EXIT_ASSERT"
     ok "principal ${name} created with ${email}, quota ${MAIL_ACCOUNT_QUOTA}"
+}
+
+# A principal that predates this fix — or one made by any other route — has no
+# role and so no permission to authenticate. Converging it is a step of its own
+# rather than part of creation, so a round-1 host is repaired by a re-run
+# instead of by a hand-written PATCH.
+ensure_login_role() {   # <principal>
+    local p="$1"
+    api GET "/api/principal/${p}"
+    api_ok || die "principal ${p} missing: $(api_error)" "$GREMION_EXIT_ASSERT"
+    if jq -e --arg r "$MAIL_LOGIN_ROLE" '(.data.roles // []) | index($r)' "$API_OUT" >/dev/null 2>&1; then
+        ok "${p}: login role ${MAIL_LOGIN_ROLE} already granted"
+        return 0
+    fi
+    api PATCH "/api/principal/${p}" \
+        "$(jq -nc --arg r "$MAIL_LOGIN_ROLE" '[{action:"addItem", field:"roles", value:$r}]')"
+    api_ok || die "granting ${MAIL_LOGIN_ROLE} to ${p} failed: $(api_error)" "$GREMION_EXIT_ASSERT"
+    api GET "/api/principal/${p}"
+    jq -e --arg r "$MAIL_LOGIN_ROLE" '(.data.roles // []) | index($r)' "$API_OUT" >/dev/null 2>&1 \
+        || die "${p} still has no ${MAIL_LOGIN_ROLE} role after PATCH; SMTP AUTH would answer 550" \
+               "$GREMION_EXIT_ASSERT"
+    ok "${p}: login role ${MAIL_LOGIN_ROLE} granted"
 }
 
 ensure_alias() {   # <principal> <address>
@@ -137,7 +181,7 @@ ensure_alias() {   # <principal> <address>
 ensure_secret() {   # <principal> <app-name> <password>
     local p="$1" app="$2" pw="$3" secret
     [ -n "$pw" ] || die "the password for ${p}/${app} is empty in the mail env file" "$GREMION_EXIT_USAGE"
-    # See the APP-PASSWORD FORMAT note in the header (S4 row 11).
+    # The representation verify_secret accepts; see item 3 of the header note.
     secret="\$app\$${app}\$${pw}"
     api GET "/api/principal/${p}"
     api_ok || die "principal ${p} missing: $(api_error)" "$GREMION_EXIT_ASSERT"
@@ -157,10 +201,10 @@ ensure_secret() {   # <principal> <app-name> <password>
 # §I wants the platform app password usable only from the app-tier subnets.
 # Whether the pinned build can express that is spike S4; if it cannot, this is
 # a BLOCK, and accepting it is an explicit operator act, recorded as a residual.
-ensure_source_restriction() {
-    local net
-    api GET "/api/principal/platform"
-    api_ok || die "principal platform missing: $(api_error)" "$GREMION_EXIT_ASSERT"
+ensure_source_restriction() {   # <principal>
+    local p="$1" net
+    api GET "/api/principal/${p}"
+    api_ok || die "principal ${p} missing: $(api_error)" "$GREMION_EXIT_ASSERT"
     if ! jq -e '.data | has("allowedNetworks")' "$API_OUT" >/dev/null 2>&1; then
         if [ "$ALLOW_UNRESTRICTED" -eq 1 ]; then
             bad "the platform app password is NOT source-restricted (accepted residual, S4)"
@@ -175,16 +219,16 @@ ensure_source_restriction() {
     fi
     for net in "$APP_BLUE_V4_SUBNET" "$APP_GREEN_V4_SUBNET"; do
         if jq -e --arg n "$net" '(.data.allowedNetworks // []) | index($n)' "$API_OUT" >/dev/null 2>&1; then
-            ok "platform: ${net} already allowed"
+            ok "${p}: ${net} already allowed"
             continue
         fi
-        api PATCH "/api/principal/platform" \
+        api PATCH "/api/principal/${p}" \
             "$(jq -nc --arg n "$net" '[{action:"addItem", field:"allowedNetworks", value:$n}]')"
-        api_ok || die "restricting platform to ${net} failed: $(api_error)" "$GREMION_EXIT_ASSERT"
-        api GET "/api/principal/platform"
+        api_ok || die "restricting ${p} to ${net} failed: $(api_error)" "$GREMION_EXIT_ASSERT"
+        api GET "/api/principal/${p}"
         jq -e --arg n "$net" '(.data.allowedNetworks // []) | index($n)' "$API_OUT" >/dev/null 2>&1 \
-            || die "platform is not restricted to ${net} after PATCH" "$GREMION_EXIT_ASSERT"
-        ok "platform restricted to ${net}"
+            || die "${p} is not restricted to ${net} after PATCH" "$GREMION_EXIT_ASSERT"
+        ok "${p} restricted to ${net}"
     done
     SOURCE_RESTRICTION="enforced"
 }
@@ -202,17 +246,23 @@ main() {
 
     ensure_domain "$PLATFORM_DOMAIN"
 
-    ensure_principal roles    individual "roles@${PLATFORM_DOMAIN}"
-    ensure_principal platform individual "platform@${PLATFORM_DOMAIN}"
+    # Both principals are NAMED by their address: the internal directory
+    # authenticates the login NAME, not the emails array (header, item 1).
+    local roles_p="roles@${PLATFORM_DOMAIN}" platform_p="platform@${PLATFORM_DOMAIN}"
+
+    ensure_principal "$roles_p"    individual "$roles_p"
+    ensure_principal "$platform_p" individual "$platform_p"
+    ensure_login_role "$roles_p"
+    ensure_login_role "$platform_p"
 
     local r
     for r in "${ROLE_ALIASES[@]}"; do
-        ensure_alias roles "${r}@${PLATFORM_DOMAIN}"
+        ensure_alias "$roles_p" "${r}@${PLATFORM_DOMAIN}"
     done
 
-    ensure_secret platform gremion-platform "$PLATFORM_SMTP_PASSWORD"
-    ensure_secret roles    gremion-roles-imap "$ROLES_IMAP_PASSWORD"
-    ensure_source_restriction
+    ensure_secret "$platform_p" gremion-platform   "$PLATFORM_SMTP_PASSWORD"
+    ensure_secret "$roles_p"    gremion-roles-imap "$ROLES_IMAP_PASSWORD"
+    ensure_source_restriction "$platform_p"
 
     printf 'MAIL-ROLES: aliases=%d platform-app-password=ok source-restriction=%s\n' \
         "${#ROLE_ALIASES[@]}" "$SOURCE_RESTRICTION"
