@@ -78,6 +78,15 @@ cd "$(dirname "$0")/.."
   echo "kernel-backup RCLONE_BUCKET=[${RCLONE_BUCKET}]"
   echo "kernel-backup COMPOSE_FILE=${COMPOSE_FILE}"
 } >>"$SHIM_LOG"
+# The real script dumps with `docker compose exec -T postgres pg_dump …`
+# (kernel scripts/backup.sh:141). That line is the FACT gremion-backup reads to
+# learn which compose service the kernel zone belongs to, so the fixture carries
+# it verbatim. Defined and never called: this stub writes its dumps directly,
+# without an engine.
+kernel_dump_target() {
+    : "the compose service the kernel zone belongs to"
+    docker compose exec -T postgres pg_dump -U "${POSTGRES_USER}" "$1"
+}
 mkdir -p "${BACKUP_DIR}/current"
 for db in keycloak gremion control; do
     printf 'dump-of-%s' "$db" | gzip >"${BACKUP_DIR}/current/${db}.sql.gz"
@@ -85,6 +94,24 @@ done
 STUB
     chmod +x "${RELEASE_DIR}/scripts/backup.sh"
     export GREMION_RELEASE_DIR="$RELEASE_DIR"
+}
+
+# TASK 9, review round 5. The two fixture mutations the kernel-zone rule is
+# proven against. Each asserts its own post-condition on the fixture, because a
+# sed that matched nothing would otherwise turn the test that uses it into a
+# test of the unmodified fixture.
+rename_kernel_stub_exec_service() {   # $1 = service the stub's dump command names
+    local f="${RELEASE_DIR}/scripts/backup.sh"
+    sed -i "s|^\(    docker compose exec -T \)postgres |\1${1} |" "$f"
+    grep -qE "^    docker compose exec -T ${1} " "$f"
+}
+
+strip_kernel_stub_exec_line() {
+    local f="${RELEASE_DIR}/scripts/backup.sh"
+    sed -i '/docker compose exec -T/d' "$f"
+    run grep -qF 'compose exec -T' "$f"
+    [ "$status" -ne 0 ]
+    bash -n "$f"
 }
 
 # TASK 9 DEVIATION FROM THE BRIEF, deliberate: docker, restic, rclone and curl
@@ -901,8 +928,19 @@ exit 0'
 @test "neither unit carries a prune" {
     # §K: no automated prune, ever. restic's own forget --prune inside
     # gremion-backup is scoped to class=daily and is not a docker prune.
-    ! grep -qE 'docker (system|volume|image) prune' "${UNIT_DIR}/gremion-backup.service"
-    ! grep -qE 'docker (system|volume|image) prune' "${UNIT_DIR}/gremion-backup.timer"
+    #
+    # NOT `! grep -q …`: a !-negated command is exempt from the ERR trap bats
+    # detects a failure with, so only the LAST statement of a test body can ever
+    # fail that way — the .service check was mid-body and asserted nothing at
+    # all, which is precisely the file §K's rule is about. `run` + an explicit
+    # status check makes each file's check fail on its own. The -f test comes
+    # first because a negated grep is vacuously true on a missing file.
+    local u
+    for u in "${UNIT_DIR}/gremion-backup.service" "${UNIT_DIR}/gremion-backup.timer"; do
+        [ -f "$u" ]
+        run grep -qE 'docker (system|volume|image) prune' "$u"
+        [ "$status" -ne 0 ]
+    done
 }
 
 # ---------------------------------------------------------------------------
@@ -1312,4 +1350,127 @@ exit 0'
     run "$BACKUP" --class daily --label odd-service
     [ "$status" -eq 2 ]
     [[ "$output" == *"invalid Postgres service name (contains '__'): pg__odd"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Review round 5: the KERNEL ZONE belongs to the kernel's own Postgres service
+# ---------------------------------------------------------------------------
+# Round 4 keyed the bare-name (kernel) zone on "whichever service happens to be
+# FIRST in BACKUP_POSTGRES_SERVICES" — a purely positional, operator-controlled
+# value that was never cross-checked against the kernel script's own exec target
+# (`docker compose exec -T postgres`, kernel scripts/backup.sh:141). On a host
+# that lists a SECOND, independent gremion-family Postgres server first, that
+# server's own control/gremion/keycloak databases — the fixed database-name
+# convention of every gremion deployment — resolved to the BARE kernel names,
+# found the real kernel server's dumps already sitting there, and were never
+# dumped at all. Every staged path stayed distinct, so the round-4 collision
+# guard held, `every enumerated database has a non-empty dump (N)` printed, and
+# the run exited 0 with a whole server's databases silently replaced by an
+# unrelated server's bytes.
+# ---------------------------------------------------------------------------
+
+# Two Postgres services in the WRONG order: pg2 (a second, independent
+# gremion-family stack, with the same fixed database names every gremion
+# deployment has) listed FIRST, and `postgres` — the service the kernel's own
+# scripts/backup.sh execs — listed second. Each server's pg_dump prints a marker
+# naming the server AND the database, so the staged bytes prove which server
+# each artefact came from.
+shim_docker_kernel_listed_second() {
+    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+case "$1 $2" in
+  "volume ls")
+     case "$*" in
+       *"project=staging-state"*) printf "staging-state_pgdata\nstaging-state_nats\n" ;;
+       *"project=staging-mail"*)  printf "staging-mail_spool\n" ;;
+     esac ;;
+  "volume inspect") exit 0 ;;
+  "image inspect") echo "alpine@sha256:0000000000000000000000000000000000000000000000000000000000000001" ;;
+  "compose exec"|"compose "*)
+     svc=""; prev=""; last=""
+     for a in "$@"; do
+       if [ "$prev" = "-T" ]; then svc="$a"; fi
+       prev="$a"; last="$a"
+     done
+     case "$*" in
+       *count*)
+          if [ "$svc" = pg2 ]; then printf "3\n"; else printf "4\n"; fi ;;
+       *pg_database*)
+          printf "control\ngremion\nkeycloak\n"
+          if [ "$svc" = postgres ]; then printf "t_pilot\n"; fi ;;
+       *pg_dump*)
+          printf "PGDUMP-FROM-%s-%s" "$svc" "$last" ;;
+     esac ;;
+  pull*) exit 0 ;;
+  run*)
+     prev=""; tarfile=""
+     for a in "$@"; do [ "$prev" = "-cf" ] && tarfile="$a"; prev="$a"; done
+     mkdir -p "$out"; printf "tar-stub" > "${out}/${tarfile#/out/}" ;;
+esac
+exit 0'
+}
+
+@test "the kernel zone belongs to the kernel's own Postgres, not to the service listed first" {
+    shim_baseline; shim_docker_kernel_listed_second
+    shim_rsync_honouring_excludes; shim_restic_ok
+    # The kernel's Postgres listed SECOND — the misordering round 4 dismissed as
+    # merely wasteful. pg2 carries the same three database names the kernel
+    # script writes, which is what turns it into data loss.
+    export BACKUP_POSTGRES_SERVICES='pg2 postgres'
+    run "$BACKUP" --class daily --label kernel-second
+    [ "$status" -eq 0 ]
+    # pg2's own control/gremion/keycloak were really dumped FROM pg2 …
+    assert_recorded docker "exec -T pg2 pg_dump -U postgres control"
+    assert_recorded docker "exec -T pg2 pg_dump -U postgres gremion"
+    assert_recorded docker "exec -T pg2 pg_dump -U postgres keycloak"
+    # … and the staged bytes are pg2's, read back from the filesystem.
+    local d="${GREMION_ROOT}/backups/current"
+    [ "$(gzip -dc "${d}/pg2__control.sql.gz")"  = "PGDUMP-FROM-pg2-control" ]
+    [ "$(gzip -dc "${d}/pg2__gremion.sql.gz")"  = "PGDUMP-FROM-pg2-gremion" ]
+    [ "$(gzip -dc "${d}/pg2__keycloak.sql.gz")" = "PGDUMP-FROM-pg2-keycloak" ]
+    # The bare kernel zone still holds the KERNEL server's dumps, untouched and
+    # not re-dumped, whatever order the operator wrote.
+    [ "$(gzip -dc "${d}/control.sql.gz")" = "dump-of-control" ]
+    refute_recorded docker "exec -T postgres pg_dump -U postgres control"
+    [ -s "${d}/postgres__t_pilot.sql.gz" ]
+    [[ "$output" == *"every enumerated database has a non-empty dump (7)"* ]]
+    [[ "$output" == *"databases=7"* ]]
+}
+
+@test "a kernel script whose Postgres service cannot be read gives up the kernel zone" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    # The one fact the zone rests on is gone. Claiming the zone for a guessed
+    # service is exactly the aliasing that loses a database, so the run keeps
+    # every enumerated database under its own pair name and says so.
+    strip_kernel_stub_exec_line
+    run "$BACKUP" --class daily --label no-exec-line
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"BACKUP-WARN: cannot read the Postgres service"* ]]
+    local d="${GREMION_ROOT}/backups/current"
+    # Every enumerated database has its OWN artefact — including the three whose
+    # names collide with the kernel script's.
+    [ -s "${d}/postgres__keycloak.sql.gz" ]
+    [ -s "${d}/postgres__control.sql.gz" ]
+    assert_recorded docker "pg_dump -U postgres keycloak"
+    # The kernel script's own dumps are still staged and still backed up.
+    [ -s "${d}/keycloak.sql.gz" ]
+    [[ "$output" == *"every enumerated database has a non-empty dump (5)"* ]]
+}
+
+@test "the kernel zone follows the kernel script's exec target when it is renamed" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    # Spec B may rename the kernel's Postgres service. The zone follows the
+    # script — observed, not assumed — and the departure from the contract this
+    # program was written against is reported rather than swallowed.
+    rename_kernel_stub_exec_service pgkernel
+    export BACKUP_POSTGRES_SERVICES='pgkernel'
+    run "$BACKUP" --class daily --label renamed-kernel-pg
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not the expected 'postgres'"* ]]
+    local d="${GREMION_ROOT}/backups/current"
+    refute_recorded docker "pg_dump -U postgres keycloak"
+    [ ! -e "${d}/pgkernel__keycloak.sql.gz" ]
+    [ -s "${d}/pgkernel__t_pilot.sql.gz" ]
+    [[ "$output" == *"every enumerated database has a non-empty dump (5)"* ]]
 }

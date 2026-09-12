@@ -21,7 +21,13 @@
 #                                 that script's contract, not this program's, so
 #                                 they are left where it puts them. Read back
 #                                 from the staged tree after it runs — never a
-#                                 hard-coded list.
+#                                 hard-coded list. The zone belongs to the ONE
+#                                 compose service that script execs (it names it:
+#                                 `docker compose exec -T postgres`), read out of
+#                                 the script itself — never "whichever service
+#                                 BACKUP_POSTGRES_SERVICES happens to list
+#                                 first", which is an operator-ordered value and
+#                                 not a fact about the kernel.
 #   <service>__<database>.sql.gz  every dump THIS program makes: one artefact per
 #                                 (compose service, database) PAIR. Split at the
 #                                 FIRST '__' — what precedes it is the compose
@@ -52,6 +58,12 @@ BACKUP_FREE_FACTOR_DEN=2
 # exact command forgets one. Task 13 documents the same command.
 BACKUP_SNAPSHOT_CLASS_WARN_DEFAULT=20
 LABEL_RE='^[A-Za-z0-9._-]{1,64}$'
+# The compose service the kernel's own scripts/backup.sh dumps from. It execs it
+# BY NAME (`docker compose exec -T postgres`, kernel scripts/backup.sh:141), so
+# this is a fixed fact of the release tree — NOT something an operator can
+# change by reordering BACKUP_POSTGRES_SERVICES. resolve_kernel_pg_service reads
+# the name out of the script that actually ran and compares it with this value.
+KERNEL_PG_SERVICE_CONTRACT="postgres"
 
 # Report fields. Initialised before the EXIT trap is installed so a failure
 # in any phase still produces a complete report.
@@ -66,8 +78,8 @@ DATABASES=""
 VOLUMES=""
 SNAP_BEFORE=""
 # The database names scripts/backup.sh actually wrote, observed from the staged
-# tree, and the service its dumps belong to (the first configured one). Together
-# they decide which of the two naming zones a (service, database) pair lands in.
+# tree, and the compose service those dumps came FROM. Together they decide
+# which of the two naming zones a (service, database) pair lands in.
 KERNEL_DUMPS=""
 KERNEL_PG_SERVICE=""
 
@@ -251,6 +263,9 @@ run_kernel_dumps() {
     cp "$src" "${driver}/scripts/backup.sh"
     cmp -s "$src" "${driver}/scripts/backup.sh" \
         || die "kernel dump script copy differs from ${src}" 1
+    # Read from the copy that is about to run, so the zone is attributed to the
+    # service THIS script execs and not to a stale assumption about it.
+    resolve_kernel_pg_service "${driver}/scripts/backup.sh"
     ( umask 077
       cat >"${driver}/.env" <<ENV
 POSTGRES_USER=${POSTGRES_USER}
@@ -268,6 +283,51 @@ ENV
     rm -rf "$scratch" "${driver}/.env"
     record_kernel_dumps
     ok "kernel dumps complete in ${DUMP_DIR}"
+}
+
+# TASK 9, review round 5: WHICH compose service the kernel zone belongs to.
+#
+# Round 4 answered "the first service in BACKUP_POSTGRES_SERVICES" — a position
+# in an operator-written list, never checked against the kernel script itself.
+# On a host that lists a SECOND, independent gremion-family Postgres server
+# first, that server's own control/gremion/keycloak databases — the fixed
+# database names every gremion deployment has — resolved to the BARE kernel
+# paths, found the real kernel server's dumps already there, and were never
+# dumped at all. Every staged path stayed distinct, so assert_dump_coverage's
+# collision guard held and the run exited 0 reporting `databases=N ok=true`
+# with a whole server's data silently replaced by another server's.
+#
+# The answer is read from the script instead: it execs its Postgres by name, on
+# one line, and that line is the only thing that decides whose dumps those bare
+# files are. Two failure directions, both deliberately safe:
+#   * the script names a service other than KERNEL_PG_SERVICE_CONTRACT — use it
+#     (the script is the authority) and say the contract moved;
+#   * the name cannot be read at all, or is ambiguous — claim NO kernel zone.
+#     Every enumerated database then gets its own <service>__<database> artefact
+#     and the kernel's own dumps ride along under their bare names: duplicated
+#     work, never a database aliased onto another server's bytes.
+kernel_pg_service_of() {   # $1 = path to a kernel dump script
+    sed -n 's/^[[:space:]]*docker compose exec -T[[:space:]]\{1,\}\([A-Za-z0-9][A-Za-z0-9_.-]*\).*/\1/p' \
+        "$1" | sort -u
+}
+
+resolve_kernel_pg_service() {   # $1 = path to the kernel dump script that runs
+    local found n
+    # Assigned first, checked after: a `die` inside $( ) runs in a subshell and
+    # cannot end the program.
+    found="$(kernel_pg_service_of "$1")" || found=""
+    n="$(printf '%s\n' "$found" | grep -c . || true)"
+    n="${n:-0}"
+    if [ "$n" -ne 1 ]; then
+        KERNEL_PG_SERVICE=""
+        bad "BACKUP-WARN: cannot read the Postgres service from ${1} (${n} candidate(s)); every enumerated database is staged under its own <service>__<database> name"
+        return 0
+    fi
+    KERNEL_PG_SERVICE="$found"
+    if [ "$KERNEL_PG_SERVICE" != "$KERNEL_PG_SERVICE_CONTRACT" ]; then
+        bad "BACKUP-WARN: kernel dump script dumps from Postgres service '${KERNEL_PG_SERVICE}', not the expected '${KERNEL_PG_SERVICE_CONTRACT}'"
+    fi
+    info "kernel dumps belong to Postgres service: ${KERNEL_PG_SERVICE}"
 }
 
 # TASK 9, review round 4: which bare-named dumps the kernel script produced,
@@ -298,11 +358,13 @@ is_kernel_dump() {   # $1 = database name
 }
 
 # The staged artefact for one (service, database) PAIR — see STAGED DUMP NAMING
-# in the header. The kernel zone is only ever the FIRST configured service's
-# dumps, and only those the kernel script really wrote: an enumerated database
-# whose kernel dump is absent or empty is dumped here like any other.
+# in the header. The kernel zone is only ever the dumps of the service the
+# kernel script itself execs (resolve_kernel_pg_service), and only those it
+# really wrote: an enumerated database whose kernel dump is absent or empty is
+# dumped here like any other. KERNEL_PG_SERVICE is empty when that service could
+# not be read, and no service name is empty, so nothing claims the zone then.
 staged_dump_path() {   # $1 = compose service, $2 = database
-    if [ "$1" = "$KERNEL_PG_SERVICE" ] && is_kernel_dump "$2"; then
+    if [ -n "$KERNEL_PG_SERVICE" ] && [ "$1" = "$KERNEL_PG_SERVICE" ] && is_kernel_dump "$2"; then
         printf '%s\n' "${DUMP_DIR}/${2}.sql.gz"
     else
         printf '%s\n' "${DUMP_DIR}/${1}__${2}.sql.gz"
@@ -386,7 +448,6 @@ dump_has_content() {   # $1 = path to a .sql.gz
 dump_remaining_databases() {
     local svc db names n_names n_count path count=0
     DATABASES=""
-    KERNEL_PG_SERVICE=""
     while read -r svc <&3; do
         [ -n "$svc" ] || continue
         # The staged name is split at the first '__' (see STAGED DUMP NAMING),
@@ -395,10 +456,6 @@ dump_remaining_databases() {
         case "$svc" in
             *__*) die "invalid Postgres service name (contains '__'): ${svc}" 2 ;;
         esac
-        # scripts/backup.sh dumps from the kernel's own Postgres, which is the
-        # first configured service; every other service's dumps are this
-        # program's own and are keyed on the pair.
-        [ -n "$KERNEL_PG_SERVICE" ] || KERNEL_PG_SERVICE="$svc"
         names="$(list_databases "$svc")" \
             || die "database enumeration failed for service ${svc}" 1
         n_names="$(printf '%s\n' "$names" | grep -c . || true)"
