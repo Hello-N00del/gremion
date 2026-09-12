@@ -913,6 +913,22 @@ stage_timers() {
         || die "gremion-backup.timer is enabled but has no next elapse"
     ok "gremion-backup.timer next elapse: ${next}"
     assert "gremion-verify.service enabled at boot" systemctl is-enabled --quiet gremion-verify.service
+
+    # Task 11: the node-exporter textfile collector. render_unit takes TWO
+    # arguments and installs <dest> itself; piping it into atomic_write would
+    # call it with ONE argument, which it refuses (exit 2) while the pipeline
+    # still returns 0 and writes an empty unit.
+    render_unit gremion-metrics.service /etc/systemd/system/gremion-metrics.service
+    render_unit gremion-metrics.timer /etc/systemd/system/gremion-metrics.timer
+    systemctl daemon-reload
+    systemctl enable --now gremion-metrics.timer
+    assert "gremion-metrics.timer is active"         systemctl is-active --quiet gremion-metrics.timer
+    # POST-CONDITION, not an exit code: the collector must actually have
+    # produced a metrics file. A timer that is "active" and writes nothing is
+    # the exact shape of a guard that lies.
+    systemctl start gremion-metrics.service
+    assert "the textfile collector produced runtime/textfile/gremion.prom"         test -s "${root}/runtime/textfile/gremion.prom"
+    assert "the collector stamped its own timestamp"         grep -q '^gremion_metrics_textfile_timestamp_seconds ' "${root}/runtime/textfile/gremion.prom"
 }
 
 # ──────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,114 @@
+# infra/host/ops/docker-compose.yml
+# Project ${STACK}-ops — the on-box half of spec A §K. Invocation, always and only:
+#   docker compose --env-file /opt/gremion/etc/env/ops.env <verb>
+# Nothing binds a wildcard address: every published port is prefixed with ${OPS_BIND_IP}
+# (loopback on every host; the operator reaches Prometheus through an SSH tunnel).
+# Data lives in bind mounts under runtime/ops so the containers can run as the
+# deploy uid without a named volume's root-owned first-run directory.
+# Every image reference is digest-pinned by infra/host/ops/pin-images.sh.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+    restart: unless-stopped
+    user: "${OPS_UID:?OPS_UID required}:${OPS_GID:?OPS_GID required}"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROM_RETENTION_TIME:?PROM_RETENTION_TIME required}"
+      - "--web.listen-address=:9090"
+    ports:
+      - "${OPS_BIND_IP:?OPS_BIND_IP required}:9090:9090"
+    volumes:
+      - "${GREMION_ROOT_DIR:?GREMION_ROOT_DIR required}/current/infra/host/ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "${GREMION_ROOT_DIR}/current/infra/host/ops/alerts.yml:/etc/prometheus/alerts.yml:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/targets:/etc/prometheus/targets:ro"
+      - "${GREMION_ROOT_DIR}/etc/secrets/ops/stalwart-api-key:/etc/prometheus/stalwart-api-key:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/prometheus-data:/prometheus"
+    networks:
+      - ops
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
+    restart: unless-stopped
+    user: "${OPS_UID}:${OPS_GID}"
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--web.listen-address=:9093"
+    ports:
+      - "${OPS_BIND_IP}:9093:9093"
+    volumes:
+      - "${GREMION_ROOT_DIR}/runtime/ops/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro"
+      - "${GREMION_ROOT_DIR}/etc/secrets/ops/smtp-password:/etc/alertmanager/smtp-password:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/alertmanager-data:/alertmanager"
+    networks:
+      - ops
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1@sha256:d00a542e409ee618a4edc67da14dd48c5da66726bbd5537ab2af9c1dfc442c8a
+    restart: unless-stopped
+    pid: host
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.textfile.directory=/textfile"
+      - "--web.listen-address=:9100"
+    volumes:
+      - "/proc:/host/proc:ro"
+      - "/sys:/host/sys:ro"
+      - "/:/rootfs:ro"
+      - "${GREMION_ROOT_DIR}/runtime/textfile:/textfile:ro"
+    networks:
+      - ops
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1@sha256:f40e65878e25c2e78ea037f73a449527a0fb994e303dc3e34cb6b187b4b91435
+    restart: unless-stopped
+    command:
+      - "--housekeeping_interval=30s"
+      - "--docker_only=true"
+      - "--store_container_labels=false"
+      - "--port=8080"
+    volumes:
+      - "/:/rootfs:ro"
+      - "/var/run:/var/run:ro"
+      - "/sys:/sys:ro"
+      - "/var/lib/docker/:/var/lib/docker:ro"
+      - "/dev/disk/:/dev/disk:ro"
+    devices:
+      - "/dev/kmsg:/dev/kmsg:r"
+    networks:
+      - ops
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.26.0@sha256:92e05d5fe0df01d3980518dc42f07b778a8997048b57392ebc7f7391ebd7bb06
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/blackbox/blackbox.yml"
+      - "--web.listen-address=:9115"
+    volumes:
+      - "${GREMION_ROOT_DIR}/current/infra/host/ops/blackbox.yml:/etc/blackbox/blackbox.yml:ro"
+    networks:
+      - ops
+
+networks:
+  ops:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: "${OPS_V4_SUBNET:?OPS_V4_SUBNET required}"
+        - subnet: "${OPS_V6_SUBNET:?OPS_V6_SUBNET required}"

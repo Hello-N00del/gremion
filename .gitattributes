@@ -54,3 +54,12 @@ infra/host/templates/** text eol=lf
 # The pattern stays a directory glob so a future file here is covered too; the
 # overlap with *.yml and *.sh sets the same value and changes nothing.
 infra/host/mail/** text eol=lf
+
+# Task 11: infra/host/ops/ carries an Alertmanager template (.yml.tmpl) and a
+# README (.md). Neither extension is matched by any rule above — measured with
+# `git check-attr eol`, both answered "unspecified" — so core.autocrlf=true
+# checks them out with CRLF on Windows, and the renderer then writes a CRLF
+# Alertmanager config that amtool rejects. The *.sh and *.yml files here are
+# already covered; the directory glob sets the same value for them and changes
+# nothing.
+infra/host/ops/** text eol=lf
