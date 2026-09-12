@@ -1,0 +1,14 @@
+# S11 fixture: the second tenant. Two tenants are the minimum for the host-pin
+# universal — the drill forges tenant-b's name against tenant-a's router — and
+# also the minimum for gremion-verify's marker-discrimination assertion.
+http:
+  routers:
+    tenant-b:
+      entryPoints: ["websecure"]
+      rule: "Host(`tenant-b.example.org`)"
+      service: "app@file"
+      priority: 10
+      middlewares:
+        - "edge-hostpin-tenant-b@docker"
+        - "edge-ratelimit@docker"
+      tls: {}

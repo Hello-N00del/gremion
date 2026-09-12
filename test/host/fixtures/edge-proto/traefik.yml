@@ -1,0 +1,46 @@
+# Static Traefik configuration for the S10/S11 prototype. NOT the production
+# configuration: no entrypoint-level redirect (§C forbids anything that can shadow
+# the ACME challenge router), and no cert resolver on any router.
+api:
+  dashboard: false
+  insecure: true      # binds the API on the `traefik` entrypoint, :8080
+
+ping: {}
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+    # The prototype's own pinned bridge subnet. Traefik must TRUST the source for
+    # the forged-header drill to be meaningful: for an untrusted source Traefik
+    # rewrites X-Forwarded-Host itself and the host-pin universal would pass
+    # vacuously.
+    forwardedHeaders:
+      trustedIPs:
+        - "127.0.0.1/32"
+        - "10.90.250.0/24"
+  internaltest:
+    address: ":8081"
+
+providers:
+  docker:
+    exposedByDefault: false
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+# Declared only so that Traefik registers the internal acme-http@internal router
+# on the `web` entrypoint. No router references this resolver, so no ACME order is
+# ever placed; the caServer is deliberately unreachable to make that impossible.
+certificatesResolvers:
+  le-http:
+    acme:
+      email: "acme@example.org"
+      storage: /tmp/acme.json
+      caServer: "https://127.0.0.1:1/directory"
+      httpChallenge:
+        entryPoint: web
+
+log:
+  level: INFO

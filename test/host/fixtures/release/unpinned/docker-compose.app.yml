@@ -1,0 +1,38 @@
+# Fixture: the colour project contract this task consumes from spec B.
+services:
+  gremion-ui:
+    environment:
+      COLOUR: ${COLOUR}
+      INTERNAL_BASE_URL: http://gremion-ui-${COLOUR}:3000
+    labels:
+      traefik.enable: "false"
+      gremion.evict: "true"
+    networks:
+      edge:
+        aliases: ["gremion-ui-${COLOUR}"]
+      state:
+        aliases: ["gremion-ui-${COLOUR}"]
+  gremion-public:
+    environment:
+      COLOUR: ${COLOUR}
+    labels:
+      traefik.enable: "false"
+    networks:
+      edge:
+        aliases: ["gremion-public-${COLOUR}"]
+      state:
+        aliases: ["gremion-public-${COLOUR}"]
+  migrate:
+    environment:
+      COLOUR: ${COLOUR}
+    labels:
+      traefik.enable: "false"
+    networks:
+      state: {}
+networks:
+  edge:
+    external: true
+    name: ${STACK}_edge
+  state:
+    external: true
+    name: ${STACK}_state

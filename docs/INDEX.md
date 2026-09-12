@@ -45,6 +45,7 @@ repositories — one per module — and carry their own docs.
 | [OPERATIONS.md](./OPERATIONS.md) | Backup/restore, monitoring & logs, maintenance, disaster recovery |
 | [deployment.md](./deployment.md) | Deploying the kernel: single host (Compose) or Kubernetes (Kustomize overlays) |
 | [ops/setup.md](./ops/setup.md) | The `scripts/setup.sh` setup runbook (secrets + governance realm + stack start) |
+| [ops/host-tooling.md](./ops/host-tooling.md) | The `/opt/gremion` host tooling: the per-project env contract, every `gremion-*` command, the restricted deploy channel and the `noop` dry-run |
 | [ops/restore-runbook.md](./ops/restore-runbook.md) | Database backup-restore runbook |
 | [runbooks/tenant-edge.md](./runbooks/tenant-edge.md) | Multi-tenancy edge: Traefik `x-forwarded-host` tenant resolution |
 | [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md) | Tenant create / provision / evict / delete (with crypto-shred) |
