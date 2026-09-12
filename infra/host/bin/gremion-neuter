@@ -1,0 +1,487 @@
+#!/usr/bin/env bash
+#
+# gremion-neuter — make a RESTORED instance harmless before anything runs in it.
+#
+# A restore carries production mail hosts and external publish tokens into a
+# non-production instance in THREE places: the env files, the per-tenant
+# config.json files (gremion-ui reads config.smtp from disk), and the control
+# registry's tenant.domain_profile.services.smtp. This program rewrites all
+# three, recreates the services that carried a live value, and then PROVES the
+# result from the running system with `docker exec <c> env`.
+#
+# Usage: gremion-neuter --stack S [--root DIR] [--release DIR] [--null-sink-host H]
+# Exit:  0 ok · 1 assertion/post-condition failed · 2 usage/precondition · 3 blocked
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+# The sink accepts SMTP and discards it. Staging-only helper, never part of any
+# production composition, so it is tag-pinned rather than digest-pinned; set
+# NULL_SINK_IMAGE to a digest reference to pin it.
+NULL_SINK_IMAGE="${NULL_SINK_IMAGE:-axllent/mailpit:v1.30.1}"
+NULL_SINK_HOST="${NULL_SINK_HOST:-null-sink}"
+NULL_SINK_PORT="${NULL_SINK_PORT:-1025}"
+# Space-separated compose SERVICE names whose image ships no `env` binary.
+NEUTER_EXEC_EXEMPT="${NEUTER_EXEC_EXEMPT:-}"
+
+NEUTER_HOST_KEYS_RE='(^|_)(SMTP_HOST|EMAIL_HOST|SMTP_SERVER)$'
+NEUTER_PORT_KEYS_RE='(^|_)(SMTP_PORT|EMAIL_PORT)$'
+NEUTER_TOKEN_KEYS_RE='^(INSTAGRAM_.+|.+_PUBLISH_TOKEN|.+_ACCESS_TOKEN|.+_WEBHOOK_URL|EMAIL_HOST_PASSWORD|SMTP_PASSWORD|PLATFORM_SMTP_PASSWORD)$'
+
+ENV_FILES_SEEN=0
+ENV_FILES_CHANGED=0
+CONFIGS_REWRITTEN=0
+ROWS_REWRITTEN=0
+CONTAINERS_CHECKED=0
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-neuter --stack S [--root DIR] [--release DIR] [--null-sink-host H]
+  --stack S           stack to neuter; must equal STACK in <root>/etc/env/state.env
+  --root DIR          instance root (default: $GREMION_ROOT, else /opt/gremion)
+  --release DIR       release tree every compose call is made FROM, because the
+                      rendered env files carry a RELATIVE COMPOSE_FILE
+                      (default: <root>/current)
+  --null-sink-host H  network alias of the sink container (default: null-sink)
+
+environment:
+  NEUTER_EXEC_EXEMPT  space-separated compose SERVICE names whose image ships no
+                      `env` binary; their environment is read with `docker inspect`
+                      instead, and every fallback prints
+                      "WARN inspect-fallback for <service>" on stderr.
+EOF
+    exit 2
+}
+
+# env_value <file> <key> — the value of KEY, empty when unset.
+# Refuses a duplicated key: a second assignment is how a "fixed" value silently
+# keeps its old one (StuRaOS #476).
+env_value() {
+    local file="$1" key="$2" hits
+    [[ -f "$file" ]] || die "env file not found: $file" 2
+    hits="$(grep -c "^${key}=" "$file" || true)"
+    [[ "$hits" -le 1 ]] || die "duplicate key ${key} in ${file}" 2
+    [[ "$hits" -eq 1 ]] || return 0
+    sed -n "s/^${key}=//p" "$file"
+}
+
+parse_args() {
+    STACK_ARG=""; ROOT=""; RELEASE_DIR=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --stack)          [ $# -ge 2 ] || die "option $1 needs a value" 2
+                              STACK_ARG="$2"; shift 2 ;;
+            --root)           [ $# -ge 2 ] || die "option $1 needs a value" 2
+                              ROOT="$2"; shift 2 ;;
+            --release)        [ $# -ge 2 ] || die "option $1 needs a value" 2
+                              RELEASE_DIR="$2"; shift 2 ;;
+            --null-sink-host) [ $# -ge 2 ] || die "option $1 needs a value" 2
+                              NULL_SINK_HOST="$2"; shift 2 ;;
+            -h|--help)        usage ;;
+            *) bad "unknown argument: $1"; usage ;;
+        esac
+    done
+    [[ -n "$STACK_ARG" ]] || usage
+    ROOT="${ROOT:-$(gremion_root)}"
+    RELEASE_DIR="${RELEASE_DIR:-${ROOT}/current}"
+    STATE_ENV="${ROOT}/etc/env/state.env"
+    [[ -f "$STATE_ENV" ]] || die "no state env for the instance: ${STATE_ENV}" 2
+    STACK="$(env_value "$STATE_ENV" STACK)"
+    [[ "$STACK" == "$STACK_ARG" ]] || \
+        die "--stack ${STACK_ARG} does not match STACK=${STACK} in ${STATE_ENV}" 2
+    PLATFORM_DOMAIN="$(env_value "$STATE_ENV" PLATFORM_DOMAIN)"
+    [[ -n "$PLATFORM_DOMAIN" ]] || die "PLATFORM_DOMAIN is empty in ${STATE_ENV}" 2
+    MAIL_HOST="mail.${PLATFORM_DOMAIN}"
+}
+
+# compose_in_release <env file> <verb...> — the ONLY shape a compose command
+# takes on a host (N20): no -f, no -p, no --profile. It is run FROM THE RELEASE
+# TREE because the rendered env files carry a RELATIVE COMPOSE_FILE
+# (infra/host/templates/env/state.env.tmpl, app.env.tmpl), which compose
+# resolves against its OWN cwd: from the caller's cwd `up -d --force-recreate`
+# exits 1 with compose's own "cannot find the file" — after this program has
+# already rewritten etc/env/*.env — and from a cwd that happens to hold ANOTHER
+# docker-compose.yml it would recreate services from the wrong composition under
+# the right project name. Every sibling host program does the same
+# (gremion-deploy's compose(), gremion-backup, gremion-render,
+# gremion-mail-bringup). RELEASE_DIR is validated once by assert_release_tree,
+# before anything is mutated, so this helper carries no `die` of its own: it is
+# called inside command substitutions, where a `die` could not end the program.
+compose_in_release() {
+    local envfile="$1"; shift
+    ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" "$@" )
+}
+
+# Asserted BEFORE the first mutation: a compose call that cannot resolve its
+# composition must not be discovered after etc/env/*.env has been rewritten and
+# the instance is half neutered.
+assert_release_tree() {
+    [[ -d "$RELEASE_DIR" ]] || \
+        die "release tree absent: ${RELEASE_DIR} — compose cannot resolve the relative COMPOSE_FILE of ${STATE_ENV} from anywhere else (pass --release DIR)" 2
+    ok "compose runs from the release tree ${RELEASE_DIR}"
+}
+
+# A running mail project would deliver what a neutered instance generates.
+assert_mail_project_down() {
+    local listing running
+    # Captured first: a `die` inside $( ) runs in a subshell and cannot end the
+    # program, and a docker that failed would otherwise read as "nothing is up".
+    listing="$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}')" \
+        || die "cannot enumerate running containers" 1
+    running="$(awk -v p="${STACK}-mail" '$1==p {print $2}' <<<"$listing")"
+    [[ -z "$running" ]] || die "refusing to neuter while the mail project is up: ${running}" 1
+    ok "no ${STACK}-mail container is running"
+}
+
+# ── ONE definition of "neutered" ───────────────────────────────────────────
+# NEUTERED_VALUE is the value a key MUST carry once this program has run.
+# rewrite_env_stream writes it into the env files; env_line_is_live compares a
+# RUNNING container's env line against it. Both go through neutered_value_for,
+# so the file rewrite, the decision which services to recreate and the
+# post-condition cannot drift apart. A narrower rule in either of the latter two
+# leaves a container relaying through a host whose env file was already rewritten
+# to the sink underneath it, while this program prints "ok" — which is exactly
+# what the value-only test (does it name mail.${PLATFORM_DOMAIN}?) did to an
+# SMTP_HOST holding an internal service name, a raw IP or a third-party relay.
+NEUTERED_VALUE=""
+ENV_LIVE_REASON=""
+
+# neutered_value_for <key> <value> — sets NEUTERED_VALUE. A setter rather than a
+# command substitution: it runs once per env line of every container, and $( )
+# would fork for each one.
+neutered_value_for() {
+    local key="$1" val="$2"
+    if [[ "$key" =~ $NEUTER_TOKEN_KEYS_RE ]]; then
+        NEUTERED_VALUE=""
+    elif [[ "$key" =~ $NEUTER_HOST_KEYS_RE ]]; then
+        NEUTERED_VALUE="$NULL_SINK_HOST"
+    elif [[ "$key" =~ $NEUTER_PORT_KEYS_RE ]]; then
+        NEUTERED_VALUE="$NULL_SINK_PORT"
+    elif [[ "$val" == *"${MAIL_HOST}"* ]]; then
+        NEUTERED_VALUE="$NULL_SINK_HOST"
+    else
+        NEUTERED_VALUE="$val"
+    fi
+}
+
+# stdin: an env file · stdout: the neutered env file (comments and order kept)
+rewrite_env_stream() {
+    local line key val
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+            neutered_value_for "$key" "$val"
+            printf '%s=%s\n' "$key" "$NEUTERED_VALUE"
+        else
+            printf '%s\n' "$line"
+        fi
+    done
+}
+
+neuter_env_files() {
+    local f tmp before after
+    tmp="$(mktemp)"
+    for f in "${ROOT}"/etc/env/*.env; do
+        [[ -f "$f" ]] || continue
+        ENV_FILES_SEEN=$((ENV_FILES_SEEN + 1))
+        before="$(sha256sum <"$f" | cut -d' ' -f1)"
+        rewrite_env_stream <"$f" >"$tmp"
+        after="$(sha256sum <"$tmp" | cut -d' ' -f1)"
+        atomic_write "$f" 600 <"$tmp"
+        [[ "$before" == "$after" ]] || ENV_FILES_CHANGED=$((ENV_FILES_CHANGED + 1))
+    done
+    rm -f "$tmp"
+    [[ "$ENV_FILES_SEEN" -gt 0 ]] || die "no env file under ${ROOT}/etc/env" 2
+    ok "env files rewritten: ${ENV_FILES_CHANGED}/${ENV_FILES_SEEN} changed"
+}
+
+ensure_null_sink() {
+    local name="${STACK}-null-sink" state
+    if state="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)"; then
+        [[ "$state" == "true" ]] || docker start "$name" >/dev/null
+    else
+        docker run -d --name "$name" \
+            --network "${STACK}_state" --network-alias "$NULL_SINK_HOST" \
+            --restart unless-stopped \
+            -e MP_SMTP_AUTH_ACCEPT_ANY=1 -e MP_SMTP_AUTH_ALLOW_INSECURE=1 \
+            -e MP_MAX_MESSAGES=200 \
+            "$NULL_SINK_IMAGE" >/dev/null
+    fi
+    state="$(docker inspect -f '{{.State.Running}}' "$name")"
+    [[ "$state" == "true" ]] || die "null sink ${name} is not running" 1
+    ok "null sink ${name} on ${STACK}_state as ${NULL_SINK_HOST}:${NULL_SINK_PORT}"
+}
+
+# "<project> <service> <id>" per running container of this stack.
+stack_containers() {
+    docker ps --format '{{.ID}} {{.Label "com.docker.compose.project"}} {{.Label "com.docker.compose.service"}}' \
+      | awk -v s="${STACK}-" 'index($2, s) == 1 {print $2" "$3" "$1}'
+}
+
+# The env of ONE container, read from the RUNNING container, on stdout.
+# A service whose image ships no `env` binary must be declared in
+# NEUTER_EXEC_EXEMPT; the fallback is announced ON STDERR (stdout is the env
+# stream its callers parse), never silent.
+container_env() {
+    local id="$1" svc="$2"
+    if docker exec "$id" env 2>/dev/null; then return 0; fi
+    case " ${NEUTER_EXEC_EXEMPT} " in
+        *" ${svc} "*)
+            printf 'WARN inspect-fallback for %s (declared in NEUTER_EXEC_EXEMPT)\n' "$svc" >&2
+            docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$id" ;;
+        *)  die "cannot read env from ${svc} (${id}): docker exec env failed and ${svc} is not in NEUTER_EXEC_EXEMPT" 1 ;;
+    esac
+}
+
+# Does this env line of a RUNNING container still carry something the rewrite
+# would have changed? THE definition of "live" — used both to pick the services
+# to recreate (find_affected) and to assert the post-condition
+# (assert_env_clean), never copied into either of them. ENV_LIVE_REASON carries
+# WHY, so the post-condition can name the offending value without a second,
+# narrower set of rules of its own.
+#
+# One deliberate carve-out from neutered_value_for: an EMPTY value is never
+# live. It reaches nothing, it is the rule the token arm has always applied
+# (`-n "$val"`), and a key that the COMPOSITION supplies empty cannot be changed
+# by any recreate — treating it as live would make the post-condition
+# unsatisfiable rather than fail-closed.
+env_line_is_live() {   # <key> <value>
+    local key="$1" val="$2"
+    ENV_LIVE_REASON=""
+    # The real relay is live WHATEVER else is configured, and this test comes
+    # first for that reason: an operator who points --null-sink-host at
+    # mail.${PLATFORM_DOMAIN} has asked for a sink that is the real thing, and a
+    # container naming it is never clean — the one place this function is
+    # deliberately STRICTER than the env rewrite, which writes the sink host the
+    # operator chose. (The restore proof's RED 3 is exactly this case.)
+    if [[ "$val" == *"${MAIL_HOST}"* ]]; then
+        ENV_LIVE_REASON="still names ${MAIL_HOST}"
+        return 0
+    fi
+    neutered_value_for "$key" "$val"
+    [[ "$val" != "$NEUTERED_VALUE" ]] || return 1
+    [[ -n "$val" ]] || return 1
+    if [[ "$key" =~ $NEUTER_TOKEN_KEYS_RE ]]; then
+        ENV_LIVE_REASON="still carries a value"
+    elif [[ "$key" =~ $NEUTER_PORT_KEYS_RE ]]; then
+        ENV_LIVE_REASON="still carries port ${val}, not the null sink port ${NULL_SINK_PORT}"
+    elif [[ "$key" =~ $NEUTER_HOST_KEYS_RE ]]; then
+        ENV_LIVE_REASON="still names ${val}, not the null sink ${NULL_SINK_HOST}"
+    else
+        ENV_LIVE_REASON="still carries ${val}, which the env rewrite would have changed"
+    fi
+    return 0
+}
+
+# ${STACK}-app-blue -> app-blue ; ${STACK}-state -> state
+project_env_name() { printf '%s\n' "${1#"${STACK}-"}"; }
+
+# "<project> <service>" per container carrying a live value.
+# container_env is NEVER called inside a process substitution: a `die` there
+# would exit only the subshell and the caller would read an empty env. The
+# container listing is captured the same way, so a docker that failed cannot
+# read back as "this stack runs nothing".
+find_affected() {
+    local listing project service id line key val envtext
+    listing="$(stack_containers)" \
+        || die "cannot enumerate the running containers of stack ${STACK}" 1
+    while read -r project service id; do
+        [[ -n "$id" ]] || continue
+        envtext="$(container_env "$id" "$service")" \
+            || die "cannot read the environment of ${service} (${id})" 1
+        while IFS= read -r line; do
+            key="${line%%=*}"; val="${line#*=}"
+            if env_line_is_live "$key" "$val"; then
+                printf '%s %s\n' "$project" "$service"
+                break
+            fi
+        done <<<"$envtext"
+    done <<<"$listing"
+}
+
+recreate_affected() {
+    local pairs projects p svcs envfile
+    pairs="$(find_affected)" \
+        || die "cannot determine which services carry a live value" 1
+    pairs="$(printf '%s\n' "$pairs" | sort -u | sed '/^$/d')"
+    if [[ -z "$pairs" ]]; then ok "no running container carried a live value"; return 0; fi
+    projects="$(printf '%s\n' "$pairs" | awk '{print $1}' | sort -u)"
+    while read -r p; do
+        [[ -n "$p" ]] || continue
+        svcs="$(printf '%s\n' "$pairs" | awk -v pr="$p" '$1==pr {printf "%s ", $2}')"
+        svcs="${svcs% }"
+        envfile="${ROOT}/etc/env/$(project_env_name "$p").env"
+        [[ -f "$envfile" ]] || die "no env file for project ${p}: ${envfile}" 2
+        # shellcheck disable=SC2086  # svcs is a deliberate list of service names
+        compose_in_release "$envfile" up -d --force-recreate $svcs \
+            || die "could not recreate ${svcs} in ${p} from ${RELEASE_DIR}" 1
+        ok "recreated in ${p}: ${svcs}"
+    done <<<"$projects"
+}
+
+wait_running() {   # <container id>
+    local cid="$1" deadline=$((SECONDS + 120)) st
+    while (( SECONDS < deadline )); do
+        st="$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)"
+        if [[ "$st" == "true" ]]; then return 0; fi
+        sleep 2
+    done
+    return 1
+}
+
+# first_cid <env file> <service> — the first container id of a compose service.
+# A trailing `| head -n1` would be a pipeline whose head can close the pipe
+# before compose finished writing; under `set -o pipefail` that reads back as a
+# failure on the PASSING path. The output is captured first instead.
+first_cid() {
+    local out
+    out="$(compose_in_release "$1" ps -q "$2")" || return 1
+    printf '%s\n' "${out%%$'\n'*}"
+}
+
+# gremion-ui reads config.smtp from /data/<slug>/config.json and $CONFIG_PATH.
+# A restore carries the production host into both, so rewrite them inside the
+# container that owns the volume, then READ THEM BACK in the same pass.
+neuter_tenant_configs() {
+    local colour appenv cid out live
+    colour="$(cat "${ROOT}/runtime/active-colour" 2>/dev/null || echo none)"
+    if [[ "$colour" == "none" ]]; then
+        info "no active colour; no tenant config file to rewrite"
+        return 0
+    fi
+    appenv="${ROOT}/etc/env/app-${colour}.env"
+    [[ -f "$appenv" ]] || die "no env file for the active colour: ${appenv}" 2
+    cid="$(first_cid "$appenv" gremion-ui)" \
+        || die "cannot resolve the gremion-ui container of colour ${colour}" 2
+    [[ -n "$cid" ]] || die "gremion-ui of colour ${colour} is not running" 2
+    wait_running "$cid" || die "gremion-ui (${cid}) did not come up within 120s" 1
+    out="$(docker exec -i \
+            -e NEUTER_SINK_HOST="$NULL_SINK_HOST" -e NEUTER_SINK_PORT="$NULL_SINK_PORT" \
+            "$cid" node - <<'NODEJS'
+const fs = require('fs')
+const path = require('path')
+const host = process.env.NEUTER_SINK_HOST
+const port = Number(process.env.NEUTER_SINK_PORT)
+const roots = ['/data', path.dirname(process.env.CONFIG_PATH || '/app/config/config.json')]
+const files = []
+const walk = (d) => {
+  let entries = []
+  try { entries = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+  for (const e of entries) {
+    const p = path.join(d, e.name)
+    if (e.isDirectory()) walk(p)
+    else if (e.name === 'config.json') files.push(p)
+  }
+}
+roots.forEach(walk)
+let changed = 0
+for (const f of files) {
+  let cfg
+  try { cfg = JSON.parse(fs.readFileSync(f, 'utf8')) } catch { continue }
+  if (!cfg || !cfg.smtp) continue
+  if (cfg.smtp.host === host && cfg.smtp.port === port) continue
+  cfg.smtp.host = host
+  cfg.smtp.port = port
+  cfg.smtp.secure = false
+  const tmp = f + '.neuter'
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n')
+  fs.renameSync(tmp, f)
+  changed++
+}
+// read back from disk: the post-condition, not the write's return value
+let live = 0
+for (const f of files) {
+  let cfg
+  try { cfg = JSON.parse(fs.readFileSync(f, 'utf8')) } catch { live++; continue }
+  if (cfg && cfg.smtp && cfg.smtp.host !== host) live++
+}
+process.stdout.write(`changed=${changed} live=${live}`)
+NODEJS
+    )"
+    CONFIGS_REWRITTEN="$(printf '%s' "$out" | sed -n 's/.*changed=\([0-9]*\).*/\1/p')"
+    live="$(printf '%s' "$out" | sed -n 's/.*live=\([0-9]*\).*/\1/p')"
+    [[ -n "$CONFIGS_REWRITTEN" && -n "$live" ]] || die "unreadable config rewrite result: ${out}" 1
+    [[ "$live" -eq 0 ]] || die "${live} tenant config file(s) still name a live SMTP host" 1
+    ok "tenant config files rewritten: ${CONFIGS_REWRITTEN}"
+}
+
+neuter_registry_rows() {
+    local db user cid have sql live
+    db="$(env_value "$STATE_ENV" CONTROL_DB_NAME)"; db="${db:-control}"
+    user="$(env_value "$STATE_ENV" POSTGRES_USER)"
+    [[ -n "$user" ]] || die "POSTGRES_USER is empty in ${STATE_ENV}" 2
+    cid="$(first_cid "$STATE_ENV" postgres)" \
+        || die "cannot resolve the postgres container of stack ${STACK}" 2
+    [[ -n "$cid" ]] || die "postgres of stack ${STACK} is not running" 2
+    have="$(docker exec -i "$cid" psql -tAq -U "$user" -d "$db" \
+              -c "SELECT to_regclass('public.tenant') IS NOT NULL;")"
+    have="${have//[$'\r\n\t ']/}"
+    if [[ "$have" != "t" ]]; then
+        info "control database has no tenant table; no registry row to rewrite"
+        return 0
+    fi
+    # The count of rewritten rows comes from the QUERY, never from psql's
+    # completion tag: `-q` suppresses "UPDATE n" entirely, so parsing the tag
+    # reported rows=0 after a genuine rewrite (review round 2). The CTE asks the
+    # server how many rows it wrote and prints that number as a normal result.
+    sql="WITH rewritten AS (UPDATE tenant SET domain_profile = jsonb_set(domain_profile, '{services,smtp,host}', to_jsonb('${NULL_SINK_HOST}'::text), false), updated_at = now() WHERE domain_profile #>> '{services,smtp,host}' IS NOT NULL AND domain_profile #>> '{services,smtp,host}' <> '${NULL_SINK_HOST}' RETURNING 1) SELECT count(*) FROM rewritten;"
+    ROWS_REWRITTEN="$(docker exec -i "$cid" psql -tAq -v ON_ERROR_STOP=1 -U "$user" -d "$db" \
+                        -c "$sql")" \
+        || die "the control registry rewrite failed on database ${db}" 1
+    ROWS_REWRITTEN="${ROWS_REWRITTEN//[$'\r\n\t ']/}"
+    # A count that cannot be read is a hard failure, never a silent 0: a restore
+    # proof that reports rows=0 after rewriting rows is a post-condition lying.
+    [[ "$ROWS_REWRITTEN" =~ ^[0-9]+$ ]] || \
+        die "unreadable rewritten-row count from database ${db}: ${ROWS_REWRITTEN}" 1
+    live="$(docker exec -i "$cid" psql -tAq -v ON_ERROR_STOP=1 -U "$user" -d "$db" \
+              -c "SELECT count(*) FROM tenant WHERE domain_profile #>> '{services,smtp,host}' IS NOT NULL AND domain_profile #>> '{services,smtp,host}' <> '${NULL_SINK_HOST}';")"
+    live="${live//[^0-9]/}"
+    [[ "$live" == "0" ]] || die "${live} tenant row(s) still name a live SMTP host" 1
+    ok "control registry rows rewritten: ${ROWS_REWRITTEN}"
+}
+
+# The post-condition of the whole program, read from the RUNNING system.
+assert_env_clean() {
+    local listing project service id line key val envtext offenders=0
+    listing="$(stack_containers)" \
+        || die "cannot enumerate the running containers of stack ${STACK}" 1
+    while read -r project service id; do
+        [[ -n "$id" ]] || continue
+        CONTAINERS_CHECKED=$((CONTAINERS_CHECKED + 1))
+        envtext="$(container_env "$id" "$service")" \
+            || die "cannot read the environment of ${service} (${id})" 1
+        while IFS= read -r line; do
+            key="${line%%=*}"; val="${line#*=}"
+            # env_line_is_live, never a second copy of its rules: the rewrite,
+            # the recreate decision and this post-condition must agree on what
+            # "live" means or a rewritten env file hides a live container.
+            if env_line_is_live "$key" "$val"; then
+                bad "${service}: ${key} ${ENV_LIVE_REASON}"
+                offenders=$((offenders + 1))
+            fi
+        done <<<"$envtext"
+    done <<<"$listing"
+    [[ "$CONTAINERS_CHECKED" -gt 0 ]] || die "no running container of stack ${STACK} to verify" 2
+    [[ "$offenders" -eq 0 ]] || die "${offenders} live mail/token value(s) survive neutering" 1
+    ok "docker exec env clean on ${CONTAINERS_CHECKED} container(s)"
+}
+
+main() {
+    parse_args "$@"
+    need_cmd docker sha256sum mktemp sed grep awk sort
+    assert_mail_project_down
+    assert_release_tree
+    neuter_env_files
+    ensure_null_sink
+    recreate_affected
+    neuter_tenant_configs
+    neuter_registry_rows
+    assert_env_clean
+    printf 'NEUTER: env-files=%s changed=%s configs=%s rows=%s containers=%s ok\n' \
+        "$ENV_FILES_SEEN" "$ENV_FILES_CHANGED" "$CONFIGS_REWRITTEN" \
+        "$ROWS_REWRITTEN" "$CONTAINERS_CHECKED"
+}
+
+main "$@"
