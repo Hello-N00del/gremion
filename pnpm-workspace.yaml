@@ -52,3 +52,11 @@ overrides:
   # GHSA — postcss <=8.5.22 (Dependabot #60). Transitive through the Svelte/Vite
   # toolchain; scoped selector so the bump stays inside the 8.x line.
   postcss@<8.5.23: '>=8.5.23 <9'
+  # GHSA-2x7j-588g-ccc2 (HIGH) + GHSA-wmmp-3585-3rmp + GHSA-cc9r-2j5m-2m83 (nodemailer <9.1.0)
+  # + GHSA-8m3c-c648-2xjj (<=9.1.0). Direct dependency of gremion-ui; the floor is held here so
+  # scripts/check-cve-floors.mjs can watch it. Bounded to 9.x: 10 is a major.
+  nodemailer: '>=9.1.1 <10'
+  # GHSA-82fw-gwwq-j7x9 — vitest >=2.1.0 <4.1.11; the advisory lives in @vitest/mocker, which
+  # vitest pins exactly, so both are floored and both stay on the 4.x line.
+  vitest: '>=4.1.11 <5'
+  '@vitest/mocker': '>=4.1.11 <5'
