@@ -47,8 +47,11 @@ teardown() {
     grep -q "KEYCLOAK_ADMIN_PASSWORD" "$KC_SCRIPT"
 }
 
-@test "script uses the stura realm" {
-    grep -q "stura" "$KC_SCRIPT"
+@test "script requires KEYCLOAK_REALM rather than hardcoding a realm" {
+    # B-01: there is no single boot realm any more, so the script MUST be told
+    # which realm it is configuring. An unset value is fatal, not defaulted.
+    grep -q 'REALM="${KEYCLOAK_REALM:?' "$KC_SCRIPT"
+    ! grep -qE '^REALM="[a-z]' "$KC_SCRIPT"
 }
 
 @test "script has retry/wait loop for Keycloak startup" {

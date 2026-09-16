@@ -795,7 +795,8 @@ check('h1 no retired wire-root literal survives anywhere in the tree', () => {
 //
 // (h1) above requires a trailing dot, because it owns the NATS subject root.
 // That trailing dot is exactly how the login theme survived the public flip:
-// `themes/sturaos/`, `loginTheme: "sturaos"` and `realms/sturaos` are the token
+// `themes/sturaos/`, `loginTheme: "sturaos"` and a realm path segment named
+// after the retired product were the token
 // standing alone, and h1 walked past every one of them while reporting clean.
 // This rule is the token as an IDENTIFIER, with no dot required.
 //
@@ -816,9 +817,16 @@ check('h1 no retired wire-root literal survives anywhere in the tree', () => {
 // install-git-hooks.mjs were invisible to it. A separator is a boundary, not
 // part of the identifier.
 const RETIRED_PRODUCT_TOKEN = /(?<![A-Za-z0-9])sturaos(?![A-Za-z0-9])/
-// ALLOW-LIST - three kinds of entry, each with its reason, and it does not grow
+// ALLOW-LIST - four kinds of entry, each with its reason, and it does not grow
 // without one:
 //  - this file, which must be able to spell what it forbids;
+//  - gremion-ui/src/lib/server/tenant/provisioner/realm-identity.test.ts,
+//    which is the B-01 companion guard: it runs `git grep` over the tracked
+//    tree and asserts the retired realm path segment occurs in no non-doc,
+//    non-vitest file. It carries the token for the same reason this file
+//    does - a guard has to name what it forbids - and for no other: the file
+//    is ~100 lines long and exists only for that post-condition, so the
+//    exemption hides nothing a reader would not expect to find there;
 //  - gremion-ui/scripts/install-git-hooks.mjs, whose MARKER_BEGIN/MARKER_END
 //    (:29-30) delimit the block ALREADY WRITTEN into every developer's
 //    .git/hooks/pre-commit. Changing the marker orphans every installed block:
@@ -835,6 +843,7 @@ const RETIRED_PRODUCT_TOKEN = /(?<![A-Za-z0-9])sturaos(?![A-Za-z0-9])/
 //    match anyway; 008, 042 and 048 carry no `stura` token whatsoever.
 const PRODUCT_TOKEN_EXEMPT_PATHS = [
   /^scripts\/kernel-hygiene-check\.mjs$/,
+  /^gremion-ui\/src\/lib\/server\/tenant\/provisioner\/realm-identity\.test\.ts$/,
   /^gremion-ui\/scripts\/install-git-hooks\.mjs$/,
   /^gremion-ui\/migrations\/008_public_portal\.sql$/,
   /^gremion-ui\/migrations\/042_protocol_resolution_required_majority\.sql$/,
@@ -855,42 +864,16 @@ const PRODUCT_TOKEN_EXEMPT_PATHS = [
 // Entries carry no line numbers on purpose: a line number drifts under every
 // edit above it, the exact text does not.
 //
-// EVERY entry below has ONE cause, opened 2026-09-16: the realm a running
-// Keycloak actually serves is still named with the retired token, and renaming
-// it is a deployment-identity migration owned by
-// B1a-realm-identity-and-boot-import, which deletes the boot import, the
-// generated realm export and the realm-secret substitution script outright.
-// This unit owns
-// the login theme. It must not invent a realm identity another unit is about to
-// decide, and it must not hold the whole suite red while it waits: h2 shares
-// one exit code with 44 other checks - i1/i2 (retired operator hosts in shipped
-// deploy and env templates), g3-g6 (k8s supply chain and :latest pinning), j1
-// (the k8s apex/escaped-domain sentinel) - and `make lint` stops at the first
-// failing target, so a permanently red h2 would silently retire all of them.
+// The list opened on 2026-09-16 with 29 entries under ONE cause: the realm a
+// running Keycloak served was still named with the retired token, and renaming
+// it was a deployment-identity migration owned by
+// B1a-realm-identity-and-boot-import. B1a has landed - it deleted the boot
+// import, the generated realm export and the realm-secret substitution script,
+// and renamed the realm path segment in every remaining carrier - so the cause
+// is closed and every entry is gone. The list stays here, empty, because that
+// is what an EMPTY ledger looks like: a new carrier now fails h2 on the day it
+// is written, and adding an entry back requires writing its cause down first.
 const PRODUCT_TOKEN_PENDING = [
-  [".env.example", "AUTH_KEYCLOAK_ISSUER=http://keycloak:8080/auth/realms/sturaos", 1],
-  [".env.example", "KEYCLOAK_ISSUER_URL=http://keycloak:8080/auth/realms/sturaos", 1],
-  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_BASE: https://council.example/auth/realms/sturaos", 1],
-  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_ISSUER: http://localhost/realms/sturaos", 1],
-  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_ISSUER: https://council.example/auth/realms/sturaos", 1],
-  ["docker-compose.override.yml", "# KC_HOSTNAME includes /auth, so iss = http://localhost:8082/auth/realms/sturaos.", 1],
-  ["docker-compose.override.yml", "AUTH_KEYCLOAK_BASE: \"http://localhost:8082/auth/realms/sturaos\"", 1],
-  ["docker-compose.override.yml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
-  ["docker-compose.override.yml", "AUTH_KEYCLOAK_ISSUER: \"http://localhost:8082/auth/realms/sturaos\"", 1],
-  ["docker-compose.yml", "AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/sturaos", 1],
-  ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
-  ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_ISSUER: \"https://stura.example.com/auth/realms/sturaos\"", 1],
-  ["scripts/configure-keycloak-clients.sh", "REALM=\"sturaos\"", 1],
-  ["scripts/dev-configure.sh", "\"${KC_BASE}/admin/realms/sturaos/clients/${uuid}\")", 1],
-  ["scripts/dev-configure.sh", "\"${KC_BASE}/admin/realms/sturaos/clients?clientId=${client_id}\" \\", 1],
-  ["scripts/dev-configure.sh", "-X PUT \"${KC_BASE}/admin/realms/sturaos/clients/${uuid}\" \\", 1],
-  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_BASE\"       \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
-  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_INTERNAL\"   \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
-  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_ISSUER\"     \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
-  ["test/integration/health.bats", "@test \"Keycloak sturaos realm is reachable\" {", 1],
-  ["test/integration/health.bats", "[[ \"$output\" == *'\"realm\":\"sturaos\"'* ]]", 1],
-  ["test/integration/health.bats", "run curl -sf http://localhost:8082/auth/realms/sturaos", 1],
-  ["test/integration/oidc.bats", "REALM=\"sturaos\"", 1],
 ]
 
 check('h2 the retired product token survives nowhere as a bare identifier', () => {

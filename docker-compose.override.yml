@@ -44,13 +44,13 @@ services:
       ORIGIN: "http://localhost:3001"
       PUBLIC_BASE_URL: "http://localhost:3001"
       # Keycloak 26 hostname v2: iss = KC_HOSTNAME/realms/{realm}.
-      # KC_HOSTNAME includes /auth, so iss = http://localhost:8082/auth/realms/sturaos.
-      AUTH_KEYCLOAK_ISSUER: "http://localhost:8082/auth/realms/sturaos"
-      AUTH_KEYCLOAK_BASE: "http://localhost:8082/auth/realms/sturaos"
+      # KC_HOSTNAME includes /auth, so iss = http://localhost:8082/auth/realms/gremion.
+      AUTH_KEYCLOAK_ISSUER: "http://localhost:8082/auth/realms/gremion"
+      AUTH_KEYCLOAK_BASE: "http://localhost:8082/auth/realms/gremion"
       # Server-side token refresh uses Docker-internal URL (avoids localhost from inside container).
       # G-080: dev keeps plain http (dev realm = sslRequired:external); base
       # defaults both of these to https://keycloak:8443 for prod internal TLS.
-      AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/sturaos"
+      AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/gremion"
       KEYCLOAK_ADMIN_URL: "http://keycloak:8080/auth"
       # The structure-aware seeder (POST /api/setup/seed) is now the single
       # seeding path — disable the 011 dev-seed migration in dev too.

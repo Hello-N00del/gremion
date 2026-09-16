@@ -170,32 +170,36 @@ specific and a reader who remembers it is owed the refutation.
   `_` inside the boundary classes and so was blind to exactly the
   `<realm>-realm.json` / `<realm>-users-0.json` carriers this section used to
   list, which is the same species of hole as h1's trailing dot. It allow-lists
-  only the guard file itself, the installed-hook markers in
-  `gremion-ui/scripts/install-git-hooks.mjs:29-30`, and the four SHA-pinned
-  applied migrations — the last on byte-immutability grounds, not on a current
-  hit. It is case-sensitive: `StuRaOS` the vertical name stays legitimate in
+  only the guard file itself, its B-01 companion guard
+  `gremion-ui/src/lib/server/tenant/provisioner/realm-identity.test.ts` (which
+  asserts the retired realm path segment occurs nowhere and so has to name it),
+  the installed-hook markers in `gremion-ui/scripts/install-git-hooks.mjs:29-30`,
+  and the four SHA-pinned applied migrations — the last on byte-immutability
+  grounds, not on a current hit. It is case-sensitive: `StuRaOS` the vertical name stays legitimate in
   prose and has its own owner in `brand.guard.test.ts`.
-- **The realm half is WAIVED BY LINE, not left red.** `h2` is **green** on this
-  tree. The ~29 surviving carriers — `.env.example`, both compose files, the k8s
-  configmap, `.github/workflows/gremion-ui.yml`, `scripts/dev-configure.sh`,
-  `scripts/configure-keycloak-clients.sh`, both realm exports,
-  `substitute-realm-secrets.sh`, and the live-realm assertions in
-  `test/integration/{health,oidc}.bats` — are listed one line at a time in
-  `PRODUCT_TOKEN_PENDING` in `scripts/kernel-hygiene-check.mjs`, each with the
-  exact text and the number of occurrences held. They all have one cause: the
-  realm a running Keycloak serves still carries the retired name, and choosing
-  its replacement belongs to the realm unit, not to a theme rename. The waiver
-  is enforced in both directions — a new carrier anywhere fails, and a pending
-  line that stops matching ALSO fails, so the list dies the day the realm unit
-  lands. Holding the check red instead would have taken `make lint` down with
-  it and retired the 44 other checks that share its exit code, several of them
-  security-relevant. **Hand-off, in writing, because `PRODUCT_TOKEN_PENDING` is
-  a surface no plan row names:** when the realm unit lands, `h2` reports every
-  entry whose line no longer matches as `STALE WAIVER … delete the entry`, and
-  the correct response is to DELETE those entries — never to widen
-  `PRODUCT_TOKEN_EXEMPT_PATHS`, never to re-point a pending line at whatever the
-  file says now. An entry that survives its cause is the allow-list growing a
-  permanent hole, which is the failure this whole section records.
+- **The realm half was WAIVED BY LINE, and the waiver is now CLOSED.** `h2` is
+  **green** on this tree and `PRODUCT_TOKEN_PENDING` in
+  `scripts/kernel-hygiene-check.mjs` is **empty**. It opened with 29 carriers —
+  `.env.example`, both compose files, the k8s configmap,
+  `.github/workflows/gremion-ui.yml`, `scripts/dev-configure.sh`,
+  `scripts/configure-keycloak-clients.sh`, both realm exports, the realm-secret
+  substitution script, and the live-realm assertions in
+  `test/integration/{health,oidc}.bats` — each held as one exact line at one
+  exact count, all under one cause: the realm a running Keycloak served still
+  carried the retired name, and choosing its replacement belonged to the realm
+  unit, not to a theme rename. `B1a-realm-identity-and-boot-import` landed that
+  choice: it deleted the boot import, the generated realm export and the
+  substitution script outright, made the template realm the `__REALM_NAME__`
+  sentinel that `buildTenantRealmDoc` overwrites, renamed the realm path segment
+  to `gremion` in every remaining carrier, moved the live-realm assertions onto
+  `master`, and DELETED every pending entry rather than widening
+  `PRODUCT_TOKEN_EXEMPT_PATHS` or re-pointing a line. The waiver was enforced in
+  both directions throughout — a new carrier anywhere fails, and a pending line
+  that stops matching ALSO fails — which is what forced the deletions. The list
+  stays in the file, empty: that is what a closed ledger looks like, and adding
+  an entry back requires writing its cause down first. An entry that survives
+  its cause is the allow-list growing a permanent hole, which is the failure
+  this whole section records.
 - **What is still pinned by exact path.** `deploy-brand.guard.test.ts` pins one
   file inside the theme directory as a vacuity check, now at its renamed path,
   so moving the directory again turns that test red as well.

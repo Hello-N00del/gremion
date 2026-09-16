@@ -124,7 +124,7 @@ services:
       # + Bearer-JWKS) — the secure prod default. docker-compose.prod.yml adds
       # NODE_EXTRA_CA_CERTS so undici/jose trust the internal cert; the dev
       # override drops this back to http://keycloak:8080 (dev realm=external).
-      AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/sturaos
+      AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/gremion
       AUTH_TRUST_HOST:          "1"
       # Generic step-up freshness window (seconds) — the validity of a fresh LoA-2
       # elevation before a re-prompt. Kernel auth keeps the KC step-up/acr plumbing;

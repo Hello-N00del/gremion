@@ -10,7 +10,10 @@ load '../test_helper/common'
 PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 
 KEYCLOAK_URL="http://localhost:8082/auth"
-REALM="sturaos"
+# B-01: nothing is imported at boot, so `master` is the realm a freshly
+# started Keycloak serves. Point the probe at a realm that exists; a dev
+# tenant realm can be named through KEYCLOAK_REALM.
+REALM="${KEYCLOAK_REALM:-master}"
 
 # ---------------------------------------------------------------------------
 # Keycloak discovery document

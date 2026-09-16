@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 import { MODULE_MANIFESTS } from '$lib/modules/registry'
 import { buildTenantRealmDoc, PROVISIONER_SECRET_CLIENTS } from './realm-doc'
 
@@ -61,5 +62,38 @@ describe('realm identity in the per-tenant template (B-01)', () => {
       ),
     })
     expect(doc.realm).toBe('kreisrat')
+  })
+})
+
+// B-01: the retired realm path segment survives in no non-doc, non-vitest file.
+// This runs `git grep` over the REAL index, so it cannot pass on an empty file
+// list — the companion test asserts the scan is non-trivial. The `*.test.ts`
+// occurrences are deliberately left to B12-zero-tenant-boot, which rewrites
+// those suites.
+const REPO_ROOT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..', '..', '..', '..', '..', '..',
+)
+
+describe('retired realm path segment (B-01)', () => {
+  it('scans a non-trivial number of tracked files', () => {
+    const all = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8' })
+      .split('\n').filter(Boolean)
+    expect(all.length).toBeGreaterThan(300)
+  })
+
+  it('no non-doc, non-vitest file carries the realms/sturaos path segment', () => {
+    let hits = ''
+    try {
+      hits = execFileSync(
+        'git',
+        ['grep', '-n', 'realms/sturaos', '--', ':!docs/', ':!*.md', ':!*.test.ts'],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      )
+    } catch (err: any) {
+      // git grep exits 1 with no output when nothing matches — that is the pass.
+      hits = (err.stdout ?? '').toString()
+    }
+    expect(hits.trim()).toBe('')
   })
 })

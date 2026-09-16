@@ -68,7 +68,7 @@ jobs:
       AUTH_SECRET: test-secret-for-ci-32-chars-minimum
       AUTH_KEYCLOAK_ID: gremion-ui
       AUTH_KEYCLOAK_SECRET: test-secret
-      AUTH_KEYCLOAK_ISSUER: http://localhost/realms/sturaos
+      AUTH_KEYCLOAK_ISSUER: http://localhost/realms/gremion
       CALDAV_URL: http://localhost/remote.php/dav
       DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/gremion
       # ── Multi-tenant control plane (#285 / G-099) ──────────────────────────
@@ -262,8 +262,8 @@ jobs:
       GREMION_DISABLE_SEEDS: 'true'
       KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
       AUTH_KEYCLOAK_SECRET: test-ui-client-secret
-      AUTH_KEYCLOAK_ISSUER: https://council.example/auth/realms/sturaos
-      AUTH_KEYCLOAK_BASE: https://council.example/auth/realms/sturaos
+      AUTH_KEYCLOAK_ISSUER: https://council.example/auth/realms/gremion
+      AUTH_KEYCLOAK_BASE: https://council.example/auth/realms/gremion
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 

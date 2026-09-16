@@ -38,7 +38,9 @@ fi
 : "${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env}"
 
 KC_BASE="${KEYCLOAK_BASE_URL:-http://localhost:8082/auth}"
-REALM="sturaos"
+# B-01: there is no single boot realm any more. The caller names the realm this
+# run configures; an unset value is a fatal misconfiguration, not a default.
+REALM="${KEYCLOAK_REALM:?KEYCLOAK_REALM must be set — name the realm to configure (see .env.example)}"
 
 info()    { echo "[configure-keycloak] $*"; }
 success() { echo "[configure-keycloak] OK: $*"; }

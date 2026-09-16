@@ -46,12 +46,13 @@ fi
 # Keycloak
 # ---------------------------------------------------------------------------
 
-@test "Keycloak sturaos realm is reachable" {
+@test "Keycloak is reachable and serves the master realm (B-01: no boot import)" {
     # The health endpoint lives on the management port (9000), which is not
-    # mapped. Check the main API instead — available only after realm import.
-    run curl -sf http://localhost:8082/auth/realms/sturaos
+    # mapped. Check the main API instead. B-01: nothing is imported at boot, so
+    # `master` is the one realm a freshly started Keycloak always has.
+    run curl -sf http://localhost:8082/auth/realms/master
     [ "$status" -eq 0 ]
-    [[ "$output" == *'"realm":"sturaos"'* ]]
+    [[ "$output" == *'"realm":"master"'* ]]
 }
 
 # ---------------------------------------------------------------------------

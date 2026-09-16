@@ -25,6 +25,9 @@ cd "$(dirname "$0")/.."
 DEV_UI_PORT=4001    # vite dev server (vite.config.ts)
 KC_PORT=8082        # keycloak:      127.0.0.1:8082:8080
 
+# B-01: the dev realm is whatever tenant-create made; `gremion` is the dev slug.
+KC_REALM="${KEYCLOAK_REALM:-gremion}"
+
 # ── Colours ──────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC_C='\033[0m'  # NC_C = "no colour" reset
@@ -90,9 +93,9 @@ ENVEOF
 fi
 
 # Apply correct service URLs (always overwrite these)
-set_env "AUTH_KEYCLOAK_ISSUER"     "http://localhost:${KC_PORT}/auth/realms/sturaos"
-set_env "AUTH_KEYCLOAK_BASE"       "http://localhost:${KC_PORT}/auth/realms/sturaos"
-set_env "AUTH_KEYCLOAK_INTERNAL"   "http://localhost:${KC_PORT}/auth/realms/sturaos"
+set_env "AUTH_KEYCLOAK_ISSUER"     "http://localhost:${KC_PORT}/auth/realms/${KC_REALM}"
+set_env "AUTH_KEYCLOAK_BASE"       "http://localhost:${KC_PORT}/auth/realms/${KC_REALM}"
+set_env "AUTH_KEYCLOAK_INTERNAL"   "http://localhost:${KC_PORT}/auth/realms/${KC_REALM}"
 set_env "KEYCLOAK_ADMIN_URL"       "http://localhost:${KC_PORT}/auth"
 set_env "PUBLIC_BASE_URL"          "http://localhost:${DEV_UI_PORT}"
 # ORIGIN drives the Keycloak post-logout redirect (auth/logout/+page.server.ts).
@@ -155,7 +158,7 @@ get_client_uuid() {
     local client_id="$1"
     curl -sf \
         -H "Authorization: Bearer ${TOKEN}" \
-        "${KC_BASE}/admin/realms/sturaos/clients?clientId=${client_id}" \
+        "${KC_BASE}/admin/realms/${KC_REALM}/clients?clientId=${client_id}" \
         | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4
 }
 
@@ -173,7 +176,7 @@ ensure_client_uris() {
     local current_json
     current_json=$(curl -sf \
         -H "Authorization: Bearer ${TOKEN}" \
-        "${KC_BASE}/admin/realms/sturaos/clients/${uuid}")
+        "${KC_BASE}/admin/realms/${KC_REALM}/clients/${uuid}")
 
     local current_uris current_origins
     current_uris=$(echo "$current_json" | grep -o '"redirectUris":\[[^]]*\]' | grep -o '"[^"]*"' | tr -d '"')
@@ -217,7 +220,7 @@ ensure_client_uris() {
 
     local http_status
     http_status=$(curl -sf -o /dev/null -w "%{http_code}" \
-        -X PUT "${KC_BASE}/admin/realms/sturaos/clients/${uuid}" \
+        -X PUT "${KC_BASE}/admin/realms/${KC_REALM}/clients/${uuid}" \
         -H "Authorization: Bearer ${TOKEN}" \
         -H "Content-Type: application/json" \
         -d "{\"clientId\":\"${client_id}\",\"id\":\"${uuid}\",\"redirectUris\":${new_uris_json},\"webOrigins\":${new_origins_json}}")
