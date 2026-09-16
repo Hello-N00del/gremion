@@ -261,7 +261,19 @@ lint-packages:
 	@echo "Checking package files allowlists..."
 	@node scripts/check-shipped-package-files.mjs --static
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages
+# B3 (spec B §A.1): kernel-wins is the decided direction for every
+# MIRRORED-but-differing path, and this is the guard that makes it safe — no
+# port-back step may delete a path the kernel holds and the StuRa tree does
+# not, or overwrite a kernel-ahead path with the extraction source's bytes.
+# The suite runs first for the same reason lint-cve-floors runs its suite
+# first: a loader that silently returned an empty set would pass vacuously,
+# and the set is checked against its own declared entry count for that reason.
+lint-port-back:
+	@echo "Checking the do-not-overwrite set..."
+	@node --test scripts/port-back/check-do-not-overwrite.test.mjs
+	@node scripts/port-back/check-do-not-overwrite.mjs
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back
 	@echo "All linters passed."
 
 # ── Repository labels ────────────────────────────────────────────────────

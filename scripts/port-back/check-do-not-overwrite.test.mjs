@@ -61,3 +61,101 @@ describe('do-not-overwrite.json — shape', () => {
     assert.equal(set.frozenAt.stura, 'f276af5925abacdcfd05f6613fc11afff2d804c5')
   })
 })
+
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { after, before } from 'node:test'
+
+import { check, indexBlobs } from './check-do-not-overwrite.mjs'
+
+// A throwaway kernel-shaped repo, never the real tree. Comparison is by git
+// index blob, so this has to be a real repo with a real commit — the same code
+// path production takes, EOL normalisation included.
+let FIX
+
+function write(rel, body) {
+  const abs = path.join(FIX, rel)
+  mkdirSync(path.dirname(abs), { recursive: true })
+  writeFileSync(abs, body)
+}
+
+function stage() {
+  execFileSync('git', ['-C', FIX, 'add', '-A'], { stdio: 'pipe' })
+}
+
+describe('check-do-not-overwrite — behaviour', () => {
+  const SMALL = {
+    schemaVersion: 1,
+    expectedEntries: 3,
+    doNotDelete: ['a/keep-one.ts', 'a/keep-two.ts'],
+    kernelAhead: [{ path: 'b/ahead.ts', forbiddenProductBlob: null }],
+  }
+
+  before(() => {
+    FIX = mkdtempSync(path.join(tmpdir(), 'b3-dno-'))
+    const g = (...a) => execFileSync('git', ['-C', FIX, ...a], { stdio: 'pipe' })
+    g('init', '-q', '-b', 'main')
+    g('config', 'user.email', 'b3@fixture.invalid')
+    g('config', 'user.name', 'b3 fixture')
+    g('config', 'commit.gpgsign', 'false')
+    write('a/keep-one.ts', 'export const one = 1\n')
+    write('a/keep-two.ts', 'export const two = 2\n')
+    write('b/ahead.ts', 'export const kernelVersion = true\n')
+    stage()
+    g('commit', '-qm', 'fixture')
+    // The blob the StuRa tree would bring for b/ahead.ts.
+    SMALL.kernelAhead[0].forbiddenProductBlob = execFileSync(
+      'git', ['-C', FIX, 'hash-object', '--stdin'],
+      { input: 'export const staleProductVersion = true\n', encoding: 'utf8' },
+    ).trim()
+  })
+
+  after(() => rmSync(FIX, { recursive: true, force: true }))
+
+  test('a clean tree produces no failures', () => {
+    assert.deepEqual(check(SMALL, indexBlobs(FIX)), [])
+  })
+
+  test('a deleted do-not-delete path is refused by name', () => {
+    rmSync(path.join(FIX, 'a/keep-two.ts'))
+    stage()
+    const out = check(SMALL, indexBlobs(FIX))
+    assert.equal(out.length, 1)
+    assert.equal(
+      out[0],
+      'PORT-BACK REFUSED: a/keep-two.ts is in the do-not-overwrite set and is no longer tracked in the kernel',
+    )
+    write('a/keep-two.ts', 'export const two = 2\n')
+    stage()
+    assert.deepEqual(check(SMALL, indexBlobs(FIX)), [])
+  })
+
+  test('a kernel-ahead path overwritten with the StuRa-tree bytes is refused', () => {
+    write('b/ahead.ts', 'export const staleProductVersion = true\n')
+    stage()
+    const out = check(SMALL, indexBlobs(FIX))
+    assert.equal(out.length, 1)
+    assert.match(out[0], /^PORT-BACK REFUSED: b\/ahead\.ts now carries the StuRa-tree blob [0-9a-f]{40}; kernel wins on this path \(spec B §2\.1\)$/)
+    write('b/ahead.ts', 'export const kernelVersion = true\n')
+    stage()
+    assert.deepEqual(check(SMALL, indexBlobs(FIX)), [])
+  })
+
+  test('an ordinary kernel edit to a protected path is allowed', () => {
+    write('a/keep-one.ts', 'export const one = 1\nexport const added = true\n')
+    stage()
+    assert.deepEqual(check(SMALL, indexBlobs(FIX)), [])
+  })
+
+  test('a short set is refused rather than passing vacuously', () => {
+    const out = check({ ...SMALL, doNotDelete: [], kernelAhead: [] }, indexBlobs(FIX))
+    assert.deepEqual(out, [
+      'PORT-BACK REFUSED: the do-not-overwrite set declares 3 entries but carries 0',
+    ])
+  })
+
+  test('the real set loads against the real kernel with no failures', () => {
+    assert.deepEqual(check(set, indexBlobs(path.join(import.meta.dirname, '..', '..'))), [])
+  })
+})

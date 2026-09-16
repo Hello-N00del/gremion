@@ -75,6 +75,12 @@ jobs:
       - name: Workspace packages must ship what their exports name
         run: node scripts/check-shipped-package-files.mjs --static
 
+      # B3: the do-not-overwrite set. Every port-back unit runs this before it
+      # writes to the tree; running it in CI is what keeps it from decaying
+      # into a step people remember to run.
+      - name: Do-not-overwrite set intact (B3)
+        run: make lint-port-back
+
       - name: Validate Docker Compose config
         run: |
           # Provide stubs so docker compose config can resolve all references
