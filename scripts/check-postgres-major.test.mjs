@@ -210,3 +210,111 @@ test('--tree FAILS LOUDLY on a tree with no fragments, instead of passing vacuou
 test('fragmentFiles throws on a directory that does not exist', () => {
   assert.throws(() => fragmentFiles(join(FIX, 'no-such-tree')), /no such tree/)
 })
+
+// ── the data-directory contract (docker-library/postgres PR 1259) ──────────
+//
+// The tag half above proves what is WRITTEN. This half proves the tag can
+// actually run: at major 18 the official image moved PGDATA to
+// /var/lib/postgresql/<major>/docker, moved its declared VOLUME to
+// /var/lib/postgresql, and made its entrypoint refuse ANY mount at
+// /var/lib/postgresql/data — an empty one included. A tree that bumps the tag
+// and leaves the 16-era mount behind crash-loops with every tag guard green.
+
+import {
+  POSTGRES_DATA_MOUNT,
+  scanDataMounts,
+  checkDataMounts,
+} from './check-postgres-major.mjs'
+
+// The mount a pre-18 tree declares. Spelling it out here is deliberate and safe:
+// checkDataMounts scans only .yml/.yaml/.sh/.bats/.tmpl and never a .mjs,
+// because a mount declaration cannot live in one — and the real-repo test below
+// scans the committed tree, this file included, which is what proves that claim
+// rather than asserting it.
+const LEGACY_MOUNT = '/var/lib/postgresql/data'
+
+test('the expected data mount is derived from the pinned major, not hardcoded', () => {
+  assert.equal(
+    POSTGRES_DATA_MOUNT,
+    POSTGRES_MAJOR >= 18 ? '/var/lib/postgresql' : LEGACY_MOUNT,
+  )
+})
+
+test('scanDataMounts reads compose short syntax and k8s mountPath, and nothing else', () => {
+  const text = [
+    '    volumes:',
+    `      - pg-data:${POSTGRES_DATA_MOUNT}`,
+    // a bind of the init script is not a data mount and must not be read as one
+    '      - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro',
+    '          volumeMounts:',
+    '            - name: data',
+    `              mountPath: ${POSTGRES_DATA_MOUNT}`,
+    // prose that merely names the path is not a declaration
+    `# the 18+ entrypoint refuses a mount at ${LEGACY_MOUNT}`,
+  ].join('\n')
+  const hits = scanDataMounts('f.yml', text)
+  assert.equal(hits.length, 2, JSON.stringify(hits))
+  assert.deepEqual(hits.map((h) => h.line), [2, 6])
+  assert.deepEqual(hits.map((h) => h.mount), [POSTGRES_DATA_MOUNT, POSTGRES_DATA_MOUNT])
+})
+
+test('checkDataMounts goes RED on the pre-18 mount, naming the contract that forbids it', () => {
+  const problems = checkDataMounts([
+    { path: 'docker-compose.yml', text: `      - pg-data:${LEGACY_MOUNT}\n` },
+  ])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.ok(problems[0].includes(`data mount: docker-compose.yml:1 mounts ${LEGACY_MOUNT}`), problems[0])
+  assert.ok(problems[0].includes(`expected ${POSTGRES_DATA_MOUNT}`), problems[0])
+  assert.ok(problems[0].includes('PR 1259'), problems[0])
+})
+
+test('checkDataMounts goes RED on a mount that hardcodes the current major', () => {
+  // /var/lib/postgresql/18/docker is where PGDATA points today, so mounting it
+  // WORKS — and silently stops working at the next bump. The expected mount is
+  // the parent, which is why an "it runs, so it is fine" mount is still a
+  // finding.
+  const pinned = `/var/lib/postgresql/${POSTGRES_MAJOR}/docker`
+  const problems = checkDataMounts([
+    { path: 'k8s/base/postgres/statefulset.yaml', text: `              mountPath: ${pinned}\n` },
+  ])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.ok(problems[0].includes(`mounts ${pinned}`), problems[0])
+})
+
+test('checkDataMounts refuses to pass on an empty match set', () => {
+  const problems = checkDataMounts([
+    { path: 'a.yml', text: 'services:\n  web:\n    image: nginx:1.29\n' },
+  ])
+  assert.match(problems.join('\n'), /zero Postgres data mounts/)
+})
+
+test('checkDataMounts leaves prose alone: the record must be free to name the old path', () => {
+  // docs/ops/postgres-major.md has to spell out /var/lib/postgresql/data in
+  // order to explain the boundary. A .md is not a place a mount is configured.
+  const problems = checkDataMounts([
+    { path: 'docs/ops/postgres-major.md', text: `a volume at \`${LEGACY_MOUNT}\` is refused\n` },
+    { path: 'docker-compose.yml', text: `      - pg-data:${POSTGRES_DATA_MOUNT}\n` },
+  ])
+  assert.deepEqual(problems, [])
+})
+
+test('the committed kernel tree mounts Postgres data where the pinned major puts it', () => {
+  const files = trackedTextFiles(ROOT)
+  const hits = files.flatMap((f) => scanDataMounts(f.path, f.text))
+  assert.ok(hits.length >= 5, `expected >= 5 Postgres data mounts, found ${hits.length}`)
+  assert.deepEqual(checkDataMounts(files), [])
+})
+
+test('--tree checks the data mount of a leaf fragment too', () => {
+  assert.deepEqual(checkDataMounts(fragmentFiles(join(FIX, 'tree-clean'))), [])
+
+  const stale = fragmentFiles(join(FIX, 'tree-stale'))
+  const mounts = scanDataMounts(stale[0].path, stale[0].text)
+  assert.equal(mounts.length, 1, 'fixture precondition: tree-stale declares one data mount')
+  assert.notEqual(mounts[0].mount, POSTGRES_DATA_MOUNT, 'fixture precondition: it must be the old mount')
+  const problems = checkDataMounts(stale)
+  assert.ok(
+    problems.join('\n').includes(`data mount: compose/calendar.yml:${mounts[0].line}`),
+    problems.join('\n'),
+  )
+})

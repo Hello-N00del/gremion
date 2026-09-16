@@ -107,6 +107,78 @@ export function checkFiles(files) {
     .map((h) => `${classify(h)}: ${h.path}:${h.line} ${h.ref} (expected ${POSTGRES_IMAGE_TAG})`)
 }
 
+// ── the data-directory contract ────────────────────────────────────────────
+//
+// A second, SEPARATE post-condition, because the tag guard above cannot see it.
+// docker-library/postgres PR 1259 changed the layout at major 18: PGDATA moved
+// from /var/lib/postgresql/data to /var/lib/postgresql/<major>/docker, the
+// image's declared VOLUME moved up to /var/lib/postgresql, and the 18+
+// entrypoint REFUSES to start when anything is mounted at
+// /var/lib/postgresql/data — a brand-new EMPTY volume included. Measured on this
+// box against the real images:
+//
+//   the 16-alpine image  PGDATA=/var/lib/postgresql/data       VOLUME /var/lib/postgresql/data
+//   the 18-alpine image  PGDATA=/var/lib/postgresql/18/docker  VOLUME /var/lib/postgresql
+//
+// (written without the `postgres:` prefix on purpose — this file is one of the
+// tracked files the tag scan above reads, and a stale tag spelled out here would
+// be an honest finding against the guard's own source.)
+//
+// So a tree that bumps the TAG to 18 and leaves its mount where 16 wanted it
+// crash-loops on a wiped box, with every tag guard green. That is the failure
+// this check exists to make impossible.
+export const POSTGRES_DATA_MOUNT =
+  POSTGRES_MAJOR >= 18 ? '/var/lib/postgresql' : '/var/lib/postgresql/data'
+
+// Only real mount DECLARATIONS are scanned, and only in the file kinds that can
+// carry one. Prose in a .md is prose: docs/ops/postgres-major.md has to be free
+// to NAME the old path in order to explain the boundary, and a .mjs carries no
+// mounts. A path that is neither POSTGRES_DATA_MOUNT nor a subdirectory-free
+// match is reported, so `/var/lib/postgresql/18/docker` — which works today and
+// breaks at the next bump — is a finding too.
+const MOUNTABLE = /\.(ya?ml|sh|bats|tmpl)$/
+const MOUNT_RES = [
+  // compose short syntax:  - pg-data:/var/lib/postgresql[:ro]
+  /^\s*-\s*["']?[A-Za-z0-9_.${}-]+:(\/var\/lib\/postgresql[^\s:"']*)/,
+  // compose long syntax and kubernetes:  target: / mountPath: /var/lib/postgresql
+  /^\s*(?:target|mountPath):\s*["']?(\/var\/lib\/postgresql[^\s"']*)/,
+]
+
+export function scanDataMounts(path, text) {
+  const hits = []
+  text.split('\n').forEach((line, i) => {
+    for (const re of MOUNT_RES) {
+      const m = line.match(re)
+      if (m) { hits.push({ path, line: i + 1, mount: m[1] }); break }
+    }
+  })
+  return hits
+}
+
+/**
+ * Every persistent Postgres data mount in the tree sits at the path the PINNED
+ * major's image actually uses. An empty match set is a FAILURE for the same
+ * reason checkFiles refuses one: a scan that found nothing proves nothing.
+ *
+ * @param files [{path, text}]
+ */
+export function checkDataMounts(files) {
+  const hits = files
+    .filter((f) => !EXCLUDED.some((re) => re.test(f.path)))
+    .filter((f) => MOUNTABLE.test(f.path))
+    .flatMap((f) => scanDataMounts(f.path, f.text))
+  if (hits.length === 0) {
+    return ['found zero Postgres data mounts — the data-directory check would pass vacuously']
+  }
+  return hits
+    .filter((h) => h.mount !== POSTGRES_DATA_MOUNT)
+    .map((h) =>
+      `data mount: ${h.path}:${h.line} mounts ${h.mount} (expected ${POSTGRES_DATA_MOUNT}` +
+      ` — postgres:${POSTGRES_MAJOR} stores its data in /var/lib/postgresql/${POSTGRES_MAJOR}/docker` +
+      ` and its entrypoint refuses ANY mount at /var/lib/postgresql/data, empty or not:` +
+      ` docker-library/postgres PR 1259)`)
+}
+
 const TEXTUAL = /\.(ya?ml|md|ts|mjs|js|sh|bats|json|tmpl)$|(^|\/)(Dockerfile|Makefile)/
 
 export function trackedTextFiles(root) {
@@ -155,12 +227,16 @@ if (isMain) {
   if (i >= 0 && !tree) { console.error('[postgres-major] --tree needs a directory'); process.exit(2) }
   const files = tree ? fragmentFiles(tree) : trackedTextFiles(ROOT)
   const problems = tree
-    ? checkFiles(files)
-    : [...checkEvidence(readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')), ...checkFiles(files)]
+    ? [...checkFiles(files), ...checkDataMounts(files)]
+    : [
+        ...checkEvidence(readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')),
+        ...checkFiles(files),
+        ...checkDataMounts(files),
+      ]
   if (problems.length > 0) {
     console.error(`[postgres-major] ${problems.length} problem(s) in ${tree ?? 'the kernel tree'}:`)
     for (const p of problems) console.error(`  x ${p}`)
     process.exit(1)
   }
-  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: reference is ${POSTGRES_IMAGE_TAG}`)
+  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: reference is ${POSTGRES_IMAGE_TAG} and every data mount is ${POSTGRES_DATA_MOUNT}`)
 }

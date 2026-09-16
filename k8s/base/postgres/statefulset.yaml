@@ -39,7 +39,7 @@ spec:
             - name: init-scripts
               mountPath: /scripts
             - name: data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql
       containers:
         - name: postgres
           image: postgres:18-alpine
@@ -76,7 +76,7 @@ spec:
             failureThreshold: 3
           volumeMounts:
             - name: data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql
             - name: init-scripts
               mountPath: /docker-entrypoint-initdb.d
       volumes:
