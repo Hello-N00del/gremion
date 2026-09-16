@@ -76,6 +76,23 @@ export const EXCLUDED = [
 // in a dozen places with nothing in front of it.
 const TAG_RE = /(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])/g
 
+// The SECOND net, for the reference that has no tag at all for TAG_RE to match:
+// `image: postgres`, `image: "postgres"`, `image: postgres:` with nothing after
+// the colon. Docker resolves every one of those to the `latest` tag at pull
+// time, which makes them the most dangerous floating reference in the set — and
+// the vacuity guard cannot save a tree that carries eighteen correct references
+// plus one of these, because the match set is far from empty.
+//
+// It is anchored on the compose / k8s `image:` KEY: a bare `postgres` word is
+// far too common in prose, in service names and in environment values
+// (`POSTGRES_DB: postgres`) to be read as an image reference anywhere else.
+//
+// The optional registry/namespace prefix accepts `docker.io/library/postgres`
+// while refusing `mypostgres` and `timescale/timescaledb-postgis`: the reference
+// must END at `postgres`, and any prefix must end in a slash.
+const UNTAGGED_IMAGE_RE =
+  /^\s*(?:-\s*)?image:\s*(["']?)((?:[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]+)?\/)*postgres):?\1\s*(?:#.*)?$/
+
 export function scanText(path, text) {
   const hits = []
   text.split('\n').forEach((line, i) => {
@@ -83,15 +100,23 @@ export function scanText(path, text) {
       if (m[1] === '5432') continue
       hits.push({ path, line: i + 1, tag: m[1], ref: `postgres:${m[1]}` })
     }
+    // A line carrying a real tag has already been read above; this fires only
+    // where there is no tag at all, so no line is ever counted twice.
+    const u = line.replace(/\r$/, '').match(UNTAGGED_IMAGE_RE)
+    if (u) hits.push({ path, line: i + 1, tag: null, ref: u[2] })
   })
   return hits
 }
 
 export function classify(hit) {
-  if (hit.tag === 'latest' || hit.tag === 'alpine') return 'unpinned'
-  const major = Number(hit.tag.split(/[.-]/)[0])
-  if (!Number.isInteger(major)) return 'unpinned'
-  return major === POSTGRES_MAJOR ? 'ok' : 'mismatched'
+  // No tag at all IS `latest`, and there is nothing to parse — so it is decided
+  // here, before the numeric path, rather than by falling through it: Number('')
+  // is 0, which IS an integer, and would otherwise be reported as a mismatched
+  // major 0 instead of as the floating reference it is.
+  if (!hit.tag || hit.tag === 'latest' || hit.tag === 'alpine') return 'unpinned'
+  const major = hit.tag.split(/[.-]/)[0]
+  if (!/^\d+$/.test(major)) return 'unpinned'
+  return Number(major) === POSTGRES_MAJOR ? 'ok' : 'mismatched'
 }
 
 /** @param files [{path, text}] */
@@ -138,8 +163,15 @@ export const POSTGRES_DATA_MOUNT =
 // breaks at the next bump — is a finding too.
 const MOUNTABLE = /\.(ya?ml|sh|bats|tmpl)$/
 const MOUNT_RES = [
-  // compose short syntax:  - pg-data:/var/lib/postgresql[:ro]
-  /^\s*-\s*["']?[A-Za-z0-9_.${}-]+:(\/var\/lib\/postgresql[^\s:"']*)/,
+  // compose short syntax, NAMED volume or BIND mount:
+  //   - pg-data:/var/lib/postgresql[:ro]      - ./pgdata:/var/lib/postgresql
+  //   - /srv/pg:/var/lib/postgresql           - ${PG_DIR}/data:/var/lib/postgresql
+  // The source class carries `/`, `\`, `~` and `..` on purpose: a bind mount at
+  // the pre-18 path crash-loops exactly like a named volume there, and a leaf
+  // fragment or an operator overlay is as likely to write one as the other. A
+  // single-letter Windows drive prefix is allowed explicitly so that a `C:/pg`
+  // source cannot swallow the separating colon.
+  /^\s*-\s*["']?(?:[A-Za-z]:)?[A-Za-z0-9_.${}~/\\+-]+:(\/var\/lib\/postgresql[^\s:"']*)/,
   // compose long syntax and kubernetes:  target: / mountPath: /var/lib/postgresql
   /^\s*(?:target|mountPath):\s*["']?(\/var\/lib\/postgresql[^\s"']*)/,
 ]
@@ -179,7 +211,13 @@ export function checkDataMounts(files) {
       ` docker-library/postgres PR 1259)`)
 }
 
-const TEXTUAL = /\.(ya?ml|md|ts|mjs|js|sh|bats|json|tmpl)$|(^|\/)(Dockerfile|Makefile)/
+// Extension-bearing text files, PLUS the tracked files that carry no extension
+// at all and would otherwise never be opened: the host CLI under
+// `infra/host/bin/` (gremion-backup, gremion-restore-into, gremion-render, ...)
+// and the dotted env templates (`.env.example`). A `postgres:<tag>` written into
+// one of those would be pinned by nobody.
+const TEXTUAL =
+  /\.(ya?ml|md|ts|mjs|js|sh|bats|json|tmpl)$|(^|\/)(Dockerfile|Makefile)|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
 
 export function trackedTextFiles(root) {
   const out = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })

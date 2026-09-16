@@ -318,3 +318,107 @@ test('--tree checks the data mount of a leaf fragment too', () => {
     problems.join('\n'),
   )
 })
+
+// ── round-2 review: the three blind spots that made the guard pass silently ──
+//
+// Each of these is a case the guard was written to catch and did not. They are
+// written as tests FIRST, watched RED, and only then closed in the scanner.
+
+// The untagged reference is built the same defensive way the stale tags above
+// are: it is spelled as a value, never as a line this file's own scan could
+// read as a declaration.
+const UNTAGGED = '    image: postgres'
+
+test('scanText finds an UNTAGGED postgres image — `:latest` at pull time', () => {
+  // An untagged reference resolves to the `latest` tag when Docker pulls it,
+  // which is
+  // the single most dangerous floating reference there is. It has no tag for a
+  // `postgres:<tag>` scanner to match, so it needs its own net.
+  const hits = scanText('docker-compose.yml', UNTAGGED)
+  assert.equal(hits.length, 1, `expected one hit, got ${JSON.stringify(hits)}`)
+  assert.equal(hits[0].line, 1)
+  assert.equal(classify(hits[0]), 'unpinned')
+})
+
+test('scanText reads every untagged spelling, and never the same line twice', () => {
+  const cases = [
+    UNTAGGED,
+    '    image: "postgres"',
+    "    image: 'postgres'",
+    '    image: postgres:',
+    '    image: docker.io/library/postgres',
+    '  - image: postgres',
+  ]
+  for (const line of cases) {
+    const hits = scanText('a.yml', line)
+    assert.equal(hits.length, 1, `${line} -> ${JSON.stringify(hits)}`)
+    assert.equal(classify(hits[0]), 'unpinned', `${line} must classify as unpinned`)
+  }
+  // a TAGGED line is matched once, by the tag scanner, not twice
+  const tagged = scanText('a.yml', `    image: ${POSTGRES_IMAGE_TAG}`)
+  assert.equal(tagged.length, 1, JSON.stringify(tagged))
+  assert.equal(classify(tagged[0]), 'ok')
+})
+
+test('the untagged net does not fire on an image that merely ends in postgres', () => {
+  const notPostgres = [
+    '    image: mypostgres',
+    '    image: ghcr.io/hello-n00del/gremion-calendar@sha256:4444444444444444444444444444444444444444444444444444444444444444',
+    '    image: timescale/timescaledb-postgis',
+    '# image: postgres is what a fragment must never say',
+    '    POSTGRES_DB: postgres',
+  ]
+  for (const line of notPostgres) {
+    assert.deepEqual(scanText('a.yml', line), [], `${line} must not be read as an untagged postgres image`)
+  }
+})
+
+test('checkFiles goes RED when one fragment of a good set is untagged', () => {
+  // The reviewer's exact scenario: a kernel tree full of correctly pinned
+  // references plus ONE leaf fragment written `image: postgres`. The vacuity
+  // guard cannot see this — the set is far from empty — so without its own net
+  // the whole run stays green.
+  const problems = checkFiles([
+    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'compose/calendar.yml', text: `${UNTAGGED}\n` },
+  ])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.ok(problems[0].includes('unpinned: compose/calendar.yml:1 postgres'), problems[0])
+  assert.ok(problems[0].includes(`expected ${POSTGRES_IMAGE_TAG}`), problems[0])
+})
+
+test('classify calls a missing tag unpinned, never a major-0 mismatch', () => {
+  assert.equal(classify({ tag: null }), 'unpinned')
+  assert.equal(classify({ tag: '' }), 'unpinned')
+})
+
+test('scanDataMounts sees a BIND-mounted data directory, not only a named volume', () => {
+  // An operator overlay or a hand-written leaf fragment is as likely to bind a
+  // host path as to name a volume, and a bind at the pre-18 path crash-loops
+  // exactly the same way.
+  for (const src of ['./pgdata', '/srv/pg', '../state/pg', '${PG_DIR}/data', '~/pg']) {
+    const line = `      - ${src}:${POSTGRES_DATA_MOUNT}`
+    const hits = scanDataMounts('a.yml', line)
+    assert.equal(hits.length, 1, `${line} -> ${JSON.stringify(hits)}`)
+    assert.equal(hits[0].mount, POSTGRES_DATA_MOUNT)
+  }
+})
+
+test('checkDataMounts goes RED on a bind mount left at the pre-18 path', () => {
+  const problems = checkDataMounts([
+    { path: 'compose/calendar.yml', text: `      - ./pgdata:${LEGACY_MOUNT}\n` },
+  ])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.ok(problems[0].includes(`mounts ${LEGACY_MOUNT}`), problems[0])
+})
+
+test('trackedTextFiles reads the extensionless host scripts too', () => {
+  // infra/host/bin/* carry no extension. A `postgres:<tag>` written into one of
+  // them would be pinned by nobody if the file filter never opened it.
+  const paths = trackedTextFiles(ROOT).map((f) => f.path)
+  assert.ok(paths.includes('infra/host/bin/gremion-backup'),
+    'infra/host/bin/gremion-backup must be scanned')
+  assert.ok(paths.includes('infra/host/bin/gremion-restore-into'),
+    'infra/host/bin/gremion-restore-into must be scanned')
+  assert.ok(paths.includes('.env.example'), '.env.example must be scanned')
+})
