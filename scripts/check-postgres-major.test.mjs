@@ -170,3 +170,43 @@ test('the committed kernel tree carries the pinned tag everywhere, in >= 8 place
   assert.ok(hits.length >= 8, `expected >= 8 postgres: references, found ${hits.length}`)
   assert.deepEqual(checkFiles(files), [])
 })
+
+import { fragmentFiles } from './check-postgres-major.mjs'
+
+const FIX = join(ROOT, 'test/host/fixtures/postgres-major')
+
+test('fragmentFiles finds a module repo compose fragment', () => {
+  const files = fragmentFiles(join(FIX, 'tree-clean'))
+  assert.equal(files.length, 1)
+  assert.equal(files[0].path, 'compose/calendar.yml')
+})
+
+test('--tree passes on a fragment carrying the pinned tag', () => {
+  assert.deepEqual(checkFiles(fragmentFiles(join(FIX, 'tree-clean'))), [])
+})
+
+test('--tree goes RED on a leaf Postgres left on the old major', () => {
+  const files = fragmentFiles(join(FIX, 'tree-stale'))
+  assert.equal(files.length, 1)
+  // The stale tag and its line are READ OFF the fixture rather than restated
+  // here, so a fixture that silently rotted to the pinned major fails the
+  // precondition instead of quietly making this test meaningless.
+  const stale = scanText(files[0].path, files[0].text)[0]
+  assert.ok(stale, 'fixture precondition: tree-stale declares a postgres image')
+  assert.equal(classify(stale), 'mismatched', 'fixture precondition: it must be stale')
+  const problems = checkFiles(files)
+  assert.ok(
+    problems.join('\n').includes(`mismatched: compose/calendar.yml:${stale.line} ${stale.ref}`),
+    problems.join('\n'),
+  )
+})
+
+test('--tree FAILS LOUDLY on a tree with no fragments, instead of passing vacuously', () => {
+  const files = fragmentFiles(join(FIX, 'tree-empty'))
+  assert.equal(files.length, 0)
+  assert.match(checkFiles(files).join('\n'), /zero postgres: image references/)
+})
+
+test('fragmentFiles throws on a directory that does not exist', () => {
+  assert.throws(() => fragmentFiles(join(FIX, 'no-such-tree')), /no such tree/)
+})

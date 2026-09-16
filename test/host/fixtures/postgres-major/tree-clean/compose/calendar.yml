@@ -1,0 +1,8 @@
+# Fixture: the fragment shape D6/D13 ship. Only the postgres block matters here.
+services:
+  calendar-postgres:
+    image: postgres:18-alpine
+    x-gremion-tier: state
+  calendar-service:
+    image: ghcr.io/hello-n00del/gremion-calendar@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    x-gremion-tier: app

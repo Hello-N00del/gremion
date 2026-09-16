@@ -12,8 +12,8 @@
 // Test: node --test scripts/check-postgres-major.test.mjs
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
+import { join, dirname, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** The major S14 settled on. Change this ONLY together with the record. */
@@ -117,20 +117,50 @@ export function trackedTextFiles(root) {
     .map((p) => ({ path: p, text: readFileSync(join(root, p), 'utf8') }))
 }
 
+// ── module repos and assembled release trees ───────────────────────────────
+
+/**
+ * A module repo or an assembled release tree: every `compose/<id>.yml` fragment
+ * plus the composed files D13 inlines them into. Nothing is walked recursively,
+ * so an accidental `--tree /` reports zero rather than grinding — and zero is a
+ * FAILURE, not a pass (checkFiles refuses an empty match set). A tree that is
+ * not there at all throws rather than reporting an empty, reassuring scan.
+ */
+export function fragmentFiles(root) {
+  if (!existsSync(root)) throw new Error(`no such tree: ${root}`)
+  const out = []
+  const push = (abs) => out.push({
+    path: relative(root, abs).split(sep).join('/'),
+    text: readFileSync(abs, 'utf8'),
+  })
+  const composeDir = join(root, 'compose')
+  if (existsSync(composeDir)) {
+    for (const n of readdirSync(composeDir)) {
+      if (/\.ya?ml$/.test(n) && statSync(join(composeDir, n)).isFile()) push(join(composeDir, n))
+    }
+  }
+  for (const n of readdirSync(root)) {
+    if (/^docker-compose.*\.ya?ml$/.test(n) && statSync(join(root, n)).isFile()) push(join(root, n))
+  }
+  return out
+}
+
 // ── CLI ────────────────────────────────────────────────────────────────────
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 if (isMain) {
   const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-  const files = trackedTextFiles(ROOT)
-  const problems = [
-    ...checkEvidence(readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')),
-    ...checkFiles(files),
-  ]
+  const i = process.argv.indexOf('--tree')
+  const tree = i >= 0 ? process.argv[i + 1] : null
+  if (i >= 0 && !tree) { console.error('[postgres-major] --tree needs a directory'); process.exit(2) }
+  const files = tree ? fragmentFiles(tree) : trackedTextFiles(ROOT)
+  const problems = tree
+    ? checkFiles(files)
+    : [...checkEvidence(readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')), ...checkFiles(files)]
   if (problems.length > 0) {
-    console.error(`[postgres-major] ${problems.length} problem(s):`)
+    console.error(`[postgres-major] ${problems.length} problem(s) in ${tree ?? 'the kernel tree'}:`)
     for (const p of problems) console.error(`  x ${p}`)
     process.exit(1)
   }
-  console.log(`[postgres-major] OK — ${files.length} tracked files scanned, every postgres: reference is ${POSTGRES_IMAGE_TAG}`)
+  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: reference is ${POSTGRES_IMAGE_TAG}`)
 }
