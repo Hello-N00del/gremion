@@ -837,11 +837,68 @@ const PRODUCT_TOKEN_EXEMPT_PATHS = [
   /^gremion-ui\/migrations\/048_resolution_decided_at\.sql$/,
 ]
 
+// PENDING - a dated, per-line waiver, and NOT a second allow-list. The
+// difference matters: an allow-list entry is a path this rule stops looking at,
+// a PENDING entry is one exact line, in one file, at one count, that the rule
+// has seen and is holding. It is enforced in BOTH directions:
+//   - a carrier that is NOT pending fails, so a NEW occurrence still breaks the
+//     build the day it is written;
+//   - a pending line that no longer occurs, or occurs a different number of
+//     times, ALSO fails, so the waiver cannot outlive its cause. When the realm
+//     unit lands, these entries stop matching and h2 goes red until they are
+//     deleted. A waiver nobody is forced to remove is a waiver that rots.
+// Entries carry no line numbers on purpose: a line number drifts under every
+// edit above it, the exact text does not.
+//
+// EVERY entry below has ONE cause, opened 2026-09-16: the realm a running
+// Keycloak actually serves is still named with the retired token, and renaming
+// it is a deployment-identity migration owned by
+// B1a-realm-identity-and-boot-import, which deletes the boot import,
+// realm-export.json and substitute-realm-secrets.sh outright. This unit owns
+// the login theme. It must not invent a realm identity another unit is about to
+// decide, and it must not hold the whole suite red while it waits: h2 shares
+// one exit code with 44 other checks - i1/i2 (retired operator hosts in shipped
+// deploy and env templates), g3-g6 (k8s supply chain and :latest pinning), j1
+// (the k8s apex/escaped-domain sentinel) - and `make lint` stops at the first
+// failing target, so a permanently red h2 would silently retire all of them.
+const PRODUCT_TOKEN_PENDING = [
+  [".env.example", "AUTH_KEYCLOAK_ISSUER=http://keycloak:8080/auth/realms/sturaos", 1],
+  [".env.example", "KEYCLOAK_ISSUER_URL=http://keycloak:8080/auth/realms/sturaos", 1],
+  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_BASE: https://council.example/auth/realms/sturaos", 1],
+  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_ISSUER: http://localhost/realms/sturaos", 1],
+  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_ISSUER: https://council.example/auth/realms/sturaos", 1],
+  ["docker-compose.override.yml", "# KC_HOSTNAME includes /auth, so iss = http://localhost:8082/auth/realms/sturaos.", 1],
+  ["docker-compose.override.yml", "AUTH_KEYCLOAK_BASE: \"http://localhost:8082/auth/realms/sturaos\"", 1],
+  ["docker-compose.override.yml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
+  ["docker-compose.override.yml", "AUTH_KEYCLOAK_ISSUER: \"http://localhost:8082/auth/realms/sturaos\"", 1],
+  ["docker-compose.yml", "AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/sturaos", 1],
+  ["docker/keycloak/realm-export.base.json", "\"realm\": \"sturaos\",", 1],
+  ["docker/keycloak/realm-export.json", "\"realm\": \"sturaos\",", 1],
+  ["docker/keycloak/substitute-realm-secrets.sh", "REALM_DST=\"${IMPORT_DIR}/sturaos-realm.json\"", 1],
+  ["docker/keycloak/substitute-realm-secrets.sh", "cp /opt/keycloak-init/dev-users.json \"${IMPORT_DIR}/sturaos-users-0.json\"", 1],
+  ["docker/keycloak/substitute-realm-secrets.sh", "echo \"[substitute-realm-secrets] dev composition — importing dev users (sturaos-users-0.json).\"", 1],
+  ["docker/keycloak/substitute-realm-secrets.sh", "rm -f \"${IMPORT_DIR}/sturaos-users-0.json\"", 2],
+  ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
+  ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_ISSUER: \"https://stura.example.com/auth/realms/sturaos\"", 1],
+  ["scripts/configure-keycloak-clients.sh", "REALM=\"sturaos\"", 1],
+  ["scripts/dev-configure.sh", "\"${KC_BASE}/admin/realms/sturaos/clients/${uuid}\")", 1],
+  ["scripts/dev-configure.sh", "\"${KC_BASE}/admin/realms/sturaos/clients?clientId=${client_id}\" \\", 1],
+  ["scripts/dev-configure.sh", "-X PUT \"${KC_BASE}/admin/realms/sturaos/clients/${uuid}\" \\", 1],
+  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_BASE\"       \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
+  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_INTERNAL\"   \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
+  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_ISSUER\"     \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
+  ["test/integration/health.bats", "@test \"Keycloak sturaos realm is reachable\" {", 1],
+  ["test/integration/health.bats", "[[ \"$output\" == *'\"realm\":\"sturaos\"'* ]]", 1],
+  ["test/integration/health.bats", "run curl -sf http://localhost:8082/auth/realms/sturaos", 1],
+  ["test/integration/oidc.bats", "REALM=\"sturaos\"", 1],
+]
+
 check('h2 the retired product token survives nowhere as a bare identifier', () => {
   const files = execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' })
     .split('\n').map((s) => s.trim()).filter(Boolean)
-  if (files.length === 0) return 'git ls-files matched zero files — the check would vacuously pass'
-  const offenders = []
+  if (files.length === 0) return 'git ls-files matched zero files - the check would vacuously pass'
+  // rel -> (exact trimmed line -> { count, lines })
+  const carriers = new Map()
   for (const rel of files) {
     if (/\.(png|jpe?g|gif|svg|ico|pdf|woff2?)$/i.test(rel)) continue
     if (PRODUCT_TOKEN_EXEMPT_PATHS.some((re) => re.test(rel))) continue
@@ -849,11 +906,39 @@ check('h2 the retired product token survives nowhere as a bare identifier', () =
     const abs = join(ROOT, rel)
     if (!existsSync(abs)) continue
     readFileSync(abs, 'utf8').split('\n').forEach((line, i) => {
-      if (RETIRED_PRODUCT_TOKEN.test(line)) offenders.push(`${rel}:${i + 1} ${line.trim().slice(0, 100)}`)
+      if (!RETIRED_PRODUCT_TOKEN.test(line)) return
+      const text = line.trim()
+      if (!carriers.has(rel)) carriers.set(rel, new Map())
+      const inFile = carriers.get(rel)
+      const seen = inFile.get(text) || { count: 0, lines: [] }
+      seen.count += 1
+      seen.lines.push(i + 1)
+      inFile.set(text, seen)
     })
   }
-  return offenders.length
-    ? `the retired product token is still a live identifier in ${offenders.length} place(s): ${offenders.join(' | ')}`
+  const problems = []
+  // LEG 1 - a pending entry that no longer matches. Deleted file, edited line or
+  // a different number of occurrences: every one of them means the waiver is
+  // stale and has to go, and none of them may pass silently.
+  const held = new Map()
+  for (const [rel, text, count] of PRODUCT_TOKEN_PENDING) {
+    const found = carriers.get(rel)?.get(text)?.count || 0
+    if (found !== count) {
+      problems.push(`STALE WAIVER ${rel} :: ${text.slice(0, 80)} - waived ${count}, found ${found}; delete the entry`)
+    }
+    held.set(rel + '\u0000' + text, count)
+  }
+  // LEG 2 - a carrier nobody waived, or more of one than was waived.
+  for (const [rel, inFile] of carriers) {
+    for (const [text, seen] of inFile) {
+      const waived = held.get(rel + '\u0000' + text) || 0
+      if (seen.count > waived) {
+        for (const ln of seen.lines.slice(waived)) problems.push(`${rel}:${ln} ${text.slice(0, 100)}`)
+      }
+    }
+  }
+  return problems.length
+    ? `the retired product token is still a live identifier in ${problems.length} unwaived place(s): ${problems.join(' | ')}`
     : null
 })
 
