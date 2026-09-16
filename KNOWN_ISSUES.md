@@ -234,6 +234,25 @@ login page. This is a deployment-identity migration, not a text change, and it
 is deliberately out of scope for 0.1.0. A fresh install can set the realm
 `displayName` to its own institution and never sees the fallback.
 
+### The dev realm requires HTTPS (a B-01 consequence) — OPEN
+
+Deleting the boot import also deleted `KC_REALM_SSL_REQUIRED`, the only knob
+that ever set a realm's `sslRequired` from the environment; the dev override
+used it to drop the dev realm to `external` so plain-HTTP localhost login
+worked without per-developer CA trust. `buildTenantRealmDoc` pins
+`sslRequired: 'all'` on every realm it composes (#139/G-080, and correct for
+a tenant), while `scripts/dev-configure.sh` still writes
+`http://localhost:${KC_PORT}/auth/realms/${KEYCLOAK_REALM}` issuers. So a dev
+realm created by tenant-create refuses the very requests the dev tooling
+points at it.
+
+Until the tenant-create entrypoint offers a dev mode, the workaround is one
+Admin API delta per dev realm:
+`kcadm.sh update realms/<realm> -s sslRequired=external`. This is a
+plan-level consequence of B-01, not an implementation defect: it belongs to
+the units that own tenant-create and the zero-tenant boot, and it is recorded
+here so it is not rediscovered as a login bug.
+
 ### The old working name in code and data
 
 - **Applied migrations are the only carriers left in code.** Four name it in

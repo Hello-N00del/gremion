@@ -205,15 +205,23 @@ Central identity provider (OIDC/SSO). Admin UI:
   `kubectl port-forward`. Set a CIDR list to allow bastion/VPN access, e.g.
   `KC_ADMIN_ALLOWLIST_CIDRS=203.0.113.10/32,198.51.100.0/24`.
 
-### KC_REALM_SSL_REQUIRED
+### Retired: `KC_REALM_SSL_REQUIRED`
 
-- **Type:** String (`all` | `external` | `none`)
-- **Default:** `all` (HTTPS required for every request, including private-IP)
-- **Used by:** substituted into the realm export as the realm `sslRequired`.
-- **Impact:** The dev override drops it to `external` so pure-local
-  `http://localhost:8082` browser login works without per-developer CA trust.
-  The actual internal HTTPS listener (`KC_HTTPS_*` + cert) lives in
-  `docker-compose.prod.yml`.
+B-01 deleted this knob from `docker-compose.yml` and from the dev override
+along with the boot import that consumed it. A realm's `sslRequired` is no
+longer an environment variable at all: `buildTenantRealmDoc` pins it to `all`
+on every realm it composes
+(`gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts`). The internal
+HTTPS listener (`KC_HTTPS_*` + cert) is unchanged and still lives in
+`docker-compose.prod.yml`.
+
+> **Named residual.** The dev escape hatch went with it: a realm created by
+> tenant-create requires HTTPS on every request, while `scripts/dev-configure.sh`
+> still writes `http://localhost:${KC_PORT}/auth/realms/${KEYCLOAK_REALM}`
+> issuers. Local browser login over plain HTTP therefore needs either a
+> per-developer CA trust or a per-realm `sslRequired` delta
+> (`kcadm.sh update realms/<realm> -s sslRequired=external`) until the
+> tenant-create entrypoint offers a dev mode. Recorded in `KNOWN_ISSUES.md`.
 
 ### OIDC client secrets
 

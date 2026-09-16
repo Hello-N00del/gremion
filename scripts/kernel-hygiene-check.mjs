@@ -1477,6 +1477,41 @@ check('e7 no tracked file outside the guards still describes the deleted Keycloa
     : null
 })
 
+// ── (e8) docs/ENVIRONMENT.md documents no knob that no longer exists ────────
+//
+// B-01 deleted `KC_REALM_SSL_REQUIRED` from docker-compose.yml and from the dev
+// override, and docs/ENVIRONMENT.md went on documenting it - Type, Default,
+// Used by, Impact - one section above a paragraph the same commit corrected.
+// Nothing compared the two surfaces, so the file contradicted itself silently.
+// Post-condition: every environment variable with its own `### NAME` section in
+// docs/ENVIRONMENT.md still has at least one LIVE carrier outside docs/ - a
+// line that is not a comment. A knob whose only remaining carriers are comments
+// is documentation of a mechanism that was removed.
+check('e8 every env var with its own section in docs/ENVIRONMENT.md still has a live carrier', () => {
+  const doc = read('docs/ENVIRONMENT.md')
+  const documented = [...doc.matchAll(/^### ([A-Z][A-Z0-9_]{2,})$/gm)].map((m) => m[1])
+  if (documented.length === 0) return 'docs/ENVIRONMENT.md declares no ### VAR sections - the check would vacuously pass'
+  const dead = []
+  for (const name of documented) {
+    const res = spawnSync('git', ['grep', '-n', '-e', name, '--', ':!docs/', ':!*.md'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    })
+    if (res.status > 1) throw new Error(`git grep failed for ${name}: ${res.stderr.trim()}`)
+    const live = (res.stdout || '')
+      .split('\n')
+      .filter(Boolean)
+      .filter((l) => {
+        const text = l.slice(l.indexOf(':', l.indexOf(':') + 1) + 1)
+        return !/^\s*(#|\/\/|--|\*)/.test(text)
+      })
+    if (live.length === 0) dead.push(name)
+  }
+  return dead.length
+    ? `docs/ENVIRONMENT.md documents ${dead.length} knob(s) with no live carrier left (comments only): ${dead.join(', ')}`
+    : null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {

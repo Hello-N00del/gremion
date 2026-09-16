@@ -276,12 +276,16 @@ Usually a redirect-URI or origin mismatch.
 3. For local dev, `make dev-configure` patches `gremion-ui/.env.local` and the
    Keycloak redirect URIs for you.
 
-> **Dev vs prod TLS:** dev runs Keycloak in `start-dev` over plain HTTP with the
-> realm at `sslRequired: external` (`KC_REALM_SSL_REQUIRED=external` in the
-> override). Production runs `start` with `sslRequired: all` and the
-> server-to-server hop over internal TLS (`https://keycloak:8443`). A login that
-> works in dev but 403s/redirects in prod is almost always missing internal-CA
-> trust (`NODE_EXTRA_CA_CERTS`) or an `sslRequired` mismatch.
+> **Dev vs prod TLS:** dev runs Keycloak in `start-dev` over plain HTTP, but
+> B-01 removed the `KC_REALM_SSL_REQUIRED` knob together with the boot import,
+> and `buildTenantRealmDoc` pins every realm it composes to `sslRequired: all`.
+> A dev realm therefore refuses plain-HTTP requests until you either trust the
+> internal CA or apply a per-realm delta:
+> `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh update realms/<realm> -s sslRequired=external`.
+> Production runs `start` with the server-to-server hop over internal TLS
+> (`https://keycloak:8443`). A login that works in dev but 403s/redirects in
+> prod is almost always missing internal-CA trust (`NODE_EXTRA_CA_CERTS`) or an
+> `sslRequired` mismatch.
 
 ---
 
