@@ -578,6 +578,48 @@ test('the wiring guard is asserted in BOTH worlds, so it cannot go silent when B
   }
 })
 
+/**
+ * The `.PHONY` DECLARATION and nothing else: the `.PHONY:` line plus its
+ * backslash continuations, stopping at the first line that does not continue.
+ *
+ * Bounding it is the whole point. `/^\.PHONY:[\s\S]*?\blint-extraction-source\b/`
+ * looks like it reads the list, but `[\s\S]*?` is unbounded and reached the
+ * `lint-extraction-source:` target definition 260 lines further down, so the
+ * name could be deleted from the list with the suite still green — the
+ * assertion could not fail, which is not an assertion.
+ */
+function phonyNames(makefile) {
+  const m = makefile.replace(/\r\n/g, '\n').match(/^\.PHONY:((?:[^\n]*\\\n)*[^\n]*)/m)
+  assert.ok(m, 'no .PHONY declaration in the Makefile')
+  return m[1]
+}
+
+/**
+ * One ci.yml job's own lines, comment-only lines removed.
+ *
+ * Bounding this matters for the same reason: matched against the whole file,
+ * `/run:\s*make lint-extraction-source/` is satisfied by a commented-out
+ * `#   run: make lint-extraction-source` — a step CI never executes — and by a
+ * step in some other job. A YAML comment is not a wiring.
+ */
+function ciJobBody(ci, job) {
+  const lines = ci.replace(/\r\n/g, '\n').split('\n')
+  const start = lines.indexOf(`  ${job}:`)
+  assert.ok(start !== -1, `no job \`${job}\` in ci.yml`)
+  const body = []
+  for (const line of lines.slice(start + 1)) {
+    // Comments first: a comment is never a step, at any indent. Testing the
+    // job boundary first would end the block at the two-space banner comment
+    // that sits between jobs — and would truncate this job at any two-space
+    // comment inside it, which is a false RED, and a guard that refuses
+    // correct code gets disabled.
+    if (/^\s*#/.test(line)) continue
+    if (/^ {2}\S/.test(line)) break // the next job's key, at the same indent
+    body.push(line)
+  }
+  return body.join('\n')
+}
+
 test('the target stays wired into make lint and into the ci.yml lint job', () => {
   // The guard only guards while something runs it. Both call sites are pinned:
   // dropping either would leave a green suite and an unrun check.
@@ -585,7 +627,15 @@ test('the target stays wired into make lint and into the ci.yml lint job', () =>
   const aggregate = mk.match(/^lint:.*$/m)
   assert.ok(aggregate, 'no lint: aggregate in the Makefile')
   assert.match(aggregate[0], /\blint-extraction-source\b/)
-  assert.match(mk, /^\.PHONY:[\s\S]*?\blint-extraction-source\b/m)
+  assert.match(
+    phonyNames(mk),
+    /\blint-extraction-source\b/,
+    'lint-extraction-source is missing from the Makefile .PHONY list'
+  )
   const ci = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8')
-  assert.match(ci, /run:\s*make lint-extraction-source/)
+  assert.match(
+    ciJobBody(ci, 'lint'),
+    /^\s+run: make lint-extraction-source$/m,
+    'no uncommented `run: make lint-extraction-source` step in the ci.yml lint job'
+  )
 })
