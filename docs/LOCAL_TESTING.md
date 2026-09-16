@@ -78,9 +78,8 @@ Internal Docker network (gremion_net):
    vector          →  tails Traefik access logs (idle in dev — no Traefik)
 ```
 
-> The admin shell app is **`gremion-ui`**, and the Keycloak realm is still named
-> **`sturaos`** — naming debt carried into 0.1.0, see
-> [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) — with clients **`gremion-ui`** and
+> The admin shell app is **`gremion-ui`**. The Keycloak realm is named by the last
+> path segment of `AUTH_KEYCLOAK_ISSUER` (`${REALM}` below), with clients **`gremion-ui`** and
 > **`gremion-admin`**. The **production** profile additionally starts Traefik and
 > a read-only docker-socket-proxy (`docker-compose.yml`, `profiles: [production]`),
 > plus PgBouncer and cloudflared from `docker-compose.prod.yml`. None of those
@@ -177,10 +176,10 @@ Quick endpoint probes:
 # Keycloak readiness
 curl -sf http://localhost:8082/auth/health/ready          # → {"status":"UP"}
 
-# Keycloak OIDC discovery for the sturaos realm
-curl -s http://localhost:8082/auth/realms/sturaos/.well-known/openid-configuration \
+# Keycloak OIDC discovery for the realm named by AUTH_KEYCLOAK_ISSUER
+curl -s http://localhost:8082/auth/realms/${REALM}/.well-known/openid-configuration \
   | python3 -m json.tool | grep -E '"issuer"|"authorization_endpoint"'
-# issuer → http://localhost:8082/auth/realms/sturaos
+# issuer → http://localhost:8082/auth/realms/${REALM}
 
 # Legal pages
 curl -sf http://localhost:8083/impressum | grep -q Impressum && echo OK
@@ -250,7 +249,7 @@ After seeding (Option B) or completing the wizard (Option A), sign in at
 > surfaces in the kernel.
 
 The SSO round-trip is part of every surface test: clicking **Sign in** should
-redirect to `http://localhost:8082/auth/realms/sturaos/...`, accept the seeded
+redirect to `http://localhost:8082/auth/realms/${REALM}/...`, accept the seeded
 credentials, and return you to the app authenticated.
 
 ---
@@ -280,7 +279,7 @@ portal deliberately holds none.
 
 ### Identity
 - [ ] Keycloak admin UI at http://localhost:8082/auth/admin is accessible
-- [ ] The `sturaos` realm exists with the `gremion-ui` and `gremion-admin` clients
+- [ ] The `${REALM}` realm exists with the `gremion-ui` and `gremion-admin` clients
 - [ ] SSO login from the app redirects to Keycloak and back
 
 ### Governance domain (after Setup / seed)
@@ -329,7 +328,7 @@ Then `docker compose restart keycloak`.
 **Cause:** The client's valid redirect URIs in the realm don't match the app's
 callback.
 
-**Fix:** In Keycloak Admin → `sturaos` realm → **Clients** → `gremion-ui`, confirm
+**Fix:** In Keycloak Admin → the `${REALM}` realm → **Clients** → `gremion-ui`, confirm
 the app's callback URL is listed under **Valid redirect URIs**. The committed
 `realm-export.json` includes the defaults; if it was overwritten, re-run
 `make setup` (regenerates nothing if `.env` exists but re-imports on a clean
