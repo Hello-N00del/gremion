@@ -387,3 +387,45 @@ describe('check-do-not-overwrite — CLI', () => {
     assert.throws(() => parseArgs(['--kernel='], { kernel: 'd', set: 's' }), /requires a non-empty value/)
   })
 })
+
+// ------------------------------------------------ the guard must actually run
+//
+// `lint: ... lint-packages lint-port-back` is a SINGLE line, and B00 appends to
+// the same line from the same base. A three-way merge conflicts there, and a
+// careless "take theirs" drops lint-port-back from the aggregate - a guard that
+// stops running with nothing failing, which is the dominant failure class this
+// whole unit exists to prevent. These assertions turn that silent drop into a
+// red test, and they cover the CI step for the same reason.
+describe('check-do-not-overwrite - the guard is wired to something that runs it', () => {
+  const KERNEL = path.join(import.meta.dirname, '..', '..')
+  const makefile = readFileSync(path.join(KERNEL, 'Makefile'), 'utf8')
+  const ci = readFileSync(path.join(KERNEL, '.github', 'workflows', 'ci.yml'), 'utf8')
+  const lines = makefile.split(/\r?\n/)
+
+  test('the lint-port-back target runs the suite AND the guard', () => {
+    const start = lines.findIndex((l) => l.startsWith('lint-port-back:'))
+    assert.notEqual(start, -1, 'the Makefile has no lint-port-back target')
+    const recipe = []
+    for (let i = start + 1; i < lines.length && (lines[i].startsWith(String.fromCharCode(9)) || lines[i] === ''); i++) {
+      if (lines[i] === '') break
+      recipe.push(lines[i])
+    }
+    const body = recipe.join(String.fromCharCode(10))
+    assert.match(body, /node --test scripts[/]port-back[/]check-do-not-overwrite[.]test[.]mjs/)
+    assert.match(body, /node scripts[/]port-back[/]check-do-not-overwrite[.]mjs/)
+  })
+
+  test('the lint aggregate still names lint-port-back', () => {
+    const i = lines.findIndex((l) => /^lint:[ 	]/.test(l))
+    assert.notEqual(i, -1, 'the Makefile has no lint aggregate')
+    let agg = lines[i]
+    for (let j = i; agg.trimEnd().endsWith(String.fromCharCode(92)); ) {
+      agg = agg.trimEnd().slice(0, -1) + ' ' + lines[++j]
+    }
+    assert.match(agg, /(^|[ ])lint-port-back([ ]|$)/, `the lint aggregate dropped lint-port-back: ${agg}`)
+  })
+
+  test('CI runs the guard as its own step', () => {
+    assert.match(ci, /make lint-port-back/, 'ci.yml no longer runs make lint-port-back')
+  })
+})
