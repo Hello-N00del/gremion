@@ -8,7 +8,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${msg("sturaosLoginTitle")} · ${(realm.displayName)!'StuRaOS'}</title>
-  <link rel="stylesheet" href="${url.resourcesPath}/css/sturaos.v2.css">
+  <link rel="stylesheet" href="${url.resourcesPath}/css/gremion.v2.css">
 </head>
 <body class="auth-body">
   <div class="auth-bg"></div>

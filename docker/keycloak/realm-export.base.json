@@ -27,7 +27,7 @@
     "en"
   ],
   "defaultLocale": "de",
-  "loginTheme": "sturaos",
+  "loginTheme": "gremion",
   "eventsEnabled": true,
   "eventsExpiration": 7776000,
   "adminEventsEnabled": true,
