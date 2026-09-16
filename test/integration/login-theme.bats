@@ -1,7 +1,6 @@
 #!/usr/bin/env bats
-# Integration test - the rendered Keycloak login page of a realm that sets no
-# displayName. REQUIRES: a running Keycloak, a provisioned realm, and Keycloak
-# admin credentials.
+# Integration test - the rendered Keycloak login page. REQUIRES: a running
+# Keycloak, a provisioned realm, and Keycloak admin credentials.
 #
 # This is the only assertion in B1b that reads what a user is SERVED rather than
 # what the repo declares. It exists because a theme mismatch is quiet: Keycloak
@@ -13,16 +12,21 @@
 # WHAT THE PAGE ACTUALLY RENDERS - measured against Keycloak 26.6.1, not assumed.
 # `${(realm.displayName)!'Gremion'}` never falls back: RealmBean.getDisplayName()
 # returns the realm NAME when displayName is unset, so the FreeMarker default is
-# unreachable and a realm called `foo` renders `<title>Anmelden - foo</title>`
-# and `<div class="n">foo</div>`. The assertions below therefore pin the realm
-# name at those two sites and pin `Gremion` only where it genuinely comes from
-# our own bundle (`gremionBrandSub`). A bare `*"Gremion"*` substring test would
-# pass on a realm that sets a displayName AND on one that does not, which makes
-# it useless as evidence.
+# unreachable and a realm called `themeclean` with no displayName renders
+# `<title>Anmelden - themeclean</title>` and `<div class="n">themeclean</div>`.
+# This suite therefore does NOT require displayName to be unset (an earlier draft
+# did, via the public /realms/<r> doc, which never carries the field and so could
+# not fail). It asks the ADMIN API what the realm's effective display name is -
+# displayName when set, otherwise the realm name - and asserts the page renders
+# exactly that, at both render sites. That assertion holds on any realm, and it
+# is what catches a stock-theme fallback rendering something plausible instead of
+# ours. `Gremion` is pinned only where it genuinely comes from our own bundle
+# (the `gremionBrandSub` value); a bare `*"Gremion"*` substring test passed on
+# every realm and proved nothing.
 #
 # Env:
 #   KEYCLOAK_URL       default http://localhost:8082/auth
-#   THEME_REALM        the realm under test; its displayName MUST be unset
+#   THEME_REALM        the realm under test (required)
 #   KC_ADMIN_USER      Keycloak admin (falls back to KEYCLOAK_ADMIN)
 #   KC_ADMIN_PASSWORD  its password (falls back to KEYCLOAK_ADMIN_PASSWORD)
 #   KC_ADMIN_REALM     default master
@@ -42,15 +46,15 @@ THEME_CLIENT_ID="${THEME_CLIENT_ID:-gremion-ui}"
 # file. Gate in setup() like the sibling suites do.
 #
 # The skip covers the admin credentials too, on purpose: without them the
-# displayName precondition below cannot be evaluated, and a suite that runs its
-# page assertions while silently unable to check its own precondition is exactly
-# the vacuous guard this file was rewritten to stop being.
+# effective display name cannot be established, and a suite that asserts what a
+# page renders while unable to say what it SHOULD render is the vacuous guard
+# this file was rewritten to stop being.
 setup() {
     if [ -z "$THEME_REALM" ]; then
-        skip "THEME_REALM is unset - set it to a realm whose displayName is unset (see header)"
+        skip "THEME_REALM is unset - set it to the realm whose login page to fetch (see header)"
     fi
     if [ -z "$KC_ADMIN_USER" ] || [ -z "$KC_ADMIN_PASSWORD" ]; then
-        skip "KC_ADMIN_USER/KC_ADMIN_PASSWORD unset - the displayName precondition needs the Admin API"
+        skip "KC_ADMIN_USER/KC_ADMIN_PASSWORD unset - the expected display name comes from the Admin API"
     fi
 }
 
@@ -66,37 +70,33 @@ kc_admin_token() {
         | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
 }
 
-# Prints the realm's displayName, empty when unset. Non-zero exit means the
-# Admin API could not be reached or parsed - which must FAIL a test, never pass
-# it, because "no displayName" and "could not ask" are different answers.
-realm_display_name() {
+# Prints the realm's EFFECTIVE display name exactly as Keycloak will render it:
+# displayName when set, otherwise the realm name. Non-zero exit means the Admin
+# API could not be reached or parsed - which must FAIL a test, never pass it,
+# because "the realm renders X" and "could not ask" are different answers.
+realm_effective_name() {
     local token
     token=$(kc_admin_token) || return 1
     [ -n "$token" ] || return 1
     curl -sf -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${THEME_REALM}" \
-        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("displayName") or "")'
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("displayName") or d["realm"])'
 }
 
-@test "precondition: the fixture realm sets no displayName (read from the Admin API)" {
-    # NOT from the public /realms/<r> doc. That endpoint returns
-    # PublicRealmRepresentation - realm, public_key, token-service,
-    # account-service, tokens-not-before - and has never carried displayName in
-    # any Keycloak version, so the earlier `[[ "$doc" != *'"displayName":"'* ]]`
-    # form passed unconditionally, including on a realm that DID set one. It was
-    # measured: `kcadm update realms/<r> -s displayName=Musterstadt` left the
-    # public doc byte-identical and the assertion green. displayName is
-    # Admin-API-only, so this reads the Admin API.
-    local display_name
-    display_name=$(realm_display_name)
-    [ "$?" -eq 0 ] || {
+@test "precondition: the Admin API answers for the realm under test" {
+    local token effective
+    token=$(kc_admin_token) || {
+        echo "FAIL: could not obtain an admin token from ${KEYCLOAK_URL}/realms/${KC_ADMIN_REALM}" >&2
+        return 1
+    }
+    [ -n "$token" ]
+    effective=$(realm_effective_name) || {
         echo "FAIL: could not read realm ${THEME_REALM} from the Admin API" >&2
         return 1
     }
-    [ -z "$display_name" ] || {
-        echo "FAIL: realm ${THEME_REALM} sets displayName='${display_name}' - the page would render that name, so the rest of this suite proves nothing about an unset realm" >&2
-        return 1
-    }
+    # Empty would make the render assertion below match any page at all.
+    [ -n "$effective" ]
+    echo "# effective display name: ${effective}" >&3
 }
 
 @test "the login page is served by the gremion theme, not the stock fallback" {
@@ -110,15 +110,14 @@ realm_display_name() {
     [[ "$page" == *'<div class="s">Gremion · Anmeldung</div>'* ]]
 }
 
-@test "the realm display block renders the realm name, at both of its sites" {
-    # With displayName unset (asserted above) Keycloak substitutes the realm
-    # name. Pinning both sites is what catches a theme that renders SOMETHING
-    # plausible from the stock template instead of ours.
-    local page
+@test "the title and brand block render the realm's effective display name" {
+    local page effective
+    effective=$(realm_effective_name)
+    [ -n "$effective" ]
     page=$(login_page)
     [ -n "$page" ]
-    [[ "$page" == *"<title>Anmelden · ${THEME_REALM}</title>"* ]]
-    [[ "$page" == *"<div class=\"n\">${THEME_REALM}</div>"* ]]
+    [[ "$page" == *"<title>Anmelden · ${effective}</title>"* ]]
+    [[ "$page" == *"<div class=\"n\">${effective}</div>"* ]]
 }
 
 @test "the login page contains zero occurrences of the retired product name" {

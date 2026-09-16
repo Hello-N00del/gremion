@@ -628,7 +628,20 @@ jobs:
           echo " ready"
 
       - name: Run integration tests (health)
-        run: bats test/integration/health.bats test/integration/oidc.bats
+        run: |
+          # login-theme.bats reads the realm's effective display name from the
+          # Admin API and asserts the SERVED page renders it, so it needs the
+          # realm under test and the admin credentials. Both are derived, never
+          # spelled: the realm name comes out of the realm template (so it
+          # tracks whatever the realm-identity work renames it to) and the
+          # credentials come out of the .env this job generated. Unset either
+          # and the suite skips loudly rather than passing on nothing.
+          THEME_REALM=$(python3 -c 'import json; print(json.load(open("docker/keycloak/realm-export.base.json"))["realm"])')
+          KEYCLOAK_ADMIN=$(grep -m1 '^KEYCLOAK_ADMIN=' .env | cut -d= -f2-)
+          KEYCLOAK_ADMIN_PASSWORD=$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' .env | cut -d= -f2-)
+          export THEME_REALM KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD
+          test -n "$THEME_REALM" && test -n "$KEYCLOAK_ADMIN_PASSWORD"
+          bats test/integration/health.bats test/integration/oidc.bats test/integration/login-theme.bats
 
       - name: Collect logs on failure
         if: failure()

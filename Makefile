@@ -139,7 +139,8 @@ test-host-docker:
 # Run integration tests (requires running stack: make up or make setup + phases)
 test-integration:
 	@echo "Running integration tests (requires running stack)..."
-	@$(BATS) test/integration/health.bats test/integration/oidc.bats test/integration/legal.bats
+	@$(BATS) test/integration/health.bats test/integration/oidc.bats test/integration/legal.bats \
+		test/integration/login-theme.bats
 
 # Run all tests (unit only by default; use test-all for integration too)
 test: test-unit

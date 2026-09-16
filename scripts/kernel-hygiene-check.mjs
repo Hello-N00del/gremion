@@ -1271,9 +1271,24 @@ check('t3 the three message bundles agree and carry no dead key', () => {
   return problems.length ? `${problems.length} message-bundle problem(s): ${problems.join(' | ')}` : null
 })
 
-// t4 - the theme's own fallback for realm.displayName. A realm created without
-// a displayName renders this literal in the <title> and in the brand block, so
-// it is the one string in the theme a user sees when the tenant sets nothing.
+// t4 - the theme's own fallback literal for realm.displayName.
+//
+// WHAT THIS CHECK IS AND IS NOT, corrected in round 1 against a running
+// Keycloak 26.6.1 rather than assumed. The `!'...'` default is UNREACHABLE at
+// runtime: RealmBean.getDisplayName() returns the realm NAME when displayName
+// is unset, so the expression is never null and the default never fires. A
+// realm called `themeclean` renders `<title>Anmelden - themeclean</title>` and
+// `<div class="n">themeclean</div>`, measured on the served page. So this is
+// NOT 'the string a user sees when the tenant sets nothing' - the eight old
+// retired-name literals were equally unreachable.
+//
+// It is still worth having, for the reason a dead brand literal is always worth
+// removing: it is a latent trap. Any change that makes the expression genuinely
+// absent - a different bean, a template that iterates realms, a Keycloak
+// release that stops substituting - renders whatever literal is sitting there
+// to a user. t4 pins WHICH literal is sitting there. The live counterpart runs
+// in test/integration/login-theme.bats, which pins the realm name at both
+// render sites instead, because that is what the page actually shows.
 const DISPLAYNAME_FALLBACK = /\(realm\.displayName\)!'([^']*)'/g
 const EXPECTED_FALLBACK = 'Gremion'
 
@@ -1292,6 +1307,56 @@ check('t4 the login theme falls back to the kernel name, not the retired one', (
   if (seen === 0) return 'found zero realm.displayName fallbacks — the check would vacuously pass'
   return offenders.length
     ? `${offenders.length} of ${seen} realm.displayName fallback(s) render a name other than "${EXPECTED_FALLBACK}": ${offenders.join(' | ')}`
+    : null
+})
+
+// ── (t5) no integration suite is orphaned ─────────────────────────────────
+//
+// The Makefile already says this out loud, twelve lines below the target it is
+// about: "a target nothing aggregates is a target nobody runs, which is how the
+// JetStream proofs went unexecuted in the first place (integration defect D8)".
+// The same hole exists one level down: `make test-integration` and ci.yml both
+// enumerate integration suites FILE BY FILE, so a new test/integration/*.bats
+// is committed, reviewed, and then never executed by anything, forever, with
+// nothing red to say so. login-theme.bats was added in exactly that state.
+//
+// Post-condition, not exit code: every .bats file under test/integration is
+// named in the test-integration recipe AND in the CI step that runs bats.
+const INTEGRATION_DIR = 'test/integration'
+// ONE exemption from the CI leg, and it is a service dependency, not a
+// preference: legal.bats drives the `legal` service on :8083, which the CI
+// integration job does not start (it brings up postgres + keycloak only). It IS
+// named by `make test-integration`, so it is aggregated, not orphaned. Opened
+// 2026-09-16; it goes away when CI starts the legal service.
+const CI_BATS_EXEMPT = ['legal.bats']
+
+check('t5 every integration bats suite is named by make test-integration and by CI', () => {
+  const dir = join(ROOT, INTEGRATION_DIR)
+  if (!existsSync(dir)) return `${INTEGRATION_DIR} does not exist - the check would vacuously pass`
+  const suites = readdirSync(dir).filter((n) => n.endsWith('.bats')).sort()
+  if (suites.length === 0) return `found zero .bats under ${INTEGRATION_DIR} - the check would vacuously pass`
+  const makefile = read('Makefile')
+  const recipe = /^test-integration:[^]*?(?=^[A-Za-z0-9_.-]+:|^# )/m.exec(makefile)
+  if (!recipe) return 'Makefile declares no test-integration target - the check would vacuously pass'
+  const ci = read('.github/workflows/ci.yml')
+  // Any LIVE bats invocation naming an integration suite, `run: bats ...` or a
+  // bats line inside a `run: |` block. Commented-out lines do not count: a
+  // suite is not run by a `#`.
+  const ciSteps = ci.split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .filter((l) => /\bbats\b/.test(l) && l.includes(`${INTEGRATION_DIR}/`))
+    .join(' ')
+  if (!ciSteps) return 'ci.yml runs bats nowhere - the check would vacuously pass'
+  const missing = []
+  for (const n of suites) {
+    const rel = `${INTEGRATION_DIR}/${n}`
+    if (!recipe[0].includes(rel)) missing.push(`${rel} is not named by make test-integration`)
+    if (!CI_BATS_EXEMPT.includes(n) && !ciSteps.includes(rel)) {
+      missing.push(`${rel} is not named by any ci.yml bats step`)
+    }
+  }
+  return missing.length
+    ? `${missing.length} orphaned integration suite reference(s): ${missing.join(' | ')}`
     : null
 })
 
