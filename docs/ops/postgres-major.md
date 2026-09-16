@@ -53,16 +53,84 @@ The only standalone client image is
 `k8s/overlays/production/patches/backup-cronjob.yaml:31`, and it is pinned here
 too.
 
+## The 18+ data-directory contract — read this before wiping anything
+
+**Crossing into 18 is not only a tag change.** At major 18 the Docker official
+images moved the data directory and the mount point
+([docker-library/postgres PR 1259](https://github.com/docker-library/postgres/pull/1259)).
+Measured on this box against the real images, 2026-09-16:
+
+| image | `PGDATA` | declared `VOLUME` |
+|---|---|---|
+| 16-alpine | `/var/lib/postgresql/data` | `/var/lib/postgresql/data` |
+| 18-alpine | `/var/lib/postgresql/18/docker` | `/var/lib/postgresql` |
+
+The 18+ entrypoint **refuses to start against any mount at
+`/var/lib/postgresql/data`** — including a brand-new, provably empty volume. It
+exits 1 before `initdb` with `there appears to be PostgreSQL data in:
+/var/lib/postgresql/data (unused mount/volume)`, and under
+`restart: unless-stopped` that becomes an endless restart loop rather than a
+visible stop.
+
+So **the kernel mounts its data volume at `/var/lib/postgresql`**, the layout
+the image now documents and the one that keeps `pg_upgrade --link` usable. The
+data then lives in the major-versioned subdirectory the image chooses
+(`/var/lib/postgresql/18/docker`), which is why the mount is the *parent* and
+never that subdirectory: mounting the versioned path works today and breaks at
+the next bump.
+
+Where that mount is declared, all of it guarded by
+`node scripts/check-postgres-major.mjs` (`POSTGRES_DATA_MOUNT`,
+`checkDataMounts`), which runs inside `make lint`:
+
+- `docker-compose.yml:47`
+- `k8s/base/postgres/statefulset.yaml:42` (init container) and `:79` (server) —
+  the two must agree
+- `test/host/integration/restore-proof.sh:81` and `:94`, so the restore fixture
+  keeps mirroring the shipped compose
+
+The volume **name** is unchanged (`pg-data` → `gremion_pg_data`), so
+`RESTORE_VOLUME_SKIP_RE` in `infra/host/bin/gremion-restore-into:34`, which keys
+on the name and not the path, is unaffected.
+
 ## Fresh initdb, and the rule for any later bump
 
 A major change means a fresh `initdb`: a `pg-data` volume written by major 16
 will not start under 18. Release 1 needs **no `pg_upgrade` path** because the box
 is wiped at cutover (P1/P3, decision P3).
 
+**A wipe alone is not sufficient, and this is the part that is easy to get
+wrong.** An empty volume at the old mount point is refused just as firmly as a
+populated one — the mount *path* has to be right as well. A cutover that wipes
+the box but keeps a `/var/lib/postgresql/data` mount produces a crash loop with
+no stale data anywhere to explain it.
+
 **Rule for every later major bump:** it is a **dump/restore with a measured RTO**
 — `gremion-backup` on the old major, `gremion-restore-into` on the new one, the
 elapsed time recorded in the restore runbook — never an in-place `pg_upgrade` and
-never a volume carried across majors.
+never a volume carried across majors. **And before the tag moves, re-read the new
+major's image for a changed `PGDATA` or `VOLUME`** (`docker image inspect
+postgres:<major>-alpine`): 18 moved both, and a future major may move them again.
+`POSTGRES_DATA_MOUNT` in `scripts/check-postgres-major.mjs` is where that answer
+is recorded, and `test/host/integration/postgres-major-proof.sh` is what proves
+it by starting the server rather than reading a file.
+
+## How the pin is proved
+
+Two guards, both watched RED before they were trusted:
+
+- `make lint-postgres-major` — the text half. Every `postgres:` reference in the
+  tree is the pinned tag, every Postgres data mount is `POSTGRES_DATA_MOUNT`,
+  this record and the code agree on the number, and an empty match set FAILS
+  instead of passing.
+- `test/host/integration/postgres-major-proof.sh` — the running half, and the
+  only one that can tell a bootable stack from an unbootable one. It starts the
+  base compose's `postgres` service with its real mounts and init script, then
+  reads back `server_version_num`, `data_directory`, `PG_VERSION` on disk, the
+  databases `docker/postgres/init-databases.sh` created, and the `pg_dump` /
+  `psql` majors inside the running container. Measured 2026-09-16: major 18
+  (`server_version_num=180006`), `data_directory=/var/lib/postgresql/18/docker`,
+  `keycloak` / `gremion` / `control` created.
 
 The C-collation requirement for Synapse's database is `B31-postgres-c-collation`
 and is unaffected by the major.
