@@ -195,3 +195,148 @@ test('the wiring guard passes for an assembler that imports it', (t) => {
   )
   assert.deepEqual(checkAssemblerWiring(dir), [])
 })
+
+// ── The guard's own vacuity: the CLI surface ───────────────────────────────
+//
+// Round-1 review found the hole these arms close: the agreement check was run
+// only when a modules root happened to be truthy, and the CLI took the value
+// from `argv[at + 1]` unvalidated. So `--modules-root` with its value dropped,
+// a flag-name typo, or no arguments at all each printed
+// `[extraction-source] OK — …; 0 module.json agree` and exited 0 — a success
+// line asserting a check that never ran. Every arm below is the real CLI in a
+// child process, asserting the rendered stdout/stderr, never the exit code
+// alone.
+
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+
+const CLI = join(ROOT, 'scripts/check-extraction-source.mjs')
+
+function runCli(args) {
+  try {
+    const stdout = execFileSync(process.execPath, [CLI, ...args], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return { code: 0, stdout, stderr: '' }
+  } catch (err) {
+    return { code: err.status, stdout: err.stdout ?? '', stderr: err.stderr ?? '' }
+  }
+}
+
+test('the CLI refuses --modules-root with its value omitted, instead of printing a false OK', () => {
+  const r = runCli(['--modules-root'])
+  assert.doesNotMatch(r.stdout, /OK/, `stdout was: ${r.stdout}`)
+  assert.match(r.stderr, /\[extraction-source\] \d+ problem\(s\):/)
+  assert.match(r.stderr, /--modules-root/)
+  assert.equal(r.code, 1)
+})
+
+test('the CLI refuses a flag-name typo rather than silently ignoring it', () => {
+  const r = runCli(['--module-root', FIXTURES])
+  assert.doesNotMatch(r.stdout, /OK/, `stdout was: ${r.stdout}`)
+  assert.match(r.stderr, /--module-root/)
+  assert.equal(r.code, 1)
+})
+
+test('the CLI accepts the --modules-root=<dir> equals form', () => {
+  const r = runCli([`--modules-root=${FIXTURES}`])
+  assert.equal(r.code, 0, `stderr was: ${r.stderr}`)
+  assert.match(r.stdout, /2 module\.json/)
+})
+
+test('the CLI with no arguments refuses instead of reporting agreement over zero manifests', () => {
+  const r = runCli([])
+  assert.doesNotMatch(r.stdout, /module\.json agree/, `stdout was: ${r.stdout}`)
+  assert.match(r.stderr, /would pass vacuously/)
+  assert.equal(r.code, 1)
+})
+
+test('the doc-only run must ask for it, and its success line claims no agreement it did not check', () => {
+  const r = runCli(['--allow-zero'])
+  assert.equal(r.code, 0, `stderr was: ${r.stderr}`)
+  assert.match(r.stdout, /no module\.json inspected/)
+  assert.doesNotMatch(r.stdout, /module\.json agree/)
+})
+
+test('a modules root that does not exist is a problem even under --allow-zero', () => {
+  const r = runCli(['--modules-root', join(ROOT, 'no-such-modules-root'), '--allow-zero'])
+  assert.match(r.stderr, /is not a directory/)
+  assert.doesNotMatch(r.stdout, /OK/, `stdout was: ${r.stdout}`)
+  assert.equal(r.code, 1)
+})
+
+test('a modules root that names a file is a problem, not an ENOTDIR crash', () => {
+  const r = runCli(['--modules-root', join(ROOT, 'Makefile')])
+  assert.match(r.stderr, /is not a directory/)
+  assert.doesNotMatch(r.stderr, /ENOTDIR/, `stderr was: ${r.stderr}`)
+  assert.equal(r.code, 1)
+})
+
+test('--print still writes the frozen SHA and nothing else', () => {
+  const r = runCli(['--print'])
+  assert.equal(r.code, 0, `stderr was: ${r.stderr}`)
+  assert.equal(r.stdout.trim(), FROZEN)
+})
+
+test('runChecks with no modules root refuses unless allowZero — the library-level form of the same hole', () => {
+  assert.match(runChecks(ROOT, {}).problems.join('\n'), /would pass vacuously/)
+  assert.match(runChecks(ROOT).problems.join('\n'), /would pass vacuously/)
+  assert.deepEqual(runChecks(ROOT, { allowZero: true }).problems, [])
+})
+
+test('the Makefile recipe passes a real --modules-root — a recipe that drops it would check nothing', () => {
+  const mk = readFileSync(join(ROOT, 'Makefile'), 'utf8')
+  const after = mk.split(/^lint-extraction-source:.*$/m)[1]
+  assert.ok(after, 'no lint-extraction-source target in the Makefile')
+  const recipe = after.split(/\n(?=\S)/)[0]
+  const m = recipe.match(/check-extraction-source\.mjs\s+--modules-root[= ]\s*(\S+)/)
+  assert.ok(m, `the recipe does not pass --modules-root:\n${recipe}`)
+  const entries = collectModuleJson(join(ROOT, m[1]))
+  assert.ok(entries.length >= 2, `--modules-root ${m[1]} holds ${entries.length} module.json`)
+})
+
+test('the wiring guard is not satisfied by a commented-out import', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-root-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  writeFileSync(
+    join(dir, 'scripts', 'assemble.mjs'),
+    "// import { runChecks } from './check-extraction-source.mjs'\nconsole.log('assembling')\n"
+  )
+  assert.match(checkAssemblerWiring(dir).join('\n'), /scripts\/assemble\.mjs/)
+})
+
+test('the wiring guard goes RED for an assembler that imports the guard and never calls it', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-root-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  writeFileSync(
+    join(dir, 'scripts', 'assemble.mjs'),
+    "import { runChecks } from './check-extraction-source.mjs'\nconsole.log('assembling')\n"
+  )
+  assert.match(checkAssemblerWiring(dir).join('\n'), /never calls it/)
+})
+
+test('the wiring guard accepts a dynamic import that calls the guard', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-root-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  writeFileSync(
+    join(dir, 'scripts', 'assemble.mjs'),
+    "const g = await import('./check-extraction-source.mjs')\ng.runChecks(process.cwd(), { modulesRoot: 'modules', allowZero: true })\n"
+  )
+  assert.deepEqual(checkAssemblerWiring(dir), [])
+})
+
+test('the zero-module assemble arm is allowed but is not reported as agreement', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-empty-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const ok = runCli(['--modules-root', dir, '--allow-zero'])
+  assert.equal(ok.code, 0, 'stderr was: ' + ok.stderr)
+  assert.match(ok.stdout, /zero-module assemble accepted via --allow-zero/)
+  assert.doesNotMatch(ok.stdout, /module\.json under .* agree/)
+  const refused = runCli(['--modules-root', dir])
+  assert.equal(refused.code, 1)
+  assert.match(refused.stderr, /would pass vacuously/)
+})

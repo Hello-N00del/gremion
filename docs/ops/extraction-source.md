@@ -22,9 +22,17 @@ extraction-source: f276af5925abacdcfd05f6613fc11afff2d804c5
 - `scripts/check-extraction-source.mjs` refuses a build in which any
   `module.json` omits the key, carries a value that is not 40 lowercase hex, or
   disagrees with this file. `make lint-extraction-source` runs it, and the
-  assembler must import it. The agreement check itself lives in
+  assembler must import it — and call it; an import with no call site is
+  refused. The agreement check itself lives in
   `scripts/lib/extraction-source.mjs` and is imported — never re-implemented —
   by the shared schema validator.
+- The guard refuses to pass over nothing. Arguments are parsed strictly, so an
+  unknown flag or a `--modules-root` whose value was dropped is an error rather
+  than a silently ignored token; a `--modules-root` that is not a directory is
+  an error even under `--allow-zero`; and a run that inspects no `module.json`
+  at all must say `--allow-zero` and is reported as doc-only, never as
+  agreement. The zero-module assemble passes `--modules-root <dir> --allow-zero`
+  explicitly.
 
 Changing this SHA re-opens the split: each module repository's blob-equality
 check is taken against it, and the StuRa tree's archive record names it.
