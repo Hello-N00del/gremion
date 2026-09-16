@@ -150,7 +150,8 @@ It looks for the ledger in this order:
 
 1. `$GREMION_WAIVER_LEDGER`, if set. `gremion-deploy` sets it for its two verify
    steps, so the release being deployed is verified against its own ledger; an
-   operator can set it by hand for a one-off run.
+   operator can set it by hand for a one-off run, and an **exported** value wins
+   over the deploy's own default (see below).
 2. `docs/ops/release-1-waivers.md` relative to the verifier's own checkout, when
    it is run out of a release tree rather than from `/opt/gremion/bin`.
 3. `/opt/gremion/current/docs/ops/release-1-waivers.md` — what the installed
@@ -164,6 +165,36 @@ the ledger existed does that). Name a ledger explicitly to get past it:
 GREMION_WAIVER_LEDGER=/opt/gremion/releases/<tag>/docs/ops/release-1-waivers.md \
   gremion-verify
 ```
+
+### The same ledger in `gremion-deploy` and `gremion-rollback`
+
+`gremion-deploy` treats the ledger as a **release-tree contract**, checked at
+step 2 beside `docker-compose.app.yml`, `docker-compose.pins.yml` and
+`release.json`. A tag whose tree carries no ledger is refused there:
+
+```
+BLOCKED: docs/ops/release-1-waivers.md absent (spec B): /opt/gremion/releases/<tag>/docs/ops/release-1-waivers.md
+```
+
+— exit 3, `STEP 2 checkout fail`, before the deploy token is spent on a pull
+and **before** step 6 stops the old colour or step 7 applies migrations. It is
+checked there rather than at step 9, the first step that runs `gremion-verify`,
+precisely so the failure cannot land on a half-deployed host. That matters for
+`gremion-rollback` class (b), which redeploys the previous tag with
+`--no-switch`: that skips steps 10–12 but **not** step 9.
+
+To redeploy a tag cut before the ledger existed, export the ledger **before**
+invoking the deploy. The export is honoured by the step-2 check and by both
+verify steps:
+
+```bash
+export GREMION_WAIVER_LEDGER=/opt/gremion/current/docs/ops/release-1-waivers.md
+echo "TOKEN $GHCR_TOKEN" | gremion-deploy <tag> --no-switch
+```
+
+Reading a ledger from outside the tree being deployed is a deliberate, recorded
+exception: the printed `WAIVED` table then describes the ledger you named, not
+the tag. Write down which ledger you used.
 
 In the reboot gate that same exit 2 is reported as
 `REBOOT-GATE: verify=precondition-failure restarted=0` and alerts with the
