@@ -1011,6 +1011,80 @@ check('j1 the k8s apex and escaped-domain sentinels resolve to the same domain',
     : `the wildcard regexp does not describe the apex: apex "${apex}" implies "${expected}", found "${esc}" (${escaped.get(esc)}) — every tenant subdomain would 404 at Traefik.`
 })
 
+// ── (t) the Keycloak login theme is internally consistent ──────────────────
+//
+// Keycloak answers a broken theme by falling back to the stock one, with no
+// error in any log and a 200 on the login page. So every reference inside the
+// theme is checked as a PATH THAT RESOLVES, not as a string that looks right:
+//   t1 - realm-export.base.json's loginTheme names a directory that exists;
+//        that directory's theme.properties `styles=` names a file that exists;
+//        every ${url.resourcesPath}/… href in every .ftl names a file that exists.
+//   t3 - the three message bundles define the IDENTICAL key set, and no key is
+//        dead (every key defined in the default bundle is used by some .ftl).
+// Together they make a half-finished rename impossible to commit: move the
+// directory without theme.properties and t1 goes red; rename a key in one
+// bundle and t3 goes red; rename a key everywhere but in the markup and t3's
+// dead-key leg goes red.
+//
+// The `t` series, not `j`: j1-j4 belong to B18-router-emitter-library's edge
+// rules, and j1 is already the k8s apex/escaped-domain sentinel check above.
+const THEME_ROOT = 'docker/keycloak/themes'
+
+function themeName() {
+  return JSON.parse(read('docker/keycloak/realm-export.base.json')).loginTheme
+}
+
+function themeFtls(theme) {
+  const dir = join(ROOT, THEME_ROOT, theme, 'login')
+  return existsSync(dir)
+    ? readdirSync(dir).filter((n) => n.endsWith('.ftl')).map((n) => `${THEME_ROOT}/${theme}/login/${n}`)
+    : []
+}
+
+check('t1 every path the login theme references resolves on disk', () => {
+  const theme = themeName()
+  if (!theme) return 'realm-export.base.json declares no loginTheme'
+  const loginDir = `${THEME_ROOT}/${theme}/login`
+  if (!has(loginDir)) return `loginTheme "${theme}" names no directory at ${loginDir}`
+  const props = read(`${loginDir}/theme.properties`)
+  const styles = /^styles=(.+)$/m.exec(props)
+  if (!styles) return `${loginDir}/theme.properties declares no styles=`
+  const missing = []
+  for (const s of styles[1].trim().split(/\s+/)) {
+    if (!has(`${loginDir}/resources/${s}`)) missing.push(`theme.properties styles= names ${s}, absent at ${loginDir}/resources/${s}`)
+  }
+  const ftls = themeFtls(theme)
+  if (ftls.length === 0) return `found zero .ftl under ${loginDir} — the check would vacuously pass`
+  for (const rel of ftls) {
+    for (const m of read(rel).matchAll(/\$\{url\.resourcesPath\}\/([A-Za-z0-9._/-]+)/g)) {
+      if (!has(`${loginDir}/resources/${m[1]}`)) missing.push(`${rel} references ${m[1]}, absent at ${loginDir}/resources/${m[1]}`)
+    }
+  }
+  return missing.length ? `${missing.length} unresolved theme reference(s): ${missing.join(' | ')}` : null
+})
+
+check('t3 the three message bundles agree and carry no dead key', () => {
+  const theme = themeName()
+  const loginDir = `${THEME_ROOT}/${theme}/login`
+  const bundles = ['messages.properties', 'messages_de.properties', 'messages_en.properties']
+  const keysOf = (b) =>
+    new Set(read(`${loginDir}/messages/${b}`).split('\n')
+      .map((l) => /^([A-Za-z][A-Za-z0-9_.]*)=/.exec(l.trim()))
+      .filter(Boolean).map((m) => m[1]))
+  const sets = bundles.map((b) => [b, keysOf(b)])
+  const base = sets[0][1]
+  if (base.size === 0) return 'the default bundle defines zero keys — the check would vacuously pass'
+  const problems = []
+  for (const [b, s] of sets.slice(1)) {
+    for (const k of base) if (!s.has(k)) problems.push(`${k} missing from ${b}`)
+    for (const k of s) if (!base.has(k)) problems.push(`${k} extra in ${b}`)
+  }
+  const markup = themeFtls(theme).map((r) => read(r)).join('\n')
+  const used = new Set([...markup.matchAll(/msg\(\s*"([^"]+)"/g)].map((m) => m[1]))
+  for (const k of base) if (!used.has(k)) problems.push(`${k} is defined but referenced by no .ftl`)
+  return problems.length ? `${problems.length} message-bundle problem(s): ${problems.join(' | ')}` : null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {
