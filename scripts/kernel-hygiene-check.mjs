@@ -1112,6 +1112,30 @@ check('t3 the three message bundles agree and carry no dead key', () => {
   return problems.length ? `${problems.length} message-bundle problem(s): ${problems.join(' | ')}` : null
 })
 
+// t4 - the theme's own fallback for realm.displayName. A realm created without
+// a displayName renders this literal in the <title> and in the brand block, so
+// it is the one string in the theme a user sees when the tenant sets nothing.
+const DISPLAYNAME_FALLBACK = /\(realm\.displayName\)!'([^']*)'/g
+const EXPECTED_FALLBACK = 'Gremion'
+
+check('t4 the login theme falls back to the kernel name, not the retired one', () => {
+  const theme = themeName()
+  const offenders = []
+  let seen = 0
+  for (const rel of themeFtls(theme)) {
+    read(rel).split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(DISPLAYNAME_FALLBACK)) {
+        seen++
+        if (m[1] !== EXPECTED_FALLBACK) offenders.push(`${rel}:${i + 1} '${m[1]}'`)
+      }
+    })
+  }
+  if (seen === 0) return 'found zero realm.displayName fallbacks — the check would vacuously pass'
+  return offenders.length
+    ? `${offenders.length} of ${seen} realm.displayName fallback(s) render a name other than "${EXPECTED_FALLBACK}": ${offenders.join(' | ')}`
+    : null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {

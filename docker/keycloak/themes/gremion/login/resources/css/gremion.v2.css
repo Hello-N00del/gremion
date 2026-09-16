@@ -1,7 +1,7 @@
-/* StuRaOS — Keycloak login theme (v4). Self-contained: the custom login.ftl /
+/* Gremion — Keycloak login theme (v4). Self-contained: the custom login.ftl /
    login-otp.ftl / login-reset-password.ftl emit the .auth-* markup below.
    Design tokens are defined here with literal values (the app's tokens.css is
-   not loaded inside Keycloak). Ported from design_handoff_stura_v4/StuRaOS
+   not loaded inside Keycloak). Ported from the StuRa vertical's design_handoff_stura_v4/
    Login.html. Light + dark: dark tokens follow the OS via prefers-color-scheme
    (and mirror under .dark for a future explicit toggle) — see the block after
    :root (Deck Board audit §4). */

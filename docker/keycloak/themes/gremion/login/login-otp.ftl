@@ -1,11 +1,11 @@
-<#-- StuRaOS v4 — OTP / 2FA step. Self-contained. KC injects url, realm,
+<#-- Gremion v4 — OTP / 2FA step. Self-contained. KC injects url, realm,
      message, messagesPerField, otpLogin, locale. Field name: otp. -->
 <!DOCTYPE html>
 <html lang="${(locale.currentLanguageTag)!'de'}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${msg("gremionOtpTitle")} · ${(realm.displayName)!'StuRaOS'}</title>
+  <title>${msg("gremionOtpTitle")} · ${(realm.displayName)!'Gremion'}</title>
   <link rel="stylesheet" href="${url.resourcesPath}/css/gremion.v2.css">
 </head>
 <body class="auth-body">
@@ -14,7 +14,7 @@
     <div class="auth-brand">
       <div class="logo">${msg("gremionLogoLetter")}</div>
       <div>
-        <div class="n">${(realm.displayName)!'StuRaOS'}</div>
+        <div class="n">${(realm.displayName)!'Gremion'}</div>
         <div class="s">${msg("gremionBrandSub")}</div>
       </div>
     </div>

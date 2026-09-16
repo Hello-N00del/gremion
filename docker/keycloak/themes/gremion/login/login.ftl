@@ -1,4 +1,4 @@
-<#-- StuRaOS v4 login theme — self-contained (no template.ftl import) so the
+<#-- Gremion v4 login theme — self-contained (no template.ftl import) so the
      custom auth-card markup is exact. Keycloak still injects the full model:
      url, realm, message, messagesPerField, social, login, auth, locale.
      Copy lives in messages(.de).properties (msg keys), not the markup. -->
@@ -7,7 +7,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${msg("gremionLoginTitle")} · ${(realm.displayName)!'StuRaOS'}</title>
+  <title>${msg("gremionLoginTitle")} · ${(realm.displayName)!'Gremion'}</title>
   <link rel="stylesheet" href="${url.resourcesPath}/css/gremion.v2.css">
 </head>
 <body class="auth-body">
@@ -16,7 +16,7 @@
     <div class="auth-brand">
       <div class="logo">${msg("gremionLogoLetter")}</div>
       <div>
-        <div class="n">${(realm.displayName)!'StuRaOS'}</div>
+        <div class="n">${(realm.displayName)!'Gremion'}</div>
         <div class="s">${msg("gremionBrandSub")}</div>
       </div>
     </div>

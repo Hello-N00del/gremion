@@ -1,4 +1,4 @@
-<#-- StuRaOS v5 — standalone error page (Fehler-Zustand). Renders hard Keycloak
+<#-- Gremion v5 — standalone error page (Fehler-Zustand). Renders hard Keycloak
      errors in the same self-contained auth shell as login/otp/reset instead of
      falling back to the parent keycloak.v2 theme. KC injects: message, client,
      skipLink, realm, locale. BRAND-driven via realm.displayName / realm.name. -->
@@ -7,7 +7,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${msg("gremionErrorTitle")} · ${(realm.displayName)!'StuRaOS'}</title>
+  <title>${msg("gremionErrorTitle")} · ${(realm.displayName)!'Gremion'}</title>
   <link rel="stylesheet" href="${url.resourcesPath}/css/gremion.v2.css">
 </head>
 <body class="auth-body">
@@ -16,7 +16,7 @@
     <div class="auth-brand">
       <div class="logo">${msg("gremionLogoLetter")}</div>
       <div>
-        <div class="n">${(realm.displayName)!'StuRaOS'}</div>
+        <div class="n">${(realm.displayName)!'Gremion'}</div>
         <div class="s">${msg("gremionBrandSub")}</div>
       </div>
     </div>
