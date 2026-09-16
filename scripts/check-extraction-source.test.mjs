@@ -104,10 +104,14 @@ test('the committed fixture pair agrees with the frozen source', () => {
 })
 
 test('checkExtractionSourceAgreement(manifests) defaults to the kernel doc — the form D2 calls', () => {
-  // Spec D D.1.2: exactly one validator. D2's validateDistManifest in
-  // scripts/validate-module-schemas.mjs imports THIS function and has no root
-  // of its own to pass, so the one-argument form must read DOC_PATH itself.
-  // The entry shape below is what D2 maps each module.json it validates onto.
+  // Spec D D.1.2: exactly one validator. D2's validateDistManifest imports
+  // THIS function and has no root of its own to pass, so the one-argument
+  // form must read DOC_PATH itself. The entry shape below is what D2 maps
+  // each module.json it validates onto. (Which FILE that validator lives in
+  // is unsettled — the B00 unit file says scripts/validate-module-schemas.mjs,
+  // the plan's decision record says scripts/lib/gremion-manifest-schema.mjs.
+  // See the header of scripts/lib/extraction-source.mjs; this arm does not
+  // depend on the answer.)
   assert.deepEqual(checkExtractionSourceAgreement(collectModuleJson(FIXTURES)), [])
   const bad = [{ id: 'x', path: 'x/module.json', extractionSource: OTHER, parseError: null }]
   assert.match(

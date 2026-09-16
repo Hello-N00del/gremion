@@ -8,11 +8,22 @@
 // module.json echoes it under "extractionSource".
 //
 // This file exists so there is exactly ONE agreement check in the tree: spec D
-// D.1.2 allows one validator, and D2's validateDistManifest in
-// scripts/validate-module-schemas.mjs IMPORTS checkExtractionSourceAgreement
-// from here instead of re-implementing the refusal row. One validator, one
-// imported helper. scripts/check-extraction-source.mjs re-exports these names;
-// a re-export is not a second implementation.
+// D.1.2 allows one validator, and D2-module-json-and-dist-schema's
+// validateDistManifest IMPORTS checkExtractionSourceAgreement from here
+// instead of re-implementing the refusal row. One validator, one imported
+// helper. scripts/check-extraction-source.mjs re-exports these names; a
+// re-export is not a second implementation.
+//
+// D2 MUST RECONCILE THE VALIDATOR'S PATH BEFORE IT DECIDES WHERE IT LIVES.
+// The two authorities disagree and neither the plan's cross-unit contract
+// table nor anything in this repo adjudicates:
+//   - the B00 unit file names scripts/validate-module-schemas.mjs;
+//   - the plan's decision record for this exact question names
+//     scripts/lib/gremion-manifest-schema.mjs.
+// Nothing here depends on which wins — this module is imported by path, not
+// by its importer's name — but D2 checks spec D D.1.2's "exactly one
+// validator" against a file, and checking it against the wrong file would
+// pass while a second implementation sat in the other one.
 
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'

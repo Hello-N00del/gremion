@@ -19,8 +19,10 @@
 // implementation, imported by D2's validator too) and are re-exported here so
 // scripts/assemble.mjs has one import to make — the wiring the guard checks for.
 //
-// Run:  node scripts/check-extraction-source.mjs [--modules-root <dir>] [--allow-zero] [--print]
+// Run:  node scripts/check-extraction-source.mjs \
+//         [--modules-root <dir>] [--allow-zero] [--verify-remote <repo-or-url>] [--print]
 //       without --modules-root, --allow-zero is required: nothing is inspected.
+//       --print returns before every check, so it refuses the other flags.
 // Test: node --test scripts/check-extraction-source.test.mjs
 
 import { execFileSync } from 'node:child_process'
