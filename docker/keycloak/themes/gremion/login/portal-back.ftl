@@ -42,6 +42,6 @@
 <#assign gremionPortalUrl = gremionSafeUrl('gremion.portal-url')>
 <#if gremionPortalUrl?has_content>
   <div class="auth-portal">
-    <a href="${gremionPortalUrl?esc}"><span class="arr">←</span> ${msg("sturaosBackToPortal")}</a>
+    <a href="${gremionPortalUrl?esc}"><span class="arr">←</span> ${msg("gremionBackToPortal")}</a>
   </div>
 </#if>

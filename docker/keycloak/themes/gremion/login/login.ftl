@@ -7,24 +7,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${msg("sturaosLoginTitle")} · ${(realm.displayName)!'StuRaOS'}</title>
+  <title>${msg("gremionLoginTitle")} · ${(realm.displayName)!'StuRaOS'}</title>
   <link rel="stylesheet" href="${url.resourcesPath}/css/gremion.v2.css">
 </head>
 <body class="auth-body">
   <div class="auth-bg"></div>
   <div class="auth-wrap">
     <div class="auth-brand">
-      <div class="logo">${msg("sturaosLogoLetter")}</div>
+      <div class="logo">${msg("gremionLogoLetter")}</div>
       <div>
         <div class="n">${(realm.displayName)!'StuRaOS'}</div>
-        <div class="s">${msg("sturaosBrandSub")}</div>
+        <div class="s">${msg("gremionBrandSub")}</div>
       </div>
     </div>
 
     <div class="auth-card">
       <div class="auth-head">
-        <h1>${msg("sturaosLoginTitle")}</h1>
-        <p>${msg("sturaosLoginSubtitle")}</p>
+        <h1>${msg("gremionLoginTitle")}</h1>
+        <p>${msg("gremionLoginSubtitle")}</p>
       </div>
 
       <#if message?has_content>
@@ -68,7 +68,7 @@
       </#if>
 
       <#if realm.password && social?? && social.providers?? && social.providers?has_content>
-        <div class="auth-divider">${msg("sturaosOr")}</div>
+        <div class="auth-divider">${msg("gremionOr")}</div>
         <#list social.providers as p>
           <a class="auth-idp" href="${p.loginUrl}">
             <span class="badge">${(p.displayName?upper_case)?substring(0,1)}</span>
@@ -79,16 +79,16 @@
       </#if>
 
       <#if realm.password && realm.registrationAllowed && !registrationDisabled??>
-        <a class="auth-back" href="${url.registrationUrl}">${msg("sturaosRegister")}</a>
+        <a class="auth-back" href="${url.registrationUrl}">${msg("gremionRegister")}</a>
       </#if>
     </div>
 
     <#include "portal-back.ftl">
     <div class="auth-foot">
-      <a href="/legal/impressum">${msg("sturaosImprint")}</a><span class="sep">·</span>
-      <a href="/legal/datenschutz">${msg("sturaosPrivacy")}</a>
+      <a href="/legal/impressum">${msg("gremionImprint")}</a><span class="sep">·</span>
+      <a href="/legal/datenschutz">${msg("gremionPrivacy")}</a>
     </div>
-    <div class="auth-secured">${msg("sturaosSecured")} ${realm.name}</div>
+    <div class="auth-secured">${msg("gremionSecured")} ${realm.name}</div>
   </div>
 </body>
 </html>

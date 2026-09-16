@@ -1063,6 +1063,33 @@ check('t1 every path the login theme references resolves on disk', () => {
   return missing.length ? `${missing.length} unresolved theme reference(s): ${missing.join(' | ')}` : null
 })
 
+// t2 - no message key in the theme carries the retired product token. The keys
+// are an API between the bundles and the markup, so a stale one is invisible
+// until a login page renders a raw ??key?? placeholder to a user.
+const RETIRED_KEY_PREFIX = /^sturaos/i
+
+check('t2 no login-theme message key carries the retired product token', () => {
+  const theme = themeName()
+  const loginDir = `${THEME_ROOT}/${theme}/login`
+  const offenders = []
+  for (const b of ['messages.properties', 'messages_de.properties', 'messages_en.properties']) {
+    read(`${loginDir}/messages/${b}`).split('\n').forEach((line, i) => {
+      const m = /^([A-Za-z][A-Za-z0-9_.]*)=/.exec(line.trim())
+      if (m && RETIRED_KEY_PREFIX.test(m[1])) offenders.push(`${loginDir}/messages/${b}:${i + 1} ${m[1]}`)
+    })
+  }
+  for (const rel of themeFtls(theme)) {
+    read(rel).split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(/msg\(\s*"([^"]+)"/g)) {
+        if (RETIRED_KEY_PREFIX.test(m[1])) offenders.push(`${rel}:${i + 1} ${m[1]}`)
+      }
+    })
+  }
+  return offenders.length
+    ? `${offenders.length} retired-token message key(s): ${offenders.join(' | ')}`
+    : null
+})
+
 check('t3 the three message bundles agree and carry no dead key', () => {
   const theme = themeName()
   const loginDir = `${THEME_ROOT}/${theme}/login`
