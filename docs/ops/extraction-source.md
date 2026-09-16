@@ -15,9 +15,29 @@ extraction-source: f276af5925abacdcfd05f6613fc11afff2d804c5
 - The StuRa tree carries the annotated tag `extraction-source` — that exact
   string — at that commit. `ARCHIVED.md` in the archived StuRa tree names it
   verbatim. The tag must be present on that repository's `origin` before any
-  module repository is extracted, because every extraction runs against a clone;
-  `git ls-remote --tags origin extraction-source` returning nothing means the
-  freeze exists only on one machine.
+  module repository is extracted, because every extraction runs against a
+  clone: a local-only tag does not resolve there, and the silent recovery is a
+  fall back to `master` — the two-source-states straddle this file exists to
+  prevent, with no artefact saying it happened. That is a post-condition on
+  another repository, so it is checked rather than asserted:
+
+  ```bash
+  # publish the freeze (once, from the StuRa tree)
+  git push origin refs/tags/extraction-source
+
+  # assert it landed: exit 1 while the remote has no such tag, while the tag
+  # is lightweight, or while it peels to a commit other than the one above
+  node scripts/check-extraction-source.mjs --allow-zero \
+    --verify-remote https://github.com/Hello-N00del/StuRaOS.git
+  ```
+
+  `--verify-remote` is deliberately NOT part of `make lint`: it needs the
+  network and it is a post-condition on a repository the kernel does not own,
+  so wiring it into every lint would make the kernel's build depend on another
+  repository's push state. Note the ref pattern — `git ls-remote --tags
+  <remote> extraction-source` filters out the peeled `^{}` line and so cannot
+  tell an annotated tag from a lightweight one; the guard asks for
+  `'refs/tags/extraction-source*'`.
 - Every `module.json` echoes the same value under `"extractionSource"`, as 40
   lowercase hexadecimal characters. It is a per-module field: the internal
   modules endpoint serialises it per enabled module, and the agreement check

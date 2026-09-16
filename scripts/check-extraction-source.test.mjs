@@ -400,3 +400,143 @@ test('the success line counts module directories, not manifests that happened to
   assert.equal(r.code, 0, `stderr was: ${r.stderr}`)
   assert.match(r.stdout, /2 of 2 module directories under .* carry an agreeing module\.json/)
 })
+
+// ── The freeze must exist on the remote, not on one machine ────────────────
+//
+// The tag is the unit's only StuRaOS artefact, and D3/D5/D11 all extract from
+// a CLONE, where a local-only tag does not resolve. The likely silent recovery
+// is a fall back to `master` — exactly the two-source-states straddle the
+// freeze exists to prevent, with no artefact saying it happened. Round 2
+// asserted "must be present on origin" in prose and shipped nothing that could
+// fail; these arms are the executable form.
+
+import { execFileSync as execFileSyncForGit } from 'node:child_process'
+import { TAG_NAME, checkRemoteTag, verifyRemoteTag } from './check-extraction-source.mjs'
+
+const TAG_OBJ = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+function git(dir, ...args) {
+  return execFileSyncForGit('git', ['-C', dir, ...args], { encoding: 'utf8' })
+}
+
+/** A real repository whose refs `git ls-remote <path>` can read, like a clone would. */
+function scratchRepo(t, { annotated = true, tagName = TAG_NAME, tag = true } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-repo-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  git(dir, 'init', '-q', '-b', 'master')
+  git(dir, 'config', 'user.email', 'b00@example.invalid')
+  git(dir, 'config', 'user.name', 'B00 fixture')
+  writeFileSync(join(dir, 'README.md'), 'extraction-source fixture\n')
+  git(dir, 'add', 'README.md')
+  git(dir, 'commit', '-q', '-m', 'fixture')
+  const sha = git(dir, 'rev-parse', 'HEAD').trim()
+  if (tag) {
+    if (annotated) git(dir, 'tag', '-a', tagName, sha, '-m', 'frozen extraction source')
+    else git(dir, 'tag', tagName, sha)
+  }
+  return { dir, sha }
+}
+
+test('TAG_NAME is the exact string D11 ARCHIVED.md must name verbatim', () => {
+  assert.equal(TAG_NAME, 'extraction-source')
+})
+
+test('checkRemoteTag goes RED when the remote carries no such tag — the freeze on one machine', () => {
+  const problems = checkRemoteTag('', FROZEN, 'origin')
+  assert.match(problems.join('\n'), /extraction-source is not on origin/)
+  assert.match(problems.join('\n'), /the freeze exists only on one machine/)
+})
+
+test('checkRemoteTag accepts an annotated tag whose peel is the frozen SHA', () => {
+  const out = `${TAG_OBJ}\trefs/tags/${TAG_NAME}\n${FROZEN}\trefs/tags/${TAG_NAME}^{}\n`
+  assert.deepEqual(checkRemoteTag(out, FROZEN, 'origin'), [])
+})
+
+test('checkRemoteTag goes RED when the remote tag peels to another commit', () => {
+  const out = `${TAG_OBJ}\trefs/tags/${TAG_NAME}\n${OTHER}\trefs/tags/${TAG_NAME}^{}\n`
+  const problems = checkRemoteTag(out, FROZEN, 'origin').join('\n')
+  assert.match(problems, new RegExp(`${OTHER}`))
+  assert.match(problems, new RegExp(`${FROZEN}`))
+})
+
+test('checkRemoteTag goes RED for a lightweight tag — spec B 2.4 requires an annotated one', () => {
+  const out = `${FROZEN}\trefs/tags/${TAG_NAME}\n`
+  assert.match(checkRemoteTag(out, FROZEN, 'origin').join('\n'), /lightweight/)
+})
+
+test('verifyRemoteTag reads a real repository over the git transport and accepts the tag', (t) => {
+  const { dir, sha } = scratchRepo(t)
+  assert.deepEqual(verifyRemoteTag(dir, sha), [])
+})
+
+test('verifyRemoteTag goes RED against a real repository that was never pushed the tag', (t) => {
+  const { dir, sha } = scratchRepo(t, { tag: false })
+  assert.match(verifyRemoteTag(dir, sha).join('\n'), /is not on /)
+})
+
+test('verifyRemoteTag goes RED for a real lightweight tag', (t) => {
+  const { dir, sha } = scratchRepo(t, { annotated: false })
+  assert.match(verifyRemoteTag(dir, sha).join('\n'), /lightweight/)
+})
+
+test('verifyRemoteTag reports an unreachable remote as a problem, not a crash', () => {
+  const problems = verifyRemoteTag(join(ROOT, 'no-such-repository-here'), FROZEN)
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.match(problems.join('\n'), /could not be read/)
+})
+
+test('the CLI --verify-remote arm refuses a remote without the tag', (t) => {
+  const { dir } = scratchRepo(t, { tag: false })
+  const r = runCli(['--verify-remote', dir, '--allow-zero'])
+  assert.doesNotMatch(r.stdout, /OK/, `stdout was: ${r.stdout}`)
+  assert.match(r.stderr, /extraction-source is not on /)
+  assert.equal(r.code, 1)
+})
+
+test('the kernel doc names --verify-remote, so the operator step cannot silently drop', () => {
+  const doc = readFileSync(join(ROOT, DOC_PATH), 'utf8')
+  assert.match(doc, /--verify-remote/)
+  assert.match(doc, /git push origin refs\/tags\/extraction-source/)
+})
+
+test('--print refuses the checking flags instead of silently inspecting nothing', () => {
+  for (const args of [
+    ['--print', '--modules-root', FIXTURES],
+    ['--print', '--allow-zero'],
+    ['--print', '--verify-remote', 'origin'],
+  ]) {
+    const r = runCli(args)
+    assert.equal(r.code, 1, `${args.join(' ')} printed: ${r.stdout}`)
+    assert.doesNotMatch(r.stdout, /[0-9a-f]{40}/, `stdout was: ${r.stdout}`)
+    assert.match(r.stderr, /--print inspects nothing/)
+  }
+})
+
+test('the wiring guard accepts an assembler that renames the import', (t) => {
+  // `import { runChecks as check }` is correct wiring. Matching only the
+  // EXPORTED names refused it — a narrow false RED B34 would have hit, and a
+  // guard that refuses correct code gets disabled. A namespace import already
+  // worked because `guard.runChecks(` still contains the exported name.
+  for (const body of [
+    "import { runChecks as check } from './check-extraction-source.mjs'\ncheck(process.cwd(), {})\n",
+    "import * as guard from './check-extraction-source.mjs'\nguard.runChecks(process.cwd(), {})\n",
+    "import { checkExtractionSourceAgreement as agree } from './check-extraction-source.mjs'\nagree([])\n",
+  ]) {
+    const dir = mkdtempSync(join(tmpdir(), 'b00-root-'))
+    t.after(() => rmSync(dir, { recursive: true, force: true }))
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+    writeFileSync(join(dir, 'scripts', 'assemble.mjs'), body)
+    assert.deepEqual(checkAssemblerWiring(dir), [], body)
+  }
+})
+
+test('a renamed import with no call site is still RED', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-root-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  writeFileSync(
+    join(dir, 'scripts', 'assemble.mjs'),
+    "import { runChecks as check } from './check-extraction-source.mjs'\nconsole.log('assembling')\n"
+  )
+  assert.match(checkAssemblerWiring(dir).join('\n'), /never calls it/)
+})

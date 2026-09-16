@@ -23,6 +23,7 @@
 //       without --modules-root, --allow-zero is required: nothing is inspected.
 // Test: node --test scripts/check-extraction-source.test.mjs
 
+import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -155,9 +156,115 @@ export function checkVacuity(entries, { allowZero = false, modulesRoot = null } 
       ]
 }
 
+// ── The freeze must exist on the REMOTE, not on one machine ─────────────
+//
+// The annotated tag is this unit's only StuRaOS artefact, and
+// D3-first-module-repo-users, D5-remaining-module-repos and
+// D11-archive-holding-repo-and-stura-tree all extract from a CLONE, where a
+// local-only tag does not resolve. The likely silent recovery is a fall back to
+// `master` — exactly the two-source-states straddle the freeze exists to
+// prevent, with no artefact saying it happened. Round 2 asserted "must be
+// present on origin" in the doc's prose and shipped nothing that could fail;
+// this is the executable form.
+//
+// It is opt-in (`--verify-remote <repo-or-url>`) rather than part of `make
+// lint`: it needs the network and it is a post-condition on a repository the
+// kernel does not own, so wiring it into every lint would make the kernel's
+// build depend on another repo's push state. The kernel doc names the command.
+
+export const TAG_NAME = 'extraction-source'
+
+const REMOTE_REF_RE = /^([0-9a-f]{40})\t(refs\/tags\/\S+)$/gm
+
+/**
+ * The refusal, over the literal stdout of
+ * `git ls-remote --tags <remote> 'refs/tags/extraction-source*'`. Pure, so the
+ * three RED shapes are testable without a network: the tag absent, the tag
+ * lightweight (spec B §2.4 requires an annotated tag, and a remote advertises
+ * the peeled `^{}` ref only for one), and the tag peeling to another commit.
+ */
+export function checkRemoteTag(lsRemoteStdout, frozen, remote) {
+  const refs = new Map()
+  for (const [, sha, ref] of String(lsRemoteStdout).matchAll(REMOTE_REF_RE)) refs.set(ref, sha)
+  const tagRef = `refs/tags/${TAG_NAME}`
+  const peelRef = `${tagRef}^{}`
+  if (!refs.has(tagRef))
+    return [
+      `${TAG_NAME} is not on ${remote} — \`git ls-remote --tags ${remote} '${tagRef}*'\` lists no such ref, so the freeze exists only on one machine; every extraction runs against a clone and would silently fall back to another commit`,
+    ]
+  if (!refs.has(peelRef))
+    return [
+      `${TAG_NAME} on ${remote} is a lightweight tag at ${refs.get(tagRef)} — spec B 2.4 requires an annotated tag, for which the remote also advertises ${peelRef}`,
+    ]
+  const peeled = refs.get(peelRef)
+  if (peeled !== frozen)
+    return [
+      `${TAG_NAME} on ${remote} peels to ${peeled}, but ${DOC_PATH} records the frozen source ${frozen} — the published tag names a different commit`,
+    ]
+  return []
+}
+
+/** checkRemoteTag against a real remote. An unreachable remote is a problem, never a crash. */
+export function verifyRemoteTag(remote, frozen = readFrozenExtractionSource()) {
+  let out
+  try {
+    out = execFileSync('git', ['ls-remote', '--tags', remote, `refs/tags/${TAG_NAME}*`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (err) {
+    const detail = String(err.stderr || err.message || err).trim().split('\n').pop()
+    return [`${remote} could not be read — git ls-remote failed: ${detail}`]
+  }
+  return checkRemoteTag(out, frozen, remote)
+}
+
 const GUARD_IMPORT_RE = /(?:from\s*|import\s*\(\s*)['"]\.\/check-extraction-source\.mjs['"]/
-const GUARD_CALL_RE =
-  /\b(?:runChecks|checkExtractionSourceAgreement|checkVacuity|collectModuleJson)\s*\(/
+const GUARD_NAMES = ['runChecks', 'checkExtractionSourceAgreement', 'checkVacuity', 'collectModuleJson']
+
+/**
+ * The local names an assembler could call the guard by. A correctly wired
+ * assembler that renames the import — `import { runChecks as check }` — used to
+ * be refused, a false RED B34 would have hit; a namespace import
+ * (`import * as guard`) already worked because `guard.runChecks(` still
+ * contains the exported name. Both are wiring, so both are accepted.
+ */
+function guardBindings(src) {
+  const names = new Set(GUARD_NAMES)
+  const add = (list) => {
+    for (const part of list.split(',')) {
+      const t = part.trim()
+      if (!t) continue
+      const renamed = t.match(/(?:\bas\b|:)\s*([A-Za-z_$][\w$]*)\s*$/)
+      names.add(renamed ? renamed[1] : t.split(/[\s:]+/)[0])
+    }
+  }
+  for (const m of src.matchAll(
+    /import\s+([^'"]*?)\s*from\s*['"]\.\/check-extraction-source\.mjs['"]/g
+  )) {
+    const clause = m[1]
+    const ns = clause.match(/\*\s*as\s+([A-Za-z_$][\w$]*)/)
+    if (ns) names.add(ns[1])
+    const braces = clause.match(/\{([^}]*)\}/)
+    if (braces) add(braces[1])
+    const dflt = clause.match(/^\s*([A-Za-z_$][\w$]*)\s*(?:,|$)/)
+    if (dflt) names.add(dflt[1])
+  }
+  for (const m of src.matchAll(
+    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\s*\(\s*['"]\.\/check-extraction-source\.mjs['"]/g
+  ))
+    names.add(m[1])
+  for (const m of src.matchAll(
+    /(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(\s*['"]\.\/check-extraction-source\.mjs['"]/g
+  ))
+    add(m[1])
+  return [...names]
+}
+
+function callsGuard(src) {
+  const names = guardBindings(src).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  return new RegExp(`\\b(?:${names.join('|')})\\s*\\(`).test(src)
+}
 
 /** Comments are not wiring: a commented-out import must not satisfy the contract. */
 function stripComments(src) {
@@ -181,14 +288,14 @@ export function checkAssemblerWiring(root) {
     return [
       `${ASSEMBLER_PATH}: exists but does not import ./check-extraction-source.mjs — the frozen-source agreement check would never run at assemble time`,
     ]
-  if (!GUARD_CALL_RE.test(src))
+  if (!callsGuard(src))
     return [
       `${ASSEMBLER_PATH}: imports ./check-extraction-source.mjs but never calls it — an import with no call site runs no agreement check at assemble time`,
     ]
   return []
 }
 
-export function runChecks(root, { modulesRoot = null, allowZero = false } = {}) {
+export function runChecks(root, { modulesRoot = null, allowZero = false, verifyRemote = null } = {}) {
   const frozen = readFrozenExtractionSource(root)
   const entries = collectModuleJson(modulesRoot)
   return {
@@ -199,6 +306,9 @@ export function runChecks(root, { modulesRoot = null, allowZero = false } = {}) 
       ...checkVacuity(entries, { allowZero, modulesRoot }),
       ...checkExtractionSourceAgreement(entries, frozen),
       ...checkAssemblerWiring(root),
+      ...(verifyRemote === null || verifyRemote === undefined
+        ? []
+        : verifyRemoteTag(verifyRemote, frozen)),
     ],
   }
 }
@@ -206,7 +316,7 @@ export function runChecks(root, { modulesRoot = null, allowZero = false } = {}) 
 // ── CLI ────────────────────────────────────────────────────────────────────
 
 const USAGE =
-  'usage: node scripts/check-extraction-source.mjs [--modules-root <dir>] [--allow-zero] [--print]'
+  'usage: node scripts/check-extraction-source.mjs [--modules-root <dir>] [--allow-zero] [--verify-remote <repo-or-url>] [--print]'
 
 function fail(problems) {
   console.error(`[extraction-source] ${problems.length} problem(s):`)
@@ -227,6 +337,7 @@ if (isMain) {
       options: {
         'modules-root': { type: 'string' },
         'allow-zero': { type: 'boolean' },
+        'verify-remote': { type: 'string' },
         print: { type: 'boolean' },
       },
       strict: true,
@@ -238,10 +349,34 @@ if (isMain) {
   }
   const modulesRoot = values['modules-root'] ?? null
   const allowZero = values['allow-zero'] === true
+  const verifyRemote = values['verify-remote'] ?? null
   if (values.print === true) {
+    // --print returns before every check, so a --print run that also carries a
+    // checking flag would exit 0 having inspected nothing — the same shape as
+    // the round-1 defect, one flag over. Refuse the combination rather than
+    // ignore the token.
+    const ignored = ['modules-root', 'allow-zero', 'verify-remote'].filter(
+      (k) => values[k] !== undefined
+    )
+    if (ignored.length > 0)
+      fail([
+        `--print inspects nothing: it writes the frozen SHA and returns before the agreement, vacuity, wiring and remote checks. ${ignored
+          .map((k) => `--${k}`)
+          .join(', ')} would be silently ignored and the exit 0 would read as a green run of a check that never happened`,
+        USAGE,
+      ])
     process.stdout.write(`${readFrozenExtractionSource(ROOT)}\n`)
   } else {
-    const { frozen, entries, problems } = runChecks(ROOT, { modulesRoot, allowZero })
+    let result
+    try {
+      result = runChecks(ROOT, { modulesRoot, allowZero, verifyRemote })
+    } catch (err) {
+      // A doc with no canonical line, or two, throws from the parser. It is a
+      // problem with the record, so it must render through the guard's own
+      // formatter rather than escape as a raw stack past it.
+      fail([err.message])
+    }
+    const { frozen, entries, problems } = result
     if (problems.length > 0) fail(problems)
     // The success line says what was actually inspected. "N module.json agree"
     // over zero manifests was the round-1 defect; a line nobody can misread as
