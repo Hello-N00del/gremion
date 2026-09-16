@@ -25,7 +25,7 @@ vi.mock('$lib/server/jwt-verify', () => ({ verifyBearerJwt: vi.fn(async () => nu
 vi.mock('$lib/server/tenant/control-migrations', () => ({ runControlMigrations: vi.fn(async () => {}) }))
 vi.mock('$lib/server/tenant/register-default', () => ({ registerDefaultTenant: vi.fn(async () => ({ id: 'tid-1' })) }))
 vi.mock('$lib/server/tenant/registry', () => ({
-  resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/sturaos' })),
+  resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/gremion-test' })),
   listActiveTenants: vi.fn(async () => [{ id: 'tid-1', slug: 'default', status: 'active' }]),
   startTenantMigrationRun: vi.fn(async () => 'run-1'),
   finishTenantMigrationRun: vi.fn(async () => {}),

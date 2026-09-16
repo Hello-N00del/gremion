@@ -107,7 +107,7 @@ vi.mock('$lib/server/tenant/register-default', () => ({
   registerDefaultTenant: vi.fn(async () => ({ id: 'default' })),
 }))
 vi.mock('$lib/server/tenant/registry', () => ({
-  resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/sturaos' })),
+  resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/gremion-test' })),
   // P2.1b T2: boot's fleet runner lists the active tenants and ledgers each
   // run. The id must match registerDefaultTenant's mock so boot's default-
   // outcome gate finds the fleet result.

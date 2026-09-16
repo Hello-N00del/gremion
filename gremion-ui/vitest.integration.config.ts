@@ -49,8 +49,8 @@ process.env.GREMION_DISABLE_SEEDS ??= 'true'
 // lets a real shell/CI value win.
 process.env.KEYCLOAK_ADMIN_CLIENT_SECRET ??= 'test-kc-admin-secret'
 process.env.AUTH_KEYCLOAK_SECRET ??= 'test-ui-client-secret'
-process.env.AUTH_KEYCLOAK_ISSUER ??= 'https://council.example/auth/realms/sturaos'
-process.env.AUTH_KEYCLOAK_BASE ??= 'https://council.example/auth/realms/sturaos'
+process.env.AUTH_KEYCLOAK_ISSUER ??= 'https://council.example/auth/realms/gremion-test'
+process.env.AUTH_KEYCLOAK_BASE ??= 'https://council.example/auth/realms/gremion-test'
 
 // Fail-closed: guard every DB URL the suite connects to — at config-load time
 // so vitest refuses to even boot when a dangerous URL is set.

@@ -52,7 +52,7 @@ describe('issuer / kc-internal derivation (D-ISSUER-HOST)', () => {
     // a plain /auth base
     expect(kcInternalForTenant('verein', 'https://kc:8443/auth')).toBe('https://kc:8443/auth/realms/verein')
     // a realm-scoped AUTH_KEYCLOAK_INTERNAL (default tenant shape) -> stripped to the right per-tenant realm
-    expect(kcInternalForTenant('verein', 'https://keycloak:8443/auth/realms/sturaos')).toBe(
+    expect(kcInternalForTenant('verein', 'https://keycloak:8443/auth/realms/gremion-test')).toBe(
       'https://keycloak:8443/auth/realms/verein',
     )
     // trailing slash tolerated

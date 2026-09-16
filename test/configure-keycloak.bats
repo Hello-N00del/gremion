@@ -91,13 +91,13 @@ teardown() {
 # Step-up 2FA realm export validation (#164)
 # These assertions verify that realm-export.json carries the LoA step-up
 # configuration needed for fresh installs.  They mirror what a live KC would
-# expose at GET /admin/realms/sturaos and
-# GET /admin/realms/sturaos/authentication/flows — but run against the source
+# expose at GET /admin/realms/<realm> and
+# GET /admin/realms/<realm>/authentication/flows — but run against the source
 # file so they pass in CI without a running Keycloak.
 # ---------------------------------------------------------------------------
 
 @test "realm-export.json otpPolicyType is totp (#164 step-up)" {
-    # Mirrors: GET /admin/realms/sturaos  ->  .otpPolicyType == "totp"
+    # Mirrors: GET /admin/realms/<realm>  ->  .otpPolicyType == "totp"
     python3 -c '
 import json, sys
 with open(sys.argv[1]) as f:
@@ -108,7 +108,7 @@ assert realm.get("otpPolicyType") == "totp", \
 }
 
 @test "realm-export.json has browser-stepup authentication flow (#164 step-up)" {
-    # Mirrors: GET /admin/realms/sturaos/authentication/flows
+    # Mirrors: GET /admin/realms/<realm>/authentication/flows
     #   ->  any(.alias == "browser-stepup")
     python3 -c '
 import json, sys

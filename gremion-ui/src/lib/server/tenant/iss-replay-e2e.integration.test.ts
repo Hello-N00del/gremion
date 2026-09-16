@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 // the authGuard tests (hooks.iss-match.test.ts) fed authGuard a HAND-BUILT
 // tenant literal. Nothing drove a REGISTRY-RESOLVED context through the REAL
 // authGuard with a replayed cross-realm token. This test closes that gap: it
-// registers two real tenants (A=default/sturaos, B=tenant-b) in the control DB,
+// registers two real tenants (A=default, B=tenant-b) in the control DB,
 // resolves B's REAL TenantContext via resolveTenantBySlug, and runs the REAL
 // authGuard inside runWithTenant(b, …) against both a replayed A-realm session
 // (expect 403 TenantMismatch) and a legitimate B-realm session (expect 200).
@@ -77,7 +77,7 @@ describe('iss-replay e2e: registry-resolved tenant through the REAL authGuard', 
     await getControlDb()`TRUNCATE tenant, tenant_provisioning_resource RESTART IDENTITY CASCADE`
     // T8: re-registered rows get NEW tenant ids — drop cached resolutions.
     _resetResolutionCacheForTests()
-    // A = default tenant (sturaos issuer, env-driven).
+    // A = default tenant (env-driven issuer).
     await registerDefaultTenant()
     // B = a distinct tenant with its OWN realm/issuer.
     await registerTenant({

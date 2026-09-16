@@ -13,7 +13,7 @@
 
      Styling is graphite/neutral (--ink-muted -> --ink on hover), NOT an accent:
      this is a secondary escape hatch, not a brand moment. Both tokens are
-     defined in the light :root and in the dark blocks of sturaos.v2.css, so it
+     defined in the light :root and in the dark blocks of gremion.v2.css, so it
      reads correctly in either scheme.
 
      ESCAPER CHOICE for the href — ?esc (HTML escaping), NOT ?url, NOT ?html:
@@ -42,6 +42,6 @@
 <#assign gremionPortalUrl = gremionSafeUrl('gremion.portal-url')>
 <#if gremionPortalUrl?has_content>
   <div class="auth-portal">
-    <a href="${gremionPortalUrl?esc}"><span class="arr">←</span> ${msg("sturaosBackToPortal")}</a>
+    <a href="${gremionPortalUrl?esc}"><span class="arr">←</span> ${msg("gremionBackToPortal")}</a>
   </div>
 </#if>

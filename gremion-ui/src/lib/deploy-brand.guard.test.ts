@@ -75,7 +75,7 @@ describe('institution-identity guard — deploy surfaces and the whole tracked t
     // Pin the surfaces the old `docker/**` exclusion left unchecked, so a future
     // narrowing of the file list cannot silently drop them again.
     const norm = new Set(files)
-    expect(norm.has('docker/keycloak/themes/sturaos/login/messages/messages_de.properties')).toBe(
+    expect(norm.has('docker/keycloak/themes/gremion/login/messages/messages_de.properties')).toBe(
       true,
     )
     expect(norm.has('docker/keycloak/realm-export.base.json')).toBe(true)

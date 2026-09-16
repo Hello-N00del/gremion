@@ -160,7 +160,7 @@ describe('safeDecodeAccessToken — tenant vocabulary threading (P2.2-auth A3)',
       groups: ['stura'],
       acr: '2fa',
       auth_time: 1717430400,
-      iss: 'https://kc.example.org/realms/sturaos',
+      iss: 'https://kc.example.org/realms/gremion-test',
     })
     const result = safeDecodeAccessToken(token)
     expect(result).toStrictEqual({
@@ -170,7 +170,7 @@ describe('safeDecodeAccessToken — tenant vocabulary threading (P2.2-auth A3)',
       preferredUsername: 'alice',
       acr: '2fa',
       authTime: 1717430400,
-      iss: 'https://kc.example.org/realms/sturaos',
+      iss: 'https://kc.example.org/realms/gremion-test',
     })
     expect('vocabulary' in result).toBe(false)
   })

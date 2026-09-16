@@ -88,7 +88,7 @@ describe('v12 back-routes — apex strip + footer colophon are opt-in and unbran
     ['PortalFooter.svelte', footer],
   ])('%s hardcodes no instance branding', (_label, source) => {
     const code = strip(source);
-    expect(code).not.toMatch(/sturaos/i);
+    expect(code).not.toMatch(/stura(os)?/i);
     expect(code).not.toMatch(/Produkt\s*&(amp;)?\s*Info/i);
     expect(code).not.toMatch(/Läuft auf/i);
   });

@@ -87,7 +87,7 @@ export function issuerForTenant(slug: string, realmName: string, apexDomain: str
  * way the DEFAULT tenant does (register-default.ts), with a TLS default matching
  * the live internal posture (`docker-compose.yml` `https://keycloak:8443/auth`,
  * #139). Any realm suffix on the supplied base is stripped so a realm-scoped
- * AUTH_KEYCLOAK_INTERNAL (e.g. `.../auth/realms/sturaos`) still yields the right
+ * AUTH_KEYCLOAK_INTERNAL (e.g. `.../auth/realms/<tenant-slug>`) still yields the right
  * per-tenant URL.
  */
 export const DEFAULT_KC_INTERNAL_BASE = 'https://keycloak:8443/auth'
@@ -187,7 +187,7 @@ function swapHost(value: unknown, apexDomain: string, tenantHost: string): unkno
  *     `localhost(:port)`) -> DROP (token-interception surface in an internet-
  *     facing realm);
  *   - a non-http(s) scheme (the mobile custom schemes `stura://…`,
- *     `de.sturaos.app:/…`) -> KEEP (no host authority to abuse).
+ *     `de.example.app:/…`) -> KEEP (no host authority to abuse).
  */
 function uriAllowedForTenant(uri: string, tenantHost: string): boolean {
   const lower = uri.toLowerCase()

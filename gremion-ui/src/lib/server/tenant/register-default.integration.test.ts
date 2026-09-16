@@ -34,14 +34,14 @@ describe('registerDefaultTenant', () => {
   })
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('inserts a `default` row pointing at the existing gremion DB + sturaos realm + env config', async () => {
+  it('inserts a `default` row pointing at the existing gremion DB + the default realm + env config', async () => {
     await registerDefaultTenant()
     const t = await getTenantBySlug('default')
     expect(t).not.toBeNull()
     expect(t!.status).toBe('active')
-    expect(t!.realmName).toBe('sturaos')
+    expect(t!.realmName).toBe('gremion-test')
     expect(t!.dbConnRef).toBe('env:DATABASE_URL') // tenant #1 keeps env secrets — no content move
-    expect(t!.issuer).toContain('/realms/sturaos')
+    expect(t!.issuer).toContain('/realms/gremion-test')
   })
 
   it('is idempotent — running it twice leaves exactly one default row with a stable id', async () => {

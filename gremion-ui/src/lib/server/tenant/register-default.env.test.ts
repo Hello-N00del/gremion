@@ -48,7 +48,7 @@ describe('registerDefaultTenant — env is the only source of tenant #1 identity
     // URL is how the literal came back last time.
     const message = (caught as Error).message
     expect(message).not.toMatch(/https?:/)
-    expect(message).not.toMatch(/sturaos/i)
+    expect(message).not.toMatch(/gremion-test/i)
   })
 })
 

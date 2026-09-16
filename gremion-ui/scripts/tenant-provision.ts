@@ -577,8 +577,9 @@ async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verif
     tenantHost: tenantHostFromIssuer(tenant.issuer),
     apexDomain: apexDomain(),
     base,
-    // (B) the DEFAULT realm legitimately keeps its localhost dev URIs (the live
-    // `sturaos` realm carries them) — flag it so the URI checks don't false-fail.
+    // (B) a realm whose client URIs were never minted from a tenant host
+    // legitimately keeps its localhost dev URIs — flag it so the URI checks
+    // don't false-fail.
     isDefault: tenant.slug === 'default',
     verifyOnly,
   })

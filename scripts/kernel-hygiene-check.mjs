@@ -754,19 +754,13 @@ check('f6 every label .github/ references is declared in .github/labels.yml', ()
 // scheme) is not a wire literal and is not flagged.
 const RETIRED_WIRE_ROOT = /(^|[^A-Za-z0-9._-])sturaos\.(?!com\b)[A-Za-z0-9_{*>%$-]/i
 
-// PATH CARVE-OUTS — two, and each is a place where `sturaos.` is provably not a
-// subject:
+// PATH CARVE-OUT — one, and it is the only place where `sturaos.` is provably
+// not a subject:
 //
-//  - docker/keycloak/themes/sturaos/** — the Keycloak login theme is NAMED
-//    sturaos, and its files reference `css/sturaos.v2.css`: a stylesheet
-//    FILENAME that Keycloak serves by path. Renaming it 404s the login page.
-//    Theme naming is the Gremion-rename ticket's job (gremion#21), not the wire
-//    root's.
 //  - scripts/kernel-hygiene-check.mjs — this file. It must be able to quote the
 //    pattern it forbids; without the carve-out the guard can never pass, which
 //    is the one failure mode that gets a guard deleted.
 const WIRE_ROOT_EXEMPT_PATHS = [
-  /^docker\/keycloak\/themes\/sturaos\//,
   /^scripts\/kernel-hygiene-check\.mjs$/,
 ]
 
@@ -790,6 +784,165 @@ check('h1 no retired wire-root literal survives anywhere in the tree', () => {
   }
   return offenders.length
     ? `retired wire root still on the wire in ${offenders.length} place(s): ${offenders.join(' | ')}`
+    : null
+})
+
+// ── (h2) the retired product token as a BARE identifier ────────────────────
+//
+// (h1) above requires a trailing dot, because it owns the NATS subject root.
+// That trailing dot is exactly how the login theme survived the public flip:
+// `themes/sturaos/`, `loginTheme: "sturaos"` and `realms/sturaos` are the token
+// standing alone, and h1 walked past every one of them while reporting clean.
+// This rule is the token as an IDENTIFIER, with no dot required.
+//
+// CASE-SENSITIVE, lower-case only, and deliberately so. `StuRaOS` is the name
+// of a vertical (D-02) and of the issues this repo cites; it is a proper noun in
+// prose with its own zero-tolerance owner at gremion-ui/src/lib/brand.guard
+// .test.ts:70-71 (the FORBIDDEN entry `product "StuRaOS"`, empty allow-list).
+// What this rule owns is the lower-case identifier: a directory name, a realm
+// segment, a message-key prefix, a stylesheet filename.
+// BOUNDARIES: lookaround on LETTERS AND DIGITS ONLY. The first draft of this
+// rule put `-` and `_` inside the boundary classes, which meant a hyphen or an
+// underscore immediately after the token defeated the match: `sturaos-realm
+// .json`, `sturaos-users-0.json`, `sturaos_realm` and `themes/sturaos-v2/` all
+// read as clean. That is the same species of hole as h1's trailing dot — the
+// hole this whole check exists to close — and it was live: the five carriers in
+// docker/keycloak/substitute-realm-secrets.sh and the two installed-hook
+// markers in install-git-hooks.mjs were invisible to it. A separator is a
+// boundary, not part of the identifier.
+const RETIRED_PRODUCT_TOKEN = /(?<![A-Za-z0-9])sturaos(?![A-Za-z0-9])/
+// ALLOW-LIST - three kinds of entry, each with its reason, and it does not grow
+// without one:
+//  - this file, which must be able to spell what it forbids;
+//  - gremion-ui/scripts/install-git-hooks.mjs, whose MARKER_BEGIN/MARKER_END
+//    (:29-30) delimit the block ALREADY WRITTEN into every developer's
+//    .git/hooks/pre-commit. Changing the marker orphans every installed block:
+//    the installer would no longer find its own managed region, and would
+//    append a second one beside it. This entry is LIVE, not decorative: the
+//    markers are `# >>> sturaos-boundary-lint >>>`, hyphenated, so they are hit
+//    by the boundary rule above and would fail the check without it;
+//  - the four SHA-pinned APPLIED migrations. Their bytes are pinned in
+//    baseline-hashes.json (B7) and 008 is B6's single named byte-equality
+//    exception; editing one is a schema-integrity failure, not a rename. All
+//    four are listed on BYTE-IMMUTABILITY grounds, not on a current hit:
+//    measured at f7ac826 only 043:50 carries the token at all, and as the
+//    capital `StuRaOS` in a comment, which this case-sensitive rule would not
+//    match anyway; 008, 042 and 048 carry no `stura` token whatsoever.
+const PRODUCT_TOKEN_EXEMPT_PATHS = [
+  /^scripts\/kernel-hygiene-check\.mjs$/,
+  /^gremion-ui\/scripts\/install-git-hooks\.mjs$/,
+  /^gremion-ui\/migrations\/008_public_portal\.sql$/,
+  /^gremion-ui\/migrations\/042_protocol_resolution_required_majority\.sql$/,
+  /^gremion-ui\/migrations\/043_audit_log_hash_chain\.sql$/,
+  /^gremion-ui\/migrations\/048_resolution_decided_at\.sql$/,
+]
+
+// PENDING - a dated, per-line waiver, and NOT a second allow-list. The
+// difference matters: an allow-list entry is a path this rule stops looking at,
+// a PENDING entry is one exact line, in one file, at one count, that the rule
+// has seen and is holding. It is enforced in BOTH directions:
+//   - a carrier that is NOT pending fails, so a NEW occurrence still breaks the
+//     build the day it is written;
+//   - a pending line that no longer occurs, or occurs a different number of
+//     times, ALSO fails, so the waiver cannot outlive its cause. When the realm
+//     unit lands, these entries stop matching and h2 goes red until they are
+//     deleted. A waiver nobody is forced to remove is a waiver that rots.
+// Entries carry no line numbers on purpose: a line number drifts under every
+// edit above it, the exact text does not.
+//
+// EVERY entry below has ONE cause, opened 2026-09-16: the realm a running
+// Keycloak actually serves is still named with the retired token, and renaming
+// it is a deployment-identity migration owned by
+// B1a-realm-identity-and-boot-import, which deletes the boot import,
+// realm-export.json and substitute-realm-secrets.sh outright. This unit owns
+// the login theme. It must not invent a realm identity another unit is about to
+// decide, and it must not hold the whole suite red while it waits: h2 shares
+// one exit code with 44 other checks - i1/i2 (retired operator hosts in shipped
+// deploy and env templates), g3-g6 (k8s supply chain and :latest pinning), j1
+// (the k8s apex/escaped-domain sentinel) - and `make lint` stops at the first
+// failing target, so a permanently red h2 would silently retire all of them.
+const PRODUCT_TOKEN_PENDING = [
+  [".env.example", "AUTH_KEYCLOAK_ISSUER=http://keycloak:8080/auth/realms/sturaos", 1],
+  [".env.example", "KEYCLOAK_ISSUER_URL=http://keycloak:8080/auth/realms/sturaos", 1],
+  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_BASE: https://council.example/auth/realms/sturaos", 1],
+  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_ISSUER: http://localhost/realms/sturaos", 1],
+  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_ISSUER: https://council.example/auth/realms/sturaos", 1],
+  ["docker-compose.override.yml", "# KC_HOSTNAME includes /auth, so iss = http://localhost:8082/auth/realms/sturaos.", 1],
+  ["docker-compose.override.yml", "AUTH_KEYCLOAK_BASE: \"http://localhost:8082/auth/realms/sturaos\"", 1],
+  ["docker-compose.override.yml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
+  ["docker-compose.override.yml", "AUTH_KEYCLOAK_ISSUER: \"http://localhost:8082/auth/realms/sturaos\"", 1],
+  ["docker-compose.yml", "AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/sturaos", 1],
+  ["docker/keycloak/realm-export.base.json", "\"realm\": \"sturaos\",", 1],
+  ["docker/keycloak/realm-export.json", "\"realm\": \"sturaos\",", 1],
+  ["docker/keycloak/substitute-realm-secrets.sh", "REALM_DST=\"${IMPORT_DIR}/sturaos-realm.json\"", 1],
+  ["docker/keycloak/substitute-realm-secrets.sh", "cp /opt/keycloak-init/dev-users.json \"${IMPORT_DIR}/sturaos-users-0.json\"", 1],
+  ["docker/keycloak/substitute-realm-secrets.sh", "echo \"[substitute-realm-secrets] dev composition — importing dev users (sturaos-users-0.json).\"", 1],
+  ["docker/keycloak/substitute-realm-secrets.sh", "rm -f \"${IMPORT_DIR}/sturaos-users-0.json\"", 2],
+  ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
+  ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_ISSUER: \"https://stura.example.com/auth/realms/sturaos\"", 1],
+  ["scripts/configure-keycloak-clients.sh", "REALM=\"sturaos\"", 1],
+  ["scripts/dev-configure.sh", "\"${KC_BASE}/admin/realms/sturaos/clients/${uuid}\")", 1],
+  ["scripts/dev-configure.sh", "\"${KC_BASE}/admin/realms/sturaos/clients?clientId=${client_id}\" \\", 1],
+  ["scripts/dev-configure.sh", "-X PUT \"${KC_BASE}/admin/realms/sturaos/clients/${uuid}\" \\", 1],
+  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_BASE\"       \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
+  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_INTERNAL\"   \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
+  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_ISSUER\"     \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
+  ["test/integration/health.bats", "@test \"Keycloak sturaos realm is reachable\" {", 1],
+  ["test/integration/health.bats", "[[ \"$output\" == *'\"realm\":\"sturaos\"'* ]]", 1],
+  ["test/integration/health.bats", "run curl -sf http://localhost:8082/auth/realms/sturaos", 1],
+  ["test/integration/oidc.bats", "REALM=\"sturaos\"", 1],
+]
+
+check('h2 the retired product token survives nowhere as a bare identifier', () => {
+  const files = execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' })
+    .split('\n').map((s) => s.trim()).filter(Boolean)
+  if (files.length === 0) return 'git ls-files matched zero files - the check would vacuously pass'
+  // rel -> (exact trimmed line -> { count, lines })
+  const carriers = new Map()
+  for (const rel of files) {
+    if (/\.(png|jpe?g|gif|svg|ico|pdf|woff2?)$/i.test(rel)) continue
+    if (PRODUCT_TOKEN_EXEMPT_PATHS.some((re) => re.test(rel))) continue
+    // The specs quote the rename they order. NOT LIVE YET: `git ls-files
+    // docs/superpowers/specs/` matches zero files at this tip, so this masks
+    // nothing today and must be re-checked the moment the spec-docs unit
+    // lands, which is when it starts carving anything out at all.
+    if (rel.startsWith('docs/superpowers/specs/')) continue
+    const abs = join(ROOT, rel)
+    if (!existsSync(abs)) continue
+    readFileSync(abs, 'utf8').split('\n').forEach((line, i) => {
+      if (!RETIRED_PRODUCT_TOKEN.test(line)) return
+      const text = line.trim()
+      if (!carriers.has(rel)) carriers.set(rel, new Map())
+      const inFile = carriers.get(rel)
+      const seen = inFile.get(text) || { count: 0, lines: [] }
+      seen.count += 1
+      seen.lines.push(i + 1)
+      inFile.set(text, seen)
+    })
+  }
+  const problems = []
+  // LEG 1 - a pending entry that no longer matches. Deleted file, edited line or
+  // a different number of occurrences: every one of them means the waiver is
+  // stale and has to go, and none of them may pass silently.
+  const held = new Map()
+  for (const [rel, text, count] of PRODUCT_TOKEN_PENDING) {
+    const found = carriers.get(rel)?.get(text)?.count || 0
+    if (found !== count) {
+      problems.push(`STALE WAIVER ${rel} :: ${text.slice(0, 80)} - waived ${count}, found ${found}; delete the entry`)
+    }
+    held.set(rel + '\u0000' + text, count)
+  }
+  // LEG 2 - a carrier nobody waived, or more of one than was waived.
+  for (const [rel, inFile] of carriers) {
+    for (const [text, seen] of inFile) {
+      const waived = held.get(rel + '\u0000' + text) || 0
+      if (seen.count > waived) {
+        for (const ln of seen.lines.slice(waived)) problems.push(`${rel}:${ln} ${text.slice(0, 100)}`)
+      }
+    }
+  }
+  return problems.length
+    ? `the retired product token is still a live identifier in ${problems.length} unwaived place(s): ${problems.join(' | ')}`
     : null
 })
 
@@ -1009,6 +1162,206 @@ check('j1 the k8s apex and escaped-domain sentinels resolve to the same domain',
   return esc === expected
     ? null
     : `the wildcard regexp does not describe the apex: apex "${apex}" implies "${expected}", found "${esc}" (${escaped.get(esc)}) — every tenant subdomain would 404 at Traefik.`
+})
+
+// ── (t) the Keycloak login theme is internally consistent ──────────────────
+//
+// Keycloak answers a broken theme by falling back to the stock one, with no
+// error in any log and a 200 on the login page. So every reference inside the
+// theme is checked as a PATH THAT RESOLVES, not as a string that looks right:
+//   t1 - realm-export.base.json's loginTheme names a directory that exists;
+//        that directory's theme.properties `styles=` names a file that exists;
+//        every ${url.resourcesPath}/… href in every .ftl names a file that exists.
+//   t3 - the three message bundles define the IDENTICAL key set, and no key is
+//        dead (every key defined in the default bundle is used by some .ftl).
+// Together they make a half-finished rename impossible to commit: move the
+// directory without theme.properties and t1 goes red; rename a key in one
+// bundle and t3 goes red; rename a key everywhere but in the markup and t3's
+// dead-key leg goes red.
+//
+// The `t` series, not `j`: j1-j4 belong to B18-router-emitter-library's edge
+// rules, and j1 is already the k8s apex/escaped-domain sentinel check above.
+const THEME_ROOT = 'docker/keycloak/themes'
+
+function themeName() {
+  return JSON.parse(read('docker/keycloak/realm-export.base.json')).loginTheme
+}
+
+function themeFtls(theme) {
+  const dir = join(ROOT, THEME_ROOT, theme, 'login')
+  return existsSync(dir)
+    ? readdirSync(dir).filter((n) => n.endsWith('.ftl')).map((n) => `${THEME_ROOT}/${theme}/login/${n}`)
+    : []
+}
+
+check('t1 every path the login theme references resolves on disk', () => {
+  const theme = themeName()
+  if (!theme) return 'realm-export.base.json declares no loginTheme'
+  const loginDir = `${THEME_ROOT}/${theme}/login`
+  if (!has(loginDir)) return `loginTheme "${theme}" names no directory at ${loginDir}`
+  const props = read(`${loginDir}/theme.properties`)
+  const styles = /^styles=(.+)$/m.exec(props)
+  if (!styles) return `${loginDir}/theme.properties declares no styles=`
+  const missing = []
+  for (const s of styles[1].trim().split(/\s+/)) {
+    if (!has(`${loginDir}/resources/${s}`)) missing.push(`theme.properties styles= names ${s}, absent at ${loginDir}/resources/${s}`)
+  }
+  // The GENERATED export, while it still exists, is a second declaration of the
+  // same value. It is composed from the base template, so a rename that moves
+  // only the base leaves a fresh `--import-realm` boot pointing at a directory
+  // that is gone — the silent stock-theme fallback again, one file further out.
+  if (has('docker/keycloak/realm-export.json')) {
+    const gen = JSON.parse(read('docker/keycloak/realm-export.json')).loginTheme
+    if (gen !== theme) {
+      missing.push(`realm-export.json declares loginTheme "${gen}" but realm-export.base.json declares "${theme}" — regenerate it (make gen-realm)`)
+    }
+  }
+  const ftls = themeFtls(theme)
+  if (ftls.length === 0) return `found zero .ftl under ${loginDir} — the check would vacuously pass`
+  for (const rel of ftls) {
+    for (const m of read(rel).matchAll(/\$\{url\.resourcesPath\}\/([A-Za-z0-9._/-]+)/g)) {
+      if (!has(`${loginDir}/resources/${m[1]}`)) missing.push(`${rel} references ${m[1]}, absent at ${loginDir}/resources/${m[1]}`)
+    }
+  }
+  return missing.length ? `${missing.length} unresolved theme reference(s): ${missing.join(' | ')}` : null
+})
+
+// t2 - no message key in the theme carries the retired product token. The keys
+// are an API between the bundles and the markup, so a stale one is invisible
+// until a login page renders a raw ??key?? placeholder to a user.
+const RETIRED_KEY_PREFIX = /^sturaos/i
+
+check('t2 no login-theme message key carries the retired product token', () => {
+  const theme = themeName()
+  const loginDir = `${THEME_ROOT}/${theme}/login`
+  const offenders = []
+  for (const b of ['messages.properties', 'messages_de.properties', 'messages_en.properties']) {
+    read(`${loginDir}/messages/${b}`).split('\n').forEach((line, i) => {
+      const m = /^([A-Za-z][A-Za-z0-9_.]*)=/.exec(line.trim())
+      if (m && RETIRED_KEY_PREFIX.test(m[1])) offenders.push(`${loginDir}/messages/${b}:${i + 1} ${m[1]}`)
+    })
+  }
+  for (const rel of themeFtls(theme)) {
+    read(rel).split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(/msg\(\s*"([^"]+)"/g)) {
+        if (RETIRED_KEY_PREFIX.test(m[1])) offenders.push(`${rel}:${i + 1} ${m[1]}`)
+      }
+    })
+  }
+  return offenders.length
+    ? `${offenders.length} retired-token message key(s): ${offenders.join(' | ')}`
+    : null
+})
+
+check('t3 the three message bundles agree and carry no dead key', () => {
+  const theme = themeName()
+  const loginDir = `${THEME_ROOT}/${theme}/login`
+  const bundles = ['messages.properties', 'messages_de.properties', 'messages_en.properties']
+  const keysOf = (b) =>
+    new Set(read(`${loginDir}/messages/${b}`).split('\n')
+      .map((l) => /^([A-Za-z][A-Za-z0-9_.]*)=/.exec(l.trim()))
+      .filter(Boolean).map((m) => m[1]))
+  const sets = bundles.map((b) => [b, keysOf(b)])
+  const base = sets[0][1]
+  if (base.size === 0) return 'the default bundle defines zero keys — the check would vacuously pass'
+  const problems = []
+  for (const [b, s] of sets.slice(1)) {
+    for (const k of base) if (!s.has(k)) problems.push(`${k} missing from ${b}`)
+    for (const k of s) if (!base.has(k)) problems.push(`${k} extra in ${b}`)
+  }
+  const markup = themeFtls(theme).map((r) => read(r)).join('\n')
+  const used = new Set([...markup.matchAll(/msg\(\s*"([^"]+)"/g)].map((m) => m[1]))
+  for (const k of base) if (!used.has(k)) problems.push(`${k} is defined but referenced by no .ftl`)
+  return problems.length ? `${problems.length} message-bundle problem(s): ${problems.join(' | ')}` : null
+})
+
+// t4 - the theme's own fallback literal for realm.displayName.
+//
+// WHAT THIS CHECK IS AND IS NOT, corrected in round 1 against a running
+// Keycloak 26.6.1 rather than assumed. The `!'...'` default is UNREACHABLE at
+// runtime: RealmBean.getDisplayName() returns the realm NAME when displayName
+// is unset, so the expression is never null and the default never fires. A
+// realm called `themeclean` renders `<title>Anmelden - themeclean</title>` and
+// `<div class="n">themeclean</div>`, measured on the served page. So this is
+// NOT 'the string a user sees when the tenant sets nothing' - the eight old
+// retired-name literals were equally unreachable.
+//
+// It is still worth having, for the reason a dead brand literal is always worth
+// removing: it is a latent trap. Any change that makes the expression genuinely
+// absent - a different bean, a template that iterates realms, a Keycloak
+// release that stops substituting - renders whatever literal is sitting there
+// to a user. t4 pins WHICH literal is sitting there. The live counterpart runs
+// in test/integration/login-theme.bats, which pins the realm name at both
+// render sites instead, because that is what the page actually shows.
+const DISPLAYNAME_FALLBACK = /\(realm\.displayName\)!'([^']*)'/g
+const EXPECTED_FALLBACK = 'Gremion'
+
+check('t4 the login theme falls back to the kernel name, not the retired one', () => {
+  const theme = themeName()
+  const offenders = []
+  let seen = 0
+  for (const rel of themeFtls(theme)) {
+    read(rel).split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(DISPLAYNAME_FALLBACK)) {
+        seen++
+        if (m[1] !== EXPECTED_FALLBACK) offenders.push(`${rel}:${i + 1} '${m[1]}'`)
+      }
+    })
+  }
+  if (seen === 0) return 'found zero realm.displayName fallbacks — the check would vacuously pass'
+  return offenders.length
+    ? `${offenders.length} of ${seen} realm.displayName fallback(s) render a name other than "${EXPECTED_FALLBACK}": ${offenders.join(' | ')}`
+    : null
+})
+
+// ── (t5) no integration suite is orphaned ─────────────────────────────────
+//
+// The Makefile already says this out loud, twelve lines below the target it is
+// about: "a target nothing aggregates is a target nobody runs, which is how the
+// JetStream proofs went unexecuted in the first place (integration defect D8)".
+// The same hole exists one level down: `make test-integration` and ci.yml both
+// enumerate integration suites FILE BY FILE, so a new test/integration/*.bats
+// is committed, reviewed, and then never executed by anything, forever, with
+// nothing red to say so. login-theme.bats was added in exactly that state.
+//
+// Post-condition, not exit code: every .bats file under test/integration is
+// named in the test-integration recipe AND in the CI step that runs bats.
+const INTEGRATION_DIR = 'test/integration'
+// ONE exemption from the CI leg, and it is a service dependency, not a
+// preference: legal.bats drives the `legal` service on :8083, which the CI
+// integration job does not start (it brings up postgres + keycloak only). It IS
+// named by `make test-integration`, so it is aggregated, not orphaned. Opened
+// 2026-09-16; it goes away when CI starts the legal service.
+const CI_BATS_EXEMPT = ['legal.bats']
+
+check('t5 every integration bats suite is named by make test-integration and by CI', () => {
+  const dir = join(ROOT, INTEGRATION_DIR)
+  if (!existsSync(dir)) return `${INTEGRATION_DIR} does not exist - the check would vacuously pass`
+  const suites = readdirSync(dir).filter((n) => n.endsWith('.bats')).sort()
+  if (suites.length === 0) return `found zero .bats under ${INTEGRATION_DIR} - the check would vacuously pass`
+  const makefile = read('Makefile')
+  const recipe = /^test-integration:[^]*?(?=^[A-Za-z0-9_.-]+:|^# )/m.exec(makefile)
+  if (!recipe) return 'Makefile declares no test-integration target - the check would vacuously pass'
+  const ci = read('.github/workflows/ci.yml')
+  // Any LIVE bats invocation naming an integration suite, `run: bats ...` or a
+  // bats line inside a `run: |` block. Commented-out lines do not count: a
+  // suite is not run by a `#`.
+  const ciSteps = ci.split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .filter((l) => /\bbats\b/.test(l) && l.includes(`${INTEGRATION_DIR}/`))
+    .join(' ')
+  if (!ciSteps) return 'ci.yml runs bats nowhere - the check would vacuously pass'
+  const missing = []
+  for (const n of suites) {
+    const rel = `${INTEGRATION_DIR}/${n}`
+    if (!recipe[0].includes(rel)) missing.push(`${rel} is not named by make test-integration`)
+    if (!CI_BATS_EXEMPT.includes(n) && !ciSteps.includes(rel)) {
+      missing.push(`${rel} is not named by any ci.yml bats step`)
+    }
+  }
+  return missing.length
+    ? `${missing.length} orphaned integration suite reference(s): ${missing.join(' | ')}`
+    : null
 })
 
 // ── report ─────────────────────────────────────────────────────────────────

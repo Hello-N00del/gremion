@@ -31,7 +31,7 @@ The governance-only stack runs **seven default services** (`docker-compose.yml`)
 | Service | Purpose |
 |---------|---------|
 | `postgres` | PostgreSQL 16 — backs Keycloak, the governance kernel, and the control plane |
-| `keycloak` | Identity provider (OIDC/SSO), realm `sturaos` |
+| `keycloak` | Identity provider (OIDC/SSO), the tenant's realm |
 | `gremion-ui` | SvelteKit admin shell — governance domain (committees, members, org-unit tree, protocols, resolutions) |
 | `gremion-public` | Read-only public portal (no auth, no sessions) served at `public.${DOMAIN}` |
 | `legal` | Static legal/Impressum pages (nginx) |
@@ -281,7 +281,7 @@ curl -sf http://localhost:3001/                       # gremion-ui (admin shell)
 curl -I  http://localhost:8082/auth/health/ready      # Keycloak readiness
 curl -sf http://localhost:8083/impressum              # Legal pages
 # Verify the realm is loaded:
-curl http://localhost:8082/auth/realms/sturaos/.well-known/openid-configuration
+curl http://localhost:8082/auth/realms/<realm>/.well-known/openid-configuration
 ```
 
 ### Monitor Kubernetes resources
@@ -317,12 +317,12 @@ kubectl exec -n gremion-system <postgres-pod> -- vacuumdb -U postgres -d gremion
 
 ### Keycloak realm export
 
-Back up the realm configuration (clients, groups, roles) as JSON. The realm name
-is **`sturaos`**:
+Back up the realm configuration (clients, groups, roles) as JSON. `<realm>` is the
+last path segment of `AUTH_KEYCLOAK_ISSUER`:
 
 ```bash
 docker compose exec keycloak /opt/keycloak/bin/kc.sh export \
-  --realm sturaos \
+  --realm "<realm>" \
   --file /tmp/realm-export.json
 
 docker compose cp keycloak:/tmp/realm-export.json \
@@ -366,7 +366,7 @@ docker compose up -d vector
 # Keycloak
 docker compose pull keycloak
 docker compose up -d keycloak
-curl http://localhost:8082/auth/realms/sturaos   # verify realm still loads
+curl http://localhost:8082/auth/realms/<realm>   # verify realm still loads
 
 # Legal pages (picks up legal/legal.env)
 make update-legal                        # Compose
@@ -447,7 +447,7 @@ docker compose restart keycloak
 
 ```bash
 # Confirm OIDC discovery is served
-curl http://localhost:8082/auth/realms/sturaos/.well-known/openid-configuration
+curl http://localhost:8082/auth/realms/<realm>/.well-known/openid-configuration
 
 # In the Keycloak admin console (Clients → gremion-ui):
 #  - Valid Redirect URIs match your domain
@@ -523,7 +523,7 @@ cp .env backups/.env.backup
 
 # 2. Export the Keycloak realm
 docker compose exec keycloak /opt/keycloak/bin/kc.sh export \
-  --realm sturaos --file /tmp/realm-export.json
+  --realm "<realm>" --file /tmp/realm-export.json
 docker compose cp keycloak:/tmp/realm-export.json backups/
 
 # 3. Back up all databases (restic + rclone)
@@ -550,7 +550,7 @@ docker compose up -d postgres
 # Re-import the Keycloak realm if needed
 docker compose cp backups/realm-export.json keycloak:/tmp/
 docker compose exec keycloak /opt/keycloak/bin/kc.sh import \
-  --realm sturaos --file /tmp/realm-export.json --override true
+  --realm "<realm>" --file /tmp/realm-export.json --override true
 
 # Bring up the rest and verify
 docker compose up -d
@@ -587,7 +587,7 @@ docker compose up -d
 - [ ] restic integrity check passes (`restic check`, run by the pipeline)
 - [ ] Off-site copy present (rclone remote configured: `RCLONE_BUCKET` set)
 - [ ] `.env` backed up securely (contains all secrets)
-- [ ] Keycloak realm `sturaos` exported
+- [ ] Keycloak realm exported
 - [ ] Per-tenant backups run for every active tenant (`scripts/tenant-backup.sh`)
 - [ ] DNS records and `DOMAIN` / `DOMAIN_REGEX` documented
 - [ ] TLS certificate / Cloudflare tunnel renewal verified
@@ -603,7 +603,7 @@ docker compose up -d
 | Per-tenant backups | Daily | `./scripts/tenant-backup.sh <slug>` |
 | Verify a restore | Monthly | restore latest snapshot into a scratch DB |
 | PostgreSQL vacuum | Weekly | `vacuumdb -d gremion` / `keycloak` / `control` |
-| Keycloak realm export | Monthly | `kc.sh export --realm sturaos` |
+| Keycloak realm export | Monthly | `kc.sh export --realm "<realm>"` |
 | Rotate the log pseudonymisation key | Per policy | `scripts/rotate-ipcrypt-key.sh` |
 | Security image updates | As released | rebuild/pull service images |
 | Capacity planning | Monthly | check disk, CPU, memory |

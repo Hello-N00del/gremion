@@ -64,7 +64,7 @@ Next steps (manual — operator handoff):
      (1Password / Bitwarden). The private key file is:
        ${KEYS_FILE}
      Use the secret-note attachment feature; tag with:
-       project=sturaos / role=sops-age-key / env=production
+       project=gremion / role=sops-age-key / env=production
      Two operators MUST be able to access it (custody quorum).
 
   3. Verify the encryption works end-to-end:

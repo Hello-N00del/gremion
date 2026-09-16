@@ -32,7 +32,7 @@ const DEFAULT_TEST_TENANT = {
   // kcAdminUrl / kcClientId / kcClientSecretRef via ALS. Widen the default test
   // tenant with the KC fields so any integration test that touches those paths
   // reads real values instead of undefined.
-  realmName: 'sturaos',
+  realmName: 'gremion-test',
   kcAdminUrl: process.env.KEYCLOAK_ADMIN_URL ?? 'http://keycloak:8080/auth',
   kcClientId: 'gremion-admin',
   kcClientSecretRef: 'env:KEYCLOAK_ADMIN_CLIENT_SECRET',

@@ -317,7 +317,7 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
 })
 
 describe('(B) reconcileRealm — the DEFAULT realm legitimately keeps localhost dev URIs', () => {
-  const DEFAULT_REALM = 'sturaos'
+  const DEFAULT_REALM = 'gremion-test'
   const DEFAULT_HOST = APEX // the default tenant host IS the apex (D-ISSUER-HOST)
   // The base gremion-ui URIs verbatim (localhost dev URIs + apex) — what the default
   // realm legitimately carries (realm-export.json) and reconcile must NOT reject.

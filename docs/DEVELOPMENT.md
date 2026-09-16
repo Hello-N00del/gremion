@@ -26,7 +26,7 @@ Local `docker compose` (base + the auto-loaded `docker-compose.override.yml`) br
 | Service | Purpose | Dev URL |
 |---------|---------|---------|
 | `postgres` | Postgres 16 — Keycloak DB, the kernel app DB (`gremion`), and the tenancy control-plane DB (`control`) | `localhost:5433` |
-| `keycloak` | OIDC identity provider (realm `sturaos`) | http://localhost:8082/auth |
+| `keycloak` | OIDC identity provider (the tenant's realm) | http://localhost:8082/auth |
 | `gremion-ui` | SvelteKit admin shell (the kernel app) | http://localhost:3001 |
 | `gremion-public` | Read-only public portal (no auth, no sessions) | http://localhost:3002 |
 | `legal` | Static legal pages (Impressum, GDPR) | http://localhost:8083 |
@@ -144,7 +144,7 @@ For shell/infra tests (`make test-unit`, `make test-integration`) and the full U
 
 ## Keycloak
 
-The realm is `sturaos` and imports `docker/keycloak/realm-export.json` at container start. The governance-only realm ships exactly two OIDC clients: `gremion-ui` (the app) and `gremion-admin` (the admin REST service account). Both client secrets are substituted into the realm file at boot by `docker/keycloak/substitute-realm-secrets.sh` from `.env` (`GREMION_UI_OIDC_CLIENT_SECRET`, `GREMION_ADMIN_OIDC_CLIENT_SECRET`) — `setup.sh` generates them.
+The realm name is whatever the last path segment of `AUTH_KEYCLOAK_ISSUER` says; the realm document is composed per tenant from `docker/keycloak/realm-export.base.json`. The governance-only realm ships exactly two OIDC clients: `gremion-ui` (the app) and `gremion-admin` (the admin REST service account). Both client secrets are substituted into the realm file at boot by `docker/keycloak/substitute-realm-secrets.sh` from `.env` (`GREMION_UI_OIDC_CLIENT_SECRET`, `GREMION_ADMIN_OIDC_CLIENT_SECRET`) — `setup.sh` generates them.
 
 ```
 Keycloak Admin: http://localhost:8082/auth/admin
@@ -162,7 +162,7 @@ In dev, Keycloak runs `start-dev` over plain HTTP on `:8080` (host `:8082`) with
 
 ### Create test users
 
-Use the admin console (Realm `sturaos` → Users → Add user → set a password under Credentials), or seed a fixture set via the seed endpoint above. Assign users to governance groups/roles for committee and resolution access.
+Use the admin console (your realm → Users → Add user → set a password under Credentials), or seed a fixture set via the seed endpoint above. Assign users to governance groups/roles for committee and resolution access.
 
 ## Regenerating the realm for a vertical
 
