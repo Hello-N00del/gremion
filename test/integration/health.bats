@@ -53,3 +53,26 @@ fi
     [ "$status" -eq 0 ]
     [[ "$output" == *'"realm":"sturaos"'* ]]
 }
+
+# ---------------------------------------------------------------------------
+# B-01 (spec B §T.4) — no Keycloak in this kernel imports a realm at boot
+# ---------------------------------------------------------------------------
+
+@test "no compose file boot-imports a realm (spec B B-01)" {
+    cd "$BATS_TEST_DIRNAME/../.."
+    run docker compose --env-file .env.example \
+        -f docker-compose.yml -f docker-compose.override.yml config
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"--import-realm"* ]]
+    [[ "$output" != *"substitute-realm-secrets"* ]]
+    [[ "$output" != *"/opt/keycloak/data/import"* ]]
+    [[ "$output" != *"keycloak-init"* ]]
+}
+
+@test "the generated realm export is not a tracked git object (spec B B-01)" {
+    cd "$BATS_TEST_DIRNAME/../.."
+    run git ls-files --error-unmatch docker/keycloak/realm-export.json
+    [ "$status" -ne 0 ]
+    run git ls-files --error-unmatch docker/keycloak/substitute-realm-secrets.sh
+    [ "$status" -ne 0 ]
+}

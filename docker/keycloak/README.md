@@ -1,22 +1,50 @@
-# Keycloak realm export (generated)
+# Keycloak realm template
 
-`realm-export.json` is **generated** — do not hand-edit it.
+`realm-export.base.json` is the **per-tenant realm TEMPLATE**. It is a tracked,
+hand-maintained file and the single copy in this repository (enforced by check
+`e5` in `scripts/kernel-hygiene-check.mjs`).
 
-It is composed by `gremion-ui/scripts/gen-realm-export.ts` from:
+## B-01: nothing imports a realm at boot
 
-- `realm-export.base.json` — the module-neutral base realm (platform groups/roles,
-  clients, flows, placeholders), and
+A Keycloak started by this kernel comes up with **`master` only**. There is no
+`--import-realm` argument, no `/opt/keycloak/data/import` mount, no entrypoint
+wrapper and no secret-substitution script — compose, the k8s base and the
+`gremion-mail-bringup` probe all assume a realm-less Keycloak.
+
+Every tenant realm is composed at **provisioning time** by `buildTenantRealmDoc`
+(`gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts`) and created through
+the master bootstrap admin. That function is the **only** consumer of
+`realm-export.base.json`. It:
+
+- overwrites the `"realm": "__REALM_NAME__"` sentinel with the tenant's realm
+  name (which defaults to the tenant slug);
+- stamps `sslRequired: "all"`;
+- swaps the `__APEX_DOMAIN__` authority for the tenant host across redirect URIs,
+  web origins and post-logout attributes;
+- substitutes the `__GREMION_UI_OIDC_CLIENT_SECRET__` /
+  `__GREMION_ADMIN_OIDC_CLIENT_SECRET__` placeholders with per-tenant generated
+  secrets.
+
+To change which realm objects a module owns, edit that module's manifest fragment
+(`gremion-ui/src/lib/modules/manifests/*.ts`), not the JSON.
+
+## `realm-export.json` is a generator OUTPUT
+
+`gremion-ui/scripts/gen-realm-export.ts` writes the module-composed realm to
+`docker/keycloak/realm-export.json` — the **same, unchanged path**, now
+`.gitignore`d. It is never committed and never imported. It is composed from:
+
+- `realm-export.base.json` — the module-neutral base realm (platform
+  groups/roles, clients, flows, placeholders), and
 - each **enabled** module's realm fragment (groups + realm-roles) declared in its
-  manifest (`gremion-ui/src/lib/modules/manifests/*.ts`).
+  manifest.
 
 A module that is disabled in the target vertical's `config.json`
-(`modules.<id> = false`) contributes no groups/roles.
+(`modules.<id> = false`) contributes no groups/roles. The governance-only kernel
+enables no feature modules, so its output carries only the `gremion-ui` and
+`gremion-admin` clients.
 
-The committed `realm-export.json` is the **governance-only kernel** realm: it carries
-only the `gremion-ui` and `gremion-admin` clients (no feature-module clients). Feature
-modules add their own clients/groups/roles via their manifest fragments when enabled.
-
-## Regenerate
+### Regenerate
 
 `make gen-realm` **requires** a config: it reads `CONFIG_PATH` if set, else
 `./config/config.json`. With neither present it errors out (it does **not** no-op).
@@ -29,15 +57,9 @@ CONFIG_PATH=/path/to/config.json make gen-realm
 make gen-realm
 ```
 
-Run this **before** `docker compose up` — Keycloak imports `realm-export.json` at
-container start. `scripts/setup.sh` does this automatically: it regenerates when a
-`config.json` is supplied (via `CONFIG_PATH` or `./config/config.json`), and
-**otherwise keeps the committed governance-only file in place** — that no-config
-keep-the-committed-file behavior lives in `setup.sh`, not in the `make gen-realm`
-target.
-
-To change which realm objects a module owns, edit that module's manifest fragment
-(not the JSON), then regenerate.
+There is no need to run it before `docker compose up` any more — nothing reads
+the output at container start. The assembler invokes the generator explicitly
+inside an assembled tree.
 
 ## Login-theme realm attributes (opt-in, v12 apex topology)
 

@@ -59,11 +59,6 @@ jobs:
           yamllint -c .yamllint.yml docker-compose.yml docker-compose.override.yml
           yamllint -c .yamllint.yml k8s/
 
-      - name: Validate JSON files
-        run: |
-          python3 -m json.tool docker/keycloak/realm-export.json > /dev/null
-          echo "realm-export.json: valid"
-
       # `files` in a workspace package.json is not only "what npm publish
       # sends": pnpm applies the same allowlist when it packs a workspace
       # dependency, and `pnpm deploy --prod --legacy` — how both runtime

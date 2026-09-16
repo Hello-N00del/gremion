@@ -269,9 +269,13 @@ check('e4 the bare kustomize build emits nothing on stderr (no errors, no deprec
 })
 
 check('e5 the shared docker/ config files are still single-copy (nothing forked into k8s/)', () => {
-  if (!has('docker/keycloak/realm-export.json')) return 'docker/keycloak/realm-export.json missing'
+  // B-01 (spec B T.4): the boot import is gone. The one shared Keycloak file
+  // left is the per-tenant TEMPLATE, whose only consumer is buildTenantRealmDoc.
+  if (!has('docker/keycloak/realm-export.base.json')) {
+    return 'docker/keycloak/realm-export.base.json missing'
+  }
   const forked = walk(join(ROOT, 'k8s')).filter((f) =>
-    /(realm-export\.json|substitute-realm-secrets\.sh)$/.test(f)
+    /(realm-export(\.base)?\.json|substitute-realm-secrets\.sh)$/.test(f)
   )
   return forked.length
     ? `shared config forked into k8s/: ${forked.map((f) => relative(ROOT, f)).join(', ')}`
@@ -807,9 +811,10 @@ check('h1 no retired wire-root literal survives anywhere in the tree', () => {
 // .json`, `sturaos-users-0.json`, `sturaos_realm` and `themes/sturaos-v2/` all
 // read as clean. That is the same species of hole as h1's trailing dot — the
 // hole this whole check exists to close — and it was live: the five carriers in
-// docker/keycloak/substitute-realm-secrets.sh and the two installed-hook
-// markers in install-git-hooks.mjs were invisible to it. A separator is a
-// boundary, not part of the identifier.
+// the Keycloak realm-secret substitution script (deleted by B-01 together with
+// the whole boot-import path) and the two installed-hook markers in
+// install-git-hooks.mjs were invisible to it. A separator is a boundary, not
+// part of the identifier.
 const RETIRED_PRODUCT_TOKEN = /(?<![A-Za-z0-9])sturaos(?![A-Za-z0-9])/
 // ALLOW-LIST - three kinds of entry, each with its reason, and it does not grow
 // without one:
@@ -853,8 +858,9 @@ const PRODUCT_TOKEN_EXEMPT_PATHS = [
 // EVERY entry below has ONE cause, opened 2026-09-16: the realm a running
 // Keycloak actually serves is still named with the retired token, and renaming
 // it is a deployment-identity migration owned by
-// B1a-realm-identity-and-boot-import, which deletes the boot import,
-// realm-export.json and substitute-realm-secrets.sh outright. This unit owns
+// B1a-realm-identity-and-boot-import, which deletes the boot import, the
+// generated realm export and the realm-secret substitution script outright.
+// This unit owns
 // the login theme. It must not invent a realm identity another unit is about to
 // decide, and it must not hold the whole suite red while it waits: h2 shares
 // one exit code with 44 other checks - i1/i2 (retired operator hosts in shipped
@@ -873,11 +879,6 @@ const PRODUCT_TOKEN_PENDING = [
   ["docker-compose.override.yml", "AUTH_KEYCLOAK_ISSUER: \"http://localhost:8082/auth/realms/sturaos\"", 1],
   ["docker-compose.yml", "AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/sturaos", 1],
   ["docker/keycloak/realm-export.base.json", "\"realm\": \"sturaos\",", 1],
-  ["docker/keycloak/realm-export.json", "\"realm\": \"sturaos\",", 1],
-  ["docker/keycloak/substitute-realm-secrets.sh", "REALM_DST=\"${IMPORT_DIR}/sturaos-realm.json\"", 1],
-  ["docker/keycloak/substitute-realm-secrets.sh", "cp /opt/keycloak-init/dev-users.json \"${IMPORT_DIR}/sturaos-users-0.json\"", 1],
-  ["docker/keycloak/substitute-realm-secrets.sh", "echo \"[substitute-realm-secrets] dev composition — importing dev users (sturaos-users-0.json).\"", 1],
-  ["docker/keycloak/substitute-realm-secrets.sh", "rm -f \"${IMPORT_DIR}/sturaos-users-0.json\"", 2],
   ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
   ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_ISSUER: \"https://stura.example.com/auth/realms/sturaos\"", 1],
   ["scripts/configure-keycloak-clients.sh", "REALM=\"sturaos\"", 1],

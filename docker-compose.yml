@@ -321,18 +321,12 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-    # C10: substitute OIDC client-secret sentinels into the realm import
-    # file before starting Keycloak. The raw template lives in
-    # /opt/keycloak-init/realm-export.json and the resolved file is
-    # written to /opt/keycloak/data/import where Keycloak looks for it.
-    entrypoint:
-      - /bin/sh
-      - -c
-      - /opt/keycloak-init/substitute-realm-secrets.sh /opt/keycloak-init/realm-export.json /opt/keycloak/data/import/realm-export.json && exec /opt/keycloak/bin/kc.sh "$@"
-      - --
+    # B-01 (spec B §T.4): no boot-time realm. Keycloak starts with `master`
+    # only; every tenant realm is composed by buildTenantRealmDoc
+    # (gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts:254) and
+    # created through the master bootstrap admin at tenant-create time.
     command:
       - start
-      - --import-realm
       - --http-relative-path
       - /auth
     depends_on:
@@ -357,25 +351,7 @@ services:
       KC_HTTP_RELATIVE_PATH: /auth
       KC_HTTP_ENABLED:       "true"
       KC_HOSTNAME_STRICT:    "false"
-      # G-080: realm sslRequired is substituted into realm-export.json from this
-      # var (default "all" — HTTPS required for every request incl. private-IP).
-      # The dev override drops it to "external" so pure-local http://localhost:8082
-      # browser login keeps working without per-developer CA trust.
-      # The actual HTTPS listener (KC_HTTPS_* + cert) lives in docker-compose.prod.yml,
-      # where internal TLS is needed and the generated certs are present — dev/CI
-      # run plain http on :8080 with the realm at sslRequired:external.
-      KC_REALM_SSL_REQUIRED: ${KC_REALM_SSL_REQUIRED:-all}
-      # The deployment apex host. substitute-realm-secrets.sh resolves the realm
-      # template's __APEX_DOMAIN__ sentinel from it, so the imported realm trusts
-      # THIS deployment's host and no other.
-      DOMAIN: ${DOMAIN}
-      # C10: OIDC client secrets consumed by substitute-realm-secrets.sh.
-      # Both must be present in .env — the script fails fast otherwise.
-      GREMION_UI_OIDC_CLIENT_SECRET:   ${GREMION_UI_OIDC_CLIENT_SECRET}
-      GREMION_ADMIN_OIDC_CLIENT_SECRET: ${GREMION_ADMIN_OIDC_CLIENT_SECRET}
     volumes:
-      - ./docker/keycloak/realm-export.json:/opt/keycloak-init/realm-export.json:ro
-      - ./docker/keycloak/substitute-realm-secrets.sh:/opt/keycloak-init/substitute-realm-secrets.sh:ro
       # PR 7 (T7.1): gremion login theme (design-refresh tokens).
       - ./docker/keycloak/themes:/opt/keycloak/themes:ro
     networks:

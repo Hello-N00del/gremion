@@ -5,13 +5,11 @@ metadata:
   labels:
     app: keycloak
 data:
-  # The deployment apex host. Consumed by the `substitute-realm-secrets`
-  # initContainer (k8s/base/keycloak/deployment.yaml), which resolves the realm
-  # template's `__APEX_DOMAIN__` sentinel from it — that sentinel is what the
-  # imported realm's redirect URIs, web origins and CSP frame-ancestors are
-  # built from, so a wrong value here means OIDC login is refused at the realm.
-  # REQUIRED, not optional: the script fails fast if it is unset.
-  #
+  # The deployment apex host. B-01 (spec B §T.4): no realm is imported at boot,
+  # so nothing substitutes this into a realm document here any more. It stays
+  # the single place an overlay declares the apex it serves, and the
+  # `Domain-sentinel guard` CI step plus the `j1` check in
+  # scripts/kernel-hygiene-check.mjs reject an unsubstituted sentinel.
   # `stura.example.com` is an RFC 2606 placeholder, exactly as in
   # k8s/base/traefik/ingressroutes.yaml. EVERY overlay MUST patch it in step
   # with the hosts it patches there:

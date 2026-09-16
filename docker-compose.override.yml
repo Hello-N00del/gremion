@@ -73,13 +73,10 @@ services:
       - "127.0.0.1:8082:8080"
       - "[::1]:8082:8080"
     # Override base 'start' with 'start-dev' for local development (no TLS
-    # required). The entrypoint from docker-compose.yml runs
-    # substitute-realm-secrets.sh then execs kc.sh "$@" — these args are
-    # $@ for that exec, so the list form is required (folded string would
-    # collapse into a single $1).
+    # required). B-01: no realm is imported at boot; a dev realm comes from
+    # tenant-create.
     command:
       - start-dev
-      - --import-realm
       - --http-relative-path
       - /auth
       - --hostname-strict=false
@@ -89,11 +86,6 @@ services:
       # as http://localhost:8082/auth/realms/... consistently.
       KC_HOSTNAME: "http://localhost:8082/auth"
       KC_HTTP_ENABLED: "true"
-      # G-080: keep the dev realm at sslRequired:external so pure-local browser
-      # login over http://localhost:8082 works without per-developer cert trust.
-      # Prod/staging default to "all" (KC_REALM_SSL_REQUIRED in base) + internal
-      # TLS from docker-compose.prod.yml.
-      KC_REALM_SSL_REQUIRED: "external"
       # Allow server-to-server (backchannel) callers that use the internal
       # Docker hostname (keycloak:8080) to get internal-hostname endpoints in
       # the discovery document, so e.g. the gremion-ui server can exchange the
@@ -103,7 +95,7 @@ services:
     # A-019 follow-up - wire the dev-csp Traefik middleware (defined in
     # docker/traefik/dynamic/dev-csp.yaml) onto the keycloak router so
     # that the prod-narrowed `frame-ancestors 'self' https://${DOMAIN}`
-    # CSP (from realm-export.json, shared between dev and prod) is
+    # CSP (from the per-tenant realm template, shared between dev and prod) is
     # overwritten with a dev-permissive policy that re-allows iframe
     # embeds from http://localhost:* during local development.
     #

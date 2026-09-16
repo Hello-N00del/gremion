@@ -212,8 +212,9 @@ re-pointed at PgBouncer.
 The realm is named by the last path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>`
 below) and carries two clients: **`gremion-ui`** (the app, Auth.js)
 and **`gremion-admin`** (the admin REST service account). The realm is imported
-from `docker/keycloak/realm-export.json` at container start; OIDC client secrets
-are substituted in from `.env` by `substitute-realm-secrets.sh`.
+from `docker/keycloak/realm-export.base.json` at tenant-create time (B-01: no
+realm is imported at container start); OIDC client secrets are substituted in
+from `.env` by `buildTenantRealmDoc`.
 
 ### Keycloak won't start
 
@@ -226,7 +227,7 @@ make shell-db -c '\l'                  # keycloak DB should exist
 |---|---|
 | Postgres not healthy | Keycloak `depends_on: postgres (service_healthy)` — fix Postgres first |
 | Wrong DB credentials | Check `.env`: `KEYCLOAK_DB_PASSWORD` |
-| Realm import fails | A required OIDC secret is empty — `substitute-realm-secrets.sh` fails fast; ensure `GREMION_UI_OIDC_CLIENT_SECRET` and `GREMION_ADMIN_OIDC_CLIENT_SECRET` are set |
+| Tenant-create fails on the realm | A required OIDC secret is empty — `buildTenantRealmDoc` throws; ensure `GREMION_UI_OIDC_CLIENT_SECRET` and `GREMION_ADMIN_OIDC_CLIENT_SECRET` are set |
 | Port 8082 in use | Change the dev mapping in `docker-compose.override.yml` |
 
 ```bash

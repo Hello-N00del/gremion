@@ -29,7 +29,7 @@ import { provisionTenant, type ProvisionDeps } from './pipeline'
 const KC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', '..', 'docker', 'keycloak')
 // The shipped base template carries the deployment apex host as the
 // `__APEX_DOMAIN__` sentinel (resolved at Keycloak boot by
-// docker/keycloak/substitute-realm-secrets.sh, and by loadBaseRealmDoc() in
+// buildTenantRealmDoc at tenant-create time, and by loadBaseRealmDoc() in
 // scripts/tenant-provision.ts). Resolve it to this suite's example apex so the
 // fixtures exercise the same shape a real deployment gets.
 const TEST_APEX = 'council.example'

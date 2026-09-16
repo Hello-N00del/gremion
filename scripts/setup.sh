@@ -104,9 +104,9 @@ else
     _sed "s|^AUTH_KEYCLOAK_ID=.*|AUTH_KEYCLOAK_ID=gremion-ui|" .env
 
     # Keycloak client secrets — each secret has two aliases in .env that must
-    # match (the app-facing var, e.g. AUTH_KEYCLOAK_SECRET, and the realm-export
-    # substitution var, e.g. GREMION_UI_OIDC_CLIENT_SECRET; both get swapped into
-    # the same Keycloak client at boot by substitute-realm-secrets.sh).
+    # match (the app-facing var, e.g. AUTH_KEYCLOAK_SECRET, and the realm-doc
+    # substitution var, e.g. GREMION_UI_OIDC_CLIENT_SECRET; B-01: both land on
+    # the same Keycloak client when buildTenantRealmDoc composes the realm).
     GREMION_UI_OIDC_SECRET=$(openssl rand -hex 32)
     _sed "s|^AUTH_KEYCLOAK_SECRET=.*|AUTH_KEYCLOAK_SECRET=${GREMION_UI_OIDC_SECRET}|"             .env
     _sed "s|^GREMION_UI_OIDC_CLIENT_SECRET=.*|GREMION_UI_OIDC_CLIENT_SECRET=${GREMION_UI_OIDC_SECRET}|" .env
@@ -168,28 +168,6 @@ chmod +x docker/postgres/init-databases.sh
 # these, but generating them up front is harmless and keeps prod ready.
 info "Ensuring internal TLS certificates (G-080)..."
 bash docker/keycloak/certs/gen-internal-ca.sh
-
-# ── Keycloak realm export (Pillar-1 P0.2) ──────────────────
-# Keycloak imports docker/keycloak/realm-export.json at container start, so the
-# file must exist BEFORE compose up. It is generated from realm-export.base.json
-# + the enabled modules' realm fragments, gated by a vertical's config.json
-# (modules.<id> = true/false). The governance-only kernel ships no feature
-# modules, so the committed realm-export.json equals the base realm (gremion-ui +
-# gremion-admin clients only); we only regenerate when a config is actually
-# supplied (CONFIG_PATH or config/config.json). The generator reads CONFIG_PATH
-# from the environment directly.
-CONFIG_PATH="${CONFIG_PATH:-}"
-if [[ -n "$CONFIG_PATH" && -f "$CONFIG_PATH" ]]; then
-    info "Generating realm-export.json from module manifests (config: ${CONFIG_PATH})..."
-    pnpm -C gremion-ui exec tsx scripts/gen-realm-export.ts
-elif [[ -f config/config.json ]]; then
-    info "Generating realm-export.json from module manifests (config: config/config.json)..."
-    CONFIG_PATH=config/config.json pnpm -C gremion-ui exec tsx scripts/gen-realm-export.ts
-else
-    info "No config.json found — using the committed governance-only realm-export.json."
-fi
-test -f docker/keycloak/realm-export.json \
-    || error "realm-export.json is missing; Keycloak will fail to import its realm."
 
 # ── Build & start ──────────────────────────────────────────
 info "Building images..."

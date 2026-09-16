@@ -51,7 +51,7 @@ Each service has its own encrypted secret file:
 | `postgres-secret.enc.yaml` | postgres | POSTGRES_USER, POSTGRES_PASSWORD, NEXTCLOUD_DB_USER, NEXTCLOUD_DB_PASSWORD, NEXTCLOUD_DB_NAME, KEYCLOAK_DB_USER, KEYCLOAK_DB_PASSWORD, KEYCLOAK_DB_NAME, CONTROL_DB_USER, CONTROL_DB_PASSWORD, CONTROL_DB_NAME |
 | `redis-secret.enc.yaml` | redis | REDIS_PASSWORD |
 | `nextcloud-secret.enc.yaml` | nextcloud | POSTGRES_PASSWORD, NEXTCLOUD_ADMIN_USER, NEXTCLOUD_ADMIN_PASSWORD, REDIS_HOST_PASSWORD, NEXTCLOUD_OIDC_CLIENT_SECRET, SMTP_PASSWORD |
-| `keycloak-secret.enc.yaml` | keycloak | KC_BOOTSTRAP_ADMIN_USERNAME, KC_BOOTSTRAP_ADMIN_PASSWORD, KC_DB_PASSWORD, KC_DB_USERNAME, GREMION_UI_OIDC_CLIENT_SECRET, GREMION_ADMIN_OIDC_CLIENT_SECRET (both required by the `substitute-realm-secrets` initContainer) |
+| `keycloak-secret.enc.yaml` | keycloak | KC_BOOTSTRAP_ADMIN_USERNAME, KC_BOOTSTRAP_ADMIN_PASSWORD, KC_DB_PASSWORD, KC_DB_USERNAME, GREMION_UI_OIDC_CLIENT_SECRET, GREMION_ADMIN_OIDC_CLIENT_SECRET (both required by `buildTenantRealmDoc` at tenant-create time) |
 | `gremion-ui-secret.enc.yaml` | gremion-ui | AUTH_SECRET, AUTH_KEYCLOAK_SECRET, KEYCLOAK_ADMIN_CLIENT_SECRET, CONTROL_DATABASE_URL, TENANT_PROXY_SHARED_SECRET (P2.1c T5 — MUST equal the value patched into the `gremion-ui-proxytrust` Middleware header in `patches/ingressroutes-prod.yaml`) |
 | `synapse-secret.enc.yaml` | synapse | SYNAPSE_SERVER_NAME, SYNAPSE_REPORT_STATS, POSTGRES_PASSWORD, MACAROON_SECRET_KEY, REGISTRATION_SHARED_SECRET, FORM_SECRET |
 | `helios-secret.enc.yaml` | helios | SECRET_KEY, DATABASE_URL, EMAIL_HOST_PASSWORD, HELIOS_ADMIN_PASSWORD |

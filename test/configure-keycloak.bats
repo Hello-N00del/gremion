@@ -60,43 +60,50 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Keycloak realm export validation
+# Keycloak realm TEMPLATE validation
+#
+# B-01 (spec B T.4): nothing is imported at boot and docker/keycloak/
+# realm-export.json is no longer a tracked file - it is a gitignored generator
+# output. The tracked, single-copy artefact these assertions own is the
+# per-tenant TEMPLATE realm-export.base.json, whose only consumer is
+# buildTenantRealmDoc.
 # ---------------------------------------------------------------------------
 
-@test "realm-export.json is valid JSON" {
+@test "realm-export.base.json is valid JSON" {
     python3 -m json.tool \
-        "${PROJECT_ROOT}/docker/keycloak/realm-export.json" > /dev/null
+        "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" > /dev/null
 }
 
-@test "realm-export.json sslRequired is parametrized, defaulting to 'all' (G-080 internal TLS)" {
+@test "realm-export.base.json sslRequired is parametrized and the provisioner pins 'all' (G-080 internal TLS)" {
     # G-080 ADDRESSED: Keycloak serves an internal TLS listener on keycloak:8443
     # (docker-compose.prod.yml; cert minted by docker/keycloak/certs/gen-internal-ca.sh),
     # the one live internal caller (gremion-ui) reaches it over https + NODE_EXTRA_CA_CERTS,
     # and Helios/Nextcloud/Synapse already ride the PUBLIC https issuer. The realm
     # therefore enforces sslRequired="all" in prod/staging.
     #
-    # The value is parametrized via __SSL_REQUIRED__ (substituted by
-    # substitute-realm-secrets.sh from KC_REALM_SSL_REQUIRED) so the dev stack can
-    # keep "external" for local http://localhost:8082 login without per-dev cert
-    # trust. This test pins the secure-by-default posture against silent regression:
+    # B-01: the boot-time substitution step is deleted, and with it the
+    # KC_REALM_SSL_REQUIRED compose knob that fed it. The template still carries
+    # the __SSL_REQUIRED__ sentinel and buildTenantRealmDoc is what resolves it -
+    # it stamps sslRequired:'all' on EVERY provisioned realm (#139), so the
+    # secure-by-default posture is now unconditional rather than env-driven.
+    # This test pins both halves against silent regression:
     #   1. the realm template is parametrized, not a hardcoded value;
-    #   2. the base compose defaults KC_REALM_SSL_REQUIRED to "all";
-    #   3. only the dev override relaxes it to "external".
-    grep -qF '"sslRequired": "__SSL_REQUIRED__"' "${PROJECT_ROOT}/docker/keycloak/realm-export.json"
-    grep -qF 'KC_REALM_SSL_REQUIRED: ${KC_REALM_SSL_REQUIRED:-all}' "${PROJECT_ROOT}/docker-compose.yml"
-    grep -qF 'KC_REALM_SSL_REQUIRED: "external"' "${PROJECT_ROOT}/docker-compose.override.yml"
+    #   2. the provisioner pins 'all' on the composed per-tenant realm.
+    grep -qF '"sslRequired": "__SSL_REQUIRED__"' "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json"
+    grep -qF "composed.sslRequired = 'all'" \
+        "${PROJECT_ROOT}/gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts"
 }
 
 # ---------------------------------------------------------------------------
-# Step-up 2FA realm export validation (#164)
-# These assertions verify that realm-export.json carries the LoA step-up
+# Step-up 2FA realm template validation (#164)
+# These assertions verify that realm-export.base.json carries the LoA step-up
 # configuration needed for fresh installs.  They mirror what a live KC would
 # expose at GET /admin/realms/<realm> and
 # GET /admin/realms/<realm>/authentication/flows — but run against the source
 # file so they pass in CI without a running Keycloak.
 # ---------------------------------------------------------------------------
 
-@test "realm-export.json otpPolicyType is totp (#164 step-up)" {
+@test "realm-export.base.json otpPolicyType is totp (#164 step-up)" {
     # Mirrors: GET /admin/realms/<realm>  ->  .otpPolicyType == "totp"
     python3 -c '
 import json, sys
@@ -104,10 +111,10 @@ with open(sys.argv[1]) as f:
     realm = json.load(f)
 assert realm.get("otpPolicyType") == "totp", \
     "realm.otpPolicyType must be \"totp\" for step-up 2FA (#164)"
-' "${PROJECT_ROOT}/docker/keycloak/realm-export.json"
+' "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json"
 }
 
-@test "realm-export.json has browser-stepup authentication flow (#164 step-up)" {
+@test "realm-export.base.json has browser-stepup authentication flow (#164 step-up)" {
     # Mirrors: GET /admin/realms/<realm>/authentication/flows
     #   ->  any(.alias == "browser-stepup")
     python3 -c '
@@ -118,5 +125,5 @@ flows = realm.get("authenticationFlows", [])
 aliases = [f["alias"] for f in flows]
 assert "browser-stepup" in aliases, \
     "authenticationFlows must contain alias \"browser-stepup\" (#164)"
-' "${PROJECT_ROOT}/docker/keycloak/realm-export.json"
+' "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json"
 }

@@ -142,10 +142,11 @@ assign_realm_admin_to_sa() {
 # `acr.loa.map` attribute, points realm.browserFlow at the new flow, and ensures
 # the gremion-ui client has an acr protocol mapper.
 #
-# Why here (not realm-export.json): Keycloak's --import-realm SKIPS realms that
-# already exist, so the live realm never picks up flow/otpPolicy changes from the
-# JSON. This applies them to the running realm via the Admin API instead.
-# realm-export.json still carries them as the source of truth for FRESH installs.
+# Why here (not the realm template): B-01 deleted the boot import, and a realm
+# that already exists never picks up flow/otpPolicy changes from a JSON document
+# anyway. This applies them to the RUNNING realm via the Admin API.
+# realm-export.base.json still carries them as the source of truth for the realm
+# buildTenantRealmDoc composes for a FRESH tenant.
 #
 # Idempotent: the (non-atomic) flow build is guarded behind flow existence; the
 # realm-config and acr-mapper steps no-op on re-run. ORDER MATTERS — the flow
