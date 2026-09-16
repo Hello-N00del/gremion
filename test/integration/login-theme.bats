@@ -24,6 +24,18 @@
 # (the `gremionBrandSub` value); a bare `*"Gremion"*` substring test passed on
 # every realm and proved nothing.
 #
+# THE REDIRECT URI IS READ FROM THE REALM, NEVER SPELLED HERE. Keycloak answers
+# an authorization request whose `redirect_uri` the client does not register
+# with an error page at HTTP 400 - and its loopback relaxation covers the PORT
+# only, never the path. A hardcoded `http://localhost/cb` is therefore a 400
+# against the realm CI imports (whose `gremion-ui` client registers only
+# `/auth/callback/keycloak` URIs), `curl -sf` returns an empty body, and five of
+# the six assertions below fail as "status 22" for a reason that has nothing to
+# do with the theme - the kind of red that gets fixed by deleting the suite.
+# `client_redirect_uri` asks the Admin API which URIs the client actually
+# registers and uses one of them, so the suite keeps working when the realm, the
+# client or its URI set is renamed by another unit.
+#
 # Env:
 #   KEYCLOAK_URL       default http://localhost:8082/auth
 #   THEME_REALM        the realm under test (required)
@@ -49,6 +61,10 @@ THEME_CLIENT_ID="${THEME_CLIENT_ID:-gremion-ui}"
 # effective display name cannot be established, and a suite that asserts what a
 # page renders while unable to say what it SHOULD render is the vacuous guard
 # this file was rewritten to stop being.
+#
+# A skip is a GREEN test, so every caller that is meant to run this suite for
+# real has to assert it did not skip. The CI step does exactly that: it fails on
+# a `# skip` line in the TAP output, not on the exit code.
 setup() {
     if [ -z "$THEME_REALM" ]; then
         skip "THEME_REALM is unset - set it to the realm whose login page to fetch (see header)"
@@ -58,16 +74,56 @@ setup() {
     fi
 }
 
-login_page() {
-    curl -sf "${KEYCLOAK_URL}/realms/${THEME_REALM}/protocol/openid-connect/auth?client_id=${THEME_CLIENT_ID}&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%2Fcb&scope=openid"
-}
-
 kc_admin_token() {
     curl -sf -X POST "${KEYCLOAK_URL}/realms/${KC_ADMIN_REALM}/protocol/openid-connect/token" \
         -d grant_type=password -d client_id=admin-cli \
         --data-urlencode "username=${KC_ADMIN_USER}" \
         --data-urlencode "password=${KC_ADMIN_PASSWORD}" \
         | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+}
+
+# Prints ONE redirect_uri the client under test really registers. Wildcards and
+# unresolved `__SENTINEL__` placeholders are skipped: a wildcard is a PATTERN
+# Keycloak matches the request against, so sending the pattern itself is not
+# guaranteed to validate. Non-zero exit means the client is absent or registers
+# nothing usable - which must FAIL a test, never pass it.
+client_redirect_uri() {
+    local token
+    token=$(kc_admin_token) || return 1
+    [ -n "$token" ] || return 1
+    curl -sf -G -H "Authorization: Bearer ${token}" \
+        --data-urlencode "clientId=${THEME_CLIENT_ID}" \
+        "${KEYCLOAK_URL}/admin/realms/${THEME_REALM}/clients" \
+        | python3 -c '
+import json, sys
+clients = json.load(sys.stdin)
+if not clients:
+    sys.exit(1)
+for uri in sorted(clients[0].get("redirectUris") or []):
+    if "*" in uri or "__" in uri:
+        continue
+    print(uri)
+    break
+else:
+    sys.exit(1)
+'
+}
+
+authorize() {
+    local uri="$1"
+    shift
+    curl "$@" -G "${KEYCLOAK_URL}/realms/${THEME_REALM}/protocol/openid-connect/auth" \
+        --data-urlencode "client_id=${THEME_CLIENT_ID}" \
+        --data-urlencode "redirect_uri=${uri}" \
+        --data "response_type=code" \
+        --data "scope=openid"
+}
+
+login_page() {
+    local uri
+    uri=$(client_redirect_uri) || return 1
+    [ -n "$uri" ] || return 1
+    authorize "$uri" -sf
 }
 
 # Prints the realm's EFFECTIVE display name exactly as Keycloak will render it:
@@ -97,6 +153,23 @@ realm_effective_name() {
     # Empty would make the render assertion below match any page at all.
     [ -n "$effective" ]
     echo "# effective display name: ${effective}" >&3
+}
+
+@test "precondition: the authorization endpoint accepts a redirect_uri the client registers" {
+    local uri code
+    uri=$(client_redirect_uri) || {
+        echo "FAIL: client ${THEME_CLIENT_ID} is absent from realm ${THEME_REALM}, or registers no concrete redirect_uri" >&2
+        return 1
+    }
+    [ -n "$uri" ]
+    code=$(authorize "$uri" -s -o /dev/null -w '%{http_code}')
+    if [ "$code" != "200" ]; then
+        echo "FAIL: the authorization endpoint answered ${code} for redirect_uri=${uri}." >&2
+        echo "      An unregistered redirect_uri answers 400 with an error page, which would make" >&2
+        echo "      every assertion below fail on an empty body instead of on the theme." >&2
+        return 1
+    fi
+    echo "# redirect_uri: ${uri}" >&3
 }
 
 @test "the login page is served by the gremion theme, not the stock fallback" {
