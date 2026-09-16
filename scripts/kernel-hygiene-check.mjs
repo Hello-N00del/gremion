@@ -801,7 +801,16 @@ check('h1 no retired wire-root literal survives anywhere in the tree', () => {
 // .test.ts:70-71 (the FORBIDDEN entry `product "StuRaOS"`, empty allow-list).
 // What this rule owns is the lower-case identifier: a directory name, a realm
 // segment, a message-key prefix, a stylesheet filename.
-const RETIRED_PRODUCT_TOKEN = /(^|[^A-Za-z0-9_-])sturaos([^A-Za-z0-9_-]|$)/
+// BOUNDARIES: lookaround on LETTERS AND DIGITS ONLY. The first draft of this
+// rule put `-` and `_` inside the boundary classes, which meant a hyphen or an
+// underscore immediately after the token defeated the match: `sturaos-realm
+// .json`, `sturaos-users-0.json`, `sturaos_realm` and `themes/sturaos-v2/` all
+// read as clean. That is the same species of hole as h1's trailing dot — the
+// hole this whole check exists to close — and it was live: the five carriers in
+// docker/keycloak/substitute-realm-secrets.sh and the two installed-hook
+// markers in install-git-hooks.mjs were invisible to it. A separator is a
+// boundary, not part of the identifier.
+const RETIRED_PRODUCT_TOKEN = /(?<![A-Za-z0-9])sturaos(?![A-Za-z0-9])/
 // ALLOW-LIST - three kinds of entry, each with its reason, and it does not grow
 // without one:
 //  - this file, which must be able to spell what it forbids;
@@ -809,7 +818,9 @@ const RETIRED_PRODUCT_TOKEN = /(^|[^A-Za-z0-9_-])sturaos([^A-Za-z0-9_-]|$)/
 //    (:29-30) delimit the block ALREADY WRITTEN into every developer's
 //    .git/hooks/pre-commit. Changing the marker orphans every installed block:
 //    the installer would no longer find its own managed region, and would
-//    append a second one beside it;
+//    append a second one beside it. This entry is LIVE, not decorative: the
+//    markers are `# >>> sturaos-boundary-lint >>>`, hyphenated, so they are hit
+//    by the boundary rule above and would fail the check without it;
 //  - the four SHA-pinned APPLIED migrations. Their bytes are pinned in
 //    baseline-hashes.json (B7) and 008 is B6's single named byte-equality
 //    exception; editing one is a schema-integrity failure, not a rename. All
