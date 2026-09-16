@@ -83,3 +83,9 @@ docs/superpowers/specs/*.md text eol=lf
 # rows at run time. A CRLF working copy would change the bytes the parser sees
 # on one platform only, which is the kind of difference nobody reproduces.
 docs/ops/release-1-waivers.md text eol=lf
+
+# B0 round 2: the deploy suite's release fixtures now carry a copy of the
+# ledger, because gremion-deploy step 2 refuses a release tree without one. The
+# rule above names a path from the repository root, so it does not reach them,
+# and `git check-attr eol` answered "unspecified" for the fixture copies.
+test/host/fixtures/release/*/docs/ops/*.md text eol=lf
