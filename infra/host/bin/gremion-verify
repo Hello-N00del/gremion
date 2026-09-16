@@ -175,6 +175,11 @@ usage: gremion-verify [--colour <blue|green>] [--hosts FILE] [--reboot]
                control.PLATFORM_DOMAIN and every line of etc/tenant-hosts.txt
   --reboot     reboot gate: on failure restart the active colour once, re-verify,
                and report the outcome to ALERT_WEBHOOK_URL
+
+It refuses to run without the signed waiver ledger docs/ops/release-1-waivers.md
+and reads it from $GREMION_WAIVER_LEDGER if set, else from its own checkout, else
+from $(gremion_root)/current/docs/ops/. Exit 1 means an assertion failed; exit 2
+means it could not verify.
 EOF
     exit 2
 }

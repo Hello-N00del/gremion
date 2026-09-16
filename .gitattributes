@@ -78,3 +78,8 @@ test/test_helper/*.bash text eol=lf
 # matches *.md, so core.autocrlf=true would check them out with CRLF on Windows
 # and the byte-identity claim would stop being reproducible after a checkout.
 docs/superpowers/specs/*.md text eol=lf
+
+# The signed waiver ledger is a machine contract: gremion-verify parses its
+# rows at run time. A CRLF working copy would change the bytes the parser sees
+# on one platform only, which is the kind of difference nobody reproduces.
+docs/ops/release-1-waivers.md text eol=lf

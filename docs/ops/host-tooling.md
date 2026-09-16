@@ -130,7 +130,7 @@ than exit codes.
 | `gremion-hostd --socket \| --ssh` | the restricted agent of section 5 |
 | `gremion-dns-check --domain D --edge-ip A --mail-ip B [--edit N]` | verify the published record set for one edit of the DNS table, one line per record |
 | `gremion-mail-bringup [--assert N\|all]` | the mail asserts in their required order, refusing to run out of order |
-| `gremion-verify [--colour c] [--hosts FILE]` | the verification contract: enumerate every router from the Traefik API, classify it, assert certificates, health, the host pin and the ACME path; writes `runtime/last-verify.json` |
+| `gremion-verify [--colour c] [--hosts FILE] [--reboot]` | the verification contract: enumerate every router from the Traefik API, classify it, assert certificates, health, the host pin and the ACME path; print the six P4 waivers of `docs/ops/release-1-waivers.md` as `WAIVED`; writes `runtime/last-verify.json`. **Refuses to run without that ledger** — see below |
 | `gremion-switch <colour> [--no-evict]` | fan the eviction out, rewrite `etc/edge/active.yml` atomically, wait for Traefik to serve the new target, record `runtime/active-colour` |
 | `gremion-deploy <tag>` | the release procedure, twelve steps, token on stdin; logs `STEP n <name> ok\|fail` to `runtime/deploy.log` |
 | `gremion-rollback [--to-tag T]` | switch back while the old colour is up, otherwise redeploy the previous tag |
@@ -138,6 +138,37 @@ than exit codes.
 | `gremion-snapshot <tag>` | `gremion-backup --label <tag> --class snapshot`, plus the artefact-class floor |
 | `gremion-restore-into --stack S --snapshot ID\|latest [--rto]` | restore a snapshot into a *different* stack, never into `etc/`, then neuter and prove by content |
 | `gremion-neuter --stack S` | point every SMTP host at a null sink and blank the publish tokens in stack `S`, asserted through `docker exec … env` |
+
+### `gremion-verify` and the signed waiver ledger
+
+`gremion-verify` will not run without `docs/ops/release-1-waivers.md`, the
+signed ledger of the six release-1 waivers. A release tree that cannot say what
+it did **not** prove must not report green, so an absent ledger is exit 2 — a
+missing precondition, not a failed assertion.
+
+It looks for the ledger in this order:
+
+1. `$GREMION_WAIVER_LEDGER`, if set. `gremion-deploy` sets it for its two verify
+   steps, so the release being deployed is verified against its own ledger; an
+   operator can set it by hand for a one-off run.
+2. `docs/ops/release-1-waivers.md` relative to the verifier's own checkout, when
+   it is run out of a release tree rather than from `/opt/gremion/bin`.
+3. `/opt/gremion/current/docs/ops/release-1-waivers.md` — what the installed
+   copy and the reboot gate read.
+
+If you meet `FAIL signed waiver ledger absent from the release tree: …`, the
+tree `current` points at carries no ledger (a rollback to a release cut before
+the ledger existed does that). Name a ledger explicitly to get past it:
+
+```bash
+GREMION_WAIVER_LEDGER=/opt/gremion/releases/<tag>/docs/ops/release-1-waivers.md \
+  gremion-verify
+```
+
+In the reboot gate that same exit 2 is reported as
+`REBOOT-GATE: verify=precondition-failure restarted=0` and alerts with the
+verifier's own message. It deliberately does **not** restart the app project:
+restarting containers cannot make a missing file appear.
 
 ## 5. The deploy channel
 

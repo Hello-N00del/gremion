@@ -55,9 +55,15 @@ The `web` entrypoint serves exactly two things: Traefik's internal
 entrypoint-level 301 to `websecure`. `acme-http@internal` is internal to
 Traefik and carries no middleware chain, so the rate-limit family that every
 application router carries does not apply to it. Neither surface authenticates
-a request nor reaches an application, and the compensating control is the host
-firewall's per-source connection limit on the edge HTTP port. This is recorded
-here as an **accepted exposure**, not as a control that has been proven.
+a request nor reaches an application.
+
+There is **no compensating control on that port today**. The host firewall
+template accepts the edge HTTP and HTTPS ports unconditionally — it carries no
+`ct count` and no `limit rate` clause — and fail2ban, which acts on log
+evidence after the fact, is the only per-source brake on the box. A per-source
+connection limit in the firewall is the *intended* control and is an operator
+item, not something this release ships. Until it exists this paragraph records
+an **accepted exposure**, and it names no control as proven.
 
 ## The release tree
 
