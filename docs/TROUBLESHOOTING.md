@@ -209,7 +209,7 @@ re-pointed at PgBouncer.
 
 ## Keycloak & OIDC
 
-The realm is named by the last path segment of `AUTH_KEYCLOAK_ISSUER` (`${REALM}`
+The realm is named by the last path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>`
 below) and carries two clients: **`gremion-ui`** (the app, Auth.js)
 and **`gremion-admin`** (the admin REST service account). The realm is imported
 from `docker/keycloak/realm-export.json` at container start; OIDC client secrets
@@ -260,7 +260,7 @@ make keycloak-configure                # scripts/configure-keycloak-clients.sh
 Verify the discovery document is reachable and well-formed:
 
 ```bash
-curl -s http://localhost:8082/auth/realms/${REALM}/.well-known/openid-configuration | jq .
+curl -s http://localhost:8082/auth/realms/<realm>/.well-known/openid-configuration | jq .
 ```
 
 ### OIDC login redirect loop
@@ -270,7 +270,7 @@ Usually a redirect-URI or origin mismatch.
 1. Keycloak admin → the tenant's realm → Clients → `gremion-ui` → **Valid Redirect URIs**.
    For local dev these must cover `http://localhost:3001/*`.
 2. Confirm `AUTH_KEYCLOAK_ISSUER` matches the browser-visible issuer
-   (`http://localhost:8082/auth/realms/${REALM}` in dev).
+   (`http://localhost:8082/auth/realms/<realm>` in dev).
 3. For local dev, `make dev-configure` patches `gremion-ui/.env.local` and the
    Keycloak redirect URIs for you.
 
