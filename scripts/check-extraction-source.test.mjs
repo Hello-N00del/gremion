@@ -544,3 +544,48 @@ test('a renamed import with no call site is still RED', (t) => {
   )
   assert.match(checkAssemblerWiring(dir).join('\n'), /never calls it/)
 })
+
+test('checkExtractionSourceAgreement refuses a non-list instead of throwing a raw TypeError', () => {
+  // D2-module-json-and-dist-schema imports THIS function. A validator handed
+  // null, undefined or an object would have got `manifests is not iterable`
+  // past the caller's own problem formatter — a crash where a refusal belongs.
+  for (const bad of [null, undefined, {}, 'users/module.json', 7]) {
+    const problems = checkExtractionSourceAgreement(bad, FROZEN)
+    assert.equal(problems.length, 1, `${JSON.stringify(bad)} -> ${problems.join('\n')}`)
+    assert.match(problems[0], /is not a list of manifests/)
+  }
+  assert.deepEqual(checkExtractionSourceAgreement([], FROZEN), [])
+})
+
+test('the wiring guard is asserted in BOTH worlds, so it cannot go silent when B34 lands', () => {
+  // The earlier arm asserted only the "no assembler yet" branch, so the day
+  // scripts/assemble.mjs appears it would stop asserting anything at all.
+  const exists = existsSync(join(ROOT, ASSEMBLER_PATH))
+  if (exists) {
+    // B34 has landed: the real assembler must satisfy the real contract.
+    assert.deepEqual(checkAssemblerWiring(ROOT), [], 'the shipped assembler does not call the guard')
+  } else {
+    assert.deepEqual(checkAssemblerWiring(ROOT), [])
+    // ...and the guard must still be capable of refusing one.
+    const dir = mkdtempSync(join(tmpdir(), 'b00-root-'))
+    try {
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'scripts', 'assemble.mjs'), "console.log('assembling')\n")
+      assert.notDeepEqual(checkAssemblerWiring(dir), [])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+})
+
+test('the target stays wired into make lint and into the ci.yml lint job', () => {
+  // The guard only guards while something runs it. Both call sites are pinned:
+  // dropping either would leave a green suite and an unrun check.
+  const mk = readFileSync(join(ROOT, 'Makefile'), 'utf8')
+  const aggregate = mk.match(/^lint:.*$/m)
+  assert.ok(aggregate, 'no lint: aggregate in the Makefile')
+  assert.match(aggregate[0], /\blint-extraction-source\b/)
+  assert.match(mk, /^\.PHONY:[\s\S]*?\blint-extraction-source\b/m)
+  const ci = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8')
+  assert.match(ci, /run:\s*make lint-extraction-source/)
+})

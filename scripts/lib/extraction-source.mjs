@@ -65,6 +65,13 @@ export function readFrozenExtractionSource(root = KERNEL_ROOT) {
  * record in DOC_PATH.
  */
 export function checkExtractionSourceAgreement(manifests, frozen = readFrozenExtractionSource()) {
+  // D2-module-json-and-dist-schema imports this function, so a caller that
+  // hands it null, undefined or a bare object must get a REFUSAL, not
+  // `manifests is not iterable` escaping past that caller's own formatter.
+  if (!Array.isArray(manifests))
+    return [
+      `checkExtractionSourceAgreement: ${typeof manifests === 'object' && manifests !== null ? 'value' : JSON.stringify(manifests)} is not a list of manifests — nothing was checked against the frozen source ${frozen}`,
+    ]
   const problems = []
   const seen = new Map() // sha -> first module.json that carried it
   for (const e of manifests) {
