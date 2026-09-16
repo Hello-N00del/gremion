@@ -49,17 +49,58 @@ GREMION_LEAVES="${GREMION_LEAVES:-content finance files votes messages newslette
 # OK is how a deployment bar gets read as a go-live gate.
 #
 # The table is READ, not carried: gremion-deploy checks a release out with
-# `git clone --depth 1 --branch <tag>` of the whole repository (:208) and points
-# `current` at it (:537-539), so docs/ ships with every release. One copy cannot
-# drift from itself. An absent ledger is a hard failure, not an empty list: a
-# release tree that cannot say what it did not prove must not report green.
+# `git clone --depth 1 --branch <tag>` of the whole repository, so docs/ ships
+# with every release and there is only one copy to read. An absent ledger is a
+# hard failure, not an empty list: a release tree that cannot say what it did
+# not prove must not report green.
+#
+# WHICH copy, though, is not obvious, and getting it wrong once cost a host its
+# first deploy. gremion-deploy runs this program at step 9 (the new colour) and
+# step 11 (the public edge); `$ROOT/current` is moved onto the new release only
+# at step 12, and bootstrap.sh never creates it at all. Reading `current`
+# unconditionally therefore (a) died with exit 2 on a freshly bootstrapped host
+# before the step that would have created it, and (b) on every later deploy
+# printed release N's waivers while verifying release N+1. See
+# waiver_ledger_path() below for the order that fixes both.
 # Row shape (pinned by test/host/release-1-waivers.bats):
 #   | `<id>` | §L:<n> | <GATE-ID> | <what is waived> | … | … |
 GREMION_WAIVER_LEDGER="${GREMION_WAIVER_LEDGER:-}"
 GREMION_WAIVERS=()
 
+# waiver_ledger_path -> the ledger this run must read, in order:
+#
+#   1. $GREMION_WAIVER_LEDGER. gremion-deploy sets it for steps 9 and 11 so the
+#      release BEING verified is the release whose waivers are printed. It is
+#      also the operator's override for a one-off run.
+#   2. The verifier's OWN checkout. infra/host/bin/ sits three levels under the
+#      repository root, so a verifier invoked out of a release tree reads that
+#      tree's ledger and cannot drift from itself.
+#   3. $(gremion_root)/current/docs/ops/release-1-waivers.md. The installed copy
+#      under /opt/gremion/bin has no sibling tree (bootstrap.sh only asserts it
+#      is present), so this is what a bare `gremion-verify` and the reboot gate
+#      read.
+#
+# An absent ledger at the end of that list is still fatal, with exit 2 - a
+# missing precondition, not a failed assertion. reboot_gate() reads that
+# distinction: a precondition failure is not something restarting containers
+# can fix.
+waiver_ledger_path() {
+    local sibling
+    if [[ -n "${GREMION_WAIVER_LEDGER:-}" ]]; then
+        printf '%s' "$GREMION_WAIVER_LEDGER"
+        return 0
+    fi
+    sibling="$SCRIPT_DIR/../../../docs/ops/release-1-waivers.md"
+    if [[ -f "$sibling" ]]; then
+        printf '%s' "$sibling"
+        return 0
+    fi
+    printf '%s' "$(gremion_root)/current/docs/ops/release-1-waivers.md"
+}
+
 load_waivers() {
-    local ledger="${GREMION_WAIVER_LEDGER:-$(gremion_root)/current/docs/ops/release-1-waivers.md}"
+    local ledger
+    ledger="$(waiver_ledger_path)"
     [[ -f "$ledger" ]] \
         || die "signed waiver ledger absent from the release tree: ${ledger} (spec B §1.4)" 2
     # mapfile, not a pipeline: the reader must run in THIS shell so a parse

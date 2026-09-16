@@ -576,6 +576,29 @@ exit 0
     [ "$sw" -lt "$output" ]
 }
 
+@test "both verify steps read the waiver ledger out of the release being deployed" {
+    # The verifier hard-dies without the signed ledger and resolves it from
+    # $(gremion_root)/current unless told otherwise. current/ is moved onto the
+    # new release in step 12 - AFTER both verify steps - and bootstrap.sh never
+    # creates it, so steps 9 and 11 must name the release tree themselves. Left
+    # to the default, the first deploy on a fresh host aborts at step 9 with
+    # exit 2 and every later deploy verifies release N+1 while printing release
+    # N's waivers.
+    stub_all
+    shim gremion-verify 'printf "%s\n" "${GREMION_WAIVER_LEDGER:-UNSET}" >> "${GREMION_ROOT}/runtime/verify-ledger.log"; exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    # The post-condition is what steps 9 and 11 DID, not the run's exit code:
+    # step 12 creates $ROOT/current with ln -s, which a Windows working copy
+    # cannot do, so this deploy's own status carries no information about the
+    # two steps this test is about. (The sibling test that owns step 12 fails
+    # on this box for the same pre-existing reason.)
+    grep -qE ' STEP 9 verify-colour ok$'  "${GREMION_ROOT}/runtime/deploy.log"
+    grep -qE ' STEP 11 verify-public ok$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(wc -l < "${GREMION_ROOT}/runtime/verify-ledger.log")" -eq 2 ]
+    run bash -c "sort -u '${GREMION_ROOT}/runtime/verify-ledger.log'"
+    [ "$output" = "${GREMION_ROOT}/releases/dist-v1.2.3/docs/ops/release-1-waivers.md" ]
+}
+
 @test "the runtime tag files and the current symlink are recorded" {
     stub_all
     printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/current-tag"

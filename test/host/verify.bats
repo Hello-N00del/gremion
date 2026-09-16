@@ -199,6 +199,20 @@ install_ledger() {
        "${GREMION_ROOT}/current/docs/ops/release-1-waivers.md"
 }
 
+# The host's verifier is an INSTALLED COPY under $(gremion_root)/bin with no
+# sibling repository tree: bootstrap.sh stage_timers (:897-903) only asserts
+# that it is there. Every test that runs the in-tree $VERIFY is therefore blind
+# to the shape the host actually has, which is how a verifier that hard-dies
+# without $ROOT/current shipped: it never dies in-tree, because in-tree it
+# reads its own checkout's ledger.
+install_verifier() {
+    mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib"
+    cp "${REPO_ROOT}/infra/host/bin/gremion-verify" "${GREMION_ROOT}/bin/gremion-verify"
+    cp "${REPO_ROOT}/infra/host/lib/common.sh"      "${GREMION_ROOT}/lib/common.sh"
+    chmod +x "${GREMION_ROOT}/bin/gremion-verify"
+    printf '%s' "${GREMION_ROOT}/bin/gremion-verify"
+}
+
 setup() {
     setup_host_root
     FAKE="${BATS_TEST_TMPDIR}/fake"
@@ -533,14 +547,61 @@ WAIVER_LITEMS=(2 6 4 1 5 5)
     [[ "$output" == *"6 row(s) look like waivers, 5 parsed"* ]]
 }
 
-@test "gremion-verify refuses to run when the signed ledger is absent from the release tree" {
+@test "the installed verifier refuses to run when no ledger is reachable" {
     # An absent ledger is not "no waivers": it is a release tree that cannot
     # say what release 1 did not prove. Silence there is the failure mode the
     # ledger exists to prevent, so the verifier dies instead of printing green.
+    # It is run from the INSTALLED layout because that is the only shape with
+    # no ledger within reach at all - see install_verifier().
+    local v; v="$(install_verifier)"
+    rm -rf "${GREMION_ROOT}/current"
+    run "$v" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"release-1-waivers.md"* ]]
+}
+
+@test "the installed verifier verifies a release that has no current symlink yet" {
+    # gremion-deploy runs the verifier at steps 9 and 11; $ROOT/current is not
+    # moved onto the new release until step 12, and bootstrap.sh never creates
+    # it at all. Before gremion-deploy exported the ledger of the release it is
+    # deploying, the FIRST deploy on a freshly bootstrapped host died at step 9
+    # with exit 2 and could never reach the step that would have created
+    # current/ - the release this ledger is written for was undeployable.
+    local v rel
+    v="$(install_verifier)"
+    rm -rf "${GREMION_ROOT}/current"
+    rel="${GREMION_ROOT}/releases/dist-v1.2.3"
+    mkdir -p "${rel}/docs/ops"
+    cp "${REPO_ROOT}/docs/ops/release-1-waivers.md" "${rel}/docs/ops/release-1-waivers.md"
+    export GREMION_WAIVER_LEDGER="${rel}/docs/ops/release-1-waivers.md"
+    run "$v" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WAIVED"* ]]
+    [[ "$output" == *"apex-dns"* ]]
+    run jq -r '.waivers | length' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "6" ]
+}
+
+@test "the installed verifier falls back to the ledger under current" {
+    # Leg 3 of waiver_ledger_path: the installed copy has no sibling tree, so a
+    # bare gremion-verify and the reboot gate read $(gremion_root)/current.
+    # setup() put a ledger there.
+    local v; v="$(install_verifier)"
+    run "$v" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WAIVED"* ]]
+}
+
+@test "a verifier run out of a release tree reads that tree's own ledger" {
+    # Leg 2. Mid-deploy there are two copies of the table on the box - the new
+    # release's and the one current/ still points at - and one of them belongs
+    # to the release that is NOT being verified. A verifier invoked from inside
+    # a checkout reads that checkout and cannot drift from itself.
     rm -rf "${GREMION_ROOT}/current"
     run "$VERIFY" --hosts "$HOSTS"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"release-1-waivers.md"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WAIVED"* ]]
+    [[ "$output" == *"apex-dns"* ]]
 }
 
 @test "bootstrap installs and enables the L:3 reboot gate, and its unit runs the verifier" {

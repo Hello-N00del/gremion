@@ -499,7 +499,15 @@ evict_port() { # <container>
 # ── step 9 — verify the new colour through the internal entrypoint (§F.4.9) ─
 step_9_verify_colour() {
     local prog; prog="$(bin_path gremion-verify)"
-    "$prog" --colour "$NEW_COLOUR"
+    # The verifier refuses to run without the signed waiver ledger, and it reads
+    # it out of the release tree it is verifying. bin_path resolves to the
+    # INSTALLED verifier under $(gremion_root)/bin, which has no sibling tree,
+    # and $ROOT/current still points at the PREVIOUS release here - step 12
+    # moves it, and bootstrap.sh never creates it at all. Without this export a
+    # freshly bootstrapped host died at this step with exit 2 and could never
+    # reach the step that would have created current/.
+    GREMION_WAIVER_LEDGER="$RELEASE_DIR/docs/ops/release-1-waivers.md" \
+        "$prog" --colour "$NEW_COLOUR"
     ok "colour ${NEW_COLOUR} passes the §C contract on the internal entrypoint"
 }
 
@@ -520,7 +528,11 @@ step_10_switch() {
 # ── step 11 — verify the public routers (§F.4.11) ───────────────────────────
 step_11_verify_public() {
     local prog; prog="$(bin_path gremion-verify)"
-    "$prog"
+    # Same ledger as step 9, and for the same reason: step 12 has not moved
+    # $ROOT/current yet, so without this the public verification would print the
+    # PREVIOUS release's waiver table for the release it just switched to.
+    GREMION_WAIVER_LEDGER="$RELEASE_DIR/docs/ops/release-1-waivers.md" \
+        "$prog"
     ok "public edge verified"
 }
 
