@@ -329,11 +329,13 @@ docker compose cp keycloak:/tmp/realm-export.json \
   docker/keycloak/realm-export.json
 ```
 
-> The realm import template at `docker/keycloak/realm-export.json` is generated
-> from the module manifests and the target vertical's config by `make gen-realm`
-> (it needs `CONFIG_PATH` or `./config/config.json`). Run it **before**
-> `docker compose up` — Keycloak imports the file at boot. Disabled modules
-> contribute no groups or roles.
+> B-01: **no realm is imported at boot.** `docker/keycloak/realm-export.json` is
+> a gitignored GENERATOR OUTPUT: `make gen-realm` writes the module-composed
+> realm template there (it needs `CONFIG_PATH` or `./config/config.json`), and
+> nothing mounts or reads it at container start. The realm a tenant actually
+> gets is composed from `docker/keycloak/realm-export.base.json` by
+> `buildTenantRealmDoc` at tenant-create time. Disabled modules contribute no
+> groups or roles either way.
 
 ### Update services
 

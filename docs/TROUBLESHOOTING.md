@@ -96,7 +96,7 @@ healthy.
 | `openssl is required to generate secrets` | `openssl` not on PATH | Install OpenSSL |
 | `Invalid domain name` | Domain prompt got a bad value | Re-run; press Enter for `localhost`, or enter a valid hostname |
 | `Some CHANGE_ME_ placeholders were not replaced` | `sed` incompatibility | Check your `sed`; on macOS the script uses BSD `sed -i ''` automatically |
-| `realm-export.json is missing` | Realm export not generated | Ensure `docker/keycloak/realm-export.json` is present (the committed governance realm), or supply a `config/config.json` and re-run |
+| `gen-realm: set CONFIG_PATH=...` | `make gen-realm` run without a vertical config | Supply `CONFIG_PATH=/path/to/config.json` or add `config/config.json`. Nothing needs `realm-export.json` to exist: B-01 deleted the boot import and the file is a gitignored generator output |
 
 ### `.env` already exists — secrets not regenerated
 
@@ -211,10 +211,11 @@ re-pointed at PgBouncer.
 
 The realm is named by the last path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>`
 below) and carries two clients: **`gremion-ui`** (the app, Auth.js)
-and **`gremion-admin`** (the admin REST service account). The realm is imported
-from `docker/keycloak/realm-export.base.json` at tenant-create time (B-01: no
-realm is imported at container start); OIDC client secrets are substituted in
-from `.env` by `buildTenantRealmDoc`.
+and **`gremion-admin`** (the admin REST service account).
+B-01: **no realm is imported at boot.** The realm is COMPOSED from
+`docker/keycloak/realm-export.base.json` by `buildTenantRealmDoc` and created
+over the Admin API at tenant-create time, with the OIDC client secrets taken
+from `.env` at that point.
 
 ### Keycloak won't start
 

@@ -62,12 +62,13 @@ The script is idempotent and runs these steps:
    server cert with SAN `keycloak,localhost,127.0.0.1`). The dev stack runs
    Keycloak over plain HTTP on `:8080`, so these are only required for the
    production overlay, but they are generated up front to keep prod ready.
-7. **Ensures `docker/keycloak/realm-export.json` exists.** Keycloak imports
-   this file at boot, so it must be present before `docker compose up`. The
-   governance-only kernel ships no feature modules, so the committed
-   `realm-export.json` already equals the base realm (the `gremion-ui` and
-   `gremion-admin` OIDC clients only). The script regenerates it only when a
-   vertical config is supplied — see [Regenerating the realm export](#regenerating-the-realm-export).
+7. B-01: **prepares no realm.** Keycloak comes up with `master` only; the
+   per-tenant realm is composed from
+   `docker/keycloak/realm-export.base.json` by `buildTenantRealmDoc` and
+   created at tenant-create time. `make gen-realm` still writes the
+   module-composed template to the gitignored
+   `docker/keycloak/realm-export.json` for inspection — see
+   [Regenerating the realm template](#regenerating-the-realm-template).
 8. **Builds the images** (`docker compose build --quiet`).
 9. **Starts the core services** — `postgres`, `keycloak`, `gremion-ui`. The
    `depends_on` health gates bring Postgres and Keycloak up first, so waiting
@@ -93,7 +94,8 @@ each variable inline. The most relevant groups:
   DB (`CONTROL_DB_*`, the tenant registry + fleet-migration ledger).
 - **Keycloak** — admin credentials, the issuer URL, and the two OIDC client
   secrets (`GREMION_UI_OIDC_CLIENT_SECRET`, `GREMION_ADMIN_OIDC_CLIENT_SECRET`)
-  that are substituted into `realm-export.json` at container start.
+  that `buildTenantRealmDoc` places into the composed per-tenant realm document
+  at tenant-create time (B-01: not at container start).
 - **App** — `AUTH_SECRET` (session-cookie signing), `AUTH_KEYCLOAK_*`,
   `INTERNAL_PUSH_SECRET` (internal-fetch auth), `INTERNAL_BASE_URL`.
 - **Seeding** — `SEED_TOKEN` gates `POST /api/setup/seed`;
@@ -157,14 +159,15 @@ This bootstraps the governance structure (org-unit tree, committees, members)
 for a tenant. See [`../LOCAL_TESTING.md`](../LOCAL_TESTING.md) for the full
 walkthrough.
 
-## Regenerating the realm export
+## Regenerating the realm template
 
-`docker/keycloak/realm-export.json` is the source of truth Keycloak imports at
-boot. The committed file is the governance-only base realm (the `gremion-ui` and
-`gremion-admin` clients). When you target a vertical with extra modules, the
-file is generated from the module manifests + the vertical's `config.json`
-(`modules.<id> = true|false` — disabled modules contribute no groups/roles).
-Regenerate it **before** `docker compose up`:
+B-01: `docker/keycloak/realm-export.json` is a gitignored GENERATOR OUTPUT, not
+an input to anything at boot. The source of truth is
+`docker/keycloak/realm-export.base.json`, whose one consumer is
+`buildTenantRealmDoc`. `make gen-realm` writes the module-composed template for
+a vertical (`modules.<id> = true|false` — disabled modules contribute no
+groups/roles), which is useful for inspecting what a vertical's realm will
+carry:
 
 ```bash
 # uses ./config/config.json if present, else set CONFIG_PATH explicitly

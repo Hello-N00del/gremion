@@ -59,7 +59,7 @@ Internet
 | Service        | Role |
 |----------------|------|
 | `postgres`     | All persistent data: the control-plane registry DB, the per-tenant governance DB(s), and the Keycloak DB |
-| `keycloak`     | OIDC/SSO identity provider; imports the kernel realm (`--import-realm`), relative path `/auth` |
+| `keycloak`     | OIDC/SSO identity provider; starts with `master` only and no realm of ours (B-01: the boot-time realm import is deleted), relative path `/auth` |
 | `gremion-ui`     | The authenticated SvelteKit app shell — dashboard, settings, system status, and the governance surface (committees, members, protocols, resolutions, portal admin) |
 | `gremion-public` | The read-only public portal at `public.<domain>` — no auth, no sessions, connects to the governance DB through a read-only role |
 | `legal`        | Static legal/portal pages (Impressum, GDPR) served by a non-root nginx |

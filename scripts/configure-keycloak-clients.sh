@@ -2,9 +2,10 @@
 # ============================================================
 # Gremion — Configure Keycloak OIDC client secrets
 #
-# Keycloak's --import-realm does NOT perform shell variable
-# substitution in the JSON file.  Run this script AFTER
-# Keycloak has started to set the real client secrets via the
+# B-01 (spec B T.4): no realm is imported at boot, so a realm's client
+# secrets are whatever the realm document carried when it was created.
+# Run this script AFTER Keycloak has started, and after the realm named by
+# KEYCLOAK_REALM exists, to (re)set the real client secrets through the
 # Admin REST API.
 #
 # Usage:
@@ -88,9 +89,9 @@ rm -f "$KC_PW_FILE"
 [[ -z "$TOKEN" || "$TOKEN" == "null" ]] && error "Failed to obtain admin token"
 
 # ── Helper: assign a realm-management role to a service-account user ──
-# Realm imports do NOT carry service-account role mappings reliably in
-# Keycloak 26 — the SA is created but ends up with no realm-management
-# permissions. Calling this after import gives the SA admin access.
+# A created realm does NOT carry service-account role mappings reliably in
+# Keycloak 26 — the SA exists but ends up with no realm-management
+# permissions. Calling this afterwards gives the SA admin access.
 assign_realm_admin_to_sa() {
     local client_id="$1"
 

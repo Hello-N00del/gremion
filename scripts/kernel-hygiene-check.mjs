@@ -1422,6 +1422,61 @@ check('t6 the CI integration job creates the realm under test and never derives 
   return null
 })
 
+// ── (e7) nothing still tells a reader that Keycloak imports a realm at boot ──
+//
+// B-01 deleted the boot import. The kernel is PUBLIC, so a doc line that still
+// says "Keycloak imports this file at boot" is a shipped instruction that does
+// not work — and the compose/k8s change that removed the mechanism cannot fail
+// because of it. Two legs:
+//   A. `--import-realm` survives ONLY in the guards that assert its absence.
+//   B. no tracked file AFFIRMS the import in prose. The pattern pairs `import`
+//      with a realm noun on one line and drops lines that negate it, so the
+//      B-01 sentences that say no realm is imported are not hits.
+const IMPORT_REALM_CARRIERS = new Set([
+  'test/integration/health.bats',        // asserts the rendered compose has none
+  'scripts/kernel-hygiene-check.mjs',    // this file
+  'docker/keycloak/README.md',           // states the boot import is gone
+  'docs/deployment.md',                  // same, as the B-01 note
+])
+
+function trackedGrep(args) {
+  const res = spawnSync('git', ['grep', '-n', ...args], { cwd: ROOT, encoding: 'utf8' })
+  // exit 1 with empty stdout = no match; anything else with stderr is a real error.
+  if (res.status > 1) throw new Error(`git grep failed: ${res.stderr.trim()}`)
+  return (res.stdout || '').split('\n').filter(Boolean)
+}
+
+check('e7 no tracked file outside the guards still describes the deleted Keycloak boot import', () => {
+  const argHits = trackedGrep(['-e', '--import-realm'])
+  if (argHits.length === 0) return 'no file names --import-realm at all - the guards that assert its absence are gone, so the check is vacuous'
+  const strayArg = argHits.filter((l) => !IMPORT_REALM_CARRIERS.has(l.split(':')[0]))
+
+  // Affirmative prose, two shapes: an import claim tied to BOOT time, and the
+  // specific retired claims about the realm export. `kc.sh import` is excluded:
+  // importing a realm into a RUNNING Keycloak by hand (the restore runbook) is
+  // a live operation, not the deleted boot path.
+  // git grep is line-based, so `.` cannot cross a line.
+  const BOOT_CLAIM = 'import[a-z]*.{0,80}(at boot|at container start|at startup)|(at boot|at container start|at startup).{0,80}import[a-z]*'
+  const RETIRED_CLAIM = 'realm import|imports? the (kernel )?realm|realm-export.{0,40}is imported|substituted into .{0,40}realm-export'
+  const SCOPE = ['--', 'docs/', '*.md', 'scripts/', 'Makefile', 'docker-compose.yml', 'docker-compose.override.yml', 'docker-compose.prod.yml']
+  const proseHits = [
+    ...trackedGrep(['-iE', BOOT_CLAIM, ...SCOPE]),
+    ...trackedGrep(['-iE', RETIRED_CLAIM, ...SCOPE]),
+  ].filter((l) => !/kc\.sh import/.test(l))
+  const stray = proseHits.filter((l) => {
+    const [file] = l.split(':')
+    if (IMPORT_REALM_CARRIERS.has(file)) return false
+    const text = l.slice(l.indexOf(':', l.indexOf(':') + 1) + 1)
+    // B-01 sentences state the NEGATIVE; those are the documentation we want.
+    return !/\b(no|not|never|nothing|deleted|removed|stopped)\b/i.test(text)
+  })
+
+  const problems = [...new Set([...strayArg, ...stray])].sort()
+  return problems.length
+    ? `${problems.length} line(s) still describe a boot-time realm import:\n    ${problems.join('\n    ')}`
+    : null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {
