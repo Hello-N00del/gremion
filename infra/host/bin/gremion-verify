@@ -41,6 +41,58 @@ HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
 REBOOT_SETTLE_SECONDS="${REBOOT_SETTLE_SECONDS:-30}"
 GREMION_LEAVES="${GREMION_LEAVES:-content finance files votes messages newsletter calendar board vault}"
 
+# ── P4 waivers (spec B §1.4/§G) — READ FROM THE SIGNED LEDGER ────────────────
+# Six go-live-gate items are waived until the pilot. They are NOT proofs this
+# release passed, so they are never printed by ok(): each is printed as WAIVED
+# with its §L item number and the gate id it suspends, and lands in
+# last-verify.json as a third state alongside ok/failures. A waiver rendered as
+# OK is how a deployment bar gets read as a go-live gate.
+#
+# The table is READ, not carried: gremion-deploy checks a release out with
+# `git clone --depth 1 --branch <tag>` of the whole repository (:208) and points
+# `current` at it (:537-539), so docs/ ships with every release. One copy cannot
+# drift from itself. An absent ledger is a hard failure, not an empty list: a
+# release tree that cannot say what it did not prove must not report green.
+# Row shape (pinned by test/host/release-1-waivers.bats):
+#   | `<id>` | §L:<n> | <GATE-ID> | <what is waived> | … | … |
+GREMION_WAIVER_LEDGER="${GREMION_WAIVER_LEDGER:-}"
+GREMION_WAIVERS=()
+
+load_waivers() {
+    local ledger="${GREMION_WAIVER_LEDGER:-$(gremion_root)/current/docs/ops/release-1-waivers.md}"
+    [[ -f "$ledger" ]] \
+        || die "signed waiver ledger absent from the release tree: ${ledger} (spec B §1.4)" 2
+    # mapfile, not a pipeline: the reader must run in THIS shell so a parse
+    # failure below can still die() the program rather than a subshell.
+    # shellcheck disable=SC2016  # the sed script is deliberately literal:
+    # its backreferences are sed's, not the shell's, and must not expand here.
+    mapfile -t GREMION_WAIVERS < <(
+        sed -n 's/^| `\([a-z0-9-]\{1,\}\)` | §L:\([0-9]\) | \(G[0-9]-[A-Z]\{1,\}\) | \([^|]*\) |.*/\1|\2|\3|\4/p' \
+            "$ledger"
+    )
+    (( ${#GREMION_WAIVERS[@]} > 0 )) \
+        || die "waiver ledger parsed to zero rows — the row shape changed: ${ledger}" 2
+}
+
+# A third printer beside ok()/bad(): dim, never green, never counted as a pass.
+waived() { printf '%s  WAIVED%s %s\n' "$C_DIM" "$C_OFF" "$*"; }
+
+print_waivers() {
+    local entry id item gate why
+    for entry in "${GREMION_WAIVERS[@]}"; do
+        IFS='|' read -r id item gate why <<<"$entry"
+        why="${why#"${why%%[![:space:]]*}"}"; why="${why%"${why##*[![:space:]]}"}"
+        waived "${id} (§L:${item}, ${gate}) — ${why}"
+    done
+}
+
+waivers_json() {
+    printf '%s\n' "${GREMION_WAIVERS[@]}" \
+        | jq -Rsc 'split("\n") | map(select(length > 0) | split("|")
+                   | {id: .[0], lItem: (.[1] | tonumber), gate: .[2],
+                      why: (.[3] | sub("^ +";"") | sub(" +$";""))})'
+}
+
 # Precedence for the marker path: an explicit environment override (an operator
 # probing one endpoint by hand, or a test) beats etc/env/state.env, which beats
 # the built-in default. load_env runs later and would otherwise clobber the
@@ -440,7 +492,8 @@ write_report() {
     fi
     jq -nc --arg ts "$ts" --argjson ok "$okflag" \
            --argjson routers "$rows" --argjson failures "$fjson" \
-        '{ts: $ts, ok: $ok, routers: $routers, failures: $failures}' \
+           --argjson waivers "$(waivers_json)" \
+        '{ts: $ts, ok: $ok, routers: $routers, failures: $failures, waivers: $waivers}' \
         | atomic_write "$(gremion_root)/runtime/last-verify.json" 0644
 }
 
@@ -596,12 +649,14 @@ run_pass() {
     FAILURES=(); ROUTER_ROWS=()
     ROUTER_CLASS=(); ROUTER_HOST=(); ROUTER_SERVICE=()
     SERVICES_TO_CHECK=(); SERVICE_HEALTHY=(); SAN_OK=(); MARKER_SHA=()
+    load_waivers
     fetch_api
     check_routers
     check_hosts
     check_containers
     [[ -z "$COLOUR" ]] || check_colour "$COLOUR"
     build_rows
+    print_waivers
     write_report
     (( ${#FAILURES[@]} == 0 ))
 }

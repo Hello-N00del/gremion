@@ -99,3 +99,22 @@ ledger_triples() {
   # vacuity + shape: the residual section adds no seventh triple
   [ "$(ledger_triples | wc -l)" -eq 6 ]
 }
+
+VERIFY_BIN="${PROJECT_ROOT}/infra/host/bin/gremion-verify"
+
+@test "gremion-verify reads the ledger from the release tree and enumerates nothing itself" {
+  # The drift guard this replaces compared two copies. There is now one copy:
+  # the verifier must name the ledger path and must contain no hardcoded
+  # '<id>|<litem>|<gate>|…' row of its own.
+  grep -qF 'current/docs/ops/release-1-waivers.md' "$VERIFY_BIN"
+  run grep -nE "^[[:space:]]*'[a-z0-9-]{1,}\|[0-9]\|G[0-9]-[A-Z]{1,}\|" "$VERIFY_BIN"
+  [ "$status" -ne 0 ] || { echo "an in-script waiver table is back:" >&2; echo "$output" >&2; false; }
+}
+
+@test "gremion-verify never hands a waiver to ok()" {
+  local id
+  for id in "${WAIVER_IDS[@]}"; do
+    run grep -nE "^[[:space:]]*ok .*${id}" "$VERIFY_BIN"
+    [ "$status" -ne 0 ]
+  done
+}

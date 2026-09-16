@@ -189,6 +189,16 @@ EOF
     fake_container c2 keycloak        "keycloak"                            running healthy 0 10.90.250.4
 }
 
+
+# The release tree carries docs/ (gremion-deploy:208 clones the whole repo and
+# :537-539 points `current` at it), so the ledger the verifier parses is the
+# repository's own ledger bytes, not a fixture that can disagree with them.
+install_ledger() {
+    mkdir -p "${GREMION_ROOT}/current/docs/ops"
+    cp "${REPO_ROOT}/docs/ops/release-1-waivers.md" \
+       "${GREMION_ROOT}/current/docs/ops/release-1-waivers.md"
+}
+
 setup() {
     setup_host_root
     FAKE="${BATS_TEST_TMPDIR}/fake"
@@ -209,6 +219,7 @@ EOF
     printf 'tenant-a.example.org\ntenant-b.example.org\n' > "$HOSTS"
     install_shims
     fixture_green
+    install_ledger
 }
 
 @test "gremion-verify passes against a well-formed edge" {
@@ -464,4 +475,53 @@ prepare_green_colour() {
     run "$VERIFY" --help
     [ "$status" -eq 2 ]
     [[ "$output" == *"--reboot"* ]]
+}
+
+# ── the six P4 waivers (B0) ──────────────────────────────────────────────────
+# Test names are ASCII: bats 1.13 on the maintainer's Windows box cannot address
+# a test whose name carries a non-ASCII byte and silently skips it, which is the
+# vacuous pass these guards exist to prevent. "L:n" below means the ledger's
+# section-L item n.
+WAIVER_IDS=(offsite-backup-remote external-probe-and-alerting mail-bringup
+            legal-documents apex-dns pilot-inputs)
+WAIVER_LITEMS=(2 6 4 1 5 5)
+
+@test "every P4 waiver is printed as WAIVED with its L item and never on an OK line" {
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" > "${BATS_TEST_TMPDIR}/verify.out"
+    local i id item
+    for i in "${!WAIVER_IDS[@]}"; do
+        id="${WAIVER_IDS[$i]}"; item="${WAIVER_LITEMS[$i]}"
+        run grep -qE "WAIVED .*${id} \(§L:${item}," "${BATS_TEST_TMPDIR}/verify.out"
+        [ "$status" -eq 0 ] || { echo "no WAIVED line for ${id} (§L:${item})" >&2; false; }
+        # A waiver rendered by ok() is the exact misreading the ledger exists to
+        # prevent, so the OK lines are searched for the id explicitly.
+        run bash -c "grep -E '^[[:space:]]*OK' '${BATS_TEST_TMPDIR}/verify.out' | grep -qF '${id}'"
+        [ "$status" -ne 0 ] || { echo "${id} appears on an OK line" >&2; false; }
+    done
+}
+
+@test "last-verify.json records the six waivers as a third state, not as failures" {
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    run jq -r '.waivers | length' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "6" ]
+    run jq -r '.waivers[] | select(.id=="mail-bringup") | "\(.lItem) \(.gate)"' \
+        "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "4 G4-MAIL" ]
+    run jq -r '.ok' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "true" ]
+    run jq -r '.failures | length' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "0" ]
+}
+
+@test "gremion-verify refuses to run when the signed ledger is absent from the release tree" {
+    # An absent ledger is not "no waivers": it is a release tree that cannot
+    # say what release 1 did not prove. Silence there is the failure mode the
+    # ledger exists to prevent, so the verifier dies instead of printing green.
+    rm -rf "${GREMION_ROOT}/current"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"release-1-waivers.md"* ]]
 }
