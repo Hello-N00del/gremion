@@ -516,6 +516,23 @@ WAIVER_LITEMS=(2 6 4 1 5 5)
     [ "$output" = "0" ]
 }
 
+@test "a waiver row the reader cannot parse is loud, not a table one row shorter" {
+    # Measured on the committed ledger before the parsed count became a
+    # post-condition: one markdown-legal escaped pipe inside a cell made the
+    # verifier print FIVE waivers, write waivers[] of length 5 and exit 0 -
+    # apex-dns simply vanished, and every suite in the repository stayed green.
+    # An under-reported waiver is the exact misreading the ledger exists to
+    # prevent, so a row that looks like a waiver and does not parse is fatal.
+    local scratch="${BATS_TEST_TMPDIR}/ledger.md"
+    sed 's/the apex DNS edits/the apex \\| DNS edits/' \
+        "${REPO_ROOT}/docs/ops/release-1-waivers.md" > "$scratch"
+    grep -qF 'the apex \| DNS edits' "$scratch"   # the mutation really landed
+    export GREMION_WAIVER_LEDGER="$scratch"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"6 row(s) look like waivers, 5 parsed"* ]]
+}
+
 @test "gremion-verify refuses to run when the signed ledger is absent from the release tree" {
     # An absent ledger is not "no waivers": it is a release tree that cannot
     # say what release 1 did not prove. Silence there is the failure mode the

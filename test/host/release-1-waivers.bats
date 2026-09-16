@@ -26,6 +26,12 @@
 
 load '../test_helper/common'
 
+# ONE parser for the ledger row shape. waiver_rows() lives in the library the
+# READER loads too, so this guard cannot become more permissive than the thing
+# it guards - which is the only direction two copies of a pattern ever drift.
+# shellcheck source=../../infra/host/lib/common.sh
+. "${PROJECT_ROOT}/infra/host/lib/common.sh"
+
 LEDGER="${PROJECT_ROOT}/docs/ops/release-1-waivers.md"
 GATE_DOC="${PROJECT_ROOT}/docs/ops/go-live-gate.md"
 
@@ -35,10 +41,11 @@ WAIVER_LITEMS=(2 6 4 1 5 5)
 WAIVER_GATES=(G2-RESTORE G6-OFFBOX G4-MAIL G1-LEGAL G5-TENANT G5-TENANT)
 
 # "<id> <litem> <gate>" per ledger row, sorted. Anchored on the row shape so a
-# waiver mentioned only in prose does not count as declared.
+# waiver mentioned only in prose does not count as declared. The parse is
+# waiver_rows() from infra/host/lib/common.sh - literally the function
+# gremion-verify reads the ledger with.
 ledger_triples() {
-  sed -n 's/^| `\([a-z0-9-]\{1,\}\)` | §L:\([0-9]\) | \(G[0-9]-[A-Z]\{1,\}\) |.*/\1 \2 \3/p' \
-      "$LEDGER" | sort
+  waiver_rows "$LEDGER" | awk -F'|' '{ print $1, $2, $3 }' | sort
 }
 
 @test "the ledger exists, is tracked, and the expectation arrays stay in step" {
@@ -117,4 +124,39 @@ VERIFY_BIN="${PROJECT_ROOT}/infra/host/bin/gremion-verify"
     run grep -nE "^[[:space:]]*ok .*${id}" "$VERIFY_BIN"
     [ "$status" -ne 0 ]
   done
+  # The id-by-id greps above cannot see the ONE mutation that turns all six
+  # waivers green at once: `waived() { ok "$@"; }`. Measured - under exactly
+  # that mutation every grep above stayed non-matching and this test passed,
+  # so it proved nothing about the behaviour it is named for. The printer is
+  # therefore pinned directly: it must exist, it must print its own line, and
+  # it must not delegate to the green printer.
+  run grep -cE '^waived\(\) \{ printf ' "$VERIFY_BIN"
+  [ "$output" = "1" ]
+  run grep -nE '^waived\(\).*[^a-zA-Z_](ok|info)[[:space:]]' "$VERIFY_BIN"
+  [ "$status" -ne 0 ] || { echo "waived() delegates to a printer that is not its own:" >&2; echo "$output" >&2; false; }
+}
+
+@test "one parser: the ledger row shape is defined once, in common.sh" {
+  # A guard that carries its own copy of the row pattern drifts looser than the
+  # reader and then counts rows the reader never saw. Measured before this was
+  # shared: one markdown-legal escaped pipe inside a cell cost gremion-verify
+  # the apex-dns waiver - five printed, waivers[] of length 5, exit 0 - while
+  # this suite still counted six and stayed green.
+  grep -qF 'waiver_rows() {' "${PROJECT_ROOT}/infra/host/lib/common.sh"
+  grep -qF 'waiver_candidate_count() {' "${PROJECT_ROOT}/infra/host/lib/common.sh"
+  grep -qF 'waiver_rows "$ledger"' "$VERIFY_BIN"
+  grep -qF 'waiver_rows "$LEDGER"' "$BATS_TEST_FILENAME"
+  # Neither the reader nor this guard may carry a second copy of the pattern.
+  # The needle is an ERE that matches the row sed WITHOUT matching its own
+  # source line - a literal needle for a pattern-ban always finds itself first,
+  # and a guard that only ever catches itself catches nothing.
+  local needle="sed -n .s/.\| \`"
+  # Vacuity: the needle must still find the ONE real copy, in common.sh.
+  run grep -cE "$needle" "${PROJECT_ROOT}/infra/host/lib/common.sh"
+  [ "$output" = "1" ]
+  run grep -nE "$needle" "$VERIFY_BIN" "$BATS_TEST_FILENAME"
+  [ "$status" -ne 0 ] || { echo "a second copy of the ledger row pattern:" >&2; echo "$output" >&2; false; }
+  # The reader measures the parse against the candidate count rather than
+  # against a floor of one row.
+  grep -qF 'parsed == candidates' "$VERIFY_BIN"
 }

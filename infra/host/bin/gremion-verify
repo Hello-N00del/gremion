@@ -63,15 +63,21 @@ load_waivers() {
     [[ -f "$ledger" ]] \
         || die "signed waiver ledger absent from the release tree: ${ledger} (spec B §1.4)" 2
     # mapfile, not a pipeline: the reader must run in THIS shell so a parse
-    # failure below can still die() the program rather than a subshell.
-    # shellcheck disable=SC2016  # the sed script is deliberately literal:
-    # its backreferences are sed's, not the shell's, and must not expand here.
-    mapfile -t GREMION_WAIVERS < <(
-        sed -n 's/^| `\([a-z0-9-]\{1,\}\)` | §L:\([0-9]\) | \(G[0-9]-[A-Z]\{1,\}\) | \([^|]*\) |.*/\1|\2|\3|\4/p' \
-            "$ledger"
-    )
-    (( ${#GREMION_WAIVERS[@]} > 0 )) \
+    # failure below can still die() the program rather than a subshell. The row
+    # pattern itself lives in common.sh, so the guard that pins the ledger
+    # parses it with the SAME parser and can never be more permissive.
+    mapfile -t GREMION_WAIVERS < <(waiver_rows "$ledger")
+
+    # A POST-CONDITION, not a floor. `> 0` is satisfied by ONE surviving row,
+    # and mapfile < <(…) throws the reader's exit status away, so a parse that
+    # dropped five of six rows printed a shorter table and still exited 0.
+    # Counting the candidate rows independently makes a dropped row loud.
+    local parsed=${#GREMION_WAIVERS[@]} candidates
+    candidates="$(waiver_candidate_count "$ledger")"
+    (( parsed > 0 )) \
         || die "waiver ledger parsed to zero rows — the row shape changed: ${ledger}" 2
+    (( parsed == candidates )) \
+        || die "waiver ledger: ${candidates} row(s) look like waivers, ${parsed} parsed — a row the reader cannot read is a waiver nobody is told about: ${ledger}" 2
 }
 
 # A third printer beside ok()/bad(): dim, never green, never counted as a pass.
