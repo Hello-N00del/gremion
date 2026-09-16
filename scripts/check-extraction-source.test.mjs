@@ -26,6 +26,8 @@ import {
   checkExtractionSourceAgreement,
   checkVacuity,
   runChecks,
+  checkAssemblerWiring,
+  ASSEMBLER_PATH,
 } from './check-extraction-source.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -73,7 +75,7 @@ test('the parser refuses an uppercase or short SHA', () => {
   )
 })
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 const FIXTURES = join(ROOT, 'test/fixtures/extraction-source/agree')
@@ -163,4 +165,33 @@ test('a zero-module run is refused unless allowZero — it would pass vacuously'
 test('runChecks reports zero problems for the committed repo state plus the fixture pair', () => {
   assert.deepEqual(runChecks(ROOT, { modulesRoot: FIXTURES }).problems, [])
   assert.equal(runChecks(ROOT, { modulesRoot: FIXTURES }).frozen, FROZEN)
+})
+
+test('no assembler exists yet, so the wiring guard is silent', () => {
+  // scripts/assemble.mjs is shipped by B34-assembler-zero-modules. Until then
+  // the guard must NOT invent a failure — and must not be silent afterwards.
+  assert.equal(ASSEMBLER_PATH, 'scripts/assemble.mjs')
+  if (!existsSync(join(ROOT, ASSEMBLER_PATH))) assert.deepEqual(checkAssemblerWiring(ROOT), [])
+})
+
+test('the wiring guard goes RED for an assembler that does not import this check', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-root-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  writeFileSync(join(dir, 'scripts', 'assemble.mjs'), "console.log('assembling')\n")
+  assert.match(
+    checkAssemblerWiring(dir).join('\n'),
+    /scripts\/assemble\.mjs: exists but does not import \.\/check-extraction-source\.mjs/
+  )
+})
+
+test('the wiring guard passes for an assembler that imports it', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-root-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  writeFileSync(
+    join(dir, 'scripts', 'assemble.mjs'),
+    "import { runChecks } from './check-extraction-source.mjs'\nrunChecks(process.cwd(), {})\n"
+  )
+  assert.deepEqual(checkAssemblerWiring(dir), [])
 })

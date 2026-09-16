@@ -34,6 +34,8 @@ export {
   checkExtractionSourceAgreement,
 }
 
+export const ASSEMBLER_PATH = 'scripts/assemble.mjs'
+
 /**
  * Every <modulesRoot>/<id>/module.json, sorted by id. Malformed JSON is reported
  * as a problem rather than thrown: the guard must name the offending file.
@@ -74,6 +76,23 @@ export function checkVacuity(entries, { allowZero = false } = {}) {
   return []
 }
 
+/**
+ * scripts/assemble.mjs does not exist until B34-assembler-zero-modules ships it.
+ * The moment it does, it must call this guard: an assembler that never runs the
+ * agreement check is exactly the silent failure the freeze exists to prevent,
+ * and a promise in a spec is not a wiring.
+ */
+export function checkAssemblerWiring(root) {
+  const abs = join(root, ASSEMBLER_PATH)
+  if (!existsSync(abs)) return []
+  const src = readFileSync(abs, 'utf8')
+  if (!/from\s+['"]\.\/check-extraction-source\.mjs['"]/.test(src))
+    return [
+      `${ASSEMBLER_PATH}: exists but does not import ./check-extraction-source.mjs — the frozen-source agreement check would never run at assemble time`,
+    ]
+  return []
+}
+
 export function runChecks(root, { modulesRoot = null, allowZero = false } = {}) {
   const frozen = readFrozenExtractionSource(root)
   const entries = modulesRoot ? collectModuleJson(modulesRoot) : []
@@ -83,6 +102,7 @@ export function runChecks(root, { modulesRoot = null, allowZero = false } = {}) 
     problems: [
       ...(modulesRoot ? checkVacuity(entries, { allowZero }) : []),
       ...checkExtractionSourceAgreement(entries, frozen),
+      ...checkAssemblerWiring(root),
     ],
   }
 }
