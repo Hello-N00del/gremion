@@ -1106,6 +1106,16 @@ check('t1 every path the login theme references resolves on disk', () => {
   for (const s of styles[1].trim().split(/\s+/)) {
     if (!has(`${loginDir}/resources/${s}`)) missing.push(`theme.properties styles= names ${s}, absent at ${loginDir}/resources/${s}`)
   }
+  // The GENERATED export, while it still exists, is a second declaration of the
+  // same value. It is composed from the base template, so a rename that moves
+  // only the base leaves a fresh `--import-realm` boot pointing at a directory
+  // that is gone — the silent stock-theme fallback again, one file further out.
+  if (has('docker/keycloak/realm-export.json')) {
+    const gen = JSON.parse(read('docker/keycloak/realm-export.json')).loginTheme
+    if (gen !== theme) {
+      missing.push(`realm-export.json declares loginTheme "${gen}" but realm-export.base.json declares "${theme}" — regenerate it (make gen-realm)`)
+    }
+  }
   const ftls = themeFtls(theme)
   if (ftls.length === 0) return `found zero .ftl under ${loginDir} — the check would vacuously pass`
   for (const rel of ftls) {
