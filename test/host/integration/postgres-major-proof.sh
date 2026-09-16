@@ -2,17 +2,27 @@
 #
 # INTEGRATION (Docker) — B37: the pinned Postgres major is what actually RUNS.
 #
-# A green `make lint` proves the TAG in a file. This proves the BINARY: the
-# rendered compose image is pulled, the server reports its major, and the
-# pg_dump / pg_restore / psql clients the backup path execs
-# (infra/host/bin/gremion-backup:414-415, scripts/restore.sh:109,122) report the
-# same one. There is no dedicated backup image at f7ac826 — the client major
-# FOLLOWS the server pin through `docker compose exec`, and this proof is what
-# establishes that. Post-conditions on real output, never an exit code: every
-# check reads a value back and compares it, and an empty reading FAILS.
+# A green `make lint` proves the TAG in a file. This proves the SERVER: the
+# kernel base compose is rendered, its postgres service is STARTED with the real
+# mounts it declares, and the major is read back out of the running database —
+# together with the pg_dump / pg_restore / psql clients the backup path execs
+# (infra/host/bin/gremion-backup:414-415, scripts/restore.sh:109,122). There is
+# no dedicated backup image at f7ac826 — the client major FOLLOWS the server pin
+# through `docker compose exec`, and this proof is what establishes that.
 #
-# The pinned major is read from scripts/check-postgres-major.mjs, so this script
-# never restates it and cannot drift from docs/ops/postgres-major.md.
+# Why the server is started and not merely inspected: at major 18 the official
+# image moved PGDATA to /var/lib/postgresql/<major>/docker and its entrypoint
+# began refusing ANY mount at /var/lib/postgresql/data, empty or not
+# (docker-library/postgres PR 1259). A tree can carry the right tag in every
+# file, pass every text guard, and still crash-loop on `up`. Only a running
+# server distinguishes those two states, so step 5 is the load-bearing one.
+#
+# Post-conditions on real output, never an exit code: every check reads a value
+# back and compares it, and an empty reading FAILS.
+#
+# The pinned major and the expected data mount are read from
+# scripts/check-postgres-major.mjs, so this script never restates them and
+# cannot drift from docs/ops/postgres-major.md.
 #
 # Usage: test/host/integration/postgres-major-proof.sh
 # Exit:  0 proof green · 1 a proof failed · 2 missing precondition
@@ -25,10 +35,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 command -v docker >/dev/null || { echo "precondition: docker not on PATH"; exit 2; }
 command -v node >/dev/null || { echo "precondition: node not on PATH"; exit 2; }
 
-MAJOR="$(cd "$ROOT" && node -e \
-    "import('./scripts/check-postgres-major.mjs').then((m) => console.log(m.POSTGRES_MAJOR))")"
+read_const() {   # <exported name>
+    (cd "$ROOT" && node -e \
+        "import('./scripts/check-postgres-major.mjs').then((m) => console.log(m.${1}))")
+}
+MAJOR="$(read_const POSTGRES_MAJOR)"
+MOUNT="$(read_const POSTGRES_DATA_MOUNT)"
 [ -n "$MAJOR" ] || { echo "precondition: could not read POSTGRES_MAJOR"; exit 2; }
+[ -n "$MOUNT" ] || { echo "precondition: could not read POSTGRES_DATA_MOUNT"; exit 2; }
 WANT="postgres:${MAJOR}-alpine"
+
+# A project name of our own, so nothing here can collide with a running stack.
+PROJECT=b37-postgres-major-proof
+PROOF_VOLUME="${PROJECT}_pg_data"
 
 # `docker compose config` refuses to render without the git-ignored
 # legal/legal.env that the legal service's `env_file:` names — the same
@@ -42,7 +61,29 @@ if [ ! -f "$LEGAL_ENV" ]; then
     : >"$LEGAL_ENV"
     CREATED_LEGAL_ENV=true
 fi
+WORK="$(mktemp -d)"
+
+# `docker` is a Windows binary under Git Bash and cannot open an MSYS path such
+# as /tmp/tmp.XXXX, so every path handed TO docker goes through this first.
+host_path() {
+    case "${OSTYPE:-}" in msys*|cygwin*) cygpath -w "$1" ;; *) echo "$1" ;; esac
+}
+OVERLAY="${WORK}/proof-overlay.yml"
+OVERLAY_F="$(host_path "$OVERLAY")"
+
+# Every compose call of this proof. It cd's to $ROOT and names the compose file
+# RELATIVELY on purpose: $ROOT is an MSYS path under Git Bash and the Windows
+# docker binary cannot open one, so an absolute -f here fails — silently, if the
+# call is one whose failure is swallowed.
+# NOTE the missing `-v`: the kernel's volumes carry FIXED names
+# (docker-compose.yml:511 `pg-data: {name: gremion_pg_data}`), not
+# project-scoped ones, so `down -v` here would delete the operator's real
+# database. The proof volume is removed by name instead, and step 5 refuses to
+# run at all unless the rendered volume name really was overridden.
 cleanup() {
+    dc down --remove-orphans >/dev/null 2>&1 || true
+    docker volume rm -f "$PROOF_VOLUME" >/dev/null 2>&1 || true
+    rm -rf "$WORK"
     if [ "$CREATED_LEGAL_ENV" = true ]; then rm -f "$LEGAL_ENV"; fi
 }
 trap cleanup EXIT
@@ -52,40 +93,175 @@ major_of() {
     printf '%s\n' "$1" | sed -n 's/.*(PostgreSQL) \([0-9][0-9]*\).*/\1/p' | head -1
 }
 
-# 1. the RENDERED compose, not the source line
+# ── 1. the RENDERED compose, not the source line ───────────────────────────
+# EVERY rendered postgres image is read, not the first one: a second Postgres
+# service added below the first would otherwise be invisible to this proof.
 CFG="$(cd "$ROOT" && docker compose -f docker-compose.yml config 2>/dev/null)" \
     || { echo "precondition: docker compose config did not render"; exit 2; }
-IMG="$(printf '%s\n' "$CFG" \
-    | sed -n 's/^[[:space:]]*image:[[:space:]]*\(postgres:.*\)$/\1/p' | head -1)"
-[ -n "$IMG" ] \
+IMGS="$(printf '%s\n' "$CFG" \
+    | sed -n 's/^[[:space:]]*image:[[:space:]]*\(postgres:.*\)$/\1/p')"
+[ -n "$IMGS" ] \
     || { echo "FAIL: the rendered compose declares no postgres: image at all"; exit 1; }
-[ "$IMG" = "$WANT" ] \
-    || { echo "FAIL: rendered compose image is '${IMG}', expected ${WANT}"; exit 1; }
-echo "  ok  rendered compose: ${IMG}"
+while IFS= read -r img; do
+    [ "$img" = "$WANT" ] \
+        || { echo "FAIL: rendered compose image is '${img}', expected ${WANT}"; exit 1; }
+done <<<"$IMGS"
+echo "  ok  rendered compose: $(printf '%s' "$IMGS" | tr '\n' ' ')"
 
-# 2. the SERVER binary inside that image
-SRV="$(docker run --rm "$IMG" postgres --version)"
+# ── 2. the MOUNT the rendered compose declares for the data volume ─────────
+# The tag and the mount are one contract: the 18+ entrypoint refuses to start
+# against a mount at the pre-18 path, so a right tag on a wrong mount is a
+# stack that never boots.
+CFG_JSON="$(cd "$ROOT" && docker compose -f docker-compose.yml config --format json 2>/dev/null)" \
+    || { echo "precondition: docker compose config --format json did not render"; exit 2; }
+RENDERED_MOUNT="$(printf '%s' "$CFG_JSON" | node -e '
+let s = ""
+process.stdin.on("data", (d) => { s += d }).on("end", () => {
+  const cfg = JSON.parse(s)
+  const vols = (cfg.services.postgres.volumes || []).filter((v) => v.type === "volume")
+  console.log(vols.map((v) => v.target).join(" "))
+})')"
+[ "$RENDERED_MOUNT" = "$MOUNT" ] \
+    || { echo "FAIL: rendered postgres data mount is '${RENDERED_MOUNT}', expected ${MOUNT}"; exit 1; }
+echo "  ok  rendered data mount: ${RENDERED_MOUNT}"
+
+# ── 3. the SERVER binary inside that image ─────────────────────────────────
+SRV="$(docker run --rm "$WANT" postgres --version)"
 [ "$(major_of "$SRV")" = "$MAJOR" ] \
     || { echo "FAIL: server reports '${SRV}', expected major ${MAJOR}"; exit 1; }
-echo "  ok  server: ${SRV}"
+echo "  ok  server binary: ${SRV}"
 
-# 3. the CLIENTS the backup/restore path execs INSIDE that same image
+# ── 4. the CLIENTS the backup/restore path execs INSIDE that same image ────
 for bin in pg_dump pg_restore psql; do
-    V="$(docker run --rm "$IMG" "$bin" --version)"
+    V="$(docker run --rm "$WANT" "$bin" --version)"
     [ "$(major_of "$V")" = "$MAJOR" ] \
         || { echo "FAIL: ${bin} reports '${V}', expected major ${MAJOR}"; exit 1; }
     echo "  ok  ${bin}: ${V}"
 done
 
-# 4. the ONE standalone backup-client image in the tree (k8s production overlay)
+# ── 5. THE RUNNING SERVER, on the mounts the kernel really declares ────────
+# Everything above this line is satisfied by a stack that cannot boot. This is
+# the step that is not.
+BASE_VOLUME="$(printf '%s' "$CFG_JSON" | node -e '
+let s = ""
+process.stdin.on("data", (d) => { s += d }).on("end", () => {
+  const cfg = JSON.parse(s)
+  console.log((cfg.volumes["pg-data"] || {}).name || "")
+})')"
+cat >"$OVERLAY" <<OVERLAY
+# The ONLY thing this proof changes about the kernel compose: the data volume
+# gets a proof-scoped name, so the operator's real database is neither read nor
+# removed. Image, mount, environment and the init script stay exactly as shipped.
+volumes:
+  pg-data:
+    name: ${PROOF_VOLUME}
+OVERLAY
+[ -n "$BASE_VOLUME" ] && [ "$BASE_VOLUME" != "$PROOF_VOLUME" ] \
+    || { echo "FAIL: refusing to run — the proof volume is not distinct from '${BASE_VOLUME}'"; exit 1; }
+
+dc() { (cd "$ROOT" && docker compose -p "$PROJECT" -f docker-compose.yml \
+        -f "$OVERLAY_F" "$@"); }
+
+# Proof-local credentials and database names, exported so they win over any
+# .env the operator happens to have in the repo root. The databases below are
+# created by docker/postgres/init-databases.sh, the kernel's own init SQL —
+# which makes this the first thing in the tree to run kernel SQL on the pin.
+export POSTGRES_USER=postgres
+export POSTGRES_PASSWORD=b37-proof-not-a-secret
+export KEYCLOAK_DB_NAME=keycloak  KEYCLOAK_DB_PASSWORD=b37-proof-not-a-secret
+export GREMION_DB_NAME=gremion    GREMION_DB_PASSWORD=b37-proof-not-a-secret
+export CONTROL_DB_NAME=control    CONTROL_DB_PASSWORD=b37-proof-not-a-secret
+export PUBLIC_DB_PASSWORD=b37-proof-not-a-secret
+
+# A leftover container from an earlier run would be RECREATED rather than built
+# fresh, and a recreate carries the previous container's mounts for any path the
+# image declares as a VOLUME. That is state leakage that can make this step pass
+# on a compose file whose mount is wrong, so the clean slate is ASSERTED, not
+# assumed: the container is torn down, the volume removed, and both facts read
+# back before anything starts.
+dc down --remove-orphans >/dev/null 2>&1 || true
+docker volume rm -f "$PROOF_VOLUME" >/dev/null 2>&1 || true
+if docker volume inspect "$PROOF_VOLUME" >/dev/null 2>&1; then
+    echo "FAIL: ${PROOF_VOLUME} still exists after removal — refusing to prove anything on leftover state"
+    exit 1
+fi
+LEFTOVER="$(docker ps -aq --filter "name=^${PROJECT}-postgres" | tr -d '\r\n')"
+[ -z "$LEFTOVER" ] \
+    || { echo "FAIL: a container of project ${PROJECT} survived teardown (${LEFTOVER})"; exit 1; }
+
+dc up -d --force-recreate --renew-anon-volumes postgres >/dev/null 2>&1 \
+    || { echo "FAIL: 'docker compose up -d postgres' did not start the service"; dc logs postgres | tail -20; exit 1; }
+
+# The mounts the container REALLY got, read off the running container. If the
+# only mount into the postgres tree is not the one the compose file declares,
+# nothing below this line would be measuring the shipped configuration.
+MOUNTS="$(docker inspect "$(dc ps -q postgres)" \
+    --format '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' \
+    | grep '^/var/lib/postgresql' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+[ "$MOUNTS" = "$MOUNT" ] \
+    || { echo "FAIL: the running container's Postgres mounts are '${MOUNTS}', expected exactly '${MOUNT}'"; exit 1; }
+echo "  ok  running container mounts: ${MOUNTS}"
+
+READY=false
+for _ in $(seq 1 60); do
+    if dc exec -T postgres pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1; then READY=true; break; fi
+    sleep 1
+done
+if [ "$READY" != true ]; then
+    echo "FAIL: the postgres service never became ready on ${WANT} at mount ${MOUNT}"
+    dc ps --format '{{.Name}} {{.Image}} {{.Status}}'
+    dc logs postgres 2>&1 | tail -25
+    exit 1
+fi
+
+# 5a. the major the RUNNING server reports — 180006 -> 18
+VERNUM="$(dc exec -T postgres psql -U "$POSTGRES_USER" -Atc 'show server_version_num' | tr -d '\r')"
+RUNNING_MAJOR="$(( VERNUM / 10000 ))"
+[ "$RUNNING_MAJOR" = "$MAJOR" ] \
+    || { echo "FAIL: the running server reports major ${RUNNING_MAJOR} (server_version_num=${VERNUM}), expected ${MAJOR}"; exit 1; }
+echo "  ok  running server: major ${RUNNING_MAJOR} (server_version_num=${VERNUM})"
+
+# 5b. the data directory is ON the mounted volume. A PGDATA outside it would
+#     mean the cluster lives on the container's writable layer and is destroyed
+#     on every recreate — which is exactly what a relocated PGDATA plus an
+#     unchanged mount produces where the entrypoint does not refuse outright.
+DATADIR="$(dc exec -T postgres psql -U "$POSTGRES_USER" -Atc 'show data_directory' | tr -d '\r')"
+case "$DATADIR" in
+    "$MOUNT"|"$MOUNT"/*) ;;
+    *) echo "FAIL: data_directory is '${DATADIR}', which is not on the mounted volume ${MOUNT}"; exit 1 ;;
+esac
+ON_DISK="$(dc exec -T postgres cat "${DATADIR}/PG_VERSION" | tr -d '\r')"
+[ "$ON_DISK" = "$MAJOR" ] \
+    || { echo "FAIL: ${DATADIR}/PG_VERSION says '${ON_DISK}', expected ${MAJOR}"; exit 1; }
+echo "  ok  data directory: ${DATADIR} (PG_VERSION ${ON_DISK}) under ${MOUNT}"
+
+# 5c. the kernel's own init SQL ran on this major
+DBS="$(dc exec -T postgres psql -U "$POSTGRES_USER" -Atc \
+    'select datname from pg_database order by 1' | tr -d '\r')"
+for db in "$KEYCLOAK_DB_NAME" "$GREMION_DB_NAME" "$CONTROL_DB_NAME"; do
+    printf '%s\n' "$DBS" | grep -qx "$db" \
+        || { echo "FAIL: docker/postgres/init-databases.sh did not create '${db}' on major ${MAJOR} (got: $(printf '%s' "$DBS" | tr '\n' ' '))"; exit 1; }
+done
+echo "  ok  kernel init SQL on major ${MAJOR}: ${KEYCLOAK_DB_NAME}, ${GREMION_DB_NAME}, ${CONTROL_DB_NAME} created"
+
+# 5d. the clients INSIDE the running container, which is what gremion-backup
+#     and scripts/restore.sh actually exec
+for bin in pg_dump psql; do
+    V="$(dc exec -T postgres "$bin" --version | tr -d '\r')"
+    [ "$(major_of "$V")" = "$MAJOR" ] \
+        || { echo "FAIL: ${bin} inside the running service reports '${V}', expected major ${MAJOR}"; exit 1; }
+    echo "  ok  ${bin} inside the running service: ${V}"
+done
+
+# ── 6. the ONE standalone backup-client image in the tree (k8s overlay) ────
 K8S="$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(postgres:[^[:space:]]*\).*$/\1/p' \
     "${ROOT}/k8s/overlays/production/patches/backup-cronjob.yaml" | head -1)"
 [ "$K8S" = "$WANT" ] \
     || { echo "FAIL: backup cronjob client image is '${K8S}', expected ${WANT}"; exit 1; }
 echo "  ok  k8s backup cronjob client: ${K8S}"
 
-# 5. the host backup and restore paths take their client from the SERVER
-#    container, so the pin covers them. Assert that contract on the real text.
+# ── 7. the host backup and restore paths take their client from the SERVER ─
+#      container, so the pin covers them. Assert that contract on the real text.
 BACKUP="${ROOT}/infra/host/bin/gremion-backup"
 # The single quotes are the point: these are the LITERAL variable names the
 # backup path writes, matched as fixed strings, not values to expand here.
@@ -105,4 +281,4 @@ if ! grep -qF 'docker compose exec -T postgres psql' "${ROOT}/scripts/restore.sh
 fi
 echo "  ok  host backup/restore clients run inside the pinned server image"
 
-echo "postgres-major proof GREEN — major ${MAJOR}, server and clients agree"
+echo "postgres-major proof GREEN — major ${MAJOR} runs from ${MOUNT}, server and clients agree"
