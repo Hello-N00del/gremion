@@ -43,6 +43,13 @@ KC_BASE="${KEYCLOAK_BASE_URL:-http://localhost:8082/auth}"
 # run configures; an unset value is a fatal misconfiguration, not a default.
 REALM="${KEYCLOAK_REALM:?KEYCLOAK_REALM must be set — name the realm to configure (see .env.example)}"
 
+# B-01 guard: the realm this run configures and the realm gremion-ui logs in
+# against must be the SAME realm. Without this check a .env whose
+# AUTH_KEYCLOAK_ISSUER was renamed and whose KEYCLOAK_REALM was not would send
+# the client-secret writes below to a realm nobody authenticates against, and
+# nothing would log an error. Both values were exported by the parser above.
+bash scripts/check-realm-env.sh
+
 info()    { echo "[configure-keycloak] $*"; }
 success() { echo "[configure-keycloak] OK: $*"; }
 error()   { echo "[configure-keycloak] ERROR: $*" >&2; exit 1; }

@@ -210,7 +210,11 @@ re-pointed at PgBouncer.
 ## Keycloak & OIDC
 
 The realm is named by the last path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>`
-below) and carries two clients: **`gremion-ui`** (the app, Auth.js)
+below), and `.env`'s `KEYCLOAK_REALM` must name that same realm — it is what the
+dev/ops scripts hand the Admin API. `make validate-env` fails when the two
+disagree (`scripts/check-realm-env.sh`); before that guard existed the mismatch
+was silent, and `configure-keycloak-clients.sh` would reset the client secrets
+of a realm nobody logs into. The realm carries two clients: **`gremion-ui`** (the app, Auth.js)
 and **`gremion-admin`** (the admin REST service account).
 B-01: **no realm is imported at boot.** The realm is COMPOSED from
 `docker/keycloak/realm-export.base.json` by `buildTenantRealmDoc` and created

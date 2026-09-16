@@ -363,3 +363,8 @@ validate-env:
 		exit 1; \
 	fi
 	@echo "  .env: OK (no placeholders found)"
+	@# B-01: KEYCLOAK_REALM and the /realms/ segment of AUTH_KEYCLOAK_ISSUER
+	@# name ONE realm. Disagreement is silent and is a WRITE — see
+	@# scripts/check-realm-env.sh.
+	@bash scripts/check-realm-env.sh .env
+	@echo "  realm: OK (KEYCLOAK_REALM agrees with AUTH_KEYCLOAK_ISSUER)"

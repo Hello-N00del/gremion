@@ -193,6 +193,26 @@ Central identity provider (OIDC/SSO). Admin UI:
 | `KEYCLOAK_ADMIN` | `admin` | Bootstrap admin username (`KC_BOOTSTRAP_ADMIN_USERNAME`) |
 | `KEYCLOAK_ADMIN_PASSWORD` | (`CHANGE_ME_keycloak_admin`) | Bootstrap admin password |
 
+### KEYCLOAK_REALM
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `KEYCLOAK_REALM` | `gremion` | The realm a dev/ops script addresses over the Keycloak Admin API |
+
+B-01: no realm is imported at boot. Every realm is created by tenant-create and
+named after the tenant slug, so a script that talks to the Admin API has to be
+told which realm it means — `scripts/configure-keycloak-clients.sh` treats an
+unset value as fatal rather than defaulting.
+
+`KEYCLOAK_REALM` and the `/realms/<name>` segment of `AUTH_KEYCLOAK_ISSUER` name
+**one** realm. Disagreement is silent and it is a WRITE:
+`configure-keycloak-clients.sh` would rewrite the confidential client secrets of
+the realm `KEYCLOAK_REALM` names while every login goes to the issuer's realm,
+and nothing logs an error. `scripts/check-realm-env.sh` compares them; it runs
+from `make validate-env` and from `configure-keycloak-clients.sh` before the
+first Admin-API write. It passes when `KEYCLOAK_REALM` is unset (the issuer is
+then the only source of truth) and when the issuer is not Keycloak-shaped.
+
 ### KC_ADMIN_ALLOWLIST_CIDRS
 
 - **Type:** String (comma-separated CIDRs)
