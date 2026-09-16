@@ -29,13 +29,22 @@ extraction-source: f276af5925abacdcfd05f6613fc11afff2d804c5
   refused. The agreement check itself lives in
   `scripts/lib/extraction-source.mjs` and is imported — never re-implemented —
   by the shared schema validator.
-- The guard refuses to pass over nothing. Arguments are parsed strictly, so an
-  unknown flag or a `--modules-root` whose value was dropped is an error rather
-  than a silently ignored token; a `--modules-root` that is not a directory is
-  an error even under `--allow-zero`; and a run that inspects no `module.json`
-  at all must say `--allow-zero` and is reported as doc-only, never as
-  agreement. The zero-module assemble passes `--modules-root <dir> --allow-zero`
-  explicitly.
+- The guard refuses to pass over nothing, and refuses to pass over a subset.
+  Arguments are parsed strictly, so an unknown flag or a `--modules-root` whose
+  value was dropped is an error rather than a silently ignored token; a
+  `--modules-root` that is not a directory is an error even under
+  `--allow-zero`; and a run that inspects no `module.json` at all must say
+  `--allow-zero` and is reported as doc-only, never as agreement.
+- Every **directory** under the modules root is a module, and a module
+  directory that carries no `module.json` is refused by name. A manifest that
+  was never written — or written as `Module.json`, `module.jsonc`,
+  `module.json.tmpl` — is the strongest form of the straddle this file exists to
+  refuse, because nothing in that module echoes the frozen SHA at all. So
+  `--allow-zero` means "the root holds no module directory" (the zero-module
+  assemble, which passes `--modules-root <dir> --allow-zero` explicitly), never
+  "no manifests happened to be found", and the success line counts module
+  directories: `N of N module directories under <dir> carry an agreeing
+  module.json`.
 
 Changing this SHA re-opens the split: each module repository's blob-equality
 check is taken against it, and the StuRa tree's archive record names it.

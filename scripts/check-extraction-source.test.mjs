@@ -84,6 +84,10 @@ function scratchModules(spec) {
   const dir = mkdtempSync(join(tmpdir(), 'b00-modules-'))
   for (const [id, body] of Object.entries(spec)) {
     mkdirSync(join(dir, id), { recursive: true })
+    // body === null creates the module DIRECTORY and no manifest — the shape an
+    // extraction that never wrote module.json leaves behind. It must be a
+    // problem, never a silent skip: that is round 2's HIGH.
+    if (body === null) continue
     writeFileSync(
       join(dir, id, 'module.json'),
       typeof body === 'string' ? body : JSON.stringify(body, null, 2)
@@ -242,7 +246,7 @@ test('the CLI refuses a flag-name typo rather than silently ignoring it', () => 
 test('the CLI accepts the --modules-root=<dir> equals form', () => {
   const r = runCli([`--modules-root=${FIXTURES}`])
   assert.equal(r.code, 0, `stderr was: ${r.stderr}`)
-  assert.match(r.stdout, /2 module\.json/)
+  assert.match(r.stdout, /2 of 2 module directories/)
 })
 
 test('the CLI with no arguments refuses instead of reporting agreement over zero manifests', () => {
@@ -339,4 +343,60 @@ test('the zero-module assemble arm is allowed but is not reported as agreement',
   const refused = runCli(['--modules-root', dir])
   assert.equal(refused.code, 1)
   assert.match(refused.stderr, /would pass vacuously/)
+})
+
+// ── "inspects a subset reads as OK" — round 2's HIGH ───────────────────────
+//
+// Round 1's hole was "inspects nothing reads as OK". One level down: a module
+// DIRECTORY that carries no module.json was skipped by the collector, so a
+// modules root holding two modules and one manifest printed
+// `OK — …; 1 module.json … agree` and exited 0, and a root full of
+// manifest-less module directories read as "zero-module assemble accepted".
+// A module whose extraction never wrote a manifest — or wrote `Module.json`,
+// `module.jsonc`, `module.json.tmpl` — is exactly the straddle the freeze
+// exists to refuse, so it must be a problem and the success line must name the
+// number of module DIRECTORIES, not the number of manifests that happened to
+// be found.
+
+test('a module directory with no module.json is a problem, not a silent skip', (t) => {
+  const dir = scratchModules({
+    users: { schemaVersion: 1, id: 'users', extractionSource: FROZEN },
+    calendar: null,
+  })
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const entries = collectModuleJson(dir)
+  assert.equal(entries.length, 2, `the collector must see both module directories: ${JSON.stringify(entries)}`)
+  assert.match(
+    checkExtractionSourceAgreement(entries, FROZEN).join('\n'),
+    /calendar\/: no module\.json/
+  )
+})
+
+test('the CLI refuses a modules root whose module directories are not all covered', (t) => {
+  const dir = scratchModules({
+    users: { schemaVersion: 1, id: 'users', extractionSource: FROZEN },
+    calendar: null,
+  })
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const r = runCli(['--modules-root', dir])
+  assert.doesNotMatch(r.stdout, /OK/, `stdout was: ${r.stdout}`)
+  assert.match(r.stderr, /calendar\/: no module\.json/)
+  assert.equal(r.code, 1)
+})
+
+test('--allow-zero means "no module directories", never "no manifests were found"', (t) => {
+  const dir = scratchModules({ users: null, calendar: null })
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const r = runCli(['--modules-root', dir, '--allow-zero'])
+  assert.doesNotMatch(r.stdout, /zero-module assemble accepted/, `stdout was: ${r.stdout}`)
+  assert.doesNotMatch(r.stdout, /OK/, `stdout was: ${r.stdout}`)
+  assert.match(r.stderr, /users\/: no module\.json/)
+  assert.match(r.stderr, /calendar\/: no module\.json/)
+  assert.equal(r.code, 1)
+})
+
+test('the success line counts module directories, not manifests that happened to exist', () => {
+  const r = runCli(['--modules-root', FIXTURES])
+  assert.equal(r.code, 0, `stderr was: ${r.stderr}`)
+  assert.match(r.stdout, /2 of 2 module directories under .* carry an agreeing module\.json/)
 })

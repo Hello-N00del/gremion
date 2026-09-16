@@ -45,7 +45,8 @@ export function readFrozenExtractionSource(root = KERNEL_ROOT) {
 
 /**
  * Absent, malformed, or not equal to the frozen SHA — and the explicit pairwise
- * report. `manifests` is a list of { id, path, extractionSource, parseError }:
+ * report. `manifests` is a list of
+ * { id, path, extractionSource, parseError, missing?, readError? }:
  * collectModuleJson produces it from disk, and D2's validateDistManifest maps
  * each module.json it is validating onto the same shape. The second argument is
  * optional so the one-argument form `checkExtractionSourceAgreement(manifests)`
@@ -56,6 +57,21 @@ export function checkExtractionSourceAgreement(manifests, frozen = readFrozenExt
   const problems = []
   const seen = new Map() // sha -> first module.json that carried it
   for (const e of manifests) {
+    // A module directory the collector could not stat, and a module directory
+    // that carries NO module.json, are both refusals — never skips. "The
+    // extraction wrote no manifest" is the strongest form of the straddle this
+    // contract exists to refuse: nothing in that module echoes the frozen
+    // source, so nothing downstream would notice it came from another commit.
+    if (e.readError) {
+      problems.push(`${e.path}: unreadable — ${e.readError}`)
+      continue
+    }
+    if (e.missing) {
+      problems.push(
+        `${e.id}/: no module.json — the extraction wrote no manifest, so nothing in that module echoes the frozen source ${frozen}`
+      )
+      continue
+    }
     if (e.parseError) {
       problems.push(`${e.path}: not parseable JSON — ${e.parseError}`)
       continue

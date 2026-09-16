@@ -56,10 +56,23 @@ function isModulesDir(modulesRoot) {
 }
 
 /**
- * Every <modulesRoot>/<id>/module.json, sorted by id. Malformed JSON is reported
- * as a problem rather than thrown: the guard must name the offending file.
- * Only "extractionSource" is read here — the module.json SCHEMA is
- * D2-module-json-and-dist-schema's, and this guard owns exactly one key.
+ * One entry per module DIRECTORY under <modulesRoot>, sorted by id — not one
+ * per module.json that happened to exist. Round 2 shipped the latter, and a
+ * root holding two module directories and one manifest printed
+ * "OK ... 1 module.json ... agree": the count read as coverage of a root it did
+ * not cover, and a module whose extraction wrote no manifest (or wrote
+ * `Module.json` / `module.jsonc` / `module.json.tmpl`) was invisible to the
+ * guard. So a directory with no `module.json` is carried as `{ missing: true }`
+ * and checkExtractionSourceAgreement refuses it. Nothing under the root is
+ * skipped silently: an entry that cannot even be stat'ed (a dangling symlink)
+ * becomes `{ readError }` rather than an unhandled ENOENT. A plain FILE beside
+ * the module directories is not a module and is the one thing ignored.
+ *
+ * Malformed JSON is reported as a problem rather than thrown: the guard must
+ * name the offending file. Only "extractionSource" is read here — the
+ * module.json SCHEMA is D2-module-json-and-dist-schema's, and this guard owns
+ * exactly one key.
+ *
  * A root that is absent or is not a directory yields no entries and no throw;
  * checkVacuity is what refuses it, so a path typo cannot read as "empty".
  */
@@ -68,9 +81,33 @@ export function collectModuleJson(modulesRoot) {
   const entries = []
   for (const id of readdirSync(modulesRoot).sort()) {
     const dir = join(modulesRoot, id)
-    if (!statSync(dir).isDirectory()) continue
+    let isDir = false
+    try {
+      isDir = statSync(dir).isDirectory()
+    } catch (err) {
+      // A dangling symlink, or a race with a writer. Never a skip — the guard
+      // names the entry it could not read.
+      entries.push({
+        id,
+        path: id,
+        extractionSource: undefined,
+        parseError: null,
+        readError: err.message,
+      })
+      continue
+    }
+    if (!isDir) continue
     const file = join(dir, 'module.json')
-    if (!existsSync(file)) continue
+    if (!existsSync(file)) {
+      entries.push({
+        id,
+        path: `${id}/module.json`,
+        extractionSource: undefined,
+        parseError: null,
+        missing: true,
+      })
+      continue
+    }
     let parsed = null
     let parseError = null
     try {
@@ -89,9 +126,13 @@ export function collectModuleJson(modulesRoot) {
 }
 
 /**
- * A run over zero module.json passes vacuously; only the zero-module assemble
- * may ask for that, and it must ask with --allow-zero. `modulesRoot` is passed
- * so the three ways of inspecting nothing stay distinguishable:
+ * A run over zero module DIRECTORIES passes vacuously; only the zero-module
+ * assemble may ask for that, and it must ask with --allow-zero. The collector
+ * yields one entry per module directory, so `entries.length` is the number of
+ * modules present: --allow-zero now means "the root holds no module directory"
+ * and can no longer be satisfied by a root full of module directories that
+ * carry no manifest. `modulesRoot` is passed so the three ways of inspecting
+ * nothing stay distinguishable:
  *   - a root that is not a directory (typo, unexpanded variable, a file) — a
  *     problem ALWAYS, because --allow-zero means "no modules yet", never
  *     "wherever you pointed me does not exist";
@@ -107,7 +148,7 @@ export function checkVacuity(entries, { allowZero = false, modulesRoot = null } 
   if (entries.length > 0 || allowZero) return []
   return asked
     ? [
-        `no module.json found under --modules-root ${modulesRoot} — the agreement check would pass vacuously (pass --allow-zero for the zero-module assemble)`,
+        `no module directory under --modules-root ${modulesRoot} — the agreement check would pass vacuously (pass --allow-zero for the zero-module assemble)`,
       ]
     : [
         'no --modules-root given — the agreement check would pass vacuously over zero module.json (pass --allow-zero to check the doc and the assembler wiring only)',
@@ -205,12 +246,16 @@ if (isMain) {
     // The success line says what was actually inspected. "N module.json agree"
     // over zero manifests was the round-1 defect; a line nobody can misread as
     // coverage is the fix, not a comment saying it is fine.
+    // The line names the number of module DIRECTORIES, not the number of
+    // manifests that happened to be found: "1 module.json agree" over a root
+    // holding two modules was round 2's HIGH, a count read as coverage.
+    const withManifest = entries.filter((e) => e.missing !== true && !e.readError).length
     const summary =
       modulesRoot === null
         ? 'doc + assembler wiring only, no module.json inspected'
         : entries.length === 0
-          ? `no module.json under ${modulesRoot} — zero-module assemble accepted via --allow-zero`
-          : `${entries.length} module.json under ${modulesRoot} agree`
+          ? `no module directory under ${modulesRoot} — zero-module assemble accepted via --allow-zero`
+          : `${withManifest} of ${entries.length} module directories under ${modulesRoot} carry an agreeing module.json`
     console.log(`[extraction-source] OK — frozen at ${frozen}; ${summary}`)
   }
 }
