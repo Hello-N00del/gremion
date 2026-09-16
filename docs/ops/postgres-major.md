@@ -20,7 +20,8 @@ One hour, per consumer, from the consumer's own published support matrix.
 | pg_dump / pg_restore client | 18 | 18 — the client shipped by the pinned server image; `docker run --rm postgres:18-alpine postgres --version` reported `postgres (PostgreSQL) 18.6` on 2026-09-16 | https://www.postgresql.org/docs/18/app-pgdump.html | 2026-09-16 |
 
 Upstream boundary, checked the same day: PostgreSQL 18 (18.6, released
-2025-09-25) is the newest major with a release; 19 has none, and
+2025-09-25) is the newest major with a **GA** release; 19 has none — it is
+still in beta, which is not a candidate for a pin — and
 the Docker official-images registry has no `19-alpine` tag (`docker manifest inspect` on it fails) —
 https://www.postgresql.org/support/versioning/ , read 2026-09-16.
 
@@ -89,9 +90,25 @@ Where that mount is declared, all of it guarded by
 - `test/host/integration/restore-proof.sh:81` and `:94`, so the restore fixture
   keeps mirroring the shipped compose
 
-The volume **name** is unchanged (`pg-data` → `gremion_pg_data`), so
-`RESTORE_VOLUME_SKIP_RE` in `infra/host/bin/gremion-restore-into:34`, which keys
-on the name and not the path, is unaffected.
+The volume **name** is unchanged (`pg-data` → `gremion_pg_data`): this unit
+renamed nothing, and the 18 layout only relocates the cluster to
+`18/docker` *inside* the same volume. `RESTORE_VOLUME_SKIP_RE` in
+`infra/host/bin/gremion-restore-into:34` keys on the volume NAME and not on
+the path, so nothing B37 did can have changed its behaviour.
+
+> ⚠ **That is not the same as saying the skip rule works, and this record does
+> not claim it does.** Its default ERE is
+> `(_pg-data|_postgres-data|_pgdata)$`, and `gremion_pg_data` matches none of
+> the three alternatives (`_pg_data` is neither `_pg-data` nor `_pgdata`) —
+> measured in bash on 2026-09-16: `gremion_pg_data` NOT skipped,
+> `gremion-state_pg-data` skipped. `docker-compose.yml` pins fixed volume
+> names while `gremion-backup` archives volumes under their real names, so an
+> assembled release tree that keeps the kernel's fixed names would have the
+> source cluster unpacked into the target volume rather than skipped. This is
+> **pre-existing** — it is not a B37 post-condition and B37 neither caused nor
+> fixed it — and it belongs to `B26-restore-and-erasure-proof` /
+> `B27-backup-host-wiring`, which own that script. Recorded here because this
+> is the page those units read the client major from.
 
 ## Fresh initdb, and the rule for any later bump
 
@@ -147,6 +164,37 @@ data plane (the 22-file manifest minus the three seed files
 `GREMION_DISABLE_SEEDS` skips, `db.ts:192`), and 22 tables in `public`. This is
 a one-off measurement, not a guard: the standing signal remains the workflow,
 whenever Actions are re-enabled.
+
+## Still open: the six leaf fragments — re-enter this unit after D6
+
+The post-condition "pinned in **every** leaf Postgres declared by a module
+compose fragment" is **not satisfied yet, and cannot be**: no
+`gremion-module-*` repo exists on disk, because `D5-remaining-module-repos` and
+`D6-leaf-images-and-compose-fragments` have not run. This is a scheduled
+dependency, not a skipped step, and it is written down here rather than left to
+memory.
+
+What is already done: the mechanism. `node scripts/check-postgres-major.mjs
+--tree <dir>` is built and proved against the three committed fixtures
+(`tree-clean` green, `tree-stale` RED on both the tag and the mount, `tree-empty`
+RED on the vacuity guard), so the moment the fragments exist the check is a
+one-liner per repo.
+
+What must still happen, **after D6**:
+
+1. Pin `<id>-postgres` in each of the six carried-forward leaves — board,
+   calendar, content, finance, newsletter, vault — and set each leaf's data
+   mount to `POSTGRES_DATA_MOUNT`, not the pre-18 path.
+2. Run `--tree gremion-module-<id>` per repo, and the stray check from the unit
+   file (a fragment with its own Postgres **outside** that inventory is pinned by
+   nobody, and a count alone would not notice).
+3. `found` must equal `expected` = 6. Zero is a failure, never a pass.
+
+Two plan-side corrections belong with this, and can only be made by whoever may
+write the plan: B37's registry row still reads wave 1 / "Depends on —", which
+contradicts this unit's own body and the plan's resolved question; and the same
+row's "Guards owned: none" is wrong — this unit owns `make lint-postgres-major`
+and the `--tree` half.
 
 The C-collation requirement for Synapse's database is `B31-postgres-c-collation`
 and is unaffected by the major.
