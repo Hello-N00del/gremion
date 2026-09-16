@@ -3,7 +3,7 @@
 # A-019 follow-up — dev-only CSP middleware (Traefik file provider).
 #
 # Background:
-#   PR #18 narrowed the Keycloak realm-export.json `browserSecurityHeaders`
+#   PR #18 narrowed the Keycloak realm template `browserSecurityHeaders`
 #   `contentSecurityPolicy` to `frame-ancestors 'self' https://${DOMAIN}`
 #   to close G-035. Because the realm export is shared between dev and
 #   prod, dev workstations can no longer iframe-embed Keycloak from

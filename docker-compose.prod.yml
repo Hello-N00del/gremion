@@ -85,8 +85,10 @@ services:
       # to-server callers (gremion-ui) reach KC at https://keycloak:8443 and trust
       # the internal CA. The plain :8080 listener stays for the Traefik edge hop,
       # which arrives with X-Forwarded-Proto=https (KC_PROXY_HEADERS above) and so
-      # satisfies sslRequired=all. The realm itself defaults to sslRequired=all
-      # (KC_REALM_SSL_REQUIRED in the base file).
+      # satisfies sslRequired=all. The realm itself is pinned to sslRequired=all
+      # by buildTenantRealmDoc when tenant-create composes it (B-01: the
+      # KC_REALM_SSL_REQUIRED compose knob and the boot import that read it are
+      # both deleted).
       KC_HTTPS_CERTIFICATE_FILE:     /opt/keycloak/certs/keycloak.crt
       KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/certs/keycloak.key
     volumes:

@@ -2,9 +2,10 @@
 # ============================================================
 # Gremion — Configure Keycloak OIDC client secrets
 #
-# Keycloak's --import-realm does NOT perform shell variable
-# substitution in the JSON file.  Run this script AFTER
-# Keycloak has started to set the real client secrets via the
+# B-01 (spec B T.4): no realm is imported at boot, so a realm's client
+# secrets are whatever the realm document carried when it was created.
+# Run this script AFTER Keycloak has started, and after the realm named by
+# KEYCLOAK_REALM exists, to (re)set the real client secrets through the
 # Admin REST API.
 #
 # Usage:
@@ -38,7 +39,16 @@ fi
 : "${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env}"
 
 KC_BASE="${KEYCLOAK_BASE_URL:-http://localhost:8082/auth}"
-REALM="sturaos"
+# B-01: there is no single boot realm any more. The caller names the realm this
+# run configures; an unset value is a fatal misconfiguration, not a default.
+REALM="${KEYCLOAK_REALM:?KEYCLOAK_REALM must be set — name the realm to configure (see .env.example)}"
+
+# B-01 guard: the realm this run configures and the realm gremion-ui logs in
+# against must be the SAME realm. Without this check a .env whose
+# AUTH_KEYCLOAK_ISSUER was renamed and whose KEYCLOAK_REALM was not would send
+# the client-secret writes below to a realm nobody authenticates against, and
+# nothing would log an error. Both values were exported by the parser above.
+bash scripts/check-realm-env.sh
 
 info()    { echo "[configure-keycloak] $*"; }
 success() { echo "[configure-keycloak] OK: $*"; }
@@ -86,9 +96,9 @@ rm -f "$KC_PW_FILE"
 [[ -z "$TOKEN" || "$TOKEN" == "null" ]] && error "Failed to obtain admin token"
 
 # ── Helper: assign a realm-management role to a service-account user ──
-# Realm imports do NOT carry service-account role mappings reliably in
-# Keycloak 26 — the SA is created but ends up with no realm-management
-# permissions. Calling this after import gives the SA admin access.
+# A created realm does NOT carry service-account role mappings reliably in
+# Keycloak 26 — the SA exists but ends up with no realm-management
+# permissions. Calling this afterwards gives the SA admin access.
 assign_realm_admin_to_sa() {
     local client_id="$1"
 
@@ -142,10 +152,11 @@ assign_realm_admin_to_sa() {
 # `acr.loa.map` attribute, points realm.browserFlow at the new flow, and ensures
 # the gremion-ui client has an acr protocol mapper.
 #
-# Why here (not realm-export.json): Keycloak's --import-realm SKIPS realms that
-# already exist, so the live realm never picks up flow/otpPolicy changes from the
-# JSON. This applies them to the running realm via the Admin API instead.
-# realm-export.json still carries them as the source of truth for FRESH installs.
+# Why here (not the realm template): B-01 deleted the boot import, and a realm
+# that already exists never picks up flow/otpPolicy changes from a JSON document
+# anyway. This applies them to the RUNNING realm via the Admin API.
+# realm-export.base.json still carries them as the source of truth for the realm
+# buildTenantRealmDoc composes for a FRESH tenant.
 #
 # Idempotent: the (non-atomic) flow build is guarded behind flow existence; the
 # realm-config and acr-mapper steps no-op on re-run. ORDER MATTERS — the flow

@@ -329,10 +329,11 @@ grep guard checks for missing `.enc.yaml` paths).
 
 ### Step 6 — Deploy
 
-> `k8s/base/kustomization.yaml` intentionally reads a few files from outside
-> its own directory tree (`docker/keycloak/realm-export.json` +
-> `substitute-realm-secrets.sh`, shared with docker-compose; the dev overlay's
-> `secretGenerator`s also read the root `.env` and `legal/legal.env`). Recent
+> `k8s/base/kustomization.yaml` no longer reads any file from outside its own
+> directory tree — B-01 deleted the Keycloak boot import, and with it the two
+> shared files (`realm-export.json` + the realm-secret substitution script) that
+> were the reason for the `docker/` generator root. The dev overlay's
+> `secretGenerator`s still read the root `.env` and `legal/legal.env`. Recent
 > kustomize/kubectl versions reject that by default
 > (`LoadRestrictionsRootOnly`), so every build needs
 > `--load-restrictor LoadRestrictionsNone`. `kubectl apply -k` does **not**
@@ -350,11 +351,12 @@ kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/aks | kubect
 ```
 
 > The Keycloak base realm export (`docker/keycloak/realm-export.json`,
-> imported via a `configMapGenerator`) contains **no users**. Hard-coded dev
-> accounts live only in the `dev` overlay; production overlays must not import
-> them. OIDC client-secret sentinels in the realm export are replaced at pod
-> start by the `substitute-realm-secrets` initContainer using values from the
-> `keycloak-secret` Secret.
+> B-01 (spec B §T.4): **no realm is imported at boot**. Keycloak comes up with
+> `master` only; every tenant realm is composed by `buildTenantRealmDoc` and
+> created over the Admin API at tenant-create time, which is also where the OIDC
+> client-secret sentinels are replaced — from the `keycloak-secret` Secret's
+> `GREMION_UI_OIDC_CLIENT_SECRET` / `GREMION_ADMIN_OIDC_CLIENT_SECRET`. No user,
+> realm document or dev-user ConfigMap is shipped by any overlay.
 
 ### Step 7 — Verify
 

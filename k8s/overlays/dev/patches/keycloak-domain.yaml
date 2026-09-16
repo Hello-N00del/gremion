@@ -1,11 +1,10 @@
 ##############################################################
-# Dev overlay — the apex host the imported Keycloak realm trusts.
+# Dev overlay — the apex host this deployment serves.
 #
 # Must match the host this overlay patches into the Traefik routes
-# (patches/ingressroutes-dev/*.yaml → stura.localhost). The realm template
-# carries it as the __APEX_DOMAIN__ sentinel; the substitute-realm-secrets
-# initContainer resolves it from DOMAIN and fails fast if it is unset.
-##############################################################
+# (patches/ingressroutes-dev/*.yaml → stura.localhost). B-01: nothing is
+# imported at boot and no realm exists until tenant-create runs; a tenant
+# realm's redirect URIs are built from this apex at tenant-create time.
 apiVersion: v1
 kind: ConfigMap
 metadata:

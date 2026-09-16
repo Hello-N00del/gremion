@@ -35,12 +35,12 @@ data:
   CONTROL_DATABASE_URL: "postgresql://control:__CONTROL_DB_PASSWORD__@postgres:5432/control"
 
   # Auth
-  AUTH_KEYCLOAK_ISSUER: "https://stura.example.com/auth/realms/sturaos"
+  AUTH_KEYCLOAK_ISSUER: "https://stura.example.com/auth/realms/gremion"
   # P2.1c T1 (#202): Docker-internal/in-cluster issuer URL for server-to-server
   # OIDC (token/userinfo/jwks/refresh). Previously unset under k8s, so those
   # calls fell back to the PUBLIC issuer and left the cluster. Same http
   # scheme rationale as KEYCLOAK_ADMIN_URL above.
-  AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/sturaos"
+  AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/gremion"
   AUTH_TRUST_HOST: "true"
 
   # Public URLs (prod overlay patches these to the real domain)

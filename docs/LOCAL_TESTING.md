@@ -128,10 +128,12 @@ A freshly-initialised kernel has no tenant yet, so the app responds with a
 4. Makes the helper scripts executable.
 5. Mints the internal TLS CA + Keycloak server cert (used only by the production
    overlay; harmless to pre-generate in dev).
-6. Ensures `docker/keycloak/realm-export.json` exists. The kernel ships a
-   committed **governance-only** realm (the `gremion-ui` and `gremion-admin` clients
-   only); it is only regenerated from module manifests when a vertical's
-   `config.json` is supplied (`CONFIG_PATH=… make gen-realm`).
+6. B-01: prepares no realm. Keycloak starts with `master` only; the
+   governance-only realm (the `gremion-ui` and `gremion-admin` clients) is
+   composed from `docker/keycloak/realm-export.base.json` and created at
+   tenant-create time. `CONFIG_PATH=… make gen-realm` writes a vertical's
+   composed template to the gitignored `docker/keycloak/realm-export.json` for
+   inspection only.
 7. Builds the images and starts `postgres`, `keycloak`, and `gremion-ui`, then
    waits for `gremion-ui` to become healthy.
 
@@ -329,10 +331,11 @@ Then `docker compose restart keycloak`.
 callback.
 
 **Fix:** In Keycloak Admin → the `<realm>` realm → **Clients** → `gremion-ui`, confirm
-the app's callback URL is listed under **Valid redirect URIs**. The committed
-`realm-export.json` includes the defaults; if it was overwritten, re-run
-`make setup` (regenerates nothing if `.env` exists but re-imports on a clean
-Keycloak volume) or add the URI manually.
+the app's callback URL is listed under **Valid redirect URIs**. The defaults come
+from `docker/keycloak/realm-export.base.json` and are stamped into the realm when
+tenant-create composes it (B-01: nothing is imported at boot, so re-running
+`make setup` does not restore them) — add the URI in the console, or recreate
+the realm.
 
 ---
 

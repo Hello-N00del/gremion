@@ -269,9 +269,13 @@ check('e4 the bare kustomize build emits nothing on stderr (no errors, no deprec
 })
 
 check('e5 the shared docker/ config files are still single-copy (nothing forked into k8s/)', () => {
-  if (!has('docker/keycloak/realm-export.json')) return 'docker/keycloak/realm-export.json missing'
+  // B-01 (spec B T.4): the boot import is gone. The one shared Keycloak file
+  // left is the per-tenant TEMPLATE, whose only consumer is buildTenantRealmDoc.
+  if (!has('docker/keycloak/realm-export.base.json')) {
+    return 'docker/keycloak/realm-export.base.json missing'
+  }
   const forked = walk(join(ROOT, 'k8s')).filter((f) =>
-    /(realm-export\.json|substitute-realm-secrets\.sh)$/.test(f)
+    /(realm-export(\.base)?\.json|substitute-realm-secrets\.sh)$/.test(f)
   )
   return forked.length
     ? `shared config forked into k8s/: ${forked.map((f) => relative(ROOT, f)).join(', ')}`
@@ -791,7 +795,8 @@ check('h1 no retired wire-root literal survives anywhere in the tree', () => {
 //
 // (h1) above requires a trailing dot, because it owns the NATS subject root.
 // That trailing dot is exactly how the login theme survived the public flip:
-// `themes/sturaos/`, `loginTheme: "sturaos"` and `realms/sturaos` are the token
+// `themes/sturaos/`, `loginTheme: "sturaos"` and a realm path segment named
+// after the retired product were the token
 // standing alone, and h1 walked past every one of them while reporting clean.
 // This rule is the token as an IDENTIFIER, with no dot required.
 //
@@ -807,13 +812,21 @@ check('h1 no retired wire-root literal survives anywhere in the tree', () => {
 // .json`, `sturaos-users-0.json`, `sturaos_realm` and `themes/sturaos-v2/` all
 // read as clean. That is the same species of hole as h1's trailing dot — the
 // hole this whole check exists to close — and it was live: the five carriers in
-// docker/keycloak/substitute-realm-secrets.sh and the two installed-hook
-// markers in install-git-hooks.mjs were invisible to it. A separator is a
-// boundary, not part of the identifier.
+// the Keycloak realm-secret substitution script (deleted by B-01 together with
+// the whole boot-import path) and the two installed-hook markers in
+// install-git-hooks.mjs were invisible to it. A separator is a boundary, not
+// part of the identifier.
 const RETIRED_PRODUCT_TOKEN = /(?<![A-Za-z0-9])sturaos(?![A-Za-z0-9])/
-// ALLOW-LIST - three kinds of entry, each with its reason, and it does not grow
+// ALLOW-LIST - four kinds of entry, each with its reason, and it does not grow
 // without one:
 //  - this file, which must be able to spell what it forbids;
+//  - gremion-ui/src/lib/server/tenant/provisioner/realm-identity.test.ts,
+//    which is the B-01 companion guard: it runs `git grep` over the tracked
+//    tree and asserts the retired realm path segment occurs in no non-doc,
+//    non-vitest file. It carries the token for the same reason this file
+//    does - a guard has to name what it forbids - and for no other: the file
+//    is ~100 lines long and exists only for that post-condition, so the
+//    exemption hides nothing a reader would not expect to find there;
 //  - gremion-ui/scripts/install-git-hooks.mjs, whose MARKER_BEGIN/MARKER_END
 //    (:29-30) delimit the block ALREADY WRITTEN into every developer's
 //    .git/hooks/pre-commit. Changing the marker orphans every installed block:
@@ -830,6 +843,7 @@ const RETIRED_PRODUCT_TOKEN = /(?<![A-Za-z0-9])sturaos(?![A-Za-z0-9])/
 //    match anyway; 008, 042 and 048 carry no `stura` token whatsoever.
 const PRODUCT_TOKEN_EXEMPT_PATHS = [
   /^scripts\/kernel-hygiene-check\.mjs$/,
+  /^gremion-ui\/src\/lib\/server\/tenant\/provisioner\/realm-identity\.test\.ts$/,
   /^gremion-ui\/scripts\/install-git-hooks\.mjs$/,
   /^gremion-ui\/migrations\/008_public_portal\.sql$/,
   /^gremion-ui\/migrations\/042_protocol_resolution_required_majority\.sql$/,
@@ -850,47 +864,16 @@ const PRODUCT_TOKEN_EXEMPT_PATHS = [
 // Entries carry no line numbers on purpose: a line number drifts under every
 // edit above it, the exact text does not.
 //
-// EVERY entry below has ONE cause, opened 2026-09-16: the realm a running
-// Keycloak actually serves is still named with the retired token, and renaming
-// it is a deployment-identity migration owned by
-// B1a-realm-identity-and-boot-import, which deletes the boot import,
-// realm-export.json and substitute-realm-secrets.sh outright. This unit owns
-// the login theme. It must not invent a realm identity another unit is about to
-// decide, and it must not hold the whole suite red while it waits: h2 shares
-// one exit code with 44 other checks - i1/i2 (retired operator hosts in shipped
-// deploy and env templates), g3-g6 (k8s supply chain and :latest pinning), j1
-// (the k8s apex/escaped-domain sentinel) - and `make lint` stops at the first
-// failing target, so a permanently red h2 would silently retire all of them.
+// The list opened on 2026-09-16 with 29 entries under ONE cause: the realm a
+// running Keycloak served was still named with the retired token, and renaming
+// it was a deployment-identity migration owned by
+// B1a-realm-identity-and-boot-import. B1a has landed - it deleted the boot
+// import, the generated realm export and the realm-secret substitution script,
+// and renamed the realm path segment in every remaining carrier - so the cause
+// is closed and every entry is gone. The list stays here, empty, because that
+// is what an EMPTY ledger looks like: a new carrier now fails h2 on the day it
+// is written, and adding an entry back requires writing its cause down first.
 const PRODUCT_TOKEN_PENDING = [
-  [".env.example", "AUTH_KEYCLOAK_ISSUER=http://keycloak:8080/auth/realms/sturaos", 1],
-  [".env.example", "KEYCLOAK_ISSUER_URL=http://keycloak:8080/auth/realms/sturaos", 1],
-  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_BASE: https://council.example/auth/realms/sturaos", 1],
-  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_ISSUER: http://localhost/realms/sturaos", 1],
-  [".github/workflows/gremion-ui.yml", "AUTH_KEYCLOAK_ISSUER: https://council.example/auth/realms/sturaos", 1],
-  ["docker-compose.override.yml", "# KC_HOSTNAME includes /auth, so iss = http://localhost:8082/auth/realms/sturaos.", 1],
-  ["docker-compose.override.yml", "AUTH_KEYCLOAK_BASE: \"http://localhost:8082/auth/realms/sturaos\"", 1],
-  ["docker-compose.override.yml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
-  ["docker-compose.override.yml", "AUTH_KEYCLOAK_ISSUER: \"http://localhost:8082/auth/realms/sturaos\"", 1],
-  ["docker-compose.yml", "AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/sturaos", 1],
-  ["docker/keycloak/realm-export.base.json", "\"realm\": \"sturaos\",", 1],
-  ["docker/keycloak/realm-export.json", "\"realm\": \"sturaos\",", 1],
-  ["docker/keycloak/substitute-realm-secrets.sh", "REALM_DST=\"${IMPORT_DIR}/sturaos-realm.json\"", 1],
-  ["docker/keycloak/substitute-realm-secrets.sh", "cp /opt/keycloak-init/dev-users.json \"${IMPORT_DIR}/sturaos-users-0.json\"", 1],
-  ["docker/keycloak/substitute-realm-secrets.sh", "echo \"[substitute-realm-secrets] dev composition — importing dev users (sturaos-users-0.json).\"", 1],
-  ["docker/keycloak/substitute-realm-secrets.sh", "rm -f \"${IMPORT_DIR}/sturaos-users-0.json\"", 2],
-  ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_INTERNAL: \"http://keycloak:8080/auth/realms/sturaos\"", 1],
-  ["k8s/base/gremion-ui/configmap.yaml", "AUTH_KEYCLOAK_ISSUER: \"https://stura.example.com/auth/realms/sturaos\"", 1],
-  ["scripts/configure-keycloak-clients.sh", "REALM=\"sturaos\"", 1],
-  ["scripts/dev-configure.sh", "\"${KC_BASE}/admin/realms/sturaos/clients/${uuid}\")", 1],
-  ["scripts/dev-configure.sh", "\"${KC_BASE}/admin/realms/sturaos/clients?clientId=${client_id}\" \\", 1],
-  ["scripts/dev-configure.sh", "-X PUT \"${KC_BASE}/admin/realms/sturaos/clients/${uuid}\" \\", 1],
-  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_BASE\"       \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
-  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_INTERNAL\"   \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
-  ["scripts/dev-configure.sh", "set_env \"AUTH_KEYCLOAK_ISSUER\"     \"http://localhost:${KC_PORT}/auth/realms/sturaos\"", 1],
-  ["test/integration/health.bats", "@test \"Keycloak sturaos realm is reachable\" {", 1],
-  ["test/integration/health.bats", "[[ \"$output\" == *'\"realm\":\"sturaos\"'* ]]", 1],
-  ["test/integration/health.bats", "run curl -sf http://localhost:8082/auth/realms/sturaos", 1],
-  ["test/integration/oidc.bats", "REALM=\"sturaos\"", 1],
 ]
 
 check('h2 the retired product token survives nowhere as a bare identifier', () => {
@@ -1361,6 +1344,177 @@ check('t5 every integration bats suite is named by make test-integration and by 
   }
   return missing.length
     ? `${missing.length} orphaned integration suite reference(s): ${missing.join(' | ')}`
+    : null
+})
+
+// ── (e6) the production Secret template carries every client secret the ──────
+//        per-tenant realm template still needs
+//
+// B-01 deleted the boot import, so nothing substitutes the realm template's
+// `__*_CLIENT_SECRET__` sentinels at container start any more — buildTenantRealmDoc
+// places them at tenant-create time, reading the values out of the keycloak
+// Secret. A key dropped from k8s/overlays/production/secrets/_templates.example.yaml
+// is therefore SILENT: kustomize renders, Keycloak starts, and the miss only
+// surfaces much later as a tenant whose client has no secret. Post-condition:
+// every client-secret sentinel the realm template carries has a stringData key
+// of the same name in the keycloak Secret document.
+check('e6 every client-secret sentinel in the realm template has a key in the production keycloak Secret', () => {
+  const tmplPath = 'k8s/overlays/production/secrets/_templates.example.yaml'
+  if (!has(tmplPath)) return `${tmplPath} missing - the check would vacuously pass`
+  const base = read('docker/keycloak/realm-export.base.json')
+  const sentinels = [
+    ...new Set([...base.matchAll(/__([A-Z0-9_]*_CLIENT_SECRET)__/g)].map((m) => m[1])),
+  ]
+  if (sentinels.length === 0) {
+    return 'realm-export.base.json carries zero client-secret sentinels - the check would vacuously pass'
+  }
+  const doc = /name:[ \t]*keycloak-secret[^]*?(?=\n---)/.exec(read(tmplPath))
+  if (!doc) return `${tmplPath} declares no keycloak-secret document - the check would vacuously pass`
+  const missing = sentinels.filter((k) => !new RegExp(`^[ \t]+${k}:`, 'm').test(doc[0]))
+  return missing.length
+    ? `${tmplPath} keycloak-secret lacks ${missing.length} client-secret key(s) buildTenantRealmDoc needs: ${missing.join(', ')}`
+    : null
+})
+
+// ── (t6) the CI integration job creates the realm it tests ──────────────────
+//
+// B-01 deleted the boot import, so the realm test/integration/login-theme.bats
+// reads the SERVED login page from has to be created by the job itself. The
+// first draft of this wiring derived the realm under test from the realm
+// TEMPLATE's `realm` field — which B-01 turns into the `__REALM_NAME__`
+// sentinel. Nothing creates a realm by that name, login-theme.bats skips only
+// on an EMPTY value, and the step rejects skips on purpose, so the whole
+// live-Keycloak step went red for a reason that reads as a theme bug.
+//
+// Post-conditions, read off ci.yml itself: the realm under test is never
+// derived from the template, and the job creates a realm BEFORE the line that
+// runs the suite.
+check('t6 the CI integration job creates the realm under test and never derives it from the realm template', () => {
+  const ci = read('.github/workflows/ci.yml')
+  const start = ci.indexOf('\n  integration-test:\n')
+  if (start < 0) return 'ci.yml declares no integration-test job - the check would vacuously pass'
+  const rest = ci.slice(start + 1)
+  const next = /\n {2}[A-Za-z0-9_-]+:\n/.exec(rest.slice(1))
+  const job = next ? rest.slice(0, next.index + 1) : rest
+  const lines = job.split('\n').filter((l) => !/^\s*#/.test(l))
+
+  const assigns = lines.filter((l) => /\bTHEME_REALM=/.test(l))
+  if (assigns.length === 0) return 'the integration job never sets THEME_REALM - the check would vacuously pass'
+  const fromTemplate = assigns.filter((l) => /realm-export(\.base)?\.json/.test(l))
+  if (fromTemplate.length) {
+    return `THEME_REALM is derived from the realm TEMPLATE, whose realm field is the __REALM_NAME__ sentinel: ${fromTemplate.join(' | ').trim()}`
+  }
+
+  const batsIdx = lines.findIndex((l) => /\bbats\b/.test(l) && l.includes('test/integration/login-theme.bats'))
+  if (batsIdx < 0) return 'the integration job runs login-theme.bats nowhere - the check would vacuously pass'
+  const createIdx = lines.findIndex((l) => /-X POST\b/.test(l) && /\/admin\/realms\b/.test(l))
+  if (createIdx < 0) {
+    return 'the integration job never creates a realm (no POST to /admin/realms), so login-theme.bats has no realm to read'
+  }
+  if (createIdx > batsIdx) {
+    return `the realm is created at line ${createIdx + 1} of the job, AFTER login-theme.bats runs at line ${batsIdx + 1}`
+  }
+
+  const fixture = 'test/integration/fixtures/render-realm-fixture.py'
+  if (job.includes('render-realm-fixture.py') && !has(fixture)) {
+    return `the integration job calls ${fixture}, which does not exist`
+  }
+  return null
+})
+
+// ── (e7) nothing still tells a reader that Keycloak imports a realm at boot ──
+//
+// B-01 deleted the boot import. The kernel is PUBLIC, so a doc line that still
+// says "Keycloak imports this file at boot" is a shipped instruction that does
+// not work — and the compose/k8s change that removed the mechanism cannot fail
+// because of it. Two legs:
+//   A. `--import-realm` survives ONLY in the guards that assert its absence.
+//   B. no tracked file AFFIRMS the import in prose. The pattern pairs `import`
+//      with a realm noun on one line and drops lines that negate it, so the
+//      B-01 sentences that say no realm is imported are not hits.
+const IMPORT_REALM_CARRIERS = new Set([
+  'test/integration/health.bats',        // asserts the rendered compose has none
+  'scripts/kernel-hygiene-check.mjs',    // this file
+  'docker/keycloak/README.md',           // states the boot import is gone
+  'docs/deployment.md',                  // same, as the B-01 note
+])
+
+function trackedGrep(args) {
+  const res = spawnSync('git', ['grep', '-n', ...args], { cwd: ROOT, encoding: 'utf8' })
+  // exit 1 with empty stdout = no match; anything else with stderr is a real error.
+  if (res.status > 1) throw new Error(`git grep failed: ${res.stderr.trim()}`)
+  return (res.stdout || '').split('\n').filter(Boolean)
+}
+
+check('e7 no tracked file outside the guards still describes the deleted Keycloak boot import', () => {
+  const argHits = trackedGrep(['-e', '--import-realm'])
+  if (argHits.length === 0) return 'no file names --import-realm at all - the guards that assert its absence are gone, so the check is vacuous'
+  const strayArg = argHits.filter((l) => !IMPORT_REALM_CARRIERS.has(l.split(':')[0]))
+
+  // Affirmative prose, two shapes: an import claim tied to BOOT time, and the
+  // specific retired claims about the realm export. `kc.sh import` is excluded:
+  // importing a realm into a RUNNING Keycloak by hand (the restore runbook) is
+  // a live operation, not the deleted boot path.
+  // git grep is line-based, so `.` cannot cross a line.
+  const BOOT_CLAIM = 'import[a-z]*.{0,80}(at boot|at container start|at startup)|(at boot|at container start|at startup).{0,80}import[a-z]*'
+  const RETIRED_CLAIM = 'realm import|imports? the (kernel )?realm|realm-export.{0,40}is imported|substituted into .{0,40}realm-export'
+  // Scope is the WHOLE tracked tree, which is what this check's name promises.
+  // A directory allowlist here READ complete and was not: `.github/`, `k8s/`,
+  // `infra/` and `.env*` were unreachable, so affirmative claims stood in the
+  // public kernel while the check reported green (round-2 review finding).
+  // Widening it to `--` turned the check RED on four lines; they are fixed in
+  // the same commit.
+  const SCOPE = ['--']
+  const proseHits = [
+    ...trackedGrep(['-iE', BOOT_CLAIM, ...SCOPE]),
+    ...trackedGrep(['-iE', RETIRED_CLAIM, ...SCOPE]),
+  ].filter((l) => !/kc\.sh import/.test(l))
+  const stray = proseHits.filter((l) => {
+    const [file] = l.split(':')
+    if (IMPORT_REALM_CARRIERS.has(file)) return false
+    const text = l.slice(l.indexOf(':', l.indexOf(':') + 1) + 1)
+    // B-01 sentences state the NEGATIVE; those are the documentation we want.
+    return !/\b(no|not|never|nothing|deleted|removed|stopped)\b/i.test(text)
+  })
+
+  const problems = [...new Set([...strayArg, ...stray])].sort()
+  return problems.length
+    ? `${problems.length} line(s) still describe a boot-time realm import:\n    ${problems.join('\n    ')}`
+    : null
+})
+
+// ── (e8) docs/ENVIRONMENT.md documents no knob that no longer exists ────────
+//
+// B-01 deleted `KC_REALM_SSL_REQUIRED` from docker-compose.yml and from the dev
+// override, and docs/ENVIRONMENT.md went on documenting it - Type, Default,
+// Used by, Impact - one section above a paragraph the same commit corrected.
+// Nothing compared the two surfaces, so the file contradicted itself silently.
+// Post-condition: every environment variable with its own `### NAME` section in
+// docs/ENVIRONMENT.md still has at least one LIVE carrier outside docs/ - a
+// line that is not a comment. A knob whose only remaining carriers are comments
+// is documentation of a mechanism that was removed.
+check('e8 every env var with its own section in docs/ENVIRONMENT.md still has a live carrier', () => {
+  const doc = read('docs/ENVIRONMENT.md')
+  const documented = [...doc.matchAll(/^### ([A-Z][A-Z0-9_]{2,})$/gm)].map((m) => m[1])
+  if (documented.length === 0) return 'docs/ENVIRONMENT.md declares no ### VAR sections - the check would vacuously pass'
+  const dead = []
+  for (const name of documented) {
+    const res = spawnSync('git', ['grep', '-n', '-e', name, '--', ':!docs/', ':!*.md'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    })
+    if (res.status > 1) throw new Error(`git grep failed for ${name}: ${res.stderr.trim()}`)
+    const live = (res.stdout || '')
+      .split('\n')
+      .filter(Boolean)
+      .filter((l) => {
+        const text = l.slice(l.indexOf(':', l.indexOf(':') + 1) + 1)
+        return !/^\s*(#|\/\/|--|\*)/.test(text)
+      })
+    if (live.length === 0) dead.push(name)
+  }
+  return dead.length
+    ? `docs/ENVIRONMENT.md documents ${dead.length} knob(s) with no live carrier left (comments only): ${dead.join(', ')}`
     : null
 })
 

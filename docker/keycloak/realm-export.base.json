@@ -1,5 +1,5 @@
 {
-  "realm": "sturaos",
+  "realm": "__REALM_NAME__",
   "displayName": "Gremion",
   "enabled": true,
   "sslRequired": "__SSL_REQUIRED__",
@@ -67,7 +67,7 @@
       },
       {
         "name": "member",
-        "description": "Standard StuRa member"
+        "description": "Standard council member"
       },
       {
         "name": "council-admin",
@@ -82,7 +82,7 @@
   "clients": [
     {
       "clientId": "gremion-ui",
-      "name": "StuRa UI",
+      "name": "Gremion UI",
       "description": "SvelteKit frontend — Auth.js OIDC client",
       "enabled": true,
       "protocol": "openid-connect",
@@ -171,7 +171,7 @@
     },
     {
       "clientId": "gremion-admin",
-      "name": "StuRa Admin Service Account",
+      "name": "Gremion Admin Service Account",
       "description": "Service account for gremion-ui server-side admin operations (user/group management)",
       "enabled": true,
       "protocol": "openid-connect",

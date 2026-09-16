@@ -7,28 +7,24 @@ import { MODULE_MANIFESTS } from './registry'
 
 const KC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'docker', 'keycloak')
 // The shipped base template carries the deployment apex host as the
-// `__APEX_DOMAIN__` sentinel (resolved at Keycloak boot by
-// docker/keycloak/substitute-realm-secrets.sh, and by loadBaseRealmDoc() in
-// scripts/tenant-provision.ts). Resolve it to this suite's example apex so the
-// fixtures exercise the same shape a real deployment gets.
+// `__APEX_DOMAIN__` sentinel (resolved per tenant by buildTenantRealmDoc, and by
+// loadBaseRealmDoc() in scripts/tenant-provision.ts). Resolve it to this suite's
+// example apex so the fixtures exercise the same shape a real deployment gets.
 const TEST_APEX = 'council.example'
 const base = JSON.parse(
   readFileSync(join(KC, 'realm-export.base.json'), 'utf-8').split('__APEX_DOMAIN__').join(TEST_APEX),
-)
-const original = JSON.parse(
-  readFileSync(join(KC, 'realm-export.json'), 'utf-8').split('__APEX_DOMAIN__').join(TEST_APEX),
 )
 const cfg = () => ({ modules: {} }) as any
 
 // Carve note: the governance-only kernel ships exactly the two always-on
 // manifests (core, governance), neither of which declares a realm fragment, so
-// composeRealm injects nothing — the composed output equals the committed
-// governance-only realm-export.json. The carved-out finance module's
-// ref-finanzen groups + `finance` realm role are gone from both the base
-// template and the generated export.
+// composeRealm injects nothing and the composed output equals the template.
+// B-01: there is no committed realm-export.json to compare against any more.
+// The carved-out finance module's ref-finanzen groups + `finance` realm role are
+// gone from the base template.
 describe('composeRealm (P0.2) — governance-only kernel', () => {
-  it('output deep-equals the committed realm-export.json (kernel adds no module realm fragments)', () => {
-    expect(composeRealm(base, MODULE_MANIFESTS, cfg())).toEqual(original)
+  it('output deep-equals the base template (kernel adds no module realm fragments)', () => {
+    expect(composeRealm(base, MODULE_MANIFESTS, cfg())).toEqual(base)
   })
 
   it('carries the four kernel realm roles and no carved-out finance role', () => {
@@ -50,7 +46,6 @@ describe('composeRealm (P0.2) — governance-only kernel', () => {
 
   it('base template carries no council.example path-wildcard redirect URIs (#240)', () => {
     expect(JSON.stringify(base)).not.toContain('https://council.example/*')
-    expect(JSON.stringify(original)).not.toContain('https://council.example/*')
   })
 
   it('every app client in the base template pins fullScopeAllowed:false (#254)', () => {

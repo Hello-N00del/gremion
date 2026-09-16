@@ -96,7 +96,7 @@ healthy.
 | `openssl is required to generate secrets` | `openssl` not on PATH | Install OpenSSL |
 | `Invalid domain name` | Domain prompt got a bad value | Re-run; press Enter for `localhost`, or enter a valid hostname |
 | `Some CHANGE_ME_ placeholders were not replaced` | `sed` incompatibility | Check your `sed`; on macOS the script uses BSD `sed -i ''` automatically |
-| `realm-export.json is missing` | Realm export not generated | Ensure `docker/keycloak/realm-export.json` is present (the committed governance realm), or supply a `config/config.json` and re-run |
+| `gen-realm: set CONFIG_PATH=...` | `make gen-realm` run without a vertical config | Supply `CONFIG_PATH=/path/to/config.json` or add `config/config.json`. Nothing needs `realm-export.json` to exist: B-01 deleted the boot import and the file is a gitignored generator output |
 
 ### `.env` already exists — secrets not regenerated
 
@@ -210,10 +210,16 @@ re-pointed at PgBouncer.
 ## Keycloak & OIDC
 
 The realm is named by the last path segment of `AUTH_KEYCLOAK_ISSUER` (`<realm>`
-below) and carries two clients: **`gremion-ui`** (the app, Auth.js)
-and **`gremion-admin`** (the admin REST service account). The realm is imported
-from `docker/keycloak/realm-export.json` at container start; OIDC client secrets
-are substituted in from `.env` by `substitute-realm-secrets.sh`.
+below), and `.env`'s `KEYCLOAK_REALM` must name that same realm — it is what the
+dev/ops scripts hand the Admin API. `make validate-env` fails when the two
+disagree (`scripts/check-realm-env.sh`); before that guard existed the mismatch
+was silent, and `configure-keycloak-clients.sh` would reset the client secrets
+of a realm nobody logs into. The realm carries two clients: **`gremion-ui`** (the app, Auth.js)
+and **`gremion-admin`** (the admin REST service account).
+B-01: **no realm is imported at boot.** The realm is COMPOSED from
+`docker/keycloak/realm-export.base.json` by `buildTenantRealmDoc` and created
+over the Admin API at tenant-create time, with the OIDC client secrets taken
+from `.env` at that point.
 
 ### Keycloak won't start
 
@@ -226,7 +232,7 @@ make shell-db -c '\l'                  # keycloak DB should exist
 |---|---|
 | Postgres not healthy | Keycloak `depends_on: postgres (service_healthy)` — fix Postgres first |
 | Wrong DB credentials | Check `.env`: `KEYCLOAK_DB_PASSWORD` |
-| Realm import fails | A required OIDC secret is empty — `substitute-realm-secrets.sh` fails fast; ensure `GREMION_UI_OIDC_CLIENT_SECRET` and `GREMION_ADMIN_OIDC_CLIENT_SECRET` are set |
+| Tenant-create fails on the realm | A required OIDC secret is empty — `buildTenantRealmDoc` throws; ensure `GREMION_UI_OIDC_CLIENT_SECRET` and `GREMION_ADMIN_OIDC_CLIENT_SECRET` are set |
 | Port 8082 in use | Change the dev mapping in `docker-compose.override.yml` |
 
 ```bash
@@ -274,12 +280,16 @@ Usually a redirect-URI or origin mismatch.
 3. For local dev, `make dev-configure` patches `gremion-ui/.env.local` and the
    Keycloak redirect URIs for you.
 
-> **Dev vs prod TLS:** dev runs Keycloak in `start-dev` over plain HTTP with the
-> realm at `sslRequired: external` (`KC_REALM_SSL_REQUIRED=external` in the
-> override). Production runs `start` with `sslRequired: all` and the
-> server-to-server hop over internal TLS (`https://keycloak:8443`). A login that
-> works in dev but 403s/redirects in prod is almost always missing internal-CA
-> trust (`NODE_EXTRA_CA_CERTS`) or an `sslRequired` mismatch.
+> **Dev vs prod TLS:** dev runs Keycloak in `start-dev` over plain HTTP, but
+> B-01 removed the `KC_REALM_SSL_REQUIRED` knob together with the boot import,
+> and `buildTenantRealmDoc` pins every realm it composes to `sslRequired: all`.
+> A dev realm therefore refuses plain-HTTP requests until you either trust the
+> internal CA or apply a per-realm delta:
+> `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh update realms/<realm> -s sslRequired=external`.
+> Production runs `start` with the server-to-server hop over internal TLS
+> (`https://keycloak:8443`). A login that works in dev but 403s/redirects in
+> prod is almost always missing internal-CA trust (`NODE_EXTRA_CA_CERTS`) or an
+> `sslRequired` mismatch.
 
 ---
 

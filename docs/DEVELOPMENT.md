@@ -144,7 +144,7 @@ For shell/infra tests (`make test-unit`, `make test-integration`) and the full U
 
 ## Keycloak
 
-The realm name is whatever the last path segment of `AUTH_KEYCLOAK_ISSUER` says; the realm document is composed per tenant from `docker/keycloak/realm-export.base.json`. The governance-only realm ships exactly two OIDC clients: `gremion-ui` (the app) and `gremion-admin` (the admin REST service account). Both client secrets are substituted into the realm file at boot by `docker/keycloak/substitute-realm-secrets.sh` from `.env` (`GREMION_UI_OIDC_CLIENT_SECRET`, `GREMION_ADMIN_OIDC_CLIENT_SECRET`) — `setup.sh` generates them.
+The realm name is whatever the last path segment of `AUTH_KEYCLOAK_ISSUER` says. `.env` also ships `KEYCLOAK_REALM`, which is the realm the dev/ops scripts address over the Admin API (`scripts/dev-configure.sh`, `scripts/configure-keycloak-clients.sh`) — the two name ONE realm, so renaming it means editing both. `scripts/check-realm-env.sh` (run by `make validate-env` and by `configure-keycloak-clients.sh` before it writes anything) fails the run when they disagree. The realm document is composed per tenant from `docker/keycloak/realm-export.base.json`. The governance-only realm ships exactly two OIDC clients: `gremion-ui` (the app) and `gremion-admin` (the admin REST service account). B-01: nothing is imported at boot — `buildTenantRealmDoc` substitutes both client secrets into the composed per-tenant realm document at tenant-create time, from `.env` (`GREMION_UI_OIDC_CLIENT_SECRET`, `GREMION_ADMIN_OIDC_CLIENT_SECRET`) — `setup.sh` generates them.
 
 ```
 Keycloak Admin: http://localhost:8082/auth/admin
@@ -259,7 +259,7 @@ make shell-db
 docker compose restart keycloak
 ```
 
-A realm-import failure usually means an empty `GREMION_UI_OIDC_CLIENT_SECRET` or `GREMION_ADMIN_OIDC_CLIENT_SECRET` — `substitute-realm-secrets.sh` fails fast if either is empty. Re-run `make setup` or `make keycloak-configure`.
+A tenant-create failure usually means an empty `GREMION_UI_OIDC_CLIENT_SECRET` or `GREMION_ADMIN_OIDC_CLIENT_SECRET` — `buildTenantRealmDoc` throws when a confidential client has no generated secret. Re-run `make setup` or `make keycloak-configure`.
 
 ### Port already in use
 

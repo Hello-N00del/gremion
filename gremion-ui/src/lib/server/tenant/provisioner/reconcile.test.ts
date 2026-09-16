@@ -21,7 +21,7 @@ import type { TenantStatus } from '../registry'
 const KC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', '..', 'docker', 'keycloak')
 // The shipped base template carries the deployment apex host as the
 // `__APEX_DOMAIN__` sentinel (resolved at Keycloak boot by
-// docker/keycloak/substitute-realm-secrets.sh, and by loadBaseRealmDoc() in
+// buildTenantRealmDoc at tenant-create time, and by loadBaseRealmDoc() in
 // scripts/tenant-provision.ts). Resolve it to this suite's example apex so the
 // fixtures exercise the same shape a real deployment gets.
 const TEST_APEX = 'council.example'
@@ -320,7 +320,7 @@ describe('(B) reconcileRealm — the DEFAULT realm legitimately keeps localhost 
   const DEFAULT_REALM = 'gremion-test'
   const DEFAULT_HOST = APEX // the default tenant host IS the apex (D-ISSUER-HOST)
   // The base gremion-ui URIs verbatim (localhost dev URIs + apex) — what the default
-  // realm legitimately carries (realm-export.json) and reconcile must NOT reject.
+  // realm legitimately carries (realm-export.base.json) and reconcile must NOT reject.
   const baseUi = (base.clients as any[]).find((c: any) => c.clientId === 'gremion-ui')
   const BASE_REDIRECT = [...baseUi.redirectUris]
   const BASE_WEB_ORIGINS = [...baseUi.webOrigins]

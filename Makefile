@@ -52,11 +52,8 @@ ps:
 setup:
 	@bash scripts/setup.sh
 
-# Generate docker/keycloak/realm-export.json from the module manifests + the
-# target vertical's config (modules.<id> = true/false). Disabled modules
-# contribute no groups/roles. Run BEFORE `docker compose up` (Keycloak imports
-# the file at boot). REQUIRES a config: reads CONFIG_PATH if set, else
-# ./config/config.json; with neither present it errors out (it does not no-op).
+# B-01: this writes the module-composed realm TEMPLATE to
+# docker/keycloak/realm-export.json (gitignored). Nothing imports it at boot.
 # Target a specific vertical: `CONFIG_PATH=/path/to/config.json make gen-realm`.
 gen-realm:
 	@test -n "$$CONFIG_PATH" -o -f config/config.json || { echo "gen-realm: set CONFIG_PATH=/path/to/config.json (or add config/config.json) to target a vertical" >&2; exit 1; }
@@ -129,7 +126,7 @@ test-unit:
 #
 # Scope is test/host/*.bats, which is what the image is provisioned for. The
 # kernel suites under test/*.bats also need python3 (test/configure-keycloak.bats
-# validates realm-export.json with `python3 -m json.tool`); they run under
+# validates realm-export.base.json with `python3 -m json.tool`); they run under
 # `make test-unit` on Debian and in CI, where python3 is present.
 test-host-docker:
 	@echo "Building the bats runner image..."
@@ -214,14 +211,14 @@ lint-sh:
 # Lint YAML files with yamllint
 lint-yaml:
 	@echo "Linting YAML files..."
-	@yamllint -c .yamllint.yml docker-compose.yml docker-compose.override.yml k8s/ docker/kustomization.yaml
+	@yamllint -c .yamllint.yml docker-compose.yml docker-compose.override.yml k8s/
 	@echo "  yamllint: OK"
 
 # Validate JSON files
 lint-json:
 	@echo "Validating JSON files..."
-	@python3 -m json.tool docker/keycloak/realm-export.json > /dev/null
-	@echo "  realm-export.json: valid"
+	@python3 -m json.tool docker/keycloak/realm-export.base.json > /dev/null
+	@echo "  realm-export.base.json: valid"
 
 # Validate Docker Compose config
 lint-compose:
@@ -366,3 +363,8 @@ validate-env:
 		exit 1; \
 	fi
 	@echo "  .env: OK (no placeholders found)"
+	@# B-01: KEYCLOAK_REALM and the /realms/ segment of AUTH_KEYCLOAK_ISSUER
+	@# name ONE realm. Disagreement is silent and is a WRITE — see
+	@# scripts/check-realm-env.sh.
+	@bash scripts/check-realm-env.sh .env
+	@echo "  realm: OK (KEYCLOAK_REALM agrees with AUTH_KEYCLOAK_ISSUER)"

@@ -10,7 +10,10 @@ load '../test_helper/common'
 PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 
 KEYCLOAK_URL="http://localhost:8082/auth"
-REALM="sturaos"
+# B-01: nothing is imported at boot, so `master` is the realm a freshly
+# started Keycloak serves. Point the probe at a realm that exists; a dev
+# tenant realm can be named through KEYCLOAK_REALM.
+REALM="${KEYCLOAK_REALM:-master}"
 
 # ---------------------------------------------------------------------------
 # Keycloak discovery document
@@ -46,10 +49,11 @@ REALM="sturaos"
 
 @test "Keycloak CSP narrows frame-ancestors to self + the deployment apex (G-035)" {
     # The realm template carries the apex host as the __APEX_DOMAIN__ sentinel,
-    # which substitute-realm-secrets.sh resolves from DOMAIN at Keycloak boot.
+    # which buildTenantRealmDoc resolves to the tenant host at provisioning time
+    # (B-01: nothing is substituted at Keycloak boot any more).
     # What G-035 asserts is the SHAPE: frame-ancestors is narrowed to self plus
     # that one host, and is never widened to a wildcard.
-    local realm="${PROJECT_ROOT}/docker/keycloak/realm-export.json"
+    local realm="${PROJECT_ROOT}/docker/keycloak/realm-export.base.json"
     grep -q "frame-ancestors 'self' https://__APEX_DOMAIN__" "$realm"
     ! grep -q "frame-ancestors 'self' [*]" "$realm"
 }

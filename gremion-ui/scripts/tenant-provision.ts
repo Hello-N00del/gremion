@@ -69,7 +69,7 @@ const apexDomain = () => reqEnv('DOMAIN')
 /** The base realm template ships the deployment apex host as the
  *  `__APEX_DOMAIN__` sentinel rather than a literal, so the public repo trusts
  *  no host the deployer does not own. The Keycloak container resolves it at boot
- *  via docker/keycloak/substitute-realm-secrets.sh; this is the SAME resolution
+ *  via the deleted boot-time substitution step; this is the SAME resolution
  *  for the provisioner, which reads the template directly. It must happen before
  *  the doc reaches realm-doc.ts: swapHost matches the apex authority literally,
  *  and restrictClientUris drops every URI whose host is not the tenant's, so an

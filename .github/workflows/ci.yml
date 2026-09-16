@@ -59,11 +59,6 @@ jobs:
           yamllint -c .yamllint.yml docker-compose.yml docker-compose.override.yml
           yamllint -c .yamllint.yml k8s/
 
-      - name: Validate JSON files
-        run: |
-          python3 -m json.tool docker/keycloak/realm-export.json > /dev/null
-          echo "realm-export.json: valid"
-
       # `files` in a workspace package.json is not only "what npm publish
       # sends": pnpm applies the same allowlist when it packs a workspace
       # dependency, and `pnpm deploy --prod --legacy` — how both runtime
@@ -631,21 +626,74 @@ jobs:
         run: |
           echo "Waiting for Keycloak..."
           # Health endpoint is on management port 9000 (not mapped); check the main
-          # API at /auth/realms/master — only available once realm import completes.
+          # API at /auth/realms/master — the built-in realm, which answers as soon
+          # as Keycloak has finished migrating its own database. B-01: no realm is
+          # created at boot, so master is the only one that exists at this point.
           timeout 300 bash -c 'until curl -sf http://localhost:8082/auth/realms/master 2>/dev/null | grep -q "\"realm\""; do sleep 5; printf "."; done'
           echo " ready"
+
+      - name: Provision the realm under test
+        run: |
+          # B-01 (spec B T.4): nothing is imported at boot any more, so this job
+          # creates the realm it tests. In production tenant-create composes it
+          # through buildTenantRealmDoc; until that entrypoint lands, the fixture
+          # renderer resolves the same template sentinels (realm name, apex
+          # domain, sslRequired, the confidential client secrets) and REFUSES to
+          # emit a document in which any survived. The realm CI tests is therefore
+          # the committed per-tenant template -- including its loginTheme, which
+          # is what login-theme.bats reads back off the SERVED page.
+          KEYCLOAK_REALM=$(grep -m1 '^KEYCLOAK_REALM=' .env | cut -d= -f2-)
+          KEYCLOAK_ADMIN=$(grep -m1 '^KEYCLOAK_ADMIN=' .env | cut -d= -f2-)
+          KEYCLOAK_ADMIN_PASSWORD=$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' .env | cut -d= -f2-)
+          # G-044: generated at runtime by the "Set up .env" step, so GitHub's
+          # own masking (declared secrets only) does not cover it.
+          echo "::add-mask::$KEYCLOAK_ADMIN_PASSWORD"
+          for v in KEYCLOAK_REALM KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is empty in .env - the realm under test cannot be created"
+              exit 1
+            fi
+          done
+          python3 test/integration/fixtures/render-realm-fixture.py             --realm "$KEYCLOAK_REALM" --apex ci.local > /tmp/ci-realm.json
+          TOKEN=$(curl -sf -X POST http://localhost:8082/auth/realms/master/protocol/openid-connect/token             -d grant_type=password -d client_id=admin-cli             --data-urlencode "username=${KEYCLOAK_ADMIN}"             --data-urlencode "password=${KEYCLOAK_ADMIN_PASSWORD}"             | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          if [ -z "$TOKEN" ]; then
+            echo "::error::could not obtain a Keycloak admin token from the master realm"
+            exit 1
+          fi
+          code=$(curl -s -o /tmp/ci-realm-create.out -w '%{http_code}'             -X POST http://localhost:8082/auth/admin/realms             -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json'             --data-binary @/tmp/ci-realm.json)
+          if [ "$code" != "201" ]; then
+            echo "::error::creating realm ${KEYCLOAK_REALM} answered HTTP ${code}"
+            cat /tmp/ci-realm-create.out
+            exit 1
+          fi
+          # Post-conditions, not the exit code: the realm answers on the public
+          # endpoint, and it carries a login theme - without one, every theme
+          # assertion in login-theme.bats would be measuring the stock fallback.
+          if ! curl -sf "http://localhost:8082/auth/realms/${KEYCLOAK_REALM}"                | grep -q "\"realm\":\"${KEYCLOAK_REALM}\""; then
+            echo "::error::realm ${KEYCLOAK_REALM} does not answer after creation"
+            exit 1
+          fi
+          theme=$(curl -sf -H "Authorization: Bearer ${TOKEN}"             "http://localhost:8082/auth/admin/realms/${KEYCLOAK_REALM}"             | python3 -c 'import json,sys; print(json.load(sys.stdin).get("loginTheme") or "")')
+          if [ -z "$theme" ]; then
+            echo "::error::realm ${KEYCLOAK_REALM} carries no loginTheme"
+            exit 1
+          fi
+          echo "created realm ${KEYCLOAK_REALM} (loginTheme=${theme})"
 
       - name: Run integration tests (health)
         run: |
           # login-theme.bats reads the realm's effective display name from the
           # Admin API and asserts the SERVED page renders it, so it needs the
           # realm under test and the admin credentials. Both are derived, never
-          # spelled: the realm name comes out of the realm template (so it
-          # tracks whatever the realm-identity work renames it to) and the
-          # credentials come out of the .env this job generated. Unset either
-          # and the suite SKIPS - and a skip is a green test, so this step
-          # asserts both the inputs and the absence of skips, not the exit code.
-          THEME_REALM=$(python3 -c 'import json; print(json.load(open("docker/keycloak/realm-export.base.json"))["realm"])')
+          # spelled: the realm is the one the previous step CREATED (named by
+          # .env's KEYCLOAK_REALM) and the credentials come out of the same
+          # .env. B-01: it is deliberately NOT read out of
+          # docker/keycloak/realm-export.base.json any more - that file's realm
+          # field is the `__REALM_NAME__` sentinel the provisioner overwrites,
+          # and no Keycloak ever has a realm by that name. Unset any input and
+          # the suite SKIPS - and a skip is a green test, so this step asserts
+          # the inputs and the absence of skips, not the exit code.
+          THEME_REALM=$(grep -m1 '^KEYCLOAK_REALM=' .env | cut -d= -f2-)
           KEYCLOAK_ADMIN=$(grep -m1 '^KEYCLOAK_ADMIN=' .env | cut -d= -f2-)
           KEYCLOAK_ADMIN_PASSWORD=$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' .env | cut -d= -f2-)
           export THEME_REALM KEYCLOAK_ADMIN KEYCLOAK_ADMIN_PASSWORD
@@ -663,6 +711,16 @@ jobs:
               echo "::error::$v resolved empty - login-theme.bats would skip, and a skip is green"
               exit 1
             fi
+            # An EMPTY value skips; an unresolved `__SENTINEL__` does not - it
+            # runs the suite against a realm nobody creates and fails six
+            # assertions for a reason that reads like a theme bug. Reject it
+            # here, where the message still names the cause.
+            case "${!v}" in
+              __*__)
+                echo "::error::$v is the unresolved template sentinel ${!v} - no realm by that name exists"
+                exit 1
+                ;;
+            esac
           done
           # One line on purpose: hygiene check t5 matches a bats invocation
           # line by line, so a continuation would hide a suite name from it.

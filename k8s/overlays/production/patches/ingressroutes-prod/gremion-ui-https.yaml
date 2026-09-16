@@ -34,8 +34,9 @@
 #     k8s/overlays/production/patches/keycloak-domain.yaml
 #
 # keycloak-domain.yaml is in that list for a reason: it carries the SAME apex
-# sentinel as DOMAIN for the Keycloak realm import, and the realm's redirect
-# URIs are built from it. Substitute the routes without it and Traefik serves
+# sentinel as DOMAIN for the Keycloak deployment, and every tenant realm's
+# redirect URIs are built from it at tenant-create time. Substitute the routes
+# without it and Traefik serves
 # your apex while Keycloak refuses every login on it.
 #
 # BOTH sentinels must resolve to the SAME domain — the second one is just the
