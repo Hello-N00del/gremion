@@ -74,6 +74,12 @@ ledger_triples() {
 @test "every gate id the ledger names is defined by the go-live gate document" {
   local gate
   [ -f "$GATE_DOC" ]
+  # A floor first: `while read … done < <(ledger_triples)` runs its body zero
+  # times when the parser returns nothing, and a loop that never ran reports
+  # the same green as a loop that checked six rows. This is the file's own
+  # documented failure class, so the promise below is measured against a count
+  # before it is measured row by row.
+  [ "$(ledger_triples | wc -l)" -eq 6 ]
   while read -r _ _ gate; do
     [ -n "$gate" ]
     grep -qF "## ${gate}" "$GATE_DOC" || { echo "invented gate id: ${gate}" >&2; false; }
@@ -82,6 +88,10 @@ ledger_triples() {
 
 @test "the ledger waives no item spec B keeps as a technical proof (L:3, L:7)" {
   local item
+  # Same floor, and it matters more here: this test's whole content is that
+  # something is ABSENT from the rows, so with no rows it asserts nothing at
+  # all while still printing ok.
+  [ "$(ledger_triples | wc -l)" -eq 6 ]
   while read -r _ item _; do
     [ "$item" != "3" ]
     [ "$item" != "7" ]
