@@ -1458,7 +1458,13 @@ check('e7 no tracked file outside the guards still describes the deleted Keycloa
   // git grep is line-based, so `.` cannot cross a line.
   const BOOT_CLAIM = 'import[a-z]*.{0,80}(at boot|at container start|at startup)|(at boot|at container start|at startup).{0,80}import[a-z]*'
   const RETIRED_CLAIM = 'realm import|imports? the (kernel )?realm|realm-export.{0,40}is imported|substituted into .{0,40}realm-export'
-  const SCOPE = ['--', 'docs/', '*.md', 'scripts/', 'Makefile', 'docker-compose.yml', 'docker-compose.override.yml', 'docker-compose.prod.yml']
+  // Scope is the WHOLE tracked tree, which is what this check's name promises.
+  // A directory allowlist here READ complete and was not: `.github/`, `k8s/`,
+  // `infra/` and `.env*` were unreachable, so affirmative claims stood in the
+  // public kernel while the check reported green (round-2 review finding).
+  // Widening it to `--` turned the check RED on four lines; they are fixed in
+  // the same commit.
+  const SCOPE = ['--']
   const proseHits = [
     ...trackedGrep(['-iE', BOOT_CLAIM, ...SCOPE]),
     ...trackedGrep(['-iE', RETIRED_CLAIM, ...SCOPE]),

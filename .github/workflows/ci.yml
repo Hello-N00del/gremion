@@ -626,7 +626,9 @@ jobs:
         run: |
           echo "Waiting for Keycloak..."
           # Health endpoint is on management port 9000 (not mapped); check the main
-          # API at /auth/realms/master — only available once realm import completes.
+          # API at /auth/realms/master — the built-in realm, which answers as soon
+          # as Keycloak has finished migrating its own database. B-01: no realm is
+          # created at boot, so master is the only one that exists at this point.
           timeout 300 bash -c 'until curl -sf http://localhost:8082/auth/realms/master 2>/dev/null | grep -q "\"realm\""; do sleep 5; printf "."; done'
           echo " ready"
 
