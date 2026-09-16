@@ -28,7 +28,7 @@ extraction-source: f276af5925abacdcfd05f6613fc11afff2d804c5
   # assert it landed: exit 1 while the remote has no such tag, while the tag
   # is lightweight, or while it peels to a commit other than the one above
   node scripts/check-extraction-source.mjs --allow-zero \
-    --verify-remote https://github.com/Hello-N00del/StuRaOS.git
+    --verify-remote https://github.com/Hello-N00del/StuRaOS
   ```
 
   `--verify-remote` is deliberately NOT part of `make lint`: it needs the
