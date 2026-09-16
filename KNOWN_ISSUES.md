@@ -189,7 +189,13 @@ specific and a reader who remembers it is owed the refutation.
   line that stops matching ALSO fails, so the list dies the day the realm unit
   lands. Holding the check red instead would have taken `make lint` down with
   it and retired the 44 other checks that share its exit code, several of them
-  security-relevant.
+  security-relevant. **Hand-off, in writing, because `PRODUCT_TOKEN_PENDING` is
+  a surface no plan row names:** when the realm unit lands, `h2` reports every
+  entry whose line no longer matches as `STALE WAIVER … delete the entry`, and
+  the correct response is to DELETE those entries — never to widen
+  `PRODUCT_TOKEN_EXEMPT_PATHS`, never to re-point a pending line at whatever the
+  file says now. An entry that survives its cause is the allow-list growing a
+  permanent hole, which is the failure this whole section records.
 - **What is still pinned by exact path.** `deploy-brand.guard.test.ts` pins one
   file inside the theme directory as a vacuity check, now at its renamed path,
   so moving the directory again turns that test red as well.
