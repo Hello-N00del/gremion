@@ -59,15 +59,32 @@ fi
 # B-01 (spec B §T.4) — no Keycloak in this kernel imports a realm at boot
 # ---------------------------------------------------------------------------
 
-@test "no compose file boot-imports a realm (spec B B-01)" {
-    cd "$BATS_TEST_DIRNAME/../.."
-    run docker compose --env-file .env.example \
-        -f docker-compose.yml -f docker-compose.override.yml config
+# Asserted against EVERY rendering, not just the dev one. A `command:` list in
+# an override REPLACES the base list wholesale, so a `--import-realm` left in
+# docker-compose.yml is invisible in the base+override render and would still
+# boot-import a realm in production, where the override is not loaded. The
+# keycloak:/non-empty assertions keep the helper from passing on an empty or
+# keycloak-less render.
+assert_no_boot_import() {
+    run docker compose --env-file .env.example "$@" config
     [ "$status" -eq 0 ]
+    [ -n "$output" ]
+    [[ "$output" == *"keycloak:"* ]]
     [[ "$output" != *"--import-realm"* ]]
     [[ "$output" != *"substitute-realm-secrets"* ]]
     [[ "$output" != *"/opt/keycloak/data/import"* ]]
     [[ "$output" != *"keycloak-init"* ]]
+}
+
+@test "no compose file boot-imports a realm (spec B B-01)" {
+    cd "$BATS_TEST_DIRNAME/../.."
+    # base alone - what a production deployment renders from
+    assert_no_boot_import -f docker-compose.yml
+    # base + dev override
+    assert_no_boot_import -f docker-compose.yml -f docker-compose.override.yml
+    # base + prod overlay. The prod overlay's cloudflared depends on traefik,
+    # which only exists under the production profile, so the render needs it.
+    assert_no_boot_import --profile production -f docker-compose.yml -f docker-compose.prod.yml
 }
 
 @test "the generated realm export is not a tracked git object (spec B B-01)" {
