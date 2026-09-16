@@ -16,7 +16,7 @@ vi.mock('$lib/server/tenant/register-default', () => ({ registerDefaultTenant: v
 // P2.1b T2: boot's fleet runner lists active tenants (id must match the
 // registerDefaultTenant mock above) and ledgers each run.
 vi.mock('$lib/server/tenant/registry', () => ({
-  resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/sturaos' })),
+  resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/gremion-test' })),
   listActiveTenants: vi.fn(async () => [{ id: 'tid-1', slug: 'default', status: 'active' }]),
   startTenantMigrationRun: vi.fn(async () => 'run-1'),
   finishTenantMigrationRun: vi.fn(async () => {}),

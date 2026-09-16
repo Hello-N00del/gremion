@@ -28,18 +28,18 @@ describe('P2.1a acceptance', () => {
     })
   })
 
-  it('default tenant resolves to the existing sturaos realm + env DB (golden)', async () => {
+  it('default tenant resolves to the existing default realm + env DB (golden)', async () => {
     await registerDefaultTenant()
     const ctx = await resolveTenantBySlug('default')
     expect(ctx).not.toBeNull()
-    expect(ctx!.realmName).toBe('sturaos')
-    expect(ctx!.issuer).toContain('/realms/sturaos')
+    expect(ctx!.realmName).toBe('gremion-test')
+    expect(ctx!.issuer).toContain('/realms/gremion-test')
     // running inside the default context, the canonical id is the default row's id
     runWithTenant(ctx!, () => { expect(currentTenantId()).toBe(ctx!.id) })
   })
 
   it('cross-tenant iss-replay is rejected by assertIssMatch (red->green proof)', async () => {
-    await registerDefaultTenant() // tenant A (default) -> sturaos issuer
+    await registerDefaultTenant() // tenant A (default) -> the default issuer
     await registerTenant({
       slug: 'tenant-b', status: 'active', dbConnRef: 'env:DATABASE_URL',
       realmName: 'tenant-b', issuer: 'https://council.example/auth/realms/tenant-b',

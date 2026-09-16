@@ -39,16 +39,16 @@ describe('buildAuthConfig(event) — per-tenant Auth.js config', () => {
   })
   it('default tenant maps to today env values byte-identically (golden)', async () => {
     const dflt: TenantAuth = {
-      id: 'default', realmName: 'sturaos', issuer: 'https://council.example/auth/realms/sturaos',
-      kcInternal: 'http://keycloak:8080/auth/realms/sturaos', authExternalBase: 'https://council.example/auth/realms/sturaos',
+      id: 'default', realmName: 'gremion-test', issuer: 'https://council.example/auth/realms/gremion-test',
+      kcInternal: 'http://keycloak:8080/auth/realms/gremion-test', authExternalBase: 'https://council.example/auth/realms/gremion-test',
       authClientId: 'gremion-ui', authClientSecretRef: 'ui-default', audiences: ['gremion-ui', 'gremion-mobile'],
     }
     const { buildAuthConfig } = await import('./auth')
     const cfg = await buildAuthConfig(eventWith(dflt))
     const p = (cfg.providers as unknown as Array<Record<string, unknown>>)[0]
     const opts = (p.options ?? p) as Record<string, unknown>
-    expect(opts.issuer).toBe('https://council.example/auth/realms/sturaos')
-    expect(String(opts.token)).toBe('http://keycloak:8080/auth/realms/sturaos/protocol/openid-connect/token')
+    expect(opts.issuer).toBe('https://council.example/auth/realms/gremion-test')
+    expect(String(opts.token)).toBe('http://keycloak:8080/auth/realms/gremion-test/protocol/openid-connect/token')
   })
 })
 

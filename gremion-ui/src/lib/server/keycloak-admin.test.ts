@@ -43,8 +43,8 @@ describe('getKeycloakAdminClient(tenant) — per-tenant factory (keyed by tenant
   })
   it('default tenant maps to today env values byte-identically (golden)', async () => {
     const { getKeycloakAdminClient } = await import('./keycloak-admin')
-    const dflt: TenantKc = { id: 'default', realmName: 'sturaos', kcAdminUrl: 'http://keycloak:8080/auth', kcClientId: 'gremion-admin', kcClientSecretRef: 'kc-default' }
+    const dflt: TenantKc = { id: 'default', realmName: 'gremion-test', kcAdminUrl: 'http://keycloak:8080/auth', kcClientId: 'gremion-admin', kcClientSecretRef: 'kc-default' }
     const c = getKeycloakAdminClient(dflt) as unknown as { realm: string; clientId: string; adminUrl: string }
-    expect(c.realm).toBe('sturaos'); expect(c.clientId).toBe('gremion-admin'); expect(c.adminUrl).toBe('http://keycloak:8080/auth')
+    expect(c.realm).toBe('gremion-test'); expect(c.clientId).toBe('gremion-admin'); expect(c.adminUrl).toBe('http://keycloak:8080/auth')
   })
 })

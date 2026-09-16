@@ -4,7 +4,7 @@ import { __resetRateLimits } from '$lib/server/rate-limit'
 // P2.1a: the setup routes now read event.locals.tenant before resolving the
 // per-realm KC admin client. getKeycloakAdminClient is mocked below, so the
 // value is inert — we only need locals.tenant to exist on the synthetic event.
-const TEST_TENANT = { realmName: 'sturaos', kcAdminUrl: 'http://keycloak:8080/auth', kcClientId: 'gremion-admin', kcClientSecretRef: 'kc-default' }
+const TEST_TENANT = { realmName: 'gremion-test', kcAdminUrl: 'http://keycloak:8080/auth', kcClientId: 'gremion-admin', kcClientSecretRef: 'kc-default' }
 
 // ── Config API ────────────────────────────────────────────────────────────────
 

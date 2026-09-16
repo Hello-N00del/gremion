@@ -27,9 +27,9 @@ import { backupKeyLocation, registryBackupKeyLeaks } from './backup-key'
 // The default tenant (env: scheme, byte-identical to register-default.ts:65).
 const defaultRow: TenantInput = {
   slug: 'default', status: 'active',
-  dbConnRef: 'env:DATABASE_URL', realmName: 'sturaos',
-  issuer: 'https://council.example/auth/realms/sturaos',
-  kcInternal: 'http://keycloak:8080/auth/realms/sturaos',
+  dbConnRef: 'env:DATABASE_URL', realmName: 'gremion-test',
+  issuer: 'https://council.example/auth/realms/gremion-test',
+  kcInternal: 'http://keycloak:8080/auth/realms/gremion-test',
   kcClientId: 'gremion-admin', kcClientRef: 'env:KEYCLOAK_ADMIN_CLIENT_SECRET',
   authClientRef: 'env:AUTH_KEYCLOAK_SECRET',
   ncTarget: { url: 'https://council.example/cloud' },

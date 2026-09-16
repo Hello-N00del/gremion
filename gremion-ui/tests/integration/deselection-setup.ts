@@ -50,7 +50,7 @@ const DESELECTION_TEST_TENANT = {
   dbPrepare: true,
   // Carry minimal KC fields so any code path that reads getTenant().realmName /
   // kcAdminUrl / kcClientId / kcClientSecretRef does not get undefined.
-  realmName: 'sturaos',
+  realmName: 'gremion-test',
   kcAdminUrl: process.env.KEYCLOAK_ADMIN_URL ?? 'http://keycloak:8080/auth',
   kcClientId: 'gremion-admin',
   kcClientSecretRef: 'env:KEYCLOAK_ADMIN_CLIENT_SECRET',

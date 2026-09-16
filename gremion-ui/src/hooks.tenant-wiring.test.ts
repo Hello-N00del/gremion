@@ -25,7 +25,7 @@ const callOrder: string[] = []
 vi.mock('$lib/server/tenant/resolve', () => ({
   tenantResolveHandle: async ({ event, resolve }: any) => {
     callOrder.push('tenant')
-    event.locals.tenant = { id: 'tid-1', slug: 'stura', issuer: 'https://kc/realms/sturaos' }
+    event.locals.tenant = { id: 'tid-1', slug: 'stura', issuer: 'https://kc/realms/gremion-test' }
     return resolve(event)
   },
   // hooks.server.ts also wires tenantForwardFetch as `handleFetch` (gremion#22
@@ -37,7 +37,7 @@ vi.mock('$lib/server/tenant/resolve', () => ({
 vi.mock('./auth', () => ({
   handle: async ({ event, resolve }: any) => {
     callOrder.push('auth')
-    expect(event.locals.tenant).toEqual({ id: 'tid-1', slug: 'stura', issuer: 'https://kc/realms/sturaos' })
+    expect(event.locals.tenant).toEqual({ id: 'tid-1', slug: 'stura', issuer: 'https://kc/realms/gremion-test' })
     return resolve(event)
   },
 }))
@@ -56,7 +56,7 @@ vi.mock('$lib/server/tenant/register-default', () => ({ registerDefaultTenant: v
 // context for the audit-purge interval; the listActiveTenants id must match the
 // registerDefaultTenant mock above.
 vi.mock('$lib/server/tenant/registry', () => ({
-  resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/sturaos' })),
+  resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/gremion-test' })),
   listActiveTenants: vi.fn(async () => [{ id: 'tid-1', slug: 'default', status: 'active' }]),
   startTenantMigrationRun: vi.fn(async () => 'run-1'),
   finishTenantMigrationRun: vi.fn(async () => {}),

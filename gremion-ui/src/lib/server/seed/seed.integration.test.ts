@@ -35,7 +35,7 @@ function fakeKc() {
     },
     groupMembers: [] as Array<[string, string]>, // [userId, groupId]
     async listGroups() {
-      // mirrors the sturaos realm-export.json groups
+      // mirrors the default realm document groups
       return ['login', 'ref-finanzen', 'ref-finanzen-belege', 'ref-finanzen-kv', 'ref-finanzen-hv', 'admin']
         .map((n) => ({ id: `grp-${n}`, name: n, path: `/${n}` }))
     },

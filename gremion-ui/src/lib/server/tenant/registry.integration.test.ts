@@ -21,9 +21,9 @@ import {
 
 const input: TenantInput = {
   slug: 'default', status: 'active',
-  dbConnRef: 'env:DATABASE_URL', realmName: 'sturaos',
-  issuer: 'https://council.example/auth/realms/sturaos',
-  kcInternal: 'http://keycloak:8080/auth/realms/sturaos',
+  dbConnRef: 'env:DATABASE_URL', realmName: 'gremion-test',
+  issuer: 'https://council.example/auth/realms/gremion-test',
+  kcInternal: 'http://keycloak:8080/auth/realms/gremion-test',
   kcClientId: 'gremion-admin', kcClientRef: 'env:KEYCLOAK_ADMIN_CLIENT_SECRET',
   authClientRef: 'env:AUTH_KEYCLOAK_SECRET',
   ncTarget: { url: 'https://council.example/cloud' },
@@ -61,9 +61,9 @@ describe('tenant registry', () => {
   // T7 — registry-write hardening: a second tenant must not claim an
   // already-registered realm_name (KC realm-cache collision seam).
   it('rejects a second tenant that reuses an existing realm_name (loud, names the column)', async () => {
-    await registerTenant(input) // default → realm sturaos
+    await registerTenant(input) // default → the default realm
     await expect(
-      registerTenant({ ...input, slug: 't2', issuer: 'https://t2.council.example/auth/realms/sturaos' }),
+      registerTenant({ ...input, slug: 't2', issuer: 'https://t2.council.example/auth/realms/gremion-test' }),
     ).rejects.toThrow(/realm_name/)
   })
   // T7 — same for issuer (JWKS / issuer-resolution collision seam).
@@ -180,8 +180,8 @@ describe('resolveTenantBySlug — builds a full TenantContext', () => {
     expect(ctx).not.toBeNull()
     expect(ctx!.id).toBeTruthy()
     expect(ctx!.slug).toBe('default')
-    expect(ctx!.issuer).toBe('https://council.example/auth/realms/sturaos')
-    expect(ctx!.realmName).toBe('sturaos')
+    expect(ctx!.issuer).toBe('https://council.example/auth/realms/gremion-test')
+    expect(ctx!.realmName).toBe('gremion-test')
     expect(Array.from(ctx!.audiences)).toEqual(['gremion-ui', 'gremion-mobile'])
     expect(ctx!.aliasNamespace).toBe('stura-')
     expect(typeof ctx!.dbUrl).toBe('string')
