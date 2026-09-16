@@ -23,7 +23,7 @@ The tenancy design bounds Postgres connections **twice**:
    explicit `-c max_connections=100` pin so the asserted budget is runtime
    reality, not an image default.
 
-The shared `postgres:16-alpine` instance also serves Keycloak **directly**
+The shared `postgres:18-alpine` instance also serves Keycloak **directly**
 (Keycloak does not go through PgBouncer). `ADMIN_RESERVE` plus PgBouncer's
 `max_db_connections=25` cap keep the app's share bounded.
 

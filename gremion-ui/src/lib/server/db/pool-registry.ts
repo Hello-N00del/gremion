@@ -35,7 +35,7 @@ export const ADMIN_RESERVE = 16
  * The provisioned per-instance Postgres max_connections this app sizes against.
  * P2.1b T11: pinned explicitly in the prod overlay (docker-compose.prod.yml
  * postgres `command: -c max_connections=100`) so the asserted budget reflects
- * runtime reality instead of relying on postgres:16-alpine's default (also
+ * runtime reality instead of relying on postgres:18-alpine's default (also
  * 100). NOTE: this instance is SHARED with Keycloak/Nextcloud/Helios + the
  * control pool, so the real app-side headroom is tighter than 100 — which is
  * why the prod overlay also fronts the app's data-plane connections with

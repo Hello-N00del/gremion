@@ -71,3 +71,102 @@ test('checkEvidence goes RED when the later-bump rule is missing', () => {
   assert.notEqual(noRule, EVIDENCE, 'fixture did not apply')
   assert.match(checkEvidence(noRule).join('\n'), /no later-bump rule/)
 })
+
+import {
+  scanText,
+  classify,
+  checkFiles,
+  trackedTextFiles,
+} from './check-postgres-major.mjs'
+
+// Stale and floating tags are BUILT, never spelled out: this very file is one of
+// the tracked files the real-repo test below scans, and a literal stale tag here
+// would be an honest finding for the guard.
+const STALE_MAJOR = POSTGRES_MAJOR - 1
+const STALE_TAG = `postgres:${STALE_MAJOR}-alpine`
+const FLOATING_TAG = 'postgres:' + 'alpine'
+
+// ── the scanner ────────────────────────────────────────────────────────────
+
+test('scanText finds an image tag and ignores a host:port in a connection URL', () => {
+  const text = [
+    '  postgres:',
+    `    image: ${POSTGRES_IMAGE_TAG}`,
+    'GREMION_PUBLIC_DB_URL=postgresql://reader:pw@postgres:5432/gremion',
+  ].join('\n')
+  const hits = scanText('f.yml', text)
+  assert.equal(hits.length, 1, `expected exactly one hit, got ${JSON.stringify(hits)}`)
+  assert.equal(hits[0].line, 2)
+  assert.equal(hits[0].ref, POSTGRES_IMAGE_TAG)
+})
+
+test('scanText ignores a bare postgres:5432 host:port even with no user@ prefix', () => {
+  // The kernel prose is full of `postgres:5432` written on its own (docs,
+  // comments, k8s configmaps). A scanner that read those as image tags would
+  // drown the guard in false findings, so this is a first-class case.
+  const text = [
+    '   postgres:5432   <-  keycloak, gremion-ui',
+    'reached directly at `postgres:5432` and never through PgBouncer',
+    'wget -qO- http://postgres:5432 2>&1 | head',
+  ].join('\n')
+  assert.deepEqual(scanText('docs/x.md', text), [])
+})
+
+test('classify names the three states', () => {
+  assert.equal(classify({ tag: `${POSTGRES_MAJOR}-alpine` }), 'ok')
+  assert.equal(classify({ tag: `${POSTGRES_MAJOR}` }), 'ok')
+  assert.equal(classify({ tag: `${STALE_MAJOR}-alpine` }), 'mismatched')
+  assert.equal(classify({ tag: 'latest' }), 'unpinned')
+  assert.equal(classify({ tag: 'alpine' }), 'unpinned')
+})
+
+// ── the file-set check ─────────────────────────────────────────────────────
+
+test('checkFiles refuses to pass on an empty match set', () => {
+  const problems = checkFiles([{ path: 'a.yml', text: 'services:\n  web:\n    image: nginx:1.29\n' }])
+  assert.match(problems.join('\n'), /zero postgres: image references/)
+})
+
+test('checkFiles goes RED on a stale major and on a floating tag', () => {
+  const problems = checkFiles([
+    { path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'b.yml', text: `    image: ${STALE_TAG}\n` },
+    { path: 'c.yml', text: `    image: ${FLOATING_TAG}\n` },
+  ])
+  assert.equal(problems.length, 2, problems.join('\n'))
+  assert.ok(problems.join('\n').includes(`mismatched: b.yml:1 ${STALE_TAG}`), problems.join('\n'))
+  assert.ok(problems.join('\n').includes(`unpinned: c.yml:1 ${FLOATING_TAG}`), problems.join('\n'))
+})
+
+test('checkFiles excludes the frozen spec copies by rule, not by accident', () => {
+  const problems = checkFiles([
+    {
+      // the name B0-spec-docs-and-waiver-ledger lands them under
+      path: 'docs/superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md',
+      text: `\`${STALE_TAG}\` today\n`,
+    },
+    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+  ])
+  assert.deepEqual(problems, [])
+})
+
+test('the exclusion list is narrow: a stale tag anywhere else is still a finding', () => {
+  // Proves the rule above is an exclusion of two NAMED paths and not a hole a
+  // stale tag can wander into.
+  for (const path of ['docs/deployment.md', 'k8s/base/postgres/statefulset.yaml',
+                      'test/host/fixtures/postgres-major/tree-clean/compose/calendar.yml']) {
+    const problems = checkFiles([{ path, text: `    image: ${STALE_TAG}\n` }])
+    assert.ok(problems.join('\n').includes(`mismatched: ${path}:1`), `${path} must not be excluded`)
+  }
+})
+
+// ── the real repo ──────────────────────────────────────────────────────────
+
+test('the committed kernel tree carries the pinned tag everywhere, in >= 8 places', () => {
+  const files = trackedTextFiles(ROOT)
+  const hits = files
+    .filter((f) => !/^docs\/superpowers\/specs\//.test(f.path))
+    .flatMap((f) => scanText(f.path, f.text))
+  assert.ok(hits.length >= 8, `expected >= 8 postgres: references, found ${hits.length}`)
+  assert.deepEqual(checkFiles(files), [])
+})

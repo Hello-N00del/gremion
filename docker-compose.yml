@@ -17,7 +17,7 @@ services:
   # PostgreSQL — database for Keycloak and the governance kernel
   # ============================================================
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
     logging:
       driver: json-file

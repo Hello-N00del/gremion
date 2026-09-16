@@ -25,7 +25,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: init-databases
-          image: postgres:16-alpine
+          image: postgres:18-alpine
           # G-036: container-level baseline-PSS hardening.
           securityContext:
             allowPrivilegeEscalation: false
@@ -42,7 +42,7 @@ spec:
               mountPath: /var/lib/postgresql/data
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: postgres:18-alpine
           # G-036: container-level baseline-PSS hardening.
           securityContext:
             allowPrivilegeEscalation: false

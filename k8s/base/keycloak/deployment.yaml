@@ -24,7 +24,7 @@ spec:
       initContainers:
         # Wait for PostgreSQL to accept connections before Keycloak starts
         - name: wait-for-postgres
-          image: postgres:16-alpine
+          image: postgres:18-alpine
           # G-036: container-level baseline-PSS hardening.
           securityContext:
             allowPrivilegeEscalation: false

@@ -9,6 +9,12 @@
 // Run:  node scripts/check-postgres-major.mjs             (the kernel repo)
 //       node scripts/check-postgres-major.mjs --tree DIR  (a module repo or an
 //                                                          assembled release tree)
+// Test: node --test scripts/check-postgres-major.test.mjs
+
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** The major S14 settled on. Change this ONLY together with the record. */
 export const POSTGRES_MAJOR = 18
@@ -42,4 +48,89 @@ export function checkEvidence(text) {
     problems.push('the record states no later-bump rule (dump/restore with a measured RTO)')
   }
   return problems
+}
+
+// ── the scanner ────────────────────────────────────────────────────────────
+
+// Two NAMED exclusions, and only two. Anything not on this list is scanned.
+//
+//  1. Frozen copies of the APPROVED specs quote the pre-pin tag verbatim. They
+//     are a record of what was decided, not a place a tag is configured;
+//     rewriting them would falsify the record. It is also the only tracked path
+//     under docs/superpowers — B0 un-ignores exactly
+//     docs/superpowers/specs/spec-{b,d}-*.md and nothing else.
+//  2. The `tree-stale` fixture EXISTS to carry a stale tag: it is what proves
+//     `--tree` goes RED. Excluding the whole `postgres-major` fixture directory
+//     would also excuse `tree-clean`, so the rule names `tree-stale` alone and
+//     `tree-clean` stays scanned like any other file (and is pinned).
+export const EXCLUDED = [
+  /^docs\/superpowers\/specs\//,
+  /^test\/host\/fixtures\/postgres-major\/tree-stale\//,
+]
+
+// `postgresql://user:pw@postgres:5432/db` is a HOST:PORT, not an image tag. The
+// lookbehind drops anything glued to a word char, dot, slash, dash or `@`, and
+// the trailing lookahead keeps a tag from being matched halfway. 5432 is then
+// refused a second time below, because one net is one forgotten char from
+// silently excusing a real tag — and the kernel prose writes bare `postgres:5432`
+// in a dozen places with nothing in front of it.
+const TAG_RE = /(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])/g
+
+export function scanText(path, text) {
+  const hits = []
+  text.split('\n').forEach((line, i) => {
+    for (const m of line.matchAll(TAG_RE)) {
+      if (m[1] === '5432') continue
+      hits.push({ path, line: i + 1, tag: m[1], ref: `postgres:${m[1]}` })
+    }
+  })
+  return hits
+}
+
+export function classify(hit) {
+  if (hit.tag === 'latest' || hit.tag === 'alpine') return 'unpinned'
+  const major = Number(hit.tag.split(/[.-]/)[0])
+  if (!Number.isInteger(major)) return 'unpinned'
+  return major === POSTGRES_MAJOR ? 'ok' : 'mismatched'
+}
+
+/** @param files [{path, text}] */
+export function checkFiles(files) {
+  const hits = files
+    .filter((f) => !EXCLUDED.some((re) => re.test(f.path)))
+    .flatMap((f) => scanText(f.path, f.text))
+  if (hits.length === 0) {
+    return ['found zero postgres: image references — the guard would pass vacuously']
+  }
+  return hits
+    .filter((h) => classify(h) !== 'ok')
+    .map((h) => `${classify(h)}: ${h.path}:${h.line} ${h.ref} (expected ${POSTGRES_IMAGE_TAG})`)
+}
+
+const TEXTUAL = /\.(ya?ml|md|ts|mjs|js|sh|bats|json|tmpl)$|(^|\/)(Dockerfile|Makefile)/
+
+export function trackedTextFiles(root) {
+  const out = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
+  return out
+    .split('\0')
+    .filter((p) => p && TEXTUAL.test(p))
+    .map((p) => ({ path: p, text: readFileSync(join(root, p), 'utf8') }))
+}
+
+// ── CLI ────────────────────────────────────────────────────────────────────
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
+if (isMain) {
+  const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const files = trackedTextFiles(ROOT)
+  const problems = [
+    ...checkEvidence(readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')),
+    ...checkFiles(files),
+  ]
+  if (problems.length > 0) {
+    console.error(`[postgres-major] ${problems.length} problem(s):`)
+    for (const p of problems) console.error(`  x ${p}`)
+    process.exit(1)
+  }
+  console.log(`[postgres-major] OK — ${files.length} tracked files scanned, every postgres: reference is ${POSTGRES_IMAGE_TAG}`)
 }

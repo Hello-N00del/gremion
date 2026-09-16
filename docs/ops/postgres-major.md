@@ -21,7 +21,7 @@ One hour, per consumer, from the consumer's own published support matrix.
 
 Upstream boundary, checked the same day: PostgreSQL 18 (18.6, released
 2025-09-25) is the newest major with a release; 19 has none, and
-`docker manifest inspect postgres:19-alpine` finds no such image —
+the Docker official-images registry has no `19-alpine` tag (`docker manifest inspect` on it fails) —
 https://www.postgresql.org/support/versioning/ , read 2026-09-16.
 
 The pin is the **minimum** of that column, and that minimum is 18.

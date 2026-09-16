@@ -4,7 +4,7 @@
         update-legal update-legal-k8s \
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
-        lint-hygiene lint-cve-floors lint-packages \
+        lint-hygiene lint-cve-floors lint-packages lint-postgres-major \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -276,7 +276,19 @@ lint-port-back:
 	@node --test scripts/port-back/check-do-not-overwrite.test.mjs
 	@node scripts/port-back/check-do-not-overwrite.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back
+# Postgres major (spec B P3, unit B37): the pinned major is the newest every
+# consumer supports; spike S14's evidence lives in docs/ops/postgres-major.md and
+# scripts/check-postgres-major.mjs is its machine-readable half. The guard
+# refuses an EMPTY match set, so a scan that found nothing fails instead of
+# passing vacuously. The suite runs first, for the same reason check-cve-floors'
+# does: a parser that silently returned [] would make the guard green on every
+# tree.
+lint-postgres-major:
+	@echo "Checking the Postgres major pin..."
+	@node --test scripts/check-postgres-major.test.mjs
+	@node scripts/check-postgres-major.mjs
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major
 	@echo "All linters passed."
 
 # ── Repository labels ────────────────────────────────────────────────────

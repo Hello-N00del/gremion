@@ -28,7 +28,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: backup
-              image: postgres:16-alpine   # Has pg_dump; add aws/gcloud CLI as needed
+              image: postgres:18-alpine   # Has pg_dump; add aws/gcloud CLI as needed
               command:
                 - /bin/sh
                 - -c
