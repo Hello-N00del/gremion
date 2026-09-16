@@ -485,6 +485,27 @@ prepare_green_colour() {
     ! grep -q 'restart' "$SHIM_LOG"
 }
 
+@test "--reboot reports a precondition failure instead of restarting anything" {
+    # A missing waiver ledger is exit 2 - "could not verify" - and it reaches
+    # the boot path, because the INSTALLED verifier is not versioned with the
+    # release tree whose docs/ it reads. Before the gate read the exit code,
+    # that laundered into: restart the whole app project, fail again, and alert
+    # "still failing after one restart of app-blue". Forty containers restarted
+    # for nothing, and the one sentence that named the real cause - a markdown
+    # file the release tree does not carry - appeared nowhere in the alert.
+    local v; v="$(install_verifier)"
+    rm -rf "${GREMION_ROOT}/current"
+    printf 'blue\n' > "${GREMION_ROOT}/runtime/active-colour"
+    run "$VERIFY" --reboot --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"REBOOT-GATE: verify=precondition-failure restarted=0"* ]]
+    # the verifier's own message travels into the alert
+    [[ "$output" == *"release-1-waivers.md"* ]]
+    # and the wrong diagnosis is not issued
+    [[ "$output" != *"still failing after one restart"* ]]
+    refute_recorded docker "restart"
+}
+
 @test "usage lists exactly the flags the parser accepts" {
     run "$VERIFY" --help
     [ "$status" -eq 2 ]
