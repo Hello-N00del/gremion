@@ -265,6 +265,9 @@ lint-packages:
 # MIRRORED-but-differing path, and this is the guard that makes it safe — no
 # port-back step may delete a path the kernel holds and the StuRa tree does
 # not, or overwrite a kernel-ahead path with the extraction source's bytes.
+# Run it AFTER the port-back has written and before the branch is handed on:
+# it reads the working tree as well as the index, so it sees an unstaged
+# `cp -r`/`rsync` — a run before the write only reports the state inherited.
 # The suite runs first for the same reason lint-cve-floors runs its suite
 # first: a loader that silently returned an empty set would pass vacuously,
 # and the set is checked against its own declared entry count for that reason.

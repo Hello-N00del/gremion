@@ -106,6 +106,26 @@
         "observed": "PORT-BACK REFUSED: … now carries the StuRa-tree blob 3bb63384590138263cf6db35ae04d06ee4a7867a; kernel wins on this path (spec B §2.1) — exit 1, alongside the 11 from the first mutation, 12 refusal(s) in total"
       }
     ],
-    "afterRestore": "do-not-overwrite: 45 entries intact (43 must-exist, 2 kernel-ahead), exit 0 against the real kernel"
+    "afterRestore": "do-not-overwrite: 45 entries intact (43 must-exist, 2 kernel-ahead), exit 0 against the real kernel",
+    "round2": {
+      "fixer": "round-2 fixer, after both reviewers found the guard read the git INDEX only",
+      "on": "2026-09-16",
+      "scratchTree": "git clone --no-hardlinks of the kernel worktree into .scratch/b3-r2 (git-excluded), removed afterwards",
+      "mutations": [
+        {
+          "what": "rm -rf gremion-ui/src/lib/components/dashboard AND cp the StuRa tree's gremion-ui/src/lib/theme/instance-theme.ts over the kernel's, with NO git add: `git diff --cached --name-only` empty, `git status --porcelain` showing ' D' for 11 files and ' M' for the theme",
+          "observed": "12 refusal(s), exit 1 - 11 'is gone from the kernel working tree' plus 'now carries the StuRa-tree blob 3bb63384590138263cf6db35ae04d06ee4a7867a in the working tree'. Round 1 printed 'do-not-overwrite: 45 entries intact' and exit 0 on exactly this state, which is the defect this round fixes."
+        },
+        {
+          "what": "the same deletion then staged with git add -A",
+          "observed": "11 refusal(s), exit 1 - the round-1 index arm is intact and was not traded away for the new one"
+        },
+        {
+          "what": "CLI misuse against the real tree: --kernal <path>, --kernel '', --kernel <not-a-repo>, --set <missing file>",
+          "observed": "exit 2 and an empty stdout for each. Round 1 answered 'do-not-overwrite: 45 entries intact', exit 0, about its own repo for the first two."
+        }
+      ],
+      "afterRestore": "do-not-overwrite: 45 entries intact (43 must-exist, 2 kernel-ahead), index and working tree, in <resolved work tree>, exit 0"
+    }
   }
 }
