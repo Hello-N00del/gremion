@@ -167,15 +167,17 @@ ENVEOF
 
 # ── the callers actually call it ───────────────────────────────────────────
 
-@test "configure-keycloak-clients.sh runs the guard before it writes any secret" {
-    # Post-condition, not a grep for the word: the guard call must come BEFORE
-    # the first Admin-API write (the client-secret PUT).
-    guard_line=$(grep -n 'check-realm-env.sh' "${SCRIPTS_DIR}/configure-keycloak-clients.sh" | head -1 | cut -d: -f1)
+@test "configure-keycloak-clients.sh runs the guard before it touches the named realm" {
+    # Post-condition on ORDER, not a grep for the word: the guard call must come
+    # before the first request this script makes against ${KEYCLOAK_REALM}'s
+    # Admin API - a guard that ran after the first write would not have
+    # prevented anything.
+    local script="${SCRIPTS_DIR}/configure-keycloak-clients.sh"
+    guard_line=$(grep -n 'check-realm-env.sh' "$script" | grep -v '^[0-9]*:#' | head -1 | cut -d: -f1)
     [ -n "$guard_line" ]
-    write_line=$(grep -nE '^\s*-X PUT|"?\$\{?KC_BASE' "${SCRIPTS_DIR}/configure-keycloak-clients.sh" | grep -n 'PUT' | head -1 | cut -d: -f1)
-    put_line=$(grep -n -- '-X PUT' "${SCRIPTS_DIR}/configure-keycloak-clients.sh" | head -1 | cut -d: -f1)
-    [ -n "$put_line" ]
-    [ "$guard_line" -lt "$put_line" ]
+    first_realm_call=$(grep -n 'admin/realms/\${REALM}' "$script" | head -1 | cut -d: -f1)
+    [ -n "$first_realm_call" ]
+    [ "$guard_line" -lt "$first_realm_call" ]
 }
 
 @test "make validate-env runs the guard" {
