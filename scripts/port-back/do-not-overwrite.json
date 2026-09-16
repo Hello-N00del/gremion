@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "unit": "B3-carve-rules-and-portback-guard",
+  "why": [
+    "Spec B §2.1 / B-02: kernel wins for all 294 MIRRORED-but-differing paths.",
+    "This file is what makes that direction safe. `doNotDelete` is the 43 paths the",
+    "kernel holds and the StuRa tree does not — a StuRa-tree-wins copy of any parent",
+    "directory removes them silently, because a copy cannot add a file the source",
+    "lacks. `kernelAhead` is the theme/OKLCH engine, where both trees carry the file",
+    "and the kernel is ahead; there the forbidden state is the kernel blob BECOMING",
+    "the StuRa blob. Neither arm pins the kernel’s own bytes: a port-back unit is",
+    "free to edit these files, it is only forbidden to delete them or to overwrite",
+    "them with the extraction source."
+  ],
+  "amendment": [
+    "Frozen is not immutable. A unit that DELIBERATELY deletes a protected path",
+    "amends this set in the SAME COMMIT as the deletion: remove the row, lower",
+    "`expectedEntries` by the number of rows removed, drop that row’s assertion from",
+    "check-do-not-overwrite.test.mjs, and re-run `make lint-port-back` so the vacuity",
+    "assertion is re-proved against the new count. An amendment that lands in a",
+    "different commit is a guard that lies for the length of a branch.",
+    "B10-resolver-fullhost is the first amender: DOMAIN_REGEX dies with the wildcard",
+    "edge, so B10 deletes gremion-ui/scripts/check-domain-regex.mjs and removes that",
+    "one row here (43 -> 42 doNotDelete, expectedEntries 45 -> 44) together with the",
+    "`has('gremion-ui/scripts/check-domain-regex.mjs')` assertion. Its guard-test",
+    "pair gremion-ui/tests/unit/check-domain-regex.test.ts is NOT in this set: it",
+    "classifies DIVERGED under diverged-bats-and-smoke (gremion-ui/tests/**) and so",
+    "never entered the measured 43. B10 re-measures rather than assuming a count.",
+    "No re-freeze unit exists or is needed — this file is a port-back guard, not a",
+    "tree inventory."
+  ],
+  "frozenAt": {
+    "kernel": "f7ac82609eb4b6dedd415d2ef6d7f8d1736ae543",
+    "stura": "f276af5925abacdcfd05f6613fc11afff2d804c5",
+    "on": "2026-09-16"
+  },
+  "expectedEntries": 45,
+  "doNotDelete": [
+    "docker/traefik/dynamic/tls.yml",
+    "gremion-ui/scripts/check-domain-regex.mjs",
+    "gremion-ui/src/hooks.audit-integrity.test.ts",
+    "gremion-ui/src/lib/components/committee/CommitteeCard.svelte",
+    "gremion-ui/src/lib/components/dashboard/ActiveVotesCard.svelte",
+    "gremion-ui/src/lib/components/dashboard/ConvergenceBanner.svelte",
+    "gremion-ui/src/lib/components/dashboard/ExternalServicesCard.svelte",
+    "gremion-ui/src/lib/components/dashboard/FeaturedMeeting.svelte",
+    "gremion-ui/src/lib/components/dashboard/KpiRow.svelte",
+    "gremion-ui/src/lib/components/dashboard/MyApprovalsCard.svelte",
+    "gremion-ui/src/lib/components/dashboard/PageHead.svelte",
+    "gremion-ui/src/lib/components/dashboard/UnplacedGuestCard.svelte",
+    "gremion-ui/src/lib/components/dashboard/UpcomingEventsCard.svelte",
+    "gremion-ui/src/lib/components/dashboard/format.ts",
+    "gremion-ui/src/lib/components/dashboard/types.ts",
+    "gremion-ui/src/lib/components/layout/ThemeToggle.svelte",
+    "gremion-ui/src/lib/dangling-links.guard.test.ts",
+    "gremion-ui/src/lib/deploy-brand.guard.test.ts",
+    "gremion-ui/src/lib/i18n/index.storage-keys.test.ts",
+    "gremion-ui/src/lib/instance-status.modules.test.ts",
+    "gremion-ui/src/lib/server/boundary/contracts-gate-runs.test.ts",
+    "gremion-ui/src/lib/server/tenant/register-default.env.test.ts",
+    "gremion-ui/src/lib/source-offer.test.ts",
+    "gremion-ui/src/lib/source-offer.ts",
+    "gremion-ui/src/lib/source-offer.wiring.test.ts",
+    "gremion-ui/src/routes/setup/steps/wizard-submit-schema.test.ts",
+    "k8s/base/keycloak/pdb.yaml",
+    "k8s/overlays/dev/patches/ingressroutes-dev/gremion-ui-apexhost.yaml",
+    "k8s/overlays/dev/patches/ingressroutes-dev/gremion-ui-https.yaml",
+    "k8s/overlays/dev/patches/ingressroutes-dev/gremion-ui-wellknown.yaml",
+    "k8s/overlays/dev/patches/ingressroutes-dev/keycloak-https.yaml",
+    "k8s/overlays/dev/patches/ingressroutes-dev/legal-https.yaml",
+    "k8s/overlays/production/patches/ingressroutes-prod/gremion-ui-apexhost.yaml",
+    "k8s/overlays/production/patches/ingressroutes-prod/gremion-ui-https.yaml",
+    "k8s/overlays/production/patches/ingressroutes-prod/gremion-ui-proxytrust.yaml",
+    "k8s/overlays/production/patches/ingressroutes-prod/gremion-ui-wellknown.yaml",
+    "k8s/overlays/production/patches/ingressroutes-prod/keycloak-https.yaml",
+    "k8s/overlays/production/patches/ingressroutes-prod/legal-https.yaml",
+    "scripts/check-cve-floors.mjs",
+    "scripts/check-cve-floors.test.mjs",
+    "scripts/check-packed-manifest.mjs",
+    "scripts/check-shipped-package-files.mjs",
+    "scripts/kernel-hygiene-check.mjs"
+  ],
+  "kernelAhead": [
+    {
+      "path": "gremion-ui/src/lib/theme/instance-theme.ts",
+      "forbiddenProductBlob": "3bb63384590138263cf6db35ae04d06ee4a7867a",
+      "reason": "The kernel's OKLCH theme engine is ahead (spec B §2.1). f276af59's bytes must never land here."
+    },
+    {
+      "path": "gremion-ui/src/lib/theme/instance-theme.test.ts",
+      "forbiddenProductBlob": "2de6b01ce7638087d79a8fc01fe0c72a0dbecd5e",
+      "reason": "Its suite moves with it; a StuRa-tree copy would re-assert the superseded behaviour."
+    }
+  ],
+  "watchedRed": {
+    "verifier": "fresh agent, not the author of the guard (spec B §E)",
+    "on": "2026-09-16",
+    "scratchTree": "git clone --no-hardlinks of the kernel into the worktree-local .scratch/b3-red (git-excluded), removed afterwards; the plan spelled /tmp/b3-red, but this box forbids writing under any Temp path, and a clone is a clone wherever it sits",
+    "mutations": [
+      {
+        "what": "rm -rf gremion-ui/src/lib/components/dashboard — the StuRa-tree-wins copy, which cannot carry files the source lacks",
+        "observed": "11 refusal(s), one per dashboard file, exit 1"
+      },
+      {
+        "what": "cp StuRaOS gremion-ui/src/lib/theme/instance-theme.ts over the kernel's",
+        "observed": "PORT-BACK REFUSED: … now carries the StuRa-tree blob 3bb63384590138263cf6db35ae04d06ee4a7867a; kernel wins on this path (spec B §2.1) — exit 1, alongside the 11 from the first mutation, 12 refusal(s) in total"
+      }
+    ],
+    "afterRestore": "do-not-overwrite: 45 entries intact (43 must-exist, 2 kernel-ahead), exit 0 against the real kernel",
+    "round2": {
+      "fixer": "round-2 fixer, after both reviewers found the guard read the git INDEX only",
+      "on": "2026-09-16",
+      "scratchTree": "git clone --no-hardlinks of the kernel worktree into .scratch/b3-r2 (git-excluded), removed afterwards",
+      "mutations": [
+        {
+          "what": "rm -rf gremion-ui/src/lib/components/dashboard AND cp the StuRa tree's gremion-ui/src/lib/theme/instance-theme.ts over the kernel's, with NO git add: `git diff --cached --name-only` empty, `git status --porcelain` showing ' D' for 11 files and ' M' for the theme",
+          "observed": "12 refusal(s), exit 1 - 11 'is gone from the kernel working tree' plus 'now carries the StuRa-tree blob 3bb63384590138263cf6db35ae04d06ee4a7867a in the working tree'. Round 1 printed 'do-not-overwrite: 45 entries intact' and exit 0 on exactly this state, which is the defect this round fixes."
+        },
+        {
+          "what": "the same deletion then staged with git add -A",
+          "observed": "11 refusal(s), exit 1 - the round-1 index arm is intact and was not traded away for the new one"
+        },
+        {
+          "what": "CLI misuse against the real tree: --kernal <path>, --kernel '', --kernel <not-a-repo>, --set <missing file>",
+          "observed": "exit 2 and an empty stdout for each. Round 1 answered 'do-not-overwrite: 45 entries intact', exit 0, about its own repo for the first two."
+        }
+      ],
+      "afterRestore": "do-not-overwrite: 45 entries intact (43 must-exist, 2 kernel-ahead), index and working tree, in <resolved work tree>, exit 0"
+    }
+  }
+}
