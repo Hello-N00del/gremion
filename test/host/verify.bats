@@ -525,6 +525,19 @@ WAIVER_LITEMS=(2 6 4 1 5 5)
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 0 ]
     printf '%s\n' "$output" > "${BATS_TEST_TMPDIR}/verify.out"
+    # ANSI first, THEN the anchor. ok() prints "$C_OK  OK$C_OFF   …" and C_OK is
+    # non-empty whenever stderr is a tty, so `^[[:space:]]*OK` over the raw
+    # capture only matches because bats is not a tty. Run against a coloured
+    # capture the same assertion would match nothing and pass vacuously — which
+    # is the failure class this file's header is about.
+    sed -e 's/\x1b\[[0-9;]*m//g' "${BATS_TEST_TMPDIR}/verify.out" \
+        > "${BATS_TEST_TMPDIR}/verify.plain"
+    grep -E '^[[:space:]]*OK' "${BATS_TEST_TMPDIR}/verify.plain" \
+        > "${BATS_TEST_TMPDIR}/verify.ok" || true
+    # The vacuity floor for the "never on an OK line" half: with no OK lines at
+    # all, "the id is not on one" proves nothing.
+    [ -s "${BATS_TEST_TMPDIR}/verify.ok" ] \
+        || { echo "no OK lines in the verifier output at all" >&2; false; }
     local i id item
     for i in "${!WAIVER_IDS[@]}"; do
         id="${WAIVER_IDS[$i]}"; item="${WAIVER_LITEMS[$i]}"
@@ -532,7 +545,7 @@ WAIVER_LITEMS=(2 6 4 1 5 5)
         [ "$status" -eq 0 ] || { echo "no WAIVED line for ${id} (§L:${item})" >&2; false; }
         # A waiver rendered by ok() is the exact misreading the ledger exists to
         # prevent, so the OK lines are searched for the id explicitly.
-        run bash -c "grep -E '^[[:space:]]*OK' '${BATS_TEST_TMPDIR}/verify.out' | grep -qF '${id}'"
+        run grep -qF "${id}" "${BATS_TEST_TMPDIR}/verify.ok"
         [ "$status" -ne 0 ] || { echo "${id} appears on an OK line" >&2; false; }
     done
 }
