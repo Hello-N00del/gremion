@@ -384,8 +384,8 @@ re-run the four checks it rests on and correct any that disagree:
 git grep -n -F Civitas -- . ':!docs' ':!KNOWN_ISSUES.md'    # migrations only
 git grep -n -F Civitas -- contracts/                        # must be EMPTY
 git grep -n -F StuRaOS -- gremion-ui/src gremion-public/src # guard files only
-pnpm -C gremion-ui vitest run src/lib/brand.guard.test.ts src/lib/deploy-brand.guard.test.ts
-pnpm -C gremion-public vitest run src/lib/test/kernel-instance-leak.test.ts
+pnpm --filter gremion-ui exec vitest run src/lib/brand.guard.test.ts src/lib/deploy-brand.guard.test.ts
+pnpm --filter gremion-public exec vitest run src/lib/test/kernel-instance-leak.test.ts
 node scripts/kernel-hygiene-check.mjs   # h1 wire root, h2 retired token (T11), i1/i2 retired hosts
 ```
 

@@ -902,7 +902,11 @@ check('h2 the retired product token survives nowhere as a bare identifier', () =
   for (const rel of files) {
     if (/\.(png|jpe?g|gif|svg|ico|pdf|woff2?)$/i.test(rel)) continue
     if (PRODUCT_TOKEN_EXEMPT_PATHS.some((re) => re.test(rel))) continue
-    if (rel.startsWith('docs/superpowers/specs/')) continue // the specs quote the rename they order
+    // The specs quote the rename they order. NOT LIVE YET: `git ls-files
+    // docs/superpowers/specs/` matches zero files at this tip, so this masks
+    // nothing today and must be re-checked the moment the spec-docs unit
+    // lands, which is when it starts carving anything out at all.
+    if (rel.startsWith('docs/superpowers/specs/')) continue
     const abs = join(ROOT, rel)
     if (!existsSync(abs)) continue
     readFileSync(abs, 'utf8').split('\n').forEach((line, i) => {
