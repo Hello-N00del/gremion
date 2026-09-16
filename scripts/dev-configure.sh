@@ -25,9 +25,6 @@ cd "$(dirname "$0")/.."
 DEV_UI_PORT=4001    # vite dev server (vite.config.ts)
 KC_PORT=8082        # keycloak:      127.0.0.1:8082:8080
 
-# B-01: the dev realm is whatever tenant-create made; `gremion` is the dev slug.
-KC_REALM="${KEYCLOAK_REALM:-gremion}"
-
 # ── Colours ──────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC_C='\033[0m'  # NC_C = "no colour" reset
@@ -54,6 +51,12 @@ while IFS='=' read -r key val; do
     val="${val#\'}" val="${val%\'}"
     export "$key=$val"
 done < <(grep -v '^[[:space:]]*#' .env | grep -v '^[[:space:]]*$')
+
+# B-01: the dev realm is whatever tenant-create made; `gremion` is the dev slug.
+# Resolved HERE, after .env is loaded: resolved before the loop, KEYCLOAK_REALM
+# in .env would be invisible and this script would rewrite .env.local's OIDC
+# issuer to a realm the developer did not pick.
+KC_REALM="${KEYCLOAK_REALM:-gremion}"
 
 # ── 1. Patch gremion-ui/.env.local ─────────────────────────────
 info "Patching gremion-ui/.env.local with current service URLs..."
