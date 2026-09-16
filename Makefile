@@ -297,9 +297,33 @@ lint-postgres-major:
 # silently returned [] would let the guard pass vacuously, so the guard's RED
 # cases are proven on every lint. The committed fixture pair is passed as
 # --modules-root so the agreement arm is non-vacuous here too.
+#
+# The suite's own count is asserted, because `node --test <file>` exits 0 on a
+# file that collects NO tests -- it reports the file itself as `1..1`, so
+# neither the exit code nor a merely non-zero TAP plan can tell a real run from
+# a suite that stopped registering. So: count the top-level `test(`
+# declarations, read the TAP plan node actually ran, and refuse unless they are
+# equal and non-zero. If the suite is ever restructured so its tests no longer
+# start at column 0, this fails loudly and the count here must be moved
+# deliberately -- it must never degrade to silence.
 lint-extraction-source:
 	@echo "Checking the frozen extraction source..."
-	@node --test scripts/check-extraction-source.test.mjs
+	@declared=$$(grep -c '^test(' scripts/check-extraction-source.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-extraction-source.test.mjs 2>&1); \
+	 status=$$?; \
+	 printf '%s\n' "$$out" >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ]; then \
+	   echo "lint-extraction-source: scripts/check-extraction-source.test.mjs declares no top-level test() -- the suite collects nothing and would still exit 0." >&2; \
+	   exit 1; \
+	 fi; \
+	 if [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-extraction-source: the suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   echo "  Either tests stopped registering, or they no longer start at column 0 -- in which case move this count deliberately." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[extraction-source] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-extraction-source.mjs --modules-root test/fixtures/extraction-source/agree
 
 lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source
