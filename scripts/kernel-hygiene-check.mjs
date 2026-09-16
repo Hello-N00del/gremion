@@ -1347,6 +1347,35 @@ check('t5 every integration bats suite is named by make test-integration and by 
     : null
 })
 
+// ── (e6) the production Secret template carries every client secret the ──────
+//        per-tenant realm template still needs
+//
+// B-01 deleted the boot import, so nothing substitutes the realm template's
+// `__*_CLIENT_SECRET__` sentinels at container start any more — buildTenantRealmDoc
+// places them at tenant-create time, reading the values out of the keycloak
+// Secret. A key dropped from k8s/overlays/production/secrets/_templates.example.yaml
+// is therefore SILENT: kustomize renders, Keycloak starts, and the miss only
+// surfaces much later as a tenant whose client has no secret. Post-condition:
+// every client-secret sentinel the realm template carries has a stringData key
+// of the same name in the keycloak Secret document.
+check('e6 every client-secret sentinel in the realm template has a key in the production keycloak Secret', () => {
+  const tmplPath = 'k8s/overlays/production/secrets/_templates.example.yaml'
+  if (!has(tmplPath)) return `${tmplPath} missing - the check would vacuously pass`
+  const base = read('docker/keycloak/realm-export.base.json')
+  const sentinels = [
+    ...new Set([...base.matchAll(/__([A-Z0-9_]*_CLIENT_SECRET)__/g)].map((m) => m[1])),
+  ]
+  if (sentinels.length === 0) {
+    return 'realm-export.base.json carries zero client-secret sentinels - the check would vacuously pass'
+  }
+  const doc = /name:[ \t]*keycloak-secret[^]*?(?=\n---)/.exec(read(tmplPath))
+  if (!doc) return `${tmplPath} declares no keycloak-secret document - the check would vacuously pass`
+  const missing = sentinels.filter((k) => !new RegExp(`^[ \t]+${k}:`, 'm').test(doc[0]))
+  return missing.length
+    ? `${tmplPath} keycloak-secret lacks ${missing.length} client-secret key(s) buildTenantRealmDoc needs: ${missing.join(', ')}`
+    : null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {
