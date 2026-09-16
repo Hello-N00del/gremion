@@ -67,6 +67,24 @@ check('a3 git submodule status is empty', () => {
 check('a4 install-bats.sh is gone', () =>
   has('test/install-bats.sh') ? 'test/install-bats.sh still present' : null)
 
+// B0 CARVE-OUT, shared by (a5), (h1) and (i1) below.
+//
+// docs/superpowers/specs/ holds the two operator-approved design specs (spec B,
+// spec D; 2026-09-15). They are committed BYTE-IDENTICAL to the approved
+// originals under a `cmp` gate, so they cannot be edited to satisfy a guard —
+// and they are the design record OF these very removals: spec B quotes the
+// retired wire root and the retired staging host precisely because B1a/B1b are
+// the units that delete them, and spec D explains why a module is cloned by
+// manifest rather than by submodule. A historical description is not an
+// instruction, which is what (a5)'s own comment already says.
+//
+// NARROW ON PURPOSE. The genuinely sensitive class — the six spec-A host
+// literals — is NOT carved out here: check (k1) below scans `docs` with no
+// exemption for this directory, and test/host/no-host-literals.bats scans the
+// whole tracked tree. Both still see these two files.
+const SPEC_DOCS_DIR = join(ROOT, 'docs', 'superpowers', 'specs')
+const SPEC_DOCS_REL = /^docs[/]superpowers[/]specs[/]/
+
 check('a5 no doc or build file tells the reader to init submodules for BATS', () => {
   const roots = ['docs', '.github', 'README.md', 'CONTRIBUTING.md', 'Makefile']
   // Match the INSTRUCTION, not the word. A doc may explain the history; what it
@@ -82,6 +100,7 @@ check('a5 no doc or build file tells the reader to init submodules for BATS', ()
     if (!existsSync(abs)) continue
     const files = statSync(abs).isDirectory() ? walk(abs) : [abs]
     for (const f of files) {
+      if (f.startsWith(SPEC_DOCS_DIR)) continue // see the B0 carve-out above
       if (/\.(png|jpg|svg|ico|pdf)$/i.test(f)) continue
       if (re.test(readFileSync(f, 'utf8'))) offenders.push(relative(ROOT, f).replace(/\\/g, '/'))
     }
@@ -766,6 +785,7 @@ const RETIRED_WIRE_ROOT = /(^|[^A-Za-z0-9._-])sturaos\.(?!com\b)[A-Za-z0-9_{*>%$
 //    is the one failure mode that gets a guard deleted.
 const WIRE_ROOT_EXEMPT_PATHS = [
   /^scripts\/kernel-hygiene-check\.mjs$/,
+  SPEC_DOCS_REL, // B0: the approved design specs — see the carve-out note at (a5)
 ]
 
 check('h1 no retired wire-root literal survives anywhere in the tree', () => {
@@ -975,6 +995,7 @@ const RETIRED_HOST_SCOPE = []
 const RETIRED_HOST_EXEMPT = [
   /^scripts[/]kernel-hygiene-check[.]mjs$/,
   /^test[/]setup[.]bats$/,
+  SPEC_DOCS_REL, // B0: the approved design specs — see the carve-out note at (a5)
 ]
 
 check('i1 no retired or unowned host appears in a shipped deploy, contract, CI or doc surface', () => {
@@ -1515,6 +1536,107 @@ check('e8 every env var with its own section in docs/ENVIRONMENT.md still has a 
   }
   return dead.length
     ? `docs/ENVIRONMENT.md documents ${dead.length} knob(s) with no live carrier left (comments only): ${dead.join(', ')}`
+    : null
+})
+
+// ── (k) no spec-A host literal in a tracked kernel DOCUMENT ────────────────
+//
+// Spec A §A names the operator's machine: an IPv4 prefix, an IPv6 allocation,
+// an inventory name, the provider's default hostname, an FQDN and a registrar.
+// This repository is public. test/host/no-host-literals.bats already scans the
+// whole tree for the same six under `make test-unit`; this rule is the
+// docs-surface half that runs under `make lint-hygiene`, so a leak introduced
+// by a documentation change is caught by the lint a docs PR actually runs.
+// Two homes, one enumeration kept in step by test/host/spec-docs.bats.
+//
+// Id allocation (binding contract): k1 is THIS rule. `k2` — no vertical or
+// Civitas literal outside verticals/ — belongs to D8 and is not defined here.
+//
+// NO WHOLE SPELLING IS COMMITTED HERE. Each pattern and each sample is built
+// from fragments at run time, because the tree-wide bats scan covers this file
+// too and a guard is not exempt from the rule it enforces.
+//
+// Separators are negated classes with a {0,2} bound rather than escaped dots:
+// a host survives longest in its regexp-escaped form (a HostRegexp leg, a
+// DOMAIN_REGEX value, an nft comment), and over-matching is the safe direction
+// for a leak guard.
+//
+// One entry per line for `name:`, at four-space indent: test/host/spec-docs.bats
+// counts those lines to prove this enumeration and the bats one stay in step.
+const HOST_LITERALS = [
+  {
+    name: 'edge-ipv4-prefix',
+    re: '159' + '[^0-9]{0,2}' + '195' + '[^0-9]',
+    sample: '159' + '.195' + '.10.20',
+  },
+  {
+    name: 'ipv6-allocation-prefix',
+    re: '2a0a' + '[^0-9a-z]{0,2}' + '4cc0',
+    sample: '2a0a' + ':' + '4cc0::1',
+  },
+  {
+    name: 'host-inventory-name',
+    re: 'gremion' + '[^a-z0-9\\s]{1,2}' + 'prod',
+    sample: 'gremion-' + 'prod',
+  },
+  {
+    name: 'provider-default-hostname',
+    re: 'quick' + 'srv',
+    sample: 'quick' + 'srv',
+  },
+  {
+    name: 'host-fqdn',
+    re: 'rs1' + '[^a-z0-9]{0,2}' + 'gremion' + '[^a-z0-9]{0,2}' + 'de',
+    sample: 'rs1' + '.gremion' + '.de',
+  },
+  {
+    name: 'registrar',
+    re: 'in' + 'wx',
+    sample: 'IN' + 'WX',
+  },
+]
+
+// <name>|<path> — an occurrence that is provably not a host literal.
+// registrar | docs/compliance/controller-processor-split.md
+//   The Art. 28 sub-processor table names the registrar as a supplier: a
+//   disclosure obligation, no address, no hostname, no credential. Same entry,
+//   same reason, as test/host/no-host-literals.bats. The check below fails if
+//   the occurrence goes away and this entry stays.
+const HOST_LITERAL_EXEMPT = new Set([
+  'registrar|docs/compliance/controller-processor-split.md',
+])
+
+check('k1 no spec-A host literal in a tracked kernel document', () => {
+  const files = execFileSync('git', ['ls-files', '--', 'docs', 'README.md'], {
+    cwd: ROOT, encoding: 'utf8',
+  }).split('\n').map((s) => s.trim()).filter(Boolean)
+  // Vacuity: a scan that reaches nothing reports clean.
+  if (files.length < 20) {
+    return `only ${files.length} tracked document(s) reached — the scan would pass vacuously`
+  }
+  const offenders = []
+  const spent = []
+  for (const lit of HOST_LITERALS) {
+    const re = new RegExp(lit.re, 'i')
+    // Dead-pattern self-proof: a pattern that stopped matching its own sample
+    // would otherwise report the tree clean.
+    if (!re.test(lit.sample)) return `pattern ${lit.name} no longer matches its own sample`
+    let exemptHit = false
+    for (const rel of files) {
+      const lines = readFileSync(join(ROOT, rel), 'utf8').split('\n')
+      for (let i = 0; i < lines.length; i++) {
+        if (!re.test(lines[i])) continue
+        if (HOST_LITERAL_EXEMPT.has(`${lit.name}|${rel}`)) { exemptHit = true; continue }
+        offenders.push(`${lit.name} ${rel}:${i + 1}`)
+      }
+    }
+    for (const entry of HOST_LITERAL_EXEMPT) {
+      if (entry.split('|')[0] === lit.name && !exemptHit) spent.push(entry)
+    }
+  }
+  if (spent.length) return `exemption(s) spent — the occurrence is gone, delete: ${spent.join(', ')}`
+  return offenders.length
+    ? `${offenders.length} spec-A host literal(s) in the public documentation surface: ${offenders.join(' | ')}`
     : null
 })
 

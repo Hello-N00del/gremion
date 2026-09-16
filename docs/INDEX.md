@@ -48,6 +48,7 @@ repositories — one per module — and carry their own docs.
 | [ops/host-tooling.md](./ops/host-tooling.md) | The `/opt/gremion` host tooling: the per-project env contract, every `gremion-*` command, the restricted deploy channel and the `noop` dry-run |
 | [ops/restore-runbook.md](./ops/restore-runbook.md) | Database backup-restore runbook |
 | [ops/go-live-gate.md](./ops/go-live-gate.md) | The go-live gate: the eight conditions an operator-run instance must prove against the running system before it may hold real users or real personal data |
+| [deployment-architecture.md](./deployment-architecture.md) | The deployment shape: two tiers, two colours, networks, the release tree, deploy/switch/rollback and verification |
 | [superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md](./superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md) | Spec B (approved 2026-09-15): kernel port-back, relocatability, release supply chain, the unit registry |
 | [superpowers/specs/spec-d-module-sdk-split-assembler-verticals-design.md](./superpowers/specs/spec-d-module-sdk-split-assembler-verticals-design.md) | Spec D (approved 2026-09-15): module SDK, one repo per module, assembler resolution, the StuRa vertical |
 | [runbooks/tenant-edge.md](./runbooks/tenant-edge.md) | Multi-tenancy edge: Traefik `x-forwarded-host` tenant resolution |

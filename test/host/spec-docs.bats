@@ -64,3 +64,25 @@ KERNEL_ROOT="${PROJECT_ROOT}"
   [[ "$output" == *"docs/superpowers/specs/spec-b-"* ]]
   [[ "$output" == *"B1a-realm-identity-and-boot-import"* ]]
 }
+
+@test "docs/deployment-architecture.md is tracked and uses documentation values only" {
+  run git -C "$KERNEL_ROOT" ls-files --error-unmatch -- docs/deployment-architecture.md
+  [ "$status" -eq 0 ]
+  grep -qF '203.0.113.0/24' "${KERNEL_ROOT}/docs/deployment-architecture.md"
+  grep -qF '2001:db8::/32'  "${KERNEL_ROOT}/docs/deployment-architecture.md"
+  grep -qF 'example.org'    "${KERNEL_ROOT}/docs/deployment-architecture.md"
+  # The ACME exemption is a named, accepted exposure — not an unremarked hole.
+  grep -qF 'acme-http@internal' "${KERNEL_ROOT}/docs/deployment-architecture.md"
+  grep -qF 'accepted exposure'  "${KERNEL_ROOT}/docs/deployment-architecture.md"
+}
+
+@test "the hygiene rule and the tree-wide bats scan enumerate the same six literals" {
+  local mjs
+  mjs="$(grep -cE "^    name: '" "${KERNEL_ROOT}/scripts/kernel-hygiene-check.mjs")"
+  [ "$mjs" -eq 6 ]
+  for n in edge-ipv4-prefix ipv6-allocation-prefix host-inventory-name \
+           provider-default-hostname host-fqdn registrar; do
+    grep -qF "name: '${n}'" "${KERNEL_ROOT}/scripts/kernel-hygiene-check.mjs"
+    grep -qF "  ${n}" "${KERNEL_ROOT}/test/host/no-host-literals.bats"
+  done
+}
