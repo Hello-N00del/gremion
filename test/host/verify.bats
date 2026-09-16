@@ -525,3 +525,19 @@ WAIVER_LITEMS=(2 6 4 1 5 5)
     [ "$status" -ne 0 ]
     [[ "$output" == *"release-1-waivers.md"* ]]
 }
+
+@test "bootstrap installs and enables the L:3 reboot gate, and its unit runs the verifier" {
+    local bs="${REPO_ROOT}/infra/host/bootstrap.sh"
+    local unit="${REPO_ROOT}/infra/host/templates/systemd/gremion-verify.service"
+    # The ledger promises section-L item 3 is not waived. Nothing asserted the
+    # install: ops.bats pins the unit's CONTENT, this pins that bootstrap ships it.
+    [ -f "$unit" ]
+    grep -qF 'gremion-verify.service' "$bs"
+    grep -qF 'systemctl enable gremion-verify.service' "$bs"
+    grep -qF 'assert "gremion-verify.service enabled at boot"' "$bs"
+    grep -q  '^WantedBy=multi-user.target' "$unit"
+    grep -q  '^ExecStart=${GREMION_ROOT}/bin/gremion-verify --reboot$' "$unit"
+    # And the ledger must still refuse to waive it.
+    run grep -nE '^\| `[a-z0-9-]+` \| §L:3 \|' "${REPO_ROOT}/docs/ops/release-1-waivers.md"
+    [ "$status" -ne 0 ]
+}
