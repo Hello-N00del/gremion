@@ -92,5 +92,20 @@
       "reason": "Its suite moves with it; a StuRa-tree copy would re-assert the superseded behaviour."
     }
   ],
-  "watchedRed": {}
+  "watchedRed": {
+    "verifier": "fresh agent, not the author of the guard (spec B §E)",
+    "on": "2026-09-16",
+    "scratchTree": "git clone --no-hardlinks of the kernel into the worktree-local .scratch/b3-red (git-excluded), removed afterwards; the plan spelled /tmp/b3-red, but this box forbids writing under any Temp path, and a clone is a clone wherever it sits",
+    "mutations": [
+      {
+        "what": "rm -rf gremion-ui/src/lib/components/dashboard — the StuRa-tree-wins copy, which cannot carry files the source lacks",
+        "observed": "11 refusal(s), one per dashboard file, exit 1"
+      },
+      {
+        "what": "cp StuRaOS gremion-ui/src/lib/theme/instance-theme.ts over the kernel's",
+        "observed": "PORT-BACK REFUSED: … now carries the StuRa-tree blob 3bb63384590138263cf6db35ae04d06ee4a7867a; kernel wins on this path (spec B §2.1) — exit 1, alongside the 11 from the first mutation, 12 refusal(s) in total"
+      }
+    ],
+    "afterRestore": "do-not-overwrite: 45 entries intact (43 must-exist, 2 kernel-ahead), exit 0 against the real kernel"
+  }
 }
