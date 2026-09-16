@@ -82,6 +82,14 @@ jobs:
       - name: Do-not-overwrite set intact (B3)
         run: make lint-port-back
 
+      # The module split takes every module repo from ONE StuRa-tree commit
+      # (docs/ops/extraction-source.md). A module.json that disagrees means the
+      # extraction straddled two source states; nothing else in the build reads
+      # that key. Delegates to the Makefile so a local `make lint` and CI cannot
+      # drift apart.
+      - name: Frozen extraction source
+        run: make lint-extraction-source
+
       - name: Validate Docker Compose config
         run: |
           # Provide stubs so docker compose config can resolve all references

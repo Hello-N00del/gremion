@@ -22,6 +22,10 @@ import {
   SHA_RE,
   parseFrozenExtractionSource,
   readFrozenExtractionSource,
+  collectModuleJson,
+  checkExtractionSourceAgreement,
+  checkVacuity,
+  runChecks,
 } from './check-extraction-source.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -67,4 +71,96 @@ test('the parser refuses an uppercase or short SHA', () => {
     () => parseFrozenExtractionSource(`extraction-source: ${FROZEN.slice(0, 12)}\n`),
     /no canonical line/
   )
+})
+
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+
+const FIXTURES = join(ROOT, 'test/fixtures/extraction-source/agree')
+
+function scratchModules(spec) {
+  const dir = mkdtempSync(join(tmpdir(), 'b00-modules-'))
+  for (const [id, body] of Object.entries(spec)) {
+    mkdirSync(join(dir, id), { recursive: true })
+    writeFileSync(
+      join(dir, id, 'module.json'),
+      typeof body === 'string' ? body : JSON.stringify(body, null, 2)
+    )
+  }
+  return dir
+}
+
+test('the committed fixture pair agrees with the frozen source', () => {
+  const entries = collectModuleJson(FIXTURES)
+  assert.equal(entries.length, 2, 'fixture must carry two module.json, or the RED case is untestable')
+  assert.deepEqual(entries.map((e) => e.id), ['calendar', 'users'])
+  assert.deepEqual(checkExtractionSourceAgreement(entries, FROZEN), [])
+})
+
+test('checkExtractionSourceAgreement(manifests) defaults to the kernel doc — the form D2 calls', () => {
+  // Spec D D.1.2: exactly one validator. D2's validateDistManifest in
+  // scripts/validate-module-schemas.mjs imports THIS function and has no root
+  // of its own to pass, so the one-argument form must read DOC_PATH itself.
+  // The entry shape below is what D2 maps each module.json it validates onto.
+  assert.deepEqual(checkExtractionSourceAgreement(collectModuleJson(FIXTURES)), [])
+  const bad = [{ id: 'x', path: 'x/module.json', extractionSource: OTHER, parseError: null }]
+  assert.match(
+    checkExtractionSourceAgreement(bad).join('\n'),
+    /disagrees with the frozen source f276af5925abacdcfd05f6613fc11afff2d804c5/
+  )
+})
+
+test('checkExtractionSourceAgreement goes RED when one module.json carries a different SHA', (t) => {
+  const dir = scratchModules({
+    users: { schemaVersion: 1, id: 'users', extractionSource: FROZEN },
+    calendar: { schemaVersion: 1, id: 'calendar', extractionSource: OTHER },
+  })
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const problems = checkExtractionSourceAgreement(collectModuleJson(dir), FROZEN)
+  assert.ok(problems.length >= 2, problems.join('\n'))
+  assert.match(problems.join('\n'), /calendar\/module\.json: extractionSource 0123456789abcdef/)
+  assert.match(problems.join('\n'), /two module\.json disagree on extractionSource/)
+})
+
+test('checkExtractionSourceAgreement goes RED on an absent key', (t) => {
+  const dir = scratchModules({ users: { schemaVersion: 1, id: 'users' } })
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  assert.match(
+    checkExtractionSourceAgreement(collectModuleJson(dir), FROZEN).join('\n'),
+    /extractionSource absent/
+  )
+})
+
+test('checkExtractionSourceAgreement goes RED on an uppercase, short or non-string value', (t) => {
+  const dir = scratchModules({
+    a: { id: 'a', extractionSource: FROZEN.toUpperCase() },
+    b: { id: 'b', extractionSource: FROZEN.slice(0, 12) },
+    c: { id: 'c', extractionSource: 12345 },
+  })
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const problems = checkExtractionSourceAgreement(collectModuleJson(dir), FROZEN)
+  assert.equal(problems.filter((p) => /is not 40 lowercase hex/.test(p)).length, 3, problems.join('\n'))
+})
+
+test('unparseable module.json is a problem, not a crash', (t) => {
+  const dir = scratchModules({ users: '{ not json' })
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  assert.match(
+    checkExtractionSourceAgreement(collectModuleJson(dir), FROZEN).join('\n'),
+    /not parseable JSON/
+  )
+})
+
+test('a zero-module run is refused unless allowZero — it would pass vacuously', (t) => {
+  const dir = scratchModules({})
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const entries = collectModuleJson(dir)
+  assert.deepEqual(entries, [])
+  assert.match(checkVacuity(entries, {}).join('\n'), /would pass vacuously/)
+  assert.deepEqual(checkVacuity(entries, { allowZero: true }), [])
+})
+
+test('runChecks reports zero problems for the committed repo state plus the fixture pair', () => {
+  assert.deepEqual(runChecks(ROOT, { modulesRoot: FIXTURES }).problems, [])
+  assert.equal(runChecks(ROOT, { modulesRoot: FIXTURES }).frozen, FROZEN)
 })

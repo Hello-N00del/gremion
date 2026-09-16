@@ -42,3 +42,42 @@ export function parseFrozenExtractionSource(docText) {
 export function readFrozenExtractionSource(root = KERNEL_ROOT) {
   return parseFrozenExtractionSource(readFileSync(join(root, DOC_PATH), 'utf8'))
 }
+
+/**
+ * Absent, malformed, or not equal to the frozen SHA — and the explicit pairwise
+ * report. `manifests` is a list of { id, path, extractionSource, parseError }:
+ * collectModuleJson produces it from disk, and D2's validateDistManifest maps
+ * each module.json it is validating onto the same shape. The second argument is
+ * optional so the one-argument form `checkExtractionSourceAgreement(manifests)`
+ * — the form D2 calls, having no kernel root of its own — reads the committed
+ * record in DOC_PATH.
+ */
+export function checkExtractionSourceAgreement(manifests, frozen = readFrozenExtractionSource()) {
+  const problems = []
+  const seen = new Map() // sha -> first module.json that carried it
+  for (const e of manifests) {
+    if (e.parseError) {
+      problems.push(`${e.path}: not parseable JSON — ${e.parseError}`)
+      continue
+    }
+    const v = e.extractionSource
+    if (v === undefined) {
+      problems.push(`${e.path}: extractionSource absent`)
+      continue
+    }
+    if (typeof v !== 'string' || !SHA_RE.test(v)) {
+      problems.push(`${e.path}: extractionSource ${JSON.stringify(v)} is not 40 lowercase hex`)
+      continue
+    }
+    if (v !== frozen)
+      problems.push(
+        `${e.path}: extractionSource ${v} disagrees with the frozen source ${frozen} recorded in ${DOC_PATH}`
+      )
+    if (!seen.has(v)) seen.set(v, e.path)
+  }
+  if (seen.size > 1) {
+    const [[a, pa], [b, pb]] = [...seen.entries()].slice(0, 2)
+    problems.push(`two module.json disagree on extractionSource: ${pa} says ${a}, ${pb} says ${b}`)
+  }
+  return problems
+}

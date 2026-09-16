@@ -4,7 +4,7 @@
         update-legal update-legal-k8s \
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
-        lint-hygiene lint-cve-floors lint-packages lint-postgres-major \
+        lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -289,7 +289,20 @@ lint-postgres-major:
 	@node --test scripts/check-postgres-major.test.mjs
 	@node scripts/check-postgres-major.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major
+# The split extracts ten module repositories from ONE commit of the StuRa tree.
+# The SHA is recorded once (docs/ops/extraction-source.md) and echoed by every
+# module.json; two module.json that disagree mean the extraction straddled two
+# source states, which nothing else in the build would notice. The suite runs
+# first, for the same reason lint-cve-floors runs its own: a collector that
+# silently returned [] would let the guard pass vacuously, so the guard's RED
+# cases are proven on every lint. The committed fixture pair is passed as
+# --modules-root so the agreement arm is non-vacuous here too.
+lint-extraction-source:
+	@echo "Checking the frozen extraction source..."
+	@node --test scripts/check-extraction-source.test.mjs
+	@node scripts/check-extraction-source.mjs --modules-root test/fixtures/extraction-source/agree
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source
 	@echo "All linters passed."
 
 # ── Repository labels ────────────────────────────────────────────────────
