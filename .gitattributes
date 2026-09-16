@@ -72,3 +72,9 @@ infra/host/ops/** text eol=lf
 # found before a single test is collected. Measured: git ls-files --eol reported
 # w/crlf for it.
 test/test_helper/*.bash text eol=lf
+
+# B0: the two approved design specs are committed byte-identical to the
+# operator-approved originals (a `cmp` gate at commit time). Nothing above
+# matches *.md, so core.autocrlf=true would check them out with CRLF on Windows
+# and the byte-identity claim would stop being reproducible after a checkout.
+docs/superpowers/specs/*.md text eol=lf

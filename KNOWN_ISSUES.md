@@ -121,6 +121,15 @@ than they are:
 
 ### The Keycloak realm (T11) — the login-theme half is CLOSED
 
+> **The units that own this section are named in the kernel (spec D §"Kept as
+> origin story").** Its resolution is specified in
+> `docs/superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md`:
+> `B1a-realm-identity-and-boot-import` deletes the boot import and the realm
+> identity — that unit has landed, and every entry below is written from the
+> tree it left — and `B1b-theme-rename-and-hygiene-guard` takes the theme
+> directory and the hygiene carve-out after the first deploy. Cite the in-repo
+> spec path, never a vault path.
+
 The realm half of this debt is still open and is closed by the realm-identity
 work (the boot import and everything that spells the realm id). The
 **login-theme** half is paid, and the argument this section used to give for
