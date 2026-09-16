@@ -14,7 +14,10 @@ extraction-source: f276af5925abacdcfd05f6613fc11afff2d804c5
 
 - The StuRa tree carries the annotated tag `extraction-source` — that exact
   string — at that commit. `ARCHIVED.md` in the archived StuRa tree names it
-  verbatim.
+  verbatim. The tag must be present on that repository's `origin` before any
+  module repository is extracted, because every extraction runs against a clone;
+  `git ls-remote --tags origin extraction-source` returning nothing means the
+  freeze exists only on one machine.
 - Every `module.json` echoes the same value under `"extractionSource"`, as 40
   lowercase hexadecimal characters. It is a per-module field: the internal
   modules endpoint serialises it per enabled module, and the agreement check
