@@ -77,9 +77,27 @@ KERNEL_ROOT="${PROJECT_ROOT}"
 }
 
 @test "the hygiene rule and the tree-wide bats scan enumerate the same six literals" {
-  local mjs
-  mjs="$(grep -cE "^    name: '" "${KERNEL_ROOT}/scripts/kernel-hygiene-check.mjs")"
+  # Count INSIDE the HOST_LITERALS array, not across the whole 1100-line
+  # script. Counted file-wide the number is 6 only because HOST_LITERALS
+  # happens to be the sole four-space-indented `name:` key in the file today;
+  # B1b and D8 both edit this script next, and the first unrelated object
+  # literal they add would turn a test about the spec-A host literals red for a
+  # reason that has nothing to do with them.
+  local block mjs res samples
+  block="$(awk '/^const HOST_LITERALS = \[$/{f=1;next} f && /^\]$/{f=0} f' \
+      "${KERNEL_ROOT}/scripts/kernel-hygiene-check.mjs")"
+  [ -n "$block" ]
+  # The range really stopped at the array: the next declaration is outside it.
+  run bash -c "printf '%s\n' \"\$1\" | grep -q HOST_LITERAL_EXEMPT" _ "$block"
+  [ "$status" -ne 0 ]
+  mjs="$(printf '%s\n' "$block" | grep -cE "^    name: '")"
   [ "$mjs" -eq 6 ]
+  # Every entry carries the pair that makes it a rule; a name with no regex
+  # would enumerate a literal nothing scans for.
+  res="$(printf '%s\n' "$block" | grep -cE "^    re: ")"
+  samples="$(printf '%s\n' "$block" | grep -cE "^    sample: ")"
+  [ "$res" -eq 6 ]
+  [ "$samples" -eq 6 ]
   for n in edge-ipv4-prefix ipv6-allocation-prefix host-inventory-name \
            provider-default-hostname host-fqdn registrar; do
     grep -qF "name: '${n}'" "${KERNEL_ROOT}/scripts/kernel-hygiene-check.mjs"
