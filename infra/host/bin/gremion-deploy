@@ -21,9 +21,11 @@
 #      immediately after `up -d` of the INACTIVE colour and before any switch; a
 #      violation tears that colour down again, so nothing foreign is ever routed to.
 #
-# BLOCKED: the app compose project, its pins layer, its release.json and its
-# `migrate` service are spec B's. Until they exist at the tag this program exits
-# 3 with `BLOCKED: <file> absent (spec B)`.
+# BLOCKED: the app compose project, its pins layer, its release.json, its
+# `migrate` service and the signed waiver ledger the verifier reads
+# (docs/ops/release-1-waivers.md) are spec B's. Until they exist at the tag this
+# program exits 3 with `BLOCKED: <file> absent (spec B)`, at step 2 - before the
+# token is spent on a pull and before any colour is stopped.
 #
 # EXIT CODES  0 ok · 1 assertion/post-condition failed · 2 usage/precondition · 3 blocked
 set -euo pipefail
@@ -161,11 +163,35 @@ compose() {
     ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" "$@" )
 }
 
+# release_waiver_ledger <release dir> -> the signed ledger this deploy verifies
+# against. An exported GREMION_WAIVER_LEDGER wins, so the recovery that
+# docs/ops/host-tooling.md documents for a release tree with no ledger (a
+# rollback to a tag cut before the ledger existed) actually works in the deploy
+# path. Written as a bare command prefix at steps 9 and 11, the assignment
+# OVERRODE whatever the operator had exported and the documented workaround
+# changed nothing.
+release_waiver_ledger() { # <release dir>
+    printf '%s' "${GREMION_WAIVER_LEDGER:-$1/docs/ops/release-1-waivers.md}"
+}
+
 require_spec_b_contracts() { # <release dir>
-    local dir="$1" f
+    local dir="$1" f ledger
     for f in docker-compose.app.yml docker-compose.pins.yml release.json; do
         [[ -f "$dir/$f" ]] || blocked "$f absent (spec B)"
     done
+    # The signed waiver ledger is a hard PRECONDITION of gremion-verify (exit 2,
+    # not a failed assertion), and the only steps that run the verifier are 9
+    # and 11. Step 9 is reached AFTER step 6 has stopped the old colour and step
+    # 7 has applied migrations, so a release tree with no ledger used to pass
+    # this function, stop the old colour, migrate, and only then die - leaving
+    # the host with migrations applied, the old colour down and no verified
+    # colour. --no-switch skips 10-12 but NOT 9, so gremion-rollback's redeploy
+    # path meets it too. It is a release-tree contract like the three above, so
+    # it is refused where they are refused: before the token is spent on a pull
+    # and long before anything is stopped.
+    ledger="$(release_waiver_ledger "$dir")"
+    [[ -f "$ledger" ]] \
+        || blocked "docs/ops/release-1-waivers.md absent (spec B): $ledger"
 }
 
 # The inactive colour is the one not in runtime/active-colour; blue on a
@@ -498,7 +524,8 @@ evict_port() { # <container>
 }
 # ── step 9 — verify the new colour through the internal entrypoint (§F.4.9) ─
 step_9_verify_colour() {
-    local prog; prog="$(bin_path gremion-verify)"
+    local prog ledger
+    prog="$(bin_path gremion-verify)"
     # The verifier refuses to run without the signed waiver ledger, and it reads
     # it out of the release tree it is verifying. bin_path resolves to the
     # INSTALLED verifier under $(gremion_root)/bin, which has no sibling tree,
@@ -506,8 +533,11 @@ step_9_verify_colour() {
     # moves it, and bootstrap.sh never creates it at all. Without this export a
     # freshly bootstrapped host died at this step with exit 2 and could never
     # reach the step that would have created current/.
-    GREMION_WAIVER_LEDGER="$RELEASE_DIR/docs/ops/release-1-waivers.md" \
-        "$prog" --colour "$NEW_COLOUR"
+    # release_waiver_ledger() keeps an exported override; step 2 has
+    # already refused this release tree if neither it nor the tree's own
+    # copy exists, so there is nothing left to discover here.
+    ledger="$(release_waiver_ledger "$RELEASE_DIR")"
+    GREMION_WAIVER_LEDGER="$ledger" "$prog" --colour "$NEW_COLOUR"
     ok "colour ${NEW_COLOUR} passes the §C contract on the internal entrypoint"
 }
 
@@ -527,12 +557,16 @@ step_10_switch() {
 
 # ── step 11 — verify the public routers (§F.4.11) ───────────────────────────
 step_11_verify_public() {
-    local prog; prog="$(bin_path gremion-verify)"
+    local prog ledger
+    prog="$(bin_path gremion-verify)"
     # Same ledger as step 9, and for the same reason: step 12 has not moved
     # $ROOT/current yet, so without this the public verification would print the
     # PREVIOUS release's waiver table for the release it just switched to.
-    GREMION_WAIVER_LEDGER="$RELEASE_DIR/docs/ops/release-1-waivers.md" \
-        "$prog"
+    # release_waiver_ledger() keeps an exported override; step 2 has
+    # already refused this release tree if neither it nor the tree's own
+    # copy exists, so there is nothing left to discover here.
+    ledger="$(release_waiver_ledger "$RELEASE_DIR")"
+    GREMION_WAIVER_LEDGER="$ledger" "$prog"
     ok "public edge verified"
 }
 
