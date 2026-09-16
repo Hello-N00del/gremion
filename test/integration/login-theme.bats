@@ -69,6 +69,21 @@ setup() {
     if [ -z "$THEME_REALM" ]; then
         skip "THEME_REALM is unset - set it to the realm whose login page to fetch (see header)"
     fi
+    # B-01: an EMPTY realm skips, but an unresolved `__SENTINEL__` does not - it
+    # is a non-empty name no Keycloak ever has, so every assertion below fails
+    # on a 404 and the suite reads like a theme regression. The realm template's
+    # own `realm` field is exactly such a sentinel (`__REALM_NAME__`, overwritten
+    # by buildTenantRealmDoc at tenant-create time), so a caller deriving
+    # THEME_REALM from the template lands here. Fail, loudly and once: this is a
+    # caller misconfiguration, not a reason to skip.
+    case "$THEME_REALM" in
+        __*__)
+            echo "FAIL: THEME_REALM is the unresolved template sentinel ${THEME_REALM}." >&2
+            echo "      No realm is named that. Point THEME_REALM at a realm that EXISTS" >&2
+            echo "      (the CI integration job creates one from .env's KEYCLOAK_REALM)." >&2
+            return 1
+            ;;
+    esac
     if [ -z "$KC_ADMIN_USER" ] || [ -z "$KC_ADMIN_PASSWORD" ]; then
         skip "KC_ADMIN_USER/KC_ADMIN_PASSWORD unset - the expected display name comes from the Admin API"
     fi

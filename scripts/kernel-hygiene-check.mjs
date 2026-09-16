@@ -1376,6 +1376,52 @@ check('e6 every client-secret sentinel in the realm template has a key in the pr
     : null
 })
 
+// ── (t6) the CI integration job creates the realm it tests ──────────────────
+//
+// B-01 deleted the boot import, so the realm test/integration/login-theme.bats
+// reads the SERVED login page from has to be created by the job itself. The
+// first draft of this wiring derived the realm under test from the realm
+// TEMPLATE's `realm` field — which B-01 turns into the `__REALM_NAME__`
+// sentinel. Nothing creates a realm by that name, login-theme.bats skips only
+// on an EMPTY value, and the step rejects skips on purpose, so the whole
+// live-Keycloak step went red for a reason that reads as a theme bug.
+//
+// Post-conditions, read off ci.yml itself: the realm under test is never
+// derived from the template, and the job creates a realm BEFORE the line that
+// runs the suite.
+check('t6 the CI integration job creates the realm under test and never derives it from the realm template', () => {
+  const ci = read('.github/workflows/ci.yml')
+  const start = ci.indexOf('\n  integration-test:\n')
+  if (start < 0) return 'ci.yml declares no integration-test job - the check would vacuously pass'
+  const rest = ci.slice(start + 1)
+  const next = /\n {2}[A-Za-z0-9_-]+:\n/.exec(rest.slice(1))
+  const job = next ? rest.slice(0, next.index + 1) : rest
+  const lines = job.split('\n').filter((l) => !/^\s*#/.test(l))
+
+  const assigns = lines.filter((l) => /\bTHEME_REALM=/.test(l))
+  if (assigns.length === 0) return 'the integration job never sets THEME_REALM - the check would vacuously pass'
+  const fromTemplate = assigns.filter((l) => /realm-export(\.base)?\.json/.test(l))
+  if (fromTemplate.length) {
+    return `THEME_REALM is derived from the realm TEMPLATE, whose realm field is the __REALM_NAME__ sentinel: ${fromTemplate.join(' | ').trim()}`
+  }
+
+  const batsIdx = lines.findIndex((l) => /\bbats\b/.test(l) && l.includes('test/integration/login-theme.bats'))
+  if (batsIdx < 0) return 'the integration job runs login-theme.bats nowhere - the check would vacuously pass'
+  const createIdx = lines.findIndex((l) => /-X POST\b/.test(l) && /\/admin\/realms\b/.test(l))
+  if (createIdx < 0) {
+    return 'the integration job never creates a realm (no POST to /admin/realms), so login-theme.bats has no realm to read'
+  }
+  if (createIdx > batsIdx) {
+    return `the realm is created at line ${createIdx + 1} of the job, AFTER login-theme.bats runs at line ${batsIdx + 1}`
+  }
+
+  const fixture = 'test/integration/fixtures/render-realm-fixture.py'
+  if (job.includes('render-realm-fixture.py') && !has(fixture)) {
+    return `the integration job calls ${fixture}, which does not exist`
+  }
+  return null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {
