@@ -1,0 +1,15 @@
+# Fixture: the fragment shape D6/D13 ship. Only the postgres block matters here.
+services:
+  calendar-postgres:
+    image: postgres:18-alpine
+    x-gremion-tier: state
+    volumes:
+      # The leaf's data mount sits where the PINNED major's image puts PGDATA.
+      # A fragment that carries the right tag and the wrong mount crash-loops,
+      # so the fixture has to declare one for the check to have anything to read.
+      - calendar-pg-data:/var/lib/postgresql
+  calendar-service:
+    image: ghcr.io/hello-n00del/gremion-calendar@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    x-gremion-tier: app
+volumes:
+  calendar-pg-data:

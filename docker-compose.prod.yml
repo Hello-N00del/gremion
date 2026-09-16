@@ -26,7 +26,7 @@ services:
   # connection-budget invariant asserts (MAX_CONNECTIONS in
   # gremion-ui/src/lib/server/db/pool-registry.ts, unit-tested) so the budget
   # reflects runtime reality instead of relying on the image default
-  # (postgres:16-alpine also defaults to 100 — this pin makes the contract
+  # (postgres:18-alpine also defaults to 100 — this pin makes the contract
   # explicit and survives image-default changes).
   # NOTE: `command` only takes effect on container RECREATE, not restart.
   # Runtime verification deferred to S4 — docs/runbooks/pgbouncer.md.

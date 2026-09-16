@@ -25,7 +25,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: init-databases
-          image: postgres:16-alpine
+          image: postgres:18-alpine
           # G-036: container-level baseline-PSS hardening.
           securityContext:
             allowPrivilegeEscalation: false
@@ -39,10 +39,10 @@ spec:
             - name: init-scripts
               mountPath: /scripts
             - name: data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: postgres:18-alpine
           # G-036: container-level baseline-PSS hardening.
           securityContext:
             allowPrivilegeEscalation: false
@@ -76,7 +76,7 @@ spec:
             failureThreshold: 3
           volumeMounts:
             - name: data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql
             - name: init-scripts
               mountPath: /docker-entrypoint-initdb.d
       volumes:

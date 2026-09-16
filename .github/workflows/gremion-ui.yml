@@ -52,7 +52,7 @@ jobs:
     # smoke assertion would fail with a meaningless "Service Unavailable".
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: gremion
           POSTGRES_PASSWORD: gremion_test
@@ -236,7 +236,7 @@ jobs:
         working-directory: gremion-ui
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: gremion
           POSTGRES_PASSWORD: gremion_test

@@ -1,0 +1,16 @@
+# Fixture: the same fragment with its leaf Postgres left on an older major AND
+# on the pre-18 data mount. This file EXISTS to be stale —
+# scripts/check-postgres-major.mjs names
+# test/host/fixtures/postgres-major/tree-stale/ in EXCLUDED for exactly that
+# reason, and nothing else under the fixture directory is excluded.
+services:
+  calendar-postgres:
+    image: postgres:17-alpine
+    x-gremion-tier: state
+    volumes:
+      - calendar-pg-data:/var/lib/postgresql/data
+  calendar-service:
+    image: ghcr.io/hello-n00del/gremion-calendar@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    x-gremion-tier: app
+volumes:
+  calendar-pg-data:

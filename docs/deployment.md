@@ -23,7 +23,7 @@ The governance-only kernel runs **7 default services**:
 
 | Service | Image | Role |
 |---------|-------|------|
-| `postgres` | `postgres:16-alpine` | Database for Keycloak, the app data plane, and the tenancy control plane |
+| `postgres` | `postgres:18-alpine` | Database for Keycloak, the app data plane, and the tenancy control plane |
 | `keycloak` | `quay.io/keycloak/keycloak` | Identity provider (OIDC/SSO, realms, LoA/ACR step-up) |
 | `gremion-ui` | `ghcr.io/hello-n00del/gremion-ui` † | The admin shell — unified SvelteKit app, built from `gremion-ui/` |
 | `gremion-public` | `ghcr.io/hello-n00del/gremion-public` † | Read-only public portal (no auth, no sessions), built from `gremion-public/` |
