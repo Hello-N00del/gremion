@@ -754,19 +754,13 @@ check('f6 every label .github/ references is declared in .github/labels.yml', ()
 // scheme) is not a wire literal and is not flagged.
 const RETIRED_WIRE_ROOT = /(^|[^A-Za-z0-9._-])sturaos\.(?!com\b)[A-Za-z0-9_{*>%$-]/i
 
-// PATH CARVE-OUTS — two, and each is a place where `sturaos.` is provably not a
-// subject:
+// PATH CARVE-OUT — one, and it is the only place where `sturaos.` is provably
+// not a subject:
 //
-//  - docker/keycloak/themes/sturaos/** — the Keycloak login theme is NAMED
-//    sturaos, and its files reference `css/sturaos.v2.css`: a stylesheet
-//    FILENAME that Keycloak serves by path. Renaming it 404s the login page.
-//    Theme naming is the Gremion-rename ticket's job (gremion#21), not the wire
-//    root's.
 //  - scripts/kernel-hygiene-check.mjs — this file. It must be able to quote the
 //    pattern it forbids; without the carve-out the guard can never pass, which
 //    is the one failure mode that gets a guard deleted.
 const WIRE_ROOT_EXEMPT_PATHS = [
-  /^docker\/keycloak\/themes\/sturaos\//,
   /^scripts\/kernel-hygiene-check\.mjs$/,
 ]
 
@@ -790,6 +784,65 @@ check('h1 no retired wire-root literal survives anywhere in the tree', () => {
   }
   return offenders.length
     ? `retired wire root still on the wire in ${offenders.length} place(s): ${offenders.join(' | ')}`
+    : null
+})
+
+// ── (h2) the retired product token as a BARE identifier ────────────────────
+//
+// (h1) above requires a trailing dot, because it owns the NATS subject root.
+// That trailing dot is exactly how the login theme survived the public flip:
+// `themes/sturaos/`, `loginTheme: "sturaos"` and `realms/sturaos` are the token
+// standing alone, and h1 walked past every one of them while reporting clean.
+// This rule is the token as an IDENTIFIER, with no dot required.
+//
+// CASE-SENSITIVE, lower-case only, and deliberately so. `StuRaOS` is the name
+// of a vertical (D-02) and of the issues this repo cites; it is a proper noun in
+// prose with its own zero-tolerance owner at gremion-ui/src/lib/brand.guard
+// .test.ts:70-71 (the FORBIDDEN entry `product "StuRaOS"`, empty allow-list).
+// What this rule owns is the lower-case identifier: a directory name, a realm
+// segment, a message-key prefix, a stylesheet filename.
+const RETIRED_PRODUCT_TOKEN = /(^|[^A-Za-z0-9_-])sturaos([^A-Za-z0-9_-]|$)/
+// ALLOW-LIST - three kinds of entry, each with its reason, and it does not grow
+// without one:
+//  - this file, which must be able to spell what it forbids;
+//  - gremion-ui/scripts/install-git-hooks.mjs, whose MARKER_BEGIN/MARKER_END
+//    (:29-30) delimit the block ALREADY WRITTEN into every developer's
+//    .git/hooks/pre-commit. Changing the marker orphans every installed block:
+//    the installer would no longer find its own managed region, and would
+//    append a second one beside it;
+//  - the four SHA-pinned APPLIED migrations. Their bytes are pinned in
+//    baseline-hashes.json (B7) and 008 is B6's single named byte-equality
+//    exception; editing one is a schema-integrity failure, not a rename. All
+//    four are listed on BYTE-IMMUTABILITY grounds, not on a current hit:
+//    measured at f7ac826 only 043:50 carries the token at all, and as the
+//    capital `StuRaOS` in a comment, which this case-sensitive rule would not
+//    match anyway; 008, 042 and 048 carry no `stura` token whatsoever.
+const PRODUCT_TOKEN_EXEMPT_PATHS = [
+  /^scripts\/kernel-hygiene-check\.mjs$/,
+  /^gremion-ui\/scripts\/install-git-hooks\.mjs$/,
+  /^gremion-ui\/migrations\/008_public_portal\.sql$/,
+  /^gremion-ui\/migrations\/042_protocol_resolution_required_majority\.sql$/,
+  /^gremion-ui\/migrations\/043_audit_log_hash_chain\.sql$/,
+  /^gremion-ui\/migrations\/048_resolution_decided_at\.sql$/,
+]
+
+check('h2 the retired product token survives nowhere as a bare identifier', () => {
+  const files = execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' })
+    .split('\n').map((s) => s.trim()).filter(Boolean)
+  if (files.length === 0) return 'git ls-files matched zero files — the check would vacuously pass'
+  const offenders = []
+  for (const rel of files) {
+    if (/\.(png|jpe?g|gif|svg|ico|pdf|woff2?)$/i.test(rel)) continue
+    if (PRODUCT_TOKEN_EXEMPT_PATHS.some((re) => re.test(rel))) continue
+    if (rel.startsWith('docs/superpowers/specs/')) continue // the specs quote the rename they order
+    const abs = join(ROOT, rel)
+    if (!existsSync(abs)) continue
+    readFileSync(abs, 'utf8').split('\n').forEach((line, i) => {
+      if (RETIRED_PRODUCT_TOKEN.test(line)) offenders.push(`${rel}:${i + 1} ${line.trim().slice(0, 100)}`)
+    })
+  }
+  return offenders.length
+    ? `the retired product token is still a live identifier in ${offenders.length} place(s): ${offenders.join(' | ')}`
     : null
 })
 
