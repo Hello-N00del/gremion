@@ -10,7 +10,8 @@
 #   2. Creates .env and legal/legal.env from their .example files
 #   3. Generates random secrets for all passwords
 #   4. Makes helper scripts executable
-#   5. Mints internal TLS certs + regenerates the realm export
+#   5. Mints internal TLS certs (B-01: there is no realm export to regenerate;
+#      every realm is composed at tenant-create time)
 #   6. Builds and starts the core services (postgres, keycloak, gremion-ui)
 #   7. Waits for gremion-ui to become healthy and prints the app URL
 # ============================================================

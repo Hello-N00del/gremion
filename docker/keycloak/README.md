@@ -13,8 +13,10 @@ wrapper and no secret-substitution script — compose, the k8s base and the
 
 Every tenant realm is composed at **provisioning time** by `buildTenantRealmDoc`
 (`gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts`) and created through
-the master bootstrap admin. That function is the **only** consumer of
-`realm-export.base.json`. It:
+the master bootstrap admin. That function is the only consumer of
+`realm-export.base.json` **on the deploy path** — the offline generator below
+(`gen-realm-export.ts`) reads the same file, and so do its vitest suites, but
+nothing reads it at boot or at run time. It:
 
 - overwrites the `"realm": "__REALM_NAME__"` sentinel with the tenant's realm
   name (which defaults to the tenant slug);
