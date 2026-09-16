@@ -132,5 +132,21 @@ Two guards, both watched RED before they were trusted:
   (`server_version_num=180006`), `data_directory=/var/lib/postgresql/18/docker`,
   `keycloak` / `gremion` / `control` created.
 
+Beyond the two guards, the kernel's own SQL has been executed on the pin once,
+by hand, because the bump also changed the base distro of the CI service
+containers (the old bare `16` Debian image → the pinned alpine/musl one) and GitHub Actions
+are administratively disabled on this account, so nothing in CI could say so.
+Replicating the `gremion-ui` workflow's migrate step locally on 2026-09-16
+against `postgres:18-alpine` 18.6 — `tsx gremion-ui/scripts/run-migrations-verified.mjs`
+with `GREMION_DISABLE_SEEDS=true` — ran the control plane and then fleet-migrated
+the `default` tenant: `[run-migrations-verified] all tenants migrated + verified
+(1 tenant(s))`, last applied `048_resolution_decided_at.sql`. Read back off the
+running server afterwards: 3 rows in the control `schema_migrations`, 19 in the
+data plane (the 22-file manifest minus the three seed files
+`005_dev_seed.sql`, `006_full_seed.sql`, `011_org_units_dev_seed.sql` that
+`GREMION_DISABLE_SEEDS` skips, `db.ts:192`), and 22 tables in `public`. This is
+a one-off measurement, not a guard: the standing signal remains the workflow,
+whenever Actions are re-enabled.
+
 The C-collation requirement for Synapse's database is `B31-postgres-c-collation`
 and is unaffected by the major.
