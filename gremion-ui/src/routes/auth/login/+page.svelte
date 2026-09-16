@@ -6,7 +6,7 @@
   import PageTitle from '$lib/components/PageTitle.svelte'
 
   // CONFORMANCE §1 / HANDOVER P1: the real login form is the Keycloak login
-  // THEME (docker/keycloak/themes/sturaos/login/). This SvelteKit page is no
+  // THEME (docker/keycloak/themes/gremion/login/). This SvelteKit page is no
   // longer an interstitial card — it just bounces straight to Keycloak, except
   // for two terminal notices that must NOT auto-redirect.
   function getSafeCallbackUrl(): string {

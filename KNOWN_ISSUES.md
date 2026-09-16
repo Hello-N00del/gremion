@@ -119,7 +119,13 @@ than they are:
   change that has to be watched fail first, so it is entered here rather than
   done blind.
 
-### The Keycloak realm is still `sturaos` (T11)
+### The Keycloak realm (T11) — the login-theme half is CLOSED
+
+The realm half of this debt is still open and is closed by the realm-identity
+work (the boot import and everything that spells the realm id). The
+**login-theme** half is paid, and the argument this section used to give for
+leaving it is refuted below rather than deleted, because that argument was
+specific and a reader who remembers it is owed the refutation.
 
 - `docker/keycloak/realm-export.base.json` and `realm-export.json` declare
   `"realm": "sturaos"`. Their `"displayName"` is **not** debt — it is now
@@ -130,15 +136,39 @@ than they are:
   `${IMPORT_DIR}/sturaos-realm.json` and `sturaos-users-0.json`. These track the
   realm id, not branding: Keycloak resolves the partial-import users file by the
   `<realm>-users-N.json` convention.
-- The login theme directory is `docker/keycloak/themes/sturaos/`, its stylesheet
-  filename carries the same name (renaming it 404s the login page — the
-  stylesheet is served by path), and every `.ftl` in it references
-  `sturaos*`-prefixed message keys from its own bundles. The directory name is
-  the realm's `loginTheme` value in both exports. (Not quoted here: the wire-root
-  hygiene guard `h1` forbids that literal tree-wide and carves out only the theme
-  directory itself. `deploy-brand.guard.test.ts` additionally pins one file
-  inside it by exact path as a vacuity check, so moving the directory turns that
-  test red as well.)
+- **The theme — CLOSED.** `docker/keycloak/themes/gremion/`. The old entry said
+  renaming the stylesheet 404s the login page — true, and the reason the rename
+  had to be atomic, not a reason to skip it: the directory, `css/gremion.v2.css`,
+  `theme.properties`'s `styles=`, the four `<link href>` lines and the realm
+  template's `loginTheme` moved in one commit, under hygiene check `t1`, which
+  resolves every one of those references as a path on disk. The 19 message keys
+  are `gremion*` (`t2`, `t3`), and the eight `${(realm.displayName)!…}` fallbacks
+  render `Gremion` (`t4`).
+- **The window between the realm work and the theme rename — a named residual.**
+  The realm work (removing the boot import) and the theme rename are deliberately
+  separate units, so between them `realm-export.base.json` keeps its old realm id
+  while already pointing `loginTheme` at `gremion`, and any realm provisioned in
+  that window carries whichever `loginTheme` the template held when it was
+  created. That is accepted, not accidental: the theme rename is off the
+  pre-deploy path, and it flips the directory, `loginTheme`, `theme.properties`,
+  the stylesheet and the four `<link href>` lines atomically, because a partial
+  move degrades silently. A realm created inside the window is corrected by an
+  Admin API delta — `kcadm.sh update realms/<realm> -s loginTheme=gremion` —
+  never by a re-import.
+- **The guard that let it survive.** `h1` requires a trailing dot, because it
+  owns the NATS subject root; it reported clean over the old theme directory for
+  the whole life of that directory, and the directory was additionally carved out
+  of `h1` by path. `h2` is the token as a bare identifier, over the whole tracked
+  tree, allow-listing only the guard file itself, the installed-hook markers in
+  `gremion-ui/scripts/install-git-hooks.mjs:29-30`, and the four SHA-pinned
+  applied migrations — the last on byte-immutability grounds, not on a current
+  hit. It is case-sensitive: `StuRaOS` the vertical name stays legitimate in
+  prose and has its own owner in `brand.guard.test.ts`. **`h2` is RED on this
+  tree by design** until the realm half above lands: its failure message is the
+  remaining work list, printed by path and line.
+- **What is still pinned by exact path.** `deploy-brand.guard.test.ts` pins one
+  file inside the theme directory as a vacuity check, now at its renamed path,
+  so moving the directory again turns that test red as well.
 - `gremion-ui/scripts/install-git-hooks.mjs` writes the pre-commit block markers
   `# >>> sturaos-boundary-lint >>>` / `# <<< sturaos-boundary-lint <<<`. These
   are matched against hooks **already installed** in contributors' `.git/hooks`;
@@ -345,7 +375,7 @@ re-run the four checks it rests on and correct any that disagree:
 git grep -n -F Civitas -- . ':!docs' ':!KNOWN_ISSUES.md'    # migrations only
 git grep -n -F Civitas -- contracts/                        # must be EMPTY
 git grep -n -F StuRaOS -- gremion-ui/src gremion-public/src # guard files only
-git grep -n -F sturaos docker/keycloak/                     # realm/theme identity, T11
+git grep -n -F sturaos docker/keycloak/                     # realm identity, T11
 pnpm -C gremion-ui vitest run src/lib/brand.guard.test.ts src/lib/deploy-brand.guard.test.ts
 pnpm -C gremion-public vitest run src/lib/test/kernel-instance-leak.test.ts
 node scripts/kernel-hygiene-check.mjs   # h1 wire root, i1 retired hosts, i2 env-template hosts
@@ -414,7 +444,7 @@ kernel's output does change; both are called out below.)
   surface is gated on **both** a target and a label: the kernel has no marketing
   site above it, and a dangling link is worse than no link. No product name,
   host or marketing copy is baked into the markup — the guard test asserts that.
-- **Keycloak portal back-link.** `docker/keycloak/themes/sturaos/login/`
+- **Keycloak portal back-link.** `docker/keycloak/themes/gremion/login/`
   `url-guard.ftl` (strict shared validator) + `portal-back.ftl`, included by all
   four templates. Driven by the `gremion.portal-url` realm attribute; absent or
   invalid emits nothing at all. Uses `?esc`, **never** `?html` — Keycloak 26 runs

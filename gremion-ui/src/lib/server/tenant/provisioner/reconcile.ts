@@ -1,9 +1,9 @@
 // src/lib/server/tenant/provisioner/reconcile.ts
 // P2.1c (T11) — the R5 drift guard. `reconcile [--verify-only] <slug>|--all`
 // asserts (verify) and repairs (apply) the §4 realm contract on EVERY realm
-// (incl. `default`/live `sturaos`), so realm-template drift gets a mechanical
-// answer from day one. The same module backs S5's P2.3 acceptance and the
-// #254/#240 live replay at S4.
+// (including a realm whose client URIs were never minted from a tenant host),
+// so realm-template drift gets a mechanical answer from day one. The same
+// module backs S5's P2.3 acceptance and the #254/#240 live replay at S4.
 //
 // PURE over an INJECTED KcTransport (the same transport KcProvisionApi takes), so
 // the whole verify+apply flow is unit-testable with a scripted fake KC. The CLI
@@ -152,12 +152,13 @@ export interface ReconcileOptions {
   /** The module-neutral base template (parsed realm-export.base.json) — the
    *  expected per-tenant gremion-ui URI set is derived from it by host swap. */
   base: Record<string, unknown>
-  /** (B) True for the DEFAULT realm (slug `default` / realm `sturaos`). The default
-   *  dev-composed realm LEGITIMATELY keeps its localhost dev URIs (realm-export.json
-   *  carries them) — so the URI-set check KEEPS localhost for `default` and drops it
-   *  ONLY for PROVISIONED tenants, mirroring buildTenantRealmDoc's own
-   *  default-vs-provisioned distinction. Without this, reconcile against the live
-   *  `sturaos` realm PERMANENTLY false-fails the URI checks (never repairable).
+  /** (B) True for a realm whose client URIs were NOT minted from a tenant host:
+   *  a dev-composed realm LEGITIMATELY keeps its localhost dev URIs, because the
+   *  realm doc it was imported from carries them — so the URI-set check KEEPS
+   *  localhost for such a realm and drops it ONLY for PROVISIONED tenants,
+   *  mirroring buildTenantRealmDoc's own default-vs-provisioned distinction.
+   *  Without this, reconcile against such a realm PERMANENTLY false-fails the
+   *  URI checks (never repairable).
    *  Defaults to false (provisioned) when omitted. */
   isDefault?: boolean
   /** verify-only = no mutation; apply (false) replays the repairable failures. */

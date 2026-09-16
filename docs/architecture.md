@@ -350,8 +350,9 @@ pinned by the deep golden test (`nav-schema.test.ts`). See [`docs/auth.md`](auth
 
 `SUBJECT_ROOT` in [`packages/ports/src/broker.ts`](../packages/ports/src/broker.ts)
 is the single definition of the wire namespace: `gremion` since the T01 rename,
-and before that the product token `sturaos` (kernel-hygiene check `h1` now fails
-the tree on any surviving wire literal of it). Every subject helper and every
+and before that the retired product token (kernel-hygiene check `h1` now fails
+the tree on any surviving wire literal of it, and `h2` on the same token as a
+bare identifier). Every subject helper and every
 `STREAMS` filter derives from that constant, so changing it moves the code and
 the tests together — but it does **not** move a running server. A deployed
 JetStream stream keeps the filter it was created with, and the messages already
@@ -439,7 +440,7 @@ them, so drain first:
    call a process makes, and only one of them throws:
    - A process whose boot path calls `ensureStream()` on the bound stream (the
      leaves, downstream) gets the refuse-on-drift error from that call, naming
-     both filters: the `sturaos`-rooted one the server holds and the
+     both filters: the retired-token-rooted one the server holds and the
      `gremion`-rooted one the code wants. Whether that takes the process down
      is the caller's decision — the broker throws, it does not exit.
    - A process that only `subscribe()`s gets **no throw**. `subscribe()`

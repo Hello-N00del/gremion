@@ -376,7 +376,7 @@ services:
     volumes:
       - ./docker/keycloak/realm-export.json:/opt/keycloak-init/realm-export.json:ro
       - ./docker/keycloak/substitute-realm-secrets.sh:/opt/keycloak-init/substitute-realm-secrets.sh:ro
-      # PR 7 (T7.1): sturaos login theme (design-refresh tokens).
+      # PR 7 (T7.1): gremion login theme (design-refresh tokens).
       - ./docker/keycloak/themes:/opt/keycloak/themes:ro
     networks:
       - gremion-net

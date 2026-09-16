@@ -99,7 +99,7 @@ pnpm -C gremion-ui test:deselection
 
 Criterion 7 reuses the **R5/R7 §4 realm-contract drift guard**
 (`tenant-provision reconcile --verify-only`) against a **THROWAWAY musterstadt
-realm** — never the live `sturaos` realm. It `it.skipIf(...)`s off unless the
+realm** — never a tenant’s live realm. It `it.skipIf(...)`s off unless the
 gate env var is set, so criteria 1–6 always run without a live KC:
 
 ```bash
