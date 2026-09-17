@@ -255,15 +255,47 @@ export const TENANT_EVICT_CHANNEL = 'tenant_evict'
 interface ResolvedEntry { ctx: TenantContext; expiresAt: number }
 const _resolutionCache = new Map<string, ResolvedEntry>()
 
+/**
+ * Spec B §T.1 — the HOST-keyed twin of `_resolutionCache`. A tenant has N hosts
+ * and one slug, so this cannot be folded into the slug map; both hold the SAME
+ * TenantContext object and the SAME RESOLUTION_CACHE_TTL_MS. Every invalidation
+ * seam below drives BOTH maps. A host entry that outlived a tenant_domain
+ * change is a CROSS-TENANT hazard — the host may have been re-registered to
+ * another tenant — which is why every tenant_domain write issues the
+ * same-transaction pg_notify(tenant_evict) and the TTL is only the backstop.
+ */
+const _hostResolutionCache = new Map<string, ResolvedEntry>()
+
 /** Explicitly drop one slug's cached resolution (registry-row change). */
 export function invalidateResolvedTenant(slug: string): void {
   _resolutionCache.delete(slug)
+  for (const [host, entry] of _hostResolutionCache) {
+    if (entry.ctx.slug === slug) _hostResolutionCache.delete(host)
+  }
+}
+
+/**
+ * Clear EVERY host-keyed entry. This is the "*" arm of eviction, consumed by
+ * B19-internal-api-evict-and-modules' evictAllTenants() (spec B l.385):
+ * evictTenantRuntime(id) can only reach entries whose ctx still names a tenant
+ * this process has cached, so a blanket evict needs a seam that does not take
+ * an id at all.
+ */
+export function clearHostResolutionCache(): void {
+  _hostResolutionCache.clear()
+}
+
+/** Test-only: the host-keyed map's size, so guards assert the MAP, never a
+ *  return value (an evictor that returns void can still evict nothing). */
+export function _hostCacheSizeForTests(): number {
+  return _hostResolutionCache.size
 }
 
 /** Test-only: clear the resolution cache (integration tests re-register rows
  *  with NEW tenant ids between cases — a cached context would go stale). */
 export function _resetResolutionCacheForTests(): void {
   _resolutionCache.clear()
+  _hostResolutionCache.clear()
 }
 
 /**
@@ -328,7 +360,7 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
  * and resolveTenantById so both produce a byte-identical context + cache entry.
  * Callers MUST have already confirmed row.status === 'active'.
  */
-function buildAndCacheTenantContext(row: Tenant): TenantContext {
+async function buildAndCacheTenantContext(row: Tenant): Promise<TenantContext> {
   const slug = row.slug
   const dbUrl = resolveSecret(row.dbConnRef)
   const conn = row.connProfile as { perTenantMax?: number; prepare?: boolean }
@@ -360,6 +392,11 @@ function buildAndCacheTenantContext(row: Tenant): TenantContext {
     smtp?: { host?: string; port?: number; from?: string; user?: string; passwordRef?: string }
   }
   const configPath = configPathForTenant(row.slug)
+  // Spec B §T.1 — the ONE place ctx.primaryHost is populated, so a context is
+  // identical however it was resolved. Deliberately NOT swallowed: a control-DB
+  // failure surfaces as the resolver's existing 503, never as a context that
+  // silently carries no host.
+  const primaryHost = await readPrimaryHost(row.id)
 
   const poolTenant = { id: row.id, dbUrl, dbMax, dbPrepare }
   const cfg = readConfig({ id: row.id, configPath })
@@ -368,6 +405,7 @@ function buildAndCacheTenantContext(row: Tenant): TenantContext {
   const ctx: TenantContext = {
     id: row.id,
     slug: row.slug,
+    primaryHost,
     db: getPoolForTenant(poolTenant),
     issuer,
     kcInternal,
@@ -773,6 +811,17 @@ export async function listTenantDomains(tenantId: string): Promise<readonly Tena
  */
 export async function primaryHostForTenant(tenantId: string): Promise<string | null> {
   assertTenantId('primaryHostForTenant', tenantId)
+  return readPrimaryHost(tenantId)
+}
+
+/**
+ * The un-guarded read behind primaryHostForTenant. buildAndCacheTenantContext
+ * calls THIS, not the exported accessor: the id it holds came out of the
+ * control-DB row it is hydrating, so it is a uuid by construction, and running
+ * assertTenantId over it would turn the public API's argument guard into a
+ * constraint on registry ROWS. One statement, one shape, one place.
+ */
+async function readPrimaryHost(tenantId: string): Promise<string | null> {
   const rows = await getControlDb()<Array<{ host: string }>>`
     SELECT host FROM tenant_domain WHERE tenant_id = ${tenantId} AND is_primary`
   return rows[0]?.host ?? null
@@ -922,4 +971,53 @@ export async function setPrimaryDomain(tenantId: string, rawHost: string): Promi
   })
   evictTenantRuntime(tenantId)
   return hydrateDomain(row as unknown as TenantDomainRow)
+}
+
+
+/**
+ * Resolve an ACTIVE tenant by the FULL edge-forwarded host, or null. There is
+ * NO fallback, NO leftmost-label path and NO apex special case: a null return
+ * means REJECT and must never be read as "use the default tenant".
+ *
+ * The lookup joins tenant_domain -> tenant. Because `host` is tenant_domain's
+ * PK the join yields at most one row, so an ambiguous host is not merely
+ * improbable — it is unrepresentable.
+ */
+export async function resolveTenantByHost(
+  host: string | undefined | null,
+): Promise<TenantContext | null> {
+  const h = normaliseHost(host)
+  if (!h) return null
+  const cached = _hostResolutionCache.get(h)
+  if (cached && cached.expiresAt > Date.now()) return cached.ctx
+  const rows = await getControlDb()<TenantRow[]>`
+    SELECT t.* FROM tenant t
+    JOIN tenant_domain d ON d.tenant_id = t.id
+    WHERE d.host = ${h}`
+  const row = rows[0]
+  if (!row || row.status !== 'active') {
+    // An expired-but-present entry must not outlive a status flip seen here.
+    _hostResolutionCache.delete(h)
+    return null
+  }
+  const ctx = await buildAndCacheTenantContext(hydrate(row))
+  _hostResolutionCache.set(h, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  return ctx
+}
+
+/**
+ * The host-keyed twin of getTenantStatusBySlug. Deliberately a CONTROL-DB ROW
+ * READ ONLY (the `status` column) — no pool, no config, no brand — so a
+ * suspended tenant whose data plane is gone or quarantined is never touched.
+ */
+export async function getTenantStatusByHost(
+  host: string | undefined | null,
+): Promise<TenantStatus | null> {
+  const h = normaliseHost(host)
+  if (!h) return null
+  const rows = await getControlDb()<{ status: TenantStatus }[]>`
+    SELECT t.status FROM tenant t
+    JOIN tenant_domain d ON d.tenant_id = t.id
+    WHERE d.host = ${h}`
+  return rows[0]?.status ?? null
 }

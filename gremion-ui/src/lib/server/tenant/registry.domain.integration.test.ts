@@ -10,6 +10,12 @@ import {
   removeTenantDomain,
   setPrimaryDomain,
   TENANT_EVICT_CHANNEL,
+  resolveTenantByHost,
+  getTenantStatusByHost,
+  updateTenantStatus,
+  _resetResolutionCacheForTests,
+  clearHostResolutionCache,
+  _hostCacheSizeForTests,
   type TenantInput,
 } from './registry'
 import { reservedPlatformHosts } from './reserved-hosts'
@@ -176,5 +182,55 @@ describe('reserved platform hosts are refused by addTenantDomain', () => {
   it('still accepts an ordinary tenant host under the same apex', async () => {
     const d = await addTenantDomain(tenantId, `musterstadt.${process.env.PLATFORM_DOMAIN}`)
     expect(d.host).toBe(`musterstadt.${process.env.PLATFORM_DOMAIN}`)
+  })
+})
+
+// Registry-row post-condition #1: a tenant is created, a host added, and the
+// tenant is resolved BY HOST.
+describe('host-keyed resolution', () => {
+  beforeEach(() => { _resetResolutionCacheForTests() })
+
+  it('resolves the tenant from the whole host, with primaryHost on the context', async () => {
+    await addTenantDomain(tenantId, 'rat-musterstadt.de', { isPrimary: true })
+    const ctx = await resolveTenantByHost('rat-musterstadt.de')
+    expect(ctx).not.toBeNull()
+    expect(ctx!.id).toBe(tenantId)
+    expect(ctx!.slug).toBe(SLUG)
+    expect(ctx!.primaryHost).toBe('rat-musterstadt.de')
+  })
+
+  it('accepts every spelling the write path accepts — one normaliser, both sides', async () => {
+    await addTenantDomain(tenantId, 'Rat-Musterstadt.DE', { isPrimary: true })
+    for (const raw of ['rat-musterstadt.de', 'RAT-MUSTERSTADT.DE', 'rat-musterstadt.de.',
+                       'rat-musterstadt.de:443']) {
+      expect((await resolveTenantByHost(raw))!.id).toBe(tenantId)
+    }
+  })
+
+  it('returns null for an unregistered host and for a malformed one — never a fallback tenant', async () => {
+    await addTenantDomain(tenantId, 'rat-musterstadt.de', { isPrimary: true })
+    expect(await resolveTenantByHost('attacker.example')).toBeNull()
+    expect(await resolveTenantByHost('client.example, rat-musterstadt.de')).toBeNull()
+    expect(await resolveTenantByHost(undefined)).toBeNull()
+  })
+
+  it('getTenantStatusByHost tells suspended from unknown without touching the data plane', async () => {
+    await addTenantDomain(tenantId, 'rat-musterstadt.de', { isPrimary: true })
+    await updateTenantStatus(tenantId, 'suspended')
+    expect(await resolveTenantByHost('rat-musterstadt.de')).toBeNull()
+    expect(await getTenantStatusByHost('rat-musterstadt.de')).toBe('suspended')
+    expect(await getTenantStatusByHost('attacker.example')).toBeNull()
+    await updateTenantStatus(tenantId, 'active')
+  })
+
+  // The "*" arm B19-internal-api-evict-and-modules' evictAllTenants binds to
+  // (spec B l.385). Per-tenant eviction is evictTenantRuntime; this clears the
+  // whole host keyspace, including entries whose tenant row is already gone.
+  it('clearHostResolutionCache empties the host-keyed cache wholesale', async () => {
+    await addTenantDomain(tenantId, 'rat-musterstadt.de', { isPrimary: true })
+    await resolveTenantByHost('rat-musterstadt.de')
+    expect(_hostCacheSizeForTests()).toBe(1)
+    clearHostResolutionCache()
+    expect(_hostCacheSizeForTests()).toBe(0)
   })
 })
