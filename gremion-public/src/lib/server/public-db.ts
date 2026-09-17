@@ -4,7 +4,7 @@
 
 import postgres from 'postgres';
 import { env } from '$env/dynamic/private';
-import type { PublicProtocol, PublicCommittee } from '@gremion/db/public-types';
+import type { PublicProtocol, PublicCommittee, PublicBeschluss } from '@gremion/db/public-types';
 import { isUuid } from '$lib/validate';
 
 let _db: ReturnType<typeof postgres> | null = null;
@@ -107,4 +107,42 @@ export async function getAllCommittees(): Promise<PublicCommittee[]> {
     ORDER  BY name ASC
   `;
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Beschluss register (public, structured)
+// ---------------------------------------------------------------------------
+
+/**
+ * Adopted resolutions (result='passed') from published protocols of publicly-
+ * visible committees — the public Beschluss register. Challenge state crosses
+ * the anonymous boundary ONLY as angefochten_count; the challenge rows, their
+ * substance and their personal attribution are never projected.
+ */
+export async function getPublicBeschluesse(
+  committeeId?: string,
+  limit = 100
+): Promise<PublicBeschluss[]> {
+  const sql = getPublicDb();
+  // Defence in depth: a non-UUID committeeId degrades to "no filter" so it can
+  // never reach the ::uuid cast and 500. Same guard as getPublishedProtocols.
+  const filterId = isUuid(committeeId) ? committeeId : null;
+
+  return sql<PublicBeschluss[]>`
+    SELECT r.id, r.protocol_id, p.committee_id, c.name AS committee_name,
+           p.meeting_date, p.title AS protocol_title, r.global_nr, r.sequence_nr,
+           r.text, r.result, r.adoption_mode,
+           r.votes_yes, r.votes_no, r.votes_abstain, r.decided_at,
+           (SELECT COUNT(*)::int FROM resolution_challenges ch
+             WHERE ch.resolution_id = r.id AND ch.status = 'open') AS angefochten_count
+    FROM   protocol_resolutions r
+    JOIN   protocols p ON p.id = r.protocol_id
+    JOIN   org_units c ON c.id = p.committee_id
+    WHERE  r.result = 'passed'
+      AND  p.status = 'published'
+      AND  c.visibility = 'all_members'
+      AND  (${filterId}::uuid IS NULL OR p.committee_id = ${filterId}::uuid)
+    ORDER  BY r.decided_at DESC NULLS LAST, p.meeting_date DESC, r.sequence_nr ASC
+    LIMIT  ${limit}
+  `;
 }
