@@ -140,6 +140,13 @@ test-integration:
 	@$(BATS) test/integration/health.bats test/integration/oidc.bats test/integration/legal.bats \
 		test/integration/login-theme.bats
 
+# Fresh init on a THROWAWAY Postgres: applies the whole kernel chain and asserts
+# tables, a column, a CHECK definition and the public-reader grants IN THE
+# DATABASE. Needs docker, nothing else - not the running stack.
+fresh-init-proof:
+	@echo "Proving a fresh init of the kernel migration chain..."
+	@bash gremion-ui/scripts/fresh-init-proof.sh
+
 # Run all tests (unit only by default; use test-all for integration too)
 test: test-unit
 
