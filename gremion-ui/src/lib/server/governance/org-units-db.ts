@@ -14,6 +14,7 @@
 // semantics regardless of whether they supply a tx.
 import { getDb } from '../db'
 import { getRunner as genericGetRunner, unpackTxArgs, type PgTransaction } from '$lib/server/db/tx'
+import { enqueueOrgUnitEvent } from './org-unit-event-outbox'
 import { loadOrgSchema, type OrgSchema } from './org-schema'
 
 /** Governance-pool-defaulting runner (was reverse-imported from finance, P0.1).
@@ -108,7 +109,14 @@ export async function createOrgUnit(
        ${data.visibility}, ${data.wantsMatrixRoom}, ${data.wantsNextcloudFolder}, ${data.childTerm ?? null},
        ${data.kindLabel ?? null}, ${data.authority ?? 'deciding'})
     RETURNING *`
-  return rows[0]!
+  const created = rows[0]!
+  // Co-commit the mirror-resync event on the SAME runner (no-op without NATS_URL).
+  await enqueueOrgUnitEvent(sql, {
+    eventType: 'upserted',
+    aggregateId: created.id,
+    payload: { id: created.id, name: created.name, kind: created.kind, parent_id: created.parent_id },
+  })
+  return created
 }
 
 export interface UpdateOrgUnitPatch {
@@ -145,7 +153,15 @@ export async function updateOrgUnit(
       visibility = COALESCE(${data.visibility ?? null}, visibility)
     WHERE id = ${id}
     RETURNING *`
-  return rows[0] ?? null
+  const updated = rows[0] ?? null
+  if (updated !== null) {
+    await enqueueOrgUnitEvent(sql, {
+      eventType: 'upserted',
+      aggregateId: updated.id,
+      payload: { id: updated.id, name: updated.name, kind: updated.kind, parent_id: updated.parent_id },
+    })
+  }
+  return updated
 }
 
 export async function deleteOrgUnit(id: string): Promise<void>
@@ -156,7 +172,11 @@ export async function deleteOrgUnit(
   const tx = typeof txOrId === 'function' ? (txOrId as PgTransaction) : undefined
   const id = typeof txOrId === 'function' ? (maybeId as string) : (txOrId as string)
   const sql = getRunner(tx)
-  await sql`DELETE FROM org_units WHERE id = ${id}`
+  const deleted = await sql<{ id: string }[]>`DELETE FROM org_units WHERE id = ${id} RETURNING id`
+  // Tombstone only when a row was actually deleted (no-op without NATS_URL).
+  if (deleted.length > 0) {
+    await enqueueOrgUnitEvent(sql, { eventType: 'deleted', aggregateId: id, payload: { id } })
+  }
 }
 
 export async function listOrgUnitMembers(orgUnitId: string): Promise<readonly OrgUnitMember[]> {
