@@ -262,6 +262,34 @@ probe deliberately sends an `X-Forwarded-Host: default.${DOMAIN}` header (and th
 proxy-trust header when set) because the fail-closed tenant resolver 404s any
 request lacking a forwarded host — a bare probe would report a false negative.
 
+### Background workers (the degraded list)
+
+The event workers (today: the org-unit outbox relay) are **non-fatal by design** —
+a NATS outage must not stop the app serving everything unrelated to it. So a
+process whose mirror has stopped still answers `200 {"status":"ok"}`. What tells
+the two apart is the `degraded` array in the same body, and it is an **operator**
+surface: the compose probe deliberately stays on the app shell (`/`), because
+marking the container unhealthy over a dead worker makes Traefik v3 silently drop
+this service's routers and converts a stopped mirror into a full outage.
+
+Read it from inside the container, carrying the same tenant headers the probe
+does — the fail-closed tenant resolver runs before this route, so a bare request
+404s:
+
+```bash
+docker compose exec gremion-ui wget -qO-   --header="X-Forwarded-Host: default.${DOMAIN}"   --header="x-proxy-trust: ${TENANT_PROXY_SHARED_SECRET:-}"   http://127.0.0.1:3000/api/health
+# {"status":"ok","degraded":[{"name":"org-unit-relay","errorClass":"Error",
+#                            "code":"stream-repoint-refused","attempts":3}]}
+```
+
+Each entry carries the worker name, the error **class** and a stable **code** —
+never the broker's own message, because `/api/health` is unauthenticated and a
+broker message can carry subject filters, `host:port` or whatever the client was
+configured with. Route on the code (`stream-repoint-refused` and `stream-cover`
+both mean "the stream topology is stale"); the full message is in the container
+log. A worker reported as *off* (e.g. `NATS_URL` unset) is a configuration, not a
+fault, and is not listed.
+
 ### Endpoint checks
 
 `make health` probes the core endpoints:
