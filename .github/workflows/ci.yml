@@ -70,6 +70,14 @@ jobs:
       - name: Workspace packages must ship what their exports name
         run: node scripts/check-shipped-package-files.mjs --static
 
+      # D-01: the three handover migrations ship in no release-1 tree. The
+      # guard's own suite runs first so a walker that returned [] cannot make
+      # this step pass vacuously.
+      - name: No handover migration may ship (D-01)
+        run: |
+          node --test scripts/check-unshipped-migrations.test.mjs
+          node scripts/check-unshipped-migrations.mjs
+
       # B3: the do-not-overwrite set. Every port-back unit runs this after it
       # writes to the tree (the guard reads the working tree as well as the
       # index, so an unstaged `cp -r` is caught); running it in CI is what
@@ -618,6 +626,13 @@ jobs:
           echo "Waiting for PostgreSQL..."
           timeout 120 bash -c 'until docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-postgres}" >/dev/null 2>&1; do sleep 3; printf "."; done'
           echo " ready"
+
+      # Applies the whole kernel chain to a THROWAWAY Postgres and asserts
+      # tables, a column, a CHECK definition and the public-reader grants in the
+      # database. Independent of the compose stack started above - it starts and
+      # removes its own container on port 15433.
+      - name: Fresh init of the kernel migration chain
+        run: make fresh-init-proof
 
       - name: Start Keycloak
         run: docker compose up -d keycloak

@@ -1663,6 +1663,27 @@ check('k1 no spec-A host literal in a tracked kernel document', () => {
     : null
 })
 
+// ── (m) the port-back provenance record ─────────────────────────
+// Ten migrations entered the kernel from another repository. Without a record
+// naming the source ref, the next reader cannot tell a ported file from one
+// written here, and B6/B7 cannot re-derive the bytes they normalise and renumber.
+check('m1 the port-back record names the frozen extraction source and all ten files', () => {
+  const p = 'docs/ops/migration-portback-2026-09-15.md'
+  if (!has(p)) return `${p} missing`
+  const doc = read(p)
+  const SOURCE = 'f276af5925abacdcfd05f6613fc11afff2d804c5'
+  if (!doc.includes(SOURCE)) return `does not name the frozen extraction source ${SOURCE}`
+  const ported = [
+    '003_calendar_schema.sql', '034_deck_board.sql', '049_org_unit_event_outbox.sql',
+    '053_notification_read_marker.sql', '054_resolution_adoption_mode.sql',
+    '055_resolution_challenges.sql', '056_role_assignment_history_recalled.sql',
+    '057_fk_hot_filter_indexes.sql', '058_public_reader_grants.sql',
+    '004_tenant_domain.sql',
+  ]
+  const missing = ported.filter((f) => !doc.includes(f))
+  return missing.length ? `does not name: ${missing.join(', ')}` : null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {
