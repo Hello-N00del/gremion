@@ -202,6 +202,28 @@ plant_repo() {  # $1 = directory to create as a throwaway git repo
   done
 }
 
+# AM-B-05 (spec B) introduces GREMION_PRODUCTION_STACK as a binding contract
+# key, and unit B15 puts it into a tracked env template. The naive
+# host-inventory-name pattern matches the *prefix* of that key -- "gremion"
+# then one separator then "prod" -- because it never checks what follows
+# "prod". This test plants the legitimate key next to the real inventory
+# token in one throwaway repo and asserts the guard tells them apart: the
+# whole token is reported, the longer word that merely starts the same way
+# is not.
+@test "host-inventory-name matches the whole token but not a longer word" {
+  local tmp="$BATS_TEST_TMPDIR/boundary"
+  plant_repo "$tmp"
+  printf 'GREMION_PRODUCTION_STACK=none\n' > "$tmp/env-key.txt"
+  printf 'gremion-%s\n' 'prod' > "$tmp/inventory-name.txt"
+  run scan_literals "$tmp"
+  [ "$status" -eq 1 ]
+  local hits
+  hits="$(printf '%s\n' "$output" | grep -c '^host-inventory-name ')"
+  [ "$hits" -eq 1 ]
+  [[ "$output" == *"host-inventory-name inventory-name.txt:1:"* ]]
+  [[ "$output" != *"env-key.txt"* ]]
+}
+
 @test "the scan skips ignored paths -- the documented blind spot" {
   local tmp="$BATS_TEST_TMPDIR/ignored"
   plant_repo "$tmp"
