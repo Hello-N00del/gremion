@@ -6,6 +6,7 @@
 import { env } from '$env/dynamic/private'
 import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
+import { normaliseHost } from './host'
 import { clampConnProfile } from './conn-profile'
 import { resolveSecret } from './secrets'
 import { getPoolForTenant, evictTenantPool } from '$lib/server/db/pool-registry'
@@ -682,4 +683,96 @@ function authExternalBaseForTenant(slug: string, issuer: string): string {
 function kcAdminUrlFromInternal(kcInternal: string): string {
   // kcInternal e.g. http://keycloak:8080/auth/realms/<realm> -> http://keycloak:8080/auth
   return kcInternal.replace(/\/realms\/.*$/, '')
+}
+
+// ── Spec B §T.1 — tenant_domain (control migration 004, owned by B4) ─────────
+//
+// The table, its CHECK and its indexes come from
+// B4-migrations-portback-nine's migrations-control/004_tenant_domain.sql. This
+// section is the ACCESSOR half only.
+//
+// The registry already carries a WRITE-TIME clash guard for realm_name/issuer
+// (registerTenant) because 001 gave neither a UNIQUE. `tenant_domain.host` is
+// the PRIMARY KEY, so the equivalent guarantee is free — but a raw
+// `duplicate key value violates unique constraint "tenant_domain_pkey"` names
+// neither the host nor the owning tenant, so addTenantDomain pre-reads the
+// owner inside the transaction and throws a loud, named error instead.
+
+export interface TenantDomain {
+  readonly host: string
+  readonly tenantId: string
+  readonly isPrimary: boolean
+  readonly verifiedAt: Date | null
+  readonly createdAt: Date
+}
+
+interface TenantDomainRow {
+  host: string
+  tenant_id: string
+  is_primary: boolean
+  verified_at: Date | null
+  created_at: Date
+}
+
+function hydrateDomain(r: TenantDomainRow): TenantDomain {
+  return {
+    host: r.host,
+    tenantId: r.tenant_id,
+    isPrimary: r.is_primary,
+    verifiedAt: r.verified_at,
+    createdAt: r.created_at,
+  }
+}
+
+/** uuid guard so a malformed tenant id fails loudly here, not as a PG cast error. */
+const TENANT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function assertTenantId(fn: string, tenantId: string): void {
+  if (typeof tenantId !== 'string' || !TENANT_ID_PATTERN.test(tenantId)) {
+    throw new Error(`${fn}: "${tenantId}" is not a tenant id (uuid)`)
+  }
+}
+
+/** Normalise-or-throw: the WRITE path shares the resolver's normaliser, so a row
+ *  the resolver could never match can never be persisted (host.ts docblock). */
+function assertHost(fn: string, rawHost: string): string {
+  const host = normaliseHost(rawHost)
+  if (!host) {
+    throw new Error(
+      `${fn}: "${rawHost}" is not a valid host — it must be an ASCII (punycode) ` +
+      `hostname with no list separator, no empty label and no ambiguous authority form`,
+    )
+  }
+  return host
+}
+
+/** Every `tenant_domain` row in the deployment, in ONE statement — one snapshot,
+ *  never `listTenants().map(listTenantDomains)` (an N+1 that can also observe a
+ *  claim set that never existed if a write lands between two of its reads). */
+export async function listAllTenantDomains(): Promise<readonly TenantDomain[]> {
+  const rows = await getControlDb()<TenantDomainRow[]>`
+    SELECT * FROM tenant_domain ORDER BY tenant_id, is_primary DESC, host`
+  return rows.map(hydrateDomain)
+}
+
+/** Every host registered to a tenant, primary first then alphabetical. */
+export async function listTenantDomains(tenantId: string): Promise<readonly TenantDomain[]> {
+  assertTenantId('listTenantDomains', tenantId)
+  const rows = await getControlDb()<TenantDomainRow[]>`
+    SELECT * FROM tenant_domain WHERE tenant_id = ${tenantId}
+    ORDER BY is_primary DESC, host`
+  return rows.map(hydrateDomain)
+}
+
+/**
+ * The tenant's canonical host — the one that mints `issuerForTenant` and every
+ * self-referential URL. Null when the tenant has no primary host: callers MUST
+ * fail closed on that, and must NEVER synthesise `<slug>.<apex>` as a
+ * substitute — that construction is exactly what spec B deletes.
+ */
+export async function primaryHostForTenant(tenantId: string): Promise<string | null> {
+  assertTenantId('primaryHostForTenant', tenantId)
+  const rows = await getControlDb()<Array<{ host: string }>>`
+    SELECT host FROM tenant_domain WHERE tenant_id = ${tenantId} AND is_primary`
+  return rows[0]?.host ?? null
 }
