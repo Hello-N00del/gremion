@@ -8,6 +8,17 @@
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": true,
+  "smtpServer": {
+    "host": "__SMTP_HOST__",
+    "port": "__SMTP_PORT__",
+    "from": "__SMTP_FROM__",
+    "fromDisplayName": "Gremion",
+    "auth": "true",
+    "user": "__SMTP_USER__",
+    "password": "__SMTP_PASSWORD__",
+    "starttls": "__SMTP_STARTTLS__",
+    "ssl": "__SMTP_SSL__"
+  },
   "editUsernameAllowed": false,
   "bruteForceProtected": true,
   "permanentLockout": false,
