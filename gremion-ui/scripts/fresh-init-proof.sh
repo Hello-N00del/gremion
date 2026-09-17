@@ -56,7 +56,10 @@ echo "[fresh-init] waiting for postgres on ${PORT}..."
 timeout 90 bash -c "until docker exec $NAME pg_isready -U postgres >/dev/null 2>&1; do sleep 2; done"
 
 PSQL=(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -U postgres -X -q)
-q() { docker exec -i "$NAME" psql -U postgres -X -tAq -d "$1" -c "$2"; }
+# ON_ERROR_STOP here too: without it a broken assertion QUERY returns the empty
+# string and the post-condition below reports a value mismatch -- true, but it
+# names the symptom instead of the SQL error that caused it.
+q() { docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -U postgres -X -tAq -d "$1" -c "$2"; }
 
 "${PSQL[@]}" -d postgres <<'SQL'
 CREATE DATABASE gremion;
