@@ -5,6 +5,7 @@
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
+        lint-unshipped-migrations fresh-init-proof \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -139,6 +140,13 @@ test-integration:
 	@$(BATS) test/integration/health.bats test/integration/oidc.bats test/integration/legal.bats \
 		test/integration/login-theme.bats
 
+# Fresh init on a THROWAWAY Postgres: applies the whole kernel chain and asserts
+# tables, a column, a CHECK definition and the public-reader grants IN THE
+# DATABASE. Needs docker, nothing else - not the running stack.
+fresh-init-proof:
+	@echo "Proving a fresh init of the kernel migration chain..."
+	@bash gremion-ui/scripts/fresh-init-proof.sh
+
 # Run all tests (unit only by default; use test-all for integration too)
 test: test-unit
 
@@ -246,6 +254,15 @@ lint-cve-floors:
 	@node --test scripts/check-cve-floors.test.mjs
 	@node scripts/check-cve-floors.mjs
 
+# D-01: the three handover migrations ship in NO release-1 tree. The suite runs
+# first so the guard's own RED cases (planted file, renumbered file, empty tree)
+# are proven on every lint - a walker that silently returned [] would let this
+# pass vacuously.
+lint-unshipped-migrations:
+	@echo "Checking that no handover migration ships..."
+	@node --test scripts/check-unshipped-migrations.test.mjs
+	@node scripts/check-unshipped-migrations.mjs
+
 # The npm `files` allowlist has to agree with each package's own exports, or a
 # published tarball (and, worse, the `pnpm deploy` payload both runtime images
 # are built from) ships a package with no entry points. scripts/check-shipped-package-files.mjs
@@ -323,7 +340,7 @@ lint-extraction-source:
 	 echo "[extraction-source] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-extraction-source.mjs --modules-root test/fixtures/extraction-source/agree
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations
 	@echo "All linters passed."
 
 # ── Repository labels ────────────────────────────────────────────────────
@@ -363,6 +380,13 @@ validate-env:
 		exit 1; \
 	fi
 	@echo "  .env: OK (no placeholders found)"
+	@# The read-only portal role is a BOOT prerequisite, not a nicety:
+	@# gremion-ui/migrations/058_public_reader_grants.sql aborts the whole
+	@# data-plane chain when gremion_public_reader is missing, and
+	@# docker/postgres/init-databases.sh refuses to start without this value.
+	@# An empty one here is a stack that comes up and never migrates.
+	@grep -qE "^PUBLIC_DB_PASSWORD=.+" .env || (echo "ERROR: PUBLIC_DB_PASSWORD is unset or empty in .env - the gremion_public_reader role cannot be created, and gremion-ui/migrations/058_public_reader_grants.sql aborts the migration chain without it" && exit 1)
+	@echo "  public reader: OK (PUBLIC_DB_PASSWORD is set)"
 	@# B-01: KEYCLOAK_REALM and the /realms/ segment of AUTH_KEYCLOAK_ISSUER
 	@# name ONE realm. Disagreement is silent and is a WRITE — see
 	@# scripts/check-realm-env.sh.

@@ -69,22 +69,25 @@ create_db_and_user \
     "${CONTROL_DB_PASSWORD}"
 
 # Create the gremion_public_reader read-only role for gremion-public (b5).
-# Owned by postgres superuser; migration 008 later grants SELECTs on
-# app tables once they exist. Done here because the gremion user that
-# runs migrations lacks CREATEROLE.
-if [ -n "${PUBLIC_DB_PASSWORD:-}" ]; then
-    echo "[init-databases] Creating gremion_public_reader role..."
-    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
-         -v _password="$PUBLIC_DB_PASSWORD" <<-'SQL'
-        SELECT CASE
-            WHEN NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'gremion_public_reader')
-            THEN format('CREATE ROLE gremion_public_reader LOGIN PASSWORD %L', :'_password')
-            ELSE format('ALTER ROLE gremion_public_reader WITH PASSWORD %L', :'_password')
-        END \gexec
+# Owned by the postgres superuser; migration 058_public_reader_grants.sql issues
+# the per-table SELECT grants once the tables exist. Done here because the
+# gremion user that runs migrations lacks CREATEROLE.
+#
+# REQUIRED, not optional. 058 ABORTS the whole data-plane migration chain when
+# this role is absent (it replaced a grant-nothing-and-report-success skip), so
+# leaving it out does not merely make the anonymous portal unusable -- it stops
+# the tenant migrating at all, one layer away from the cause. So fail HERE, where
+# the cause is, naming the variable. `:?` fires on unset AND on empty.
+: "${PUBLIC_DB_PASSWORD:?[init-databases] PUBLIC_DB_PASSWORD is unset or empty. The gremion_public_reader role cannot be created without it, and gremion-ui/migrations/058_public_reader_grants.sql aborts the migration chain when that role is missing. Set PUBLIC_DB_PASSWORD (see .env.example) to the same password GREMION_PUBLIC_DB_URL carries.}"
+
+echo "[init-databases] Creating gremion_public_reader role..."
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" -v _password="$PUBLIC_DB_PASSWORD" <<-'SQL'
+    SELECT CASE
+        WHEN NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'gremion_public_reader')
+        THEN format('CREATE ROLE gremion_public_reader LOGIN PASSWORD %L', :'_password')
+        ELSE format('ALTER ROLE gremion_public_reader WITH PASSWORD %L', :'_password')
+    END \gexec
 SQL
-    echo "[init-databases] Done: gremion_public_reader."
-else
-    echo "[init-databases] PUBLIC_DB_PASSWORD not set — skipping gremion_public_reader role."
-fi
+echo "[init-databases] Done: gremion_public_reader."
 
 echo "[init-databases] All databases initialized."

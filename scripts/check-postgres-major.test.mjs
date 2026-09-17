@@ -112,6 +112,31 @@ test('scanText ignores a bare postgres:5432 host:port even with no user@ prefix'
   assert.deepEqual(scanText('docs/x.md', text), [])
 })
 
+test('scanText reads a shell parameter-expansion default — the tag that actually runs', () => {
+  // The blind spot that shipped a stale proof image: `${VAR:-postgres:<major>-alpine}`.
+  // TAG_RE cannot see it (its lookbehind drops the `-` of `:-`), so the default
+  // — which IS the image whenever the variable is unset, i.e. in CI — went
+  // unscanned. Every substituting form is exercised, and the tags are BUILT from
+  // POSTGRES_MAJOR so this file cannot itself become a finding.
+  for (const expansion of [':-', '-', ':=', '=']) {
+    const line = `IMAGE="\${SOME_IMAGE${expansion}${STALE_TAG}}"`
+    const hits = scanText('x.sh', line)
+    assert.equal(hits.length, 1, `${expansion}: expected one hit, got ${JSON.stringify(hits)}`)
+    assert.equal(hits[0].ref, STALE_TAG)
+    assert.equal(classify(hits[0]), 'mismatched', `${expansion}: a stale default must be mismatched`)
+  }
+})
+
+test('a shell default on the pinned tag passes, and is counted exactly once', () => {
+  const hits = scanText('x.sh', `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"`)
+  assert.equal(hits.length, 1, `expected exactly one hit, got ${JSON.stringify(hits)}`)
+  assert.deepEqual(checkFiles([{ path: 'x.sh', text: `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"` }]), [])
+})
+
+test('a shell default naming the bare port is still not an image reference', () => {
+  assert.deepEqual(scanText('x.sh', 'PORT="\${PGHOST:-postgres:5432}"'), [])
+})
+
 test('classify names the three states', () => {
   assert.equal(classify({ tag: `${POSTGRES_MAJOR}-alpine` }), 'ok')
   assert.equal(classify({ tag: `${POSTGRES_MAJOR}` }), 'ok')

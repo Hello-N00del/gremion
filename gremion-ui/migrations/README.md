@@ -234,6 +234,26 @@ not bookkeeping"). Consequences:
   module's schema: core (or other modules') migrations that a module-OFF
   tenant still applies may never depend on it.
 
+### Cross-cutting module tables
+
+Three of the files above create or alter a table a **module** owns, and are
+nevertheless applied by every tenant, module ON or OFF:
+
+| Migration | Module table |
+|---|---|
+| `003_calendar_schema.sql` | `calendar_events` |
+| `004_committee_elections.sql` | `committee_elections` |
+| `034_deck_board.sql` | `deck_board` |
+
+They are kernel-applied by written rule, because later **ungated** kernel DDL
+depends on the tables existing — `010_org_units.sql` ALTERs
+`committee_elections`, and `058_public_reader_grants.sql` aborts on a missing
+portal table. The set is machine-readable as `CROSS_CUTTING_MIGRATIONS` in
+[`../src/lib/modules/migration-ownership.ts`](../src/lib/modules/migration-ownership.ts)
+and is asserted against a module-OFF apply list in
+`../src/lib/modules/migration-ownership.test.ts`. It is a closed list: a new
+migration that touches a module-owned table belongs in that module's repository.
+
 ### Numbering: the gaps are inherited, not corruption
 
 The filenames in this directory are **deliberately non-contiguous**. They are
@@ -252,6 +272,17 @@ manifest and re-apply it.
 The next free data-plane number is **current highest + 1**, read off the
 directory — never a number reused from a gap.
 
+**The 2026-09-15 port-back is the one recorded exception**, and it is a closed
+one: `003_calendar_schema.sql` and `034_deck_board.sql` were back-filled into
+gaps below `048_resolution_decided_at.sql`, the highest number this repository
+shipped before it. A fresh install is unaffected — sort order applies them in
+dependency order — but a database initialised **before** that commit has already
+recorded `048`, picks `003` up out of order on its next boot, and aborts on
+`committees`, the table `010` renamed. Such a database must be re-initialised
+(`docker compose down -v`); there is no in-place upgrade. Why, and the two
+guards that keep it from happening again unannounced, are in
+[`../../docs/ops/migration-portback-2026-09-15.md`](../../docs/ops/migration-portback-2026-09-15.md#back-filled-numbers-and-the-re-initialisation-they-force).
+
 **The control plane is a separate chain.** The tenant registry and the fleet-run
 ledger live in [`../migrations-control/`](../migrations-control/) with their own
 independent `001…` numbering, their own runner (`runControlMigrations`) and
@@ -263,14 +294,15 @@ data-plane file against the control-plane chain, or the reverse.
 
 ## What is here, what is not
 
-**22 data-plane migrations ship in this repository**, and they apply in this
+**31 data-plane migrations ship in this repository**, and they apply in this
 order:
 
 | File | What it does |
 |------|--------------|
 | `001_governance_schema.sql` | The governance core: bodies, committees, members, mandates. |
 | `002_config_store.sql` | The per-tenant configuration store the brand/module config is read from. |
-| `004_committee_elections.sql` | Bridges external election ids (Helios) to committees in this database. |
+| `003_calendar_schema.sql` | The calendar tables (`event_types`, `calendar_events`, recurrence, CalDAV sync queue). Calendar is a *module*, but this DDL is kernel-applied even with the module OFF — see [Cross-cutting module tables](#cross-cutting-module-tables). |
+| `004_committee_elections.sql` | Bridges external election ids (Helios) to committees in this database. Elections is a module; the DDL is cross-cutting, as above. |
 | `005_dev_seed.sql` | Dev-only seed keyed by dev-realm Keycloak UUIDs. Skipped when `GREMION_DISABLE_SEEDS=true`. |
 | `006_full_seed.sql` | The larger dev-only fixture set. Same skip rule. |
 | `007_protocols.sql` | Protocols (*Protokolle*) and their agenda / resolution structure. |
@@ -282,6 +314,7 @@ order:
 | `018_sub_org_type.sql` | A catalogue of sub-org types (AG, Referat, Projektgruppe) a sub-org can be classified under. |
 | `024_audit_log_composite_index.sql` | Read-path index on `audit_log`. |
 | `033_org_unit_child_term.sql` | The admin-editable `org_units.child_term` label for a node’s children (e.g. *Referate*); `NULL` falls back to a computed default. |
+| `034_deck_board.sql` | The native task board (`board` / `stack` / `card`), a card optionally linking a protocol action item. Board is a module; the DDL is cross-cutting, as above. |
 | `037_provisioning_member_ops.sql` | The durable `provisioning_member_ops` membership-remove outbox the reconcile worker drains. |
 | `038_org_unit_kind_catalog.sql` | Demotes the closed `OrgUnitKind` taxonomy to the per-tenant `org_unit_kind` reference table (FK from `org_units.kind`), plus root policy, display-label override, authority + voting flags. |
 | `039_caucus.sql` | The orthogonal caucus / *Fraktion* dimension (`caucus` + `caucus_membership`), off by default — zero rows means the feature is disabled. |
@@ -290,40 +323,47 @@ order:
 | `042_protocol_resolution_required_majority.sql` | Persists the required majority on the resolution, fixed at creation. |
 | `043_audit_log_hash_chain.sql` | The INV-1 hash chain: the advisory-lock-serialized `BEFORE INSERT` trigger and the chain columns. |
 | `048_resolution_decided_at.sql` | `resolution.decided_at`, the adoption timestamp the quorum gate stamps. |
+| `049_org_unit_event_outbox.sql` | The transactional org-unit event outbox: every `org_units` DML co-commits one row here, and the relay drains it to the broker. |
+| `053_notification_read_marker.sql` | One row per user: the instant the notification bell was last marked all-read. |
+| `054_resolution_adoption_mode.sql` | `adoption_mode` (`tally` \| `acclamation`) on a resolution, with the vote/mode CHECK matrix enforced in the database. |
+| `055_resolution_challenges.sql` | Contestability: `resolution_challenges`, the standing channel by which those bound may contest an adopted resolution. |
+| `056_role_assignment_history_recalled.sql` | Recall: widens the `001` CHECK so an archived assignment may carry `ended_reason = 'recalled'`. |
+| `057_fk_hot_filter_indexes.sql` | Read-path indexes on five FK columns used as hot WHERE predicates. |
+| `058_public_reader_grants.sql` | Closes the fresh-install grant hole for the anonymous portal: grants `gremion_public_reader` on the portal tables, and aborts rather than granting nothing. |
 
-Plus three control-plane migrations in
+Plus **4 control-plane migrations** in
 [`../migrations-control/`](../migrations-control/): `001_tenant_registry.sql`,
-`002_tenant_migration_runs.sql`, `003_tenant_uniques.sql`.
+`002_tenant_migration_runs.sql`, `003_tenant_uniques.sql` and
+`004_tenant_domain.sql` (the per-tenant custom-domain registry).
+
+Nine of the data-plane files above — `003`, `034`, `049`, `053`–`058` — and
+control `004` entered this repository on 2026-09-15 from the reference product
+tree, because they are kernel-owned rather than module-owned. Their per-file
+provenance, every adaptation made on the way in and the re-initialisation this
+imposes on a pre-existing database are in
+[`../../docs/ops/migration-portback-2026-09-15.md`](../../docs/ops/migration-portback-2026-09-15.md).
 
 ### Migrations that exist in the product and not here
 
-The reference product chain has **58** data-plane files; this one has 22. Most of
-the 36 absent files belong to feature modules that are not part of the kernel and
-ship in their own repositories — calendar (`003`), finance (`013`–`017`,
-`019`–`023`, `025`–`032`, `035`, `036`), content (`044`–`047`) and
-handover (`050`–`052`).
+The reference product chain has **58** data-plane files; this one has 31, so
+**27 are absent**. Every one of them is module-owned or unshipped — finance
+(`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`)
+ship in their own repositories, and handover (`050`–`052`) ships in no release-1
+tree at all: `make lint-unshipped-migrations` fails any tree that carries one.
 
-The rest are **governance-side** migrations that the product has and this kernel
-does not. They are named here so that nobody reads the gap as a packaging
-accident:
+**No governance-side data-plane migration of the product is absent here any
+more.** Until the 2026-09-15 port-back, `034`, `049` and `053`–`058` were; this
+section used to name them one by one, and nothing in the kernel created
+`deck_board`, `resolution_challenges` or the portal grants. If you are reading
+an older SHA's copy of this file, that is what it is describing.
 
-| Absent | What it does in the product |
-|---|---|
-| `034_deck_board.sql` | The native task board (`board` / `stack` / `card`) — a module here. |
-| `049_org_unit_event_outbox.sql` | The org-unit event outbox. |
-| `053_notification_read_marker.sql` | Per-user notification read markers. |
-| `054_resolution_adoption_mode.sql` | The adoption-mode dimension on a resolution. |
-| `055_resolution_challenges.sql` | Contestability — challenges against an adopted resolution. |
-| `056_role_assignment_history_recalled.sql` | Recall — the terminated-mandate leg of accountability. |
-| `057_fk_hot_filter_indexes.sql` | Read-path indexes. |
-| `058_public_reader_grants.sql` | Public-reader role grants. |
-
-`055` and `056` are the schema half of the contestability / recall work that
-[`../../README.md`](../../README.md) names as absent from the kernel. If you are
-reading this because the charter in
+`055` and `056` are the **schema** half of the contestability / recall work.
+That half is here. The application half — routes, services, UI — is not, and
+[`../../README.md`](../../README.md) still names it among what this kernel does
+not contain yet. If the charter in
 [`../../docs/about-gremion.md`](../../docs/about-gremion.md) describes
-accountability and contestability as first-class and you cannot find them in the
-schema — that is why.
+accountability and contestability as first-class, and you find the tables in a
+fresh database but no way to reach them from the app — that is why.
 
 The four-eyes approval model, the FinTS state machine and the *Finanzordnung*
 signer configuration are finance-module concerns and are documented with the

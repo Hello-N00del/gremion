@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'path'
 import { readConfig } from '$lib/server/config'
 import { MODULE_MANIFESTS } from '$lib/modules/registry'
+import { backFillNotice } from '$lib/modules/migration-ownership'
 import { disabledModuleMigrationFiles, moduleReenableCatchup } from '$lib/server/module-migrations'
 
 // Re-export shared types from @gremion/db so existing imports from '$lib/server/db' continue to work
@@ -171,7 +172,9 @@ export async function runMigrations(): Promise<void> {
   // planner — it never throws; the unapplied files it reports are picked up by
   // the standard apply loop below (they are absent from `applied` and, the
   // module being ON, absent from moduleSkips). Log the plan for observability.
+  const catchUpFiles = new Set<string>()
   for (const plan of moduleReenableCatchup({ isFreshDb, applied, config, manifests: MODULE_MANIFESTS })) {
+    for (const f of plan.files) catchUpFiles.add(f)
     console.info(
       `[migrations] module '${plan.moduleId}' OFF→ON re-enable catch-up: ${plan.files.join(', ')}`,
     )
@@ -190,6 +193,19 @@ export async function runMigrations(): Promise<void> {
   const manifest = loadMigrationManifest(dir)
 
   const skipSeeds = env.GREMION_DISABLE_SEEDS === 'true'
+
+  // A file numbered into a gap BELOW this database's high-water mark is a
+  // back-fill, not a forward migration: the apply loop picks it up out of
+  // order and a reference to a since-renamed table aborts the boot with an
+  // error that names the table instead of the cause. Say the cause first.
+  const backFill = backFillNotice({
+    applied,
+    candidates: files.filter(
+      (f) => !(skipSeeds && f.endsWith('_seed.sql')) && !moduleSkips.has(f),
+    ),
+    expected: catchUpFiles,
+  })
+  if (backFill) console.warn(backFill)
 
   for (const file of files) {
     // Dev seed files (*_seed.sql) populate test committees and members keyed
