@@ -93,10 +93,33 @@ const TAG_RE = /(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+
 const UNTAGGED_IMAGE_RE =
   /^\s*(?:-\s*)?image:\s*(["']?)((?:[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]+)?\/)*postgres):?\1\s*(?:#.*)?$/
 
+// The THIRD net: a shell parameter-expansion DEFAULT, `${VAR:-postgres:18-alpine}`.
+// TAG_RE structurally CANNOT see one. The lookbehind that keeps
+// `timescale-postgres:2` and `reader@postgres:5432` out drops anything glued to a
+// `-`, and the `-` of `:-` is exactly that. Measured 2026-09-17:
+// gremion-ui/scripts/fresh-init-proof.sh:28 carried a stale default for
+// FRESH_INIT_PROOF_IMAGE through a whole unit while this guard reported
+// "OK - 780 files scanned in the kernel tree". A default IS the tag that runs
+// whenever the variable is unset, which is every CI run of `make fresh-init-proof`.
+// Only the HYPHEN forms (`${V:-tag}` and `${V-tag}`) are matched here, because
+// only they are invisible above: in `${V:=tag}` and `${V=tag}` the character
+// before the reference is `=`, which the lookbehind does not drop, so TAG_RE
+// already reads those. Matching them twice would report one stale default as two
+// findings — the narrower net is what keeps each occurrence counted exactly once.
+const SHELL_DEFAULT_RE =
+  /\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])/g
+
 export function scanText(path, text) {
   const hits = []
   text.split('\n').forEach((line, i) => {
     for (const m of line.matchAll(TAG_RE)) {
+      if (m[1] === '5432') continue
+      hits.push({ path, line: i + 1, tag: m[1], ref: `postgres:${m[1]}` })
+    }
+    // Read on the SAME line pass, after TAG_RE: the two nets cannot both match one
+    // occurrence (TAG_RE's lookbehind is precisely what blinds it here), so no
+    // line is ever counted twice.
+    for (const m of line.matchAll(SHELL_DEFAULT_RE)) {
       if (m[1] === '5432') continue
       hits.push({ path, line: i + 1, tag: m[1], ref: `postgres:${m[1]}` })
     }
