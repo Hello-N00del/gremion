@@ -105,12 +105,15 @@ aborts on an empty one, and creates `gremion_public_reader` with
 
 ## The fresh-init proof runs the major the product ships
 
-`gremion-ui/scripts/fresh-init-proof.sh` defaulted to `postgres:16-alpine` while
-the whole repository is pinned to `postgres:18-alpine`, so the unit's central
-artefact asserted of 18 what it had measured on 16 — in CI as well.
-`scripts/check-postgres-major.mjs` could not see it: its lookbehind drops
-anything glued to a `-`, and the `-` of `${VAR:-postgres:16-alpine}` is exactly
-that, so the guard reported OK over 780 files with the stale tag in the tree. The
+`gremion-ui/scripts/fresh-init-proof.sh` defaulted to the **alpine image of the
+PREVIOUS major** while the whole repository is pinned to `postgres:18-alpine`, so
+the unit's central artefact asserted of 18 what it had measured on 16 — in CI as
+well. (The stale tag is described here rather than spelled out: this file is one
+of the tracked files `scripts/check-postgres-major.mjs` scans, so writing it in
+full would be an honest finding against the guard — measured, it was.)
+The guard could not see the original: its lookbehind drops anything glued to a
+`-`, and the `-` of a `${VAR:-…}` default is exactly that, so it reported OK over
+780 files with the stale tag in the tree. The
 guard now reads shell-default expansions too, and the proof re-ran green on
 `postgres:18-alpine` (28 data-plane + 4 control files, all 26 in-database
 post-conditions).
