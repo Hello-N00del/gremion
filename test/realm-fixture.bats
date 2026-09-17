@@ -90,3 +90,73 @@ print(c[\"secret\"])
     [ "$status" -eq 0 ]
     [ "$output" = "fixture-ui-secret" ]
 }
+
+# --- gremion#6: the platform SMTP block -------------------------------------
+# The base template carries the sender as __SMTP_*__ sentinels, filled on the
+# product path by smtpServerBlock() in
+# gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts. This renderer is
+# the SECOND consumer of that template (.github/workflows/ci.yml pipes its
+# stdout straight into the Keycloak Admin API), so a sentinel it does not know
+# is a CI integration lane that cannot create its realm at all.
+
+@test "the rendered realm carries a resolved smtpServer the Admin API can accept" {
+    run bash -c "python3 '$RENDER' --realm citest --apex ci.local | python3 -c '
+import json, sys
+s = json.load(sys.stdin)[\"smtpServer\"]
+bad = [k for k in (\"host\", \"port\", \"from\", \"user\", \"password\", \"auth\", \"starttls\", \"ssl\")
+       if not str(s.get(k, \"\")).strip() or \"__\" in str(s.get(k, \"\"))]
+print(\",\".join(bad) or \"none\")
+'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "none" ]
+}
+
+@test "the rendered smtpServer mirrors the provisioner's 465-vs-other TLS carrier rule" {
+    # ONE source of truth: RealmRepresentation has no requireTLS field, so
+    # starttls/ssl are the carrier — 465 is the single implicit-TLS port and
+    # every other port must negotiate STARTTLS (realm-doc.ts smtpServerBlock).
+    # A fixture that renders a different transport proves a realm the product
+    # never composes.
+    run bash -c "python3 '$RENDER' --realm citest --apex ci.local --smtp-port 465 | python3 -c '
+import json, sys
+s = json.load(sys.stdin)[\"smtpServer\"]
+print(s[\"port\"], s[\"ssl\"], s[\"starttls\"])
+'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "465 true false" ]
+    run bash -c "python3 '$RENDER' --realm citest --apex ci.local --smtp-port 587 | python3 -c '
+import json, sys
+s = json.load(sys.stdin)[\"smtpServer\"]
+print(s[\"port\"], s[\"ssl\"], s[\"starttls\"])
+'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "587 false true" ]
+}
+
+@test "the fixture sender is the unroutable sink, never the platform submission host" {
+    # CI creates this realm in a LIVE Keycloak. A fixture that inherited
+    # mail.<apex> would make an integration run authenticate to the platform
+    # relay and deliver real mail, so the default host is the sink and the
+    # password is generated, never a committed literal.
+    run bash -c "python3 '$RENDER' --realm citest --apex ci.local | python3 -c '
+import json, sys
+s = json.load(sys.stdin)[\"smtpServer\"]
+print(s[\"host\"])
+'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "null-sink" ]
+    # …and the whole rendered document names the apex mail host nowhere.
+    run bash -c "python3 '$RENDER' --realm citest --apex ci.local | grep -c 'mail\.ci\.local'"
+    [ "$output" = "0" ]
+}
+
+@test "refuses an SMTP port outside the port range" {
+    # Mirrors smtpServerBlock's own refusal. Asserted on the MESSAGE, not just
+    # the exit code: argparse rejects an unknown option with the same non-zero
+    # status, so an exit-code-only test would pass against a renderer that never
+    # learned the option at all.
+    run python3 "$RENDER" --realm citest --apex ci.local --smtp-port 70000
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing"* ]]
+    [[ "$output" == *"70000"* ]]
+}

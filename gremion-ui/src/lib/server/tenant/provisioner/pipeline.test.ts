@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MODULE_MANIFESTS } from '$lib/modules/registry'
+import { smtpServerBlock } from './realm-doc'
 
 const KC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', '..', 'docker', 'keycloak')
 // The shipped base template carries the deployment apex host as the
@@ -54,6 +55,13 @@ function harness(opts: { realmFailsOnce?: boolean; multi?: boolean } = {}) {
   const deps: ProvisionDeps = {
     manifests: MODULE_MANIFESTS,
     apexDomain: 'council.example',
+    platformSmtp: {
+      host: 'mail.example.org',
+      port: 587,
+      from: 'no-reply@example.org',
+      user: 'platform@example.org',
+      password: 'unit-test-platform-password',
+    },
     loadDefaultConfig: () => cfg as never,
     loadBaseRealm: () => JSON.parse(JSON.stringify(base)),
     loadTenantConfig: () => ({ modules: { finance: false, elections: true } }) as never,
@@ -82,6 +90,9 @@ function harness(opts: { realmFailsOnce?: boolean; multi?: boolean } = {}) {
       }),
       configureStepupFlow: vi.fn(async () => {}),
       assignServiceAccountRealmRoles: vi.fn(async () => {}),
+      // Part of ProvisionKc since gremion#6, and applied on EVERY pass — the
+      // `as never` below is what let the harness omit it.
+      updateRealmSmtp: vi.fn(async () => {}),
     } as never,
     registry: {
       getTenantBySlug: async (slug) => (rows.has(slug) ? ({ ...rows.get(slug)! } as never) : null),
@@ -327,5 +338,53 @@ describe('provisionTenant — idempotency + half-onboarded retry (§6-P2.1)', ()
     // the UI client id is FROZEN to gremion-ui (D-UICLIENT) at the registry, not via
     // a kc_client_id column — its OWN secret ref is authClientRef.
     expect(row.authClientRef).toMatch(/^file:\/run\/secrets\/tenants\/tenant_t2_client_gremion-ui$/)
+  })
+})
+
+// gremion#6 (spec B §T.4) — the Admin-API SMTP delta for a realm that already
+// exists on KC (the local ledger has not yet marked it 'ok'). Spec A §H
+// forbids a re-import here; the pipeline must apply the delta instead.
+describe('provisionTenant — gremion#6 SMTP delta on the already-exists branch', () => {
+  it('applies the SMTP delta by Admin API when the realm already exists (never a re-import)', async () => {
+    const h = harness()
+    h.deps.kc.realmExists = async () => true
+    const updateRealmSmtp = vi.fn(async () => {})
+    ;(h.deps.kc as any).updateRealmSmtp = updateRealmSmtp
+    await provisionTenant(args, h.deps)
+    expect(h.deps.kc.createRealm).not.toHaveBeenCalled()
+    expect(updateRealmSmtp).toHaveBeenCalledWith('verein', smtpServerBlock(h.deps.platformSmtp))
+  })
+
+  it('re-stamps the platform SMTP block even when the realm ledger already says ok', async () => {
+    // The delta used to sit under `if (ledger.realm !== 'ok')`, so a tenant
+    // whose realm was provisioned before gremion#6 was never reached at all,
+    // and a realm whose smtpServer had been repointed away (the tenant's own
+    // gremion-admin SA holds realm-admin on it) stayed repointed forever.
+    // Re-stamping on every pass is what makes that drift, not a one-way door.
+    const h = harness()
+    const updateRealmSmtp = vi.fn(async () => {})
+    ;(h.deps.kc as any).updateRealmSmtp = updateRealmSmtp
+    await provisionTenant(args, h.deps)
+    updateRealmSmtp.mockClear()
+    ;(h.deps.kc.createRealm as any).mockClear()
+    await provisionTenant(args, h.deps)
+    expect(h.deps.kc.createRealm).not.toHaveBeenCalled()
+    expect(updateRealmSmtp).toHaveBeenCalledWith('verein', smtpServerBlock(h.deps.platformSmtp))
+  })
+
+  it('refuses to PUT a blank smtpServer onto a live realm', async () => {
+    // The create path is fail-closed by assertSmtpConfiguredForEmailLogin; the
+    // delta path validated only the PORT, so a misassembled platformSmtp could
+    // blank the sender of a LIVE realm and lock every user of that tenant out
+    // — the exact failure the create-path guard exists to prevent.
+    const h = harness()
+    const updateRealmSmtp = vi.fn(async () => {})
+    ;(h.deps.kc as any).updateRealmSmtp = updateRealmSmtp
+    h.deps.kc.realmExists = async () => true
+    h.deps.platformSmtp = { ...h.deps.platformSmtp, host: '', user: '' }
+    await expect(provisionTenant(args, h.deps)).rejects.toThrow(
+      /platform SMTP settings are unset/,
+    )
+    expect(updateRealmSmtp).not.toHaveBeenCalled()
   })
 })

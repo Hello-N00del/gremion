@@ -137,7 +137,7 @@ than exit codes.
 | `gremion-backup [--label L] [--class daily\|snapshot]` | enumerate from the running system, archive, restic, off-site, report; writes `runtime/last-backup.json` |
 | `gremion-snapshot <tag>` | `gremion-backup --label <tag> --class snapshot`, plus the artefact-class floor |
 | `gremion-restore-into --stack S --snapshot ID\|latest [--rto]` | restore a snapshot into a *different* stack, never into `etc/`, then neuter and prove by content |
-| `gremion-neuter --stack S` | point every SMTP host at a null sink and blank the publish tokens in stack `S`, asserted through `docker exec … env` |
+| `gremion-neuter --stack S` | point every SMTP host at a null sink and blank the publish tokens in stack `S` — env files, tenant `config.json`, the control registry and every Keycloak realm's `smtpServer` — asserted through `docker exec … env` and a kcadm read-back |
 
 ### `gremion-verify` and the signed waiver ledger
 

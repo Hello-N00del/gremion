@@ -37,6 +37,8 @@ PLATFORM_DOMAIN=example.org
 TRAEFIK_CERT_RESOLVER=
 POSTGRES_USER=postgres
 CONTROL_DB_NAME=control
+KEYCLOAK_ADMIN=admin
+KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password
 KEYCLOAK_SMTP_HOST=mail.example.org
 KEYCLOAK_SMTP_PORT=587
 NEXTCLOUD_MAIL_RELAY=smtp://mail.example.org:465
@@ -77,6 +79,13 @@ shim_docker_empty() {
     shim docker '
 args="$*"
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*)    echo "cid1 stg-state postgres"; exit 0 ;;
   "inspect -f {{.State.Running}} stg-null-sink")
@@ -132,6 +141,13 @@ esac'
     shim docker '
 args="$*"
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) echo "stg-mail stg-mail-stalwart-1"; exit 0 ;;
   *) exit 0 ;;
 esac'
@@ -178,6 +194,13 @@ EOF
 args="$*"
 clean="$GREMION_ROOT/runtime/.cleaned"
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*)
       echo "cid-ui stg-app-blue gremion-ui"
@@ -224,6 +247,13 @@ shim_docker_exempt() {
     shim docker '
 args="$*"
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*)
       echo "cid-mc stg-state minio-mc"
@@ -277,7 +307,7 @@ esac'
     shim_docker_live
     run "$NEUTER" --stack stg
     [ "$status" -eq 0 ]
-    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=2 rows=0 containers=2 ok"* ]]
+    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=2 rows=0 realms=2 containers=2 ok"* ]]
 }
 
 # The exec-exempt fallback must be TAKEN and ANNOUNCED, not merely declared.
@@ -288,7 +318,7 @@ esac'
     [ "$status" -eq 0 ]
     [[ "$output" == *"WARN inspect-fallback for minio-mc"* ]]
     assert_recorded docker "{{range .Config.Env}}"
-    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=0 containers=2 ok"* ]]
+    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=0 realms=2 containers=2 ok"* ]]
 }
 
 # WATCH IT FAIL: an UNdeclared service that cannot be read is a hard failure,
@@ -307,6 +337,13 @@ esac'
     shim docker '
 args="$*"
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*) echo "cid-ui stg-app-blue gremion-ui"; exit 0 ;;
   "inspect -f {{.State.Running}} stg-null-sink")
@@ -333,6 +370,13 @@ esac'
     shim docker '
 args="$*"
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*) echo "cid-ui stg-app-blue gremion-ui"; exit 0 ;;
   "inspect -f {{.State.Running}} stg-null-sink")
@@ -368,6 +412,13 @@ for a in "$@"; do
   prev="$a"
 done
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*) echo "cid-pg stg-state postgres"; exit 0 ;;
   "inspect -f {{.State.Running}} stg-null-sink")
@@ -393,7 +444,7 @@ exit 0'
     run "$NEUTER" --stack stg
     [ "$status" -eq 0 ]
     [[ "$output" == *"control registry rows rewritten: 6"* ]]
-    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=6 containers=1 ok"* ]]
+    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=6 realms=2 containers=1 ok"* ]]
     # the count is asked of the server; psql -q never prints the "UPDATE n" tag
     assert_recorded docker "RETURNING"
 }
@@ -488,6 +539,13 @@ shim_docker_relay() {
 args="$*"
 clean="$GREMION_ROOT/runtime/.cleaned"
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*)
       echo "cid-ui stg-app-blue gremion-ui"
@@ -529,6 +587,13 @@ shim_docker_stuck() {
     shim docker '
 args="$*"
 case "$args" in
+  *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
+  "inspect stg-state-keycloak") exit 0 ;;
+  *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
+  *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      sed -n "s/.*\"host\":\"\([^\"]*\)\".*/{ \"host\" : \"\1\" }/p" \
+          "$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*)
       echo "cid-ui stg-app-blue gremion-ui"
@@ -560,7 +625,7 @@ esac'
     [ "$status" -eq 0 ]
     assert_recorded docker "--env-file ${GREMION_ROOT}/etc/env/app-blue.env up -d --force-recreate gremion-ui"
     [[ "$output" == *"recreated in stg-app-blue: gremion-ui"* ]]
-    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=0 containers=2 ok"* ]]
+    [[ "$output" == *"NEUTER: env-files=2 changed=2 configs=0 rows=0 realms=2 containers=2 ok"* ]]
 }
 
 # WATCH IT FAIL: the post-condition. A raw IP in an SMTP host key is a value no
@@ -609,10 +674,154 @@ esac'
 # host the operator asked for, and the value already equals it. The integration
 # found this; the unit suite pins it here.
 @test "gremion-neuter flags the real mail host even when the sink is pointed at it" {
+    # An operator who points --null-sink-host at mail.${PLATFORM_DOMAIN} has
+    # asked for a sink that IS the real thing, and EVERY layer refuses it.
+    # Since gremion#6 the Keycloak realm layer is the first one reached (the
+    # realm PUT lands before the container post-condition), so the refusal
+    # surfaces there; the container layer pins the same rule under a normal
+    # sink in "exits 1 when a container still names the live mail host".
     printf '%s\n' "SMTP_HOST=mail.example.org" >"${GREMION_ROOT}/runtime/.stuck-env"
     shim_docker_stuck
     run "$NEUTER" --stack stg --null-sink-host mail.example.org
     [ "$status" -eq 1 ]
-    [[ "$output" == *"gremion-ui: SMTP_HOST still names mail.example.org"* ]]
-    [[ "$output" == *"live mail/token value(s) survive neutering"* ]]
+    [[ "$output" == *"still names mail.example.org"* ]]
+    [[ "$output" == *"realm(s) still name a live SMTP host"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# gremion#6 — the FOURTH place a restore carries a live sender.
+#
+# This program's own header enumerates three: the env files, the per-tenant
+# config.json files and the control registry. The Keycloak realm smtpServer is
+# a fourth, and no env rewrite can reach it: Keycloak reads host, user and the
+# plaintext platform app password out of its OWN database
+# (docker/keycloak/realm-export.base.json + the provisioner's Admin-API delta).
+# Without this stage a restored instance passes every post-condition above and
+# still delivers real UPDATE_PASSWORD mail to real addresses from the
+# production sender.
+# ---------------------------------------------------------------------------
+
+# A stack whose only running container is postgres, plus a scriptable Keycloak.
+#   runtime/.kc-realms    what `kcadm get realms` lists
+#   runtime/.kc-readback  the host `kcadm get realms/<r>` reports afterwards
+#   KC_PRESENT_RC         exit code of `docker inspect <keycloak>`
+shim_docker_kc() {
+    printf 'postgres\nkeycloak\n' >"${GREMION_ROOT}/runtime/.kc-services"
+    printf 'master\nt1\n' >"${GREMION_ROOT}/runtime/.kc-realms"
+    echo "null-sink" >"${GREMION_ROOT}/runtime/.kc-readback"
+    : >"${GREMION_ROOT}/runtime/.kc-updates"
+    shim docker '
+args="$*"
+case "$args" in
+  *"config --services"*) cat "$GREMION_ROOT/runtime/.kc-services"; exit 0 ;;
+  "inspect stg-state-keycloak") exit "${KC_PRESENT_RC:-0}" ;;
+  *"kcadm.sh get realms --fields realm"*) cat "$GREMION_ROOT/runtime/.kc-realms"; exit 0 ;;
+  *"kcadm.sh update realms/"*)
+      { echo "$args"; cat; echo; } >> "$GREMION_ROOT/runtime/.kc-updates"; exit 0 ;;
+  *"kcadm.sh get realms/"*)
+      printf "{ \"host\" : \"%s\" }\n" "$(cat "$GREMION_ROOT/runtime/.kc-readback")"; exit 0 ;;
+  *"{{.Names}}"*) exit 0 ;;
+  *"{{.ID}}"*) echo "cid-pg stg-state postgres"; exit 0 ;;
+  "inspect -f {{.State.Running}} stg-null-sink")
+      if [ -f "$GREMION_ROOT/runtime/.sink-started" ]; then echo true; exit 0; fi
+      exit 1 ;;
+  "run -d --name stg-null-sink"*)
+      : >"$GREMION_ROOT/runtime/.sink-started"; echo cid-sink; exit 0 ;;
+  "exec cid-pg env") echo "PATH=/usr/bin"; exit 0 ;;
+  *"ps -q postgres"*) echo cid-pg; exit 0 ;;
+  *to_regclass*) echo f; exit 0 ;;
+  *) exit 0 ;;
+esac'
+}
+
+@test "gremion-neuter rewrites the smtpServer of every Keycloak realm" {
+    shim_docker_kc
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    # Asserted from what the program TRIED to do, never from its exit code.
+    grep -q "update realms/master" "${GREMION_ROOT}/runtime/.kc-updates"
+    grep -q "update realms/t1" "${GREMION_ROOT}/runtime/.kc-updates"
+    [[ "$output" == *"keycloak realms neutered: 2"* ]]
+    [[ "$output" == *"realms=2"* ]]
+}
+
+@test "the rewritten realm sender is the sink and carries no credential" {
+    shim_docker_kc
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    local body
+    body="$(cat "${GREMION_ROOT}/runtime/.kc-updates")"
+    [[ "$body" == *'"host":"null-sink"'* ]]
+    [[ "$body" == *'"port":"1025"'* ]]
+    # the platform app password and the authenticating principal are what a
+    # restore must not keep: both are PUT empty, and auth is turned off.
+    [[ "$body" == *'"user":""'* ]]
+    [[ "$body" == *'"password":""'* ]]
+    [[ "$body" == *'"auth":"false"'* ]]
+    # TLS off against the plaintext sink, so a neutered realm cannot silently
+    # fall back to the real transport.
+    [[ "$body" == *'"starttls":"false"'* ]]
+    [[ "$body" == *'"ssl":"false"'* ]]
+    [[ "$body" != *"mail.example.org"* ]]
+}
+
+@test "gremion-neuter exits 1 when a realm still names the live mail host after the rewrite" {
+    shim_docker_kc
+    echo "mail.example.org" >"${GREMION_ROOT}/runtime/.kc-readback"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"still names mail.example.org"* ]]
+    [[ "$output" == *"realm(s) still name a live SMTP host"* ]]
+}
+
+@test "gremion-neuter exits 1 when kcadm lists no realm at all" {
+    # The vacuous pass this stage must not have: a kcadm that printed nothing
+    # would otherwise be reported as "0 realms neutered, ok". A live Keycloak
+    # always has `master`, so an empty listing is a read that failed.
+    shim_docker_kc
+    : >"${GREMION_ROOT}/runtime/.kc-realms"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"listed no realm"* ]]
+}
+
+@test "gremion-neuter exits 2 when the Keycloak container is not running" {
+    shim_docker_kc
+    export KC_PRESENT_RC=1
+    run "$NEUTER" --stack stg
+    unset KC_PRESENT_RC
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"stg-state-keycloak"* ]]
+}
+
+@test "gremion-neuter exits 2 when the state env carries no kcadm credential" {
+    shim_docker_kc
+    grep -v '^KEYCLOAK_ADMIN_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env" \
+        >"${GREMION_ROOT}/etc/env/state.env.tmp"
+    mv "${GREMION_ROOT}/etc/env/state.env.tmp" "${GREMION_ROOT}/etc/env/state.env"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"KEYCLOAK_ADMIN"* ]]
+}
+
+@test "gremion-neuter skips the realm stage when the composition declares no keycloak" {
+    # An instance without Keycloak has no realm to carry a sender. Said out
+    # loud and counted as 0, never passed over in silence.
+    shim_docker_kc
+    printf 'postgres\nnextcloud\n' >"${GREMION_ROOT}/runtime/.kc-services"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"declares no keycloak service"* ]]
+    [[ "$output" == *"realms=0"* ]]
+    [ ! -s "${GREMION_ROOT}/runtime/.kc-updates" ]
+}
+
+@test "gremion-neuter exits 1 when the state composition lists no service at all" {
+    # The vacuous skip this must not have: a compose call that printed nothing
+    # would otherwise read back as "this instance has no Keycloak".
+    shim_docker_kc
+    : >"${GREMION_ROOT}/runtime/.kc-services"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"lists no service at all"* ]]
 }

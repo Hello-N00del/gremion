@@ -47,6 +47,13 @@ function makeDeps(opts: { realmFailsOnce?: boolean } = {}) {
   const deps: ProvisionDeps = {
     manifests: MODULE_MANIFESTS,
     apexDomain: 'council.example',
+    platformSmtp: {
+      host: 'mail.example.org',
+      port: 587,
+      from: 'no-reply@example.org',
+      user: 'platform@example.org',
+      password: 'unit-test-platform-password',
+    },
     loadDefaultConfig: () => ({ deployment: { mode: 'multi' } }),
     loadBaseRealm: () => JSON.parse(JSON.stringify(base)),
     loadTenantConfig: () => ({ modules: { finance: false, elections: true } }),

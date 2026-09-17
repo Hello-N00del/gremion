@@ -3,11 +3,14 @@
 # gremion-neuter — make a RESTORED instance harmless before anything runs in it.
 #
 # A restore carries production mail hosts and external publish tokens into a
-# non-production instance in THREE places: the env files, the per-tenant
-# config.json files (gremion-ui reads config.smtp from disk), and the control
-# registry's tenant.domain_profile.services.smtp. This program rewrites all
-# three, recreates the services that carried a live value, and then PROVES the
-# result from the running system with `docker exec <c> env`.
+# non-production instance in FOUR places: the env files, the per-tenant
+# config.json files (gremion-ui reads config.smtp from disk), the control
+# registry's tenant.domain_profile.services.smtp, and every Keycloak realm's
+# smtpServer (gremion#6 - host, user and the plaintext platform app password
+# live in Keycloak's OWN database, where no env rewrite can reach them). This
+# program rewrites all four, recreates the services that carried a live value,
+# and then PROVES the result from the running system with `docker exec <c> env`
+# and a kcadm read-back.
 #
 # Usage: gremion-neuter --stack S [--root DIR] [--release DIR] [--null-sink-host H]
 # Exit:  0 ok · 1 assertion/post-condition failed · 2 usage/precondition · 3 blocked
@@ -23,6 +26,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NULL_SINK_IMAGE="${NULL_SINK_IMAGE:-axllent/mailpit:v1.30.1}"
 NULL_SINK_HOST="${NULL_SINK_HOST:-null-sink}"
 NULL_SINK_PORT="${NULL_SINK_PORT:-1025}"
+# The kcadm entrypoint inside the Keycloak image - the same path
+# infra/host/bin/gremion-mail-bringup drives for assert 6b.
+KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
 # Space-separated compose SERVICE names whose image ships no `env` binary.
 NEUTER_EXEC_EXEMPT="${NEUTER_EXEC_EXEMPT:-}"
 
@@ -34,6 +40,7 @@ ENV_FILES_SEEN=0
 ENV_FILES_CHANGED=0
 CONFIGS_REWRITTEN=0
 ROWS_REWRITTEN=0
+REALMS_NEUTERED=0
 CONTAINERS_CHECKED=0
 
 usage() {
@@ -442,6 +449,74 @@ neuter_registry_rows() {
     ok "control registry rows rewritten: ${ROWS_REWRITTEN}"
 }
 
+# The FOURTH place (gremion#6). Keycloak reads its sender out of its own
+# database, not out of the environment, so neuter_env_files cannot reach it: a
+# restored instance whose env files all name the sink still holds
+# mail.<prod domain>, platform@<prod domain> and that principal's live app
+# password in every realm, and Keycloak will deliver real UPDATE_PASSWORD and
+# reset mail to real addresses from the production sender. Every realm is PUT
+# at the sink with auth off and an EMPTY user/password, and every realm is then
+# READ BACK - the post-condition, never the exit code of the write.
+neuter_keycloak_realms() {
+    local kc="${STACK}-state-keycloak" declared admin password realms r out live=0
+    # Whether this instance HAS a Keycloak is read from the composition, not
+    # from what happens to be running: a stopped Keycloak still holds the live
+    # sender in its database and would send the moment it came up, so "the
+    # container is not up" must never read as "there is nothing to neuter".
+    # The listing is captured first and required to be non-empty, because a
+    # compose call that failed would otherwise read back as "no keycloak here".
+    declared="$(compose_in_release "$STATE_ENV" config --services)" \
+        || die "cannot read the services of the state composition from ${RELEASE_DIR}" 1
+    [[ -n "$declared" ]] || \
+        die "the state composition lists no service at all; refusing to decide about Keycloak from an empty read" 1
+    if ! grep -qx 'keycloak' <<<"$declared"; then
+        info "the state composition declares no keycloak service; no realm to neuter"
+        return 0
+    fi
+    docker inspect "$kc" >/dev/null 2>&1 \
+        || die "keycloak container ${kc} is not running: its realms still hold the production sender and its password, and no env rewrite reaches them (gremion#6) - bring the state project up and re-run" 2
+    admin="$(env_value "$STATE_ENV" KEYCLOAK_ADMIN)"
+    password="$(env_value "$STATE_ENV" KEYCLOAK_ADMIN_PASSWORD)"
+    [[ -n "$admin" && -n "$password" ]] \
+        || die "KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD are unset in ${STATE_ENV}; kcadm has no credential and the realm senders cannot be neutered" 2
+    docker exec "$kc" "$KCADM_BIN" config credentials \
+        --server http://127.0.0.1:8080 --realm master \
+        --user "$admin" --password "$password" >/dev/null \
+        || die "kcadm could not authenticate against ${kc}" 1
+    # Captured first: a `die` inside $( ) runs in a subshell and could not end
+    # the program, and a kcadm that failed would read back as "no realm".
+    realms="$(docker exec "$kc" "$KCADM_BIN" get realms --fields realm --format csv --noquotes)" \
+        || die "cannot enumerate the realms of ${kc}" 1
+    realms="$(printf '%s\n' "$realms" | tr -d '\r' | sed '/^$/d')"
+    # A live Keycloak always carries `master`. An empty listing is a read that
+    # failed, never a Keycloak with nothing to neuter - reporting "0 realms
+    # neutered, ok" for it would be the post-condition lying.
+    [[ -n "$realms" ]] || \
+        die "kcadm listed no realm on ${kc}; refusing to report a Keycloak this program never read" 1
+    while read -r r; do
+        [[ -n "$r" ]] || continue
+        printf '{"smtpServer":{"host":"%s","port":"%s","from":"no-reply@%s","auth":"false","user":"","password":"","starttls":"false","ssl":"false"}}' \
+            "$NULL_SINK_HOST" "$NULL_SINK_PORT" "$NULL_SINK_HOST" \
+          | docker exec -i "$kc" "$KCADM_BIN" update "realms/${r}" -f - >/dev/null \
+          || die "kcadm could not rewrite the smtpServer of realm ${r}" 1
+        out="$(docker exec "$kc" "$KCADM_BIN" get "realms/${r}" --fields smtpServer)" \
+            || die "cannot read back the smtpServer of realm ${r}" 1
+        case "$out" in
+            # Strictest first, exactly as env_line_is_live orders it: the real
+            # relay is live whatever else the value says.
+            *"${MAIL_HOST}"*)
+                bad "realm ${r}: smtpServer still names ${MAIL_HOST}"; live=$((live + 1)) ;;
+            *"${NULL_SINK_HOST}"*)
+                REALMS_NEUTERED=$((REALMS_NEUTERED + 1)) ;;
+            *)
+                bad "realm ${r}: smtpServer names neither ${NULL_SINK_HOST} nor ${MAIL_HOST} after the rewrite"
+                live=$((live + 1)) ;;
+        esac
+    done <<<"$realms"
+    [[ "$live" -eq 0 ]] || die "${live} Keycloak realm(s) still name a live SMTP host" 1
+    ok "keycloak realms neutered: ${REALMS_NEUTERED}"
+}
+
 # The post-condition of the whole program, read from the RUNNING system.
 assert_env_clean() {
     local listing project service id line key val envtext offenders=0
@@ -478,10 +553,11 @@ main() {
     recreate_affected
     neuter_tenant_configs
     neuter_registry_rows
+    neuter_keycloak_realms
     assert_env_clean
-    printf 'NEUTER: env-files=%s changed=%s configs=%s rows=%s containers=%s ok\n' \
+    printf 'NEUTER: env-files=%s changed=%s configs=%s rows=%s realms=%s containers=%s ok\n' \
         "$ENV_FILES_SEEN" "$ENV_FILES_CHANGED" "$CONFIGS_REWRITTEN" \
-        "$ROWS_REWRITTEN" "$CONTAINERS_CHECKED"
+        "$ROWS_REWRITTEN" "$REALMS_NEUTERED" "$CONTAINERS_CHECKED"
 }
 
 main "$@"

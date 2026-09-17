@@ -93,7 +93,16 @@ teardown() {
     #   1. the realm template is parametrized, not a hardcoded value;
     #   2. the provisioner pins 'all' on the composed per-tenant realm.
     grep -qF '"sslRequired": "__SSL_REQUIRED__"' "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json"
-    grep -qF "composed.sslRequired = 'all'" \
+    # Matched by SHAPE, not by the builder's local variable name. A literal
+    # grep for one spelling ("composed.sslRequired = 'all'") stopped verifying
+    # anything the day gremion#6 renamed that local to `resolved`: the guard
+    # went RED for a rename while the behaviour it pins was intact, which is
+    # the same class of defect as a guard that stays green for a deletion.
+    # What must hold is that SOME local carrying the composed doc is assigned
+    # 'all' — a deletion, or a weakening to 'external', still fails. No
+    # end-of-line anchor: the source files are checked out CRLF on the
+    # authoring host, where a trailing `$` would match nothing at all.
+    grep -qE "^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*\\.sslRequired = 'all'" \
         "${PROJECT_ROOT}/gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts"
 }
 

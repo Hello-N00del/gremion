@@ -68,6 +68,17 @@ export class KcProvisionApi {
     }
   }
 
+  /** gremion#6 (spec B §T.4) — apply the SMTP settings to an ALREADY-CREATED
+   *  realm as an Admin-API DELTA. Spec A §H: changes to an existing realm are
+   *  Admin-API deltas, never a re-import. KC merges a partial realm rep, so the
+   *  body carries only the realm name and the smtpServer block. */
+  async updateRealmSmtp(realm: string, smtpServer: Record<string, string>): Promise<void> {
+    await this.transport('PUT', `/admin/realms/${KcProvisionApi.realmSeg(realm)}`, {
+      realm,
+      smtpServer,
+    })
+  }
+
   /** T17 (§8.7) — DELETE /admin/realms/<realm>. Idempotent: a 404 (realm already
    *  gone — e.g. a re-run after a partial delete) is a no-op, not an error. */
   async deleteRealm(realm: string): Promise<void> {

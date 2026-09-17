@@ -26,10 +26,13 @@
 import { validateSlug, dbNameForSlug } from '$lib/server/tenant/slug'
 import { assertMultiTenantEnabled } from './wizard-gate'
 import {
+  assertSmtpConfiguredForEmailLogin,
   buildTenantRealmDoc,
   issuerForTenant,
   kcInternalForTenant,
   PROVISIONER_SECRET_CLIENTS,
+  smtpServerBlock,
+  type RealmSmtpSettings,
 } from './realm-doc'
 import type { ModuleManifest } from '$lib/modules/types'
 import type { KcProvisionApi } from './kc-admin-api'
@@ -66,7 +69,11 @@ export interface ProvisionDbExecutor {
 /** The KC Admin-API surface the pipeline needs (KcProvisionApi subset). */
 export type ProvisionKc = Pick<
   KcProvisionApi,
-  'realmExists' | 'createRealm' | 'configureStepupFlow' | 'assignServiceAccountRealmRoles'
+  | 'realmExists'
+  | 'createRealm'
+  | 'configureStepupFlow'
+  | 'assignServiceAccountRealmRoles'
+  | 'updateRealmSmtp'
 >
 
 /** The registry surface the pipeline needs (real registry.ts fns, or mocks). */
@@ -90,6 +97,10 @@ export interface ProvisionDeps {
   manifests: ModuleManifest[]
   /** The deployment apex domain (e.g. `council.example`) — issuer/host derivation. */
   apexDomain: string
+  /** The platform's authenticating SMTP sender (gremion#6). REQUIRED: the base
+   *  template's __SMTP_*__ sentinels have no other filler now that the Keycloak
+   *  boot import is gone (spec B §T.4). */
+  platformSmtp: RealmSmtpSettings
   /** (A) #139/G-080: the in-cluster KC admin/OIDC base (scheme+authority+`/auth`,
    *  NO realm suffix) the provisioned tenant's admin client uses. MUST be the
    *  internal-TLS URL (`https://keycloak:8443/auth`) so it can reach a realm
@@ -297,6 +308,7 @@ export async function provisionTenant(
           tenantHost,
           apexDomain: deps.apexDomain,
           clientSecrets,
+          smtp: deps.platformSmtp,
         })
         const res = await deps.kc.createRealm(realmDoc as Record<string, unknown>)
         realmCreated = !res.alreadyExisted
@@ -323,6 +335,39 @@ export async function provisionTenant(
       await deps.registry.markTenantResourceFailed(tenantId, 'realm', String(err))
       throw err
     }
+  }
+
+  // (4b) gremion#6 — the platform smtpServer, applied as an Admin-API DELTA
+  // (spec A §H forbids a re-import here) on EVERY pass, not only when the realm
+  // ledger is not yet 'ok'. Two reasons, both from review round 1:
+  //   · a realm provisioned BEFORE this block existed has said 'ok' since the
+  //     day it was created, so a delta gated on the ledger never reaches it and
+  //     that tenant's realm keeps no sender at all;
+  //   · the tenant's own gremion-admin service account holds `realm-admin` on
+  //     its realm (GREMION_ADMIN_SA_REALM_ROLES), so it CAN repoint
+  //     smtpServer.host at a host it controls and capture the platform
+  //     credential from the inbound AUTH exchange. Re-stamping turns that into
+  //     drift every provision/reconcile pass repairs, instead of a permanent,
+  //     silent exfiltration. This is a MITIGATION, named as one: the root fix
+  //     is a per-tenant submission principal, or a role set narrower than the
+  //     realm-admin composite, and establishing the minimal realm-management
+  //     set needs a live Keycloak to verify against.
+  // The guard is the CREATE path's, not a second, weaker rule of its own:
+  // smtpServerBlock alone validates the port and nothing else, so a
+  // misassembled platformSmtp could blank the sender of a LIVE realm and lock
+  // every user of that tenant out. The rep passed to it carries what the base
+  // template fixes for every realm composed from it (loginWithEmailAllowed and
+  // resetPasswordAllowed, realm-export.base.json:7,9), so the guard cannot be
+  // side-stepped by a realm this pipeline never read back.
+  try {
+    assertSmtpConfiguredForEmailLogin(
+      { realm: realmName, loginWithEmailAllowed: true, resetPasswordAllowed: true } as never,
+      deps.platformSmtp,
+    )
+    await deps.kc.updateRealmSmtp(realmName, smtpServerBlock(deps.platformSmtp))
+  } catch (err) {
+    await deps.registry.markTenantResourceFailed(tenantId, 'realm', String(err))
+    throw err
   }
 
   // (6) write back the provisioner-owned columns (registerTenant is DO NOTHING,
