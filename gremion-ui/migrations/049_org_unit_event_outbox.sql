@@ -5,7 +5,7 @@
 -- schema). This transactional outbox is the publisher's durable
 -- hand-off: every org_units DML at the choke point (governance/org-units-db.ts)
 -- co-commits ONE row here in the SAME transaction (never a phantom/missed publish),
--- and org-unit-event-relay.ts drains due rows → NATS (sturaos.<t>.org-unit.<event>).
+-- and org-unit-event-relay.ts drains due rows → NATS (<subject-prefix>.<t>.org-unit.<event>).
 --
 -- occurred_at is the LOGICAL event time (the DML instant), carried onto the envelope
 -- occurredAt so the leaf consumer's per-aggregate ordering guard is driven by DML

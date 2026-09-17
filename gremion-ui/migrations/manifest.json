@@ -23,7 +23,7 @@
   "042_protocol_resolution_required_majority.sql": "fa1468c436fb936055d4b219c015e63d1c1f251bf157f23c4be05a6a014b95b1",
   "043_audit_log_hash_chain.sql": "40d90809a84e3ceb4fd048ef76c996651f7ca829af7440cc9681dc03ad6363bf",
   "048_resolution_decided_at.sql": "3ad10088e1bd1d31883803a7fd58f83db95a932ca84c6ab32de06a3968128f04",
-  "049_org_unit_event_outbox.sql": "692b9788e9025e4e8a8b049818a7a80d51a7c9dda344a1f15aeb58a27199f9cc",
+  "049_org_unit_event_outbox.sql": "13e9cfd7ed2034c9a9d95f295141bc23decd5ed5fd349fe579e9af51675c5a84",
   "053_notification_read_marker.sql": "0d878f71cb44e26f3a8a93ff0792f4f4746b771466f38d545518f9e19a5e405b",
   "054_resolution_adoption_mode.sql": "6a011935713023d7ecd237bd890c6031fc3bc122b0c294ed777e6335d993e184",
   "055_resolution_challenges.sql": "a29221b61dd784d5bfb95a954ba60317936dfd63f1c7a07d9d6106352267095e",
