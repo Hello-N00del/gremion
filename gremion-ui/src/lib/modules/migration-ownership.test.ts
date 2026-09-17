@@ -63,3 +63,36 @@ describe('cross-cutting kernel DDL survives a module-OFF fresh init', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('the five unclaimed kernel migrations and their order constraints', () => {
+  const list = () => readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()
+  const at = (f: string) => list().indexOf(f)
+
+  it('049 ships (the org-unit outbox table)', () => {
+    expect(list()).toContain('049_org_unit_event_outbox.sql')
+  })
+
+  it('053 ships (the notification read marker)', () => {
+    expect(list()).toContain('053_notification_read_marker.sql')
+  })
+
+  it('054 sorts after 007 and 042 — it ALTERs protocol_resolutions and re-adds 042s CHECK', () => {
+    expect(at('054_resolution_adoption_mode.sql')).toBeGreaterThan(at('007_protocols.sql'))
+    expect(at('054_resolution_adoption_mode.sql')).toBeGreaterThan(
+      at('042_protocol_resolution_required_majority.sql'),
+    )
+  })
+
+  it('056 sorts after 001 — it DROPs the inline CHECK 001 creates on role_assignment_history', () => {
+    expect(at('056_role_assignment_history_recalled.sql')).toBeGreaterThan(
+      at('001_governance_schema.sql'),
+    )
+  })
+
+  it('057 sorts after 010 and guards its content-schema indexes on to_regclass', () => {
+    expect(at('057_fk_hot_filter_indexes.sql')).toBeGreaterThan(at('010_org_units.sql'))
+    const body = readFileSync(join(MIGRATIONS_DIR, '057_fk_hot_filter_indexes.sql'), 'utf-8')
+    expect(body).toMatch(/to_regclass\('content\.post_media'\)/)
+    expect(body).toMatch(/to_regclass\('content\.post_recipients'\)/)
+  })
+})
