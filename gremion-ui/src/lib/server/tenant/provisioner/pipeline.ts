@@ -30,6 +30,7 @@ import {
   issuerForTenant,
   kcInternalForTenant,
   PROVISIONER_SECRET_CLIENTS,
+  type RealmSmtpSettings,
 } from './realm-doc'
 import type { ModuleManifest } from '$lib/modules/types'
 import type { KcProvisionApi } from './kc-admin-api'
@@ -90,6 +91,10 @@ export interface ProvisionDeps {
   manifests: ModuleManifest[]
   /** The deployment apex domain (e.g. `council.example`) — issuer/host derivation. */
   apexDomain: string
+  /** The platform's authenticating SMTP sender (gremion#6). REQUIRED: the base
+   *  template's __SMTP_*__ sentinels have no other filler now that the Keycloak
+   *  boot import is gone (spec B §T.4). */
+  platformSmtp: RealmSmtpSettings
   /** (A) #139/G-080: the in-cluster KC admin/OIDC base (scheme+authority+`/auth`,
    *  NO realm suffix) the provisioned tenant's admin client uses. MUST be the
    *  internal-TLS URL (`https://keycloak:8443/auth`) so it can reach a realm
@@ -297,6 +302,7 @@ export async function provisionTenant(
           tenantHost,
           apexDomain: deps.apexDomain,
           clientSecrets,
+          smtp: deps.platformSmtp,
         })
         const res = await deps.kc.createRealm(realmDoc as Record<string, unknown>)
         realmCreated = !res.alreadyExisted

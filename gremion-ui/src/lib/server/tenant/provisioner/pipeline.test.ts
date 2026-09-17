@@ -54,6 +54,13 @@ function harness(opts: { realmFailsOnce?: boolean; multi?: boolean } = {}) {
   const deps: ProvisionDeps = {
     manifests: MODULE_MANIFESTS,
     apexDomain: 'council.example',
+    platformSmtp: {
+      host: 'mail.example.org',
+      port: 587,
+      from: 'no-reply@example.org',
+      user: 'platform@example.org',
+      password: 'unit-test-platform-password',
+    },
     loadDefaultConfig: () => cfg as never,
     loadBaseRealm: () => JSON.parse(JSON.stringify(base)),
     loadTenantConfig: () => ({ modules: { finance: false, elections: true } }) as never,

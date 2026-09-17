@@ -46,6 +46,7 @@ import {
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { provisionTenant, type ProvisionDeps } from '../src/lib/server/tenant/provisioner/pipeline'
+import { platformSmtpFromEnv } from '../src/lib/server/tenant/provisioner/realm-doc'
 import {
   reconcileRealm,
   reconcileFleet,
@@ -347,6 +348,7 @@ function liveDeps(): { deps: ProvisionDeps; cleanup: () => Promise<void> } {
   const deps: ProvisionDeps = {
     manifests: MODULE_MANIFESTS,
     apexDomain: apexDomain(),
+    platformSmtp: platformSmtpFromEnv(process.env),
     kcInternalBase: kcInternalBase(),
     adminKc,
     loadDefaultConfig: () => {

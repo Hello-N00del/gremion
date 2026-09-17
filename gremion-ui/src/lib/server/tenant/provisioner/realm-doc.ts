@@ -140,6 +140,10 @@ export interface BuildTenantRealmDocInput {
   apexDomain: string
   /** Generated per-client secrets keyed by clientId (PROVISIONER_SECRET_CLIENTS). */
   clientSecrets: Record<string, string>
+  /** The platform's authenticating SMTP sender. REQUIRED: the template's
+   *  __SMTP_*__ sentinels have no other filler now that the Keycloak boot
+   *  import is gone (spec B §T.4, gremion#6). */
+  smtp: RealmSmtpSettings
 }
 
 /** Recursively replace every `https://<apexDomain>` occurrence with the tenant
@@ -251,8 +255,135 @@ export function assertRoleVocabularyCarried(
   }
 }
 
+/** The platform's authenticating SMTP sender (gremion#6). Derived from the host
+ *  env, never configured twice: the principal is `platform@<PLATFORM_DOMAIN>`
+ *  (infra/host/mail/provision-roles.sh:251,263), its app password is
+ *  PLATFORM_SMTP_PASSWORD, and the submission host is mail.<PLATFORM_DOMAIN>
+ *  reached on 587 by its PUBLIC name (spec A §B hairpin), so the setup wizard's
+ *  RFC1918-refusing SMTP guard stays intact. */
+export interface RealmSmtpSettings {
+  host: string
+  port: number
+  from: string
+  user: string
+  password: string
+}
+
+export const TEMPLATE_SENTINEL_PATTERN = /__[A-Z][A-Z0-9_]*__/g
+
+/** PURE: the caller supplies the env record (process.env in the CLI and in the
+ *  B19 compose-realm route), so this module still reads no env of its own. */
+export function platformSmtpFromEnv(env: Record<string, string | undefined>): RealmSmtpSettings {
+  const domain = (env.PLATFORM_DOMAIN ?? '').trim()
+  const password = (env.PLATFORM_SMTP_PASSWORD ?? '').trim()
+  if (!domain) {
+    throw new Error(
+      'realm-doc: PLATFORM_DOMAIN is unset — the platform SMTP identity ' +
+        '(platform@<PLATFORM_DOMAIN> on mail.<PLATFORM_DOMAIN>) cannot be derived (gremion#6).',
+    )
+  }
+  if (!password) {
+    throw new Error(
+      'realm-doc: PLATFORM_SMTP_PASSWORD is unset — a realm whose reset-password path is open ' +
+        'must not be provisioned without an authenticating platform sender (gremion#6).',
+    )
+  }
+  return {
+    host: `mail.${domain}`,
+    port: 587,
+    from: `no-reply@${domain}`,
+    user: `platform@${domain}`,
+    password,
+  }
+}
+
+/** The Keycloak smtpServer representation (all values are strings). ONE source
+ *  of truth: the template path substitutes exactly these values, and the
+ *  Admin-API delta for an existing realm PUTs exactly this object.
+ *  TLS: spec A §I requires TLS on every transport. RealmRepresentation carries
+ *  no `requireTLS` field — `starttls` and `ssl` are the only TLS keys it has, so
+ *  they are the carrier: 465 is the one implicit-TLS port, and every other port
+ *  must negotiate STARTTLS.
+ *  `fromDisplayName` is the literal platform identity (D-02 keeps per-vertical
+ *  wording in verticals/<id>/, not in env); it becomes a B14 env key only if the
+ *  operator later asks for it. */
+export function smtpServerBlock(smtp: RealmSmtpSettings): Record<string, string> {
+  if (!Number.isInteger(smtp.port) || smtp.port <= 0 || smtp.port > 65535) {
+    throw new Error(`realm-doc: refusing a non-port SMTP port "${String(smtp.port)}" (gremion#6)`)
+  }
+  const implicitTls = smtp.port === 465
+  return {
+    host: smtp.host,
+    port: String(smtp.port),
+    from: smtp.from,
+    fromDisplayName: 'Gremion',
+    auth: 'true',
+    user: smtp.user,
+    password: smtp.password,
+    starttls: implicitTls ? 'false' : 'true',
+    ssl: implicitTls ? 'true' : 'false',
+  }
+}
+
+/** FAIL CLOSED: the base template opens both email paths
+ *  (loginWithEmailAllowed realm-export.base.json:7, resetPasswordAllowed :9). A
+ *  realm stamped with those and no working sender locks every user of a fresh
+ *  tenant out with no recovery path, so refuse loudly instead (gremion#6). */
+export function assertSmtpConfiguredForEmailLogin(
+  doc: RealmDoc,
+  smtp: RealmSmtpSettings | undefined,
+): void {
+  if (doc.loginWithEmailAllowed !== true && doc.resetPasswordAllowed !== true) return
+  const missing = (['host', 'from', 'user', 'password'] as const).filter(
+    (k) => !smtp || typeof smtp[k] !== 'string' || smtp[k].trim() === '',
+  )
+  if (missing.length > 0) {
+    throw new Error(
+      `realm-doc: refusing to provision realm "${doc.realm}" — ` +
+        'loginWithEmailAllowed/resetPasswordAllowed are on but the platform SMTP settings are unset ' +
+        `(missing: ${missing.join(', ')}). See gremion#6.`,
+    )
+  }
+}
+
+/** The §T.4 / §T.5 post-condition: the provisioner is the ONLY consumer of the
+ *  base template now that the Keycloak boot import and
+ *  substitute-realm-secrets.sh are gone, so an unresolved sentinel would be
+ *  stamped into a live realm verbatim. */
+export function assertNoTemplateSentinels(doc: RealmDoc): void {
+  const hits = [...new Set(JSON.stringify(doc).match(TEMPLATE_SENTINEL_PATTERN) ?? [])]
+  if (hits.length > 0) {
+    throw new Error(
+      `realm-doc: refusing to emit realm "${doc.realm}" — ${hits.length} unresolved ` +
+        `template sentinel(s) survived composition: ${hits.join(', ')}`,
+    )
+  }
+}
+
+/** Deep string substitution over the composed doc. Runs BEFORE the host swap so
+ *  __APEX_DOMAIN__ becomes the real apex and swapHost can then rewrite it to the
+ *  tenant host; idempotent for a caller that already resolved it at read time. */
+function substituteSentinels(value: unknown, table: Record<string, string>): unknown {
+  if (typeof value === 'string') {
+    let out = value
+    for (const [sentinel, replacement] of Object.entries(table)) {
+      if (out.includes(sentinel)) out = out.split(sentinel).join(replacement)
+    }
+    return out
+  }
+  if (Array.isArray(value)) return value.map((v) => substituteSentinels(v, table))
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = substituteSentinels(v, table)
+    }
+    return out
+  }
+  return value
+}
+
 export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
-  const { base, manifests, config, realmName, tenantHost, apexDomain, clientSecrets } = input
+  const { base, manifests, config, realmName, tenantHost, apexDomain, clientSecrets, smtp } = input
 
   // #239 — refuse a base that carries any non-service-account user BEFORE we
   // compose, so a tampered template never reaches KC.
@@ -267,17 +398,31 @@ export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
     config as never,
   ) as unknown as RealmDoc
 
+  // (1b) gremion#6 / §T.4 — the provisioner is now the ONLY consumer of the base
+  // template (the Keycloak boot import and substitute-realm-secrets.sh are gone),
+  // so every __…__ sentinel is filled HERE, in the same pass that swaps the realm
+  // name and the authority. __APEX_DOMAIN__ is resolved BEFORE swapHost so the
+  // apex authority is real by the time the tenant-host swap runs.
+  assertSmtpConfiguredForEmailLogin(composed, smtp)
+  const resolved = substituteSentinels(composed, {
+    __APEX_DOMAIN__: apexDomain,
+    ...Object.fromEntries(
+      Object.entries(smtpServerBlock(smtp)).map(([k, v]) => [`__SMTP_${k.toUpperCase()}__`, v]),
+    ),
+  }) as RealmDoc
+  resolved.smtpServer = smtpServerBlock(smtp)
+
   // (2) per-tenant realm identity + sslRequired:'all' literal (#139).
-  composed.realm = realmName
-  composed.sslRequired = 'all'
+  resolved.realm = realmName
+  resolved.sslRequired = 'all'
 
   // (D) role-vocab guard — refuse a divergent config.roles override BEFORE we
   // emit a realm whose tokens would silently miss the tenant's custom roles.
-  assertRoleVocabularyCarried(config.roles, composed)
+  assertRoleVocabularyCarried(config.roles, resolved)
 
   // (2b) host swap across the whole doc (redirect URIs / web-origins /
   // post-logout attributes) — exact shapes preserved, apex authority -> tenant.
-  const hostSwapped = swapHost(composed, apexDomain, tenantHost) as RealmDoc
+  const hostSwapped = swapHost(resolved, apexDomain, tenantHost) as RealmDoc
 
   // (2c) #240 (B/C): a PROVISIONED realm carries ONLY tenant-host http(s) URIs —
   // drop every foreign-host (e.g. the relic stura.example.org, were it ever reintroduced)
@@ -316,5 +461,7 @@ export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
   const authConfigs = (hostSwapped.authenticatorConfig as Array<Record<string, unknown>> | undefined) ?? []
   for (const cfg of authConfigs) delete cfg.id
 
+  // (5) §T.4/§T.5 post-condition: zero __…__ survives composition.
+  assertNoTemplateSentinels(hostSwapped)
   return hostSwapped
 }

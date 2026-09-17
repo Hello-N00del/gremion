@@ -12,6 +12,7 @@ import {
   assertRoleVocabularyCarried,
   DEFAULT_KC_INTERNAL_BASE,
   PROVISIONER_SECRET_CLIENTS,
+  type RealmSmtpSettings,
 } from './realm-doc'
 
 const KC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', '..', 'docker', 'keycloak')
@@ -32,6 +33,17 @@ const cfgOff = { modules: {} } as never
 
 // Deterministic generated secret per client, so the test asserts exact placement.
 const secretFor = (clientId: string) => `secret-${clientId}`
+
+// gremion#6 — every buildTenantRealmDoc call site now needs the platform SMTP
+// sender (REQUIRED input field); this suite is not exercising SMTP behaviour
+// itself (realm-smtp.test.ts owns that), so one fixed fixture is enough.
+const TEST_SMTP: RealmSmtpSettings = {
+  host: 'mail.example.org',
+  port: 587,
+  from: 'no-reply@example.org',
+  user: 'platform@example.org',
+  password: 'unit-test-platform-password',
+}
 
 describe('issuer / kc-internal derivation (D-ISSUER-HOST)', () => {
   it('builds the per-tenant subdomain issuer', () => {
@@ -93,6 +105,7 @@ describe('buildTenantRealmDoc (§4 realm contract)', () => {
       tenantHost: 't2.council.example',
       apexDomain: 'council.example',
       clientSecrets: Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, secretFor(c)])),
+      smtp: TEST_SMTP,
     })
 
   it('sets the per-tenant realm name and sslRequired:all literal (#139)', () => {
@@ -187,6 +200,7 @@ describe('buildTenantRealmDoc (§4 realm contract)', () => {
       tenantHost: 't2.council.example',
       apexDomain: 'council.example',
       clientSecrets: Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, secretFor(c)])),
+      smtp: TEST_SMTP,
     })
     const ui = (doc.clients as any[]).find((c) => c.clientId === 'gremion-ui')
     expect(ui.redirectUris.some((u: string) => u.includes('stura.example.org'))).toBe(false)
@@ -218,6 +232,7 @@ describe('buildTenantRealmDoc (§4 realm contract)', () => {
         tenantHost: 't2.council.example',
         apexDomain: 'council.example',
         clientSecrets: Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, secretFor(c)])),
+        smtp: TEST_SMTP,
       }),
     ).toThrow(/dev\.admin/)
   })
@@ -267,6 +282,7 @@ describe('(D) role-vocabulary guard (assertRoleVocabularyCarried)', () => {
         tenantHost: 't2.council.example',
         apexDomain: 'council.example',
         clientSecrets: Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, secretFor(c)])),
+        smtp: TEST_SMTP,
       }),
     ).toThrow(/config\.roles override.*buergermeister|missing.*buergermeister/)
   })
@@ -282,6 +298,7 @@ describe('(D) role-vocabulary guard (assertRoleVocabularyCarried)', () => {
         tenantHost: 't2.council.example',
         apexDomain: 'council.example',
         clientSecrets: Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, secretFor(c)])),
+        smtp: TEST_SMTP,
       }),
     ).not.toThrow()
   })

@@ -42,3 +42,97 @@ describe('realm-export.base.json — the gremion#6 smtpServer block', () => {
     expect(smtp).not.toMatch(/@/)
   })
 })
+
+import { MODULE_MANIFESTS } from '$lib/modules/registry'
+import {
+  buildTenantRealmDoc,
+  platformSmtpFromEnv,
+  smtpServerBlock,
+  assertNoTemplateSentinels,
+  PROVISIONER_SECRET_CLIENTS,
+  type RealmSmtpSettings,
+} from './realm-doc'
+
+const TEST_APEX = 'council.example'
+// NOTE: unlike the older suites, the base is handed over RAW — resolving
+// __APEX_DOMAIN__ is now buildTenantRealmDoc's job, not the caller's.
+const rawBase = JSON.parse(RAW)
+const cfgOff = { modules: {} } as never
+const clientSecrets = Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, `secret-${c}`]))
+const smtp: RealmSmtpSettings = {
+  host: 'mail.example.org',
+  port: 587,
+  from: 'no-reply@example.org',
+  user: 'platform@example.org',
+  password: 'unit-test-platform-password',
+}
+const build = (over: Partial<Parameters<typeof buildTenantRealmDoc>[0]> = {}) =>
+  buildTenantRealmDoc({
+    base: JSON.parse(RAW), manifests: MODULE_MANIFESTS, config: cfgOff,
+    slug: 't2', realmName: 'verein', tenantHost: `t2.${TEST_APEX}`,
+    apexDomain: TEST_APEX, clientSecrets, smtp, ...over,
+  } as never)
+
+describe('platformSmtpFromEnv — the platform sender is derived, never configured twice', () => {
+  it('derives host/user/from from PLATFORM_DOMAIN and takes PLATFORM_SMTP_PASSWORD', () => {
+    expect(platformSmtpFromEnv({ PLATFORM_DOMAIN: 'example.org', PLATFORM_SMTP_PASSWORD: 'pw' })).toEqual({
+      host: 'mail.example.org', port: 587,
+      from: 'no-reply@example.org', user: 'platform@example.org', password: 'pw',
+    })
+  })
+  it('refuses an unset PLATFORM_SMTP_PASSWORD by name', () => {
+    expect(() => platformSmtpFromEnv({ PLATFORM_DOMAIN: 'example.org' }))
+      .toThrow(/PLATFORM_SMTP_PASSWORD is unset/)
+  })
+  it('refuses an unset PLATFORM_DOMAIN by name', () => {
+    expect(() => platformSmtpFromEnv({ PLATFORM_SMTP_PASSWORD: 'pw' }))
+      .toThrow(/PLATFORM_DOMAIN is unset/)
+  })
+})
+
+describe('smtpServerBlock — TLS is required on every transport (spec A §I, gremion#6)', () => {
+  it('587 negotiates STARTTLS and never implicit TLS', () => {
+    const b = smtpServerBlock(smtp)
+    expect(b.starttls).toBe('true')
+    expect(b.ssl).toBe('false')
+    expect(b.auth).toBe('true')
+    expect(b.port).toBe('587')
+  })
+  it('25 — any non-465 transport — also requires STARTTLS', () => {
+    expect(smtpServerBlock({ ...smtp, port: 25 })).toMatchObject({ starttls: 'true', ssl: 'false' })
+  })
+  it('465 is the one implicit-TLS transport', () => {
+    expect(smtpServerBlock({ ...smtp, port: 465 })).toMatchObject({ starttls: 'false', ssl: 'true' })
+  })
+})
+
+describe('buildTenantRealmDoc — sentinel substitution (spec B §T.4)', () => {
+  it('fills the smtpServer block exactly as smtpServerBlock does (one source of truth with the delta path)', () => {
+    expect(build().smtpServer).toEqual(smtpServerBlock(smtp))
+  })
+
+  it('POST-CONDITION: the composed doc contains zero __…__ sequences', () => {
+    expect(JSON.stringify(build())).not.toMatch(/__[A-Z][A-Z0-9_]*__/)
+  })
+
+  it('resolves __APEX_DOMAIN__ itself, so the host swap still lands the tenant host', () => {
+    const ui = (build().clients as Array<Record<string, unknown>>)
+      .find((c) => c.clientId === 'gremion-ui') as { redirectUris: string[] }
+    expect(ui.redirectUris).toContain(`https://t2.${TEST_APEX}/auth/callback/keycloak`)
+    expect(ui.redirectUris.join(' ')).not.toContain('__APEX_DOMAIN__')
+  })
+
+  it('never host-swaps the PLATFORM sender onto the tenant host', () => {
+    expect((build().smtpServer as Record<string, string>).from).toBe('no-reply@example.org')
+  })
+
+  it('FAIL-CLOSED: refuses to compose when email login is on and SMTP is unset', () => {
+    expect(() => build({ smtp: { ...smtp, host: '' } }))
+      .toThrow(/loginWithEmailAllowed\/resetPasswordAllowed are on but the platform SMTP settings are unset/)
+  })
+
+  it('assertNoTemplateSentinels names every survivor', () => {
+    expect(() => assertNoTemplateSentinels({ realm: 'verein', leftover: '__SMTP_HOST__' } as never))
+      .toThrow(/unresolved template sentinel\(s\).*__SMTP_HOST__/)
+  })
+})
