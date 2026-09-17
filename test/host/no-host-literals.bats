@@ -70,11 +70,16 @@ HOST_LITERAL_NAMES=(
 # Extended regular expressions, matched case-insensitively, backslash-free.
 # The [:space:] exclusion in host-inventory-name is deliberate: without it the
 # pattern matches the phrase "Gremion production" in ordinary prose and the
-# guard would have shipped with a false positive on day one.
+# guard would have shipped with a false positive on day one. The trailing
+# ([^a-z]|$) closes the token on the right: without it "prod" also matches as
+# the prefix of "production", and AM-B-05's binding contract key
+# GREMION_PRODUCTION_STACK (spec B) is a legitimate env-key name, not the
+# host's inventory name -- only the bare separator-joined token (see the
+# sample below) is the literal this rule hunts.
 HOST_LITERAL_PATTERNS=(
   '159''[^0-9]{0,2}''195''[^0-9]'
   '2a0a''[^0-9a-z]{0,2}''4cc0'
-  'gremion''[^a-z0-9[:space:]]{1,2}''prod'
+  'gremion''[^a-z0-9[:space:]]{1,2}''prod''([^a-z]|$)'
   'quick''srv'
   'rs1''[^a-z0-9]{0,2}''gremion''[^a-z0-9]{0,2}''de'
   'in''wx'
@@ -200,6 +205,28 @@ plant_repo() {  # $1 = directory to create as a throwaway git repo
   for i in "${!HOST_LITERAL_ESCAPED_NAMES[@]}"; do
     [[ "$output" == *"${HOST_LITERAL_ESCAPED_NAMES[$i]} escaped-$i.txt:1:"* ]]
   done
+}
+
+# AM-B-05 (spec B) introduces GREMION_PRODUCTION_STACK as a binding contract
+# key, and unit B15 puts it into a tracked env template. The naive
+# host-inventory-name pattern matches the *prefix* of that key -- "gremion"
+# then one separator then "prod" -- because it never checks what follows
+# "prod". This test plants the legitimate key next to the real inventory
+# token in one throwaway repo and asserts the guard tells them apart: the
+# whole token is reported, the longer word that merely starts the same way
+# is not.
+@test "host-inventory-name matches the whole token but not a longer word" {
+  local tmp="$BATS_TEST_TMPDIR/boundary"
+  plant_repo "$tmp"
+  printf 'GREMION_PRODUCTION_STACK=none\n' > "$tmp/env-key.txt"
+  printf 'gremion-%s\n' 'prod' > "$tmp/inventory-name.txt"
+  run scan_literals "$tmp"
+  [ "$status" -eq 1 ]
+  local hits
+  hits="$(printf '%s\n' "$output" | grep -c '^host-inventory-name ')"
+  [ "$hits" -eq 1 ]
+  [[ "$output" == *"host-inventory-name inventory-name.txt:1:"* ]]
+  [[ "$output" != *"env-key.txt"* ]]
 }
 
 @test "the scan skips ignored paths -- the documented blind spot" {
