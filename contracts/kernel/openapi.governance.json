@@ -1312,6 +1312,9 @@
                   "properties": {
                     "status": {
                       "const": "ok"
+                    },
+                    "degraded": {
+                      "$ref": "#/components/schemas/DegradedWorker"
                     }
                   }
                 }
@@ -1330,6 +1333,9 @@
                   "properties": {
                     "status": {
                       "const": "booting"
+                    },
+                    "degraded": {
+                      "$ref": "#/components/schemas/DegradedWorker"
                     }
                   }
                 }
@@ -1524,6 +1530,106 @@
           },
           "403": {
             "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}/roles/{roleId}/revoke": {
+      "post": {
+        "summary": "Recall (revoke) the active mandate on a committee role — archives the assignment as 'recalled' and appends the mandate.revoked audit act in one transaction (#320 phase 3, INV-3)",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "roleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "description": "The recorded, attributable ground for the recall. Required and non-empty: a recall without a reason is not a governance act.",
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mandate recalled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceOk"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure (empty or missing reason)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active assignment for this role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The assignment cannot be archived (null start/end dates — UnarchivableAssignmentError)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1849,7 +1955,8 @@
             "enum": [
               "expired",
               "resigned",
-              "removed"
+              "removed",
+              "recalled"
             ]
           },
           "created_at": {
@@ -1899,6 +2006,31 @@
         "properties": {
           "message": {
             "type": "string"
+          }
+        }
+      },
+      "DegradedWorker": {
+        "description": "Background event workers this process could not keep running. Non-fatal by design: `status` stays 'ok' and the container healthcheck is unaffected, because marking the container unhealthy would make Traefik drop its routers and turn a stopped worker into an outage. Only the worker name, error class and a stable code are exposed — never the broker's own message, since this endpoint is unauthenticated.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "name",
+            "attempts"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "errorClass": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "attempts": {
+              "type": "integer"
+            }
           }
         }
       },
