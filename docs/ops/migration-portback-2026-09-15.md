@@ -16,12 +16,12 @@ holding repo was not read.
 | `055_resolution_challenges.sql` | unclaimed; creates `resolution_challenges`, which `058` requires — strictly before `058` | the GRANT DO-block's retired role name renamed to `gremion_public_reader` |
 | `056_role_assignment_history_recalled.sql` | unclaimed; widens the implicit CHECK from `001:52-53` | verbatim |
 | `057_fk_hot_filter_indexes.sql` | unclaimed, purely additive; sorts after `010` | verbatim |
-| `058_public_reader_grants.sql` | unclaimed; the fresh-install grant fix, last of the nine | `'news_posts'` dropped from `portal_tables` — kernel `008:4-6` creates no such table. `B4a-news-posts-ownership` gives content its own grant. Its role test already reads `gremion_public_reader` and its `GRANT CONNECT` is already `current_database()`-bound, so neither needed a change; the abort message's historical parenthetical was reworded so no executable line names the retired role |
+| `058_public_reader_grants.sql` | unclaimed; the fresh-install grant fix, last of the nine | `'news_posts'` dropped from `portal_tables` — kernel `008:4-6` creates no such table. `B4a-news-posts-ownership` gives content its own grant. Its role test already reads `gremion_public_reader` and its `GRANT CONNECT` is already `current_database()`-bound, so neither needed a change; the abort message's historical parenthetical was reworded so no executable line names the retired role, and its `STURA_PUBLIC_DB_URL` reference was corrected to the kernel's `GREMION_PUBLIC_DB_URL` (adaptation 4 below) |
 | `migrations-control/004_tenant_domain.sql` | control chain, kernel-owned; sorts after control `003` | the `:104-119` issuer-derived seed is dropped (spec B §T.1) and the rationale block that described it is replaced by a short NOT-PORTED note. The DDL, the `lower(host)` + no-whitespace-no-comma CHECK, `tenant_domain_one_primary` and `tenant_domain_tenant` are unchanged |
 
 ## Adaptations beyond spec B's list, and why
 
-Three edits go beyond the adaptations spec B §2 and §T.1 name. All three are
+Four edits go beyond the adaptations spec B §2 and §T.1 name. All four are
 comment or diagnostic text; no DDL or grant statement was altered.
 
 1. **`055`'s retired role name.** StuRa `055:68-71` guards its `GRANT` on the
@@ -45,6 +45,20 @@ comment or diagnostic text; no DDL or grant statement was altered.
    carriers all sat in the rationale for the statement §T.1 drops, so that block
    was replaced rather than waived; `049`'s was one example subject. No waiver
    was added for either.
+4. **`058`'s abort message named an env var the kernel does not define.** The
+   message told the operator to reuse "the SAME password `STURA_PUBLIC_DB_URL`
+   carries". That variable exists only in the StuRa tree; the kernel's is
+   `GREMION_PUBLIC_DB_URL` (`.env.example:197`,
+   `gremion-public/src/lib/server/public-db.ts:14`), and no `STURA_`-prefixed
+   variable is defined anywhere in this repository. An operator hitting the abort
+   would have gone looking for something that does not exist, which is the same
+   defect class `058` exists to close — a diagnostic that reads plausibly and
+   points nowhere. The token is renamed; `migration-portal-grants.test.ts` now
+   asserts over the whole chain that no executable line names a `STURA_`-prefixed
+   variable, and that `058` names `GREMION_PUBLIC_DB_URL`. It escaped the earlier
+   passes because `scripts/kernel-hygiene-check.mjs`'s retired-product-token rule
+   matches the retired product token as a whole word, not the bare `STURA_`
+   prefix.
 
 ## Not ported, deliberately
 

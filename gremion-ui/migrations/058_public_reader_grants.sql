@@ -89,7 +89,7 @@ BEGIN
       'GRANT CONNECT ON DATABASE % TO gremion_public_reader; '
       'GRANT USAGE ON SCHEMA public TO gremion_public_reader; '
       '— then re-run the migrations (this file issues the per-table GRANTs). '
-      'Use the SAME password STURA_PUBLIC_DB_URL carries, or the portal will '
+      'Use the SAME password GREMION_PUBLIC_DB_URL carries, or the portal will '
       'fail authentication instead of authorization. On a FRESH install set '
       'PUBLIC_DB_PASSWORD and let docker/postgres/init-databases.sh (Docker) or '
       'the postgres-init-scripts ConfigMap (K8s) create it. '

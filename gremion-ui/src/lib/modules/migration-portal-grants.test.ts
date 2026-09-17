@@ -54,6 +54,21 @@ describe('058 public-reader grants', () => {
     expect(offenders).toEqual([])
   })
 
+  // Same failure mode one level up: 058's abort message tells the operator which
+  // password to reuse, and the extraction source named the StuRa tree's own
+  // connection variable. The kernel's is GREMION_PUBLIC_DB_URL (.env.example:197,
+  // gremion-public/src/lib/server/public-db.ts:14) — no STURA_-prefixed variable
+  // exists here, so the ported wording sent an operator looking for something the
+  // kernel never defines. Asserted over the whole chain, not just 058.
+  it('no executable line in the kernel chain names a STURA_-prefixed env var', () => {
+    const offenders = sorted().filter((f) => /\bSTURA_[A-Z0-9_]+/.test(executable(f)))
+    expect(offenders).toEqual([])
+  })
+
+  it('058 points the operator at the env var the kernel actually defines', () => {
+    expect(executable('058_public_reader_grants.sql')).toMatch(/GREMION_PUBLIC_DB_URL/)
+  })
+
   it('every portal table is created by a migration that sorts before 058', () => {
     const list = sorted()
     const i058 = list.indexOf('058_public_reader_grants.sql')
