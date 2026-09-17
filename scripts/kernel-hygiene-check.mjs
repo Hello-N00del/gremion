@@ -1684,6 +1684,78 @@ check('m1 the port-back record names the frozen extraction source and all ten fi
   return missing.length ? `does not name: ${missing.join(', ')}` : null
 })
 
+// ── (n) the migration inventory docs match the tree ────────────────────────
+// The port-back added nine data-plane files and one control file. Three docs
+// state inventory counts and name "absent" files by basename:
+// gremion-ui/migrations/README.md (the ledger a contributor actually opens),
+// README.md and docs/about-gremion.md. A doc that contradicts readdirSync is
+// worse than no doc — it tells a reader a shipped migration does not exist.
+// Derived from the tree, so a future port-back or extraction cannot leave it
+// stale: every count below is read off disk, never written down twice.
+
+const INVENTORY_DOCS = ['gremion-ui/migrations/README.md', 'README.md', 'docs/about-gremion.md']
+const dataPlaneFiles = readdirSync(join(ROOT, 'gremion-ui', 'migrations'))
+  .filter((f) => f.endsWith('.sql'))
+  .sort()
+const controlPlaneFiles = readdirSync(join(ROOT, 'gremion-ui', 'migrations-control'))
+  .filter((f) => f.endsWith('.sql'))
+  .sort()
+
+check('n1 every inventory doc states the real data-plane and control-plane counts', () => {
+  const wrong = []
+  for (const p of INVENTORY_DOCS) {
+    if (!has(p)) return `${p} missing`
+    const doc = read(p)
+    for (const [text, n] of [...doc.matchAll(/\*{0,2}(\d+)\*{0,2} (?:data-plane|governance) migrations/g)]
+      .map((m) => [m[0], Number(m[1])])) {
+      if (n !== dataPlaneFiles.length) wrong.push(`${p}: "${text}" but ${dataPlaneFiles.length} ship`)
+    }
+    for (const [text, n] of [...doc.matchAll(/\*{0,2}(\d+)\*{0,2} control(?:-plane)? migrations/g)]
+      .map((m) => [m[0], Number(m[1])])) {
+      if (n !== controlPlaneFiles.length) wrong.push(`${p}: "${text}" but ${controlPlaneFiles.length} ship`)
+    }
+  }
+  return wrong.length ? wrong.join(' | ') : null
+})
+
+check('n2 the migrations ledger lists every shipped file and calls none of them absent', () => {
+  const p = 'gremion-ui/migrations/README.md'
+  if (!has(p)) return `${p} missing`
+  const doc = read(p)
+  const INVENTORY = '## What is here, what is not'
+  const ABSENT = '### Migrations that exist in the product and not here'
+  const i = doc.indexOf(INVENTORY)
+  const a = doc.indexOf(ABSENT)
+  if (i < 0 || a < 0 || a < i) return `${p} no longer has the inventory and absent sections in order`
+  const inventory = doc.slice(i, a)
+  const absent = doc.slice(a)
+  const named = (text) => new Set([...text.matchAll(/`(\d{3,4}_[a-z0-9_]+\.sql)`/g)].map((m) => m[1]))
+  const listed = named(inventory)
+  const missing = [...dataPlaneFiles, ...controlPlaneFiles].filter((f) => !listed.has(f))
+  const shipped = new Set([...dataPlaneFiles, ...controlPlaneFiles])
+  const contradicted = [...named(absent)].filter((f) => shipped.has(f))
+  const problems = []
+  if (missing.length) problems.push(`inventory omits: ${missing.join(', ')}`)
+  if (contradicted.length) problems.push(`calls shipped file(s) absent: ${contradicted.join(', ')}`)
+  return problems.length ? problems.join(' | ') : null
+})
+
+check('n3 the "absent from the kernel" arithmetic is the product chain minus what ships', () => {
+  const wrong = []
+  for (const p of INVENTORY_DOCS) {
+    const doc = read(p)
+    const total = [...doc.matchAll(/\*{0,2}(\d+)\*{0,2} (?:in the (?:reference )?product|data-plane files)/g)]
+      .map((m) => Number(m[1]))
+    const absent = [...doc.matchAll(/\*{0,2}(\d+)\*{0,2} are absent/g)].map((m) => Number(m[1]))
+    if (!total.length) continue
+    const expected = total[0] - dataPlaneFiles.length
+    for (const n of absent) {
+      if (n !== expected) wrong.push(`${p}: says ${n} absent, but ${total[0]} - ${dataPlaneFiles.length} = ${expected}`)
+    }
+  }
+  return wrong.length ? wrong.join(' | ') : null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {
