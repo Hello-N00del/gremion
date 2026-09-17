@@ -905,10 +905,13 @@ check('h2 the retired product token survives nowhere as a bare identifier', () =
   for (const rel of files) {
     if (/\.(png|jpe?g|gif|svg|ico|pdf|woff2?)$/i.test(rel)) continue
     if (PRODUCT_TOKEN_EXEMPT_PATHS.some((re) => re.test(rel))) continue
-    // The specs quote the rename they order. NOT LIVE YET: `git ls-files
-    // docs/superpowers/specs/` matches zero files at this tip, so this masks
-    // nothing today and must be re-checked the moment the spec-docs unit
-    // lands, which is when it starts carving anything out at all.
+    // The specs quote the rename they order. NOW LIVE: B0-spec-docs-and-waiver-
+    // ledger tracks exactly two files here, spec-b-*.md and spec-d-*.md, both
+    // committed byte-identical to the operator-approved originals, so the token
+    // they quote cannot be edited out of them. Nothing else under the directory
+    // is tracked (.gitignore:188-196 re-includes only those two globs, and
+    // test/host/spec-docs.bats fails if a third path appears), so this carve-out
+    // covers the two frozen records and nothing more.
     if (rel.startsWith('docs/superpowers/specs/')) continue
     const abs = join(ROOT, rel)
     if (!existsSync(abs)) continue
@@ -1460,6 +1463,17 @@ const IMPORT_REALM_CARRIERS = new Set([
   'docs/deployment.md',                  // same, as the B-01 note
 ])
 
+// The two operator-approved design specs that B0 tracks are the FROZEN record
+// of this very change: they name `--import-realm` as the argument the work
+// deletes, and they are committed byte-identical to the approved originals
+// (which is why .gitattributes pins them to LF), so they cannot be reworded to
+// satisfy a guard. They are a design record, never an instruction to a reader.
+// Exactly these two paths are exempt — e7 keeps its tree-wide scope everywhere
+// else, and if the spec files are ever renamed this pattern matches nothing and
+// e7 goes red on them again rather than silently widening. h2 above carves the
+// same directory out for the same reason.
+const DESIGN_SPEC_RECORD = /^docs\/superpowers\/specs\/spec-[bd]-[^/]+\.md$/
+
 function trackedGrep(args) {
   const res = spawnSync('git', ['grep', '-n', ...args], { cwd: ROOT, encoding: 'utf8' })
   // exit 1 with empty stdout = no match; anything else with stderr is a real error.
@@ -1470,7 +1484,10 @@ function trackedGrep(args) {
 check('e7 no tracked file outside the guards still describes the deleted Keycloak boot import', () => {
   const argHits = trackedGrep(['-e', '--import-realm'])
   if (argHits.length === 0) return 'no file names --import-realm at all - the guards that assert its absence are gone, so the check is vacuous'
-  const strayArg = argHits.filter((l) => !IMPORT_REALM_CARRIERS.has(l.split(':')[0]))
+  const strayArg = argHits
+    .map((l) => [l, l.split(':')[0]])
+    .filter(([, file]) => !IMPORT_REALM_CARRIERS.has(file) && !DESIGN_SPEC_RECORD.test(file))
+    .map(([l]) => l)
 
   // Affirmative prose, two shapes: an import claim tied to BOOT time, and the
   // specific retired claims about the realm export. `kc.sh import` is excluded:
@@ -1493,6 +1510,7 @@ check('e7 no tracked file outside the guards still describes the deleted Keycloa
   const stray = proseHits.filter((l) => {
     const [file] = l.split(':')
     if (IMPORT_REALM_CARRIERS.has(file)) return false
+    if (DESIGN_SPEC_RECORD.test(file)) return false
     const text = l.slice(l.indexOf(':', l.indexOf(':') + 1) + 1)
     // B-01 sentences state the NEGATIVE; those are the documentation we want.
     return !/\b(no|not|never|nothing|deleted|removed|stopped)\b/i.test(text)
