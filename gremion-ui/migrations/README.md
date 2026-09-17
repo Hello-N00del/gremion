@@ -272,6 +272,17 @@ manifest and re-apply it.
 The next free data-plane number is **current highest + 1**, read off the
 directory — never a number reused from a gap.
 
+**The 2026-09-15 port-back is the one recorded exception**, and it is a closed
+one: `003_calendar_schema.sql` and `034_deck_board.sql` were back-filled into
+gaps below `048_resolution_decided_at.sql`, the highest number this repository
+shipped before it. A fresh install is unaffected — sort order applies them in
+dependency order — but a database initialised **before** that commit has already
+recorded `048`, picks `003` up out of order on its next boot, and aborts on
+`committees`, the table `010` renamed. Such a database must be re-initialised
+(`docker compose down -v`); there is no in-place upgrade. Why, and the two
+guards that keep it from happening again unannounced, are in
+[`../../docs/ops/migration-portback-2026-09-15.md`](../../docs/ops/migration-portback-2026-09-15.md#back-filled-numbers-and-the-re-initialisation-they-force).
+
 **The control plane is a separate chain.** The tenant registry and the fleet-run
 ledger live in [`../migrations-control/`](../migrations-control/) with their own
 independent `001…` numbering, their own runner (`runControlMigrations`) and

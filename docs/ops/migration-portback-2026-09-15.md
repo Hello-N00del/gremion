@@ -118,6 +118,66 @@ guard now reads shell-default expansions too, and the proof re-ran green on
 `postgres:18-alpine` (28 data-plane + 4 control files, all 26 in-database
 post-conditions).
 
+## Back-filled numbers, and the re-initialisation they force
+
+Seven of the nine data-plane files sort above `048_resolution_decided_at.sql`,
+the highest basename the pre-port-back kernel shipped. Two do not:
+`003_calendar_schema.sql` and `034_deck_board.sql` were numbered into inherited
+gaps, **below** that high-water mark. This is the one thing the port-back does
+that `gremion-ui/migrations/README.md`'s own numbering rule forbids ("the next
+free data-plane number is current highest + 1 … never a number reused from a
+gap"), and it is done deliberately: the numbers are the product's, `B7` is about
+to renumber the whole block to four digits, and the alternative — re-numbering
+nine files on the way in — would break the provenance this record exists to
+keep.
+
+On a **fresh** database it is invisible, and that is what
+`gremion-ui/scripts/fresh-init-proof.sh` measures: `readdirSync().sort()` puts
+`003` before `010`, so every FK resolves. An **already-initialised** database is
+the opposite case, and the proof cannot see it:
+
+- `schema_migrations` holds a row per applied file, `001`…`048`, and none for
+  `003` or `034`.
+- `runMigrations()` (`gremion-ui/src/lib/server/db.ts`) applies in filename
+  order but skips what that table already holds — so on the next boot it starts
+  with `003`, out of order, against a schema that is 45 files ahead.
+- `003:69,77` declares `REFERENCES committees(id)`, and `010_org_units.sql:6` is
+  `ALTER TABLE committees RENAME TO org_units` with no compatibility view. The
+  file aborts with `relation "committees" does not exist` — a message naming a
+  table nobody removed.
+- `applyMigrationFile` is atomic per file, so nothing is recorded and every
+  later boot repeats the same abort. The tenant is wedged, not degraded.
+
+**A kernel database created before this commit must therefore be
+re-initialised** — `docker compose down -v`, then boot on the new chain. There
+is no in-place upgrade and release 1 offers none: spec B's forced sequencing
+wipes the environment (`down -v`) before the port-back lands, and
+`B7-renumber-ranges-baseline` renumbers every file to four digits straight
+after, which leaves every pre-renumber `schema_migrations` row unmatched anyway.
+`tenant_migration_run` rows naming pre-renumber filenames are an audit ledger
+and must not be "repaired".
+
+`034` on its own would in fact apply cleanly out of order (`board`/`stack`/`card`
+FK `org_units` and `protocol_action_items`, both present after `010`). The rule
+is stated for the class rather than the file: nothing in the runner makes
+out-of-order application safe in general, and the next back-fill will not
+announce itself.
+
+Two guards hold the line:
+
+- `gremion-ui/src/lib/modules/migration-block.test.ts` **derives** the
+  back-filled set (ported basenames sorting below the pre-port-back high-water
+  mark — measured: exactly `003` and `034` under `048_resolution_decided_at.sql`)
+  and fails unless every member is named here with this re-initialisation
+  requirement, unless the README's numbering section flags the exception, and if
+  any file on disk sorts below the mark without being declared. A tenth file
+  back-filled tomorrow fails the suite until it is written down.
+- `backFillNotice()` in `gremion-ui/src/lib/modules/migration-ownership.ts`,
+  called by `runMigrations()` before the apply loop, prints the cause — the
+  files, the high-water mark and the remedy — ahead of the abort that would
+  otherwise be the only evidence. A module OFF→ON catch-up, whose gaps are
+  legitimate (README §P0.2), is excluded, and a fresh database is silent.
+
 ## Not ported, deliberately
 
 `050_handover_schema.sql`, `051_handover_event.sql` and
