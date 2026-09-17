@@ -302,6 +302,156 @@ export function getSetupHealthProbes(): readonly SetupHealthProbe[] {
   return _setupHealthProbes
 }
 
+
+// ── 7. Role-assignment group grants ──────────────────────────────────────────
+// #410 FIN-2 (B2): a module can declare that holders of a governance ROLE need
+// extra FLAT Keycloak groups (finance: Finanzvorstand → ref-finanzen + -hv, …).
+// Provisioning only creates/joins the per-org-unit groups named by display name,
+// so module authz that keys on flat groups needs this seam. The finance module
+// registers its resolver in register.server.ts; the kernel role-assign route
+// unions every resolver's grants for the assigned role's name and adds the
+// assignee to those KC groups. A resolver returns [] for role names it does not
+// map — the kernel never learns any module's group literals.
+export type RoleGroupGrantResolver = (roleName: string) => readonly string[]
+
+const _roleGroupGrantResolvers: RoleGroupGrantResolver[] = []
+
+/** Register a module's role → flat-group grant resolver. */
+export function registerRoleGroupGrantResolver(resolver: RoleGroupGrantResolver): void {
+  _roleGroupGrantResolvers.push(resolver)
+}
+
+/** Union of every registered resolver's flat-group names for `roleName`
+ *  (deduplicated; [] when no module maps the role). */
+export function resolveRoleGroupGrants(roleName: string): readonly string[] {
+  const names = new Set<string>()
+  for (const resolver of _roleGroupGrantResolvers) {
+    for (const name of resolver(roleName)) names.add(name)
+  }
+  return [...names]
+}
+
+// ── 8. Second-locus strategies ───────────────────────────────────────────────
+// Governance charter Slot B (resource-commitment guard): no actor unilaterally
+// commits collective resources as sole decider — a commitment is staged through
+// a SECOND locus distinct from its initiator. HOW that second locus is staged
+// (ex-ante co-signature à la Vier-Augen, M-of-N, review-window, …) is a
+// pluggable strategy resolved BY ID, mirroring the decision-rule seam the StuRa
+// tree carries (not ported to the kernel in release 1): the
+// kernel resolver lives in $lib/server/governance/second-locus.ts and consults
+// this registry; a module contributes strategies at import time (its own
+// module graph / register.server.ts), so the kernel never imports a module's
+// commitment vocabulary. Resolution is FAIL-CLOSED — an unregistered id throws
+// in second-locus.ts, it NEVER falls back to a permissive no-guard result.
+//
+// Unlike that decision-rule seam, the kernel reserves NO placeholder ids
+// for this seam: verticals OWN their strategy ids (finance ships 'vier-augen').
+// Registration is therefore unconditional — a repeat under the same id replaces
+// (a module re-import is a no-op, not a duplicate).
+//
+// The contract types below are KERNEL-OWNED structural shapes derived from the
+// finance Vier-Augen workflow's actual usage (approval-stages.ts buildStages/
+// resolveTier + approval-workflow.ts #assertSignerEligible) — this file imports
+// NO module internals; a module maps its own domain types onto these at
+// registration time.
+
+/** One configured signer stage, as the governing profile declares it (the
+ *  shape finanzordnung_profile.signer_stages rows already carry). */
+export interface SecondLocusSignerStageDef {
+  role: string
+  required_group: string
+  certifies: string[]
+}
+
+/** One decision-authority tier. `max_amount_cents === null` is the open-top
+ *  tier (matches any amount). */
+export interface SecondLocusAuthorityTier {
+  max_amount_cents: number | null
+  required_group: string
+}
+
+/** The staging question a strategy answers: which ordered co-signature stages
+ *  guard a commitment of `amountCents` under this signer/tier configuration?
+ *  `amountCents === null` = the approvable carries no amount snapshot. */
+export interface SecondLocusStageInput {
+  signerStages: readonly SecondLocusSignerStageDef[]
+  decisionAuthorityTiers: readonly SecondLocusAuthorityTier[]
+  amountCents: number | null
+}
+
+/** One described stage row (the approval-stages BuiltStage shape — the
+ *  insertable camelCase projection the calling module persists). */
+export interface SecondLocusBuiltStage {
+  stageIndex: number
+  role: string
+  requiredGroup: string
+  certifies: string[]
+}
+
+/** The signer attempting to act on the current stage. */
+export interface SecondLocusActor {
+  userId: string
+  groups: readonly string[]
+}
+
+/** The approval under signature, projected to what distinctness needs. */
+export interface SecondLocusApprovalMeta {
+  createdBy: string
+}
+
+/** One persisted stage's signature state: stable identity (the distinct-
+ *  signers guard compares by it), required group, and who signed it (null =
+ *  not yet acted). */
+export interface SecondLocusStageState {
+  id: number
+  requiredGroup: string
+  signerUserId: string | null
+}
+
+/** Distinctness verdict: ok, or WHICH guard failed — discriminated by the
+ *  three guards in #assertSignerEligible order (group eligibility →
+ *  no-self-approval → distinct signers). */
+export type SecondLocusDistinctnessResult =
+  | { ok: true }
+  | { ok: false; violation: 'group-ineligible' | 'self-approval' | 'duplicate-signer' }
+
+/** One second-locus strategy: pure config → stage rows + signer-distinctness
+ *  judgement. No side effects — persistence and the typed-error mapping stay
+ *  with the calling module. */
+export interface SecondLocusStrategy {
+  /** Describe the ordered co-signature stages guarding a commitment. */
+  describeStages(input: SecondLocusStageInput): SecondLocusBuiltStage[]
+  /** Judge whether `actor` may sign `currentStage` of `approval`. */
+  validateDistinctness(
+    stages: readonly SecondLocusStageState[],
+    actor: SecondLocusActor,
+    approval: SecondLocusApprovalMeta,
+    currentStage: SecondLocusStageState,
+  ): SecondLocusDistinctnessResult
+}
+
+const _secondLocusStrategies = new Map<string, SecondLocusStrategy>()
+
+/**
+ * Register a module's second-locus strategy under its id. The kernel reserves
+ * NO ids for this seam — a module OWNS its strategy ids (registration is
+ * unconditional). A repeat registration under the same id replaces the prior
+ * strategy (a module re-import is a no-op, not a duplicate).
+ */
+export function registerSecondLocusStrategy(strategyId: string, strategy: SecondLocusStrategy): void {
+  _secondLocusStrategies.set(strategyId, strategy)
+}
+
+/**
+ * The module strategy registered under `strategyId`, or undefined. Consulted
+ * by resolveSecondLocusStrategy() (second-locus.ts) AFTER the core strategies;
+ * that caller — not this registry — owns the fail-closed throw on a fully
+ * unknown id.
+ */
+export function getModuleSecondLocusStrategy(strategyId: string): SecondLocusStrategy | undefined {
+  return _secondLocusStrategies.get(strategyId)
+}
+
 /** Test-only: clear all registries so a unit test starts from empty. */
 export function _resetRuntimeRegistryForTests(): void {
   _serverInitHooks.length = 0
@@ -310,4 +460,6 @@ export function _resetRuntimeRegistryForTests(): void {
   _dataProviders.clear()
   _protocolDocumentPort = undefined
   _setupHealthProbes.length = 0
+  _roleGroupGrantResolvers.length = 0
+  _secondLocusStrategies.clear()
 }

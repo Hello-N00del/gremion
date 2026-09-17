@@ -19,6 +19,10 @@ import {
   getProtocolDocumentPort,
   registerSetupHealthProbe,
   getSetupHealthProbes,
+  registerRoleGroupGrantResolver,
+  resolveRoleGroupGrants,
+  registerSecondLocusStrategy,
+  getModuleSecondLocusStrategy,
   _resetRuntimeRegistryForTests,
 } from './runtime-registry'
 import type { ProtocolDocumentPort, SetupHealthProbe } from './runtime-registry'
@@ -286,5 +290,34 @@ describe('runtime-registry — setup-health probes', () => {
     expect(getSetupHealthProbes()).toHaveLength(1)
     _resetRuntimeRegistryForTests()
     expect(getSetupHealthProbes()).toEqual([])
+  })
+})
+
+describe('role-group grant + second-locus registration seams', () => {
+  beforeEach(() => _resetRuntimeRegistryForTests())
+
+  it('resolveRoleGroupGrants unions every registered resolver and is empty with none', () => {
+    expect(resolveRoleGroupGrants('ref-finanzen')).toEqual([])
+    registerRoleGroupGrantResolver((r) => (r === 'ref-finanzen' ? ['ref-finanzen-lesen'] : []))
+    registerRoleGroupGrantResolver((r) => (r === 'ref-finanzen' ? ['ref-finanzen-schreiben'] : []))
+    expect([...resolveRoleGroupGrants('ref-finanzen')].sort())
+      .toEqual(['ref-finanzen-lesen', 'ref-finanzen-schreiben'])
+  })
+
+  it('getModuleSecondLocusStrategy returns undefined for an unregistered id', () => {
+    expect(getModuleSecondLocusStrategy('vier-augen')).toBeUndefined()
+  })
+
+  it('_resetRuntimeRegistryForTests clears BOTH new containers', () => {
+    registerRoleGroupGrantResolver(() => ['g'])
+    registerSecondLocusStrategy('x', {
+      describeStages: () => [],
+      validateDistinctness: () => ({ ok: true }),
+    })
+    expect(resolveRoleGroupGrants('anything')).toEqual(['g'])
+    expect(getModuleSecondLocusStrategy('x')).toBeDefined()
+    _resetRuntimeRegistryForTests()
+    expect(resolveRoleGroupGrants('anything')).toEqual([])
+    expect(getModuleSecondLocusStrategy('x')).toBeUndefined()
   })
 })
