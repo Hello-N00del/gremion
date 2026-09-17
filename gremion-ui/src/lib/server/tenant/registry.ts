@@ -266,8 +266,22 @@ const _resolutionCache = new Map<string, ResolvedEntry>()
  */
 const _hostResolutionCache = new Map<string, ResolvedEntry>()
 
+/**
+ * HARDENING-1 — the write-after-evict guard for both caches.
+ *
+ * A monotonic generation counter, bumped by EVERY eviction seam. A resolution
+ * captures it before its first read and DISCARDS its cache write when it has
+ * moved. Deliberately GLOBAL, not per-tenant: an eviction can arrive for a
+ * tenant whose id an in-flight resolution has not established yet (a host whose
+ * row it is still reading). The cost is one extra resolution on the next
+ * request; the DISCARD path is the fail-closed one.
+ */
+let _evictionEpoch = 0
+function bumpEvictionEpoch(): void { _evictionEpoch++ }
+
 /** Explicitly drop one slug's cached resolution (registry-row change). */
 export function invalidateResolvedTenant(slug: string): void {
+  bumpEvictionEpoch()
   _resolutionCache.delete(slug)
   for (const [host, entry] of _hostResolutionCache) {
     if (entry.ctx.slug === slug) _hostResolutionCache.delete(host)
@@ -282,6 +296,7 @@ export function invalidateResolvedTenant(slug: string): void {
  * an id at all.
  */
 export function clearHostResolutionCache(): void {
+  bumpEvictionEpoch()
   _hostResolutionCache.clear()
 }
 
@@ -294,6 +309,7 @@ export function _hostCacheSizeForTests(): number {
 /** Test-only: clear the resolution cache (integration tests re-register rows
  *  with NEW tenant ids between cases — a cached context would go stale). */
 export function _resetResolutionCacheForTests(): void {
+  bumpEvictionEpoch()
   _resolutionCache.clear()
   _hostResolutionCache.clear()
 }
@@ -309,13 +325,14 @@ export async function resolveTenantBySlug(slug: string): Promise<TenantContext |
   if (!v.ok) return null
   const cached = _resolutionCache.get(slug)
   if (cached && cached.expiresAt > Date.now()) return cached.ctx
+  const epoch = _evictionEpoch      // captured BEFORE the registry read
   const row = await getTenantBySlug(slug)
   if (!row || row.status !== 'active') {
     // An expired-but-present entry must not outlive a status flip seen here.
     _resolutionCache.delete(slug)
     return null
   }
-  return buildAndCacheTenantContext(row)
+  return buildAndCacheTenantContext(row, epoch)
 }
 
 /**
@@ -342,6 +359,7 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
   for (const entry of _resolutionCache.values()) {
     if (entry.ctx.id === id && entry.expiresAt > now) return entry.ctx
   }
+  const epoch = _evictionEpoch      // captured BEFORE the registry read
   const row = await getTenantById(id)
   if (!row || row.status !== 'active') {
     // Drop any expired-but-present entry for this id so a status flip seen here
@@ -351,7 +369,7 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
     }
     return null
   }
-  return buildAndCacheTenantContext(row)
+  return buildAndCacheTenantContext(row, epoch)
 }
 
 /**
@@ -360,7 +378,7 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
  * and resolveTenantById so both produce a byte-identical context + cache entry.
  * Callers MUST have already confirmed row.status === 'active'.
  */
-async function buildAndCacheTenantContext(row: Tenant): Promise<TenantContext> {
+async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<TenantContext> {
   const slug = row.slug
   const dbUrl = resolveSecret(row.dbConnRef)
   const conn = row.connProfile as { perTenantMax?: number; prepare?: boolean }
@@ -463,7 +481,11 @@ async function buildAndCacheTenantContext(row: Tenant): Promise<TenantContext> {
       smtp: domainProfile.smtp,
     },
   }
-  _resolutionCache.set(slug, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  // HARDENING-1: an eviction that landed while this resolution was in flight
+  // must not be undone by its cache write.
+  if (_evictionEpoch === epoch) {
+    _resolutionCache.set(slug, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  }
   return ctx
 }
 
@@ -483,6 +505,10 @@ async function buildAndCacheTenantContext(row: Tenant): Promise<TenantContext> {
  * modules register their evictor into the runtime-registry seam instead.
  */
 export function evictTenantRuntime(tenantId: string): void {
+  // HARDENING-1: bump FIRST. The deletes below only reach entries that already
+  // exist; a resolution in flight has nothing to delete yet, and this is what
+  // stops its later write from re-installing what we are evicting.
+  bumpEvictionEpoch()
   for (const [slug, entry] of _resolutionCache) {
     if (entry.ctx.id === tenantId) _resolutionCache.delete(slug)
   }
@@ -990,6 +1016,7 @@ export async function resolveTenantByHost(
   if (!h) return null
   const cached = _hostResolutionCache.get(h)
   if (cached && cached.expiresAt > Date.now()) return cached.ctx
+  const epoch = _evictionEpoch      // captured BEFORE the host->tenant read
   const rows = await getControlDb()<TenantRow[]>`
     SELECT t.* FROM tenant t
     JOIN tenant_domain d ON d.tenant_id = t.id
@@ -1000,8 +1027,10 @@ export async function resolveTenantByHost(
     _hostResolutionCache.delete(h)
     return null
   }
-  const ctx = await buildAndCacheTenantContext(hydrate(row))
-  _hostResolutionCache.set(h, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  const ctx = await buildAndCacheTenantContext(hydrate(row), epoch)
+  if (_evictionEpoch === epoch) {
+    _hostResolutionCache.set(h, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  }
   return ctx
 }
 
