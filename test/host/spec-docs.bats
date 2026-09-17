@@ -84,8 +84,14 @@ KERNEL_ROOT="${PROJECT_ROOT}"
   # literal they add would turn a test about the spec-A host literals red for a
   # reason that has nothing to do with them.
   local block mjs res samples
-  block="$(awk '/^const HOST_LITERALS = \[$/{f=1;next} f && /^\]$/{f=0} f' \
-      "${KERNEL_ROOT}/scripts/kernel-hygiene-check.mjs")"
+  # Strip CR before awk: scripts/kernel-hygiene-check.mjs carries no
+  # eol=lf .gitattributes rule, so a Windows checkout (core.autocrlf=true)
+  # gives the working copy CRLF line endings, and both awk anchors below
+  # are end-of-line anchors (`\[$`, `^\]$`) that silently match nothing
+  # against a `\r\n` file — leaving $block empty and this test dying on
+  # the vacuity floor below instead of running its real assertions.
+  block="$(tr -d '\r' < "${KERNEL_ROOT}/scripts/kernel-hygiene-check.mjs" \
+      | awk '/^const HOST_LITERALS = \[$/{f=1;next} f && /^\]$/{f=0} f')"
   [ -n "$block" ]
   # The range really stopped at the array: the next declaration is outside it.
   run bash -c "printf '%s\n' \"\$1\" | grep -q HOST_LITERAL_EXEMPT" _ "$block"
