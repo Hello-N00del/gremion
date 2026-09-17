@@ -1579,6 +1579,11 @@ check('e8 every env var with its own section in docs/ENVIRONMENT.md still has a 
 // DOMAIN_REGEX value, an nft comment), and over-matching is the safe direction
 // for a leak guard.
 //
+// host-inventory-name closes its token on the right with ([^a-z]|$): without
+// it "prod" also matches as the prefix of "production", and AM-B-05's binding
+// contract key GREMION_PRODUCTION_STACK (spec B) is a legitimate env-key
+// name, not the host's inventory name.
+//
 // One entry per line for `name:`, at four-space indent: test/host/spec-docs.bats
 // counts those lines to prove this enumeration and the bats one stay in step.
 const HOST_LITERALS = [
@@ -1594,7 +1599,7 @@ const HOST_LITERALS = [
   },
   {
     name: 'host-inventory-name',
-    re: 'gremion' + '[^a-z0-9\\s]{1,2}' + 'prod',
+    re: 'gremion' + '[^a-z0-9\\s]{1,2}' + 'prod' + '([^a-z]|$)',
     sample: 'gremion-' + 'prod',
   },
   {
