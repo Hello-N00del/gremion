@@ -131,6 +131,24 @@ describe('058 prerequisite: every shipped path provisions gremion_public_reader'
     expect(skips, `${path} still has a skip-and-continue branch`).toEqual([])
   })
 
+  // A fix is only a fix in the process that actually runs. The ConfigMap's
+  // inline script opens with `set -euo pipefail`, but statefulset.yaml starts it
+  // with `/bin/sh` -- busybox ash in postgres:*-alpine -- which rejects
+  // `-o pipefail` outright. Measured 2026-09-17 inside postgres:18-alpine:
+  //   /tmp/k8s-init.sh: set: line 5: illegal option -o pipefail
+  // i.e. the K8s init container has never created ANY database or role. Adding
+  // the role block above it would have been provisioning nobody executes.
+  it('the K8s init script survives the interpreter the StatefulSet hands it', () => {
+    const sts = readRepo('k8s/base/postgres/statefulset.yaml')
+    const cm = readRepo('k8s/base/postgres/configmap.yaml')
+    const runsUnderSh = /command:\s*\[\s*"\/bin\/sh"/.test(sts)
+    expect(runsUnderSh, 'precondition: the init container is started with /bin/sh').toBe(true)
+    // The bashisms busybox ash refuses. `pipefail` is the one that shipped.
+    for (const bashism of [/set\s+-[a-z]*o\s+pipefail/, /pipefail/, /\[\[/]) {
+      expect(cm, `the inline init script uses ${bashism} but runs under /bin/sh`).not.toMatch(bashism)
+    }
+  })
+
   it('every repo path 058 names is a path this repo actually has', () => {
     // The same defect class as the STURA_PUBLIC_DB_URL wording above: a
     // remediation that names a file the kernel does not ship sends the operator
