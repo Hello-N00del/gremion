@@ -21,11 +21,24 @@
 # "FAIL vacuity: applied 28 data-plane files, minimum 99". None printed
 # "all post-conditions hold"; the first two exit 3 (psql's own code under
 # set -e), the third exits 1.
+#
+# Re-measured 2026-09-17 on postgres:18-alpine, the major the product ships
+# (it ran on 16 until then, i.e. it asserted of 18 what it measured on 16):
+# 28 data-plane + 4 control files applied and all 26 in-database
+# post-conditions held, ending "all post-conditions hold".
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${FRESH_INIT_PROOF_PORT:-15433}"
-IMAGE="${FRESH_INIT_PROOF_IMAGE:-postgres:16-alpine}"
+# The major the product SHIPS: scripts/check-postgres-major.mjs exports
+# POSTGRES_IMAGE_TAG and docs/ops/postgres-major.md records why. A proof that
+# applies the chain on another major asserts of 18 what it measured on 16.
+# Kept as its own assignment rather than inline in the expansion: the pin
+# guard reads a `${VAR:-postgres:...}` default too (that gap is what let this
+# file sit on 16 for a whole unit), but a plain literal is the form every net
+# sees and the form a reader greps for.
+DEFAULT_IMAGE="postgres:18-alpine"
+IMAGE="${FRESH_INIT_PROOF_IMAGE:-$DEFAULT_IMAGE}"
 NAME="gremion-fresh-init-$$"
 OMIT="${FRESH_INIT_PROOF_OMIT:-}"
 MIN_APPLIED="${FRESH_INIT_PROOF_MIN_APPLIED:-28}"
