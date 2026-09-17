@@ -70,6 +70,19 @@ describe('#320 INV-3 revokeMandate (integration)', () => {
     await sql`DELETE FROM committee_roles`
     await sql`DELETE FROM org_unit_members`
     await sql`DELETE FROM committee_elections`
+    // The protocol chain hangs off org_units by FK, and a SIBLING integration
+    // file (protocols-db.beschluesse-challenges) cleans with
+    // `TRUNCATE org_units ... CASCADE` on ENTRY, so it leaves its protocols
+    // rows behind on exit. `fileParallelism: false` makes that ordering
+    // deterministic, not absent: the next file to run is this one, and a bare
+    // `DELETE FROM org_units` then dies on protocols_committee_id_fkey. Clear
+    // the chain first, the same way resolution-challenges.integration.test.ts
+    // does -- this file's own fixtures never create protocols, so this only
+    // ever removes another file's leftovers.
+    await sql`DELETE FROM resolution_challenges`
+    await sql`DELETE FROM protocol_resolutions`
+    await sql`DELETE FROM protocol_attendance`
+    await sql`DELETE FROM protocols`
     await sql`DELETE FROM org_units`
   })
 
