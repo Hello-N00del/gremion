@@ -776,3 +776,133 @@ export async function primaryHostForTenant(tenantId: string): Promise<string | n
     SELECT host FROM tenant_domain WHERE tenant_id = ${tenantId} AND is_primary`
   return rows[0]?.host ?? null
 }
+
+/**
+ * Register `host` for `tenantId`. Idempotent for the SAME tenant, and REFUSED
+ * with a named error when another tenant already owns the host — the host PK
+ * makes takeover impossible, this just makes the refusal readable.
+ *
+ * `isPrimary: true` clears the tenant's previous primary in the SAME
+ * transaction (clear-then-set), so `tenant_domain_one_primary` is never
+ * transiently violated and a crash can never leave a tenant with two primaries.
+ *
+ * pg_notify(TENANT_EVICT_CHANNEL) runs INSIDE the transaction: a host->tenant
+ * mapping change must bust every replica's host-resolution cache on commit and
+ * on nothing else. Without it, an operator who moves a host from tenant A to
+ * tenant B leaves other replicas serving A's data on B's host for a full TTL.
+ */
+export async function addTenantDomain(
+  tenantId: string,
+  rawHost: string,
+  opts: { isPrimary?: boolean; verified?: boolean } = {},
+): Promise<TenantDomain> {
+  assertTenantId('addTenantDomain', tenantId)
+  const host = assertHost('addTenantDomain', rawHost)
+  const isPrimary = opts.isPrimary === true
+  const sql = getControlDb()
+  const row = await sql.begin(async (tx) => {
+    const owner = await tx<Array<{ tenant_id: string; slug: string }>>`
+      SELECT d.tenant_id, t.slug FROM tenant_domain d
+      JOIN tenant t ON t.id = d.tenant_id
+      WHERE d.host = ${host}
+      FOR UPDATE OF d`
+    if (owner[0] && owner[0].tenant_id !== tenantId) {
+      throw new Error(
+        `addTenantDomain: host "${host}" is already registered to tenant "${owner[0].slug}" ` +
+        `(${owner[0].tenant_id}) — a host belongs to exactly one tenant`,
+      )
+    }
+    if (!owner[0]) {
+      const t = await tx<Array<{ slug: string }>>`SELECT slug FROM tenant WHERE id = ${tenantId}`
+      if (!t[0]) throw new Error(`addTenantDomain: unknown tenant id ${tenantId}`)
+    }
+    if (isPrimary) {
+      await tx`UPDATE tenant_domain SET is_primary = false
+               WHERE tenant_id = ${tenantId} AND is_primary AND host <> ${host}`
+    }
+    const rows = await tx<TenantDomainRow[]>`
+      INSERT INTO tenant_domain (host, tenant_id, is_primary, verified_at)
+      VALUES (${host}, ${tenantId}, ${isPrimary},
+              CASE WHEN ${opts.verified === true} THEN now() ELSE NULL END)
+      ON CONFLICT (host) DO UPDATE SET
+        is_primary  = tenant_domain.is_primary OR EXCLUDED.is_primary,
+        verified_at = COALESCE(EXCLUDED.verified_at, tenant_domain.verified_at)
+      WHERE tenant_domain.tenant_id = EXCLUDED.tenant_id
+      RETURNING *`
+    if (!rows[0]) {
+      throw new Error(`addTenantDomain: host "${host}" was claimed by another tenant concurrently`)
+    }
+    await tx`SELECT pg_notify(${TENANT_EVICT_CHANNEL}, ${tenantId})`
+    return rows[0]
+  })
+  evictTenantRuntime(tenantId)
+  return hydrateDomain(row as unknown as TenantDomainRow)
+}
+
+/**
+ * Un-register a host from a tenant, scoped by tenantId so one tenant's operator
+ * surface can never delete another tenant's row. The PRIMARY host cannot be
+ * removed while the tenant still has OTHER hosts — enforced in the DELETE's own
+ * WHERE, not in JS. Removing the LAST host IS allowed: that is the deliberate
+ * "this tenant goes dark" operation.
+ */
+export async function removeTenantDomain(tenantId: string, rawHost: string): Promise<boolean> {
+  assertTenantId('removeTenantDomain', tenantId)
+  const host = assertHost('removeTenantDomain', rawHost)
+  const sql = getControlDb()
+  const removed = await sql.begin(async (tx) => {
+    const rows = await tx<TenantDomainRow[]>`
+      DELETE FROM tenant_domain d
+      WHERE d.tenant_id = ${tenantId}
+        AND d.host = ${host}
+        AND (NOT d.is_primary
+             OR NOT EXISTS (SELECT 1 FROM tenant_domain o
+                            WHERE o.tenant_id = d.tenant_id AND o.host <> d.host))
+      RETURNING *`
+    if (rows[0]) {
+      await tx`SELECT pg_notify(${TENANT_EVICT_CHANNEL}, ${tenantId})`
+      return true
+    }
+    const existing = await tx<Array<{ is_primary: boolean }>>`
+      SELECT is_primary FROM tenant_domain WHERE tenant_id = ${tenantId} AND host = ${host}`
+    if (existing[0]?.is_primary) {
+      throw new Error(
+        `removeTenantDomain: host "${host}" is tenant ${tenantId}'s PRIMARY host and the tenant ` +
+        `has other hosts — setPrimaryDomain to one of them before removing it`,
+      )
+    }
+    return false
+  })
+  if (removed) evictTenantRuntime(tenantId)
+  return removed === true
+}
+
+/**
+ * Promote one of the tenant's existing hosts to primary. CLEAR-then-SET in ONE
+ * transaction, not a single `SET is_primary = (host = $2)`:
+ * `tenant_domain_one_primary` is a plain (non-deferrable) partial unique index
+ * and Postgres checks it per ROW, so one statement can spuriously trip on a
+ * transient two-primaries state depending on row order.
+ */
+export async function setPrimaryDomain(tenantId: string, rawHost: string): Promise<TenantDomain> {
+  assertTenantId('setPrimaryDomain', tenantId)
+  const host = assertHost('setPrimaryDomain', rawHost)
+  const sql = getControlDb()
+  const row = await sql.begin(async (tx) => {
+    await tx`UPDATE tenant_domain SET is_primary = false
+             WHERE tenant_id = ${tenantId} AND is_primary AND host <> ${host}`
+    const rows = await tx<TenantDomainRow[]>`
+      UPDATE tenant_domain SET is_primary = true
+      WHERE tenant_id = ${tenantId} AND host = ${host}
+      RETURNING *`
+    if (!rows[0]) {
+      throw new Error(
+        `setPrimaryDomain: host "${host}" is not registered to tenant ${tenantId} — register it first`,
+      )
+    }
+    await tx`SELECT pg_notify(${TENANT_EVICT_CHANNEL}, ${tenantId})`
+    return rows[0]
+  })
+  evictTenantRuntime(tenantId)
+  return hydrateDomain(row as unknown as TenantDomainRow)
+}
