@@ -20,6 +20,9 @@ export interface BeschlussRow {
   protocolTitle: string
   committeeId: string
   committeeName: string
+  // Number of OPEN challenges (migration 055) against this resolution — drives
+  // the 'Einspruch offen' badge on the register.
+  openChallengeCount: number
 }
 
 // Passed resolutions from published protocols, newest meeting first. Drafts and
@@ -38,6 +41,8 @@ export async function listBeschluesse(): Promise<readonly BeschlussRow[]> {
            p.title                                   AS "protocolTitle",
            ou.id::text                               AS "committeeId",
            ou.name                                   AS "committeeName"
+           ,(SELECT count(*)::int FROM resolution_challenges c
+               WHERE c.resolution_id = r.id AND c.status = 'open') AS "openChallengeCount"
     FROM protocol_resolutions r
     JOIN protocols  p  ON p.id = r.protocol_id
     JOIN org_units  ou ON ou.id = p.committee_id
@@ -78,4 +83,37 @@ export async function listProtocols(): Promise<readonly ProtokollRow[]> {
     FROM protocols p
     JOIN org_units ou ON ou.id = p.committee_id
     ORDER BY p.meeting_date DESC`
+}
+
+// One challenge row for the admin disposition controls. Field names follow the
+// APPLIED 055 schema (raised_by / resolved_by / resolved_at).
+export interface BeschlussChallengeRow {
+  id: string
+  resolutionId: string
+  raisedBy: string
+  grounds: string
+  status: 'open' | 'upheld' | 'dismissed' | 'withdrawn'
+  resolvedBy: string | null
+  resolvedAt: string | null
+  createdAt: string
+}
+
+/** Every challenge whose resolution is IN the register universe (same predicate
+ *  as listBeschluesse, so a challenge can never reference a row the page does
+ *  not render). Open challenges first, newest first within each group. */
+export async function listChallengesForBeschluesse(): Promise<readonly BeschlussChallengeRow[]> {
+  return getDb()<BeschlussChallengeRow[]>`
+    SELECT c.id::text            AS "id",
+           c.resolution_id::text AS "resolutionId",
+           c.raised_by           AS "raisedBy",
+           c.grounds             AS "grounds",
+           c.status              AS "status",
+           c.resolved_by         AS "resolvedBy",
+           to_char(c.resolved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "resolvedAt",
+           to_char(c.created_at  AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "createdAt"
+    FROM resolution_challenges c
+    JOIN protocol_resolutions r ON r.id = c.resolution_id
+    JOIN protocols p ON p.id = r.protocol_id
+    WHERE r.result = 'passed' AND p.status = 'published'
+    ORDER BY (c.status = 'open') DESC, c.created_at DESC`
 }

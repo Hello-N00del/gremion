@@ -86,6 +86,9 @@
             {:else}
               <span class="mono td-muted">{b.votesYes}:{b.votesNo}:{b.votesAbstain}</span>
             {/if}
+            {#if b.openChallengeCount > 0}
+              <span class="pill pill-warn">Einspruch offen ({b.openChallengeCount})</span>
+            {/if}
           </div>
         </div>
       {/each}
