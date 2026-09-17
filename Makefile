@@ -5,6 +5,7 @@
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
+        lint-unshipped-migrations fresh-init-proof \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -246,6 +247,15 @@ lint-cve-floors:
 	@node --test scripts/check-cve-floors.test.mjs
 	@node scripts/check-cve-floors.mjs
 
+# D-01: the three handover migrations ship in NO release-1 tree. The suite runs
+# first so the guard's own RED cases (planted file, renumbered file, empty tree)
+# are proven on every lint - a walker that silently returned [] would let this
+# pass vacuously.
+lint-unshipped-migrations:
+	@echo "Checking that no handover migration ships..."
+	@node --test scripts/check-unshipped-migrations.test.mjs
+	@node scripts/check-unshipped-migrations.mjs
+
 # The npm `files` allowlist has to agree with each package's own exports, or a
 # published tarball (and, worse, the `pnpm deploy` payload both runtime images
 # are built from) ships a package with no entry points. scripts/check-shipped-package-files.mjs
@@ -323,7 +333,7 @@ lint-extraction-source:
 	 echo "[extraction-source] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-extraction-source.mjs --modules-root test/fixtures/extraction-source/agree
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations
 	@echo "All linters passed."
 
 # ── Repository labels ────────────────────────────────────────────────────
