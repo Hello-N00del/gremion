@@ -1124,3 +1124,297 @@ This table is the complete spec-B unit inventory: every unit with a `B` prefix n
 | `B38-leaf-shreds-and-erasure-ledger` | M | `B23`, `B12` | The control-DB `subsystem` CHECK admits every leaf plus `backup-key`, watched RED against today's four-value CHECK, which rejects the row outright; `calendar`, `content` and `finance` each have an idempotent shred path exercised by a test, with errors propagating before the tombstone; erasing a tenant with `board`, `files`, `messages`, `vault` or `votes` enabled writes a `failed` ledger row per such leaf with the reason `no shred path: manual teardown required` and does not report complete | civitas | no (feeds §L.7) |
 
 **B-side edges into spec D's registry**, stated here so a planner stacking off this table does not lose them: `B20` ← `D4-evict-on-leaves`, which itself stacks on `B19-internal-api-evict-and-modules` and `D5-remaining-module-repos`; `B22` ← `D5-remaining-module-repos`; `B33` ← `D1-module-sdk-package`; `B34` ← `D1-module-sdk-package` + `D2-module-json-and-dist-schema`; `B35` → gates `D6-leaf-images-and-compose-fragments`; `D7-synapse-on-postgres` ← `B31`; `D10-module-runtime-declarations` ← `B19`, `B27`, `B28`; `D13-compose-fragment-inlining` ← `B14`.
+
+## Appendix — Amendments from plan reconciliation (2026-09-16)
+
+Each entry below is **binding on the implementation**. They were adopted by the release-1 implementation plan (`plan/2026-09-15-b-d-release-1.md`, reconciled 2026-09-16) as the conservative option for a question spec B did not answer; every one was raised by the named unit writer and is already in force in that plan's task text. Unless an entry is marked *operator decision pending*, it is adopted and binding exactly as written — names, paths, keys, values and exit codes are literal. Vocabulary: Gremion is the product; StuRaOS is the StuRa vertical / the StuRa tree. Entries are numbered in the order the plan residuals list them; the spec-D half of this reconciliation is in `spec-d.amendments-2026-09-16.md`.
+
+### Resolutions of flagged contradictions (orchestrator, 2026-09-16)
+
+The reconciliation pass flagged contradictions between adopted answers and standing spec text. They are resolved below from the plan's **"Cross-unit contracts (binding)"** table (`plan/2026-09-15-b-d-release-1.md` l.281–442), which outranks every writer answer. Entries named here carry `Consistency: resolved — see Resolutions`.
+
+- **R1 — host-pin placement (AM-B-07).** Contract rows "platform host-pin middlewares", "per-tenant host-pin name", "per-tenant host-pin placement" and "router middleware chain order": the four PLATFORM pins `edge-hostpin-apex`, `edge-hostpin-www`, `edge-hostpin-control` and `edge-hostpin-sales` are declared on the traefik container's labels and referenced as `<name>@docker` (owner `B16-routers-middlewares-and-verify`); the PER-TENANT pin `edge-hostpin-<slug>` (index 0; `edge-hostpin-<slug>-<i>` for each further domain; `hostPinName(slug, index)`) is declared inside the tenant's own emitted `${GREMION_ROOT}/etc/edge/tenant-<slug>.yml` beside the router it protects (owner `B18-router-emitter-library`); every chain is `<host-pin>,<hsts>,<rate-limit>[,...]` with the pin FIRST. §T.1's "every pin declaration moves onto Traefik's labels" is **narrowed to the platform pins**; B18's post-condition follows the placement row.
+- **R2 — OSS-artefact-purity ownership (AM-B-20).** Adopted. The G-D14 row splits: `B35-release-supply-chain` owns the release-tree half (spec B §E) and `D15-oss-artefact-guard` owns the artefact half (spec D's G-D14 row). The spec-D mirror is entry **AM-D-37**.
+- **R3 — exactly-once helper signature (AM-B-30).** The binding signature from the plan's D1 unit is `assertExactlyOnceUnderTwoColours(job, { module, exportName, claim, sideEffect, databaseUrl, expected?, colours? })`, returning `{ colours: [string, string]; sideEffectCount: number }`, exported from `@gremion/module-sdk/testing`, `module` being an `import.meta.url`. Spec D D.1.5's two-field options form is superseded; the spec-D mirror is entry **AM-D-38**.
+- **R4 — healthcheck census input (AM-D-08 / AM-B-34).** Contract row "healthcheck census input": `civitas/infra/host/health-census.json = { schemaVersion: 1, exemptServices: ["minio-mc"], leafBlastRadius: { <leaf service>: { probe, unhealthyOnUnreachableTenantDb, scope, rationale } } }`, schema owned by `D6-leaf-images-and-compose-fragments`, committed and consumed by `B30-healthchecks-and-census`; `HEALTH_EXEMPT_SERVICES=minio-mc` in `civitas/infra/host/templates/env/state.env.tmpl` remains the env-side exemption list and B30 consumes both carriers. Spec B has no §K — the section concerned is "### 7. `/healthz`, boot determinism, healthchecks". The kernel half is entry **AM-B-34**; the module half stays in `spec-d.amendments-2026-09-16.md` as AM-D-08.
+- **R5 — ACME compensating control (AM-B-06), corrected 2026-09-17.** The 2026-09-16 binding answer said the ACME path's rate-limit exemption "is compensated by the host firewall's per-source connection limit". Measured during B0's fresh verification: the nftables template carries no such limit, and `docs/deployment-architecture.md` as shipped by B0 says so ("no compensating control on that port today", an accepted exposure that names no control as proven). AM-B-06 now states the measured truth; adding the limit is an operator decision, not a unit's task. B16 must not write the old sentence into §3.
+
+### AM-B-01 — The extraction-source tag is named `extraction-source`
+- **Amends:** "#### 2.4 The extraction source, frozen" (chapter "Scope, finish line, architecture as spec B leaves it, amendments to spec A"; the annotated-tag requirement itself is today only in the `B00-extraction-source-freeze` row of "### Units in this section — the consolidated unit registry")
+- **Raised by:** B00-extraction-source-freeze
+- **Gap:** §2.4 requires an annotated tag on the extraction source but does not name it; the plan uses `extraction-source`.
+- **Binding answer:** The annotated tag on StuRaOS `f276af59` is named `extraction-source`, and it is recorded in `civitas/docs/ops/extraction-source.md`. §2.4 states: "The annotated tag is named `extraction-source`; D11's ARCHIVED.md names that exact string." `D11-archive-holding-repo-and-stura-tree` uses it verbatim.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-02 — Permanent guards against `HostRegexp` and a synthetic `X-Forwarded-Host`
+- **Amends:** "### 8. Guards and how each is watched RED" (chapter "Edge, relocatability, env contract, healthchecks, boot determinism")
+- **Raised by:** B10-resolver-fullhost
+- **Gap:** No permanent guard is assigned against `HostRegexp` or a synthetic `X-Forwarded-Host` re-entering a compose file.
+- **Binding answer:** Both belong to `B32-render-and-boundary-guards`'s guard set. §8's table carries two further rows: "No compose file declares a `HostRegexp` rule" (watched RED against `docker-compose.prod.yml:114` pre-change) and "No compose file injects `X-Forwarded-Host` as a customrequestheader on an app-tier service" (watched RED against `gremion-ui-apexhost`).
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-03 — Census assertion ties `PUBLIC_BASE_PATH` to the `BASE_PATH` build arg
+- **Amends:** "### 7. `/healthz`, boot determinism, healthchecks" (chapter "Edge, relocatability, env contract, healthchecks, boot determinism")
+- **Raised by:** B11-healthz-and-boot-determinism
+- **Gap:** Nothing ties the `PUBLIC_BASE_PATH` that `gremion-switch` substitutes into `active.yml` to the `BASE_PATH` build arg baked into the gremion-public image; the spec names no guard.
+- **Binding answer:** The guard is `B30-healthchecks-and-census`'s. §7's census paragraph states: "A census assertion compares `PUBLIC_BASE_PATH` in the rendered app env against the `BASE_PATH` build arg recorded in the gremion-public image's labels and fails on any mismatch, watched RED by changing one of the two."
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-04 — `tenant-create` runs as root and mounts the edge directory read-write
+- **Amends:** "### T.3 The interim `tenant-create` service (B-06)" (chapter "Tenancy, realm surface, zero-tenant boot, tenant-create, internal API")
+- **Raised by:** B13-tenant-create-entrypoint
+- **Gap:** `tenant-create` needs a writable mount of the 0700 root-owned `${GREMION_EDGE_DIR}` while the image runs as uid 1000; the spec fixes only that the app process must never hold it.
+- **Binding answer:** The one-shot runs as root rather than the directory being weakened: the `tenant-create` block sets `user: "0:0"` and mounts `${GREMION_ROOT:?}/etc/edge:/opt/gremion/etc/edge:rw`. There is no operator chown — `gremion-init-secrets:111` asserts mode 700 on every `etc/` child.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-05 — `GREMION_PRODUCTION_STACK` is a declared env key
+- **Amends:** "### 6. Env contract (B-08)" (chapter "Edge, relocatability, env contract, healthchecks, boot determinism")
+- **Raised by:** B15-env-contract-and-validator
+- **Gap:** The production STACK is not knowable from inside a container; the plan introduces `GREMION_PRODUCTION_STACK`, which the spec names nowhere.
+- **Binding answer:** The key is added. §6 states: "`GREMION_PRODUCTION_STACK` is declared in state.env.tmpl and app.env.tmpl with no default (literal `none` on a host with no production unit); a truncating harness refuses to start when it is unset." No other host source carries the production stack name.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-06 — The ACME exemption from the rate-limit family: an accepted exposure, not a compensated one
+- **Amends:** "### 3. Routers, pins and middleware placement (B-09, B-10)" (chapter "Edge, relocatability, env contract, healthchecks, boot determinism")
+- **Raised by:** B16-routers-middlewares-and-verify
+- **Gap:** `acme-http@internal` is exempt from the `edge-ratelimit` family, so the `:80` ACME challenge path is unlimited; §3 names no compensating control.
+- **Binding answer:** §3 states: "The `web` entrypoint serves only `acme-http@internal` and the entrypoint-level 301 — neither authenticates nor reaches an app. The ACME path's exemption from the rate-limit family has **no compensating control today**: the host firewall template accepts the edge HTTP and HTTPS ports with no per-source connection limit (no `ct count`, no `limit rate`), and fail2ban, which acts on log evidence after the fact, is the only per-source brake. `docs/deployment-architecture.md` records this as an **accepted exposure** and names no control as proven. A per-source connection limit in the nftables template is the intended control and an operator item, not something release 1 ships." `B16-routers-middlewares-and-verify` must not write the 2026-09-16 wording ("compensated by the host firewall's per-source connection limit") into §3 or anywhere else: the spec and `docs/deployment-architecture.md` (owned by `B0-spec-docs-and-waiver-ledger`, whose `test/host/spec-docs.bats` pins the "accepted exposure" wording) must agree.
+- **Status:** adopted — **corrected 2026-09-17** by the orchestrator: the 2026-09-16 wording claimed a control that does not exist. B0's fresh verifier measured `infra/host/templates/nftables` (no `ct count` / `limit rate` on the edge ports) and B0 shipped the doc with the honest reading. Adding the per-source limit to the firewall template = **operator decision pending** (scope, not a defect of any unit).
+- **Consistency:** resolved — see Resolutions (R5)
+
+### AM-B-07 — Platform pins on labels, the per-tenant pin in the emitted file
+- **Amends:** "### T.1 Tenant identity port-back" (chapter "Tenancy, realm surface, zero-tenant boot, tenant-create, internal API"), and the `B18-router-emitter-library` post-condition in "### Units in this section — the consolidated unit registry"
+- **Raised by:** B18-router-emitter-library
+- **Gap:** Middleware placement contradiction: §3/B-09 declare the per-tenant pin in the emitted file, while §T.1, B18's registry row and the committed template say it is declared on Traefik's labels.
+- **Binding answer:** Placement is split by pin class. The four **platform** pins `edge-hostpin-apex`, `edge-hostpin-www`, `edge-hostpin-control` and `edge-hostpin-sales` are declared on the traefik container's labels and referenced as `<name>@docker`; they are `B16-routers-middlewares-and-verify`'s. The **per-tenant** pin is `edge-hostpin-<slug>` at index 0 and `edge-hostpin-<slug>-<i>` for each further domain, named by `hostPinName(slug, index)`, and is declared inside the tenant's own emitted `${GREMION_ROOT}/etc/edge/tenant-<slug>.yml` beside the router it protects, chained as `…@file`; it is `B18-router-emitter-library`'s. Every router's middleware chain is `<host-pin>,<hsts>,<rate-limit>[,...]` with the pin FIRST. §T.1's "every pin declaration moves onto Traefik's labels" is narrowed to the platform pins, and B18's post-condition follows the placement row. `infra/host/templates/edge/tenant-router.example.yml` declares the pin in-file under the contract name `edge-hostpin-<slug>`; the earlier spelling `edge-hostpin-tenant-<slug>` is superseded.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-B-08 — The dev/example realm is `gremion`, addressed through `KEYCLOAK_REALM`
+- **Amends:** "### T.4 The realm surface (B-01)" (chapter "Tenancy, realm surface, zero-tenant boot, tenant-create, internal API")
+- **Raised by:** B1a-realm-identity-and-boot-import
+- **Gap:** §T.4 names no replacement token for the `sturaos` realm path segment in dev/example/CI carriers.
+- **Binding answer:** §T.4 states: "The dev/example realm is named `gremion`; the two Admin-API scripts address it through `KEYCLOAK_REALM`, defaulting to `gremion`." The two scripts are `scripts/configure-keycloak-clients.sh` and `scripts/dev-configure.sh`. `B13-tenant-create-entrypoint`'s dev slug uses the same value.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-09 — `boot()` names the control-schema-behind failure instead of migrating
+- **Amends:** "### 6. The migrate job (spec A §F.4.7, amended)" (chapter "Migrations: port-back, canonical bytes, renumber, ranges, baseline, migrate job, leaf ledgers")
+- **Raised by:** B21-migrate-job-lock-then-read
+- **Gap:** §6 does not say what `boot()` should do when the CONTROL chain is behind.
+- **Binding answer:** No control migration is re-added at boot — §6 stops the app migrating in the same commit. `listActiveTenants`' failure is wrapped with a named error: ``[boot] control schema behind — run `docker compose run --rm migrate` ``. §6 carries that sentence so diagnosability is not traded for the lock.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-10 — Collaborative drafts fail closed under `STORAGE_BACKEND=local`
+- **Amends:** "#### 1.2 The three copies change together" (chapter "Storage seam, MinIO, backups and restore, erasure ledger, shreds")
+- **Raised by:** B23-storage-seam
+- **Gap:** What the news-draft route and `protocol-documents.ts` do under `STORAGE_BACKEND=local`, where the handle is not a DAV path, is unspecified.
+- **Binding answer:** Both throw the named error `nextcloud backend required for collaborative drafts` rather than silently writing an unopenable draft. §1.2 states: "Both bypass writers require a handle Collabora/WOPI can open; under `STORAGE_BACKEND=local` they fail closed with a named error."
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-11 — B25 makes no StuRa-tree write; its drift is recorded, not zeroed
+- **Amends:** "### Units in this section — the consolidated unit registry" (chapter "Assembler (zero modules), release supply chain, sales site, guards, acceptance, units"; the `B25-backup-enumeration-and-guards` row)
+- **Raised by:** B25-backup-enumeration-and-guards
+- **Gap:** The post-condition "`carve.mjs check` no longer lists the three scripts in drift.differs" is only reachable by a StuRa-tree manifest rule, but B25 is not one of §1.5's five permitted StuRa writes.
+- **Binding answer:** B25 makes no StuRa-tree write. Under B-02 kernel-wins, a MIRRORED path whose kernel bytes move is expected drift — that is true of 294 files, not three. The post-condition reads: "the divergence of scripts/backup.sh, restore.sh and tenant-backup.sh is recorded as expected kernel-wins drift in the commit body; `carve.mjs check`'s exit code is not claimed."
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-12 — The same B25 post-condition, reached from the `divergedUnpinned` side
+- **Amends:** "### Units in this section — the consolidated unit registry" (chapter "Assembler (zero modules), release supply chain, sales site, guards, acceptance, units"; the `B25-backup-enumeration-and-guards` row)
+- **Raised by:** B25-backup-enumeration-and-guards
+- **Gap:** The carve-rule addition leaves the three paths in `divergedUnpinned`, so `carve.mjs check` still exits 1 and the post-condition's zero exit is not met. (Second of the two B25 questions answered identically; recorded separately because the residuals list it twice.)
+- **Binding answer:** B25 makes no StuRa-tree write. Under B-02 kernel-wins, a MIRRORED path whose kernel bytes move is expected drift — that is true of 294 files, not three. The post-condition reads: "the divergence of scripts/backup.sh, restore.sh and tenant-backup.sh is recorded as expected kernel-wins drift in the commit body; `carve.mjs check`'s exit code is not claimed."
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-13 — The retention horizon has a formula
+- **Amends:** "### 5. Erasure ledger widening and the leaf shreds" (chapter "Storage seam, MinIO, backups and restore, erasure ledger, shreds"; the retention-horizon clause "The erasure ledger records the retention horizon date for the tenant's rows in retained restic snapshots (N21)")
+- **Raised by:** B26-restore-and-erasure-proof
+- **Gap:** The retention horizon has no formula in spec B (N21 is named only).
+- **Binding answer:** The horizon is erasure date + `BACKUP_RETENTION_MONTHLY` months (`state.env.tmpl:83` = 6), passed in as `DeleteDeps.retentionHorizonIso`, because `BACKUP_RETENTION_*` is state-tier env `gremion-ui` cannot read. §5's retention-horizon clause carries that formula sentence.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-14 — The calendar scheduler's claim-then-send re-order travels with the module
+- **Amends:** "### 2. The two irreversible jobs and their exact claims" (chapter "Workers in overlap, exactly-once proof, state-tier services, Synapse on Postgres")
+- **Raised by:** B28-worker-safety-and-colour-gating
+- **Gap:** `markNotificationSent` is replaced by `claimNotificationForSend`, but its only caller is the calendar module's scheduler and no unit re-orders it.
+- **Binding answer:** The claim-then-send re-order is added to `D5-remaining-module-repos`'s calendar row. `claimNotificationForSend` is the only exported claim, so the module fails to compile at the kernel bump rather than double-sending. §2(b) states: "the calendar scheduler's re-ordering travels with gremion-module-calendar and is D5's."
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-15 — Timeouts on the provisioning transaction that holds the advisory lock
+- **Amends:** "### 2. The two irreversible jobs and their exact claims" (chapter "Workers in overlap, exactly-once proof, state-tier services, Synapse on Postgres")
+- **Raised by:** B28-worker-safety-and-colour-gating
+- **Gap:** The advisory lock is held across Keycloak/Matrix/Nextcloud HTTP calls; no timeout is specified for that transaction.
+- **Binding answer:** §2(a) states: "The provisioning transaction sets `statement_timeout = 30s` and `idle_in_transaction_session_timeout = 60s`, so one slow external call cannot hold a pool connection and its advisory lock indefinitely." Both are set on the transaction, not on the role.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-16 — The Keycloak probe is two-clause
+- **Amends:** "### 7. `/healthz`, boot determinism, healthchecks" (chapter "Edge, relocatability, env contract, healthchecks, boot determinism")
+- **Raised by:** B30-healthchecks-and-census
+- **Gap:** §7 says the Keycloak probe is `/health/ready`, but that alone cannot satisfy "a Keycloak whose realm failed to import reads unhealthy".
+- **Binding answer:** The probe is two-clause: `/health/ready` UP **and** the expected realm's OIDC discovery answering 200. §7 names the endpoint, not the whole predicate, and the registry post-condition is the binding requirement. §7 states: "the probe is two-clause; `/health/ready` alone reports UP with only the `master` realm present."
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-17 — Two boundary lints, two owners
+- **Amends:** "### E. Guard register" (chapter "Assembler (zero modules), release supply chain, sales site, guards, acceptance, units")
+- **Raised by:** B32-render-and-boundary-guards
+- **Gap:** §E gives an "assembler boundary-lint vacuity" row to B34 while B32's registry row also names a boundary lint; are they two lints?
+- **Binding answer:** Two lints. `B32-render-and-boundary-guards` owns the kernel's own `civitas/gremion-ui/scripts/boundary-lint.ts` run in CI (today wired only into the pre-commit hook), with its scanned-file-count assertion. `B34-assembler-zero-modules` owns the assembler's `--all` invocation over the assembled tree and its separate vacuity count. §E's two rows state the split.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-18 — The N20 guard's root list is widened to `docs/**`
+- **Amends:** "### 8. Guards and how each is watched RED" (chapter "Edge, relocatability, env contract, healthchecks, boot determinism"; the row "No `-f` / `--profile` / `-p` outside `--env-file` in `scripts/`, `Makefile`, `.github/workflows/`, `docs/runbooks/`")
+- **Raised by:** B32-render-and-boundary-guards
+- **Gap:** Four docs carry the forbidden `-f`/`--profile` composition but fall outside the four named N20 roots.
+- **Binding answer:** The guard row reads "no `-f` / `--profile` / `-p` outside `--env-file` in `scripts/`, `Makefile`, `.github/workflows/` and `docs/**`". The four measured occurrences outside the named roots — `docs/OPERATIONS.md:42`, `docs/deployment.md:149`, `docs/ENVIRONMENT.md:393`, `docs/playbooks/extract-a-service.md:208` — are fixed by B32.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-19 — `scripts/assemble.mjs` CLI signature
+- **Amends:** "### B. `scripts/assemble.mjs` at zero modules (B-16 first half, owner unit B34)" (chapter "Assembler (zero modules), release supply chain, sales site, guards, acceptance, units")
+- **Raised by:** B35-release-supply-chain
+- **Gap:** The spec fixes no CLI signature for `scripts/assemble.mjs`.
+- **Binding answer:** The signature is `node scripts/assemble.mjs --manifest <path> --out <dir>`, exit 0 on success and non-zero on any refusal. `B34-assembler-zero-modules` publishes exactly that signature and `D9-assembler-module-resolution` does not change it. §B carries the signature line.
+- **Status:** adopted (conservative option)
+- **Consistency:** none (AM-B-32 extends the same signature with the `GREMION_DIST_MANIFEST` default)
+
+### AM-B-20 — The OSS-artefact-purity guard is split B35 / D15
+- **Amends:** "### E. Guard register" (chapter "Assembler (zero modules), release supply chain, sales site, guards, acceptance, units"; the "OSS artefact purity" row)
+- **Raised by:** B35-release-supply-chain
+- **Gap:** Spec B §E assigns the OSS-artefact-purity guard to B35 while spec D §4 G-D14 assigns it to D15.
+- **Binding answer:** Adopted, and the G-D14 row splits with it: `B35-release-supply-chain` owns the **release-tree half**, recorded in spec B §E, and `D15-oss-artefact-guard` owns the **artefact half**, recorded in spec D's G-D14 row. B35 authors `check-oss-purity.mjs` — private-path refusal plus an independent vacuity count — because it owns the two build passes; D15 owns the public-module presence half and settles the `gremion-public-oss` variant question. Neither register reads as sole owner. The spec-D mirror is entry AM-D-37.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-B-21 — Ported `055` renames `stura_public_reader` to `gremion_public_reader`
+- **Amends:** "### 2. Port-back: nine data-plane files plus control `004`" (chapter "Migrations: port-back, canonical bytes, renumber, ranges, baseline, migrate job, leaf ledgers"; the adaptation list, which today names only `058`)
+- **Raised by:** B4-migrations-portback-nine
+- **Gap:** Ported `055` guards its GRANT on the retired role `stura_public_reader`, an adaptation the spec does not list.
+- **Binding answer:** `B4-migrations-portback-nine` owns it: the token is renamed to `gremion_public_reader` in the ported `055` (measured — StuRa `055:68-71` guards on `stura_public_reader`; kernel `008:20` creates `gremion_public_reader`). §2's adaptation list names `055` beside `058`. The portal-grant test asserts that no executable line in the kernel chain names the retired role.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-22 — Owner of the `055` role rename, named
+- **Amends:** "### 2. Port-back: nine data-plane files plus control `004`" (chapter "Migrations: port-back, canonical bytes, renumber, ranges, baseline, migrate job, leaf ledgers"; the adaptation list)
+- **Raised by:** B4a-news-posts-ownership
+- **Gap:** Ported `055` still guards its GRANT with the retired role name `stura_public_reader` and no unit is named as its owner. (Same answer as AM-B-21, raised independently.)
+- **Binding answer:** `B4-migrations-portback-nine` owns it: the token is renamed to `gremion_public_reader` in the ported `055` (measured — StuRa `055:68-71` guards on `stura_public_reader`; kernel `008:20` creates `gremion_public_reader`). §2's adaptation list names `055` beside `058`. The portal-grant test asserts that no executable line in the kernel chain names the retired role.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-23 — The public register's anonymous read does not depend on `058` alone
+- **Amends:** "### 2. Port-back: nine data-plane files plus control `004`" (chapter "Migrations: port-back, canonical bytes, renumber, ranges, baseline, migrate job, leaf ledgers"; the adaptation list)
+- **Raised by:** B5-governance-320-subsystem
+- **Gap:** Ported `055`'s GRANT names `stura_public_reader`, which the kernel never creates, so the public register's anonymous read depends entirely on B4's `058`. (Same answer as AM-B-21, raised independently.)
+- **Binding answer:** `B4-migrations-portback-nine` owns it: the token is renamed to `gremion_public_reader` in the ported `055` (measured — StuRa `055:68-71` guards on `stura_public_reader`; kernel `008:20` creates `gremion_public_reader`). §2's adaptation list names `055` beside `058`. The portal-grant test asserts that no executable line in the kernel chain names the retired role.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-24 — #320 phase 1 is not ported in release 1
+- **Amends:** "#### 1.6 Named gaps this spec does not close" (chapter "Scope, finish line, architecture as spec B leaves it, amendments to spec A")
+- **Raised by:** B5-governance-320-subsystem
+- **Gap:** #320 phase 1 (`support_threshold`, the decision-rule strategy seam) is absent from the kernel and no unit claims it.
+- **Binding answer:** It is not ported in release 1 — nothing in B5's file set imports `supportThreshold` and no acceptance clause in §F needs it. §1.6 gains: "(d) #320 phase 1 (the franchise/decision-rule strategy registry) is not ported in release 1; the SDK carries its types (D1) and the port is post-go-live work."
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-25 — Named exceptions to the byte-equality post-condition
+- **Amends:** "### 3. Canonical bytes (B-02)" (chapter "Migrations: port-back, canonical bytes, renumber, ranges, baseline, migrate job, leaf ledgers")
+- **Raised by:** B6-canonical-migration-bytes
+- **Gap:** After B4a the adapted `058` is not byte-equal to the StuRa `058`, yet §3 names only `008` as an exception.
+- **Binding answer:** B6's adjudication set is the 46 shared basenames at pre-port-back HEAD; the nine B4-ported basenames are B4/B4a's and are exempt from B6. §3 states: "008 and the nine basenames ported by B4/B4a are named exceptions to the byte-equality post-condition."
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-26 — Where the migration sort-order guard runs
+- **Amends:** "#### 4.1 Guards" (chapter "Migrations: port-back, canonical bytes, renumber, ranges, baseline, migrate job, leaf ledgers"; the sort-order guard row)
+- **Raised by:** B7-renumber-ranges-baseline
+- **Gap:** Handover's 050–052 stay 3-digit beside 4-digit files in the StuRa tree; where the sort-order guard runs is not written.
+- **Binding answer:** It runs in the kernel and in the assembled tree only, never against the archived StuRa tree — it follows from §4's "its files stay frozen in the archived StuRa tree" plus the per-directory width rule. §4.1's sort-order guard row states that scope, so it is written rather than inferred.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-27 — The do-not-overwrite set is `civitas/scripts/portback/do-not-overwrite.json`
+- **Amends:** "### A. Tree direction and the do-not-overwrite guard (B-02, owner unit B3)" (chapter "Assembler (zero modules), release supply chain, sales site, guards, acceptance, units"; clause (2)(1))
+- **Raised by:** B8-tenant-domains-and-leaf-trust
+- **Gap:** B3 freezes the 43-path do-not-overwrite set as "a machine-readable file" but fixes neither its filename nor its repo.
+- **Binding answer:** The file is `civitas/scripts/portback/do-not-overwrite.json` — the kernel, because every port-back step reads it and B3's StuRa writes are limited to carve rules. §A(2)(1) names that path; B8 and every port-back unit reference that exact path.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-28 — `dev-csp.yaml` is deleted by B15, not B9
+- **Amends:** "### 6. Env contract (B-08)" (chapter "Edge, relocatability, env contract, healthchecks, boot determinism"; the override-deletion sentence)
+- **Raised by:** B9-edge-static-config
+- **Gap:** `docker/traefik/dynamic/dev-csp.yaml` becomes unmounted once the file provider points at `${GREMION_ROOT}/etc/edge`; §2 names only `tls.yml` as deleted.
+- **Binding answer:** It is deleted in `B15-env-contract-and-validator`, not B9: its only consumer is the dormant keycloak-dev router at `docker-compose.override.yml:120-124`, and B15 deletes that file. §6's override-deletion sentence gains "and `docker/traefik/dynamic/dev-csp.yaml`, whose only consumer dies with it." B9 leaves it in place.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-29 — B34's export surface, pinned
+- **Amends:** "### B. `scripts/assemble.mjs` at zero modules (B-16 first half, owner unit B34)" (chapter "Assembler (zero modules), release supply chain, sales site, guards, acceptance, units"; the adopted answer cites "spec B §C's B34 paragraph", but B34's paragraph is §B — §C is the release supply chain, owner B35)
+- **Raised by:** D9-assembler-module-resolution
+- **Gap:** `B34-assembler-zero-modules`' export surface is fixed by neither spec (`readDistManifest`, `assembleTree`, `runCodegens`, `KERNEL_BUILTIN_MODULE_IDS` assumed).
+- **Binding answer:** `civitas/scripts/assemble.mjs` exports `readDistManifest(path)`, `assembleTree(manifest, opts)`, `runCodegens(treeDir)` and `KERNEL_BUILTIN_MODULE_IDS`. That export list is written into B34's paragraph. D9, D13 and D14 import exactly these names and nothing else.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-30 — The exactly-once helper's signature crosses a process boundary by module path
+- **Amends:** "### 4. The exactly-once harness (B29)" (chapter "Workers in overlap, exactly-once proof, state-tier services, Synapse on Postgres"; spec B l.854, "a helper that takes a job function and a side-effect counter")
+- **Raised by:** D1-module-sdk-package
+- **Gap:** Spec B:854 says the helper "takes a job function", but a function cannot cross a process boundary and D.1.5 requires two processes on one Postgres.
+- **Binding answer:** The signature is `assertExactlyOnceUnderTwoColours(job, { module, exportName, claim, sideEffect, databaseUrl, expected?, colours? })`, returning `{ colours: [string, string]; sideEffectCount: number }`, exported from `@gremion/module-sdk/testing`; `module` is an `import.meta.url`. Spec B l.854's "takes a job function" describes the type parameter only and is amended to name the `module`/`exportName` pair that crosses the process boundary. Spec D D.1.5's two-field options form is superseded; the spec-D mirror is entry AM-D-38.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-B-31 — The colour-policy env key is `GREMION_COLOUR_GATED_JOBS`
+- **Amends:** "### 1. The hybrid worker model (B-15)" (chapter "Workers in overlap, exactly-once proof, state-tier services, Synapse on Postgres"; beside `GREMION_ACTIVE_COLOUR_FILE`)
+- **Raised by:** D10-module-runtime-declarations
+- **Gap:** The colour-policy env key has no name in spec B §Workers 1 or spec D D.1.4.
+- **Binding answer:** The key is `GREMION_COLOUR_GATED_JOBS`, written into `app.env` by the assembler from `runtime.timedJobs[]`. §Workers 1 names it beside `GREMION_ACTIVE_COLOUR_FILE`; `B28-worker-safety-and-colour-gating` reads that exact key.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-32 — The assembler's output-path CLI and manifest default
+- **Amends:** "### B. `scripts/assemble.mjs` at zero modules (B-16 first half, owner unit B34)" (chapter "Assembler (zero modules), release supply chain, sales site, guards, acceptance, units"; the adopted answer cites "spec B §C's B34 paragraph")
+- **Raised by:** D14-gremion-dist-repo
+- **Gap:** `scripts/assemble.mjs`'s output-path CLI is B34's and is unnamed in either spec.
+- **Binding answer:** B34's CLI is `node scripts/assemble.mjs --manifest <path> --out <dir>`, with `GREMION_DIST_MANIFEST` supplying the manifest default. That line is written into B34's paragraph. D14's fail-closed regression invokes it with no arguments in an empty cwd and asserts stderr plus no created directory.
+- **Status:** adopted (conservative option)
+- **Consistency:** none (same signature as AM-B-19)
+
+### AM-B-33 — `release.json`'s `modules[]` inventory, schematised
+- **Amends:** "#### 2.3 The release tree — already fixed, not open for design" (chapter "Scope, finish line, architecture as spec B leaves it, amendments to spec A"; the `release.json` row)
+- **Raised by:** D15-oss-artefact-guard
+- **Gap:** `release.json`'s `modules[]` inventory is schematised nowhere; D15 fixes a shape B35 must emit.
+- **Binding answer:** The shape is `modules: [{ id, visibility, images: [{ id, image, role }] }]`; `D15-oss-artefact-guard` fails closed when it is absent. §2.3's `release.json` row carries that field so `B35-release-supply-chain` emits exactly it and the private-sidecar check can enumerate `gremion-helios`.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-B-34 — The healthcheck census reads two carriers (kernel half of AM-D-08)
+- **Amends:** "### 7. `/healthz`, boot determinism, healthchecks" (chapter "Edge, relocatability, env contract, healthchecks, boot determinism")
+- **Raised by:** D6-leaf-images-and-compose-fragments (kernel half; the module half is AM-D-08 in `spec-d.amendments-2026-09-16.md`)
+- **Gap:** The census exemption input has no file, and the adopted answer cites "spec B §K" — spec B has no §K, because §K is spec A's and is implemented by this section.
+- **Binding answer:** The census reads two carriers, and `B30-healthchecks-and-census` consumes both. `civitas/infra/host/health-census.json` = `{ schemaVersion: 1, exemptServices: ["minio-mc"], leafBlastRadius: { <leaf service>: { probe, unhealthyOnUnreachableTenantDb, scope, rationale } } }`, its schema owned by `D6-leaf-images-and-compose-fragments`, committed and consumed by B30. `HEALTH_EXEMPT_SERVICES=minio-mc` in `civitas/infra/host/templates/env/state.env.tmpl` remains the env-side exemption list. §7's census paragraph names both carriers.
+- **Status:** adopted (orchestrator resolution)
+- **Consistency:** resolved — see Resolutions
+
+### AM-B-35 — The platform SMTP credential inside tenant realms is a NAMED accepted exposure (orchestrator, 2026-09-17)
+- **Amends:** the gremion#6 paragraph of spec B ("**gremion#6** rides in the template: an `smtpServer` block in `realm-export.base.json` …", §T.4)
+- **Raised by:** B2-realm-smtp-block (security review of the landed unit, 2026-09-17)
+- **Gap:** §T.4 stamps the ONE platform sender credential (`PLATFORM_SMTP_PASSWORD`, Stalwart principal `platform@${PLATFORM_DOMAIN}`) into every tenant realm's `smtpServer`. Any principal holding `manage-realm` in a tenant realm — today the tenant's gremion-admin service account via the `realm-admin` composite — can re-point `smtpServer.host` to a host it controls and exfiltrate the credential, then send as `platform@` for every tenant.
+- **Binding answer:** Release 1 keeps §T.4 as written and records the exposure by name; it is an **accepted exposure** until one of two root fixes lands, both outside B2: (a) a per-tenant Stalwart submission principal so the credential's blast radius equals the realm that holds it (`infra/host/mail/provision-roles.sh`, operator); or (b) narrowing `GREMION_ADMIN_SA_REALM_ROLES` off the `realm-admin` composite to an explicit realm-management set established against a live Keycloak, changed in lockstep with `scripts/configure-keycloak-clients.sh` and carrying a migration for realms that already hold the composite (`manage-groups` is NOT a Keycloak realm-management role; group management sits under `manage-users`). The mitigation that ships with B2: the provisioner re-stamps the correct `smtpServer` on every provision and reconcile pass and fails closed on the Admin-API delta path; `gremion-neuter` rewrites the realm `smtpServer` as the fourth surface a restore carries live mail through. `docs/deployment-architecture.md` must name this exposure beside the ACME one — a follow-up recorded in `plan/residuals.md`, not B2's task.
+- **Status:** adopted as a named exposure — **operator decision pending** (which root fix, and when)
+- **Consistency:** none

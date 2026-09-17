@@ -682,3 +682,322 @@ Units specified here: `D9-assembler-module-resolution`, `D13-compose-fragment-in
 | `D16-handover-visibility-record` | S | `D1-module-sdk-package` | The implementable half only: `CONTRIBUTING.md`'s private-module list includes `handover`, the N17 trigger paragraph names it as the one private module with no service, and a docs-lint guard fails when that list diverges from the `visibility: private` set in `gremion.dist.example.json`. Post-condition: the guard goes RED when a fresh verifier flips one module's visibility in `gremion.dist.example.json` without editing `CONTRIBUTING.md`. **Operator item, waived by name (P4 pattern):** the standalone decision on handover's visibility; this unit files it as the dated decision record once the operator takes it, and until then the state above is the state | civitas | no | no `D5-remaining-module-repos` edge: handover is not extracted, and its 1900–1999 block stays reserved and empty |
 
 `B33-assembled-tree-guards` is a spec-B unit whose D-side is specified in §1 D.1.6 (nav anchors) and §4 D.1.6 (`FEATURE_TARGETS` derivation); it depends on `D1-module-sdk-package` and is not listed above. Spec B lists these D units by id only; this table is their sole owner.
+
+## Appendix — Amendments from plan reconciliation (2026-09-16)
+
+Each entry below is **binding on the implementation**. They were adopted by the release-1 implementation plan (`plan/2026-09-15-b-d-release-1.md`, reconciled 2026-09-16) as the conservative option for a question spec D did not answer; every one was raised by the named unit writer and is already in force in that plan's task text. Unless an entry is marked *operator decision pending*, it is adopted and binding exactly as written — names, paths, keys, values and exit codes are literal. Vocabulary: Gremion is the product; StuRaOS is the StuRa vertical / the StuRa tree. Entries are numbered in the order the plan residuals list them; the spec-B half of this reconciliation is in `spec-b.amendments-2026-09-16.md`.
+
+### Resolutions of flagged contradictions (orchestrator, 2026-09-16)
+
+The reconciliation pass flagged contradictions between adopted answers and standing spec text. They are resolved below from the plan's **"Cross-unit contracts (binding)"** table (`plan/2026-09-15-b-d-release-1.md` l.281–442), which outranks every writer answer. Entries named here carry `Consistency: resolved — see Resolutions`.
+
+- **R1 — the shared schema validator (AM-D-02, AM-D-05, AM-D-14, AM-D-23, AM-D-34).** Contract row "the shared schema validator": `civitas/scripts/validate-module-schemas.mjs`, owner `D2-module-json-and-dist-schema`, exporting `validateModuleJson(obj, ctx): string[]`, `validateDistManifest(obj): string[]`, `validateVerticalJson(obj, ctx): string[]`, `validateRangesJson` and `validateAll` (an empty array means valid). CLI: `node scripts/validate-module-schemas.mjs [--modules DIR] [--ranges FILE] [--verticals DIR] [--dist FILE]`, exit 1 on any problem including the vacuity problem. Consumers: `B34-assembler-zero-modules`, `D3-first-module-repo-users`, `D5-remaining-module-repos`, `D5a-newsletter-profile-gate`, `D8-stura-vertical`, `D9-assembler-module-resolution`, `D12-module-repo-ci-and-dependabot-template`, `D14-gremion-dist-repo`, `D6-leaf-images-and-compose-fragments`. Both earlier answers — `civitas/scripts/lib/gremion-manifest-schema.mjs` with `validateVertical`, and `civitas/packages/module-sdk/src/validate.ts` with `validateVerticalManifest` behind `@gremion/module-sdk/validate` — are **superseded**.
+- **R2 — kernel `KNOWN_ISSUES.md` §T11 (AM-D-01, AM-D-26).** Both stand, with split ownership. `B0-spec-docs-and-waiver-ledger` inserts the **pointer block** naming the in-repo spec that owns the resolution, and its `test/host/spec-docs.bats` asserts the §T11 block carries the spec path; `B1b-theme-rename-and-hygiene-guard` (task .6c) replaces the section with the **closed record** and MUST preserve B0's pointer lines. Spec D l.493 stands for the pointer; AM-D-26 stands for the closed record. Neither touches `StuRaOS/KNOWN_ISSUES.md`.
+- **R3 — healthcheck census input (AM-D-08).** Contract row "healthcheck census input": `civitas/infra/host/health-census.json = { schemaVersion: 1, exemptServices: ["minio-mc"], leafBlastRadius: { <leaf service>: { probe, unhealthyOnUnreachableTenantDb, scope, rationale } } }`, schema owned by `D6-leaf-images-and-compose-fragments`, committed and consumed by `B30-healthchecks-and-census`; `HEALTH_EXEMPT_SERVICES=minio-mc` in `civitas/infra/host/templates/env/state.env.tmpl` remains the env-side exemption list and B30 consumes both carriers. Spec B has no §K — the kernel-side section is spec B "### 7. `/healthz`, boot determinism, healthchecks", carried as entry **AM-B-34**.
+- **R4 — M12 and the four frozen migrations (AM-D-16).** Adopted as written: G-D10's byte-immutability of `008_public_portal.sql`, 042, 043 and 048 wins over spec A record M12's scrub **for those four files only**; M12 stays in force everywhere else.
+- **R5 — the example dist manifest (AM-D-21).** Adopted: the amendment's wording replaces spec D l.374's "names only public modules and only in-kernel verticals" sentence; that replacement *is* the amendment.
+- **R6 — mirrors added.** Two entries were added so that a split contract is written on both sides: **AM-D-37** (mirror of AM-B-20, the G-D14 split) and **AM-D-38** (mirror of AM-B-30, the exactly-once helper signature).
+
+### AM-D-01 — §T11 is a kernel-only write; the archived StuRa tree's own file is untouched
+- **Amends:** "### Archiving (D11)" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving")
+- **Raised by:** B0-spec-docs-and-waiver-ledger
+- **Gap:** Spec D:493 says `KNOWN_ISSUES.md` §T11 is overwritten by B0, but spec B §1.5's five permitted StuRa-tree writes exclude B0. Is a StuRa-tree edit expected?
+- **Binding answer:** No StuRa-tree edit. Only `civitas/KNOWN_ISSUES.md` §T11 is written, pointing at the in-repo spec and B1a/B1b. §3 Archiving states: "The archived StuRa tree's own KNOWN_ISSUES.md §T11 is left untouched; D11-archive-holding-repo-and-stura-tree adds the one-line pointer to the kernel's rewritten §T11." Ownership of the kernel §T11 is split and both halves stand: `B0-spec-docs-and-waiver-ledger` inserts the pointer block naming the in-repo spec that owns the resolution, asserted by its `test/host/spec-docs.bats` (the §T11 block carries the spec path); `B1b-theme-rename-and-hygiene-guard` (task .6c) then replaces the section with the closed record and preserves B0's pointer lines. Spec D l.493 stands for the pointer.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-02 — The shared schema validator, named by the contract table
+- **Amends:** "#### D.1.2 `module.json` verification" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units"; the sentence "there is exactly one validator, not four")
+- **Raised by:** B34-assembler-zero-modules
+- **Gap:** Spec D says there is exactly one validator but gives it no path or export name.
+- **Binding answer:** The one validator is `civitas/scripts/validate-module-schemas.mjs`, owned by `D2-module-json-and-dist-schema`, exporting `validateModuleJson(obj, ctx): string[]`, `validateDistManifest(obj): string[]`, `validateVerticalJson(obj, ctx): string[]`, `validateRangesJson` and `validateAll`; an empty array means valid. Its CLI is `node scripts/validate-module-schemas.mjs [--modules DIR] [--ranges FILE] [--verticals DIR] [--dist FILE]`, exit 1 on any problem including the vacuity problem. Consumers are B34, D3, D5, D5a, D8, D9, D12, D14 and D6. The earlier `civitas/scripts/lib/gremion-manifest-schema.mjs` / `validateVertical` spelling is superseded. D.1.2's "exactly one validator" sentence carries the path and the export names.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-03 — 40 module docker-stack files, asserted as five measured counts
+- **Amends:** "## Units — spec D" (the `D5-remaining-module-repos` row; the adopted answer cites "spec D §3's D5 row", but the "41 module docker-stack files" wording lives in this units table)
+- **Raised by:** D5-remaining-module-repos
+- **Gap:** Sidecar docker-stack count: spec D cites units-v2's 41 module docker-stack files; `git ls-files` at `f276af59` measures 40.
+- **Binding answer:** Assert the five measured counts — helios 15, nextcloud 10, synapse 6, element-call 6, livekit 3, collabora 0 (no directory) = 40. Never the aggregate 41. The D5 row reads "units-v2 records … 40 module docker-stack files".
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-04 — finance's Helios coupling is 13 files
+- **Amends:** "### Per-module extraction tables" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving"; the elections paragraph's `lib/server/finance/services/helios/**` note)
+- **Raised by:** D5-remaining-module-repos
+- **Gap:** Spec D §3 says `lib/server/finance/services/helios/**` is 14 files; `git ls-files` measures 13.
+- **Binding answer:** Measured 13 at `f276af59` (`git -C StuRaOS ls-tree -r f276af59 --name-only -- gremion-ui/src/lib/server/finance/services/helios | wc -l`). Assert 13. The elections row's "14 files" becomes "13 files"; the path stays finance-owned and travels with finance.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-05 — The shared schema validator, as every D unit imports it
+- **Amends:** "#### D.1.2 `module.json` verification" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units"; the "exactly one validator" sentence)
+- **Raised by:** D5-remaining-module-repos
+- **Gap:** The D2 validator's exact export name is not fixed by spec D ("the SDK's validator" / "the same validator").
+- **Binding answer:** `D2-module-json-and-dist-schema` ships `civitas/scripts/validate-module-schemas.mjs` exporting `validateModuleJson(obj, ctx): string[]`, `validateDistManifest(obj): string[]`, `validateVerticalJson(obj, ctx): string[]`, `validateRangesJson` and `validateAll` (empty array = valid); CLI `node scripts/validate-module-schemas.mjs [--modules DIR] [--ranges FILE] [--verticals DIR] [--dist FILE]`, exit 1 on any problem including the vacuity problem. Every D unit imports exactly these names. The earlier `civitas/packages/module-sdk/src/validate.ts` / `validateVerticalManifest` / `@gremion/module-sdk/validate` spelling is superseded.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-06 — D3 ships the split driver `extract-module.mjs`
+- **Amends:** "### Creation from git index blobs (D-03, F2)" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)")
+- **Raised by:** D5-remaining-module-repos
+- **Gap:** D3's registry row names `extraction-map.json` but no driver script, so it is undefined whether D3 ships a driver D5 generalises or extracted 14 files by hand.
+- **Binding answer:** `D3-first-module-repo-users` creates `civitas/scripts/split/extract-module.mjs` together with `extraction-map.json` — a hand extraction is not re-verifiable against index blobs. D5 task .2 becomes an extension of that driver, proved by reproducing D3's users repo byte-for-byte.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-07 — `routes/api/auth/matrix-*/**` goes to messages
+- **Amends:** "### Per-module extraction tables" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving"; the messages row)
+- **Raised by:** D5-remaining-module-repos
+- **Gap:** `routes/api/auth/matrix-*/**` is classified `product-module-api-routes` but is not counted in spec D §3's messages half (38 measured).
+- **Binding answer:** `gremion-ui/src/routes/api/auth/matrix-device/**` and `matrix-token/**` (3 files, verified) are routed to `gremion-module-messages` and recorded in `extraction-map.json` as driver-total paths outside §3's 38-file union. The messages row gains "+3 api/auth/matrix-* files".
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-08 — The census input file, its schema and its owner
+- **Amends:** "## Units — spec D" (the `D6-leaf-images-and-compose-fragments` row) and, for its kernel half, spec B "### 7. `/healthz`, boot determinism, healthchecks" — corrected from the answer's "spec B §K", which does not exist in spec B; that half is carried as entry AM-B-34
+- **Raised by:** D6-leaf-images-and-compose-fragments
+- **Gap:** The census exemption list has no file; `HEALTH_EXEMPT_SERVICES` is a flat name list that cannot carry a per-leaf blast-radius decision.
+- **Binding answer:** The census input is `civitas/infra/host/health-census.json` = `{ schemaVersion: 1, exemptServices: ["minio-mc"], leafBlastRadius: { <leaf service>: { probe, unhealthyOnUnreachableTenantDb, scope, rationale } } }`. Its schema is owned by `D6-leaf-images-and-compose-fragments`, which commits the nine per-leaf blast-radius rows; `B30-healthchecks-and-census` consumes it. `HEALTH_EXEMPT_SERVICES=minio-mc` in `civitas/infra/host/templates/env/state.env.tmpl` remains the env-side exemption list, and B30 consumes both carriers. The file is named in spec D's D6 row and in spec B §7.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-09 — Leaf contexts resolve against the tree, sidecar contexts against the module checkout
+- **Amends:** "### Interim leaf-image build (D-05)" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving"), and the `images[].context` comment under "#### `module.json` — repo root of each `gremion-module-<id>`"
+- **Raised by:** D6-leaf-images-and-compose-fragments
+- **Gap:** A leaf build context must be the assembled tree root while `module.json.images[].context` for a leaf is `service`, relative to the module repo; spec D states the rule only in prose.
+- **Binding answer:** A `role: "leaf"` context resolves against the assembled tree root (`--tree`); a `role: "sidecar"` context resolves against the module checkout (`--modules`). That sentence is the path contract in §3 "Interim leaf-image build (D-05)" and in §2's `images[].context` comment.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-10 — `gremion.dist.example.json` is created by D16
+- **Amends:** "#### `gremion.dist.json` (private) and `gremion.dist.example.json` (kernel)" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)")
+- **Raised by:** D2-module-json-and-dist-schema
+- **Gap:** Ownership of `civitas/gremion.dist.example.json` is not stated by unit id anywhere in spec D.
+- **Binding answer:** `D16-handover-visibility-record` (wave 7) creates `civitas/gremion.dist.example.json`; it lands before D2 (wave 8) and D14 (wave 9). D2 validates the committed file and asserts its negative cases against fixtures; D14 reads it. No other unit creates it.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-11 — `composePageAccess` ships in two forms
+- **Amends:** "#### D.1.3 Registry contracts and composition seams" (chapter "Scope, the module SDK, the types reconcile, licence trigger, handover")
+- **Raised by:** D1-module-sdk-package
+- **Gap:** Spec D.1.3 writes `composePageAccess(vocabulary?)`, but the SDK cannot import the kernel-generated manifests barrel.
+- **Binding answer:** The SDK ships `composePageAccess(manifests, vocabulary?)`; `civitas/gremion-ui/src/lib/modules/registry.ts` keeps `composePageAccess(vocabulary?)` as a one-line binding over `MODULE_MANIFESTS`; the same for `composeCapabilities`, `moduleRoutePrefixes`, `moduleOwnsSegment` and `moduleHref`. Call sites are untouched. D.1.3 notes both forms.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-12 — `Role` and `NavItem` are SDK surface
+- **Amends:** "#### D.1.3 Registry contracts and composition seams" (chapter "Scope, the module SDK, the types reconcile, licence trigger, handover"; the export table)
+- **Raised by:** D1-module-sdk-package
+- **Gap:** Spec D.1.2/D.1.3 do not name `Role` or `NavItem` as SDK surface, yet `ModulePage.minRole`, `ModuleManifest.nav` and `NavTemplateEntry` cannot typecheck without them.
+- **Binding answer:** `Role` (`auth/types.ts:1-6`) and `NavItem` (`nav-schema.ts:7-21`) move into the SDK and are re-exported from their current kernel paths. `baseNavSchema`, `AuthHelpers` and `termFor` stay kernel data. D.1.3's export table carries both rows.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-13 — `SDK_VERSION` is the declared compatibility token
+- **Amends:** "#### D.1.7 Semver and compatibility" (chapter "Scope, the module SDK, the types reconcile, licence trigger, handover")
+- **Raised by:** D1-module-sdk-package
+- **Gap:** D.1.7 requires the kernel to declare the SDK version it satisfies but names no file for that declaration.
+- **Binding answer:** The SDK root entrypoint exports `SDK_VERSION = '1.0.0'`, with a package test asserting it equals `packages/module-sdk/package.json`'s version. D2's range check and D9's refusal both read `SDK_VERSION`, never `package.json`.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-14 — The shared schema validator, for `vertical.json`
+- **Amends:** "#### D.1.2 `module.json` verification" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units"; the "exactly one validator" sentence, which also governs "#### `verticals/<id>/vertical.json` — kernel tree (F3)")
+- **Raised by:** D8-stura-vertical
+- **Gap:** Spec D fixes "the same validator" for `vertical.json` but never names D2's export or signature.
+- **Binding answer:** `vertical.json` is validated by `validateVerticalJson(obj, ctx): string[]` from `civitas/scripts/validate-module-schemas.mjs`, owned by `D2-module-json-and-dist-schema`, which also exports `validateModuleJson(obj, ctx): string[]`, `validateDistManifest(obj): string[]`, `validateRangesJson` and `validateAll` (empty array = valid); CLI `node scripts/validate-module-schemas.mjs [--modules DIR] [--ranges FILE] [--verticals DIR] [--dist FILE]`, exit 1 on any problem including the vacuity problem. The earlier `validateVerticalManifest` spelling and the `@gremion/module-sdk/validate` subpath are superseded.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-15 — The vertical-literal guard is scoped and ratcheted
+- **Amends:** "### The StuRa vertical (D8, D-02)" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving"; the post-condition "no vertical literal…", and the `D8-stura-vertical` row in "## Units — spec D")
+- **Raised by:** D8-stura-vertical
+- **Gap:** The registry row's "no vertical literal outside `verticals/`" is unbounded: the kernel carries 880 case-insensitive `stura` occurrences across 190 tracked files.
+- **Binding answer:** The guard is scoped to `civitas/gremion-ui/src/**` and `civitas/gremion-public/src/**`, excluding `*.test.*`, as a per-file counted ratchet. §3's post-condition takes that scope, and the test-fixture, docs/k8s/docker and `KNOWN_ISSUES.md` sweeps are listed as named residuals.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-16 — Four shipped migrations are allow-listed against the M12 literal scrub
+- **Amends:** "### The StuRa vertical (D8, D-02)" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving")
+- **Raised by:** D8-stura-vertical
+- **Gap:** Four already-shipped migrations (008, 042, 043, 048) carry the Civitas literal and are byte-frozen by G-D10; M12 says scrub it.
+- **Binding answer:** Baseline immutability wins for those four files. `008_public_portal.sql`, 042, 043 and 048 are not scrubbed (verified present in the kernel). Those four paths are allow-listed in the M12 literal guard with a comment naming G-D10, and a release-1 residual is recorded. M12 stays in force everywhere else. §3 carries that sentence.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — M12 narrowed by name
+
+### AM-D-17 — B31 creates the Synapse database with C collation
+- **Amends:** "## Units — spec D" (the `D7-synapse-on-postgres` row)
+- **Raised by:** D7-synapse-on-postgres
+- **Gap:** Seam with B31: B31 must also carry the `create_db_and_user "${SYNAPSE_DB_NAME:-synapse}" … C` invocation, or D7's `datcollate` assertion fails.
+- **Binding answer:** Correct, and it is B31's: `create_db_and_user "${SYNAPSE_DB_NAME:-synapse}" … C` is added to `civitas/docker/postgres/init-databases.sh` in `B31-postgres-c-collation`'s task list. D7 edits neither that file nor `k8s/base/postgres/configmap.yaml`; it declares the three `SYNAPSE_DB_*` keys and asserts `datcollate`.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-18 — D9 exports `resolveModules` and an `outDir` option
+- **Amends:** "#### D.1.1 Manifest source and module clone" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units")
+- **Raised by:** D10-module-runtime-declarations
+- **Gap:** D9's export name for the resolved-module list is not fixed in spec D §D.1.
+- **Binding answer:** `D9-assembler-module-resolution` exports `resolveModules(manifest) => [{ id, order, dir, moduleJson }]` and an `outDir` option from `civitas/scripts/assemble.mjs`. Those names are pinned in D9's task list; D10 and D13 import them and change nothing else.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-19 — The three leaf scheduler job ids
+- **Amends:** "#### `module.json` — repo root of each `gremion-module-<id>`" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)"; the `runtime.timedJobs[]` block)
+- **Raised by:** D10-module-runtime-declarations
+- **Gap:** The three leaf schedulers carry no job id today; B28 must emit the ids D10 declares.
+- **Binding answer:** `calendar-leaf-scheduler`, `content-leaf-scheduler` and `newsletter-leaf-scheduler` are declared as `runtime.timedJobs[].id`. `B28-worker-safety-and-colour-gating`'s task list gains: each leaf tick body emits its own id string verbatim, so the colour-policy assertion matches `GREMION_COLOUR_GATED_JOBS`.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-20 — D16 owns the example dist manifest (D16's own raising)
+- **Amends:** "#### `gremion.dist.json` (private) and `gremion.dist.example.json` (kernel)" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)")
+- **Raised by:** D16-handover-visibility-record
+- **Gap:** `gremion.dist.example.json` exists in no repo and spec D names no owning unit; D16 carries no D2 edge. (Same answer as AM-D-10, raised independently.)
+- **Binding answer:** `D16-handover-visibility-record` (wave 7) creates `civitas/gremion.dist.example.json`; it lands before D2 (wave 8) and D14 (wave 9). D2 validates the committed file and asserts its negative cases against fixtures; D14 reads it. No other unit creates it.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-21 — The example manifest carries every module id with its visibility
+- **Amends:** "#### `gremion.dist.json` (private) and `gremion.dist.example.json` (kernel)" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)"; the adopted answer cites "spec D §4 D.1.1", but the sentence it replaces is at spec D l.374 in this §2 schema block)
+- **Raised by:** D16-handover-visibility-record
+- **Gap:** Spec D:374 says the example manifest names only public modules, while D16's guard must read a `visibility: private` set out of it.
+- **Binding answer:** "gremion.dist.example.json carries an entry for every module id with its visibility; private entries carry repo: null and ref: null." That wording **replaces** spec D l.374's "names only public modules and only in-kernel verticals" sentence. It ships that way; D16's docs-lint guard compares `CONTRIBUTING.md`'s private list against those entries.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-22 — Handover's visibility (operator decision)
+- **Amends:** "### D.3 Handover" (chapter "Scope, the module SDK, the types reconcile, licence trigger, handover")
+- **Raised by:** D16-handover-visibility-record
+- **Gap:** The operator half — the standalone dated decision re-opening handover's visibility (D-01) — has no date and no outcome.
+- **Binding answer:** The standalone dated decision on handover's visibility is the operator's to take and to date. Until it is taken, the state below is the state, and `D16-handover-visibility-record` task .4 files the record of that state and marks the decision open.
+- **Status:** operator decision pending (default in force: handover stays private, no repo, block 1900–1999 reserved and empty, `CONTRIBUTING.md` names it as the one private module with no service)
+- **Consistency:** none
+
+### AM-D-23 — The shared schema validator, for the dist manifest
+- **Amends:** "#### D.1.2 `module.json` verification" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units"; the "exactly one validator" sentence)
+- **Raised by:** D14-gremion-dist-repo
+- **Gap:** The exact export name and specifier of D2's shared validator is not written in spec D.
+- **Binding answer:** The dist manifest is validated by `validateDistManifest(obj): string[]` from `civitas/scripts/validate-module-schemas.mjs`, owned by `D2-module-json-and-dist-schema`, alongside `validateModuleJson(obj, ctx)`, `validateVerticalJson(obj, ctx)`, `validateRangesJson` and `validateAll` (empty array = valid); CLI `node scripts/validate-module-schemas.mjs [--modules DIR] [--ranges FILE] [--verticals DIR] [--dist FILE]`, exit 1 on any problem including the vacuity problem. The `@gremion/module-sdk/validate` subpath is superseded.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-24 — Who creates `civitas/gremion.dist.example.json`, by unit id
+- **Amends:** "#### `gremion.dist.json` (private) and `gremion.dist.example.json` (kernel)" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)")
+- **Raised by:** D14-gremion-dist-repo
+- **Gap:** No unit's registry row says by name who creates `civitas/gremion.dist.example.json`. (Same answer as AM-D-10, raised independently.)
+- **Binding answer:** `D16-handover-visibility-record` (wave 7) creates `civitas/gremion.dist.example.json`; it lands before D2 (wave 8) and D14 (wave 9). D2 validates the committed file and asserts its negative cases against fixtures; D14 reads it. No other unit creates it.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-25 — Exactly one dated provenance reference to the holding repo
+- **Amends:** "### Archiving (D11)" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving")
+- **Raised by:** D11-archive-holding-repo-and-stura-tree
+- **Gap:** Is "no spec-B/D artefact references civitas-modules" literally zero occurrences, or "nothing depends on it"?
+- **Binding answer:** Read it as "nothing depends on it": exactly one dated provenance reference is allowed — `source.repo` and `source.commit` in `civitas/gremion-ui/migrations/ownership-harvest.json` — and both tokens are forbidden everywhere else. D11's row carries that exemption sentence so the guard's allow-list is spec-backed.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-26 — §T11 is `civitas/KNOWN_ISSUES.md:122`, and B1b writes the closed record
+- **Amends:** "### Archiving (D11)" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving"; the "Kept as origin story" line at l.493)
+- **Raised by:** D11-archive-holding-repo-and-stura-tree
+- **Gap:** Spec D's "Kept as origin story: KNOWN_ISSUES.md (including §T11)" — §T11 is in `civitas/KNOWN_ISSUES.md`, not StuRaOS's.
+- **Binding answer:** §T11 is at `civitas/KNOWN_ISSUES.md:122` and absent from `StuRaOS/KNOWN_ISSUES.md` (verified). The StuRa file is left untouched, and D11's "Kept as origin story" line names `civitas/KNOWN_ISSUES.md`. Ownership is split: `B0-spec-docs-and-waiver-ledger` inserts the pointer block (asserted by `test/host/spec-docs.bats`), and `B1b-theme-rename-and-hygiene-guard` task .6c replaces the section with the **closed record**, preserving B0's pointer lines verbatim.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-27 — The archive flip on two repos (operator decision)
+- **Amends:** "### Archiving (D11)" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving")
+- **Raised by:** D11-archive-holding-repo-and-stura-tree
+- **Gap:** The archive flip in D11 task .4 is an irreversible outward-facing GitHub state change on two repos.
+- **Binding answer:** Archiving `Hello-N00del/gremion-modules` and `Hello-N00del/StuRaOS` read-only is irreversible and outward-facing, and is the operator's to run at the gate. The item is added to `registry.json`'s `operator_items` list.
+- **Status:** operator decision pending (default in force: task .4 prints the exact `gh repo archive` commands and stops; the plan archives nothing)
+- **Consistency:** none
+
+### AM-D-28 — Per-leaf Postgres credential keys are B14's
+- **Amends:** "#### D.1.4 Compose fragment inlining (B-07)" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units")
+- **Raised by:** D13-compose-fragment-inlining
+- **Gap:** `state.env.tmpl` declares no per-leaf Postgres credential keys while state-tier fragment blocks reference `${<LEAF>_PG_USER}` / `${<LEAF>_PG_PASSWORD}`; spec B names no owner.
+- **Binding answer:** Ownership is `B14-two-project-split`'s — it owns every env-template key and its coverage cross-check. `<LEAF>_PG_USER` and `<LEAF>_PG_PASSWORD` are declared in B14's `state.env.tmpl` change (wave 7); `D13-compose-fragment-inlining` (wave 17) only asserts them through the render guard.
+- **Status:** adopted (conservative option)
+- **Consistency:** none (it mirrors seam S15, which likewise places `INTERNAL_<LEAF>_SECRET` in the env templates with B14)
+
+### AM-D-29 — D9's export shape, as D13's wire-in reads it
+- **Amends:** "#### D.1.1 Manifest source and module clone" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units")
+- **Raised by:** D13-compose-fragment-inlining
+- **Gap:** Task 6's wire-in assumes D9 exposes `resolveModules()` and an `outDir`; a different export shape moves the call site. (Same answer as AM-D-18, raised independently.)
+- **Binding answer:** `D9-assembler-module-resolution` exports `resolveModules(manifest) => [{ id, order, dir, moduleJson }]` and an `outDir` option from `civitas/scripts/assemble.mjs`. Those names are pinned in D9's task list; D10 and D13 import them and change nothing else.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-30 — `Role.Finance` and `Role.Auditor` are restored kernel-side, in the SDK enum
+- **Amends:** "#### D.1.3 Registry contracts and composition seams" (chapter "Scope, the module SDK, the types reconcile, licence trigger, handover")
+- **Raised by:** D5a-newsletter-profile-gate
+- **Gap:** The kernel `Role` enum has no `Finance`, which newsletter's manifest uses; whether the finance-scoped Role travels with finance or is restored kernel-side is unsettled.
+- **Binding answer:** Restore it kernel-side — a module repo cannot extend a TypeScript enum. `D1-module-sdk-package` (wave 6) ships `Role.Finance = 'finance'` and `Role.Auditor` in the SDK enum with the `ROLE_HIERARCHY` rows of `StuRaOS/gremion-ui/src/lib/auth/index.ts:8-13`. `D5a-newsletter-profile-gate` (wave 9) then uses `Role.Finance` directly.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-31 — Pre-cut overlays live at `civitas/extraction/<module>/`
+- **Amends:** "### Creation from git index blobs (D-03, F2)" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)")
+- **Raised by:** D5a-newsletter-profile-gate
+- **Gap:** Spec D names no kernel location for an artefact deliberately changed before its module repo is cut.
+- **Binding answer:** Use `civitas/extraction/newsletter/`. The path and its post-change source SHA are recorded in `extraction-map.json` and handed to D5's split driver (`civitas/scripts/split/extract-module.mjs`), so D5 extracts the overlay rather than the `f276af59` bytes and the profile gate survives the cut.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-32 — `ranges.json`'s path is kernel-relative
+- **Amends:** "#### `migrations/ranges.json` — kernel, beside `gremion-ui/migrations/manifest.json`" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)"; together with the bare `migrations/ranges.json` forms the adopted answer cites as "spec D §1 D.1.2/D.1.7")
+- **Raised by:** D15-oss-artefact-guard
+- **Gap:** `ranges.json`'s path is ambiguous in spec D: "beside `gremion-ui/migrations/manifest.json`" vs the bare `migrations/ranges.json`.
+- **Binding answer:** The path is `civitas/gremion-ui/migrations/ranges.json` — spec B §5 fixes it: "Both live at gremion-ui/migrations/ in the kernel and both are committed." `--ranges` is kept and that path is named in the `release.yml` step. Spec D's bare form becomes the kernel-relative one.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-33 — `verticals/` ships inside the gremion-ui image
+- **Amends:** "### The StuRa vertical (D8, D-02)" (chapter "Per-module extraction, the StuRa vertical, news, compose fragments, interim leaf images, archiving")
+- **Raised by:** D15-oss-artefact-guard
+- **Gap:** Whether `verticals/` ships inside the gremion-ui image at all is undecided, so the image-side private-vertical check may be permanently vacuous.
+- **Binding answer:** `civitas/gremion-ui/Dockerfile` copies only `gremion-ui/**`, `LICENSE` and `NOTICE` (verified `:12-21,50`). `D8-stura-vertical` adds `COPY verticals ./verticals/` so the interim `tenant-create` resolves a vertical at runtime; `D15-oss-artefact-guard` then asserts the private-vertical clause against both the release tree and the image.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-34 — The shared schema validator, for the per-repo `validate-module-json` job
+- **Amends:** "#### D.1.2 `module.json` verification" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units"; the "exactly one validator" sentence, consumed by the `validate-module-json` row of "#### Per-repo CI (`.github/workflows/ci.yml`)")
+- **Raised by:** D12-module-repo-ci-and-dependabot-template
+- **Gap:** Spec D names "the SDK's validator" but fixes neither an export name nor a CLI path for the `validate-module-json` job.
+- **Binding answer:** The job runs `node scripts/validate-module-schemas.mjs [--modules DIR] [--ranges FILE] [--verticals DIR] [--dist FILE]` from `civitas/scripts/validate-module-schemas.mjs`, owner `D2-module-json-and-dist-schema`, exit 1 on any problem including the vacuity problem; the module exports `validateModuleJson(obj, ctx): string[]`, `validateDistManifest(obj): string[]`, `validateVerticalJson(obj, ctx): string[]`, `validateRangesJson` and `validateAll` (empty array = valid). The `@gremion/module-sdk/validate` subpath and `packages/module-sdk/bin/validate-module-json.mjs` are superseded.
+- **Status:** adopted (conservative option)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-35 — The boundary-lint vacuity comparison is qualified to `.ts` and `.sql`
+- **Amends:** "#### Per-repo CI (`.github/workflows/ci.yml`)" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)"; the `boundary-lint` row's vacuity guard)
+- **Raised by:** D12-module-repo-ci-and-dependabot-template
+- **Gap:** Spec D's boundary-lint vacuity rule reads "scanned-file count ≥ tracked `app/` file count" unqualified, but `app/` also tracks `.json` and `.md`.
+- **Binding answer:** Compare against tracked `app/` files ending `.ts` or `.sql` only — `boundary-lint.ts:92` and `:105` read exactly those two extensions and never `.svelte`. §2's unqualified wording takes that qualified form.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-36 — The CI-only root manifest tracks the kernel's dev dependency versions
+- **Amends:** "#### Per-repo CI (`.github/workflows/ci.yml`)" (chapter "Module repo shape, creation from index blobs, per-repo CI, schemas (module.json, ranges, dist manifest, vertical)")
+- **Raised by:** D12-module-repo-ci-and-dependabot-template
+- **Gap:** The CI-only root manifest pins vitest/tsx/typescript versions that must track the kernel's, with no mechanism fixed to keep them in step.
+- **Binding answer:** A CI step asserts that every version in `.github/ci/package.ci.json` equals the kernel's `devDependencies` value read from `.kernel/package.json` at `module.json.kernelRef`; drift then fails the job. §2's per-repo CI section carries that mechanism sentence.
+- **Status:** adopted (conservative option)
+- **Consistency:** none
+
+### AM-D-37 — The G-D14 split, mirrored from AM-B-20
+- **Amends:** "### D.3 Guard register — spec D" (chapter "Assembler module and vertical resolution, fragment inlining, OSS artefact guard, guards, acceptance, D units"; the G-D14 row)
+- **Raised by:** B35-release-supply-chain (mirror of AM-B-20)
+- **Gap:** G-D14 reads as `D15-oss-artefact-guard`'s guard alone while spec B §E reads as `B35-release-supply-chain`'s alone; one guard cannot have two sole owners.
+- **Binding answer:** The G-D14 row splits: `B35-release-supply-chain` owns the **release-tree half** (recorded in spec B §E, where it authors `check-oss-purity.mjs` — private-path refusal plus an independent vacuity count — because it owns the two build passes) and `D15-oss-artefact-guard` owns the **artefact half** (this row: the public-module presence check and the `gremion-public-oss` variant question). Neither register reads as sole owner.
+- **Status:** adopted (orchestrator resolution)
+- **Consistency:** resolved — see Resolutions
+
+### AM-D-38 — The worker-safety helper's full signature, mirrored from AM-B-30
+- **Amends:** "#### D.1.5 The worker-safety test helper (B-15)" (chapter "Scope, the module SDK, the types reconcile, licence trigger, handover")
+- **Raised by:** D1-module-sdk-package (mirror of AM-B-30)
+- **Gap:** D.1.5 ships `assertExactlyOnceUnderTwoColours(job, {claim, sideEffect})`; a two-field options object cannot carry the job across the process boundary D.1.5 itself requires.
+- **Binding answer:** The signature is `assertExactlyOnceUnderTwoColours(job, { module, exportName, claim, sideEffect, databaseUrl, expected?, colours? })`, returning `{ colours: [string, string]; sideEffectCount: number }`, exported from `@gremion/module-sdk/testing`; `module` is an `import.meta.url`. D.1.5's two-field options form is superseded, and spec B §4 (l.854) carries the same signature as AM-B-30.
+- **Status:** adopted (orchestrator resolution)
+- **Consistency:** resolved — see Resolutions
