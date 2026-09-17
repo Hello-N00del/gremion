@@ -638,6 +638,44 @@ EOF
     [[ "$output" == *"6b=BLOCKED"* ]]
 }
 
+# The registry post-condition of B2-realm-smtp-block: with the REAL release
+# tree staged, assert 6b no longer stops at the smtpServer grep
+# (gremion-mail-bringup:633-635). It advances to the kcadm dispatch.
+@test "assert 6b clears the smtpServer gate when the real release tree is staged (B2)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
+       "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
+    grep -q '"smtpServer"' "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password \
+        run "$BRINGUP" --assert 6b
+    [[ "$output" != *"BLOCKED: keycloak realm export has no smtpServer block"* ]] \
+        || { echo "$output"; return 1; }
+}
+
+@test "assert 6b dispatches the reset mail and passes on pasted dkim/spf/dmarc headers (B2)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
+       "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
+    # kcadm: config credentials succeeds, `get users` yields one id, the
+    # execute-actions-email update succeeds.
+    shim docker '
+case " $* " in
+  *" get users "*) printf "0d1f2e3a-0000-4000-8000-000000000001\n"; exit 0 ;;
+esac
+exit 0'
+    cat > "${GREMION_ROOT}/results.txt" <<EOF
+Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass; dmarc=pass
+Received: from mail.example.org (mail.example.org [203.0.113.25])
+EOF
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password \
+        run "$BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 0 ] || { echo "status=${status}"; echo "$output"; return 1; }
+    [[ "$output" == *"Keycloak reset mail dispatched"* ]]
+    [[ "$output" == *"dkim=pass spf=pass dmarc=pass from 203.0.113.25"* ]]
+}
+
 @test "MX-PUBLICATION stays HOLD while any assert is not ok" {
     # The one guard that, if it lied, would publish the MX before the box is
     # provably safe. Drilled RED in Step 19.
