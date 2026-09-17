@@ -1,6 +1,7 @@
 // P2.1c (T10) — KC Admin-API helper unit tests (mocked transport, no network).
 import { describe, it, expect } from 'vitest'
 import { KcProvisionApi, type KcTransport } from './kc-admin-api'
+import { smtpServerBlock } from './realm-doc'
 
 /** A scriptable transport: maps `${method} ${path}` to a response body. */
 function fakeTransport(routes: Record<string, unknown>): {
@@ -290,5 +291,30 @@ describe('KcProvisionApi.configureStepupFlow (ported §4-2, idempotent)', () => 
         (c) => c.method === 'POST' && c.path === '/admin/realms/verein/clients/uuid-ui/protocol-mappers/models',
       ),
     ).toBe(true)
+  })
+})
+
+describe('updateRealmSmtp — the gremion#6 delta for an ALREADY-CREATED realm (never a re-import)', () => {
+  it('PUTs the realm rep with only realm + smtpServer, on the realm-scoped path', async () => {
+    const calls: Array<{ method: string; path: string; body?: unknown }> = []
+    const api = new KcProvisionApi(async (method, path, body) => {
+      calls.push({ method, path, body })
+      return undefined
+    })
+    const block = smtpServerBlock({
+      host: 'mail.example.org', port: 587, from: 'no-reply@example.org',
+      user: 'platform@example.org', password: 'pw',
+    })
+    await api.updateRealmSmtp('verein', block)
+    expect(calls).toEqual([
+      { method: 'PUT', path: '/admin/realms/verein', body: { realm: 'verein', smtpServer: block } },
+    ])
+  })
+
+  it('encodes the realm segment like every other realm-scoped call', async () => {
+    const calls: string[] = []
+    const api = new KcProvisionApi(async (_m, path) => { calls.push(path); return undefined })
+    await api.updateRealmSmtp('a b', { host: 'mail.example.org' })
+    expect(calls[0]).toBe('/admin/realms/a%20b')
   })
 })

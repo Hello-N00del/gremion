@@ -30,6 +30,7 @@ import {
   issuerForTenant,
   kcInternalForTenant,
   PROVISIONER_SECRET_CLIENTS,
+  smtpServerBlock,
   type RealmSmtpSettings,
 } from './realm-doc'
 import type { ModuleManifest } from '$lib/modules/types'
@@ -67,7 +68,11 @@ export interface ProvisionDbExecutor {
 /** The KC Admin-API surface the pipeline needs (KcProvisionApi subset). */
 export type ProvisionKc = Pick<
   KcProvisionApi,
-  'realmExists' | 'createRealm' | 'configureStepupFlow' | 'assignServiceAccountRealmRoles'
+  | 'realmExists'
+  | 'createRealm'
+  | 'configureStepupFlow'
+  | 'assignServiceAccountRealmRoles'
+  | 'updateRealmSmtp'
 >
 
 /** The registry surface the pipeline needs (real registry.ts fns, or mocks). */
@@ -306,6 +311,11 @@ export async function provisionTenant(
         })
         const res = await deps.kc.createRealm(realmDoc as Record<string, unknown>)
         realmCreated = !res.alreadyExisted
+      } else {
+        // gremion#6: the realm predates this block (or a previous run created
+        // it). Apply the SMTP settings as an Admin-API delta — spec A §H forbids
+        // a re-import here.
+        await deps.kc.updateRealmSmtp(realmName, smtpServerBlock(deps.platformSmtp))
       }
       // (5) step-up contract apply (idempotent; drift-proof even on fresh import).
       await deps.kc.configureStepupFlow(realmName)
