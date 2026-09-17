@@ -70,11 +70,16 @@ HOST_LITERAL_NAMES=(
 # Extended regular expressions, matched case-insensitively, backslash-free.
 # The [:space:] exclusion in host-inventory-name is deliberate: without it the
 # pattern matches the phrase "Gremion production" in ordinary prose and the
-# guard would have shipped with a false positive on day one.
+# guard would have shipped with a false positive on day one. The trailing
+# ([^a-z]|$) closes the token on the right: without it "prod" also matches as
+# the prefix of "production", and AM-B-05's binding contract key
+# GREMION_PRODUCTION_STACK (spec B) is a legitimate env-key name, not the
+# host's inventory name -- only the bare separator-joined token (see the
+# sample below) is the literal this rule hunts.
 HOST_LITERAL_PATTERNS=(
   '159''[^0-9]{0,2}''195''[^0-9]'
   '2a0a''[^0-9a-z]{0,2}''4cc0'
-  'gremion''[^a-z0-9[:space:]]{1,2}''prod'
+  'gremion''[^a-z0-9[:space:]]{1,2}''prod''([^a-z]|$)'
   'quick''srv'
   'rs1''[^a-z0-9]{0,2}''gremion''[^a-z0-9]{0,2}''de'
   'in''wx'
