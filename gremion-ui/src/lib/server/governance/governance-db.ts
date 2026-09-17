@@ -1,4 +1,6 @@
 import { getDb } from '../db'
+import { getRunner, type PgTransaction } from '$lib/server/db/tx'
+import { writeAuditEntry } from '$lib/server/audit-db'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -23,13 +25,17 @@ export interface RoleAssignment {
   readonly created_at: Date
 }
 
+/** Every way a mandate can END. 'recalled' is migration 056's widened member
+ *  (#320 INV-3): a recall is an attributable act, not an expiry. */
+export type ArchiveReason = 'expired' | 'resigned' | 'removed' | 'recalled'
+
 export interface RoleAssignmentHistory {
   readonly id: string
   readonly role_id: string
   readonly user_keycloak_id: string | null // nullable: NULL after GDPR hard erasure (migration 012)
   readonly start_date: Date
   readonly end_date: Date
-  readonly ended_reason: 'expired' | 'resigned' | 'removed'
+  readonly ended_reason: ArchiveReason
   readonly created_at: Date
 }
 
@@ -101,15 +107,29 @@ export async function createAssignment(data: {
   return rows[0]!
 }
 
+/** Thrown when an assignment cannot be archived because role_assignment_history
+ *  requires concrete dates the live row does not carry. A TYPED error so a route
+ *  can map it to a clean 409 instead of a 500 on a bare Error's text. */
+export class UnarchivableAssignmentError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnarchivableAssignmentError'
+  }
+}
+
 export async function archiveAssignment(
   assignment: RoleAssignment,
-  reason: 'expired' | 'resigned' | 'removed'
+  reason: ArchiveReason,
+  tx?: PgTransaction,
 ): Promise<void> {
-  // role_assignments allows null dates since migration 010; role_assignment_history still requires concrete dates (NOT NULL from migration 001)
+  // role_assignments allows null dates since migration 010; role_assignment_history
+  // still requires concrete dates (NOT NULL from migration 001).
   if (assignment.start_date === null || assignment.end_date === null) {
-    throw new Error(`Cannot archive assignment ${assignment.id}: start_date or end_date is null`)
+    throw new UnarchivableAssignmentError(
+      `Cannot archive assignment ${assignment.id}: start_date or end_date is null`,
+    )
   }
-  const sql = getDb()
+  const sql = getRunner(tx, getDb)
   await sql`
     INSERT INTO role_assignment_history
       (role_id, user_keycloak_id, start_date, end_date, ended_reason)
@@ -118,6 +138,45 @@ export async function archiveAssignment(
        ${assignment.start_date}, ${assignment.end_date}, ${reason})
   `
   await sql`DELETE FROM role_assignments WHERE id = ${assignment.id}`
+}
+
+/** Every DISTINCT committee-role name defined anywhere — the auto-managed group
+ *  UNIVERSE for role-group-reconcile.ts. */
+export async function listAllRoleNames(): Promise<readonly string[]> {
+  const rows = await getDb()<{ name: string }[]>`SELECT DISTINCT name FROM committee_roles`
+  return rows.map((r) => r.name)
+}
+
+/** The role names one user still holds ACTIVE (active|grace) across all committees. */
+export async function listActiveRoleNamesForUser(userKeycloakId: string): Promise<readonly string[]> {
+  const rows = await getDb()<{ name: string }[]>`
+    SELECT cr.name
+    FROM role_assignments ra
+    JOIN committee_roles cr ON cr.id = ra.role_id
+    WHERE ra.user_keycloak_id = ${userKeycloakId}
+      AND ra.status IN ('active', 'grace')
+  `
+  return rows.map((r) => r.name)
+}
+
+/** INV-3 recall: archive as 'recalled' and append the audit act in ONE transaction. */
+export async function revokeMandate(
+  assignment: RoleAssignment,
+  reason: string,
+  revokedBy: string,
+): Promise<void> {
+  await getDb().begin(async (tx) => {
+    await archiveAssignment(assignment, 'recalled', tx)
+    await writeAuditEntry(
+      {
+        userId: revokedBy,
+        field: 'mandate.revoked',
+        oldValue: null,
+        newValue: JSON.stringify({ assignmentId: assignment.id, reason, revokedBy }),
+      },
+      tx,
+    )
+  })
 }
 
 export async function listDueNotifications(): Promise<readonly ScheduledNotification[]> {
