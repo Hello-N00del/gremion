@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -88,5 +88,62 @@ describe('058 public-reader grants', () => {
       expect(creator, `no migration creates ${table}`).toBeGreaterThanOrEqual(0)
       expect(creator, `${table} is created after 058`).toBeLessThan(i058)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 058 turned a silent skip into a hard prerequisite. A prerequisite is only as
+// good as the provisioning that satisfies it: before this guard, ONLY
+// docker/postgres/init-databases.sh created gremion_public_reader, and only when
+// PUBLIC_DB_PASSWORD happened to be set. The K8s ConfigMap -- which
+// init-databases.sh:7-11 declares its mandatory mirror, and which 058's own
+// abort message sends the operator to -- created keycloak, gremion and control
+// and nothing else, so every K8s-provisioned kernel aborted the WHOLE data-plane
+// chain at boot with a remediation pointing at a file that did not implement it.
+// ---------------------------------------------------------------------------
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
+const readRepo = (f: string) => readFileSync(join(REPO_ROOT, f), 'utf-8')
+
+const PROVISIONING_PATHS = [
+  'docker/postgres/init-databases.sh',
+  'k8s/base/postgres/configmap.yaml',
+]
+
+describe('058 prerequisite: every shipped path provisions gremion_public_reader', () => {
+  it.each(PROVISIONING_PATHS)('%s creates the role', (path) => {
+    expect(readRepo(path)).toMatch(/CREATE ROLE gremion_public_reader/)
+  })
+
+  it.each(PROVISIONING_PATHS)('%s aborts when PUBLIC_DB_PASSWORD is unset', (path) => {
+    const text = readRepo(path)
+    // The `${VAR:?message}` form, because it is fatal under both bash and the
+    // busybox sh the K8s init container runs (statefulset.yaml:34), and because
+    // it is one greppable shape rather than two hand-rolled if/exit branches.
+    expect(text, `${path} must refuse to continue without PUBLIC_DB_PASSWORD`).toMatch(
+      /\$\{PUBLIC_DB_PASSWORD:\?/,
+    )
+    // The precise shape 058 exists to delete, one layer down: provision nothing,
+    // say so in a log line nobody reads, exit 0. A skip here does not degrade the
+    // portal -- it stops the tenant migrating at all, one layer from the cause.
+    const skips = text
+      .split('\n')
+      .filter((l) => /skip/i.test(l) && /gremion_public_reader|PUBLIC_DB_PASSWORD/.test(l))
+    expect(skips, `${path} still has a skip-and-continue branch`).toEqual([])
+  })
+
+  it('every repo path 058 names is a path this repo actually has', () => {
+    // The same defect class as the STURA_PUBLIC_DB_URL wording above: a
+    // remediation that names a file the kernel does not ship sends the operator
+    // nowhere. Only `dir/name.ext` tokens are read -- bare basenames like `db.ts`
+    // are prose cross-references, not instructions.
+    const text = read('058_public_reader_grants.sql')
+    const paths = [
+      ...new Set(text.match(/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+\.(?:sh|ya?ml|ts|sql|json)/g) ?? []),
+    ]
+    expect(paths.length, 'precondition: 058 names at least one repo path').toBeGreaterThan(0)
+    const missing = paths.filter(
+      (rel) => !existsSync(join(REPO_ROOT, rel)) && !existsSync(join(REPO_ROOT, 'gremion-ui', rel)),
+    )
+    expect(missing, '058 names paths that do not exist in this repo').toEqual([])
   })
 })
