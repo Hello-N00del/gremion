@@ -90,6 +90,9 @@ function harness(opts: { realmFailsOnce?: boolean; multi?: boolean } = {}) {
       }),
       configureStepupFlow: vi.fn(async () => {}),
       assignServiceAccountRealmRoles: vi.fn(async () => {}),
+      // Part of ProvisionKc since gremion#6, and applied on EVERY pass — the
+      // `as never` below is what let the harness omit it.
+      updateRealmSmtp: vi.fn(async () => {}),
     } as never,
     registry: {
       getTenantBySlug: async (slug) => (rows.has(slug) ? ({ ...rows.get(slug)! } as never) : null),
@@ -350,5 +353,38 @@ describe('provisionTenant — gremion#6 SMTP delta on the already-exists branch'
     await provisionTenant(args, h.deps)
     expect(h.deps.kc.createRealm).not.toHaveBeenCalled()
     expect(updateRealmSmtp).toHaveBeenCalledWith('verein', smtpServerBlock(h.deps.platformSmtp))
+  })
+
+  it('re-stamps the platform SMTP block even when the realm ledger already says ok', async () => {
+    // The delta used to sit under `if (ledger.realm !== 'ok')`, so a tenant
+    // whose realm was provisioned before gremion#6 was never reached at all,
+    // and a realm whose smtpServer had been repointed away (the tenant's own
+    // gremion-admin SA holds realm-admin on it) stayed repointed forever.
+    // Re-stamping on every pass is what makes that drift, not a one-way door.
+    const h = harness()
+    const updateRealmSmtp = vi.fn(async () => {})
+    ;(h.deps.kc as any).updateRealmSmtp = updateRealmSmtp
+    await provisionTenant(args, h.deps)
+    updateRealmSmtp.mockClear()
+    ;(h.deps.kc.createRealm as any).mockClear()
+    await provisionTenant(args, h.deps)
+    expect(h.deps.kc.createRealm).not.toHaveBeenCalled()
+    expect(updateRealmSmtp).toHaveBeenCalledWith('verein', smtpServerBlock(h.deps.platformSmtp))
+  })
+
+  it('refuses to PUT a blank smtpServer onto a live realm', async () => {
+    // The create path is fail-closed by assertSmtpConfiguredForEmailLogin; the
+    // delta path validated only the PORT, so a misassembled platformSmtp could
+    // blank the sender of a LIVE realm and lock every user of that tenant out
+    // — the exact failure the create-path guard exists to prevent.
+    const h = harness()
+    const updateRealmSmtp = vi.fn(async () => {})
+    ;(h.deps.kc as any).updateRealmSmtp = updateRealmSmtp
+    h.deps.kc.realmExists = async () => true
+    h.deps.platformSmtp = { ...h.deps.platformSmtp, host: '', user: '' }
+    await expect(provisionTenant(args, h.deps)).rejects.toThrow(
+      /platform SMTP settings are unset/,
+    )
+    expect(updateRealmSmtp).not.toHaveBeenCalled()
   })
 })
