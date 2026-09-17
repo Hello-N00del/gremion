@@ -21,7 +21,7 @@ const CONTENT_SECRET = 'content-secret-32-bytes-of-padxxxx'
 vi.mock('$env/dynamic/private', () => ({
   env: {
     TENANT_PROXY_SHARED_SECRET: PROXY_SECRET,
-    PUBLIC_BASE_URL: 'https://sturaos.com',
+    PUBLIC_BASE_URL: 'https://gremion.example',
   },
 }))
 
@@ -42,16 +42,16 @@ const MUSTERSTADT: Ctx = {
 const DEFAULT: Ctx = {
   id: 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb',
   slug: 'default',
-  primaryHost: 'sturaos.com',
+  primaryHost: 'gremion.example',
 }
 /**
- * The trap: this tenant registered `rat-musterstadt.sturaos.com`, precisely the
+ * The trap: this tenant registered `rat-musterstadt.gremion.example`, precisely the
  * string a pre-D1 leaf synthesises as `<slug>.<apex>` for MUSTERSTADT.
  */
 const SQUATTER: Ctx = {
   id: 'cccccccc-3333-4333-8333-cccccccccccc',
   slug: 'squatter',
-  primaryHost: 'rat-musterstadt.sturaos.com',
+  primaryHost: 'rat-musterstadt.gremion.example',
 }
 /** Known to the control plane but not active (suspended / tombstoned). */
 const INACTIVE_ID = 'dddddddd-4444-4444-8444-dddddddddddd'
@@ -61,10 +61,10 @@ const INACTIVE_ID = 'dddddddd-4444-4444-8444-dddddddddddd'
  * leftmost label of `x-forwarded-host` and calls `resolveTenantBySlug`
  * (`resolve.ts:186-188`). `B10-resolver-fullhost` is the unit that replaces it
  * with `resolveTenantByHost`. So the fixture is keyed on the leftmost label of
- * the SAME hostnames, and the trap survives intact: `rat-musterstadt.sturaos.com`
+ * the SAME hostnames, and the trap survives intact: `rat-musterstadt.gremion.example`
  * — the string a pre-D1 leaf synthesises as `<slug>.<apex>` for MUSTERSTADT —
  * has leftmost label `rat-musterstadt`, which is registered to SQUATTER.
- * MUSTERSTADT's own `rat-musterstadt.de` and DEFAULT's `sturaos.com` are 2-label
+ * MUSTERSTADT's own `rat-musterstadt.de` and DEFAULT's `gremion.example` are 2-label
  * hosts the leftmost-label rule cannot serve at all, which is precisely why the
  * id path has to exist.
  */
@@ -199,7 +199,7 @@ describe('a host the leaf may still be carrying is NOT an input', () => {
     const oldLeaf = {
       ...newLeaf(MUSTERSTADT),
       'x-proxy-trust': PROXY_SECRET,
-      'x-forwarded-host': `${MUSTERSTADT.slug}.sturaos.com`,
+      'x-forwarded-host': `${MUSTERSTADT.slug}.gremion.example`,
     }
     // The trap is live: the synthesised host's leftmost label IS the slug, and
     // that label is registered to SQUATTER.

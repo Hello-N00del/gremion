@@ -15,22 +15,22 @@ describe('normaliseHost — accepts', () => {
   })
   it('a multi-label host unchanged (no leftmost-label arithmetic remains)', () => {
     expect(normaliseHost('www.rat-musterstadt.de')).toBe('www.rat-musterstadt.de')
-    expect(normaliseHost('demo.sturaos.com')).toBe('demo.sturaos.com')
+    expect(normaliseHost('demo.gremion.example')).toBe('demo.gremion.example')
   })
   it('lowercases (the DB CHECK stores host = lower(host))', () => {
-    expect(normaliseHost('STURAOS.COM')).toBe('sturaos.com')
-    expect(normaliseHost('Demo.SturaOS.com')).toBe('demo.sturaos.com')
+    expect(normaliseHost('GREMION.EXAMPLE')).toBe('gremion.example')
+    expect(normaliseHost('Demo.Gremion.Example')).toBe('demo.gremion.example')
   })
   it('strips a numeric port', () => {
-    expect(normaliseHost('sturaos.com:443')).toBe('sturaos.com')
+    expect(normaliseHost('gremion.example:443')).toBe('gremion.example')
     expect(normaliseHost('localhost:4001')).toBe('localhost')
   })
   it('strips exactly ONE trailing FQDN root dot', () => {
-    expect(normaliseHost('sturaos.com.')).toBe('sturaos.com')
+    expect(normaliseHost('gremion.example.')).toBe('gremion.example')
   })
   it('trims surrounding whitespace before parsing', () => {
-    expect(normaliseHost('  sturaos.com  ')).toBe('sturaos.com')
-    expect(normaliseHost('sturaos.com\r\n')).toBe('sturaos.com')
+    expect(normaliseHost('  gremion.example  ')).toBe('gremion.example')
+    expect(normaliseHost('gremion.example\r\n')).toBe('gremion.example')
   })
   it('accepts a punycode A-label IDN (what the edge actually sends)', () => {
     expect(normaliseHost('xn--bcher-kva.example')).toBe('xn--bcher-kva.example')
@@ -61,20 +61,20 @@ describe('normaliseHost — rejects (fail closed)', () => {
   // comma-separated value. Taking the first (client-most) element would let an
   // attacker-supplied host win over the trusted hop's appended one.
   it('a comma-joined multi-value header', () => {
-    expect(normaliseHost('evil.example, sturaos.com')).toBeNull()
-    expect(normaliseHost('sturaos.com,evil.example')).toBeNull()
-    expect(normaliseHost('sturaos.com,')).toBeNull()
+    expect(normaliseHost('evil.example, gremion.example')).toBeNull()
+    expect(normaliseHost('gremion.example,evil.example')).toBeNull()
+    expect(normaliseHost('gremion.example,')).toBeNull()
   })
   it('an INNER-whitespace-joined multi-value header (trim only strips the ends)', () => {
-    expect(normaliseHost('evil.example sturaos.com')).toBeNull()
-    expect(normaliseHost('sturaos.com\tevil.example')).toBeNull()
-    expect(normaliseHost('sturaos.com\nevil.example')).toBeNull()
+    expect(normaliseHost('evil.example gremion.example')).toBeNull()
+    expect(normaliseHost('gremion.example\tevil.example')).toBeNull()
+    expect(normaliseHost('gremion.example\nevil.example')).toBeNull()
   })
 
   it('empty labels anywhere', () => {
-    expect(normaliseHost('sturaos..com')).toBeNull()
-    expect(normaliseHost('.sturaos.com')).toBeNull()
-    expect(normaliseHost('sturaos.com..')).toBeNull() // a SECOND trailing dot
+    expect(normaliseHost('gremion..com')).toBeNull()
+    expect(normaliseHost('.gremion.example')).toBeNull()
+    expect(normaliseHost('gremion.example..')).toBeNull() // a SECOND trailing dot
     expect(normaliseHost('.')).toBeNull()
     expect(normaliseHost('..')).toBeNull()
   })
@@ -90,17 +90,17 @@ describe('normaliseHost — rejects (fail closed)', () => {
     // Assert the fold really would have produced ASCII, so this test fails
     // loudly if the charset check is ever moved after toLowerCase().
     expect('\u212A'.toLowerCase()).toBe('k')
-    expect(normaliseHost('sturaos.com\u212A')).toBeNull() // KELVIN SIGN
-    expect(normaliseHost('\u0130sturaos.com')).toBeNull() // I WITH DOT ABOVE
+    expect(normaliseHost('gremion.example\u212A')).toBeNull() // KELVIN SIGN
+    expect(normaliseHost('\u0130gremion.example')).toBeNull() // I WITH DOT ABOVE
   })
 
   // The old split(':', 1)[0] accepted all of these and produced *something*.
   it('an ambiguous authority form (userinfo / non-numeric port / bare colon)', () => {
-    expect(normaliseHost('evil.example:80@sturaos.com')).toBeNull()
-    expect(normaliseHost('sturaos.com:')).toBeNull()
-    expect(normaliseHost('sturaos.com:https')).toBeNull()
-    expect(normaliseHost('sturaos.com:443:443')).toBeNull()
-    expect(normaliseHost('user@sturaos.com')).toBeNull()
+    expect(normaliseHost('evil.example:80@gremion.example')).toBeNull()
+    expect(normaliseHost('gremion.example:')).toBeNull()
+    expect(normaliseHost('gremion.example:https')).toBeNull()
+    expect(normaliseHost('gremion.example:443:443')).toBeNull()
+    expect(normaliseHost('user@gremion.example')).toBeNull()
   })
   it('an IPv6 literal (bracketed or bare)', () => {
     expect(normaliseHost('[::1]:443')).toBeNull()
@@ -108,17 +108,17 @@ describe('normaliseHost — rejects (fail closed)', () => {
     expect(normaliseHost('::1')).toBeNull()
   })
   it('a URL rather than a host', () => {
-    expect(normaliseHost('https://sturaos.com')).toBeNull()
-    expect(normaliseHost('sturaos.com/admin')).toBeNull()
+    expect(normaliseHost('https://gremion.example')).toBeNull()
+    expect(normaliseHost('gremion.example/admin')).toBeNull()
   })
   it('a wildcard or underscore label', () => {
-    expect(normaliseHost('*.sturaos.com')).toBeNull()
-    expect(normaliseHost('_acme-challenge.sturaos.com')).toBeNull()
+    expect(normaliseHost('*.gremion.example')).toBeNull()
+    expect(normaliseHost('_acme-challenge.gremion.example')).toBeNull()
   })
   it('non-whitespace control characters that survive trim()', () => {
-    expect(normaliseHost('stura\u0000os.com')).toBeNull() // NUL
-    expect(normaliseHost('sturaos.com\u0007')).toBeNull() // BEL
-    expect(normaliseHost('stura os.com')).toBeNull() // inner space
+    expect(normaliseHost('gremi\u0000on.example')).toBeNull() // NUL
+    expect(normaliseHost('gremion.example\u0007')).toBeNull() // BEL
+    expect(normaliseHost('gremi on.example')).toBeNull() // inner space
   })
   it('over-length hosts and labels', () => {
     expect(normaliseHost(`${'a'.repeat(64)}.example`)).toBeNull()
@@ -135,8 +135,8 @@ describe('normaliseHost — idempotence (read path and write path agree)', () =>
   // MUST be a fixed point, or a stored row could be permanently unreachable.
   it('normalising twice equals normalising once', () => {
     for (const raw of [
-      'STURAOS.COM.',
-      'Demo.SturaOS.com:443',
+      'GREMION.EXAMPLE.',
+      'Demo.Gremion.Example:443',
       '  xn--BCHER-kva.Example.  ',
       'rat-musterstadt.de',
       'localhost:5432',
@@ -151,7 +151,7 @@ describe('normaliseHost — idempotence (read path and write path agree)', () =>
   // Anything normaliseHost returns must satisfy it, or an addTenantDomain write
   // would fail at the constraint instead of at the guard.
   it('every accepted host satisfies the tenant_domain CHECK constraint', () => {
-    for (const raw of ['STURAOS.COM.', 'Demo.SturaOS.com:443', ' xn--BCHER-kva.Example ']) {
+    for (const raw of ['GREMION.EXAMPLE.', 'Demo.Gremion.Example:443', ' xn--BCHER-kva.Example ']) {
       const host = normaliseHost(raw)!
       expect(host).toBe(host.toLowerCase())
       expect(/[\s,]/.test(host)).toBe(false)
@@ -168,11 +168,11 @@ describe('normaliseHost — idempotence (read path and write path agree)', () =>
 // strip + lower + LDH/length filter) — verified by applying 004 to a real DB.
 describe('hostFromIssuer', () => {
   it('returns the issuer authority, normalised the same way the resolver reads a header', () => {
-    expect(hostFromIssuer('https://sturaos.com/auth/realms/sturaos')).toBe('sturaos.com')
+    expect(hostFromIssuer('https://gremion.example/auth/realms/gremion')).toBe('gremion.example')
     expect(hostFromIssuer('https://rat-musterstadt.de/auth/realms/must')).toBe('rat-musterstadt.de')
     expect(hostFromIssuer('https://Ported.Example:8443/auth/realms/x')).toBe('ported.example')
     expect(hostFromIssuer('https://xn--bcher-kva.example/auth/realms/uni')).toBe('xn--bcher-kva.example')
-    expect(hostFromIssuer('https://sturaos.com')).toBe('sturaos.com')
+    expect(hostFromIssuer('https://gremion.example')).toBe('gremion.example')
   })
 
   it('rejects every shape migration 004 skips — null is the only failure signal', () => {
@@ -194,8 +194,8 @@ describe('hostFromIssuer', () => {
 
   it('agrees with normaliseHost, so no issuer can imply an unmatchable host', () => {
     for (const iss of [
-      'https://sturaos.com/auth/realms/sturaos',
-      'https://Demo.SturaOS.com:443/auth/realms/demo',
+      'https://gremion.example/auth/realms/gremion',
+      'https://Demo.Gremion.Example:443/auth/realms/demo',
       'https://gremion.example.org/auth/realms/hs',
     ]) {
       const host = hostFromIssuer(iss)!
