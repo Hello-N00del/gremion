@@ -41,6 +41,105 @@ HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
 REBOOT_SETTLE_SECONDS="${REBOOT_SETTLE_SECONDS:-30}"
 GREMION_LEAVES="${GREMION_LEAVES:-content finance files votes messages newsletter calendar board vault}"
 
+# ── P4 waivers (spec B §1.4/§G) — READ FROM THE SIGNED LEDGER ────────────────
+# Six go-live-gate items are waived until the pilot. They are NOT proofs this
+# release passed, so they are never printed by ok(): each is printed as WAIVED
+# with its §L item number and the gate id it suspends, and lands in
+# last-verify.json as a third state alongside ok/failures. A waiver rendered as
+# OK is how a deployment bar gets read as a go-live gate.
+#
+# The table is READ, not carried: gremion-deploy checks a release out with
+# `git clone --depth 1 --branch <tag>` of the whole repository, so docs/ ships
+# with every release and there is only one copy to read. An absent ledger is a
+# hard failure, not an empty list: a release tree that cannot say what it did
+# not prove must not report green.
+#
+# WHICH copy, though, is not obvious, and getting it wrong once cost a host its
+# first deploy. gremion-deploy runs this program at step 9 (the new colour) and
+# step 11 (the public edge); `$ROOT/current` is moved onto the new release only
+# at step 12, and bootstrap.sh never creates it at all. Reading `current`
+# unconditionally therefore (a) died with exit 2 on a freshly bootstrapped host
+# before the step that would have created it, and (b) on every later deploy
+# printed release N's waivers while verifying release N+1. See
+# waiver_ledger_path() below for the order that fixes both.
+# Row shape (pinned by test/host/release-1-waivers.bats):
+#   | `<id>` | §L:<n> | <GATE-ID> | <what is waived> | … | … |
+GREMION_WAIVER_LEDGER="${GREMION_WAIVER_LEDGER:-}"
+GREMION_WAIVERS=()
+
+# waiver_ledger_path -> the ledger this run must read, in order:
+#
+#   1. $GREMION_WAIVER_LEDGER. gremion-deploy sets it for steps 9 and 11 so the
+#      release BEING verified is the release whose waivers are printed. It is
+#      also the operator's override for a one-off run.
+#   2. The verifier's OWN checkout. infra/host/bin/ sits three levels under the
+#      repository root, so a verifier invoked out of a release tree reads that
+#      tree's ledger and cannot drift from itself.
+#   3. $(gremion_root)/current/docs/ops/release-1-waivers.md. The installed copy
+#      under /opt/gremion/bin has no sibling tree (bootstrap.sh only asserts it
+#      is present), so this is what a bare `gremion-verify` and the reboot gate
+#      read.
+#
+# An absent ledger at the end of that list is still fatal, with exit 2 - a
+# missing precondition, not a failed assertion. reboot_gate() reads that
+# distinction: a precondition failure is not something restarting containers
+# can fix.
+waiver_ledger_path() {
+    local sibling
+    if [[ -n "${GREMION_WAIVER_LEDGER:-}" ]]; then
+        printf '%s' "$GREMION_WAIVER_LEDGER"
+        return 0
+    fi
+    sibling="$SCRIPT_DIR/../../../docs/ops/release-1-waivers.md"
+    if [[ -f "$sibling" ]]; then
+        printf '%s' "$sibling"
+        return 0
+    fi
+    printf '%s' "$(gremion_root)/current/docs/ops/release-1-waivers.md"
+}
+
+load_waivers() {
+    local ledger
+    ledger="$(waiver_ledger_path)"
+    [[ -f "$ledger" ]] \
+        || die "signed waiver ledger absent from the release tree: ${ledger} (spec B §1.4)" 2
+    # mapfile, not a pipeline: the reader must run in THIS shell so a parse
+    # failure below can still die() the program rather than a subshell. The row
+    # pattern itself lives in common.sh, so the guard that pins the ledger
+    # parses it with the SAME parser and can never be more permissive.
+    mapfile -t GREMION_WAIVERS < <(waiver_rows "$ledger")
+
+    # A POST-CONDITION, not a floor. `> 0` is satisfied by ONE surviving row,
+    # and mapfile < <(…) throws the reader's exit status away, so a parse that
+    # dropped five of six rows printed a shorter table and still exited 0.
+    # Counting the candidate rows independently makes a dropped row loud.
+    local parsed=${#GREMION_WAIVERS[@]} candidates
+    candidates="$(waiver_candidate_count "$ledger")"
+    (( parsed > 0 )) \
+        || die "waiver ledger parsed to zero rows — the row shape changed: ${ledger}" 2
+    (( parsed == candidates )) \
+        || die "waiver ledger: ${candidates} row(s) look like waivers, ${parsed} parsed — a row the reader cannot read is a waiver nobody is told about: ${ledger}" 2
+}
+
+# A third printer beside ok()/bad(): dim, never green, never counted as a pass.
+waived() { printf '%s  WAIVED%s %s\n' "$C_DIM" "$C_OFF" "$*"; }
+
+print_waivers() {
+    local entry id item gate why
+    for entry in "${GREMION_WAIVERS[@]}"; do
+        IFS='|' read -r id item gate why <<<"$entry"
+        why="${why#"${why%%[![:space:]]*}"}"; why="${why%"${why##*[![:space:]]}"}"
+        waived "${id} (§L:${item}, ${gate}) — ${why}"
+    done
+}
+
+waivers_json() {
+    printf '%s\n' "${GREMION_WAIVERS[@]}" \
+        | jq -Rsc 'split("\n") | map(select(length > 0) | split("|")
+                   | {id: .[0], lItem: (.[1] | tonumber), gate: .[2],
+                      why: (.[3] | sub("^ +";"") | sub(" +$";""))})'
+}
+
 # Precedence for the marker path: an explicit environment override (an operator
 # probing one endpoint by hand, or a test) beats etc/env/state.env, which beats
 # the built-in default. load_env runs later and would otherwise clobber the
@@ -76,6 +175,11 @@ usage: gremion-verify [--colour <blue|green>] [--hosts FILE] [--reboot]
                control.PLATFORM_DOMAIN and every line of etc/tenant-hosts.txt
   --reboot     reboot gate: on failure restart the active colour once, re-verify,
                and report the outcome to ALERT_WEBHOOK_URL
+
+It refuses to run without the signed waiver ledger docs/ops/release-1-waivers.md
+and reads it from $GREMION_WAIVER_LEDGER if set, else from its own checkout, else
+from $(gremion_root)/current/docs/ops/. Exit 1 means an assertion failed; exit 2
+means it could not verify.
 EOF
     exit 2
 }
@@ -440,7 +544,8 @@ write_report() {
     fi
     jq -nc --arg ts "$ts" --argjson ok "$okflag" \
            --argjson routers "$rows" --argjson failures "$fjson" \
-        '{ts: $ts, ok: $ok, routers: $routers, failures: $failures}' \
+           --argjson waivers "$(waivers_json)" \
+        '{ts: $ts, ok: $ok, routers: $routers, failures: $failures, waivers: $waivers}' \
         | atomic_write "$(gremion_root)/runtime/last-verify.json" 0644
 }
 
@@ -488,6 +593,14 @@ check_colour() {
 
 reboot_alert() {
     local ok_flag="$1" restarted="$2" detail="$3" url="${ALERT_WEBHOOK_URL:-}" payload
+    # The detail can now carry the verifier's own message (see reboot_gate), and
+    # that is free text: one quote, backslash or control byte in it produces a
+    # payload that is not JSON, and the receiver drops the alert instead of
+    # showing it. Control bytes go first, then the two characters JSON escapes -
+    # backslashes before quotes, or the escape added for a quote is escaped again.
+    detail="$(printf '%s' "$detail" | tr -d '\000-\037')"
+    detail="${detail//\\/\\\\}"
+    detail="${detail//\"/\\\"}"
     payload="$(printf '{"event":"reboot-gate","ok":%s,"restarted":%s,"detail":"%s"}' \
         "$ok_flag" "$restarted" "$detail")"
     if [[ -z "$url" ]]; then
@@ -534,16 +647,26 @@ wait_for_docker() {
 # The installed verifier is the contract. When it is not installed - a release
 # checkout, a staging root, this suite - verify in-process rather than report a
 # green gate on a verification that never ran.
+# The last thing the child verifier said. A precondition failure names the file
+# or the key that is missing, and that sentence IS the diagnosis; reboot_alert's
+# detail used to be a fixed string, so it never travelled.
+CHILD_VERIFY_LAST=""
+
 run_child_verify() {
-    local child
+    local child out rc=0
     child="$(gremion_root)/bin/gremion-verify"
     if [[ -x "$child" ]]; then
-        "$child"
+        out="$("$child" 2>&1)" || rc=$?
     else
         info "no installed verifier at ${child}; verifying in this process"
-        prepare_verify
-        run_pass
+        # A subshell on purpose: run_pass can die() on a missing precondition,
+        # and a die in THIS shell would end the reboot gate before it alerted
+        # anyone. Only the status and the output have to come back.
+        out="$( { prepare_verify && run_pass; } 2>&1 )" || rc=$?
     fi
+    [[ -z "$out" ]] || printf '%s\n' "$out"
+    CHILD_VERIFY_LAST="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1 || true)"
+    return "$rc"
 }
 
 reboot_gate() {
@@ -561,10 +684,25 @@ reboot_gate() {
         die "docker unavailable" 2
     fi
 
-    if run_child_verify; then
+    local rc=0
+    run_child_verify || rc=$?
+    if (( rc == 0 )); then
         echo "REBOOT-GATE: verify=pass restarted=0"
         reboot_alert true 0 "verify green on the first pass after boot"
         return 0
+    fi
+
+    # Exit 2 is "could not verify", not "the application is broken". Restarting
+    # forty containers cannot make an absent file or an unset key appear, and
+    # the alert for the restart path says "still failing after one restart of
+    # app-<colour>", which sends the operator after an application outage that
+    # is not happening. Reachable for real: a rollback to a release tree that
+    # carries no waiver ledger, since the INSTALLED verifier is not versioned
+    # with the release tree whose docs/ it reads.
+    if (( rc == 2 )); then
+        echo "REBOOT-GATE: verify=precondition-failure restarted=0"
+        reboot_alert false 0 "verify could not run (exit 2): ${CHILD_VERIFY_LAST:-no message}"
+        return 1
     fi
 
     colour="$(cat "$root/runtime/active-colour" 2>/dev/null || echo none)"
@@ -596,12 +734,14 @@ run_pass() {
     FAILURES=(); ROUTER_ROWS=()
     ROUTER_CLASS=(); ROUTER_HOST=(); ROUTER_SERVICE=()
     SERVICES_TO_CHECK=(); SERVICE_HEALTHY=(); SAN_OK=(); MARKER_SHA=()
+    load_waivers
     fetch_api
     check_routers
     check_hosts
     check_containers
     [[ -z "$COLOUR" ]] || check_colour "$COLOUR"
     build_rows
+    print_waivers
     write_report
     (( ${#FAILURES[@]} == 0 ))
 }

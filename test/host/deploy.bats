@@ -253,6 +253,63 @@ EOF
     grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
 }
 
+@test "a release tree without the signed waiver ledger is refused at step 2" {
+    # gremion-verify hard-dies (exit 2) without docs/ops/release-1-waivers.md,
+    # and steps 9 and 11 are the only places that ran it - step 9 AFTER step 6
+    # has stopped the old colour and step 7 has applied migrations. Discovered
+    # there, a release tree with no ledger left the host with migrations
+    # applied, the old colour down and no verified colour. The ledger is a
+    # release-tree contract like the other three, so it is refused where they
+    # are: step 2, before the token is used on a pull and long before anything
+    # is stopped. The post-condition is the steps that did NOT run.
+    stub_all
+    local strip="${BATS_TEST_TMPDIR}/no-ledger"
+    mkdir -p "$strip"
+    cp -R "${FIXTURES}/valid"/. "$strip"/
+    rm -f "$strip/docs/ops/release-1-waivers.md"
+    [ ! -f "$strip/docs/ops/release-1-waivers.md" ]
+    export FIXTURE_RELEASE="$strip"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"BLOCKED: docs/ops/release-1-waivers.md absent (spec B)"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    # Nothing past step 2 may have run: no stop, no migrate, no start, no
+    # verify. A count, not a `! grep`, so a renamed step cannot pass vacuously.
+    run bash -c "grep -cE ' STEP (6|7|8|9|10|11|12) ' '${GREMION_ROOT}/runtime/deploy.log'"
+    [ "$output" = "0" ]
+    # ... and the step that DID run is in the same log, so the grep above was
+    # reading a real file and not an empty one.
+    run bash -c "grep -cE ' STEP 2 ' '${GREMION_ROOT}/runtime/deploy.log'"
+    [ "$output" = "1" ]
+}
+
+@test "an exported GREMION_WAIVER_LEDGER is honoured by step 2 and both verify steps" {
+    # docs/ops/host-tooling.md offers this as THE recovery for a release tree
+    # with no ledger - a rollback to a tag cut before the ledger existed. It
+    # was inert in the path that meets the failure: steps 9 and 11 set
+    # GREMION_WAIVER_LEDGER as a bare command prefix, which overrides whatever
+    # the operator exported, so the documented workaround changed nothing.
+    stub_all
+    local strip="${BATS_TEST_TMPDIR}/no-ledger"
+    mkdir -p "$strip"
+    cp -R "${FIXTURES}/valid"/. "$strip"/
+    rm -f "$strip/docs/ops/release-1-waivers.md"
+    export FIXTURE_RELEASE="$strip"
+    local own="${BATS_TEST_TMPDIR}/operator-ledger.md"
+    cp "${PROJECT_ROOT}/docs/ops/release-1-waivers.md" "$own"
+    export GREMION_WAIVER_LEDGER="$own"
+    shim gremion-verify 'printf "%s\n" "${GREMION_WAIVER_LEDGER:-UNSET}" >> "${GREMION_ROOT}/runtime/verify-ledger.log"; exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    # Again post-conditions, not the run's status: step 12 creates $ROOT/current
+    # with ln -s, which a Windows working copy cannot do.
+    grep -qE ' STEP 2 checkout ok$'       "${GREMION_ROOT}/runtime/deploy.log"
+    grep -qE ' STEP 9 verify-colour ok$'  "${GREMION_ROOT}/runtime/deploy.log"
+    grep -qE ' STEP 11 verify-public ok$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(wc -l < "${GREMION_ROOT}/runtime/verify-ledger.log")" -eq 2 ]
+    run bash -c "sort -u '${GREMION_ROOT}/runtime/verify-ledger.log'"
+    [ "$output" = "$own" ]
+}
+
 @test "release.json without overlap fails with exit 1" {
     stub_all
     export FIXTURE_RELEASE="${FIXTURES}/missing-overlap"
@@ -574,6 +631,29 @@ exit 0
     run bash -c "grep -n 'gremion-verify' '$SHIM_LOG' | tail -1 | cut -d: -f1"
     [ "$pre" -lt "$sw" ]
     [ "$sw" -lt "$output" ]
+}
+
+@test "both verify steps read the waiver ledger out of the release being deployed" {
+    # The verifier hard-dies without the signed ledger and resolves it from
+    # $(gremion_root)/current unless told otherwise. current/ is moved onto the
+    # new release in step 12 - AFTER both verify steps - and bootstrap.sh never
+    # creates it, so steps 9 and 11 must name the release tree themselves. Left
+    # to the default, the first deploy on a fresh host aborts at step 9 with
+    # exit 2 and every later deploy verifies release N+1 while printing release
+    # N's waivers.
+    stub_all
+    shim gremion-verify 'printf "%s\n" "${GREMION_WAIVER_LEDGER:-UNSET}" >> "${GREMION_ROOT}/runtime/verify-ledger.log"; exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    # The post-condition is what steps 9 and 11 DID, not the run's exit code:
+    # step 12 creates $ROOT/current with ln -s, which a Windows working copy
+    # cannot do, so this deploy's own status carries no information about the
+    # two steps this test is about. (The sibling test that owns step 12 fails
+    # on this box for the same pre-existing reason.)
+    grep -qE ' STEP 9 verify-colour ok$'  "${GREMION_ROOT}/runtime/deploy.log"
+    grep -qE ' STEP 11 verify-public ok$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(wc -l < "${GREMION_ROOT}/runtime/verify-ledger.log")" -eq 2 ]
+    run bash -c "sort -u '${GREMION_ROOT}/runtime/verify-ledger.log'"
+    [ "$output" = "${GREMION_ROOT}/releases/dist-v1.2.3/docs/ops/release-1-waivers.md" ]
 }
 
 @test "the runtime tag files and the current symlink are recorded" {

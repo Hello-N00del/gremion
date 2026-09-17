@@ -72,3 +72,20 @@ infra/host/ops/** text eol=lf
 # found before a single test is collected. Measured: git ls-files --eol reported
 # w/crlf for it.
 test/test_helper/*.bash text eol=lf
+
+# B0: the two approved design specs are committed byte-identical to the
+# operator-approved originals (a `cmp` gate at commit time). Nothing above
+# matches *.md, so core.autocrlf=true would check them out with CRLF on Windows
+# and the byte-identity claim would stop being reproducible after a checkout.
+docs/superpowers/specs/*.md text eol=lf
+
+# The signed waiver ledger is a machine contract: gremion-verify parses its
+# rows at run time. A CRLF working copy would change the bytes the parser sees
+# on one platform only, which is the kind of difference nobody reproduces.
+docs/ops/release-1-waivers.md text eol=lf
+
+# B0 round 2: the deploy suite's release fixtures now carry a copy of the
+# ledger, because gremion-deploy step 2 refuses a release tree without one. The
+# rule above names a path from the repository root, so it does not reach them,
+# and `git check-attr eol` answered "unspecified" for the fixture copies.
+test/host/fixtures/release/*/docs/ops/*.md text eol=lf

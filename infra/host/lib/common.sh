@@ -96,6 +96,53 @@ gremion_root() {
     printf '%s\n' "${GREMION_ROOT:-/opt/gremion}"
 }
 
+# -- the signed release-1 waiver ledger (spec B S1.4/SG) - ONE parser --------
+#
+# The row shape of docs/ops/release-1-waivers.md is a machine contract: it is
+# read at run time by infra/host/bin/gremion-verify and pinned by
+# test/host/release-1-waivers.bats. It lives HERE, in the library both of them
+# load, because two copies of a pattern drift in one direction only - the guard
+# gets looser than the reader, and then a row the reader silently dropped is
+# still counted green by the guard.
+#
+# Measured before this was shared: one markdown-legal escaped pipe inside a
+# cell cost gremion-verify the `apex-dns` waiver - five printed where six were
+# declared, `waivers[]` of length 5, exit 0 - while every suite stayed green.
+# Under-reporting a waiver is precisely the "deployed read as gated" misreading
+# the ledger exists to prevent.
+#
+# Row shape:
+#   | `<id>` | SL:<n> | <GATE-ID> | <what is waived> | <why> | <lifted by> |
+# (S is the section sign in the file itself; it is spelled out here because
+# this comment is also read on terminals that mangle it.)
+
+# A line that LOOKS like a waiver row: the id cell and the section-L cell,
+# nothing more. It is deliberately looser than waiver_rows() below, because it
+# is the floor the parse is measured against - a row that looks like a waiver
+# and does not parse is a DROPPED waiver, not an absent one.
+# NOTE the unescaped pipes: this is a BRE, and GNU grep reads `\|` there as
+# ALTERNATION, not as a literal bar. Written the other way `^\|` matches every
+# line in the file, the candidate count comes back 62, and the post-condition
+# below turns into a permanent false alarm. Measured.
+# shellcheck disable=SC2016  # the backticks are the ledger's own literal
+# markdown code fences, not a command substitution.
+WAIVER_ROW_CANDIDATE='^| `[a-z0-9-]\{1,\}` | §L:'
+
+# waiver_candidate_count <ledger> -> how many lines look like a waiver row.
+waiver_candidate_count() {
+    grep -c "$WAIVER_ROW_CANDIDATE" "$1" 2>/dev/null || true
+}
+
+# waiver_rows <ledger> -> one `id|litem|gate|why` record per PARSED row.
+# The caller compares its count with waiver_candidate_count and refuses to
+# continue when they disagree; this function never decides that on its own.
+# shellcheck disable=SC2016  # the sed script is deliberately literal: its
+# backreferences are sed's, not the shell's, and must not expand here.
+waiver_rows() {
+    sed -n 's/^| `\([a-z0-9-]\{1,\}\)` | §L:\([0-9]\{1,\}\) | \(G[0-9]-[A-Z]\{1,\}\) | \([^|]*\) |.*/\1|\2|\3|\4/p' \
+        "$1"
+}
+
 # fs_carries_modes <dir>
 # 0 when the filesystem under <dir> really stores POSIX permission bits.
 # Git Bash on NTFS does not, so a 0600 assertion there would be a lie; the mode

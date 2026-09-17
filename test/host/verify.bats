@@ -189,6 +189,30 @@ EOF
     fake_container c2 keycloak        "keycloak"                            running healthy 0 10.90.250.4
 }
 
+
+# The release tree carries docs/ (gremion-deploy:208 clones the whole repo and
+# :537-539 points `current` at it), so the ledger the verifier parses is the
+# repository's own ledger bytes, not a fixture that can disagree with them.
+install_ledger() {
+    mkdir -p "${GREMION_ROOT}/current/docs/ops"
+    cp "${REPO_ROOT}/docs/ops/release-1-waivers.md" \
+       "${GREMION_ROOT}/current/docs/ops/release-1-waivers.md"
+}
+
+# The host's verifier is an INSTALLED COPY under $(gremion_root)/bin with no
+# sibling repository tree: bootstrap.sh stage_timers (:897-903) only asserts
+# that it is there. Every test that runs the in-tree $VERIFY is therefore blind
+# to the shape the host actually has, which is how a verifier that hard-dies
+# without $ROOT/current shipped: it never dies in-tree, because in-tree it
+# reads its own checkout's ledger.
+install_verifier() {
+    mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib"
+    cp "${REPO_ROOT}/infra/host/bin/gremion-verify" "${GREMION_ROOT}/bin/gremion-verify"
+    cp "${REPO_ROOT}/infra/host/lib/common.sh"      "${GREMION_ROOT}/lib/common.sh"
+    chmod +x "${GREMION_ROOT}/bin/gremion-verify"
+    printf '%s' "${GREMION_ROOT}/bin/gremion-verify"
+}
+
 setup() {
     setup_host_root
     FAKE="${BATS_TEST_TMPDIR}/fake"
@@ -209,6 +233,7 @@ EOF
     printf 'tenant-a.example.org\ntenant-b.example.org\n' > "$HOSTS"
     install_shims
     fixture_green
+    install_ledger
 }
 
 @test "gremion-verify passes against a well-formed edge" {
@@ -460,8 +485,171 @@ prepare_green_colour() {
     ! grep -q 'restart' "$SHIM_LOG"
 }
 
+@test "--reboot reports a precondition failure instead of restarting anything" {
+    # A missing waiver ledger is exit 2 - "could not verify" - and it reaches
+    # the boot path, because the INSTALLED verifier is not versioned with the
+    # release tree whose docs/ it reads. Before the gate read the exit code,
+    # that laundered into: restart the whole app project, fail again, and alert
+    # "still failing after one restart of app-blue". Forty containers restarted
+    # for nothing, and the one sentence that named the real cause - a markdown
+    # file the release tree does not carry - appeared nowhere in the alert.
+    local v; v="$(install_verifier)"
+    rm -rf "${GREMION_ROOT}/current"
+    printf 'blue\n' > "${GREMION_ROOT}/runtime/active-colour"
+    run "$VERIFY" --reboot --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"REBOOT-GATE: verify=precondition-failure restarted=0"* ]]
+    # the verifier's own message travels into the alert
+    [[ "$output" == *"release-1-waivers.md"* ]]
+    # and the wrong diagnosis is not issued
+    [[ "$output" != *"still failing after one restart"* ]]
+    refute_recorded docker "restart"
+}
+
 @test "usage lists exactly the flags the parser accepts" {
     run "$VERIFY" --help
     [ "$status" -eq 2 ]
     [[ "$output" == *"--reboot"* ]]
+}
+
+# ── the six P4 waivers (B0) ──────────────────────────────────────────────────
+# Test names are ASCII: bats 1.13 on the maintainer's Windows box cannot address
+# a test whose name carries a non-ASCII byte and silently skips it, which is the
+# vacuous pass these guards exist to prevent. "L:n" below means the ledger's
+# section-L item n.
+WAIVER_IDS=(offsite-backup-remote external-probe-and-alerting mail-bringup
+            legal-documents apex-dns pilot-inputs)
+WAIVER_LITEMS=(2 6 4 1 5 5)
+
+@test "every P4 waiver is printed as WAIVED with its L item and never on an OK line" {
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" > "${BATS_TEST_TMPDIR}/verify.out"
+    # ANSI first, THEN the anchor. ok() prints "$C_OK  OK$C_OFF   …" and C_OK is
+    # non-empty whenever stderr is a tty, so `^[[:space:]]*OK` over the raw
+    # capture only matches because bats is not a tty. Run against a coloured
+    # capture the same assertion would match nothing and pass vacuously — which
+    # is the failure class this file's header is about.
+    sed -e 's/\x1b\[[0-9;]*m//g' "${BATS_TEST_TMPDIR}/verify.out" \
+        > "${BATS_TEST_TMPDIR}/verify.plain"
+    grep -E '^[[:space:]]*OK' "${BATS_TEST_TMPDIR}/verify.plain" \
+        > "${BATS_TEST_TMPDIR}/verify.ok" || true
+    # The vacuity floor for the "never on an OK line" half: with no OK lines at
+    # all, "the id is not on one" proves nothing.
+    [ -s "${BATS_TEST_TMPDIR}/verify.ok" ] \
+        || { echo "no OK lines in the verifier output at all" >&2; false; }
+    local i id item
+    for i in "${!WAIVER_IDS[@]}"; do
+        id="${WAIVER_IDS[$i]}"; item="${WAIVER_LITEMS[$i]}"
+        run grep -qE "WAIVED .*${id} \(§L:${item}," "${BATS_TEST_TMPDIR}/verify.out"
+        [ "$status" -eq 0 ] || { echo "no WAIVED line for ${id} (§L:${item})" >&2; false; }
+        # A waiver rendered by ok() is the exact misreading the ledger exists to
+        # prevent, so the OK lines are searched for the id explicitly.
+        run grep -qF "${id}" "${BATS_TEST_TMPDIR}/verify.ok"
+        [ "$status" -ne 0 ] || { echo "${id} appears on an OK line" >&2; false; }
+    done
+}
+
+@test "last-verify.json records the six waivers as a third state, not as failures" {
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    run jq -r '.waivers | length' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "6" ]
+    run jq -r '.waivers[] | select(.id=="mail-bringup") | "\(.lItem) \(.gate)"' \
+        "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "4 G4-MAIL" ]
+    run jq -r '.ok' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "true" ]
+    run jq -r '.failures | length' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "0" ]
+}
+
+@test "a waiver row the reader cannot parse is loud, not a table one row shorter" {
+    # Measured on the committed ledger before the parsed count became a
+    # post-condition: one markdown-legal escaped pipe inside a cell made the
+    # verifier print FIVE waivers, write waivers[] of length 5 and exit 0 -
+    # apex-dns simply vanished, and every suite in the repository stayed green.
+    # An under-reported waiver is the exact misreading the ledger exists to
+    # prevent, so a row that looks like a waiver and does not parse is fatal.
+    local scratch="${BATS_TEST_TMPDIR}/ledger.md"
+    sed 's/the apex DNS edits/the apex \\| DNS edits/' \
+        "${REPO_ROOT}/docs/ops/release-1-waivers.md" > "$scratch"
+    grep -qF 'the apex \| DNS edits' "$scratch"   # the mutation really landed
+    export GREMION_WAIVER_LEDGER="$scratch"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"6 row(s) look like waivers, 5 parsed"* ]]
+}
+
+@test "the installed verifier refuses to run when no ledger is reachable" {
+    # An absent ledger is not "no waivers": it is a release tree that cannot
+    # say what release 1 did not prove. Silence there is the failure mode the
+    # ledger exists to prevent, so the verifier dies instead of printing green.
+    # It is run from the INSTALLED layout because that is the only shape with
+    # no ledger within reach at all - see install_verifier().
+    local v; v="$(install_verifier)"
+    rm -rf "${GREMION_ROOT}/current"
+    run "$v" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"release-1-waivers.md"* ]]
+}
+
+@test "the installed verifier verifies a release that has no current symlink yet" {
+    # gremion-deploy runs the verifier at steps 9 and 11; $ROOT/current is not
+    # moved onto the new release until step 12, and bootstrap.sh never creates
+    # it at all. Before gremion-deploy exported the ledger of the release it is
+    # deploying, the FIRST deploy on a freshly bootstrapped host died at step 9
+    # with exit 2 and could never reach the step that would have created
+    # current/ - the release this ledger is written for was undeployable.
+    local v rel
+    v="$(install_verifier)"
+    rm -rf "${GREMION_ROOT}/current"
+    rel="${GREMION_ROOT}/releases/dist-v1.2.3"
+    mkdir -p "${rel}/docs/ops"
+    cp "${REPO_ROOT}/docs/ops/release-1-waivers.md" "${rel}/docs/ops/release-1-waivers.md"
+    export GREMION_WAIVER_LEDGER="${rel}/docs/ops/release-1-waivers.md"
+    run "$v" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WAIVED"* ]]
+    [[ "$output" == *"apex-dns"* ]]
+    run jq -r '.waivers | length' "${GREMION_ROOT}/runtime/last-verify.json"
+    [ "$output" = "6" ]
+}
+
+@test "the installed verifier falls back to the ledger under current" {
+    # Leg 3 of waiver_ledger_path: the installed copy has no sibling tree, so a
+    # bare gremion-verify and the reboot gate read $(gremion_root)/current.
+    # setup() put a ledger there.
+    local v; v="$(install_verifier)"
+    run "$v" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WAIVED"* ]]
+}
+
+@test "a verifier run out of a release tree reads that tree's own ledger" {
+    # Leg 2. Mid-deploy there are two copies of the table on the box - the new
+    # release's and the one current/ still points at - and one of them belongs
+    # to the release that is NOT being verified. A verifier invoked from inside
+    # a checkout reads that checkout and cannot drift from itself.
+    rm -rf "${GREMION_ROOT}/current"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WAIVED"* ]]
+    [[ "$output" == *"apex-dns"* ]]
+}
+
+@test "bootstrap installs and enables the L:3 reboot gate, and its unit runs the verifier" {
+    local bs="${REPO_ROOT}/infra/host/bootstrap.sh"
+    local unit="${REPO_ROOT}/infra/host/templates/systemd/gremion-verify.service"
+    # The ledger promises section-L item 3 is not waived. Nothing asserted the
+    # install: ops.bats pins the unit's CONTENT, this pins that bootstrap ships it.
+    [ -f "$unit" ]
+    grep -qF 'gremion-verify.service' "$bs"
+    grep -qF 'systemctl enable gremion-verify.service' "$bs"
+    grep -qF 'assert "gremion-verify.service enabled at boot"' "$bs"
+    grep -q  '^WantedBy=multi-user.target' "$unit"
+    grep -q  '^ExecStart=${GREMION_ROOT}/bin/gremion-verify --reboot$' "$unit"
+    # And the ledger must still refuse to waive it.
+    run grep -nE '^\| `[a-z0-9-]+` \| §L:3 \|' "${REPO_ROOT}/docs/ops/release-1-waivers.md"
+    [ "$status" -ne 0 ]
 }
