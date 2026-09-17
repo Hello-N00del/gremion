@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'migrations')
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
 
 /**
  * The kernel data-plane block after the port-back: the 22 files the carve left
@@ -56,5 +57,68 @@ describe('kernel data-plane migration block', () => {
     for (const f of readdirSync(MIGRATIONS_DIR).filter((x) => x.endsWith('.sql'))) {
       expect(f).toMatch(/^\d{3}_[a-z0-9_]+\.sql$/)
     }
+  })
+})
+
+/** The nine data-plane basenames the 2026-09-15 port-back brought in. */
+export const PORTED_BASENAMES = [
+  '003_calendar_schema.sql', '034_deck_board.sql', '049_org_unit_event_outbox.sql',
+  '053_notification_read_marker.sql', '054_resolution_adoption_mode.sql',
+  '055_resolution_challenges.sql', '056_role_assignment_history_recalled.sql',
+  '057_fk_hot_filter_indexes.sql', '058_public_reader_grants.sql',
+]
+
+// A ported file that sorts BELOW the highest basename the pre-port-back kernel
+// shipped is a BACK-FILL, and the README's own rule ("the next free number is
+// current highest + 1, never a number reused from a gap") forbids one. Every
+// database initialised before the port-back has already recorded that
+// high-water mark in schema_migrations, so runMigrations() picks a back-filled
+// file up out of order on the next boot: 003_calendar_schema.sql:69,77
+// REFERENCES committees(id), which 010_org_units.sql:6 renamed to org_units, so
+// it aborts, applyMigrationFile records nothing, and the boot wedges on every
+// retry with an error naming a table nobody removed. Derived from the two sets
+// rather than written down, so a future back-fill cannot slip in undeclared.
+const PRE_PORT_BACK_BASENAMES = KERNEL_BLOCK_BASENAMES.filter(
+  (f) => !PORTED_BASENAMES.includes(f),
+)
+export const PRE_PORT_BACK_HIGH_WATER = [...PRE_PORT_BACK_BASENAMES].sort().at(-1) as string
+export const BACK_FILLED_BASENAMES = PORTED_BASENAMES.filter(
+  (f) => f < PRE_PORT_BACK_HIGH_WATER,
+).sort()
+
+describe('numbers back-filled below the pre-port-back high-water mark', () => {
+  it('is exactly 003 and 034, measured against 048', () => {
+    expect(PRE_PORT_BACK_HIGH_WATER).toBe('048_resolution_decided_at.sql')
+    expect(BACK_FILLED_BASENAMES).toEqual(['003_calendar_schema.sql', '034_deck_board.sql'])
+  })
+
+  it('no file on disk sorts below the mark without being declared', () => {
+    const onDisk = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
+    const declared = new Set([...PRE_PORT_BACK_BASENAMES, ...BACK_FILLED_BASENAMES])
+    expect(onDisk.filter((f) => f < PRE_PORT_BACK_HIGH_WATER && !declared.has(f))).toEqual([])
+  })
+
+  it('the provenance record names every back-filled file and the re-init it forces', () => {
+    const doc = readFileSync(
+      join(REPO_ROOT, 'docs', 'ops', 'migration-portback-2026-09-15.md'),
+      'utf-8',
+    )
+    const i = doc.indexOf('## Back-filled numbers')
+    expect(i, 'the provenance record has no "## Back-filled numbers" section').toBeGreaterThan(-1)
+    const section = doc.slice(i)
+    for (const f of BACK_FILLED_BASENAMES) expect(section).toContain(f)
+    expect(section).toContain(PRE_PORT_BACK_HIGH_WATER)
+    expect(section).toMatch(/down -v/)
+    expect(section).toMatch(/re-initialis/i)
+  })
+
+  it('the migrations README flags the exception to its own numbering rule', () => {
+    const readme = readFileSync(join(MIGRATIONS_DIR, 'README.md'), 'utf-8')
+    const i = readme.indexOf('### Numbering: the gaps are inherited, not corruption')
+    expect(i, 'the numbering section has been renamed').toBeGreaterThan(-1)
+    const section = readme.slice(i, readme.indexOf('## What is here, what is not'))
+    expect(section).toMatch(/back-fill/i)
+    for (const f of BACK_FILLED_BASENAMES) expect(section).toContain(f)
+    expect(section).toContain('migration-portback-2026-09-15.md')
   })
 })

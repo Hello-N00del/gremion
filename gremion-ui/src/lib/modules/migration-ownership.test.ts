@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MODULE_MANIFESTS } from './registry'
-import { CROSS_CUTTING_MIGRATIONS } from './migration-ownership'
+import { CROSS_CUTTING_MIGRATIONS, backFillNotice } from './migration-ownership'
 import { disabledModuleMigrationFiles } from '$lib/server/module-migrations'
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'migrations')
@@ -94,5 +94,55 @@ describe('the five unclaimed kernel migrations and their order constraints', () 
     const body = readFileSync(join(MIGRATIONS_DIR, '057_fk_hot_filter_indexes.sql'), 'utf-8')
     expect(body).toMatch(/to_regclass\('content\.post_media'\)/)
     expect(body).toMatch(/to_regclass\('content\.post_recipients'\)/)
+  })
+})
+
+// The chain was extended BELOW what an already-initialised database has
+// applied (003 and 034 sit in gaps under the pre-port-back high-water mark
+// 048_resolution_decided_at.sql). runMigrations() applies in filename order but
+// SELECTs the applied set, so such a file is picked up out of order on the next
+// boot of an old database; 003 REFERENCES committees(id), renamed by 010, so it
+// aborts with "relation committees does not exist" — an error that names a
+// table nobody removed, on a boot that then wedges for good because
+// applyMigrationFile is atomic and records nothing. The run is doomed either
+// way; what this adds is the diagnosis, printed BEFORE the abort.
+describe('backFillNotice', () => {
+  const CHAIN = [
+    '001_governance_schema.sql', '003_calendar_schema.sql', '010_org_units.sql',
+    '034_deck_board.sql', '048_resolution_decided_at.sql', '049_org_unit_event_outbox.sql',
+  ]
+  const OLD_DB = new Set([
+    '001_governance_schema.sql', '010_org_units.sql', '048_resolution_decided_at.sql',
+  ])
+
+  it('says nothing on a fresh database — sort order makes every file apply in order', () => {
+    expect(backFillNotice({ applied: new Set(), candidates: CHAIN })).toBeNull()
+  })
+
+  it('says nothing when every unapplied file sorts above the high-water mark', () => {
+    expect(
+      backFillNotice({ applied: OLD_DB, candidates: CHAIN.filter((f) => f >= '049') }),
+    ).toBeNull()
+  })
+
+  it('names every back-filled file, the mark it sits under, and the remedy', () => {
+    const notice = backFillNotice({ applied: OLD_DB, candidates: CHAIN })
+    expect(notice).not.toBeNull()
+    expect(notice).toContain('003_calendar_schema.sql')
+    expect(notice).toContain('034_deck_board.sql')
+    expect(notice).not.toContain('049_org_unit_event_outbox.sql')
+    expect(notice).toContain('048_resolution_decided_at.sql')
+    expect(notice).toMatch(/down -v/)
+    expect(notice).toContain('docs/ops/migration-portback-2026-09-15.md')
+  })
+
+  it('does not cry back-fill over a module OFF->ON catch-up, whose gaps are expected', () => {
+    expect(
+      backFillNotice({
+        applied: OLD_DB,
+        candidates: CHAIN,
+        expected: new Set(['003_calendar_schema.sql', '034_deck_board.sql']),
+      }),
+    ).toBeNull()
   })
 })
