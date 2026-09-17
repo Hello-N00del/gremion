@@ -13,6 +13,14 @@
 # Hooks for the negative proofs (task .9), not for normal runs:
 #   FRESH_INIT_PROOF_OMIT=<basename>  do not apply that file
 #   FRESH_INIT_PROOF_NO_ROLE=1        do not create gremion_public_reader
+#
+# Watched RED 2026-09-17 by a fresh verifier: OMIT=055 aborted 058 with
+# "the anonymous public portal reads table(s) that do not exist:
+# resolution_challenges"; NO_ROLE=1 aborted with "role gremion_public_reader
+# does not exist"; MIN_APPLIED=99 failed the vacuity floor with
+# "FAIL vacuity: applied 28 data-plane files, minimum 99". None printed
+# "all post-conditions hold"; the first two exit 3 (psql's own code under
+# set -e), the third exits 1.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
