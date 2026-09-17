@@ -7,6 +7,7 @@ import { env } from '$env/dynamic/private'
 import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
 import { normaliseHost } from './host'
+import { isReservedPlatformHost } from './reserved-hosts'
 import { clampConnProfile } from './conn-profile'
 import { resolveSecret } from './secrets'
 import { getPoolForTenant, evictTenantPool } from '$lib/server/db/pool-registry'
@@ -797,7 +798,23 @@ export async function addTenantDomain(
   opts: { isPrimary?: boolean; verified?: boolean } = {},
 ): Promise<TenantDomain> {
   assertTenantId('addTenantDomain', tenantId)
+  // Spec A §C / §H.2 — reserved platform names, BEFORE normalisation (so the
+  // underscore in `_dmarc` is refused as reserved, not as malformed) and BEFORE
+  // any DNS pre-flight (which cannot catch names that already point at us).
+  // ONE error shape for both call sites: an operator must never be told a
+  // reserved name is merely malformed.
+  const platformDomain = env.PLATFORM_DOMAIN ?? ''
+  const refuseReserved = (candidate: string) => {
+    if (isReservedPlatformHost(candidate, platformDomain)) {
+      throw new Error(
+        `addTenantDomain: reserved platform host: ${candidate} — reserved for the platform ` +
+        `under PLATFORM_DOMAIN=${platformDomain}, it can never be a tenant host (spec A §C)`,
+      )
+    }
+  }
+  refuseReserved(rawHost.trim().toLowerCase().replace(/:[0-9]{1,5}$/, '').replace(/\.$/, ''))
   const host = assertHost('addTenantDomain', rawHost)
+  refuseReserved(host)
   const isPrimary = opts.isPrimary === true
   const sql = getControlDb()
   const row = await sql.begin(async (tx) => {

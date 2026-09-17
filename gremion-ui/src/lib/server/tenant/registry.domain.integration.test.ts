@@ -12,6 +12,7 @@ import {
   TENANT_EVICT_CHANNEL,
   type TenantInput,
 } from './registry'
+import { reservedPlatformHosts } from './reserved-hosts'
 
 const SLUG = 'rat-musterstadt'
 let tenantId: string
@@ -145,5 +146,35 @@ describe('tenant_domain write accessors', () => {
     } finally {
       await listener.unlisten()
     }
+  })
+})
+
+// §T.1 reserved-host refusal. On addTenantDomain, not only in a control-plane
+// form, so no surviving library caller can bypass it (spec A §H.2: before the
+// DNS pre-flight, which cannot catch names already pointing at our own edge).
+describe('reserved platform hosts are refused by addTenantDomain', () => {
+  it('refuses each of the nine names under PLATFORM_DOMAIN, with ONE error shape', async () => {
+    for (const host of reservedPlatformHosts(process.env.PLATFORM_DOMAIN!)) {
+      await expect(addTenantDomain(tenantId, host)).rejects.toThrow(
+        new RegExp(`reserved platform host: ${host.replace(/\./g, '\.')}`),
+      )
+    }
+    expect(await listTenantDomains(tenantId)).toEqual([])
+  })
+
+  // `_dmarc.<apex>` cannot survive normaliseHost (host.ts:43 rejects the
+  // underscore), so it is the one reserved name that would get the WRONG error
+  // — "not a valid host" — if the reserved check ran after normalisation.
+  it('reports _dmarc.<apex> as RESERVED, never as malformed', async () => {
+    const dmarc = `_dmarc.${process.env.PLATFORM_DOMAIN}`
+    await expect(addTenantDomain(tenantId, dmarc)).rejects.toThrow(
+      new RegExp(`reserved platform host: ${dmarc.replace(/\./g, '\.')}`),
+    )
+    await expect(addTenantDomain(tenantId, dmarc)).rejects.not.toThrow(/is not a valid host/)
+  })
+
+  it('still accepts an ordinary tenant host under the same apex', async () => {
+    const d = await addTenantDomain(tenantId, `musterstadt.${process.env.PLATFORM_DOMAIN}`)
+    expect(d.host).toBe(`musterstadt.${process.env.PLATFORM_DOMAIN}`)
   })
 })
