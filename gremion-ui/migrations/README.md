@@ -368,3 +368,41 @@ fresh database but no way to reach them from the app — that is why.
 The four-eyes approval model, the FinTS state machine and the *Finanzordnung*
 signer configuration are finance-module concerns and are documented with the
 finance module, not here.
+
+---
+
+## Table ownership: kernel-guaranteed vs module-owned
+
+A migration in **this** directory may only depend on tables **this** directory
+produces. A table a module owns is created by that module's own migration, in
+that module's block (B-04: kernel `0001`–`0199`, module blocks of 100 from
+`1000`), and is granted by that module's own migration too.
+
+`news_posts` is the worked example. `008_public_portal.sql` records that the
+table moved out with the calendar/news modules during the Civitas kernel carve,
+so nothing here creates it. `058_public_reader_grants.sql` therefore grants the
+anonymous reader role `gremion_public_reader` only the six tables the kernel
+chain itself produces —
+
+| Table | Produced by |
+|---|---|
+| `calendar_events`, `event_recurrence` | `003_calendar_schema.sql` |
+| `protocols`, `protocol_resolutions` | `007_protocols.sql` |
+| `org_units` | `010_org_units.sql` (`ALTER TABLE committees RENAME TO org_units`) |
+| `resolution_challenges` | `055_resolution_challenges.sql` |
+
+— and still **aborts** when one of them is absent: an absent kernel table means
+a broken replay, and a silent skip is the defect `058` exists to close.
+`news_posts` and its `GRANT SELECT` live in the content module's
+`1200_content_news_posts.sql`, which is staged outside this directory
+(`modules/content/migrations/`) until the content module repo exists. The
+consequence is the rule: a **content-OFF** kernel-only fresh init completes
+green and serves the anonymous portal, and a content-ON install additionally
+gets `news_posts`.
+
+Enforced by `src/lib/server/portal-reader-grants.test.ts` (every `portal_tables`
+entry is produced by the kernel chain, and no executable line here names the
+retired `stura_public_reader` role),
+`src/lib/server/content-news-posts-migration.test.ts`
+(no file here creates `news_posts`) and `src/lib/server/portal-reader-grants.integration.test.ts`
+(both cases against a real database).

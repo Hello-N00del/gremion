@@ -38,3 +38,24 @@ describe('migrations/README.md — multi-tenant migration rules (§7.5)', () => 
     expect(readme).toContain('migrations-control')
   })
 })
+
+// B4a-news-posts-ownership — the README is the source-of-truth doc for how
+// data-plane migrations are applied, so the kernel-guaranteed / module-owned
+// table split has to be written there, not only in 058's comments.
+describe('migrations/README.md — table ownership (B4a)', () => {
+  const readme = readFileSync(join(process.cwd(), 'migrations', 'README.md'), 'utf-8')
+
+  it('has the "Table ownership" section', () => {
+    expect(readme).toMatch(/^## Table ownership: kernel-guaranteed vs module-owned/m)
+  })
+
+  it('names the content-owned creation migration and the reader role', () => {
+    expect(readme).toContain('1200_content_news_posts.sql')
+    expect(readme).toContain('gremion_public_reader')
+  })
+
+  it('states the content-OFF rule the split exists for', () => {
+    expect(readme).toContain('content-OFF')
+    expect(readme).toContain('058_public_reader_grants.sql')
+  })
+})
