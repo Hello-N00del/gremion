@@ -34,4 +34,22 @@ describe('A1 codegen — generated server-init barrel is the single registration
     const committed = readFileSync(BARREL, 'utf-8')
     expect(norm(committed)).toBe(norm(fresh))
   })
+
+  // VACUITY GUARD (B5 post-condition): the codegen SCANS for register.server.ts
+  // and writes a comment-only barrel, exit 0, when it finds none — which is what
+  // the kernel shipped before the governance relay landed. A byte-equality guard
+  // alone happily pins an empty barrel forever. Assert the artefact has at least
+  // one real side-effect import, and that the governance built-in is one of them
+  // (B34/D9 count kernel built-ins declaring a register.server.ts).
+  it('barrel imports at least one real register.server.ts (vacuity guard)', () => {
+    const committed = readFileSync(BARREL, 'utf-8')
+    const importLines = committed
+      .split(/\r?\n/)
+      .filter((l) => /^import '\.\.?\//.test(l))
+    expect(importLines.length).toBeGreaterThan(0)
+    // Spelling note: the plan wrote this expectation as './../governance/…'; the
+    // codegen emits the path it actually builds, '../governance/…'. The guard
+    // asserts the ARTEFACT, so it reads the real spelling.
+    expect(importLines).toContain("import '../governance/register.server'")
+  })
 })
