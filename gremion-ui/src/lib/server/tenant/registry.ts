@@ -8,6 +8,7 @@ import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
 import { normaliseHost } from './host'
 import { isReservedPlatformHost } from './reserved-hosts'
+import { evictTenantRateLimit } from './rate-limit'
 import { clampConnProfile } from './conn-profile'
 import { resolveSecret } from './secrets'
 import { getPoolForTenant, evictTenantPool } from '$lib/server/db/pool-registry'
@@ -512,6 +513,14 @@ export function evictTenantRuntime(tenantId: string): void {
   for (const [slug, entry] of _resolutionCache) {
     if (entry.ctx.id === tenantId) _resolutionCache.delete(slug)
   }
+  // Spec B §T.1: the HOST-keyed cache is evicted on the SAME seam, so the
+  // cross-process tenant_evict NOTIFY covers it too. A stale host entry is
+  // strictly worse than a stale slug entry — a host can be re-registered to a
+  // DIFFERENT tenant, so an un-evicted entry is a cross-tenant selection.
+  // (The blanket form, for B19's evictAllTenants, is clearHostResolutionCache.)
+  for (const [host, entry] of _hostResolutionCache) {
+    if (entry.ctx.id === tenantId) _hostResolutionCache.delete(host)
+  }
   evictTenantPool(tenantId)
   evictKeycloakAdminClient(tenantId)
   evictJwks(tenantId)
@@ -520,6 +529,10 @@ export function evictTenantRuntime(tenantId: string): void {
   // newsletter leaf service owns per-tenant state now, so there is no
   // monolith-side newsletter handle to evict here.
   evictTenantMail(tenantId) // SP-2: drop the per-tenant SMTP transport + close its sockets
+  // Spec B §T.1: the per-tenant token bucket is per-tenant keyed runtime state
+  // like every handle above — a suspended or re-registered id must not inherit
+  // the previous occupant's consumed budget.
+  evictTenantRateLimit(tenantId)
   // Module-owned per-tenant handles (Matrix/Synapse/Helios/LiveKit): each module
   // registered its evictor via runtime-registry (register.server.ts). Run them on
   // the SAME lifecycle seam as the kernel evictors above.
