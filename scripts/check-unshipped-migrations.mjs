@@ -3,6 +3,12 @@
 // NO release-1 tree — not the kernel, not any gremion-module-<id> repo, not the
 // assembled distribution. Block 1900-1999 is reserved and EMPTY.
 //
+// Watched RED 2026-09-17 by a fresh verifier: a planted 050_handover_schema.sql
+// (and its renumbered 1900_ form) in a `git archive HEAD` scratch tree each
+// produced "UNSHIPPED MIGRATION: gremion-ui/migrations/<file> — handover does not
+// ship in release 1 (D-01)", exit 1, while the real tree stayed green at
+// 35 migration files scanned.
+//
 // Post-condition, not exit code: the walk counts the migration files it actually
 // looked at and FAILS below one, because a guard that scanned nothing and exited
 // 0 is indistinguishable from a guard that found nothing wrong.
