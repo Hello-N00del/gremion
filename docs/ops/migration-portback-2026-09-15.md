@@ -21,7 +21,7 @@ holding repo was not read.
 
 ## Adaptations beyond spec B's list, and why
 
-Four edits go beyond the adaptations spec B §2 and §T.1 name. All four are
+Five edits go beyond the adaptations spec B §2 and §T.1 name. All five are
 comment or diagnostic text; no DDL or grant statement was altered.
 
 1. **`055`'s retired role name.** StuRa `055:68-71` guards its `GRANT` on the
@@ -59,6 +59,61 @@ comment or diagnostic text; no DDL or grant statement was altered.
    passes because `scripts/kernel-hygiene-check.mjs`'s retired-product-token rule
    matches the retired product token as a whole word, not the bare `STURA_`
    prefix.
+
+5. **`058` named a rename script the kernel does not ship.** The header
+   explained why the source tree never saw the bug by pointing at that tree's
+   own `scripts/rename-data-layer.sh` — a path this repository has no file for,
+   i.e. adaptation 4's defect class one paragraph higher up. The sentence now
+   names the *mechanism* (a one-off data-layer rename that left the databases
+   with inherited grants) and no path. Post-condition:
+   `migration-portal-grants.test.ts` asserts that every `dir/name.ext` path
+   `058` names resolves to a file that exists, under the repo root or under
+   `gremion-ui/`. Regenerating `migrations/manifest.json` is part of the edit.
+
+## The prerequisite 058 creates, and the provisioning that has to meet it
+
+Porting `058` converts `gremion_public_reader` from an optional nicety into a
+**boot prerequisite for the entire data-plane chain**: absent role, aborted
+migration run, unready tenant. Round-1 review found the kernel could not meet
+that prerequisite on either shipped path, so three fixes land with the port:
+
+- `k8s/base/postgres/configmap.yaml` never created the role (it created
+  keycloak, gremion and control), although `docker/postgres/init-databases.sh`'s
+  header declares the ConfigMap its mandatory mirror and `058`'s own abort
+  message sends the operator there.
+- That ConfigMap script could not have created it either way: it opened with
+  `set -euo pipefail` while `k8s/base/postgres/statefulset.yaml` starts it with
+  `/bin/sh`, which in `postgres:*-alpine` is busybox ash. Measured inside
+  `postgres:18-alpine`: `set: line 5: illegal option -o pipefail`. The init
+  container created **nothing at all**. It is now `#!/bin/sh` + `set -eu`, like
+  its Docker twin; neither file contains a pipe.
+- Both implementations *skipped* the role when `PUBLIC_DB_PASSWORD` was unset,
+  logging a line and exiting 0 — the silent-skip shape `058` exists to delete,
+  one layer down. Both now abort on unset **and** on empty, naming the variable
+  and the migration that needs it, and `make validate-env` refuses a `.env` that
+  leaves it empty.
+
+`k8s/overlays/production/secrets/_templates.example.yaml` also advertised
+`postgres://gremion_public:…`, a role nothing in the repo creates, and carried no
+`PUBLIC_DB_PASSWORD` key for the init container to read. Both fixed.
+
+Proven against a real `postgres:18-alpine`, for the Docker script and for the
+ConfigMap script extracted as `kubectl` renders it and run under the interpreter
+the StatefulSet gives it: aborts with no password (role absent from `pg_roles`),
+aborts on an empty one, and creates `gremion_public_reader` with
+`rolcanlogin = t`.
+
+## The fresh-init proof runs the major the product ships
+
+`gremion-ui/scripts/fresh-init-proof.sh` defaulted to `postgres:16-alpine` while
+the whole repository is pinned to `postgres:18-alpine`, so the unit's central
+artefact asserted of 18 what it had measured on 16 — in CI as well.
+`scripts/check-postgres-major.mjs` could not see it: its lookbehind drops
+anything glued to a `-`, and the `-` of `${VAR:-postgres:16-alpine}` is exactly
+that, so the guard reported OK over 780 files with the stale tag in the tree. The
+guard now reads shell-default expansions too, and the proof re-ran green on
+`postgres:18-alpine` (28 data-plane + 4 control files, all 26 in-database
+post-conditions).
 
 ## Not ported, deliberately
 

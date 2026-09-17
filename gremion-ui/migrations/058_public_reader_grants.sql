@@ -11,9 +11,12 @@
 -- take a bare `RAISE NOTICE` ELSE branch, grant NOTHING, and the migration run
 -- still EXITS GREEN. The anonymous public portal is then permanently broken
 -- (`permission denied for table news_posts`) with no failing check anywhere.
--- Staging never showed it because it inherited the grants through
--- scripts/rename-data-layer.sh (`ALTER ROLE stura_public_reader RENAME TO
--- gremion_public_reader`), which a fresh install never runs.
+-- The tree this file was ported from never showed the bug: a one-off data-layer
+-- rename had already renamed the role in place there, so its databases INHERITED
+-- the grants instead of being granted them. That rename is not part of the
+-- kernel and a fresh install runs no equivalent -- named as a mechanism and not
+-- as a path on purpose, because a remediation that points at a file this repo
+-- does not ship is the same dead end as an env var it does not define.
 --
 -- WHY A NEW MIGRATION INSTEAD OF FIXING 008/055 IN PLACE
 -- -----------------------------------------------------
@@ -141,9 +144,10 @@ BEGIN
   -- install converges on. Every database that ever ran 008_public_portal.sql
   -- while the role still carried its old name already HOLDS those grants:
   -- 008:40-48 granted SELECT on protocol_attendance and protocol_action_items
-  -- to stura_public_reader, and scripts/rename-data-layer.sh:145 does
-  -- `ALTER ROLE stura_public_reader RENAME TO gremion_public_reader` — Postgres
-  -- keys privileges to the role OID, so the rename carried every grant across.
+  -- to the reader role under its retired name, and the data-layer rename that
+  -- ran in that tree (not in this repository) renamed the role in place —
+  -- Postgres keys privileges to the role OID, so the rename carried every grant
+  -- across.
   -- Staging holds all nine tables today. Without these REVOKEs a fresh install
   -- would have seven and every real deployment nine: permanent, invisible
   -- configuration drift, which is the same defect class this migration exists
