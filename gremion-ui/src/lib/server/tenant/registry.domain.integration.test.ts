@@ -234,3 +234,41 @@ describe('host-keyed resolution', () => {
     expect(_hostCacheSizeForTests()).toBe(0)
   })
 })
+
+// The registry row for this unit, asserted in one place.
+describe('B8 post-condition', () => {
+  // The host-keyed cache survives the outer beforeEach (which only touches the
+  // control DB) and each pass seeds a NEW tenant id, so an entry left by an
+  // earlier describe would resolve this host to a tenant that no longer exists.
+  beforeEach(() => {
+    _resetResolutionCacheForTests()
+  })
+
+  it('a tenant is created, a host added, and the tenant resolved BY HOST', async () => {
+    const d = await addTenantDomain(tenantId, 'rat-musterstadt.de', { isPrimary: true })
+    const stored = await getControlDb()<Array<{ host: string; is_primary: boolean }>>`
+      SELECT host, is_primary FROM tenant_domain WHERE tenant_id = ${tenantId}`
+    expect(stored).toEqual([{ host: 'rat-musterstadt.de', is_primary: true }])
+    // Byte-for-byte: the key the write path stored is the key the read path uses.
+    expect((await resolveTenantByHost(d.host))!.id).toBe(tenantId)
+  })
+
+  it('every one of the nine reserved names is refused and writes no row', async () => {
+    for (const host of reservedPlatformHosts(process.env.PLATFORM_DOMAIN!)) {
+      await expect(addTenantDomain(tenantId, host)).rejects.toThrow(/reserved platform host:/)
+    }
+    const rows = await getControlDb()<Array<{ c: number }>>`
+      SELECT count(*)::int AS c FROM tenant_domain`
+    expect(rows[0].c).toBe(0)
+  })
+
+  it('every registry write path normalises through assertHost', async () => {
+    for (const call of [
+      () => addTenantDomain(tenantId, 'client.example, rat-musterstadt.de'),
+      () => removeTenantDomain(tenantId, 'evil.com:80@x'),
+      () => setPrimaryDomain(tenantId, 'tenant..de'),
+    ]) {
+      await expect(call()).rejects.toThrow(/is not a valid host/)
+    }
+  })
+})
