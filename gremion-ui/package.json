@@ -51,7 +51,7 @@
     "@gremion/ports": "workspace:*",
     "clsx": "^2.1.1",
     "isomorphic-dompurify": "^3.19.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.1.0",
     "jose": "^6.2.12",
     "lru-cache": "^11.5.2",
     "node-cron": "^4.6.0",
