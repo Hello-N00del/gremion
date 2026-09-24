@@ -87,7 +87,11 @@
          a governance route the kernel itself owns (TASK-009 lane A, G1). -->
     {#if isAdmin}
       <div class="detail-links">
-        <a class="btn" href={`/members/committees/${node.id}`}>Verwalten</a>
+        <!-- LOW (r1-kernel-nav-roomsB2): this label repeats verbatim across
+             every committee's detail panel — an aria-label naming the unit
+             makes it distinguishable for screen-reader users navigating by
+             a links list, without changing the visible text. -->
+        <a class="btn" href={`/members/committees/${node.id}`} aria-label={`Verwalten — ${node.label}`}>Verwalten</a>
       </div>
     {/if}
   </aside>
