@@ -18,10 +18,10 @@ Containers observed (docker-reported), 32 total, all `Up 8 days`:
 
 | Container | Image (as running) | Health |
 |---|---|---|
-| gremion-public | locally built (`sturaos-gremion-public`) | healthy |
+| gremion-public | locally built (first-party image, no registry reference) | healthy |
 | gremion-ui | `gremion/ui:latest` | healthy |
 | messages-service | `gremion/messages:latest` | healthy |
-| matrix | locally built (`sturaos-matrix`) | healthy |
+| matrix | locally built (first-party image, no registry reference) | healthy |
 | content-service | `gremion/content:latest` | healthy |
 | vault-service | `gremion/vault:latest` | healthy |
 | newsletter-service | `gremion/newsletter:latest` | healthy |
@@ -38,7 +38,7 @@ Containers observed (docker-reported), 32 total, all `Up 8 days`:
 | mailpit | `axllent/mailpit:v1.30.1` | healthy |
 | calendar-postgres | `postgres:16-alpine` | healthy |
 | helios | `gremion/helios:latest` | healthy |
-| legal | locally built (`sturaos-legal`) | healthy |
+| legal | locally built (first-party image, no registry reference) | healthy |
 | files-service | `gremion/files:latest` | healthy |
 | votes-service | `gremion/votes:latest` | healthy |
 | collabora | `collabora/code:24.04.10.1.1` | healthy |
@@ -59,14 +59,21 @@ Compose-declared services (`docker compose config --services`, same host, 32 ser
 - **Declared but not running:** none. All 32 compose-declared services have a matching running
   container.
 - **Running but not declared:** none. All 32 running containers match a compose-declared service.
+- **Required but not observed in this census:** LiveKit (SFU) and its JWT auth-service (TRD-242,
+  TRD-395 "as found" list) — neither appears among the 32 running containers or the 32
+  compose-declared services on this host today. TRD-242's own inspection criterion (docker-compose
+  defines livekit + JWT auth-service) is not met by the current compose files in this worktree,
+  which define no `livekit` service. This is a real gap against the target topology (§2), not a
+  drift from a prior declaration; it is carried into §2 with its own `[A]` status rather than
+  assumed present.
 - **Unhealthy:** none observed. Four containers (`vector`, `fallback`, `pgbouncer`,
   `docker-socket-proxy`) carry no healthcheck in the current compose files, so they report no
   health state rather than `unhealthy`; this is a gap against TRD-179 (idle-colour healthcheck
   requirement) to close by TASK-086, not a running-vs-declared mismatch.
-- **Floating tags:** ten first-party service images run on the mutable `:latest` tag rather than
+- **Floating tags:** eleven first-party service images run on the mutable `:latest` tag rather than
   a version or digest: `gremion/ui`, `gremion/messages`, `gremion/content`, `gremion/vault`,
   `gremion/newsletter`, `gremion/finance-service`, `gremion/calendar`, `gremion/board`,
-  `gremion/vector`, `gremion/helios`, `gremion/fallback` (eleven). This is the known gap TRD-350
+  `gremion/vector`, `gremion/helios`, `gremion/fallback`. This is the known gap TRD-350
   gates at re-init (`both · re-init`), not a violation today; it is exactly what §3 below marks
   `[A] to pin at re-init`.
 - **Locally built images without a registry digest:** `gremion-public`, `matrix`, `legal` build
@@ -102,10 +109,9 @@ is not yet fixed — TRD-352 assigns pinning it to the re-init, owner the operat
 | NATS | broker | `nats:2.12-alpine` | pinned |
 | Traefik | edge/reverse proxy | `traefik:v3.7.1` | pinned |
 | Collabora | document editing | `collabora/code:24.04.10.1.1` | pinned |
-| LiveKit | video/calls | `v1.7.2` [E research/inv-stack.md] | pinned |
+| LiveKit + JWT auth-service | video/calls | target `livekit-server:v1.7.2` (digest-pinned) [E TRD-242, TRD §11 "as found"] | `[A]` not observed in §1's census — TRD-242's own compose-definition check fails against this host's current compose files; deploy and pin at re-init |
 | PgBouncer | connection pooler | `edoburu/pgbouncer:v1.25.2-p0` (digest-pinned) | pinned |
 | Mailpit | dev mail capture | `axllent/mailpit:v1.30.1` | pinned |
-| Vaultwarden | credential tool (optional, profile-gated) | `1.36.0` [E research/inv-stack.md] | pinned |
 | Edge gateway (`docker-socket-proxy`) | ops/socket proxy | `tecnativa/docker-socket-proxy:0.1.1` | pinned |
 | Nextcloud | files | `gremion/nextcloud:33-apache` | pinned |
 | gremion/ui, /messages, /content, /vault, /newsletter, /finance-service, /calendar, /board, /vector, /helios, /fallback | first-party services | `:latest` (floating) | `[A]` to pin at re-init |
@@ -125,6 +131,14 @@ service, Valkey = class 5; Tempo = class 4), rather than as later pilot-time cha
 
 Object storage does not run in the pilot (TRD-066); no line for it here.
 
+Vaultwarden is not a line in the table above: it is not a running or pinned component of this
+topology. TRD §11 reads PRD §12.1a as the council's own externally-operated Vaultwarden instance —
+not a bundled container on this host — so TRD-263's SSO demonstration exercises that external
+instance, and §1's census correctly shows no Vaultwarden container. Which instance TRD-263 actually
+scores against (the council's own vs. the bundled `vaultwarden` compose profile) is an open item
+(⚑ Q-2.5, TRD-351/TRD-263), owner the operator, closing at the Beschluss; this record makes no
+running/pinned claim about it either way.
+
 ## 3. One image set; tasks board and password vault stay disabled
 
 The release produces one image set and does not require a private manifest (PRD-REC-004): every
@@ -137,9 +151,10 @@ test passes for that module:
 
 - Tasks board: off, blocked on the isolation proof (PRD-PLAT-012).
 - Native password vault: off by default; may be enabled later in the pilot once its isolation test
-  passes [D R19-D13, D R19-D37]. Vaultwarden (profile-gated, optional) remains the supported
-  alternative credential tool for the pilot [D R4-5], and is listed in §2 above as a running
-  component in its own right — its presence is not the native vault and does not change this status.
+  passes [D R19-D13, D R19-D37]. Vaultwarden (the council's own externally-operated instance, per
+  TRD §11's reading of PRD §12.1a) remains the supported alternative credential tool for the pilot
+  [D R4-5]; it is not a component of this host's topology (§2) and its status does not change here —
+  see §2's note on the open Q-2.5 item.
 
 ## 4. Deployment-unit addition rule (TRD-351)
 
