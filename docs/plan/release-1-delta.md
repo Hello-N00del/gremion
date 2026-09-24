@@ -164,6 +164,8 @@ changes. Summary:
   even though nothing in the active table's scope actually changes. Neither choice changes the
   active table until the operator/planner picks one; `docs/ops/release-1-waivers.md`'s ledger
   records the same open item under `offsite-backup-remote` and its change log.
+  **Closed 2026-09-24 [D R23-3]: the operator chose (a).** TASK-089's demonstration satisfies
+  PRD-REC-006 for the provider-side item; the off-site copy stays waived; the active table is unchanged.
 - **The probe/alert vendor** — flagged, not cleanly closed. PRD §17.1 P4 names it as one of the three
   that fall, but PLAN's own requirements table scores its requirement, PRD-OPS-008 (the independent
   status page), as Should and defers it to P4/12-month scope, stating explicitly "no other task

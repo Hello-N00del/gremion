@@ -10,8 +10,8 @@ decision, a purchase, a DNS edit or a real council's identity. They were waived
 `mail-bringup` and `external-probe-and-alerting` — leave the active table below
 and move to "Lifted waivers", dated, per PRD §17.1 P4's ADJUST verdict. A third,
 `offsite-backup-remote`, stays active and unchanged in scope — but that is
-flagged as an **open item, not a settled call**: see the row's amendment note
-and "Open items" below. Four items remain in the active table:
+flagged as an open item and closed the same day by the operator: nothing
+was waived over the provider-side item, so nothing is lifted [D R23-3]. Four items remain in the active table:
 `offsite-backup-remote`, `legal-documents`, `apex-dns`, `pilot-inputs`. See
 "Change log" at the end of this file for the dated detail; rows are never
 deleted, only moved and annotated.
@@ -25,7 +25,9 @@ visibility for both):**
    written on 2026-09-15 never waived a provider-side item — only the true
    off-site (second-provider) copy. TASK-089 demonstrates the provider-side
    restore, but there is no provider-side waiver to remove for it. See the
-   row's amendment note for the two ways to close this.
+   row's amendment note for the two ways to close this. **Closed 2026-09-24
+   [D R23-3]: the operator chose (a)** — nothing was waived, so nothing is
+   lifted; TASK-089's demonstration satisfies PRD-REC-006 for this item.
 
 A waiver is not a pass. `gremion-verify` reads this file out of the release tree
 (`current/docs/ops/release-1-waivers.md`) on every run, prints each of the six as
@@ -44,7 +46,7 @@ private host design; the gate id is the corresponding section of
 
 | Waiver id | §L item | Gate | What is waived | Why it cannot be proven at release 1 | Lifted by |
 |---|---|---|---|---|---|
-| `offsite-backup-remote` | §L:2 | G2-RESTORE | the off-site (second-provider) backup remote and the `offsite: true` assertion over it — **unchanged 2026-09-24, flagged as an OPEN ITEM, not a settled call (see "Open items" above)**. The measured local (provider-side) restore of §L:2 is **not waived**, and release 1 must record its RTO as a number; that provider-side drill is demonstrated by TASK-089 (one-off backup verification and provider restore drill, after which both backup jobs are switched off). TASK-011's acceptance text and PLAN §7's B0 reuse line both say "the provider-side backup remote... leave[s] the waiver list," but this row, as written on 2026-09-15, never waived a provider-side item — only the off-site (second-provider) copy, which PRD-OPS-007 keeps outside pilot scope ("the north star, funded once paying councils exist"). So TASK-089 demonstrates the provider-side restore PRD-REC-006 asks for, but there is no provider-side waiver here to lift; whether that satisfies PRD-REC-006 in full, or the row should instead be split so a provider-side line moves to "Lifted waivers" for symmetry with mail and the probe/vendor item, is left to the operator/planner — see delta record §5 | the second-provider remote is a purchased off-box destination; no credential and no target exist before the pilot, and PRD-OPS-007 defers it past the pilot | OPERATOR, before G2-RESTORE |
+| `offsite-backup-remote` | §L:2 | G2-RESTORE | the off-site (second-provider) backup remote and the `offsite: true` assertion over it — **unchanged 2026-09-24; the open item on it was closed the same day, nothing to lift [D R23-3] (see "Open items" above)**. The measured local (provider-side) restore of §L:2 is **not waived**, and release 1 must record its RTO as a number; that provider-side drill is demonstrated by TASK-089 (one-off backup verification and provider restore drill, after which both backup jobs are switched off). TASK-011's acceptance text and PLAN §7's B0 reuse line both say "the provider-side backup remote... leave[s] the waiver list," but this row, as written on 2026-09-15, never waived a provider-side item — only the off-site (second-provider) copy, which PRD-OPS-007 keeps outside pilot scope ("the north star, funded once paying councils exist"). So TASK-089 demonstrates the provider-side restore PRD-REC-006 asks for, but there is no provider-side waiver here to lift; whether that satisfies PRD-REC-006 in full, or the row should instead be split so a provider-side line moves to "Lifted waivers" for symmetry with mail and the probe/vendor item, is left to the operator/planner — see delta record §5 | the second-provider remote is a purchased off-box destination; no credential and no target exist before the pilot, and PRD-OPS-007 defers it past the pilot | OPERATOR, before G2-RESTORE |
 | `legal-documents` | §L:1 | G1-LEGAL | Impressum, Datenschutz, DPIA, ROPA, AVV and the accessibility statement as signed documents | they name a legal entity that does not exist until the pilot council signs | OPERATOR, before G1-LEGAL |
 | `apex-dns` | §L:5 | G5-TENANT | the apex DNS edits for the production domain | the apex is edited once, at cutover; editing it early points real names at an ungated deployment | OPERATOR, before G5-TENANT |
 | `pilot-inputs` | §L:5 | G5-TENANT | the pilot council's identity, real names, wording and legal texts | operator-supplied content; fixtures must not stand in for it | OPERATOR, before G5-TENANT |
@@ -104,6 +106,11 @@ Dated lines only; a change is added here, never substituted for the row it descr
   satisfies PRD-REC-006 for this item or whether the row should be split for
   symmetry with mail/probe. `apex-dns` unchanged. Full reasoning and the PRD
   §17.1 verdict-by-verdict table: `docs/plan/release-1-delta.md`.
+- **2026-09-24 (operator decision R23-3):** the `offsite-backup-remote` open item
+  is closed with option (a): nothing was waived over the provider-side item, so
+  nothing is lifted, and TASK-089's provider restore drill satisfies
+  PRD-REC-006 for it. The off-site (second-provider) copy stays waived. The
+  probe/alert vendor gap (PRD-OPS-008) stays open.
 
 ## Signature
 
