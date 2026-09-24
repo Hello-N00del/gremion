@@ -139,14 +139,31 @@ changes. Summary:
   server on the vendor domain, SPF/DKIM/DMARC pass, inbox delivery to a large consumer mailbox and a
   university mailbox) per the PRD-REC-006 requirements-traceability row (TASK-011, TASK-015,
   TASK-089). Condition for the fall — PRD-MTG-002a is Must — already holds (PRD §8.8 table).
-- **The provider-side (pilot host) backup remote** leaves the waiver list. The current ledger already
-  scoped its one backup-related row to the off-site (second-provider) copy only, and already states
-  the local restore "is not waived". No row needed removing; TASK-089 (the one-off backup
-  verification and provider restore drill, after which both backup jobs are switched off) is named
-  as the demonstrating task, per the PRD-REC-006 traceability row and PRD-OPS-007's pilot deviation
-  text. The true off-site (second-provider) copy stays waived — PRD-OPS-007 keeps it "the north
-  star, funded once paying councils exist," and P4's own text says the pilot's demonstrated item is
-  "not an off-site copy."
+- **The backup remote — flagged, not cleanly closed, same visibility as the probe/vendor gap below.**
+  TASK-011's own acceptance text and PLAN §7's B0 reuse line both say "the provider-side backup
+  remote... leave[s] the waiver list." The ledger's one backup-related row (`offsite-backup-remote`,
+  written 2026-09-15) never waived a provider-side item to begin with: it waived only the off-site
+  (second-provider) copy and its `offsite: true` assertion, and already stated the *local* restore
+  "is not waived." So read literally, there is nothing in the active table for the provider-side
+  item to leave — it was outside the waiver before this amendment. PRD-REC-006's own text points
+  the same way for what release 1 demonstrates: PRD-REC-006 says "the backup remote demonstrated
+  is the [pilot-host]-side backup the first restore drill restores from" (quoting PRD-REC-006,
+  which names the pilot host's hosting provider; that name is not repeated here per this task's
+  rule against naming hosting providers in committed docs) "... An off-site copy at a second
+  provider is the north star and is not demonstrated in the pilot." I.e. PRD-REC-006 demonstrates
+  the provider-side restore (TASK-089: one-off backup verification and provider restore drill, after which both
+  backup jobs are switched off) and leaves the off-site copy waived, unchanged. That satisfies
+  PRD-REC-006's "demonstrated working" half for the provider-side item, but not its "removed from
+  the waiver list" half, because there is no waiver row over that item to remove. This record does
+  not resolve that mismatch unilaterally: it surfaces it for operator/planner sign-off, same as the
+  probe/vendor item. Two ways to close it, named for the operator/planner to choose: (a) treat
+  TASK-089's demonstration as satisfying PRD-REC-006 in full for this item, since nothing was ever
+  waived to lift; or (b) read the `offsite-backup-remote` row as needing a split — the off-site
+  (second-provider) copy stays active/waived, and a separate provider-side line is added to "Lifted
+  waivers" naming TASK-089, purely for symmetry with how mail and the probe/vendor item are shown,
+  even though nothing in the active table's scope actually changes. Neither choice changes the
+  active table until the operator/planner picks one; `docs/ops/release-1-waivers.md`'s ledger
+  records the same open item under `offsite-backup-remote` and its change log.
 - **The probe/alert vendor** — flagged, not cleanly closed. PRD §17.1 P4 names it as one of the three
   that fall, but PLAN's own requirements table scores its requirement, PRD-OPS-008 (the independent
   status page), as Should and defers it to P4/12-month scope, stating explicitly "no other task
