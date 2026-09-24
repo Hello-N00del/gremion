@@ -41,6 +41,12 @@ process.env.DATABASE_URL ??= 'postgres://gremion:gremion_test@localhost:5432/gre
 // runMigrations applying seeds — they all use the pre-migrated DB directly.
 process.env.GREMION_DISABLE_SEEDS ??= 'true'
 
+// Spec A §C — the platform apex the reserved-host refusal in
+// registry.addTenantDomain is computed against. Set here (config module, before
+// the $env/dynamic/private snapshot at worker fork) so the domain suites see a
+// real value; `??=` lets a real shell/CI value win.
+process.env.PLATFORM_DOMAIN ??= 'gremion.example'
+
 // P2.1a — resolveTenantBySlug assembles a full TenantContext, which eagerly
 // resolves the KC-admin + Auth.js UI client secret refs (getKeycloakAdminClient
 // reads resolveSecret in its constructor) and derives the default tenant's

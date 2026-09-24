@@ -50,6 +50,8 @@ function fakeCtx(id: string): TenantContext {
     brand: {} as TenantContext['brand'],
     config: {} as TenantContext['config'],
     aliasNamespace: `${id}-`, accent: null, logoUrl: null,
+    // Spec B §T.1: null primary host, never a synthesised `<slug>.<apex>`.
+    primaryHost: null,
     configPath: `/data/${id}/config.json`,
     dbUrl: `postgres://${id}`, dbMax: 3, dbPrepare: true,
   }
