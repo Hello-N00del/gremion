@@ -148,6 +148,22 @@ export async function updateOrgUnit(
   return rows[0] ?? null
 }
 
+/** FLOW-MSG-001 (TASK-009 lane B): flips one subsystem's `wants_*` flag. Always called
+ *  inside the caller's tx — attachSubsystem/releaseSubsystem co-commit this with the
+ *  ledger enqueue/detach so the flag and the row never drift apart. `UpdateOrgUnitPatch`
+ *  intentionally does not carry `wants_*` (it is a request-shaped patch; this is an
+ *  internal provisioning primitive), so this stays a standalone function. Only two
+ *  literal branches — no dynamic identifier building, no injection surface. */
+export async function setSubsystemWanted(
+  tx: PgTransaction, id: string, subsystem: 'matrix' | 'nextcloud', wanted: boolean
+): Promise<void> {
+  if (subsystem === 'matrix') {
+    await tx`UPDATE org_units SET wants_matrix_room = ${wanted} WHERE id = ${id}`
+  } else {
+    await tx`UPDATE org_units SET wants_nextcloud_folder = ${wanted} WHERE id = ${id}`
+  }
+}
+
 export async function deleteOrgUnit(id: string): Promise<void>
 export async function deleteOrgUnit(tx: PgTransaction, id: string): Promise<void>
 export async function deleteOrgUnit(
