@@ -58,11 +58,29 @@
           </div>
           <div class="mono">{p.tops}</div>
           <div class="mono td-muted">{p.attended}/{p.total}</div>
-          <div>
+          <div class="status-cell">
             {#if p.status === 'published'}
               <span class="pill pill-success">Final</span>
             {:else}
               <span class="pill pill-warn">Entwurf</span>
+            {/if}
+            <!-- TASK-009 kernel lane (F1 drift): points at the real,
+                 already-working per-committee editor. Gated on
+                 data.isAdmin — the exact permission that route itself
+                 enforces for writes (Role.CouncilAdmin). aria-label names
+                 the protocol: "Bearbeiten"/"Öffnen" repeats verbatim across
+                 every row, otherwise ambiguous for a screen-reader user
+                 navigating by a links list (same class of fix as
+                 OrgDetailPanel's "Verwalten" link, 008372e). -->
+            {#if data.isAdmin}
+              {@const label = p.status === 'draft' ? 'Bearbeiten' : 'Öffnen'}
+              <a
+                class="row-link"
+                href={`/members/committees/${p.committeeId}/protokolle/${p.id}`}
+                aria-label={`${label} — ${p.title}`}
+              >
+                {label}
+              </a>
             {/if}
           </div>
         </div>
@@ -151,5 +169,21 @@
   }
   :global(.dark) .com-mono .bar {
     background: oklch(72% 0.14 var(--c-hue, 252));
+  }
+
+  .status-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .row-link {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--accent-ink);
+    text-decoration: none;
+  }
+  .row-link:hover {
+    text-decoration: underline;
   }
 </style>
