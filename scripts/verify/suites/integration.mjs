@@ -1,98 +1,70 @@
-// TASK-045: integration suite (brief S5, S9). Three sub-checks against a
-// throwaway Postgres 18 started with a PLAIN `docker run` (never `docker
-// compose` -- the repo's base docker-compose.yml pins gremion_* volume names
-// host-wide; a 2026-09-24 incident wiped 7 of them when a worktree's compose
-// run collided with other work's shared volumes). The container and any
-// volume it creates are named uniquely per run and torn down in a `finally`
-// with plain `docker rm -f` / `docker volume rm`, never `docker compose down`.
+// TASK-045: integration suite (brief S5, S9). Three sub-checks, combined
+// with lib/guard.mjs#combineParts so none can hide inside another's count:
+//   - vitest: gremion-ui `test:integration` against a throwaway Postgres 18
+//     started with a PLAIN `docker run` (never `docker compose` -- the repo's
+//     base docker-compose.yml pins gremion_* volume names host-wide; a
+//     2026-09-24 incident wiped 7 of them when a worktree's compose run
+//     collided with other work's shared volumes). The container is named
+//     uniquely per run and torn down in a `finally` with plain
+//     `docker rm -f`, never `docker compose down`.
+//   - fresh-init: `make fresh-init-proof` (its own throwaway container).
+//   - nats: `make test-ports-nats` (its own throwaway container).
+// Each is judged by exit code AND its own printed post-condition line.
+// Each can run alone as `verify --only integration:<part>`.
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { combineParts } from '../lib/guard.mjs'
 import { headSha } from '../lib/git.mjs'
-import { parseVitestJsonFile, summarizeVitestFailures } from '../lib/parsers.mjs'
-import { run, toolAvailable } from '../lib/proc.mjs'
+import { run, spawnMissing, tail, toolAvailable } from '../lib/proc.mjs'
+import { REPO_ROOT, runVitestJson } from '../lib/vitest.mjs'
 
-// Brief S9: the container name is unique per run. Task-045 round-1 review
-// (LOW) found this using `Date.now().toString(16)` whenever GITHUB_SHA was
-// unset -- i.e. on every local run -- instead of the HEAD sha8 the brief
-// actually specifies. verify.mjs already refuses to run any real suite
-// (integration included) against a dirty tree (Q5), so HEAD is guaranteed to
-// describe the exact tree this suite is testing by the time this runs; using
-// it here (rather than a wall-clock value with no relation to the commit
-// under test) makes a leftover/orphaned container from a killed run
-// identifiable by the commit that produced it.
+// Q4 (recommended default, applied): test/integration/*.bats needs the full
+// stack including Keycloak, so it is excluded from every suite and listed in
+// every record as deferred -- never run, never reported as passed.
 export const DEFERRED_BATS_NOTE =
   'test/integration/*.bats: deferred to TASK-036/re-init (needs the full stack including Keycloak) -- never run or reported as passed by this suite (Q4)'
 
-const REPO_ROOT = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
-
-// A fresh, unguessable password per run -- never committed, never logged.
-// Earlier draft of this suite hard-coded POSTGRES_PASSWORD=gremion_test,
-// which is fine for a throwaway container nothing else can reach, but a
-// literal credential in a public kernel repo is exactly the shape the
-// public-flip leak check exists to catch, and costs nothing to avoid: this
-// container is torn down at the end of the same function and the password
-// is never printed (run()'s own stdout/stderr capture is never logged for
-// this call site) or written to the result record.
+// A fresh, unguessable password per run -- never committed, never logged,
+// never on a command line: it reaches docker and psql through the child
+// process's ENVIRONMENT (`-e NAME` with no value makes docker read NAME
+// from its own env), so it is not visible in the host process list or in
+// `docker inspect`'s recorded command (round-1 LOW: it used to be passed
+// as `-e POSTGRES_PASSWORD=<value>` on argv).
 function randomTestPassword() {
   return randomBytes(24).toString('base64url')
 }
 
 function startTestDb({ sha8, pid }) {
+  // Brief S9: unique per run, and identifiable by the commit under test
+  // (verify.mjs refuses a dirty tree, so HEAD is the tree being tested).
   const name = `verify-${sha8}-${pid}-db`
   const password = randomTestPassword()
+  const env = { ...process.env, POSTGRES_PASSWORD: password, PGPASSWORD: password }
   // POSTGRES_USER contains "test" so assert-safe-test-db-url.ts's non-5432
-  // convention check passes (brief S9) without touching the documented
-  // fixture URLs. `-p 127.0.0.1::5432` binds an ephemeral host port so this
-  // run can never collide with another worktree's, or with staging's 5433.
+  // convention check passes (brief S9). `-p 127.0.0.1::5432` binds an
+  // ephemeral host port so this run can never collide with another
+  // worktree's, or with staging's 5433.
   //
-  // POSTGRES_DB is "gremion", not "gremion_test": found by actually running
-  // `pnpm migrate` against a "gremion_test" database --
-  // migrations/008_public_portal.sql hardcodes a bare `GRANT CONNECT ON
-  // DATABASE gremion TO gremion_public_reader` (058's own header names this
-  // as a known, un-fixed defect in 008 -- migration files are pinned by
-  // SHA-256 manifest and never edited after the fact). assert-safe-test-db-
-  // url.ts's OWN documented fixture URL is
-  // `postgres://gremion:gremion_test@localhost:5432/gremion` -- "gremion" is
-  // this repo's actual integration-suite database name; the safety
-  // convention (db name OR user name must contain "test") is satisfied here
-  // by POSTGRES_USER alone, so the database itself can and should be named
-  // to match what every migration assumes.
-  const runRes = run('docker', [
-    'run',
-    '-d',
-    '--name',
-    name,
-    '-e',
-    'POSTGRES_USER=gremion_test',
-    '-e',
-    `POSTGRES_PASSWORD=${password}`,
-    '-e',
-    'POSTGRES_DB=gremion',
-    '-p',
-    '127.0.0.1::5432',
-    'postgres:18-alpine',
-  ])
+  // POSTGRES_DB is "gremion", not "gremion_test": migrations/008 hardcodes
+  // `GRANT CONNECT ON DATABASE gremion` (058's header names it as a known,
+  // un-fixed defect in a hash-pinned file). The safety convention (db name
+  // OR user name contains "test") is satisfied by POSTGRES_USER alone.
+  const runRes = run(
+    'docker',
+    ['run', '-d', '--name', name, '-e', 'POSTGRES_USER=gremion_test', '-e', 'POSTGRES_PASSWORD', '-e', 'POSTGRES_DB=gremion', '-p', '127.0.0.1::5432', 'postgres:18-alpine'],
+    { env },
+  )
   if (runRes.code !== 0) {
     return { ok: false, name, detail: `docker run failed: ${runRes.stderr || runRes.stdout}` }
   }
   // The official postgres image starts TWO servers on a first run: a
-  // temporary, unix-socket-only postmaster that runs initdb's own scripts,
-  // then a full restart into the real one. `pg_isready` can observe the
-  // temporary server's brief accepting-connections window and report ready
-  // moments before it shuts down for the restart -- caught by actually
-  // running this suite: `pg_isready` succeeded, port lookup succeeded, and
-  // the very next call (`CREATE DATABASE control`, ~1-2s later) failed with
-  // "connection ... failed: No such file or directory" because the socket
-  // it had just seen was gone again mid-restart. `pg_isready` alone cannot
-  // tell the two servers apart; a real `SELECT 1` through psql can, because
-  // it only ever succeeds against a server actually accepting queries, and
-  // retrying it (not just checking once) rides out the restart gap.
+  // temporary, unix-socket-only one for initdb's scripts, then the real one.
+  // `pg_isready` can see the temporary one moments before it shuts down; a
+  // real `SELECT 1`, retried, rides out the restart gap.
   const deadline = Date.now() + 60_000
   let port = null
   while (Date.now() < deadline) {
-    const probe = run('docker', ['exec', '-e', `PGPASSWORD=${password}`, name, 'psql', '-U', 'gremion_test', '-d', 'postgres', '-tAc', 'SELECT 1'])
+    const probe = run('docker', ['exec', '-e', 'PGPASSWORD', name, 'psql', '-U', 'gremion_test', '-d', 'postgres', '-tAc', 'SELECT 1'], { env })
     if (probe.code === 0 && probe.stdout.trim() === '1') {
       const portRes = run('docker', ['port', name, '5432/tcp'])
       const m = portRes.stdout.match(/:(\d+)\s*$/m)
@@ -106,16 +78,13 @@ function startTestDb({ sha8, pid }) {
   if (port === null) {
     return { ok: false, name, detail: `${name} never became ready within 60s` }
   }
-  return { ok: true, name, port, password }
+  return { ok: true, name, port, password, env }
 }
 
-// Kept dependency-free and synchronous (this whole suite is spawnSync
-// throughout, see lib/proc.mjs's own doc comment on why): Atomics.wait on a
-// fresh SharedArrayBuffer blocks the calling thread for exactly `ms` without
-// spawning a process per poll.
+// Synchronous (this whole suite is spawnSync throughout): Atomics.wait on a
+// fresh SharedArrayBuffer blocks for exactly `ms` without a process per poll.
 function sleepMs(ms) {
-  const sab = new SharedArrayBuffer(4)
-  Atomics.wait(new Int32Array(sab), 0, 0, ms)
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 function stopTestDb(name) {
@@ -124,74 +93,45 @@ function stopTestDb(name) {
   run('docker', ['rm', '-f', name])
 }
 
-export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
-  if (!toolAvailable('docker')) {
-    return { toolMissing: 'docker', unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0 }
-  }
+function psqlAsTestUser(db, database, args, opts = {}) {
+  return run('docker', ['exec', ...(opts.input ? ['-i'] : []), '-e', 'PGPASSWORD', db.name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'gremion_test', '-d', database, ...args], {
+    env: db.env,
+    ...opts,
+  })
+}
+
+function vitestPart({ root }) {
+  const label = 'gremion-ui vitest (test:integration)'
+  if (!toolAvailable('docker')) return { label, toolMissing: 'docker' }
   const uiDir = path.join(root, 'gremion-ui')
-  const sha8 = headSha(root).slice(0, 8)
-  const db = startTestDb({ sha8, pid: process.pid })
-  if (!db.ok) {
-    stopTestDb(db.name)
-    return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: db.detail }
-  }
-
+  const db = startTestDb({ sha8: headSha(root).slice(0, 8), pid: process.pid })
   try {
-    const dataUrl = `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion`
-    const controlUrl = `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/control`
+    if (!db.ok) return { label, unparseable: true, detail: db.detail }
 
-    const createControl = run('docker', [
-      'exec',
-      '-e',
-      `PGPASSWORD=${db.password}`,
-      db.name,
-      'psql',
-      '-U',
-      'gremion_test',
-      '-d',
-      'postgres',
-      '-c',
-      'CREATE DATABASE control',
-    ])
+    const createControl = psqlAsTestUser(db, 'postgres', ['-c', 'CREATE DATABASE control'])
     if (createControl.code !== 0) {
-      return unparseable(`CREATE DATABASE control failed: ${createControl.stderr || createControl.stdout}`)
+      return { label, unparseable: true, detail: `CREATE DATABASE control failed: ${createControl.stderr || createControl.stdout}` }
     }
 
-    // migrations/058_public_reader_grants.sql (T07) deliberately ABORTS the
-    // whole migration chain when the `gremion_public_reader` role does not
-    // exist yet -- found by actually running `pnpm migrate` against this
-    // throwaway container: "role gremion_public_reader does not exist ...
-    // Create it BEFORE migrating." On a real deployment that role comes from
-    // docker/postgres/init-databases.sh (Docker) or the postgres-init-scripts
-    // ConfigMap (K8s), neither of which this ad hoc `docker run` container
-    // runs. This suite owns its own throwaway Postgres end-to-end, so it
-    // creates the role itself here, the same way init-databases.sh does --
-    // with its own fresh, unlogged, never-printed password (the role's
-    // password is never read back by anything this suite does; only its
-    // existence matters to 058).
-    // Ported from docker/postgres/init-databases.sh's own form: `-c` does NOT
-    // expand a `-v`-supplied psql variable (:'_password') the way piping the
-    // same statement through stdin does (proved empirically -- `-c` raised
-    // "syntax error at or near \":\""), so this goes through stdin, exactly
-    // like init-databases.sh's own heredoc does.
+    // migrations/058 ABORTS the chain when `gremion_public_reader` does not
+    // exist; on a real deployment docker/postgres/init-databases.sh creates
+    // it. This suite owns its throwaway Postgres, so it creates the role the
+    // same way (its password is never read back; only its existence
+    // matters). `-c` does not expand a `-v` psql variable, stdin does.
     const publicReaderPassword = randomTestPassword()
-    const createPublicReader = run(
-      'docker',
-      ['exec', '-i', '-e', `PGPASSWORD=${db.password}`, db.name, 'psql', '-v', 'ON_ERROR_STOP=1', '-v', `_password=${publicReaderPassword}`, '-U', 'gremion_test', '-d', 'gremion'],
-      {
-        input:
-          "SELECT CASE WHEN NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'gremion_public_reader') " +
-          "THEN format('CREATE ROLE gremion_public_reader LOGIN PASSWORD %L', :'_password') ELSE 'SELECT 1' END \\gexec\n",
-      },
-    )
+    const createPublicReader = psqlAsTestUser(db, 'gremion', ['-v', `_password=${publicReaderPassword}`], {
+      input:
+        "SELECT CASE WHEN NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'gremion_public_reader') " +
+        "THEN format('CREATE ROLE gremion_public_reader LOGIN PASSWORD %L', :'_password') ELSE 'SELECT 1' END \\gexec\n",
+    })
     if (createPublicReader.code !== 0) {
-      return unparseable(`provisioning gremion_public_reader failed: ${createPublicReader.stderr || createPublicReader.stdout}`)
+      return { label, unparseable: true, detail: `provisioning gremion_public_reader failed: ${createPublicReader.stderr || createPublicReader.stdout}` }
     }
 
     const env = {
       ...process.env,
-      DATABASE_URL: dataUrl,
-      CONTROL_DATABASE_URL: controlUrl,
+      DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion`,
+      CONTROL_DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/control`,
       CONFIG_PATH: path.join(uiDir, 'tests', 'integration', 'fixtures', 'default-config.json'),
       GREMION_DISABLE_SEEDS: 'true',
       KEYCLOAK_ADMIN_CLIENT_SECRET: 'test-kc-admin-secret',
@@ -199,62 +139,80 @@ export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
       AUTH_KEYCLOAK_ISSUER: 'https://council.example/auth/realms/gremion',
       AUTH_KEYCLOAK_BASE: 'https://council.example/auth/realms/gremion',
     }
+    delete env.POSTGRES_PASSWORD
+    delete env.PGPASSWORD
 
     const migrate = run('pnpm', ['run', 'migrate'], { cwd: uiDir, env })
+    if (spawnMissing(migrate)) return { label, toolMissing: 'pnpm' }
     if (migrate.code !== 0) {
-      return unparseable(`pnpm migrate failed: ${tail(migrate.stdout + migrate.stderr)}`)
+      return { label, unparseable: true, detail: `pnpm migrate failed: ${tail(migrate.stdout + migrate.stderr)}` }
     }
-
-    const outFile = path.join(mkdtempSync(path.join(tmpdir(), 'verify-integration-')), 'result.json')
-    const test = run(
-      'pnpm',
-      ['exec', 'vitest', 'run', '--config', 'vitest.integration.config.ts', '--reporter=json', `--outputFile=${outFile}`],
-      { cwd: uiDir, env },
-    )
-    const parsed = parseVitestJsonFile(outFile)
-    // Read failure summaries BEFORE the temp report is deleted -- found
-    // needed by actually running this suite: a bare "5 of 155 failed" gave no
-    // lead at all on which 5.
-    const vitestFailureLines = parsed && parsed.failed > 0 ? summarizeVitestFailures(outFile) : []
-    rmSync(path.dirname(outFile), { recursive: true, force: true })
-    if (!parsed) {
-      return unparseable(`vitest test:integration produced no parseable JSON report (exit ${test.code})\n${tail(test.stdout + test.stderr)}`)
-    }
-
-    // make fresh-init-proof and make test-ports-nats are each self-contained
-    // (their own throwaway container, own port) -- see the Makefile's own
-    // comments. Trusted by exit code plus their own printed post-condition
-    // string, since both already assert non-vacuously in-database / in-log.
-    const freshInit = run('make', ['fresh-init-proof'], { cwd: root })
-    const freshInitOk = freshInit.code === 0 && /all post-conditions hold/.test(freshInit.stdout + freshInit.stderr)
-
-    const natsTest = run('make', ['test-ports-nats'], { cwd: root })
-    const natsOk = natsTest.code === 0
-
-    const extraFailed = (freshInitOk ? 0 : 1) + (natsOk ? 0 : 1)
-    const details = []
-    if (vitestFailureLines.length > 0) details.push(`vitest test:integration failures:\n  ${vitestFailureLines.join('\n  ')}`)
-    if (!freshInitOk) details.push(`fresh-init-proof: ${tail(freshInit.stdout + freshInit.stderr)}`)
-    if (!natsOk) details.push(`test-ports-nats: ${tail(natsTest.stdout + natsTest.stderr)}`)
-
-    return {
-      toolMissing: null,
-      unparseable: false,
-      collected: parsed.collected + 2,
-      passed: parsed.passed + (freshInitOk ? 1 : 0) + (natsOk ? 1 : 0),
-      failed: parsed.failed + extraFailed,
-      skipped: parsed.skipped,
-      detail: details.join('\n'),
-    }
+    return runVitestJson({ label, cwd: uiDir, cmd: 'pnpm', args: ['run', 'test:integration'], env, root })
   } finally {
     stopTestDb(db.name)
   }
 }
 
-function unparseable(detail) {
-  return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail }
+/**
+ * `make test-ports-nats` (packages/ports/scripts/nats-test.sh). Exit 0 is
+ * not enough (round-1 MEDIUM: this was trusted on exit code alone while the
+ * comment claimed a post-condition check): the script's own final OK line
+ * and its "<N> passing tests from <file>" count must both be present, and N
+ * is the part's collected count.
+ */
+export function judgeNatsTest(res) {
+  const label = 'make test-ports-nats'
+  const out = `${res.stdout}\n${res.stderr}`
+  const count = out.match(/^\[nats-test\] (\d+) passing tests from \S+ \(minimum \d+\)\s*$/m)
+  const ok = /^\[nats-test\] OK -- the JetStream proofs ran against a real server\s*$/m.test(out)
+  if (res.code !== 0) {
+    return { label, collected: Math.max(1, count ? Number(count[1]) : 1), passed: 0, failed: Math.max(1, count ? Number(count[1]) : 1), skipped: 0, detail: tail(out) }
+  }
+  if (!count || !ok) {
+    return { label, unparseable: true, detail: `exit 0 but no "[nats-test] N passing tests" + "[nats-test] OK" post-condition lines -- untrusted\n${tail(out)}` }
+  }
+  const n = Number(count[1])
+  return { label, collected: n, passed: n, failed: 0, skipped: 0 }
 }
 
-function tail(text, n = 500) {
-  return text.length > n ? text.slice(-n) : text
+/**
+ * `make fresh-init-proof` (gremion-ui/scripts/fresh-init-proof.sh). Its
+ * checks print `  ok <name>` / `FAIL <name>: ...`; collected is their count,
+ * and exit 0 must come with its own "[fresh-init] all post-conditions hold".
+ */
+export function judgeFreshInit(res) {
+  const label = 'make fresh-init-proof'
+  const out = `${res.stdout}\n${res.stderr}`
+  const oks = (out.match(/^\s+ok \S/gm) ?? []).length
+  const fails = (out.match(/^FAIL \S/gm) ?? []).length
+  const holds = /^\[fresh-init\] all post-conditions hold\s*$/m.test(out)
+  if (res.code !== 0) {
+    const failed = Math.max(1, fails)
+    return { label, collected: oks + failed, passed: oks, failed, skipped: 0, detail: tail(out) }
+  }
+  if (!holds || fails > 0) {
+    return { label, unparseable: true, detail: `exit 0 but no "[fresh-init] all post-conditions hold" line (or a FAIL line was printed) -- untrusted\n${tail(out)}` }
+  }
+  return { label, collected: oks, passed: oks, failed: 0, skipped: 0 }
+}
+
+function makePart(target, judge, root) {
+  if (!toolAvailable('docker')) return { label: `make ${target}`, toolMissing: 'docker' }
+  const res = run('make', [target], { cwd: root })
+  if (spawnMissing(res)) return { label: `make ${target}`, toolMissing: 'make' }
+  return judge(res)
+}
+
+export const INTEGRATION_PARTS = {
+  vitest: (root) => vitestPart({ root }),
+  'fresh-init': (root) => makePart('fresh-init-proof', judgeFreshInit, root),
+  nats: (root) => makePart('test-ports-nats', judgeNatsTest, root),
+}
+
+export function runIntegrationSuite({ root = REPO_ROOT, only } = {}) {
+  const names = only ?? Object.keys(INTEGRATION_PARTS)
+  for (const n of names) {
+    if (!INTEGRATION_PARTS[n]) throw new Error(`unknown integration part: ${n} (known: ${Object.keys(INTEGRATION_PARTS).join(', ')})`)
+  }
+  return combineParts(names.map((n) => INTEGRATION_PARTS[n](root)))
 }
