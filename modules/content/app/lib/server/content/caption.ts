@@ -9,7 +9,8 @@ import type { Post } from './types'
 import type { Section } from './segment'
 // jsdom is imported untyped (no `@types/jsdom` dependency added for this pure
 // helper); its window is re-typed to the standard DOM lib types below.
-// @ts-expect-error -- jsdom has no bundled types and we add none on purpose.
+// Typed by the local ambient declaration in jsdom-shim.d.ts (the toolchain guard allows
+// the expect-error suppression directive only in *.test.ts).
 import { JSDOM } from 'jsdom'
 
 interface JsdomWindow {

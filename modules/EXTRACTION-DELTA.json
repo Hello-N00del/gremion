@@ -6,11 +6,6 @@
   },
   "entries": [
     {
-      "path": "modules/content/app/migrations/1200_content_news_posts.sql",
-      "reason": "added: kernel-origin content creation migration (B4a-news-posts-ownership), moved bytes-unchanged from modules/content/migrations/ into the content app chain (Q7); not a StuRa file",
-      "owner": "TASK-200"
-    },
-    {
       "path": "modules/board/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
       "owner": "TASK-200"
@@ -28,6 +23,36 @@
     {
       "path": "modules/calendar/test/tenant-store.init-retry.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/calendar/tsconfig.test.json",
+      "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/caption.ts",
+      "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/channels/instagram-renderer.ts",
+      "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/jsdom-shim.d.ts",
+      "reason": "added: ambient `jsdom` declaration replacing three @ts-expect-error lines (toolchain guard, TASK-017 Q2)",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/segment.ts",
+      "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/app/migrations/1200_content_news_posts.sql",
+      "reason": "added: kernel-origin content creation migration (B4a-news-posts-ownership), moved bytes-unchanged from modules/content/migrations/ into the content app chain (Q7); not a StuRa file",
       "owner": "TASK-200"
     },
     {
@@ -51,6 +76,11 @@
       "owner": "TASK-200"
     },
     {
+      "path": "modules/content/tsconfig.test.json",
+      "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
+      "owner": "TASK-200"
+    },
+    {
       "path": "modules/finance/test/api.integration.test.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
       "owner": "TASK-200"
@@ -63,6 +93,11 @@
     {
       "path": "modules/finance/test/tenant-store.init-retry.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/finance/tsconfig.test.json",
+      "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
       "owner": "TASK-200"
     },
     {
@@ -93,6 +128,11 @@
     {
       "path": "modules/publishing/test/tenant-store.init-retry.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/publishing/tsconfig.test.json",
+      "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
       "owner": "TASK-200"
     },
     {

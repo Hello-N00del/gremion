@@ -17,7 +17,8 @@
 // function is fully typed. jsdom is used (rather than a global DOMParser, which
 // is not a Node runtime global) so the splitter behaves identically under
 // SvelteKit SSR and the jsdom unit-test env.
-// @ts-expect-error -- jsdom has no bundled types and we add none on purpose.
+// Typed by the local ambient declaration in jsdom-shim.d.ts (the toolchain guard allows
+// the expect-error suppression directive only in *.test.ts).
 import { JSDOM } from 'jsdom'
 
 interface JsdomWindow {

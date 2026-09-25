@@ -26,6 +26,6 @@
     "dist",
     "node_modules",
     "test/**/*.integration.test.ts",
-    "test/scheduler.test.ts",
+    "test/scheduler.test.ts"
   ]
 }

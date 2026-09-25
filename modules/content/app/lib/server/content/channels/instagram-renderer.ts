@@ -14,7 +14,8 @@
 
 // jsdom is imported untyped (no `@types/jsdom` dependency is added on purpose,
 // matching segment.ts/caption.ts); its window is re-typed to the DOM lib below.
-// @ts-expect-error -- jsdom has no bundled types and we add none on purpose.
+// Typed by the local ambient declaration in jsdom-shim.d.ts (the toolchain guard allows
+// the expect-error suppression directive only in *.test.ts).
 import { JSDOM } from 'jsdom'
 import { composeCaption, IG_MAX_SLIDES } from '../caption'
 import { renderCarousel } from '../carousel/render'

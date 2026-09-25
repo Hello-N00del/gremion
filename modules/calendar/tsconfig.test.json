@@ -28,6 +28,6 @@
     "test/**/*.integration.test.ts",
     "test/caldav.test.ts",
     "test/scheduler.test.ts",
-    "scripts/backfill.ts",
+    "scripts/backfill.ts"
   ]
 }
