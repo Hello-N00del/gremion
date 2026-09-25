@@ -111,6 +111,38 @@ documents 404, and every one with a request body documents 400.
   `gremion.*.gov.>` and dedupe on `eventId`; no `receive` operation stands
   in for them.
 
+## 4c. Nullability and value sets follow SCHEMA
+
+Widening a response or payload type to admit `null`, or renaming an enum
+value, is a MAJOR bump under the compat gate. So at 1.0.0 every column
+that `SCHEMA-gremion.md` declares nullable is already nullable here, and
+every NOT NULL column stays non-null (guard D6,
+`governance-nullability.test.ts`):
+
+- `Meeting.org_unit_id` is null where the body itself decides (DOMAIN
+  DB-GOV organisational references), in `Meeting`, in the
+  `meeting.scheduled` payload, and optional on `MeetingCreate`. Because the
+  org unit can be absent, `MeetingCreate` names `body_id` (required). The
+  tenant still comes from the host and token, never from the body.
+- `scheduled_end`, `meeting_number`, `location` and `motion_deadline_at`
+  are nullable; `scheduled_end` is optional on create and nullable in the
+  scheduled/rescheduled payloads.
+- `Motion.target_meeting_id` (draft, or deferred to the next meeting),
+  `submitted_at` (`motion_submitted_check`) and `is_late` (a generated
+  column, null while either side is null, also in `motion.submitted`).
+- `AgendaItem.position` (null while proposed or declined),
+  `Invitation.notice_met` (null while draft or checked) and
+  `NoticeOverride.reason` (erasable in place under a covered redaction).
+- `cancel_reason` uses SCHEMA `meeting_cancel_reason_check`:
+  `chair_cancelled`, `body_archived`, `org_unit_archived`,
+  `customer_offboarding` (guard D7).
+
+Named schemas beyond the 2xx and request bodies (guards N1, N2):
+`updateAgendaItem` takes a partial `AgendaItemUpdate` (no required field),
+and the three multi-refusal 409s name their unions
+(`ProblemNoticeOverrideConflict`, `ProblemSendInvitationRefused`,
+`ProblemMotionAdmissionConflict`), so no generator synthesizes a name.
+
 ## 5. Ownership note (brief §3)
 
 This directory (`contracts/governance/**`) is fully owned here. The
@@ -119,12 +151,27 @@ the brief's ownership rule:
 
 - two appended entries in `contracts/registry.json` (`governance-http`,
   `governance-lifecycle`);
-- one codegen entry in `packages/generated-clients/src/codegen.ts` plus a
-  one-line export in its `package.json`, and the codegen output itself
-  (`packages/generated-clients/src/generated/governance-client.ts`,
-  produced only by `pnpm --filter @gremion/generated-clients generate`);
-- a consumer-fixture test and the governance-scoped TDD suite (T1-T9) in
-  `packages/generated-clients/src/`.
+- in `packages/generated-clients` (TASK-030's package):
+  - one codegen entry in `src/codegen.ts`;
+  - two `package.json` export entries for `./governance-client` (the
+    source `exports` map and the `publishConfig.exports` map), plus one
+    `files` exclusion (`!src/consumer-fixture/**`) so the fixtures are
+    never packed;
+  - the codegen output itself
+    (`src/generated/governance-client.ts`, produced only by
+    `pnpm --filter @gremion/generated-clients generate`);
+  - the consumer fixtures (`src/consumer-fixture/{node,browser}-style.ts`)
+    with their two configs, `tsconfig.consumer-node.json` and
+    `tsconfig.consumer-browser.json`, and an `exclude` of the fixtures in
+    `tsconfig.build.json` so they stay out of `dist`;
+  - the governance-scoped TDD suite (T1-T9, D1-D7, N1-N2):
+    `governance-contracts.test.ts`, `governance-domain.test.ts`,
+    `governance-http-surface.test.ts`, `governance-nullability.test.ts`
+    and `governance-named-schemas.test.ts`;
+- one line in the root `.gitignore` (`.tmp/`), for the Dart smoke output
+  (brief §5 Q3 names `.tmp/dart-gov/` as gitignored). This edit is not in
+  the brief's list of permitted outside edits; it is stated here and in
+  the PR body.
 
 No generator was added; TASK-030's existing `openapi-typescript` +
 `openapi-fetch` pipeline picked up the new spec unchanged.
