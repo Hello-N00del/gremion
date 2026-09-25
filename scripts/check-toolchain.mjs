@@ -113,9 +113,20 @@ export function checkPackageJsonPnpmBuildControl(rootPackageJson) {
 
 // ── node-major ──────────────────────────────────────────────────────────
 
-const FROM_NODE_RE = /^FROM\s+node:(\d+)(?:[.\w-]*)?\b/gm
+// Matches a Dockerfile FROM line naming a node base image: an optional
+// --platform=... flag, an optional registry/namespace prefix (docker.io/,
+// docker.io/library/, ghcr.io/org/, ...), then "node:<tag>". The tag is
+// captured whole so the caller can tell a literal major ("26", "26-alpine")
+// from a non-literal one (a build ARG like "${NODE_MAJOR}-alpine") — the
+// latter must be flagged, not silently skipped (verifier LOW finding 6).
+const FROM_NODE_RE = /^FROM\s+(?:--platform=\S+\s+)?(?:[\w.-]+\/)*node:(\S+)/gm
 
-/** @param files [{path, text}] tracked Dockerfiles (first-party only) */
+/** True when the Dockerfile text has at least one node: FROM line (any stage). */
+export function hasNodeFromLine(text) {
+  return [...text.matchAll(FROM_NODE_RE)].length > 0
+}
+
+/** @param files [{path, text}] tracked Dockerfiles with at least one node: FROM line */
 export function checkNodeMajorDockerfiles(files) {
   if (files.length === 0) {
     return ['found zero first-party Dockerfiles with a node: base — the node-major check would pass vacuously']
@@ -125,8 +136,12 @@ export function checkNodeMajorDockerfiles(files) {
     let any = false
     for (const m of f.text.matchAll(FROM_NODE_RE)) {
       any = true
-      if (Number(m[1]) !== NODE_MAJOR) {
-        problems.push(`${f.path}: FROM node:${m[1]} (expected node:${NODE_MAJOR})`)
+      const tag = m[1]
+      const majorMatch = /^(\d+)/.exec(tag)
+      if (!majorMatch) {
+        problems.push(`${f.path}: FROM node:${tag} — non-literal or unparseable tag, cannot verify it names major ${NODE_MAJOR}`)
+      } else if (Number(majorMatch[1]) !== NODE_MAJOR) {
+        problems.push(`${f.path}: FROM node:${majorMatch[1]} (expected node:${NODE_MAJOR})`)
       }
     }
     if (!any) problems.push(`${f.path}: no "FROM node:<major>" line found — cannot verify its Node major`)
@@ -465,13 +480,18 @@ export function gatherRepoState(root) {
   const packageDirs = resolvePackageDirs(root, workspaceYamlText)
   const allDirs = ['.', ...packageDirs]
 
-  // First-party image Dockerfiles named by the acceptance, plus the host test
-  // runner's — not every Dockerfile in the tree (docker/legal, docker/vector
-  // are third-party base images this unit does not own).
-  const FIRST_PARTY_DOCKERFILES = ['gremion-ui/Dockerfile', 'gremion-public/Dockerfile', 'test/host/runner/Dockerfile']
-  const dockerfiles = FIRST_PARTY_DOCKERFILES
-    .filter((p) => tracked.has(p))
+  // Every tracked Dockerfile (any "Dockerfile" or "*.Dockerfile" basename),
+  // kept only when it actually names a node: base image — docker/legal,
+  // docker/vector and docker/fallback are third-party base images (nginx,
+  // vector, debian) this unit does not own and that never match FROM_NODE_RE,
+  // so they fall out on their own. This also covers a future first-party
+  // Dockerfile under services/* or modules/* without a hardcoded path list
+  // (verifier LOW finding 6).
+  const DOCKERFILE_NAME_RE = /(^|\/)([^/]*\.)?Dockerfile$/
+  const dockerfiles = [...tracked]
+    .filter((p) => DOCKERFILE_NAME_RE.test(p))
     .map((p) => ({ path: p, text: readFileSync(join(root, p), 'utf8') }))
+    .filter((f) => hasNodeFromLine(f.text))
 
   const nodeVersionFiles = NODE_VERSION_FILES
     .filter((f) => existsSync(join(root, f)))
@@ -482,12 +502,20 @@ export function gatherRepoState(root) {
     .filter((p) => tracked.has(p.split(sep).join('/')) || existsSync(join(root, p)))
     .map((p) => ({ path: p.split(sep).join('/'), json: readJson(join(root, p)) }))
 
+  // tsconfig*.json, not just the two names in use today, so a future
+  // tsconfig.test.json etc. is covered without touching this file (verifier
+  // LOW finding 7). Only the package's own top-level tsconfig*.json — not
+  // nested ones (e.g. inside src/) — matching resolvePackageDirs' own scope.
   const tsconfigs = []
   for (const d of packageDirs) {
-    for (const name of ['tsconfig.json', 'tsconfig.build.json']) {
+    const dirAbs = join(root, d === '.' ? '' : d)
+    if (!existsSync(dirAbs)) continue
+    for (const name of readdirSync(dirAbs)) {
+      if (!/^tsconfig.*\.json$/.test(name)) continue
+      const abs = join(dirAbs, name)
+      if (!statSync(abs).isFile()) continue
       const rel = (d === '.' ? name : `${d}/${name}`)
-      const abs = join(root, rel)
-      if (existsSync(abs)) tsconfigs.push({ path: rel, text: readFileSync(abs, 'utf8') })
+      tsconfigs.push({ path: rel, text: readFileSync(abs, 'utf8') })
     }
   }
 

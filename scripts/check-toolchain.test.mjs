@@ -19,6 +19,7 @@ import {
   ALLOWED_FIRST_PARTY_LIFECYCLE,
   ALLOWED_FIRST_PARTY_TS_NOCHECK,
   checkNodeMajorDockerfiles,
+  hasNodeFromLine,
   checkNodeVersionFiles,
   checkEnginesNode,
   checkEngineStrictOn,
@@ -59,6 +60,35 @@ test('node-major: GREEN — a fixture Dockerfile on node:26-alpine passes', () =
 
 test('node-major: an empty Dockerfile set is refused, not a vacuous pass', () => {
   assert.match(checkNodeMajorDockerfiles([]).join('\n'), /pass vacuously/)
+})
+
+// ── verifier LOW finding 6: FROM_NODE_RE variants + hardcoded discovery ────
+
+test('node-major: GREEN — --platform and a registry/namespace prefix are recognized', () => {
+  const problems = checkNodeMajorDockerfiles([
+    { path: 'fixture/Dockerfile', text: 'FROM --platform=$BUILDPLATFORM docker.io/library/node:26-alpine AS builder\n' },
+  ])
+  assert.deepEqual(problems, [])
+})
+
+test('node-major: RED — a non-literal tag (a build ARG) is flagged, not silently skipped', () => {
+  const problems = checkNodeMajorDockerfiles([
+    { path: 'fixture/Dockerfile', text: 'FROM node:${NODE_MAJOR}-alpine AS builder\n' },
+  ])
+  assert.match(problems.join('\n'), /non-literal or unparseable tag/)
+})
+
+test('node-major: a stage on a non-node base alongside a correct node stage raises no problem for the non-node stage', () => {
+  const problems = checkNodeMajorDockerfiles([
+    { path: 'fixture/Dockerfile', text: 'FROM debian:bookworm-slim AS deps\nFROM node:26-alpine AS runner\n' },
+  ])
+  assert.deepEqual(problems, [])
+})
+
+test('hasNodeFromLine: true only when a FROM line names a node: base', () => {
+  assert.equal(hasNodeFromLine('FROM nginx:alpine\n'), false)
+  assert.equal(hasNodeFromLine('FROM node:26-alpine\n'), true)
+  assert.equal(hasNodeFromLine('FROM --platform=linux/amd64 ghcr.io/org/node:26\n'), true)
 })
 
 test('node-major: RED — .nvmrc pinning 24 is flagged', () => {
@@ -368,6 +398,17 @@ test('the real tree passes every check with zero violations', () => {
   assert.ok(state.tsconfigs.length >= 6, 'fixture precondition: all six tsconfigs are discovered')
   assert.ok(state.packageJsons.length >= 5, 'fixture precondition: root + 4 workspace package.json are discovered')
   assert.deepEqual(runAllChecks(state), [])
+})
+
+test('gatherRepoState: Dockerfile discovery is name-based (not a hardcoded path list) and excludes non-node bases', () => {
+  const state = gatherRepoState(ROOT)
+  const paths = state.dockerfiles.map((f) => f.path).sort()
+  assert.deepEqual(paths, ['gremion-public/Dockerfile', 'gremion-ui/Dockerfile', 'test/host/runner/Dockerfile'])
+  // docker/legal, docker/vector, docker/fallback are tracked Dockerfiles but
+  // name non-node bases (nginx/vector/debian) — never discovered as node.
+  for (const p of ['docker/legal/Dockerfile', 'docker/vector/Dockerfile', 'docker/fallback/Dockerfile']) {
+    assert.ok(!paths.includes(p), `${p} should not be discovered as a node Dockerfile`)
+  }
 })
 
 // ── item 5: seeded install fixture (offline, real pnpm) ────────────────────
