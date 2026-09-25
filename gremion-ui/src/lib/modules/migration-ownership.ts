@@ -1,8 +1,11 @@
 // The three kernel-block migrations that create or alter a MODULE-owned table
 // and stay kernel-applied by written rule (spec B, migrations chapter §4).
 // A vertical that runs calendar, elections or board OFF still gets these files:
-// later ungated kernel DDL (010_org_units.sql's ALTER of committee_elections,
-// 058_public_reader_grants.sql's portal_tables abort) depends on them existing.
+// later ungated kernel DDL (010_org_units.sql's ALTER of committee_elections)
+// and gremion-ui/scripts/fresh-init-proof.sh's existence assertions depend on
+// them existing. (058_public_reader_grants.sql no longer names calendar_events
+// among its own dependencies as of R-E13: it grants only the tables the
+// anonymous portal reads, org_units and protocols.)
 export const CROSS_CUTTING_MODULE_TABLES = [
   'calendar_events',
   'committee_elections',
