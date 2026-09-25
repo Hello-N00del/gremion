@@ -9,11 +9,8 @@
 import { error, redirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getPublishedProtocolById } from '$lib/server/public-db';
-// `$env/dynamic/public`: PUBLIC_MAIN_APP_URL is excluded from the private
-// dynamic env (SvelteKit filters out the public prefix there), so reading it
-// from `private` always produced `undefined` and this route always 500'd with
-// "Main app URL not configured". Same fix as +layout.server.ts.
-import { env } from '$env/dynamic/public';
+// TASK-032 (TRD-410 [D R20-D5]): reads process.env directly rather than
+// $env/dynamic/public — see +layout.server.ts's header comment.
 import { isUuid } from '$lib/validate';
 
 export const GET: RequestHandler = async ({ params }) => {
@@ -31,7 +28,7 @@ export const GET: RequestHandler = async ({ params }) => {
   // The target is the MAIN APP's own route; only the portal can be relocated
   // under a base path. Named `mainAppOrigin`, not `base`, so it can never be
   // confused with the portal base path from `$app/paths`.
-  const mainAppOrigin = (env.PUBLIC_MAIN_APP_URL ?? '').replace(/\/+$/, '');
+  const mainAppOrigin = (process.env.PUBLIC_MAIN_APP_URL ?? '').replace(/\/+$/, '');
   if (!mainAppOrigin) throw error(500, 'Main app URL not configured');
 
   throw redirect(302, `${mainAppOrigin}/api/public/protocols/${params.id}/pdf`);

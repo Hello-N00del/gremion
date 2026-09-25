@@ -18,9 +18,20 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 // `paths.base` is baked in at BUILD time (SvelteKit inlines it into the client
 // bundle), so this is a build arg, never a runtime env var — see the matching
 // `ARG BASE_PATH` in this app's Dockerfile. Every internal link in src/ routes
-// through `base` from `$app/paths`; nothing may hardcode a leading-slash
+// through `base` from `$lib/base` (see that module's header comment for why
+// it is no longer `$app/paths`); nothing may hardcode a leading-slash
 // absolute path (guarded by src/lib/test/base-path.test.ts).
-const base = process.env.BASE_PATH ?? '';
+//
+// TASK-032 (TRD-410 [D R20-D5]): kit's `paths.base` type narrowed to
+// `'' | `/${string}`` — validate rather than blindly cast an arbitrary env
+// string into it, so a malformed BASE_PATH (missing leading slash) fails the
+// build loudly instead of silently mounting the portal somewhere unintended.
+const rawBase = process.env.BASE_PATH ?? '';
+if (rawBase !== '' && !rawBase.startsWith('/')) {
+  throw new Error(`BASE_PATH must be empty or start with '/', got '${rawBase}'`);
+}
+/** @type {'' | `/${string}`} */
+const base = /** @type {any} */ (rawBase);
 
 // TASK-032 (TRD-410 [D R20-D5], Q4): kit 3 requires Svelte(Kit) config to be
 // passed through the `sveltekit(...)` Vite plugin call rather than
@@ -48,7 +59,13 @@ function versionName() {
 /** @type {import('@sveltejs/kit/vite').Config} */
 const config = {
   preprocess: vitePreprocess(),
-  adapter: adapter({ port: 3000 }),
+  // TASK-032 (TRD-410 [D R20-D5]): adapter-node 6's AdapterOptions dropped
+  // `port` (upstream CHANGELOG.md has no explicit breaking-change line for
+  // this, but the type is gone in 6.0.0-next.13's ambient .d.ts). No
+  // behavior change: the built server's own runtime default is already
+  // `env('PORT', '3000')` (src/index.js), so `{ port: 3000 }` was setting a
+  // build-time value identical to the existing runtime default.
+  adapter: adapter(),
   paths: { base },
   // kit 3 removes the automatic `$lib` alias in favour of `#lib` (upstream
   // CHANGELOG.md, 3.0.0-next.9: "replace the `$lib` alias with `#lib` and

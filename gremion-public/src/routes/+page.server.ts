@@ -1,6 +1,7 @@
 // gremion-public/src/routes/+page.server.ts
+// TASK-032 (TRD-410 [D R20-D5]): reads process.env directly rather than
+// $env/dynamic/public — see +layout.server.ts's header comment.
 import type { PageServerLoad } from './$types';
-import { env } from '$env/dynamic/public';
 import {
   getPublishedProtocols,
   getAllCommittees,
@@ -35,7 +36,7 @@ export const load: PageServerLoad = async () => {
   return {
     latestProtocols,
     committees,
-    showAntrag: flag(env.PUBLIC_PORTAL_ANTRAG),
-    contactEmail: env.PUBLIC_CONTACT_EMAIL ?? null,
+    showAntrag: flag(process.env.PUBLIC_PORTAL_ANTRAG),
+    contactEmail: process.env.PUBLIC_CONTACT_EMAIL ?? null,
   };
 };

@@ -7,7 +7,7 @@
   //
   // v12 apex topology adds the APEX STRIP above the topbar: an optional
   // back-route out of the portal and up to whatever site sits above it.
-  import { base } from '$app/paths';
+  import { base } from '$lib/base'
 
   interface NavLink {
     href: string;

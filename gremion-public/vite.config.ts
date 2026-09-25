@@ -20,6 +20,13 @@ export default defineConfig({
   // `sveltekit(...)` plugin call rather than auto-discovered from
   // kit.config.js.
   plugins: [tailwindcss(), sveltekit(svelteConfig)],
+  // TASK-032: kit 3 removed `base` from `$app/paths`; `$lib/base.ts` reads it
+  // back from this build-time constant instead, sourced from the SAME
+  // `kit.config.js` value SvelteKit itself uses for `paths.base` (one
+  // computation, not a second env-var read that could drift from it).
+  define: {
+    __BASE_PATH__: JSON.stringify(svelteConfig.paths?.base ?? ''),
+  },
   ssr: {
     noExternal: ['@gremion/db']
   },

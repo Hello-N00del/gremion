@@ -2,7 +2,7 @@
   import '../app.css';
   import type { Snippet } from 'svelte';
   import { page } from '$app/state'
-  import { base } from '$app/paths';
+  import { base } from '$lib/base'
   import type { LayoutData } from './$types';
   import PortalHeader from '$lib/components/PortalHeader.svelte';
   import PortalFooter from '$lib/components/PortalFooter.svelte';

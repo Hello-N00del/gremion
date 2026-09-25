@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { base } from '$app/paths';
+  import { base } from '$lib/base'
   import type { PageData } from './$types';
   import OrganisationTree from '$lib/components/OrganisationTree.svelte';
 

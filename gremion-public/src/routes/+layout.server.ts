@@ -1,16 +1,18 @@
 // gremion-public/src/routes/+layout.server.ts
 // Supplies global data: institution branding, main app URL.
 //
-// `$env/dynamic/public`, NOT `$env/dynamic/private`: SvelteKit's private dynamic
-// env EXCLUDES every variable whose name starts with the public prefix, so
-// reading `PUBLIC_*` from it silently yields `undefined` and every value below
-// falls back to its default — the institution name never applies, and the
-// members' CTA has no target. Verified by rendering this app's built server with
-// PUBLIC_* set: the output was byte-identical to the run with them unset. The
-// sibling loads (`+page.server.ts`, `kontakt/+page.server.ts`) already read the
-// public module; this file and the PDF route were the two stragglers.
+// TASK-032 (TRD-410 [D R20-D5]): reads process.env directly. This used to
+// read `$env/dynamic/public`, NOT `$env/dynamic/private` — SvelteKit's
+// private dynamic env EXCLUDED every variable whose name starts with the
+// public prefix, so reading `PUBLIC_*` from it silently yielded `undefined`
+// (a real, previously-fixed bug here — see git history). Kit 3 made both
+// dynamic-env modules expose only vars explicitly declared via
+// `defineEnvVars` (nothing here is declared that way), so continuing to read
+// either module would silently resolve every value below to `undefined`
+// again. `process.env` has no public/private distinction to get wrong: this
+// is a `.server.ts` file, so it never reaches the browser regardless of the
+// `PUBLIC_` prefix's historical meaning for client-bundled code.
 import type { LayoutServerLoad } from './$types';
-import { env } from '$env/dynamic/public';
 import { resolveSourceUrl } from '$lib/source-offer';
 
 export const load: LayoutServerLoad = async () => {
@@ -23,17 +25,17 @@ export const load: LayoutServerLoad = async () => {
     // the apex block below: compose's `${VAR:-}` substitutes an EMPTY STRING,
     // which `??` would happily pass through. `+layout.svelte` renders the
     // product chip only `{#if data.product}`.
-    product:          env.PUBLIC_PRODUCT_NAME || null,
-    institutionName:  env.PUBLIC_CONTACT_NAME ?? 'Studierendenrat',
-    legislatureLabel: env.PUBLIC_LEGISLATURE_LABEL ?? null,
-    mainAppUrl:       env.PUBLIC_MAIN_APP_URL ?? null,
+    product:          process.env.PUBLIC_PRODUCT_NAME || null,
+    institutionName:  process.env.PUBLIC_CONTACT_NAME ?? 'Studierendenrat',
+    legislatureLabel: process.env.PUBLIC_LEGISLATURE_LABEL ?? null,
+    mainAppUrl:       process.env.PUBLIC_MAIN_APP_URL ?? null,
 
     // AGPL-3.0 section 13: the running program must offer its Corresponding
     // Source. An operator who modified the program sets PUBLIC_SOURCE_URL to
     // their own repository — pointing at upstream would make the offer false.
     // Unset falls back to upstream (resolveSourceUrl), which is correct for an
     // unmodified deploy.
-    sourceUrl:        resolveSourceUrl(env.PUBLIC_SOURCE_URL),
+    sourceUrl:        resolveSourceUrl(process.env.PUBLIC_SOURCE_URL),
 
     // v12 (apex topology) — the optional back-route out of the portal and up to
     // a site ABOVE it (a landing / marketing site at the origin root). ALL of
@@ -48,9 +50,9 @@ export const load: LayoutServerLoad = async () => {
     // `|| null`, not `?? null`: docker-compose's `${VAR:-}` substitutes an EMPTY
     // STRING for an unset variable, so `??` would hand the chrome `''` and only
     // truthiness checks downstream would save it. Normalise here instead.
-    apexUrl:          env.PUBLIC_APEX_URL || null,
-    apexLabel:        env.PUBLIC_APEX_LABEL || null,
-    apexNote:         env.PUBLIC_APEX_NOTE || null,
-    apexColophon:     env.PUBLIC_APEX_COLOPHON || null,
+    apexUrl:          process.env.PUBLIC_APEX_URL || null,
+    apexLabel:        process.env.PUBLIC_APEX_LABEL || null,
+    apexNote:         process.env.PUBLIC_APEX_NOTE || null,
+    apexColophon:     process.env.PUBLIC_APEX_COLOPHON || null,
   };
 };

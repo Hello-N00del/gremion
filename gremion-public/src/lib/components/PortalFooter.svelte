@@ -7,7 +7,7 @@
   //
   // v12 apex topology adds the COLOPHON below the legal bar — the footer half
   // of the back-route the apex strip opens in PortalHeader.
-  import { base } from '$app/paths';
+  import { base } from '$lib/base'
   import { SOURCE_OFFER_LABEL, resolveSourceUrl } from '$lib/source-offer';
 
   let {
