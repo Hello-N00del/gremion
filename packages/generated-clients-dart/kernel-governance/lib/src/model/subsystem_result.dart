@@ -165,6 +165,8 @@ class SubsystemResultSubsystemEnum extends EnumClass {
   static const SubsystemResultSubsystemEnum matrix = _$subsystemResultSubsystemEnum_matrix;
   @BuiltValueEnumConst(wireName: r'nextcloud')
   static const SubsystemResultSubsystemEnum nextcloud = _$subsystemResultSubsystemEnum_nextcloud;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const SubsystemResultSubsystemEnum unknownDefaultOpenApi = _$subsystemResultSubsystemEnum_unknownDefaultOpenApi;
 
   static Serializer<SubsystemResultSubsystemEnum> get serializer => _$subsystemResultSubsystemEnumSerializer;
 
@@ -182,6 +184,8 @@ class SubsystemResultStatusEnum extends EnumClass {
   static const SubsystemResultStatusEnum failed = _$subsystemResultStatusEnum_failed;
   @BuiltValueEnumConst(wireName: r'skipped')
   static const SubsystemResultStatusEnum skipped = _$subsystemResultStatusEnum_skipped;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const SubsystemResultStatusEnum unknownDefaultOpenApi = _$subsystemResultStatusEnum_unknownDefaultOpenApi;
 
   static Serializer<SubsystemResultStatusEnum> get serializer => _$subsystemResultStatusEnumSerializer;
 

@@ -8,7 +8,7 @@ part of 'api_groups_get200_response.dart';
 
 class _$ApiGroupsGet200Response extends ApiGroupsGet200Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final BuiltList<BuiltMap<String, JsonObject?>> data;
 
@@ -16,7 +16,8 @@ class _$ApiGroupsGet200Response extends ApiGroupsGet200Response {
           [void Function(ApiGroupsGet200ResponseBuilder)? updates]) =>
       (ApiGroupsGet200ResponseBuilder()..update(updates))._build();
 
-  _$ApiGroupsGet200Response._({this.success, required this.data}) : super._();
+  _$ApiGroupsGet200Response._({required this.success, required this.data})
+      : super._();
   @override
   ApiGroupsGet200Response rebuild(
           void Function(ApiGroupsGet200ResponseBuilder) updates) =>
@@ -57,9 +58,9 @@ class ApiGroupsGet200ResponseBuilder
         Builder<ApiGroupsGet200Response, ApiGroupsGet200ResponseBuilder> {
   _$ApiGroupsGet200Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   ListBuilder<BuiltMap<String, JsonObject?>>? _data;
   ListBuilder<BuiltMap<String, JsonObject?>> get data =>
@@ -99,7 +100,8 @@ class ApiGroupsGet200ResponseBuilder
     try {
       _$result = _$v ??
           _$ApiGroupsGet200Response._(
-            success: success,
+            success: BuiltValueNullFieldError.checkNotNull(
+                success, r'ApiGroupsGet200Response', 'success'),
             data: data.build(),
           );
     } catch (_) {

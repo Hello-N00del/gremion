@@ -35,8 +35,7 @@ abstract class ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequest implements 
   factory ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequest([void updates(ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequestBuilder b)]) = _$ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequest;
 
   @BuiltValueHook(initializeBuilder: true)
-  static void _defaults(ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequestBuilder b) => b
-      ..heliosElectionId = 'null';
+  static void _defaults(ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequestBuilder b) => b;
 
   @BuiltValueSerializer(custom: true)
   static Serializer<ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequest> get serializer => _$ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequestSerializer();

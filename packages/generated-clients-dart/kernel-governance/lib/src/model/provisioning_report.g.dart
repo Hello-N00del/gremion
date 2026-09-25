@@ -12,6 +12,9 @@ const ProvisioningReportOverallEnum _$provisioningReportOverallEnum_degraded =
     const ProvisioningReportOverallEnum._('degraded');
 const ProvisioningReportOverallEnum _$provisioningReportOverallEnum_failed =
     const ProvisioningReportOverallEnum._('failed');
+const ProvisioningReportOverallEnum
+    _$provisioningReportOverallEnum_unknownDefaultOpenApi =
+    const ProvisioningReportOverallEnum._('unknownDefaultOpenApi');
 
 ProvisioningReportOverallEnum _$provisioningReportOverallEnumValueOf(
     String name) {
@@ -22,8 +25,10 @@ ProvisioningReportOverallEnum _$provisioningReportOverallEnumValueOf(
       return _$provisioningReportOverallEnum_degraded;
     case 'failed':
       return _$provisioningReportOverallEnum_failed;
+    case 'unknownDefaultOpenApi':
+      return _$provisioningReportOverallEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$provisioningReportOverallEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -33,6 +38,7 @@ final BuiltSet<ProvisioningReportOverallEnum>
   _$provisioningReportOverallEnum_ok,
   _$provisioningReportOverallEnum_degraded,
   _$provisioningReportOverallEnum_failed,
+  _$provisioningReportOverallEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<ProvisioningReportOverallEnum>
@@ -45,11 +51,13 @@ class _$ProvisioningReportOverallEnumSerializer
     'ok': 'ok',
     'degraded': 'degraded',
     'failed': 'failed',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'ok': 'ok',
     'degraded': 'degraded',
     'failed': 'failed',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

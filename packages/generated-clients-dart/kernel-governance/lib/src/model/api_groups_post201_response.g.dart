@@ -8,7 +8,7 @@ part of 'api_groups_post201_response.dart';
 
 class _$ApiGroupsPost201Response extends ApiGroupsPost201Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final ApiGroupsPost201ResponseData data;
 
@@ -16,7 +16,8 @@ class _$ApiGroupsPost201Response extends ApiGroupsPost201Response {
           [void Function(ApiGroupsPost201ResponseBuilder)? updates]) =>
       (ApiGroupsPost201ResponseBuilder()..update(updates))._build();
 
-  _$ApiGroupsPost201Response._({this.success, required this.data}) : super._();
+  _$ApiGroupsPost201Response._({required this.success, required this.data})
+      : super._();
   @override
   ApiGroupsPost201Response rebuild(
           void Function(ApiGroupsPost201ResponseBuilder) updates) =>
@@ -57,9 +58,9 @@ class ApiGroupsPost201ResponseBuilder
         Builder<ApiGroupsPost201Response, ApiGroupsPost201ResponseBuilder> {
   _$ApiGroupsPost201Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   ApiGroupsPost201ResponseDataBuilder? _data;
   ApiGroupsPost201ResponseDataBuilder get data =>
@@ -98,7 +99,8 @@ class ApiGroupsPost201ResponseBuilder
     try {
       _$result = _$v ??
           _$ApiGroupsPost201Response._(
-            success: success,
+            success: BuiltValueNullFieldError.checkNotNull(
+                success, r'ApiGroupsPost201Response', 'success'),
             data: data.build(),
           );
     } catch (_) {

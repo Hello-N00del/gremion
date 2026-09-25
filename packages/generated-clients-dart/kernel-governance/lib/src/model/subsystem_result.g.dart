@@ -12,6 +12,9 @@ const SubsystemResultSubsystemEnum _$subsystemResultSubsystemEnum_matrix =
     const SubsystemResultSubsystemEnum._('matrix');
 const SubsystemResultSubsystemEnum _$subsystemResultSubsystemEnum_nextcloud =
     const SubsystemResultSubsystemEnum._('nextcloud');
+const SubsystemResultSubsystemEnum
+    _$subsystemResultSubsystemEnum_unknownDefaultOpenApi =
+    const SubsystemResultSubsystemEnum._('unknownDefaultOpenApi');
 
 SubsystemResultSubsystemEnum _$subsystemResultSubsystemEnumValueOf(
     String name) {
@@ -22,8 +25,10 @@ SubsystemResultSubsystemEnum _$subsystemResultSubsystemEnumValueOf(
       return _$subsystemResultSubsystemEnum_matrix;
     case 'nextcloud':
       return _$subsystemResultSubsystemEnum_nextcloud;
+    case 'unknownDefaultOpenApi':
+      return _$subsystemResultSubsystemEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$subsystemResultSubsystemEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -33,6 +38,7 @@ final BuiltSet<SubsystemResultSubsystemEnum>
   _$subsystemResultSubsystemEnum_keycloak,
   _$subsystemResultSubsystemEnum_matrix,
   _$subsystemResultSubsystemEnum_nextcloud,
+  _$subsystemResultSubsystemEnum_unknownDefaultOpenApi,
 ]);
 
 const SubsystemResultStatusEnum _$subsystemResultStatusEnum_ok =
@@ -41,6 +47,9 @@ const SubsystemResultStatusEnum _$subsystemResultStatusEnum_failed =
     const SubsystemResultStatusEnum._('failed');
 const SubsystemResultStatusEnum _$subsystemResultStatusEnum_skipped =
     const SubsystemResultStatusEnum._('skipped');
+const SubsystemResultStatusEnum
+    _$subsystemResultStatusEnum_unknownDefaultOpenApi =
+    const SubsystemResultStatusEnum._('unknownDefaultOpenApi');
 
 SubsystemResultStatusEnum _$subsystemResultStatusEnumValueOf(String name) {
   switch (name) {
@@ -50,8 +59,10 @@ SubsystemResultStatusEnum _$subsystemResultStatusEnumValueOf(String name) {
       return _$subsystemResultStatusEnum_failed;
     case 'skipped':
       return _$subsystemResultStatusEnum_skipped;
+    case 'unknownDefaultOpenApi':
+      return _$subsystemResultStatusEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$subsystemResultStatusEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -60,6 +71,7 @@ final BuiltSet<SubsystemResultStatusEnum> _$subsystemResultStatusEnumValues =
   _$subsystemResultStatusEnum_ok,
   _$subsystemResultStatusEnum_failed,
   _$subsystemResultStatusEnum_skipped,
+  _$subsystemResultStatusEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<SubsystemResultSubsystemEnum>
@@ -74,11 +86,13 @@ class _$SubsystemResultSubsystemEnumSerializer
     'keycloak': 'keycloak',
     'matrix': 'matrix',
     'nextcloud': 'nextcloud',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'keycloak': 'keycloak',
     'matrix': 'matrix',
     'nextcloud': 'nextcloud',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override
@@ -105,11 +119,13 @@ class _$SubsystemResultStatusEnumSerializer
     'ok': 'ok',
     'failed': 'failed',
     'skipped': 'skipped',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'ok': 'ok',
     'failed': 'failed',
     'skipped': 'skipped',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

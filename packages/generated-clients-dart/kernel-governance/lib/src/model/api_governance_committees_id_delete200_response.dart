@@ -17,7 +17,7 @@ part 'api_governance_committees_id_delete200_response.g.dart';
 @BuiltValue()
 abstract class ApiGovernanceCommitteesIdDelete200Response implements Built<ApiGovernanceCommitteesIdDelete200Response, ApiGovernanceCommitteesIdDelete200ResponseBuilder> {
   @BuiltValueField(wireName: r'success')
-  JsonObject? get success;
+  bool get success;
 
   @BuiltValueField(wireName: r'data')
   JsonObject? get data;
@@ -46,9 +46,9 @@ class _$ApiGovernanceCommitteesIdDelete200ResponseSerializer implements Primitiv
     FullType specifiedType = FullType.unspecified,
   }) sync* {
     yield r'success';
-    yield object.success == null ? null : serializers.serialize(
+    yield serializers.serialize(
       object.success,
-      specifiedType: const FullType.nullable(JsonObject),
+      specifiedType: const FullType(bool),
     );
     yield r'data';
     yield object.data == null ? null : serializers.serialize(
@@ -81,9 +81,8 @@ class _$ApiGovernanceCommitteesIdDelete200ResponseSerializer implements Primitiv
         case r'success':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType.nullable(JsonObject),
-          ) as JsonObject?;
-          if (valueDes == null) continue;
+            specifiedType: const FullType(bool),
+          ) as bool;
           result.success = valueDes;
           break;
         case r'data':

@@ -8,7 +8,7 @@ part of 'api_groups_id_get200_response.dart';
 
 class _$ApiGroupsIdGet200Response extends ApiGroupsIdGet200Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final BuiltMap<String, JsonObject?> data;
 
@@ -16,7 +16,8 @@ class _$ApiGroupsIdGet200Response extends ApiGroupsIdGet200Response {
           [void Function(ApiGroupsIdGet200ResponseBuilder)? updates]) =>
       (ApiGroupsIdGet200ResponseBuilder()..update(updates))._build();
 
-  _$ApiGroupsIdGet200Response._({this.success, required this.data}) : super._();
+  _$ApiGroupsIdGet200Response._({required this.success, required this.data})
+      : super._();
   @override
   ApiGroupsIdGet200Response rebuild(
           void Function(ApiGroupsIdGet200ResponseBuilder) updates) =>
@@ -57,9 +58,9 @@ class ApiGroupsIdGet200ResponseBuilder
         Builder<ApiGroupsIdGet200Response, ApiGroupsIdGet200ResponseBuilder> {
   _$ApiGroupsIdGet200Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   MapBuilder<String, JsonObject?>? _data;
   MapBuilder<String, JsonObject?> get data =>
@@ -98,7 +99,8 @@ class ApiGroupsIdGet200ResponseBuilder
     try {
       _$result = _$v ??
           _$ApiGroupsIdGet200Response._(
-            success: success,
+            success: BuiltValueNullFieldError.checkNotNull(
+                success, r'ApiGroupsIdGet200Response', 'success'),
             data: data.build(),
           );
     } catch (_) {

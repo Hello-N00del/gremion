@@ -12,6 +12,9 @@ const CommitteeRoleElectionMethodEnum _$committeeRoleElectionMethodEnum_poll =
     const CommitteeRoleElectionMethodEnum._('poll');
 const CommitteeRoleElectionMethodEnum _$committeeRoleElectionMethodEnum_manual =
     const CommitteeRoleElectionMethodEnum._('manual');
+const CommitteeRoleElectionMethodEnum
+    _$committeeRoleElectionMethodEnum_unknownDefaultOpenApi =
+    const CommitteeRoleElectionMethodEnum._('unknownDefaultOpenApi');
 
 CommitteeRoleElectionMethodEnum _$committeeRoleElectionMethodEnumValueOf(
     String name) {
@@ -22,8 +25,10 @@ CommitteeRoleElectionMethodEnum _$committeeRoleElectionMethodEnumValueOf(
       return _$committeeRoleElectionMethodEnum_poll;
     case 'manual':
       return _$committeeRoleElectionMethodEnum_manual;
+    case 'unknownDefaultOpenApi':
+      return _$committeeRoleElectionMethodEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$committeeRoleElectionMethodEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -33,6 +38,7 @@ final BuiltSet<CommitteeRoleElectionMethodEnum>
   _$committeeRoleElectionMethodEnum_helios,
   _$committeeRoleElectionMethodEnum_poll,
   _$committeeRoleElectionMethodEnum_manual,
+  _$committeeRoleElectionMethodEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<CommitteeRoleElectionMethodEnum>
@@ -45,11 +51,13 @@ class _$CommitteeRoleElectionMethodEnumSerializer
     'helios': 'helios',
     'poll': 'poll',
     'manual': 'manual',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'helios': 'helios',
     'poll': 'poll',
     'manual': 'manual',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

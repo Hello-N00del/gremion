@@ -151,6 +151,8 @@ class ApiGovernanceCommitteesIdPatchRequestVisibilityEnum extends EnumClass {
   static const ApiGovernanceCommitteesIdPatchRequestVisibilityEnum allMembers = _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_allMembers;
   @BuiltValueEnumConst(wireName: r'committee_only')
   static const ApiGovernanceCommitteesIdPatchRequestVisibilityEnum committeeOnly = _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_committeeOnly;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const ApiGovernanceCommitteesIdPatchRequestVisibilityEnum unknownDefaultOpenApi = _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_unknownDefaultOpenApi;
 
   static Serializer<ApiGovernanceCommitteesIdPatchRequestVisibilityEnum> get serializer => _$apiGovernanceCommitteesIdPatchRequestVisibilityEnumSerializer;
 

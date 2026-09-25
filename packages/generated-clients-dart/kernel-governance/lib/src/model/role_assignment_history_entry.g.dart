@@ -15,6 +15,9 @@ const RoleAssignmentHistoryEntryEndedReasonEnum
 const RoleAssignmentHistoryEntryEndedReasonEnum
     _$roleAssignmentHistoryEntryEndedReasonEnum_removed =
     const RoleAssignmentHistoryEntryEndedReasonEnum._('removed');
+const RoleAssignmentHistoryEntryEndedReasonEnum
+    _$roleAssignmentHistoryEntryEndedReasonEnum_unknownDefaultOpenApi =
+    const RoleAssignmentHistoryEntryEndedReasonEnum._('unknownDefaultOpenApi');
 
 RoleAssignmentHistoryEntryEndedReasonEnum
     _$roleAssignmentHistoryEntryEndedReasonEnumValueOf(String name) {
@@ -25,8 +28,10 @@ RoleAssignmentHistoryEntryEndedReasonEnum
       return _$roleAssignmentHistoryEntryEndedReasonEnum_resigned;
     case 'removed':
       return _$roleAssignmentHistoryEntryEndedReasonEnum_removed;
+    case 'unknownDefaultOpenApi':
+      return _$roleAssignmentHistoryEntryEndedReasonEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$roleAssignmentHistoryEntryEndedReasonEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -36,6 +41,7 @@ final BuiltSet<RoleAssignmentHistoryEntryEndedReasonEnum>
   _$roleAssignmentHistoryEntryEndedReasonEnum_expired,
   _$roleAssignmentHistoryEntryEndedReasonEnum_resigned,
   _$roleAssignmentHistoryEntryEndedReasonEnum_removed,
+  _$roleAssignmentHistoryEntryEndedReasonEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<RoleAssignmentHistoryEntryEndedReasonEnum>
@@ -48,11 +54,13 @@ class _$RoleAssignmentHistoryEntryEndedReasonEnumSerializer
     'expired': 'expired',
     'resigned': 'resigned',
     'removed': 'removed',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'expired': 'expired',
     'resigned': 'resigned',
     'removed': 'removed',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

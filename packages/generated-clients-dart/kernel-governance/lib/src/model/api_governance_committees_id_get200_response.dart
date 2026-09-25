@@ -18,7 +18,7 @@ part 'api_governance_committees_id_get200_response.g.dart';
 @BuiltValue()
 abstract class ApiGovernanceCommitteesIdGet200Response implements Built<ApiGovernanceCommitteesIdGet200Response, ApiGovernanceCommitteesIdGet200ResponseBuilder> {
   @BuiltValueField(wireName: r'success')
-  JsonObject? get success;
+  bool get success;
 
   /// OrgUnit fields spread with members (OrgUnitMember[]), roles (CommitteeRole[]), children (OrgUnit[]) — see getOrgUnit + listOrgUnitMembers + listRoles + getChildOrgUnits
   @BuiltValueField(wireName: r'data')
@@ -48,9 +48,9 @@ class _$ApiGovernanceCommitteesIdGet200ResponseSerializer implements PrimitiveSe
     FullType specifiedType = FullType.unspecified,
   }) sync* {
     yield r'success';
-    yield object.success == null ? null : serializers.serialize(
+    yield serializers.serialize(
       object.success,
-      specifiedType: const FullType.nullable(JsonObject),
+      specifiedType: const FullType(bool),
     );
     yield r'data';
     yield serializers.serialize(
@@ -83,9 +83,8 @@ class _$ApiGovernanceCommitteesIdGet200ResponseSerializer implements PrimitiveSe
         case r'success':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType.nullable(JsonObject),
-          ) as JsonObject?;
-          if (valueDes == null) continue;
+            specifiedType: const FullType(bool),
+          ) as bool;
           result.success = valueDes;
           break;
         case r'data':

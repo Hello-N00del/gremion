@@ -253,6 +253,8 @@ class RoleAssignmentStatusEnum extends EnumClass {
   static const RoleAssignmentStatusEnum expired = _$roleAssignmentStatusEnum_expired;
   @BuiltValueEnumConst(wireName: r'vacated')
   static const RoleAssignmentStatusEnum vacated = _$roleAssignmentStatusEnum_vacated;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const RoleAssignmentStatusEnum unknownDefaultOpenApi = _$roleAssignmentStatusEnum_unknownDefaultOpenApi;
 
   static Serializer<RoleAssignmentStatusEnum> get serializer => _$roleAssignmentStatusEnumSerializer;
 

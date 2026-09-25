@@ -3,7 +3,6 @@
 //
 
 // ignore_for_file: unused_element
-import 'package:built_value/json_object.dart';
 import 'package:built_value/built_value.dart';
 import 'package:built_value/serializer.dart';
 
@@ -16,7 +15,7 @@ part 'api_health_get200_response.g.dart';
 @BuiltValue()
 abstract class ApiHealthGet200Response implements Built<ApiHealthGet200Response, ApiHealthGet200ResponseBuilder> {
   @BuiltValueField(wireName: r'status')
-  JsonObject? get status;
+  String get status;
 
   ApiHealthGet200Response._();
 
@@ -42,9 +41,9 @@ class _$ApiHealthGet200ResponseSerializer implements PrimitiveSerializer<ApiHeal
     FullType specifiedType = FullType.unspecified,
   }) sync* {
     yield r'status';
-    yield object.status == null ? null : serializers.serialize(
+    yield serializers.serialize(
       object.status,
-      specifiedType: const FullType.nullable(JsonObject),
+      specifiedType: const FullType(String),
     );
   }
 
@@ -72,9 +71,8 @@ class _$ApiHealthGet200ResponseSerializer implements PrimitiveSerializer<ApiHeal
         case r'status':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType.nullable(JsonObject),
-          ) as JsonObject?;
-          if (valueDes == null) continue;
+            specifiedType: const FullType(String),
+          ) as String;
           result.status = valueDes;
           break;
         default:

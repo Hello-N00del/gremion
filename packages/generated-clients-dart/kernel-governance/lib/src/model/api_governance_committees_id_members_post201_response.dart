@@ -4,7 +4,6 @@
 
 // ignore_for_file: unused_element
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_delete207_response_data.dart';
-import 'package:built_value/json_object.dart';
 import 'package:built_value/built_value.dart';
 import 'package:built_value/serializer.dart';
 
@@ -18,7 +17,7 @@ part 'api_governance_committees_id_members_post201_response.g.dart';
 @BuiltValue()
 abstract class ApiGovernanceCommitteesIdMembersPost201Response implements Built<ApiGovernanceCommitteesIdMembersPost201Response, ApiGovernanceCommitteesIdMembersPost201ResponseBuilder> {
   @BuiltValueField(wireName: r'success')
-  JsonObject? get success;
+  bool get success;
 
   @BuiltValueField(wireName: r'data')
   ApiGovernanceCommitteesIdDelete207ResponseData get data;
@@ -47,9 +46,9 @@ class _$ApiGovernanceCommitteesIdMembersPost201ResponseSerializer implements Pri
     FullType specifiedType = FullType.unspecified,
   }) sync* {
     yield r'success';
-    yield object.success == null ? null : serializers.serialize(
+    yield serializers.serialize(
       object.success,
-      specifiedType: const FullType.nullable(JsonObject),
+      specifiedType: const FullType(bool),
     );
     yield r'data';
     yield serializers.serialize(
@@ -82,9 +81,8 @@ class _$ApiGovernanceCommitteesIdMembersPost201ResponseSerializer implements Pri
         case r'success':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType.nullable(JsonObject),
-          ) as JsonObject?;
-          if (valueDes == null) continue;
+            specifiedType: const FullType(bool),
+          ) as bool;
           result.success = valueDes;
           break;
         case r'data':

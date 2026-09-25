@@ -247,6 +247,8 @@ class CommitteeMemberMembershipTypeEnum extends EnumClass {
   static const CommitteeMemberMembershipTypeEnum unelected = _$committeeMemberMembershipTypeEnum_unelected;
   @BuiltValueEnumConst(wireName: r'employee')
   static const CommitteeMemberMembershipTypeEnum employee = _$committeeMemberMembershipTypeEnum_employee;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const CommitteeMemberMembershipTypeEnum unknownDefaultOpenApi = _$committeeMemberMembershipTypeEnum_unknownDefaultOpenApi;
 
   static Serializer<CommitteeMemberMembershipTypeEnum> get serializer => _$committeeMemberMembershipTypeEnumSerializer;
 

@@ -18,6 +18,10 @@ const ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum
     _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_employee =
     const ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum._(
         'employee');
+const ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum
+    _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_unknownDefaultOpenApi =
+    const ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum._(
+        'unknownDefaultOpenApi');
 
 ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum
     _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnumValueOf(
@@ -29,8 +33,10 @@ ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum
       return _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_unelected;
     case 'employee':
       return _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_employee;
+    case 'unknownDefaultOpenApi':
+      return _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -41,6 +47,7 @@ final BuiltSet<ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum>
   _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_elected,
   _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_unelected,
   _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_employee,
+  _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum>
@@ -55,11 +62,13 @@ class _$ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnumSerializer
     'elected': 'elected',
     'unelected': 'unelected',
     'employee': 'employee',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'elected': 'elected',
     'unelected': 'unelected',
     'employee': 'employee',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

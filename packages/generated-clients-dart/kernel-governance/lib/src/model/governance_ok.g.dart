@@ -8,12 +8,12 @@ part of 'governance_ok.dart';
 
 class _$GovernanceOk extends GovernanceOk {
   @override
-  final JsonObject? success;
+  final bool success;
 
   factory _$GovernanceOk([void Function(GovernanceOkBuilder)? updates]) =>
       (GovernanceOkBuilder()..update(updates))._build();
 
-  _$GovernanceOk._({this.success}) : super._();
+  _$GovernanceOk._({required this.success}) : super._();
   @override
   GovernanceOk rebuild(void Function(GovernanceOkBuilder) updates) =>
       (toBuilder()..update(updates)).build();
@@ -47,9 +47,9 @@ class GovernanceOkBuilder
     implements Builder<GovernanceOk, GovernanceOkBuilder> {
   _$GovernanceOk? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   GovernanceOkBuilder() {
     GovernanceOk._defaults(this);
@@ -80,7 +80,8 @@ class GovernanceOkBuilder
   _$GovernanceOk _build() {
     final _$result = _$v ??
         _$GovernanceOk._(
-          success: success,
+          success: BuiltValueNullFieldError.checkNotNull(
+              success, r'GovernanceOk', 'success'),
         );
     replace(_$result);
     return _$result;

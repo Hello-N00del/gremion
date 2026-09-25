@@ -8,13 +8,13 @@ part of 'api_health_get200_response.dart';
 
 class _$ApiHealthGet200Response extends ApiHealthGet200Response {
   @override
-  final JsonObject? status;
+  final String status;
 
   factory _$ApiHealthGet200Response(
           [void Function(ApiHealthGet200ResponseBuilder)? updates]) =>
       (ApiHealthGet200ResponseBuilder()..update(updates))._build();
 
-  _$ApiHealthGet200Response._({this.status}) : super._();
+  _$ApiHealthGet200Response._({required this.status}) : super._();
   @override
   ApiHealthGet200Response rebuild(
           void Function(ApiHealthGet200ResponseBuilder) updates) =>
@@ -51,9 +51,9 @@ class ApiHealthGet200ResponseBuilder
         Builder<ApiHealthGet200Response, ApiHealthGet200ResponseBuilder> {
   _$ApiHealthGet200Response? _$v;
 
-  JsonObject? _status;
-  JsonObject? get status => _$this._status;
-  set status(JsonObject? status) => _$this._status = status;
+  String? _status;
+  String? get status => _$this._status;
+  set status(String? status) => _$this._status = status;
 
   ApiHealthGet200ResponseBuilder() {
     ApiHealthGet200Response._defaults(this);
@@ -84,7 +84,8 @@ class ApiHealthGet200ResponseBuilder
   _$ApiHealthGet200Response _build() {
     final _$result = _$v ??
         _$ApiHealthGet200Response._(
-          status: status,
+          status: BuiltValueNullFieldError.checkNotNull(
+              status, r'ApiHealthGet200Response', 'status'),
         );
     replace(_$result);
     return _$result;

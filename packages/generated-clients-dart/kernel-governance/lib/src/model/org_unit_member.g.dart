@@ -15,6 +15,9 @@ const OrgUnitMemberMembershipTypeEnum
 const OrgUnitMemberMembershipTypeEnum
     _$orgUnitMemberMembershipTypeEnum_employee =
     const OrgUnitMemberMembershipTypeEnum._('employee');
+const OrgUnitMemberMembershipTypeEnum
+    _$orgUnitMemberMembershipTypeEnum_unknownDefaultOpenApi =
+    const OrgUnitMemberMembershipTypeEnum._('unknownDefaultOpenApi');
 
 OrgUnitMemberMembershipTypeEnum _$orgUnitMemberMembershipTypeEnumValueOf(
     String name) {
@@ -25,8 +28,10 @@ OrgUnitMemberMembershipTypeEnum _$orgUnitMemberMembershipTypeEnumValueOf(
       return _$orgUnitMemberMembershipTypeEnum_unelected;
     case 'employee':
       return _$orgUnitMemberMembershipTypeEnum_employee;
+    case 'unknownDefaultOpenApi':
+      return _$orgUnitMemberMembershipTypeEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$orgUnitMemberMembershipTypeEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -36,6 +41,7 @@ final BuiltSet<OrgUnitMemberMembershipTypeEnum>
   _$orgUnitMemberMembershipTypeEnum_elected,
   _$orgUnitMemberMembershipTypeEnum_unelected,
   _$orgUnitMemberMembershipTypeEnum_employee,
+  _$orgUnitMemberMembershipTypeEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<OrgUnitMemberMembershipTypeEnum>
@@ -48,11 +54,13 @@ class _$OrgUnitMemberMembershipTypeEnumSerializer
     'elected': 'elected',
     'unelected': 'unelected',
     'employee': 'employee',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'elected': 'elected',
     'unelected': 'unelected',
     'employee': 'employee',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

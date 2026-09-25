@@ -10,6 +10,8 @@ const OrgUnitAuthorityEnum _$orgUnitAuthorityEnum_advisory =
     const OrgUnitAuthorityEnum._('advisory');
 const OrgUnitAuthorityEnum _$orgUnitAuthorityEnum_deciding =
     const OrgUnitAuthorityEnum._('deciding');
+const OrgUnitAuthorityEnum _$orgUnitAuthorityEnum_unknownDefaultOpenApi =
+    const OrgUnitAuthorityEnum._('unknownDefaultOpenApi');
 
 OrgUnitAuthorityEnum _$orgUnitAuthorityEnumValueOf(String name) {
   switch (name) {
@@ -17,8 +19,10 @@ OrgUnitAuthorityEnum _$orgUnitAuthorityEnumValueOf(String name) {
       return _$orgUnitAuthorityEnum_advisory;
     case 'deciding':
       return _$orgUnitAuthorityEnum_deciding;
+    case 'unknownDefaultOpenApi':
+      return _$orgUnitAuthorityEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$orgUnitAuthorityEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -26,12 +30,15 @@ final BuiltSet<OrgUnitAuthorityEnum> _$orgUnitAuthorityEnumValues =
     BuiltSet<OrgUnitAuthorityEnum>(const <OrgUnitAuthorityEnum>[
   _$orgUnitAuthorityEnum_advisory,
   _$orgUnitAuthorityEnum_deciding,
+  _$orgUnitAuthorityEnum_unknownDefaultOpenApi,
 ]);
 
 const OrgUnitVisibilityEnum _$orgUnitVisibilityEnum_allMembers =
     const OrgUnitVisibilityEnum._('allMembers');
 const OrgUnitVisibilityEnum _$orgUnitVisibilityEnum_committeeOnly =
     const OrgUnitVisibilityEnum._('committeeOnly');
+const OrgUnitVisibilityEnum _$orgUnitVisibilityEnum_unknownDefaultOpenApi =
+    const OrgUnitVisibilityEnum._('unknownDefaultOpenApi');
 
 OrgUnitVisibilityEnum _$orgUnitVisibilityEnumValueOf(String name) {
   switch (name) {
@@ -39,8 +46,10 @@ OrgUnitVisibilityEnum _$orgUnitVisibilityEnumValueOf(String name) {
       return _$orgUnitVisibilityEnum_allMembers;
     case 'committeeOnly':
       return _$orgUnitVisibilityEnum_committeeOnly;
+    case 'unknownDefaultOpenApi':
+      return _$orgUnitVisibilityEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$orgUnitVisibilityEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -48,6 +57,7 @@ final BuiltSet<OrgUnitVisibilityEnum> _$orgUnitVisibilityEnumValues =
     BuiltSet<OrgUnitVisibilityEnum>(const <OrgUnitVisibilityEnum>[
   _$orgUnitVisibilityEnum_allMembers,
   _$orgUnitVisibilityEnum_committeeOnly,
+  _$orgUnitVisibilityEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<OrgUnitAuthorityEnum> _$orgUnitAuthorityEnumSerializer =
@@ -60,10 +70,12 @@ class _$OrgUnitAuthorityEnumSerializer
   static const Map<String, Object> _toWire = const <String, Object>{
     'advisory': 'advisory',
     'deciding': 'deciding',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'advisory': 'advisory',
     'deciding': 'deciding',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override
@@ -88,10 +100,12 @@ class _$OrgUnitVisibilityEnumSerializer
   static const Map<String, Object> _toWire = const <String, Object>{
     'allMembers': 'all_members',
     'committeeOnly': 'committee_only',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'all_members': 'allMembers',
     'committee_only': 'committeeOnly',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

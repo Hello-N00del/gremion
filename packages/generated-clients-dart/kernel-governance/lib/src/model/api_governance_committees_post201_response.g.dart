@@ -9,7 +9,7 @@ part of 'api_governance_committees_post201_response.dart';
 class _$ApiGovernanceCommitteesPost201Response
     extends ApiGovernanceCommitteesPost201Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final ApiGovernanceCommitteesPost201ResponseData data;
 
@@ -19,7 +19,8 @@ class _$ApiGovernanceCommitteesPost201Response
       (ApiGovernanceCommitteesPost201ResponseBuilder()..update(updates))
           ._build();
 
-  _$ApiGovernanceCommitteesPost201Response._({this.success, required this.data})
+  _$ApiGovernanceCommitteesPost201Response._(
+      {required this.success, required this.data})
       : super._();
   @override
   ApiGovernanceCommitteesPost201Response rebuild(
@@ -64,9 +65,9 @@ class ApiGovernanceCommitteesPost201ResponseBuilder
             ApiGovernanceCommitteesPost201ResponseBuilder> {
   _$ApiGovernanceCommitteesPost201Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   ApiGovernanceCommitteesPost201ResponseDataBuilder? _data;
   ApiGovernanceCommitteesPost201ResponseDataBuilder get data =>
@@ -107,7 +108,8 @@ class ApiGovernanceCommitteesPost201ResponseBuilder
     try {
       _$result = _$v ??
           _$ApiGovernanceCommitteesPost201Response._(
-            success: success,
+            success: BuiltValueNullFieldError.checkNotNull(
+                success, r'ApiGovernanceCommitteesPost201Response', 'success'),
             data: data.build(),
           );
     } catch (_) {

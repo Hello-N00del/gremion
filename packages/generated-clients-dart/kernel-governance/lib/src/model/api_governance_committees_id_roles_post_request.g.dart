@@ -17,6 +17,10 @@ const ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum
     _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_manual =
     const ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum._(
         'manual');
+const ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum
+    _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_unknownDefaultOpenApi =
+    const ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum._(
+        'unknownDefaultOpenApi');
 
 ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum
     _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnumValueOf(
@@ -28,8 +32,10 @@ ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum
       return _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_poll;
     case 'manual':
       return _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_manual;
+    case 'unknownDefaultOpenApi':
+      return _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -40,6 +46,7 @@ final BuiltSet<ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum>
   _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_helios,
   _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_poll,
   _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_manual,
+  _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum>
@@ -54,11 +61,13 @@ class _$ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnumSerializer
     'helios': 'helios',
     'poll': 'poll',
     'manual': 'manual',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'helios': 'helios',
     'poll': 'poll',
     'manual': 'manual',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

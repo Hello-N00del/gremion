@@ -13,6 +13,10 @@ const ApiGovernanceCommitteesIdPatchRequestVisibilityEnum
     _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_committeeOnly =
     const ApiGovernanceCommitteesIdPatchRequestVisibilityEnum._(
         'committeeOnly');
+const ApiGovernanceCommitteesIdPatchRequestVisibilityEnum
+    _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_unknownDefaultOpenApi =
+    const ApiGovernanceCommitteesIdPatchRequestVisibilityEnum._(
+        'unknownDefaultOpenApi');
 
 ApiGovernanceCommitteesIdPatchRequestVisibilityEnum
     _$apiGovernanceCommitteesIdPatchRequestVisibilityEnumValueOf(String name) {
@@ -21,8 +25,10 @@ ApiGovernanceCommitteesIdPatchRequestVisibilityEnum
       return _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_allMembers;
     case 'committeeOnly':
       return _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_committeeOnly;
+    case 'unknownDefaultOpenApi':
+      return _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -31,6 +37,7 @@ final BuiltSet<ApiGovernanceCommitteesIdPatchRequestVisibilityEnum>
         ApiGovernanceCommitteesIdPatchRequestVisibilityEnum>(const <ApiGovernanceCommitteesIdPatchRequestVisibilityEnum>[
   _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_allMembers,
   _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_committeeOnly,
+  _$apiGovernanceCommitteesIdPatchRequestVisibilityEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<ApiGovernanceCommitteesIdPatchRequestVisibilityEnum>
@@ -44,10 +51,12 @@ class _$ApiGovernanceCommitteesIdPatchRequestVisibilityEnumSerializer
   static const Map<String, Object> _toWire = const <String, Object>{
     'allMembers': 'all_members',
     'committeeOnly': 'committee_only',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'all_members': 'allMembers',
     'committee_only': 'committeeOnly',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

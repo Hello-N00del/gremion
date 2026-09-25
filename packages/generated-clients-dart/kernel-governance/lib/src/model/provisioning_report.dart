@@ -147,6 +147,8 @@ class ProvisioningReportOverallEnum extends EnumClass {
   static const ProvisioningReportOverallEnum degraded = _$provisioningReportOverallEnum_degraded;
   @BuiltValueEnumConst(wireName: r'failed')
   static const ProvisioningReportOverallEnum failed = _$provisioningReportOverallEnum_failed;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const ProvisioningReportOverallEnum unknownDefaultOpenApi = _$provisioningReportOverallEnum_unknownDefaultOpenApi;
 
   static Serializer<ProvisioningReportOverallEnum> get serializer => _$provisioningReportOverallEnumSerializer;
 

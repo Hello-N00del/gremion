@@ -4,7 +4,6 @@
 
 // ignore_for_file: unused_element
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_delete207_response_data.dart';
-import 'package:built_value/json_object.dart';
 import 'package:built_value/built_value.dart';
 import 'package:built_value/serializer.dart';
 
@@ -19,7 +18,7 @@ part 'api_governance_committees_id_delete207_response.g.dart';
 @BuiltValue()
 abstract class ApiGovernanceCommitteesIdDelete207Response implements Built<ApiGovernanceCommitteesIdDelete207Response, ApiGovernanceCommitteesIdDelete207ResponseBuilder> {
   @BuiltValueField(wireName: r'success')
-  JsonObject? get success;
+  bool get success;
 
   @BuiltValueField(wireName: r'error')
   String get error;
@@ -51,9 +50,9 @@ class _$ApiGovernanceCommitteesIdDelete207ResponseSerializer implements Primitiv
     FullType specifiedType = FullType.unspecified,
   }) sync* {
     yield r'success';
-    yield object.success == null ? null : serializers.serialize(
+    yield serializers.serialize(
       object.success,
-      specifiedType: const FullType.nullable(JsonObject),
+      specifiedType: const FullType(bool),
     );
     yield r'error';
     yield serializers.serialize(
@@ -91,9 +90,8 @@ class _$ApiGovernanceCommitteesIdDelete207ResponseSerializer implements Primitiv
         case r'success':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType.nullable(JsonObject),
-          ) as JsonObject?;
-          if (valueDes == null) continue;
+            specifiedType: const FullType(bool),
+          ) as bool;
           result.success = valueDes;
           break;
         case r'error':

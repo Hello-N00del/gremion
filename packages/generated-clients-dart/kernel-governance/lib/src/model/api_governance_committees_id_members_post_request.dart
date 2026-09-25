@@ -172,6 +172,8 @@ class ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum extends Enum
   static const ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum unelected = _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_unelected;
   @BuiltValueEnumConst(wireName: r'employee')
   static const ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum employee = _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_employee;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum unknownDefaultOpenApi = _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum_unknownDefaultOpenApi;
 
   static Serializer<ApiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnum> get serializer => _$apiGovernanceCommitteesIdMembersPostRequestMembershipTypeEnumSerializer;
 

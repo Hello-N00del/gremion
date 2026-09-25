@@ -18,7 +18,7 @@ part 'api_groups_id_get200_response.g.dart';
 @BuiltValue()
 abstract class ApiGroupsIdGet200Response implements Built<ApiGroupsIdGet200Response, ApiGroupsIdGet200ResponseBuilder> {
   @BuiltValueField(wireName: r'success')
-  JsonObject? get success;
+  bool get success;
 
   /// Keycloak group object — see kc.getGroup
   @BuiltValueField(wireName: r'data')
@@ -48,9 +48,9 @@ class _$ApiGroupsIdGet200ResponseSerializer implements PrimitiveSerializer<ApiGr
     FullType specifiedType = FullType.unspecified,
   }) sync* {
     yield r'success';
-    yield object.success == null ? null : serializers.serialize(
+    yield serializers.serialize(
       object.success,
-      specifiedType: const FullType.nullable(JsonObject),
+      specifiedType: const FullType(bool),
     );
     yield r'data';
     yield serializers.serialize(
@@ -83,9 +83,8 @@ class _$ApiGroupsIdGet200ResponseSerializer implements PrimitiveSerializer<ApiGr
         case r'success':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType.nullable(JsonObject),
-          ) as JsonObject?;
-          if (valueDes == null) continue;
+            specifiedType: const FullType(bool),
+          ) as bool;
           result.success = valueDes;
           break;
         case r'data':

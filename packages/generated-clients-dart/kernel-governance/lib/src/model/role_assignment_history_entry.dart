@@ -214,6 +214,8 @@ class RoleAssignmentHistoryEntryEndedReasonEnum extends EnumClass {
   static const RoleAssignmentHistoryEntryEndedReasonEnum resigned = _$roleAssignmentHistoryEntryEndedReasonEnum_resigned;
   @BuiltValueEnumConst(wireName: r'removed')
   static const RoleAssignmentHistoryEntryEndedReasonEnum removed = _$roleAssignmentHistoryEntryEndedReasonEnum_removed;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const RoleAssignmentHistoryEntryEndedReasonEnum unknownDefaultOpenApi = _$roleAssignmentHistoryEntryEndedReasonEnum_unknownDefaultOpenApi;
 
   static Serializer<RoleAssignmentHistoryEntryEndedReasonEnum> get serializer => _$roleAssignmentHistoryEntryEndedReasonEnumSerializer;
 

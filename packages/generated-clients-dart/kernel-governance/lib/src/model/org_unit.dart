@@ -306,6 +306,9 @@ class OrgUnitAuthorityEnum extends EnumClass {
   /// beratend vs beschließend (P2.2 #202, §3.5(d)); NOT NULL DEFAULT 'deciding' (migration 038)
   @BuiltValueEnumConst(wireName: r'deciding')
   static const OrgUnitAuthorityEnum deciding = _$orgUnitAuthorityEnum_deciding;
+  /// beratend vs beschließend (P2.2 #202, §3.5(d)); NOT NULL DEFAULT 'deciding' (migration 038)
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const OrgUnitAuthorityEnum unknownDefaultOpenApi = _$orgUnitAuthorityEnum_unknownDefaultOpenApi;
 
   static Serializer<OrgUnitAuthorityEnum> get serializer => _$orgUnitAuthorityEnumSerializer;
 
@@ -321,6 +324,8 @@ class OrgUnitVisibilityEnum extends EnumClass {
   static const OrgUnitVisibilityEnum allMembers = _$orgUnitVisibilityEnum_allMembers;
   @BuiltValueEnumConst(wireName: r'committee_only')
   static const OrgUnitVisibilityEnum committeeOnly = _$orgUnitVisibilityEnum_committeeOnly;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const OrgUnitVisibilityEnum unknownDefaultOpenApi = _$orgUnitVisibilityEnum_unknownDefaultOpenApi;
 
   static Serializer<OrgUnitVisibilityEnum> get serializer => _$orgUnitVisibilityEnumSerializer;
 

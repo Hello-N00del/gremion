@@ -171,6 +171,8 @@ class ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum extends EnumCl
   static const ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum poll = _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_poll;
   @BuiltValueEnumConst(wireName: r'manual')
   static const ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum manual = _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_manual;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum unknownDefaultOpenApi = _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum_unknownDefaultOpenApi;
 
   static Serializer<ApiGovernanceCommitteesIdRolesPostRequestElectionMethodEnum> get serializer => _$apiGovernanceCommitteesIdRolesPostRequestElectionMethodEnumSerializer;
 

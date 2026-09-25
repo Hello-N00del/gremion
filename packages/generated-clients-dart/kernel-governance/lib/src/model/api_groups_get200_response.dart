@@ -18,7 +18,7 @@ part 'api_groups_get200_response.g.dart';
 @BuiltValue()
 abstract class ApiGroupsGet200Response implements Built<ApiGroupsGet200Response, ApiGroupsGet200ResponseBuilder> {
   @BuiltValueField(wireName: r'success')
-  JsonObject? get success;
+  bool get success;
 
   @BuiltValueField(wireName: r'data')
   BuiltList<BuiltMap<String, JsonObject?>> get data;
@@ -47,9 +47,9 @@ class _$ApiGroupsGet200ResponseSerializer implements PrimitiveSerializer<ApiGrou
     FullType specifiedType = FullType.unspecified,
   }) sync* {
     yield r'success';
-    yield object.success == null ? null : serializers.serialize(
+    yield serializers.serialize(
       object.success,
-      specifiedType: const FullType.nullable(JsonObject),
+      specifiedType: const FullType(bool),
     );
     yield r'data';
     yield serializers.serialize(
@@ -82,9 +82,8 @@ class _$ApiGroupsGet200ResponseSerializer implements PrimitiveSerializer<ApiGrou
         case r'success':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType.nullable(JsonObject),
-          ) as JsonObject?;
-          if (valueDes == null) continue;
+            specifiedType: const FullType(bool),
+          ) as bool;
           result.success = valueDes;
           break;
         case r'data':

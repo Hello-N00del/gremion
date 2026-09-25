@@ -15,6 +15,9 @@ const CommitteeMemberMembershipTypeEnum
 const CommitteeMemberMembershipTypeEnum
     _$committeeMemberMembershipTypeEnum_employee =
     const CommitteeMemberMembershipTypeEnum._('employee');
+const CommitteeMemberMembershipTypeEnum
+    _$committeeMemberMembershipTypeEnum_unknownDefaultOpenApi =
+    const CommitteeMemberMembershipTypeEnum._('unknownDefaultOpenApi');
 
 CommitteeMemberMembershipTypeEnum _$committeeMemberMembershipTypeEnumValueOf(
     String name) {
@@ -25,8 +28,10 @@ CommitteeMemberMembershipTypeEnum _$committeeMemberMembershipTypeEnumValueOf(
       return _$committeeMemberMembershipTypeEnum_unelected;
     case 'employee':
       return _$committeeMemberMembershipTypeEnum_employee;
+    case 'unknownDefaultOpenApi':
+      return _$committeeMemberMembershipTypeEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$committeeMemberMembershipTypeEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -36,6 +41,7 @@ final BuiltSet<CommitteeMemberMembershipTypeEnum>
   _$committeeMemberMembershipTypeEnum_elected,
   _$committeeMemberMembershipTypeEnum_unelected,
   _$committeeMemberMembershipTypeEnum_employee,
+  _$committeeMemberMembershipTypeEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<CommitteeMemberMembershipTypeEnum>
@@ -48,11 +54,13 @@ class _$CommitteeMemberMembershipTypeEnumSerializer
     'elected': 'elected',
     'unelected': 'unelected',
     'employee': 'employee',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'elected': 'elected',
     'unelected': 'unelected',
     'employee': 'employee',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

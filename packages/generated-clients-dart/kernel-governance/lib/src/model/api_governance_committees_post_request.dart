@@ -38,8 +38,6 @@ abstract class ApiGovernanceCommitteesPostRequest implements Built<ApiGovernance
 
   @BuiltValueHook(initializeBuilder: true)
   static void _defaults(ApiGovernanceCommitteesPostRequestBuilder b) => b
-      ..description = 'null'
-      ..parentId = 'null'
       ..visibility = const ApiGovernanceCommitteesPostRequestVisibilityEnum._('all_members');
 
   @BuiltValueSerializer(custom: true)
@@ -172,6 +170,8 @@ class ApiGovernanceCommitteesPostRequestVisibilityEnum extends EnumClass {
   static const ApiGovernanceCommitteesPostRequestVisibilityEnum allMembers = _$apiGovernanceCommitteesPostRequestVisibilityEnum_allMembers;
   @BuiltValueEnumConst(wireName: r'committee_only')
   static const ApiGovernanceCommitteesPostRequestVisibilityEnum committeeOnly = _$apiGovernanceCommitteesPostRequestVisibilityEnum_committeeOnly;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const ApiGovernanceCommitteesPostRequestVisibilityEnum unknownDefaultOpenApi = _$apiGovernanceCommitteesPostRequestVisibilityEnum_unknownDefaultOpenApi;
 
   static Serializer<ApiGovernanceCommitteesPostRequestVisibilityEnum> get serializer => _$apiGovernanceCommitteesPostRequestVisibilityEnumSerializer;
 

@@ -9,7 +9,7 @@ part of 'api_governance_committees_id_history_get200_response.dart';
 class _$ApiGovernanceCommitteesIdHistoryGet200Response
     extends ApiGovernanceCommitteesIdHistoryGet200Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final BuiltList<RoleAssignmentHistoryEntry> data;
 
@@ -20,7 +20,7 @@ class _$ApiGovernanceCommitteesIdHistoryGet200Response
           ._build();
 
   _$ApiGovernanceCommitteesIdHistoryGet200Response._(
-      {this.success, required this.data})
+      {required this.success, required this.data})
       : super._();
   @override
   ApiGovernanceCommitteesIdHistoryGet200Response rebuild(
@@ -65,9 +65,9 @@ class ApiGovernanceCommitteesIdHistoryGet200ResponseBuilder
             ApiGovernanceCommitteesIdHistoryGet200ResponseBuilder> {
   _$ApiGovernanceCommitteesIdHistoryGet200Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   ListBuilder<RoleAssignmentHistoryEntry>? _data;
   ListBuilder<RoleAssignmentHistoryEntry> get data =>
@@ -109,7 +109,8 @@ class ApiGovernanceCommitteesIdHistoryGet200ResponseBuilder
     try {
       _$result = _$v ??
           _$ApiGovernanceCommitteesIdHistoryGet200Response._(
-            success: success,
+            success: BuiltValueNullFieldError.checkNotNull(success,
+                r'ApiGovernanceCommitteesIdHistoryGet200Response', 'success'),
             data: data.build(),
           );
     } catch (_) {

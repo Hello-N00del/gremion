@@ -9,7 +9,7 @@ part of 'api_governance_committees_id_delete200_response.dart';
 class _$ApiGovernanceCommitteesIdDelete200Response
     extends ApiGovernanceCommitteesIdDelete200Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final JsonObject? data;
 
@@ -19,7 +19,8 @@ class _$ApiGovernanceCommitteesIdDelete200Response
       (ApiGovernanceCommitteesIdDelete200ResponseBuilder()..update(updates))
           ._build();
 
-  _$ApiGovernanceCommitteesIdDelete200Response._({this.success, this.data})
+  _$ApiGovernanceCommitteesIdDelete200Response._(
+      {required this.success, this.data})
       : super._();
   @override
   ApiGovernanceCommitteesIdDelete200Response rebuild(
@@ -64,9 +65,9 @@ class ApiGovernanceCommitteesIdDelete200ResponseBuilder
             ApiGovernanceCommitteesIdDelete200ResponseBuilder> {
   _$ApiGovernanceCommitteesIdDelete200Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   JsonObject? _data;
   JsonObject? get data => _$this._data;
@@ -104,7 +105,8 @@ class ApiGovernanceCommitteesIdDelete200ResponseBuilder
   _$ApiGovernanceCommitteesIdDelete200Response _build() {
     final _$result = _$v ??
         _$ApiGovernanceCommitteesIdDelete200Response._(
-          success: success,
+          success: BuiltValueNullFieldError.checkNotNull(success,
+              r'ApiGovernanceCommitteesIdDelete200Response', 'success'),
           data: data,
         );
     replace(_$result);

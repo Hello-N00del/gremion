@@ -9,7 +9,7 @@ part of 'api_governance_committees_id_members_post201_response.dart';
 class _$ApiGovernanceCommitteesIdMembersPost201Response
     extends ApiGovernanceCommitteesIdMembersPost201Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final ApiGovernanceCommitteesIdDelete207ResponseData data;
 
@@ -22,7 +22,7 @@ class _$ApiGovernanceCommitteesIdMembersPost201Response
           ._build();
 
   _$ApiGovernanceCommitteesIdMembersPost201Response._(
-      {this.success, required this.data})
+      {required this.success, required this.data})
       : super._();
   @override
   ApiGovernanceCommitteesIdMembersPost201Response rebuild(
@@ -67,9 +67,9 @@ class ApiGovernanceCommitteesIdMembersPost201ResponseBuilder
             ApiGovernanceCommitteesIdMembersPost201ResponseBuilder> {
   _$ApiGovernanceCommitteesIdMembersPost201Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   ApiGovernanceCommitteesIdDelete207ResponseDataBuilder? _data;
   ApiGovernanceCommitteesIdDelete207ResponseDataBuilder get data =>
@@ -111,7 +111,8 @@ class ApiGovernanceCommitteesIdMembersPost201ResponseBuilder
     try {
       _$result = _$v ??
           _$ApiGovernanceCommitteesIdMembersPost201Response._(
-            success: success,
+            success: BuiltValueNullFieldError.checkNotNull(success,
+                r'ApiGovernanceCommitteesIdMembersPost201Response', 'success'),
             data: data.build(),
           );
     } catch (_) {

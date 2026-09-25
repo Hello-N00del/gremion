@@ -194,6 +194,8 @@ class CommitteeRoleElectionMethodEnum extends EnumClass {
   static const CommitteeRoleElectionMethodEnum poll = _$committeeRoleElectionMethodEnum_poll;
   @BuiltValueEnumConst(wireName: r'manual')
   static const CommitteeRoleElectionMethodEnum manual = _$committeeRoleElectionMethodEnum_manual;
+  @BuiltValueEnumConst(wireName: r'unknown_default_open_api', fallback: true)
+  static const CommitteeRoleElectionMethodEnum unknownDefaultOpenApi = _$committeeRoleElectionMethodEnum_unknownDefaultOpenApi;
 
   static Serializer<CommitteeRoleElectionMethodEnum> get serializer => _$committeeRoleElectionMethodEnumSerializer;
 

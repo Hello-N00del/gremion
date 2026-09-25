@@ -14,6 +14,9 @@ const RoleAssignmentStatusEnum _$roleAssignmentStatusEnum_expired =
     const RoleAssignmentStatusEnum._('expired');
 const RoleAssignmentStatusEnum _$roleAssignmentStatusEnum_vacated =
     const RoleAssignmentStatusEnum._('vacated');
+const RoleAssignmentStatusEnum
+    _$roleAssignmentStatusEnum_unknownDefaultOpenApi =
+    const RoleAssignmentStatusEnum._('unknownDefaultOpenApi');
 
 RoleAssignmentStatusEnum _$roleAssignmentStatusEnumValueOf(String name) {
   switch (name) {
@@ -25,8 +28,10 @@ RoleAssignmentStatusEnum _$roleAssignmentStatusEnumValueOf(String name) {
       return _$roleAssignmentStatusEnum_expired;
     case 'vacated':
       return _$roleAssignmentStatusEnum_vacated;
+    case 'unknownDefaultOpenApi':
+      return _$roleAssignmentStatusEnum_unknownDefaultOpenApi;
     default:
-      throw ArgumentError(name);
+      return _$roleAssignmentStatusEnum_unknownDefaultOpenApi;
   }
 }
 
@@ -36,6 +41,7 @@ final BuiltSet<RoleAssignmentStatusEnum> _$roleAssignmentStatusEnumValues =
   _$roleAssignmentStatusEnum_grace,
   _$roleAssignmentStatusEnum_expired,
   _$roleAssignmentStatusEnum_vacated,
+  _$roleAssignmentStatusEnum_unknownDefaultOpenApi,
 ]);
 
 Serializer<RoleAssignmentStatusEnum> _$roleAssignmentStatusEnumSerializer =
@@ -48,12 +54,14 @@ class _$RoleAssignmentStatusEnumSerializer
     'grace': 'grace',
     'expired': 'expired',
     'vacated': 'vacated',
+    'unknownDefaultOpenApi': 'unknown_default_open_api',
   };
   static const Map<Object, String> _fromWire = const <Object, String>{
     'active': 'active',
     'grace': 'grace',
     'expired': 'expired',
     'vacated': 'vacated',
+    'unknown_default_open_api': 'unknownDefaultOpenApi',
   };
 
   @override

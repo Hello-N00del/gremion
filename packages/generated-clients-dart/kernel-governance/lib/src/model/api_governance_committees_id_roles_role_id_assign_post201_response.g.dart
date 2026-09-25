@@ -9,7 +9,7 @@ part of 'api_governance_committees_id_roles_role_id_assign_post201_response.dart
 class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response
     extends ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final RoleAssignment data;
 
@@ -22,7 +22,7 @@ class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response
           ._build();
 
   _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response._(
-      {this.success, required this.data})
+      {required this.success, required this.data})
       : super._();
   @override
   ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response rebuild(
@@ -70,9 +70,9 @@ class ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseBuilder
             ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseBuilder> {
   _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   RoleAssignmentBuilder? _data;
   RoleAssignmentBuilder get data => _$this._data ??= RoleAssignmentBuilder();
@@ -114,7 +114,10 @@ class ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseBuilder
     try {
       _$result = _$v ??
           _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response._(
-            success: success,
+            success: BuiltValueNullFieldError.checkNotNull(
+                success,
+                r'ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response',
+                'success'),
             data: data.build(),
           );
     } catch (_) {

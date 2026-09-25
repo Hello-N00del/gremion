@@ -9,7 +9,7 @@ part of 'api_governance_committees_id_provision_post200_response.dart';
 class _$ApiGovernanceCommitteesIdProvisionPost200Response
     extends ApiGovernanceCommitteesIdProvisionPost200Response {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final ProvisioningReport data;
 
@@ -22,7 +22,7 @@ class _$ApiGovernanceCommitteesIdProvisionPost200Response
           ._build();
 
   _$ApiGovernanceCommitteesIdProvisionPost200Response._(
-      {this.success, required this.data})
+      {required this.success, required this.data})
       : super._();
   @override
   ApiGovernanceCommitteesIdProvisionPost200Response rebuild(
@@ -68,9 +68,9 @@ class ApiGovernanceCommitteesIdProvisionPost200ResponseBuilder
             ApiGovernanceCommitteesIdProvisionPost200ResponseBuilder> {
   _$ApiGovernanceCommitteesIdProvisionPost200Response? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   ProvisioningReportBuilder? _data;
   ProvisioningReportBuilder get data =>
@@ -111,7 +111,10 @@ class ApiGovernanceCommitteesIdProvisionPost200ResponseBuilder
     try {
       _$result = _$v ??
           _$ApiGovernanceCommitteesIdProvisionPost200Response._(
-            success: success,
+            success: BuiltValueNullFieldError.checkNotNull(
+                success,
+                r'ApiGovernanceCommitteesIdProvisionPost200Response',
+                'success'),
             data: data.build(),
           );
     } catch (_) {

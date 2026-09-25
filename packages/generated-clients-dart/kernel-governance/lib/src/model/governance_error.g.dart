@@ -8,14 +8,14 @@ part of 'governance_error.dart';
 
 class _$GovernanceError extends GovernanceError {
   @override
-  final JsonObject? success;
+  final bool success;
   @override
   final String error;
 
   factory _$GovernanceError([void Function(GovernanceErrorBuilder)? updates]) =>
       (GovernanceErrorBuilder()..update(updates))._build();
 
-  _$GovernanceError._({this.success, required this.error}) : super._();
+  _$GovernanceError._({required this.success, required this.error}) : super._();
   @override
   GovernanceError rebuild(void Function(GovernanceErrorBuilder) updates) =>
       (toBuilder()..update(updates)).build();
@@ -53,9 +53,9 @@ class GovernanceErrorBuilder
     implements Builder<GovernanceError, GovernanceErrorBuilder> {
   _$GovernanceError? _$v;
 
-  JsonObject? _success;
-  JsonObject? get success => _$this._success;
-  set success(JsonObject? success) => _$this._success = success;
+  bool? _success;
+  bool? get success => _$this._success;
+  set success(bool? success) => _$this._success = success;
 
   String? _error;
   String? get error => _$this._error;
@@ -91,7 +91,8 @@ class GovernanceErrorBuilder
   _$GovernanceError _build() {
     final _$result = _$v ??
         _$GovernanceError._(
-          success: success,
+          success: BuiltValueNullFieldError.checkNotNull(
+              success, r'GovernanceError', 'success'),
           error: BuiltValueNullFieldError.checkNotNull(
               error, r'GovernanceError', 'error'),
         );
