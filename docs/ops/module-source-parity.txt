@@ -1,6 +1,6 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f1 -> 0c9d342e9a1f9785b6f976719008134237198d0d; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: 86d53102b3cb763bc32ae2b99635cfddc2f0ae1b
+kernel: 3a2a89aa2b854b7b9feb83bb58a240473126e596
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f1: 21 files, 0 differ (0 listed, 0 unlisted)
