@@ -315,6 +315,34 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     }
   })
 
+  // Round-2 verifier HIGH: a rename that also rewrites most of the spec is
+  // below git's 50% similarity, so it shows as D + A and rename detection
+  // never pairs it. The registry's `name` is the stable identity: the base
+  // copy is the file the base registry listed under the same name.
+  it('a renamed AND heavily rewritten spec is found via its registry name at base', () => {
+    const d = trunkTree()
+    try {
+      git(d, ['reset', '-q', '--hard', 'HEAD~1'])
+      const many = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`/p${i}`, specV1.paths['/x']]))
+      writeSpec(d, { ...specV1, paths: many })
+      git(d, ['commit', '-q', '-am', 'twenty paths'])
+      git(d, ['checkout', '-q', '-b', 'unit/rewrite'])
+      git(d, ['rm', '-q', 'contracts/kernel/openapi.x.json'])
+      mkdirSync(join(d, 'contracts', 'kernel'), { recursive: true }) // git rm drops the emptied dir
+      writeFileSync(join(d, 'contracts', 'kernel', 'openapi.z.json'), JSON.stringify({ ...specV1, info: { title: 'rewritten', version: '1.0.0' }, paths: { '/p0': specV1.paths['/x'] } }, null, 2))
+      writeFileSync(join(d, 'contracts', 'registry.json'), JSON.stringify({
+        specs: [{ name: 'x', type: 'openapi', file: 'contracts/kernel/openapi.z.json', status: 'active', owner: 'gov' }],
+      }))
+      git(d, ['add', '-A'])
+      git(d, ['commit', '-q', '-m', 'rename + drop 19 paths, no bump'])
+      const result = runContractsCheck(d, { env: envWithout() })
+      expect(result.compatChecked).toBe(1)
+      expect(result.problems.some((p) => /openapi\.z\.json: breaking change/.test(p))).toBe(true)
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
+  })
+
   it('HEAD on main with unpushed commits: origin/main (behind HEAD) is the base, not HEAD', () => {
     const d = trunkTree()
     try {

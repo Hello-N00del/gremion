@@ -127,7 +127,10 @@ function specsCleanAgainstHead(repoRoot, files) {
 function renamedFrom(repoRoot, ref, file) {
   let out = ''
   try {
-    out = execFileSync('git', ['diff', '-M', '--name-status', '-z', ref, '--'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    // Scoped to contracts/ with renameLimit=0 (round-2 verifier MEDIUM): an
+    // unscoped diff over a big change set makes git skip rename detection
+    // ("too many files"), silently turning a rename back into D + A.
+    out = execFileSync('git', ['-c', 'diff.renameLimit=0', 'diff', '-M', '--name-status', '-z', ref, '--', 'contracts/'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   } catch {
     return null
   }
@@ -145,12 +148,33 @@ function renamedFrom(repoRoot, ref, file) {
   return null
 }
 
-/** The base copy of a registered spec: at its own path, else at the path it
- *  was renamed from. null = genuinely new since base. */
-function readBaseCopy(repoRoot, ref, file) {
-  const own = readAtRef(repoRoot, ref, file)
+/** The file the BASE registry listed under `name`, or null. The registry
+ *  name is a spec's stable identity: round-2 verifier HIGH — a rename that
+ *  also rewrites most of the spec is below git's rename similarity (D + A),
+ *  so rename detection alone let "rename + drop most endpoints" pass. */
+function baseRegistryFile(repoRoot, ref, name) {
+  const raw = readAtRef(repoRoot, ref, 'contracts/registry.json')
+  if (raw === null) return null
+  try {
+    const hit = (JSON.parse(raw).specs ?? []).find((e) => e && e.name === name)
+    return hit && typeof hit.file === 'string' ? hit.file : null
+  } catch {
+    return null
+  }
+}
+
+/** The base copy of a registered spec: at its own path, else at the file the
+ *  base registry listed under the same name, else at the path git says it was
+ *  renamed from. null = genuinely new since base. */
+function readBaseCopy(repoRoot, ref, entry) {
+  const own = readAtRef(repoRoot, ref, entry.file)
   if (own !== null) return own
-  const old = renamedFrom(repoRoot, ref, file)
+  const byName = baseRegistryFile(repoRoot, ref, entry.name)
+  if (byName !== null && byName !== entry.file) {
+    const raw = readAtRef(repoRoot, ref, byName)
+    if (raw !== null) return raw
+  }
+  const old = renamedFrom(repoRoot, ref, entry.file)
   return old === null ? null : readAtRef(repoRoot, ref, old)
 }
 
@@ -217,7 +241,7 @@ export function runContractsCheck(repoRoot, opts = {}) {
   let compatChecked = 0
   if (baseRefValid) {
     for (const entry of entries) {
-      const oldRaw = readBaseCopy(repoRoot, baseRef, entry.file)
+      const oldRaw = readBaseCopy(repoRoot, baseRef, entry)
       if (oldRaw === null) continue // new since base: registered (checked above), no prior version to diff
       const newRaw = readFileSync(join(repoRoot, entry.file), 'utf8')
       let result
@@ -240,7 +264,7 @@ export function runContractsCheck(repoRoot, opts = {}) {
   if (entries.length === 0) {
     problems.push('vacuity: contracts/registry.json has zero entries — nothing was checked')
   } else if (baseRefValid && compatChecked === 0) {
-    const allNew = entries.every((e) => readBaseCopy(repoRoot, baseRef, e.file) === null)
+    const allNew = entries.every((e) => readBaseCopy(repoRoot, baseRef, e) === null)
     if (!allNew) problems.push(`vacuity: compat-checked 0 of ${entries.length} registered spec(s) against base ${baseRef}`)
   }
 

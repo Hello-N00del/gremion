@@ -149,6 +149,34 @@ describe('gateStagedSpecs — CONTRACTS_ALLOW_BREAKING=1 still requires a MAJOR 
     expect(problems[0]).toContain('contracts/kernel/openapi.z.json')
   })
 
+  // Round-2 verifier HIGH: renamed AND mostly rewritten is below git's rename
+  // similarity (staged as D + A); the registry name pairs it instead.
+  it('a staged rename+rewrite below rename similarity is paired via contracts/registry.json', () => {
+    vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '')
+    dir = mkdtempSync(join(tmpdir(), 'contracts-gate-staged-'))
+    git(dir, ['init', '-q'])
+    git(dir, ['config', 'user.email', 'test@example.com'])
+    git(dir, ['config', 'user.name', 'test'])
+    mkdirSync(join(dir, 'contracts', 'kernel'), { recursive: true })
+    const reg = (file: string) => JSON.stringify({ specs: [{ name: 'x', type: 'openapi', file, status: 'active', owner: 'gov' }] })
+    const big = JSON.stringify({ openapi: '3.1.0', info: { title: 't', version: '1.0.0' },
+      paths: Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`/p${i}`, { get: { responses: { '200': { description: 'ok' } } } }])) }, null, 2)
+    writeFileSync(join(dir, SPEC_PATH), big)
+    writeFileSync(join(dir, 'contracts', 'registry.json'), reg(SPEC_PATH))
+    git(dir, ['add', '-A'])
+    git(dir, ['commit', '-q', '-m', 'base'])
+    git(dir, ['rm', '-q', SPEC_PATH])
+    mkdirSync(join(dir, 'contracts', 'kernel'), { recursive: true }) // git rm drops the emptied dir
+    const small = JSON.stringify({ openapi: '3.1.0', info: { title: 'rewritten', version: '1.0.0' }, paths: {} })
+    writeFileSync(join(dir, 'contracts/kernel/openapi.z.json'), small)
+    writeFileSync(join(dir, 'contracts', 'registry.json'), reg('contracts/kernel/openapi.z.json'))
+    git(dir, ['add', '-A'])
+    const seen: Array<[string, string]> = []
+    const problems = gate.gateStagedSpecs(dir, { compare: (o, n) => { seen.push([o, n]); return breaking() } })
+    expect(seen).toEqual([[big, small]])
+    expect(problems).toHaveLength(1)
+  })
+
   it('a non-breaking verdict passes regardless of version', () => {
     vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '')
     dir = stagedBreak('1.4.2')

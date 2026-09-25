@@ -97,12 +97,15 @@ export interface GateStagedOpts {
 /** Gate staged spec files against their HEAD version. Returns failure messages. */
 export function gateStagedSpecs(repoRoot: string, opts: GateStagedOpts = {}): string[] {
   const compare = opts.compare ?? runOasdiffBreaking
-  const git = (args: string[]) => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' })
+  // stderr piped: a new spec's failed `git show HEAD:<path>` is expected, and
+  // stray `fatal:` lines on a passing commit train people to ignore them.
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   // -M with -z: a staged rename is `R<score>\0<old>\0<new>`, so a renamed spec is
   // compared against HEAD under its OLD path. Before TASK-018-FU this listed
   // names only, `git show HEAD:<new path>` failed, and `git mv` + a break was
   // skipped as a "new file".
-  const fields = git(['diff', '--cached', '--name-status', '-M', '-z', '--diff-filter=ACMR']).split('\0')
+  // renameLimit=0: a big staged change set must not make git skip detection.
+  const fields = git(['-c', 'diff.renameLimit=0', 'diff', '--cached', '--name-status', '-M', '-z', '--diff-filter=ACMR']).split('\0')
   const staged: Array<{ path: string; oldPath: string }> = []
   for (let i = 0; i < fields.length && fields[i]; ) {
     if (fields[i].startsWith('R') || fields[i].startsWith('C')) {
@@ -120,9 +123,28 @@ export function gateStagedSpecs(repoRoot: string, opts: GateStagedOpts = {}): st
   const isSpec = (p: string) => /^contracts\/kernel\/openapi\..+\.json$/.test(p)
   const specs = staged.filter((s) => isSpec(s.path) || isSpec(s.oldPath))
   const problems: string[] = []
+  // A rename that also rewrites most of the spec is below git's similarity
+  // threshold and is staged as D + A (round-2 verifier HIGH). The registry
+  // name is the stable identity: pair the staged path with the file HEAD's
+  // registry listed under the same name.
+  const registry = (rev: string): Array<{ name?: unknown; file?: unknown }> => {
+    try { return (JSON.parse(git(['show', `${rev}contracts/registry.json`])) as { specs?: [] }).specs ?? [] } catch { return [] }
+  }
+  const headRegistry = registry('HEAD:')
+  const stagedRegistry = registry(':')
+  const headFileFor = (p: string): string | null => {
+    const name = stagedRegistry.find((e) => e?.file === p)?.name
+    if (typeof name !== 'string') return null
+    const file = headRegistry.find((e) => e?.name === name)?.file
+    return typeof file === 'string' && file !== p ? file : null
+  }
   for (const { path: p, oldPath } of specs) {
-    let oldSpec: string
-    try { oldSpec = git(['show', `HEAD:${oldPath}`]) } catch { continue /* new file — nothing to break */ }
+    let oldSpec: string | null = null
+    for (const candidate of [oldPath, headFileFor(p)]) {
+      if (candidate === null || oldSpec !== null) continue
+      try { oldSpec = git(['show', `HEAD:${candidate}`]) } catch { /* not at HEAD */ }
+    }
+    if (oldSpec === null) continue /* new file — nothing to break */
     const newSpec = git(['show', `:${p}`])
     const res = compare(oldSpec, newSpec)
     if (res.breaking) {
