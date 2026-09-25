@@ -14,6 +14,7 @@
 // (Q3), which is scoped to individual tests inside a suite, not whole suites.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { evaluateSuite } from './lib/guard.mjs'
 import { headSha, isDirty } from './lib/git.mjs'
 import { parseSvelteCheckMachine } from './lib/parsers.mjs'
@@ -187,6 +188,16 @@ async function main() {
 // parser without importing the whole suite module.
 export { parseSvelteCheckMachine }
 
-if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
+// Hand-built `file://` string comparisons (the previous form here) diverge
+// from `import.meta.url`'s own encoding for any path containing a character
+// URL-encodes, most commonly a space (%20) -- any Windows profile with a
+// space in it (this repo's own CI account name is one). Reproduced: copying
+// scripts/ to a path containing a space made this comparison false for every
+// invocation, so main() silently never ran and the process exited 0 with no
+// output at all -- a merge block calling this with no record present would
+// have passed on nothing. `pathToFileURL(...).href` is exactly how Node
+// derives `import.meta.url` for a local file, so this compares like with
+// like on every platform, spaces included.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
 }

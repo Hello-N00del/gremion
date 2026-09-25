@@ -2,6 +2,10 @@
 // injected readRecordFn/requiredSuites so these never touch the real
 // scripts/verify/out/ directory or this repo's real required-suites.txt.
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { cpSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import { checkRecord } from './check-record.mjs'
 
@@ -61,4 +65,31 @@ test('a complete, all-green, non-partial record passes', () => {
   const record = { sha: 'deadbeef', partial: false, suites: allGreenSuites() }
   const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED })
   assert.equal(r.ok, true)
+})
+
+test('the CLI entrypoint actually runs (and exits non-zero) from a checkout path containing a space', () => {
+  // Reproduces the real defect: both check-record.mjs and verify.mjs decided
+  // whether to run main() by hand-building a `file://` string and comparing
+  // it to import.meta.url. For a path containing a space (URL-encoded as
+  // %20 in import.meta.url but not in the hand-built string), the comparison
+  // was always false, so main() never ran and the process exited 0 with no
+  // output at all -- a merge block would have passed on nothing. Any
+  // Windows user profile with a space in it (e.g. "PixelLite Test") is
+  // affected, not just this synthetic case. Only scripts/verify/ itself
+  // needs copying: every import inside it is relative, and this call passes
+  // an explicit sha so headSha()/REPO_ROOT are never consulted.
+  const scratchRoot = mkdtempSync(path.join(tmpdir(), 'verify-space-test-'))
+  const spacedVerifyDir = path.join(scratchRoot, 'sp ace', 'verify')
+  cpSync(path.join(import.meta.dirname), spacedVerifyDir, {
+    recursive: true,
+    filter: (src) => !src.includes(`${path.sep}out${path.sep}`) && !src.endsWith(`${path.sep}out`),
+  })
+  try {
+    const copiedCheckRecord = path.join(spacedVerifyDir, 'check-record.mjs')
+    const res = spawnSync(process.execPath, [copiedCheckRecord, 'deadbeef-does-not-exist'], { encoding: 'utf8' })
+    assert.notEqual(res.status, 0, `expected a non-zero exit naming the missing record, got ${res.status} with stdout=${res.stdout} stderr=${res.stderr}`)
+    assert.match(res.stdout + res.stderr, /no result record/)
+  } finally {
+    rmSync(scratchRoot, { recursive: true, force: true })
+  }
 })

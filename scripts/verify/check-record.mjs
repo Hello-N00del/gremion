@@ -13,6 +13,7 @@
 //
 // Usage: node scripts/verify/check-record.mjs [sha]   (default: HEAD)
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { headSha } from './lib/git.mjs'
 import { readRecord, recordPath } from './lib/record.mjs'
 import { loadRequiredSuites, REQUIRED_SUITES_PATH } from './verify.mjs'
@@ -59,6 +60,13 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
+// See verify.mjs's own comment on this same check: a hand-built `file://`
+// string diverges from `import.meta.url` for any path a URL encodes, most
+// commonly a space -- this is the merge block, so silently never running
+// main() here means a merge step calling this with an absent/red record
+// exits 0 anyway. Reproduced: copied scripts/ to a path containing a space;
+// `node '.../sp ace/scripts/verify/check-record.mjs' deadbeef` exited 0 with
+// no output.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
 }

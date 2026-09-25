@@ -18,6 +18,10 @@
 // message for the same transcript, plus the missing-tool and
 // unparseable-output analogs.
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { cpSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import { runAll } from './verify.mjs'
 
@@ -69,6 +73,28 @@ test('verify.mjs carries no dirty-tree bypass of any kind -- Q5 has no VERIFY_AL
   const { readFileSync } = await import('node:fs')
   const src = readFileSync(new URL('./verify.mjs', import.meta.url), 'utf8')
   assert.doesNotMatch(src, /process\.env\.VERIFY_ALLOW_DIRTY/)
+})
+
+test('the CLI entrypoint actually runs from a checkout path containing a space (same defect as check-record.mjs)', () => {
+  // See check-record.test.mjs's identical test for the full defect
+  // description. Runs `--only __fixture_missing_tool__` (never touches a
+  // real suite, so no dirty-tree refusal or real tool is involved) and
+  // asserts the process prints and exits non-zero, rather than silently
+  // exiting 0 with no output because main() never ran.
+  const scratchRoot = mkdtempSync(path.join(tmpdir(), 'verify-space-test-'))
+  const spacedVerifyDir = path.join(scratchRoot, 'sp ace', 'verify')
+  cpSync(import.meta.dirname, spacedVerifyDir, {
+    recursive: true,
+    filter: (src) => !src.includes(`${path.sep}out${path.sep}`) && !src.endsWith(`${path.sep}out`),
+  })
+  try {
+    const copiedVerify = path.join(spacedVerifyDir, 'verify.mjs')
+    const res = spawnSync(process.execPath, [copiedVerify, '--only', '__fixture_missing_tool__'], { encoding: 'utf8' })
+    assert.notEqual(res.status, 0, `expected a non-zero exit, got ${res.status} with stdout=${res.stdout} stderr=${res.stderr}`)
+    assert.match(res.stdout + res.stderr, /missing tool/)
+  } finally {
+    rmSync(scratchRoot, { recursive: true, force: true })
+  }
 })
 
 test('--only writes results that runAll can produce for a single suite, and parseArgs supports comma and repeated forms', async () => {
