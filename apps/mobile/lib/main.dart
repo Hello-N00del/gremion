@@ -4,7 +4,6 @@
 import 'dart:async';
 import 'dart:ui';
 
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
@@ -37,12 +36,6 @@ Future<void> main() async {
     assertReleaseHttps(httpsEndpoints);
 
     await vod.init(); // B2: must run before any matrix Client is created
-
-    // Firebase (FCM push notifications) — optional for local dev.
-    // Requires google-services.json; silently skipped if not configured.
-    try {
-      await Firebase.initializeApp();
-    } catch (_) {}
 
     // G-050: crash reporter wired before installing the global error hooks
     // so any error fired during the rest of init() is captured.

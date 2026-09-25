@@ -26,7 +26,7 @@ dependencies:
   # SQLCipher natively on Android/iOS (no separate sqlcipher_flutter_libs
   # needed for the mobile sqflite path). Exact pin (SDK floor stays >=3.3.0,
   # inside our declared >=3.6.0) per the repo's supply-chain-hygiene pinning
-  # convention (cf. path / firebase_messaging). Provides a sqflite_common
+  # convention (cf. path). Provides a sqflite_common
   # Database that MatrixSdkDatabase.init accepts (documented path).
   sqflite_sqlcipher: 3.3.0
 
@@ -34,9 +34,9 @@ dependencies:
   provider: ^6.1.0
   go_router: ^17.2.3               # updated from ^14.6.0 — no StatefulShellRoute breaking changes (goBranch deprecated → use branches param)
 
-  # Push notifications
-  firebase_core: ^4.7.0             # direct dep — required by firebase_messaging
-  firebase_messaging: 16.0.4        # EXACT pin — 16.1.x has active iOS crash bug (issue #18110, open 2026-03-27; do NOT change to ^16.0.4) (B4)
+  # Push notifications. TASK-166 removed FCM; the self-hosted transport
+  # (UnifiedPush + Sygnal pusher) stays behind ENABLE_SELF_HOSTED_PUSH,
+  # default off (TRD-293). See lib/services/push_service.dart.
   flutter_local_notifications: ^18.0.0
   unifiedpush: ^6.2.0
   device_info_plus: ^12.4.0

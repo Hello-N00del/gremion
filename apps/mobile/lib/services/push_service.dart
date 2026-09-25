@@ -3,17 +3,31 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:unifiedpush/unifiedpush.dart';
 
-/// Handles push notification registration (FCM + APNs + UnifiedPush)
-/// and registers the push token with Sygnal via the Matrix CS API pusher endpoint.
+/// TASK-166 (TRD-293): the self-hosted push transport (UnifiedPush + a Sygnal
+/// pusher registered through the Matrix CS API) stays in the app but is OFF
+/// unless a build opts in with `--dart-define=ENABLE_SELF_HOSTED_PUSH=true`.
+/// There is no store-vendor transport (FCM was removed in TASK-166), so with
+/// the default build no push transport is active at all.
+const selfHostedPushEnabled = bool.fromEnvironment(
+  'ENABLE_SELF_HOSTED_PUSH',
+  defaultValue: false,
+);
+
+/// Handles push notification registration (UnifiedPush, behind
+/// [selfHostedPushEnabled]) and registers the push endpoint with Sygnal via
+/// the Matrix CS API pusher endpoint.
 class PushService {
-  PushService({required this.sygnalUrl});
+  PushService({required this.sygnalUrl, this.enabled = selfHostedPushEnabled});
 
   final String sygnalUrl;
+
+  /// Whether [init] registers the self-hosted transport. Defaults to the
+  /// [selfHostedPushEnabled] build flag.
+  final bool enabled;
 
   final _localNotifications = FlutterLocalNotificationsPlugin();
   static const _androidChannel = AndroidNotificationChannel(
@@ -37,9 +51,16 @@ class PushService {
   }
 
   Future<void> init() async {
+    if (!enabled) {
+      developer.log(
+        'Self-hosted push is off (ENABLE_SELF_HOSTED_PUSH not set); '
+        'no push transport registered.',
+        name: 'PushService',
+      );
+      return;
+    }
     await _initLocalNotifications();
-    await _initFcm();
-    // UnifiedPush: Android-only fallback (no-op on iOS)
+    // UnifiedPush is Android-only; iOS has no transport until TASK-176.
     if (Platform.isAndroid) await _initUnifiedPush();
   }
 
@@ -59,35 +80,10 @@ class PushService {
         _localNotifications.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
     await androidPlugin?.createNotificationChannel(_androidChannel);
-  }
-
-  Future<void> _initFcm() async {
-    // Request permission
-    final settings = await FirebaseMessaging.instance.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
-    if (settings.authorizationStatus == AuthorizationStatus.denied) return;
-
-    final fcmAppId =
-        Platform.isIOS ? 'com.stura.app.ios' : 'com.stura.app.android';
-
-    final token = await FirebaseMessaging.instance.getToken();
-    if (token != null) {
-      await _registerWithSygnal(pushkey: token, appId: fcmAppId, kind: 'http');
-    }
-
-    // Refresh token handler
-    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-      _registerWithSygnal(pushkey: newToken, appId: fcmAppId, kind: 'http');
-    });
-
-    // Foreground message display
-    FirebaseMessaging.onMessage.listen(_showLocalNotification);
-
-    // Background message handler registered in main.dart
-    FirebaseMessaging.onBackgroundMessage(_backgroundMessageHandler);
+    // The removed FCM arm used to request the notification permission; the
+    // local notifications shown for UnifiedPush need it too (POST_NOTIFICATIONS
+    // on Android 13+).
+    await androidPlugin?.requestNotificationsPermission();
   }
 
   Future<void> _initUnifiedPush() async {
@@ -108,12 +104,7 @@ class PushService {
       },
       onMessage: (_, __) {
         // UnifiedPush delivers the push payload — show summary notification
-        _showLocalNotification(const RemoteMessage(
-          notification: RemoteNotification(
-            title: 'StuRaOS',
-            body: 'You have a new message',
-          ),
-        ));
+        _showLocalNotification();
       },
     );
     await UnifiedPush.register();
@@ -172,29 +163,17 @@ class PushService {
     }
   }
 
-  /// #233: remove every pusher this device registered (FCM/APNs + UnifiedPush)
-  /// so a logged-out account stops receiving notifications. Best-effort — each
-  /// deregister is independent and failures are swallowed so an offline logout
-  /// still proceeds.
+  /// #233: remove every pusher this device registered (UnifiedPush) so a
+  /// logged-out account stops receiving notifications. Best-effort — failures
+  /// are logged and swallowed so an offline logout still proceeds. Runs
+  /// whatever [enabled] says: a build without the flag may follow one that
+  /// registered a UnifiedPush pusher.
   ///
   /// MUST run BEFORE the Matrix token is revoked (MatrixService.logout()):
   /// /pushers/set is authenticated with [_matrixAccessToken], which becomes
   /// invalid after logout, so deregistering afterwards would silently 401 and
   /// leave the pushers live.
   Future<void> deregisterAll() async {
-    final fcmAppId =
-        Platform.isIOS ? 'com.stura.app.ios' : 'com.stura.app.android';
-    try {
-      // Delete the pusher keyed by the current FCM token, then invalidate the
-      // token locally so a re-login mints a clean one.
-      final fcmToken = await FirebaseMessaging.instance.getToken();
-      if (fcmToken != null && fcmToken.isNotEmpty) {
-        await _deregisterFromSygnal(appId: fcmAppId, pushkey: fcmToken);
-      }
-      await FirebaseMessaging.instance.deleteToken();
-    } catch (e) {
-      developer.log('FCM deregister failed', name: 'PushService', error: e);
-    }
     if (Platform.isAndroid) {
       try {
         // Fires onUnregistered → _deregisterFromSygnal for the UnifiedPush id.
@@ -227,13 +206,10 @@ class PushService {
     } catch (_) {}
   }
 
-  Future<void> _showLocalNotification(RemoteMessage message) async {
-    final notification = message.notification;
-    if (notification == null) return;
-
+  Future<void> _showLocalNotification() async {
     await _localNotifications.show(
-      notification.hashCode,
-      notification.title ?? 'StuRaOS',
+      _androidChannel.id.hashCode,
+      'StuRaOS',
       // Summary-only — never show message body from payload
       'You have a new message',
       NotificationDetails(
@@ -248,11 +224,4 @@ class PushService {
       ),
     );
   }
-}
-
-/// Top-level handler for background FCM messages (must be top-level function).
-@pragma('vm:entry-point')
-Future<void> _backgroundMessageHandler(RemoteMessage message) async {
-  // Background messages: notification will be shown by FCM directly.
-  // No action needed here beyond ensuring Firebase is initialized.
 }

@@ -36,6 +36,7 @@ These also exist in the source and are read the same way:
 | Define | Read in | Meaning | Default |
 | --- | --- | --- | --- |
 | `SYGNAL_URL` | `lib/app.dart` (`sygnalUrl`) | Matrix push gateway (Sygnal) notify endpoint, passed to `PushService`. | `http://localhost:5000/_matrix/push/v1/notify` |
+| `ENABLE_SELF_HOSTED_PUSH` | `push_service.dart` | Opt-in for the self-hosted push transport (UnifiedPush + Sygnal pusher, TRD-293). Off = no push transport at all. | `false` |
 | `KEYCLOAK_CLIENT_ID` | `auth_service.dart` | OIDC client id used for authorization, token, refresh, and the JWT `aud` check. | `stura-mobile` |
 | `AUTH_CALLBACK_URL` | `auth_service.dart` | AppAuth redirect URI. The default is a custom URI scheme (see the G-051 security note in `auth_service.dart`). | `stura://auth/callback` |
 | `MATRIX_ADMIN_ROOM_ID` | `matrix_service.dart` | Room whose joined members may auto-accept invites; empty = strict mode, every invite is surfaced for manual review (G-053). | `` (empty) |
@@ -84,7 +85,7 @@ flutter test
 ```
 lib/
   main.dart        Entry point: runZonedGuarded boot, vodozemac (Matrix crypto)
-                   init, Firebase/FCM init, CrashReporter + global error hooks,
+                   init, CrashReporter + global error hooks,
                    release-only HTTPS assertion, then runApp(StuRaApp()).
   app.dart         App composition root: the StuRaApp widget. Declares the
                    build-time URL constants, wires AuthService / ApiClient /
@@ -101,8 +102,9 @@ lib/
                          exchange via the gateway, secure-storage session.
     matrix_service.dart  Embedded Matrix client (matrix SDK + vodozemac),
                          login-with-token, sync, invite handling.
-    push_service.dart    Push registration (FCM/APNs/UnifiedPush) + Sygnal
-                         pusher registration.
+    push_service.dart    Self-hosted push (UnifiedPush) + Sygnal pusher
+                         registration; off unless ENABLE_SELF_HOSTED_PUSH=true.
+                         No FCM (TASK-166).
     api_client.dart      StuRaOS gateway REST client (bearer-authenticated).
     crash_reporter.dart  Crash/error reporting sink (G-050).
   models/          Plain data models: user_session, group, calendar_event,

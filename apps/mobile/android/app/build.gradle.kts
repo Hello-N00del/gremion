@@ -8,8 +8,8 @@ plugins {
 }
 
 // Exclude the JVM tink artifact — tink-android supersedes it on Android.
-// Without this, firebase_messaging and flutter_secure_storage both pull in
-// different tink variants causing hundreds of duplicate class errors.
+// flutter_secure_storage uses tink-android; a JVM tink pulled in by any other
+// dependency would cause hundreds of duplicate class errors.
 configurations.all {
     exclude(group = "com.google.crypto.tink", module = "tink")
 }
