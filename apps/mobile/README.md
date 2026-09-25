@@ -54,7 +54,9 @@ Besides Flutter 3.41.x (Dart 3.11) and the Android SDK / Xcode:
   `test/matrix/` exercises the encrypted Matrix store through
   `sqflite_common_ffi`, and package:sqlite3 looks SQLCipher up by name (see
   the `hooks:` block in `pubspec.yaml`). Debian/Ubuntu: `apt install
-  libsqlcipher-dev`; macOS: `brew install sqlcipher`; Windows: put
+  libsqlcipher-dev`; macOS: `brew install sqlcipher` (on Apple Silicon
+  also `export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`, since the
+  library is looked up by bare name); Windows: put
   `sqlcipher.dll` and the OpenSSL `libcrypto` DLL it needs on `PATH` (e.g.
   from vcpkg `sqlcipher`). Without it only `test/matrix/matrix_store_test.dart`
   fails, with an explicit message. On devices nothing changes: the app's

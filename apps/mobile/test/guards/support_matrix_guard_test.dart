@@ -12,12 +12,14 @@ String _read(String path) =>
 void main() {
   test('Android: literal minSdk = 29 (Android 10)', () {
     final gradle = _read('android/app/build.gradle.kts');
-    // Every minSdk / minSdkVersion(...) setting outside line comments: a
-    // second one would override the literal at build time.
+    // Every line mentioning minSdk in any form (minSdkVersion(...),
+    // setMinSdkVersion(...), minSdkPreview, ...) outside line comments: a
+    // second one could override the literal at build time.
     final settings = gradle
         .split('\n')
         .map((line) => line.replaceFirst(RegExp(r'//.*'), '').trim())
-        .where((line) => RegExp(r'\bminSdk(Version)?\b').hasMatch(line))
+        .where((line) =>
+            RegExp('minsdk', caseSensitive: false).hasMatch(line))
         .toList();
     expect(settings, ['minSdk = 29'],
         reason: 'expected exactly one `minSdk = 29`, found $settings');
