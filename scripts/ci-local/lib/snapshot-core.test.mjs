@@ -9,7 +9,7 @@ import {
   snapshotBaseName,
   renderMarkdown,
 } from './snapshot-core.mjs'
-import { DEFAULT_TIMEOUT_MS } from './run.mjs'
+import { DEFAULT_TIMEOUT_MS, run } from './run.mjs'
 
 function baseOpts(overrides = {}) {
   return {
@@ -287,4 +287,49 @@ test('renderMarkdown renders an "only: ... (PARTIAL)" line when the snapshot was
   }
   const md = renderMarkdown(snapshot)
   assert.match(md, /only: kernel-unit, vertical-unit \(PARTIAL/)
+})
+
+// --- TASK-012-FU LOW (flutter): a missing tool is named as one ------------
+// Suite commands run through a shell, so a missing binary is not a spawn
+// ENOENT — the shell prints its own "not found" line and exits non-zero, and
+// the row used to carry the parser's "no summary found" reason instead.
+
+function missingToolRow(output, exitCode, extra = {}) {
+  const suite = { id: 'v-flutter', repo: 'vertical', category: 'unit', cwd: '.', kind: 'flutter', command: 'flutter test', testGlobs: ['a_test.dart'] }
+  return evaluateSuite(suite, ['a_test.dart'], baseOpts({ runFn: () => ({ exitCode, output, timedOut: false, spawnError: null, ...extra }) }))
+}
+
+test('FU-L1: a shell "not recognized" / "not found" line FAILs the row with reason "missing tool: <name>" (cmd.exe, dash, bash, pnpm)', () => {
+  const cases = [
+    ["'flutter' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n", 1],
+    ['sh: 1: flutter: not found\n', 127],
+    ['/bin/sh: line 1: flutter: command not found\n', 127],
+    ['bash: flutter: command not found\n', 127],
+    [' ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command "flutter" not found\n', 254],
+  ]
+  for (const [output, code] of cases) {
+    const row = missingToolRow(output, code)
+    assert.equal(row.status, 'FAIL')
+    assert.equal(row.reason, 'missing tool: flutter', JSON.stringify(output))
+  }
+})
+
+test('FU-L1: a spawn-time ENOENT names the missing tool too', () => {
+  const err = Object.assign(new Error('spawn bats ENOENT'), { code: 'ENOENT', path: 'bats' })
+  const row = missingToolRow('spawn bats ENOENT', 1, { spawnError: err })
+  assert.equal(row.status, 'FAIL')
+  assert.match(row.reason, /^could not run: missing tool: bats/)
+})
+
+test('FU-L1: an ordinary 0-collected failure keeps the parser reason (no false "missing tool")', () => {
+  const row = missingToolRow('Error: no tests found in test/\n', 1)
+  assert.equal(row.status, 'FAIL')
+  assert.match(row.reason, /no "\+N -M:" summary/)
+})
+
+test('FU-L1: REAL shell — a suite command naming a tool that does not exist, run through lib/run.mjs, FAILs "missing tool: <name>"', () => {
+  const suite = { id: 'v-nope', repo: 'vertical', category: 'unit', cwd: '.', kind: 'flutter', command: 'ci-local-no-such-tool-fu test', testGlobs: ['a_test.dart'] }
+  const row = evaluateSuite(suite, ['a_test.dart'], baseOpts({ joinRepo: () => process.cwd(), runFn: (cmd, cwd, o) => run(cmd, cwd, o) }))
+  assert.equal(row.status, 'FAIL')
+  assert.equal(row.reason, 'missing tool: ci-local-no-such-tool-fu')
 })

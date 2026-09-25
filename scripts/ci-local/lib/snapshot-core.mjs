@@ -7,7 +7,7 @@
 // against inline fixtures with no process spawned and no disk touched.
 
 import { filterMatching } from './discover.mjs'
-import { parseCounts, parseNodeTest } from './parse-output.mjs'
+import { parseCounts, parseNodeTest, missingToolReason } from './parse-output.mjs'
 import { DEFAULT_TIMEOUT_MS } from './run.mjs'
 
 /**
@@ -99,10 +99,14 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
     reason = `suite timed out after ${Math.round(timeoutMs / 1000)}s`
   } else if (spawnError) {
     status = 'FAIL'
-    reason = `could not run: ${spawnError.message ?? spawnError}`
+    // TASK-012-FU (LOW): name the tool on a spawn-time ENOENT.
+    const tool = spawnError.code === 'ENOENT' && spawnError.path ? `missing tool: ${spawnError.path} (${spawnError.message})` : undefined
+    reason = `could not run: ${tool ?? spawnError.message ?? spawnError}`
   } else if (counts.collected === 0) {
     status = 'FAIL'
-    reason = counts.reason ?? '0 tests collected'
+    // TASK-012-FU (LOW): a shell's own "not found" beats the parser's
+    // "no summary" — the row then says WHY nothing was collected.
+    reason = missingToolReason(output, exitCode) ?? counts.reason ?? '0 tests collected'
   } else if ((counts.skipped ?? 0) > 0 && counts.passed === 0 && counts.failed === 0) {
     // MEDIUM fix: "Tests  12 skipped (12)" used to be collected 12 = PASS.
     // A suite that ran nothing is not a pass (fail-closed verify, no skip).

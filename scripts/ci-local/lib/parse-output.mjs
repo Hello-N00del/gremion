@@ -192,3 +192,30 @@ export function parseCounts(kind, output, exitCode) {
   }
   return parser(output, exitCode)
 }
+
+// TASK-012-FU (LOW): suites.json commands run through a shell, so a missing
+// binary is not a spawn ENOENT: the shell prints its own "not found" line
+// and exits non-zero, and a row used to carry the parser's "no summary
+// found" reason (e.g. flutter, which is not on PATH on every box). These are
+// the shells' and pnpm's own wordings; the first match names the tool.
+const MISSING_TOOL_RES = [
+  /^'([^']+)' is not recognized as an internal or external command/m, // cmd.exe
+  /^(?:\S*\/)?(?:ba|da|z|k)?sh:(?:\s*\d+:)?(?:\s*line \d+:)?\s*([^\s:]+):\s*(?:command )?not found\s*$/m, // sh/dash/bash
+  /^(?:\S*\/)?zsh:\s*command not found:\s*(\S+)\s*$/m,
+  /Command "([^"]+)" not found/, // pnpm exec / pnpm run
+]
+
+/**
+ * `missing tool: <name>` when a NON-ZERO run's output shows the shell (or
+ * pnpm) could not find the command, else undefined. A zero exit never counts:
+ * a suite that ran and passed is never re-labelled.
+ */
+export function missingToolReason(output, exitCode) {
+  if (exitCode === 0) return undefined
+  const text = String(output ?? '').replace(/\r\n?/g, '\n')
+  for (const re of MISSING_TOOL_RES) {
+    const m = text.match(re)
+    if (m) return `missing tool: ${m[1]}`
+  }
+  return undefined
+}
