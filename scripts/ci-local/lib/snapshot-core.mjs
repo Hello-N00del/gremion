@@ -82,13 +82,29 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
   // node-test-shaped suites, and only when the caller wired a counter (the
   // CLI does; snapshot-core's own unit tests exercise both with and without
   // one).
+  //
+  // Deliberately one-directional: FAIL only when node collected FEWER tests
+  // than the naive `^test\(/gm` count found (real under-registration — the
+  // vacuity case this check exists for). `countDeclared`'s regex is only a
+  // LOWER BOUND: lint-extraction-source's own comment already warns it is
+  // fragile the moment a file's tests "no longer start at column 0", and
+  // kernel-scripts-node-test (suites.json) composes MANY files under one
+  // command, most of which this package does not own and cannot hold to
+  // that column-0 discipline. A file with nested/looped/dynamically
+  // registered tests (indented, so missed by the regex) makes node collect
+  // MORE than the naive count — that is normal, not a stopped-registering
+  // regression, and treating `!==` as failing in that direction would make
+  // this suite permanently, meaninglessly RED on the real kernel tree (see
+  // TASK-012 gate evidence: scripts/port-back/check-do-not-overwrite.test.mjs
+  // alone declares 0 at column 0 while genuinely registering dozens, nested
+  // under its own describe blocks).
   if ((suite.kind === 'node-test' || suite.kind === 'guard') && opts.countDeclared) {
     const tap = parseNodeTest(output)
     if (tap.collected > 0) {
       const declared = opts.countDeclared(matchedFiles)
-      if (declared !== undefined && declared !== tap.collected) {
+      if (declared !== undefined && tap.collected < declared) {
         status = 'FAIL'
-        reason = `declared ${declared} test(s) in [${matchedFiles.join(', ')}] but node collected ${tap.collected} — tests may have stopped registering`
+        reason = `declared ${declared} test(s) in [${matchedFiles.join(', ')}] but node collected only ${tap.collected} — tests may have stopped registering`
       }
     }
   }

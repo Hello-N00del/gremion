@@ -130,6 +130,25 @@ test('evaluateSuite: declared-vs-collected agreement on a node-test suite stays 
   assert.equal(row.status, 'PASS')
 })
 
+test('evaluateSuite: node collecting MORE tests than the naive declared count is a PASS, never a FAIL — the check is one-directional', () => {
+  // Real-world case (seen against the kernel tip's own kernel-scripts-node-test
+  // suite): a file with tests nested in a describe block, a loop, or any
+  // registration not starting at column 0 makes `countDeclared`'s naive
+  // `^test\(/gm` regex undercount. That is NOT the "tests silently stopped
+  // registering" failure this check exists for — node registered them all,
+  // it just didn't do so in a shape the naive counter can see — so it must
+  // never turn a genuinely passing suite red.
+  const suite = { id: 'k9', repo: 'kernel', category: 'unit', cwd: '.', kind: 'node-test', command: 'node --test a.test.mjs', testGlobs: ['a.test.mjs'] }
+  const tapOutput = '1..245\n# tests 245\n# pass 245\n# fail 0\n'
+  const opts = baseOpts({
+    runFn: () => ({ exitCode: 0, output: tapOutput, timedOut: false, spawnError: null }),
+    countDeclared: () => 216, // naive column-0 count undercounts nested/looped registrations
+  })
+  const row = evaluateSuite(suite, ['a.test.mjs'], opts)
+  assert.equal(row.status, 'PASS')
+  assert.equal(row.collected, 245)
+})
+
 test('findUnclaimed reports a test file no suite\'s globs reach', () => {
   const suites = [{ testGlobs: ['src/**/*.test.ts'] }]
   const files = ['src/a.test.ts', 'scripts/orphan.test.mjs']
