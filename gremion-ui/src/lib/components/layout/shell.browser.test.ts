@@ -304,6 +304,21 @@ describe('(3) state per width, the toggle, the stored choice', () => {
     expect(toggle().getAttribute('aria-label')).toBe('Seitenleiste')
   })
 
+  test('gremion.nav stays unwritten after load at every width and across resizes', async () => {
+    for (const w of [320, 767, 768, 1024, 1279, 1280, 1440, 1920]) {
+      await mount({ width: w, height: 800 })
+      await vi.waitFor(() => expect(shellRoot().hasAttribute('data-nav-ready')).toBe(true))
+      expect(localStorage.getItem(NAV_STORAGE_KEY), `${w}px`).toBeNull()
+      cleanup()
+    }
+    await mount({ width: 390, height: 844 })
+    for (const w of [768, 1280, 1920, 1024, 390]) {
+      await vpage.viewport(w, 800)
+      await nextFrame()
+    }
+    expect(localStorage.getItem(NAV_STORAGE_KEY)).toBeNull()
+  })
+
   test("the toggle's description says the choice is saved on this device (de and en)", async () => {
     await mount({ width: 1024, height: 800 })
     await expect.element(vpage.getByRole('button', { name: 'Seitenleiste' })).toHaveAccessibleDescription('Wird auf diesem Gerät gespeichert')
@@ -388,6 +403,14 @@ describe('(5) the icon rail', () => {
     await userEvent.keyboard('{Escape}')
     await vi.waitFor(() => expect($('.rail-tip')).toBeNull())
     expect(document.activeElement).toBe(link)
+  })
+
+  test('the expanded sidebar shows no tooltip (labels are visible)', async () => {
+    await mount({ width: 1440, height: 900 })
+    await vi.waitFor(() => expect(toggle().getAttribute('aria-expanded')).toBe('true'))
+    $<HTMLAnchorElement>('.nav-col a[href="/committees"]')!.focus()
+    await nextFrame()
+    expect($('.rail-tip')).toBeNull()
   })
 
   test('the tooltip is announced once: it is aria-hidden and nothing points at it', async () => {
@@ -598,7 +621,10 @@ describe('(11) 100dvh shell', () => {
     const sources = import.meta.glob(['./**/*.svelte', './**/*.ts', '!./**/*.test.ts'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>
     expect(Object.keys(sources).length).toBeGreaterThan(10)
     const bad: string[] = []
-    for (const [file, src] of Object.entries(sources)) {
+    // Comments are stripped first: a 'dvh' in a comment must not excuse a 100vh.
+    const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/<!--[\s\S]*?-->/g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    for (const [file, raw] of Object.entries(sources)) {
+      const src = code(raw)
       if (/\bh-screen\b/.test(src)) bad.push(`${file}: h-screen`)
       for (const m of src.matchAll(/100vh/g)) {
         const after = src.slice(m.index! + 5, m.index! + 80)

@@ -47,6 +47,13 @@ function run(stored: Record<string, string>, opts: { throwing?: boolean; writeTh
 }
 
 describe('app.html pre-paint: gremion.nav', () => {
+  test('the script is inline in <head>, before %sveltekit.head% and the body', () => {
+    const at = APP_HTML.indexOf(prePaintScript())
+    expect(at).toBeGreaterThan(APP_HTML.indexOf('<head>'))
+    expect(at).toBeLessThan(APP_HTML.indexOf('%sveltekit.head%'))
+    expect(at).toBeLessThan(APP_HTML.indexOf('<body'))
+  })
+
   test("'rail' sets html.nav-rail only", () => {
     const { classes } = run({ [NAV_STORAGE_KEY]: 'rail' })
     expect(classes.has(RAIL)).toBe(true)
