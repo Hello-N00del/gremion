@@ -182,6 +182,39 @@ describe('T8: response schemas stay on', () => {
   })
 })
 
+describe('T8: every valid JSON Schema 2020-12 construct loads (no Ajv strictTypes/strictRequired refusal)', () => {
+  // Each schema is valid 2020-12 and valid OpenAPI 3.1; Ajv's full `strict: true`
+  // refused all four at boot (strictTypes / strictRequired), which would stop a
+  // spec-first service over a spec the contracts gate accepts.
+  it.each([
+    ['$ref with a constraining sibling', { $ref: '#/components/schemas/WidgetInput', required: ['note'] }, { name: 'n', note: null }, { name: 'n' }],
+    ['properties/required without type', { properties: { name: { type: 'string' } }, required: ['name'] }, { name: 'n' }, {}],
+    [
+      'required inside oneOf branches',
+      { type: 'object', properties: { a: { type: 'string' }, b: { type: 'string' } }, oneOf: [{ required: ['a'] }, { required: ['b'] }] },
+      { a: 'x' },
+      { a: 'x', b: 'y' },
+    ],
+    ['a union type', { type: 'object', properties: { name: { type: ['string', 'integer'] } }, required: ['name'] }, { name: 7 }, { name: true }],
+  ])('%s: boots, accepts a valid body, rejects an invalid one', async (_label, schema, valid, invalid) => {
+    const spec = fixtureSpec()
+    spec.paths['/widgets'].post.requestBody.content['application/json'].schema = schema
+    spec.paths['/widgets'].post.responses['201'] = { description: 'Created' }
+    const handlers = { ...fixtureHandlers(), createWidget: (async (_req, reply) => reply.code(201).send()) as OperationHandler }
+    const app = track(createService({ spec, handlers }))
+    await app.ready()
+    expect((await app.inject({ method: 'POST', url: '/widgets', payload: valid })).statusCode).toBe(201)
+    expect((await app.inject({ method: 'POST', url: '/widgets', payload: invalid })).statusCode).toBe(400)
+  })
+
+  it('an unknown schema keyword (a typo) still refuses to boot, named', async () => {
+    const spec = fixtureSpec()
+    spec.paths['/widgets'].post.requestBody.content['application/json'].schema = { type: 'object', properites: {} }
+    const app = track(createService({ spec, handlers: fixtureHandlers() }))
+    await expect(app.ready()).rejects.toThrow(/unknown keyword: "properites"/)
+  })
+})
+
 describe('T8: the committed kernel spec (contracts/kernel/openapi.governance.json)', () => {
   const kernel = () => JSON.parse(readFileSync(KERNEL_SPEC_PATH, 'utf8'))
 

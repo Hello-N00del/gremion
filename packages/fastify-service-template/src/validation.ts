@@ -39,8 +39,24 @@ function collectExtensionKeys(node: unknown, into: Set<string>): Set<string> {
   return into
 }
 
+// Ajv's full `strict: true` is NOT used: its strictTypes / strictRequired /
+// strictTuples parts refuse schemas that are valid JSON Schema 2020-12 and
+// valid OpenAPI 3.1 (a `$ref` with a `required` sibling, `properties` without
+// `type`, `required` inside a oneOf branch, a union `type`, `prefixItems`
+// without `items`). The spec is the source of truth and the contracts gate
+// has already accepted it, so the template must load every valid schema.
+// strictSchema stays on: an unknown keyword is refused at boot, named.
+const STRICTNESS: AjvOptions = {
+  strictSchema: true,
+  strictNumbers: true,
+  strictTypes: false,
+  strictTuples: false,
+  strictRequired: false,
+  allowUnionTypes: true,
+}
+
 function makeAjv(doc: OpenApiDocument, options: AjvOptions): Ajv2020 {
-  const ajv = new Ajv2020({ strict: true, allErrors: false, useDefaults: true, ...options })
+  const ajv = new Ajv2020({ ...STRICTNESS, allErrors: false, useDefaults: true, ...options })
   addFormats(ajv)
   for (const k of [...OPENAPI_ANNOTATIONS, ...collectExtensionKeys(doc.paths, new Set())]) {
     if (!ajv.getKeyword(k)) ajv.addKeyword({ keyword: k })
