@@ -3,6 +3,8 @@
 // turn a red run green, a file whose describe stopped collecting, or a config
 // that collects nothing, fails here although every remaining test passes.
 import { spawnSync } from 'node:child_process'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -12,20 +14,21 @@ const PKG = fileURLToPath(new URL('../../', import.meta.url))
 export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
   unit: {
     'src/advisory-locks.test.ts': 5,
-    'src/names.test.ts': 32,
-    'src/store.test.ts': 9,
+    'src/names.test.ts': 40,
+    'src/store.test.ts': 16,
     'src/manifest.test.ts': 10,
     'src/strip-outer-transaction.test.ts': 11,
-    'src/runner.test.ts': 3,
-    'src/schema-gate.test.ts': 6,
+    'src/runner.test.ts': 5,
+    'src/schema-gate.test.ts': 8,
     'src/index.test.ts': 2,
-    'test/unit/check-tenant-db-access.test.ts': 12,
-    'test/unit/suite-size.test.ts': 3,
+    'test/unit/check-tenant-db-access.test.ts': 15,
+    'test/unit/suite-size.test.ts': 4,
   },
   integration: {
     'test/integration/concurrent.test.ts': 2,
     'test/integration/manifest-before-ddl.test.ts': 6,
-    'test/integration/runner.test.ts': 8,
+    'test/integration/runner.test.ts': 12,
+    'test/integration/pooler.test.ts': 3,
     'test/integration/service.test.ts': 6,
   },
 }
@@ -66,5 +69,22 @@ describe('suite size (TDD 10)', () => {
   it('zero collected tests is a failure, and so is one missing test', () => {
     expect(() => assertFloor({}, { 'a.test.ts': 1 })).toThrow(/zero tests collected/)
     expect(() => assertFloor({ 'a.test.ts': 1 }, { 'a.test.ts': 2 })).toThrow(/a\.test\.ts: 1 < 2/)
+  })
+
+  it('no spec is skipped, todo or focused (vitest list collects those too)', () => {
+    const specs: string[] = []
+    const walk = (d: string) => {
+      for (const e of readdirSync(join(PKG, d), { withFileTypes: true })) {
+        if (e.name === 'node_modules' || e.name === 'fixtures') continue
+        const p = `${d}/${e.name}`
+        if (e.isDirectory()) walk(p)
+        else if (e.name.endsWith('.test.ts')) specs.push(p)
+      }
+    }
+    walk('src')
+    walk('test')
+    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length)
+    const marked = specs.filter((f) => /\b(?:it|test|describe)\s*\.\s*(?:skip|todo|only|skipIf|runIf)\b/.test(readFileSync(join(PKG, f), 'utf8')))
+    expect(marked).toEqual([])
   })
 })
