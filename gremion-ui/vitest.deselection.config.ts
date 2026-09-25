@@ -1,5 +1,8 @@
 import { sveltekit } from '@sveltejs/kit/vite'
 import { defineConfig } from 'vitest/config'
+// TASK-032 (kit 3): the kit config is no longer auto-discovered; pass it into
+// sveltekit() (without it $lib, the adapter and the stamp are missing).
+import { createKitConfig } from './kit.config.js'
 
 // The DB-backed FinTS crypto tests read FINTS_PASSWORD_KEY via
 // $env/dynamic/private, which snapshots process.env when the SvelteKit env
@@ -23,7 +26,7 @@ process.env.FINTS_PASSWORD_KEY ??= '0'.repeat(64)
 // Run with `pnpm test:deselection` against the isolated stack — see
 // tests/integration/README.md for the full runbook. It is NOT a CI lane.
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [sveltekit(createKitConfig())],
   ssr: { noExternal: ['@gremion/db'] },
   test: {
     include: ['tests/integration/**/*.integration.test.ts'],

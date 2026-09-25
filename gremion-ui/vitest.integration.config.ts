@@ -1,6 +1,9 @@
 import { resolve } from 'node:path'
 import { sveltekit } from '@sveltejs/kit/vite'
 import { defineConfig } from 'vitest/config'
+// TASK-032 (kit 3): the kit config is no longer auto-discovered; pass it into
+// sveltekit() (without it $lib, the adapter and the stamp are missing).
+import { createKitConfig } from './kit.config.js'
 import { assertSafeTestDbUrl } from './tests/integration/assert-safe-test-db-url'
 
 // P2.1c (T15 / §6-P2.2): the real-boot fleet (hooks.boot-real.integration.test)
@@ -69,7 +72,7 @@ assertSafeTestDbUrl(process.env.CONTROL_DATABASE_URL ?? '', 'CONTROL_DATABASE_UR
 // migrations applied. Run with `pnpm test:integration`.
 // The fast, dependency-free unit suite lives in vite.config.ts (`pnpm test:unit`).
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [sveltekit(createKitConfig())],
   ssr: { noExternal: ['@gremion/db'] },
   test: {
     include: ['src/**/*.integration.test.ts'],
