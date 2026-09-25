@@ -29,5 +29,5 @@
   "055_resolution_challenges.sql": "a29221b61dd784d5bfb95a954ba60317936dfd63f1c7a07d9d6106352267095e",
   "056_role_assignment_history_recalled.sql": "96002e5b887cb1a8621157c0220f893d5df72242760338a2c64b0093c6183f01",
   "057_fk_hot_filter_indexes.sql": "1dc2cdad096597e5710acbd24fe0d0bfebcadc8e094233f941f5799aa2d60cbc",
-  "058_public_reader_grants.sql": "daaa034894b34ea5a4296dec75d418bfcdb71ddf774cf1189aafee80f6055da7"
+  "058_public_reader_grants.sql": "b963388faef6afa033c0c3be29918bd9371986306d9c136b2a30bbd361d854be"
 }

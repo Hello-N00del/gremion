@@ -279,14 +279,20 @@ a broken replay, and a silent skip is the defect `058` exists to close. `058`
 also **REVOKEs** SELECT on `calendar_events`, `event_recurrence`,
 `protocol_resolutions` and `resolution_challenges` — every kernel-guaranteed
 table the anonymous portal's own queries never read — alongside the
-pre-existing `protocol_attendance` / `protocol_action_items` revoke. An
-earlier `058` granted the whole kernel-guaranteed set instead of only what the
-portal reads, anonymously exposing `resolution_challenges.raised_by` /
-`grounds` and `calendar_events.created_by`; the REVOKE is what fixes a
-database that already applied that grant (Postgres keys privileges to the
-role OID, so dropping a table from the grant list alone converges only a
-fresh install). The REVOKE runs after `055_resolution_challenges.sql`'s own
-GRANT, keeping the `055` → `058` filename ordering load-bearing.
+pre-existing `protocol_attendance` / `protocol_action_items` revoke. The
+REVOKE is load-bearing on every install, fresh included: kernel
+`008_public_portal.sql` grants `protocol_resolutions`, `protocol_attendance`
+and `protocol_action_items` to `gremion_public_reader` directly, and
+`055_resolution_challenges.sql` grants `resolution_challenges` the same way —
+both run before `058`. Without the REVOKE, a brand-new database would still
+end up holding those grants. `calendar_events` and `event_recurrence` are not
+granted by any kernel migration today; revoking them is defensive. The REVOKE
+runs after `055_resolution_challenges.sql`'s own GRANT, keeping the `055` →
+`058` filename ordering load-bearing. Editing `058` in place does not converge
+a database that already applied an earlier, six-table version of it under
+this filename — the migration runner skips a filename it has already
+recorded before re-checking its hash — but no such database exists: kernel
+`058` has never shipped on `main` or `origin/main`.
 
 `news_posts` and its `GRANT SELECT` live in the content module's
 `1200_content_news_posts.sql`, staged outside this directory

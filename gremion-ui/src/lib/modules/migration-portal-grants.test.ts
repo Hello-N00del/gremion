@@ -22,16 +22,18 @@ const executable = (f: string) =>
 const KERNEL_PORTAL_TABLES = ['org_units', 'protocols']
 
 // Tables 058 actively REVOKEs rather than merely omitting from portal_tables.
-// `protocol_attendance`/`protocol_action_items` predate this unit (008 granted
-// them under the retired role name; a rename-in-place elsewhere carried the
-// grant forward by role OID). `calendar_events`, `event_recurrence`,
-// `protocol_resolutions` and `resolution_challenges` are this unit's own
-// narrowing (R-E13): an earlier 058 granted the whole kernel-guaranteed set,
-// not only what the portal reads, exposing resolution_challenges.raised_by/
-// grounds and calendar_events.created_by anonymously. Any database that ran
-// that 058 already HOLDS those grants (Postgres keys privileges to the role
-// OID), so dropping them from portal_tables alone converges only a fresh
-// install — the REVOKE is what fixes an existing deployment.
+// `protocol_attendance`, `protocol_action_items` and `protocol_resolutions`
+// are granted directly to gremion_public_reader by kernel
+// 008_public_portal.sql (008:23-29); `resolution_challenges` by
+// 055_resolution_challenges.sql (055:69). Both run before 058 on every
+// install, so these four REVOKEs are load-bearing on a fresh install too —
+// without them gremion_public_reader would still end up holding all four via
+// 008/055 alone. `calendar_events` and `event_recurrence` are not granted by
+// any kernel migration today; their REVOKE is defensive (R-E13). Editing 058
+// in place cannot converge a database that already applied an earlier,
+// six-table version of this filename — the migration runner skips a filename
+// it has already recorded before re-checking its hash — but no such database
+// exists: kernel 058 has never shipped on `main` or `origin/main`.
 const REVOKED_TABLES = [
   'protocol_attendance',
   'protocol_action_items',
