@@ -32,6 +32,7 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
+import { walkFiles } from './lib/discover.mjs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { run } from './lib/run.mjs'
@@ -224,6 +225,21 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
 }
 
 // ---------------------------------------------------------------------------
+// --image-build — TASK-012 §5 Q5 default: "the image-build job" is the
+// existing `docker-build` jobs, which stay beside this file unchanged. This
+// flag is purely informational (it never runs docker, never gates anything)
+// — it only lists the Dockerfiles those jobs would build, so a re-enabled
+// pipeline (or an operator) can see the surface at a glance.
+// ---------------------------------------------------------------------------
+
+/** Every Dockerfile (bare `Dockerfile`, or `Dockerfile.*`) under `repoRoot`, repo-relative POSIX paths, sorted. */
+export function listDockerfiles(repoRoot) {
+  return walkFiles(repoRoot)
+    .filter((f) => /(^|\/)Dockerfile(\..+)?$/.test(f))
+    .sort()
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
@@ -255,10 +271,27 @@ export function main(argv = process.argv.slice(2)) {
   const base = argValue(argv, '--base') ?? undefined
   const waiversPath = argValue(argv, '--waivers') ?? join(HERE, 'waivers.json')
   const outDir = argValue(argv, '--out')
+  const imageBuild = argv.includes('--image-build')
 
   if (!kernelPath || !sturaosPath) {
     console.error('guards: --kernel <path> and --sturaos <path> are both required')
     process.exitCode = 1
+    return
+  }
+
+  if (imageBuild) {
+    console.log('\nci-local --image-build — Dockerfiles the existing docker-build jobs build (informational only, no gate effect):\n')
+    for (const [label, path] of [
+      ['kernel', kernelPath],
+      ['sturaos', sturaosPath],
+    ]) {
+      const files = listDockerfiles(path)
+      console.log(`  ${label}:`)
+      if (files.length === 0) console.log('    (none found)')
+      for (const f of files) console.log(`    ${f}`)
+    }
+    console.log('')
+    process.exitCode = 0
     return
   }
 

@@ -112,9 +112,11 @@ rather than a silent pass. See `waivers.json`'s own entry for why
 
 "The image-build job" (TRD-342) is the existing `docker-build` jobs, which
 stay beside `guards.mjs` unchanged (§5 Q5) — this package does not build
-images. `guards.mjs` takes no `--image-build` flag beyond what is documented
-above; a re-enabled pipeline runs `docker-build` as its own job, in parallel
-with (not instead of) the call at the top of this file.
+images. `guards.mjs --kernel <path> --sturaos <path> --image-build` is purely
+informational: it lists the Dockerfiles those jobs build (for both repos)
+and exits 0 without running any guard arm. A re-enabled pipeline runs
+`docker-build` as its own job, in parallel with (not instead of) the call at
+the top of this file.
 
 ## Runner posture (TRD-364)
 

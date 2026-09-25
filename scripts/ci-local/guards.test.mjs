@@ -12,6 +12,7 @@ import {
   runOverridesDriftArm,
   runRunnerPolicyArm,
   runAllArms,
+  listDockerfiles,
 } from './guards.mjs'
 
 function fakeRun(map) {
@@ -195,5 +196,25 @@ test('runAllArms: overall exit is non-zero when even one arm fails, and every ar
   } finally {
     rmSync(kernel, { recursive: true, force: true })
     rmSync(sturaos, { recursive: true, force: true })
+  }
+})
+
+test('listDockerfiles finds a bare Dockerfile and a Dockerfile.suffix, sorted, and [] when there are none', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-local-dockerfiles-'))
+  try {
+    mkdirSync(join(root, 'gremion-ui'), { recursive: true })
+    mkdirSync(join(root, 'docker', 'vector'), { recursive: true })
+    writeFileSync(join(root, 'gremion-ui', 'Dockerfile'), 'FROM node')
+    writeFileSync(join(root, 'docker', 'vector', 'Dockerfile'), 'FROM vector')
+    writeFileSync(join(root, 'README.md'), '# not a dockerfile')
+    assert.deepEqual(listDockerfiles(root), ['docker/vector/Dockerfile', 'gremion-ui/Dockerfile'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+  const empty = mkdtempSync(join(tmpdir(), 'ci-local-dockerfiles-empty-'))
+  try {
+    assert.deepEqual(listDockerfiles(empty), [])
+  } finally {
+    rmSync(empty, { recursive: true, force: true })
   }
 })
