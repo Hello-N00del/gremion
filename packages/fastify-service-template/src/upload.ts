@@ -18,13 +18,14 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Readable } from 'node:stream'
 
 const LIMIT_HIT = Symbol('gremion.uploadLimitHit')
+const PARTS = Symbol('gremion.uploadParts')
 
 interface FilePart {
   type?: string
   file?: Readable & { truncated?: boolean }
 }
 
-type Tracked = FastifyRequest & { [LIMIT_HIT]?: boolean }
+type Tracked = FastifyRequest & { [LIMIT_HIT]?: boolean; [PARTS]?: FilePart[] }
 
 // The three stream-mode accessors @fastify/multipart decorates the request
 // with, typed loosely: they are wrapped, not called with typed options here.
@@ -43,10 +44,15 @@ function tooLarge(request: FastifyRequest): Error {
 function armPart(request: Tracked, part: FilePart | undefined): void {
   if (!part || !part.file || typeof part.file.once !== 'function') return
   const file = part.file
-  file.once('limit', () => {
+  ;(request[PARTS] ??= []).push(part)
+  const trip = () => {
     request[LIMIT_HIT] = true
     file.destroy(tooLarge(request))
-  })
+  }
+  // Busboy may have hit the limit (and emitted 'limit') before this runs, when
+  // the whole body was already buffered: `truncated` is set before the event.
+  if (file.truncated === true) trip()
+  else file.once('limit', trip)
 }
 
 export function armUploadLimit(request: FastifyRequest, _reply: FastifyReply): void {
@@ -72,6 +78,8 @@ export function armUploadLimit(request: FastifyRequest, _reply: FastifyReply): v
   req.parts = wrapIterator(parts)
 }
 
+/** True if any file part of this request hit the ceiling (flag, or busboy's own truncated mark). */
 export function uploadLimitWasHit(request: FastifyRequest): boolean {
-  return (request as Tracked)[LIMIT_HIT] === true
+  const tracked = request as Tracked
+  return tracked[LIMIT_HIT] === true || (tracked[PARTS] ?? []).some((p) => p.file?.truncated === true)
 }
