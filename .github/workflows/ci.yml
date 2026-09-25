@@ -93,6 +93,13 @@ jobs:
       - name: Frozen extraction source
         run: make lint-extraction-source
 
+      # TASK-005: marketing copy may state no licence that diverges from
+      # docs/compliance/licence-register.md and no election lawfulness or
+      # statutory-fitness claim (TRD-265, TRD-112). Delegates to the Makefile
+      # so a local `make lint` and CI cannot drift apart.
+      - name: Marketing copy matches the licence register and elections scope
+        run: make lint-compliance
+
       - name: Validate Docker Compose config
         run: |
           # Provide stubs so docker compose config can resolve all references
