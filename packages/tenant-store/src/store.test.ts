@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DbProfile } from '@gremion/db'
-import { createTenantStore } from './store.js'
+import { createTenantStore, openMigrationDb } from './store.js'
 import { tenantModuleDbName } from './names.js'
 
 const A = '01928f4e-8c3b-7a51-9d2e-3f4a5b6c7d8e'
@@ -41,16 +41,36 @@ describe('createTenantStore().openTenantDb', () => {
     expect(f.made[0]?.profile.prepare).toBe(false)
   })
 
-  it('evicts the least recently used pool and ends it', async () => {
+  it('evicts the least recently used pool, and ends it only after the grace (a caller may still hold it)', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = fakeFactory()
+      const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 2, evictGraceMs: 1000 })
+      await store.openTenantDb(A, 'calendar')
+      await store.openTenantDb(A, 'finance')
+      await store.openTenantDb(A, 'calendar') // touch: finance is now the LRU
+      await store.openTenantDb(B, 'calendar')
+      expect(store.size()).toBe(2)
+      expect(f.made[1]?.end).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(f.made[1]?.end).toHaveBeenCalledTimes(1)
+      expect(f.made[0]?.end).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('close() also ends a pool still in its eviction grace', async () => {
     const f = fakeFactory()
-    const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 2 })
+    const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 1, evictGraceMs: 60_000 })
     await store.openTenantDb(A, 'calendar')
-    await store.openTenantDb(A, 'finance')
-    await store.openTenantDb(A, 'calendar') // touch: finance is now the LRU
     await store.openTenantDb(B, 'calendar')
-    expect(store.size()).toBe(2)
-    expect(f.made[1]?.end).toHaveBeenCalledTimes(1)
-    expect(f.made[0]?.end).not.toHaveBeenCalled()
+    await store.close()
+    expect(f.made.map((m) => m.end.mock.calls.length)).toEqual([1, 1])
+  })
+
+  it.each([['maxConnections', 0], ['maxPools', 0], ['drainSeconds', -1], ['evictGraceMs', 1.5]])('refuses %s = %s', (k, v) => {
+    expect(() => createTenantStore({ resolveTarget, [k]: v })).toThrow(new RegExp(k))
   })
 
   it('shares one in-flight open between concurrent callers of the same pair', async () => {
@@ -119,5 +139,18 @@ describe('createTenantStore().openTenantDb', () => {
     await expect(inflight).rejects.toThrow(/closed/)
     await expect(store.openTenantDb(A, 'calendar')).rejects.toThrow(/closed/)
     expect(f.made).toHaveLength(0)
+  })
+})
+
+describe('openMigrationDb', () => {
+  it('opens a direct, unpooled connection (max 2, prepared statements on) to exactly the pair\'s database', async () => {
+    const f = fakeFactory()
+    await openMigrationDb(A, 'calendar', { resolveTarget, createDb: f.createDb })
+    expect(f.made[0]?.profile).toEqual({ url: `postgres://u@h/${tenantModuleDbName(A, 'calendar')}`, max: 2, prepare: true })
+  })
+
+  it('refuses a resolver answer naming another database', async () => {
+    const wrong = () => ({ url: `postgres://u@h/${tenantModuleDbName(B, 'calendar')}` })
+    await expect(openMigrationDb(A, 'calendar', { resolveTarget: wrong, createDb: fakeFactory().createDb })).rejects.toThrow(/does not name database/)
   })
 })

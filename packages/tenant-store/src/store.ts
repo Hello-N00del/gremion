@@ -20,7 +20,12 @@ export interface TenantStoreOptions {
    * store; it connects directly.
    */
   prepare?: boolean
-  /** Seconds an evicted pool gets to drain in-flight queries. Default 5. */
+  /**
+   * An evicted pool is not ended at once — a caller may still hold it
+   * mid-request — but after this grace, in ms. Default 30000.
+   */
+  evictGraceMs?: number
+  /** Then: seconds end() gives in-flight queries. Default 5. */
   drainSeconds?: number
   /** Test seam; defaults to @gremion/db createDb. */
   createDb?: (profile: DbProfile) => Sql
@@ -42,13 +47,18 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
   const maxConnections = options.maxConnections ?? 3
   const prepare = options.prepare ?? false
   const drainSeconds = options.drainSeconds ?? 5
+  const evictGraceMs = options.evictGraceMs ?? 30_000
   const createDb = options.createDb ?? defaultCreateDb
   const onError = options.onError ?? ((err, context) => console.error(`[tenant-store] ${context}:`, err))
-  if (!Number.isInteger(maxPools) || maxPools < 1) throw new RangeError('maxPools must be a positive integer')
+  for (const [name, v, min] of [['maxPools', maxPools, 1], ['maxConnections', maxConnections, 1], ['drainSeconds', drainSeconds, 0], ['evictGraceMs', evictGraceMs, 0]] as const) {
+    if (!Number.isInteger(v) || v < min) throw new RangeError(`${name} must be an integer >= ${min}`)
+  }
 
   // Insertion order is recency order: a hit is deleted and re-set at the end.
   const pools = new Map<string, Sql>()
   const opening = new Map<string, Promise<Sql>>()
+  // Evicted pools waiting out their grace before end().
+  const draining = new Map<Sql, ReturnType<typeof setTimeout>>()
   let closed = false
 
   function end(sql: Sql, context: string): Promise<void> {
@@ -66,7 +76,12 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
     while (pools.size > maxPools) {
       const [oldKey, oldSql] = pools.entries().next().value as [string, Sql]
       pools.delete(oldKey)
-      void end(oldSql, `evicting pool ${oldKey}`)
+      const timer = setTimeout(() => {
+        draining.delete(oldSql)
+        void end(oldSql, `evicting pool ${oldKey}`)
+      }, evictGraceMs)
+      timer.unref?.()
+      draining.set(oldSql, timer)
     }
     return sql
   }
@@ -96,6 +111,11 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
       closed = true
       const all = [...pools.entries()]
       pools.clear()
+      for (const [sql, timer] of draining) {
+        clearTimeout(timer)
+        all.push(['evicted', sql])
+      }
+      draining.clear()
       await Promise.all(all.map(([key, sql]) => end(sql, `closing pool ${key}`)))
     },
   }
@@ -110,4 +130,25 @@ let defaultStore: TenantStore | undefined
 export function openTenantDb(tenantId: string, moduleId: string): Promise<Sql> {
   defaultStore ??= createTenantStore()
   return defaultStore.openTenantDb(tenantId, moduleId)
+}
+
+export interface MigrationDbOptions {
+  /** Defaults to envResolveTarget(process.env, 'direct'): GREMION_<MODULE>_PG_DIRECT_URL. */
+  resolveTarget?: ResolveTarget
+  /** Test seam; defaults to @gremion/db createDb. */
+  createDb?: (profile: DbProfile) => Sql
+}
+
+/**
+ * A DIRECT connection to one (tenant, module) database, for runMigrations
+ * (Q3: never through a pooler; the runner re-checks). Two connections: the
+ * runner reserves one and keeps the other to terminate the first if it ever
+ * cannot release its lock. Not pooled or cached — the caller ends it.
+ */
+export async function openMigrationDb(tenantId: string, moduleId: string, options: MigrationDbOptions = {}): Promise<Sql> {
+  const dbName = tenantModuleDbName(tenantId, moduleId)
+  const resolveTarget = options.resolveTarget ?? envResolveTarget(process.env, 'direct')
+  const { url } = await resolveTarget(tenantId, moduleId)
+  assertTargetMatches(url, dbName)
+  return (options.createDb ?? defaultCreateDb)({ url, max: 2, prepare: true })
 }

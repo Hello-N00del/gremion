@@ -5,6 +5,7 @@ describe('@gremion/tenant-store public API', () => {
   it('exports the post-condition surface', () => {
     for (const name of [
       'openTenantDb',
+      'openMigrationDb',
       'createTenantStore',
       'tenantModuleDbName',
       'envResolveTarget',
