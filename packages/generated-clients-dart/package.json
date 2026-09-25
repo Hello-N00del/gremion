@@ -1,0 +1,28 @@
+{
+  "name": "@gremion/generated-clients-dart",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Write and check side of the generated Dart (dart-dio) clients for every active OpenAPI surface in contracts/registry.json (TRD-405)",
+  "type": "module",
+  "private": true,
+  "files": ["src", "!src/**/*.test.ts", "README.md"],
+  "exports": {
+    "./codegen-drift": {
+      "import": "./src/codegen-drift.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:unit": "vitest run --exclude 'src/**/*.integration.test.ts'",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "images:pull": "node tools/pull-images.mjs",
+    "generate": "node tools/pull-images.mjs && node tools/generate.mjs",
+    "codegen:check": "node tools/pull-images.mjs && node tools/check.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11",
+    "js-yaml": "4.3.2"
+  }
+}
