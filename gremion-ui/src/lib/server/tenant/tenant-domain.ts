@@ -32,6 +32,14 @@ import { isReservedPlatformHost } from './reserved-hosts'
  */
 export const TENANT_EVICT_CHANNEL = 'tenant_evict'
 
+// TASK-025 §5 Q2 (round-2 fix, docs item — verify-round1.md residual
+// "MED/LOW: Q2 default ... not recorded in any commit or ledger"): no
+// migration change in TASK-025; DB-TNT-DOMAINBINDING's purpose/state
+// (pending/active/retired) and "unique among non-retired" are a gap handed to
+// TASK-077 (expand/contract); the host PK is stricter than unique-among-
+// non-retired. Recorded here (not in 004_tenant_domain.sql — its bytes are
+// pinned by migrations-control/manifest.json) because this is where the
+// shape `TenantDomain` actually models lives.
 export interface TenantDomain {
   readonly host: string
   readonly tenantId: string
