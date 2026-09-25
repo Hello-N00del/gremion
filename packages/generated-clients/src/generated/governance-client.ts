@@ -398,6 +398,12 @@ export interface components {
              */
             cancel_reason?: "cancelled_by_chair" | "body_archived" | null;
         };
+        /** @description One page of Meeting, in the list's stable server order. */
+        MeetingPage: {
+            items: components["schemas"]["Meeting"][];
+            /** @description Opaque cursor for the next page, or null at the end. */
+            nextCursor: string | null;
+        };
         MeetingCreate: {
             /**
              * Format: uuid
@@ -427,11 +433,6 @@ export interface components {
             scheduled_end?: string;
             location?: string;
         };
-        MeetingPage: {
-            items: components["schemas"]["Meeting"][];
-            /** @description Opaque cursor for the next page, or null at the end. */
-            nextCursor: string | null;
-        };
         AgendaSection: {
             /** @description DB-GOV-AGENDA-SECTION id (bigint, carried as a string to avoid JS precision loss) */
             section_id: string;
@@ -444,6 +445,12 @@ export interface components {
             title: string;
             /** @enum {string} */
             publication_class: "public" | "non_public";
+        };
+        /** @description One page of AgendaSection, in the list's stable server order. */
+        AgendaSectionPage: {
+            items: components["schemas"]["AgendaSection"][];
+            /** @description Opaque cursor for the next page, or null at the end. */
+            nextCursor: string | null;
         };
         AgendaSectionCreate: {
             position: number;
@@ -482,6 +489,12 @@ export interface components {
             /** Format: uuid */
             proposer_person_id?: string | null;
         };
+        /** @description One page of AgendaItem, in the list's stable server order. */
+        AgendaItemPage: {
+            items: components["schemas"]["AgendaItem"][];
+            /** @description Opaque cursor for the next page, or null at the end. */
+            nextCursor: string | null;
+        };
         AgendaItemCreate: {
             section_id?: components["schemas"]["BigintId"];
             position?: number;
@@ -516,6 +529,12 @@ export interface components {
             /** Format: date-time */
             sent_at?: string | null;
             recipient_count: number;
+        };
+        /** @description One page of Invitation, in the list's stable server order. */
+        InvitationPage: {
+            items: components["schemas"]["Invitation"][];
+            /** @description Opaque cursor for the next page, or null at the end. */
+            nextCursor: string | null;
         };
         InvitationCreate: {
             /** @description No required fields: an invitation draft is created from the meeting's current agenda snapshot server-side. */
@@ -573,6 +592,12 @@ export interface components {
             submitted_at?: string | null;
             in_app_delivered?: boolean;
         };
+        /** @description One page of InvitationRecipient, in the list's stable server order. */
+        InvitationRecipientPage: {
+            items: components["schemas"]["InvitationRecipient"][];
+            /** @description Opaque cursor for the next page, or null at the end. */
+            nextCursor: string | null;
+        };
         Motion: {
             /**
              * Format: uuid
@@ -605,6 +630,12 @@ export interface components {
             state: "draft" | "pending_verification" | "submitted" | "on_agenda" | "withheld" | "deferred" | "decided" | "adjourned" | "withdrawn" | "expired";
             /** @enum {string} */
             publication_class?: "public" | "non_public";
+        };
+        /** @description One page of Motion, in the list's stable server order. */
+        MotionPage: {
+            items: components["schemas"]["Motion"][];
+            /** @description Opaque cursor for the next page, or null at the end. */
+            nextCursor: string | null;
         };
         MotionCreate: {
             title: string;
@@ -645,7 +676,12 @@ export interface components {
         };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
+        Cursor: string;
+        /** @description Page size; the server default applies when omitted. */
+        Limit: number;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -655,8 +691,10 @@ export interface operations {
     listMeetings: {
         parameters: {
             query?: {
-                cursor?: string;
-                limit?: number;
+                /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size; the server default applies when omitted. */
+                limit?: components["parameters"]["Limit"];
             };
             header?: never;
             path?: never;
@@ -905,7 +943,12 @@ export interface operations {
     };
     listAgendaSections: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size; the server default applies when omitted. */
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path: {
                 meetingId: components["schemas"]["UuidId"];
@@ -920,7 +963,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgendaSection"][];
+                    "application/json": components["schemas"]["AgendaSectionPage"];
                 };
             };
         };
@@ -1024,7 +1067,12 @@ export interface operations {
     };
     listAgendaItems: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size; the server default applies when omitted. */
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path: {
                 meetingId: components["schemas"]["UuidId"];
@@ -1039,7 +1087,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgendaItem"][];
+                    "application/json": components["schemas"]["AgendaItemPage"];
                 };
             };
         };
@@ -1147,7 +1195,12 @@ export interface operations {
     };
     listInvitations: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size; the server default applies when omitted. */
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path: {
                 meetingId: components["schemas"]["UuidId"];
@@ -1162,7 +1215,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Invitation"][];
+                    "application/json": components["schemas"]["InvitationPage"];
                 };
             };
         };
@@ -1270,7 +1323,12 @@ export interface operations {
     };
     listInvitationRecipients: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size; the server default applies when omitted. */
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path: {
                 invitationId: components["schemas"]["UuidId"];
@@ -1285,14 +1343,19 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InvitationRecipient"][];
+                    "application/json": components["schemas"]["InvitationRecipientPage"];
                 };
             };
         };
     };
     listMotions: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size; the server default applies when omitted. */
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path: {
                 meetingId: components["schemas"]["UuidId"];
@@ -1307,7 +1370,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Motion"][];
+                    "application/json": components["schemas"]["MotionPage"];
                 };
             };
         };

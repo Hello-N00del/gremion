@@ -48,22 +48,10 @@
         ],
         "parameters": [
           {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/parameters/Cursor"
           },
           {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 200
-            }
+            "$ref": "#/components/parameters/Limit"
           }
         ]
       },
@@ -403,10 +391,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AgendaSection"
-                  }
+                  "$ref": "#/components/schemas/AgendaSectionPage"
                 }
               }
             }
@@ -415,6 +400,14 @@
         "security": [
           {
             "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
           }
         ]
       },
@@ -572,10 +565,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AgendaItem"
-                  }
+                  "$ref": "#/components/schemas/AgendaItemPage"
                 }
               }
             }
@@ -584,6 +574,14 @@
         "security": [
           {
             "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
           }
         ]
       },
@@ -745,10 +743,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Invitation"
-                  }
+                  "$ref": "#/components/schemas/InvitationPage"
                 }
               }
             }
@@ -757,6 +752,14 @@
         "security": [
           {
             "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
           }
         ]
       },
@@ -930,10 +933,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/InvitationRecipient"
-                  }
+                  "$ref": "#/components/schemas/InvitationRecipientPage"
                 }
               }
             }
@@ -942,6 +942,14 @@
         "security": [
           {
             "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
           }
         ]
       }
@@ -969,10 +977,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Motion"
-                  }
+                  "$ref": "#/components/schemas/MotionPage"
                 }
               }
             }
@@ -981,6 +986,14 @@
         "security": [
           {
             "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
           }
         ]
       },
@@ -1151,6 +1164,29 @@
         "description": "Keycloak-issued OIDC bearer token (TRD-409 / memo D22)."
       }
     },
+    "parameters": {
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque cursor from a previous page's nextCursor; omit for the first page.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Page size; the server default applies when omitted.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
     "schemas": {
       "Problem": {
         "type": "object",
@@ -1310,6 +1346,29 @@
           }
         }
       },
+      "MeetingPage": {
+        "type": "object",
+        "description": "One page of Meeting, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Meeting"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
       "MeetingCreate": {
         "type": "object",
         "required": [
@@ -1369,28 +1428,6 @@
           }
         }
       },
-      "MeetingPage": {
-        "type": "object",
-        "required": [
-          "items",
-          "nextCursor"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Meeting"
-            }
-          },
-          "nextCursor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Opaque cursor for the next page, or null at the end."
-          }
-        }
-      },
       "AgendaSection": {
         "type": "object",
         "required": [
@@ -1423,6 +1460,29 @@
               "public",
               "non_public"
             ]
+          }
+        }
+      },
+      "AgendaSectionPage": {
+        "type": "object",
+        "description": "One page of AgendaSection, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgendaSection"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
           }
         }
       },
@@ -1546,6 +1606,29 @@
           }
         }
       },
+      "AgendaItemPage": {
+        "type": "object",
+        "description": "One page of AgendaItem, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgendaItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
       "AgendaItemCreate": {
         "type": "object",
         "required": [
@@ -1640,6 +1723,29 @@
           },
           "recipient_count": {
             "type": "integer"
+          }
+        }
+      },
+      "InvitationPage": {
+        "type": "object",
+        "description": "One page of Invitation, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invitation"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
           }
         }
       },
@@ -1780,6 +1886,29 @@
           }
         }
       },
+      "InvitationRecipientPage": {
+        "type": "object",
+        "description": "One page of InvitationRecipient, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvitationRecipient"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
       "Motion": {
         "type": "object",
         "required": [
@@ -1868,6 +1997,29 @@
               "public",
               "non_public"
             ]
+          }
+        }
+      },
+      "MotionPage": {
+        "type": "object",
+        "description": "One page of Motion, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Motion"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
           }
         }
       },
