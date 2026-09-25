@@ -51,9 +51,9 @@ events — are P3-additive (DOMAIN's events table) and are deliberately
    wave. A consumer fixture in `packages/generated-clients` proves both
    import shapes (node-style and browser-style) typecheck against the
    generated client now; TASK-084 and TASK-038 assert the real importers.
-3. **Dart**: a smoke run only (`openapitools/openapi-generator-cli` via
-   Docker, `-g dart-dio`, into a gitignored scratch dir), no package
-   committed. TASK-124 (P3) owns `generated-clients-dart/**`.
+3. **Dart**: a smoke run only (`openapitools/openapi-generator-cli:v7.12.0`
+   via Docker, `-g dart-dio`, into the gitignored `.tmp/dart-gov/`), no
+   package committed. TASK-124 (P3) owns `generated-clients-dart/**`.
 4. **Ids**: section/override/admission ids are bigint, exposed as strings
    matching `^[0-9]+$` to avoid JS precision loss. Meeting/agenda-item/
    invitation/motion/recipient ids are UUIDv7, `format: uuid`.
@@ -62,9 +62,54 @@ events — are P3-additive (DOMAIN's events table) and are deliberately
    PRD-MTG-002a's per-recipient proof needs it. No address or e-mail is
    ever exposed on that schema (DOMAIN DB-GOV-INVITATION-RECIPIENT
    invariant); the evidence lives only in MAIL.
-6. **Error shape**: `application/problem+json` (RFC 9457), with a `type`
-   URI per named refusal.
-7. **Pagination**: a cursor (`?cursor=&limit=`) on list endpoints.
+6. **Error shape**: `application/problem+json` (RFC 9457). Every 4xx
+   response declares its named problem schemas, each pinning a `type` URN
+   and its `status`: `urn:gremion:problem:{unauthenticated, validation-failed,
+   forbidden, not-found}` and the governance refusals
+   `urn:gremion:problem:gov:{state-transition-refused, agenda-frozen,
+   notice-override-missing, no-mail-connector, override-exists,
+   override-not-required, invitation-already-dispatched, motion-not-late,
+   admission-exists}`. `sendInvitation` 409 names the missing override and
+   the missing mail connector as two distinct types.
+7. **Pagination**: a cursor (`?cursor=&limit=`) on **every** list
+   operation, each returning a named `*Page` (`items`, `nextCursor`).
+
+Every operation documents 401 and 403 (the PDP decides every call); the
+chair-only ones say so on their 403; every operation addressed by a path id
+documents 404, and every one with a request body documents 400.
+
+## 4a. Records the server writes
+
+- The notice-override is append-only: `POST` records it, `GET`
+  (`getNoticeOverride`) reads it back, and no PUT/PATCH/DELETE exists.
+  `curing_basis_snapshot` is read-only.
+- Motion admissions are append-only: `POST` records one, `GET`
+  (`listMotionAdmissions`) lists them. A `defer` names exactly one target,
+  `deferred_to_meeting_id` or `defer_to_next_meeting: true` (DOMAIN
+  DB-GOV-MOTION-ADMISSION, SCHEMA `motion_admission_defer_check`); an
+  `admit` names neither. This is an `if`/`then`/`else` in
+  `MotionAdmissionCreate`; openapi-typescript does not turn it into a TS
+  union, so the service validates it.
+- Read-only server fields: `Motion.is_late` and `deadline_snapshot`,
+  `Invitation.sender_person_id`, `AgendaItem.outcome` (set when dealt).
+- Every state enum equals its DOMAIN lifecycle diagram, because adding a
+  response enum value later is a MAJOR bump under the compat gate.
+
+## 4b. Events
+
+- Every envelope pins `eventType` to its DB-PLT-EVENT-TYPE name,
+  `de.gremion.gov.<entity>.<verb>.v1` (the reverse-DNS CloudEvents 1.0
+  `type` form). The calendar and content contracts carry a short
+  event type instead; governance follows DOMAIN's event-type names.
+- Payloads equal DOMAIN's events table field for field and are closed
+  (`additionalProperties: false`). `meeting.scheduled` carries no title or
+  location, and `notice.overridden` no free-text reason: readers fetch
+  those from the HTTP read surface.
+- `motion.deferred` carries a null `target_meeting_id` for a defer to the
+  next meeting.
+- The document holds only GOV's `send` operations. Consumers subscribe on
+  `gremion.*.gov.>` and dedupe on `eventId`; no `receive` operation stands
+  in for them.
 
 ## 5. Ownership note (brief §3)
 
