@@ -92,6 +92,9 @@ export function checkDartCodegenDrift(repoRoot: string, opts: DriftOptions): Dri
       problems.push(`${s.packageDir}: generating surface "${s.name}" from ${s.specFile} failed: ${(e as Error).message}`)
       continue
     }
+    if (![...expectedFiles.keys()].some((k) => k.startsWith('lib/') && k.endsWith('.dart'))) {
+      problems.push(`${s.packageDir}: the generator emitted no lib/**/*.dart for "${s.name}" — an empty client is not a client.`)
+    }
     for (const [rel, bytes] of [...expectedFiles].sort(([a], [b]) => byPath(a, b))) {
       const onDisk = join(repoRoot, s.packageDir, rel)
       if (!existsSync(onDisk)) {
@@ -124,4 +127,17 @@ export function checkDartCodegenDrift(repoRoot: string, opts: DriftOptions): Dri
     }
   }
   return { problems, checked, expected: surfaces.length }
+}
+
+export interface Verdict { ok: boolean; problems: string[]; summary: string }
+
+/** The one place `ok` is decided. `requireSurfaces` is the real-tree mode:
+ *  a registry with no openapi+active entry means the check looked at nothing,
+ *  which is a failure there (a fixture may legitimately be 0 of 0). */
+export function finalizeCheck(r: DriftResult, o: { requireSurfaces: boolean }): Verdict {
+  const problems = [...r.problems]
+  const summary = `${r.checked} of ${r.expected} registry surface(s) (openapi+active) regenerated and matched`
+  if (r.checked !== r.expected) problems.push(`only ${r.checked} of ${r.expected} surfaces checked clean`)
+  if (o.requireSurfaces && r.expected < 1) problems.push(`${summary}: 0 of 0 on the real tree — contracts/registry.json lists no openapi+active surface, so this check looked at nothing`)
+  return { ok: problems.length === 0, problems, summary }
 }
