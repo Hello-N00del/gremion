@@ -125,7 +125,7 @@
      html.cb-* colour-blind a11y accents (higher cascade origin on a more-specific
      element wins), inverting accessibility. `brand` is still passed down for the
      logo/strings.
-     TASK-208: .app-shell is 100dvh (100vh fallback) — see navShellCss. -->
+     TASK-208: .app-shell is 100dvh, with a vh fallback line — see navShellCss. -->
 <div class="app-shell" style="background: var(--paper);" data-nav-ready={ready ? '' : undefined} bind:this={shell}>
   <Sidebar
     {nav}

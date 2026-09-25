@@ -3,6 +3,7 @@
   // aria-live status region around AppShell with fixture navigation, the way
   // routes/+layout.svelte mounts it. Links never navigate the test page.
   import AppShell from '../AppShell.svelte'
+  import Icon from '$lib/components/ui/Icon.svelte'
   import type { NavItem } from '../nav-schema'
   import type { Role } from '$lib/auth'
 
@@ -26,8 +27,26 @@
 <a href="#main-content" class="sr-only focus:not-sr-only" data-testid="skip-link">Zum Inhalt springen</a>
 <div role="status" aria-live="polite" class="sr-only" data-testid="app-status"></div>
 
+{#snippet fixtureChip()}
+  <span class="fixture-chip" data-testid="fixture-chip" style="font: 10px monospace; padding: 4px 9px; white-space: nowrap;">MATRIX · VERBUNDEN</span>
+{/snippet}
+{#snippet fixtureBell()}
+  <a href="/messages" class="fixture-bell" data-testid="fixture-bell" aria-label="Benachrichtigungen (3 ungelesen)">
+    <Icon name="bell" size={16} />
+  </a>
+{/snippet}
+
 <div data-shell-fixture style="display: contents">
-  <AppShell {nav} {counts} {activeHref} {roles} userName="Dev Member" brand={null} sourceUrl="https://example.org/source">
+  <AppShell
+    {nav}
+    {counts}
+    {activeHref}
+    {roles}
+    userName="Dev Member"
+    brand={null}
+    sourceUrl="https://example.org/source"
+    topbarModules={withModules ? { chips: fixtureChip, bell: fixtureBell } : undefined}
+  >
     {#snippet children()}
       <h1>Seite</h1>
       <p>Inhalt</p>

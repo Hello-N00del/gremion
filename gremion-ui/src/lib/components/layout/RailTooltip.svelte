@@ -5,8 +5,6 @@
   // tooltip is aria-hidden: the element's accessible name already carries the
   // label, so it is never announced twice. Fixed positioning keeps it clear of
   // the column's overflow clipping.
-  import { onMount } from 'svelte'
-
   let { container, enabled = false }: { container?: HTMLElement; enabled?: boolean } = $props()
 
   let text = $state('')
@@ -35,7 +33,8 @@
     anchor = null
   }
 
-  onMount(() => {
+  // An effect, not onMount: the column's bind:this lands after this child mounts.
+  $effect(() => {
     const el = container
     if (!el) return
     const onFocusIn = (e: FocusEvent) => {
