@@ -1,0 +1,845 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "Gremion governance module — meeting, invitation and motion lifecycle events",
+    "version": "1.0.0",
+    "description": "Eleven lifecycle events emitted by the governance service (TASK-083, DOMAIN DB-GOV events table): meeting scheduled/rescheduled/cancelled/opened/closed, invitation.issued, notice.overridden, and motion submitted/withheld/admitted/deferred. Subject grammar: gremion.{tenantId}.gov.{event} — built by govSubject() in @gremion/ports/broker (single source of truth for the wire subject; TASK-079/084 add the helper and topology entry). EventEnvelope field-matched to packages/ports/src/broker.ts EventEnvelope interface. Protocol, resolution, register and poll events are P3-additive and out of scope here (DOMAIN DB-GOV events table)."
+  },
+  "defaultContentType": "application/json",
+  "channels": {
+    "gremion.{tenantId}.gov.meeting.scheduled": {
+      "address": "gremion.{tenantId}.gov.meeting.scheduled",
+      "description": "de.gremion.gov.meeting.scheduled.v1 — subject built by govSubject(tenantId, 'meeting.scheduled'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MeetingScheduledEvent": {
+          "$ref": "#/components/messages/MeetingScheduledEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.meeting.rescheduled": {
+      "address": "gremion.{tenantId}.gov.meeting.rescheduled",
+      "description": "de.gremion.gov.meeting.rescheduled.v1 — subject built by govSubject(tenantId, 'meeting.rescheduled'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MeetingRescheduledEvent": {
+          "$ref": "#/components/messages/MeetingRescheduledEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.meeting.cancelled": {
+      "address": "gremion.{tenantId}.gov.meeting.cancelled",
+      "description": "de.gremion.gov.meeting.cancelled.v1 — subject built by govSubject(tenantId, 'meeting.cancelled'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MeetingCancelledEvent": {
+          "$ref": "#/components/messages/MeetingCancelledEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.meeting.opened": {
+      "address": "gremion.{tenantId}.gov.meeting.opened",
+      "description": "de.gremion.gov.meeting.opened.v1 — subject built by govSubject(tenantId, 'meeting.opened'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MeetingOpenedEvent": {
+          "$ref": "#/components/messages/MeetingOpenedEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.meeting.closed": {
+      "address": "gremion.{tenantId}.gov.meeting.closed",
+      "description": "de.gremion.gov.meeting.closed.v1 — subject built by govSubject(tenantId, 'meeting.closed'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MeetingClosedEvent": {
+          "$ref": "#/components/messages/MeetingClosedEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.invitation.issued": {
+      "address": "gremion.{tenantId}.gov.invitation.issued",
+      "description": "de.gremion.gov.invitation.issued.v1 — subject built by govSubject(tenantId, 'invitation.issued'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "InvitationIssuedEvent": {
+          "$ref": "#/components/messages/InvitationIssuedEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.notice.overridden": {
+      "address": "gremion.{tenantId}.gov.notice.overridden",
+      "description": "de.gremion.gov.notice.overridden.v1 — subject built by govSubject(tenantId, 'notice.overridden'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "NoticeOverriddenEvent": {
+          "$ref": "#/components/messages/NoticeOverriddenEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.motion.submitted": {
+      "address": "gremion.{tenantId}.gov.motion.submitted",
+      "description": "de.gremion.gov.motion.submitted.v1 — subject built by govSubject(tenantId, 'motion.submitted'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MotionSubmittedEvent": {
+          "$ref": "#/components/messages/MotionSubmittedEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.motion.withheld": {
+      "address": "gremion.{tenantId}.gov.motion.withheld",
+      "description": "de.gremion.gov.motion.withheld.v1 — subject built by govSubject(tenantId, 'motion.withheld'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MotionWithheldEvent": {
+          "$ref": "#/components/messages/MotionWithheldEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.motion.admitted": {
+      "address": "gremion.{tenantId}.gov.motion.admitted",
+      "description": "de.gremion.gov.motion.admitted.v1 — subject built by govSubject(tenantId, 'motion.admitted'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MotionAdmittedEvent": {
+          "$ref": "#/components/messages/MotionAdmittedEvent"
+        }
+      }
+    },
+    "gremion.{tenantId}.gov.motion.deferred": {
+      "address": "gremion.{tenantId}.gov.motion.deferred",
+      "description": "de.gremion.gov.motion.deferred.v1 — subject built by govSubject(tenantId, 'motion.deferred'); never construct the subject string directly.",
+      "parameters": {
+        "tenantId": {
+          "description": "Tenant UUID."
+        }
+      },
+      "messages": {
+        "MotionDeferredEvent": {
+          "$ref": "#/components/messages/MotionDeferredEvent"
+        }
+      }
+    }
+  },
+  "operations": {
+    "publishMeetingScheduled": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.meeting.scheduled"
+      },
+      "summary": "GOV publishes de.gremion.gov.meeting.scheduled.v1."
+    },
+    "publishMeetingRescheduled": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.meeting.rescheduled"
+      },
+      "summary": "GOV publishes de.gremion.gov.meeting.rescheduled.v1."
+    },
+    "publishMeetingCancelled": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.meeting.cancelled"
+      },
+      "summary": "GOV publishes de.gremion.gov.meeting.cancelled.v1."
+    },
+    "publishMeetingOpened": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.meeting.opened"
+      },
+      "summary": "GOV publishes de.gremion.gov.meeting.opened.v1."
+    },
+    "publishMeetingClosed": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.meeting.closed"
+      },
+      "summary": "GOV publishes de.gremion.gov.meeting.closed.v1."
+    },
+    "publishInvitationIssued": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.invitation.issued"
+      },
+      "summary": "GOV publishes de.gremion.gov.invitation.issued.v1."
+    },
+    "publishNoticeOverridden": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.notice.overridden"
+      },
+      "summary": "GOV publishes de.gremion.gov.notice.overridden.v1."
+    },
+    "publishMotionSubmitted": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.motion.submitted"
+      },
+      "summary": "GOV publishes de.gremion.gov.motion.submitted.v1."
+    },
+    "publishMotionWithheld": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.motion.withheld"
+      },
+      "summary": "GOV publishes de.gremion.gov.motion.withheld.v1."
+    },
+    "publishMotionAdmitted": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.motion.admitted"
+      },
+      "summary": "GOV publishes de.gremion.gov.motion.admitted.v1."
+    },
+    "publishMotionDeferred": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.motion.deferred"
+      },
+      "summary": "GOV publishes de.gremion.gov.motion.deferred.v1."
+    },
+    "consumeGovernanceEvents": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.meeting.scheduled"
+      },
+      "summary": "Consumers (CAL, MSG, NTF, OPS, IDT per DOMAIN's Serves column) subscribe on gremion.*.gov.> (6+ token subjects). At-least-once delivery; consumers MUST dedupe on eventId."
+    }
+  },
+  "components": {
+    "messages": {
+      "MeetingScheduledEvent": {
+        "name": "MeetingScheduledEvent",
+        "title": "MeetingScheduled",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMeetingScheduled"
+        }
+      },
+      "MeetingRescheduledEvent": {
+        "name": "MeetingRescheduledEvent",
+        "title": "MeetingRescheduled",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMeetingRescheduled"
+        }
+      },
+      "MeetingCancelledEvent": {
+        "name": "MeetingCancelledEvent",
+        "title": "MeetingCancelled",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMeetingCancelled"
+        }
+      },
+      "MeetingOpenedEvent": {
+        "name": "MeetingOpenedEvent",
+        "title": "MeetingOpened",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMeetingOpened"
+        }
+      },
+      "MeetingClosedEvent": {
+        "name": "MeetingClosedEvent",
+        "title": "MeetingClosed",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMeetingClosed"
+        }
+      },
+      "InvitationIssuedEvent": {
+        "name": "InvitationIssuedEvent",
+        "title": "InvitationIssued",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeInvitationIssued"
+        }
+      },
+      "NoticeOverriddenEvent": {
+        "name": "NoticeOverriddenEvent",
+        "title": "NoticeOverridden",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeNoticeOverridden"
+        }
+      },
+      "MotionSubmittedEvent": {
+        "name": "MotionSubmittedEvent",
+        "title": "MotionSubmitted",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMotionSubmitted"
+        }
+      },
+      "MotionWithheldEvent": {
+        "name": "MotionWithheldEvent",
+        "title": "MotionWithheld",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMotionWithheld"
+        }
+      },
+      "MotionAdmittedEvent": {
+        "name": "MotionAdmittedEvent",
+        "title": "MotionAdmitted",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMotionAdmitted"
+        }
+      },
+      "MotionDeferredEvent": {
+        "name": "MotionDeferredEvent",
+        "title": "MotionDeferred",
+        "payload": {
+          "$ref": "#/components/schemas/EnvelopeMotionDeferred"
+        }
+      }
+    },
+    "schemas": {
+      "EventEnvelope": {
+        "type": "object",
+        "required": [
+          "eventId",
+          "eventType",
+          "tenantId",
+          "occurredAt",
+          "payload"
+        ],
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Also the Nats-Msg-Id (JetStream dedup)."
+          },
+          "eventType": {
+            "type": "string",
+            "description": "Short event type from @gremion/ports/broker's GovernanceEvent union."
+          },
+          "tenantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "correlationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The aggregate's own id (meeting_id, invitation_id or motion_id)."
+          },
+          "payload": {
+            "type": "object",
+            "description": "Event-specific payload (see envelope sub-schemas)."
+          }
+        }
+      },
+      "EnvelopeMeetingScheduled": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "meeting_id",
+                      "body_id",
+                      "org_unit_id",
+                      "scheduled_start",
+                      "scheduled_end",
+                      "aggregate_version"
+                    ],
+                    "properties": {
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "body_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "org_unit_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "scheduled_start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "scheduled_end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "aggregate_version": {
+                        "type": "integer"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.meeting.scheduled.v1. Deliberately carries no title and no location — consumers read those live through gov.meeting-read v1 (DB-GOV-MEETING invariant)."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeMeetingRescheduled": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "meeting_id",
+                      "scheduled_start",
+                      "scheduled_end",
+                      "aggregate_version"
+                    ],
+                    "properties": {
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "scheduled_start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "scheduled_end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "aggregate_version": {
+                        "type": "integer"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.meeting.rescheduled.v1. No title or location."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeMeetingCancelled": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "meeting_id",
+                      "cancel_reason",
+                      "aggregate_version"
+                    ],
+                    "properties": {
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "cancel_reason": {
+                        "type": "string"
+                      },
+                      "aggregate_version": {
+                        "type": "integer"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.meeting.cancelled.v1. No title or location."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeMeetingOpened": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "meeting_id",
+                      "opened_at"
+                    ],
+                    "properties": {
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "opened_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.meeting.opened.v1."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeMeetingClosed": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "meeting_id",
+                      "body_id",
+                      "closed_at"
+                    ],
+                    "properties": {
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "body_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "closed_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.meeting.closed.v1."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeInvitationIssued": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "invitation_id",
+                      "meeting_id",
+                      "version",
+                      "recipient_person_ids",
+                      "notice_met"
+                    ],
+                    "properties": {
+                      "invitation_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "version": {
+                        "type": "integer"
+                      },
+                      "recipient_person_ids": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      },
+                      "notice_met": {
+                        "type": "boolean"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.invitation.issued.v1. In-app delivery only; the mail copy goes through mail.send, not this event."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeNoticeOverridden": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "invitation_id",
+                      "meeting_id",
+                      "actor_person_id",
+                      "days_short"
+                    ],
+                    "properties": {
+                      "invitation_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "actor_person_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "days_short": {
+                        "type": "integer"
+                      },
+                      "curing_basis_id": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "uuid"
+                      },
+                      "curing_basis_version": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.notice.overridden.v1. Deliberately carries no free-text reason — never the override's reason field — per DOMAIN [D R20-D26-5]: only OPS's log stream consumes this, and the reason is not repeated into the event bus."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeMotionSubmitted": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "motion_id",
+                      "meeting_id",
+                      "submitter_kind",
+                      "is_late"
+                    ],
+                    "properties": {
+                      "motion_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "submitter_kind": {
+                        "type": "string",
+                        "enum": [
+                          "member",
+                          "helper",
+                          "public"
+                        ]
+                      },
+                      "is_late": {
+                        "type": "boolean"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.motion.submitted.v1."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeMotionWithheld": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "motion_id",
+                      "meeting_id"
+                    ],
+                    "properties": {
+                      "motion_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.motion.withheld.v1."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeMotionAdmitted": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "motion_id",
+                      "meeting_id",
+                      "actor_person_id"
+                    ],
+                    "properties": {
+                      "motion_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "actor_person_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.motion.admitted.v1."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EnvelopeMotionDeferred": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "motion_id",
+                      "target_meeting_id",
+                      "actor_person_id"
+                    ],
+                    "properties": {
+                      "motion_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "target_meeting_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "actor_person_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "description": "DOMAIN de.gremion.gov.motion.deferred.v1."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

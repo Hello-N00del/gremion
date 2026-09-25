@@ -34,6 +34,9 @@
     },
     "./kernel-governance-client": {
       "import": "./src/generated/kernel-governance-client.ts"
+    },
+    "./governance-client": {
+      "import": "./src/generated/governance-client.ts"
     }
   },
   "publishConfig": {
@@ -66,6 +69,10 @@
       "./kernel-governance-client": {
         "types": "./dist/generated/kernel-governance-client.d.ts",
         "import": "./dist/generated/kernel-governance-client.js"
+      },
+      "./governance-client": {
+        "types": "./dist/generated/governance-client.d.ts",
+        "import": "./dist/generated/governance-client.js"
       }
     }
   },
