@@ -1,0 +1,480 @@
+{
+  "//": "TASK-012 (L1-28) suite manifest. Every entry is one command snapshot.mjs can run against a repo tip. `category` must be one of unit|integration|e2e|shell|tree-guard (lib/manifest.mjs enforces >=1 suite per category per repo). `requiresStack: true` suites never run without --stack-env (Q4 default) and record FAIL \"no stack\" instead. `testGlobs` are repo-relative and are what proves a suite's files exist (post-condition a) and what claims a test file so it is not reported unclaimed (post-condition b). `kind` selects the output parser in lib/parse-output.mjs; `guard` additionally composes the suite's own node --test TAP summary with the trailing guard script's exit code (see lib/snapshot-core.mjs). Seed sources: TASK-012.md §4 (reuse) and §4 seed list.",
+  "kernel": [
+    {
+      "id": "kernel-ui-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:unit",
+      "requiresStack": false,
+      "testGlobs": [
+        "gremion-ui/tests/unit/**/*.test.ts",
+        "gremion-ui/src/**/*.test.ts",
+        "gremion-ui/scripts/install-git-hooks.test.ts",
+        "packages/db/src/**/*.test.ts",
+        "packages/ports/src/**/*.test.ts"
+      ]
+    },
+    {
+      "id": "kernel-ui-vitest-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-ui-vitest-deselection",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:deselection",
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-ui-playwright",
+      "repo": "kernel",
+      "category": "e2e",
+      "cwd": "gremion-ui",
+      "kind": "playwright",
+      "command": "pnpm run test:e2e",
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "kernel-public-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "gremion-public",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["gremion-public/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-public-playwright",
+      "repo": "kernel",
+      "category": "e2e",
+      "cwd": "gremion-public",
+      "kind": "playwright",
+      "command": "pnpm run test:e2e",
+      "requiresStack": true,
+      "testGlobs": ["gremion-public/tests/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "kernel-ports-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/ports",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["packages/ports/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-ports-nats",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": ".",
+      "kind": "vitest",
+      "command": "bash packages/ports/scripts/nats-test.sh",
+      "requiresStack": true,
+      "testGlobs": ["packages/ports/src/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-bats-unit",
+      "repo": "kernel",
+      "category": "shell",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats test/*.bats test/host/*.bats",
+      "requiresStack": false,
+      "testGlobs": ["test/*.bats", "test/host/*.bats"]
+    },
+    {
+      "id": "kernel-bats-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats test/integration/health.bats test/integration/oidc.bats test/integration/legal.bats test/integration/login-theme.bats",
+      "requiresStack": true,
+      "testGlobs": [
+        "test/integration/health.bats",
+        "test/integration/oidc.bats",
+        "test/integration/legal.bats",
+        "test/integration/login-theme.bats"
+      ]
+    },
+    {
+      "id": "kernel-ui-bats",
+      "repo": "kernel",
+      "category": "shell",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats gremion-ui/test/*.bats",
+      "requiresStack": false,
+      "testGlobs": ["gremion-ui/test/*.bats"]
+    },
+    {
+      "id": "kernel-scripts-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test \"scripts/*.test.mjs\" \"scripts/port-back/*.test.mjs\" \"scripts/ci-local/**/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["scripts/*.test.mjs", "scripts/port-back/*.test.mjs", "scripts/ci-local/**/*.test.mjs"]
+    },
+    {
+      "id": "kernel-cve-floor-guard",
+      "repo": "kernel",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "node --test scripts/check-cve-floors.test.mjs && node scripts/check-cve-floors.mjs",
+      "requiresStack": false,
+      "testGlobs": ["scripts/check-cve-floors.test.mjs"]
+    },
+    {
+      "id": "kernel-known-secrets-guard",
+      "repo": "kernel",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "node --test scripts/ci-local/known-secrets.test.mjs && node scripts/ci-local/known-secrets.mjs --repo .",
+      "requiresStack": false,
+      "testGlobs": ["scripts/ci-local/known-secrets.test.mjs"]
+    },
+    {
+      "id": "kernel-runner-policy-guard",
+      "repo": "kernel",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "node --test scripts/ci-local/runner-policy.test.mjs && node scripts/ci-local/runner-policy.mjs --repo . --waivers scripts/ci-local/waivers.json",
+      "requiresStack": false,
+      "testGlobs": ["scripts/ci-local/runner-policy.test.mjs"]
+    }
+  ],
+  "sturaos": [
+    {
+      "id": "sturaos-ui-vitest-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:unit",
+      "requiresStack": false,
+      "testGlobs": [
+        "gremion-ui/tests/unit/**/*.test.ts",
+        "gremion-ui/src/**/*.test.ts",
+        "gremion-ui/scripts/install-git-hooks.test.ts"
+      ]
+    },
+    {
+      "id": "sturaos-ui-vitest-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
+    },
+    {
+      "id": "sturaos-ui-vitest-deselection",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:deselection",
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
+    },
+    {
+      "id": "sturaos-ui-playwright",
+      "repo": "sturaos",
+      "category": "e2e",
+      "cwd": "gremion-ui",
+      "kind": "playwright",
+      "command": "pnpm run test:e2e",
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "sturaos-public-vitest-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "gremion-public",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["gremion-public/src/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-public-playwright",
+      "repo": "sturaos",
+      "category": "e2e",
+      "cwd": "gremion-public",
+      "kind": "playwright",
+      "command": "pnpm run test:e2e",
+      "requiresStack": true,
+      "testGlobs": ["gremion-public/tests/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "sturaos-service-board-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/board",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/board/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-board-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/board",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/board/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "sturaos-service-calendar-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/calendar",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/calendar/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-calendar-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/calendar",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/calendar/test/**/*.integration.test.ts", "services/calendar/test/relay.test.ts"]
+    },
+    {
+      "id": "sturaos-service-content-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/content",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/content/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-content-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/content",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/content/test/**/*.integration.test.ts", "services/content/test/relay.test.ts"]
+    },
+    {
+      "id": "sturaos-service-files-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/files",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/files/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-files-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/files",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/files/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "sturaos-service-finance-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/finance",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/finance/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-finance-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/finance",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/finance/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "sturaos-service-messages-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/messages",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/messages/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-messages-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/messages",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/messages/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "sturaos-service-newsletter-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/newsletter",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/newsletter/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-newsletter-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/newsletter",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/newsletter/test/**/*.integration.test.ts", "services/newsletter/test/relay.test.ts"]
+    },
+    {
+      "id": "sturaos-service-vault-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/vault",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/vault/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-vault-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/vault",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/vault/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "sturaos-service-votes-unit",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "services/votes",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "requiresStack": false,
+      "testGlobs": ["services/votes/test/**/*.test.ts"]
+    },
+    {
+      "id": "sturaos-service-votes-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": "services/votes",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "requiresStack": true,
+      "testGlobs": ["services/votes/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "sturaos-bats-unit",
+      "repo": "sturaos",
+      "category": "shell",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats test/*.bats",
+      "requiresStack": false,
+      "testGlobs": ["test/*.bats"]
+    },
+    {
+      "id": "sturaos-bats-integration",
+      "repo": "sturaos",
+      "category": "integration",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats test/integration/health.bats test/integration/oidc.bats test/integration/legal.bats",
+      "requiresStack": true,
+      "testGlobs": ["test/integration/health.bats", "test/integration/oidc.bats", "test/integration/legal.bats"]
+    },
+    {
+      "id": "sturaos-ui-bats",
+      "repo": "sturaos",
+      "category": "shell",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats gremion-ui/test/*.bats",
+      "requiresStack": false,
+      "testGlobs": ["gremion-ui/test/*.bats"]
+    },
+    {
+      "id": "sturaos-root-test-guards",
+      "repo": "sturaos",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "pnpm run test:guards",
+      "requiresStack": false,
+      "testGlobs": [
+        "scripts/check-no-known-secrets.test.mjs",
+        "scripts/check-overrides-drift.test.mjs",
+        "scripts/check-k8s-postgres-secret-keys.test.mjs",
+        "scripts/check-no-retired-wire-root.test.mjs",
+        "scripts/nats-migrate-streams.test.mjs",
+        "scripts/check-no-hardcoded-compose-files.test.mjs",
+        "scripts/check-compose-edge.test.mjs"
+      ]
+    },
+    {
+      "id": "sturaos-root-test-carve",
+      "repo": "sturaos",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "pnpm run test:carve",
+      "requiresStack": false,
+      "testGlobs": ["scripts/carve/carve.test.mjs", "scripts/carve/pnpm-deps.test.mjs"]
+    },
+    {
+      "id": "sturaos-mobile-flutter",
+      "repo": "sturaos",
+      "category": "unit",
+      "cwd": "mobile",
+      "kind": "flutter",
+      "command": "flutter test",
+      "requiresStack": false,
+      "testGlobs": ["mobile/**/*_test.dart"]
+    }
+  ]
+}
