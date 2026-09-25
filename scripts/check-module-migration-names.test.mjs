@@ -112,3 +112,12 @@ test('RED: an app chain number equal to a kernel number, or a number used twice 
     c.cleanup()
   }
 })
+
+test('RED: two app chains (both in the kernel database) using the same number', () => {
+  const t = tree([...BASE, 'modules/finance/app/migrations/1200_x.sql'])
+  try {
+    assert.ok(checkMigrationNames(t.root).problems.some((p) => /1200/.test(p) && /app chain/.test(p) && /content/.test(p)))
+  } finally {
+    t.cleanup()
+  }
+})

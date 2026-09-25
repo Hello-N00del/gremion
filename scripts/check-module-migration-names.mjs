@@ -68,6 +68,7 @@ export function checkMigrationNames(root) {
   }
   const kernelNums = new Map(kernel.filter((f) => num(f) !== null).map((f) => [num(f), f]))
   const byDir = new Map()
+  const appNums = new Map()
   for (const m of modules) {
     const dir = m.path.slice(0, -m.base.length - 1)
     if (!byDir.has(dir)) byDir.set(dir, new Map())
@@ -79,8 +80,14 @@ export function checkMigrationNames(root) {
     const seen = byDir.get(dir)
     if (seen.has(n)) problems.push(`${m.path} uses number ${n} twice in ${dir}/ (also ${seen.get(n)}) — the same number in one chain orders by the rest of the name, silently`)
     else seen.set(n, m.base)
-    if (/\/app\/migrations$/.test(dir) && kernelNums.has(n))
-      problems.push(`${m.path} is an app chain (kernel database) file numbered ${n}, like kernel ${KERNEL_MIGRATIONS}/${kernelNums.get(n)} — take the next free number in the module's own block`)
+    if (/\/app\/migrations$/.test(dir)) {
+      if (kernelNums.has(n))
+        problems.push(`${m.path} is an app chain (kernel database) file numbered ${n}, like kernel ${KERNEL_MIGRATIONS}/${kernelNums.get(n)} — take the next free number in the module's own block`)
+      // every app chain lands in the same kernel database: numbers are shared across them
+      if (appNums.has(n) && appNums.get(n).dir !== dir)
+        problems.push(`${m.path} is an app chain file numbered ${n}, like ${appNums.get(n).path} in another app chain — both apply to the kernel database`)
+      else if (!appNums.has(n)) appNums.set(n, { dir, path: m.path })
+    }
   }
   return { problems, kernel: kernel.length, modules: modules.length, dirs: new Set(modules.map((m) => m.path.replace(/\/[^/]+$/, ''))).size }
 }
@@ -93,5 +100,5 @@ if (isMain) {
     for (const p of r.problems) console.error(`  x ${p}`)
     process.exit(1)
   }
-  console.log(`[module-migration-names] OK — ${r.modules} module migration(s) in ${r.dirs} chain(s); none shares a basename with the ${r.kernel} kernel migrations, no chain reuses a number, and no app chain reuses a kernel number`)
+  console.log(`[module-migration-names] OK — ${r.modules} module migration(s) in ${r.dirs} chain(s); none shares a basename with the ${r.kernel} kernel migrations, no chain reuses a number, and no app chain reuses a kernel or another app chain's number`)
 }

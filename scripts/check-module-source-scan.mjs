@@ -15,7 +15,9 @@
 //         package scripts and vitest run there);
 //       - FAIL-CLOSED: every other string literal carrying a `..` path segment,
 //         judged from the file's directory (a `${__dirname}/..` template too).
-//   package.json — file:/link:/portal: dependency specs.
+//   package.json — path dependency specs (bare, file:, link:, portal:,
+//     workspace:<path>), npm:@stura aliases, and path arguments in scripts.
+//   symlinks — never followed; a link whose target leaves the module is a finding.
 //   tsconfig*.json — extends, references[].path, compilerOptions.paths, include/files.
 //   Dockerfile / Dockerfile.* / *.Dockerfile / Containerfile — COPY/ADD sources
 //     (heredocs and URLs are not paths).
@@ -43,7 +45,7 @@
 //       node scripts/check-module-source-scan.mjs --coupled-excludes <id>
 // Test: node --test scripts/check-module-source-scan.test.mjs
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'node:fs'
 import { join, dirname, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -461,10 +463,16 @@ export function extractPackagePaths(text) {
   const out = []
   for (const k of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'])
     for (const [name, spec] of Object.entries(json[k] ?? {})) {
-      const m = /^(?:file|link|portal):(.+)$/.exec(String(spec))
-      if (m) out.push({ what: `${k}.${name} ${spec}`, rel: m[1] })
-      if (/^@stura/i.test(name)) out.push({ what: `${k}.${name}`, rel: null, stura: true })
+      const v = String(spec)
+      const m = /^(?:file:|link:|portal:|workspace:)?(\.{1,2}\/.*|\/.*)$/.exec(v) ?? /^(?:file|link|portal):(.+)$/.exec(v)
+      if (m) out.push({ what: `${k}.${name} ${v}`, rel: m[1] })
+      if (/^@stura/i.test(name) || /^npm:@stura/i.test(v)) out.push({ what: `${k}.${name} ${v}`, rel: null, stura: true })
     }
+  // Lifecycle and run scripts are executed by the gate: a path argument in one
+  // that climbs out of the module is the same coupling as an import.
+  for (const [name, cmd] of Object.entries(json.scripts ?? {}))
+    for (const tok of String(cmd).split(/[\s=;&|()'"]+/))
+      if (DOTDOT_RE.test(tok) || tok.startsWith('/')) out.push({ what: `scripts.${name} ${tok}`, rel: tok })
   return out
 }
 
@@ -576,14 +584,19 @@ function moduleDirs(root) {
     .sort()
 }
 
-function walk(root, rel, moduleRoot, out) {
+function walk(root, rel, moduleRoot, out, links = []) {
   for (const name of readdirSync(join(root, rel)).sort()) {
     const r = `${rel}/${name}`
-    const st = statSync(join(root, r))
+    const lst = lstatSync(join(root, r))
+    if (lst.isSymbolicLink()) {
+      if (name !== 'node_modules') links.push({ path: r, target: readlinkSync(join(root, r)) })
+      continue // judged as a link below, never followed
+    }
+    const st = lst
     if (st.isDirectory()) {
       if (name === 'node_modules') continue
       if (rel === moduleRoot && ROOT_SKIP_DIRS.has(name)) continue
-      walk(root, r, moduleRoot, out)
+      walk(root, r, moduleRoot, out, links)
     } else if (st.isFile()) out.push(r)
   }
   return out
@@ -615,7 +628,13 @@ export function scanModules(root, { dockerAllowlist = DOCKERFILE_ALLOWLIST, trav
   }
   for (const id of ids) {
     const moduleRoot = `modules/${id}`
-    for (const rel of walk(root, moduleRoot, moduleRoot, [])) {
+    const links = []
+    const files = walk(root, moduleRoot, moduleRoot, [], links)
+    for (const l of links) {
+      counts.filesScanned++
+      add(l.path, 1, `symlink -> ${l.target}`, resolvedFinding(l.target, joinSegs(posix.dirname(l.path), [l.target]), 'link', moduleRoot))
+    }
+    for (const rel of files) {
       const text = () => readFileSync(join(root, rel), 'utf8')
       if (DOCKERFILE_RE.test(rel)) {
         counts.filesScanned++

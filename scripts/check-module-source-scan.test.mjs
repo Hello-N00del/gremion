@@ -8,7 +8,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 
@@ -458,4 +458,25 @@ test('RED: a traversal-fixture allowance names one literal in one file, and goes
 test('the lexer ignores comments and keeps quotes inside regex literals from opening strings', () => {
   const src = "// import x from '../../../commented'\nconst re = /from ['\"][^'\"]*x['\"]/\n/* require('../../../block') */\nimport y from './y'\n"
   assert.deepEqual(extractSpecifiers(src).map((s) => s.spec), ['./y'])
+})
+
+test('RED (round 2): bare/workspace path deps, npm:@stura aliases, lifecycle scripts, and symlinks leaving the module', () => {
+  const t = tree({
+    ...BASE,
+    'modules/finance/package.json': JSON.stringify({
+      name: 'finance-service',
+      dependencies: { a: '../../packages/a', b: 'workspace:../../packages/b', c: 'npm:@stura/c@1', ok: 'workspace:*' },
+      scripts: { pretest: 'node ../../scripts/x.mjs', build: 'node scripts/build.mjs' },
+    }),
+  })
+  try {
+    symlinkSync('../../../scripts', join(t.root, 'modules/finance/src/linked'))
+    const r = scanModules(t.root, OPTS)
+    const mine = r.problems.filter((p) => /modules\/finance\/(package\.json|src\/linked)/.test(p))
+    for (const w of ['dependencies.a', 'dependencies.b', 'dependencies.c', 'scripts.pretest', 'src/linked'])
+      assert.ok(mine.some((p) => p.includes(w)), `${w} not flagged:\n${r.problems.join('\n')}`)
+    assert.ok(!mine.some((p) => /dependencies\.ok|scripts\.build/.test(p)))
+  } finally {
+    t.cleanup()
+  }
 })
