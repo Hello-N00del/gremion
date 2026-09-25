@@ -137,3 +137,40 @@ test('the real repository passes', () => {
   const out = execFileSync(process.execPath, [SCRIPT], { encoding: 'utf8', cwd: REPO })
   assert.match(out, /^marketing-copy-check: OK \d+ file\(s\) scanned/)
 })
+
+// ── critic round (TASK-005): phrasings that used to slip through ────────────
+
+test('a licence claim hard-wrapped across two Markdown lines fails, reported at its first line', () => {
+  const r = run(tree({ 'README.md': '# Gremion\n\nThe identity layer is Keycloak, which is licensed\nunder the MIT License.\n' }))
+  assert.equal(r.status, 1, r.out)
+  assert.match(r.out, /README\.md:3: states "MIT License" for Keycloak/)
+})
+
+test('"GPL-licensed" / "AGPL-licensed" is a licence mention', () => {
+  for (const s of ['Keycloak is GPL-licensed.', 'Keycloak is AGPL-licensed software.']) {
+    const r = run(tree({ 'README.md': `${s}\n` }))
+    assert.equal(r.status, 1, `${s}\n${r.out}`)
+    assert.match(r.out, /for Keycloak/)
+  }
+})
+
+test('ordinary lawfulness and statutory-fitness phrasings fail', () => {
+  for (const s of [
+    'Die Online-Wahl ist in allen Ländern zulässig.',
+    'Das Modul eignet sich für satzungsgemäße Wahlen.',
+    'Studierendenparlamentswahlen können rechtssicher online durchgeführt werden.',
+    'Use Gremion for your official student-body elections.',
+    'The module can run your statutory student elections.',
+  ]) {
+    const r = run(tree({ 'docs/about-gremion.md': `${s}\n` }))
+    assert.equal(r.status, 1, `${s}\n${r.out}`)
+  }
+})
+
+test('an SPDX disjunction allows each alternative alone (Element Call), not a wider one', () => {
+  const ok = run(tree({ 'README.md': 'Element Call is AGPL-3.0-only.\n' }))
+  assert.equal(ok.status, 0, ok.out)
+  const bad = run(tree({ 'README.md': 'Element Call is AGPL-3.0-or-later.\n' }))
+  assert.equal(bad.status, 1, bad.out)
+  assert.match(bad.out, /for Element Call/)
+})

@@ -129,9 +129,17 @@ records, so this page and the check cannot drift apart:
   required scope entry is missing or yields no file, when the register lacks a row for
   any of the seven systems, or when the elections table yields no phrasings.
 
+Sentences are read whole: in Markdown and plain text, hard-wrapped lines are joined into
+paragraphs before they are split into sentences, so a claim cannot hide across a line
+break. An SPDX disjunction in the register allows each of its alternatives on its own.
+
 What it cannot see: a licence stated for a system under a name the check does not know
-(it knows the names in section 2), and copy that lives outside this repository. Such copy
-is checked against this register by hand before it is published.
+(it knows the names in section 2); a sentence split across two string literals in code;
+and copy that lives outside this repository. The broader elections patterns are skipped
+in a sentence that contains a negation, so that the sanctioned honest-scope notice passes;
+a negated sentence that still asserts lawfulness is left to the per-release reading
+TRD-112 requires. Copy outside the check's reach is checked against this register and
+elections-scope.md by hand before it is published.
 
 **Measured state on 2026-09-25:** the first run of the check found one divergence:
 `docs/about-gremion.md` listed the public module repositories as "AGPL-3.0-only" and

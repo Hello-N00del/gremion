@@ -66,7 +66,7 @@ const NOT_COPY = /(^|[\\/])(test|tests|__tests__|node_modules)([\\/]|$)|\.(test|
 const LICENCE_RE = new RegExp(
   [
     String.raw`\bGNU\s+(?:Affero\s+|Lesser\s+)?General\s+Public\s+Licen[cs]e(?:,?\s+(?:version|v\.?)\s*\d(?:\.\d)?)?(?:\s+or\s+(?:any\s+)?later(?:\s+version)?|\s+only)?`,
-    String.raw`\b(?:GNU\s+)?(?:A|L)?GPL(?:[- ]?v?\d(?:\.\d)?)?(?:-only|-or-later|\+|\s+or\s+later|\s+only)?(?![\w-])`,
+    String.raw`\b(?:GNU\s+)?(?:A|L)?GPL(?:[- ]?v?\d(?:\.\d)?)?(?:-only|-or-later|\+|\s+or\s+later|\s+only)?(?!\w)`,
     String.raw`\bMozilla\s+Public\s+Licen[cs]e(?:,?\s+(?:v\.?|version)?\s*\d\.\d)?`,
     String.raw`\bMPL(?:[- ]?v?\d\.\d)?\b`,
     String.raw`\bApache(?:\s+Licen[cs]e)?(?:,?\s*(?:Version|v\.?)?\s*-?\d\.\d)?\b`,
@@ -92,7 +92,22 @@ export const ELECTION_PATTERNS = [
   /\bWahl(?:en)?\b[^.!?\n]{0,80}\b(?:sind|ist)\s+(?:rechtlich\s+)?(?:zulässig|rechtssicher|rechtsgültig|rechtskonform|erlaubt)\b/i,
   /\b(?:rechtssicher|rechtsgültig|rechtskonform|zulässig)\w*\s+(?:Online-)?(?:Gremien|Hochschul|Studierendenschafts)?[Ww]ahl/,
   /\bfür\s+(?:satzungsgemäße|amtliche|offizielle|gesetzliche)\s+Wahlen\s+(?:geeignet|zugelassen)\b/i,
+  /\beignet sich\b[^.!?\n]{0,40}\b(?:satzungsgemäß|amtlich|offiziell|gesetzlich)\w*\s+Wahl/i,
+  /\brechts(?:sicher|gültig|konform)\b[^.!?\n]{0,60}wahl/i,
+  /wahl\w*\b[^.!?\n]{0,60}\brechts(?:sicher|gültig|konform)\b/i,
 ]
+
+// Broader patterns that the sanctioned honest-scope notice itself would
+// match ("does not run the university's statutory elections", "keine
+// satzungsgemäßen Wahlen"). They apply only to sentences without a negation.
+export const ELECTION_PATTERNS_UNLESS_NEGATED = [
+  /\b(?:zulässig|erlaubt)\b[^.!?\n]{0,40}\b(?:Ländern|Land|Bundesl\w*)\b/i,
+  /\b(?:Ländern|Land|Bundesl\w*)\b[^.!?\n]{0,40}\b(?:zulässig|erlaubt)\b/i,
+  /\b(?:zulässig|erlaubt)\b[^.!?\n]{0,40}\bWahl/i,
+  /\b(?:official|binding|statutory)\s+(?:[\w-]+\s+){0,2}elections?\b/i,
+  /\b(?:satzungsgemäß|amtlich|offiziell|gesetzlich)\w*\s+(?:\w+\s+)?Wahl/i,
+]
+const NEGATION = /\b(?:not|no|never|nor|cannot|can't|doesn't|does not|keine?[nmrs]?|nicht|niemals|weder)\b/i
 
 // ── records ────────────────────────────────────────────────────────────────
 
@@ -136,6 +151,9 @@ export function parseRegister(text) {
     // A plain wording with a parenthetical is also allowed without it:
     // "GNU AGPL v3 (dual-licensed; ...)" -> "GNU AGPL v3".
     const extra = plain.map((p) => p.replace(/\s*\(.*\)\s*$/, '')).filter((p) => p && !plain.includes(p))
+    // An SPDX disjunction also allows each alternative on its own:
+    // "AGPL-3.0-only OR LicenseRef-X" -> "AGPL-3.0-only".
+    for (const e of spdx) if (/ OR /.test(e)) extra.push(...e.split(/\s+OR\s+/).filter((x) => !x.startsWith('LicenseRef-')))
     out.set(sys.key, { spdx, allowed: [...spdx, ...plain, ...extra] })
   }
   const missing = SYSTEMS.filter((s) => !s.optional && !out.has(s.key)).map((s) => s.key)
@@ -230,18 +248,46 @@ export function electionProblems(sentence, forbidden) {
   for (const re of ELECTION_PATTERNS) {
     if (re.test(sentence)) problems.push(`asserts election lawfulness or statutory fitness (${re}) -- TRD-112`)
   }
+  if (!NEGATION.test(sentence)) {
+    for (const re of ELECTION_PATTERNS_UNLESS_NEGATED) {
+      if (re.test(sentence)) problems.push(`asserts election lawfulness or statutory fitness (${re}) -- TRD-112`)
+    }
+  }
   return problems
 }
 
-export function checkText(text, register, forbidden) {
+// Prose is hard-wrapped, so a sentence can span lines. In Markdown and plain
+// text, consecutive prose lines are joined into one paragraph (reported at its
+// first line); a blank line, heading, table row, list item, quote or code
+// fence starts a new one. Code files are checked line by line.
+const BLOCK_START = /^\s*(?:#|\||[-*+]\s|\d+[.)]\s|>|```|~~~)/
+
+export function paragraphs(text, prose) {
+  const lines = text.split(/\r?\n/)
+  if (!prose) return lines.map((l, i) => ({ line: i + 1, text: l }))
   const out = []
-  text.split(/\r?\n/).forEach((line, i) => {
-    for (const s of sentences(line)) {
-      for (const p of [...licenceProblems(s, register), ...electionProblems(s, forbidden)]) {
-        out.push({ line: i + 1, problem: p, text: s.trim().slice(0, 160) })
-      }
+  let cur = null
+  lines.forEach((l, i) => {
+    if (!l.trim()) { cur = null; return }
+    if (!cur || BLOCK_START.test(l) || cur.text.trimStart().startsWith('|')) {
+      cur = { line: i + 1, text: l }
+      out.push(cur)
+    } else {
+      cur.text += ` ${l.trim()}`
     }
   })
+  return out
+}
+
+export function checkText(text, register, forbidden, prose = true) {
+  const out = []
+  for (const para of paragraphs(text, prose)) {
+    for (const s of sentences(para.text)) {
+      for (const p of [...licenceProblems(s, register), ...electionProblems(s, forbidden)]) {
+        out.push({ line: para.line, problem: p, text: s.trim().slice(0, 160) })
+      }
+    }
+  }
   return out
 }
 
@@ -282,7 +328,7 @@ export function run(root) {
   if (files.length === 0) throw new Error('scope matched no files')
   const violations = []
   for (const f of files) {
-    for (const v of checkText(readFileSync(f, 'utf8'), register, forbidden)) {
+    for (const v of checkText(readFileSync(f, 'utf8'), register, forbidden, /\.(md|txt)$/i.test(f))) {
       violations.push({ file: relative(root, f).split(sep).join('/'), ...v })
     }
   }
