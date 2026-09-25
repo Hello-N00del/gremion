@@ -20,6 +20,14 @@ COPY packages/db ./packages/db/
 COPY packages/ports ./packages/ports/
 COPY gremion-ui ./gremion-ui/
 
+# TASK-032 (Q4): the SvelteKit build-version stamp `kit3+civitas.<sha>` served
+# at <base>/_app/version.json. Pass the kernel commit as a 7-char short sha:
+#   --build-arg BUILD_SHA=$(git rev-parse --short=7 HEAD)
+# The build FAILS without it (kit.config.js buildStampGuard); it never falls
+# back to a timestamp. A build ARG is visible to the RUN below as an env var,
+# and it stays in this builder stage: the runtime image never carries it.
+ARG BUILD_SHA
+
 # Build the SvelteKit app (@gremion/db + @gremion/ports bundled via ssr.noExternal)
 WORKDIR /repo/gremion-ui
 RUN pnpm build

@@ -29,6 +29,14 @@ COPY gremion-public ./gremion-public/
 ARG BASE_PATH=""
 ENV BASE_PATH=$BASE_PATH
 
+# TASK-032 (Q4): the SvelteKit build-version stamp `kit3+civitas.<sha>` served
+# at <base>/_app/version.json. Pass the kernel commit as a 7-char short sha:
+#   --build-arg BUILD_SHA=$(git rev-parse --short=7 HEAD)
+# The build FAILS without it (kit.config.js buildStampGuard); it never falls
+# back to a timestamp. A build ARG is visible to the RUN below as an env var,
+# and it stays in this builder stage: the runtime image never carries it.
+ARG BUILD_SHA
+
 # Build (@gremion/db is bundled via ssr.noExternal in vite.config.ts)
 WORKDIR /repo/gremion-public
 RUN pnpm build
