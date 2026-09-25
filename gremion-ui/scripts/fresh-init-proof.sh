@@ -117,7 +117,7 @@ expect_eq() { if [ "$2" != "$3" ]; then echo "FAIL $1: expected '$3', got '$2'";
 if [ "$applied" -lt "$MIN_APPLIED" ]; then
   echo "FAIL vacuity: applied $applied data-plane files, minimum $MIN_APPLIED"; fail=1
 else say "ok applied $applied data-plane files"; fi
-expect_eq "control files applied" "$control_applied" "4"
+expect_eq "control files applied" "$control_applied" "5"
 
 # -- the three cross-cutting module tables, each module OFF -------------------
 # `deck_board` is the board module's KEY in CROSS_CUTTING_MIGRATIONS, not a
