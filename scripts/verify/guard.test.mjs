@@ -57,6 +57,28 @@ test('a skip within the declared allowance passes', () => {
   assert.equal(r.reason, null)
 })
 
+test('a per-file skip violation fails even when the suite-wide allowance would have permitted it (Q3)', () => {
+  // Reproduces the real defect: allowedSkipsForSuite sums every entry's
+  // maxCount into one suite-wide budget, so 21 skips concentrated entirely
+  // in a file only ever allowed 1 still summed to <= 21 and passed.
+  const r = evaluateSuite({
+    collected: 100,
+    passed: 79,
+    failed: 0,
+    skipped: 21,
+    allowedSkips: 21,
+    skipFileViolations: ['gremion-ui/scripts/install-git-hooks.test.ts: 21 skip(s), exceeds the allowed 1 for this file'],
+  })
+  assert.equal(r.status, 'fail')
+  assert.match(r.reason, /unaccounted skip\(s\)/)
+  assert.match(r.reason, /install-git-hooks/)
+})
+
+test('no skipFileViolations falls back to the suite-wide allowance unchanged', () => {
+  const r = evaluateSuite({ collected: 10, passed: 9, failed: 0, skipped: 1, allowedSkips: 1, skipFileViolations: [] })
+  assert.equal(r.status, 'pass')
+})
+
 test('a fully green suite with no skips at all passes', () => {
   const r = evaluateSuite({ collected: 42, passed: 42, failed: 0, skipped: 0 })
   assert.equal(r.status, 'pass')

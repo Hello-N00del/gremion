@@ -188,6 +188,38 @@ export function summarizeVitestFailures(outputFilePath, limit = 10) {
 }
 
 /**
+ * Per-file skip counts from a vitest JSON report (Q3): `pending`/`todo`
+ * assertions, grouped by the file (`testResults[].name`, the ABSOLUTE path
+ * vitest itself reports) they belong to. scripts/verify/allowed-skips.json's
+ * `file` field is a per-file budget, not a per-suite one -- summing every
+ * entry's maxCount into one suite-wide total (the old lib/skips.mjs
+ * behavior) let a skip anywhere in the suite spend another file's
+ * allowance. Callers normalize the returned absolute paths against
+ * REPO_ROOT (posix separators) to match allowed-skips.json's repo-relative
+ * `file` field. Never throws: a missing/malformed file returns `{}`, same
+ * as `summarizeVitestFailures` -- this is a second read of a report already
+ * validated by `parseVitestJsonFile`, not itself a vacuity signal.
+ */
+export function skipsByFileFromVitestJson(outputFilePath) {
+  let data
+  try {
+    data = JSON.parse(readFileSync(outputFilePath, 'utf8'))
+  } catch {
+    return {}
+  }
+  const out = {}
+  for (const tr of data.testResults ?? []) {
+    if (!tr.name) continue
+    let n = 0
+    for (const ar of tr.assertionResults ?? []) {
+      if (ar.status === 'pending' || ar.status === 'todo') n++
+    }
+    if (n > 0) out[tr.name] = (out[tr.name] ?? 0) + n
+  }
+  return out
+}
+
+/**
  * `svelte-check --output machine`'s final summary line:
  *   <ts> COMPLETED <n> FILES <n> ERRORS <n> WARNINGS <n> FILES_WITH_PROBLEMS
  * The release-1 gate (integration-gate.sh) parsed this with a tail `grep -oE`

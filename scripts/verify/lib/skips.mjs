@@ -25,7 +25,45 @@ export function loadAllowedSkips() {
   return data
 }
 
-/** Total allowed-skip budget for one suite name, summed across its entries. */
+/** Total allowed-skip budget for one suite name, summed across its entries.
+ * Kept for suites that cannot yet attribute a skip to one file (see
+ * checkSkipsByFile below for the per-file enforcement Q3 actually asks
+ * for). */
 export function allowedSkipsForSuite(suiteName, data = loadAllowedSkips()) {
   return data.entries.filter((e) => e.suite === suiteName).reduce((sum, e) => sum + e.maxCount, 0)
+}
+
+/**
+ * Q3's actual rule, enforced file by file: a skip in a file with no entry at
+ * all, or beyond that file's OWN maxCount, is a violation -- summing every
+ * entry's maxCount into one suite-wide budget (allowedSkipsForSuite above)
+ * let a skip anywhere in the suite spend another file's allowance. Reproduced:
+ * with only allowedSkipsForSuite, 21 skips concentrated entirely in
+ * install-git-hooks.test.ts (which is only ever allowed 1) still summed to
+ * <= 21 and passed, because nats-broker.integration.test.ts's separate
+ * 20-skip allowance was never actually spent by anything.
+ *
+ * @param {string} suiteName
+ * @param {Record<string, number>} skipsByFile repo-relative (posix
+ *   separators) file path -> skip count actually observed in this run. A
+ *   caller that cannot attribute every skip to a real source file (bats,
+ *   node --test) should fold the remainder into a synthetic key that matches
+ *   no allow-list entry, so it is judged with a zero budget rather than
+ *   silently uncounted.
+ * @param {{entries: Array<{suite: string, file: string, reason: string, maxCount: number}>}} [data]
+ * @returns {string[]} one message per file that exceeded its own budget;
+ *   empty when every observed skip is within its file's allowance.
+ */
+export function checkSkipsByFile(suiteName, skipsByFile, data = loadAllowedSkips()) {
+  const violations = []
+  for (const [file, count] of Object.entries(skipsByFile)) {
+    if (!(count > 0)) continue
+    const allowed = data.entries
+      .filter((e) => e.suite === suiteName && e.file === file)
+      .reduce((sum, e) => sum + e.maxCount, 0)
+    if (count > allowed) {
+      violations.push(`${file}: ${count} skip(s), exceeds the allowed ${allowed} for this file (see scripts/verify/allowed-skips.json)`)
+    }
+  }
+  return violations
 }

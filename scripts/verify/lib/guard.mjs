@@ -30,8 +30,17 @@
  * @param {number} [input.failed] tests reported as failed/errored.
  * @param {number} [input.skipped] tests reported as skipped/pending/todo.
  * @param {number} [input.allowedSkips] the max skip count this suite may
- *   carry per scripts/verify/allowed-skips.json (Q3). Defaults to 0: any
- *   skip fails unless explicitly allow-listed.
+ *   carry per scripts/verify/allowed-skips.json (Q3), summed across every
+ *   entry for the suite. Defaults to 0: any skip fails unless explicitly
+ *   allow-listed. Superseded, when `skipFileViolations` is non-empty, by the
+ *   more precise per-file check below -- kept as a fallback for a suite that
+ *   cannot yet attribute a skip to one file.
+ * @param {string[]} [input.skipFileViolations] pre-computed per-file
+ *   allow-list violations (lib/skips.mjs#checkSkipsByFile) -- a skip
+ *   attributed to a file with no entry, or beyond that file's own maxCount.
+ *   Non-empty fails the suite regardless of what the suite-wide
+ *   `allowedSkips` total would otherwise permit (Q3's actual rule: the
+ *   allow-list's `file` field is a per-file budget, not a suite-wide one).
  * @returns {{status: 'pass'|'fail', reason: string|null}}
  */
 export function evaluateSuite({
@@ -42,6 +51,7 @@ export function evaluateSuite({
   failed = 0,
   skipped = 0,
   allowedSkips = 0,
+  skipFileViolations = [],
 } = {}) {
   // 1. Missing tool. Checked first: a suite that could not even start has no
   // counts worth trusting, and "missing tool" must never be mistaken for a
@@ -76,8 +86,17 @@ export function evaluateSuite({
     return { status: 'fail', reason: `all ${collected} collected test(s) were skipped` }
   }
 
-  // 6. A skip beyond the declared allowance (Q3) fails -- an un-allow-listed
-  // skip is exactly as unaccounted for as one nobody looked at.
+  // 6. A skip attributed to a file with no allow-list entry, or beyond that
+  // file's own maxCount, fails -- checked file by file, never as one
+  // suite-wide sum (see checkSkipsByFile's own doc comment for the exact
+  // defect this closes).
+  if (skipFileViolations.length > 0) {
+    return { status: 'fail', reason: `unaccounted skip(s): ${skipFileViolations.join('; ')}` }
+  }
+
+  // 7. Fallback for a suite that cannot yet attribute a skip to one file: a
+  // skip beyond the declared allowance (Q3) fails -- an un-allow-listed skip
+  // is exactly as unaccounted for as one nobody looked at.
   if (skipped > allowedSkips) {
     return {
       status: 'fail',
