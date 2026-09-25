@@ -20,7 +20,28 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseDocument } from 'yaml'
+
+// TASK-012-FU finding 3 (MEDIUM): `yaml` is a root devDependency (granted by
+// the orchestrator under R24-1), so it exists only after
+// `pnpm install --frozen-lockfile`. A STATIC import killed guards.mjs (which
+// imports this file) with ERR_MODULE_NOT_FOUND before it wrote any dated
+// JSON. The import is now dynamic and caught: a missing or broken `yaml`
+// becomes a reported, fail-closed FAIL (see yamlUnavailableReason), never a
+// crash and never a vacuous PASS.
+let parseDocument
+let yamlLoadError
+try {
+  ;({ parseDocument } = await import('yaml'))
+} catch (err) {
+  yamlLoadError = err
+}
+
+/** Why workflows cannot be parsed in this process, or undefined when `yaml` loaded. */
+export function yamlUnavailableReason() {
+  if (!yamlLoadError) return undefined
+  const first = String(yamlLoadError.message ?? yamlLoadError).split('\n')[0]
+  return `the 'yaml' package could not be imported (${first}) — run \`pnpm install --frozen-lockfile\` at the kernel root first; failing closed`
+}
 
 // HIGH fix (round 5): the previous regex denylist scanned raw text lines
 // and failed OPEN on ordinary YAML a scanner should have no trouble with —
@@ -265,6 +286,8 @@ export function listWorkflowFiles(repoRoot) {
  */
 export function checkWorkflowText(text) {
   const findings = []
+  const yamlMissing = yamlUnavailableReason()
+  if (yamlMissing) return [{ rule: 'yaml-unavailable', id: 'yaml-unavailable', detail: yamlMissing }]
   let doc
   try {
     doc = parseDocument(text, { strict: true })
@@ -422,6 +445,20 @@ export function evaluateRepo(repoLabel, repoRoot, waivers, today = todayIso()) {
       },
     ]
   }
+  // TASK-012-FU finding 3: without `yaml` nothing can be classified — a
+  // repo with zero workflow files must not read as a clean PASS either.
+  const yamlMissing = yamlUnavailableReason()
+  if (yamlMissing) {
+    return [
+      {
+        path: '(yaml)',
+        findings: [{ rule: 'yaml-unavailable', id: 'yaml-unavailable', detail: yamlMissing }],
+        waiver: undefined,
+        waived: false,
+        waivedFindings: [],
+      },
+    ]
+  }
   const files = listWorkflowFiles(repoRoot)
   const perFile = []
   for (const relPath of files) {
@@ -506,6 +543,12 @@ export function main(argv = process.argv.slice(2)) {
   ]
   if (repos.length === 0) {
     console.error('runner-policy: no --repo (or --kernel/--vertical) given')
+    process.exitCode = 1
+    return
+  }
+  const yamlMissing = yamlUnavailableReason()
+  if (yamlMissing) {
+    console.error(`runner-policy: ${yamlMissing}`)
     process.exitCode = 1
     return
   }

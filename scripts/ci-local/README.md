@@ -2,8 +2,17 @@
 
 TASK-012 (L1-28): dated test-suite snapshots plus the merge-gate guard set,
 run locally while GitHub Actions stays disabled (TRD-340/342/346/356/364).
-Everything here is pure Node (no external deps beyond `gitleaks` on PATH),
-so one call works unchanged on Windows, Debian and `ubuntu-latest`.
+Everything here is Node plus one npm package, `yaml` (runner-policy parses
+workflows with it), and `gitleaks` on PATH, so one call works unchanged on
+Windows, Debian and `ubuntu-latest`.
+
+**Prerequisite:** run `pnpm install --frozen-lockfile` at the kernel root
+first. `yaml` is a root `dependencies` entry (pinned 2.9.0) in `package.json` /
+`pnpm-lock.yaml`. Those files belong to TASK-017; the orchestrator granted
+this one addition to TASK-012 under decision R24-1 (TASK-012-FU,
+2026-09-25). If `yaml` cannot be imported, nothing crashes: `guards.mjs`
+still writes its dated JSON, the runner-policy arm FAILs with a reason that
+names this command, and the exit code is non-zero.
 
 The second repo's CLI flag, repo label and suite-id prefix are spelled
 `--vertical` / `vertical` / `vertical-*`, not the product's own name: the

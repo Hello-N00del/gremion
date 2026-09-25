@@ -51,7 +51,7 @@ import { run } from './lib/run.mjs'
 import { parseNodeTest } from './lib/parse-output.mjs'
 import { headInfo } from './lib/git.mjs'
 import { scanRepo as knownSecretsScanRepo, trackedFiles, loadDenylistFile } from './known-secrets.mjs'
-import { evaluateRepo as runnerPolicyEvaluateRepo, loadWaivers, todayIso } from './runner-policy.mjs'
+import { evaluateRepo as runnerPolicyEvaluateRepo, loadWaivers, todayIso, yamlUnavailableReason } from './runner-policy.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -466,6 +466,12 @@ export function runOverridesDriftArm(sturaosPath, kernelPath, { runFn = run } = 
 // ---------------------------------------------------------------------------
 
 export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
+  // TASK-012-FU finding 3: runner-policy.mjs loads `yaml` with a caught
+  // dynamic import, so a clone without node_modules reaches this point
+  // instead of dying on import — and this arm FAILs, naming the fix, while
+  // main() still writes the dated JSON result.
+  const yamlMissing = yamlUnavailableReason()
+  if (yamlMissing) return { arm: 'runner-policy', repo: 'both', status: 'FAIL', reason: yamlMissing }
   // LOW fix: loadWaivers now THROWS on a waivers file that is valid JSON but
   // not an array (or has invalid JSON syntax) rather than silently returning
   // []. Wrapped here the same way runKnownSecretsArm wraps its scan, so a
