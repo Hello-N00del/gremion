@@ -16,7 +16,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { join } from 'node:path'
 import { checkAnalysisOptions, checkIgnoreComments, evaluateAnalyze } from './analyze-gate.ts'
 import { byPath, listPackageFiles, specStamp, STAMP_FILE, type GeneratedFiles, type GenerateFn } from './codegen-drift.ts'
-import { normalizeNullableFor31 } from './spec-normalize.ts'
+import { normalizeFor31 } from './spec-normalize.ts'
 import { DART_PACKAGES_DIR, SCRATCH_ROOT, type DartSurface } from './registry.ts'
 import type { Tool } from './tools.ts'
 
@@ -97,8 +97,8 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
     }
     mkdirSync(join(work, 'in'))
     mkdirSync(join(work, 'out'))
-    const { doc, rewritten } = normalizeNullableFor31(parsed)
-    if (rewritten.length > 0) log(`[${s.name}] generator input: ${rewritten.length} OpenAPI-3.0-style "nullable" keyword(s) rewritten to 3.1 type arrays (src/spec-normalize.ts)`)
+    const { doc, report } = normalizeFor31(parsed)
+    log(`[${s.name}] generator input (src/spec-normalize.ts): ${report.nullable.length} nullable -> type array, ${report.nullableFalseDropped.length} nullable:false dropped, ${report.defaultNullDropped.length} default:null dropped, ${report.constTyped.length} const typed`)
     writeFileSync(join(work, 'in', 'spec.json'), `${JSON.stringify(doc, null, 2)}\n`)
     writeFileSync(join(work, 'out', '.openapi-generator-ignore'), GENERATOR_IGNORE)
 
