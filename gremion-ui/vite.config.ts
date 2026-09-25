@@ -25,7 +25,7 @@ export default defineConfig({
     strictPort: true
   },
   ssr: {
-    noExternal: ['@gremion/db', '@gremion/ports']
+    noExternal: ['@gremion/db', '@gremion/ports', '@gremion/storage']
   },
   test: {
     // `packages/db` and `packages/ports` have no own vitest config in this run;
@@ -38,7 +38,7 @@ export default defineConfig({
     // hook guard lives beside the script it guards, outside src/. Without this
     // entry the suite is never collected and the gate that runs it passes
     // vacuously — the same shape of failure the guard itself is about.
-    include: ['tests/unit/**/*.test.ts', 'src/**/*.test.ts', 'scripts/install-git-hooks.test.ts', '../packages/db/src/**/*.test.ts', '../packages/ports/src/**/*.test.ts'],
+    include: ['tests/unit/**/*.test.ts', 'src/**/*.test.ts', 'scripts/install-git-hooks.test.ts', '../packages/db/src/**/*.test.ts', '../packages/ports/src/**/*.test.ts', '../packages/storage/src/**/*.test.ts'],
     // *.integration.test.ts files need a real Postgres — they run separately
     // via `pnpm test:integration` (see vitest.integration.config.ts).
     exclude: [...configDefaults.exclude, '**/*.integration.test.ts'],
