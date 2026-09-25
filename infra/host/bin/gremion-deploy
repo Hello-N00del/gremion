@@ -263,6 +263,16 @@ verify_first_party_signatures() {
     cosign="$(command -v cosign 2>/dev/null || true)"
     [[ -n "$cosign" ]] || die "cosign not on PATH — cannot verify image signatures (refusing)" 1
 
+    # The pin set is read from canonical `image: <ref>` lines only, so any
+    # other line that declares an image (a flow mapping, a quoted key, a
+    # trailing comment) would be pulled by compose yet never verified here.
+    local stray
+    stray="$(grep -vE '^[[:space:]]*#' "$RELEASE_DIR/docker-compose.pins.yml" \
+        | grep -E 'image' \
+        | grep -vE '^[[:space:]]*image:[[:space:]]*["'\'']?[^][:space:]"'\''{}#,]+["'\'']?[[:space:]]*$' || true)"
+    [[ -z "$stray" ]] \
+        || die "unrecognised image declaration in docker-compose.pins.yml (only '<indent>image: <repo>@sha256:<hex>' is verifiable): $(printf '%s' "$stray" | head -c 300)" 1
+
     # Which images are third-party is the HOST's decision, not the tree's: a
     # pin outside the first-party prefix is refused unless its repository is
     # listed in $ROOT/etc/third-party-images (one repository per line, no tag,

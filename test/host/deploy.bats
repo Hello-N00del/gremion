@@ -901,3 +901,26 @@ PINS
     [ "$(grep -c 'postgres' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*postgres' "$SHIM_LOG"
     [[ "$output" == *"1 third-party image(s) on the host list"* ]]
 }
+
+@test "an image declared in any non-canonical form in the pins layer is refused, not skipped" {
+    # The gate reads `image:` lines; a flow mapping or a quoted key would be
+    # pulled by compose but never seen by it. Any such line is a refusal.
+    stub_all
+    local body
+    for body in '  evil: {image: ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555}' \
+                '  evil:
+    "image": ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555' \
+                '  evil:
+    image: ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555 # pinned'; do
+        local tree="${BATS_TEST_TMPDIR}/odd-$RANDOM"
+        mkdir -p "$tree"; cp -R "${FIXTURES}/valid"/. "$tree"/
+        printf '%s\n' "$body" >> "$tree/docker-compose.pins.yml"
+        export FIXTURE_RELEASE="$tree"
+        rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+        : > "$SHIM_LOG"
+        run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+        [ "$status" -eq 1 ] || { echo "accepted: $body"; return 1; }
+        [[ "$output" == *"unrecognised image declaration"* || "$output" == *"pin is not <repo>@sha256"* ]] || { echo "$output"; return 1; }
+        [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    done
+}
