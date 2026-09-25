@@ -1,6 +1,7 @@
 import { handle as authHandle } from './auth'
 import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
+import { building } from '$app/environment'
 import { readOrMintCorrelationId, CORRELATION_HEADER } from '$lib/server/ports/tracer'
 import { canAccess, pageAccessForTenant, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
@@ -282,7 +283,10 @@ export function boot(): Promise<void> {
   return _bootPromise
 }
 
-boot()
+// Not while SvelteKit builds: its analyse step imports this module, and a
+// non-transient boot failure (no database configured at build time) exits 1,
+// which would kill `vite build`.
+if (!building) void boot()
 
 /**
  * Build a SessionUser from a raw Keycloak JWT payload. `vocabulary` is the

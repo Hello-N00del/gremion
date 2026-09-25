@@ -34,7 +34,11 @@ import { startTenantEvictListener } from '$lib/server/tenant/evict-listener'
 let migrationsImpl: () => Promise<void> = async () => {}
 let controlMigrationsImpl: () => Promise<void> = async () => {}
 
-vi.mock('$app/environment', () => ({ building: true }))
+// TASK-023: steerable, so one test can load the module as a running server
+// (building=false, boot starts at load) while every other test drives boot()
+// by hand (building=true: the module-load boot is skipped, as in `vite build`).
+const appEnv = vi.hoisted(() => ({ building: true }))
+vi.mock('$app/environment', () => appEnv)
 
 vi.mock('$env/dynamic/private', () => ({
   env: {
@@ -153,6 +157,7 @@ beforeEach(() => {
   migrationsImpl = async () => {}
   controlMigrationsImpl = async () => {}
   exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+  appEnv.building = true
 })
 
 afterEach(() => {
@@ -288,7 +293,8 @@ describe('hooks.server authGuard 503 while booting (T4.1 / G-014)', () => {
       })
 
     const mod = await import('./hooks.server')
-    // Don't await mod.boot() — we WANT it pending here.
+    // Start boot but don't await it — we WANT it pending here.
+    const inflight = mod.boot()
 
     const event = makeFakeEvent('/dashboard')
     const res = await mod.authGuard({
@@ -303,8 +309,9 @@ describe('hooks.server authGuard 503 while booting (T4.1 / G-014)', () => {
     expect(await response.text()).toBe('Service Unavailable: booting')
 
     // Release the migration so vitest doesn't hold the promise forever.
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
     pending.resolve?.()
-    await mod.boot()
+    await inflight
   })
 
   it('returns 503 with no Retry-After once boot has definitively failed (control plane)', async () => {
@@ -338,7 +345,7 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
       if (calls === 1) throw refused()
     }
     const mod = await import('./hooks.server')
-    await settleModuleLoadBoot(mod)
+    await mod.boot()
 
     expect(mod.getBootStatus().complete).toBe(false)
     expect(mod.getBootStatus().error?.message).toContain('ECONNREFUSED')
@@ -403,7 +410,7 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
     const mod = await import('./hooks.server')
     expect(mod.BOOT_RETRY_DELAY_MS).toBeGreaterThan(0)
     expect(mod.BOOT_RETRY_DELAY_MS).toBeLessThanOrEqual(30_000)
-    await settleModuleLoadBoot(mod)
+    await mod.boot()
     expect(mod.getBootStatus().complete).toBe(false)
     expect(vi.getTimerCount()).toBe(1)
 
@@ -426,7 +433,7 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
       throw refused()
     }
     const mod = await import('./hooks.server')
-    await settleModuleLoadBoot(mod)
+    await mod.boot()
     await mod.boot()
     await mod.boot()
     expect(calls).toBe(3)
@@ -441,7 +448,7 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
       throw refused()
     }
     const mod = await import('./hooks.server')
-    await settleModuleLoadBoot(mod)
+    await mod.boot()
     expect(calls).toBe(1)
     for (let i = 0; i < 5; i++) {
       const res = (await mod.authGuard({
@@ -453,6 +460,33 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
     await Promise.resolve()
     expect(calls).toBe(1)
     expect(vi.getTimerCount()).toBe(1)
+  })
+})
+
+describe('boot at module load (TASK-023)', () => {
+  it('is skipped while SvelteKit builds: an exit(1) there would kill `vite build`', async () => {
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      throw new Error('CONTROL_DATABASE_URL not configured')
+    }
+    const mod = await import('./hooks.server')
+    for (let i = 0; i < 50; i++) await Promise.resolve()
+    expect(calls).toBe(0)
+    expect(exitSpy).not.toHaveBeenCalled()
+    expect(mod.getBootStatus()).toEqual({ complete: false, error: null })
+  })
+
+  it('starts on import in a running server', async () => {
+    appEnv.building = false
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+    }
+    const mod = await import('./hooks.server')
+    await settleModuleLoadBoot(mod)
+    expect(calls).toBe(1)
+    expect(mod.getBootStatus().complete).toBe(true)
   })
 })
 
@@ -478,6 +512,7 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
         pending.resolve = r
       })
     const mod = await import('./hooks.server')
+    const inflight = mod.boot()
 
     const h = await guard(mod, '/healthz')
     expect(h.reached).toBe(true)
@@ -492,7 +527,7 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
     }
     await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
     pending.resolve?.()
-    await mod.boot()
+    await inflight
   })
 
   it('while booting: an unresolved /api/internal/ request passes, a tenant-resolved one is gated', async () => {
@@ -502,6 +537,7 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
         pending.resolve = r
       })
     const mod = await import('./hooks.server')
+    const inflight = mod.boot()
 
     expect((await guard(mod, '/api/internal/evict')).reached).toBe(true)
     const resolved = await guard(mod, '/api/internal/newsletter/render', { id: 't1', slug: 't1' })
@@ -510,7 +546,7 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
 
     await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
     pending.resolve?.()
-    await mod.boot()
+    await inflight
   })
 
   it('after a transient failure (re-attempt pending) other paths stay 503 booting with Retry-After: 5', async () => {
@@ -519,7 +555,7 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
       throw refused()
     }
     const mod = await import('./hooks.server')
-    await settleModuleLoadBoot(mod)
+    await mod.boot()
     const o = await guard(mod, '/dashboard')
     expect(o.res.status).toBe(503)
     expect(o.res.headers.get('Retry-After')).toBe('5')
