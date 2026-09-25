@@ -32,16 +32,18 @@
 // the drift D1 exists to prevent. Because the normaliser is injected, its
 // output is NOT trusted: every host is re-checked here against a strict
 // rule-safe LDH shape before it is spliced into a backtick-quoted rule and a
-// double-quoted YAML scalar, and a failure THROWS rather than skipping — a
-// normaliser that lets `a\`) || Host(\`b` through is a caller bug to surface,
-// not a host to drop quietly.
+// double-quoted YAML scalar. A host that fails it is SKIPPED with the code
+// `invalid-host` and reported, never emitted: gremion-ui's real normaliser
+// legitimately passes shapes a router must not carry (`localhost`, a leading
+// hyphen, an IPv4 literal), and one such registry row must not stop the whole
+// fleet's sync (review round 1).
 //
 // YAML is hand-rendered (brief Q4, no third-party dependency), as the StuRa
 // source does; every interpolated value is either a validated slug, a
 // validated resolver name, a validated host or a numeric constant.
 
-import { assertSlug, hostPinName, perIpName, routerName } from './names.ts'
-import { MW_HSTS_CUSTOM, MW_RATELIMIT_APP, PER_IP_INFLIGHT } from './platform-middlewares.ts'
+import { assertSlug, hostPinName, perIpName, routerName } from './names.js'
+import { MW_HSTS_CUSTOM, MW_RATELIMIT_APP, PER_IP_INFLIGHT } from './platform-middlewares.js'
 
 /** The colour-bound service every tenant router targets (classify.ts). */
 export const TENANT_SERVICE = 'app@file'
@@ -102,10 +104,16 @@ const RESOLVER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/
 /** A rule-safe host: LDH labels, no leading/trailing hyphen, 1-63 per label. */
 const LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
+/**
+ * A host a tenant router may carry: two or more LDH labels, and a top-level
+ * label that is not all digits — so no IPv4 literal (a tenant registering the
+ * edge's own address would capture every request addressed by bare IP).
+ */
 export function isRuleSafeHost(host: string): boolean {
   if (typeof host !== 'string' || host.length === 0 || host.length > 253) return false
   const labels = host.split('.')
-  return labels.length >= 2 && labels.every((l) => LABEL_RE.test(l))
+  const tld = labels[labels.length - 1] ?? ''
+  return labels.length >= 2 && labels.every((l) => LABEL_RE.test(l)) && /[a-z]/.test(tld)
 }
 
 export function assertCertResolver(value: unknown): string {
@@ -162,10 +170,12 @@ export function renderTenantRouter(input: RenderTenantRouterInput): RenderTenant
       continue
     }
     if (!isRuleSafeHost(host)) {
-      throw new Error(
-        `renderTenantRouter: host ${JSON.stringify(host)} came back from the injected normaliser but is not ` +
-          'rule-safe (lowercase LDH labels only) — refusing to splice it into a Traefik rule',
-      )
+      skipped.push({
+        host,
+        code: 'invalid-host',
+        reason: 'not rule-safe after normalisation (two or more lowercase LDH labels, a non-numeric top label)',
+      })
+      continue
     }
     if (isReservedHost(host)) {
       skipped.push({ host, code: 'reserved', reason: 'a reserved platform host — never a tenant router' })

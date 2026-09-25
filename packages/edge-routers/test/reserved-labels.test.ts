@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { REPO_ROOT, RESERVED_LABELS, deps, isReservedHost, APEX } from './helpers.ts'
-import { renderTenantRouter } from '../src/render.ts'
+import { REPO_ROOT, RESERVED_LABELS, deps, isReservedHost, APEX } from './helpers.js'
+import { renderTenantRouter } from '../src/render.js'
 
 // Q3: the package takes isReservedHost as a PARAMETER and never imports
 // gremion-ui. The nine reserved names are pinned here as a fixture and

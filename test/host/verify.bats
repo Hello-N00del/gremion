@@ -48,9 +48,9 @@ fake_container() {  # <id> <name> <aliases> <status> <health> <exitcode> [ip] [l
 
 install_shims() {
     shim curl '
-url=""; outfile=""; want_code=0; forged=0; prev=""
+url=""; outfile=""; hdrfile=""; want_code=0; forged=0; prev=""
 for a in "$@"; do
-  case "$prev" in -o) outfile="$a" ;; esac
+  case "$prev" in -o) outfile="$a" ;; -D) hdrfile="$a" ;; esac
   case "$a" in
     -w) want_code=1 ;;
     X-Forwarded-Host:*) forged=1 ;;
@@ -59,9 +59,17 @@ for a in "$@"; do
   prev="$a"
 done
 case "$url" in
-  */api/http/routers)     cat "$FAKE_HTTP/api-http-routers.json"; exit 0 ;;
-  */api/http/services)    cat "$FAKE_HTTP/api-http-services.json"; exit 0 ;;
-  */api/http/middlewares) cat "$FAKE_HTTP/api-http-middlewares.json"; exit 0 ;;
+  */api/*)
+    if [ -n "$hdrfile" ] && [ -f "$FAKE_HTTP/api-next-page" ]; then
+      printf "HTTP/1.1 200 OK\r\nX-Next-Page: %s\r\n\r\n" "$(cat "$FAKE_HTTP/api-next-page")" > "$hdrfile"
+    fi ;;
+esac
+case "$url" in
+  */api/http/routers|*/api/http/routers\?*)         cat "$FAKE_HTTP/api-http-routers.json"; exit 0 ;;
+  */api/http/services|*/api/http/services\?*)       cat "$FAKE_HTTP/api-http-services.json"; exit 0 ;;
+  */api/http/middlewares|*/api/http/middlewares\?*) cat "$FAKE_HTTP/api-http-middlewares.json"; exit 0 ;;
+  */api/tcp/routers|*/api/tcp/routers\?*)           cat "$FAKE_HTTP/api-tcp-routers.json"; exit 0 ;;
+  */api/udp/routers|*/api/udp/routers\?*)           cat "$FAKE_HTTP/api-udp-routers.json"; exit 0 ;;
 esac
 s="$(printf "%s" "$url" | tr -c "A-Za-z0-9" "-")"
 [ "$forged" = 1 ] && s="${s}-forged"
@@ -100,7 +108,7 @@ esac
     shim docker '
 cmd="$1"; shift
 case "$cmd" in
-  ps) cat "$FAKE_DOCKER/ps" 2>/dev/null; exit 0 ;;
+  ps) [ -f "$FAKE_DOCKER/ps-fails" ] && exit 1; cat "$FAKE_DOCKER/ps" 2>/dev/null; exit 0 ;;
   inspect)
       fmt=""; id=""; prev=""
       for a in "$@"; do
@@ -227,6 +235,8 @@ EOF
    "rateLimit":{"average":30,"burst":10,"period":"1m"}}
 ]
 EOF
+    printf '[]\n' > "${FAKE_HTTP}/api-tcp-routers.json"
+    printf '[]\n' > "${FAKE_HTTP}/api-udp-routers.json"
     emitted_file a tenant-a.example.org
     emitted_file b tenant-b.example.org
     local h
@@ -238,6 +248,17 @@ EOF
     done
     fake_container c1 gremion-ui-blue "gremion-ui-blue gremion-public-blue" running healthy 0
     fake_container c2 keycloak        "keycloak"                            running healthy 0 10.90.250.4
+    fake_traefik
+}
+
+# The traefik container, declaring every @docker middleware the fixture chains
+# on its own labels (compose service `traefik`) — check_middleware_placement.
+fake_traefik() {
+    fake_container c9 traefik "traefik" running healthy 0 "" \
+        '{"com.docker.compose.service":"traefik","com.docker.compose.project":"staging-state",
+          "traefik.http.middlewares.edge-hsts-custom.headers.stsseconds":"31536000",
+          "traefik.http.middlewares.edge-ratelimit-app.ratelimit.average":"300",
+          "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.average":"30"}'
 }
 
 
@@ -441,6 +462,7 @@ EOF
     : > "${FAKE_DOCKER}/ps"
     fake_container c3 minio-mc "minio-mc" exited none 0
     fake_container c2 keycloak "keycloak" running healthy 0 10.90.250.4
+    fake_traefik
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 0 ]
     [[ "$output" == *"exempt container minio-mc exited 0"* ]]
@@ -652,14 +674,14 @@ prepare_green_colour() {
     api_edit routers '(.[] | select(.name=="tenant-b@file")).rule = "HostRegexp(`^[a-z0-9-]+\\.example\\.org$`)"'
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"router tenant-b@file: rule matches a host pattern (HostRegexp)"* ]]
+    [[ "$output" == *"router tenant-b@file: rule does not begin with exactly one literal Host"* ]]
 }
 
 @test "universal: a public router naming two literal hosts fails" {
     api_edit routers '(.[] | select(.name=="tenant-b@file")).rule = "Host(`tenant-b.example.org`) || Host(`tenant-a.example.org`)"'
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"router tenant-b@file: rule names 2 literal hosts (expected exactly 1)"* ]]
+    [[ "$output" == *"router tenant-b@file: rule carries 2 host matchers (expected exactly 1)"* ]]
 }
 
 @test "universal: a router with NO entryPoints listens everywhere and is held to it" {
@@ -702,11 +724,224 @@ prepare_green_colour() {
     [[ "$output" == *"router universal: traefik reports no public router"* ]]
 }
 
-@test "universal: an unclassified router still fails even when fully pinned" {
+@test "check_routers: an unclassified router fails even when the universal is satisfied" {
     api_edit routers '(.[] | select(.name=="tenant-a@file")).service = "ghost@file"'
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 1 ]
     [[ "$output" == *"UNCLASSIFIED router tenant-a@file"* ]]
+}
+
+# Review round 1 (security / silent-failure): rule shapes that answer more than
+# their host, later middlewares that undo the pin, L4 routers, pagination.
+
+rule_case() {  # <router> <rule> -> runs verify with that router's rule replaced
+    jq --arg n "$1" --arg r "$2" '(.[] | select(.name == $n)).rule = $r' \
+        "${FAKE_HTTP}/api-http-routers.json" > "${FAKE_HTTP}/r.new"
+    mv "${FAKE_HTTP}/r.new" "${FAKE_HTTP}/api-http-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+}
+
+@test "universal: Host || PathPrefix fails (not a conjunction)" {
+    rule_case tenant-b@file 'Host(`tenant-b.example.org`) || PathPrefix(`/`)'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-b@file: rule continues with something other than &&"* ]]
+}
+
+@test "universal: Host && Path || PathPrefix fails (top-level || after the conjunction)" {
+    rule_case tenant-b@file 'Host(`tenant-b.example.org`) && Path(`/x`) || PathPrefix(`/`)'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-b@file: rule has a top-level || and answers more than its host"* ]]
+}
+
+@test "universal: a lower-case second host matcher fails" {
+    rule_case tenant-b@file 'Host(`tenant-b.example.org`) || host(`evil.example.net`)'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-b@file: rule carries 2 host matchers"* ]]
+}
+
+@test "universal: a lower-case hostregexp disjunction fails" {
+    rule_case tenant-b@file 'Host(`tenant-b.example.org`) || hostregexp(`.+`)'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-b@file: rule carries 2 host matchers"* ]]
+}
+
+@test "universal: a double-quoted second Host fails" {
+    rule_case tenant-b@file 'Host(`tenant-b.example.org`) || Host("evil.example.net")'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-b@file: rule carries 2 host matchers"* ]]
+}
+
+@test "universal: a negated Host answers every OTHER host and fails" {
+    rule_case tenant-b@file '!Host(`tenant-b.example.org`)'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-b@file: rule does not begin with exactly one literal Host"* ]]
+}
+
+@test "universal: a two-argument Host fails" {
+    rule_case tenant-b@file 'Host(`tenant-b.example.org`,`evil.example.net`)'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-b@file: rule does not begin with exactly one literal Host"* ]]
+}
+
+@test "universal: an upper-case host literal fails (the pin could never match it byte for byte)" {
+    rule_case tenant-b@file 'Host(`TENANT-B.example.org`)'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-b@file: rule does not begin with exactly one literal Host"* ]]
+}
+
+@test "universal: || INSIDE a parenthesised && conjunct is fine" {
+    rule_case keycloak@docker 'Host(`tenant-a.example.org`) && (PathPrefix(`/auth/realms`) || PathPrefix(`/auth/js`))'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all checks passed"* ]]
+}
+
+@test "universal: a later middleware that rewrites X-Forwarded-Host fails" {
+    api_edit middlewares '. + [{"name":"unpin@docker","provider":"docker","type":"headers","headers":{"customRequestHeaders":{"x-forwarded-host":"tenant-b.example.org"}}}]'
+    api_edit routers '(.[] | select(.name=="tenant-a@file")).middlewares += ["unpin@docker"]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: middleware unpin@docker sets X-Forwarded-Host after the pin"* ]]
+}
+
+@test "universal: a forwardAuth that copies response headers by regex fails" {
+    api_edit middlewares '. + [{"name":"auth@docker","provider":"docker","type":"forwardauth","forwardAuth":{"address":"http://a","authResponseHeadersRegex":"^X-"}}]'
+    api_edit routers '(.[] | select(.name=="tenant-a@file")).middlewares += ["auth@docker"]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: middleware auth@docker is a forwardAuth that can copy X-Forwarded-Host"* ]]
+}
+
+@test "universal: a chain middleware cannot be read and fails" {
+    api_edit middlewares '. + [{"name":"bundle@docker","provider":"docker","type":"chain","chain":{"middlewares":["x"]}}]'
+    api_edit routers '(.[] | select(.name=="tenant-a@file")).middlewares += ["bundle@docker"]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: middleware bundle@docker is a chain/plugin middleware"* ]]
+}
+
+@test "universal: a pin carrying a second, lower-case X-Forwarded-Host key fails" {
+    api_edit middlewares '(.[] | select(.name=="edge-hostpin-a@file")).headers.customRequestHeaders["x-forwarded-host"] = "tenant-b.example.org"'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: pin edge-hostpin-a@file sets X-Forwarded-Host 'tenant-a.example.org,tenant-b.example.org'"* ]]
+}
+
+@test "universal: a TCP router on websecure fails" {
+    printf '[{"name":"passthru@docker","entryPoints":["websecure"],"rule":"HostSNI(`*`)","tls":{"passthrough":true}}]\n' \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: passthru@docker"* ]]
+}
+
+@test "universal: a UDP router with no entryPoints fails; a TCP router on a private entrypoint does not" {
+    printf '[{"name":"u@docker"}]\n' > "${FAKE_HTTP}/api-udp-routers.json"
+    printf '[{"name":"smtp@docker","entryPoints":["smtp"],"rule":"HostSNI(`*`)"}]\n' > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"UDP router(s) on a public entrypoint: u@docker"* ]]
+    [[ "$output" != *"smtp@docker"* ]]
+}
+
+@test "api: a response that fills the page is a truncated read, exit 2" {
+    export API_PER_PAGE=6
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"traefik API /api/http/routers is truncated (6 items, per_page=6"* ]]
+}
+
+@test "api: an X-Next-Page beyond page 1 is a truncated read, exit 2" {
+    printf '2' > "${FAKE_HTTP}/api-next-page"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"is truncated"* ]]
+    [[ "$output" == *"X-Next-Page=2"* ]]
+}
+
+@test "api: a list endpoint that is not a JSON list is exit 2, not an empty universal" {
+    printf '{"oops":1}\n' > "${FAKE_HTTP}/api-http-middlewares.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"/api/http/middlewares did not return a JSON list"* ]]
+}
+
+@test "the verifier requests every list with per_page" {
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    local e
+    for e in http/routers http/services http/middlewares tcp/routers udp/routers; do
+        assert_recorded curl "/api/${e}?per_page=10000&page=1"
+    done
+}
+
+@test "placement: an @docker middleware NOT declared on the traefik container fails" {
+    api_edit middlewares '. + [{"name":"stray@docker","provider":"docker","type":"headers","headers":{}}]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"middleware stray@docker is not declared on the traefik container's labels"* ]]
+}
+
+@test "placement: without exactly one traefik container the @docker placement cannot be established" {
+    : > "${FAKE_DOCKER}/ps"
+    fake_container c1 gremion-ui-blue "gremion-ui-blue gremion-public-blue" running healthy 0
+    fake_container c2 keycloak "keycloak" running healthy 0 10.90.250.4
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"0 containers carry com.docker.compose.service=traefik"* ]]
+}
+
+@test "placement: docker ps failing is a failure, not an empty census" {
+    : > "${FAKE_DOCKER}/ps-fails"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"middleware placement: docker ps failed"* ]]
+}
+
+@test "placement: a mixed-case middleware label on an app-tier container is still found" {
+    fake_container c7 gremion-public-green "gremion-public-green" running healthy 0 "" \
+        '{"Traefik.HTTP.Middlewares.Sneaky.headers.stsseconds":"1"}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"container gremion-public-green (app tier) declares middleware(s): sneaky"* ]]
+}
+
+@test "emitted: the same router name in two tenant files fails (slug a host #1 = slug a-1 host #0)" {
+    emitted_file a-1 tenant-a1.example.org
+    # slug a gains a second host whose router is named tenant-a-1 as well
+    awk '{print} /^  routers:$/ && !d {print "    tenant-a-1:\n      rule: \"Host(`a2.example.org`)\""; d=1}' \
+        "${GREMION_ROOT}/etc/edge/tenant-a.yml" > "${GREMION_ROOT}/etc/edge/t.new"
+    mv "${GREMION_ROOT}/etc/edge/t.new" "${GREMION_ROOT}/etc/edge/tenant-a.yml"
+    api_edit routers '. + [{"name":"tenant-a-1@file","status":"enabled","entryPoints":["websecure"],
+        "rule":"Host(`tenant-a1.example.org`)","service":"app@file","tls":{"certResolver":"le-http"},
+        "middlewares":["edge-hostpin-a-1@file","edge-hsts-custom@docker","edge-ratelimit-app@docker"]}]'
+    api_edit middlewares '. + [{"name":"edge-hostpin-a-1@file","provider":"file","type":"headers",
+        "headers":{"customRequestHeaders":{"X-Forwarded-Host":"tenant-a1.example.org"}}},
+        {"name":"edge-perip-a-1@file","provider":"file","type":"inflightreq","inFlightReq":{"amount":50}}]'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router name tenant-a-1 is declared in both etc/edge/tenant-a-1.yml and etc/edge/tenant-a.yml"* ]]
+    [[ "$output" == *"emitted router tenant-a-1@file: traefik serves rule 'Host(\`tenant-a1.example.org\`)', but etc/edge/tenant-a.yml says 'Host(\`a2.example.org\`)'"* ]]
+}
+
+@test "emitted: a tenant-*.yaml sibling fails" {
+    cp "${GREMION_ROOT}/etc/edge/tenant-a.yml" "${GREMION_ROOT}/etc/edge/tenant-z.yaml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/tenant-z.yaml: a tenant router file with a .yaml suffix"* ]]
+}
+
+@test "emitted: a tenant file whose name is not a slug is refused, not regex-interpolated" {
+    cp "${GREMION_ROOT}/etc/edge/tenant-a.yml" "${GREMION_ROOT}/etc/edge/tenant-.+.yml"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge/tenant-.+.yml: not a tenant slug the emitter can produce"* ]]
+}
+
+@test "emitted: a missing etc/edge is a failure, not a pass" {
+    rm -rf "${GREMION_ROOT}/etc/edge"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"etc/edge does not exist"* ]]
 }
 
 # ── middleware placement ─────────────────────────────────────────────────────
@@ -730,10 +965,12 @@ prepare_green_colour() {
 }
 
 @test "placement: middlewares on the traefik container are the design, not a failure" {
-    fake_container c6 traefik "traefik" running healthy 0 "" \
-        '{"com.docker.compose.project":"prod-state","com.docker.compose.service":"traefik","traefik.http.middlewares.edge-hsts-custom.headers.stsseconds":"31536000"}'
+    # the green fixture's c9 is the traefik container declaring every @docker middleware
+    grep -qx c9 "${FAKE_DOCKER}/ps"
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 0 ]
+    [[ "$output" != *"placement"* ]]
+    [[ "$output" != *"not declared on the traefik container"* ]]
 }
 
 @test "placement: a file-provider middleware outside the emitter contract fails" {
@@ -783,7 +1020,7 @@ prepare_green_colour() {
 @test "the router functions are wired into run_pass, in order" {
     local body
     body="$(sed -n '/^run_pass() {/,/^}/p' "$VERIFY")"
-    [[ "$body" == *$'check_routers\n    check_router_universal\n    check_emitted_routers\n    check_middleware_placement'* ]]
+    [[ "$body" == *$'check_routers\n    check_router_universal\n    check_l4_routers\n    check_emitted_routers\n    check_middleware_placement'* ]]
 }
 
 # ── the six P4 waivers (B0) ──────────────────────────────────────────────────

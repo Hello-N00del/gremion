@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { COLOUR_BOUND_SERVICES, classifyRouter, classifyService, qualifyService } from '../src/classify.ts'
-import { renderTenantRouter, TENANT_SERVICE } from '../src/render.ts'
-import { REPO_ROOT, deps } from './helpers.ts'
+import { COLOUR_BOUND_SERVICES, classifyRouter, classifyService, qualifyService } from '../src/classify.js'
+import { renderTenantRouter, TENANT_SERVICE } from '../src/render.js'
+import { REPO_ROOT, deps } from './helpers.js'
 
 const VERIFY = join(REPO_ROOT, 'infra', 'host', 'bin', 'gremion-verify')
 

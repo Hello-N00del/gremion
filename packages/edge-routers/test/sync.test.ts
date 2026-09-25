@@ -2,8 +2,8 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { formatEdgeSyncReport, syncTenantRouters, type EdgeSyncTenant } from '../src/sync.ts'
-import { deps } from './helpers.ts'
+import { formatEdgeSyncReport, syncTenantRouters, type EdgeSyncTenant } from '../src/sync.js'
+import { deps } from './helpers.js'
 
 let dir: string
 beforeEach(() => {
@@ -123,5 +123,35 @@ describe('syncTenantRouters — TDD 5', () => {
     expect(r.rows[0]!.action).toBe('written')
     expect(r.orphans).toEqual(['tenant-gone.yml'])
     expect(listing()).toEqual(['active.yml', 'tenant-gone.yml'])
+  })
+
+  it('throws on an unknown status instead of deleting a live tenant\'s file', () => {
+    sync([t('acme', ['a.example.net'])])
+    expect(() => sync([{ slug: 'acme', status: 'Active' as never, domains: [{ host: 'a.example.net' }] }])).toThrow(/unknown status/)
+    expect(listing()).toEqual(['active.yml', 'tenant-acme.yml'])
+  })
+
+  it('names the tenant whose domains are not an array', () => {
+    expect(() => sync([{ slug: 'acme', status: 'active', domains: null as never }])).toThrow(/tenant "acme" domains must be an array/)
+  })
+
+  it('a SINGLE-tenant pass still refuses names already declared by another tenant\'s file on disk', () => {
+    sync([t('a-1', ['z.example.net'])])
+    const before = readFileSync(join(dir, 'tenant-a-1.yml'), 'utf8')
+    expect(() => sync([t('a', ['x.example.net', 'y.example.net'])])).toThrow(/tenant-a-1" is claimed by BOTH "a" and "a-1"/)
+    expect(listing()).toEqual(['active.yml', 'tenant-a-1.yml'])
+    expect(readFileSync(join(dir, 'tenant-a-1.yml'), 'utf8')).toBe(before)
+  })
+
+  it('a SINGLE-tenant pass refuses a host another tenant\'s file on disk already routes', () => {
+    sync([t('beta', ['shared.example.net'])])
+    expect(() => sync([t('acme', ['Shared.example.net'])])).toThrow(/shared\.example\.net" is claimed by BOTH "acme" and "beta"/)
+    expect(listing()).toEqual(['active.yml', 'tenant-beta.yml'])
+  })
+
+  it('one bad registry row (an IP literal, localhost) is skipped and reported, and the fleet still syncs', () => {
+    const r = sync([t('acme', ['203.0.113.5', 'a.example.net']), t('beta', ['b.example.net'])])
+    expect(r.rows.map((x) => x.action)).toEqual(['written', 'written'])
+    expect(r.rows[0]!.skipped.map((x) => [x.host, x.code])).toEqual([['203.0.113.5', 'invalid-host']])
   })
 })

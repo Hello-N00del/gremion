@@ -22,7 +22,7 @@
 
 import { Resolver } from 'node:dns/promises'
 import { isIPv4, isIPv6 } from 'node:net'
-import { isRuleSafeHost } from './render.ts'
+import { isRuleSafeHost } from './render.js'
 
 export interface DnsResolver {
   resolve4(host: string): Promise<string[]>
@@ -64,7 +64,12 @@ function edgeSet(values: readonly string[] | undefined, family: 'ipv4' | 'ipv6')
   if (!Array.isArray(values) || values.length === 0 || !values.every((v) => typeof v === 'string' && valid(v))) {
     throw new Error(`checkTenantHostDns: edge.${family} must be a non-empty list of ${family} addresses, got ${JSON.stringify(values)}`)
   }
-  return new Set(family === 'ipv6' ? values.map(canonical6) : values)
+  if (family === 'ipv4') return new Set(values)
+  try {
+    return new Set(values.map(canonical6))
+  } catch {
+    throw new Error(`checkTenantHostDns: edge.ipv6 carries an address that cannot be compared by value (a zone index?): ${JSON.stringify(values)}`)
+  }
 }
 
 function defaultResolver(): DnsResolver {
@@ -78,7 +83,7 @@ async function lookup(fn: () => Promise<string[]>, family: 'A' | 'AAAA'): Promis
     return { ok: true, records: await fn() }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOTFOUND') return { ok: false, problem: { code: 'nxdomain', detail: 'the name does not exist (NXDOMAIN)' } }
+    if (code === 'ENOTFOUND') return { ok: false, problem: { code: 'nxdomain', detail: `${family} lookup: the name does not exist (NXDOMAIN)` } }
     if (code === 'ENODATA') {
       return { ok: false, problem: { code: family === 'A' ? 'no-a' : 'no-aaaa', detail: `no ${family} record` } }
     }
@@ -92,8 +97,10 @@ export async function checkTenantHostDns(host: string, opts: CheckTenantHostDnsO
   const want6 = edgeSet(opts.edge?.ipv6, 'ipv6')
   const resolver = opts.resolver ?? defaultResolver()
 
-  const a = await lookup(() => resolver.resolve4(host), 'A')
-  const aaaa = await lookup(() => resolver.resolve6(host), 'AAAA')
+  const [a, aaaa] = await Promise.all([
+    lookup(() => resolver.resolve4(host), 'A'),
+    lookup(() => resolver.resolve6(host), 'AAAA'),
+  ])
 
   const problems: DnsProblem[] = []
   // NXDOMAIN is one fact about the name, not one per family.
@@ -105,7 +112,13 @@ export async function checkTenantHostDns(host: string, opts: CheckTenantHostDnsO
       [aaaa, want6, 'aaaa-mismatch', canonical6],
     ] as const) {
       if (!res.ok) {
-        problems.push(res.problem)
+        // NXDOMAIN on ONE family while the other answered is not a missing name —
+        // it is a missing record of that family (or a resolver disagreeing).
+        problems.push(
+          res.problem.code === 'nxdomain'
+            ? { code: code === 'a-mismatch' ? 'no-a' : 'no-aaaa', detail: res.problem.detail }
+            : res.problem,
+        )
         continue
       }
       if (res.records.length === 0) {

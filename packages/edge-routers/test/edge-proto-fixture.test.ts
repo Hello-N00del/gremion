@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { platformMiddlewareLabels } from '../src/platform-middlewares.ts'
-import { renderTenantRouter } from '../src/render.ts'
-import { REPO_ROOT, deps } from './helpers.ts'
+import { platformMiddlewareLabels } from '../src/platform-middlewares.js'
+import { renderTenantRouter } from '../src/render.js'
+import { REPO_ROOT, deps } from './helpers.js'
 
 // The edge-proto drill runs a REAL Traefik against these fixtures; they must
 // be what the library emits and what the platform labels state, or the drill
@@ -17,7 +17,13 @@ describe('edge-proto fixtures', () => {
   })
 
   it('the traefik container carries every platform middleware label, with the stated value', () => {
-    const compose = readFileSync(join(FIXTURE, 'docker-compose.yml'), 'utf8')
+    const all = readFileSync(join(FIXTURE, 'docker-compose.yml'), 'utf8')
+    // scoped to the traefik service block: a label on a stub would not count
+    const start = all.indexOf('\n  traefik:\n')
+    const end = all.indexOf('\n  stub-blue:\n')
+    expect(start).toBeGreaterThan(0)
+    expect(end).toBeGreaterThan(start)
+    const compose = all.slice(start, end)
     const want = platformMiddlewareLabels({ apex: 'example.org', sales: 'sales.example.org' })
     expect(Object.keys(want).length).toBeGreaterThan(20)
     for (const [k, v] of Object.entries(want)) expect(compose).toContain(`      ${k}: "${v}"\n`)

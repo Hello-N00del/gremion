@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { renderTenantRouter } from '../src/render.ts'
-import { REPO_ROOT, deps } from './helpers.ts'
+import { renderTenantRouter } from '../src/render.js'
+import { REPO_ROOT, deps } from './helpers.js'
 
 const TEMPLATE = join(REPO_ROOT, 'infra', 'host', 'templates', 'edge', 'tenant-router.example.yml')
 
@@ -144,11 +144,21 @@ describe('renderTenantRouter — fail closed', () => {
     expect(() => render('acme', ['a.example.net'], { certResolver })).toThrow(/certResolver/)
   })
 
-  it('refuses a host the INJECTED normaliser let through but that is not rule-safe', () => {
+  it('never emits a host the INJECTED normaliser let through but that is not rule-safe — it is skipped as invalid-host', () => {
     const leaky = (raw: string) => raw // an identity "normaliser" — a caller bug
-    for (const host of ['a`) || Host(`b.example.net', 'a"b.example.net', 'a..b', '-a.example.net', 'a_b.example.net']) {
-      expect(() => render('acme', [host], { normaliseHost: leaky })).toThrow(/rule-safe/)
-    }
+    const hostile = ['a`) || Host(`b.example.net', 'a"b.example.net', 'a..b', '-a.example.net', 'a_b.example.net', 'localhost']
+    const r = render('acme', [...hostile, 'ok.example.net'], { normaliseHost: leaky })
+    expect(r.hosts).toEqual(['ok.example.net'])
+    expect(r.skipped.map((x) => [x.host, x.code])).toEqual(hostile.map((h) => [h, 'invalid-host']))
+    expect(r.yaml).not.toMatch(/b\.example\.net|a"b|a_b|localhost|-a\.example/)
+  })
+
+  it('refuses an IP literal (a tenant must never capture requests addressed by bare IP)', () => {
+    // gremion-ui's real normaliseHost accepts these; the emitter must not route them
+    const r = render('acme', ['203.0.113.5', '10.0.0.1:443', 'ok.example.net'])
+    expect(r.hosts).toEqual(['ok.example.net'])
+    expect(r.skipped.map((x) => x.code)).toEqual(['invalid-host', 'invalid-host'])
+    expect(r.yaml).not.toMatch(/203\.0\.113\.5|10\.0\.0\.1/)
   })
 
   it('treats a throwing isReservedHost as a failure, not as "not reserved"', () => {

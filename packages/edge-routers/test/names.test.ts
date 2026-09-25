@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ROUTER_FILE_RE, SLUG_PATTERN, hostPinName, perIpName, routerFileName, routerName, validateSlug } from '../src/names.ts'
-import { REPO_ROOT } from './helpers.ts'
+import { ROUTER_FILE_RE, SLUG_PATTERN, hostPinName, perIpName, routerFileName, routerName, validateSlug } from '../src/names.js'
+import { REPO_ROOT } from './helpers.js'
 
 describe('names', () => {
   it('SLUG_PATTERN is textually identical to gremion-ui slug.ts', () => {

@@ -14,10 +14,10 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { REPO_ROOT } from './helpers.ts'
+import { REPO_ROOT } from './helpers.js'
 
 const CDN_TOKEN_VAR = ['CF', 'API', 'TOKEN'].join('_')
-const EDGE_PLAN = ['edge', 'plan'].join('-')
+const PLANNER = ['edge', 'plan'].join('-')
 
 const trees: string[] = []
 
@@ -89,11 +89,11 @@ describe('kernel hygiene (j) — TDD 8', () => {
     const t = copyTree()
     const dir = join(t, 'gremion-ui', 'src', 'lib', 'server', 'tenant', 'provisioner')
     mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, `${EDGE_PLAN}.ts`), 'export const plan = 1\n')
-    edit(t, 'packages/edge-routers/src/index.ts', /$/, `\n// see ../${EDGE_PLAN}\n`)
+    writeFileSync(join(dir, `${PLANNER}.ts`), 'export const plan = 1\n')
+    edit(t, 'packages/edge-routers/src/index.ts', /$/, `\n// see ../${PLANNER}\n`)
     const out = runHygiene(t)
     expect(ids(out)).toEqual(['j3'])
-    expect(out.join('\n')).toContain(`${EDGE_PLAN}.ts`)
+    expect(out.join('\n')).toContain(`${PLANNER}.ts`)
     expect(out.join('\n')).toContain('packages/edge-routers/src/index.ts')
   }, 120_000)
 
@@ -119,5 +119,42 @@ describe('kernel hygiene (j) — TDD 8', () => {
     const out = runHygiene(t)
     expect(ids(out)).toEqual(['j4'])
     expect(out.join('\n')).toMatch(/gremion-public/)
+  }, 120_000)
+
+  it('j2 also catches the DNS-01 spelling lego reads (a <CDN>_DNS_API_TOKEN)', () => {
+    const t = copyTree()
+    const v = [['CLOUD', 'FLARE'].join(''), 'DNS', 'API', 'TOKEN'].join('_')
+    edit(t, 'infra/host/templates/env/ops.env.tmpl', /$/, `\n${v}=obviously-fake-not-a-token\n`)
+    expect(ids(runHygiene(t))).toEqual(['j2'])
+  }, 120_000)
+
+  it('j3 is case-insensitive (a PascalCase planner reference)', () => {
+    const t = copyTree()
+    edit(t, 'packages/edge-routers/src/index.ts', /$/, `\n// ${['Edge', 'Plan'].join('')} was here\n`)
+    expect(ids(runHygiene(t))).toEqual(['j3'])
+  }, 120_000)
+
+  it('j4 catches a WRITABLE ancestor bind in the ops project (a second view of etc/edge)', () => {
+    const t = copyTree()
+    edit(t, 'infra/host/ops/docker-compose.yml', '      - "/:/rootfs:ro"\n', '      - "/:/rootfs:rw"\n')
+    const out = runHygiene(t)
+    expect(ids(out)).toEqual(['j4'])
+    expect(out.join('\n')).toMatch(/ancestor of etc\/edge, WRITABLE/)
+  }, 120_000)
+
+  it('j4 catches volumes_from naming traefik', () => {
+    const t = copyTree()
+    edit(t, 'docker-compose.yml', /(\n {2}gremion-public:\n)/, '$1    volumes_from:\n      - traefik\n')
+    const out = runHygiene(t)
+    expect(ids(out)).toEqual(['j4'])
+    expect(out.join('\n')).toMatch(/volumes_from names traefik/)
+  }, 120_000)
+
+  it('j4 normalises the source: an etc//edge spelling is still a second mount', () => {
+    const t = copyTree()
+    edit(t, 'docker-compose.yml', '      - traefik-acme:/letsencrypt\n', '      - traefik-acme:/letsencrypt\n      - ${GREMION_ROOT}/etc//edge/:/srv/x:ro\n')
+    const out = runHygiene(t)
+    expect(ids(out)).toEqual(['j4'])
+    expect(out.join('\n')).toMatch(/2 mounts/)
   }, 120_000)
 })

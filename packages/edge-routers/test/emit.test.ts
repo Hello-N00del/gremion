@@ -1,9 +1,9 @@
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { emitTenantRouterFile, removeTenantRouterFile } from '../src/emit.ts'
-import { deps } from './helpers.ts'
+import { emitTenantRouterFile, removeTenantRouterFile } from '../src/emit.js'
+import { deps } from './helpers.js'
 
 let dir: string
 beforeEach(() => {
@@ -36,6 +36,14 @@ describe('emitTenantRouterFile — TDD 4', () => {
     expect(again.action).toBe('unchanged')
     expect(statSync(first.path).mtimeMs).toBe(before)
     expect(listing()).toEqual(['active.yml', 'tenant-acme.yml'])
+  })
+
+  it('a same-content file with the wrong mode is rewritten 0644, not reported unchanged', () => {
+    const first = emit(['a.example.net'])
+    chmodSync(first.path, 0o600)
+    const again = emit(['a.example.net'])
+    expect(again.action).toBe('written')
+    expect(statSync(first.path).mode & 0o777).toBe(0o644)
   })
 
   it('a changed document is rewritten', () => {

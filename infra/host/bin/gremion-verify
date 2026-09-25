@@ -154,6 +154,8 @@ REBOOT=0
 ROUTERS_JSON=""
 SERVICES_JSON=""
 MIDDLEWARES_JSON=""
+TCP_ROUTERS_JSON="[]"
+UDP_ROUTERS_JSON="[]"
 
 declare -a FAILURES=()
 declare -a ROUTER_ROWS=()
@@ -186,24 +188,44 @@ EOF
 
 fail() { FAILURES+=("$1"); bad "$1"; }
 
-api() {
-    local path="$1" out
-    if ! out="$(curl -fsS --max-time "$HTTP_TIMEOUT" "${TRAEFIK_API}${path}" 2>/dev/null)"; then
-        die "traefik API unreachable: ${TRAEFIK_API}${path}" 2
-    fi
-    printf '%s' "$out"
-}
-
-# `api` runs inside a command substitution, i.e. in a SUBSHELL, so the `exit` in
+# `api_list` runs inside a command substitution, i.e. in a SUBSHELL, so the `exit` in
 # its `die` can only end that subshell — it cannot end this program. Worse,
 # run_pass is invoked as `if run_pass`, which disables `set -e` for everything it
 # calls, so an unreachable Traefik API would otherwise leave all three variables
 # empty, give `check_routers` nothing to iterate, and be reported as GREEN.
 # Each substitution therefore propagates its own status explicitly.
+#
+# The list endpoints are PAGINATED (Traefik's default page is 100 items). A
+# universal that read one page would silently skip every router sorted after
+# the hundredth, so each list is requested with API_PER_PAGE and a response
+# that fills the page — or that announces a later page in X-Next-Page — is a
+# precondition failure, never a partial read.
+API_PER_PAGE="${API_PER_PAGE:-10000}"
+
+api_list() {
+    local path="$1" hdr out len next
+    hdr="$(mktemp)"
+    if ! out="$(curl -fsS --max-time "$HTTP_TIMEOUT" -D "$hdr" \
+                "${TRAEFIK_API}${path}?per_page=${API_PER_PAGE}&page=1" 2>/dev/null)"; then
+        rm -f "$hdr"
+        die "traefik API unreachable: ${TRAEFIK_API}${path}" 2
+    fi
+    next="$(tr -d '\r' < "$hdr" | sed -n 's/^[Xx]-[Nn]ext-[Pp]age: *//p' | head -n1)"
+    rm -f "$hdr"
+    len="$(printf '%s' "$out" | jq -r 'if type == "array" then length else "not-a-list" end' 2>/dev/null || echo not-json)"
+    [[ "$len" =~ ^[0-9]+$ ]] || die "traefik API ${path} did not return a JSON list (${len})" 2
+    if (( len >= API_PER_PAGE )) || [[ -n "$next" && "$next" =~ ^[0-9]+$ && "$next" -gt 1 ]]; then
+        die "traefik API ${path} is truncated (${len} items, per_page=${API_PER_PAGE}, X-Next-Page=${next:-none}); raise API_PER_PAGE" 2
+    fi
+    printf '%s' "$out"
+}
+
 fetch_api() {
-    ROUTERS_JSON="$(api /api/http/routers)"         || exit $?
-    SERVICES_JSON="$(api /api/http/services)"       || exit $?
-    MIDDLEWARES_JSON="$(api /api/http/middlewares)" || exit $?
+    ROUTERS_JSON="$(api_list /api/http/routers)"         || exit $?
+    SERVICES_JSON="$(api_list /api/http/services)"       || exit $?
+    MIDDLEWARES_JSON="$(api_list /api/http/middlewares)" || exit $?
+    TCP_ROUTERS_JSON="$(api_list /api/tcp/routers)"      || exit $?
+    UDP_ROUTERS_JSON="$(api_list /api/udp/routers)"      || exit $?
 }
 
 # The literal host a router's rule pins, or "*" for the catch-all internaltest
@@ -309,10 +331,67 @@ check_routers() {
 #     not HSTS.
 # Zero subjects is itself a failure: a universal over nothing proves nothing.
 
-# How many times the ERE <re> occurs in <text>. awk, not `grep -o | wc -l`: a
-# grep that matches nothing exits 1 and, under pipefail, would abort the pass.
-count_matches() {
-    awk -v s="$2" -v re="$1" 'BEGIN { print gsub(re, "", s) }'
+# ── The router universal (TASK-034a; spec B §3 post-condition) ───────────────
+#
+# Asserted over EVERY router Traefik's API reports, never over a list of names:
+# a router added tomorrow is held to it the moment Traefik loads it. Later
+# /api/v1 routers (TRD-409) are no exception — they must pass this too.
+#
+# SUBJECT: every HTTP router except `*@internal` (Traefik's own: acme-http, api,
+# ping) and a router whose entryPoints are EXACTLY ["internaltest"] (the
+# loopback-only inactive-colour routers). A router with NO entryPoints listens
+# on every default entrypoint, so it is a subject too — exemption is by
+# evidence, never by absence. TCP/UDP routers on the public entrypoints are
+# refused outright (check_l4_routers): a TCP passthrough on websecure takes the
+# connection before any HTTP router, pin included, ever sees it.
+#
+# Each subject must carry:
+#   - a non-empty tls.certResolver. A bare `tls: {}` does not inherit the
+#     entrypoint's resolver and silently serves the default certificate;
+#   - a rule of the ALLOW-LISTED shape  Host(`<one lowercase host>`) [&& …]:
+#     exactly one host matcher in any letter case (host/Host/HOST,
+#     HostRegexp, HostHeader, HostSNI all count), no second argument, and no
+#     top-level `||` — a disjunction answers requests for other hosts under
+#     this router's pin (see rule_shape);
+#   - exactly ONE edge-hostpin-* middleware, FIRST in its chain, whose loaded
+#     headers set X-Forwarded-Host (compared case-insensitively, exactly one
+#     such key) to that literal host. Traefik only sets X-Forwarded-Host when it
+#     is absent and only strips it from untrusted peers; the pin is what makes
+#     the header edge-authoritative, first is what keeps every later middleware
+#     from seeing a client-supplied value;
+#   - no OTHER middleware in the chain that can rewrite X-Forwarded-Host after
+#     the pin: a headers middleware naming it, a forwardAuth copying it (or
+#     copying by regex), or a chain/plugin middleware whose effect cannot be
+#     read from the API;
+#   - an HSTS middleware (edge-hsts-platform|edge-hsts-custom with stsSeconds
+#     > 0) and a tiered edge-ratelimit-* middleware that IS a rate limiter.
+#     Names alone are not trusted.
+# Zero subjects is itself a failure: a universal over nothing proves nothing.
+
+# rule_shape <rule> -> "ok <host>" or "bad <reason>". The allow-list, in awk so
+# the parenthesis depth and backtick/double-quote strings can be tracked.
+rule_shape() {
+    awk -v r="$1" 'BEGIN {
+        if (match(r, /^Host\(`[a-z0-9.-]+`\)/) == 0) {
+            print "bad does not begin with exactly one literal Host(`<lowercase host>`)"; exit
+        }
+        host = substr(r, 7, RLENGTH - 8); rest = substr(r, RLENGTH + 1)
+        l = tolower(r); n = gsub(/host(regexp|header|sni)?\(/, "", l)
+        if (n != 1) { print "bad carries " n " host matchers (expected exactly 1)"; exit }
+        if (rest != "" && rest !~ /^[ \t]*&&/) { print "bad continues with something other than &&"; exit }
+        depth = 0; q = ""
+        for (i = 1; i <= length(rest); i++) {
+            c = substr(rest, i, 1)
+            if (q != "") { if (c == q) q = ""; continue }
+            if (c == "`" || c == "\"") { q = c; continue }
+            if (c == "(") depth++
+            else if (c == ")") depth--
+            else if (depth == 0 && c == "|" && substr(rest, i + 1, 1) == "|") {
+                print "bad has a top-level || and answers more than its host"; exit
+            }
+        }
+        print "ok " host
+    }'
 }
 
 # The middleware object Traefik loaded for <qualified name>, or "null".
@@ -328,10 +407,11 @@ qualify_ref() {
 }
 
 check_router_universal() {
-    local n i r name eps resolver rule nhost nregex host mws m q base
-    local -a chain pins
-    local subjects=0 has_hsts has_rl pinhost
-    n="$(printf '%s' "$ROUTERS_JSON" | jq -r 'length')"
+    local n i r name eps resolver rule shape host m q base mj pinvals npinkeys why
+    local -a chain pins mws
+    local subjects=0 has_hsts has_rl
+    n="$(printf '%s' "$ROUTERS_JSON" | jq -r 'length')" \
+        || { fail "router universal: the router list is not JSON"; return 0; }
     for (( i = 0; i < n; i++ )); do
         r="$(printf '%s' "$ROUTERS_JSON" | jq -c ".[$i]")"
         name="$(jq -r '.name' <<<"$r")"
@@ -344,20 +424,17 @@ check_router_universal() {
         [[ -n "$resolver" ]] || fail "router $name: no certresolver"
 
         rule="$(jq -r '.rule // ""' <<<"$r")"
-        nregex="$(count_matches 'HostRegexp\\(' "$rule")"
-        nhost="$(count_matches 'Host\\(`' "$rule")"
+        shape="$(rule_shape "$rule")"
         host=""
-        if (( nregex > 0 )); then
-            fail "router $name: rule matches a host pattern (HostRegexp) and cannot be pinned to one host: $rule"
-        elif (( nhost != 1 )); then
-            fail "router $name: rule names ${nhost} literal hosts (expected exactly 1): $rule"
+        if [[ "$shape" == ok\ * ]]; then
+            host="${shape#ok }"
         else
-            host="$(rule_host "$rule")"
+            fail "router $name: rule ${shape#bad } — it cannot be pinned to one host: $rule"
         fi
 
-        chain=(); pins=()
-        mws="$(jq -r '.middlewares // [] | .[]' <<<"$r")"
-        for m in $mws; do
+        chain=(); pins=(); mws=()
+        mapfile -t mws < <(jq -r '.middlewares // [] | .[]' <<<"$r")
+        for m in "${mws[@]}"; do
             q="$(qualify_ref "$m" "$name")"
             chain+=("$q")
             base="${q%%@*}"
@@ -367,9 +444,13 @@ check_router_universal() {
         if (( ${#pins[@]} != 1 )); then
             fail "router $name: ${#pins[@]} host pins (expected exactly 1)"
         else
-            pinhost="$(mw_json "${pins[0]}" | jq -r '.headers.customRequestHeaders["X-Forwarded-Host"] // ""')"
-            if [[ -n "$host" && "$pinhost" != "$host" ]]; then
-                fail "router $name: pin ${pins[0]} sets X-Forwarded-Host '${pinhost}', not its own host '${host}'"
+            mj="$(mw_json "${pins[0]}")"
+            npinkeys="$(jq -r '[.headers.customRequestHeaders // {} | to_entries[]
+                               | select(.key | ascii_downcase == "x-forwarded-host")] | length' <<<"$mj")"
+            pinvals="$(jq -r '[.headers.customRequestHeaders // {} | to_entries[]
+                              | select(.key | ascii_downcase == "x-forwarded-host") | .value] | join(",")' <<<"$mj")"
+            if [[ -n "$host" ]] && { [[ "$npinkeys" != "1" ]] || [[ "$pinvals" != "$host" ]]; }; then
+                fail "router $name: pin ${pins[0]} sets X-Forwarded-Host '${pinvals}', not its own host '${host}'"
             fi
             [[ "${chain[0]}" == "${pins[0]}" ]] \
                 || fail "router $name: host pin ${pins[0]} is not first in the chain (${chain[*]})"
@@ -378,11 +459,25 @@ check_router_universal() {
         has_hsts=0; has_rl=0
         for q in "${chain[@]}"; do
             base="${q%%@*}"
+            mj="$(mw_json "$q")"
+            if [[ "$base" != edge-hostpin-* ]]; then
+                why="$(jq -r '
+                    if . == null then ""
+                    elif ([.headers.customRequestHeaders // {} | keys[] | ascii_downcase] | index("x-forwarded-host")) != null
+                        then "sets X-Forwarded-Host after the pin"
+                    elif .forwardAuth != null and (([.forwardAuth.authResponseHeaders // [] | .[] | ascii_downcase]
+                              | index("x-forwarded-host")) != null or ((.forwardAuth.authResponseHeadersRegex // "") != ""))
+                        then "is a forwardAuth that can copy X-Forwarded-Host after the pin"
+                    elif .chain != null or .plugin != null or ((.type // "") | test("^(chain|plugin)"; "i"))
+                        then "is a chain/plugin middleware whose effect on X-Forwarded-Host cannot be read"
+                    else "" end' <<<"$mj")"
+                [[ -z "$why" ]] || fail "router $name: middleware $q $why"
+            fi
             case "$base" in
                 edge-hsts-platform|edge-hsts-custom)
-                    [[ "$(mw_json "$q" | jq -r '(.headers.stsSeconds // 0) > 0')" == "true" ]] && has_hsts=1 ;;
+                    [[ "$(jq -r '(.headers.stsSeconds // 0) > 0' <<<"$mj")" == "true" ]] && has_hsts=1 ;;
                 edge-ratelimit-?*)
-                    [[ "$(mw_json "$q" | jq -r '.rateLimit != null')" == "true" ]] && has_rl=1 ;;
+                    [[ "$(jq -r '. != null and .rateLimit != null' <<<"$mj")" == "true" ]] && has_rl=1 ;;
             esac
         done
         (( has_hsts )) || fail "router $name: no HSTS middleware (edge-hsts-platform|edge-hsts-custom with stsSeconds > 0)"
@@ -393,28 +488,74 @@ check_router_universal() {
     return 0
 }
 
+# TCP and UDP routers on the public entrypoints (or on none, which means all)
+# sit IN FRONT of every HTTP router: a TCP HostSNI passthrough on websecure
+# hands the raw client stream — forged headers included — to its backend.
+check_l4_routers() {
+    local proto json bad
+    for proto in tcp udp; do
+        if [[ "$proto" == tcp ]]; then json="$TCP_ROUTERS_JSON"; else json="$UDP_ROUTERS_JSON"; fi
+        bad="$(printf '%s' "$json" | jq -r '.[]
+            | select((.name | endswith("@internal")) | not)
+            | select((.entryPoints // []) as $e | ($e | length) == 0 or ($e | index("web")) != null or ($e | index("websecure")) != null)
+            | .name' | paste -sd, -)" \
+            || { fail "router universal: the ${proto} router list is not JSON"; continue; }
+        [[ -z "$bad" ]] \
+            || fail "${proto^^} router(s) on a public entrypoint: ${bad} — an L4 router takes the connection before any pinned HTTP router sees it"
+    done
+    return 0
+}
+
 # ── Middleware placement (spec B B-09) ───────────────────────────────────────
-# Every middleware a router chains lives on the TRAEFIK container's labels, the
-# one container that exists whenever a router does — except each tenant's pin
-# and per-IP cap, which live in that tenant's emitted file. An APP-TIER
-# container (a colour: gremion-ui-*/gremion-public-* or a *-app-blue|green
-# compose project) vanishes on every switch and takes its middlewares along,
-# leaving every router that chains them in error with no way back.
+# Every @docker middleware a router can chain must be declared on the TRAEFIK
+# container's labels (compose service `traefik`), the one container that exists
+# whenever a router does; each tenant's pin and per-IP cap live in that
+# tenant's emitted file, and no other file-provider middleware may exist. An
+# APP-TIER container (a colour: gremion-ui-*/gremion-public-* or a
+# *-app-blue|green compose project) vanishes on every switch and takes its
+# middlewares along, leaving every router that chains them in error with no way
+# back — it is named explicitly. Anything this cannot SEE (docker unreachable,
+# a label set that is not JSON) is a failure, not an empty set. Label keys are
+# compared lower-cased: Traefik reads them case-insensitively.
 check_middleware_placement() {
-    local id cname labels project declared m base
-    for id in $(docker ps -a -q 2>/dev/null); do
-        cname="$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's|^/||')"
-        labels="$(docker inspect --format '{{json .Config.Labels}}' "$id" 2>/dev/null || printf '{}')"
+    local ids id cname labels project declared m base traefik_ids=0
+    local -A on_traefik=()
+    if ! ids="$(docker ps -a -q)"; then
+        fail "middleware placement: docker ps failed — the placement of @docker middlewares cannot be established"
+        return 0
+    fi
+    for id in $ids; do
+        if ! cname="$(docker inspect --format '{{.Name}}' "$id")" \
+           || ! labels="$(docker inspect --format '{{json .Config.Labels}}' "$id")"; then
+            fail "middleware placement: docker inspect ${id} failed"
+            continue
+        fi
+        cname="${cname#/}"
         [[ -n "$labels" && "$labels" != "null" ]] || labels='{}'
-        project="$(jq -r '."com.docker.compose.project" // ""' <<<"$labels" 2>/dev/null || true)"
+        if ! labels="$(jq -c 'with_entries(.key |= ascii_downcase)' <<<"$labels" 2>/dev/null)"; then
+            fail "middleware placement: the labels of container ${cname} are not JSON"
+            continue
+        fi
+        project="$(jq -r '."com.docker.compose.project" // ""' <<<"$labels")"
+        declared="$(jq -r 'keys[] | select(startswith("traefik.http.middlewares.")) | split(".")[3]' <<<"$labels" | sort -u)"
+        if [[ "$(jq -r '."com.docker.compose.service" // ""' <<<"$labels")" == "traefik" ]]; then
+            traefik_ids=$(( traefik_ids + 1 ))
+            for m in $declared; do on_traefik["$m"]=1; done
+            continue
+        fi
         case "$cname|$project" in
-            gremion-ui-blue\|*|gremion-ui-green\|*|gremion-public-blue\|*|gremion-public-green\|*|*\|*-app-blue|*\|*-app-green) ;;
-            *) continue ;;
+            gremion-ui-blue\|*|gremion-ui-green\|*|gremion-public-blue\|*|gremion-public-green\|*|*\|*-app-blue|*\|*-app-green)
+                [[ -z "$declared" ]] \
+                    || fail "container ${cname} (app tier) declares middleware(s): $(paste -sd, - <<<"$declared") — an app-tier container vanishes on every colour switch; declare them on the traefik container" ;;
         esac
-        declared="$(jq -r 'keys[] | select(startswith("traefik.http.middlewares.")) | split(".")[3]' <<<"$labels" 2>/dev/null \
-                    | sort -u | paste -sd, -)"
-        [[ -z "$declared" ]] \
-            || fail "container ${cname} (app tier) declares middleware(s): ${declared} — an app-tier container vanishes on every colour switch; declare them on the traefik container"
+    done
+
+    for m in $(printf '%s' "$MIDDLEWARES_JSON" | jq -r '.[] | select((.provider // (.name | split("@")[1])) == "docker") | .name'); do
+        base="$(tr '[:upper:]' '[:lower:]' <<<"${m%%@*}")"
+        (( traefik_ids == 1 )) \
+            || { fail "middleware ${m}: ${traefik_ids} containers carry com.docker.compose.service=traefik (expected exactly 1), so its placement cannot be established"; continue; }
+        [[ -n "${on_traefik[$base]:-}" ]] \
+            || fail "middleware ${m} is not declared on the traefik container's labels (spec B B-09)"
     done
 
     for m in $(printf '%s' "$MIDDLEWARES_JSON" | jq -r '.[] | select((.provider // (.name | split("@")[1])) == "file") | .name'); do
@@ -428,28 +569,43 @@ check_middleware_placement() {
 }
 
 # ── check_emitted_routers (B18) ──────────────────────────────────────────────
-# Every etc/edge/tenant-<slug>.yml the emitter wrote must be LIVE: each router
-# it declares is reported by Traefik as <router>@file and enabled. A file on
-# disk that Traefik ignored (a parse error, a name collision between two
-# files) is a tenant silently dark. The file's own shape is held to the
-# emitter contract too: only http.routers and http.middlewares, routers named
-# tenant-<slug>[-i], middlewares only edge-hostpin-<slug>[-i] / edge-perip-<slug>,
-# and at least one router.
+# Every etc/edge/tenant-<slug>.yml the emitter wrote must be LIVE and MINE:
+# each router it declares is reported by Traefik as <router>@file, enabled,
+# with the SAME rule the file carries (Traefik's file provider keeps the first
+# of two same-named definitions and skips the other, so a name collision
+# between two tenant files leaves one tenant's host routed by the other's
+# router). No router or middleware name may appear in two tenant files. The
+# file's shape is held to the emitter contract: only http.routers and
+# http.middlewares, routers tenant-<slug>[-i], middlewares only
+# edge-hostpin-<slug>[-i] / edge-perip-<slug>, at least one router, a slug of
+# the tenant alphabet, and never a .yaml sibling (the emitter writes .yml).
 #
 # The emitter's output is fixed-shape YAML (renderTenantRouter); the awk below
 # reads that shape — keys at two spaces under `http:` are sections, keys at
-# four spaces are object names — and anything else it cannot place is reported
-# by the shape checks rather than skipped.
+# four spaces are object names, `rule:` at six spaces belongs to the current
+# router — and anything it cannot place is reported by the shape checks.
 check_emitted_routers() {
-    local dir f slug rel kind obj status nrouters
+    local dir f slug rel kind obj rest status nrouters api_rule
+    local -A seen_name=()
     dir="$(gremion_root)/etc/edge"
-    [[ -d "$dir" ]] || return 0
+    if [[ ! -d "$dir" ]]; then
+        fail "check_emitted_routers: ${dir} does not exist — the router directory Traefik watches is missing"
+        return 0
+    fi
+    for f in "$dir"/tenant-*.yaml; do
+        [[ -e "$f" ]] || continue
+        fail "etc/edge/${f##*/}: a tenant router file with a .yaml suffix — the emitter writes only .yml, so nothing owns or prunes this one"
+    done
     for f in "$dir"/tenant-*.yml; do
         [[ -e "$f" ]] || continue
         rel="etc/edge/${f##*/}"
         slug="${f##*/tenant-}"; slug="${slug%.yml}"
+        if [[ ! "$slug" =~ ^[a-z0-9-]{1,30}$ ]]; then
+            fail "${rel}: not a tenant slug the emitter can produce — refusing to read its names"
+            continue
+        fi
         nrouters=0
-        while IFS=' ' read -r kind obj; do
+        while IFS=' ' read -r kind obj rest; do
             case "$kind" in
                 section)
                     [[ "$obj" == "routers" || "$obj" == "middlewares" ]] \
@@ -458,21 +614,34 @@ check_emitted_routers() {
                     nrouters=$(( nrouters + 1 ))
                     [[ "$obj" =~ ^tenant-${slug}(-[1-9][0-9]*)?$ ]] \
                         || fail "${rel} declares router ${obj}, which is not tenant-${slug}[-i]"
+                    [[ -z "${seen_name[r:$obj]:-}" ]] \
+                        || fail "router name ${obj} is declared in both ${seen_name[r:$obj]} and ${rel} — traefik keeps one and skips the other"
+                    seen_name["r:$obj"]="$rel"
                     status="$(printf '%s' "$ROUTERS_JSON" \
                         | jq -r --arg n "${obj}@file" '[.[] | select(.name == $n)][0].status // "absent"')"
                     [[ "$status" == "enabled" ]] \
                         || fail "emitted router ${obj}@file (${rel}) is not live in traefik (status=${status})" ;;
+                rule)
+                    api_rule="$(printf '%s' "$ROUTERS_JSON" \
+                        | jq -r --arg n "${obj}@file" '[.[] | select(.name == $n)][0].rule // ""')"
+                    [[ -z "$api_rule" || "$api_rule" == "$rest" ]] \
+                        || fail "emitted router ${obj}@file: traefik serves rule '${api_rule}', but ${rel} says '${rest}' — another file's definition won" ;;
                 middlewares)
                     [[ "$obj" =~ ^edge-hostpin-${slug}(-[1-9][0-9]*)?$ || "$obj" == "edge-perip-${slug}" ]] \
-                        || fail "${rel} declares middleware ${obj} — only edge-hostpin-${slug}[-i] and edge-perip-${slug} belong in an emitted file" ;;
+                        || fail "${rel} declares middleware ${obj} — only edge-hostpin-${slug}[-i] and edge-perip-${slug} belong in an emitted file"
+                    [[ -z "${seen_name[m:$obj]:-}" ]] \
+                        || fail "middleware name ${obj} is declared in both ${seen_name[m:$obj]} and ${rel} — traefik keeps one and skips the other"
+                    seen_name["m:$obj"]="$rel" ;;
                 top)
                     [[ "$obj" == "http" ]] || fail "${rel} declares top-level ${obj} — an emitted file declares only http" ;;
             esac
         done < <(awk '
+            { sub(/\r$/, "") }
             /^[[:space:]]*(#|$)/ { next }
-            /^[^ ]/              { k=$1; sub(/:.*/, "", k); print "top " k; sec=""; next }
-            /^  [^ ]/            { k=$1; sub(/:.*/, "", k); sec=k; print "section " k; next }
-            /^    [^ ]/          { k=$1; sub(/:.*/, "", k); if (sec != "") print sec " " k; next }
+            /^[^ ]/              { k=$1; sub(/:.*/, "", k); print "top " k; sec=""; cur=""; next }
+            /^  [^ ]/            { k=$1; sub(/:.*/, "", k); sec=k; cur=""; print "section " k; next }
+            /^    [^ ]/          { k=$1; sub(/:.*/, "", k); cur=k; if (sec != "") print sec " " k; next }
+            /^      rule: /      { if (sec == "routers" && cur != "") { v=$0; sub(/^      rule: "/, "", v); sub(/"[[:space:]]*$/, "", v); print "rule " cur " " v }; next }
         ' "$f")
         (( nrouters > 0 )) || fail "${rel} declares no router — an emitted file with no router should not exist"
     done
@@ -937,6 +1106,7 @@ run_pass() {
     fetch_api
     check_routers
     check_router_universal
+    check_l4_routers
     check_emitted_routers
     check_middleware_placement
     check_hosts

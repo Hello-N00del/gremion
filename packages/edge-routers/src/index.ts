@@ -2,10 +2,10 @@
 // The control plane (TASK-043's provisioner) CALLS this library; it never runs as
 // a CLI and it never runs inside the app process, which holds no writable mount
 // of etc/edge.
-export * from './names.ts'
-export * from './platform-middlewares.ts'
-export * from './classify.ts'
-export * from './render.ts'
-export * from './emit.ts'
-export * from './sync.ts'
-export * from './dns-preflight.ts'
+export * from './names.js'
+export * from './platform-middlewares.js'
+export * from './classify.js'
+export * from './render.js'
+export * from './emit.js'
+export * from './sync.js'
+export * from './dns-preflight.js'

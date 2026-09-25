@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkTenantHostDns, type DnsResolver } from '../src/dns-preflight.ts'
+import { checkTenantHostDns, type DnsResolver } from '../src/dns-preflight.js'
 
 const EDGE = { ipv4: ['192.0.2.10'], ipv6: ['2001:db8::10'] }
 
@@ -74,5 +74,19 @@ describe('checkTenantHostDns — TDD 6', () => {
     await expect(checkTenantHostDns('a.example.net', { edge: { ipv4: ['192.0.2.10'], ipv6: ['nope'] }, resolver: r })).rejects.toThrow(/ipv6/)
     await expect(checkTenantHostDns('a`b', { edge: EDGE, resolver: r })).rejects.toThrow(/not a host/)
     expect(r.calls).toEqual([])
+  })
+
+  it('A answers but AAAA says NXDOMAIN: reported as no-aaaa, not as a missing name', async () => {
+    const r = await check('council.example.net', {
+      resolve4: () => Promise.resolve(['192.0.2.10']),
+      resolve6: () => Promise.reject(err('ENOTFOUND')),
+    })
+    expect(r.problems.map((p) => p.code)).toEqual(['no-aaaa'])
+  })
+
+  it('a zone-scoped edge IPv6 address is a named configuration error', async () => {
+    await expect(
+      checkTenantHostDns('a.example.net', { edge: { ipv4: ['192.0.2.10'], ipv6: ['fe80::1%eth0'] }, resolver: fake({}) }),
+    ).rejects.toThrow(/edge\.ipv6/)
   })
 })

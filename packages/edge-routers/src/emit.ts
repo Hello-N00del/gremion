@@ -28,8 +28,8 @@
 import * as fs from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
-import { ROUTER_FILE_RE, routerFileName } from './names.ts'
-import { renderTenantRouter, type RenderTenantRouterInput, type RenderTenantRouterResult } from './render.ts'
+import { ROUTER_FILE_RE, routerFileName } from './names.js'
+import { renderTenantRouter, type RenderTenantRouterInput, type RenderTenantRouterResult } from './render.js'
 
 /** The fs calls emit makes — injectable so a failure mid-write can be simulated. */
 export interface EmitIo {
@@ -95,6 +95,16 @@ function targetState(path: string): 'file' | 'missing' {
   return 'file'
 }
 
+/** fsync a file or directory by path (a crash must never leave an empty router file). */
+function fsyncPath(path: string): void {
+  const fd = fs.openSync(path, 'r')
+  try {
+    fs.fsyncSync(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 function readOrNull(path: string): string | null {
   try {
     return fs.readFileSync(path, 'utf8')
@@ -117,14 +127,20 @@ export function emitTenantRouterFile(opts: EmitTenantRouterFileOptions): EmitTen
     return { ...rendered, path, action: 'removed' }
   }
 
-  if (present && readOrNull(path) === rendered.yaml) return { ...rendered, path, action: 'unchanged' }
+  // Content AND mode: a same-content file Traefik cannot read (0600 after a
+  // manual edit) is not "unchanged", it is broken, and a rewrite repairs it.
+  if (present && readOrNull(path) === rendered.yaml && (fs.statSync(path).mode & 0o777) === 0o644) {
+    return { ...rendered, path, action: 'unchanged' }
+  }
   if (opts.dryRun) return { ...rendered, path, action: 'written' }
 
   const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
   try {
     io.writeFileSync(tmp, rendered.yaml, { encoding: 'utf8', mode: 0o644, flag: 'wx' })
     fs.chmodSync(tmp, 0o644) // the umask must not decide whether Traefik can read it
+    fsyncPath(tmp) // the bytes are durable BEFORE the name points at them
     io.renameSync(tmp, path)
+    fsyncPath(dirname(path)) // …and so is the rename
   } catch (err) {
     try {
       fs.unlinkSync(tmp)

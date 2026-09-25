@@ -119,20 +119,35 @@ PROTO_NETWORK="${EDGEPROTO_PROJECT}_edge"
 compose() { ( cd "$FIXTURE_DIR" && docker compose --env-file "$ENV_FILE" "$@" ); }
 
 # Removes exactly the named containers and the named network, each by name.
-# `|| true` per object: an object that was never created is not an error here.
+# A removal can fail only because the object was never created (not an error
+# here) or because the daemon refused — so success is judged by the POST-
+# condition, not by the exit codes: afterwards none of the names may exist.
 teardown_by_name() {
-    local c
+    local c left=""
     for c in "${PROTO_CONTAINERS[@]}"; do
         docker rm -f "$c" >/dev/null 2>&1 || true
     done
     docker network rm "$PROTO_NETWORK" >/dev/null 2>&1 || true
+    for c in "${PROTO_CONTAINERS[@]}"; do
+        docker container inspect "$c" >/dev/null 2>&1 && left="${left} ${c}"
+    done
+    docker network inspect "$PROTO_NETWORK" >/dev/null 2>&1 && left="${left} ${PROTO_NETWORK}"
+    if [[ -n "$left" ]]; then
+        bad "teardown left behind:${left} — remove them by name"
+        return 1
+    fi
+    return 0
 }
 
 cleanup() {
-    teardown_by_name
+    local rc=$?
+    teardown_by_name || rc=1
     rm -rf "$PROTO_ROOT"
+    exit "$rc"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 need_cmd docker curl jq openssl sha256sum envsubst
 

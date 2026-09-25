@@ -23,9 +23,9 @@
 
 import * as fs from 'node:fs'
 import { join } from 'node:path'
-import { assertSlug, ROUTER_FILE_RE, validateSlug } from './names.ts'
-import { emitTenantRouterFile, removeTenantRouterFile, type EmitAction, type EmitIo } from './emit.ts'
-import { renderTenantRouter, type HostPolicy, type RouterSkip, type TenantDomain } from './render.ts'
+import { assertSlug, ROUTER_FILE_RE, validateSlug } from './names.js'
+import { emitTenantRouterFile, removeTenantRouterFile, type EmitAction, type EmitIo } from './emit.js'
+import { renderTenantRouter, type HostPolicy, type RouterSkip, type TenantDomain } from './render.js'
 
 /** gremion-ui registry TenantStatus, restated (the package imports nothing from gremion-ui). */
 export type TenantStatus = 'provisioning' | 'active' | 'suspended' | 'deleting' | 'deleted'
@@ -38,6 +38,17 @@ export type TenantStatus = 'provisioning' | 'active' | 'suspended' | 'deleting' 
  * someone else's (identifier reuse / takeover) — a leftover router is the risk.
  */
 export const ROUTABLE_STATUSES: ReadonlySet<TenantStatus> = new Set<TenantStatus>(['active', 'suspended'])
+
+/** Every status the registry can hold. Anything else is enum drift and THROWS:
+ *  treating an unknown value as "not routable" would silently delete a live
+ *  tenant's router file. */
+export const TENANT_STATUSES: ReadonlySet<string> = new Set<TenantStatus>([
+  'provisioning',
+  'active',
+  'suspended',
+  'deleting',
+  'deleted',
+])
 
 export function isRoutableStatus(status: TenantStatus): boolean {
   return ROUTABLE_STATUSES.has(status)
@@ -103,7 +114,11 @@ export function syncTenantRouters(opts: SyncTenantRoutersOptions): EdgeSyncRepor
 
   const slugs = new Set<string>()
   for (const t of opts.tenants) {
-    const slug = assertSlug(t.slug, 'syncTenantRouters')
+    const slug = assertSlug(t?.slug, 'syncTenantRouters')
+    if (!TENANT_STATUSES.has(t.status)) {
+      throw new Error(`syncTenantRouters: tenant "${slug}" has unknown status ${JSON.stringify(t.status)} — refusing to guess whether it routes`)
+    }
+    if (!Array.isArray(t.domains)) throw new Error(`syncTenantRouters: tenant "${slug}" domains must be an array`)
     if (slugs.has(slug)) {
       throw new Error(`syncTenantRouters: slug "${slug}" appears twice in the tenant list — refusing to pick a winner`)
     }
@@ -148,6 +163,21 @@ export function syncTenantRouters(opts: SyncTenantRoutersOptions): EdgeSyncRepor
       claim(nameOwner, r.pin, t.slug, 'middleware name')
     }
     if (plan.routers.length > 0) claim(nameOwner, `edge-perip-${t.slug}`, t.slug, 'middleware name')
+  }
+
+  // ── …and every claim ALREADY ON DISK by a tenant this pass was not given ────
+  // A single-tenant caller that passes only its own row would otherwise write a
+  // file whose router/middleware names or hosts collide with another tenant's
+  // existing file; Traefik keeps one definition and skips the other, taking a
+  // host dark. On a prune pass those files are orphans about to be removed.
+  if (!prune) {
+    for (const c of onDiskClaims(opts.dynamicDir, slugs)) {
+      for (const h of c.hosts) {
+        const n = opts.normaliseHost(h)
+        if (n) claim(hostOwner, n, c.slug, 'host')
+      }
+      for (const n of c.names) claim(nameOwner, n, c.slug, 'router/middleware name')
+    }
   }
 
   const rows: EdgeSyncRow[] = []
@@ -202,6 +232,44 @@ export function syncTenantRouters(opts: SyncTenantRoutersOptions): EdgeSyncRepor
     dryRun,
     dynamicDir: opts.dynamicDir,
   }
+}
+
+interface DiskClaim {
+  readonly slug: string
+  readonly hosts: readonly string[]
+  readonly names: readonly string[]
+}
+
+/**
+ * Router/middleware names and Host() literals declared by the tenant-*.yml
+ * files on disk whose slug is NOT in `listed`. Read in the emitter's own fixed
+ * shape (four-space keys under `routers:`/`middlewares:`, `rule: "Host(...)"`);
+ * a file that is not a regular file is skipped here and never touched.
+ */
+function onDiskClaims(dynamicDir: string, listed: ReadonlySet<string>): DiskClaim[] {
+  const dir = fs.realpathSync(dynamicDir)
+  const out: DiskClaim[] = []
+  for (const name of fs.readdirSync(dir).sort()) {
+    const m = ROUTER_FILE_RE.exec(name)
+    if (!m?.[1] || listed.has(m[1])) continue
+    const path = join(dir, name)
+    if (!fs.lstatSync(path).isFile()) continue
+    const hosts: string[] = []
+    const names: string[] = []
+    let section = ''
+    for (const line of fs.readFileSync(path, 'utf8').split(/\r?\n/)) {
+      const sec = /^ {2}([A-Za-z]+):\s*$/.exec(line)
+      if (sec?.[1]) {
+        section = sec[1]
+        continue
+      }
+      const key = /^ {4}([A-Za-z0-9_.-]+):\s*$/.exec(line)
+      if (key?.[1] && (section === 'routers' || section === 'middlewares')) names.push(key[1])
+      for (const h of line.matchAll(/Host\(`([^`]+)`\)/g)) if (h[1]) hosts.push(h[1])
+    }
+    out.push({ slug: m[1], hosts, names })
+  }
+  return out
 }
 
 /** The operator table. Skipped hosts are printed one per line, never summarised. */

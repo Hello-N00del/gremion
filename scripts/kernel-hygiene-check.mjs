@@ -1803,7 +1803,14 @@ function jScan(needle) {
 const J_MIN_SCANNED = 200 // the kernel tracks ~1100 files; far fewer means the scan is looking at the wrong tree
 
 check('j2 no CDN API token variable in the kernel', () => {
-  const needle = new RegExp(['CF', 'API', 'TOKEN'].join('_'), 'i')
+  // Every spelling Traefik/lego and the CDN's own tooling read for a DNS-01 /
+  // API credential: <CF|CLOUDFLARE>_[DNS_|ZONE_]API_<TOKEN|KEY>, and the
+  // account e-mail that pairs with a global key.
+  const cdn = ['CF', ['CLOUD', 'FLARE'].join('')].join('|')
+  const needle = new RegExp(
+    `\\b(${cdn})_(DNS_|ZONE_)?API_(TOKEN|KEY)\\b|\\b(${cdn})_(API_)?EMAIL\\b`,
+    'i',
+  )
   const { hits, scanned } = jScan(needle)
   if (scanned < J_MIN_SCANNED) return `scanned only ${scanned} tracked file(s) — the scan proves nothing`
   return hits.length ? `found in: ${hits.join(' | ')}` : null
@@ -1812,11 +1819,11 @@ check('j2 no CDN API token variable in the kernel', () => {
 check('j3 no carrier of the deleted edge planner', () => {
   const needle = new RegExp(
     [
-      ['edge', 'plan'].join('[-_]'),
-      ['edge', 'Plan'].join(''),
+      ['edge', 'plan'].join('[-_.]?'),
       ['render', 'Ns', 'Delegation'].join(''),
       ['DEFAULT', 'ORIGIN', 'SERVER', 'NAME'].join('_'),
     ].join('|'),
+    'i',
   )
   const { hits, scanned } = jScan(needle)
   if (scanned < J_MIN_SCANNED) return `scanned only ${scanned} tracked file(s) — the scan proves nothing`
@@ -1824,12 +1831,32 @@ check('j3 no carrier of the deleted edge planner', () => {
 })
 
 // j4 reads the compose files as TEXT, because the question is about every
-// spelling that could mount the directory — short syntax, long syntax, a named
-// volume's bind driver_opts — not about what one parser makes of one file. A
-// line naming etc/edge that is neither a recognised short-syntax nor a
-// long-syntax `source:` is itself a failure: unrecognised is not "not a mount".
-const J_COMPOSE = /^(docker-compose[^/]*\.ya?ml|compose\/.+\.ya?ml)$/
+// spelling that could mount the directory — short syntax, long syntax, a
+// parent directory, an inherited volume set — not about what one parser makes
+// of one file. Scope: EVERY tracked *compose*.y(a)ml outside test/ (the ops and
+// mail projects are deployed too; test/ fixtures are throwaway stacks such as
+// edge-proto's). A line naming etc/edge that is neither a recognised
+// short-syntax mount nor a long-syntax `source:` is itself a failure:
+// unrecognised is not "not a mount".
+//
+// Sources are normalised (`//` and `/./` collapsed, trailing `/` dropped)
+// before they are compared. A bind of an ANCESTOR of etc/edge (`/`, /opt,
+// /opt/gremion, …/etc, ${GREMION_ROOT}, ${GREMION_ROOT}/etc) is a second view
+// of the router directory: it must be read-only (node-exporter's `/:/rootfs:ro`
+// is), and a writable one fails. `volumes_from` or `extends` naming traefik
+// would hand its etc/edge mount — possibly writable — to another service, and
+// fails outright. A source spelled through another variable (${EDGE_DIR})
+// cannot be resolved from text and is not claimed to be caught.
+const J_COMPOSE = /(^|\/)[^/]*compose[^/]*\.ya?ml$/i
 const J_EDGE_DIR = /etc\/edge(?![A-Za-z0-9_-])/
+const J_ANCESTORS = new Set(['/', '/opt', '/opt/gremion', '/opt/gremion/etc', '${GREMION_ROOT}', '${GREMION_ROOT}/etc', '$GREMION_ROOT', '$GREMION_ROOT/etc'])
+
+function jNormalise(src) {
+  let s = src.replace(/\/+/g, '/')
+  while (s.includes('/./')) s = s.replace('/./', '/')
+  if (s.length > 1) s = s.replace(/\/$/, '')
+  return s
+}
 
 function jServiceAt(lines, i) {
   for (let k = i; k >= 0; k--) {
@@ -1840,36 +1867,63 @@ function jServiceAt(lines, i) {
   return null
 }
 
+/** The lines of the block opened at line i (same item, deeper indent). */
+function jBlock(lines, i) {
+  const indent = lines[i].search(/\S/)
+  const out = [lines[i]]
+  for (let k = i + 1; k < lines.length; k++) {
+    if (lines[k].trim() === '' || /^\s*#/.test(lines[k])) continue
+    if (lines[k].search(/\S/) <= indent) break
+    out.push(lines[k])
+  }
+  return out
+}
+
 function jEdgeMounts() {
   const mounts = []
+  const ancestors = []
   const problems = []
-  const files = J_TRACKED.filter((f) => J_COMPOSE.test(f) && existsSync(join(ROOT, f)))
+  const files = J_TRACKED.filter((f) => J_COMPOSE.test(f) && !f.startsWith('test/') && existsSync(join(ROOT, f)))
   for (const f of files) {
     const lines = readFileSync(join(ROOT, f), 'utf8').split('\n')
     lines.forEach((line, i) => {
-      if (/^\s*#/.test(line) || !J_EDGE_DIR.test(line)) return
+      if (/^\s*#/.test(line)) return
       const where = `${f}:${i + 1}`
+      const inherit = /^\s*(volumes_from|extends)\s*:/.exec(line)
+      if (inherit && /traefik/.test(jBlock(lines, i).join('\n'))) {
+        problems.push(`${where}: ${inherit[1]} names traefik in service ${jServiceAt(lines, i)} — it would inherit the etc/edge mount`)
+        return
+      }
       const short = /^\s*-\s*["']?([^"'\s]+)["']?\s*(#.*)?$/.exec(line)
       const long = /^(\s*)(?:-\s*)?source:\s*["']?([^"'\s]+)["']?\s*(#.*)?$/.exec(line)
-      if (short && !/^\s*-\s*source:/.test(line)) {
+      if (short && !/^\s*-\s*source:/.test(line) && short[1].includes(':')) {
         const parts = short[1].split(':')
-        if (!J_EDGE_DIR.test(parts[0])) {
-          problems.push(`${where}: etc/edge appears in a mount's target or options, not its source: ${line.trim()}`)
-          return
-        }
+        const src = jNormalise(parts[0])
         const opts = (parts[2] ?? '').split(',')
-        mounts.push({ where, service: jServiceAt(lines, i), target: parts[1] ?? '', ro: opts.includes('ro') })
-      } else if (long) {
+        const ro = opts.includes('ro')
+        if (J_EDGE_DIR.test(src)) {
+          mounts.push({ where, service: jServiceAt(lines, i), target: parts[1] ?? '', ro })
+        } else if (J_ANCESTORS.has(src)) {
+          ancestors.push({ where, service: jServiceAt(lines, i), src, ro })
+        } else if (J_EDGE_DIR.test(line)) {
+          problems.push(`${where}: etc/edge appears in a mount's target or options, not its source: ${line.trim()}`)
+        }
+        return
+      }
+      if (long) {
+        const src = jNormalise(long[2])
+        const isEdge = J_EDGE_DIR.test(src)
+        if (!isEdge && !J_ANCESTORS.has(src)) return
         const indent = long[1].length
         let ro = false
         let target = ''
-        // The rest of this list item: the lines after `source:` indented at
-        // least as deep, plus the lines before it up to the item's `- ` marker.
+        // The rest of this list item: lines after `source:` at least as deep,
+        // plus the lines before it up to the item's own `- ` marker.
         let start = i
         for (let k = i - 1; k >= 0; k--) {
           const depth = lines[k].search(/\S/)
           if (/^\s*-\s/.test(lines[k]) && depth < indent) {
-            start = k // the item's own `- ` marker
+            start = k
             break
           }
           if (depth < indent) break
@@ -1877,21 +1931,24 @@ function jEdgeMounts() {
         }
         for (let k = start; k < lines.length; k++) {
           if (k > i && (lines[k].search(/\S/) < indent || /^\s*-\s/.test(lines[k]))) break
-          if (/^\s*read_only:\s*true\s*(#.*)?$/.test(lines[k])) ro = true
+          if (/^\s*read_only:\s*["']?true["']?\s*(#.*)?$/.test(lines[k])) ro = true
           const t = /^\s*target:\s*["']?([^"'\s]+)/.exec(lines[k])
           if (t) target = t[1]
         }
-        mounts.push({ where, service: jServiceAt(lines, i), target, ro })
-      } else {
+        if (isEdge) mounts.push({ where, service: jServiceAt(lines, i), target, ro })
+        else ancestors.push({ where, service: jServiceAt(lines, i), src, ro })
+        return
+      }
+      if (J_EDGE_DIR.test(line)) {
         problems.push(`${where}: names etc/edge in a shape j4 cannot classify, so it cannot prove this is not a mount: ${line.trim()}`)
       }
     })
   }
-  return { files, mounts, problems }
+  return { files, mounts, ancestors, problems }
 }
 
 check('j4 etc/edge is mounted exactly once, read-only, into traefik', () => {
-  const { files, mounts, problems } = jEdgeMounts()
+  const { files, mounts, ancestors, problems } = jEdgeMounts()
   if (files.length === 0) return 'no kernel compose file found — the scan proves nothing'
   if (mounts.length !== 1) {
     problems.push(`${mounts.length} mounts of etc/edge (expected exactly 1): ${mounts.map((m) => `${m.where} [${m.service}]`).join(', ')}`)
@@ -1900,6 +1957,9 @@ check('j4 etc/edge is mounted exactly once, read-only, into traefik', () => {
     if (!m.ro) problems.push(`${m.where}: the etc/edge mount in service ${m.service} is not read-only`)
     if (m.service !== 'traefik') problems.push(`${m.where}: etc/edge is mounted into service ${m.service}, not traefik`)
     if (m.target !== '/etc/traefik/dynamic') problems.push(`${m.where}: etc/edge is mounted at ${m.target || '(no target)'}, not /etc/traefik/dynamic`)
+  }
+  for (const a of ancestors) {
+    if (!a.ro) problems.push(`${a.where}: service ${a.service} binds ${a.src}, an ancestor of etc/edge, WRITABLE — a second, writable view of the router directory`)
   }
   return problems.length ? problems.join(' | ') : null
 })
