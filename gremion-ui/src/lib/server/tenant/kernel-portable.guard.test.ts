@@ -13,9 +13,17 @@
 //   - a forbidden specifier (see FORBIDDEN_PATTERNS), including `import type`
 //     (a type-only import still couples the file to the SvelteKit module
 //     resolution the kernel build does not provide) AND a DYNAMIC
-//     `import('<spec>')` or `require('<spec>')` call with a string-literal
-//     argument (TASK-025 round-2 fix MED #2 — the static-only grammar
-//     originally here let `import('$env/dynamic/private')` pass silently);
+//     `import('<spec>')`/`import(\`<spec>\`)` or `require(...)` call whose
+//     argument is a string or no-substitution template literal (TASK-025
+//     round-2 fix MED #2 — the static-only grammar originally here let
+//     `import('$env/dynamic/private')` pass silently; round-3 fix MEDIUM #2
+//     added the no-substitution template-literal form);
+//   - a NON-LITERAL dynamic import(...)/require(...) argument (a
+//     `${...}`-computed template, a bare identifier, a concatenation, ...),
+//     as its OWN violation label "non-literal dynamic import" — round-3 fix
+//     MEDIUM #2: a regex-based guard cannot evaluate an arbitrary expression,
+//     so failing loud on every non-literal dynamic call is the fail-closed
+//     choice (see findNonLiteralDynamicImports for the full rationale);
 //   - a relative import target that does not exist on disk.
 //
 // RED-before-GREEN evidence lives in the commit that adds tenant-domain.ts:
@@ -52,20 +60,69 @@ const STATIC_SPECIFIER_RE = /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\bfrom
  * `import('<spec>')` call (no `from`, `(` immediately follows the keyword) —
  * that shape passed the guard silently, e.g. `import('$env/dynamic/private')`.
  * `require('<spec>')` is the same gap for anything transpiled to CommonJS.
- * Only a STRING-LITERAL argument is in scope — a computed specifier
- * (`import(pathVar)`) cannot be resolved statically and a kernel-portable file
- * must never construct one anyway. Optional inner whitespace (`import ( '…' )`)
- * is allowed so a reformatted call is not a silent bypass either.
+ *
+ * Captures the WHOLE argument text (not just a quoted body) so the caller can
+ * classify it — round-3 fix MEDIUM #2 found that a round-2 regex requiring
+ * `['"]` delimiters missed a no-substitution template literal
+ * (`import(\`$env/dynamic/private\`)`), and a plain string/backtick check
+ * alone still lets a COMPUTED specifier (`import(\`$env/${x}\`)`, a bare
+ * identifier, a concatenation, ...) through with no violation at all — see
+ * findNonLiteralDynamicImports below. `[^)]*` does not balance nested parens;
+ * an argument containing its own call (`import(getPath())`) is not matched
+ * whole, but the truncated text still fails literalSpecifierOf and is
+ * reported as non-literal, which is the correct outcome either way.
  */
-const DYNAMIC_SPECIFIER_RE = /\b(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+const DYNAMIC_CALL_RE = /\b(?:import|require)\s*\(([^)]*)\)/g
+
+/**
+ * A single/double-quoted string, or a backtick template with NO `${`
+ * substitution, resolves to a literal specifier string a static scanner CAN
+ * check against FORBIDDEN_PATTERNS. Anything else returns null.
+ */
+function literalSpecifierOf(rawArg: string): string | null {
+  const arg = rawArg.trim()
+  const quoted = /^'([^']*)'$/.exec(arg) ?? /^"([^"]*)"$/.exec(arg)
+  if (quoted) return quoted[1]
+  const backtick = /^`([^`]*)`$/.exec(arg)
+  if (backtick && !backtick[1].includes('${')) return backtick[1]
+  return null
+}
+
+/**
+ * Every dynamic import(...)/require(...) call whose argument is NOT a
+ * resolvable literal (literalSpecifierOf returns null): a `${...}`-computed
+ * template, a bare identifier, a concatenation, .... DECISION (round-3 fix
+ * MEDIUM #2): a regex-based guard cannot evaluate an arbitrary expression, so
+ * a computed specifier could resolve to '$env/dynamic/private' just as easily
+ * as to something benign — silently passing it (the round-2 behaviour) would
+ * let a computed specifier hide a forbidden import from this guard forever.
+ * Failing loud on EVERY non-literal dynamic call is the fail-closed choice:
+ * it would false-positive if a kernel-portable file ever needed a genuinely
+ * dynamic (non-SvelteKit) import, but there is no such use case in
+ * host.ts/reserved-hosts.ts/tenant-domain.ts today, and a legitimate one can
+ * be special-cased later, in the open, next to FORBIDDEN_PATTERNS.
+ */
+function findNonLiteralDynamicImports(src: string): string[] {
+  const nonLiteral: string[] = []
+  DYNAMIC_CALL_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = DYNAMIC_CALL_RE.exec(src))) {
+    const arg = m[1].trim()
+    if (literalSpecifierOf(arg) === null) nonLiteral.push(arg)
+  }
+  return nonLiteral
+}
 
 function extractSpecifiers(src: string): string[] {
   const specs: string[] = []
   let m: RegExpExecArray | null
   STATIC_SPECIFIER_RE.lastIndex = 0
   while ((m = STATIC_SPECIFIER_RE.exec(src))) specs.push(m[1])
-  DYNAMIC_SPECIFIER_RE.lastIndex = 0
-  while ((m = DYNAMIC_SPECIFIER_RE.exec(src))) specs.push(m[1])
+  DYNAMIC_CALL_RE.lastIndex = 0
+  while ((m = DYNAMIC_CALL_RE.exec(src))) {
+    const lit = literalSpecifierOf(m[1])
+    if (lit !== null) specs.push(lit)
+  }
   return specs
 }
 
@@ -122,6 +179,12 @@ function scanKernelPortability(entryFiles: readonly string[]): ScanResult {
     }
     visited.push(file)
     const src = readFileSync(file, 'utf-8')
+    // Round-3 fix MEDIUM #2: a non-literal dynamic import/require argument is
+    // its OWN violation, independent of FORBIDDEN_PATTERNS (which can only
+    // test a resolvable specifier STRING) — see findNonLiteralDynamicImports.
+    for (const arg of findNonLiteralDynamicImports(src)) {
+      violations.push({ file, specifier: arg, label: 'non-literal dynamic import' })
+    }
     for (const spec of extractSpecifiers(src)) {
       if (isRelative(spec)) {
         const target = resolveRelativeSpecifier(file, spec)
@@ -192,6 +255,82 @@ describe('dynamic import(...) / require(...) detection (round-2 fix MED #2)', ()
       expect(missing).toEqual([])
       expect(violations).toEqual([
         { file: fixture, specifier: '$env/dynamic/private', label: '$env/*' },
+      ])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// TASK-025 round-3 fix (house review MEDIUM #2): DYNAMIC_SPECIFIER_RE only
+// matched a single- or double-quoted argument, so a no-substitution template
+// literal — `import(`$env/dynamic/private`)` — passed silently (the `['"]`
+// character class in the round-2 regex never matches a backtick). Fixed by
+// classifying EVERY dynamic import(...)/require(...) call's argument:
+//   - a '...'/"..." literal, or a `...` template with NO `${` inside, is a
+//     resolvable specifier — checked against FORBIDDEN_PATTERNS exactly like
+//     a static specifier;
+//   - anything else (a `${...}`-computed template, a bare identifier, a
+//     concatenation, ...) is NOT resolvable statically, and is flagged as its
+//     OWN violation class, "non-literal dynamic import" — DECISION: a
+//     computed specifier could just as easily resolve to '$env/dynamic/private'
+//     at runtime as to something benign, and a regex-based guard has no way to
+//     evaluate it, so silently ignoring it (the round-2 behaviour) would let a
+//     computed specifier hide a forbidden import from this guard forever.
+//     Failing loud on ANY non-literal dynamic call is the fail-closed choice;
+//     it costs a false positive if a kernel-portable file ever needs a
+//     genuinely dynamic (non-SvelteKit) import, but there is no such use case
+//     in host.ts/reserved-hosts.ts/tenant-domain.ts today, and a legitimate
+//     one can be special-cased in FORBIDDEN_PATTERNS's neighbourhood later.
+describe('dynamic import(...) / require(...) literal classification (round-3 fix MEDIUM #2)', () => {
+  it('extractSpecifiers finds a no-substitution template-literal import(...)', () => {
+    expect(extractSpecifiers('await import(`$env/dynamic/private`)'))
+      .toContain('$env/dynamic/private')
+  })
+
+  it('extractSpecifiers finds a no-substitution template-literal require(...)', () => {
+    expect(extractSpecifiers('const m = require(`$app/environment`)'))
+      .toContain('$app/environment')
+  })
+
+  it('findNonLiteralDynamicImports flags a ${...}-computed template as non-literal, NOT as a resolved specifier', () => {
+    const src = 'const sub = "dynamic/private"\nawait import(`$env/${sub}`)'
+    expect(extractSpecifiers(src)).not.toContain('$env/dynamic/private')
+    expect(findNonLiteralDynamicImports(src)).toEqual(['`$env/${sub}`'])
+  })
+
+  it('findNonLiteralDynamicImports flags a bare-identifier argument', () => {
+    const src = 'await import(modulePath)'
+    expect(findNonLiteralDynamicImports(src)).toEqual(['modulePath'])
+  })
+
+  it('findNonLiteralDynamicImports flags a concatenation argument', () => {
+    const src = "require('$env/' + suffix)"
+    expect(findNonLiteralDynamicImports(src)).toEqual(["'$env/' + suffix"])
+  })
+
+  it('findNonLiteralDynamicImports does NOT flag a plain string or a no-substitution template', () => {
+    const src = "import('./relative'); import(`$env/dynamic/private`)"
+    expect(findNonLiteralDynamicImports(src)).toEqual([])
+  })
+
+  // Full-pipeline proof (not just the classifier in isolation): a computed
+  // template that WOULD resolve to a forbidden $env specifier at runtime is
+  // reported as a violation via the real scanKernelPortability path, even
+  // though its literal text never matches FORBIDDEN_PATTERNS.
+  it('a computed dynamic import in an ISOLATED temp fixture is reported as a non-literal violation by the real scan', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kernel-portable-guard-'))
+    const fixture = join(dir, 'seeded-computed-dynamic.ts')
+    try {
+      writeFileSync(
+        fixture,
+        'const sub = "dynamic/private"\nexport const p = import(`$env/${sub}`)\n',
+        'utf-8',
+      )
+      const { violations, missing } = scanKernelPortability([fixture])
+      expect(missing).toEqual([])
+      expect(violations).toEqual([
+        { file: fixture, specifier: '`$env/${sub}`', label: 'non-literal dynamic import' },
       ])
     } finally {
       rmSync(dir, { recursive: true, force: true })
