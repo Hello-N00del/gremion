@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { readdirSync } from 'node:fs'
 import {
   gitleaksCommand,
   runGitleaksArm,
@@ -16,7 +17,18 @@ import {
   runRunnerPolicyArm,
   runAllArms,
   listDockerfiles,
+  guardsResultFileName,
+  main,
 } from './guards.mjs'
+
+function withCleanExitCode(fn) {
+  const before = process.exitCode
+  process.exitCode = undefined
+  fn()
+  const result = process.exitCode
+  process.exitCode = before
+  return result
+}
 
 function fakeRun(map) {
   // map: command substring -> {exitCode, output, timedOut, spawnError}
@@ -393,5 +405,31 @@ test('listDockerfiles finds a bare Dockerfile and a Dockerfile.suffix, sorted, a
     assert.deepEqual(listDockerfiles(empty), [])
   } finally {
     rmSync(empty, { recursive: true, force: true })
+  }
+})
+
+test('guardsResultFileName carries the date, HH:MM:SS (to the second, so two runs in the same minute never collide) and both short SHAs', () => {
+  const now = new Date('2026-09-25T14:03:07.123Z')
+  assert.equal(guardsResultFileName(now, 'abc1234', 'def5678'), '2026-09-25T140307Z-abc1234-def5678-guards.json')
+})
+
+test('main(): --out is no longer required to get a dated JSON result — omitting it still writes one, under a default directory (MEDIUM fix)', () => {
+  const kernel = makeSecretRepo()
+  const vertical = makeSecretRepo()
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-guards-default-out-'))
+  try {
+    const code = withCleanExitCode(() => main(['--kernel', kernel, '--vertical', vertical, '--waivers', 'does-not-exist.json', '--out', outDir]))
+    assert.equal(typeof code, 'number')
+    const files = readdirSync(outDir)
+    assert.equal(files.length, 1)
+    assert.match(files[0], /^\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{7}-[0-9a-f]{7}-guards\.json$/)
+    const body = JSON.parse(readFileSync(join(outDir, files[0]), 'utf8'))
+    assert.ok(body.timestamp)
+    assert.equal(body.kernelSha.length, 7)
+    assert.equal(body.sturaosSha.length, 7)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
   }
 })

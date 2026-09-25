@@ -48,6 +48,7 @@ import { walkFiles } from './lib/discover.mjs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { run } from './lib/run.mjs'
+import { headInfo } from './lib/git.mjs'
 import { scanRepo as knownSecretsScanRepo, trackedFiles, loadDenylistFile } from './known-secrets.mjs'
 import { evaluateRepo as runnerPolicyEvaluateRepo, loadWaivers, todayIso } from './runner-policy.mjs'
 
@@ -387,6 +388,19 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
 // pipeline (or an operator) can see the surface at a glance.
 // ---------------------------------------------------------------------------
 
+/**
+ * `<date>T<hhmmss>Z-<kernelShortSha>-<sturaosShortSha>-guards.json` — a NEW
+ * name every run (to the second), naming both tips, so a watch-RED-then-
+ * GREEN sequence never overwrites its own RED record (MEDIUM fix: the old
+ * `<date>-guards.json` name collided on every same-day re-run, and `--out`
+ * was optional at all, so the README's own one-line call recorded nothing).
+ */
+export function guardsResultFileName(now, kernelShortSha, sturaosShortSha) {
+  const date = now.toISOString().slice(0, 10)
+  const hhmmss = now.toISOString().slice(11, 19).replace(/:/g, '')
+  return `${date}T${hhmmss}Z-${kernelShortSha}-${sturaosShortSha}-guards.json`
+}
+
 /** Every Dockerfile (bare `Dockerfile`, or `Dockerfile.*`) under `repoRoot`, repo-relative POSIX paths, sorted. */
 export function listDockerfiles(repoRoot) {
   return walkFiles(repoRoot)
@@ -434,6 +448,15 @@ function argValue(argv, flag) {
   return i === -1 ? null : argv[i + 1]
 }
 
+/** HEAD's short SHA for the result filename, or 'unknown' if `path` is not (yet) a git repo. */
+function tryHeadShortSha(path) {
+  try {
+    return headInfo(path).shortSha
+  } catch {
+    return 'unknown'
+  }
+}
+
 export function main(argv = process.argv.slice(2)) {
   const kernelPath = argValue(argv, '--kernel')
   const sturaosPath = argValue(argv, '--vertical')
@@ -442,7 +465,13 @@ export function main(argv = process.argv.slice(2)) {
   const sturaosBase = argValue(argv, '--vertical-base') ?? undefined
   const waiversPath = argValue(argv, '--waivers') ?? join(HERE, 'waivers.json')
   const denylistPath = argValue(argv, '--known-secrets-denylist') ?? undefined
-  const outDir = argValue(argv, '--out')
+  // MEDIUM fix: --out used to be optional, and the README's own one-line
+  // call omitted it, so the acceptance item "guards.mjs ... writes a dated
+  // JSON result" was unconditionally true only when a caller remembered to
+  // pass --out. Defaulting it (rather than making it a hard requirement,
+  // which would break that one-line call) means a dated record is ALWAYS
+  // written.
+  const outDir = argValue(argv, '--out') ?? join(tmpdir(), 'ci-local-guards-results')
   const imageBuild = argv.includes('--image-build')
 
   if (!kernelPath || !sturaosPath) {
@@ -475,11 +504,25 @@ export function main(argv = process.argv.slice(2)) {
   }
   console.log(`\nguards: overall ${overallExit === 0 ? 'PASS' : 'FAIL'} (${arms.filter((a) => a.status === 'FAIL').length}/${arms.length} arm(s) failed)\n`)
 
-  if (outDir) {
+  {
     mkdirSync(outDir, { recursive: true })
-    const date = new Date().toISOString().slice(0, 10)
-    const path = join(outDir, `${date}-guards.json`)
-    writeFileSync(path, JSON.stringify({ date, kernelPath, sturaosPath, base, kernelBase, sturaosBase, overallExit, arms }, null, 2))
+    const now = new Date()
+    // Best-effort SHAs for the filename only — a scratch path that is not a
+    // real git repo (or mid-teardown) must never stop the dated result from
+    // being written; the JSON body's own `kernelPath`/`sturaosPath` remain
+    // the authoritative identification either way.
+    const kernelShortSha = tryHeadShortSha(kernelPath)
+    const sturaosShortSha = tryHeadShortSha(sturaosPath)
+    const fileName = guardsResultFileName(now, kernelShortSha, sturaosShortSha)
+    const path = join(outDir, fileName)
+    writeFileSync(
+      path,
+      JSON.stringify(
+        { date: now.toISOString().slice(0, 10), timestamp: now.toISOString(), kernelPath, sturaosPath, kernelSha: kernelShortSha, sturaosSha: sturaosShortSha, base, kernelBase, sturaosBase, overallExit, arms },
+        null,
+        2,
+      ),
+    )
     console.log(`wrote ${path}`)
   }
 
