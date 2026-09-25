@@ -15,9 +15,42 @@
 // lint-extraction-source's declared-vs-collected check) or is a well-known
 // external linter; carve-lint's job is only to run every target and refuse to
 // call any of them zero times.
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { run, toolAvailable } from '../lib/proc.mjs'
 
 const REPO_ROOT = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
+
+// integration-gate.sh's own stub() (vault
+// session-2026-09-15-spec-b-d/plan/tooling/integration-gate.sh:35): lint-compose
+// and lint-hygiene both read .env / legal/legal.env (docker compose config
+// resolution, the g2 hygiene overlay check) and FAIL in a bare worktree that
+// has never run `make setup` -- not because anything is wrong, but because
+// nothing was ever configured. Ported verbatim: copy .env.example -> .env and
+// create an empty legal/legal.env only if each is absent, then assert (the
+// same way integration-gate.sh does) that the result is untracked -- both
+// paths are gitignored, so a non-empty `git status` here means something
+// unexpected is tracked at that path and stubbing must refuse rather than
+// silently overwrite it.
+function stubEnvFilesIfAbsent(cwd) {
+  const envPath = path.join(cwd, '.env')
+  const legalDir = path.join(cwd, 'legal')
+  const legalEnvPath = path.join(legalDir, 'legal.env')
+  if (!existsSync(envPath)) {
+    copyFileSync(path.join(cwd, '.env.example'), envPath)
+  }
+  if (!existsSync(legalEnvPath)) {
+    mkdirSync(legalDir, { recursive: true })
+    writeFileSync(legalEnvPath, '')
+  }
+  const status = run('git', ['status', '--porcelain', '--untracked-files=all', '--', '.env', 'legal/legal.env'], { cwd })
+  if (status.stdout.trim().length > 0) {
+    throw new Error(
+      `refusing to stub .env/legal/legal.env: git status is non-empty for a path that should be gitignored -- ` +
+        `something unexpected is tracked there:\n${status.stdout}`,
+    )
+  }
+}
 
 // name -> {make: target} | {tool, args} for the two non-`make` external
 // checks integration-gate.sh ran directly.
@@ -48,6 +81,13 @@ export function runCarveLintSuite({ only, cwd = REPO_ROOT } = {}) {
   for (const t of targets) {
     if (t.tool && !toolAvailable(t.tool)) {
       return { toolMissing: t.tool, unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `${t.name} needs ${t.tool}` }
+    }
+  }
+  if (targets.some((t) => t.name === 'lint-compose' || t.name === 'lint-hygiene')) {
+    try {
+      stubEnvFilesIfAbsent(cwd)
+    } catch (err) {
+      return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: err.message }
     }
   }
   let passed = 0
