@@ -152,7 +152,7 @@ test('an allowance without a reason fails, and so does a stale one', () => {
   )
   assert.deepEqual(codes(reasonless), ['allow-without-reason', 'plaintext-secret'])
   const stale = runSopsCheck(
-    repo(clean, { allow: { allow: [{ path: 'gone.md', rule: 'secret-path', reason: 'was here once' }] } }),
+    repo(clean, { allow: { allow: [{ path: 'gone.md', rule: 'secret-path', reason: 'was here once', blob: '0'.repeat(40) }] } }),
   )
   assert.deepEqual(codes(stale), ['allow-stale'])
 })
@@ -183,7 +183,7 @@ test('age-encrypted twins pass (yaml, json, dotenv, *.enc.*), and the Q5 exclusi
     'secrets/tenant.example.yaml': 'token: CHANGEME\n',
     'secrets/rotate.sh': '#!/bin/sh\necho rotate\n',
     'secrets/README.md': 'what lives here\n',
-  }, { allow: { allow: [{ path: 'secrets/README.md', rule: 'secret-path', reason: 'documentation only, carries no values' }] } })
+  }, { allow: { allow: [{ path: 'secrets/README.md', rule: 'secret-path', reason: 'documentation only, carries no values', blob: sh('git', ['hash-object', '--stdin'], { input: 'what lives here\n' }).stdout.trim() }] } })
   const res = runSopsCheck(r)
   assert.deepEqual(res.problems, [])
   assert.equal(res.secretFiles, 4)
@@ -194,4 +194,80 @@ test('isSopsEncrypted is a post-condition on content, not on the file name', () 
   assert.equal(isSopsEncrypted(encrypt('a: b\n', 'yaml'), 'x.yaml').ok, true)
   assert.equal(isSopsEncrypted('{"sops":{}}', 'x.json').ok, false)
   assert.equal(isSopsEncrypted('sops_version=3\n', 'x.env').ok, false)
+})
+
+// ── review round 1 (2026-09-25): holes found by the security and
+//    silent-failure reviewers, each seeded here before the fix ─────────────
+
+test('a committed plaintext secret deleted from the work tree still fails (the index is read, not the disk)', () => {
+  const r = repo({ ...clean, 'secrets/db.env': 'password=hunter2\n' })
+  sh('rm', [join(r, 'secrets/db.env')])
+  assert.deepEqual(codes(runSopsCheck(r)), ['plaintext-secret'])
+  // …and an uncommitted encrypted twin on disk does not hide the staged plaintext.
+  const r2 = repo({ ...clean, 'secrets/db.yaml': 'password: hunter2\n' })
+  writeFileSync(join(r2, 'secrets/db.yaml'), encrypt('password: hunter2\n', 'yaml'))
+  assert.deepEqual(codes(runSopsCheck(r2)), ['plaintext-secret'])
+})
+
+test('key material after a NUL byte or in UTF-16 is still found', () => {
+  const after = Buffer.concat([Buffer.from('hdr\0\n'), Buffer.from(ALICE.secret)])
+  const utf16 = Buffer.from(`x\n${ALICE.secret}`, 'utf16le')
+  const r = join(h.tmp, 'bin-repo')
+  mkdirSync(r, { recursive: true })
+  writeFileSync(join(r, '.sops.yaml'), sopsYaml(ALICE.recipient))
+  writeFileSync(join(r, 'README.md'), 'x\n')
+  writeFileSync(join(r, 'nul.dat'), after)
+  writeFileSync(join(r, 'utf16.txt'), utf16)
+  sh('git', ['-C', r, 'init', '-q'])
+  sh('git', ['-C', r, 'add', '-A'])
+  const res = runSopsCheck(r)
+  assert.deepEqual(codes(res), ['key-material', 'key-material'])
+})
+
+test('a secret key pasted as the recipient is refused WITHOUT echoing it', () => {
+  const sk = ALICE.secret.trim().split('\n').pop()
+  const res = runSopsCheck(repo(clean, { sops: sopsYaml(sk) }))
+  assert.ok(codes(res).includes('bad-recipient'), JSON.stringify(codes(res)))
+  assert.ok(!JSON.stringify(res).includes(sk.slice(20)), 'the finding echoes the secret key')
+})
+
+test('plaintext hidden inside the sops metadata block (yaml, json) fails', () => {
+  const enc = encrypt('a: one\n', 'yaml')
+  const hidden = enc.replace(/^sops:\n/m, 'sops:\n    password: hunter2\n')
+  assert.equal(isSopsEncrypted(hidden, 'x.yaml').ok, false)
+  const j = JSON.parse(encrypt('{"a":"one"}', 'json'))
+  j.sops.password = 'hunter2'
+  assert.equal(isSopsEncrypted(JSON.stringify(j), 'x.json').ok, false)
+  const trailing = enc + 'password: hunter2\n'
+  assert.equal(isSopsEncrypted(trailing, 'x.yaml').ok, false)
+})
+
+test('a dotenv key that merely starts with sops_ is not metadata', () => {
+  const enc = encrypt('A=1\n', 'dotenv')
+  assert.equal(isSopsEncrypted(enc + 'sops_db_password=hunter2\n', 'x.env').ok, false)
+})
+
+test('plaintext dressed as ENC[...] fails: the full SOPS value shape is required', () => {
+  const enc = encrypt('a: one\n', 'yaml')
+  const fake = enc.replace(/^a: ENC\[.*$/m, 'a: ENC[AES256_GCM,data:hunter2]')
+  assert.equal(isSopsEncrypted(fake, 'x.yaml').ok, false)
+})
+
+test('a PGP private key block, Secrets/ in any case and *.enc.YAML are covered', () => {
+  const pgp = ['-----BEGIN PGP', 'PRIVATE KEY BLOCK-----'].join(' ')
+  assert.deepEqual(codes(runSopsCheck(repo({ ...clean, 'k.asc': `${pgp}\nxx\n` }))), ['key-material'])
+  assert.deepEqual(codes(runSopsCheck(repo({ ...clean, 'Secrets/prod.env': 'A=1\n' }))), ['plaintext-secret'])
+  assert.deepEqual(codes(runSopsCheck(repo({ ...clean, 'c/app.enc.YAML': 'a: 1\n' }))), ['plaintext-secret'])
+})
+
+test('a key-material allowance is pinned to the file content: an edited file fails', () => {
+  const pem = sh('openssl', ['genpkey', '-algorithm', 'ed25519']).stdout
+  const body = `fixture\n${pem}`
+  const sha = sh('git', ['hash-object', '--stdin'], { input: body }).stdout.trim()
+  const entry = { path: 'f.txt', rule: 'key-material', reason: 'fixture', blob: sha }
+  assert.deepEqual(runSopsCheck(repo({ ...clean, 'f.txt': body }, { allow: { allow: [entry] } })).problems, [])
+  const edited = runSopsCheck(repo({ ...clean, 'f.txt': body + 'more\n' }, { allow: { allow: [entry] } }))
+  assert.deepEqual(codes(edited), ['allow-stale', 'key-material'])
+  const unpinned = runSopsCheck(repo({ ...clean, 'f.txt': body }, { allow: { allow: [{ ...entry, blob: undefined }] } }))
+  assert.deepEqual(codes(unpinned), ['allow-unpinned', 'key-material'])
 })
