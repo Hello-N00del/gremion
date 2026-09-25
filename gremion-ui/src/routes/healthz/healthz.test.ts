@@ -143,6 +143,12 @@ describe('GET /healthz (gremion-ui)', () => {
     warn.mockRestore()
   })
 
+  it('the lookup timeout stays under the 3 s Traefik healthCheck timeout', async () => {
+    const mod = await import('./+server')
+    expect(mod._HEALTHZ_LOOKUP_TIMEOUT_MS).toBeGreaterThan(0)
+    expect(mod._HEALTHZ_LOOKUP_TIMEOUT_MS).toBeLessThan(3_000)
+  })
+
   it('the body is byte-identical for two probes of one host', async () => {
     const mod = await import('./+server')
     const a = await (await probe(mod, 'musterstadt.example.org')).text()
