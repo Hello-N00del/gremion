@@ -105,3 +105,61 @@ is a deployment bar, not the go-live gate of `docs/ops/go-live-gate.md`.
 It is not a host build runbook (`docs/ops/host-tooling.md`), not the go-live
 gate (`docs/ops/go-live-gate.md`), and not a deployment's own address plan —
 that belongs in that deployment's private annex and never here.
+
+## `/healthz` and the boot-and-resolve exemption
+
+Every web app answers `GET /healthz` with `200`. `gremion-ui` returns
+`{"ok":true,"tenant":<slug|null>,"colour":"<COLOUR>"}`, keys in that order;
+`gremion-public` returns `{"ok":true,"app":"gremion-public"}` at
+`${PUBLIC_BASE_PATH}/healthz`, because the portal's base path is baked in at
+build time. `COLOUR` is read once at start-up and is empty until the colour
+projects set it. The container healthchecks and the four `healthCheck` blocks of
+the switch file probe these paths; `gremion-switch` substitutes
+`PUBLIC_BASE_PATH` from `state.env` into the `public` and `public-next` probes.
+
+The `gremion-ui` marker needs no host header, no proxy-trust header and no tenant
+row. That is possible because `/healthz` is on a **closed** list,
+`BOOT_AND_RESOLVE_EXEMPT_PATHS` (`gremion-ui/src/lib/server/boot-exempt.ts`),
+which is exactly `['/healthz', '/api/internal/']`; a test pins it by value, so a
+third entry is a reviewed change, not a drive-by. A request on that list is
+handed on by the tenant resolver without a lookup and is answered while the
+process boots:
+
+- `/healthz` always.
+- `/api/internal/…` only when the request names no tenant (no
+  `x-forwarded-host`, no `x-tenant-id`), e.g. the switch's evict fan-out on the
+  container network. A leaf callback or an internal hop that names a tenant is
+  resolved and gated as before, and the edge always stamps `x-forwarded-host`,
+  so nothing arriving through Traefik takes the exemption. Every handler under
+  `routes/api/internal/` must call `isInternalTrustRequest` or
+  `constantTimeEqual`; a static test fails the build otherwise.
+
+Two properties are accepted and deliberate:
+
+- **Liveness, not readiness.** A process that is still booting, or whose boot
+  failed, also answers `200` on `/healthz`. `/api/health` stays the boot probe
+  (`200` only once boot completed). Anything that must not route to a
+  half-booted colour — the switch gate — has to read `/api/health` as well.
+- **Slug disclosure.** Anyone who can reach `/healthz` can ask whether a host is
+  a registered tenant and learn its slug. The lookup goes through the registry's
+  cached host resolution, and misses are remembered for the cache lifetime, so a
+  probe never costs one database query.
+
+## Boot determinism
+
+`gremion-ui` does not need Postgres to be up before it starts. Boot first waits
+for the control database on an exponential ladder: 500 ms, doubling, never more
+than 30 s per wait, each wait jittered into 50–100 % of its step. Every wait is
+logged as `[boot] database not ready (attempt n/60): <error>; backoff=<step>ms
+[(capped)] wait=<ms>`. While it waits, `/healthz` answers and every other route
+answers `503` with `Retry-After: 5`.
+
+What happens when boot fails depends on the failure:
+
+- **Transient** (the database went away mid-boot): the attempt is dropped and one
+  re-attempt is scheduled 5 s later; the process heals without a restart.
+- **Non-transient** (wrong credentials, a schema fault, or the 60-attempt budget
+  running out, roughly 14–27 minutes): boot logs the cause and exits with status
+  1, and `restart: unless-stopped` starts a fresh container. A wrong database
+  password therefore shows up as a rising restart count, not as a container that
+  stays up serving `503`.
