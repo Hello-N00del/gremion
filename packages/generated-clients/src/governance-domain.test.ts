@@ -138,6 +138,39 @@ describe('D3 - every event payload equals its DOMAIN field list, closed against 
   }
 })
 
+describe('D4 - server-recorded DOMAIN fields are readable; append-only records have a read path', () => {
+  it('snapshots and actors DOMAIN records are exposed read-only', () => {
+    const s = loadOpenApi().components.schemas
+    // DB-GOV-NOTICE-OVERRIDE "text curing_basis_snapshot (the basis text and
+    // citation as they stood when recorded)"
+    expect(s.NoticeOverride.properties.curing_basis_snapshot?.readOnly).toBe(true)
+    // DB-GOV-MOTION "timestamp deadline_snapshot"; is_late is computed from it
+    expect(s.Motion.properties.deadline_snapshot?.readOnly).toBe(true)
+    // DB-GOV-INVITATION "reference sender_person_id"
+    expect(s.Invitation.properties.sender_person_id?.readOnly).toBe(true)
+    expect(s.NoticeOverrideCreate.properties.curing_basis_snapshot).toBeUndefined()
+    expect(s.MotionCreate.properties.deadline_snapshot).toBeUndefined()
+  })
+
+  it('the one notice-override and a motion\'s admissions can be read back (GET only, still no mutating verb)', () => {
+    const paths = loadOpenApi().paths
+    const override = paths['/api/v1/invitations/{invitationId}/notice-override']
+    expect(override.get?.operationId).toBe('getNoticeOverride')
+    const admissions = paths['/api/v1/motions/{motionId}/admissions']
+    expect(admissions.get?.operationId).toBe('listMotionAdmissions')
+    for (const item of [override, admissions]) {
+      for (const m of ['put', 'patch', 'delete']) expect(item[m]).toBeUndefined()
+    }
+  })
+
+  it('a defer admission must name its target: a meeting id or the next meeting (DB-GOV-MOTION-ADMISSION)', () => {
+    const create = loadOpenApi().components.schemas.MotionAdmissionCreate
+    expect(create.if?.properties?.outcome?.const).toBe('defer')
+    const alternatives = (create.then?.oneOf ?? []).map((b: any) => b.required).flat()
+    expect(alternatives).toEqual(expect.arrayContaining(['deferred_to_meeting_id', 'defer_to_next_meeting']))
+  })
+})
+
 describe('D2 - every state enum equals its DOMAIN lifecycle diagram', () => {
   for (const [schema, states] of Object.entries(DOMAIN_LIFECYCLES)) {
     it(`${schema}.state enum = DOMAIN ${schema} lifecycle`, () => {
