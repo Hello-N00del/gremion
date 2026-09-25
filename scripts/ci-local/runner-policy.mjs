@@ -92,7 +92,7 @@ export function listWorkflowFiles(repoRoot) {
 export function checkWorkflowText(text) {
   const findings = []
   if (detectSelfHostedRunner(text)) {
-    findings.push({ rule: 'self-hosted', detail: 'runs-on names (or may resolve to) a self-hosted runner' })
+    findings.push({ rule: 'self-hosted', id: 'self-hosted', detail: 'runs-on names (or may resolve to) a self-hosted runner' })
   }
   const seen = new Set()
   for (const m of text.matchAll(SECRET_REF_RE)) {
@@ -100,14 +100,14 @@ export function checkWorkflowText(text) {
     if (seen.has(name)) continue
     if (SENSITIVE_SECRET_NAME_RE.test(name)) {
       seen.add(name)
-      findings.push({ rule: 'sensitive-secret', detail: `references secrets.${name} (signing/age/SSH/deploy)` })
+      findings.push({ rule: 'sensitive-secret', id: `secret:${name}`, detail: `references secrets.${name} (signing/age/SSH/deploy)` })
     }
   }
   if (SECRETS_TOJSON_RE.test(text)) {
-    findings.push({ rule: 'sensitive-secret', detail: 'toJSON(secrets) serializes the entire secrets context — treated as sensitive, fail closed' })
+    findings.push({ rule: 'sensitive-secret', id: 'secrets-tojson', detail: 'toJSON(secrets) serializes the entire secrets context — treated as sensitive, fail closed' })
   }
   if (SECRETS_INHERIT_RE.test(text)) {
-    findings.push({ rule: 'sensitive-secret', detail: 'secrets: inherit passes every secret to a reusable workflow — treated as sensitive, fail closed' })
+    findings.push({ rule: 'sensitive-secret', id: 'secrets-inherit', detail: 'secrets: inherit passes every secret to a reusable workflow — treated as sensitive, fail closed' })
   }
   return findings
 }
@@ -130,8 +130,30 @@ export function todayIso(now = new Date()) {
 export function activeWaiver(waivers, repoLabel, fileBasename, today) {
   const w = waivers.find((x) => x.repo === repoLabel && x.file === fileBasename)
   if (!w) return undefined
+  if (waiverProblem(w)) return undefined // malformed — fails closed, never an open-ended waiver
   if (w.expiresOn < today) return undefined // expired — the guard must still fail
   return w
+}
+
+/**
+ * Why a waiver entry is unusable, or undefined when it is well-formed.
+ * MEDIUM fix: `undefined < '2026-09-25'` is false, so an entry with no
+ * expiresOn (or a non-ISO one like '2026-9-1', which also compares
+ * wrongly as a string) used to stay live forever. And a waiver used to mute
+ * EVERY finding in its file, so a later `runs-on: self-hosted` or
+ * SIGNING_KEY added to the waived file passed silently. A waiver must now
+ * name a real calendar date and the exact finding ids it covers (`covers`,
+ * e.g. "secret:DEPLOY_SSH_KEY"); anything else in the file still fails.
+ */
+export function waiverProblem(w) {
+  const m = typeof w.expiresOn === 'string' ? w.expiresOn.match(/^(\d{4})-(\d{2})-(\d{2})$/) : null
+  if (!m) return `expiresOn ${JSON.stringify(w.expiresOn)} is not a YYYY-MM-DD date`
+  const d = new Date(`${w.expiresOn}T00:00:00Z`)
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== w.expiresOn) return `expiresOn '${w.expiresOn}' is not a real calendar date`
+  if (!Array.isArray(w.covers) || w.covers.length === 0 || !w.covers.every((c) => typeof c === 'string' && c.length > 0)) {
+    return 'covers must list the exact finding ids this waiver mutes (e.g. "secret:DEPLOY_SSH_KEY")'
+  }
+  return undefined
 }
 
 /**
@@ -155,7 +177,21 @@ export function evaluateRepo(repoLabel, repoRoot, waivers, today = todayIso()) {
     const findings = checkWorkflowText(text)
     if (findings.length === 0) continue
     const waiver = activeWaiver(waivers, repoLabel, basename, today)
-    perFile.push({ path: relPath, findings, waiver, waived: Boolean(waiver) })
+    if (!waiver) {
+      perFile.push({ path: relPath, findings, waiver: undefined, waived: false, waivedFindings: [] })
+      continue
+    }
+    // A live waiver mutes only the finding ids it names. Anything else in
+    // the same file — a new self-hosted runner, a new signing secret — is
+    // still a failure (see waiverProblem).
+    const covered = new Set(waiver.covers)
+    const waivedFindings = findings.filter((f) => covered.has(f.id))
+    const uncovered = findings.filter((f) => !covered.has(f.id))
+    if (uncovered.length === 0) {
+      perFile.push({ path: relPath, findings, waiver, waived: true, waivedFindings })
+    } else {
+      perFile.push({ path: relPath, findings: uncovered, waiver, waived: false, waivedFindings })
+    }
   }
   return perFile
 }

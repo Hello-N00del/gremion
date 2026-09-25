@@ -436,14 +436,14 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
     // deploy.yml can never silently cover the other repo's same-named file.
     const perFile = runnerPolicyEvaluateRepo(label, path, waivers, today)
     for (const entry of perFile) {
-      if (entry.waived) {
-        // Waiver use is reported in the arm result (not just console output),
-        // so the dated JSON shows it too — an ever-growing waiver list must
-        // leave a trace, never a bare PASS with an empty findings array.
-        waived.push({ repo: label, path: entry.path, owner: entry.waiver.owner, expiresOn: entry.waiver.expiresOn })
-      } else {
-        results.push({ repo: label, path: entry.path, findings: entry.findings })
+      // Waiver use is reported in the arm result (not just console output),
+      // so the dated JSON shows it too — an ever-growing waiver list must
+      // leave a trace, never a bare PASS with an empty findings array. A
+      // waiver mutes only the finding ids it covers; the rest still fail.
+      if (entry.waivedFindings?.length > 0) {
+        waived.push({ repo: label, path: entry.path, owner: entry.waiver.owner, expiresOn: entry.waiver.expiresOn, findings: entry.waivedFindings.map((f) => f.id) })
       }
+      if (!entry.waived) results.push({ repo: label, path: entry.path, findings: entry.findings })
     }
   }
   return {

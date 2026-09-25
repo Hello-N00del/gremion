@@ -468,7 +468,7 @@ test('runRunnerPolicyArm: a waiver naming ONLY the kernel repo does not waive th
   const kernel = makeWorkflowRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
   const vertical = makeWorkflowRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
   const waiversPath = join(mkdtempSync(join(tmpdir(), 'ci-local-waivers-')), 'waivers.json')
-  writeFileSync(waiversPath, JSON.stringify([{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2099-01-01' }]))
+  writeFileSync(waiversPath, JSON.stringify([{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2099-01-01', covers: ['secret:DEPLOY_SSH_KEY'] }]))
   try {
     const r = runRunnerPolicyArm(kernel, vertical, waiversPath)
     // kernel/deploy.yml is waived and must not appear as a failure...

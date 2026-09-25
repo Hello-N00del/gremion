@@ -3,11 +3,13 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   listWorkflowFiles,
   checkWorkflowText,
   todayIso,
   activeWaiver,
+  waiverProblem,
   evaluateRepo,
   loadWaivers,
 } from './runner-policy.mjs'
@@ -103,14 +105,14 @@ test('todayIso returns YYYY-MM-DD from an injected clock', () => {
 })
 
 test('activeWaiver: live waiver is returned; expired waiver is not (the guard must still fail on an expired waiver)', () => {
-  const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
+  const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24', covers: ['secret:DEPLOY_SSH_KEY'] }]
   assert.ok(activeWaiver(waivers, 'kernel', 'deploy.yml', '2026-09-25'))
   assert.equal(activeWaiver(waivers, 'kernel', 'deploy.yml', '2026-12-25'), undefined)
   assert.equal(activeWaiver(waivers, 'kernel', 'other.yml', '2026-09-25'), undefined)
 })
 
 test('activeWaiver: a waiver scoped to one repo does NOT match the same file in a DIFFERENT repo (HIGH fix: waivers are repo-scoped)', () => {
-  const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
+  const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24', covers: ['secret:DEPLOY_SSH_KEY'] }]
   assert.ok(activeWaiver(waivers, 'kernel', 'deploy.yml', '2026-09-25'), 'kernel deploy.yml is covered')
   assert.equal(
     activeWaiver(waivers, 'vertical', 'deploy.yml', '2026-09-25'),
@@ -135,7 +137,7 @@ test('evaluateRepo: a deploy-secret workflow covered by a live SAME-REPO waiver 
     'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n',
   })
   try {
-    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24', covers: ['secret:DEPLOY_SSH_KEY'] }]
     const result = evaluateRepo('kernel', root, waivers, '2026-09-25')
     assert.equal(result.length, 1)
     assert.equal(result[0].waived, true)
@@ -150,7 +152,7 @@ test('evaluateRepo: the SAME deploy.yml finding in a DIFFERENT repo than the wai
     'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n',
   })
   try {
-    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24', covers: ['secret:DEPLOY_SSH_KEY'] }]
     const result = evaluateRepo('vertical', root, waivers, '2026-09-25')
     assert.equal(result.length, 1)
     assert.equal(result[0].waived, false, 'a kernel-scoped waiver must not silently cover the vertical repo')
@@ -164,13 +166,52 @@ test('evaluateRepo: the SAME finding on an EXPIRED waiver is reported as NOT wai
     'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n',
   })
   try {
-    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-01-01' }]
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-01-01', covers: ['secret:DEPLOY_SSH_KEY'] }]
     const result = evaluateRepo('kernel', root, waivers, '2026-09-25')
     assert.equal(result.length, 1)
     assert.equal(result[0].waived, false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('activeWaiver: a waiver with a missing, non-ISO or impossible expiresOn is never live (MEDIUM fix: it used to never expire)', () => {
+  for (const expiresOn of [undefined, '', '2026-9-1', '2026-13-45', '2026-02-30', 'someday', 20261224]) {
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn, covers: ['secret:DEPLOY_SSH_KEY'] }]
+    assert.equal(activeWaiver(waivers, 'kernel', 'deploy.yml', '2026-09-25'), undefined, String(expiresOn))
+    assert.match(waiverProblem(waivers[0]), /expiresOn/)
+  }
+})
+
+test('activeWaiver: a waiver that does not name the finding ids it covers is never live', () => {
+  for (const covers of [undefined, [], [''], 'secret:DEPLOY_SSH_KEY']) {
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2099-01-01', covers }]
+    assert.equal(activeWaiver(waivers, 'kernel', 'deploy.yml', '2026-09-25'), undefined, JSON.stringify(covers))
+  }
+})
+
+test('evaluateRepo: a live waiver mutes ONLY the finding ids it covers — a new self-hosted runner or signing secret added to the waived file still FAILs (MEDIUM fix)', () => {
+  const root = makeRepo({
+    'deploy.yml': 'jobs:\n  a:\n    runs-on: self-hosted\n    env:\n      K: ${{ secrets.DEPLOY_SSH_KEY }}\n      S: ${{ secrets.COSIGN_KEY }}\n',
+  })
+  try {
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2099-01-01', covers: ['secret:DEPLOY_SSH_KEY'] }]
+    const [entry] = evaluateRepo('kernel', root, waivers, '2026-09-25')
+    assert.equal(entry.waived, false)
+    assert.deepEqual(entry.findings.map((f) => f.id).sort(), ['secret:COSIGN_KEY', 'self-hosted'])
+    assert.deepEqual(entry.waivedFindings.map((f) => f.id), ['secret:DEPLOY_SSH_KEY'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the committed waivers.json covers exactly the findings on the real kernel deploy.yml — no more, no fewer', () => {
+  const waivers = loadWaivers(fileURLToPath(new URL('./waivers.json', import.meta.url)))
+  const kernelRoot = fileURLToPath(new URL('../../', import.meta.url))
+  const entries = evaluateRepo('kernel', kernelRoot, waivers, todayIso()).filter((e) => e.path === '.github/workflows/deploy.yml')
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].waived, true, JSON.stringify(entries[0].findings))
+  assert.deepEqual(entries[0].waivedFindings.map((f) => f.id).sort(), [...waivers[0].covers].sort())
 })
 
 test('evaluateRepo: a clean tree reports no entries at all', () => {
@@ -196,7 +237,7 @@ test('loadWaivers reads a real waivers.json and [] when the path is missing or a
 })
 
 test('the committed scripts/ci-local/waivers.json waives exactly kernel/deploy.yml, owned by TASK-086, and is still a live (non-expired) waiver today', () => {
-  const waivers = loadWaivers(new URL('./waivers.json', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:'))
+  const waivers = loadWaivers(fileURLToPath(new URL('./waivers.json', import.meta.url)))
   assert.equal(waivers.length, 1)
   assert.equal(waivers[0].repo, 'kernel')
   assert.equal(waivers[0].file, 'deploy.yml')

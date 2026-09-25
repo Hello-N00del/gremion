@@ -149,7 +149,12 @@ anywhere in the file) or references a signing/age/SSH/deploy secret
 (TRD-364; `secrets.NAME`, `secrets['NAME']`, `toJSON(secrets)` and
 `secrets: inherit` are all covered — the last two fail closed since they can
 carry ANY secret, not just a named one). Each `waivers.json`
-entry is `{repo, file, owner, expiresOn, reason}` and matches BOTH fields — a
+entry is `{repo, file, owner, expiresOn, covers, reason}`. `covers` lists
+the exact finding ids the waiver mutes (`secret:DEPLOY_SSH_KEY`,
+`self-hosted`, `secrets-tojson`, `secrets-inherit`); any other finding in
+the waived file still fails, so a waiver cannot grow silently. An entry
+whose `expiresOn` is not a real `YYYY-MM-DD` date, or with no `covers`, is
+never live (fail closed). Matching uses BOTH `repo` and `file` — a
 waiver naming `{repo: "kernel", file: "deploy.yml"}` never covers a StuRaOS
 `deploy.yml`, even though the basename is identical (a bare `{file}` waiver
 was a HIGH finding: it silently muted the other repo's same-named file too).
