@@ -96,7 +96,7 @@ export function checkRunning({ project, expected, docker }) {
   for (const c of containers) {
     const who = `${c.name} (${c.label})`
     if (c.state !== 'running') {
-      problems.push(`${c.service || c.name} ${who} is ${c.state}, not running`)
+      problems.push(`${c.service ? `${c.service} ` : ''}${who} is ${c.state}, not running`)
       continue
     }
     const v = psql(docker, c.id, "SELECT current_setting('server_version_num') || '|' || version()")
