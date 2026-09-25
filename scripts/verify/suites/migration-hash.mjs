@@ -26,21 +26,28 @@ export function checkMigrationHashes(dir) {
     return { unparseable: true }
   }
   const sqlFiles = entries.filter((f) => f.endsWith('.sql')).sort()
-  // Refuse an empty directory outright (brief S6 item 5) -- a migrations dir
-  // with zero *.sql files means the check ran over nothing, which is the same
-  // vacuity shape as a test suite that collected zero tests.
-  if (sqlFiles.length === 0) {
-    return { collected: 0, passed: 0, failed: 0, skipped: 0, unparseable: false, mismatches: [], missingFromManifest: [], missingFromDisk: [] }
-  }
+  const manifestExists = entries.includes('manifest.json')
 
-  const manifestPath = path.join(dir, 'manifest.json')
-  let manifest
-  try {
-    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-  } catch {
-    return { unparseable: true }
-  }
-  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+  // A real migrations directory (one or more *.sql files) always needs a
+  // real manifest.json to compare against -- a missing or malformed one here
+  // is unparseable, same as before. A directory with zero *.sql files and no
+  // manifest.json at all is the genuinely-empty, nothing-ever-tracked-here
+  // case (e.g. migrations-control before its first migration): manifest
+  // stays {} and the comparison below runs over nothing, which `empty`
+  // (checked by the caller, brief S6 item 5) turns into a suite-level fail.
+  let manifest = {}
+  if (manifestExists) {
+    const manifestPath = path.join(dir, 'manifest.json')
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    } catch {
+      return { unparseable: true }
+    }
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+      return { unparseable: true }
+    }
+  } else if (sqlFiles.length > 0) {
+    // *.sql files exist on disk but there is nothing to check them against.
     return { unparseable: true }
   }
 
@@ -58,6 +65,10 @@ export function checkMigrationHashes(dir) {
   }
   const manifestFiles = new Set(Object.keys(manifest))
   const diskFiles = new Set(sqlFiles)
+  // Computed even when sqlFiles is empty (brief S6 item 5's real defect: a
+  // directory whose *.sql files were all deleted but whose manifest.json
+  // still lists them must report every one of those as missing-from-disk,
+  // not silently read as "nothing to check" because the disk side is empty).
   const missingFromDisk = [...manifestFiles].filter((f) => !diskFiles.has(f))
 
   const failedCount = mismatches.length + missingFromManifest.length + missingFromDisk.length
@@ -67,6 +78,7 @@ export function checkMigrationHashes(dir) {
     failed: failedCount,
     skipped: 0,
     unparseable: false,
+    empty: sqlFiles.length === 0,
     mismatches,
     missingFromManifest,
     missingFromDisk,
@@ -80,6 +92,7 @@ export function runMigrationHashSuite({ root = path.join(import.meta.dirname, '.
   let passed = 0
   let failed = 0
   const problems = []
+  const emptyDirs = []
   for (const dir of dirs) {
     const r = checkMigrationHashes(dir)
     if (r.unparseable) {
@@ -88,9 +101,28 @@ export function runMigrationHashSuite({ root = path.join(import.meta.dirname, '.
     collected += r.collected
     passed += r.passed
     failed += r.failed
+    if (r.empty) emptyDirs.push(dir)
     if (r.mismatches.length) problems.push(`${dir}: hash mismatch: ${r.mismatches.join(', ')}`)
     if (r.missingFromManifest.length) problems.push(`${dir}: on disk but not in manifest.json: ${r.missingFromManifest.join(', ')}`)
     if (r.missingFromDisk.length) problems.push(`${dir}: in manifest.json but missing on disk: ${r.missingFromDisk.join(', ')}`)
+  }
+  if (emptyDirs.length > 0) {
+    // Brief S6 item 5: an empty directory must exit non-zero on its own,
+    // never be washed out by summing collected counts across BOTH
+    // directories (the real defect: migrations had 31 real files while
+    // migrations-control had 0 -- their SUM was still >0, so the old
+    // collected<=0 guard alone could never catch this). Reported as
+    // unparseable so lib/guard.mjs fails regardless of the other
+    // directory's own collected/passed/failed numbers.
+    return {
+      toolMissing: null,
+      unparseable: true,
+      collected,
+      passed,
+      failed,
+      skipped: 0,
+      detail: `${emptyDirs.join(', ')}: 0 *.sql file(s) found -- refusing an empty migrations directory${problems.length ? '; ' + problems.join('; ') : ''}`,
+    }
   }
   return { toolMissing: null, unparseable: false, collected, passed, failed, skipped: 0, detail: problems.join('; ') }
 }

@@ -4,9 +4,12 @@
 // writes in place and would silently "fix" a wrong manifest instead of
 // failing on one.
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { checkMigrationHashes } from './suites/migration-hash.mjs'
+import { checkMigrationHashes, runMigrationHashSuite } from './suites/migration-hash.mjs'
 
 const FIXTURES = path.join(import.meta.dirname, '__fixtures__', 'migration-hash')
 
@@ -39,4 +42,39 @@ test('a file present on disk but absent from manifest.json is reported, not sile
   // fixture so a future edit to it cannot quietly stop testing the mismatch
   // path this test exists for.
   assert.deepEqual(r.missingFromManifest, [])
+})
+
+test('an empty directory whose manifest.json still lists files reports them missing-from-disk, not nothing-to-check', () => {
+  // Reproduces the real defect (brief S6 item 5): every *.sql file removed
+  // from migrations-control while its manifest.json still lists 4 files.
+  const r = checkMigrationHashes(path.join(FIXTURES, 'empty-with-manifest'))
+  assert.equal(r.unparseable, false)
+  assert.equal(r.collected, 0)
+  assert.equal(r.empty, true)
+  assert.deepEqual(r.missingFromDisk, ['001_ghost.sql'])
+  assert.ok(r.failed > 0, 'a manifest entry with no file on disk must count as a failure')
+})
+
+test('runMigrationHashSuite fails when EITHER directory is empty, even if the other has real passing files', () => {
+  // The real defect this suite-level test guards: summing collected across
+  // both directories let one healthy directory's non-zero count mask the
+  // other directory's empty one (31 + 0 is still > 0).
+  const root = mkdtempSync(path.join(tmpdir(), 'verify-migration-hash-suite-test-'))
+  try {
+    const healthyDir = path.join(root, 'gremion-ui', 'migrations')
+    const emptyDir = path.join(root, 'gremion-ui', 'migrations-control')
+    mkdirSync(healthyDir, { recursive: true })
+    mkdirSync(emptyDir, { recursive: true })
+    writeFileSync(path.join(healthyDir, '001_a.sql'), 'select 1;\n')
+    const hash = createHash('sha256').update('select 1;\n').digest('hex')
+    writeFileSync(path.join(healthyDir, 'manifest.json'), JSON.stringify({ '001_a.sql': hash }))
+    // emptyDir has no .sql files and no manifest.json at all -- the
+    // genuinely-empty shape.
+    const r = runMigrationHashSuite({ root })
+    assert.equal(r.unparseable, true)
+    assert.match(r.detail, /migrations-control/)
+    assert.match(r.detail, /empty/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
