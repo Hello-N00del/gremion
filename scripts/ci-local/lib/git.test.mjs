@@ -70,3 +70,14 @@ test('isGitRepo is true for a real repo and false for a plain directory', () => 
     rmSync(plain, { recursive: true, force: true })
   }
 })
+
+test('headInfo reports a detached HEAD as "(detached)", not the literal "HEAD" git prints for it', () => {
+  const root = makeRepo()
+  try {
+    const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+    execFileSync('git', ['-C', root, 'checkout', '-q', '--detach', sha])
+    assert.equal(headInfo(root).branch, '(detached)')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

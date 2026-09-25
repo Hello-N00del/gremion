@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { validateManifest, suitesFor, CATEGORIES } from './manifest.mjs'
 
 function suite(id, category) {
-  return { id, category, repo: 'kernel', cwd: '.', kind: 'guard', command: 'true', testGlobs: [] }
+  return { id, category, repo: 'kernel', cwd: '.', kind: 'guard', command: 'true', testGlobs: ['x.test.mjs'] }
 }
 
 function fullManifest() {
@@ -57,4 +57,18 @@ test('suitesFor narrows to the given ids, preserving manifest order', () => {
     picked.map((s) => s.id),
     ['k-0', 'k-2'],
   )
+})
+
+test('validateManifest goes RED on a suite with no testGlobs (it could never be reported absent and claims nothing)', () => {
+  const m = fullManifest()
+  m.kernel[0].testGlobs = []
+  delete m.vertical[1].testGlobs
+  const problems = validateManifest(m)
+  assert.equal(problems.filter((p) => /has no testGlobs/.test(p)).length, 2)
+})
+
+test('the committed suites.json is valid', async () => {
+  const { loadManifest } = await import('./manifest.mjs')
+  const { fileURLToPath } = await import('node:url')
+  assert.deepEqual(validateManifest(loadManifest(fileURLToPath(new URL('../suites.json', import.meta.url)))), [])
 })

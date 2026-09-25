@@ -31,6 +31,9 @@ export function headInfo(root) {
   } catch {
     branch = '(detached)'
   }
+  // `rev-parse --abbrev-ref HEAD` prints the literal "HEAD" (and exits 0)
+  // on a detached HEAD, so the catch above never sees that case.
+  if (branch === 'HEAD') branch = '(detached)'
   return { sha, shortSha, branch }
 }
 

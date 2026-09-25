@@ -34,6 +34,11 @@ export function validateManifest(manifest) {
       if (!CATEGORIES.includes(suite.category)) {
         problems.push(`repo '${repo}': suite '${suite.id}' declares unknown category '${suite.category}'`)
       }
+      // A suite with no testGlobs can never be reported as "files absent"
+      // and claims nothing, so it could run nothing and still look present.
+      if (!Array.isArray(suite.testGlobs) || suite.testGlobs.length === 0) {
+        problems.push(`repo '${repo}': suite '${suite.id}' has no testGlobs — every suite must name the files that prove it exists`)
+      }
     }
     for (const category of CATEGORIES) {
       const count = suites.filter((s) => s.category === category).length

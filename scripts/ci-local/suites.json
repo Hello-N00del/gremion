@@ -467,6 +467,26 @@
       "testGlobs": ["scripts/carve/carve.test.mjs", "scripts/carve/pnpm-deps.test.mjs"]
     },
     {
+      "id": "vertical-f1-defect-guards",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "vitest",
+      "command": "pnpm --dir gremion-ui exec vitest run --config ../test/f1-defect/vitest.config.ts",
+      "requiresStack": false,
+      "testGlobs": ["test/f1-defect/guards/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-f1-defect-e2e",
+      "repo": "vertical",
+      "category": "e2e",
+      "cwd": "gremion-ui",
+      "kind": "playwright",
+      "command": "pnpm exec playwright test --config=../test/f1-defect/e2e/playwright.config.ts",
+      "requiresStack": true,
+      "testGlobs": ["test/f1-defect/e2e/**/*.spec.ts"]
+    },
+    {
       "id": "vertical-mobile-flutter",
       "repo": "vertical",
       "category": "unit",
