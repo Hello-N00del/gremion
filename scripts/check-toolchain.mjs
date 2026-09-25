@@ -44,6 +44,12 @@ export const NODE_VERSION_FILES = ['.node-version', '.nvmrc']
 // under strictDepBuilds. Each reason is why running it is safe — read it
 // before adding a third entry.
 export const ALLOWED_BUILD_DEPS = {
+  'better-sqlite3': 'native SQLite binding (install: prebuild-install, else node-gyp ' +
+    'rebuild) — dev-only: a devDependency of the in-tree calendar, content and ' +
+    'publishing modules (TASK-200), used by publishing\'s one-shot legacy backfill ' +
+    'script and its integration test to read the retired SQLite store read-only; ' +
+    'never in a runtime image (each leaf image is `pnpm deploy --prod`, which omits ' +
+    'devDependencies)',
   esbuild: 'native binary downloader (install.js) fetches the platform-matched ' +
     'esbuild executable; dev/build-only, esbuild is never a runtime dependency ' +
     'of either shipped image',
