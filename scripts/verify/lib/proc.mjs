@@ -43,3 +43,17 @@ export function toolAvailable(name) {
   const probe = process.platform === 'win32' ? run('where', [name]) : run('which', [name])
   return probe.code === 0
 }
+
+/**
+ * True when `run()` could not start the command at all (the binary is not
+ * on PATH). Callers report that as `toolMissing`, never as a failed or
+ * skipped run.
+ */
+export function spawnMissing(res) {
+  return res.error?.code === 'ENOENT'
+}
+
+/** The last `n` characters of a tool's output, for a FAIL line's detail. */
+export function tail(text, n = 500) {
+  return text.length > n ? text.slice(-n) : text
+}

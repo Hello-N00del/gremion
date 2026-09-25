@@ -4,6 +4,8 @@
   "version": "0.0.0",
   "scripts": {
     "test:custom": "node fake-reporter.mjs",
-    "test:unit": "node fail-if-called.mjs"
+    "test:unit": "node fail-if-called.mjs",
+    "test:green-exit1": "node green-report-exit1.mjs",
+    "test:skips": "node skips-reporter.mjs"
   }
 }

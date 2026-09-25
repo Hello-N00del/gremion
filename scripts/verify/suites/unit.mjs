@@ -1,82 +1,86 @@
 // TASK-045: unit suite (brief S5). Five sub-checks, each counted a different
 // way because each tool lies about "nothing ran" differently:
-//   - gremion-ui / gremion-public / @gremion/ports: vitest JSON reporter.
-//   - scripts/**/*.test.mjs: node --test TAP summary, cross-checked against
-//     the declared `test(` count (see lib/parsers.mjs's countDeclaredNodeTests
-//     doc comment for why the raw TAP summary alone is not enough).
-//   - test/*.bats + test/host/*.bats: bats' own TAP output.
-import { globSync } from 'node:fs'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+//   - gremion-ui / gremion-public / @gremion/ports: vitest JSON reporter plus
+//     the exit code (lib/vitest.mjs).
+//   - scripts/**/*.test.mjs: node --test TAP summary per file, cross-checked
+//     against the declared `test(` count (see lib/parsers.mjs's
+//     countDeclaredNodeTests doc comment for why the raw TAP summary alone is
+//     not enough).
+//   - test/*.bats + test/host/*.bats: bats' own TAP output plus its exit code.
+// The parts are combined with lib/guard.mjs#combineParts, so one sub-check
+// that collected nothing fails the suite by name instead of hiding inside
+// the others' total.
+//
+// Each part can also be run on its own as `verify --only unit:<part>` (see
+// UNIT_PARTS / verify.mjs's registry) -- gremion-ui's vitest alone takes
+// about three minutes, so the whole suite does not fit a single 4-minute
+// agent tool call. A part run is always a partial record; only a full
+// `verify` (every required suite, `unit` whole) satisfies check-record.
+import { globSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary, parseVitestJsonFile, summarizeVitestFailures } from '../lib/parsers.mjs'
-import { run, toolAvailable } from '../lib/proc.mjs'
+import { combineParts } from '../lib/guard.mjs'
+import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary } from '../lib/parsers.mjs'
+import { run, tail, toolAvailable } from '../lib/proc.mjs'
+import { REPO_ROOT, runVitestJson } from '../lib/vitest.mjs'
 
-const REPO_ROOT = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
-
-export function vitestSubcheck({ cwd, testScript = 'test:unit' }) {
-  const outFile = path.join(mkdtempSync(path.join(tmpdir(), 'verify-vitest-')), 'result.json')
+/** One package's own test script, run with the JSON reporter. */
+export function vitestSubcheck({ cwd, testScript = 'test:unit', root = REPO_ROOT, label = `${path.basename(cwd)} vitest (${testScript})` }) {
   // Runs the package's OWN script (`pnpm run <testScript>`), not a
-  // hand-assembled `vitest run` -- all three call sites happen to define
-  // that script as exactly `vitest run` today, so this was silently
-  // equivalent, but a future change to any one of them (a --coverage flag,
-  // a different config, swapping tools entirely) would have kept being
-  // ignored forever, since `testScript` was accepted but never read.
-  //
-  // NO `--` before the flags: pnpm 10 forwards a literal `--` to the script,
-  // and vitest then treats everything after it as positional, ignores
-  // --reporter/--outputFile and writes no JSON at all (reproduced against
-  // packages/ports: "no parseable JSON report (exit 0)"). pnpm 10 appends
-  // extra arguments after the script name to the script's command as-is.
-  const res = run('pnpm', ['run', testScript, '--reporter=json', `--outputFile=${outFile}`], {
-    cwd,
-  })
-  const parsed = parseVitestJsonFile(outFile)
-  const failureLines = parsed && parsed.failed > 0 ? summarizeVitestFailures(outFile) : []
-  rmSync(path.dirname(outFile), { recursive: true, force: true })
-  if (!parsed) {
-    return { unparseable: true, detail: `${cwd}: vitest produced no parseable JSON report (exit ${res.code})\n${tail(res.stdout + res.stderr)}` }
-  }
-  const detail = failureLines.length > 0 ? `${cwd}:\n  ${failureLines.join('\n  ')}` : ''
-  return { unparseable: false, ...parsed, detail }
+  // hand-assembled `vitest run`, so a flag or config a package adds to its
+  // script is what verify runs too.
+  return runVitestJson({ label, cwd, cmd: 'pnpm', args: ['run', testScript], root })
 }
 
 // Runs node --test PER FILE, one process per file, exactly like the
 // Makefile's lint-extraction-source / lint-toolchain targets do -- so the
-// same declared-`test(`-count-vs-TAP-plan check applies file by file. Running
-// them together (tried first) flattens every file's tests into one shared
-// TAP stream where a file with 0 declared tests contributes a single
-// synthetic "file itself" entry indistinguishable, in the aggregate, from a
-// real skipped test -- per-file is what makes that entry unambiguous: THIS
-// file declared 0 and collected 1, a mismatch that can never happen by
-// chance.
-function nodeTestSubcheck({ cwd, files }) {
+// same declared-`test(`-count-vs-TAP-plan check applies file by file, and a
+// file with 0 declared tests is its own empty part (combineParts names it)
+// rather than one synthetic "file itself" entry lost in an aggregate.
+export function nodeTestParts({ cwd, files }) {
   if (files.length === 0) {
-    return { unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0, detail: 'no scripts/**/*.test.mjs files found' }
+    return [{ label: 'node --test (no *.test.mjs files found)', collected: 0, passed: 0, failed: 0, skipped: 0 }]
   }
-  let collected = 0
-  let passed = 0
-  let failed = 0
-  let skipped = 0
-  for (const file of files) {
+  return files.map((file) => {
+    const label = `node --test ${file.split(path.sep).join('/')}`
     const declared = countDeclaredNodeTests([readFileSync(path.join(cwd, file), 'utf8')])
-    const res = run('node', ['--test', '--test-reporter=tap', file], { cwd })
-    const summary = parseNodeTapSummary(res.stdout + res.stderr)
+    // NODE_TEST_CONTEXT is stripped: when verify itself runs under node --test
+    // (its own tests do), an inherited NODE_TEST_CONTEXT=child-v8 makes the
+    // child report to that parent in node's internal v8 stream instead of
+    // printing TAP, and the summary is unparseable.
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    const res = run(process.execPath, ['--test', '--test-reporter=tap', file], { cwd, env })
+    const out = res.stdout + res.stderr
+    const summary = parseNodeTapSummary(out)
     if (!summary) {
-      return { unparseable: true, detail: `${file}: node --test produced no parseable TAP summary\n${tail(res.stdout + res.stderr)}` }
+      return { label, unparseable: true, detail: `no parseable TAP summary (exit ${res.code})\n${tail(out)}` }
     }
-    if (declared === 0) {
-      return { unparseable: true, detail: `${file}: declares 0 top-level test() but node --test collected ${summary.collected} -- the file has no real tests (it becomes its own synthetic passing entry)` }
+    if (declared === 0 && summary.failed === 0) {
+      return {
+        label,
+        collected: 0,
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+        detail: `declares no test() -- node --test counted ${summary.collected}, the file itself as a synthetic passing test`,
+      }
+    }
+    if (summary.failed > 0) {
+      return { label, ...summary, detail: tail(out) }
     }
     if (summary.collected !== declared) {
-      return { unparseable: true, detail: `${file}: declares ${declared} test(s) but node --test collected ${summary.collected} -- tests stopped registering, or moved off column 0` }
+      return {
+        label,
+        unparseable: true,
+        detail: `declares ${declared} test(s) but node --test collected ${summary.collected} -- tests stopped registering, or the file uses t.test()/it() forms this count does not see`,
+      }
     }
-    collected += summary.collected
-    passed += summary.passed
-    failed += summary.failed
-    skipped += summary.skipped
-  }
-  return { unparseable: false, collected, passed, failed, skipped }
+    if (res.code !== 0) {
+      return { label, unparseable: true, detail: `node --test exited ${res.code ?? `on signal ${res.signal}`} with no failed test in its summary -- untrusted\n${tail(out)}` }
+    }
+    return { label, ...summary }
+  })
 }
 
 // On win32 the npm bats shim rejects the C:/ path the recipe's own shell
@@ -87,134 +91,100 @@ function nodeTestSubcheck({ cwd, files }) {
 // bats-runner/Dockerfile), against a REAL CLONE: a linked worktree's `.git`
 // is a file whose gitdir line is a host-absolute path the container cannot
 // resolve.
-function batsSubcheckWindows({ cwd, patterns }) {
+function batsPartWindows({ label, cwd, patterns }) {
   if (!toolAvailable('docker')) {
-    return { toolMissing: 'docker' }
+    return { label, toolMissing: 'docker' }
   }
   const runnerDir = path.join(cwd, 'test', 'host', 'runner')
   const batsRunnerDockerfile = path.join(cwd, 'scripts', 'verify', 'bats-runner')
   const baseBuild = run('docker', ['build', '-q', '-t', 'gremion-bats:local', runnerDir])
   if (baseBuild.code !== 0) {
-    return { unparseable: true, detail: `docker build gremion-bats:local failed:\n${tail(baseBuild.stdout + baseBuild.stderr)}` }
+    return { label, unparseable: true, detail: `docker build gremion-bats:local failed:\n${tail(baseBuild.stdout + baseBuild.stderr)}` }
   }
   const pyBuild = run('docker', ['build', '-q', '-t', 'gremion-bats-py:local', batsRunnerDockerfile])
   if (pyBuild.code !== 0) {
-    return { unparseable: true, detail: `docker build gremion-bats-py:local failed:\n${tail(pyBuild.stdout + pyBuild.stderr)}` }
+    return { label, unparseable: true, detail: `docker build gremion-bats-py:local failed:\n${tail(pyBuild.stdout + pyBuild.stderr)}` }
   }
 
   const cloneDir = mkdtempSync(path.join(tmpdir(), 'verify-bats-clone-'))
   try {
     const clone = run('git', ['clone', '--no-hardlinks', cwd, cloneDir])
     if (clone.code !== 0) {
-      return { unparseable: true, detail: `git clone into scratch failed:\n${tail(clone.stdout + clone.stderr)}` }
+      return { label, unparseable: true, detail: `git clone into scratch failed:\n${tail(clone.stdout + clone.stderr)}` }
     }
-    const files = patterns.flatMap((p) => globSync(p, { cwd: cloneDir })).sort()
+    const files = patterns.flatMap((p) => globSync(p, { cwd: cloneDir })).map((f) => f.split(path.sep).join('/')).sort()
     if (files.length === 0) {
-      return { unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
+      return { label, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
     }
-    const res = run(
-      'docker',
-      ['run', '--rm', '-v', `${cloneDir}:/wt`, '-w', '/wt', 'gremion-bats-py:local', '--tap', ...files],
-      { env: { ...process.env, MSYS_NO_PATHCONV: '1' } },
-    )
-    const parsed = parseBatsTap(res.stdout + res.stderr)
-    if (!parsed) {
-      return { unparseable: true, detail: `bats (container) produced no parseable or complete TAP plan (docker exit ${res.code})\n${tail(res.stdout + res.stderr)}` }
-    }
-    // A TAP stream can look complete (plan matches ok+not-ok count) while the
-    // container itself still exited non-zero for a reason the TAP never
-    // recorded as a `not ok` -- e.g. the runner crashed AFTER printing its
-    // last result line. `parsed.failed > 0` already explains a non-zero exit;
-    // a non-zero exit with no reported failure at all is not explained by
-    // anything this parser saw, so it is treated as untrustworthy, not clean.
-    if (res.code !== 0 && parsed.failed === 0) {
-      return { unparseable: true, detail: `bats (container) exited ${res.code} but its TAP output reported no failures -- untrusted\n${tail(res.stdout + res.stderr)}` }
-    }
-    return { unparseable: false, ...parsed }
+    const res = run('docker', ['run', '--rm', '-v', `${cloneDir}:/wt`, '-w', '/wt', 'gremion-bats-py:local', '--tap', ...files], {
+      env: { ...process.env, MSYS_NO_PATHCONV: '1' },
+    })
+    return judgeBats(label, res, 'bats (container)')
   } finally {
     rmSync(cloneDir, { recursive: true, force: true })
   }
 }
 
-function batsSubcheck({ cwd, patterns }) {
+// A TAP stream can look complete (plan matches ok+not-ok count) while the
+// runner itself still exited non-zero for a reason the TAP never recorded
+// as a `not ok` -- e.g. it crashed AFTER printing its last result line.
+// `failed > 0` already explains a non-zero exit; a non-zero exit with no
+// reported failure is not explained by anything the parser saw, so it is
+// untrusted, not clean.
+function judgeBats(label, res, what) {
+  const out = res.stdout + res.stderr
+  const parsed = parseBatsTap(out)
+  if (!parsed) {
+    return { label, unparseable: true, detail: `${what} produced no parseable or complete TAP plan (exit ${res.code})\n${tail(out)}` }
+  }
+  if (res.code !== 0 && parsed.failed === 0) {
+    return { label, unparseable: true, detail: `${what} exited ${res.code ?? `on signal ${res.signal}`} but its TAP output reported no failures -- untrusted\n${tail(out)}` }
+  }
+  return { label, ...parsed, detail: parsed.failed > 0 ? tail(out, 1500) : '' }
+}
+
+function batsPart({ cwd, patterns }) {
+  const label = `bats ${patterns.join(' ')}`
   if (process.platform === 'win32') {
-    return batsSubcheckWindows({ cwd, patterns })
+    return batsPartWindows({ label, cwd, patterns })
   }
   if (!toolAvailable('bats')) {
-    return { toolMissing: 'bats' }
+    return { label, toolMissing: 'bats' }
   }
   const files = patterns.flatMap((p) => globSync(p, { cwd })).sort()
   if (files.length === 0) {
-    return { unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
+    return { label, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
   }
-  const res = run('bats', ['--tap', ...files], { cwd })
-  const parsed = parseBatsTap(res.stdout + res.stderr)
-  if (!parsed) {
-    return { unparseable: true, detail: `bats produced no parseable or complete TAP plan (exit ${res.code})\n${tail(res.stdout + res.stderr)}` }
-  }
-  if (res.code !== 0 && parsed.failed === 0) {
-    return { unparseable: true, detail: `bats exited ${res.code} but its TAP output reported no failures -- untrusted\n${tail(res.stdout + res.stderr)}` }
-  }
-  return { unparseable: false, ...parsed }
+  return judgeBats(label, run('bats', ['--tap', ...files], { cwd }), 'bats')
 }
 
-export function runUnitSuite({ root = REPO_ROOT } = {}) {
-  const uiDir = path.join(root, 'gremion-ui')
-  const publicDir = path.join(root, 'gremion-public')
-  const portsDir = path.join(root, 'packages', 'ports')
-
-  const ui = vitestSubcheck({ cwd: uiDir, testScript: 'test:unit' })
-  if (ui.unparseable) return unparseableResult(ui.detail)
-
-  const pub = vitestSubcheck({ cwd: publicDir, testScript: 'test' })
-  if (pub.unparseable) return unparseableResult(pub.detail)
-
-  const ports = vitestSubcheck({ cwd: portsDir, testScript: 'test' })
-  if (ports.unparseable) return unparseableResult(ports.detail)
-
+function scriptTestFiles(root) {
   // __fixtures__/** is deliberately excluded: those files exist to be
   // seeded-bad (zero declared tests, all-skip) for verify's OWN guard tests
   // and must never be swept into the real suite they are fixtures for.
-  const scriptTestFiles = globSync('scripts/**/*.test.mjs', { cwd: root })
+  return globSync('scripts/**/*.test.mjs', { cwd: root })
     .filter((f) => !f.split(/[\\/]/).includes('__fixtures__'))
     .sort()
-  const nodeSuite = nodeTestSubcheck({ cwd: root, files: scriptTestFiles })
-  if (nodeSuite.unparseable) return unparseableResult(nodeSuite.detail)
+}
 
-  const bats = batsSubcheck({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })
-  if (bats.toolMissing) return { toolMissing: bats.toolMissing, unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0 }
-  if (bats.unparseable) return unparseableResult(bats.detail)
+/** Part name -> the combineParts parts it produces. Order is run order. */
+export const UNIT_PARTS = {
+  ui: (root) => [vitestSubcheck({ cwd: path.join(root, 'gremion-ui'), testScript: 'test:unit', root, label: 'gremion-ui vitest (test:unit)' })],
+  public: (root) => [vitestSubcheck({ cwd: path.join(root, 'gremion-public'), testScript: 'test', root, label: 'gremion-public vitest (test)' })],
+  ports: (root) => [vitestSubcheck({ cwd: path.join(root, 'packages', 'ports'), testScript: 'test', root, label: '@gremion/ports vitest (test)' })],
+  node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
+  bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
+}
 
-  const parts = [ui, pub, ports, nodeSuite, bats]
-  // Found needed by actually running this suite with real vitest failures
-  // present: hard-coding detail: '' here discarded every sub-check's own
-  // failure summary the moment the suite as a whole was merely `failed`, not
-  // `unparseable` -- the aggregate correctly summed the failed count but gave
-  // no lead at all on which tests. Each sub-check's own `detail` (set only
-  // when it has something to say -- see vitestSubcheck) is preserved here.
-  const detail = parts
-    .map((p) => p.detail)
-    .filter((d) => d)
-    .join('\n')
-  return {
-    toolMissing: null,
-    unparseable: false,
-    collected: sum(parts, 'collected'),
-    passed: sum(parts, 'passed'),
-    failed: sum(parts, 'failed'),
-    skipped: sum(parts, 'skipped'),
-    detail,
+/**
+ * @param {{root?: string, only?: string[]}} [opts] `only` restricts the run
+ *   to named UNIT_PARTS (used by the `unit:<part>` registry entries); an
+ *   unknown part name throws, which runAll reports as a FAIL.
+ */
+export function runUnitSuite({ root = REPO_ROOT, only } = {}) {
+  const names = only ?? Object.keys(UNIT_PARTS)
+  for (const n of names) {
+    if (!UNIT_PARTS[n]) throw new Error(`unknown unit part: ${n} (known: ${Object.keys(UNIT_PARTS).join(', ')})`)
   }
-}
-
-function unparseableResult(detail) {
-  return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail }
-}
-
-function sum(parts, key) {
-  return parts.reduce((acc, p) => acc + (p[key] ?? 0), 0)
-}
-
-function tail(text, n = 400) {
-  return text.length > n ? text.slice(-n) : text
+  return combineParts(names.flatMap((n) => UNIT_PARTS[n](root)))
 }
