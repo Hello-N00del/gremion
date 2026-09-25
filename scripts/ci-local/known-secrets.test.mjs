@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -123,5 +123,49 @@ test('scanRepo passes GREEN once the sentinel is removed from the tree (watch it
     assert.equal(scanRepo(root, syntheticDenylist()).findings.length, 0) // GREEN
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('scanRepo: a tracked file deleted in the worktree is skipped, but a tracked path that cannot be read for any other reason FAILs the scan (MEDIUM fix: every read error used to be skipped silently)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-local-known-secrets-unreadable-'))
+  const git = (args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' })
+  try {
+    git(['init', '-q', '-b', 'main'])
+    git(['config', 'user.email', 'ci-local-test@example.invalid'])
+    git(['config', 'user.name', 'ci-local-test'])
+    writeFileSync(join(root, 'keep.txt'), 'ordinary text\n')
+    writeFileSync(join(root, 'gone.txt'), 'ordinary text\n')
+    writeFileSync(join(root, 'weird.txt'), 'ordinary text\n')
+    git(['add', '-A'])
+    git(['commit', '-q', '-m', 'seed'])
+
+    rmSync(join(root, 'gone.txt'))
+    assert.equal(scanRepo(root, syntheticDenylist()).scanned, 2, 'a deleted tracked file is simply not scanned')
+
+    // Replace a tracked file with a directory: git still lists it, reading it fails with EISDIR.
+    rmSync(join(root, 'weird.txt'))
+    mkdirSync(join(root, 'weird.txt'))
+    assert.throws(() => scanRepo(root, syntheticDenylist()), /could not read tracked file weird\.txt/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('loadDenylistFile refuses a key that is not a lower-case SHA-256 hex digest, a non-object file and an empty note — a typo must never silently protect nothing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-denylist-bad-'))
+  try {
+    const cases = [
+      [{ 'not-a-digest': 'note' }, /not a lower-case 64-hex SHA-256 digest/],
+      [{ [SENTINEL_DIGEST.toUpperCase()]: 'note' }, /not a lower-case 64-hex SHA-256 digest/],
+      [{ [SENTINEL_DIGEST]: '' }, /non-empty note/],
+      [[SENTINEL_DIGEST], /must be a JSON object/],
+    ]
+    for (const [body, re] of cases) {
+      const p = join(dir, 'denylist.json')
+      writeFileSync(p, JSON.stringify(body))
+      assert.throws(() => loadDenylistFile(p), re)
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

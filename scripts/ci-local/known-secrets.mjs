@@ -101,7 +101,21 @@ export function loadDenylistFile(path, base = KNOWN_COMPROMISED) {
   const merged = new Map(base)
   if (!path) return merged
   const entries = JSON.parse(readFileSync(path, 'utf8'))
-  for (const [digest, note] of Object.entries(entries)) merged.set(digest, note)
+  if (entries === null || typeof entries !== 'object' || Array.isArray(entries)) {
+    throw new Error(`known-secrets: denylist ${path} must be a JSON object of {"<sha256-hex>": "<note>"}`)
+  }
+  for (const [digest, note] of Object.entries(entries)) {
+    // A key that is not a lower-case SHA-256 hex digest can never match
+    // (scanText looks up createHash(...).digest('hex')), so a typo or a
+    // pasted plaintext would silently protect nothing. Refuse it.
+    if (!/^[0-9a-f]{64}$/.test(digest)) {
+      throw new Error(`known-secrets: denylist ${path} has a key that is not a lower-case 64-hex SHA-256 digest (entry ${Object.keys(entries).indexOf(digest) + 1})`)
+    }
+    if (typeof note !== 'string' || note.length === 0) {
+      throw new Error(`known-secrets: denylist ${path} entry ${Object.keys(entries).indexOf(digest) + 1} needs a non-empty note`)
+    }
+    merged.set(digest, note)
+  }
   return merged
 }
 
@@ -120,8 +134,14 @@ export function scanRepo(repoRoot, denylist = KNOWN_COMPROMISED) {
     let text
     try {
       text = readFileSync(join(repoRoot, rel), 'utf8')
-    } catch {
-      continue // deleted-in-worktree or unreadable
+    } catch (err) {
+      // Only a tracked file deleted in the worktree is skipped silently: it
+      // cannot be scanned and holds nothing on disk. Any other read error
+      // (permissions, a directory where a file was, I/O) would drop a file
+      // from the scan with no trace, so it fails the scan instead (MEDIUM
+      // fix: every error used to be skipped silently).
+      if (err?.code === 'ENOENT') continue
+      throw new Error(`known-secrets: could not read tracked file ${rel}: ${err?.code ?? err?.message} — refusing to report a scan that skipped it`)
     }
     if (text.includes('\0')) continue // binary
     scanned++
