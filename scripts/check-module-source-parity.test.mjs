@@ -230,6 +230,17 @@ test('RED: a stale delta entry (listed but byte-equal, or pointing nowhere) fail
   }
 })
 
+test('RED: a copied file that .gitignore hides would never be committed — refused, not hashed from disk', () => {
+  const f = fixture()
+  try {
+    put(f.kernel, '.gitignore', 'm.ts\n')
+    const r = runParity(f.opts)
+    assert.ok(r.problems.some((p) => /ignored/.test(p) && /modules\/messaging\/src\/m\.ts/.test(p)), r.problems.join('\n'))
+  } finally {
+    f.cleanup()
+  }
+})
+
 test('validateDelta refuses a missing reason, a missing owner and a duplicate path', () => {
   assert.ok(validateDelta({ entries: [{ path: 'modules/a', owner: 'TASK-1' }] }).some((p) => /reason/.test(p)))
   assert.ok(validateDelta({ entries: [{ path: 'modules/a', reason: 'r' }] }).some((p) => /owner/.test(p)))

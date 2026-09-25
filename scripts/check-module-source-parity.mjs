@@ -234,6 +234,13 @@ export function runParity(opts) {
   const setAPaths = setA.map((a) => mapSourcePath(a.path)).filter(Boolean)
   const hashes = kernelBlobs(kernelRoot, [...new Set([...mappedTargets, ...setAPaths, ...onDisk])])
 
+  // A mapped file that exists on disk but that git would never commit (ignored
+  // by a .gitignore) hashes equal here and is missing from every clone. Refuse.
+  const committable = new Set(onDisk)
+  for (const p of mappedTargets)
+    if (hashes.get(p) !== null && !committable.has(p))
+      problems.push(`${p} exists on disk but is ignored by git — it would never be committed, so a clone would lack it`)
+
   const compare = (sourcePath, sourceBlob) => {
     const kernelPath = mapSourcePath(sourcePath)
     const kernelBlob = hashes.get(kernelPath) ?? null
