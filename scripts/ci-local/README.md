@@ -30,15 +30,32 @@ keeps a re-enabled Actions runner honest about TRD-364 in the first place.
 ### `guards.mjs` — the single merge-gate entry point
 
 ```
-node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--waivers <path>] [--out <dir>]
+node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--out <dir>]
 ```
 
 Runs every arm below, in order, **all of them every time** — a failing arm
 never skips the rest, so the dated result always shows every arm's outcome:
 
 1. **secret-scan** — `gitleaks`, diff-scoped (`git ... --log-opts "<base>..HEAD"`)
-   when `--base` is given, whole-tree (`dir`, filtered to git-tracked files)
-   otherwise. A missing `gitleaks` binary is its own FAIL, never a skip.
+   when a base ref is given, whole-tree (`dir`, filtered to git-tracked
+   files) otherwise. Always runs with `cwd` set to the (resolved-absolute)
+   repo path and scans/configures via the relative `"."` / `.gitleaks.toml`
+   — never an embedded absolute path — so `.gitleaks.toml`'s `^`-anchored
+   `paths` allowlist behaves the same no matter how the caller spelled the
+   repo path (a HIGH fix: an absolute repo path used to defeat the anchor).
+   A missing `gitleaks` binary is its own FAIL, never a skip. In dir mode a
+   non-zero exit (only possible as a scan error, since `--exit-code 0`
+   neutralizes "leaks found") is a FAIL, and a missing/unparseable/
+   non-array report is a FAIL — never coerced to "0 findings" (HIGH fix: a
+   broken `.gitleaks.toml` used to make gitleaks FTL with no report file,
+   which read as a silent PASS). `--kernel-base`/`--vertical-base` set a
+   per-repo diff base ref (falling back to the shared `--base`); either way,
+   `runGitleaksArm` verifies the ref resolves to a commit IN THAT REPO before
+   scanning and FAILs if it does not, rather than vacuously scanning an empty
+   range (HIGH fix: one `--base` applied to both repos silently no-opped
+   whichever repo's default branch it did not match — kernel `main` vs.
+   StuRaOS `master`). An `ERR`/`FTL` line in gitleaks' own output FAILs the
+   arm even if the exit code alone would have looked clean.
 2. **known-secrets** — `known-secrets.mjs`'s SHA-256 digest denylist, run
    against **both** repos (the kernel owns the scanner; §5 Q2 below).
 3. **cve-floor** — the kernel's own `scripts/check-cve-floors.mjs`, same

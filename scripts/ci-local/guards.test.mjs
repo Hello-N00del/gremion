@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process'
 import {
   gitleaksCommand,
   runGitleaksArm,
+  baseRefResolves,
   runKnownSecretsArm,
   runCveFloorArm,
   runOverridesDriftArm,
@@ -25,23 +26,133 @@ function fakeRun(map) {
   }
 }
 
-test('gitleaksCommand: whole-tree "dir" mode (JSON report, exit-code 0 so runGitleaksArm can filter it) when no base is given, diff-scoped "git" mode (--exit-code 1) when it is', () => {
-  const dirCmd = gitleaksCommand('/repo', undefined, '/tmp/report.json')
-  assert.match(dirCmd, /^gitleaks dir "\/repo" --config "[^"]*\.gitleaks\.toml" --redact --exit-code 0 --report-format json --report-path "\/tmp\/report\.json"$/)
-  const gitCmd = gitleaksCommand('/repo', 'main')
-  assert.match(gitCmd, /^gitleaks git "\/repo" --log-opts "main\.\.HEAD" --config .*--exit-code 1$/)
+test('gitleaksCommand always scans "." with a RELATIVE --config: the repo comes from the process cwd the caller runs it in, never from a path embedded in the command string, so an absolute-vs-relative repoPath can never change which .gitleaks.toml allowlist paths match (HIGH fix)', () => {
+  const dirCmd = gitleaksCommand(undefined, '/tmp/report.json')
+  assert.equal(dirCmd, 'gitleaks dir "." --config ".gitleaks.toml" --redact --exit-code 0 --report-format json --report-path "/tmp/report.json"')
+  const gitCmd = gitleaksCommand('main')
+  assert.equal(gitCmd, 'gitleaks git "." --log-opts "main..HEAD" --config ".gitleaks.toml" --redact --exit-code 1')
 })
 
 test('runGitleaksArm (diff-scoped, --base given) is PASS on exit 0, FAIL on a non-zero exit (a leak found), via an injected runFn', () => {
   const clean = runGitleaksArm('kernel', '/repo', 'main', {
     runFn: fakeRun({ gitleaks: { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null } }),
+    verifyBaseRefFn: () => true,
   })
   assert.equal(clean.status, 'PASS')
 
   const dirty = runGitleaksArm('kernel', '/repo', 'main', {
     runFn: fakeRun({ gitleaks: { exitCode: 1, output: 'leak found', timedOut: false, spawnError: null } }),
+    verifyBaseRefFn: () => true,
   })
   assert.equal(dirty.status, 'FAIL')
+})
+
+test('runGitleaksArm (diff-scoped) FAILs closed when the base ref does not resolve in THIS repo, instead of vacuously scanning an empty range (HIGH fix)', () => {
+  const runFn = () => {
+    throw new Error('must never run gitleaks over an unresolved base ref')
+  }
+  const r = runGitleaksArm('vertical', '/repo', 'main', { runFn, verifyBaseRefFn: () => false })
+  assert.equal(r.status, 'FAIL')
+  assert.match(r.reason, /does not resolve to a commit in vertical/)
+})
+
+test("runGitleaksArm (diff-scoped) FAILs when gitleaks logs an ERR/FTL line even if it happened to exit 0", () => {
+  const r = runGitleaksArm('kernel', '/repo', 'main', {
+    verifyBaseRefFn: () => true,
+    runFn: fakeRun({ gitleaks: { exitCode: 0, output: 'FTL unable to load gitleaks config, err: bad toml', timedOut: false, spawnError: null } }),
+  })
+  assert.equal(r.status, 'FAIL')
+  assert.match(r.reason, /ERR\/FTL/)
+})
+
+test('baseRefResolves: true for HEAD in a real repo, false for a ref that does not exist', () => {
+  const root = makeSecretRepo()
+  try {
+    assert.equal(baseRefResolves(root, 'HEAD'), true)
+    assert.equal(baseRefResolves(root, 'totally-not-a-real-ref'), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// Assembled at runtime, not written as one contiguous literal: this file is
+// itself scanned by the real whole-tree gitleaks arm (guards.mjs's own
+// gate), and a literal "-----BEGIN PRIVATE KEY-----" sitting in THIS source
+// file would trip that scan on every future run of this very test suite.
+// The fixture it builds is still fully synthetic (a fake base64 body, never
+// a real key) — only the marker text is split so it never appears
+// contiguous in the committed source.
+const PEM_FIXTURE = ['-----BEGIN', ' PRIVATE KEY', '-----\n', 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDSYN', 'THETIC\n', '-----END', ' PRIVATE KEY', '-----\n'].join('')
+
+test('runGitleaksArm (whole-tree, no --base), REAL binary: a committed synthetic PEM key goes RED end-to-end, and GREEN once removed (TDD item 5)', () => {
+  const root = makeSecretRepo()
+  try {
+    writeFileSync(join(root, 'fixture.pem'), PEM_FIXTURE)
+    execFileSync('git', ['-C', root, 'add', 'fixture.pem'])
+    execFileSync('git', ['-C', root, 'commit', '-q', '-m', 'seed a synthetic PEM'])
+    const red = runGitleaksArm('kernel', root, undefined)
+    assert.equal(red.status, 'FAIL', `expected RED with the PEM present; got: ${JSON.stringify(red)}`)
+
+    execFileSync('git', ['-C', root, 'rm', '-q', 'fixture.pem'])
+    execFileSync('git', ['-C', root, 'commit', '-q', '-m', 'remove the synthetic PEM'])
+    const green = runGitleaksArm('kernel', root, undefined)
+    assert.equal(green.status, 'PASS', `expected GREEN once removed; got: ${JSON.stringify(green)}`)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runGitleaksArm (whole-tree, no --base), REAL binary: a broken .gitleaks.toml FAILs the arm instead of silently passing (HIGH fix — this is the exact bug the review found)', () => {
+  const root = makeSecretRepo()
+  try {
+    writeFileSync(join(root, '.gitleaks.toml'), 'this is not valid toml {{{\n')
+    execFileSync('git', ['-C', root, 'add', '.gitleaks.toml'])
+    execFileSync('git', ['-C', root, 'commit', '-q', '-m', 'break the gitleaks config'])
+    const r = runGitleaksArm('kernel', root, undefined)
+    assert.equal(r.status, 'FAIL', `a broken config must FAIL, never silently PASS; got: ${JSON.stringify(r)}`)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runGitleaksArm (whole-tree) FAILs when the report is missing despite a reported exit 0 (a corrupted/incomplete run must never read as "0 findings")', () => {
+  const runFn = () => ({ exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null }) // never writes the report file
+  const root = makeSecretRepo()
+  try {
+    const r = runGitleaksArm('kernel', root, undefined, { runFn })
+    assert.equal(r.status, 'FAIL')
+    assert.match(r.reason, /could not read gitleaks report/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runGitleaksArm (whole-tree) FAILs when the report file is not valid JSON (never coerced to "0 findings")', () => {
+  const runFn = (command) => {
+    const m = command.match(/--report-path "([^"]+)"/)
+    writeFileSync(m[1], 'not json at all {{{')
+    return { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null }
+  }
+  const root = makeSecretRepo()
+  try {
+    const r = runGitleaksArm('kernel', root, undefined, { runFn })
+    assert.equal(r.status, 'FAIL')
+    assert.match(r.reason, /could not read gitleaks report/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runGitleaksArm (whole-tree) FAILs when gitleaks exits non-zero (dir mode uses --exit-code 0, so a non-zero exit is always an error, never "leaks found")', () => {
+  const runFn = () => ({ exitCode: 1, output: 'FTL unable to load gitleaks config', timedOut: false, spawnError: null })
+  const root = makeSecretRepo()
+  try {
+    const r = runGitleaksArm('kernel', root, undefined, { runFn })
+    assert.equal(r.status, 'FAIL')
+    assert.match(r.reason, /exited 1/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('runGitleaksArm (whole-tree, no --base) filters the JSON report down to git-TRACKED files — an untracked/gitignored local file\'s "leak" never fails the guard', () => {
@@ -99,8 +210,13 @@ function makeSecretRepo(sentinelEnvLine) {
   run(['init', '-q', '-b', 'main'])
   run(['config', 'user.email', 'ci-local-test@example.invalid'])
   run(['config', 'user.name', 'ci-local-test'])
+  // gitleaksCommand now always points --config at a CWD-relative
+  // ".gitleaks.toml" (the HIGH fix for the absolute-path allowlist bug), so
+  // every real-binary fixture repo needs its own, exactly like a real
+  // kernel/StuRaOS checkout does.
+  writeFileSync(join(root, '.gitleaks.toml'), '[extend]\nuseDefault = true\n')
   writeFileSync(join(root, '.env'), sentinelEnvLine ?? 'FINE=ok\n')
-  run(['add', '.env'])
+  run(['add', '.env', '.gitleaks.toml'])
   run(['commit', '-q', '-m', 'seed'])
   return root
 }
