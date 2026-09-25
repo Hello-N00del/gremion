@@ -1,9 +1,10 @@
 [
   {
+    "repo": "kernel",
     "file": "deploy.yml",
     "owner": "TASK-086",
     "expiresOn": "2026-12-24",
     "dated": "2026-09-25",
-    "reason": "TASK-012 §5 Q1 default. .github/workflows/deploy.yml passes DEPLOY_SSH_KEY, DEPLOY_HOST and DEPLOY_HOST_KEY to an Actions runner (TRD-364 violation). .github/** is TASK-018's file ownership and the deploy path itself is TASK-086's; this unit may not touch either, so the runner-policy guard would otherwise be permanently RED on a file two other units own. Waived for this one file only, and only until TASK-086 lands or this waiver's expiresOn passes, whichever is first. expiresOn is a placeholder ~90 days out (there is no calendar date for 'when TASK-038 lands' yet); whoever lands TASK-086 or TASK-038 must move this date or remove the entry — an expired waiver still fails the guard, by design, so a forgotten waiver degrades to a normal RED rather than a silent pass."
+    "reason": "TASK-012 §5 Q1 default. .github/workflows/deploy.yml passes DEPLOY_SSH_KEY, DEPLOY_HOST and DEPLOY_HOST_KEY to an Actions runner (TRD-364 violation). .github/** is TASK-018's file ownership and the deploy path itself is TASK-086's; this unit may not touch either, so the runner-policy guard would otherwise be permanently RED on a file two other units own. Waived for this one file, in this one repo (the kernel), only — a StuRaOS deploy.yml with the same name is a DIFFERENT finding and is never covered by this entry (2026-09-25 HIGH fix: waivers are repo-scoped after a review found the un-scoped form let a kernel waiver silently mute a StuRaOS deploy.yml too) — and only until TASK-086 lands or this waiver's expiresOn passes, whichever is first. expiresOn is a placeholder ~90 days out (there is no calendar date for 'when TASK-038 lands' yet); whoever lands TASK-086 or TASK-038 must move this date or remove the entry — an expired waiver still fails the guard, by design, so a forgotten waiver degrades to a normal RED rather than a silent pass."
   }
 ]

@@ -110,11 +110,18 @@ to suppress a match is to remove the credential from the tree (and rotate it
 ## `runner-policy.mjs`
 
 Fails on any `.github/workflows/*.yml` that names a `self-hosted` runner or
-references a signing/age/SSH/deploy secret (TRD-364). `waivers.json` waives
-exactly one named file until its `expiresOn` date; an expired waiver still
-fails the guard by design, so a forgotten waiver degrades to a normal RED
-rather than a silent pass. See `waivers.json`'s own entry for why
-`deploy.yml` is waived today and who owns removing the waiver.
+references a signing/age/SSH/deploy secret (TRD-364). Each `waivers.json`
+entry is `{repo, file, owner, expiresOn, reason}` and matches BOTH fields — a
+waiver naming `{repo: "kernel", file: "deploy.yml"}` never covers a StuRaOS
+`deploy.yml`, even though the basename is identical (a bare `{file}` waiver
+was a HIGH finding: it silently muted the other repo's same-named file too).
+An expired waiver still fails the guard by design, so a forgotten waiver
+degrades to a normal RED rather than a silent pass. Waiver use is also
+reported in `guards.mjs`'s arm result (a `waived[]` array with `repo`,
+`path`, `owner` and `expiresOn`), so the dated JSON shows every waiver that
+was actually exercised, not just an empty `findings` array. See
+`waivers.json`'s own entry for why `deploy.yml` is waived today and who owns
+removing the waiver.
 
 ## The image-build job
 

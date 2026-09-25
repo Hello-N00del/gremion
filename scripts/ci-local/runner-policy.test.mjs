@@ -66,16 +66,26 @@ test('todayIso returns YYYY-MM-DD from an injected clock', () => {
 })
 
 test('activeWaiver: live waiver is returned; expired waiver is not (the guard must still fail on an expired waiver)', () => {
-  const waivers = [{ file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
-  assert.ok(activeWaiver(waivers, 'deploy.yml', '2026-09-25'))
-  assert.equal(activeWaiver(waivers, 'deploy.yml', '2026-12-25'), undefined)
-  assert.equal(activeWaiver(waivers, 'other.yml', '2026-09-25'), undefined)
+  const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
+  assert.ok(activeWaiver(waivers, 'kernel', 'deploy.yml', '2026-09-25'))
+  assert.equal(activeWaiver(waivers, 'kernel', 'deploy.yml', '2026-12-25'), undefined)
+  assert.equal(activeWaiver(waivers, 'kernel', 'other.yml', '2026-09-25'), undefined)
+})
+
+test('activeWaiver: a waiver scoped to one repo does NOT match the same file in a DIFFERENT repo (HIGH fix: waivers are repo-scoped)', () => {
+  const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
+  assert.ok(activeWaiver(waivers, 'kernel', 'deploy.yml', '2026-09-25'), 'kernel deploy.yml is covered')
+  assert.equal(
+    activeWaiver(waivers, 'vertical', 'deploy.yml', '2026-09-25'),
+    undefined,
+    'a kernel waiver must never cover vertical/deploy.yml, even though the basename matches',
+  )
 })
 
 test('evaluateRepo: an unwaived self-hosted workflow is reported, waived is false', () => {
   const root = makeRepo({ 'x.yml': 'jobs:\n  a:\n    runs-on: self-hosted\n' })
   try {
-    const result = evaluateRepo(root, [], '2026-09-25')
+    const result = evaluateRepo('kernel', root, [], '2026-09-25')
     assert.equal(result.length, 1)
     assert.equal(result[0].waived, false)
   } finally {
@@ -83,16 +93,30 @@ test('evaluateRepo: an unwaived self-hosted workflow is reported, waived is fals
   }
 })
 
-test('evaluateRepo: a deploy-secret workflow covered by a live waiver is reported as waived, not as a failure', () => {
+test('evaluateRepo: a deploy-secret workflow covered by a live SAME-REPO waiver is reported as waived, not as a failure', () => {
   const root = makeRepo({
     'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n',
   })
   try {
-    const waivers = [{ file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
-    const result = evaluateRepo(root, waivers, '2026-09-25')
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
+    const result = evaluateRepo('kernel', root, waivers, '2026-09-25')
     assert.equal(result.length, 1)
     assert.equal(result[0].waived, true)
     assert.equal(result[0].waiver.owner, 'TASK-086')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('evaluateRepo: the SAME deploy.yml finding in a DIFFERENT repo than the waiver names is reported as NOT waived', () => {
+  const root = makeRepo({
+    'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n',
+  })
+  try {
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-12-24' }]
+    const result = evaluateRepo('vertical', root, waivers, '2026-09-25')
+    assert.equal(result.length, 1)
+    assert.equal(result[0].waived, false, 'a kernel-scoped waiver must not silently cover the vertical repo')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -103,8 +127,8 @@ test('evaluateRepo: the SAME finding on an EXPIRED waiver is reported as NOT wai
     'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n',
   })
   try {
-    const waivers = [{ file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-01-01' }]
-    const result = evaluateRepo(root, waivers, '2026-09-25')
+    const waivers = [{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2026-01-01' }]
+    const result = evaluateRepo('kernel', root, waivers, '2026-09-25')
     assert.equal(result.length, 1)
     assert.equal(result[0].waived, false)
   } finally {
@@ -115,7 +139,7 @@ test('evaluateRepo: the SAME finding on an EXPIRED waiver is reported as NOT wai
 test('evaluateRepo: a clean tree reports no entries at all', () => {
   const root = makeRepo({ 'ci.yml': 'jobs:\n  a:\n    runs-on: ubuntu-latest\n' })
   try {
-    assert.deepEqual(evaluateRepo(root, [], '2026-09-25'), [])
+    assert.deepEqual(evaluateRepo('kernel', root, [], '2026-09-25'), [])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -134,10 +158,16 @@ test('loadWaivers reads a real waivers.json and [] when the path is missing or a
   }
 })
 
-test('the committed scripts/ci-local/waivers.json waives exactly deploy.yml, owned by TASK-086, and is still a live (non-expired) waiver today', () => {
+test('the committed scripts/ci-local/waivers.json waives exactly kernel/deploy.yml, owned by TASK-086, and is still a live (non-expired) waiver today', () => {
   const waivers = loadWaivers(new URL('./waivers.json', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:'))
   assert.equal(waivers.length, 1)
+  assert.equal(waivers[0].repo, 'kernel')
   assert.equal(waivers[0].file, 'deploy.yml')
   assert.equal(waivers[0].owner, 'TASK-086')
-  assert.ok(activeWaiver(waivers, 'deploy.yml', todayIso()), 'expected the committed waiver to still be live today')
+  assert.ok(activeWaiver(waivers, 'kernel', 'deploy.yml', todayIso()), 'expected the committed waiver to still be live today')
+  assert.equal(
+    activeWaiver(waivers, 'vertical', 'deploy.yml', todayIso()),
+    undefined,
+    'the committed kernel waiver must not cover a vertical/deploy.yml',
+  )
 })

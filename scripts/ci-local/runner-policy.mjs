@@ -67,12 +67,17 @@ export function todayIso(now = new Date()) {
 }
 
 /**
- * @param waivers  [{file, owner, expiresOn, reason}], `file` matched against
- *                 the workflow's basename (e.g. "deploy.yml").
- * @returns the active (non-expired) waiver for `fileBasename`, or undefined.
+ * @param waivers      [{repo, file, owner, expiresOn, reason}]. `repo` is
+ *                     matched EXACTLY (e.g. "kernel" or "vertical") and
+ *                     `file` against the workflow's basename (e.g.
+ *                     "deploy.yml"). A waiver missing `repo` never matches —
+ *                     see the header comment on why repo-scoping matters.
+ * @param repoLabel    the repo this evaluation is for.
+ * @param fileBasename the workflow file's basename.
+ * @returns the active (non-expired) waiver for `repoLabel`/`fileBasename`, or undefined.
  */
-export function activeWaiver(waivers, fileBasename, today) {
-  const w = waivers.find((x) => x.file === fileBasename)
+export function activeWaiver(waivers, repoLabel, fileBasename, today) {
+  const w = waivers.find((x) => x.repo === repoLabel && x.file === fileBasename)
   if (!w) return undefined
   if (w.expiresOn < today) return undefined // expired — the guard must still fail
   return w
@@ -83,8 +88,14 @@ export function activeWaiver(waivers, fileBasename, today) {
  * file that has an unwaived (or waiver-expired) finding. A file fully covered
  * by a live waiver is omitted, but its waiver use is reported separately so
  * an ever-growing waiver list is visible (see `report()`).
+ *
+ * `repoLabel` scopes waiver matching (a waiver is `{repo, file}`, not
+ * `{file}` alone) — a waiver committed for one repo's `deploy.yml` must
+ * never silently cover the OTHER repo's same-named file. This is why
+ * `repoLabel` is REQUIRED (no default): a caller that cannot name which repo
+ * it is evaluating should not be evaluating waivers at all.
  */
-export function evaluateRepo(repoRoot, waivers, today = todayIso()) {
+export function evaluateRepo(repoLabel, repoRoot, waivers, today = todayIso()) {
   const files = listWorkflowFiles(repoRoot)
   const perFile = []
   for (const relPath of files) {
@@ -92,7 +103,7 @@ export function evaluateRepo(repoRoot, waivers, today = todayIso()) {
     const text = readFileSync(join(repoRoot, relPath), 'utf8')
     const findings = checkWorkflowText(text)
     if (findings.length === 0) continue
-    const waiver = activeWaiver(waivers, basename, today)
+    const waiver = activeWaiver(waivers, repoLabel, basename, today)
     perFile.push({ path: relPath, findings, waiver, waived: Boolean(waiver) })
   }
   return perFile
@@ -122,10 +133,14 @@ export function loadWaivers(path) {
 }
 
 export function main(argv = process.argv.slice(2)) {
+  // { label, path }[] — `label` is what waivers.json's `repo` field matches
+  // against. A bare --repo has no name of its own, so it is labelled by its
+  // own path: distinct from every other repo (including another --repo), so
+  // it can never accidentally share a waiver with one it is not.
   const repos = [
-    ...argValues(argv, '--repo'),
-    ...(argValue(argv, '--kernel') ? [argValue(argv, '--kernel')] : []),
-    ...(argValue(argv, '--vertical') ? [argValue(argv, '--vertical')] : []),
+    ...argValues(argv, '--repo').map((path) => ({ label: path, path })),
+    ...(argValue(argv, '--kernel') ? [{ label: 'kernel', path: argValue(argv, '--kernel') }] : []),
+    ...(argValue(argv, '--vertical') ? [{ label: 'vertical', path: argValue(argv, '--vertical') }] : []),
   ]
   if (repos.length === 0) {
     console.error('runner-policy: no --repo (or --kernel/--vertical) given')
@@ -137,8 +152,8 @@ export function main(argv = process.argv.slice(2)) {
 
   let failures = 0
   let waivedCount = 0
-  for (const repoRoot of repos) {
-    const perFile = evaluateRepo(repoRoot, waivers, today)
+  for (const { label, path: repoRoot } of repos) {
+    const perFile = evaluateRepo(label, repoRoot, waivers, today)
     for (const entry of perFile) {
       if (entry.waived) {
         waivedCount++
@@ -148,7 +163,7 @@ export function main(argv = process.argv.slice(2)) {
         continue
       }
       failures++
-      const expired = waivers.some((w) => w.file === entry.path.split('/').pop() && w.expiresOn < today)
+      const expired = waivers.some((w) => w.repo === label && w.file === entry.path.split('/').pop() && w.expiresOn < today)
       console.error(`\nRUNNER-POLICY GUARD FAILED — ${repoRoot}/${entry.path}${expired ? ' (waiver EXPIRED)' : ''}:`)
       for (const f of entry.findings) console.error(`  [${f.rule}] ${f.detail}`)
     }

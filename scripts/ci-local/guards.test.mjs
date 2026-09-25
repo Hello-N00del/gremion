@@ -176,6 +176,28 @@ test('runRunnerPolicyArm PASSes when both repos are clean', () => {
   }
 })
 
+test('runRunnerPolicyArm: a waiver naming ONLY the kernel repo does not waive the vertical repo\'s same-named file, and the waiver use is reported in the result (HIGH fix)', () => {
+  const kernel = makeWorkflowRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
+  const vertical = makeWorkflowRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
+  const waiversPath = join(mkdtempSync(join(tmpdir(), 'ci-local-waivers-')), 'waivers.json')
+  writeFileSync(waiversPath, JSON.stringify([{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2099-01-01' }]))
+  try {
+    const r = runRunnerPolicyArm(kernel, vertical, waiversPath)
+    // kernel/deploy.yml is waived and must not appear as a failure...
+    assert.equal(r.status, 'FAIL')
+    assert.match(r.reason, /vertical\/\.github\/workflows\/deploy\.yml/)
+    assert.doesNotMatch(r.reason, /^kernel\/|, kernel\//)
+    assert.equal(r.findings.some((f) => f.repo === 'kernel'), false)
+    // ...but its waiver use IS visible in the arm result, not dropped silently.
+    assert.equal(r.waived.length, 1)
+    assert.equal(r.waived[0].repo, 'kernel')
+    assert.equal(r.waived[0].owner, 'TASK-086')
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
+  }
+})
+
 test('runAllArms: overall exit is non-zero when even one arm fails, and every arm still ran (no short-circuit)', () => {
   const kernel = makeSecretRepo()
   mkdirSync(join(kernel, '.github', 'workflows'), { recursive: true })

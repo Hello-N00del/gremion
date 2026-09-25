@@ -206,13 +206,24 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
   const waivers = loadWaivers(waiversPath)
   const today = todayIso()
   const results = []
+  const waived = []
   for (const [label, path] of [
     ['kernel', kernelPath],
     ['vertical', sturaosPath],
   ]) {
-    const perFile = runnerPolicyEvaluateRepo(path, waivers, today)
+    // repoLabel is REQUIRED here (evaluateRepo has no default): a waiver is
+    // {repo, file}, never {file} alone, so a waiver committed for one repo's
+    // deploy.yml can never silently cover the other repo's same-named file.
+    const perFile = runnerPolicyEvaluateRepo(label, path, waivers, today)
     for (const entry of perFile) {
-      if (!entry.waived) results.push({ repo: label, path: entry.path, findings: entry.findings })
+      if (entry.waived) {
+        // Waiver use is reported in the arm result (not just console output),
+        // so the dated JSON shows it too — an ever-growing waiver list must
+        // leave a trace, never a bare PASS with an empty findings array.
+        waived.push({ repo: label, path: entry.path, owner: entry.waiver.owner, expiresOn: entry.waiver.expiresOn })
+      } else {
+        results.push({ repo: label, path: entry.path, findings: entry.findings })
+      }
     }
   }
   return {
@@ -221,6 +232,7 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
     status: results.length === 0 ? 'PASS' : 'FAIL',
     reason: results.length === 0 ? undefined : results.map((r) => `${r.repo}/${r.path}`).join(', '),
     findings: results,
+    waived,
   }
 }
 
