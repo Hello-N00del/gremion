@@ -85,6 +85,22 @@ own tenant). Every container, volume and image is removed by name.
   reads, and some non-call forms (e.g. `(await import('fs')).writeFileSync`
   taken as a reference, or a `.then(({ writeFileSync: w }) => …)` destructure)
   are not covered.
+- **The bypass scan is not yet run by any gate.** Nothing on `main` runs
+  `scripts/check-storage-seam.mjs`, its `.test.mjs` suite, or this package's
+  typecheck: the Makefile lists named test files only, and `scripts/verify`
+  does not exist yet. The brief routes the wiring through TASK-045. Its
+  `scripts/**/*.test.mjs` glob collects the seam suite, which scans the real
+  tree, and a `required-suites.txt` line plus a `@gremion/storage` typecheck
+  subcheck need TASK-045's grant. Until TASK-045 lands, the guard runs only
+  when someone invokes it: `node --test scripts/check-storage-seam.test.mjs
+  && node scripts/check-storage-seam.mjs`. A `make lint-storage-seam`
+  target is the fallback if TASK-045 prefers it. This unit does not edit the
+  Makefile or CI, because both belong to TASK-045.
+- **No volume is mounted at the default root yet.** `RECEIPT_STORAGE_DIR`'s
+  unmounted `./var/storage` default is refused on Linux, and no compose file
+  mounts a volume there. Nothing in the kernel calls the seam today. The
+  first CAP-STORAGE consumer must add the volume mount and update the
+  `.env.example` comment (TASK-032's file).
 - **Symlink TOCTOU.** Links are refused by an `lstat` walk before each
   operation; a link swapped in between the check and the I/O is not covered.
   Only this seam writes under the root.
