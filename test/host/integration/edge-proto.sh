@@ -16,6 +16,19 @@
 #   acme-red  a hand-written redirect on the web entrypoint turns the ACME probe
 #             from 404 into 301.
 #   mw-red    a router chaining a middleware nobody declares fails.
+#   apexpin-red  the PLATFORM apex router without its pin: a request for the
+#             apex carrying a forged X-Forwarded-Host naming a tenant host is
+#             served as that tenant, and gremion-verify's forged-header
+#             two-host universal goes RED; with edge-hostpin-apex@docker
+#             chained first it is green again. Both verifier outputs are kept
+#             (logs/apexpin-red.log, logs/apexpin-green.log) and printed.
+#
+# The tenant files dynamic/tenant-{a,b}.yml are the BYTE-EXACT output of
+# @gremion/edge-routers renderTenantRouter (asserted by
+# packages/edge-routers/test/edge-proto-fixture.test.ts), and the traefik
+# container carries exactly the platform middleware labels the package states.
+# Every router here satisfies gremion-verify's router universal, so each RED
+# drill below is red for its own reason only.
 #
 # VERIFY_MARKER_PATH is /whoami here, not the /healthz default: the stub's
 # /whoami echoes the forwarded host, which is the property spec B's real /healthz
@@ -31,7 +44,7 @@
 # provider registers the routers themselves (wait_edge_ready).
 #
 # Prints for Task 15's runbook:
-#   EDGE-PROTO: s10=ok s11=ok pin-red=ok cert-red=ok acme-red=ok mw-red=ok
+#   EDGE-PROTO: s10=ok s11=ok pin-red=ok cert-red=ok acme-red=ok mw-red=ok apexpin-red=ok
 #
 # Exit codes: 0 ok · 1 an assertion failed · 2 missing precondition.
 
@@ -63,7 +76,7 @@ EDGE_SETTLE_SECONDS="${EDGE_SETTLE_SECONDS:-30}"
 
 HOSTS_FILE="$PROTO_ROOT/hosts.txt"
 RESULT_S10="fail" RESULT_S11="fail"
-RESULT_PIN="fail" RESULT_CERT="fail" RESULT_ACME="fail" RESULT_MW="fail"
+RESULT_PIN="fail" RESULT_CERT="fail" RESULT_ACME="fail" RESULT_MW="fail" RESULT_APEXPIN="fail"
 
 # ── The compose project is CHECKOUT-UNIQUE, and teardown is BY NAME ─────────
 #
@@ -128,10 +141,13 @@ prepare_root() {
     mkdir -p "$PROTO_ROOT"/{etc/env,etc/edge,etc/edge-certs,runtime,logs,bin}
     cp "$FIXTURE_DIR"/dynamic/tenant-a.yml "$PROTO_ROOT/etc/edge/tenant-a.yml"
     cp "$FIXTURE_DIR"/dynamic/tenant-b.yml "$PROTO_ROOT/etc/edge/tenant-b.yml"
+    cp "$FIXTURE_DIR"/dynamic/platform-apex.yml "$PROTO_ROOT/etc/edge/platform-apex.yml"
     # The static config is served to the container from HERE, so that red_acme can
     # rewrite it without ever touching the tracked fixture.
     cp "$FIXTURE_DIR"/traefik.yml "$PROTO_ROOT/traefik.yml"
-    printf 'tenant-a.example.org\ntenant-b.example.org\n' > "$HOSTS_FILE"
+    # The apex LAST: check_hosts forges, for each host, the NEXT host in the
+    # list, so the apex is probed with X-Forwarded-Host: tenant-a.example.org.
+    printf 'tenant-a.example.org\ntenant-b.example.org\nexample.org\n' > "$HOSTS_FILE"
     printf '[]\n' > "$PROTO_ROOT/runtime/evict-targets.json"
 
     cat > "$PROTO_ROOT/etc/env/state.env" <<'EOF'
@@ -180,7 +196,7 @@ prompt             = no
 CN = tenant-a.example.org
 
 [v3]
-subjectAltName = DNS:tenant-a.example.org, DNS:tenant-b.example.org
+subjectAltName = DNS:tenant-a.example.org, DNS:tenant-b.example.org, DNS:example.org
 EOF
     openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days "$days" \
         -config "$cfg" \
@@ -290,11 +306,13 @@ wait_edge_ready() {
         mw="$(curl -fsS --max-time 3 "${TRAEFIK_API}/api/http/middlewares" 2>/dev/null \
               | jq -r '[.[].name] | join(" ")' 2>/dev/null || printf '')"
         missing=""
-        for m in edge-ratelimit@docker edge-hostpin-tenant-a@docker edge-hostpin-tenant-b@docker; do
+        for m in edge-ratelimit-app@docker edge-hsts-custom@docker edge-hsts-platform@docker \
+                 edge-hostpin-apex@docker edge-hostpin-a@file edge-hostpin-b@file \
+                 edge-perip-a@file edge-perip-b@file; do
             [[ " ${mw} " == *" ${m} "* ]] || missing="${missing} ${m}"
         done
         if [[ -z "$missing" ]]; then
-            ok "edge converged: the docker provider has registered the tenant middlewares"
+            ok "edge converged: both providers have registered every middleware the routers chain"
             return 0
         fi
         [[ "$(date +%s)" -lt "$deadline" ]] || break
@@ -373,18 +391,20 @@ prove_s11() {
         wait_api /api/http/routers/tenant-a@file '.status' 'enabled'
     assert "tenant-b@file is enabled" \
         wait_api /api/http/routers/tenant-b@file '.status' 'enabled'
-    assert "edge-hostpin-tenant-a is declared on the traefik container" \
-        wait_api /api/http/middlewares/edge-hostpin-tenant-a@docker '.status' 'enabled'
-    assert "edge-ratelimit is declared on the traefik container" \
-        wait_api /api/http/middlewares/edge-ratelimit@docker '.status' 'enabled'
+    assert "edge-hostpin-a is declared in tenant a's own file" \
+        wait_api /api/http/middlewares/edge-hostpin-a@file '.status' 'enabled'
+    assert "edge-ratelimit-app is declared on the traefik container" \
+        wait_api /api/http/middlewares/edge-ratelimit-app@docker '.status' 'enabled'
     assert "gremion-verify is green against the running edge" verify
 
     info "S11: stopping the active colour must not take a tenant router down"
     compose stop stub-blue >/dev/null
     assert "tenant-a@file is still enabled with its colour stopped" \
         wait_api /api/http/routers/tenant-a@file '.status' 'enabled'
-    assert "edge-hostpin-tenant-a survives the colour" \
-        wait_api /api/http/middlewares/edge-hostpin-tenant-a@docker '.status' 'enabled'
+    assert "edge-hostpin-a survives the colour" \
+        wait_api /api/http/middlewares/edge-hostpin-a@file '.status' 'enabled'
+    assert "edge-hsts-custom survives the colour" \
+        wait_api /api/http/middlewares/edge-hsts-custom@docker '.status' 'enabled'
     compose start stub-blue >/dev/null
     # Single quotes deliberate: $0 and $1 are the inner shell's positional
     # parameters, supplied after the script body, not this shell's.
@@ -407,8 +427,10 @@ http:
       service: "app@file"
       priority: 10
       middlewares:
-        - "edge-ratelimit@docker"
-      tls: {}
+        - "edge-hsts-custom@docker"
+        - "edge-ratelimit-app@docker"
+      tls:
+        certResolver: "le-http"
 EOF
     sleep 3
     if verify > "$PROTO_ROOT/logs/red-pin.log" 2>&1; then
@@ -472,13 +494,18 @@ http:
       service: "app@file"
       middlewares: ["red-to-https"]
 EOF
-    # Drop the whole certificatesResolvers block from the copy Traefik reads, so
-    # that no acme-http@internal router is published on the next start.
+    # Switch the resolver to a NON-HTTP challenge in the copy Traefik reads, so
+    # that no acme-http@internal router is published on the next start. The
+    # resolver itself stays: every router names it (the router universal
+    # requires a certresolver), and deleting it would disable those routers
+    # for a reason that has nothing to do with this drill.
     awk '
-        /^certificatesResolvers:/            { skip = 1; next }
-        skip && /^[A-Za-z]/                  { skip = 0 }
-        !skip
+        /^      httpChallenge:/ { print "      tlsChallenge: {}"; skip = 1; next }
+        skip && /^        /     { next }
+        { skip = 0; print }
     ' "$FIXTURE_DIR/traefik.yml" > "$PROTO_ROOT/traefik.yml"
+    grep -q '^      tlsChallenge: {}$' "$PROTO_ROOT/traefik.yml" \
+        || die "red_acme: the challenge swap did not land in the static config copy" 1
     compose restart traefik >/dev/null
     assert "traefik answers its API again" wait_api_up
     assert "the internal ACME router is gone" \
@@ -521,7 +548,8 @@ http:
       priority: 10
       middlewares:
         - "edge-hostpin-orphan@docker"
-      tls: {}
+      tls:
+        certResolver: "le-http"
 EOF
     sleep 3
     if verify > "$PROTO_ROOT/logs/red-mw.log" 2>&1; then
@@ -536,6 +564,75 @@ EOF
     sleep 3
     assert "green again after restoring the middleware" verify
     RESULT_MW="ok"
+}
+
+# ── apexpin-red: the PLATFORM apex without its pin ───────────────────────────
+# The same forged-header two-host case the tenant pin drill makes, on the apex
+# router: Host example.org + X-Forwarded-Host: tenant-a.example.org. Unpinned,
+# Traefik (which trusts the peer) passes the client's header through and the
+# backend answers AS tenant-a; pinned, edge-hostpin-apex@docker overwrites it.
+# Both verifier runs are dated and kept, and the router universal must name the
+# unpinned router as well — two independent guards over one defect.
+APEXPIN_RED_AT="" APEXPIN_GREEN_AT=""
+red_apexpin() {
+    info "RED: remove the platform pin from the apex router"
+    cat > "$PROTO_ROOT/etc/edge/platform-apex.yml" <<'EOF'
+http:
+  routers:
+    apex:
+      entryPoints: ["websecure"]
+      rule: "Host(`example.org`)"
+      service: "app@file"
+      priority: 20
+      middlewares:
+        - "edge-hsts-platform@docker"
+        - "edge-ratelimit-app@docker"
+      tls:
+        certResolver: "le-http"
+EOF
+    assert "the unpinned apex router is live" \
+        wait_api /api/http/routers/apex@file '.middlewares | length' '2'
+    wait_body "unpinned apex with a forged X-Forwarded-Host" "xfh=tenant-a.example.org" \
+        curl -k -sS --resolve example.org:8443:127.0.0.1 -H 'X-Forwarded-Host: tenant-a.example.org' \
+             https://example.org:8443/whoami
+    APEXPIN_RED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if verify > "$PROTO_ROOT/logs/apexpin-red.log" 2>&1; then
+        bad "gremion-verify passed with the apex pin removed"
+        return 1
+    fi
+    grep -q 'host-pin: forged X-Forwarded-Host: tenant-a.example.org changed the response for example.org' \
+        "$PROTO_ROOT/logs/apexpin-red.log" \
+        || { bad "expected the apex forged-header failure; got:"; cat "$PROTO_ROOT/logs/apexpin-red.log"; return 1; }
+    grep -q 'router apex@file: 0 host pins (expected exactly 1)' "$PROTO_ROOT/logs/apexpin-red.log" \
+        || { bad "expected the router universal to name apex@file; got:"; cat "$PROTO_ROOT/logs/apexpin-red.log"; return 1; }
+    ok "apex host-pin guards went RED (forged-header universal and router universal)"
+
+    cp "$FIXTURE_DIR/dynamic/platform-apex.yml" "$PROTO_ROOT/etc/edge/platform-apex.yml"
+    assert "the pinned apex router is live" \
+        wait_api /api/http/routers/apex@file '.middlewares[0]' 'edge-hostpin-apex@docker'
+    wait_body "pinned apex with a forged X-Forwarded-Host" "xfh=example.org" \
+        curl -k -sS --resolve example.org:8443:127.0.0.1 -H 'X-Forwarded-Host: tenant-a.example.org' \
+             https://example.org:8443/whoami
+    APEXPIN_GREEN_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if ! verify > "$PROTO_ROOT/logs/apexpin-green.log" 2>&1; then
+        bad "gremion-verify is still red with the apex pin restored:"
+        cat "$PROTO_ROOT/logs/apexpin-green.log"
+        return 1
+    fi
+    ok "green again with edge-hostpin-apex@docker chained first"
+    RESULT_APEXPIN="ok"
+}
+
+# The two apexpin verifier outputs, dated, for the commit record.
+print_apexpin_record() {
+    [[ -f "$PROTO_ROOT/logs/apexpin-red.log" ]] || return 0
+    printf -- '--- apexpin-red: gremion-verify at %s (apex UNPINNED) ---\n' "$APEXPIN_RED_AT"
+    grep -E 'FAIL|failure\(s\)' "$PROTO_ROOT/logs/apexpin-red.log" || true
+    if [[ -f "$PROTO_ROOT/logs/apexpin-green.log" ]]; then
+        printf -- '--- apexpin-green: gremion-verify at %s (apex PINNED) ---\n' "$APEXPIN_GREEN_AT"
+        grep -E 'FAIL' "$PROTO_ROOT/logs/apexpin-green.log" || true
+        grep -v '^[[:space:]]*$' "$PROTO_ROOT/logs/apexpin-green.log" | tail -n 1
+    fi
 }
 
 main() {
@@ -555,9 +652,11 @@ main() {
     red_cert
     red_acme
     red_mw
+    red_apexpin
+    print_apexpin_record
 
-    printf 'EDGE-PROTO: s10=%s s11=%s pin-red=%s cert-red=%s acme-red=%s mw-red=%s\n' \
-        "$RESULT_S10" "$RESULT_S11" "$RESULT_PIN" "$RESULT_CERT" "$RESULT_ACME" "$RESULT_MW"
+    printf 'EDGE-PROTO: s10=%s s11=%s pin-red=%s cert-red=%s acme-red=%s mw-red=%s apexpin-red=%s\n' \
+        "$RESULT_S10" "$RESULT_S11" "$RESULT_PIN" "$RESULT_CERT" "$RESULT_ACME" "$RESULT_MW" "$RESULT_APEXPIN"
 }
 
 main "$@"

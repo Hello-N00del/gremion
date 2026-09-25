@@ -59,10 +59,45 @@ services:
     labels:
       traefik.enable: "true"
       traefik.http.services.traefik.loadbalancer.server.port: "8080"
-      traefik.http.middlewares.edge-hostpin-tenant-a.headers.customrequestheaders.X-Forwarded-Host: "tenant-a.example.org"
-      traefik.http.middlewares.edge-hostpin-tenant-b.headers.customrequestheaders.X-Forwarded-Host: "tenant-b.example.org"
-      traefik.http.middlewares.edge-ratelimit.ratelimit.average: "300"
-      traefik.http.middlewares.edge-ratelimit.ratelimit.burst: "100"
+      # traefik.enable=true (needed so the docker provider reads the middleware
+      # labels below) with NO router label makes Traefik GENERATE a default
+      # router, Host(`<container name>`) on EVERY entrypoint: public, unpinned,
+      # no certresolver. gremion-verify's router universal names it
+      # (measured 2026-09-25: "router traefik-<project>@docker: no
+      # certresolver", "0 host pins"). Declaring one explicit router stops the
+      # default one; it lives on the loopback internaltest entrypoint only and
+      # answers with noop@internal.
+      traefik.http.routers.traefik.entrypoints: "internaltest"
+      traefik.http.routers.traefik.rule: "Host(`traefik.invalid`)"
+      traefik.http.routers.traefik.service: "noop@internal"
+      # The PLATFORM middlewares, on the Traefik container's own labels (spec B
+      # B-09): exactly the set @gremion/edge-routers platformMiddlewareLabels()
+      # states for apex example.org / sales sales.example.org —
+      # packages/edge-routers/test/edge-proto-fixture.test.ts asserts every
+      # key and value. The PER-TENANT pins and per-IP caps are not here: they
+      # live in each tenant's emitted file (dynamic/tenant-*.yml).
+      traefik.http.middlewares.edge-hostpin-apex.headers.customrequestheaders.X-Forwarded-Host: "example.org"
+      traefik.http.middlewares.edge-hostpin-www.headers.customrequestheaders.X-Forwarded-Host: "www.example.org"
+      traefik.http.middlewares.edge-hostpin-control.headers.customrequestheaders.X-Forwarded-Host: "control.example.org"
+      traefik.http.middlewares.edge-hostpin-sales.headers.customrequestheaders.X-Forwarded-Host: "sales.example.org"
+      traefik.http.middlewares.edge-hsts-platform.headers.stsseconds: "31536000"
+      traefik.http.middlewares.edge-hsts-platform.headers.stsincludesubdomains: "true"
+      traefik.http.middlewares.edge-hsts-platform.headers.stspreload: "false"
+      traefik.http.middlewares.edge-hsts-custom.headers.stsseconds: "31536000"
+      traefik.http.middlewares.edge-hsts-custom.headers.stsincludesubdomains: "false"
+      traefik.http.middlewares.edge-hsts-custom.headers.stspreload: "false"
+      traefik.http.middlewares.edge-ratelimit-app.ratelimit.average: "300"
+      traefik.http.middlewares.edge-ratelimit-app.ratelimit.burst: "100"
+      traefik.http.middlewares.edge-ratelimit-app.ratelimit.period: "1m"
+      traefik.http.middlewares.edge-ratelimit-app.ratelimit.sourcecriterion.ipstrategy.depth: "0"
+      traefik.http.middlewares.edge-ratelimit-portal.ratelimit.average: "100"
+      traefik.http.middlewares.edge-ratelimit-portal.ratelimit.burst: "50"
+      traefik.http.middlewares.edge-ratelimit-portal.ratelimit.period: "1m"
+      traefik.http.middlewares.edge-ratelimit-portal.ratelimit.sourcecriterion.ipstrategy.depth: "0"
+      traefik.http.middlewares.edge-ratelimit-auth.ratelimit.average: "30"
+      traefik.http.middlewares.edge-ratelimit-auth.ratelimit.burst: "10"
+      traefik.http.middlewares.edge-ratelimit-auth.ratelimit.period: "1m"
+      traefik.http.middlewares.edge-ratelimit-auth.ratelimit.sourcecriterion.ipstrategy.depth: "0"
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: "5s"
