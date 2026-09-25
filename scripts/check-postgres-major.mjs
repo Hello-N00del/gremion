@@ -74,23 +74,24 @@ export const EXCLUDED = [
 // to the tag at every commit (scripts/check-module-source-parity.mjs), so their
 // pre-pin tag cannot be rewritten here. It sits only in the docker-run guidance
 // string of each file's fail-closed test-DB guard; nothing is started from it.
-// Any other ref in these files, and this ref anywhere else, is still a finding;
+// Pinned to PATH, LINE and REF: any other ref, a second occurrence on another
+// line, and this ref anywhere else are all still findings;
 // an exemption that no longer matches a hit is stale and fails the CLI run.
 // Spelled by join, for the same reason the data-directory note below omits the
 // prefix: this file is scanned too, and a literal stale tag here is a finding.
 const PRE_PIN_16 = ['postgres', '16-alpine'].join(':')
 export const PATH_EXEMPTIONS = [
-  { path: 'modules/finance/test/backfill.integration.test.ts', ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f1; guidance string in the fail-closed test-DB guard' },
-  { path: 'modules/finance/test/bank-money.integration.test.ts', ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f1; guidance string in the fail-closed test-DB guard' },
+  { path: 'modules/finance/test/backfill.integration.test.ts', line: 38, ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f1; guidance string in the fail-closed test-DB guard' },
+  { path: 'modules/finance/test/bank-money.integration.test.ts', line: 38, ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f1; guidance string in the fail-closed test-DB guard' },
 ]
 
-const isExempt = (h) => PATH_EXEMPTIONS.some((e) => e.path === h.path && e.ref === h.ref)
+const isExempt = (h) => PATH_EXEMPTIONS.some((e) => e.path === h.path && e.line === h.line && e.ref === h.ref)
 
 /** Exemptions that excuse nothing in `files` — stale, and a finding. */
 export function staleExemptions(files) {
   const hits = files.filter((f) => PATH_EXEMPTIONS.some((e) => e.path === f.path)).flatMap((f) => scanText(f.path, f.text))
-  return PATH_EXEMPTIONS.filter((e) => !hits.some((h) => h.path === e.path && h.ref === e.ref)).map(
-    (e) => `stale exemption: ${e.path} no longer carries ${e.ref} — delete the PATH_EXEMPTIONS entry`,
+  return PATH_EXEMPTIONS.filter((e) => !hits.some((h) => h.path === e.path && h.line === e.line && h.ref === e.ref)).map(
+    (e) => `stale exemption: ${e.path}:${e.line} no longer carries ${e.ref} — delete or move the PATH_EXEMPTIONS entry`,
   )
 }
 

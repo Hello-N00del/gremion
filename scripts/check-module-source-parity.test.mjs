@@ -364,17 +364,21 @@ test('Q6: the postgres exemption excuses exactly two set-A paths and one ref, an
     ['modules/finance/test/backfill.integration.test.ts', 'modules/finance/test/bank-money.integration.test.ts'],
   )
   const exempt = PATH_EXEMPTIONS[0].path
-  assert.deepEqual(checkFiles([{ path: exempt, text: `docker run ${stale}\n` }]), [])
+  const at = (n, t) => '\n'.repeat(n - 1) + t + '\n'
+  const line = PATH_EXEMPTIONS[0].line
+  assert.equal(typeof line, 'number')
+  assert.deepEqual(checkFiles([{ path: exempt, text: at(line, `docker run ${stale}`) }]), [])
+  // same path and ref on ANOTHER line: a second occurrence is not excused
+  assert.equal(checkFiles([{ path: exempt, text: at(line, `docker run ${stale}`) + `docker run ${stale}\n` }]).length, 1)
   // same path, another stale ref: still a finding
   assert.equal(checkFiles([{ path: exempt, text: `docker run ${other}\n` }]).length, 1)
   // same ref, any other path (a set-B sibling included): still a finding
   assert.equal(checkFiles([{ path: 'modules/finance/test/api.integration.test.ts', text: `docker run ${stale}\n` }]).length, 1)
   // an exemption whose file no longer carries the ref is stale
   assert.equal(staleExemptions([{ path: exempt, text: 'nothing here\n' }]).length, 2)
-  assert.equal(
-    staleExemptions(PATH_EXEMPTIONS.map((e) => ({ path: e.path, text: `x ${stale}\n` }))).length,
-    0,
-  )
+  assert.equal(staleExemptions(PATH_EXEMPTIONS.map((e) => ({ path: e.path, text: at(e.line, `x ${stale}`) }))).length, 0)
+  // moved to another line: stale
+  assert.equal(staleExemptions(PATH_EXEMPTIONS.map((e) => ({ path: e.path, text: at(e.line + 1, `x ${stale}`) }))).length, 2)
 })
 
 test('RED: extras anywhere under modules/ — a stray top-level file, an unknown module dir, a non-content app/ file', () => {
