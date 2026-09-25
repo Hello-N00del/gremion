@@ -46,7 +46,13 @@ describe('migrations/README.md — table ownership (B4a)', () => {
   const readme = readFileSync(join(process.cwd(), 'migrations', 'README.md'), 'utf-8')
 
   it('has the "Table ownership" section', () => {
-    expect(readme).toMatch(/^## Table ownership: kernel-guaranteed vs module-owned/m)
+    // ### (not ##): moved under "## Multi-tenant migration rules", right after
+    // "### Cross-cutting module tables" and BEFORE "## What is here, what is
+    // not" — hygiene check n2 reads everything from that inventory heading to
+    // "### Migrations that exist in the product and not here" as the "absent"
+    // list, so a table-ownership section placed after it that names shipped
+    // files (008, 058, 003, 007, 010, 055) got misread as calling them absent.
+    expect(readme).toMatch(/^### Table ownership: kernel-guaranteed vs module-owned/m)
   })
 
   it('names the content-owned creation migration and the reader role', () => {

@@ -247,12 +247,70 @@ nevertheless applied by every tenant, module ON or OFF:
 
 They are kernel-applied by written rule, because later **ungated** kernel DDL
 depends on the tables existing — `010_org_units.sql` ALTERs
-`committee_elections`, and `058_public_reader_grants.sql` aborts on a missing
-portal table. The set is machine-readable as `CROSS_CUTTING_MIGRATIONS` in
+`committee_elections` — and `gremion-ui/scripts/fresh-init-proof.sh` measures
+all three against a real database regardless of module state. The set is
+machine-readable as `CROSS_CUTTING_MIGRATIONS` in
 [`../src/lib/modules/migration-ownership.ts`](../src/lib/modules/migration-ownership.ts)
 and is asserted against a module-OFF apply list in
 `../src/lib/modules/migration-ownership.test.ts`. It is a closed list: a new
 migration that touches a module-owned table belongs in that module's repository.
+
+### Table ownership: kernel-guaranteed vs module-owned
+
+A migration in **this** directory may only depend on tables **this** directory
+produces. A table a module owns is created by that module's own migration, in
+that module's block (B-04: kernel `0001`–`0199`, module blocks of 100 from
+`1000`), and is granted by that module's own migration too.
+
+`news_posts` is the worked example. `008_public_portal.sql` records that the
+table moved out with the calendar/news modules during the Civitas kernel carve,
+so nothing here creates it. `058_public_reader_grants.sql` grants the
+anonymous reader role `gremion_public_reader` only the tables the anonymous
+public portal actually reads (R-E13: `gremion-public/src/lib/server/public-db.ts`
+reads `protocols` and `org_units`, nothing else) —
+
+| Table | Produced by |
+|---|---|
+| `protocols` | `007_protocols.sql` |
+| `org_units` | `010_org_units.sql` (`ALTER TABLE committees RENAME TO org_units`) |
+
+— and still **aborts** when one of them is absent: an absent kernel table means
+a broken replay, and a silent skip is the defect `058` exists to close. `058`
+also **REVOKEs** SELECT on `calendar_events`, `event_recurrence`,
+`protocol_resolutions` and `resolution_challenges` — every kernel-guaranteed
+table the anonymous portal's own queries never read — alongside the
+pre-existing `protocol_attendance` / `protocol_action_items` revoke. An
+earlier `058` granted the whole kernel-guaranteed set instead of only what the
+portal reads, anonymously exposing `resolution_challenges.raised_by` /
+`grounds` and `calendar_events.created_by`; the REVOKE is what fixes a
+database that already applied that grant (Postgres keys privileges to the
+role OID, so dropping a table from the grant list alone converges only a
+fresh install). The REVOKE runs after `055_resolution_challenges.sql`'s own
+GRANT, keeping the `055` → `058` filename ordering load-bearing.
+
+`news_posts` and its `GRANT SELECT` live in the content module's
+`1200_content_news_posts.sql`, staged outside this directory
+(`modules/content/migrations/`) until the content module repo exists; that
+grant covers the whole row today, drafts and `author_id` included, since no
+portal query reads `news_posts` yet — narrowing it to a published-only view
+is a follow-on unit, not this one. The consequence is the rule: a
+**content-OFF** kernel-only fresh init completes green and serves the
+anonymous portal on exactly `protocols` and `org_units`, and a content-ON
+install additionally grants `news_posts`.
+
+Row-level exposure is a separate, still-open gap: the table grants above let
+the anonymous role's own database connection select unpublished protocols and
+`committee_only` org units directly. Today only `public-db.ts`'s own `WHERE`
+clauses keep the portal's HTTP responses to published, publicly-visible rows —
+not a database-level restriction. A view or row-level-security policy that
+enforces that at the grant is a residual, not yet built.
+
+Enforced by `src/lib/modules/migration-portal-grants.test.ts` (`portal_tables`
+is exactly `org_units` and `protocols`, `revoked_tables` covers the four
+newly-narrowed tables, and no executable line here names the retired
+`stura_public_reader` role) and
+`src/lib/server/content-news-posts-migration.test.ts` (no file here creates
+`news_posts`); a database-backed integration proof follows in TASK-028.
 
 ### Numbering: the gaps are inherited, not corruption
 
@@ -368,41 +426,3 @@ fresh database but no way to reach them from the app — that is why.
 The four-eyes approval model, the FinTS state machine and the *Finanzordnung*
 signer configuration are finance-module concerns and are documented with the
 finance module, not here.
-
----
-
-## Table ownership: kernel-guaranteed vs module-owned
-
-A migration in **this** directory may only depend on tables **this** directory
-produces. A table a module owns is created by that module's own migration, in
-that module's block (B-04: kernel `0001`–`0199`, module blocks of 100 from
-`1000`), and is granted by that module's own migration too.
-
-`news_posts` is the worked example. `008_public_portal.sql` records that the
-table moved out with the calendar/news modules during the Civitas kernel carve,
-so nothing here creates it. `058_public_reader_grants.sql` therefore grants the
-anonymous reader role `gremion_public_reader` only the six tables the kernel
-chain itself produces —
-
-| Table | Produced by |
-|---|---|
-| `calendar_events`, `event_recurrence` | `003_calendar_schema.sql` |
-| `protocols`, `protocol_resolutions` | `007_protocols.sql` |
-| `org_units` | `010_org_units.sql` (`ALTER TABLE committees RENAME TO org_units`) |
-| `resolution_challenges` | `055_resolution_challenges.sql` |
-
-— and still **aborts** when one of them is absent: an absent kernel table means
-a broken replay, and a silent skip is the defect `058` exists to close.
-`news_posts` and its `GRANT SELECT` live in the content module's
-`1200_content_news_posts.sql`, which is staged outside this directory
-(`modules/content/migrations/`) until the content module repo exists. The
-consequence is the rule: a **content-OFF** kernel-only fresh init completes
-green and serves the anonymous portal, and a content-ON install additionally
-gets `news_posts`.
-
-Enforced by `src/lib/server/portal-reader-grants.test.ts` (every `portal_tables`
-entry is produced by the kernel chain, and no executable line here names the
-retired `stura_public_reader` role),
-`src/lib/server/content-news-posts-migration.test.ts`
-(no file here creates `news_posts`) and `src/lib/server/portal-reader-grants.integration.test.ts`
-(both cases against a real database).
