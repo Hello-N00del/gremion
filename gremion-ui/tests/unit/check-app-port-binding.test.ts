@@ -15,6 +15,7 @@ import { missingLocalEnvFiles, LOCAL_ENV_FILES, SETUP_FIRST } from '../../../scr
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
 const PORT_CHECK = path.join(REPO_ROOT, 'gremion-ui', 'scripts', 'check-app-port-binding.mjs')
+const HYGIENE = path.join(REPO_ROOT, 'scripts', 'kernel-hygiene-check.mjs')
 const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.override.yml', 'docker-compose.prod.yml']
 
 const dockerUp = spawnSync('docker', ['info'], { encoding: 'utf8' }).status === 0
@@ -129,5 +130,31 @@ describe.skipIf(!dockerUp)('check-app-port-binding on a SET-UP working copy (nee
     expect(res.status).toBe(1)
     expect(out).toContain('non-loopback')
     expect(out).not.toContain(SETUP_FIRST)
+  })
+})
+
+describe('kernel-hygiene g2 on a working copy that is not set up', () => {
+  it('reports the dev overlay as NOT CHECKED with the setup-first text, before any render', () => {
+    // A fresh clone of this repository: exactly what a new contributor has.
+    const clone = path.join(tmp, 'clone')
+    const cl = spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone], { encoding: 'utf8' })
+    expect(cl.status, cl.stderr).toBe(0)
+    expect(missingLocalEnvFiles(clone)).toEqual(['.env', 'legal/legal.env'])
+    // PATH without kubectl: the preflight must answer before a render is tried,
+    // so the verdict cannot depend on whether kustomize is installed.
+    const res = spawnSync(process.execPath, [HYGIENE], {
+      encoding: 'utf8',
+      env: { ...process.env, GREMION_REPO_ROOT: clone, PATH: path.dirname(process.execPath) },
+      timeout: 120_000,
+    })
+    const out = `${res.stdout}${res.stderr}`
+    const g2 = out.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
+    expect(res.status).not.toBe(0)
+    expect(g2).toMatch(/dev: NOT CHECKED/)
+    expect(g2).toContain(SETUP_FIRST)
+    expect(g2).toContain('.env')
+    expect(g2).not.toMatch(/dev: render FAILED/)
+    expect(out).not.toContain('non-loopback')
+    expect(out).not.toContain('SAFETY')
   })
 })
