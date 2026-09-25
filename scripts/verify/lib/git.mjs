@@ -14,14 +14,21 @@ export function headSha(cwd = process.cwd()) {
 }
 
 /**
- * True if any TRACKED file differs from HEAD (staged or unstaged). Untracked
- * files are deliberately ignored -- scripts/verify/out/*.json and the
- * per-run docker-compose override are gitignored and untracked by
- * definition, and would otherwise make `verify` refuse to run against its
- * own output.
+ * True if the tracked tree differs from HEAD (staged or unstaged changes),
+ * OR a non-ignored file is untracked (a `??` entry). `git status --porcelain`
+ * never lists gitignored files unless `--ignored` is explicitly passed, so
+ * scripts/verify/out/*.json and the per-run docker-compose override -- both
+ * gitignored -- are excluded for free and do NOT need `--untracked-files=no`
+ * to stay excluded. That flag's actual effect was excluding every OTHER
+ * untracked file too: a new, not-yet-`git add`ed .sql migration or manifest
+ * entry changes what gets tested without ever making the tree "dirty".
+ * Reproduced: committing HEAD without a migration file the manifest still
+ * lists, then leaving that file on disk untracked (no env var involved) gave
+ * "PASS migration-hash" -- a green record for a HEAD that is red. Forgetting
+ * `git add` on a new file is the most common way this happens.
  */
 export function isDirty(cwd = process.cwd()) {
-  const res = run('git', ['status', '--porcelain', '--untracked-files=no'], { cwd })
+  const res = run('git', ['status', '--porcelain'], { cwd })
   if (res.code !== 0) {
     throw new Error(`git status failed: ${res.stderr || res.error}`)
   }
