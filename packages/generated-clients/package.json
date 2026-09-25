@@ -75,7 +75,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm build",
     "generate": "node tools/generate.mjs",
-    "contracts:check": "node tools/contracts-check.mjs"
+    "contracts:check": "pnpm build && node tools/contracts-check.mjs"
   },
   "dependencies": {
     "openapi-fetch": "0.17.0"
