@@ -7,7 +7,29 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { stat, readFile, symlink, mkdir, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { LocalStorageBackend, nodeFs } from './local.js'
-import { mountedScratchRoot, TENANT_A, TENANT_B } from '../test/support.js'
+import { mountedScratchRoot, SCRATCH, TENANT_A, TENANT_B } from '../test/support.js'
+
+// A directory link on win32 is a junction: it needs no privilege, and lstat
+// reports it as a symbolic link, so the refusal is exercised on every host.
+const DIR_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir'
+
+// A FILE symlink on an unprivileged win32 host fails with EPERM (no
+// SeCreateSymbolicLinkPrivilege / developer mode). Probe the capability
+// instead of assuming it; any other probe error is a real failure.
+const canSymlinkFiles: boolean = await (async () => {
+  const dir = join(SCRATCH, `symlink-probe-${process.pid}-${Date.now()}`)
+  await mkdir(dir, { recursive: true })
+  try {
+    await writeFile(join(dir, 't'), 'x')
+    await symlink(join(dir, 't'), join(dir, 'l'), 'file')
+    return true
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EPERM') return false
+    throw err
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})()
 
 let root: string
 let backend: LocalStorageBackend
@@ -79,7 +101,7 @@ describe('LocalStorageBackend symlink refusal (review round 1, security M1)', ()
     await mkdir(other, { recursive: true })
     await writeFile(join(other, 's.txt'), 'B-SECRET')
     await mkdir(join(root, TENANT_A), { recursive: true })
-    await symlink(join(root, TENANT_B), join(root, TENANT_A, 'link'))
+    await symlink(join(root, TENANT_B), join(root, TENANT_A, 'link'), DIR_LINK_TYPE)
     await expect(backend.read(`${TENANT_A}/link/secret/s.txt`)).rejects.toThrow(/refusing symlink/)
     await expect(backend.put('link/secret/planted.txt', new Uint8Array([1]))).rejects.toThrow(/refusing symlink/)
     await expect(backend.delete(`${TENANT_A}/link/secret/s.txt`)).rejects.toThrow(/refusing symlink/)
@@ -89,10 +111,12 @@ describe('LocalStorageBackend symlink refusal (review round 1, security M1)', ()
     expect(await readFile(join(other, 's.txt'), 'utf8')).toBe('B-SECRET')
   })
 
-  it('a symlinked file under the tenant root is refused too', async () => {
+  // Linux (the gate that matters) always runs this; an unprivileged win32
+  // host skips it, and the directory case above still covers the lstat walk.
+  it.skipIf(!canSymlinkFiles)('a symlinked file under the tenant root is refused too', async () => {
     await mkdir(join(root, TENANT_A), { recursive: true })
     await writeFile(join(root, 'outside.txt'), 'X')
-    await symlink(join(root, 'outside.txt'), join(root, TENANT_A, 'f.txt'))
+    await symlink(join(root, 'outside.txt'), join(root, TENANT_A, 'f.txt'), 'file')
     await expect(backend.read(`${TENANT_A}/f.txt`)).rejects.toThrow(/refusing symlink/)
   })
 })
