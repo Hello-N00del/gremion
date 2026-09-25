@@ -396,16 +396,24 @@
                         "format": "uuid"
                       },
                       "org_unit_id": {
-                        "type": "string",
-                        "format": "uuid"
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "uuid",
+                        "description": "Null where the body itself decides (DOMAIN DB-GOV organisational references)."
                       },
                       "scheduled_start": {
                         "type": "string",
                         "format": "date-time"
                       },
                       "scheduled_end": {
-                        "type": "string",
-                        "format": "date-time"
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "date-time",
+                        "description": "Null when no end is set (SCHEMA gov.meeting.scheduled_end nullable)."
                       },
                       "aggregate_version": {
                         "type": "integer"
@@ -454,8 +462,12 @@
                         "format": "date-time"
                       },
                       "scheduled_end": {
-                        "type": "string",
-                        "format": "date-time"
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "date-time",
+                        "description": "Null when no end is set (SCHEMA gov.meeting.scheduled_end nullable)."
                       },
                       "aggregate_version": {
                         "type": "integer"
@@ -772,7 +784,11 @@
                         ]
                       },
                       "is_late": {
-                        "type": "boolean"
+                        "type": [
+                          "boolean",
+                          "null"
+                        ],
+                        "description": "Null when the target meeting sets no motion deadline (SCHEMA gov.motion.is_late generated from deadline_snapshot)."
                       }
                     },
                     "description": "DOMAIN de.gremion.gov.motion.submitted.v1.",

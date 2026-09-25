@@ -550,22 +550,27 @@ export interface components {
             body_id: string;
             /**
              * Format: uuid
-             * @description Opaque IDT org-unit reference
+             * @description Opaque IDT org-unit reference: the deciding organ. Null where the body itself decides (DOMAIN DB-GOV organisational references; SCHEMA gov.meeting.org_unit_id nullable).
              */
-            org_unit_id: string;
+            org_unit_id: string | null;
             /**
              * Format: uuid
              * @description Opaque IDT Wahlperiode reference (TRD-086). A mismatch with the body's current Wahlperiode warns and never blocks [D R17-14].
              */
             wahlperiode_id?: string | null;
-            meeting_number: number;
+            /** @description Serves the meeting_number token of the register numbering scheme. Null until numbered (SCHEMA gov.meeting.meeting_number nullable). */
+            meeting_number: number | null;
             /** @description DB-GOV-MEETING.title. Served here (gov.meeting-read v1) and deliberately never carried in event payloads (DOMAIN GOV events table). */
             title: string;
             /** Format: date-time */
             scheduled_start: string;
-            /** Format: date-time */
-            scheduled_end: string;
-            location?: string;
+            /**
+             * Format: date-time
+             * @description Null when no end is set (SCHEMA gov.meeting.scheduled_end nullable).
+             */
+            scheduled_end: string | null;
+            /** @description Free text; null when no location is set (SCHEMA gov.meeting.location nullable). */
+            location?: string | null;
             /**
              * Format: uuid
              * @description Display-only projection of msg.calllink.set.v1. MSG owns the meeting-to-call association; GOV never writes it except from MSG's event.
@@ -582,9 +587,9 @@ export interface components {
             notice_due_at: string;
             /**
              * Format: date-time
-             * @description Snapshotted from the body's motion deadline offset when the meeting was planned.
+             * @description Snapshotted from the body's motion deadline offset when the meeting was planned. Null when the body sets no motion deadline (SCHEMA gov.meeting.motion_deadline_at nullable).
              */
-            motion_deadline_at?: string;
+            motion_deadline_at?: string | null;
             /** Format: date-time */
             opened_at?: string | null;
             /** Format: date-time */
@@ -604,9 +609,14 @@ export interface components {
         MeetingCreate: {
             /**
              * Format: uuid
-             * @description Opaque IDT org-unit reference
+             * @description Opaque IDT body reference. Immutable once the meeting exists (DOMAIN DB-GOV-MEETING invariant). The tenant still comes from the host and token, never from here (TRD-409).
              */
-            org_unit_id: string;
+            body_id: string;
+            /**
+             * Format: uuid
+             * @description Opaque IDT org-unit reference of the deciding organ inside body_id. Omit or send null where the body itself decides (DOMAIN DB-GOV organisational references).
+             */
+            org_unit_id?: string | null;
             /**
              * Format: uuid
              * @description Opaque IDT Wahlperiode reference. Optional: when omitted the server records the body's current Wahlperiode [A]. A mismatch warns and never blocks [D R17-14].
@@ -616,8 +626,11 @@ export interface components {
             title: string;
             /** Format: date-time */
             scheduled_start: string;
-            /** Format: date-time */
-            scheduled_end: string;
+            /**
+             * Format: date-time
+             * @description Optional (SCHEMA gov.meeting.scheduled_end nullable). When given it must lie after scheduled_start (meeting_scheduled_end_check).
+             */
+            scheduled_end?: string;
             location?: string;
         };
         /** @description Retitle, relocate or reschedule. body_id is immutable and not accepted here (DOMAIN DB-GOV-MEETING invariant). A change of start or end emits de.gremion.gov.meeting.rescheduled.v1. */
@@ -626,9 +639,13 @@ export interface components {
             title?: string;
             /** Format: date-time */
             scheduled_start?: string;
-            /** Format: date-time */
-            scheduled_end?: string;
-            location?: string;
+            /**
+             * Format: date-time
+             * @description Send null to clear the end (SCHEMA gov.meeting.scheduled_end nullable).
+             */
+            scheduled_end?: string | null;
+            /** @description Send null to clear the location (SCHEMA gov.meeting.location nullable). */
+            location?: string | null;
         };
         AgendaSection: {
             /** @description DB-GOV-AGENDA-SECTION id (bigint, carried as a string to avoid JS precision loss) */
@@ -670,10 +687,12 @@ export interface components {
              */
             meeting_id: string;
             section_id?: components["schemas"]["BigintId"] | null;
-            position: number;
-            item_number?: string;
+            /** @description Order within the section. Null while the item is proposed or declined; set together with section_id (SCHEMA agenda_item_placement_check). */
+            position: number | null;
+            /** @description The printed TOP number; null until assigned. */
+            item_number?: string | null;
             title: string;
-            description?: string;
+            description?: string | null;
             /** @enum {string} */
             kind: "report" | "motion" | "previous_protocol_approval" | "election" | "misc";
             /** @enum {string|null} */
@@ -726,8 +745,8 @@ export interface components {
              * @enum {string}
              */
             state: "draft" | "checked" | "blocked" | "override_logged" | "dispatching" | "dispatch_refused" | "sent" | "partly_failed";
-            /** @description False when sent_at would be after notice_due_at; a flag, never a block (PRD-MTG-002b). */
-            notice_met: boolean;
+            /** @description Set by the notice check; null while the invitation is draft or checked (SCHEMA invitation_notice_met_check). false is a flag, never a block: dispatch then needs the one notice override (PRD-MTG-002b). */
+            notice_met: boolean | null;
             /** Format: date-time */
             sent_at?: string | null;
             /**
@@ -735,7 +754,8 @@ export interface components {
              * @description Opaque person reference of the chair who issued the invitation (DOMAIN DB-GOV-INVITATION); null until sent.
              */
             readonly sender_person_id?: string | null;
-            recipient_count: number;
+            /** @description Number of recipients at dispatch; null before dispatch (SCHEMA gov.invitation.recipient_count nullable). */
+            recipient_count: number | null;
         };
         /** @description One page of Invitation, in the list's stable server order. */
         InvitationPage: {
@@ -766,8 +786,8 @@ export interface components {
             /** Format: date-time */
             overridden_at: string;
             days_short: number;
-            /** @description Required since v0.3 (DOMAIN [D R20-D26-5]). */
-            reason: string;
+            /** @description Required at insert (NoticeOverrideCreate). Null only after it was erased in place under a covered redaction (SCHEMA notice_override_erased_check). Never carried in an event payload. */
+            reason: string | null;
             /** Format: uuid */
             curing_basis_id?: string | null;
             curing_basis_version?: number | null;
@@ -815,28 +835,31 @@ export interface components {
             motion_id: string;
             /**
              * Format: uuid
-             * @description The meeting this motion targets
+             * @description The meeting this motion targets. Null while in draft, or after a deferral to the next meeting until one is chosen (SCHEMA gov.motion.target_meeting_id).
              */
-            target_meeting_id: string;
+            target_meeting_id: string | null;
             /** Format: uuid */
             agenda_item_id?: string | null;
-            reference_label?: string;
+            reference_label?: string | null;
             title: string;
             motion_text: string;
-            rationale?: string;
+            rationale?: string | null;
             /** @enum {string} */
             submitter_kind: "member" | "helper" | "public";
             /** Format: uuid */
             submitter_person_id?: string | null;
-            /** Format: date-time */
-            submitted_at: string;
+            /**
+             * Format: date-time
+             * @description Set by the server at submission or on verification. Null in draft, pending_verification and expired (SCHEMA motion_submitted_check).
+             */
+            submitted_at: string | null;
             /**
              * Format: date-time
              * @description The meeting's motion deadline as it stood when the motion was submitted (DOMAIN DB-GOV-MOTION); is_late is computed from it on the server. Null while the motion is a draft.
              */
             readonly deadline_snapshot?: string | null;
-            /** @description Computed on the server (submitted_at after deadline_snapshot). Never accepted from the client (PRD-MTG-003, FLOW-MTG-003 B1). */
-            readonly is_late: boolean;
+            /** @description Computed on the server (submitted_at after deadline_snapshot). Never accepted from the client (PRD-MTG-003, FLOW-MTG-003 B1). Null while either side is null: before submission, or when the target meeting sets no motion deadline (SCHEMA generated column). */
+            readonly is_late: boolean | null;
             /**
              * @description DOMAIN Motion lifecycle (PRD-MTG-003, FLOW-MTG-003). withheld = submitted after the deadline and marked late, off the agenda until an admission; pending_verification and expired belong to public intake, which stays off per body (DOMAIN GOV question 1).
              * @enum {string}

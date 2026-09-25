@@ -1937,9 +1937,12 @@
             "description": "Opaque IDT body reference"
           },
           "org_unit_id": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid",
-            "description": "Opaque IDT org-unit reference"
+            "description": "Opaque IDT org-unit reference: the deciding organ. Null where the body itself decides (DOMAIN DB-GOV organisational references; SCHEMA gov.meeting.org_unit_id nullable)."
           },
           "wahlperiode_id": {
             "type": [
@@ -1950,7 +1953,11 @@
             "description": "Opaque IDT Wahlperiode reference (TRD-086). A mismatch with the body's current Wahlperiode warns and never blocks [D R17-14]."
           },
           "meeting_number": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Serves the meeting_number token of the register numbering scheme. Null until numbered (SCHEMA gov.meeting.meeting_number nullable)."
           },
           "title": {
             "type": "string",
@@ -1962,11 +1969,19 @@
             "format": "date-time"
           },
           "scheduled_end": {
-            "type": "string",
-            "format": "date-time"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Null when no end is set (SCHEMA gov.meeting.scheduled_end nullable)."
           },
           "location": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free text; null when no location is set (SCHEMA gov.meeting.location nullable)."
           },
           "call_link_id": {
             "type": [
@@ -2000,9 +2015,12 @@
             "format": "date-time"
           },
           "motion_deadline_at": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
-            "description": "Snapshotted from the body's motion deadline offset when the meeting was planned."
+            "description": "Snapshotted from the body's motion deadline offset when the meeting was planned. Null when the body sets no motion deadline (SCHEMA gov.meeting.motion_deadline_at nullable)."
           },
           "opened_at": {
             "type": [
@@ -2058,16 +2076,23 @@
       "MeetingCreate": {
         "type": "object",
         "required": [
-          "org_unit_id",
+          "body_id",
           "title",
-          "scheduled_start",
-          "scheduled_end"
+          "scheduled_start"
         ],
         "properties": {
-          "org_unit_id": {
+          "body_id": {
             "type": "string",
             "format": "uuid",
-            "description": "Opaque IDT org-unit reference"
+            "description": "Opaque IDT body reference. Immutable once the meeting exists (DOMAIN DB-GOV-MEETING invariant). The tenant still comes from the host and token, never from here (TRD-409)."
+          },
+          "org_unit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Opaque IDT org-unit reference of the deciding organ inside body_id. Omit or send null where the body itself decides (DOMAIN DB-GOV organisational references)."
           },
           "wahlperiode_id": {
             "type": "string",
@@ -2085,7 +2110,8 @@
           },
           "scheduled_end": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "Optional (SCHEMA gov.meeting.scheduled_end nullable). When given it must lie after scheduled_start (meeting_scheduled_end_check)."
           },
           "location": {
             "type": "string"
@@ -2106,11 +2132,19 @@
             "format": "date-time"
           },
           "scheduled_end": {
-            "type": "string",
-            "format": "date-time"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Send null to clear the end (SCHEMA gov.meeting.scheduled_end nullable)."
           },
           "location": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Send null to clear the location (SCHEMA gov.meeting.location nullable)."
           }
         }
       },
@@ -2238,16 +2272,27 @@
             ]
           },
           "position": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Order within the section. Null while the item is proposed or declined; set together with section_id (SCHEMA agenda_item_placement_check)."
           },
           "item_number": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The printed TOP number; null until assigned."
           },
           "title": {
             "type": "string"
           },
           "description": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "kind": {
             "type": "string",
@@ -2413,8 +2458,11 @@
             "description": "DOMAIN Invitation lifecycle (PRD-MTG-002a/002b, FLOW-MTG-002). blocked = notice not met and no override yet; override_logged = the one notice-override is recorded; dispatch_refused = MAIL reports no connector for the body; partly_failed = some recipients failed or bounced. A blocked invitation never blocks the Sitzung [D R20-D26-5]."
           },
           "notice_met": {
-            "type": "boolean",
-            "description": "False when sent_at would be after notice_due_at; a flag, never a block (PRD-MTG-002b)."
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Set by the notice check; null while the invitation is draft or checked (SCHEMA invitation_notice_met_check). false is a flag, never a block: dispatch then needs the one notice override (PRD-MTG-002b)."
           },
           "sent_at": {
             "type": [
@@ -2433,7 +2481,11 @@
             "description": "Opaque person reference of the chair who issued the invitation (DOMAIN DB-GOV-INVITATION); null until sent."
           },
           "recipient_count": {
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Number of recipients at dispatch; null before dispatch (SCHEMA gov.invitation.recipient_count nullable)."
           }
         }
       },
@@ -2509,9 +2561,12 @@
             "type": "integer"
           },
           "reason": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "minLength": 1,
-            "description": "Required since v0.3 (DOMAIN [D R20-D26-5])."
+            "description": "Required at insert (NoticeOverrideCreate). Null only after it was erased in place under a covered redaction (SCHEMA notice_override_erased_check). Never carried in an event payload."
           },
           "curing_basis_id": {
             "type": [
@@ -2647,9 +2702,12 @@
             "description": "DB-GOV-MOTION id (UUIDv7)"
           },
           "target_meeting_id": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid",
-            "description": "The meeting this motion targets"
+            "description": "The meeting this motion targets. Null while in draft, or after a deferral to the next meeting until one is chosen (SCHEMA gov.motion.target_meeting_id)."
           },
           "agenda_item_id": {
             "type": [
@@ -2659,7 +2717,10 @@
             "format": "uuid"
           },
           "reference_label": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "title": {
             "type": "string"
@@ -2668,7 +2729,10 @@
             "type": "string"
           },
           "rationale": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "submitter_kind": {
             "type": "string",
@@ -2686,8 +2750,12 @@
             "format": "uuid"
           },
           "submitted_at": {
-            "type": "string",
-            "format": "date-time"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set by the server at submission or on verification. Null in draft, pending_verification and expired (SCHEMA motion_submitted_check)."
           },
           "deadline_snapshot": {
             "type": [
@@ -2699,9 +2767,12 @@
             "description": "The meeting's motion deadline as it stood when the motion was submitted (DOMAIN DB-GOV-MOTION); is_late is computed from it on the server. Null while the motion is a draft."
           },
           "is_late": {
-            "type": "boolean",
+            "type": [
+              "boolean",
+              "null"
+            ],
             "readOnly": true,
-            "description": "Computed on the server (submitted_at after deadline_snapshot). Never accepted from the client (PRD-MTG-003, FLOW-MTG-003 B1)."
+            "description": "Computed on the server (submitted_at after deadline_snapshot). Never accepted from the client (PRD-MTG-003, FLOW-MTG-003 B1). Null while either side is null: before submission, or when the target meeting sets no motion deadline (SCHEMA generated column)."
           },
           "state": {
             "type": "string",
