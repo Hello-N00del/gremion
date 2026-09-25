@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Dev-only: allow cleartext HTTP to local dev servers.
+    - 10.0.2.2: Android emulator loopback to host machine
+    - 192.168.0.x: LAN IP range for direct emulator-to-host on local WiFi
+    Production builds MUST NOT include cleartext — HTTPS is mandatory in prod.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">192.168.0.13</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

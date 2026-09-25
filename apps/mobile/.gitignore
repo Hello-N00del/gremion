@@ -1,0 +1,30 @@
+# Flutter/Dart build artifacts
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+*.g.dart
+
+# Android local config
+android/local.properties
+android/app/google-services.json
+android/.gradle/
+android/app/.cxx/
+
+# iOS generated
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_export_environment.sh
+ios/Flutter/Generated.xcconfig
+ios/Runner/GeneratedPluginRegistrant.h
+ios/Runner/GeneratedPluginRegistrant.m
+ios/GoogleService-Info.plist
+ios/.symlinks/
+ios/Pods/
+
+# macOS generated
+macos/Flutter/ephemeral/
+macos/Flutter/GeneratedPluginRegistrant.swift
+
+# Environment
+.env
+*.env

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDisplayName</key>
+    <string>StuRaOS</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>stura</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(FLUTTER_BUILD_NAME)</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleVersion</key>
+    <string>$(FLUTTER_BUILD_NUMBER)</string>
+
+    <!--
+        AppAuth redirect: stura://auth/callback (custom scheme, not a
+        Universal Link).
+
+        G-051: custom URI schemes are interceptable. Any other iOS app
+        declaring the same scheme in CFBundleURLSchemes registers as a
+        handler. Mitigations (kept consistent with lib/services/auth_service.dart):
+          - PKCE on by default (flutter_appauth v7+).
+          - `state` parameter auto-generated and validated per authorize().
+        Migration to a Universal Link is blocked on flutter_appauth issue
+        #566 (authorize() never returns with a Universal Link redirect URI).
+        See docs/specs/mobile-oidc-scheme-migration.md.
+    -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>com.stura.app</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>stura</string>
+            </array>
+        </dict>
+    </array>
+
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>fetch</string>
+        <string>remote-notification</string>
+    </array>
+
+    <!--
+        G-046: `NSAppTransportSecurity { NSAllowsLocalNetworking = true }`
+        was removed from this production plist. Allowing local networking
+        in release builds relaxed ATS for production users.
+
+        The plan's strategy was to split the plist via xcconfig (debug-only
+        overlay) and ship a clean release plist. That split requires a
+        full `Runner.xcodeproj` scaffold — which does NOT currently exist
+        in this tree (the iOS project has Info.plist + GeneratedPluginRegistrant
+        only). Recorded as addendum-2 §2 A-014: future iOS macOS pass must
+        re-scaffold the xcodeproj and reintroduce `NSAllowsLocalNetworking`
+        in Debug-only via `Info-Debug.plist` + `Debug.xcconfig`. Until then,
+        local dev on iOS that needs to talk to plain-HTTP localhost will
+        require a separate, local-only patch — release is safe.
+    -->
+
+    <!-- Required by local_auth for Face ID -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>StuRaOS uses Face ID to unlock the app.</string>
+
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+    <key>UIMainStoryboardFile</key>
+    <string>Main</string>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+</dict>
+</plist>

@@ -1,0 +1,5 @@
+-keep class io.flutter.** { *; }
+-dontwarn io.flutter.**
+-keep class net.openid.appauth.** { *; }
+-keep class net.sqlcipher.** { *; }
+-keep class org.matrix.** { *; }
