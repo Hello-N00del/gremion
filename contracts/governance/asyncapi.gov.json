@@ -513,10 +513,12 @@
                       "cancel_reason": {
                         "type": "string",
                         "enum": [
-                          "cancelled_by_chair",
-                          "body_archived"
+                          "chair_cancelled",
+                          "body_archived",
+                          "org_unit_archived",
+                          "customer_offboarding"
                         ],
-                        "description": "The Meeting lifecycle's two Cancelled edges: the chair cancels, or the body is archived (DOMAIN Meeting lifecycle) [A: value names chosen here]."
+                        "description": "Why the meeting was cancelled: the chair cancelled it, the body or the org unit was archived, or the customer is being offboarded. Values are SCHEMA meeting_cancel_reason_check."
                       },
                       "aggregate_version": {
                         "type": "integer"

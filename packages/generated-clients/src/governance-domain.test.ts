@@ -241,6 +241,25 @@ describe('D5 - every envelope names its own DB-PLT-EVENT-TYPE; the document desc
   })
 })
 
+describe('D7 - cancel_reason carries exactly SCHEMA meeting_cancel_reason_check', () => {
+  // SCHEMA gov.meeting: CHECK (cancel_reason IN ('chair_cancelled',
+  // 'body_archived', 'org_unit_archived', 'customer_offboarding')). A value the
+  // GOV database stores but the 1.0.0 enum lacks, or a renamed value, is a
+  // MAJOR bump later, so both documents use SCHEMA's set now.
+  const SCHEMA_CANCEL_REASONS = ['chair_cancelled', 'body_archived', 'org_unit_archived', 'customer_offboarding']
+
+  it('Meeting.cancel_reason = SCHEMA values plus null (null outside cancelled)', () => {
+    const prop = loadOpenApi().components.schemas.Meeting.properties.cancel_reason
+    expect([...prop.enum].sort()).toEqual([...SCHEMA_CANCEL_REASONS, null].sort())
+  })
+
+  it('meeting.cancelled payload cancel_reason = SCHEMA values (the event is only sent when cancelled)', () => {
+    const p = payloadSchema(loadAsyncApi(), 'EnvelopeMeetingCancelled')
+    expect([...p.properties.cancel_reason.enum].sort()).toEqual([...SCHEMA_CANCEL_REASONS].sort())
+    expect(p.properties.cancel_reason.type).toBe('string')
+  })
+})
+
 describe('D2 - every state enum equals its DOMAIN lifecycle diagram', () => {
   for (const [schema, states] of Object.entries(DOMAIN_LIFECYCLES)) {
     it(`${schema}.state enum = DOMAIN ${schema} lifecycle`, () => {

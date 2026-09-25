@@ -595,10 +595,10 @@ export interface components {
             /** Format: date-time */
             closed_at?: string | null;
             /**
-             * @description Set when state is cancelled: the chair cancelled, or the body was archived (DOMAIN Meeting lifecycle) [A: value names chosen here].
+             * @description Set exactly when state is cancelled, null otherwise (SCHEMA meeting_cancelled_check). Why the meeting was cancelled: the chair cancelled it, the body or the org unit was archived, or the customer is being offboarded. Values are SCHEMA meeting_cancel_reason_check.
              * @enum {string|null}
              */
-            cancel_reason?: "cancelled_by_chair" | "body_archived" | null;
+            cancel_reason?: "chair_cancelled" | "body_archived" | "org_unit_archived" | "customer_offboarding" | null;
         };
         /** @description One page of Meeting, in the list's stable server order. */
         MeetingPage: {
