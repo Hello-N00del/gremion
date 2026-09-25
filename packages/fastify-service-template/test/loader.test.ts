@@ -64,6 +64,28 @@ describe('T1: the route table is loaded from the spec', () => {
     expect(coerced.statusCode).toBe(400)
   })
 
+  it('a literal ":" in a spec path (a custom method, /widgets/{id}:archive) is a literal, not a second parameter', async () => {
+    const spec = fixtureSpec()
+    spec.paths['/widgets/{widgetId}:archive'] = {
+      post: {
+        operationId: 'archiveWidget',
+        parameters: [{ name: 'widgetId', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Archived', content: { 'application/json': { schema: { type: 'object', properties: { widgetId: { type: 'string' } } } } } } },
+      },
+    }
+    const handlers: Record<string, OperationHandler> = {
+      ...fixtureHandlers(),
+      archiveWidget: async (request) => ({ widgetId: (request.params as { widgetId: string }).widgetId }),
+    }
+    const app = track(createService({ spec, handlers }))
+    await app.ready()
+    expect(getRouteTable(app)).toContain('POST /widgets/{widgetId}:archive')
+    const res = await app.inject({ method: 'POST', url: '/widgets/abc:archive' })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json()).toEqual({ widgetId: 'abc' })
+    expect([404, 405]).toContain((await app.inject({ method: 'POST', url: '/widgets/abc' })).statusCode)
+  })
+
   it('serves GET /healthz from the template on every service', async () => {
     const app = track(createService({ spec: fixtureSpec(), handlers: fixtureHandlers() }))
     const res = await app.inject({ method: 'GET', url: '/healthz' })

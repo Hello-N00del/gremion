@@ -58,9 +58,14 @@ export function getUploadCeilingBytes(app: FastifyInstance): number {
   return state(app).uploadCeilingBytes
 }
 
-/** `/a/:id` -> `/a/{id}` (spec form), for comparing a Fastify URL with a spec path. */
+/**
+ * `/a/:id` -> `/a/{id}` (spec form), for comparing a Fastify URL with a spec
+ * path. `::` is find-my-way's escaped literal colon and maps back to `:`.
+ */
 export function toSpecPath(fastifyUrl: string): string {
-  return fastifyUrl.replace(/:([A-Za-z0-9_]+)(\([^)]*\))?/g, '{$1}')
+  return fastifyUrl.replace(/::|:([A-Za-z0-9_]+)(\([^)]*\))?/g, (_match, name: string | undefined) =>
+    name === undefined ? ':' : `{${name}}`,
+  )
 }
 
 /** Handler stub: 501 problem+json until the operation is implemented. */

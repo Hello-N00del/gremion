@@ -41,9 +41,19 @@ const PLATFORM_HANDLERS: Record<string, OperationHandler> = {
 
 const MULTIPART = 'multipart/form-data'
 
-/** `/a/{id}` -> `/a/:id` (find-my-way syntax). */
+/**
+ * `/a/{id}` -> `/a/:id` (find-my-way syntax). A literal `:` in the spec path
+ * (a custom method, `/a/{id}:archive`) is escaped as `::` first, or the router
+ * would read it as the start of a second parameter. find-my-way ends a
+ * parameter NAME only at `-`, `.`, `/` or `(`, so a parameter directly
+ * followed by a literal colon gets a regex terminator `(^[^:]+)`; without it
+ * the parameter would be named `id::archive`.
+ */
 export function toFastifyPath(specPath: string): string {
-  return specPath.replace(/\{([^}/]+)\}/g, ':$1')
+  return specPath
+    .replace(/:/g, '::')
+    .replace(/\{([^}/]+)\}(?=::)/g, ':$1(^[^:]+)')
+    .replace(/\{([^}/]+)\}/g, ':$1')
 }
 
 /**
