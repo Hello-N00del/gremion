@@ -61,6 +61,43 @@ test('checkWorkflowText is green on an ordinary ubuntu-latest workflow with no s
   assert.deepEqual(checkWorkflowText('jobs:\n  x:\n    runs-on: ubuntu-latest\n    steps: []\n'), [])
 })
 
+test('checkWorkflowText is RED on a YAML block-list runs-on (self-hosted as a "- " list item, not inline)', () => {
+  const text = 'jobs:\n  x:\n    runs-on:\n      - self-hosted\n      - linux\n'
+  assert.equal(checkWorkflowText(text).length, 1)
+})
+
+test('checkWorkflowText is RED on a runs-on labels map (self-hosted runner group syntax)', () => {
+  const inline = 'jobs:\n  x:\n    runs-on: {labels: self-hosted}\n'
+  assert.equal(checkWorkflowText(inline).length, 1)
+  const block = 'jobs:\n  x:\n    runs-on:\n      group: my-group\n      labels: self-hosted\n'
+  assert.equal(checkWorkflowText(block).length, 1)
+})
+
+test('checkWorkflowText is RED when runs-on is matrix-supplied and the matrix strategy lists self-hosted', () => {
+  const text =
+    'jobs:\n  x:\n    strategy:\n      matrix:\n        os: [self-hosted, ubuntu-latest]\n    runs-on: ${{ matrix.os }}\n'
+  assert.equal(checkWorkflowText(text).length, 1)
+})
+
+test('checkWorkflowText is RED on bracket-syntax secret access: secrets[\'DEPLOY_SSH_KEY\']', () => {
+  const text = "env:\n  K: ${{ secrets['DEPLOY_SSH_KEY'] }}\n"
+  assert.equal(checkWorkflowText(text).length, 1)
+})
+
+test('checkWorkflowText is RED on toJSON(secrets) and on secrets: inherit (both can carry ANY secret)', () => {
+  assert.equal(checkWorkflowText('env:\n  ALL: ${{ toJSON(secrets) }}\n').length, 1)
+  assert.equal(checkWorkflowText('jobs:\n  x:\n    secrets: inherit\n').length, 1)
+})
+
+test('checkWorkflowText flags the canonical SOPS age var name (AGE_SECRET_KEY, not just *_AGE_KEY), HOST_KEY, COSIGN and KEYSTORE secrets', () => {
+  const flags = (name) => checkWorkflowText(`x: \${{ secrets.${name} }}`).length
+  assert.equal(flags('AGE_SECRET_KEY'), 1)
+  assert.equal(flags('PROD_HOST_PRIVATE_KEY'), 1)
+  assert.equal(flags('COSIGN_KEY'), 1)
+  assert.equal(flags('ANDROID_KEYSTORE_PASSWORD'), 1)
+  assert.equal(flags('STAGE_ENV_NAME'), 0, 'a name that merely CONTAINS "age" as a substring must not false-positive')
+})
+
 test('todayIso returns YYYY-MM-DD from an injected clock', () => {
   assert.equal(todayIso(new Date('2026-09-25T12:00:00Z')), '2026-09-25')
 })

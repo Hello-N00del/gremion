@@ -21,9 +21,54 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const SELF_HOSTED_RE = /runs-on:\s*(\[[^\]]*\bself-hosted\b[^\]]*\]|['"]?self-hosted['"]?\s*$)/im
-const SECRET_REF_RE = /secrets\.([A-Za-z0-9_]+)/g
-const SENSITIVE_SECRET_NAME_RE = /DEPLOY|SIGN(ING)?|SSH|AGE_KEY|GPG|SOPS/i
+// Inline forms only: a scalar (`runs-on: self-hosted`), an inline list
+// (`runs-on: [self-hosted, ...]`) or an inline flow map
+// (`runs-on: {labels: self-hosted}`) — all on the SAME line as `runs-on:`.
+// Block forms (a YAML list or map on the following, more-indented lines) are
+// not regex-shaped at all; `detectSelfHostedRunner` below handles those by
+// scanning indentation instead of trying to extend this regex.
+const SELF_HOSTED_INLINE_RE = /runs-on:\s*(\[[^\]]*\bself-hosted\b[^\]]*\]|\{[^}]*\bself-hosted\b[^}]*\}|['"]?self-hosted['"]?\s*$)/im
+const MATRIX_RUNS_ON_RE = /runs-on:\s*\$\{\{\s*matrix\./i
+const SECRET_REF_RE = /secrets(?:\.([A-Za-z0-9_]+)|\[\s*['"]([A-Za-z0-9_]+)['"]\s*\])/g
+const SECRETS_TOJSON_RE = /toJSON\(\s*secrets\s*\)/
+const SECRETS_INHERIT_RE = /secrets:\s*inherit\b/
+// Bounded so a name that merely CONTAINS "age" (STAGE_ENV_NAME, MESSAGE_ID)
+// never false-positives: AGE must stand alone between start/end and `_`.
+const SENSITIVE_SECRET_NAME_RE = /DEPLOY|SIGN(ING)?|SSH|GPG|SOPS|COSIGN|KEYSTORE|PRIVATE_KEY|HOST_KEY|(?:^|_)AGE(?:_|$)/i
+
+/**
+ * `runs-on:` beyond the inline forms `SELF_HOSTED_INLINE_RE` already covers:
+ *  - a YAML BLOCK list (`runs-on:` with no value, then indented `- item`
+ *    lines below it) or a block flow map (indented `key: value` lines) —
+ *    found by scanning lines more-indented than `runs-on:` itself, stopping
+ *    at the first line that is not (dedent = end of this block).
+ *  - a MATRIX-supplied runner (`runs-on: ${{ matrix.os }}`) — this file
+ *    never resolves what matrix.os expands to at any given run, so it fails
+ *    CLOSED: if the word `self-hosted` appears anywhere in the file (in
+ *    practice, in that same job's `strategy.matrix` values), the runner is
+ *    treated as possibly self-hosted.
+ */
+export function detectSelfHostedRunner(text) {
+  if (SELF_HOSTED_INLINE_RE.test(text)) return true
+  const lines = text.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\s*)runs-on:\s*(.*)$/)
+    if (!m) continue
+    const [, indentStr, rest] = m
+    const indent = indentStr.length
+    if (rest.trim() === '') {
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trim() === '') continue
+        const lineIndent = lines[j].match(/^(\s*)/)[1].length
+        if (lineIndent <= indent) break
+        if (/self-hosted/i.test(lines[j])) return true
+      }
+    } else if (MATRIX_RUNS_ON_RE.test(lines[i]) && /self-hosted/i.test(text)) {
+      return true
+    }
+  }
+  return false
+}
 
 /** Every `.github/workflows/*.yml` (and `.yaml`) file, repo-relative POSIX paths. */
 export function listWorkflowFiles(repoRoot) {
@@ -46,17 +91,23 @@ export function listWorkflowFiles(repoRoot) {
  */
 export function checkWorkflowText(text) {
   const findings = []
-  if (SELF_HOSTED_RE.test(text)) {
-    findings.push({ rule: 'self-hosted', detail: 'runs-on names a self-hosted runner' })
+  if (detectSelfHostedRunner(text)) {
+    findings.push({ rule: 'self-hosted', detail: 'runs-on names (or may resolve to) a self-hosted runner' })
   }
   const seen = new Set()
   for (const m of text.matchAll(SECRET_REF_RE)) {
-    const name = m[1]
+    const name = m[1] ?? m[2]
     if (seen.has(name)) continue
     if (SENSITIVE_SECRET_NAME_RE.test(name)) {
       seen.add(name)
       findings.push({ rule: 'sensitive-secret', detail: `references secrets.${name} (signing/age/SSH/deploy)` })
     }
+  }
+  if (SECRETS_TOJSON_RE.test(text)) {
+    findings.push({ rule: 'sensitive-secret', detail: 'toJSON(secrets) serializes the entire secrets context — treated as sensitive, fail closed' })
+  }
+  if (SECRETS_INHERIT_RE.test(text)) {
+    findings.push({ rule: 'sensitive-secret', detail: 'secrets: inherit passes every secret to a reusable workflow — treated as sensitive, fail closed' })
   }
   return findings
 }

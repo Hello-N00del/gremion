@@ -109,8 +109,13 @@ to suppress a match is to remove the credential from the tree (and rotate it
 
 ## `runner-policy.mjs`
 
-Fails on any `.github/workflows/*.yml` that names a `self-hosted` runner or
-references a signing/age/SSH/deploy secret (TRD-364). Each `waivers.json`
+Fails on any `.github/workflows/*.yml` that names a `self-hosted` runner
+(inline scalar/list/flow-map, YAML block list, block flow map, or a
+matrix-supplied `runs-on` — the last fails closed if `self-hosted` appears
+anywhere in the file) or references a signing/age/SSH/deploy secret
+(TRD-364; `secrets.NAME`, `secrets['NAME']`, `toJSON(secrets)` and
+`secrets: inherit` are all covered — the last two fail closed since they can
+carry ANY secret, not just a named one). Each `waivers.json`
 entry is `{repo, file, owner, expiresOn, reason}` and matches BOTH fields — a
 waiver naming `{repo: "kernel", file: "deploy.yml"}` never covers a StuRaOS
 `deploy.yml`, even though the basename is identical (a bare `{file}` waiver
