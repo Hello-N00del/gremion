@@ -461,7 +461,7 @@ install_lib_only() {
 
 @test "load_env refuses keys that steer the shell or the loader itself" {
     local k
-    for k in ALLOW_SENTINELS GREMION_ENV_TEMPLATE_DIR PATH IFS BASH_ENV LD_PRELOAD; do
+    for k in ALLOW_SENTINELS GREMION_ENV_TEMPLATE_DIR PATH IFS BASH_ENV LD_PRELOAD GREMION_EXIT_ASSERT GREMION_EXIT_USAGE GREMION_LIB_DIR C_BAD; do
         printf 'A=1\n%s=x\n' "$k" > "${GREMION_ROOT}/t.env"
         run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
         [ "$status" -eq 2 ] || { echo "$k was accepted"; return 1; }

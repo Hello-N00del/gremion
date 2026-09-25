@@ -28,6 +28,7 @@ render_filled() {
     local f
     for f in "$ENV_DIR"/*.env; do
         sed -i -E 's/^([A-Za-z_][A-Za-z0-9_]*)=CHANGE_ME_OPERATOR_[a-z0-9_]+$/\1=fake-operator-value/' "$f"
+        sed -i 's/^GREMION_PRODUCTION_STACK=.*/GREMION_PRODUCTION_STACK=none/' "$f"
         ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME_' "$f" || { echo "sentinel left in $f"; return 1; }
     done
     touch "$RELEASE"/docker-compose.yml "$RELEASE"/docker-compose.prod.yml \
@@ -328,10 +329,22 @@ second_readers() {
 DOMAIN_BINDING='DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
 
 @test "DOMAIN is bound from PLATFORM_DOMAIN exactly once across the compose files" {
-    local n
+    local n any
     n="$(cat "${KERNEL_ROOT}/docker-compose.yml" "${KERNEL_ROOT}/docker-compose.prod.yml" \
         | grep -cF "$DOMAIN_BINDING" || true)"
     [ "$n" -eq 1 ]
+    # ...and nothing else reads PLATFORM_DOMAIN (a second, unguarded binding)
+    any="$(cat "${KERNEL_ROOT}/docker-compose.yml" "${KERNEL_ROOT}/docker-compose.prod.yml" \
+        | grep -vE '^[[:space:]]*#' | grep -c 'PLATFORM_DOMAIN' || true)"
+    [ "$any" -eq 1 ] || { echo "PLATFORM_DOMAIN read ${any} times"; return 1; }
+}
+
+@test "a GREMION_PRODUCTION_STACK that is neither none nor a stack name exits 1" {
+    render_filled
+    sed -i 's/^GREMION_PRODUCTION_STACK=.*/GREMION_PRODUCTION_STACK=Not-A-Stack/' "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"GREMION_PRODUCTION_STACK"* ]]
 }
 
 # A private project directory holding the three compose files and an EMPTY

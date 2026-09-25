@@ -186,6 +186,12 @@ check_template_keys() {
             [[ -n "${val//[[:space:]]/}" ]] || fail "${key} is empty: the operator must fill it in"
         fi
     done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$__gve_template")
+    # The truncating-harness contract (AM-B-05): `none` or a stack name.
+    if grep -q '^GREMION_PRODUCTION_STACK=' "$__gve_template" \
+        && [[ "${GREMION_PRODUCTION_STACK-}" != none \
+              && ! "${GREMION_PRODUCTION_STACK-}" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
+        fail "GREMION_PRODUCTION_STACK is neither 'none' nor a stack name (^[a-z][a-z0-9-]{0,31}\$)"
+    fi
     [[ "$__gve_failures" -gt "$before" ]] || ok "template keys: all ${n} declared, operator keys filled"
 }
 

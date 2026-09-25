@@ -335,11 +335,13 @@ load_env() {
         fi
         key="${line%%=*}"
         value="${line#*=}"
-        # Keys that steer this loader, the shell or the dynamic linker are not
-        # configuration: exported, they would change how every later line (and
-        # every later program) is judged.
+        # Keys that steer this loader, the shell, the dynamic linker or this
+        # library's own state (exit codes, colours) are not configuration:
+        # exported, they would change how every later line -- and the verdict
+        # of the program that loaded the file -- is judged.
         case "$key" in
-            ALLOW_SENTINELS|GREMION_ENV_TEMPLATE_DIR|PATH|IFS|ENV|BASH_ENV|BASH_*|SHELLOPTS|BASHOPTS|PS4|LD_*)
+            ALLOW_SENTINELS|GREMION_ENV_TEMPLATE_DIR|PATH|IFS|ENV|BASH_ENV|BASH_*|SHELLOPTS|BASHOPTS|PS4|LD_*|\
+            GREMION_EXIT_*|GREMION_LIB_DIR|GREMION_ASSERT_TAIL_LINES|WAIVER_ROW_CANDIDATE|C_OK|C_BAD|C_DIM|C_OFF)
                 bad "load_env: ${file}: line ${n} sets ${key}, which an env file may not set"
                 exit "$GREMION_EXIT_USAGE"
                 ;;
