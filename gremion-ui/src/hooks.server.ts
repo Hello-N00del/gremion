@@ -639,6 +639,16 @@ export const correlationHandle: Handle = ({ event, resolve }) => {
   return resolve(event)
 }
 
+// TASK-023: Auth.js builds its config from the resolved tenant and throws
+// without one, so a request the resolver handed on unresolved (/healthz, an
+// /api/internal/ call naming no tenant — see boot-exempt.ts) skips it; the
+// authGuard below is what answers such a request. A tenant-resolved request
+// goes through Auth.js exactly as before.
+export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
+  isBootAndResolveExempt(event.url.pathname) && !event.locals.tenant
+    ? resolve(event)
+    : authHandle({ event, resolve })
+
 // correlationHandle is element 0: it mints/validates the correlation id BEFORE
 // tenant resolution, auth, or any data-plane query so every downstream handle
 // (including tenantResolveHandle's ALS scope) can read event.locals.correlationId.
@@ -647,7 +657,7 @@ export const handle = sequence(
   correlationHandle,
   tenantResolveHandle,
   tenantBrandStyleHandle,
-  authHandle,
+  authHandleUnlessExempt,
   authGuard,
   cspGuard,
 )

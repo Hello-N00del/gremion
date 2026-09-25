@@ -131,12 +131,26 @@ vi.mock('$lib/server/tenant/default-tenant', () => ({
   DEFAULT_TENANT: { id: 'default', configPath: '/tmp/config.json' },
 }))
 
-// ./auth re-exports a SvelteKit `handle` — we just need a passthrough so the
-// `sequence(authHandle, …)` at the bottom of hooks.server.ts doesn't blow up.
+// ./auth re-exports a SvelteKit `handle`. TASK-023: faithful to the real one in
+// the one way that matters here — buildAuthConfig THROWS without a resolved
+// tenant — so a sequence test proves an exempt request never reaches it.
+const authHandleCalls: string[] = []
 vi.mock('./auth', () => ({
-  handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) =>
-    resolve(event),
+  handle: async ({ event, resolve }: { event: { url: URL; locals: Record<string, unknown> }; resolve: (e: unknown) => unknown }) => {
+    authHandleCalls.push(event.url.pathname)
+    if (!event.locals.tenant) throw new Error('buildAuthConfig: no tenant resolved (tenantResolveHandle must run first)')
+    return resolve(event)
+  },
 }))
+
+// @ts-expect-error — runtime-only internal entry; see hooks.tenant-wiring.test.ts.
+import { with_request_store } from '@sveltejs/kit/internal/server'
+
+/** sequence() needs SvelteKit's request store; the runtime (respond.js) provides it. */
+function withRequestStore<T>(event: unknown, fn: () => T): T {
+  const state = { tracing: { record_span: <R>({ fn }: { fn: (span: unknown) => Promise<R> }) => fn({}) } }
+  return with_request_store({ event, state } as never, fn)
+}
 
 // nodemailer is referenced but only invoked when smtp.configured === true,
 // which our config stub leaves false. A bare stub is still required so the
@@ -460,6 +474,46 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
     await Promise.resolve()
     expect(calls).toBe(1)
     expect(vi.getTimerCount()).toBe(1)
+  })
+})
+
+describe('the full handle sequence (TASK-023)', () => {
+  async function throughHandle(mod: typeof import('./hooks.server'), path: string, tenant?: unknown) {
+    const event = makeFakeEvent(path)
+    if (tenant) event.locals.tenant = tenant
+    return (await withRequestStore(event, () =>
+      mod.handle({ event: event as never, resolve: async () => new Response('{"ok":true}', { status: 200 }) }),
+    )) as Response
+  }
+
+  beforeEach(() => {
+    authHandleCalls.length = 0
+  })
+
+  it('an unresolved /healthz never reaches Auth.js (which throws without a tenant), during and after boot', async () => {
+    const pending: { resolve?: () => void } = {}
+    controlMigrationsImpl = () =>
+      new Promise<void>((r) => {
+        pending.resolve = r
+      })
+    const mod = await import('./hooks.server')
+    const inflight = mod.boot()
+    expect((await throughHandle(mod, '/healthz')).status).toBe(200)
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+    pending.resolve?.()
+    await inflight
+    expect((await throughHandle(mod, '/healthz')).status).toBe(200)
+    expect((await throughHandle(mod, '/api/internal/evict')).status).toBe(200)
+    expect(authHandleCalls).toEqual([])
+  })
+
+  it('a tenant-resolved request still goes through Auth.js', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
+    await throughHandle(mod, '/api/internal/newsletter/render', tenant)
+    await throughHandle(mod, '/healthz', tenant)
+    expect(authHandleCalls).toEqual(['/api/internal/newsletter/render', '/healthz'])
   })
 })
 
