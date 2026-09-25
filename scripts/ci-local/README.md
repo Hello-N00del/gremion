@@ -58,12 +58,21 @@ never skips the rest, so the dated result always shows every arm's outcome:
    arm even if the exit code alone would have looked clean.
 2. **known-secrets** — `known-secrets.mjs`'s SHA-256 digest denylist, run
    against **both** repos (the kernel owns the scanner; §5 Q2 below).
-3. **cve-floor** — the kernel's own `scripts/check-cve-floors.mjs`, same
+   `--known-secrets-denylist <path>` merges an extra JSON `{digest: note}`
+   file onto it — the kernel's own denylist starts empty (no incidents
+   recorded yet), so this is also the only way to prove this arm FAILs at
+   the entry point without editing source.
+3. **known-secrets-vertical-native** — StuRaOS's **own**
+   `scripts/check-no-known-secrets.mjs` (its 2 real incident digests), run
+   against the vertical path. The kernel-ported arm above can never fail on
+   the kernel's own empty denylist, so relying on it alone would silently
+   drop StuRaOS's real incidents; this arm is what actually protects them.
+4. **cve-floor** — the kernel's own `scripts/check-cve-floors.mjs`, same
    order as `make lint-cve-floors` (its unit test first, then the guard).
-4. **overrides-drift** — StuRaOS's `scripts/check-overrides-drift.mjs`,
+5. **overrides-drift** — StuRaOS's `scripts/check-overrides-drift.mjs`,
    pointed at *this* kernel checkout's `pnpm-workspace.yaml` (`--kernel`),
    never at the `upstream/gremion` submodule.
-5. **runner-policy** — `runner-policy.mjs` on both repos' `.github/workflows/*.yml`.
+6. **runner-policy** — `runner-policy.mjs` on both repos' `.github/workflows/*.yml`.
 
 `--waivers <path>` defaults to the committed `scripts/ci-local/waivers.json`.
 `--out <dir>` additionally writes a dated `<dir>/<date>-guards.json`.
@@ -120,9 +129,16 @@ A SHA-256 digest denylist, ported from StuRaOS's
 the product (open-core boundary: dependency direction is kernel -> product,
 never the reverse — §5 Q2). Carries digests only, never a plaintext
 credential in any encoding. `guards.mjs` runs this same file against both
-repos. There is no allowlist for this rule, on any path, ever: the only way
-to suppress a match is to remove the credential from the tree (and rotate it
-— this script cannot do that for you).
+repos, PLUS StuRaOS's own `scripts/check-no-known-secrets.mjs` directly
+against the vertical path (the `known-secrets-vertical-native` arm) — the
+kernel's own `KNOWN_COMPROMISED` starts empty, so the kernel-ported copy
+alone can never fail and would otherwise silently drop StuRaOS's 2 real
+incident digests. `loadDenylistFile` merges an extra JSON `{digest: note}`
+file onto the kernel-ported copy (`--known-secrets-denylist`), which is also
+how this arm's entry-point behavior is proven RED on an injected sentinel
+without editing source. There is no allowlist for this rule, on any path,
+ever: the only way to suppress a match is to remove the credential from the
+tree (and rotate it — this script cannot do that for you).
 
 ## `runner-policy.mjs`
 

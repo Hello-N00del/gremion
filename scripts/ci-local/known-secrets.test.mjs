@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { scanText, scanRepo, trackedFiles, KNOWN_COMPROMISED } from './known-secrets.mjs'
+import { scanText, scanRepo, trackedFiles, loadDenylistFile, KNOWN_COMPROMISED } from './known-secrets.mjs'
 
 // A synthetic value, never a real credential — proves the digest mechanism
 // without this repo ever containing a real compromised secret in any
@@ -84,6 +84,25 @@ test('scanRepo goes RED end-to-end: a committed file carrying the sentinel is fo
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('loadDenylistFile merges a JSON {digest: note} file onto the base denylist, so an entry point can be proven RED on an injected sentinel without editing this file (HIGH fix)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-known-secrets-denylist-'))
+  try {
+    const path = join(dir, 'denylist.json')
+    writeFileSync(path, JSON.stringify({ [SENTINEL_DIGEST]: 'injected sentinel' }))
+    const merged = loadDenylistFile(path)
+    assert.equal(merged.get(SENTINEL_DIGEST), 'injected sentinel')
+    assert.equal(merged.size, KNOWN_COMPROMISED.size + 1, 'the base denylist entries must still be present too')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('loadDenylistFile with no path returns a copy of the base denylist, mutated independently', () => {
+  const merged = loadDenylistFile(undefined)
+  merged.set('deadbeef', 'should not leak back into KNOWN_COMPROMISED')
+  assert.equal(KNOWN_COMPROMISED.has('deadbeef'), false)
 })
 
 test('scanRepo passes GREEN once the sentinel is removed from the tree (watch it go RED first, then fixed)', () => {

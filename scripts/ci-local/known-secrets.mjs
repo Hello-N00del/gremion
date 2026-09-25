@@ -86,6 +86,25 @@ export function trackedFiles(repoRoot) {
   return out.split('\0').filter(Boolean)
 }
 
+/**
+ * Load an EXTRA denylist from a JSON file of `{ "<sha256-hex>": "<note>" }`
+ * entries and merge it with a base denylist (default `KNOWN_COMPROMISED`).
+ * This is what lets a caller (guards.mjs's `--known-secrets-denylist`, or a
+ * test) prove the entry point actually goes RED on an injected sentinel
+ * digest without editing this file's source — the kernel's own
+ * KNOWN_COMPROMISED starts empty (TASK-012 §5 Q2: the kernel has no
+ * incidents recorded yet), so without an injection point the arm could never
+ * be observed failing at the entry point at all, only by unit-testing
+ * `scanText`/`scanRepo` directly.
+ */
+export function loadDenylistFile(path, base = KNOWN_COMPROMISED) {
+  const merged = new Map(base)
+  if (!path) return merged
+  const entries = JSON.parse(readFileSync(path, 'utf8'))
+  for (const [digest, note] of Object.entries(entries)) merged.set(digest, note)
+  return merged
+}
+
 export function scanRepo(repoRoot, denylist = KNOWN_COMPROMISED) {
   const files = trackedFiles(repoRoot)
 

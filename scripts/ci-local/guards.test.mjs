@@ -4,11 +4,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   gitleaksCommand,
   runGitleaksArm,
   baseRefResolves,
   runKnownSecretsArm,
+  runVerticalNativeKnownSecretsArm,
   runCveFloorArm,
   runOverridesDriftArm,
   runRunnerPolicyArm,
@@ -231,6 +233,30 @@ test('runKnownSecretsArm PASSes on a clean scratch repo (KNOWN_COMPROMISED is em
   }
 })
 
+test('runKnownSecretsArm: an entry-point-level FAIL on an injected --known-secrets-denylist sentinel, with no code edit (HIGH fix: the kernel denylist starts empty, so without this injection point the arm could never be observed failing except by unit-testing scanRepo directly)', () => {
+  const root = makeSecretRepo()
+  const SENTINEL = 'sentinel-ci-local-guards-entrypoint-fixture-4e21ab'
+  const digest = createHash('sha256').update(SENTINEL).digest('hex')
+  const denylistDir = mkdtempSync(join(tmpdir(), 'ci-local-guards-denylist-'))
+  try {
+    writeFileSync(join(root, 'leaked.env'), `TOKEN=${SENTINEL}\n`)
+    execFileSync('git', ['-C', root, 'add', 'leaked.env'])
+    execFileSync('git', ['-C', root, 'commit', '-q', '-m', 'seed a denylisted sentinel'])
+
+    const clean = runKnownSecretsArm('kernel', root)
+    assert.equal(clean.status, 'PASS', 'no denylist injected yet — must not false-positive')
+
+    const denylistPath = join(denylistDir, 'denylist.json')
+    writeFileSync(denylistPath, JSON.stringify({ [digest]: 'injected sentinel' }))
+    const red = runKnownSecretsArm('kernel', root, { denylistPath })
+    assert.equal(red.status, 'FAIL')
+    assert.match(red.reason, /1 known-compromised digest match/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(denylistDir, { recursive: true, force: true })
+  }
+})
+
 test('runKnownSecretsArm is FAIL when scanRepo throws (0 tracked files) — never silently green', () => {
   const root = mkdtempSync(join(tmpdir(), 'ci-local-guards-empty-'))
   try {
@@ -240,6 +266,18 @@ test('runKnownSecretsArm is FAIL when scanRepo throws (0 tracked files) — neve
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('runVerticalNativeKnownSecretsArm runs StuRaOS\'s OWN check-no-known-secrets.mjs (its 2 real incident digests), PASS/FAIL by the injected command\'s exit code (HIGH fix: the kernel-ported known-secrets.mjs arm can never fail on its own empty denylist, so StuRaOS\'s real incidents need its own script run too)', () => {
+  const pass = runVerticalNativeKnownSecretsArm('/vertical', {
+    runFn: fakeRun({ 'check-no-known-secrets': { exitCode: 0, output: 'ok', timedOut: false, spawnError: null } }),
+  })
+  assert.equal(pass.status, 'PASS')
+  assert.equal(pass.arm, 'known-secrets-vertical-native')
+  const fail = runVerticalNativeKnownSecretsArm('/vertical', {
+    runFn: fakeRun({ 'check-no-known-secrets': { exitCode: 1, output: 'FOUND', timedOut: false, spawnError: null } }),
+  })
+  assert.equal(fail.status, 'FAIL')
 })
 
 test('runCveFloorArm is PASS/FAIL by the injected command\'s exit code', () => {
@@ -323,10 +361,11 @@ test('runAllArms: overall exit is non-zero when even one arm fails, and every ar
       gitleaks: { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null },
       'check-cve-floors': { exitCode: 1, output: 'FLOOR BROKEN', timedOut: false, spawnError: null }, // forced FAIL
       'check-overrides-drift': { exitCode: 0, output: 'ok', timedOut: false, spawnError: null },
+      'check-no-known-secrets': { exitCode: 0, output: 'ok', timedOut: false, spawnError: null },
     })
     const { arms, overallExit } = runAllArms({ kernelPath: kernel, sturaosPath: vertical, waiversPath: undefined, runFn })
     assert.equal(overallExit, 1)
-    assert.equal(arms.length, 7) // 2 gitleaks + 2 known-secrets + cve-floor + overrides-drift + runner-policy
+    assert.equal(arms.length, 8) // 2 gitleaks + 2 known-secrets + known-secrets-vertical-native + cve-floor + overrides-drift + runner-policy
     const cve = arms.find((a) => a.arm === 'cve-floor')
     assert.equal(cve.status, 'FAIL')
     // every other arm still has a real verdict, not "skipped"

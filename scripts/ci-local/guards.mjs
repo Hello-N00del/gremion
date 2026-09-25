@@ -4,24 +4,36 @@
 // disabled, and that a re-enabled Actions pipeline can call unchanged
 // (README.md has the one-line invocation).
 //
-//   node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--waivers <path>]
+//   node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--known-secrets-denylist <path>]
 //   node --test scripts/ci-local/guards.test.mjs
 //
 // Arms, run in this order, ALL of them, every time (a failing arm never
 // skips the rest — the dated result must show every arm's outcome):
-//   1. secret-scan   — gitleaks, diff-scoped when --base is given, whole-tree
-//                      otherwise. A missing gitleaks binary FAILs; it is
-//                      never treated as "scan skipped, pass".
+//   1. secret-scan   — gitleaks, diff-scoped when a base ref is given,
+//                      whole-tree otherwise. A missing gitleaks binary
+//                      FAILs; it is never treated as "scan skipped, pass".
 //   2. known-secrets — the kernel-ported digest denylist (known-secrets.mjs),
 //                      run against BOTH repos (TASK-012 §5 Q2).
-//   3. cve-floor     — the kernel's own scripts/check-cve-floors.mjs (its
+//                      --known-secrets-denylist merges an extra
+//                      {digest: note} JSON file onto it, which is also the
+//                      injection point for proving this arm RED at the
+//                      entry point on a seeded sentinel (the kernel's own
+//                      denylist starts empty).
+//   3. known-secrets-vertical-native — StuRaOS's OWN
+//                      scripts/check-no-known-secrets.mjs (its 2 real
+//                      incident digests), because the kernel-ported copy
+//                      above can never fail against the kernel's own
+//                      (empty) denylist and would otherwise silently drop
+//                      StuRaOS's incidents the day this became StuRaOS's
+//                      own gate too.
+//   4. cve-floor     — the kernel's own scripts/check-cve-floors.mjs (its
 //                      unit test runs first, same idiom as `make
 //                      lint-cve-floors`).
-//   4. overrides-drift — StuRaOS's scripts/check-overrides-drift.mjs,
+//   5. overrides-drift — StuRaOS's scripts/check-overrides-drift.mjs,
 //                      pointed at the KERNEL PATH's pnpm-workspace.yaml
 //                      (never the upstream/gremion submodule — this repo's
 //                      copy of the kernel tip is the source of truth here).
-//   5. runner-policy — self-hosted / signing / age / SSH / deploy secret
+//   6. runner-policy — self-hosted / signing / age / SSH / deploy secret
 //                      references in .github/workflows/*.yml, on both repos.
 //
 // Any failing arm means a non-zero exit (acceptance item 4). Nothing here
@@ -36,7 +48,7 @@ import { walkFiles } from './lib/discover.mjs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { run } from './lib/run.mjs'
-import { scanRepo as knownSecretsScanRepo, trackedFiles } from './known-secrets.mjs'
+import { scanRepo as knownSecretsScanRepo, trackedFiles, loadDenylistFile } from './known-secrets.mjs'
 import { evaluateRepo as runnerPolicyEvaluateRepo, loadWaivers, todayIso } from './runner-policy.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -243,9 +255,20 @@ export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyB
 // Arm 2 — known-secrets (kernel-ported), on both repos
 // ---------------------------------------------------------------------------
 
-export function runKnownSecretsArm(repoLabel, repoPath) {
+/**
+ * @param denylistPath  optional path to a JSON {digest: note} file, merged
+ *                      onto the kernel's own (empty) KNOWN_COMPROMISED via
+ *                      known-secrets.mjs's loadDenylistFile. This is the
+ *                      injection point that lets guards.mjs's entry point be
+ *                      proven RED on a seeded digest (§7 gate efficacy (a))
+ *                      without editing known-secrets.mjs's source — the
+ *                      kernel starts with zero incidents, so without this
+ *                      the arm could only ever be unit-tested directly.
+ */
+export function runKnownSecretsArm(repoLabel, repoPath, { denylistPath } = {}) {
   try {
-    const { findings, scanned } = knownSecretsScanRepo(repoPath)
+    const denylist = loadDenylistFile(denylistPath)
+    const { findings, scanned } = knownSecretsScanRepo(repoPath, denylist)
     return {
       arm: 'known-secrets',
       repo: repoLabel,
@@ -255,6 +278,33 @@ export function runKnownSecretsArm(repoLabel, repoPath) {
     }
   } catch (err) {
     return { arm: 'known-secrets', repo: repoLabel, status: 'FAIL', reason: `could not scan: ${err.message}` }
+  }
+}
+
+/**
+ * StuRaOS's OWN `scripts/check-no-known-secrets.mjs`, run against the
+ * StuRaOS path directly (same subprocess pattern as cve-floor/
+ * overrides-drift: its own test first, then the guard). HIGH fix: the
+ * kernel-ported `known-secrets.mjs` arm above can never fail in practice
+ * (the kernel's KNOWN_COMPROMISED starts empty, and guards.mjs had no CLI
+ * input to seed one), which made it strictly WEAKER than StuRaOS's own
+ * script — StuRaOS carries 2 real incident digests that this arm would
+ * otherwise silently drop the day guards.mjs became StuRaOS's own gate too.
+ * Running StuRaOS's native script here, rather than only the kernel-ported
+ * copy, is what keeps both incidents covered without the kernel importing
+ * from the product (the open-core boundary §5 Q2 exists to protect).
+ */
+export function runVerticalNativeKnownSecretsArm(sturaosPath, { runFn = run } = {}) {
+  const command = 'node --test --test-reporter=tap scripts/check-no-known-secrets.test.mjs && node scripts/check-no-known-secrets.mjs'
+  const { exitCode, output, timedOut, spawnError } = runFn(command, sturaosPath, { timeoutMs: 60_000 })
+  if (spawnError) return { arm: 'known-secrets-vertical-native', repo: 'vertical', status: 'FAIL', reason: `could not run: ${spawnError.message}` }
+  if (timedOut) return { arm: 'known-secrets-vertical-native', repo: 'vertical', status: 'FAIL', reason: 'timed out' }
+  return {
+    arm: 'known-secrets-vertical-native',
+    repo: 'vertical',
+    status: exitCode === 0 ? 'PASS' : 'FAIL',
+    reason: exitCode === 0 ? undefined : 'check-no-known-secrets.mjs failed (see output)',
+    output,
   }
 }
 
@@ -357,12 +407,17 @@ export function listDockerfiles(repoRoot) {
  * `runGitleaksArm` independently verifies whichever ref it ends up with
  * resolves in ITS OWN repo before scanning.
  */
-export function runAllArms({ kernelPath, sturaosPath, base, kernelBase, sturaosBase, waiversPath, runFn = run }) {
+export function runAllArms({ kernelPath, sturaosPath, base, kernelBase, sturaosBase, waiversPath, denylistPath, runFn = run }) {
   const arms = []
   arms.push(runGitleaksArm('kernel', kernelPath, kernelBase ?? base, { runFn }))
   arms.push(runGitleaksArm('vertical', sturaosPath, sturaosBase ?? base, { runFn }))
-  arms.push(runKnownSecretsArm('kernel', kernelPath))
-  arms.push(runKnownSecretsArm('vertical', sturaosPath))
+  arms.push(runKnownSecretsArm('kernel', kernelPath, { denylistPath }))
+  arms.push(runKnownSecretsArm('vertical', sturaosPath, { denylistPath }))
+  // HIGH fix: also run StuRaOS's OWN check-no-known-secrets.mjs (its 2 real
+  // incident digests) rather than relying solely on the kernel-ported copy
+  // above, which the kernel's own (empty) KNOWN_COMPROMISED can never fail —
+  // see runVerticalNativeKnownSecretsArm's header.
+  arms.push(runVerticalNativeKnownSecretsArm(sturaosPath, { runFn }))
   arms.push(runCveFloorArm(kernelPath, { runFn }))
   arms.push(runOverridesDriftArm(sturaosPath, kernelPath, { runFn }))
   arms.push(runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath))
@@ -386,6 +441,7 @@ export function main(argv = process.argv.slice(2)) {
   const kernelBase = argValue(argv, '--kernel-base') ?? undefined
   const sturaosBase = argValue(argv, '--vertical-base') ?? undefined
   const waiversPath = argValue(argv, '--waivers') ?? join(HERE, 'waivers.json')
+  const denylistPath = argValue(argv, '--known-secrets-denylist') ?? undefined
   const outDir = argValue(argv, '--out')
   const imageBuild = argv.includes('--image-build')
 
@@ -411,7 +467,7 @@ export function main(argv = process.argv.slice(2)) {
     return
   }
 
-  const { arms, overallExit } = runAllArms({ kernelPath, sturaosPath, base, kernelBase, sturaosBase, waiversPath })
+  const { arms, overallExit } = runAllArms({ kernelPath, sturaosPath, base, kernelBase, sturaosBase, waiversPath, denylistPath })
 
   console.log(`\nci-local guards — ${new Date().toISOString()}\n`)
   for (const arm of arms) {
