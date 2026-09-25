@@ -36,6 +36,12 @@ async function waitReady() {
 }
 
 export default async function setup(project: TestProject) {
+  // `vitest list` (the suite-size floor, TDD 10) collects without a stack:
+  // placeholder ids, and no database is touched.
+  if (process.env.T020_COLLECT_ONLY === '1') {
+    project.provide('tenants', { A: '00000000-0000-7000-8000-000000000001', B: '00000000-0000-7000-8000-000000000002' })
+    return
+  }
   await waitReady()
   const admin = connect('t020_test_admin', { max: 1 })
   try {
