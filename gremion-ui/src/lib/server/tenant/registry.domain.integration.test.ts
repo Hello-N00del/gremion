@@ -299,6 +299,11 @@ describe('two-tenant isolation and host reassignment', () => {
     expect((await resolveTenantByHost('a.rat-musterstadt.de'))!.id).toBe(tenantId)
     expect((await resolveTenantByHost('b.rat-anderstadt.de'))!.id).toBe(other.id)
     expect(await resolveTenantByHost('unregistered.example')).toBeNull()
+    // TRD-075 / post-condition item 3: `<A-slug>.<apex>` — a host that LOOKS
+    // like the old leftmost-label scheme would resolve (its leftmost label IS
+    // a real, active tenant's slug) — must still resolve to null. There is no
+    // fallback to "use the slug as if it were the host".
+    expect(await resolveTenantByHost(`${SLUG}.${process.env.PLATFORM_DOMAIN}`)).toBeNull()
 
     // Move a.rat-musterstadt.de from tenantId to other.id.
     expect(await removeTenantDomain(tenantId, 'a.rat-musterstadt.de')).toBe(true)
