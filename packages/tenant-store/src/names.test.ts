@@ -51,16 +51,22 @@ describe('isUuidV7', () => {
 
 describe('envResolveTarget (Q2 default resolver)', () => {
   it('reads GREMION_<MODULE>_PG_URL and replaces the database name', () => {
-    const resolve = envResolveTarget({ GREMION_CALENDAR_PG_URL: 'postgres://u:p@db.invalid:5432/postgres?sslmode=disable' })
+    const resolve = envResolveTarget({ GREMION_CALENDAR_PG_URL: 'postgres://u:p@db.invalid:5432/postgres?sslmode=require' })
     const { url } = resolve(A, 'calendar')
     const u = new URL(url)
     expect(u.pathname).toBe('/t_01928f4e8c3b7a519d2e3f4a5b6c7d8e__calendar')
-    expect(u.searchParams.get('sslmode')).toBe('disable')
+    expect(u.searchParams.get('sslmode')).toBe('require')
   })
 
   it('upper-cases a multi-word module id into the variable name', () => {
     const resolve = envResolveTarget({ GREMION_PUBLIC_PORTAL_PG_URL: 'postgres://u@h/x' })
     expect(resolve(A, 'public_portal').url).toContain('__public_portal')
+  })
+
+  it('the direct kind reads GREMION_<MODULE>_PG_DIRECT_URL and never falls back to the runtime url', () => {
+    const env = { GREMION_CALENDAR_PG_URL: 'postgres://u@pooler/x', GREMION_CALENDAR_PG_DIRECT_URL: 'postgres://u@server/x' }
+    expect(new URL(envResolveTarget(env, 'direct')(A, 'calendar').url).hostname).toBe('server')
+    expect(() => envResolveTarget({ GREMION_CALENDAR_PG_URL: 'postgres://u@pooler/x' }, 'direct')(A, 'calendar')).toThrow(/GREMION_CALENDAR_PG_DIRECT_URL/)
   })
 
   it('throws, naming the variable, when it is unset', () => {
@@ -82,6 +88,7 @@ describe('assertTargetMatches', () => {
   it('passes the exact database, with the allowed TLS / session parameters', () => {
     expect(() => assertTargetMatches(`postgres://u@h/${name}`, name)).not.toThrow()
     expect(() => assertTargetMatches(`postgresql://u@h:6432/${name}?sslmode=verify-full&application_name=x`, name)).not.toThrow()
+    expect(() => assertTargetMatches(`postgres://u@h/${name}?sslrootcert=system&target_session_attrs=read-write`, name)).not.toThrow()
   })
   it.each([
     ['another database', 'postgres://u@h/t_other__calendar'],
@@ -93,6 +100,13 @@ describe('assertTargetMatches', () => {
     ['a startup-parameter override (search_path)', `postgres://u@h/${name}?search_path=evil`],
     ['a role override', `postgres://u@h/${name}?role=postgres`],
     ['a non-postgres scheme', `http://u@h/${name}`],
+    ['TLS switched off', `postgres://u@h/${name}?sslmode=disable`],
+    ['TLS optional', `postgres://u@h/${name}?sslmode=prefer`],
+    ['an sslrootcert file (forwarded as a startup parameter)', `postgres://u@h/${name}?sslrootcert=/etc/x.pem`],
+    ['target_session_attrs=any (throws inside postgres-js)', `postgres://u@h/${name}?target_session_attrs=any`],
+    ['no user (PGUSER fallback)', `postgres://h/${name}`],
+    ['no host (PGHOST fallback)', `postgres:///${name}`],
+    ['a fragment', `postgres://u@h/${name}#x`],
   ])('refuses %s', (_label, url) => {
     expect(() => assertTargetMatches(url, name)).toThrow(/target/)
   })

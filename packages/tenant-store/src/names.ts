@@ -62,9 +62,17 @@ export type ResolveTarget = (tenantId: string, moduleId: string) => TenantTarget
  * postgres-js turns every url query parameter it does not know into a startup
  * parameter (database, role, search_path, options, ...), and a startup
  * parameter can move the connection to another database or identity. Only
- * these are allowed through.
+ * these are allowed through, each with the values that are safe:
+ * TLS on (no disable/allow/prefer: a resolver must not switch TLS off);
+ * sslrootcert only as `system` (postgres-js maps it to verify-full; any
+ * other value would be forwarded as an unknown startup parameter).
  */
-const ALLOWED_QUERY_PARAMS = new Set(['sslmode', 'sslrootcert', 'target_session_attrs', 'application_name'])
+const ALLOWED_QUERY_PARAMS: Readonly<Record<string, (v: string) => boolean>> = {
+  sslmode: (v) => v === 'require' || v === 'verify-ca' || v === 'verify-full',
+  sslrootcert: (v) => v === 'system',
+  target_session_attrs: (v) => v === 'read-write' || v === 'primary',
+  application_name: (v) => /^[A-Za-z0-9_.:-]{1,63}$/.test(v),
+}
 
 function parsePostgresUrl(url: string, what: string): URL {
   let u: URL
@@ -91,29 +99,41 @@ export function assertTargetMatches(url: string, dbName: string): void {
   if (u.pathname !== `/${dbName}`) {
     throw new Error(`tenant target does not name database ${dbName}`)
   }
-  for (const key of u.searchParams.keys()) {
-    if (!ALLOWED_QUERY_PARAMS.has(key)) {
-      throw new Error(`tenant target carries the query parameter '${key}', which is not allowed`)
-    }
+  // No host or user would let postgres-js fall back to PGHOST / PGUSER /
+  // PGPASSWORD from the environment — possibly an admin identity.
+  if (!u.hostname || !u.username) {
+    throw new Error('tenant target must name its host and user explicitly (no PGHOST/PGUSER fallback)')
+  }
+  if (u.hash) throw new Error('tenant target carries a fragment, which is not allowed')
+  for (const [key, value] of u.searchParams) {
+    const ok = ALLOWED_QUERY_PARAMS[key]
+    if (!ok) throw new Error(`tenant target carries the query parameter '${key}', which is not allowed`)
+    if (!ok(value)) throw new Error(`tenant target's query parameter '${key}' has a value that is not allowed`)
   }
 }
 
 type Env = Readonly<Record<string, string | undefined>>
 
-/** GREMION_<MODULE>_PG_URL: the module's server; the path is replaced. */
-export function moduleUrlVariable(moduleId: string): string {
+/**
+ * GREMION_<MODULE>_PG_URL: the module's server as runtime pools reach it (a
+ * pooler is fine). GREMION_<MODULE>_PG_DIRECT_URL (`direct`): the server
+ * itself, for the migration runner (Q3). The path is replaced either way.
+ */
+export function moduleUrlVariable(moduleId: string, kind: 'runtime' | 'direct' = 'runtime'): string {
   assertModuleId(moduleId)
-  return `GREMION_${moduleId.toUpperCase()}_PG_URL`
+  return `GREMION_${moduleId.toUpperCase()}_PG_${kind === 'direct' ? 'DIRECT_' : ''}URL`
 }
 
 /**
- * Q2 default resolver: the module server's url from GREMION_<MODULE>_PG_URL,
- * with its database replaced by tenantModuleDbName(tenant, module).
+ * Q2 default resolver: the module server's url from GREMION_<MODULE>_PG_URL
+ * (or, for `direct`, GREMION_<MODULE>_PG_DIRECT_URL — no fallback to the
+ * runtime url, which may be a pooler), with its database replaced by
+ * tenantModuleDbName(tenant, module).
  */
-export function envResolveTarget(env: Env = process.env): (tenantId: string, moduleId: string) => TenantTarget {
+export function envResolveTarget(env: Env = process.env, kind: 'runtime' | 'direct' = 'runtime'): (tenantId: string, moduleId: string) => TenantTarget {
   return (tenantId, moduleId) => {
     const dbName = tenantModuleDbName(tenantId, moduleId)
-    const variable = moduleUrlVariable(moduleId)
+    const variable = moduleUrlVariable(moduleId, kind)
     const base = env[variable]
     if (!base) throw new Error(`${variable} is not set`)
     const u = parsePostgresUrl(base, variable)
