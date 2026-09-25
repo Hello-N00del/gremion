@@ -1,16 +1,28 @@
-// TASK-045: output -> counts parsers, one per tool the five suites shell out
-// to. Every parser returns `null` (not a thrown error, not a best-effort
-// guess) when it cannot make sense of its input -- callers turn a `null` into
+// TASK-045: output -> counts parsers, one per tool the suites shell out to.
+// Every parser returns `null` (not a thrown error, not a best-effort guess)
+// when it cannot make sense of its input -- callers turn a `null` into
 // `unparseable: true` for lib/guard.mjs, which is a FAIL, never a pass.
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 /**
- * `node --test --test-reporter=tap` summary lines, e.g.:
- *   # tests 4
+ * `node --test --test-reporter=tap` summary lines, e.g. (node 26.1):
+ *   # tests 6
+ *   # suites 0
  *   # pass 3
  *   # fail 0
+ *   # cancelled 1
  *   # skipped 1
+ *   # todo 1
  * Present at the end of every run node --test produces, pass or fail.
+ *
+ * `cancelled` is a FAILURE: node reports a test that hit its own `timeout`
+ * (or whose parent failed first) as cancelled and leaves `# fail` at 0.
+ * Probed 2026-09-25: a file whose only failing test timed out printed
+ * `# fail 0 / # cancelled 1`; reading only `fail` made that a pass. `todo`
+ * folds into `skipped`, matching vitest's numTodoTests handling below.
+ * The five buckets must add up to `# tests`; if they do not, the summary
+ * means something this parser does not understand, so it is `null`.
  */
 export function parseNodeTapSummary(text) {
   const get = (label) => {
@@ -18,13 +30,18 @@ export function parseNodeTapSummary(text) {
     return m ? Number(m[1]) : null
   }
   const collected = get('tests')
-  const passed = get('pass')
-  const failed = get('fail')
+  const pass = get('pass')
+  const fail = get('fail')
+  const cancelled = get('cancelled')
   const skipped = get('skipped')
-  if (collected === null || passed === null || failed === null || skipped === null) {
+  const todo = get('todo')
+  if ([collected, pass, fail, cancelled, skipped, todo].some((n) => n === null)) {
     return null
   }
-  return { collected, passed, failed, skipped }
+  if (pass + fail + cancelled + skipped + todo !== collected) {
+    return null
+  }
+  return { collected, passed: pass, failed: fail + cancelled, skipped: skipped + todo }
 }
 
 /**
@@ -32,30 +49,31 @@ export function parseNodeTapSummary(text) {
  * start of a line and preceded only by whitespace -- so a `test(` nested
  * inside a `describe(` block (scripts/port-back/check-do-not-overwrite.test.mjs's
  * own style: every one of its 31 real tests is indented two spaces under a
- * `describe`) is counted exactly like a column-0 one. The Makefile's own
- * lint-extraction-source / lint-toolchain targets use a stricter `^test(`
- * (column 0 only) because THEIR suites never nest under `describe` -- their
- * own comments say so explicitly ("if the suite is ever restructured so its
- * tests no longer start at column 0, this fails loudly"). suites/unit.mjs's
- * node-test subcheck runs over every "scripts, any depth, *.test.mjs" file
- * indiscriminately, including ones that do nest, so anchoring on indentation
- * alone (not "no indentation") is what keeps a real, fully-tested file like
- * check-do-not-overwrite.test.mjs from being misread as declaring zero tests
- * -- caught by running this suite for real, not assumed (see the TASK-045
- * commit message for the exact mismatch it produced before this fix).
+ * `describe`) is counted exactly like a column-0 one. `test.skip(`,
+ * `test.only(` and `test.todo(` are declarations too: node counts each of
+ * them in `# tests` (as skipped / todo / a normal test), so leaving them out
+ * made a file that legitimately uses one read as "declares fewer tests than
+ * node collected" -- a false unparseable (round-1 review, MEDIUM).
  *
- * `node --test` reports a file with ZERO of these as ONE synthetic passing
- * test (the file itself), which inflates `# tests`/`# pass` without a single
- * real assertion having run. Comparing this declared count against
- * parseNodeTapSummary(...).collected is what catches that -- a file with 0
- * declared tests can never equal the >=1 collected the synthetic entry
- * produces, so the mismatch itself is the vacuity signal (see
- * suites/unit.mjs).
+ * The Makefile's own lint-extraction-source / lint-toolchain targets use a
+ * stricter `^test(` (column 0 only) because THEIR suites never nest under
+ * `describe`. suites/unit.mjs's node-test subcheck runs over every
+ * "scripts, any depth, *.test.mjs" file, including ones that do nest.
+ *
+ * Not counted, deliberately: `t.test(` subtests and `it(`. node counts a
+ * subtest in `# tests`, so a file using them reads as declared < collected
+ * and fails as unparseable -- fail-closed, and the message names the file.
+ *
+ * `node --test` reports a file with ZERO declarations as ONE synthetic
+ * passing test (the file itself), which inflates `# tests`/`# pass` without
+ * a single real assertion having run. Comparing this declared count against
+ * parseNodeTapSummary(...).collected is what catches that (see
+ * suites/unit.mjs#nodeTestSubcheck).
  */
 export function countDeclaredNodeTests(sourceTexts) {
   let n = 0
   for (const text of sourceTexts) {
-    const matches = text.match(/^[ \t]*test\(/gm)
+    const matches = text.match(/^[ \t]*test(?:\.(?:skip|only|todo))?\(/gm)
     if (matches) n += matches.length
   }
   return n
@@ -93,23 +111,26 @@ export function parseBatsTap(text) {
 
 /**
  * `vitest run --reporter=json --outputFile=<path>`'s top-level Jest-shaped
- * summary. `numPendingTests` covers `it.skip`/`it.todo`, but NOT a test file
- * that throws at collection time (a syntax error, a bad import, a top-level
- * throw) -- that file drops out of `numTotalTests` entirely instead of
- * counting as pending, so the per-test counts alone can look like a clean
- * pass while a whole file silently never ran (reproduced empirically: one
- * passing file plus one file that throws at import gave vitest exit=1 and
- * `{success:false, numTotalTests:1, numPassedTests:1, numFailedTests:0,
- * numFailedTestSuites:1}` -- every per-test count is internally consistent,
- * only `success`/`numFailedTestSuites` say anything went wrong). `success` is
- * ALSO not trusted alone for the opposite reason -- vitest reports
- * `success: true` for a file whose only test is `it.skip` (proved empirically
- * while building this suite), the exact all-skipped-passes-anyway shape this
- * guard exists to catch. So both signals are used: the per-test counts decide
- * skip-vacuity, and `numFailedTestSuites`/`success` catch a file that never
- * contributed a count at all -- matching the release-1 gate's
- * `grep '[0-9]+ failed'` on "Test Files N failed", which this JSON parser
- * replaces.
+ * summary. `numPendingTests` covers `it.skip`, `numTodoTests` `it.todo`, but
+ * NEITHER covers a test file that throws at collection time (a syntax error,
+ * a bad import, a top-level throw) -- that file drops out of `numTotalTests`
+ * entirely, so the per-test counts alone can look like a clean pass while a
+ * whole file silently never ran (reproduced: one passing file plus one file
+ * that throws at import gave vitest exit=1 and `{success:false,
+ * numTotalTests:1, numPassedTests:1, numFailedTests:0,
+ * numFailedTestSuites:1}`). `success` is ALSO not trusted alone for the
+ * opposite reason -- vitest reports `success: true` for a file whose only
+ * test is `it.skip`, the exact all-skipped-passes-anyway shape this guard
+ * exists to catch.
+ *
+ * So: the per-test counts decide skip-vacuity, and every file in
+ * `testResults` that FAILED WITHOUT a failing assertion (a collection error)
+ * is added as one collected-and-failed entry. A file that failed only
+ * because one of its tests failed is already in numFailedTests and is not
+ * counted twice. If vitest says `success:false` and nothing above explains
+ * it (an unhandled error outside any test, or a report without
+ * `testResults`), one failure is added anyway: vitest's own verdict of
+ * "unsuccessful" is never turned into a pass.
  */
 export function parseVitestJsonFile(outputFilePath) {
   let text
@@ -148,13 +169,23 @@ export function parseVitestJsonFile(outputFilePath) {
   if (collected !== passed + rawFailed + skipped) {
     return null
   }
-  // Fold in whole files that threw at collection time and never contributed
-  // ANY count above: each is a real failure this parser must not lose.
-  const droppedSuites = data.success === false ? Math.max(failedSuites, 1) : failedSuites
+  let droppedFiles
+  if (Array.isArray(data.testResults)) {
+    droppedFiles = data.testResults.filter(
+      (tr) => tr?.status === 'failed' && !(tr.assertionResults ?? []).some((a) => a?.status === 'failed'),
+    ).length
+  } else {
+    // No per-file detail: every failed suite not already explained by a
+    // failing test is a dropped file.
+    droppedFiles = rawFailed === 0 ? failedSuites : 0
+  }
+  if (data.success === false && rawFailed === 0 && droppedFiles === 0) {
+    droppedFiles = 1
+  }
   return {
-    collected: collected + droppedSuites,
+    collected: collected + droppedFiles,
     passed,
-    failed: rawFailed + droppedSuites,
+    failed: rawFailed + droppedFiles,
     skipped,
   }
 }
@@ -162,11 +193,10 @@ export function parseVitestJsonFile(outputFilePath) {
 /**
  * Names + first failure line for every failed test in a vitest JSON report,
  * so a red `verify` run can say WHICH tests failed, not only the count.
- * Found needed by actually running the integration suite for real: without
- * this, "5 of 155 failed" gave no lead at all on which 5. Returns `[]` (never
- * throws) for a missing/malformed file -- this is a diagnostics add-on, never
- * itself a vacuity signal, so it must not turn a real failure into an
- * unparseable one just because the report shape changed.
+ * Also names every file that failed with no failing test (a collection
+ * error), with vitest's own `message` for it. Returns `[]` (never throws)
+ * for a missing/malformed file -- this is a diagnostics add-on, never itself
+ * a vacuity signal.
  */
 export function summarizeVitestFailures(outputFilePath, limit = 10) {
   let data
@@ -177,7 +207,12 @@ export function summarizeVitestFailures(outputFilePath, limit = 10) {
   }
   const out = []
   for (const tr of data.testResults ?? []) {
-    for (const ar of tr.assertionResults ?? []) {
+    const assertions = tr.assertionResults ?? []
+    if (tr.status === 'failed' && !assertions.some((a) => a.status === 'failed')) {
+      out.push(`${tr.name ?? '(unnamed file)'}: file failed without a failing test: ${String(tr.message ?? '(no message)').split('\n')[0]}`)
+      if (out.length >= limit) return out
+    }
+    for (const ar of assertions) {
       if (ar.status !== 'failed') continue
       const firstLine = (ar.failureMessages ?? [])[0]?.split('\n')[0] ?? '(no message)'
       out.push(`${ar.fullName ?? ar.title ?? '(unnamed test)'}: ${firstLine}`)
@@ -188,19 +223,17 @@ export function summarizeVitestFailures(outputFilePath, limit = 10) {
 }
 
 /**
- * Per-file skip counts from a vitest JSON report (Q3): `pending`/`todo`
- * assertions, grouped by the file (`testResults[].name`, the ABSOLUTE path
- * vitest itself reports) they belong to. scripts/verify/allowed-skips.json's
- * `file` field is a per-file budget, not a per-suite one -- summing every
- * entry's maxCount into one suite-wide total (the old lib/skips.mjs
- * behavior) let a skip anywhere in the suite spend another file's
- * allowance. Callers normalize the returned absolute paths against
- * REPO_ROOT (posix separators) to match allowed-skips.json's repo-relative
- * `file` field. Never throws: a missing/malformed file returns `{}`, same
- * as `summarizeVitestFailures` -- this is a second read of a report already
- * validated by `parseVitestJsonFile`, not itself a vacuity signal.
+ * Per-file skip counts from a vitest JSON report (Q3): `pending`/`todo`/
+ * `skipped` assertions, grouped by the file they belong to.
+ * scripts/verify/allowed-skips.json's `file` field is a per-file budget, not
+ * a per-suite one. vitest reports `testResults[].name` as an ABSOLUTE path;
+ * with `root` given, each key is made repo-relative with posix separators so
+ * it compares equal to the allow-list's `file` field. Never throws: a
+ * missing/malformed file returns `{}` -- the caller books every skip it
+ * cannot attribute here under a zero-budget key (lib/guard.mjs#combineParts),
+ * so a lost attribution can only fail a suite, never pass one.
  */
-export function skipsByFileFromVitestJson(outputFilePath) {
+export function skipsByFileFromVitestJson(outputFilePath, { root } = {}) {
   let data
   try {
     data = JSON.parse(readFileSync(outputFilePath, 'utf8'))
@@ -212,9 +245,11 @@ export function skipsByFileFromVitestJson(outputFilePath) {
     if (!tr.name) continue
     let n = 0
     for (const ar of tr.assertionResults ?? []) {
-      if (ar.status === 'pending' || ar.status === 'todo') n++
+      if (ar.status === 'pending' || ar.status === 'todo' || ar.status === 'skipped') n++
     }
-    if (n > 0) out[tr.name] = (out[tr.name] ?? 0) + n
+    if (n === 0) continue
+    const key = root ? path.relative(root, path.resolve(tr.name)).split(path.sep).join('/') : tr.name
+    out[key] = (out[key] ?? 0) + n
   }
   return out
 }

@@ -17,8 +17,8 @@ import {
   parseVitestJsonFile,
 } from './lib/parsers.mjs'
 
-test('parseNodeTapSummary reads the four summary lines node --test always prints', () => {
-  const tap = '# tests 4\n# pass 3\n# fail 0\n# skipped 1\n'
+test('parseNodeTapSummary reads the summary lines node --test always prints', () => {
+  const tap = '# tests 4\n# suites 0\n# pass 3\n# fail 0\n# cancelled 0\n# skipped 1\n# todo 0\n'
   assert.deepEqual(parseNodeTapSummary(tap), { collected: 4, passed: 3, failed: 0, skipped: 1 })
 })
 
