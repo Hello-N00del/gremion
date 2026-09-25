@@ -138,7 +138,13 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   mkdirSync(outDir, { recursive: true })
-  const base = snapshotBaseName(date, kernelInfo.shortSha, sturaosInfo.shortSha)
+  // MEDIUM fix: a --only subset run used to write the exact same
+  // <date>-<ksha7>-<ssha7> name a FULL run of the same tips on the same day
+  // would, so a passing subset could silently overwrite a full F1/re-init/
+  // first-offer reading with a partial one that only its JSON `only` field
+  // told apart. The suffix means a partial reading can never collide with,
+  // or overwrite, a full one's filename.
+  const base = snapshotBaseName(date, kernelInfo.shortSha, sturaosInfo.shortSha) + (onlyIds ? '-partial' : '')
   const jsonPath = join(outDir, `${base}.json`)
   const mdPath = join(outDir, `${base}.md`)
   writeFileSync(jsonPath, JSON.stringify(snapshot, null, 2))

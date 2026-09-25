@@ -237,6 +237,16 @@ export function renderMarkdown(snapshot) {
   lines.push(`- started: ${snapshot.startedAt}`)
   lines.push(`- finished: ${snapshot.finishedAt}`)
   lines.push(`- overall exit: ${snapshot.overallExit}`)
+  // MEDIUM fix: a --only subset reading used to render identically to a
+  // full reading (only the JSON's `only` field told them apart), and wrote
+  // the SAME <date>-<ksha7>-<ssha7> filename, so a passing subset could
+  // silently overwrite a full F1/re-init/first-offer reading of the same
+  // tips. This line makes a partial reading visually unmistakable in the
+  // .md a human actually reads; snapshot.mjs's filename suffix (see
+  // snapshotBaseName's caller) is what stops the overwrite itself.
+  if (Array.isArray(snapshot.only) && snapshot.only.length > 0) {
+    lines.push(`- only: ${snapshot.only.join(', ')} (PARTIAL — not a full reading; do not file as an F1/re-init/first-offer snapshot)`)
+  }
   lines.push('')
   lines.push('| repo | category | suite | command | collected | passed | failed | skipped | status | exit | reason |')
   lines.push('|---|---|---|---|---:|---:|---:|---:|---|---:|---|')

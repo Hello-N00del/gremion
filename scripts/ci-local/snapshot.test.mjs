@@ -297,3 +297,48 @@ test('main(): an --only id that names no suite exits non-zero with an only:<id> 
     rmSync(outDir, { recursive: true, force: true })
   }
 })
+
+test('main(): a --only subset reading never writes the same filename as a full reading of the same tips, and is marked PARTIAL in the .md (MEDIUM fix — a subset that happened to pass used to overwrite a full F1/re-init reading with no way to tell them apart from the filename alone)', () => {
+  const kernel = makeFixtureRepo()
+  const vertical = makeFixtureRepo()
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    // A full reading first (still non-zero exit — integration/e2e "no
+    // stack" by design — but that is irrelevant to this test).
+    withCleanExitCode(() => main(['--kernel', kernel, '--vertical', vertical, '--out', outDir, '--manifest', manifestPath]))
+    const filesAfterFull = readdirSync(outDir)
+    const fullJson = filesAfterFull.find((f) => f.endsWith('.json'))
+    assert.ok(fullJson, 'expected the full reading to have written a .json')
+
+    // A partial (--only) reading of the SAME tips, same day, right after.
+    withCleanExitCode(() =>
+      main(['--kernel', kernel, '--vertical', vertical, '--out', outDir, '--manifest', manifestPath, '--only', 'kernel-unit,vertical-unit']),
+    )
+    const filesAfterPartial = readdirSync(outDir)
+
+    // The full reading's files must still exist, untouched.
+    assert.ok(filesAfterPartial.includes(fullJson), 'the partial run must not have overwritten the full .json')
+    assert.ok(filesAfterPartial.includes(fullJson.replace(/\.json$/, '.md')), 'the partial run must not have overwritten the full .md')
+
+    // The partial run wrote its OWN, differently-named files.
+    const partialJson = filesAfterPartial.find((f) => f.endsWith('.json') && f !== fullJson)
+    assert.ok(partialJson, 'expected the partial reading to have written its own .json, distinct from the full one')
+    assert.match(partialJson, /-partial\.json$/)
+
+    const partialMd = readFileSync(join(outDir, partialJson.replace(/\.json$/, '.md')), 'utf8')
+    assert.match(partialMd, /PARTIAL/)
+    assert.match(partialMd, /kernel-unit/)
+    assert.match(partialMd, /vertical-unit/)
+
+    // The full reading's own .md must NOT claim to be partial.
+    const fullMd = readFileSync(join(outDir, fullJson.replace(/\.json$/, '.md')), 'utf8')
+    assert.doesNotMatch(fullMd, /PARTIAL/)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})

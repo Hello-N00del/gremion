@@ -268,4 +268,23 @@ test('renderMarkdown includes both repos\' sha/branch, the overall exit and one 
   assert.match(md, /overall exit: 1/)
   assert.match(md, /\| kernel \| unit \| k1 \| `pnpm vitest run` \| 5 \| 5 \| 0 \| 0 \| PASS \| 0 \|/)
   assert.match(md, /no stack/)
+  // No `only` field set on this snapshot (a full reading) — the .md must
+  // never claim PARTIAL for one.
+  assert.doesNotMatch(md, /PARTIAL/)
+})
+
+test('renderMarkdown renders an "only: ... (PARTIAL)" line when the snapshot was a --only subset run (MEDIUM fix: a subset reading looked identical to a full one in the .md, with only the JSON\'s `only` field telling them apart)', () => {
+  const snapshot = {
+    date: '2026-09-25',
+    kernel: { sha: 'a'.repeat(40), shortSha: 'aaaaaaa', branch: 'main' },
+    vertical: { sha: 'b'.repeat(40), shortSha: 'bbbbbbb', branch: 'main' },
+    os: 'win32',
+    startedAt: '2026-09-25T01:00:00.000Z',
+    finishedAt: '2026-09-25T01:00:05.000Z',
+    overallExit: 0,
+    only: ['kernel-unit', 'vertical-unit'],
+    suites: [{ repo: 'kernel', category: 'unit', id: 'kernel-unit', command: 'x', collected: 1, passed: 1, failed: 0, status: 'PASS', exitCode: 0 }],
+  }
+  const md = renderMarkdown(snapshot)
+  assert.match(md, /only: kernel-unit, vertical-unit \(PARTIAL/)
 })
