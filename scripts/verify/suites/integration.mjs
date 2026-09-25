@@ -131,6 +131,37 @@ export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
       return unparseable(`CREATE DATABASE control failed: ${createControl.stderr || createControl.stdout}`)
     }
 
+    // migrations/058_public_reader_grants.sql (T07) deliberately ABORTS the
+    // whole migration chain when the `gremion_public_reader` role does not
+    // exist yet -- found by actually running `pnpm migrate` against this
+    // throwaway container: "role gremion_public_reader does not exist ...
+    // Create it BEFORE migrating." On a real deployment that role comes from
+    // docker/postgres/init-databases.sh (Docker) or the postgres-init-scripts
+    // ConfigMap (K8s), neither of which this ad hoc `docker run` container
+    // runs. This suite owns its own throwaway Postgres end-to-end, so it
+    // creates the role itself here, the same way init-databases.sh does --
+    // with its own fresh, unlogged, never-printed password (the role's
+    // password is never read back by anything this suite does; only its
+    // existence matters to 058).
+    // Ported from docker/postgres/init-databases.sh's own form: `-c` does NOT
+    // expand a `-v`-supplied psql variable (:'_password') the way piping the
+    // same statement through stdin does (proved empirically -- `-c` raised
+    // "syntax error at or near \":\""), so this goes through stdin, exactly
+    // like init-databases.sh's own heredoc does.
+    const publicReaderPassword = randomTestPassword()
+    const createPublicReader = run(
+      'docker',
+      ['exec', '-i', '-e', `PGPASSWORD=${db.password}`, db.name, 'psql', '-v', 'ON_ERROR_STOP=1', '-v', `_password=${publicReaderPassword}`, '-U', 'gremion_test', '-d', 'gremion_test'],
+      {
+        input:
+          "SELECT CASE WHEN NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'gremion_public_reader') " +
+          "THEN format('CREATE ROLE gremion_public_reader LOGIN PASSWORD %L', :'_password') ELSE 'SELECT 1' END \\gexec\n",
+      },
+    )
+    if (createPublicReader.code !== 0) {
+      return unparseable(`provisioning gremion_public_reader failed: ${createPublicReader.stderr || createPublicReader.stdout}`)
+    }
+
     const env = {
       ...process.env,
       DATABASE_URL: dataUrl,
