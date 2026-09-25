@@ -37,7 +37,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm build",
     "scaffold": "node src/cli/scaffold.ts",
-    "routes:check": "node src/cli/routes-check.ts"
+    "routes:check": "node src/cli/routes-check.ts --self-check"
   },
   "dependencies": {
     "@fastify/multipart": "10.1.2",
