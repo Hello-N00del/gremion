@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { byPath, listCommittable } from './tree-files.ts'
+import { byPath, isGitWorkTree, listCommittable } from './tree-files.ts'
 import { DART_PACKAGES_DIR, loadDartSurfaces, NODE_SIDE, type DartSurface } from './registry.ts'
 
 /** package-relative, forward-slash path → exact bytes */
@@ -71,15 +71,20 @@ export function checkDartCodegenDrift(repoRoot: string, opts: DriftOptions): Dri
     if (![...expectedFiles.keys()].some((k) => k.startsWith('lib/') && k.endsWith('.dart'))) {
       problems.push(`${s.packageDir}: the generator emitted no lib/**/*.dart for "${s.name}" — an empty client is not a client.`)
     }
+    const committable = listCommittable(repoRoot, s.packageDir)
+    const committableSet = new Set(committable)
+    const git = isGitWorkTree(repoRoot)
     for (const [rel, bytes] of [...expectedFiles].sort(([a], [b]) => byPath(a, b))) {
       const onDisk = join(repoRoot, s.packageDir, rel)
-      if (!existsSync(onDisk)) {
+      if (git && existsSync(onDisk) && !committableSet.has(rel)) {
+        problems.push(`${s.packageDir}/${rel}: generated but ignored by git (a .gitignore or core.excludesFile rule) — it would never be committed. Un-ignore it or force-add it.`)
+      } else if (!existsSync(onDisk)) {
         problems.push(`${s.packageDir}/${rel}: missing — the generator emits it but it is not on disk. ${REGENERATE}`)
       } else if (!readFileSync(onDisk).equals(bytes)) {
         problems.push(`${s.packageDir}/${rel}: differs from what ${s.specFile} generates — a hand edit (or a stale spec). ${REGENERATE}`)
       }
     }
-    for (const rel of listCommittable(repoRoot, s.packageDir)) {
+    for (const rel of committable) {
       if (!expectedFiles.has(rel)) {
         problems.push(`${s.packageDir}/${rel}: extra — the generator does not emit this file (hand-written?). Generated packages hold generator output only.`)
       }

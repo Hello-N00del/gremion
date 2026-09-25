@@ -214,8 +214,8 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
     // 'null' default is always that bug (see src/spec-normalize.ts), never
     // intended, and dart analyze cannot see it.
     for (const [rel, bytes] of files) {
-      if (rel.startsWith('lib/') && rel.endsWith('.dart') && /=\s*r?'null'\s*[;,)]/.test(bytes.toString('utf8'))) {
-        throw new Error(`${rel}: generated a string 'null' default — the client would send "null" as a value`)
+      if (rel.startsWith('lib/') && rel.endsWith('.dart') && /(?:=|wireName:)\s*r?["']null["']/.test(bytes.toString('utf8'))) {
+        throw new Error(`${rel}: generated a string 'null' default or enum wire name — the client would send or expect "null" as a value`)
       }
     }
     const ignoreProblems = checkIgnoreComments(files)

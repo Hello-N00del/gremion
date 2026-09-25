@@ -95,21 +95,23 @@ export function normalizeFor31(input: unknown): { doc: unknown; report: Normaliz
       report.defaultNullDropped.push(at)
     }
 
-    if (Array.isArray(src.enum) && src.enum.some((v) => typeof v !== 'string' && v !== null)) {
+    if (Array.isArray(src.enum) && src.enum.includes(null)) {
+      throw new Error(`${at}: enum containing null ${JSON.stringify(src.enum)} — openapi-generator 7.12.0 would make an enum member with wire name 'null'; express nullability with the type only`)
+    }
+    if (Array.isArray(src.enum) && src.enum.some((v) => typeof v !== 'string')) {
       throw new Error(`${at}: non-string enum ${JSON.stringify(src.enum)} — openapi-generator 7.12.0 (dart-dio) makes a string-wire EnumClass that cannot decode it; use a plain type or string values`)
     }
     if ('const' in src) {
       const c = src.const
       const t = typeof c === 'boolean' ? 'boolean' : typeof c === 'string' ? 'string'
         : typeof c === 'number' ? (Number.isInteger(c) ? 'integer' : 'number') : null
-      if (t !== null) {
-        // The generator turns any const into a single-value EnumClass whose
-        // wire name is a STRING ('true'), which cannot decode the JSON value.
-        // A client does not validate server constants; keep the type only.
-        delete out.const
-        if (!('type' in src)) out.type = t
-        report.constDropped.push(at)
-      }
+      if (t === null) throw new Error(`${at}: non-scalar const ${JSON.stringify(c)} cannot be mapped faithfully for the generator; use a type`)
+      // The generator turns any const into a single-value EnumClass whose
+      // wire name is a STRING ('true'), which cannot decode the JSON value.
+      // A client does not validate server constants; keep the type only.
+      delete out.const
+      if (!('type' in src)) out.type = t
+      report.constDropped.push(at)
     }
     return out
   }

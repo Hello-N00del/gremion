@@ -127,6 +127,8 @@ describe('generateDartPackage with fake tools', () => {
     ['build_runner writing a non-.g.dart file', { gdart: ['lib/src/model/a.g.dart', 'lib/extra.dart'] }, /lib\/extra\.dart/],
     ['an unaccounted file', { pubExtra: 'stray.txt' }, /unaccounted \[stray\.txt\]/],
     ['a generated string "null" default', { model: "part 'a.g.dart';\n  static void _defaults(ABuilder b) => b..parentId = 'null';\n" }, /'null'/],
+    ['a double-quoted "null" default', { model: "part 'a.g.dart';\n  static void _defaults(ABuilder b) => b..parentId = \"null\";\n" }, /'null'/],
+    ['an enum member with wire name null', { model: "part 'a.g.dart';\n  @BuiltValueEnumConst(wireName: r'null')\n" }, /'null'/],
     ['an analyze error', { analyzeFails: true, analyze: "error - lib/a.dart:1:1 - x - y\n1 issue found.\n" }, /analyze gate failed/],
   ])('fails closed on %s', (_n, k, re) => {
     expect(run(k).run).toThrow(re)

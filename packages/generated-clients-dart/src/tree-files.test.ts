@@ -56,4 +56,11 @@ describe('committable file sets (git work tree)', () => {
     writeFile(root, 'apps/mobile/lib/x.dart', "const p = '/api/widgets/1';\n")
     expect(scanForHandWrittenClients(root).problems.join('\n')).toMatch(/apps\/mobile\/lib\/x\.dart/)
   })
+
+  it('a generated file that git would ignore (e.g. a global excludesFile ignoring pubspec.lock) is named, not silently uncommitted', () => {
+    const { root } = gitFixture()
+    writeFile(root, '.gitignore', '.DS_Store\nnode_modules/\n.gen-work/\n*.dart\n')
+    const { problems } = checkDartCodegenDrift(root, { generate: fakeGenerate })
+    expect(problems.some((p) => /lib\/gremion_widgets_client\.dart: generated but ignored by git/.test(p))).toBe(true)
+  })
 })

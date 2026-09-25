@@ -83,6 +83,13 @@ describe('normalizeFor31 — const / non-string enum', () => {
     expect(() => normalizeFor31(wrap({ b: { type: 'boolean', enum: [true] } }))).toThrow(/non-string enum/)
     expect(() => normalizeFor31(wrap({ n: { type: 'integer', enum: [1, 2] } }))).toThrow(/non-string enum/)
     expect(() => normalizeFor31(wrap({ s: { type: 'string', enum: ['a', 'b'] } }))).not.toThrow()
+    expect(() => normalizeFor31(wrap({ s: { type: ['string', 'null'], enum: ['a', null] } }))).toThrow(/null/)
+  })
+
+  it('fails closed on a non-scalar const (null, object, array)', () => {
+    expect(() => normalizeFor31(wrap({ c: { const: null } }))).toThrow(/const/)
+    expect(() => normalizeFor31(wrap({ c: { const: { a: 1 } } }))).toThrow(/const/)
+    expect(() => normalizeFor31(wrap({ c: { const: [1] } }))).toThrow(/const/)
   })
 })
 
