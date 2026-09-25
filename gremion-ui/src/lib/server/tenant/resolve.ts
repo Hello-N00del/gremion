@@ -1,7 +1,13 @@
 // src/lib/server/tenant/resolve.ts
 import type { Handle, HandleFetch } from '@sveltejs/kit'
-import { resolveTenantBySlug, getTenantStatusBySlug } from '$lib/server/tenant/registry'
+import {
+  resolveTenantBySlug,
+  getTenantStatusBySlug,
+  resolveTenantById,
+} from '$lib/server/tenant/registry'
+import { leafCallbackClaim } from '$lib/server/tenant/leaf-trust'
 import { runWithTenant } from '$lib/server/tenant/context'
+import type { TenantContext } from '$lib/server/tenant/context'
 import { suspendedTenantResponse } from '$lib/server/tenant/suspended-page'
 import {
   getTenantReadiness,
@@ -179,42 +185,86 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
   // 403 BEFORE any registry lookup — x-forwarded-host trust no longer rests on
   // topology alone. Computed once and reused for tenantSelectionTrusted below.
   const internalTrusted = isInternalTrustRequest(event.request)
-  if (!isProxyTrusted(event.request, internalTrusted)) {
+
+  // Spec B §T.1 HARDENING-3: is this one of the four kernel routes a LEAF
+  // service calls back into, presenting THAT route's own shared secret? If so
+  // the leaf asserts its tenant by ID and no host is involved at all — see
+  // leaf-trust.ts for why the host was the wrong thing to communicate, and why
+  // the per-leaf secret (unlike proxy-trust, which Traefik stamps on every edge
+  // request) is the only thing that could gate a header-driven selector.
+  // `null` for every other request, which therefore takes the host path below
+  // UNCHANGED — B10-resolver-fullhost is the unit that replaces that branch.
+  const leafClaim = leafCallbackClaim(event.url.pathname, event.request.headers)
+
+  if (!isProxyTrusted(event.request, internalTrusted || leafClaim !== null)) {
     return new Response('Forbidden', { status: 403 })
   }
 
-  const forwardedHost = event.request.headers.get('x-forwarded-host')
-  const slug = extractLeftmostLabel(forwardedHost)
-  if (!slug) return new Response('Not Found', { status: 404 })
-
-  let ctx
-  try {
-    // resolveTenantBySlug MUST validate the slug (validateSlug) before any
-    // registry/DB use; the guard lives there — do NOT swap it for a raw
-    // getTenantBySlug without re-adding validation.
-    ctx = await resolveTenantBySlug(slug)
+  let ctx: TenantContext | null
+  if (leafClaim) {
+    // The ID path. Same registry hydration, same active-only filter and same
+    // resolution cache as the host path (resolveTenantById funnels through
+    // buildAndCacheTenantContext), so the context a callback runs in is
+    // byte-identical to the one a browser request would get.
+    try {
+      ctx = await resolveTenantById(leafClaim.tenantId)
+    } catch (err) {
+      tlog('error', '[tenant-resolve] registry lookup failed', {
+        route: leafClaim.route,
+        err: err instanceof Error ? err.message : String(err),
+      })
+      return new Response('Service Unavailable: tenant registry', {
+        status: 503,
+        headers: { 'Retry-After': '5' },
+      })
+    }
     if (!ctx) {
-      // P2.1c (T6): resolveTenantBySlug returns null for unknown / invalid /
-      // NON-ACTIVE rows alike. Consult the status-only control-DB read (no
-      // data-plane resolution) to distinguish a SUSPENDED tenant — which serves
-      // a branded, data-plane-free 503 page instead of the indistinguishable
-      // 404 — from a truly unknown slug or a deleting/deleted tombstone (both
-      // 404; §7.8 identifier-reuse defence keeps a tombstoned slug unservable).
-      // Order: invalid slug → 404; row absent → 404; suspended → 503 page;
-      // deleting/deleted → 404. active never reaches here (ctx is non-null).
-      const status = await getTenantStatusBySlug(slug)
-      if (status === 'suspended') return suspendedTenantResponse()
+      // Unknown / suspended / deleting / deleted all collapse to 404 here, on
+      // purpose. The host path's branded 503 exists for a BROWSER on a
+      // suspended tenant's domain; a leaf is a machine caller with no page to
+      // render, and its client treats any non-2xx as a retryable failure that
+      // leaves the work claimed. There is no fallback tenant, exactly as on the
+      // host path.
+      tlog('warn', '[tenant-resolve] leaf callback names no active tenant', {
+        route: leafClaim.route,
+        claimedTenantId: leafClaim.tenantId,
+      })
       return new Response('Not Found', { status: 404 })
     }
-  } catch (err) {
-    tlog('error', '[tenant-resolve] registry lookup failed', {
-      slug,
-      err: err instanceof Error ? err.message : String(err),
-    })
-    return new Response('Service Unavailable: tenant registry', {
-      status: 503,
-      headers: { 'Retry-After': '5' },
-    })
+  } else {
+    const forwardedHost = event.request.headers.get('x-forwarded-host')
+    const slug = extractLeftmostLabel(forwardedHost)
+    if (!slug) return new Response('Not Found', { status: 404 })
+
+    try {
+      // resolveTenantBySlug MUST validate the slug (validateSlug) before any
+      // registry/DB use; the guard lives there — do NOT swap it for a raw
+      // getTenantBySlug without re-adding validation.
+      ctx = await resolveTenantBySlug(slug)
+      if (!ctx) {
+        // P2.1c (T6): resolveTenantBySlug returns null for unknown / invalid /
+        // NON-ACTIVE rows alike. Consult the status-only control-DB read (no
+        // data-plane resolution) to distinguish a SUSPENDED tenant — which
+        // serves a branded, data-plane-free 503 page instead of the
+        // indistinguishable 404 — from a truly unknown slug or a
+        // deleting/deleted tombstone (both 404; §7.8 identifier-reuse defence
+        // keeps a tombstoned slug unservable). Order: invalid slug → 404; row
+        // absent → 404; suspended → 503 page; deleting/deleted → 404. active
+        // never reaches here (ctx is non-null).
+        const status = await getTenantStatusBySlug(slug)
+        if (status === 'suspended') return suspendedTenantResponse()
+        return new Response('Not Found', { status: 404 })
+      }
+    } catch (err) {
+      tlog('error', '[tenant-resolve] registry lookup failed', {
+        slug,
+        err: err instanceof Error ? err.message : String(err),
+      })
+      return new Response('Service Unavailable: tenant registry', {
+        status: 503,
+        headers: { 'Retry-After': '5' },
+      })
+    }
   }
 
   // P2.1b T3 (D-READY): per-tenant boot readiness gate. A tenant whose

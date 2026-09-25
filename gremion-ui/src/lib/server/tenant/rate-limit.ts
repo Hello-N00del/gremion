@@ -110,3 +110,19 @@ export function __resetTenantRateLimit(): void {
   buckets.clear()
   warned.clear()
 }
+
+/**
+ * Drop ONE tenant's bucket. Called from registry.evictTenantRuntime, the single
+ * per-tenant lifecycle seam (suspend/delete, the cross-process tenant_evict
+ * NOTIFY, the operator script), so this module stops being the one per-tenant
+ * keyed runtime map that outlives its tenant: an id that is suspended or
+ * re-registered must not inherit the previous occupant's consumed budget.
+ *
+ * Deliberately NOT __resetTenantRateLimit(), which clears EVERY bucket and so
+ * would hand every other tenant a free full burst on one lifecycle transition —
+ * exactly the cross-tenant effect the per-tenant limiter exists to prevent.
+ * Unknown ids are a no-op (eviction is idempotent and runs on every hop).
+ */
+export function evictTenantRateLimit(tenantId: string): void {
+  buckets.delete(tenantId)
+}
