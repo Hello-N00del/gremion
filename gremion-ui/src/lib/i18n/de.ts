@@ -19,8 +19,6 @@ const de: Record<string, string> = {
   'nav.drawer.close':   'Navigation schließen',
   'nav.sidebar':        'Seitenleiste',
   'nav.sidebar.saved':  'Wird auf diesem Gerät gespeichert',
-  'nav.sidebar.expanded':  'Seitenleiste ausgeklappt',
-  'nav.sidebar.collapsed': 'Seitenleiste eingeklappt',
   'nav.legal':          'Rechtliches',
 
   // ── Gremien (Committees / Governance) ────────────────────────────────────

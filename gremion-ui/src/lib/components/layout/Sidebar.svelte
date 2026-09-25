@@ -62,7 +62,8 @@
   let column: HTMLElement | undefined = $state()
 </script>
 
-<aside class="nav-col sidebar" aria-label={labels['nav.sidebar']} bind:this={column}>
+<!-- A plain column, not an <aside>: the <nav> inside is the landmark. -->
+<div class="nav-col sidebar" bind:this={column}>
   <div class="sb-brand">
     <!-- P2.2-data: per-tenant logo (config.brand.logo_url → brand.logoUrl).
          Same .sb-logo size/box classes as the letter mark; null = today's
@@ -87,7 +88,7 @@
   <LegalMenu {sourceUrl} idPrefix="nav-col" {labels} />
 
   <RailTooltip container={column} enabled={mode === 'rail'} />
-</aside>
+</div>
 
 <style>
   .sidebar {
@@ -98,7 +99,7 @@
     height: 100%;
     flex-shrink: 0;
     overflow: hidden;
-    transition: width var(--nav-motion, 0ms) var(--e-out);
+    transition: width var(--nav-motion) var(--e-out);
   }
   .sb-brand {
     padding: 12px 8px 10px 18px;

@@ -14,6 +14,7 @@
  * it never skips — so an unconfigured run cannot pass vacuously.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { NAV_STORAGE_KEY } from '../../src/lib/components/layout/nav-constants'
 
 const ENV_KEYS = ['E2E_BASE_URL', 'E2E_MEMBER_USER', 'E2E_MEMBER_PASS', 'E2E_ADMIN_USER', 'E2E_ADMIN_PASS'] as const
 const missingEnv = ENV_KEYS.filter((k) => !process.env[k])
@@ -24,7 +25,7 @@ const CREDS: Record<Who, { user: string; pass: string }> = {
   admin: { user: process.env.E2E_ADMIN_USER ?? '', pass: process.env.E2E_ADMIN_PASS ?? '' }
 }
 const ADMIN_EXTRA_ROUTES = ['/messages/manage']
-const NAV_KEY = 'gremion.nav'
+const NAV_KEY = NAV_STORAGE_KEY
 
 test.use({ baseURL: process.env.E2E_BASE_URL })
 

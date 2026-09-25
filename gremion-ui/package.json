@@ -11,7 +11,7 @@
     "check": "node scripts/check-tenant-env-guard.mjs --enforce --root src && node scripts/check-app-port-binding.mjs && node scripts/check-domain-regex.mjs && node scripts/check-tenant-secrets-dir.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "test:unit": "vitest run --project unit",
-    "test:browser": "vitest run --project browser --project browser-dsf2",
+    "test:browser": "vitest run --project browser && vitest run --project browser-dsf2",
     "test:unit:watch": "vitest --project unit",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:deselection": "vitest run --config vitest.deselection.config.ts",

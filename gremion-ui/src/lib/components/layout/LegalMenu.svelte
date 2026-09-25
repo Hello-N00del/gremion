@@ -11,7 +11,7 @@
     idPrefix,
     onnavigate,
     labels = DEFAULT_NAV_LABELS
-  }: { sourceUrl: string; idPrefix: string; onnavigate?: (href: string) => void; labels?: NavLabels } = $props()
+  }: { sourceUrl: string; idPrefix: string; onnavigate?: (href: string, event: MouseEvent) => void; labels?: NavLabels } = $props()
 
   let open = $state(false)
   let button: HTMLButtonElement | undefined = $state()
@@ -24,6 +24,17 @@
       button?.focus()
     }
   }
+
+  // Close on a pointer press outside (WebKit does not focus buttons on click,
+  // so focus-out alone would leave the popover over the page).
+  $effect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (wrap && !(e.target instanceof Node && wrap.contains(e.target))) open = false
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  })
 
   function onfocusout(e: FocusEvent) {
     if (open && wrap && !(e.relatedTarget instanceof Node && wrap.contains(e.relatedTarget))) open = false
@@ -45,14 +56,14 @@
     aria-label={labels['nav.legal']}
     aria-expanded={open}
     aria-controls="{idPrefix}-legal"
-    data-nav-label={labels['nav.legal']}
+    data-nav-label={open ? undefined : labels['nav.legal']}
     onclick={() => (open = !open)}
   >
     <Icon name="scale" size={18} />
   </button>
   <ul class="legal-list sb-legal" class:open id="{idPrefix}-legal">
     {#each LINKS as l (l.href)}
-      <li><a href={l.href} onclick={() => onnavigate?.(l.href)}>{l.label}</a></li>
+      <li><a href={l.href} onclick={(e) => onnavigate?.(l.href, e)}>{l.label}</a></li>
     {/each}
     <li class="sb-source">
       <a href={sourceUrl} target="_blank" rel="noopener noreferrer">{SOURCE_OFFER_LABEL}</a>
@@ -68,8 +79,8 @@
     justify-content: center;
   }
   .legal-btn {
-    width: var(--nav-control, 44px);
-    height: var(--nav-control, 44px);
+    width: var(--nav-control);
+    height: var(--nav-control);
     place-items: center;
     justify-content: center;
     align-items: center;

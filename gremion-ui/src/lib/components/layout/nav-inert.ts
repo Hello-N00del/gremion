@@ -1,14 +1,16 @@
 /**
  * Makes everything outside an open modal drawer inert (TASK-208, UX-071a AC-2):
  * walking up from `keep` to <body>, every sibling at every level gets `inert`,
- * the skip link included. An aria-live region is left live (a status message
- * must still be announced while the drawer is open): a sibling that IS one is
- * skipped, a sibling that CONTAINS one is descended into instead.
+ * the skip link included. The app's status region (marked data-shell-status)
+ * is left live so a status message is still announced while the drawer is
+ * open: a sibling that IS it is skipped, a sibling that CONTAINS it is
+ * descended into instead. Page-level live regions are inerted like the rest
+ * (they may hold focusable content).
  *
  * Returns the release function. Callers release BEFORE focus returns to the
  * trigger — focus() on an element under an inert ancestor silently fails.
  */
-const LIVE = '[aria-live]:not([aria-live="off"]), [role="status"], [role="alert"], [role="log"]'
+const LIVE = '[data-shell-status]'
 
 export function inertOutside(keep: Element): () => void {
   const touched: HTMLElement[] = []

@@ -8,11 +8,11 @@
   import type { Snippet } from 'svelte'
   import type { Brand } from '$lib/brand'
   import type { TopbarModuleSlot } from './topbar-slot'
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import { t } from '$lib/i18n'
   import { resolveSourceUrl } from '$lib/source-offer'
   import { MQ_COLUMN, MQ_WIDE, navShellCss } from './nav-constants'
-  import { applyNavPrefClass, createNavPrefStore, effectiveNavMode, type NavMode, type NavPref } from './nav-state'
+  import { applyNavPrefClass, createNavPrefStore, modeFromMatches, type NavMode, type NavPref } from './nav-state'
   import { navHrefs, resolveActiveHref } from './nav-active'
   import { navLabels } from './nav-labels'
 
@@ -53,15 +53,16 @@
   const prefs = createNavPrefStore(() => localStorage)
 
   let pref = $state<NavPref | null>(null)
-  let width = $state<number | null>(null)
+  // The two media queries' matches: the same test the CSS applies, so JS and
+  // CSS never disagree (fractional widths under zoom included).
+  let matches = $state<{ column: boolean; wide: boolean } | null>(null)
   let ready = $state(false)
   let drawerOpen = $state(false)
-  let status = $state('')
   let hamburger: HTMLButtonElement | undefined = $state()
   let shell: HTMLElement | undefined = $state()
 
   // null until hydrated: SSR renders no state-dependent ARIA it could get wrong.
-  let mode = $derived<NavMode | null>(width === null ? null : effectiveNavMode(width, pref))
+  let mode = $derived<NavMode | null>(matches === null ? null : modeFromMatches(matches.column, matches.wide, pref))
   let currentHref = $derived(resolveActiveHref(navHrefs(nav), activeHref))
 
   onMount(() => {
@@ -69,16 +70,37 @@
     const column = matchMedia(MQ_COLUMN)
     const wide = matchMedia(MQ_WIDE)
     const sync = () => {
-      width = window.innerWidth
+      matches = { column: column.matches, wide: wide.matches }
       if (column.matches && drawerOpen) void closeDrawer('resize')
     }
     sync()
     column.addEventListener('change', sync)
     wide.addEventListener('change', sync)
+    // The command palette lives behind the drawer's inert background, so the
+    // Ctrl/Cmd+K shortcut is swallowed while the drawer is open.
+    const onKey = (e: KeyboardEvent) => {
+      if (drawerOpen && (e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
     ready = true
     return () => {
       column.removeEventListener('change', sync)
       wide.removeEventListener('change', sync)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  })
+
+  // Any route change closes the drawer, whatever started it (browser back,
+  // goto(), a redirect) — not only a click on one of the drawer's links.
+  let lastHref = untrack(() => activeHref)
+  $effect(() => {
+    const href = activeHref
+    if (href !== lastHref) {
+      lastHref = href
+      if (drawerOpen) void closeDrawer('navigate')
     }
   })
 
@@ -87,7 +109,6 @@
     pref = next
     prefs.write(next)
     applyNavPrefClass(document.documentElement, next)
-    status = next === 'expanded' ? $t('nav.sidebar.expanded') : $t('nav.sidebar.collapsed')
   }
 
   function openDrawer() {
@@ -168,6 +189,7 @@
       {nav}
       {counts}
       {currentHref}
+      activePath={activeHref}
       {userName}
       {roles}
       {brand}
@@ -175,13 +197,12 @@
       onclose={(reason) => void closeDrawer(reason)}
     />
   {/if}
-  <div class="sr-only" role="status" aria-live="polite">{status}</div>
 </div>
 
 <style>
   .nav-hamburger {
-    width: var(--nav-control, 44px);
-    height: var(--nav-control, 44px);
+    width: var(--nav-control);
+    height: var(--nav-control);
     flex-shrink: 0;
     margin-left: -4px;
     display: grid;

@@ -20,7 +20,7 @@
     /** The one nav href that is the current page (nav-active.ts), or null. */
     currentHref?: string | null
     idPrefix: string
-    onnavigate?: (href: string) => void
+    onnavigate?: (href: string, event: MouseEvent) => void
   } = $props()
 
   function badgeCount(item: Leaf): number {
@@ -36,11 +36,11 @@
     const out: Group[] = []
     for (const node of nav) {
       if (node.kind === 'section') {
-        out.push({ label: node.label, key: `s:${node.label}`, items: node.children.filter((c): c is Leaf => c.kind === 'item') })
+        out.push({ label: node.label, key: `s:${out.length}:${node.label}`, items: node.children.filter((c): c is Leaf => c.kind === 'item') })
       } else {
         const last = out[out.length - 1]
         if (last && last.label === null) last.items.push(node)
-        else out.push({ label: null, key: `i:${node.href}`, items: [node] })
+        else out.push({ label: null, key: `i:${out.length}:${node.href}`, items: [node] })
       }
     }
     return out
@@ -57,7 +57,7 @@
     aria-current={current ? 'page' : undefined}
     aria-label={n > 0 ? `${item.label} ${n}` : item.label}
     data-nav-label={item.label}
-    onclick={() => onnavigate?.(item.href)}
+    onclick={(e) => onnavigate?.(item.href, e)}
   >
     <Icon name={item.icon} size={18} />
     <span class="sb-label nav-rail-hide">{item.label}</span>
@@ -69,16 +69,16 @@
 
 {#each groups as group, i (group.key)}
   {#if group.label !== null}
-    <div class="sb-section nav-rail-hide" id="{idPrefix}-sec-{i}">{group.label}</div>
+    <h2 class="sb-section nav-rail-hide" id="{idPrefix}-sec-{i}">{group.label}</h2>
     <div class="sb-section-rule nav-rail-only" aria-hidden="true"></div>
     <ul class="sb-list" aria-labelledby="{idPrefix}-sec-{i}">
-      {#each group.items as item (item.href)}
+      {#each group.items as item, j (`${j}:${item.href}`)}
         <li>{@render link(item)}</li>
       {/each}
     </ul>
   {:else}
     <ul class="sb-list">
-      {#each group.items as item (item.href)}
+      {#each group.items as item, j (`${j}:${item.href}`)}
         <li>{@render link(item)}</li>
       {/each}
     </ul>
@@ -95,7 +95,9 @@
     gap: 1px;
   }
   .sb-section {
+    margin: 0;
     padding: 18px 12px 6px;
+    line-height: 1.5;
     font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.14em;

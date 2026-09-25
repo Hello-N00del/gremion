@@ -33,9 +33,9 @@ export const NAV_CLASS_EXPANDED = 'nav-expanded'
 
 /** Media query strings, derived from the breakpoints above. */
 export const MQ_COLUMN = `(min-width: ${NAV_BREAKPOINT_RAIL}px)`
-export const MQ_DRAWER = `(max-width: ${NAV_BREAKPOINT_RAIL - 0.02}px)`
+export const MQ_DRAWER = `not all and ${MQ_COLUMN}`
 export const MQ_WIDE = `(min-width: ${NAV_BREAKPOINT_EXPANDED}px)`
-const MQ_MID = `${MQ_COLUMN} and (max-width: ${NAV_BREAKPOINT_EXPANDED - 0.02}px)`
+const MQ_MID = `${MQ_COLUMN} and (not ${MQ_WIDE})`
 
 /**
  * The layout-critical shell CSS. Global on purpose: it is keyed on the html
@@ -43,23 +43,27 @@ const MQ_MID = `${MQ_COLUMN} and (max-width: ${NAV_BREAKPOINT_EXPANDED - 0.02}px
  * rules stay scoped in the components.
  */
 export function navShellCss(): string {
-  const rail = `
-    .nav-col { width: var(--nav-rail-w); }
-    .nav-col .nav-rail-hide { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
-    .nav-col .nav-rail-only { display: flex !important; }
-    .nav-col .nav-expanded-only { display: none !important; }
-    .nav-col .legal-list:not(.open) { display: none !important; }
-    .nav-col .legal-list.open { position: fixed; z-index: 60; left: calc(var(--nav-rail-w) + 4px); bottom: 8px; flex-direction: column; align-items: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--sh-2); padding: 6px; }
-    .nav-col .sb-item { justify-content: center; padding: 0; width: var(--nav-control); min-height: var(--nav-control); margin-inline: auto; }
-    .nav-col .sb-brand { flex-direction: column; padding: 10px 0; gap: 8px; }
-    .nav-col .sb-nav { padding: 0 0 8px; }
-    .nav-col .sb-badge { position: absolute; top: 1px; right: 1px; padding: 0 4px; font-size: 9px; line-height: 14px; }
-    .nav-col .sb-item.active::before { left: -10px; }
-    .nav-col .sb-foot, .nav-col .sb-legal-wrap { padding-inline: 0; }`
-  const expanded = `
-    .nav-col { width: var(--nav-sidebar-w); }`
+  // Flat selectors (no CSS nesting): the string is injected at runtime, so no
+  // build step would lower nesting for older engines.
+  const RAIL = [
+    '.nav-col { width: var(--nav-rail-w); }',
+    '.nav-col .nav-rail-hide { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }',
+    '.nav-col .nav-rail-only { display: flex !important; }',
+    '.nav-col .nav-expanded-only { display: none !important; }',
+    '.nav-col .legal-list:not(.open) { display: none !important; }',
+    '.nav-col .legal-list.open { position: fixed; z-index: 60; left: calc(var(--nav-rail-w) + 4px); bottom: 8px; flex-direction: column; align-items: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--sh-2); padding: 6px; }',
+    '.nav-col .sb-item { justify-content: center; padding: 0; width: var(--nav-control); min-height: var(--nav-control); margin-inline: auto; }',
+    '.nav-col .sb-brand { flex-direction: column; padding: 10px 0; gap: 8px; }',
+    '.nav-col .sb-nav { padding: 0 0 8px; }',
+    '.nav-col .sb-badge { position: absolute; top: 1px; right: 1px; padding: 0 4px; font-size: 9px; line-height: 14px; }',
+    '.nav-col .sb-item.active::before { left: -10px; }',
+    '.nav-col .sb-foot, .nav-col .sb-legal-wrap { padding-inline: 0; }'
+  ]
+  const EXPANDED = ['.nav-col { width: var(--nav-sidebar-w); }']
+  const scoped = (scope: string, rules: string[]) =>
+    rules.map((r) => r.replace(/^([^{]+)\{/, (_m, sel: string) => sel.split(',').map((x) => `${scope} ${x.trim()}`).join(', ') + ' {')).join('\n  ')
   return `
-:root, html.density-compact {
+:root {
   --nav-rail-w: ${NAV_RAIL_WIDTH.normal}px;
   --nav-sidebar-w: ${NAV_SIDEBAR_WIDTH.normal}px;
   --nav-control: ${NAV_CONTROL_SIZE.normal}px;
@@ -70,11 +74,15 @@ html.density-gross {
   --nav-rail-w: ${NAV_RAIL_WIDTH.gross}px;
   --nav-sidebar-w: ${NAV_SIDEBAR_WIDTH.gross}px;
   --nav-control: ${NAV_CONTROL_SIZE.gross}px;
+  --nav-font: 16px;
+}
+html.reduce-motion { --nav-motion: 0ms; }
+@media (prefers-reduced-motion: reduce) {
+  :root, html.density-gross, html.density-compact { --nav-motion: 0ms; }
 }
 .nav-rail-only { display: none !important; }
 .app-shell { display: flex; width: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
 .app-shell-body { display: flex; flex: 1 1 0%; min-width: 0; flex-direction: column; overflow: hidden; }
-html.density-gross { --nav-font: 16px; }
 .app-main { flex: 1 1 0%; min-width: 0; overflow: auto; display: flex; flex-direction: column; padding: 24px; }
 @media ${MQ_DRAWER} {
   .nav-col, .nav-column-only { display: none !important; }
@@ -86,25 +94,18 @@ html.density-gross { --nav-font: 16px; }
   html .topbar .topbar-status.inst { min-width: var(--nav-control); min-height: var(--nav-control); padding: 0; justify-content: center; border-radius: var(--r-sm); }
   html .topbar .inst-txt { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   html .topbar .topbar-bell :is(a, button) { min-width: var(--nav-control); min-height: var(--nav-control); display: inline-grid; place-items: center; }
-  html .topbar .topbar-live { max-width: 96px; overflow: hidden; }
+  html .topbar .topbar-live, html .topbar .topbar-body-context { flex-shrink: 1; min-width: 0; overflow-wrap: anywhere; }
 }
 @media ${MQ_COLUMN} {
   .nav-drawer-only { display: none !important; }
 }
 @media ${MQ_MID} {
-  html:not(.${NAV_CLASS_EXPANDED}) {${rail}
-  }
-  html.${NAV_CLASS_EXPANDED} {${expanded}
-  }
+  ${scoped(`html:not(.${NAV_CLASS_EXPANDED})`, RAIL)}
+  ${scoped(`html.${NAV_CLASS_EXPANDED}`, EXPANDED)}
 }
 @media ${MQ_WIDE} {
-  html:not(.${NAV_CLASS_RAIL}) {${expanded}
-  }
-  html.${NAV_CLASS_RAIL} {${rail}
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  :root { --nav-motion: 0ms; }
+  ${scoped(`html:not(.${NAV_CLASS_RAIL})`, EXPANDED)}
+  ${scoped(`html.${NAV_CLASS_RAIL}`, RAIL)}
 }
 `
 }

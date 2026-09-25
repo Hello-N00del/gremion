@@ -156,7 +156,7 @@
     aria-haspopup="dialog"
   >
     <Icon name="search" size={14} aria-hidden="true" />
-    <span class="search-text">Antrag, Datei, Person…</span>
+    <span>Antrag, Datei, Person…</span>
     <span class="k" aria-hidden="true">⌘ K</span>
   </button>
 

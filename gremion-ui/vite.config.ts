@@ -76,7 +76,7 @@ export default defineConfig({
         extends: true,
         // Svelte's client build: without the browser condition `svelte` resolves
         // to index-server.js and mount() throws.
-        resolve: { conditions: ['browser'] },
+        resolve: { conditions: ['browser', 'development'] },
         test: {
           name: 'browser',
           include: [BROWSER_TESTS],
@@ -95,7 +95,7 @@ export default defineConfig({
       {
         // Item (8): 1280 px at 200 % zoom is a 640 CSS px viewport at device scale 2.
         extends: true,
-        resolve: { conditions: ['browser'] },
+        resolve: { conditions: ['browser', 'development'] },
         test: {
           name: 'browser-dsf2',
           include: [DSF2_BROWSER_TESTS],

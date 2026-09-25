@@ -57,17 +57,30 @@
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && visible) hide()
     }
+    // A fixed tooltip does not follow its anchor: hide it when things move,
+    // and when focus goes anywhere outside the column (a hover tip must not
+    // sit over the control a keyboard user just reached).
+    const onMove = () => hide()
+    const onDocFocus = (e: FocusEvent) => {
+      if (!(e.target instanceof Node && el.contains(e.target))) hide()
+    }
     el.addEventListener('focusin', onFocusIn)
     el.addEventListener('focusout', onFocusOut)
     el.addEventListener('mouseover', onOver)
     el.addEventListener('mouseleave', onLeave)
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
+    document.addEventListener('scroll', onMove, true)
+    window.addEventListener('resize', onMove)
+    document.addEventListener('focusin', onDocFocus)
     return () => {
       el.removeEventListener('focusin', onFocusIn)
       el.removeEventListener('focusout', onFocusOut)
       el.removeEventListener('mouseover', onOver)
       el.removeEventListener('mouseleave', onLeave)
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
+      document.removeEventListener('scroll', onMove, true)
+      window.removeEventListener('resize', onMove)
+      document.removeEventListener('focusin', onDocFocus)
     }
   })
 

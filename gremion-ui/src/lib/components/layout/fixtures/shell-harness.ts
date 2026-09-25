@@ -34,9 +34,9 @@ export function mainContent(): HTMLElement {
   return m
 }
 
-/** The navigation column (the <aside> of the shell). */
+/** The navigation column (.nav-col; the pre-change shell's <aside>). */
 export function navColumn(): HTMLElement {
-  const a = shellRoot().querySelector<HTMLElement>('aside')
+  const a = shellRoot().querySelector<HTMLElement>('.nav-col') ?? shellRoot().querySelector<HTMLElement>('aside')
   if (!a) throw new Error('no navigation column')
   return a
 }
@@ -69,6 +69,7 @@ export function reflow(): ReflowReport {
     const r = el.getBoundingClientRect()
     if (r.width === 0 && r.height === 0) continue
     if (r.right > limit) offenders.push(`${describe(el)} right=${r.right.toFixed(1)} > ${limit}`)
+    if (r.left < -0.5) offenders.push(`${describe(el)} left=${r.left.toFixed(1)} < 0`)
   }
   return {
     sidebarWidth: columnWidth(),

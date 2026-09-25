@@ -32,6 +32,12 @@ export function parseNavPref(raw: string | null | undefined): NavPref | null {
   return raw === 'rail' || raw === 'expanded' ? raw : null
 }
 
+/** The mode from the two media queries' matches (what the CSS itself uses). */
+export function modeFromMatches(column: boolean, wide: boolean, pref: NavPref | null): NavMode {
+  if (!column) return 'drawer'
+  return pref ?? (wide ? 'expanded' : 'rail')
+}
+
 /** Drawer below the rail breakpoint whatever is stored; else the choice, else the range default. */
 export function effectiveNavMode(width: number, pref: NavPref | null): NavMode {
   const band = bandForWidth(width)

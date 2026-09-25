@@ -24,6 +24,7 @@
     nav = [],
     counts = { approvals: 0, liveVotes: 0, unread: 0 },
     currentHref = null,
+    activePath = '',
     userName = '',
     roles = [],
     brand: brandProp,
@@ -34,6 +35,8 @@
     nav?: NavItem[]
     counts?: { approvals: number; liveVotes: number; unread: number }
     currentHref?: string | null
+    /** The real pathname: a link to it is not a route change. */
+    activePath?: string
     userName?: string
     roles?: string[]
     brand?: Partial<Brand> | null
@@ -50,10 +53,20 @@
     }
   }
 
-  // Activating the current page's own link is not a route change: focus goes
+  const bare = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p)
+
+  // A modified click opens a new tab or window and does not navigate here: the drawer
+  // stays. Activating the page's own URL is not a route change: focus goes
   // back to the hamburger as for the close button.
-  function onnavigate(href: string) {
-    onclose(href === currentHref ? 'close' : 'navigate')
+  function onnavigate(href: string, e: MouseEvent) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    onclose(bare(href) === bare(activePath) ? 'close' : 'navigate')
+  }
+
+  // actions/modal.ts blocks wheel and touchmove on the document to freeze the
+  // page behind the scrim; stop them at the panel so the drawer itself scrolls.
+  function keepScroll(e: Event) {
+    e.stopPropagation()
   }
 </script>
 
@@ -70,6 +83,8 @@
     tabindex="-1"
     use:navDrawer
     {onkeydown}
+    onwheel={keepScroll}
+    ontouchmove={keepScroll}
   >
     <div class="drawer-head">
       <button type="button" class="drawer-close" aria-label={$t('nav.drawer.close')} onclick={() => onclose('close')}>
@@ -90,7 +105,6 @@
         type="button"
         class="drawer-action"
         onclick={() => themeMode.set($themeMode === 'dark' ? 'light' : 'dark')}
-        aria-pressed={$themeMode === 'dark'}
       >
         <Icon name={$themeMode === 'dark' ? 'sun' : 'moon'} size={18} />
         <span>{$themeMode === 'dark' ? $t('theme.light') : $t('theme.dark')}</span>
@@ -124,7 +138,7 @@
     top: 0;
     bottom: 0;
     left: 0;
-    width: min(calc(100vw - 48px), var(--nav-drawer-max, 320px));
+    width: min(calc(100vw - 48px), var(--nav-drawer-max));
     display: flex;
     flex-direction: column;
     background: var(--surface);
@@ -133,7 +147,7 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     transform: translateX(0);
-    transition: transform var(--nav-motion, 220ms) var(--e-out, ease-out);
+    transition: transform var(--nav-motion) var(--e-out, ease-out);
   }
   @starting-style {
     .nav-drawer {
@@ -159,8 +173,8 @@
     border-bottom: 1px solid var(--border);
   }
   .drawer-close {
-    width: var(--nav-control, 44px);
-    height: var(--nav-control, 44px);
+    width: var(--nav-control);
+    height: var(--nav-control);
     flex-shrink: 0;
     display: grid;
     place-items: center;
@@ -215,7 +229,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: var(--nav-control, 44px);
+    min-height: var(--nav-control);
     padding: 6px 10px;
     border: none;
     background: transparent;

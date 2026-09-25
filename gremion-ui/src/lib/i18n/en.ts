@@ -19,8 +19,6 @@ const en: Record<string, string> = {
   'nav.drawer.close':   'Close navigation',
   'nav.sidebar':        'Sidebar',
   'nav.sidebar.saved':  'Saved on this device',
-  'nav.sidebar.expanded':  'Sidebar expanded',
-  'nav.sidebar.collapsed': 'Sidebar collapsed',
   'nav.legal':          'Legal',
 
   // ── Committees / Governance ───────────────────────────────────────────────

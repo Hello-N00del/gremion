@@ -28,8 +28,8 @@
 
 <style>
   .nav-toggle {
-    width: var(--nav-control, 44px);
-    height: var(--nav-control, 44px);
+    width: var(--nav-control);
+    height: var(--nav-control);
     flex-shrink: 0;
     display: grid;
     place-items: center;

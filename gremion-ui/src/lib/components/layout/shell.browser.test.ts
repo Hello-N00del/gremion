@@ -19,6 +19,7 @@ import {
   navColumn,
   shellRoot
 } from './fixtures/shell-harness'
+import { TOPBAR_SLOT_BELOW_RAIL } from './topbar-slot'
 import { NAV_CONTROL_SIZE, NAV_SIDEBAR_WIDTH, NAV_RAIL_WIDTH, NAV_STORAGE_KEY, NAV_MAIN_MIN_CONTENT } from './nav-constants'
 import { fontSizePx } from '$lib/stores/font-size'
 import de from '$lib/i18n/de'
@@ -42,10 +43,11 @@ async function mount(opts: MountOpts) {
   await vpage.viewport(opts.width, opts.height)
   const path = opts.path ?? '/members'
   pageState.url = new URL('http://localhost' + path)
-  render(ShellFixture, {
+  const r = render(ShellFixture, {
     props: { nav: FIXTURE_NAV, activeHref: path, counts: COUNTS, wideMain: opts.wideMain ?? 0, withModules: opts.withModules ?? false }
   })
   await nextFrame()
+  return r
 }
 
 const $ = <T extends Element = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)
@@ -63,6 +65,8 @@ async function openDrawerByKeyboard() {
   hamburger().focus()
   await userEvent.keyboard('{Enter}')
   await vi.waitFor(() => expect(document.activeElement?.closest('[role="dialog"]')).toBeTruthy())
+  // Past the slide-in (NAV_MOTION_MS): measure the settled drawer.
+  await vi.waitFor(() => expect(dialog()!.getBoundingClientRect().left).toBeGreaterThanOrEqual(0))
 }
 
 // Links never navigate the test page; SvelteKit's router does that in the app.
@@ -104,6 +108,16 @@ describe('(1) reflow at 320x640 and 390x844', () => {
     expect.soft(r.documentOverflow, 'document horizontal overflow').toBeLessThanOrEqual(0)
     expect.soft(r.mainOverflow, '#main-content horizontal overflow').toBeLessThanOrEqual(0)
     expect.soft(r.offenders, 'elements past documentElement.clientWidth').toEqual([])
+  })
+
+  test.each([320, 390])('%i px with every TopBar slot filled and a degraded instance badge', async (w) => {
+    pageState.data = { instanceState: 'degraded' }
+    await mount({ width: w, height: 700, withModules: true, path: '/protokolle/2026/sitzung' })
+    const r = reflow()
+    expect.soft(r.documentOverflow).toBeLessThanOrEqual(0)
+    expect.soft(r.mainOverflow).toBeLessThanOrEqual(0)
+    expect.soft(r.offenders).toEqual([])
+    for (const id of ['fixture-live', 'fixture-bell', 'fixture-body']) expect.soft(visible($(`[data-testid="${id}"]`)!), id).toBe(true)
   })
 
   test('the #main-content clause goes RED alone on a 391 px element in #main-content', async () => {
@@ -163,7 +177,53 @@ describe('(2) keyboard-only drawer at 390 px', () => {
     const lacking = outside.filter((el) => !el.closest('[inert]')).map((el) => el.outerHTML.slice(0, 80))
     expect(lacking).toEqual([])
     expect($('[data-testid="skip-link"]')!.closest('[inert]')).toBeTruthy()
-    for (const live of $$('[aria-live]')) expect(live.closest('[inert]'), 'live region stays live').toBeNull()
+    expect($('[data-shell-status]')!.closest('[inert]'), 'the app status region stays live').toBeNull()
+    // A page's own live region (with a button in it) is inerted like the rest.
+    expect($('[data-testid="page-status"]')!.closest('[inert]')).toBeTruthy()
+    expect($('#main-content')!.closest('[inert]')).toBeTruthy()
+  })
+
+  test('the drawer itself scrolls: wheel and touchmove on it are not cancelled by the scroll lock', async () => {
+    await mount({ width: 320, height: 420 })
+    await openDrawerByKeyboard()
+    const d = dialog()!
+    expect(d.scrollHeight).toBeGreaterThan(d.clientHeight)
+    const link = $('[role="dialog"] a[href="/members"]')!
+    const wheel = new WheelEvent('wheel', { deltaY: 200, bubbles: true, cancelable: true })
+    link.dispatchEvent(wheel)
+    expect(wheel.defaultPrevented).toBe(false)
+    const touch = new Event('touchmove', { bubbles: true, cancelable: true })
+    link.dispatchEvent(touch)
+    expect(touch.defaultPrevented).toBe(false)
+    // …while the page behind stays locked.
+    const behind = new WheelEvent('wheel', { deltaY: 200, bubbles: true, cancelable: true })
+    $('.nav-scrim')!.dispatchEvent(behind)
+    expect(behind.defaultPrevented).toBe(true)
+  })
+
+  test('Ctrl+K does not open the (inert) command palette behind an open drawer', async () => {
+    await mount({ width: 390, height: 844 })
+    await openDrawerByKeyboard()
+    await userEvent.keyboard('{Control>}k{/Control}')
+    await nextFrame()
+    expect($$('[role="dialog"]').length).toBe(1)
+    expect(dialog()!.contains(document.activeElement)).toBe(true)
+  })
+
+  test('a route change from outside the drawer (browser back, goto) closes it', async () => {
+    const r = await mount({ width: 390, height: 844, path: '/members' })
+    await openDrawerByKeyboard()
+    await r.rerender({ nav: FIXTURE_NAV, activeHref: '/committees', counts: COUNTS, wideMain: 0, withModules: false })
+    await vi.waitFor(() => expect(dialog()).toBeNull())
+    expect($$('[inert]')).toEqual([])
+  })
+
+  test('a modified click (new tab) on a drawer link keeps the drawer open', async () => {
+    await mount({ width: 390, height: 844, path: '/members' })
+    await openDrawerByKeyboard()
+    await userEvent.click($('[role="dialog"] a[href="/committees"]')!, { modifiers: ['ControlOrMeta'] })
+    await nextFrame()
+    expect(dialog()).not.toBeNull()
   })
 
   test('30 Tab and 30 Shift+Tab presses never leave the dialog', async () => {
@@ -394,6 +454,19 @@ describe('(7) target sizes', () => {
     }
   })
 
+  test('with html.density-gross the controls measure at least 56x56', async () => {
+    document.documentElement.className = 'density-gross'
+    await mount({ width: 390, height: 844 })
+    const g = NAV_CONTROL_SIZE.gross
+    expect(size(hamburger()).width).toBeGreaterThanOrEqual(g)
+    await openDrawerByKeyboard()
+    expect(size($('.drawer-close')!).height).toBeGreaterThanOrEqual(g)
+    cleanup()
+    await mount({ width: 1024, height: 900 })
+    expect(size(toggle()).width).toBeGreaterThanOrEqual(g)
+    expect(size(toggle()).height).toBeGreaterThanOrEqual(g)
+  })
+
   test.each([
     ['drawer', 390],
     ['rail', 1024],
@@ -402,6 +475,10 @@ describe('(7) target sizes', () => {
     await mount({ width: w, height: 900 })
     if (state === 'drawer') await openDrawerByKeyboard()
     const scope = state === 'drawer' ? dialog()! : navColumn()
+    if (state === 'rail') {
+      await userEvent.click($('.nav-col .legal-btn')!)
+      await vi.waitFor(() => expect(visible($('.nav-col .legal-list a')!)).toBe(true))
+    }
     const targets = $$('a[href], button', scope).filter(visible)
     expect(targets.length).toBeGreaterThan(LABELS.length)
     const small = targets
@@ -540,8 +617,10 @@ describe('(11) 100dvh shell', () => {
 // ── (12) ─────────────────────────────────────────────────────────────────────
 describe('(12) topbarModuleSlot: chips, live-call indicator, bell', () => {
   test('below 768 px the fixture chip is hidden and the bell stays, named, at control size', async () => {
+    expect(TOPBAR_SLOT_BELOW_RAIL).toEqual({ chips: 'hidden', liveCall: 'kept', bell: 'kept' })
     await mount({ width: 390, height: 844, withModules: true })
     expect(visible($('[data-testid="fixture-chip"]')!)).toBe(false)
+    expect(visible($('[data-testid="fixture-live"]')!)).toBe(true)
     const bell = vpage.getByRole('button', { name: /Benachrichtigungen/ })
     await expect.element(bell).toBeVisible()
     expect(size(bell.element()).width).toBeGreaterThanOrEqual(NAV_CONTROL_SIZE.normal)
@@ -556,6 +635,9 @@ describe('(12) topbarModuleSlot: chips, live-call indicator, bell', () => {
   })
 
   test('theme toggle and logout move from the TopBar into the drawer below 768 px', async () => {
+    await mount({ width: 1024, height: 800 })
+    expect($$('.topbar .icon-btn').filter(visible).length).toBe(2)
+    cleanup()
     await mount({ width: 390, height: 844 })
     expect($$('.topbar .icon-btn').filter(visible)).toEqual([])
     await openDrawerByKeyboard()
