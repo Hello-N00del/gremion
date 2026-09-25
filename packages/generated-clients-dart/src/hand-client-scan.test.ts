@@ -38,27 +38,27 @@ describe('scanForHandWrittenClients', () => {
   it('names apps/mobile/lib/api/governance_client.dart calling a spec path', () => {
     const root = fixture()
     writeFile(root, 'apps/mobile/lib/api/governance_client.dart', "final r = dio.get('/api/widgets/$id');\n")
-    const problems = scanForHandWrittenClients(root)
+    const { problems } = scanForHandWrittenClients(root)
     expect(problems.some((p) => p.startsWith('apps/mobile/lib/api/governance_client.dart:') && p.includes('/api/widgets/{id}'))).toBe(true)
   })
 
   it('covers every registered OpenAPI spec, not only active ones', () => {
     const root = fixture()
     writeFile(root, 'tool/x.dart', "const p = '/api/legacy/items';\n")
-    expect(scanForHandWrittenClients(root).join('\n')).toMatch(/tool\/x\.dart:.*\/api\/legacy\/items/)
+    expect(scanForHandWrittenClients(root).problems.join('\n')).toMatch(/tool\/x\.dart:.*\/api\/legacy\/items/)
   })
 
   it('passes a Dart file that names no spec path, and generated surface packages', () => {
     const root = fixture()
     writeFile(root, 'apps/mobile/lib/main.dart', "void main() => print('/api/other');\n")
     writeFile(root, 'packages/generated-clients-dart/widgets/lib/src/api.dart', "const p = r'/api/widgets/{id}';\n")
-    expect(scanForHandWrittenClients(root)).toEqual([])
+    expect(scanForHandWrittenClients(root).problems).toEqual([])
   })
 
   it('does scan Dart outside a surface directory even under packages/generated-clients-dart/', () => {
     const root = fixture()
     writeFile(root, 'packages/generated-clients-dart/widgets-extra/x.dart', "const p = '/api/widgets/1';\n")
-    expect(scanForHandWrittenClients(root).join('\n')).toMatch(/widgets-extra\/x\.dart/)
+    expect(scanForHandWrittenClients(root).problems.join('\n')).toMatch(/widgets-extra\/x\.dart/)
   })
 })
 

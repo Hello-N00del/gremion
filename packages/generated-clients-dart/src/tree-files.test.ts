@@ -54,6 +54,6 @@ describe('committable file sets (git work tree)', () => {
   it('the scan still sees the tree (sanity for the exemption)', () => {
     const { root } = gitFixture()
     writeFile(root, 'apps/mobile/lib/x.dart', "const p = '/api/widgets/1';\n")
-    expect(scanForHandWrittenClients(root).join('\n')).toMatch(/apps\/mobile\/lib\/x\.dart/)
+    expect(scanForHandWrittenClients(root).problems.join('\n')).toMatch(/apps\/mobile\/lib\/x\.dart/)
   })
 })
