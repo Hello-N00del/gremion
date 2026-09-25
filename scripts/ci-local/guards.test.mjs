@@ -1,11 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readdirSync } from 'node:fs'
 import {
   gitleaksCommand,
   runGitleaksArm,
@@ -18,6 +17,7 @@ import {
   runAllArms,
   listDockerfiles,
   guardsResultFileName,
+  defaultGuardsOutDir,
   main,
 } from './guards.mjs'
 
@@ -413,13 +413,19 @@ test('guardsResultFileName carries the date, HH:MM:SS (to the second, so two run
   assert.equal(guardsResultFileName(now, 'abc1234', 'def5678'), '2026-09-25T140307Z-abc1234-def5678-guards.json')
 })
 
-test('main(): --out is no longer required to get a dated JSON result — omitting it still writes one, under a default directory (MEDIUM fix)', () => {
+test('main(): --out is no longer required to get a dated JSON result — omitting it still writes one, under the default directory (MEDIUM fix)', () => {
   const kernel = makeSecretRepo()
   const vertical = makeSecretRepo()
   const outDir = mkdtempSync(join(tmpdir(), 'ci-local-guards-default-out-'))
+  const before = process.env.CI_LOCAL_GUARDS_OUT
+  process.env.CI_LOCAL_GUARDS_OUT = outDir
   try {
-    const code = withCleanExitCode(() => main(['--kernel', kernel, '--vertical', vertical, '--waivers', 'does-not-exist.json', '--out', outDir]))
-    assert.equal(typeof code, 'number')
+    assert.equal(defaultGuardsOutDir(), outDir)
+    // NO --out on the command line: the dated record must still be written.
+    const code = withCleanExitCode(() => main(['--kernel', kernel, '--vertical', vertical, '--waivers', 'does-not-exist.json']))
+    // These scratch repos lack the cve-floor/overrides-drift scripts, so the
+    // entry point must be RED here — and still write its record.
+    assert.equal(code, 1)
     const files = readdirSync(outDir)
     assert.equal(files.length, 1)
     assert.match(files[0], /^\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{7}-[0-9a-f]{7}-guards\.json$/)
@@ -427,7 +433,10 @@ test('main(): --out is no longer required to get a dated JSON result — omittin
     assert.ok(body.timestamp)
     assert.equal(body.kernelSha.length, 7)
     assert.equal(body.sturaosSha.length, 7)
+    assert.equal(body.overallExit, 1)
   } finally {
+    if (before === undefined) delete process.env.CI_LOCAL_GUARDS_OUT
+    else process.env.CI_LOCAL_GUARDS_OUT = before
     rmSync(kernel, { recursive: true, force: true })
     rmSync(vertical, { recursive: true, force: true })
     rmSync(outDir, { recursive: true, force: true })

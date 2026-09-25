@@ -124,7 +124,7 @@ function hasFatalLog(output) {
  * does not resolve in (gitleaks prints "fatal: ambiguous argument ...
  * unknown revision", reports "0 commits scanned", and exits 0) — proven with
  * a synthetic PEM committed in a StuRaOS scratch clone: --base main gave
- * [PASS] secret-scan (sturaos) with the key still in the scanned range,
+ * [PASS] secret-scan on the StuRaOS clone with the key still in the scanned range,
  * because the kernel's default branch is main and StuRaOS's is master.
  */
 export function baseRefResolves(repoPath, ref) {
@@ -448,6 +448,17 @@ function argValue(argv, flag) {
   return i === -1 ? null : argv[i + 1]
 }
 
+/**
+ * Where the dated JSON goes when no --out is given: $CI_LOCAL_GUARDS_OUT if
+ * set (a re-enabled pipeline points it at its artifact dir), otherwise
+ * <os tmpdir>/ci-local-guards-results. Never inside either repo: a result
+ * file there would make the tree dirty (snapshot.mjs refuses a dirty tree)
+ * and would put run records into the kernel (§5 Q3).
+ */
+export function defaultGuardsOutDir() {
+  return process.env.CI_LOCAL_GUARDS_OUT || join(tmpdir(), 'ci-local-guards-results')
+}
+
 /** HEAD's short SHA for the result filename, or 'unknown' if `path` is not (yet) a git repo. */
 function tryHeadShortSha(path) {
   try {
@@ -471,7 +482,7 @@ export function main(argv = process.argv.slice(2)) {
   // pass --out. Defaulting it (rather than making it a hard requirement,
   // which would break that one-line call) means a dated record is ALWAYS
   // written.
-  const outDir = argValue(argv, '--out') ?? join(tmpdir(), 'ci-local-guards-results')
+  const outDir = argValue(argv, '--out') ?? defaultGuardsOutDir()
   const imageBuild = argv.includes('--image-build')
 
   if (!kernelPath || !sturaosPath) {
