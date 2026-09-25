@@ -36,13 +36,18 @@
 import { test as nodeTest } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { FIXTURE, REPO_ROOT, parseYamlSubset, readEnvFile, renderState } from './compose-edge.mjs'
+
+// The brief's contract: this file exports renderState. TASK-034 should import
+// ./compose-edge.mjs directly -- importing a test file is what the entry guard
+// below exists to make harmless, not a pattern to build on.
+export { FIXTURE, REPO_ROOT, parseYamlSubset, readEnvFile, renderState }
 
 const SELF = fileURLToPath(import.meta.url)
-const REPO_ROOT = path.resolve(path.dirname(SELF), '..')
 
 // TASK-034 imports renderState from this file. node:test registers every
 // test() a module declares when it is IMPORTED, so without this the whole
@@ -50,140 +55,20 @@ const REPO_ROOT = path.resolve(path.dirname(SELF), '..')
 // when this file is the process entry -- which `node --test <file>` makes it
 // (one process per file). If a runner ever changes that, the suite registers
 // nothing and `make lint-edge-render` fails on its collected-count check
-// rather than passing on zero tests.
-const IS_ENTRY = process.argv[1] !== undefined && path.resolve(process.argv[1]) === SELF
+// rather than passing on zero tests. (`--test-isolation=none` with this file
+// not first on the command line is such a runner; so is anything else that
+// runs files in one process.)
+const realpath = (p) => {
+  try {
+    return realpathSync(p)
+  } catch {
+    return path.resolve(p)
+  }
+}
+const IS_ENTRY = process.argv[1] !== undefined && realpath(process.argv[1]) === realpath(SELF)
 const test = IS_ENTRY ? nodeTest : () => {}
-export const FIXTURE = 'test/host/fixtures/edge-render/state.env'
 const TRAEFIK_YML = 'docker/traefik/traefik.yml'
 const MARKERS = ['@ACME_EMAIL@', '@ACME_CA_SERVER@', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@']
-
-// Only what docker itself needs to find its daemon. Everything the render reads
-// comes from the env file or from `env` below, never from the caller's shell.
-const DOCKER_ENV_KEYS = ['PATH', 'HOME', 'DOCKER_HOST', 'DOCKER_CONFIG', 'DOCKER_CONTEXT', 'DOCKER_CERT_PATH', 'DOCKER_TLS_VERIFY']
-
-/**
- * Render a composition exactly as the host runs it:
- *   docker compose --env-file <state.env> config
- * Returns the parsed JSON config. Throws with compose's stderr on a refusal, so
- * a caller can assert on the refusal text (x-required-env names the key).
- *
- * The kernel composition's `legal` service names the git-ignored
- * legal/legal.env as an env_file; compose refuses to render without it. It is
- * created only if absent and removed again, the same precondition ci.yml
- * satisfies with `touch legal/legal.env`.
- */
-export function renderState({ envFile = FIXTURE, cwd = REPO_ROOT, env = {} } = {}) {
-  const childEnv = {}
-  for (const k of DOCKER_ENV_KEYS) if (process.env[k] !== undefined) childEnv[k] = process.env[k]
-  Object.assign(childEnv, env)
-
-  const legalEnv = path.join(cwd, 'legal', 'legal.env')
-  const created = !existsSync(legalEnv)
-  if (created) {
-    mkdirSync(path.dirname(legalEnv), { recursive: true })
-    writeFileSync(legalEnv, '')
-  }
-  try {
-    const res = spawnSync('docker', ['compose', '--env-file', envFile, 'config', '--format', 'json'], {
-      cwd,
-      env: childEnv,
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    })
-    if (res.error) throw new Error(`docker could not be run: ${res.error.message}`)
-    if (res.status !== 0) {
-      const err = new Error(`docker compose config refused (exit ${res.status}): ${res.stderr.trim()}`)
-      err.stderr = res.stderr
-      throw err
-    }
-    return JSON.parse(res.stdout)
-  } finally {
-    if (created) rmSync(legalEnv, { force: true })
-  }
-}
-
-/** Reads KEY=VALUE lines of an env file (comments and blanks skipped). */
-export function readEnvFile(file) {
-  const out = {}
-  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const m = /^([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line)
-    if (m) out[m[1]] = m[2]
-  }
-  return out
-}
-
-/**
- * A reader for the YAML subset docker/traefik/traefik.yml is written in: block
- * mappings, block sequences of scalars, quoted or plain scalars, `{}`, and
- * comments. Anything outside that subset throws rather than being skipped, so
- * the static guard can never pass on a file it did not actually read.
- */
-export function parseYamlSubset(text) {
-  const scalar = (raw) => {
-    const v = raw.trim()
-    if (v === '{}') return {}
-    if (v === '[]') return []
-    if (v === 'true') return true
-    if (v === 'false') return false
-    if (/^-?\d+$/.test(v)) return Number(v)
-    const q = /^"(.*)"$/.exec(v) || /^'(.*)'$/.exec(v)
-    if (q) return q[1]
-    if (/^[[{|>]/.test(v)) throw new Error(`unsupported YAML construct: ${v}`)
-    return v
-  }
-  // Strip a trailing comment that sits outside quotes.
-  const uncomment = (line) => {
-    let inS = false
-    let inD = false
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i]
-      if (c === "'" && !inD) inS = !inS
-      else if (c === '"' && !inS) inD = !inD
-      else if (c === '#' && !inS && !inD && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i)
-    }
-    return line
-  }
-  const lines = text
-    .split(/\r?\n/)
-    .map(uncomment)
-    .filter((l) => l.trim() !== '')
-    .map((l) => {
-      if (/\t/.test(l.match(/^\s*/)[0])) throw new Error('tab indentation')
-      return { indent: l.match(/^ */)[0].length, body: l.trim() }
-    })
-
-  let i = 0
-  function block(indent) {
-    if (i >= lines.length || lines[i].indent < indent) return null
-    const own = lines[i].indent
-    if (lines[i].body.startsWith('- ')) {
-      const arr = []
-      while (i < lines.length && lines[i].indent === own && lines[i].body.startsWith('- ')) {
-        arr.push(scalar(lines[i].body.slice(2)))
-        i++
-      }
-      return arr
-    }
-    const obj = {}
-    while (i < lines.length && lines[i].indent === own) {
-      const m = /^("[^"]*"|'[^']*'|[^:]+):(?:\s+(.*))?$/.exec(lines[i].body)
-      if (!m) throw new Error(`unparseable line: ${lines[i].body}`)
-      const key = m[1].replace(/^["']|["']$/g, '')
-      if (key in obj) throw new Error(`duplicate key: ${key}`)
-      i++
-      if (m[2] !== undefined && m[2] !== '') obj[key] = scalar(m[2])
-      else {
-        const child = i < lines.length && lines[i].indent > own ? block(lines[i].indent) : null
-        obj[key] = child
-      }
-    }
-    if (i < lines.length && lines[i].indent > own) throw new Error(`bad indentation at: ${lines[i].body}`)
-    return obj
-  }
-  const doc = block(0)
-  if (i !== lines.length) throw new Error(`trailing content at: ${lines[i].body}`)
-  return doc ?? {}
-}
 
 // ── helpers over the render ────────────────────────────────────────────────
 
@@ -197,9 +82,14 @@ function traefik() {
   assert.ok(svc, 'the production render has no traefik service -- is the fixture COMPOSE_PROFILES=production?')
   return svc
 }
-const fixtureEnv = () => readEnvFile(path.join(REPO_ROOT, FIXTURE))
-const WILDCARD = new Set(['', '0.0.0.0', '::', '[::]'])
-const normIp = (ip) => String(ip ?? '').replace(/^\[|\]$/g, '')
+const fixtureEnv = () => readEnvFile(FIXTURE)
+const WILDCARD = new Set(['', '0.0.0.0', '::'])
+// Brackets off; an all-zero IPv6 spelling (`::0`, `0:0:0:0:0:0:0:0`, ...)
+// normalised to `::` so it cannot slip past the wildcard set.
+const normIp = (ip) => {
+  const v = String(ip ?? '').replace(/^\[|\]$/g, '')
+  return v.includes(':') && /^[0:]+$/.test(v) ? '::' : v
+}
 const commandText = (svc) => [].concat(svc.entrypoint ?? [], svc.command ?? []).join(' ')
 
 // ── 0. the tools the guards stand on ───────────────────────────────────────
@@ -208,9 +98,13 @@ test('parseYamlSubset reads nesting, lists, quoting and comments, and refuses wh
   const doc = parseYamlSubset(
     ['# c', 'a:', '  b: "x # not a comment"  # comment', '  c:', '    - "1"', '    - two', '  d: {}', 'e: false'].join('\n'),
   )
-  assert.deepEqual(doc, { a: { b: 'x # not a comment', c: ['1', 'two'], d: {} }, e: false })
+  assert.deepEqual(JSON.parse(JSON.stringify(doc)), { a: { b: 'x # not a comment', c: ['1', 'two'], d: {} }, e: false })
   assert.throws(() => parseYamlSubset('a: [1, 2]'), /unsupported/)
   assert.throws(() => parseYamlSubset('a: 1\na: 2'), /duplicate/)
+  for (const bad of ['a: &x 1', 'a: *x', 'a: !!str 5', 'a:\n  - k: v', 'l:\n- x: 1', 'a: "q\\" x"', "a: 'it''s'", 'a: 0755', '<<: 1']) {
+    assert.throws(() => parseYamlSubset(bad), /unsupported/, JSON.stringify(bad))
+  }
+  assert.deepEqual({ ...parseYamlSubset('constructor: 1\n__proto__: 2') }, { constructor: 1, ['__proto__']: 2 })
 })
 
 test('renderState renders the fixture through the production profile, independent of the caller shell', () => {
@@ -245,7 +139,10 @@ test('importing renderState from another test file registers none of this suite'
     // runner instead of to its stdout; it must run as a standalone runner.
     const env = { ...process.env }
     delete env.NODE_TEST_CONTEXT
-    const res = spawnSync(process.execPath, ['--test', '--test-reporter=tap', importer], { encoding: 'utf8', env })
+    // Bounded: if the entry guard ever misfired, the child would re-register
+    // this very test and recurse -- that must be a failure, not a hang.
+    const res = spawnSync(process.execPath, ['--test', '--test-reporter=tap', importer], { encoding: 'utf8', env, timeout: 60_000 })
+    assert.equal(res.signal, null, `the importer run was killed (${res.signal}) -- recursion or hang`)
     assert.equal(res.status, 0, res.stdout + res.stderr)
     assert.match(res.stdout, /^1\.\.1$/m, `the importer ran more than its own test:\n${res.stdout}`)
   } finally {
@@ -309,6 +206,10 @@ test('guard 2: exactly the four entrypoints, at their fixed addresses, with the 
   assert.equal(ep.ping.address, ':8082')
   assert.equal(ep.internaltest.address, ':8081')
   assert.deepEqual(ep.web.http?.redirections?.entryPoint, { to: 'websecure', scheme: 'https', permanent: true })
+  // Only websecure is a default entrypoint: a router naming no entryPoints must
+  // never also attach to internaltest (or ping, or web).
+  assert.equal(ep.websecure.asDefault, true)
+  for (const name of ['web', 'ping', 'internaltest']) assert.equal(ep[name].asDefault, undefined, `${name} is a default entrypoint`)
 })
 
 test('guard 2: the ping block, the API without dashboard, the le-http resolver and the directory provider', () => {
@@ -353,6 +254,8 @@ test('guard 3: exactly one mount targets /etc/traefik/dynamic, read-only, from $
   assert.equal(mounts[0].type, 'bind')
   assert.equal(mounts[0].read_only, true)
   assert.equal(mounts[0].source, `${fixtureEnv().GREMION_ROOT}/etc/edge`)
+  // A missing router directory must refuse `up`, not become an empty dir.
+  assert.equal(mounts[0].bind?.create_host_path, false, 'a missing ${GREMION_ROOT}/etc/edge would be created empty')
 })
 
 test('guard 3: ACME state lives only in the external ${STACK}_traefik_acme volume, mounted at /letsencrypt', () => {
