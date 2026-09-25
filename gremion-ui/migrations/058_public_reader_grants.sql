@@ -35,18 +35,18 @@
 -- k8s/base/postgres/configmap.yaml, both of which need PUBLIC_DB_PASSWORD set —
 -- then re-run.
 --
--- Idempotent: re-running only re-issues GRANTs that are already in place.
+-- Idempotent: re-running only re-issues GRANTs/REVOKEs that are already in
+-- place.
 
--- WHY EVERY TABLE IS UNCONDITIONAL, AND WHY NEWS_POSTS IS NOT HERE
--- ----------------------------------------------------------------
+-- WHY THE REQUIRED SET IS UNCONDITIONAL, AND WHY NEWS_POSTS IS NOT HERE
+-- ----------------------------------------------------------------------
 -- The first draft wrapped each GRANT in `IF EXISTS (information_schema.tables)`
 -- and justified it with the P0.2 module skip. That justification is FALSE for
--- every table below: each one is produced by a KERNEL migration
--- (003_calendar_schema.sql, 007_protocols.sql, 010_org_units.sql,
--- 055_resolution_challenges.sql), so an absent one always means a broken
--- replay. The per-table ELSE branch was also the very silent-skip shape this
--- migration exists to delete. Every table below is required, and a missing one
--- aborts.
+-- both tables below: each is produced by a KERNEL migration
+-- (007_protocols.sql, 010_org_units.sql), so an absent one always means a
+-- broken replay. The per-table ELSE branch was also the very silent-skip shape
+-- this migration exists to delete. Every table in `portal_tables` is required,
+-- and a missing one aborts.
 --
 -- news_posts is DELIBERATELY ABSENT (B4a-news-posts-ownership). The kernel's
 -- 008_public_portal.sql:4-6 records that it moved out with the calendar/news
@@ -55,31 +55,74 @@
 -- public-reader GRANT now live in the content module's own creation migration
 -- 1200_content_news_posts.sql. Kernel grants what the kernel guarantees;
 -- content grants what content creates.
+--
+-- WHY THE GRANT SET NARROWED TO TWO TABLES (R-E13)
+-- --------------------------------------------------
+-- An earlier version of this file granted every table the KERNEL chain
+-- produces that the portal's data model touches at all: calendar_events,
+-- event_recurrence, org_units, protocols, protocol_resolutions and
+-- resolution_challenges. That is broader than least privilege actually
+-- requires — gremion-public/src/lib/server/public-db.ts:51,82,105 reads only
+-- `protocols` and `org_units`; nothing in the anonymous portal ever queries
+-- the other four. Granting them anonymously exposed person data over the
+-- internet with no application code standing in the way:
+-- `resolution_challenges.raised_by` / `grounds` (who contested a resolution
+-- and on what grounds) and `calendar_events.created_by`. `portal_tables`
+-- below is therefore exactly the two tables the portal reads, and the four
+-- that used to be in it move to `revoked_tables` — REVOKE, not merely
+-- omission, because a database that already ran the six-table version of
+-- this file HOLDS those grants and dropping a name from an array does nothing
+-- to a database that already applied it.
 
 DO $$
 DECLARE
-  -- LEAST PRIVILEGE: exactly the tables gremion-public queries, verified against
-  -- gremion-public/src/lib/server/public-db.ts. `protocol_attendance` and
-  -- `protocol_action_items` were in the first draft and are deliberately GONE —
-  -- no gremion-public query touches either, and attendance is personal data
-  -- (who sat in which meeting) that must not be reachable by an anonymous,
-  -- internet-facing role. `committees` is absent because 010_org_units.sql
-  -- renamed it to org_units. `news_posts` is absent because it is content-owned
-  -- (see the header block); content's 1200_content_news_posts.sql grants it.
+  -- LEAST PRIVILEGE: exactly the tables the anonymous public portal reads,
+  -- verified against gremion-public/src/lib/server/public-db.ts:51,82,105
+  -- (R-E13). `protocol_attendance` and `protocol_action_items` were in the
+  -- first draft and were already GONE before R-E13 — no gremion-public query
+  -- touches either, and attendance is personal data (who sat in which
+  -- meeting) that must not be reachable by an anonymous, internet-facing
+  -- role. `committees` is absent because 010_org_units.sql renamed it to
+  -- org_units. `calendar_events`, `event_recurrence`, `protocol_resolutions`
+  -- and `resolution_challenges` are absent as of R-E13: the portal's own
+  -- queries never read them (see the header block above); they are now in
+  -- `revoked_tables`. `news_posts` is absent because it is content-owned (see
+  -- the header block); content's 1200_content_news_posts.sql grants it.
   portal_tables CONSTANT text[] := ARRAY[
-    'calendar_events',
-    'event_recurrence',
     'org_units',
-    'protocols',
-    'protocol_resolutions',
-    'resolution_challenges'
+    'protocols'
   ];
-  -- The two tables 008 granted and this migration takes BACK. Kept as an
-  -- explicit array rather than an implicit absence so the removal is executable
-  -- and auditable, not merely documented (see the REVOKE loop at the bottom).
+  -- Tables this migration actively takes SELECT back from the reader role,
+  -- because a database that ran an earlier version of this file (or 008,
+  -- under the role's retired name) already holds the grant. Kept as an
+  -- explicit array rather than an implicit absence so the removal is
+  -- executable and auditable, not merely documented (see the REVOKE loop at
+  -- the bottom).
+  --
+  -- `protocol_attendance` / `protocol_action_items`: 008 granted these to the
+  -- reader role under its retired name; a data-layer rename that ran outside
+  -- this repository renamed the role in place, which — Postgres keys
+  -- privileges to the role OID — carried the grant across to
+  -- gremion_public_reader.
+  --
+  -- `calendar_events`, `event_recurrence`, `protocol_resolutions`,
+  -- `resolution_challenges`: R-E13's own narrowing (see the header block
+  -- above). A database that ran the six-table `portal_tables` this file used
+  -- to declare already holds these grants; dropping the four names from
+  -- `portal_tables` converges only a FRESH install, not that database — the
+  -- REVOKE is what fixes it. This is also why the 055 -> 058 filename
+  -- ordering stays load-bearing even though 058 no longer GRANTs
+  -- resolution_challenges: the REVOKE below must still run strictly after
+  -- 055_resolution_challenges.sql's own GRANT of it, or the REVOKE would
+  -- revoke a privilege 055 has not granted yet on that run and 055's later
+  -- GRANT would silently re-open it.
   revoked_tables CONSTANT text[] := ARRAY[
     'protocol_attendance',
-    'protocol_action_items'
+    'protocol_action_items',
+    'calendar_events',
+    'event_recurrence',
+    'protocol_resolutions',
+    'resolution_challenges'
   ];
   t text;
   missing text[] := ARRAY[]::text[];
@@ -133,12 +176,11 @@ BEGIN
   IF array_length(missing, 1) IS NOT NULL THEN
     RAISE EXCEPTION
       'the anonymous public portal reads table(s) that do not exist: %. '
-      'These are KERNEL tables (003_calendar_schema.sql, 007_protocols.sql, '
-      '010_org_units.sql, 055_resolution_challenges.sql), not module-gated ones, '
-      'so a missing table means the migration replay is broken. news_posts is '
-      'deliberately not in this list: the content module migration '
-      '1200_content_news_posts.sql creates and grants it, so a content-OFF '
-      'install completes green with a working portal. '
+      'These are KERNEL tables (007_protocols.sql, 010_org_units.sql), not '
+      'module-gated ones, so a missing table means the migration replay is '
+      'broken. news_posts is deliberately not in this list: the content '
+      'module migration 1200_content_news_posts.sql creates and grants it, '
+      'so a content-OFF install completes green with a working portal. '
       'This migration refuses to grant a partial set and report success.',
       array_to_string(missing, ', ');
   END IF;
@@ -151,22 +193,20 @@ BEGIN
 
   -- REVOKE, not merely "absent from the list above".
   --
-  -- Dropping the two tables from portal_tables only changes what a FRESH
-  -- install converges on. Every database that ever ran 008_public_portal.sql
-  -- while the role still carried its old name already HOLDS those grants:
-  -- 008:40-48 granted SELECT on protocol_attendance and protocol_action_items
-  -- to the reader role under its retired name, and the data-layer rename that
-  -- ran in that tree (not in this repository) renamed the role in place —
-  -- Postgres keys privileges to the role OID, so the rename carried every grant
-  -- across.
-  -- Staging holds all nine tables today. Without these REVOKEs a fresh install
-  -- would have seven and every real deployment nine: permanent, invisible
-  -- configuration drift, which is the same defect class this migration exists
-  -- to close, merely inverted.
+  -- Dropping a table from portal_tables only changes what a FRESH install
+  -- converges on. Every database that ever ran a version of this file (or,
+  -- for protocol_attendance/protocol_action_items, 008_public_portal.sql)
+  -- that granted one of these under any name the reader role has ever held
+  -- already HOLDS that grant — Postgres keys privileges to the role OID, so
+  -- a role rename in place carries every grant across.
+  -- Without these REVOKEs a fresh install would hold only `portal_tables`
+  -- while every already-migrated deployment kept holding the wider set:
+  -- permanent, invisible configuration drift, which is the same defect class
+  -- this migration exists to close, merely inverted.
   --
-  -- Existence-guarded because a database restored from before 007_protocols.sql
-  -- has no such tables, and idempotent because REVOKE on a privilege that was
-  -- never granted is a no-op.
+  -- Existence-guarded because a database restored from before the table's own
+  -- creating migration has no such table, and idempotent because REVOKE on a
+  -- privilege that was never granted is a no-op.
   FOREACH t IN ARRAY revoked_tables LOOP
     IF EXISTS (
       SELECT FROM information_schema.tables
