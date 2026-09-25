@@ -43,6 +43,7 @@ const BASE = {
 }
 
 const NO_DOCKER = {}
+const OPTS = { dockerAllowlist: NO_DOCKER, traversalFixtures: [] }
 
 test('extractSpecifiers reads static, re-export, side-effect, dynamic, require and vi.mock forms', () => {
   const src = [
@@ -108,9 +109,9 @@ test('extractDockerCopySources skips --from= stages and reads every source of a 
 test('GREEN: a module whose imports stay inside it has zero findings', () => {
   const t = tree(BASE)
   try {
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     assert.deepEqual(r.problems, [])
-    assert.equal(r.filesScanned, 2)
+    assert.equal(r.filesScanned, 3) // two sources + package.json
     assert.ok(r.specifiers >= 1)
   } finally {
     t.cleanup()
@@ -124,7 +125,7 @@ test("RED: the seeded import from '../../../gremion-ui/src/lib/server/governance
       "import x from '../../../gremion-ui/src/lib/server/governance/org-units-db'\nexport default x\n",
   })
   try {
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     assert.ok(r.problems.some((p) => /modules\/finance\/src\/lib\/leak\.ts:1/.test(p) && /leaves modules\/finance/.test(p)), r.problems.join('\n'))
   } finally {
     t.cleanup()
@@ -134,7 +135,7 @@ test("RED: the seeded import from '../../../gremion-ui/src/lib/server/governance
 test("RED: the seeded import from '../../upstream/gremion/...'", () => {
   const t = tree({ ...BASE, 'modules/finance/src/up.ts': "export { p } from '../../upstream/gremion/packages/ports'\n" })
   try {
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     assert.ok(r.problems.some((p) => /modules\/finance\/src\/up\.ts:1/.test(p) && /upstream/.test(p)), r.problems.join('\n'))
   } finally {
     t.cleanup()
@@ -144,7 +145,7 @@ test("RED: the seeded import from '../../upstream/gremion/...'", () => {
 test('RED: a relative import into a SIBLING module leaves its own modules/<id>/', () => {
   const t = tree({ ...BASE, 'modules/finance/src/sib.ts': "import '../../calendar/src/x'\n" })
   try {
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     assert.ok(r.problems.some((p) => /sib\.ts:1/.test(p)))
   } finally {
     t.cleanup()
@@ -157,7 +158,7 @@ test('RED: an @stura* package, a StuRaOS segment, a services/ segment each fail'
     'modules/finance/src/pkg.ts': "import s from '@stura/kit'\nimport t from 'x/StuRaOS/y'\nimport u from 'z/services/finance/w'\n",
   })
   try {
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     const mine = r.problems.filter((p) => /pkg\.ts/.test(p))
     assert.equal(mine.length, 3, mine.join('\n'))
   } finally {
@@ -177,7 +178,7 @@ test('RED: require(), import(), vi.mock() and a path literal leaving the module 
     ].join('\n'),
   })
   try {
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     const mine = r.problems.filter((p) => /deep\.test\.ts/.test(p))
     assert.equal(mine.length, 5, mine.join('\n'))
   } finally {
@@ -192,7 +193,7 @@ test('RED: a nested dirname(fileURLToPath(import.meta.url)) base that climbs out
       "const k = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'k8s', 'base')\n",
   })
   try {
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     assert.ok(r.problems.some((p) => /nested\.test\.ts:1/.test(p) && /resolves to k8s\/base/.test(p)), r.problems.join('\n'))
   } finally {
     t.cleanup()
@@ -206,7 +207,7 @@ test('a path literal that stays inside the module is not a finding', () => {
       "const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'migrations')\nconst x = join(process.cwd(), 'migrations')\n",
   })
   try {
-    assert.deepEqual(scanModules(t.root, { dockerAllowlist: NO_DOCKER }).problems, [])
+    assert.deepEqual(scanModules(t.root, OPTS).problems, [])
   } finally {
     t.cleanup()
   }
@@ -216,12 +217,15 @@ test('RED: a Dockerfile COPY of upstream/ or services/ fails unless the reasoned
   const df = 'FROM node:26-alpine\nCOPY upstream/gremion/packages/ports ./p/\nCOPY services/finance ./s/\n'
   const t = tree({ ...BASE, 'modules/finance/Dockerfile': df })
   try {
-    let r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    let r = scanModules(t.root, OPTS)
     assert.equal(r.problems.filter((p) => /Dockerfile/.test(p)).length, 2)
-    r = scanModules(t.root, { dockerAllowlist: { 'modules/finance/Dockerfile': 'frozen build context (TASK-038)' } })
+    r = scanModules(t.root, {
+      traversalFixtures: [],
+      dockerAllowlist: { 'modules/finance/Dockerfile': { reason: 'frozen build context (TASK-038)', sources: ['upstream/gremion/packages/ports', 'services/finance'] } },
+    })
     assert.deepEqual(r.problems, [])
     assert.equal(r.allowed.length, 2)
-    r = scanModules(t.root, { dockerAllowlist: { 'modules/finance/Dockerfile': '' } })
+    r = scanModules(t.root, { traversalFixtures: [], dockerAllowlist: { 'modules/finance/Dockerfile': { reason: '', sources: [] } } })
     assert.ok(r.problems.some((p) => /reason/.test(p)))
   } finally {
     t.cleanup()
@@ -231,9 +235,9 @@ test('RED: a Dockerfile COPY of upstream/ or services/ fails unless the reasoned
 test('RED: a stale allowlist entry (no hit, or no file) fails', () => {
   const t = tree({ ...BASE, 'modules/finance/Dockerfile': 'FROM node:26-alpine\nCOPY package.json ./\n' })
   try {
-    let r = scanModules(t.root, { dockerAllowlist: { 'modules/finance/Dockerfile': 'r' } })
+    let r = scanModules(t.root, { traversalFixtures: [], dockerAllowlist: { 'modules/finance/Dockerfile': { reason: 'r', sources: ['services/finance'] } } })
     assert.ok(r.problems.some((p) => /stale/.test(p)))
-    r = scanModules(t.root, { dockerAllowlist: { 'modules/votes/Dockerfile': 'r' } })
+    r = scanModules(t.root, { traversalFixtures: [], dockerAllowlist: { 'modules/votes/Dockerfile': { reason: 'r', sources: ['services/votes'] } } })
     assert.ok(r.problems.some((p) => /modules\/votes\/Dockerfile/.test(p)))
   } finally {
     t.cleanup()
@@ -242,7 +246,14 @@ test('RED: a stale allowlist entry (no hit, or no file) fails', () => {
 
 test('the coupled-test list excuses exactly its own files, and is validated', () => {
   const coupled = {
-    entries: [{ path: 'modules/finance/test/yearend-parity.test.ts', reason: 'imports the StuRa app half', owner: 'TASK-205' }],
+    entries: [
+      {
+        path: 'modules/finance/test/yearend-parity.test.ts',
+        reason: 'imports the StuRa app half',
+        owner: 'TASK-205',
+        allows: ['gremion-ui/src/lib/server/finance'],
+      },
+    ],
   }
   const t = tree({
     ...BASE,
@@ -250,7 +261,7 @@ test('the coupled-test list excuses exactly its own files, and is validated', ()
     'modules/finance/test/yearend-parity.test.ts': "import { x } from '../../../gremion-ui/src/lib/server/finance/x'\n",
   })
   try {
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     assert.deepEqual(r.problems, [])
     assert.equal(r.allowed.length, 1)
     assert.deepEqual(coupledExcludes(t.root, 'finance'), ['--exclude', 'test/yearend-parity.test.ts'])
@@ -264,15 +275,19 @@ test('RED: COUPLED-TESTS.json refuses a missing reason, a missing owner, a nonex
   const t = tree({ ...BASE, 'modules/finance/test/clean.test.ts': "import { a } from '../src/a'\n" })
   try {
     const bad = (entries) => validateCoupledTests(t.root, { entries })
-    assert.ok(bad([{ path: 'modules/finance/test/clean.test.ts', owner: 'TASK-205' }]).some((p) => /reason/.test(p)))
-    assert.ok(bad([{ path: 'modules/finance/test/clean.test.ts', reason: 'r' }]).some((p) => /owner/.test(p)))
-    assert.ok(bad([{ path: 'modules/finance/test/nope.test.ts', reason: 'r', owner: 'TASK-205' }]).some((p) => /does not exist/.test(p)))
+    const A = ['gremion-ui/x']
+    assert.ok(bad([{ path: 'modules/finance/test/clean.test.ts', owner: 'TASK-205', allows: A }]).some((p) => /reason/.test(p)))
+    assert.ok(bad([{ path: 'modules/finance/test/clean.test.ts', reason: 'r', allows: A }]).some((p) => /owner/.test(p)))
+    assert.ok(bad([{ path: 'modules/finance/test/nope.test.ts', reason: 'r', owner: 'TASK-205', allows: A }]).some((p) => /does not exist/.test(p)))
+    assert.ok(bad([{ path: 'modules/finance/test/clean.test.ts', reason: 'r', owner: 'TASK-205' }]).some((p) => /allows/.test(p)))
+    // an exclusion outside the vitest include excludes nothing
+    assert.ok(bad([{ path: 'modules/finance/src/a.ts', reason: 'r', owner: 'TASK-205', allows: A }]).some((p) => /vitest include/.test(p)))
     assert.ok(validateCoupledTests(t.root, {}).some((p) => /entries/.test(p)))
     writeFileSync(
       join(t.root, 'modules/COUPLED-TESTS.json'),
-      JSON.stringify({ entries: [{ path: 'modules/finance/test/clean.test.ts', reason: 'r', owner: 'TASK-205' }] }),
+      JSON.stringify({ entries: [{ path: 'modules/finance/test/clean.test.ts', reason: 'r', owner: 'TASK-205', allows: ['gremion-ui/x'] }] }),
     )
-    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    const r = scanModules(t.root, OPTS)
     assert.ok(r.problems.some((p) => /stale/.test(p) && /clean\.test\.ts/.test(p)), r.problems.join('\n'))
     assert.throws(() => coupledExcludes(t.root, 'finance'), /stale|COUPLED/)
   } finally {
@@ -283,13 +298,13 @@ test('RED: COUPLED-TESTS.json refuses a missing reason, a missing owner, a nonex
 test('RED: the scan refuses zero files, and a missing COUPLED-TESTS.json', () => {
   const t = tree({ 'pnpm-workspace.yaml': WS_OK, 'modules/COUPLED-TESTS.json': '{"entries":[]}' })
   try {
-    assert.ok(scanModules(t.root, { dockerAllowlist: NO_DOCKER }).problems.some((p) => /zero/.test(p)))
+    assert.ok(scanModules(t.root, OPTS).problems.some((p) => /zero/.test(p)))
   } finally {
     t.cleanup()
   }
   const u = tree({ 'pnpm-workspace.yaml': WS_OK, 'modules/finance/package.json': '{}', 'modules/finance/a.ts': '' })
   try {
-    assert.ok(scanModules(u.root, { dockerAllowlist: NO_DOCKER }).problems.some((p) => /COUPLED-TESTS/.test(p)))
+    assert.ok(scanModules(u.root, OPTS).problems.some((p) => /COUPLED-TESTS/.test(p)))
   } finally {
     u.cleanup()
   }
@@ -335,4 +350,112 @@ test('disabled.json: each id is a private module with a reason; RED on an unknow
   } finally {
     t.cleanup()
   }
+})
+
+// ── review round 1: forms the first scan could not see, and per-finding allowances ──
+
+test('RED: every form the reviews found unseen is now a finding', () => {
+  const t = tree({
+    ...BASE,
+    'modules/finance/src/forms.ts': [
+      "const a = import.meta.resolve('../../../a')",
+      "const b = require.resolve('../../../b')",
+      "const req = createRequire(import.meta.url)",
+      "const c = req('../../../c')",
+      "const d = await import(/* @vite-ignore */ '../../../d')",
+      "export { e as \"e2\" } from '../../../e'",
+      "const f = readFileSync('../../gremion-ui/src/f')",
+      "const g = __dirname + '/../../../g'",
+      "const h = `${__dirname}/../../../h`",
+      "const i = path.resolve('../../../i')",
+      "const j = path.join('../..', 'j')",
+      "const k = path.resolve(__dirname, '/etc', 'passwd')",
+      "const l = path.join(__dirname, // don't\n '..', '..', '..', 'l')",
+      "const up = '../../..'",
+      "const m = join(__dirname, up, 'm')",
+    ].join('\n'),
+  })
+  try {
+    const r = scanModules(t.root, OPTS)
+    const lines = new Set(r.problems.filter((p) => /forms\.ts/.test(p)).map((p) => Number(/forms\.ts:(\d+)/.exec(p)[1])))
+    for (const n of [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16]) assert.ok(lines.has(n), `line ${n} not flagged:\n${r.problems.join('\n')}`)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('RED: a .tsx file, a Dockerfile.dev, a package.json link: dep and a tsconfig extends are scanned', () => {
+  const t = tree({
+    ...BASE,
+    'modules/finance/src/view.tsx': "import x from '../../../gremion-ui/x'\n",
+    'modules/finance/Dockerfile.dev': 'FROM node:26-alpine\nCOPY ../gremion-ui /x\n',
+    'modules/finance/package.json': '{"name":"finance-service","dependencies":{"k":"link:../../../StuRaOS/k"}}',
+    'modules/finance/tsconfig.json': '{ // c\n "extends": "../../gremion-ui/tsconfig.json", }',
+  })
+  try {
+    const r = scanModules(t.root, OPTS)
+    for (const f of ['src/view.tsx', 'Dockerfile.dev', 'package.json', 'tsconfig.json'])
+      assert.ok(r.problems.some((p) => p.includes(`modules/finance/${f}`)), `${f}:\n${r.problems.join('\n')}`)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('RED: a SvelteKit alias outside an app/ half fails; inside app/ it is counted, not judged', () => {
+  const t = tree({
+    ...BASE,
+    'modules/finance/src/alias.ts': "import { db } from '$lib/server/db'\n",
+    'modules/finance/app/lib/ok.ts': "import { db } from '$lib/server/db'\n",
+  })
+  try {
+    const r = scanModules(t.root, OPTS)
+    assert.ok(r.problems.some((p) => /src\/alias\.ts:1/.test(p) && /alias/.test(p)))
+    assert.ok(!r.problems.some((p) => /app\/lib\/ok\.ts/.test(p)))
+    assert.equal(r.aliases, 1)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('RED: an allowance is per finding — a second coupling in an allowlisted file, or an extra COPY, still fails', () => {
+  const t = tree({
+    ...BASE,
+    'modules/COUPLED-TESTS.json': JSON.stringify({
+      entries: [{ path: 'modules/finance/test/y.test.ts', reason: 'r', owner: 'TASK-205', allows: ['gremion-ui/src/lib/server/finance'] }],
+    }),
+    'modules/finance/test/y.test.ts':
+      "import a from '../../../gremion-ui/src/lib/server/finance/a'\nimport s from '../../../gremion-ui/src/lib/server/auth/session'\n",
+    'modules/finance/Dockerfile': 'FROM node:26-alpine\nCOPY services/finance ./s/\nCOPY ../../secrets /s\nCOPY services/board ./b/\n',
+  })
+  try {
+    const r = scanModules(t.root, {
+      traversalFixtures: [],
+      dockerAllowlist: { 'modules/finance/Dockerfile': { reason: 'r', sources: ['services/finance'] } },
+    })
+    assert.ok(r.problems.some((p) => /y\.test\.ts:2/.test(p) && /auth\/session/.test(p)), r.problems.join('\n'))
+    assert.ok(!r.problems.some((p) => /y\.test\.ts:1/.test(p)))
+    assert.ok(r.problems.some((p) => /Dockerfile:3 COPY \.\.\/\.\.\/secrets/.test(p)))
+    assert.ok(r.problems.some((p) => /Dockerfile:4 COPY services\/board/.test(p)))
+    assert.ok(!r.problems.some((p) => /Dockerfile:2 /.test(p)))
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('RED: a traversal-fixture allowance names one literal in one file, and goes stale loudly', () => {
+  const t = tree({ ...BASE, 'modules/finance/test/w.test.ts': "expect(() => p('../../etc/passwd')).toThrow()\n" })
+  try {
+    const fx = [{ file: 'modules/finance/test/w.test.ts', literal: '../../etc/passwd', reason: 'traversal input' }]
+    assert.deepEqual(scanModules(t.root, { dockerAllowlist: {}, traversalFixtures: fx }).problems, [])
+    assert.ok(scanModules(t.root, OPTS).problems.some((p) => /w\.test\.ts:1/.test(p)))
+    const stale = [...fx, { file: 'modules/finance/test/w.test.ts', literal: '../../gone', reason: 'r' }]
+    assert.ok(scanModules(t.root, { dockerAllowlist: {}, traversalFixtures: stale }).problems.some((p) => /stale/.test(p) && /gone/.test(p)))
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('the lexer ignores comments and keeps quotes inside regex literals from opening strings', () => {
+  const src = "// import x from '../../../commented'\nconst re = /from ['\"][^'\"]*x['\"]/\n/* require('../../../block') */\nimport y from './y'\n"
+  assert.deepEqual(extractSpecifiers(src).map((s) => s.spec), ['./y'])
 })
