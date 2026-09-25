@@ -208,23 +208,46 @@ atomic_write() {
     fi
 }
 
-# The directory the env templates live in: <lib>/../templates/env, which is
-# the source tree's infra/host/templates/env and the host's
-# /opt/gremion/templates/env alike (bin/, lib/ and templates/ are installed side
-# by side). GREMION_ENV_TEMPLATE_DIR overrides it for tests.
+# Where the env templates live. In a source tree or release checkout that is
+# <lib>/../templates/env. The INSTALLED layout (bootstrap puts only bin/ and
+# lib/ under /opt/gremion) has none there, so the active release's copy under
+# <root>/current is tried next. GREMION_ENV_TEMPLATE_DIR overrides both, and is
+# then the ONLY place looked in.
 GREMION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# env_template_for <env-file> -> the template path a host env file is rendered
-# from, or nothing for a file that is not one of the five host env files.
-env_template_for() {
-    local dir="${GREMION_ENV_TEMPLATE_DIR:-${GREMION_LIB_DIR}/../templates/env}"
+env_template_dirs() {
+    if [[ -n "${GREMION_ENV_TEMPLATE_DIR:-}" ]]; then
+        printf '%s\n' "$GREMION_ENV_TEMPLATE_DIR"
+        return 0
+    fi
+    printf '%s\n' "${GREMION_LIB_DIR}/../templates/env" \
+        "$(gremion_root)/current/infra/host/templates/env"
+}
+
+# env_template_name <env-file> -> the template file name a host env file is
+# rendered from, or nothing for a file that is not one of the five.
+env_template_name() {
     case "$(basename "$1")" in
-        state.env)                 printf '%s\n' "${dir}/state.env.tmpl" ;;
-        app-blue.env|app-green.env) printf '%s\n' "${dir}/app.env.tmpl" ;;
-        mail.env)                  printf '%s\n' "${dir}/mail.env.tmpl" ;;
-        ops.env)                   printf '%s\n' "${dir}/ops.env.tmpl" ;;
+        state.env)                  printf '%s\n' state.env.tmpl ;;
+        app-blue.env|app-green.env) printf '%s\n' app.env.tmpl ;;
+        mail.env)                   printf '%s\n' mail.env.tmpl ;;
+        ops.env)                    printf '%s\n' ops.env.tmpl ;;
         *) ;;
     esac
+}
+
+# env_template_for <env-file> -> the first existing template for it along
+# env_template_dirs, or nothing (not one of the five, or no template reachable).
+env_template_for() {
+    local name dir
+    name="$(env_template_name "$1")"
+    [[ -n "$name" ]] || return 0
+    while IFS= read -r dir; do
+        if [[ -f "${dir}/${name}" ]]; then
+            printf '%s\n' "${dir}/${name}"
+            return 0
+        fi
+    done < <(env_template_dirs)
 }
 
 # secret_marked_keys <template> -> every key whose template value carries a
@@ -250,15 +273,32 @@ secret_marked_keys() {
 #   - an EMPTY value for a key the template marks secret (its template value
 #     carries CHANGE_ME_GEN_). ALLOW_SENTINELS does not waive this: an empty
 #     secret is not an unfinished file, it is a broken one. The template is
-#     <template> when given, else the one the file name maps to (state.env,
-#     app-blue.env, app-green.env, mail.env, ops.env); for one of those five
-#     names a missing template is itself a refusal, never a skipped check.
+#     <template> when given -- then it MUST exist -- else the one the file name
+#     maps to (state.env, app-blue.env, app-green.env, mail.env, ops.env),
+#     looked up along env_template_dirs; with GREMION_ENV_TEMPLATE_DIR set it
+#     must exist there too.
+#     ONE deliberate exception: an installed program (no templates beside
+#     lib/) with no release under <root>/current cannot find the template at
+#     all. Refusing there would stop gremion-verify and gremion-backup on the
+#     host itself, so load_env says LOUDLY on stderr that this one check did
+#     not run, and runs every other refusal. gremion-validate-env, the gate an
+#     operator runs before `up`, never takes this exception.
 load_env() {
     local file="${1:-}" tmpl="${2:-}"
     [[ -n "$file" ]] || die "load_env: usage: load_env <file> [<template>]" "$GREMION_EXIT_USAGE"
     [[ -f "$file" ]] || die "load_env: no such env file: ${file}" "$GREMION_EXIT_USAGE"
 
-    [[ -n "$tmpl" ]] || tmpl="$(env_template_for "$file")"
+    if [[ -z "$tmpl" && -n "$(env_template_name "$file")" ]]; then
+        tmpl="$(env_template_for "$file")"
+        if [[ -z "$tmpl" ]]; then
+            if [[ -n "${GREMION_ENV_TEMPLATE_DIR:-}" ]]; then
+                die "load_env: ${file}: no $(env_template_name "$file") template in GREMION_ENV_TEMPLATE_DIR=${GREMION_ENV_TEMPLATE_DIR}; cannot tell which keys are secret" \
+                    "$GREMION_EXIT_USAGE"
+            fi
+            printf '%s  WARN%s load_env: %s: no %s reachable (not beside lib/, not under %s/current); the empty-secret check did NOT run -- run gremion-validate-env from a release tree\n' \
+                "$C_BAD" "$C_OFF" "$file" "$(env_template_name "$file")" "$(gremion_root)" >&2
+        fi
+    fi
     local -A secret_key=()
     if [[ -n "$tmpl" ]]; then
         [[ -f "$tmpl" ]] \

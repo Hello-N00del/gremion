@@ -407,6 +407,51 @@ set_key() {
     [[ "$output" == *"template"* ]]
 }
 
+# The INSTALLED layout: bootstrap puts only bin/ and lib/ under the root, so no
+# template sits beside lib/. The active release's copy is used when present...
+install_lib_only() {
+    mkdir -p "${GREMION_ROOT}/lib"
+    cp "$COMMON_SH" "${GREMION_ROOT}/lib/common.sh"
+    printf '%s' "${GREMION_ROOT}/lib/common.sh"
+}
+
+@test "installed layout: the template under <root>/current is used, so an empty secret is still refused" {
+    render_real_env
+    local lib; lib="$(install_lib_only)"
+    mkdir -p "${GREMION_ROOT}/current/infra/host/templates"
+    cp -r "${HOST_SRC}/templates/env" "${GREMION_ROOT}/current/infra/host/templates/env"
+    set_key "${GREMION_ROOT}/etc/env/state.env" AUTH_SECRET ''
+    run bash -c 'set -euo pipefail; . "$0"; ALLOW_SENTINELS=1 load_env "$1"' \
+        "$lib" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"AUTH_SECRET"* ]]
+}
+
+# ...and with no release at all it says LOUDLY that the one check did not run,
+# while every other refusal still holds.
+@test "installed layout, no release: a loud WARN, the other refusals still run" {
+    render_real_env
+    local lib; lib="$(install_lib_only)"
+    run bash -c 'set -euo pipefail; . "$0"; ALLOW_SENTINELS=1 load_env "$1"; echo LOADED' \
+        "$lib" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WARN"* ]]
+    [[ "$output" == *"empty-secret check did NOT run"* ]]
+    [[ "$output" == *"LOADED"* ]]
+    printf 'STACK=dup\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    run bash -c 'set -euo pipefail; . "$0"; ALLOW_SENTINELS=1 load_env "$1"' \
+        "$lib" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"duplicate key"* ]]
+}
+
+@test "an explicit template argument that does not exist is a refusal, never a skip" {
+    printf 'A=1\n' > "${GREMION_ROOT}/t.env"
+    run_with 'load_env "$1" "$2"' "${GREMION_ROOT}/t.env" "${GREMION_ROOT}/absent.tmpl"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"absent.tmpl"* ]]
+}
+
 @test "load_env never echoes a malformed line (it may hold a secret)" {
     printf 'A=1\nexport LEAKY=fake-secret-value-0000\n' > "${GREMION_ROOT}/t.env"
     run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
