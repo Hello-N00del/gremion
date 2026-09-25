@@ -19,6 +19,12 @@ import {
   type TenantInput,
 } from './registry'
 import { reservedPlatformHosts } from './reserved-hosts'
+// TASK-025 round-2 fix (MED #1, verify-round1.md residual "(e)"): the
+// registry.ts wrapper never exposes a seam to force the real ON-CONFLICT
+// interleave, so this suite drops down to tenant-domain.ts's own
+// addTenantDomain directly — the ONLY caller in the whole tree allowed to set
+// afterOwnerPreRead (a test-only hook, never wired by registry.ts).
+import { addTenantDomain as tdAddTenantDomainDirect } from './tenant-domain'
 
 const SLUG = 'rat-musterstadt'
 let tenantId: string
@@ -279,6 +285,41 @@ describe('concurrent claim on one never-before-claimed host', () => {
     const rows = await getControlDb()<Array<{ tenant_id: string }>>`
       SELECT tenant_id FROM tenant_domain WHERE host = ${host}`
     expect(rows).toHaveLength(1)
+    await getControlDb()`DELETE FROM tenant WHERE slug = 'rat-anderstadt'`
+  })
+
+  // TASK-025 round-2 fix (verify-round1.md residual "(e)" / MED #1): the
+  // Promise.allSettled race above is UNDEFINED-SCHEDULING — in 8 verifier runs
+  // the loser always lost at the serialized FOR UPDATE pre-read ("already
+  // registered to tenant"), never at the ON CONFLICT ... WHERE guard, so
+  // dropping that WHERE clause left the suite green 3/3. This test forces the
+  // ONE interleave the pre-read can never observe: B's own transaction reads
+  // NO owner (the host has never been claimed), then — via the afterOwnerPreRead
+  // test seam — a raw INSERT on a SEPARATE connection commits A's ownership of
+  // the SAME host, and only THEN does B's own INSERT ... ON CONFLICT execute
+  // and collide with a row it never saw at its pre-read.
+  it('forces the true ON CONFLICT interleave: a commit lands between the pre-read and the upsert, so the loser hits the WHERE guard, not the pre-read', async () => {
+    const other = await registerTenant(inputFor('rat-anderstadt'))
+    const host = 'raced.rat-musterstadt.de'
+    const sql = getControlDb()
+    let evicted = false
+    await expect(
+      tdAddTenantDomainDirect(sql, other.id, host, {}, {
+        platformDomain: process.env.PLATFORM_DOMAIN ?? '',
+        onEvict: () => { evicted = true },
+        afterOwnerPreRead: async () => {
+          // A SECOND connection (the pool, not the open tx) — commits
+          // immediately, independent of `other`'s still-open transaction.
+          await sql`INSERT INTO tenant_domain (host, tenant_id) VALUES (${host}, ${tenantId})`
+        },
+      }),
+    ).rejects.toThrow(/claimed by another tenant concurrently/)
+    // The loser's refusal must not have been paired with an eviction notice.
+    expect(evicted).toBe(false)
+    // The row still belongs to A (tenantId) — no takeover, no second row.
+    const rows = await getControlDb()<Array<{ tenant_id: string }>>`
+      SELECT tenant_id FROM tenant_domain WHERE host = ${host}`
+    expect(rows).toEqual([{ tenant_id: tenantId }])
     await getControlDb()`DELETE FROM tenant WHERE slug = 'rat-anderstadt'`
   })
 })

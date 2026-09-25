@@ -139,6 +139,19 @@ export interface TenantDomainWriteDeps {
    *  (resolution caches, pools, KC/JWKS/mail clients, …) must be evicted.
    *  Never called for a refused write. */
   onEvict: (tenantId: string) => void
+  /**
+   * TEST-ONLY seam (TASK-025 round-2 fix, verify-round1.md residual "(e)" /
+   * MED #1): invoked once inside the transaction, immediately after the owner
+   * pre-read resolves and BEFORE this call's own INSERT ... ON CONFLICT runs.
+   * Defaults to a no-op and MUST NEVER be set by a production wrapper —
+   * registry.ts's addTenantDomain never sets it. It exists solely so
+   * registry.domain.integration.test.ts can force the ON-CONFLICT interleave
+   * DETERMINISTICALLY (a second connection commits a competing owner between
+   * this call's pre-read and its own upsert) instead of relying on
+   * Promise.allSettled's undefined scheduling, which never actually reached
+   * that code path in 8 verifier runs.
+   */
+  afterOwnerPreRead?: () => void | Promise<void>
 }
 
 /**
@@ -197,6 +210,9 @@ export async function addTenantDomain(
       const t = await tx<Array<{ slug: string }>>`SELECT slug FROM tenant WHERE id = ${tenantId}`
       if (!t[0]) throw new Error(`addTenantDomain: unknown tenant id ${tenantId}`)
     }
+    // TEST-ONLY seam — see TenantDomainWriteDeps.afterOwnerPreRead. A no-op in
+    // every production call (registry.ts never sets it).
+    if (deps.afterOwnerPreRead) await deps.afterOwnerPreRead()
     if (isPrimary) {
       await tx`UPDATE tenant_domain SET is_primary = false
                WHERE tenant_id = ${tenantId} AND is_primary AND host <> ${host}`
