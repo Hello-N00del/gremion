@@ -171,6 +171,7 @@ class MatrixService extends ChangeNotifier {
         try {
           await _client.clearCache();
         } catch (_) {}
+        await _disposeClient();
         if (_dbPath != null) {
           try {
             // Delete only the DB file — keep the SQLCipher key so the rebuilt
@@ -359,6 +360,7 @@ class MatrixService extends ChangeNotifier {
   /// same rebuild the OLM-reset path performs. The rebuild mints a new key +
   /// encrypted DB (key was just evicted), which is exactly what we want.
   Future<void> deleteLocalDatabase() async {
+    if (_initialized) await _disposeClient();
     final path = _dbPath;
     if (path != null) {
       try {
@@ -382,6 +384,18 @@ class MatrixService extends ChangeNotifier {
           name: 'MatrixService', error: e);
     }
     notifyListeners();
+  }
+
+  /// Closes the current client and its database connection before the DB
+  /// file is deleted and a new client is built on the same path, so no
+  /// stale connection to the deleted file stays open.
+  Future<void> _disposeClient() async {
+    try {
+      await _client.dispose(closeDatabase: true);
+    } catch (e) {
+      developer.log('Matrix client dispose failed',
+          name: 'MatrixService', error: e);
+    }
   }
 
   @override

@@ -57,12 +57,10 @@
     -->
 
     <!--
-        G-046: no NSAppTransportSecurity exception in this (Release/Profile)
-        plist. Debug builds use Info-Debug.plist instead (selected by
-        INFOPLIST_FILE in Flutter/Debug.xcconfig), which is this file plus
-        NSAppTransportSecurity { NSAllowsLocalNetworking = true } for
-        plain-HTTP dev services. test/guards/ios_info_plist_guard_test.dart
-        keeps the two files identical apart from that one key.
+        G-046: DEBUG plist (selected by INFOPLIST_FILE in
+        Flutter/Debug.xcconfig). Identical to Info.plist, which Release and
+        Profile use, except for the NSAppTransportSecurity exception below;
+        test/guards/ios_info_plist_guard_test.dart enforces that.
     -->
 
     <!--
