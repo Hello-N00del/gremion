@@ -73,10 +73,12 @@ export function checkEvidence(text) {
 //     rewriting them would falsify the record. It is also the only tracked path
 //     under docs/superpowers — B0 un-ignores exactly
 //     docs/superpowers/specs/spec-{b,d}-*.md and nothing else.
-//  2. The `tree-stale` fixture EXISTS to carry a stale tag: it is what proves
-//     `--tree` goes RED. Excluding the whole `postgres-major` fixture directory
-//     would also excuse `tree-clean`, so the rule names `tree-stale` alone and
-//     `tree-clean` stays scanned like any other file (and is pinned).
+//  2. The `tree-stale` and `tree-stale-module` fixtures EXIST to carry a stale
+//     tag: they are what prove `--tree` goes RED (the second one digest-pinned
+//     on an older major, TASK-019). Excluding the whole `postgres-major` fixture
+//     directory would also excuse `tree-clean`, so the rule names the two stale
+//     trees alone and `tree-clean` stays scanned like any other file (and is
+//     pinned).
 //  3. `k8s/**` is FROZEN (decision D16): the Kubernetes manifests are not a
 //     release-1 deployment target, nobody edits them, and a pin nobody may
 //     write cannot be demanded of them. They keep the major-only tag they
@@ -84,7 +86,7 @@ export function checkEvidence(text) {
 //     `infra/k8s/` would still be scanned.
 export const EXCLUDED = [
   /^docs\/superpowers\/specs\//,
-  /^test\/host\/fixtures\/postgres-major\/tree-stale\//,
+  /^test\/host\/fixtures\/postgres-major\/tree-stale(-module)?\//,
   /^k8s\//,
 ]
 

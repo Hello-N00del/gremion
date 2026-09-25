@@ -768,3 +768,32 @@ test('the committed docker-compose.yml carries the full, correct module set', ()
   const labelled = composeServices(text).filter((s) => s.label)
   assert.equal(labelled.length, 1 + MODULE_POSTGRES_IDS.length)
 })
+
+// ── TASK-019: a per-module server left on an older major, digest and all ────
+
+test('TDD-5: --tree goes RED on tree-stale-module, a digested leaf on an older major', () => {
+  const files = fragmentFiles(join(FIX, 'tree-stale-module'))
+  assert.equal(files.length, 1, 'fixture precondition: one fragment')
+  const hits = scanText(files[0].path, files[0].text)
+  assert.equal(hits.length, 1, JSON.stringify(hits))
+  // read OFF the fixture, so a fixture that rotted to the pin fails here
+  assert.match(hits[0].digest ?? '', /^sha256:[0-9a-f]{64}$/, 'fixture precondition: it carries a digest')
+  assert.notEqual(hits[0].tag.split('-')[0], String(POSTGRES_MAJOR), 'fixture precondition: it is stale')
+  const problems = checkFiles(files)
+  assert.ok(problems.some((p) => p.startsWith(`mismatched: compose/calendar.yml:${hits[0].line} ${hits[0].ref}@`)),
+    problems.join('\n'))
+})
+
+test('TDD-5: tree-clean carries the digest pin and passes every --tree check', () => {
+  const files = fragmentFiles(join(FIX, 'tree-clean'))
+  const hits = scanText(files[0].path, files[0].text)
+  assert.equal(hits[0].digest, POSTGRES_IMAGE_DIGEST)
+  assert.deepEqual([...checkFiles(files), ...checkDataMounts(files), ...checkComposeServices(files)], [])
+})
+
+test('the stale-fixture rule names exactly the two stale fixtures, not tree-clean', () => {
+  const hit = (p) => EXCLUDED.filter((re) => re.test(p)).length
+  assert.equal(hit('test/host/fixtures/postgres-major/tree-stale-module/compose/calendar.yml'), 1)
+  assert.equal(hit('test/host/fixtures/postgres-major/tree-clean/compose/calendar.yml'), 0)
+  assert.equal(hit('test/host/fixtures/postgres-major/tree-stale-other/compose/calendar.yml'), 0)
+})
