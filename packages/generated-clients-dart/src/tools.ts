@@ -58,12 +58,25 @@ export interface Tool {
 interface ResolveOpts {
   env?: NodeJS.ProcessEnv
   log?: (m: string) => void
+  /** per-run wall clock limit; a hung pub get (proxy stall) or generator
+   *  fails closed instead of blocking the check forever */
+  timeoutMs?: number
 }
 
-function probe(cmd: string, args: string[], env: NodeJS.ProcessEnv): { ok: boolean; out: string } {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', env })
-  if (r.error) return { ok: false, out: '' }
-  return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() }
+export const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000
+
+/** A run that was killed (timeout) or never started is not a verdict. */
+function notRun(describe: string, r: ReturnType<typeof spawnSync>, timeoutMs: number): string | null {
+  if (r.error && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') return `${describe} timed out after ${timeoutMs} ms and was killed — it did not finish`
+  if (r.error) return `${describe} did not run: ${r.error.message}`
+  if (r.status === null) return `${describe} did not finish (killed by ${r.signal ?? 'a signal'})`
+  return null
+}
+
+function probe(cmd: string, args: string[], env: NodeJS.ProcessEnv): { ok: boolean; found: boolean; status: number | null; out: string } {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', env, timeout: 120_000 })
+  if (r.error && (r.error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: false, found: false, status: null, out: '' }
+  return { ok: !r.error && r.status === 0, found: true, status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() }
 }
 
 export function dockerDaemonAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -81,14 +94,15 @@ function failClosed(what: string, tried: string[]): Error {
   )
 }
 
-function pathTool(bin: string, describe: string, env: NodeJS.ProcessEnv, prefix: string[] = []): Tool {
+function pathTool(bin: string, describe: string, env: NodeJS.ProcessEnv, prefix: string[] = [], timeoutMs = DEFAULT_TIMEOUT_MS): Tool {
   return {
     describe,
     kind: 'path',
     run(args, o) {
-      const r = spawnSync(bin, [...prefix, ...args], { cwd: join(o.workDir, o.cwd ?? '.'), env, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+      const r = spawnSync(bin, [...prefix, ...args], { cwd: join(o.workDir, o.cwd ?? '.'), env, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: timeoutMs, killSignal: 'SIGKILL' })
       const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
-      if (r.error) throw new Error(`${describe} did not run: ${r.error.message}`)
+      const why = notRun(describe, r, timeoutMs)
+      if (why) throw new Error(`${why}\n${out}`)
       if (r.status !== 0) throw new Error(`${describe} ${args.join(' ')} exited ${r.status}:\n${out}`)
       return out
     },
@@ -99,7 +113,7 @@ function loopbackProxy(env: NodeJS.ProcessEnv): boolean {
   return PROXY_VARS.slice(0, 4).some((k) => /^[a-z]+:\/\/(?:[^@/]*@)?(?:127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(env[k] ?? ''))
 }
 
-function dockerTool(image: string, env: NodeJS.ProcessEnv, prefix: string[], extra: (o: RunOpts) => string[]): Tool {
+function dockerTool(image: string, env: NodeJS.ProcessEnv, prefix: string[], extra: (o: RunOpts) => string[], timeoutMs = DEFAULT_TIMEOUT_MS): Tool {
   const describe = `${image} (docker)`
   return {
     describe,
@@ -122,9 +136,10 @@ function dockerTool(image: string, env: NodeJS.ProcessEnv, prefix: string[], ext
       const dockerArgs = ['run', '--rm', '--pull', 'never', '--name', name, ...user, ...net, ...passEnv,
         '-e', 'HOME=/tmp', '-v', `${o.workDir}:/work`, ...extra(o), '-w', cwd, image, ...prefix, ...args]
       try {
-        const r = spawnSync('docker', dockerArgs, { env, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+        const r = spawnSync('docker', dockerArgs, { env, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: timeoutMs, killSignal: 'SIGKILL' })
         const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
-        if (r.error) throw new Error(`${describe} did not run: ${r.error.message}`)
+        const why = notRun(describe, r, timeoutMs) // the container itself is killed by the rm -f below
+        if (why) throw new Error(`${why}\n${out}`)
         if (r.status === null || DOCKER_ENGINE_FAILURE.has(r.status)) {
           throw new Error(`${describe} did not run (docker exit ${r.status}: engine/daemon error, not a tool verdict):\n${out}`)
         }
@@ -155,10 +170,14 @@ export function localGenerator(opts: ResolveOpts = {}, tried: string[] = []): To
   let seen = false
   for (const cand of ['openapi-generator-cli', 'openapi-generator']) {
     const p = probe(cand, ['version'], env)
-    if (!p.ok) continue
+    if (!p.found) continue
     seen = true
+    if (!p.ok) {
+      tried.push(`PATH ${cand} found but \`${cand} version\` exited ${p.status ?? 'abnormally'}: ${p.out.split('\n')[0]}`)
+      continue
+    }
     const v = p.out.split('\n').pop()?.trim() ?? ''
-    if (v === GENERATOR_VERSION) return pathTool(cand, `${cand} (PATH, version ${v})`, env)
+    if (v === GENERATOR_VERSION) return pathTool(cand, `${cand} (PATH, version ${v})`, env, [], opts.timeoutMs)
     tried.push(`PATH ${cand} reports version "${v}", pinned is ${GENERATOR_VERSION}`)
     opts.log?.(`ignoring ${cand} on PATH: version "${v}" is not the pinned ${GENERATOR_VERSION}`)
   }
@@ -173,7 +192,7 @@ export function resolveGenerator(opts: ResolveOpts = {}): Tool {
   const local = localGenerator(opts, tried)
   if (local) return local
   dockerFallback(GENERATOR_IMAGE, env, tried, `openapi-generator ${GENERATOR_VERSION}`)
-  return dockerTool(GENERATOR_IMAGE, env, [], () => [])
+  return dockerTool(GENERATOR_IMAGE, env, [], () => [], opts.timeoutMs)
 }
 
 function dartVersionOf(bin: string, env: NodeJS.ProcessEnv): string | null {
@@ -189,13 +208,13 @@ export function localDart(opts: ResolveOpts = {}, tried: string[] = []): Tool | 
   const explicit = env.DART_BIN
   if (explicit) {
     const v = existsSync(explicit) ? dartVersionOf(explicit, env) : null
-    if (v === DART_SDK_VERSION) return pathTool(explicit, `${explicit} ($DART_BIN, SDK ${v})`, env, DART_PREFIX)
+    if (v === DART_SDK_VERSION) return pathTool(explicit, `${explicit} ($DART_BIN, SDK ${v})`, env, DART_PREFIX, opts.timeoutMs)
     throw failClosed(`Dart SDK ${DART_SDK_VERSION}`, [
       v === null ? `$DART_BIN (${explicit}) does not exist or does not run` : `$DART_BIN (${explicit}) is SDK "${v}", pinned is ${DART_SDK_VERSION}`,
     ])
   }
   const v = dartVersionOf('dart', env)
-  if (v === DART_SDK_VERSION) return pathTool('dart', `dart (PATH, SDK ${v})`, env, DART_PREFIX)
+  if (v === DART_SDK_VERSION) return pathTool('dart', `dart (PATH, SDK ${v})`, env, DART_PREFIX, opts.timeoutMs)
   if (v === null) tried.push('no $DART_BIN, no dart on PATH')
   else {
     tried.push(`PATH dart is SDK "${v}", pinned is ${DART_SDK_VERSION}`)
@@ -215,5 +234,5 @@ export function resolveDart(opts: ResolveOpts = {}): Tool {
   return dockerTool(DART_IMAGE, env, ['dart', ...DART_PREFIX], () => {
     mkdirSync(DOCKER_PUB_CACHE, { recursive: true }) // else docker creates it root-owned
     return ['-v', `${DOCKER_PUB_CACHE}:/pub-cache`, '-e', 'PUB_CACHE=/pub-cache']
-  })
+  }, opts.timeoutMs)
 }

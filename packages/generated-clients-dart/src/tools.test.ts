@@ -103,3 +103,16 @@ describe('resolveDart', () => {
     expect(resolveDart({ env: env() }).describe).toContain(DART_IMAGE)
   })
 })
+
+describe('run hygiene', () => {
+  it('a PATH generator whose version probe fails is named as such, not as absent', () => {
+    fakeBin('openapi-generator-cli', 'echo "java: not found" >&2; exit 127')
+    expect(() => resolveGenerator({ env: env() })).toThrow(/openapi-generator-cli.*version.*exited 127/)
+  })
+
+  it('a hung tool is killed at the timeout and reported as not having run', () => {
+    fakeBin('openapi-generator-cli', `[ "$1" = version ] && { echo ${GENERATOR_VERSION}; exit 0; }; while :; do :; done`)
+    const g = resolveGenerator({ env: env(), timeoutMs: 300 })
+    expect(() => g.run(['generate'], { workDir: bin })).toThrow(/timed out|did not (run|finish)/)
+  })
+})
