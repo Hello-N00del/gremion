@@ -10,6 +10,11 @@ subject grammar is derived from, and oasdiff test fixtures:
 - `calendar/asyncapi.calendar.json` — AsyncAPI 3.0, calendar event lifecycle
 - `content/asyncapi.content.json` — AsyncAPI 3.0, content publish lifecycle
 - `fixtures/oasdiff/` — base/breaking/compatible fixtures for the self-test gate
+- `registry.json` — DB-PLT-API-CONTRACT / DB-PLT-EVENT-TYPE registry: every
+  first-party spec, one entry each (see §6)
+- `fixtures/compat/{openapi,asyncapi}/` — version-bump-rule fixtures (§6)
+- `schema/module-contracts.schema.json` — a module's provides/requires
+  declaration shape (§6, TASK-077's input)
 
 **JSON not YAML:** no YAML parser dependency exists in the repo, and NEW-FILES-ONLY
 forbids adding one. oasdiff and all OpenAPI/AsyncAPI tooling fully support JSON.
@@ -66,9 +71,15 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
    problem. It does NOT run oasdiff — breaking-change detection needs a staged diff, so
    it lives in `--staged`. Both document lists are DISCOVERED from `contracts/kernel/`,
    not hardcoded, and each refuses to report OK when it finds no document to validate.
-   Its scope is `contracts/kernel/` only: `contracts/calendar/` and `contracts/content/`
-   describe module leaves that ship in their own repositories and are validated by no
-   mode here — an open gap recorded in [`../KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
+   Its scope is `contracts/kernel/` only. `contracts/calendar/` and `contracts/content/`
+   describe module leaves that ship in their own repositories; they are **not**
+   validated by this mode, but they ARE validated — TASK-030 (§6 below) closed
+   the gap `../KNOWN_ISSUES.md`'s "Two contract documents are validated by no
+   mode" entry describes: `@gremion/generated-clients`'s `registry.ts`/`schema.ts`
+   structurally validate and `$ref`-close all four registered specs, including
+   calendar and content, on every `pnpm --filter @gremion/generated-clients
+   test` and `contracts:check` run. That entry is stale and pending an
+   operator edit to `KNOWN_ISSUES.md` (out of this package's ownership).
 3. The `contracts-real-specs.test.ts` test enforces route/spec coverage equivalence
    (every kernel route operation appears in spec; no phantom spec operations).
 
