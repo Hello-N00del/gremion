@@ -93,29 +93,43 @@ appendix is filled in; its terms were checked by the bump script, not by hash.
 
 ## 5. The marketing-copy check
 
-The plan pairs this register with a CI grep over marketing copy that fails when a
-licence string there diverges from the register, and that also enforces the elections
-wording rules in [elections-scope.md](elections-scope.md). **That grep is not built in
-this change** (see the delivery note in section 7). What it must check, so it can be
-built without re-deriving the rule:
+The CI grep over marketing copy that the plan pairs with this register is
+`ops/scripts/marketing-copy-check.mjs`. It runs as `make lint-compliance`, which is part
+of `make lint` and a step of the CI lint job; its suite
+(`ops/scripts/marketing-copy-check.test.mjs`) runs first, and the number of tests it
+collected is checked against the number it declares. It reads its rules from the
+records, so this page and the check cannot drift apart:
 
 - **Scope ("marketing copy"):** the repository `README.md`, `docs/about-gremion.md`,
-  the public portal's user-facing strings (`gremion-public/`), the product's UI strings
-  (`gremion-ui/src/lib/i18n/`), and — once they exist — the offer, the website text, the
-  trust document and any demo script, in German and English.
-- **Licence rule:** any sentence in scope that names a system from section 2 together
-  with a licence name or SPDX identifier must use that system's "SPDX expression" or
-  "Plain wording" value; anything else fails. A licence named for a system not in the
-  register fails.
-- **Elections rule:** the forbidden phrasings of elections-scope.md section 2 fail
-  wherever they appear in scope.
-- **Vacuity guard:** the check must assert that its scope matched a non-zero number of
-  files, so that a moved directory cannot turn "no violations" into "nothing scanned".
+  the public portal's sources (`gremion-public/src/`), the product's UI strings
+  (`gremion-ui/src/lib/i18n/`), and, from the day they exist, `docs/sales/`,
+  `docs/marketing/`, `docs/trust/` and `docs/onboarding/` (the offer, the website text,
+  the trust document, demo scripts and onboarding material belong there). Test files
+  are not copy and are skipped.
+- **Licence rule:** in any sentence in scope that names a system from section 2, every
+  licence name or SPDX identifier is attributed to the nearest system name and must lie
+  inside that system's "SPDX expression" or "Plain wording" value, read from the table
+  above. Anything else fails, including a correct family with a wrong "only" /
+  "or later". A licence named for a system with no row fails.
+- **Elections rule:** the forbidden phrasings of elections-scope.md section 2, read from
+  its table, fail wherever they appear in scope, and so do general assertions that
+  elections are lawful or that the module is fit, approved or certified for statutory
+  use (German and English).
+- **Vacuity guards:** the check exits 2, which fails CI as surely as a violation, when a
+  required scope entry is missing or yields no file, when the register lacks a row for
+  any of the seven systems, or when the elections table yields no phrasings.
 
-**Measured state on 2026-09-25:** a search of this repository for any of the seven
-system names within the same line as a licence name found **no licence claim** for any
-of them outside planning specifications; the only licence statements that name a
-bundled system are the Helios rows of this register and of elections-scope.md.
+What it cannot see: a licence stated for a system under a name the check does not know
+(it knows the names in section 2), and copy that lives outside this repository. Such copy
+is checked against this register by hand before it is published.
+
+**Measured state on 2026-09-25:** the first run of the check found one divergence:
+`docs/about-gremion.md` listed the public module repositories as "AGPL-3.0-only" and
+named Helios and Nextcloud in the same sentence, which reads as a licence claim for
+both (Helios is Apache-2.0 and Nextcloud AGPL-3.0-or-later, per section 2). The
+sentence was reworded in the same change to keep the first-party module licence apart
+from the wrapped systems' own licences. No other licence claim for a section 2 system
+was found in scope.
 
 ## 6. Out of scope here
 
@@ -141,6 +155,7 @@ own `LICENSE` and `NOTICE` and is not a third-party row.
   date-bound to about 2027-02); R23-24 (2026-09-25: pull standing and later units forward
   and run them in parallel), which is why the register is written now.
 - **Delivery note (TASK-005):** the plan entry owns three files — this register,
-  elections-scope.md and the Helios bump script. The CI marketing-copy grep named in the
-  same acceptance has no owned file, so it is specified in section 5 and left for the
-  unit that owns a `verify` script.
+  elections-scope.md and the Helios bump script. The acceptance also requires the CI
+  marketing-copy grep, which has no owned file; it was added as
+  `ops/scripts/marketing-copy-check.mjs` next to the bump script, with a `lint-compliance`
+  Makefile target and a CI step, rather than left unbuilt.

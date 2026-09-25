@@ -44,9 +44,9 @@ the module is enabled** (TRD-112):
    number of votes cast). It says nothing about whether such a poll satisfies any
    Satzung's secret-ballot requirement.
 
-**Forbidden phrasings** (the marketing-copy check described in
-[licence-register.md](licence-register.md), section 5, fails on these; the list is a
-floor, not a whitelist of everything else):
+**Forbidden phrasings** (the marketing-copy check, `make lint-compliance`, described in
+[licence-register.md](licence-register.md), section 5, reads this table and fails on
+every quoted phrasing in it; the list is a floor, not a whitelist of everything else):
 
 | German | English |
 |---|---|
