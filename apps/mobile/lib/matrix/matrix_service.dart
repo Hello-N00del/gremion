@@ -35,6 +35,20 @@ class MatrixOlmResetRequired implements Exception {
   String toString() => 'MatrixOlmResetRequired: stale device $staleDeviceId';
 }
 
+/// The failure Matrix Dart SDK 13 throws from `Client.init` when the device
+/// keys of a new OLM account cannot be uploaded: Synapse already holds
+/// different identity keys for this device id, i.e. the local OLM state is
+/// stale (SDK 6.x said 'Upload key failed'). Pinned against the SDK source by
+/// test/matrix/olm_reset_detection_test.dart.
+const olmKeyUploadFailure =
+    'Upload of the device keys for the new olm account failed';
+
+/// Whether [error] from `Client.init` means the local OLM state is stale.
+/// `Client.init` wraps failures in a ClientInitException whose toString() is
+/// the original error's.
+bool isStaleOlmStateError(Object error) =>
+    error.toString().contains(olmKeyUploadFailure);
+
 class MatrixService extends ChangeNotifier {
   MatrixService(
       {required this.homeserverUrl, FlutterSecureStorage? secureStorage})
@@ -142,8 +156,7 @@ class MatrixService extends ChangeNotifier {
         newHomeserver: Uri.parse(homeserverUrl),
       );
     } catch (e) {
-      final msg = e.toString();
-      if (msg.contains('Upload key failed') || msg.contains('OlmManager')) {
+      if (isStaleOlmStateError(e)) {
         // The local OLM key material doesn't match what Synapse has for this
         // device — Synapse rejects re-uploads with a different ed25519 identity
         // key. Delete the local DB so the next login starts with fresh OLM state,
