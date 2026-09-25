@@ -36,6 +36,11 @@ export const actions: Actions = {
       kcLogout.searchParams.set('id_token_hint', idToken)
     }
 
-    redirect(303, kcLogout.toString())
+    // TASK-032 (TRD-410 [D R20-D5]): kit 3's redirect() now refuses an
+    // external origin unless explicitly allowed. kcLogout.origin IS the
+    // computed target (the current tenant's own Keycloak, from the trusted
+    // tenant registry — never user input), allowlisted exactly, never a
+    // blanket `external: true`.
+    redirect(303, kcLogout.toString(), { external: [kcLogout.origin] })
   }
 }

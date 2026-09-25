@@ -31,5 +31,13 @@ export const GET: RequestHandler = async ({ params }) => {
   const mainAppOrigin = (process.env.PUBLIC_MAIN_APP_URL ?? '').replace(/\/+$/, '');
   if (!mainAppOrigin) throw error(500, 'Main app URL not configured');
 
-  throw redirect(302, `${mainAppOrigin}/api/public/protocols/${params.id}/pdf`);
+  // TASK-032 (TRD-410 [D R20-D5]): kit 3's redirect() now refuses an external
+  // origin unless explicitly allowed (upstream: "Cannot redirect to external
+  // URL ... pass { external: true } or an allowlist of permitted origins").
+  // Allowlisting exactly `mainAppOrigin` (not a blanket `external: true`) is
+  // the operator-configured target this route exists to redirect to — never
+  // anything wider.
+  throw redirect(302, `${mainAppOrigin}/api/public/protocols/${params.id}/pdf`, {
+    external: [mainAppOrigin],
+  });
 };

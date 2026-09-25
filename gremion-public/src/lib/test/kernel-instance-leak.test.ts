@@ -56,7 +56,7 @@ describe('(i) no instance name is baked in as a fallback', () => {
 
   test("PUBLIC_PRODUCT_NAME renders nothing when unconfigured", () => {
     const f = body(join(SRC, 'routes/+layout.server.ts'));
-    expect(f).toMatch(/product:\s*env\.PUBLIC_PRODUCT_NAME\s*\|\|\s*null/);
+    expect(f).toMatch(/product:\s*process\.env\.PUBLIC_PRODUCT_NAME\s*\|\|\s*null/);
     expect(f).not.toMatch(/PUBLIC_PRODUCT_NAME\s*\?\?\s*['"]/);
   });
 

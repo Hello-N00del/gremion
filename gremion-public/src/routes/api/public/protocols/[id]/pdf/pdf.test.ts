@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// The route reads PUBLIC_MAIN_APP_URL from `$env/dynamic/public` — the private
-// dynamic env filters out PUBLIC_-prefixed names, so mocking `private` here (as
-// this test used to) mocked a module the route never consults.
-vi.mock('$env/dynamic/public', () => ({
-  env: { PUBLIC_MAIN_APP_URL: 'https://example.org' },
-}));
+// TASK-032 (TRD-410 [D R20-D5]): the route now reads process.env directly
+// (kit 3 dropped $env/dynamic/public's free-form var access — its
+// declarative replacement exposes only vars declared via `defineEnvVars`,
+// which nothing here uses). This used to read `$env/dynamic/public`, NOT
+// `private`: the private dynamic env filtered out PUBLIC_-prefixed names, so
+// mocking `private` would have mocked a module the route never consulted.
+process.env.PUBLIC_MAIN_APP_URL = 'https://example.org';
 
 const { mockGetById } = vi.hoisted(() => ({ mockGetById: vi.fn() }));
 vi.mock('$lib/server/public-db', () => ({

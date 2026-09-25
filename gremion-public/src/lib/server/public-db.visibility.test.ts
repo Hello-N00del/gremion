@@ -5,9 +5,9 @@
 // visibility filter is present.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('$env/dynamic/private', () => ({
-  env: { GREMION_PUBLIC_DB_URL: 'postgres://mock:mock@localhost/mock' },
-}));
+// TASK-032 (TRD-410 [D R20-D5]): public-db.ts now reads process.env directly
+// (kit 3 dropped $env/dynamic/private's free-form var access).
+process.env.GREMION_PUBLIC_DB_URL = 'postgres://mock:mock@localhost/mock';
 
 // Record the static SQL text of each tagged-template call. The first argument
 // to a tagged template is the array of literal chunks; interpolated values land

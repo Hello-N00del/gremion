@@ -50,7 +50,7 @@ describe('the portal chrome offers the source', () => {
 
   it('threads the operator value from the layout load to the footer', () => {
     expect(read('../../routes/+layout.server.ts')).toContain(
-      'resolveSourceUrl(env.PUBLIC_SOURCE_URL)',
+      'resolveSourceUrl(process.env.PUBLIC_SOURCE_URL)',
     );
     expect(read('../../routes/+layout.svelte')).toContain('sourceUrl={data.sourceUrl}');
   });
