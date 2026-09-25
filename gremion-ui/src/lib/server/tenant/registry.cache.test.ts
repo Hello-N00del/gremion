@@ -16,8 +16,6 @@
 // owns that against the real control DB).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('$env/dynamic/private', () => ({ env: {} }))
-
 const { sqlSpy } = vi.hoisted(() => ({ sqlSpy: vi.fn() }))
 vi.mock('./control-db', () => ({ getControlDb: () => sqlSpy }))
 vi.mock('./secrets', () => ({ resolveSecret: vi.fn(() => 'postgres://resolved') }))

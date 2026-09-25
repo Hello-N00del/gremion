@@ -8,8 +8,6 @@
 // malformed profile never reaches the control DB at all.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('$env/dynamic/private', () => ({ env: {} }))
-
 const { sqlSpy, jsonSpy } = vi.hoisted(() => {
   const jsonSpy = vi.fn((v: unknown) => v)
   const sqlSpy = Object.assign(vi.fn(), { json: jsonSpy })

@@ -6,12 +6,11 @@ import { registerDefaultTenant } from './register-default'
 import { getTenantBySlug, listTenants } from './registry'
 
 // P2.1b T5 (#243): the reconcile tests need to CHANGE env between two boots.
-// $env/dynamic/private snapshots process.env at module init, so swap it for a
-// mutable copy (vi.hoisted runs before the hoisted vi.mock factories fire on
-// the static imports above). Initialised from process.env => the existing
-// tests see byte-identical values.
-const envMock = vi.hoisted(() => ({ ...process.env }) as Record<string, string | undefined>)
-vi.mock('$env/dynamic/private', () => ({ env: envMock }))
+// TASK-032 (TRD-410 [D R20-D5]): the code under test reads process.env (kit
+// 3's $env/dynamic/private exposes only schema-declared vars, so a vi.mock of
+// it is inert). envMock writes through to process.env; see
+// tests/unit/process-env-mock.ts.
+import { envMock } from '../../../../tests/unit/process-env-mock'
 
 const DRIFT_TAG = '[tenant-registry] env/registry drift:'
 

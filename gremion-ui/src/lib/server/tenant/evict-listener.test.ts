@@ -9,8 +9,6 @@
 // dispatch contract; the real NOTIFY round-trip is proven live in the SP-4 proof.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('$env/dynamic/private', () => ({ env: {} }))
-
 const { listenSpy, evictSpy } = vi.hoisted(() => ({ listenSpy: vi.fn(), evictSpy: vi.fn() }))
 vi.mock('./control-db', () => ({ getControlDb: () => ({ listen: listenSpy }) }))
 vi.mock('./registry', () => ({ evictTenantRuntime: evictSpy, TENANT_EVICT_CHANNEL: 'tenant_evict' }))

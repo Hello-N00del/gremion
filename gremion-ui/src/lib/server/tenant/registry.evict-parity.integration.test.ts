@@ -2,12 +2,14 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 
 // The per-tenant limiter is DEFAULT OFF (rate-limit.ts: no TENANT_RATE_LIMIT_RPS
 // ⇒ no bucket state at all), so the bucket-eviction case cannot be observed
-// without turning it on. Widen the REAL dynamic env rather than replacing it:
+// without turning it on. Widen the REAL process env rather than replacing it:
 // control-db.ts and registry.ts read CONTROL_DATABASE_URL / PLATFORM_DOMAIN /
-// CONFIG_PATH through the same module.
-vi.mock('$env/dynamic/private', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('$env/dynamic/private')>()
-  return { env: { ...actual.env, TENANT_RATE_LIMIT_RPS: '1', TENANT_RATE_LIMIT_BURST: '20' } }
+// CONFIG_PATH from process.env too (TASK-032: kit 3's $env/dynamic/private
+// exposes only schema-declared vars, so the code reads process.env and a
+// vi.mock of that module would be inert). vi.hoisted runs before the imports.
+vi.hoisted(() => {
+  process.env.TENANT_RATE_LIMIT_RPS = '1'
+  process.env.TENANT_RATE_LIMIT_BURST = '20'
 })
 
 import { getControlDb } from './control-db'

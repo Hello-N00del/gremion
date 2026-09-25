@@ -14,16 +14,20 @@
 // tenant and fail loudly rather than passing for the wrong reason.
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
-const PROXY_SECRET = 'proxy-trust-secret-32-bytes-padxx'
 const NL_SECRET = 'newsletter-secret-32-bytes-of-padxx'
 const CONTENT_SECRET = 'content-secret-32-bytes-of-padxxxx'
 
-vi.mock('$env/dynamic/private', () => ({
-  env: {
-    TENANT_PROXY_SHARED_SECRET: PROXY_SECRET,
-    PUBLIC_BASE_URL: 'https://gremion.example',
-  },
-}))
+// TASK-032 (TRD-410 [D R20-D5]): kit 3's $env/dynamic/private exposes only
+// schema-declared vars, so the code under test reads process.env; a
+// vi.mock of $env/dynamic/private would be inert. vi.hoisted sets the value
+// before the imports below, exactly where the old mock applied it.
+// Without it the proxy-trust gate this suite claims to ENFORCE is silently off.
+const { PROXY_SECRET } = vi.hoisted(() => {
+  const PROXY_SECRET = 'proxy-trust-secret-32-bytes-padxx'
+  process.env.TENANT_PROXY_SHARED_SECRET = PROXY_SECRET
+  process.env.PUBLIC_BASE_URL = 'https://gremion.example'
+  return { PROXY_SECRET }
+})
 
 // ── the fixture control plane ────────────────────────────────────────────────
 interface Ctx {

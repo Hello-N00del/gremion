@@ -12,16 +12,16 @@ import * as os from 'node:os'
 // lazily on every call, so swapping it between tests works without
 // resetModules.
 
-const envMock: { CONFIG_PATH: string } = { CONFIG_PATH: '' }
-
-vi.mock('$env/dynamic/private', () => ({
-  env: envMock,
-}))
+// TASK-032 (TRD-410 [D R20-D5]): the code under test reads process.env (kit
+// 3's $env/dynamic/private exposes only schema-declared vars, so a vi.mock of
+// it is inert). envMock writes through to process.env; see
+// tests/unit/process-env-mock.ts.
+import { envMock } from '../../../tests/unit/process-env-mock'
 
 // P2.1a: readConfig()/writeConfig() default their tenant arg to requireTenant()
 // (fail-closed). This suite swaps envMock.CONFIG_PATH per test (real tmp file),
 // so the default-tenant configPath must track the same mutable env value.
-vi.mock('$lib/server/tenant/context', () => ({ requireTenant: () => ({ id: 'default', configPath: envMock.CONFIG_PATH }) }))
+vi.mock('$lib/server/tenant/context', () => ({ requireTenant: () => ({ id: 'default', configPath: envMock.CONFIG_PATH ?? '' }) }))
 
 let scratchDir: string
 let configPath: string

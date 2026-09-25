@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 
 const tenantMock: { current: { id: string; configPath: string } | null } = { current: null }
-vi.mock('$env/dynamic/private', () => ({ env: { CONFIG_PATH: '/tmp/default-config.json' } }))
+// TASK-032 (TRD-410 [D R20-D5]): kit 3's $env/dynamic/private exposes only
+// schema-declared vars, so the code under test reads process.env; a
+// vi.mock of $env/dynamic/private would be inert. vi.hoisted sets the value
+// before the imports below, exactly where the old mock applied it.
+vi.hoisted(() => {
+  process.env.CONFIG_PATH = '/tmp/default-config.json'
+})
 vi.mock('$lib/server/tenant/context', () => ({
   requireTenant: () => {
     if (!tenantMock.current) throw new Error('no tenant resolved in this context')

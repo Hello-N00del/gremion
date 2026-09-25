@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('$env/dynamic/private', () => ({
-  env: { DATABASE_URL: 'postgresql://test:test@localhost:5432/test' }
-}))
+// TASK-032 (TRD-410 [D R20-D5]): kit 3's $env/dynamic/private exposes only
+// schema-declared vars, so the code under test reads process.env; a
+// vi.mock of $env/dynamic/private would be inert. vi.hoisted sets the value
+// before the imports below, exactly where the old mock applied it.
+vi.hoisted(() => {
+  process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test'
+})
 
 const mockSql = vi.fn()
 vi.mock('./db', () => ({

@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const envMock: Record<string, string> = {}
-vi.mock('$env/dynamic/private', () => ({ env: envMock }))
+// TASK-032 (TRD-410 [D R20-D5]): the code under test reads process.env (kit
+// 3's $env/dynamic/private exposes only schema-declared vars, so a vi.mock of
+// it is inert). envMock writes through to process.env; see
+// tests/unit/process-env-mock.ts.
+import { envMock } from '../../../tests/unit/process-env-mock'
 vi.mock('$lib/server/tenant/secrets', () => ({ resolveSecret: (ref: string) => `secret-for-${ref}` }))
 
 type TenantKc = { id: string; realmName: string; kcAdminUrl: string; kcClientId: string; kcClientSecretRef: string }

@@ -5,7 +5,9 @@ import assert from 'node:assert/strict'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { checkFileText, checkAppSrc } from './check-removed-kit-apis.mjs'
+import { existsSync } from 'node:fs'
+
+import { checkFileText, checkAppSrc, ENV_DYNAMIC_FIXTURE_FILES } from './check-removed-kit-apis.mjs'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -45,6 +47,45 @@ test('is clean for a file using only surviving APIs', () => {
 test('is clean for a file that mentions the banned words only in prose, not an import', () => {
   const problems = checkFileText('lib/x.ts', '// migrated off $app/stores and $app/paths base\n')
   assert.deepEqual(problems, [])
+})
+
+// ── $env/dynamic/* (round-1 MEDIUM) ─────────────────────────────────────────
+// Kit 3's `$env/dynamic/*` re-exports only the vars declared through the kit
+// env schema, so an undeclared var (DATABASE_URL, issuers, secrets) silently
+// reads as undefined; a `vi.mock` of it no longer reaches migrated code either.
+
+test('flags a static $env/dynamic/private import', () => {
+  const problems = checkFileText('lib/server/db.ts', "import { env } from '$env/dynamic/private'\n")
+  assert.ok(problems.some((p) => p.includes("'$env/dynamic/private'")), problems.join('\n'))
+})
+
+test('flags a static $env/dynamic/public import', () => {
+  const problems = checkFileText('routes/+page.svelte', 'import { env } from "$env/dynamic/public"\n')
+  assert.ok(problems.some((p) => p.includes("'$env/dynamic/public'")), problems.join('\n'))
+})
+
+test('flags a dynamic import() of $env/dynamic/*', () => {
+  const problems = checkFileText('lib/x.ts', "const { env } = await import('$env/dynamic/private')\n")
+  assert.ok(problems.some((p) => p.includes('$env/dynamic/private')), problems.join('\n'))
+})
+
+test('flags a vi.mock of $env/dynamic/* (inert under kit 3)', () => {
+  const problems = checkFileText(
+    'lib/server/x.test.ts',
+    "vi.mock('$env/dynamic/private', () => ({ env: { DATABASE_URL: 'x' } }))\n"
+  )
+  assert.ok(problems.some((p) => p.includes('vi.mock') && p.includes('$env/dynamic/private')), problems.join('\n'))
+})
+
+test('does not flag $env/dynamic/* mentioned only in a comment', () => {
+  assert.deepEqual(checkFileText('lib/x.ts', '// no longer reads $env/dynamic/private\n'), [])
+})
+
+test('the $env/dynamic exemption list names only existing files, each with a reason', () => {
+  for (const [rel, reason] of ENV_DYNAMIC_FIXTURE_FILES) {
+    assert.ok(reason.trim().length > 0, `${rel} has no reason`)
+    assert.ok(existsSync(join(REPO_ROOT, rel)), `${rel} does not exist`)
+  }
 })
 
 // ── the live repo (the actual acceptance check) ──────────────────────────────

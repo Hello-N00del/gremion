@@ -11,8 +11,6 @@ vi.mock('$lib/server/config', () => ({
   writeConfig: mockWriteConfig,
 }))
 
-vi.mock('$env/dynamic/private', () => ({ env: {} }))
-
 // Prevent fs operations during tests (backup endpoint reads/writes files)
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()

@@ -11,7 +11,6 @@ import type { GremionConfig } from '$lib/server/config'
 // still 403s a disabled module and passes an enabled one, so a re-attached module
 // gates exactly as before.
 
-vi.mock('$env/dynamic/private', () => ({ env: {} }))
 const mockReadConfig = vi.fn()
 vi.mock('$lib/server/config', () => ({ readConfig: () => mockReadConfig() }))
 

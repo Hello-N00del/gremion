@@ -6,9 +6,6 @@
 // prove the refusals are not vacuous.
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
-// internal-fetch (for constantTimeEqual) reads the private dynamic env at import.
-vi.mock('$env/dynamic/private', () => ({ env: {} }))
-
 const { leafCallbackClaim, LEAF_CALLBACK_ROUTES } = await import('./leaf-trust')
 
 const NL_SECRET = 'newsletter-secret-32-bytes-of-padxx'

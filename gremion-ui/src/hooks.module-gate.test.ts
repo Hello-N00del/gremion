@@ -13,7 +13,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // --- module stubs (must precede the ./hooks.server import) ---
 vi.mock('$app/environment', () => ({ building: true }))
-vi.mock('$env/dynamic/private', () => ({ env: { DATABASE_URL: 'postgresql://gremion:gremion@localhost:5432/gremion' } }))
+// TASK-032 (TRD-410 [D R20-D5]): kit 3's $env/dynamic/private exposes only
+// schema-declared vars, so the code under test reads process.env; a
+// vi.mock of $env/dynamic/private would be inert. vi.hoisted sets the value
+// before the imports below, exactly where the old mock applied it.
+vi.hoisted(() => {
+  process.env.DATABASE_URL = 'postgresql://gremion:gremion@localhost:5432/gremion'
+})
 vi.mock('$lib/server/db', () => ({ waitForDbReady: vi.fn(async () => {}), runMigrations: vi.fn(async () => {}), getDb: () => ({}) }))
 // Mutable module toggle: each test flips `demo_widget` and the SAME readConfig
 // mock feeds boot(), the cookie gate and the Bearer gate (module-gate.ts).

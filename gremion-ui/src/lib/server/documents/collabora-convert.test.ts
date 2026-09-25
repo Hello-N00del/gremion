@@ -10,9 +10,13 @@ import type { Mock } from 'vitest'
 //   - default base URL http://collabora:9980 when COLLABORA_URL is unset
 //   - a non-ok response throws `Collabora convert failed: <status>`
 
-vi.mock('$env/dynamic/private', () => ({
-  env: { COLLABORA_URL: 'http://collabora:9980' }
-}))
+// TASK-032 (TRD-410 [D R20-D5]): kit 3's $env/dynamic/private exposes only
+// schema-declared vars, so the code under test reads process.env; a
+// vi.mock of $env/dynamic/private would be inert. vi.hoisted sets the value
+// before the imports below, exactly where the old mock applied it.
+vi.hoisted(() => {
+  process.env.COLLABORA_URL = 'http://collabora:9980'
+})
 
 import { convertOdtToHtml, convertOdtToPdf } from './collabora-convert'
 

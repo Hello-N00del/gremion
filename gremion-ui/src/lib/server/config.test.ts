@@ -4,9 +4,13 @@ import type { ModuleManifest } from '$lib/modules/types'
 import type { GremionConfig } from './config'
 
 // Mock the $env/dynamic/private module
-vi.mock('$env/dynamic/private', () => ({
-  env: { CONFIG_PATH: '/tmp/test-config.json' },
-}))
+// TASK-032 (TRD-410 [D R20-D5]): kit 3's $env/dynamic/private exposes only
+// schema-declared vars, so the code under test reads process.env; a
+// vi.mock of $env/dynamic/private would be inert. vi.hoisted sets the value
+// before the imports below, exactly where the old mock applied it.
+vi.hoisted(() => {
+  process.env.CONFIG_PATH = '/tmp/test-config.json'
+})
 
 // P2.1a: readConfig()/writeConfig() default their tenant arg to requireTenant()
 // (fail-closed). These legacy single-tenant suites call them zero-arg, so stub

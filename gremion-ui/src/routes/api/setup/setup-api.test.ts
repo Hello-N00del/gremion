@@ -31,8 +31,6 @@ vi.mock('$lib/server/setup-token', () => ({
   clearSetupToken: mockClearSetupToken,
 }))
 
-vi.mock('$env/dynamic/private', () => ({ env: {} }))
-
 // P2.1a — the rate-limit helpers now read currentTenantId() from ALS. These
 // unit tests call the route handler directly (no hooks.server.ts runWithTenant
 // wrap), so stub the canonical id to a default tenant.
