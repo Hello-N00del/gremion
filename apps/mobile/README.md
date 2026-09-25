@@ -42,6 +42,27 @@ These also exist in the source and are read the same way:
 | `MATRIX_ADMIN_ROOM_ID` | `lib/matrix/matrix_service.dart` | Room whose joined members may auto-accept invites; empty = strict mode, every invite is surfaced for manual review (G-053). | `` (empty) |
 | `BRAND_PRODUCT`, `BRAND_LOGO_LETTER`, `BRAND_ORG_SHORT`, `BRAND_TERM`, `BRAND_ORG_NAME`, `BRAND_DOMAIN`, `BRAND_MATRIX_HOMESERVER` | `lib/brand.dart` | Tenant-branding strings (mirrors `gremion-ui/src/lib/brand.ts`). Defaults to HS Harz values. | `StuRaOS` / `S` / `HS Harz` / `SoSe 26` / `Studierendenrat der Hochschule Harz` / `stura.hs-harz.de` / `stura.hs-harz.de` |
 
+## Prerequisites
+
+Besides Flutter 3.41.x (Dart 3.11) and the Android SDK / Xcode:
+
+- **Rust (rustup on PATH)** for Android and iOS builds: `flutter_vodozemac`
+  (Matrix end-to-end encryption) compiles its Rust crate from source through
+  cargokit, which calls `rustup run <toolchain> cargo build`. There are no
+  prebuilt binaries for the Gradle/CocoaPods path.
+- **SQLCipher as a system library for `flutter test`** on the host:
+  `test/matrix/` exercises the encrypted Matrix store through
+  `sqflite_common_ffi`, and package:sqlite3 looks SQLCipher up by name (see
+  the `hooks:` block in `pubspec.yaml`). Debian/Ubuntu: `apt install
+  libsqlcipher-dev`; macOS: `brew install sqlcipher`; Windows: put
+  `sqlcipher.dll` and the OpenSSL `libcrypto` DLL it needs on `PATH` (e.g.
+  from vcpkg `sqlcipher`). Without it only `test/matrix/matrix_store_test.dart`
+  fails, with an explicit message. On devices nothing changes: the app's
+  SQLCipher comes from `sqflite_sqlcipher`.
+- **iOS, first macOS build:** `pod install` adds the Pods phases to
+  `ios/Runner.xcodeproj/project.pbxproj` and creates `ios/Podfile.lock`;
+  commit both.
+
 ## Build & run
 
 Install dependencies:

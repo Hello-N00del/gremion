@@ -45,6 +45,23 @@ Future<MatrixSdkDatabase> _openStore(String path, String password) =>
 class _PlainSqliteDatabase extends Mock implements Database {}
 
 void main() {
+  setUpAll(() async {
+    // Turn a missing host SQLCipher library into an instruction instead of
+    // a bare dlopen error (see "Prerequisites" in README.md).
+    try {
+      final probe = await databaseFactoryFfi.openDatabase(
+        inMemoryDatabasePath,
+        options: OpenDatabaseOptions(singleInstance: false),
+      );
+      final version = await probe.rawQuery('PRAGMA cipher_version');
+      await probe.close();
+      if (version.isEmpty) throw StateError('library is not SQLCipher');
+    } catch (e) {
+      fail('test/matrix needs SQLCipher as a system library on this host '
+          '(libsqlcipher / sqlcipher.dll, see README.md "Prerequisites"): $e');
+    }
+  });
+
   late Directory tmp;
 
   setUp(() async {
