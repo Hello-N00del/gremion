@@ -95,7 +95,7 @@ describe('isResolveExemptRequest', () => {
 const ROUTES_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'routes')
 const GUARD_CALL = /\b(?:isInternalTrustRequest|constantTimeEqual)\s*\(/
 const ENDPOINT = /^\+server\.(ts|js)$/
-const PAGE_OR_LAYOUT = /^\+(page|layout)(\.server)?\.(ts|js|svelte)$/
+const PAGE_OR_LAYOUT = /^\+(page|layout)(@[^.]*)?(\.server)?\.(ts|js|svelte)$/
 
 function stripCommentsAndStrings(src: string): string {
   return src
@@ -172,12 +172,13 @@ describe('Q4 static guard: internal routes authenticate themselves', () => {
     file(fixture, '[...rest]', '+server.ts', open)
     file(fixture, 'api/[[opt]]/internal/y', '+server.ts', open)
     file(fixture, 'api/internal/form', '+page.server.ts', 'export const actions = {}')
+    file(fixture, 'api/internal/reset', '+page@.svelte', '<p>x</p>')
     // Not under /api/internal/: never flagged.
     file(fixture, 'api/members/[handle]', '+server.ts', open)
     file(fixture, 'api/health', '+server.ts', open)
     file(fixture, '', '+layout.server.ts', 'export const load = () => ({})')
     const r = internalRouteViolations(fixture)
-    expect(r.routeFiles).toBe(15)
+    expect(r.routeFiles).toBe(16)
     expect(r.violations.sort()).toEqual(
       [
         '(svc)/api/internal/grp/+server.ts',
@@ -189,6 +190,7 @@ describe('Q4 static guard: internal routes authenticate themselves', () => {
         'api/internal/commented/+server.ts',
         'api/internal/form/+page.server.ts (no page or layout may serve /api/internal/)',
         'api/internal/open/+server.ts',
+        'api/internal/reset/+page@.svelte (no page or layout may serve /api/internal/)',
         'api/internal/stringly/+server.ts',
       ].sort(),
     )
