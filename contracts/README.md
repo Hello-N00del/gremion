@@ -163,7 +163,9 @@ TASK-030 (PRD-PLAT-002b/008, TRD-403/404/405). `packages/generated-clients/` own
   migration-range and nav/realm checks are TASK-021's, per the brief's decision 5).
 
 Run: `pnpm --filter @gremion/generated-clients contracts:check` (Q2 default — `verify`,
-TASK-045, wires this in once it lands).
+TASK-045, wires this in once it lands). The base ref is the merge-base with `origin/main`, then
+`main`; on trunk itself that merge-base is HEAD and the check fails closed, so there pass it
+explicitly: `CONTRACTS_BASE_REF=HEAD~1 pnpm --filter @gremion/generated-clients contracts:check`.
 
 **Acceptance demo, run against the real tree** (`contracts/kernel/openapi.governance.json`,
 `CONTRACTS_BASE_REF=HEAD` to isolate a single seeded edit from the committed 0.2.0->1.0.0
