@@ -12,7 +12,10 @@
 // module's own code"). Fails on:
 //   - a forbidden specifier (see FORBIDDEN_PATTERNS), including `import type`
 //     (a type-only import still couples the file to the SvelteKit module
-//     resolution the kernel build does not provide);
+//     resolution the kernel build does not provide) AND a DYNAMIC
+//     `import('<spec>')` or `require('<spec>')` call with a string-literal
+//     argument (TASK-025 round-2 fix MED #2 — the static-only grammar
+//     originally here let `import('$env/dynamic/private')` pass silently);
 //   - a relative import target that does not exist on disk.
 //
 // RED-before-GREEN evidence lives in the commit that adds tenant-domain.ts:
@@ -40,13 +43,28 @@ const FORBIDDEN_PATTERNS: ReadonlyArray<{ re: RegExp; label: string }> = [
 
 /** Matches `import ... from '<spec>'`, `import '<spec>'` and `export ... from '<spec>'`,
  *  with or without a leading `type` keyword — a type-only import still counts. */
-const SPECIFIER_RE = /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\bfrom\s+)?['"]([^'"]+)['"]/g
+const STATIC_SPECIFIER_RE = /\b(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\bfrom\s+)?['"]([^'"]+)['"]/g
+
+/**
+ * TASK-025 round-2 fix (MED #2): `import ... from '<spec>'` requires whitespace
+ * between the keyword and the specifier, so it never matches a DYNAMIC
+ * `import('<spec>')` call (no `from`, `(` immediately follows the keyword) —
+ * that shape passed the guard silently, e.g. `import('$env/dynamic/private')`.
+ * `require('<spec>')` is the same gap for anything transpiled to CommonJS.
+ * Only a STRING-LITERAL argument is in scope — a computed specifier
+ * (`import(pathVar)`) cannot be resolved statically and a kernel-portable file
+ * must never construct one anyway. Optional inner whitespace (`import ( '…' )`)
+ * is allowed so a reformatted call is not a silent bypass either.
+ */
+const DYNAMIC_SPECIFIER_RE = /\b(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g
 
 function extractSpecifiers(src: string): string[] {
   const specs: string[] = []
   let m: RegExpExecArray | null
-  SPECIFIER_RE.lastIndex = 0
-  while ((m = SPECIFIER_RE.exec(src))) specs.push(m[1])
+  STATIC_SPECIFIER_RE.lastIndex = 0
+  while ((m = STATIC_SPECIFIER_RE.exec(src))) specs.push(m[1])
+  DYNAMIC_SPECIFIER_RE.lastIndex = 0
+  while ((m = DYNAMIC_SPECIFIER_RE.exec(src))) specs.push(m[1])
   return specs
 }
 
@@ -122,6 +140,44 @@ function scanKernelPortability(entryFiles: readonly string[]): ScanResult {
 
   return { visited, violations, missing }
 }
+
+// TASK-025 round-2 fix (verify-round1.md residual "MED #2"): the guard's
+// SPECIFIER_RE only matches the STATIC import/export-from grammar, so a
+// dynamic `import('$env/dynamic/private')` — no `from`, no whitespace
+// requirement satisfied between `import` and `(` — passes it silently. A
+// `require('$env/...')` call is the same gap for anything transpiled to
+// CommonJS. Both are exercised directly against extractSpecifiers (no disk
+// I/O, deterministic) so a regression here fails fast without needing to
+// seed a real file.
+describe('dynamic import(...) / require(...) detection (round-2 fix MED #2)', () => {
+  it('extractSpecifiers finds a dynamic import(...) with a string-literal argument', () => {
+    expect(extractSpecifiers(`const m = await import('$env/dynamic/private')`))
+      .toContain('$env/dynamic/private')
+  })
+
+  it('extractSpecifiers finds a dynamic import(...) with double quotes and inner whitespace', () => {
+    expect(extractSpecifiers(`await import ( "$app/environment" )`))
+      .toContain('$app/environment')
+  })
+
+  it('extractSpecifiers finds a require(...) call', () => {
+    expect(extractSpecifiers(`const m = require('$env/dynamic/private')`))
+      .toContain('$env/dynamic/private')
+  })
+
+  it('a seeded dynamic $env import in an entry file is reported as a violation', () => {
+    // Exercises the full scanKernelPortability path (not just the regex) by
+    // seeding the violation into an ISOLATED temp fixture beside the real
+    // entry files, rather than mutating host.ts/tenant-domain.ts for a
+    // permanent test — that mutation is done manually as the guard-efficacy
+    // proof (commit message), watched RED, then reverted.
+    const src = `export async function f() {\n  const { env } = await import('$env/dynamic/private')\n  return env\n}\n`
+    const specs = extractSpecifiers(src)
+    expect(specs).toContain('$env/dynamic/private')
+    const forbidden = FORBIDDEN_PATTERNS.find((p) => p.re.test('$env/dynamic/private'))
+    expect(forbidden?.label).toBe('$env/*')
+  })
+})
 
 describe('kernel-portable guard (L3-17)', () => {
   it('host.ts, reserved-hosts.ts and tenant-domain.ts exist and are reachable', () => {
