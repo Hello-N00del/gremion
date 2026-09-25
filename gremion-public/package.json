@@ -14,9 +14,9 @@
   },
   "dependencies": {
     "@gremion/db": "workspace:*",
-    "@sveltejs/adapter-node": "^5.5.7",
-    "@sveltejs/kit": "^2.70.2",
-    "svelte": "^5.56.8",
+    "@sveltejs/adapter-node": "6.0.0-next.13",
+    "@sveltejs/kit": "3.0.0-next.28",
+    "svelte": "^5.57.1",
     "isomorphic-dompurify": "^3.19.0",
     "postgres": "^3.4.4"
   },
@@ -26,7 +26,7 @@
     "@types/dompurify": "^3.0.5",
     "@types/node": "^26.6.0",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.4.5",
+    "typescript": "^6.0.3",
     "vite": "^8.3.0",
     "vitest": "^4.1.11",
     "svelte-check": "^4.7.6",

@@ -27,6 +27,18 @@ const config = {
   kit: {
     adapter: adapter({ port: 3000 }),
     paths: { base },
+    // TASK-032 (TRD-410 [D R20-D5]): kit 3 removes the automatic `$lib` alias
+    // in favour of `#lib` (CHANGELOG.md, 3.0.0-next.9: "replace the `$lib`
+    // alias with `#lib` and remove `files.lib` config"). `kit.alias` itself is
+    // only DEPRECATED, not removed (3.0.0-next.17/24: "deprecate the `alias`
+    // option") — it still works and still feeds svelte-kit's generated
+    // tsconfig path mapping, so this reinstates `$lib` explicitly rather than
+    // rewriting the ~1000 `$lib` imports across this app's source tree to
+    // `#lib`. Matches gremion-ui/svelte.config.js, which already declared this
+    // alias explicitly before kit 3 (so needed no change here).
+    alias: {
+      $lib: 'src/lib',
+    },
   },
 };
 

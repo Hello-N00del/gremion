@@ -36,6 +36,21 @@ onlyBuiltDependencies:
   - esbuild
   - msw
 
+# TASK-032 (TRD-410 [D R20-D5], Q1): @auth/sveltekit 1.11.3 (its latest
+# release) declares peer `@sveltejs/kit: ^1.0.0 || ^2.0.0` — no kit-3 release
+# of @auth/sveltekit exists yet. pnpm 10 only WARNS on an out-of-range peer by
+# default, but the warning is easy to lose in a long install log, so this
+# names the exception explicitly rather than leaving it merely tolerated.
+# Default applied per the brief's Q1 (orchestrator-decided, not re-asked):
+# keep @auth/sveltekit and widen the allowed peer range, PROVEN at runtime by
+# the auth smoke test (brief §6 test 5) rather than assumed from the peer
+# range alone. If that smoke test ever shows kit 3 breaking auth at runtime,
+# the fix is an operator decision (a `pnpm patch` or a different auth
+# library), never a silent edit to auth code — see auth.ts / hooks.server.ts.
+peerDependencyRules:
+  allowedVersions:
+    '@auth/sveltekit>@sveltejs/kit': '3'
+
 # CVE floors. `scripts/check-cve-floors.mjs` (wired into `make lint`) pins each entry
 # against a committed floor table, asserts the lockfile absorbed it, asserts the
 # resolved tree honours it, and rejects an UNBOUNDED replacement — a bare
@@ -76,7 +91,18 @@ overrides:
   # (2.70.0 already satisfies >=2.69.1, so pnpm had no reason to move) and the
   # manifests silently claimed a floor the installed tree did not honour. Any
   # future kit bump must raise this line too, or it is inert.
-  '@sveltejs/kit': '>=2.70.2 <3'
+  #
+  # TASK-032 (TRD-410 [D R20-D5]): bumped to the exact kit-3 prerelease pin
+  # (no 3.0 stable tag exists as of 2026-09-24: `npm view @sveltejs/kit
+  # dist-tags` shows only `latest: 2.70.3` and `next: 3.0.0-next.28`). The
+  # GHSA above only affects kit <=2.70.1 — a 3.x prerelease is unaffected —
+  # so `checkFloors`'s core-version compare against the committed floor
+  # (2.70.2, unchanged in check-cve-floors.mjs's FLOORS table) still passes:
+  # 3.0.0 > 2.70.2. `checkKitLockstep` compares this override's floor against
+  # each manifest's declared kit version, so both must read the exact same
+  # string, "3.0.0-next.28" — no operator on either side (isBounded treats a
+  # bare exact version as bounded).
+  '@sveltejs/kit': '3.0.0-next.28'
   # GHSA — nanoid <3.3.18 (Dependabot #61, HIGH): predictable IDs from a biased
   # random source. Only the 3.x line is affected and it arrives transitively via
   # postcss's `nanoid: ^3.3.11`, so the selector is scoped to <3.3.18 — an
