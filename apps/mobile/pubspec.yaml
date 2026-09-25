@@ -17,9 +17,12 @@ dependencies:
   flutter_secure_storage: ^9.2.0
   local_auth: ^2.3.0
 
-  # Matrix (SDK v6 — B1: HiveCollectionsDatabase removed; B2: flutter_olm removed)
-  matrix: ^6.2.0
-  flutter_vodozemac: ^0.5.0         # replaces flutter_olm (B2)
+  # Matrix Dart SDK 13 (TASK-166, Q4): exact pin, the storage contract
+  # (MatrixSdkDatabase schema version 11 over a caller-supplied sqflite_common
+  # Database) is unchanged from 6.2.0 and guarded by test/matrix/.
+  # B1: HiveCollectionsDatabase removed; B2: flutter_olm removed.
+  matrix: 13.0.0
+  flutter_vodozemac: ^0.8.1         # replaces flutter_olm (B2); matrix 11+ needs vodozemac 0.8
   flutter_openssl_crypto: ^0.5.0    # required by flutter_vodozemac (B2)
   sqflite: ^2.3.3                   # sqflite_common types; transitive of matrix (B1)
   # #245: encrypt the Matrix SQLite DB at rest with SQLCipher. Bundles
