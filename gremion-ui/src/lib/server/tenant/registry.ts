@@ -782,7 +782,7 @@ function kcAdminUrlFromInternal(kcInternal: string): string {
 // which is kernel-portable (no SvelteKit import, see kernel-portable.guard.
 // test.ts) — every function below is a THIN WRAPPER that supplies the three
 // things only registry.ts is allowed to know about: getControlDb() (the
-// control pool), env.PLATFORM_DOMAIN, and evictTenantRuntime (the runtime
+// control pool), process.env.PLATFORM_DOMAIN, and evictTenantRuntime (the runtime
 // eviction callback). No behaviour change: same exports, same signatures,
 // same errors — the extraction moved code, not semantics.
 export type { TenantDomain }
@@ -837,7 +837,7 @@ export async function addTenantDomain(
   opts: AddTenantDomainOptions = {},
 ): Promise<TenantDomain> {
   return tdAdd(getControlDb(), tenantId, rawHost, opts, {
-    platformDomain: env.PLATFORM_DOMAIN ?? '',
+    platformDomain: process.env.PLATFORM_DOMAIN ?? '',
     onEvict: evictTenantRuntime,
   })
 }
