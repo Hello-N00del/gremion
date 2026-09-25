@@ -1,0 +1,21 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "compat fixture",
+    "version": "1.1.0",
+    "description": "MEDIUM finding (survived mutant G1b: `bump === 'major'` loosened to `bump === 'major' || bump === 'minor'` and all 38 tests stayed green). T3: same removal as removed-endpoint-1.0.0.json, but with only a MINOR bump — must still FAIL."
+  },
+  "paths": {
+    "/widgets": {
+      "get": {
+        "summary": "List widgets",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "compat fixture",
+    "version": "1.0.0",
+    "description": "T4: adds a new OPTIONAL property tags (backward-compatible) with NO bump — must FAIL."
+  },
+  "channels": {
+    "widget.created": {
+      "address": "gremion.default.widget.created.v1"
+    }
+  },
+  "operations": {
+    "onWidgetCreated": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/widget.created"
+      }
+    }
+  },
+  "components": {
+    "messages": {
+      "WidgetCreated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "name"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "active",
+                "archived"
+              ]
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

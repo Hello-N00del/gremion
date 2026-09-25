@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Gremion kernel — governance surface",
-    "version": "0.2.0",
+    "version": "1.0.0",
     "description": "Documents the governance/groups/health HTTP surface of the Gremion governance kernel. v0.2.0 (breaking): the users-admin API (/api/users*) left the kernel with the users-admin module during the open-core carve. Contract-first: edit this spec in the same change as the route. Error envelope: {success:false, error:string}. Coverage and breaking-change gates: see contracts/README.md."
   },
   "servers": [

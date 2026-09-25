@@ -2,7 +2,7 @@
   "asyncapi": "3.0.0",
   "info": {
     "title": "Gremion calendar module — event lifecycle + CalDAV sync events",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "description": "Terminal events emitted by the calendar module (which lives in the module repo, not here) for event lifecycle changes and CalDAV push sync failures. Four events: event.created, event.updated, event.deleted, caldav.sync.failed. Subject grammar: gremion.{tenantId}.calendar.{event} — built by calendarSubject() in @gremion/ports/broker (single source of truth for the wire subject, mirroring D-P1-7's newsletterSubject() pattern). EventEnvelope field-matched to packages/ports/src/broker.ts EventEnvelope interface. JetStream mapping: Nats-Msg-Id = envelope.eventId. The leaf's egress publish emits; its audit consumer — which lives in the module repo, not here — consumes on gremion.*.calendar.> (5-token subjects, '>' extension per broker.ts subjectMatches). The AsyncAPI channel addresses are verified at test time against calendarSubject() — see packages/ports/src/calendar-contract.test.ts."
   },
   "defaultContentType": "application/json",
