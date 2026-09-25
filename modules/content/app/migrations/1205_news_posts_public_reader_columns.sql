@@ -9,7 +9,9 @@
 -- and every unpublished or future-dated row were readable over that
 -- connection; only the portal's WHERE clauses kept them out of its responses.
 --
--- WHAT THE PORTAL READS. gremion-public's public-db.ts selects exactly
+-- WHAT THE PORTAL READS. The StuRa tree's gremion-public public-db.ts (at the
+-- extraction tag extraction-source-f1; the kernel's portal has no news query
+-- yet) selects exactly
 -- id, title, slug, body_html, published_at, created_at, updated_at, and only
 -- rows WHERE published_at IS NOT NULL AND published_at <= now() (plus a
 -- COUNT(*) over the same predicate). This file grants exactly that:
@@ -23,14 +25,25 @@
 -- role now sees no rows until a policy names it — fail closed, on purpose.
 --
 -- NUMBER. The next free number in the content app chain: 1200 is taken and
--- 1201-1204 are allocated to the renumbered StuRa 044-047 (spec B section 4;
--- content highWater 1204). Checked against the kernel chain
+-- 1201-1204 are allocated to the renumbered StuRa 044-047 (spec B section 4's
+-- renumber table; spec D's ranges.json sets content's highWater to 1204). Those
+-- four land with the content app half (TASK-205) and must be in place before any
+-- database applies this chain, or they apply below its high-water mark. Checked against the kernel chain
 -- (gremion-ui/migrations, 0xx) and every modules/**/migrations directory:
 -- no collision (scripts/check-module-migration-names.mjs guards basenames).
 --
 -- PROOF. modules/content/app/scripts/news-posts-public-grant-proof.sh runs this
 -- chain on a throwaway postgres:18-alpine and asserts the grant as the reader.
 -- Idempotent: re-running re-issues the same REVOKE/GRANT and recreates the policy.
+-- Re-running 1200 ALONE after this file re-issues its whole-table GRANT and
+-- re-opens author_id; the runner never re-runs an applied file, and a manual
+-- replay must replay this file after it.
+--
+-- CHECKED, NOT ASSUMED. The REVOKE reaches only grants made to the reader
+-- itself; a grant through PUBLIC or a role it belongs to would survive it. So
+-- the file ends by asking the catalog what the reader can EFFECTIVELY do and
+-- aborts unless: no author_id, no table-level SELECT, no write privilege, and
+-- no BYPASSRLS.
 
 DO $$
 BEGIN
@@ -51,6 +64,18 @@ BEGIN
   CREATE POLICY news_posts_public_reader_published ON public.news_posts
     FOR SELECT TO gremion_public_reader
     USING (published_at IS NOT NULL AND published_at <= now());
+
+  IF has_column_privilege('gremion_public_reader', 'public.news_posts', 'author_id', 'SELECT')
+     OR has_table_privilege('gremion_public_reader', 'public.news_posts', 'SELECT')
+     OR has_table_privilege('gremion_public_reader', 'public.news_posts', 'INSERT, UPDATE, DELETE, TRUNCATE')
+     OR (SELECT rolbypassrls FROM pg_roles WHERE rolname = 'gremion_public_reader') THEN
+    RAISE EXCEPTION
+      'gremion_public_reader can still reach more of news_posts than the seven '
+      'portal columns of published rows (author_id, a table-level SELECT, a write '
+      'privilege, or BYPASSRLS) in database % — through PUBLIC or an inherited '
+      'role, which the REVOKE above cannot reach. Remove that grant, then re-run.',
+      current_database();
+  END IF;
 
   RAISE NOTICE 'gremion_public_reader: news_posts narrowed to 7 columns of published rows (content module)';
 END

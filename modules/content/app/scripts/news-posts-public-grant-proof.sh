@@ -64,15 +64,21 @@ for f in "$MIGRATIONS"/*.sql; do
   applied+=("$base")
   [ "$base" = "$THROUGH" ] && break
 done
-echo "applied as gremion (owner): ${applied[*]}"
-# Idempotency: the head of the chain must survive a second application.
-last="${applied[${#applied[@]}-1]}"
-if ! log="$(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -q -U gremion -d gremion <"$MIGRATIONS/$last" 2>&1)"; then
-  printf '%s\n' "$log" >&2
-  echo "RESULT: FAIL — $last is not idempotent" >&2
-  exit 1
+if [ -n "$THROUGH" ] && [ "${applied[${#applied[@]}-1]}" != "$THROUGH" ]; then
+  echo "RESULT: FAIL — --through $THROUGH names no migration in $MIGRATIONS" >&2
+  exit 2
 fi
-echo "re-applied $last (idempotent)"
+echo "applied as gremion (owner): ${applied[*]}"
+# Idempotency: a replay of the applied chain, in order, must succeed and leave
+# the same grant (the assertions below run after it).
+for base in "${applied[@]}"; do
+  if ! log="$(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -q -U gremion -d gremion <"$MIGRATIONS/$base" 2>&1)"; then
+    printf '%s\n' "$log" >&2
+    echo "RESULT: FAIL — $base is not idempotent" >&2
+    exit 1
+  fi
+done
+echo "re-applied ${applied[*]} in order (idempotent)"
 
 docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -q -U gremion -d gremion <<'SQL'
 INSERT INTO news_posts (title, slug, body_html, author_id, published_at) VALUES
@@ -109,6 +115,20 @@ check 'owner sees every row' "$out" 3
 out="$(reader "INSERT INTO news_posts (title, slug, author_id) VALUES ('x','x','x')")"
 case "$out" in *"permission denied"*) got=denied ;; *) got="allowed:$out" ;; esac
 check 'anon INSERT' "$got" denied
+
+# The head migration's own effective-privilege check: with the reader reaching
+# author_id through PUBLIC — which its REVOKE cannot touch — it must ABORT.
+if [ -z "$THROUGH" ]; then
+  head="${applied[${#applied[@]}-1]}"
+  owner 'GRANT SELECT ON news_posts TO PUBLIC' >/dev/null
+  if docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -q -U gremion -d gremion <"$MIGRATIONS/$head" >/dev/null 2>&1; then
+    got=applied
+  else
+    got=aborted
+  fi
+  owner 'REVOKE SELECT ON news_posts FROM PUBLIC' >/dev/null
+  check "$head with a PUBLIC grant reaching author_id" "$got" aborted
+fi
 
 if [ "$fail" -ne 0 ]; then echo "RESULT: FAIL"; exit 1; fi
 echo "RESULT: OK"

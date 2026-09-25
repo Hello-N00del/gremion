@@ -75,13 +75,13 @@
       "path": "modules/content/app/migrations/1205_news_posts_public_reader_columns.sql",
       "reason": "added: forward migration narrowing 1200's whole-table public-reader grant to the seven portal columns of published rows, with RLS (Q9); not a StuRa file",
       "owner": "TASK-200",
-      "blob": "c33f863ac6b64391e88bae0ed7479c6ae2ee3d9d"
+      "blob": "0fd03f6ed658799963c939f4107f302270c6635a"
     },
     {
       "path": "modules/content/app/scripts/news-posts-public-grant-proof.sh",
       "reason": "added: plain-docker-run postgres:18-alpine proof of the Q9 grant (RED with --through 1200_content_news_posts.sql, GREEN on the chain); not a StuRa file",
       "owner": "TASK-200",
-      "blob": "8022de093539a7ae5bd6a2958c543c321960fa6c"
+      "blob": "172937234242225cbc78019396c40b97b4f3144c"
     },
     {
       "path": "modules/content/test/guard.test.ts",
