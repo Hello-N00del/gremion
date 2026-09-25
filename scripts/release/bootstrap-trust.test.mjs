@@ -21,7 +21,7 @@ const h = new Harness('trust')
 after(() => h.teardown())
 
 let n = 0
-function stageTrust({ keyFile, download = 'pinned', preinstalled = false } = {}) {
+function stageTrust({ keyFile, download = 'pinned', preinstalled = false, arch = 'x86_64' } = {}) {
   n += 1
   const root = join(h.tmp, `root-${n}`)
   const bin = join(h.tmp, `bin-${n}`)
@@ -37,6 +37,7 @@ set -euo pipefail
 source "${BOOTSTRAP}"
 require_root() { :; }
 chown() { :; }
+uname() { if [ "$1" = "-m" ]; then echo ${arch}; else command uname "$@"; fi; }
 curl() { local out=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac; done
          printf 'curl %s\\n' "$out" >> "${h.tmp}/curl-${n}.log"; cp "${served}" "$out"; }
 stage_trust
@@ -113,4 +114,12 @@ test('no --cosign-pubkey is a usage error (exit 2); a non-PEM file is refused', 
   const j = stageTrust({ keyFile: junk })
   assert.notEqual(j.status, 0)
   assert.match(j.out, /not a PEM public key/)
+})
+
+test('a host that is not x86_64 is refused by name (only the linux-amd64 asset is pinned)', () => {
+  const k = h.keyPair('arm')
+  const r = stageTrust({ keyFile: k.pub, arch: 'aarch64' })
+  assert.notEqual(r.status, 0)
+  assert.match(r.out, /only the linux-amd64 cosign is pinned; this host is aarch64/)
+  assert.equal(existsSync(r.curlLog), false)
 })

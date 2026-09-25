@@ -1064,6 +1064,8 @@ install_cosign() {
         ok "cosign ${COSIGN_VERSION} already installed at ${dst}"
         return 0
     fi
+    [[ "$(uname -m)" == "x86_64" ]] \
+        || die "only the linux-amd64 cosign is pinned; this host is $(uname -m) — add a pinned asset for it first" 1
     info "installing cosign ${COSIGN_VERSION} (sha256-pinned) to ${dst}"
     tmp="$(mktemp)"
     if ! curl -fsSL "$COSIGN_URL" -o "$tmp"; then
