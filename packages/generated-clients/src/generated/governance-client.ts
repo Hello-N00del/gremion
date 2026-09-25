@@ -534,6 +534,12 @@ export interface components {
             /** Format: uri-reference */
             instance?: string;
         };
+        /** @description Why a notice override was refused: one already exists (append-only, at most one per invitation), notice was met so none is needed, or the invitation was already dispatched (PRD-MTG-002b). */
+        ProblemNoticeOverrideConflict: components["schemas"]["ProblemOverrideExists"] | components["schemas"]["ProblemOverrideNotRequired"] | components["schemas"]["ProblemInvitationAlreadyDispatched"];
+        /** @description Why a dispatch was refused, by name: notice missed with no override recorded, no mail connector for the body (GOV never picks one), or the invitation is not in a sendable state (PRD-MTG-002a/002b). */
+        ProblemSendInvitationRefused: components["schemas"]["ProblemNoticeOverrideMissing"] | components["schemas"]["ProblemNoMailConnector"] | components["schemas"]["ProblemStateTransitionRefused"];
+        /** @description Why an admission decision was refused: the motion is not late, or its admission is already decided (append-only, PRD-MTG-003). */
+        ProblemMotionAdmissionConflict: components["schemas"]["ProblemMotionNotLate"] | components["schemas"]["ProblemAdmissionExists"];
         /** Format: uuid */
         UuidId: string;
         BigintId: string;
@@ -1588,7 +1594,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemOverrideExists"] | components["schemas"]["ProblemOverrideNotRequired"] | components["schemas"]["ProblemInvitationAlreadyDispatched"];
+                    "application/problem+json": components["schemas"]["ProblemNoticeOverrideConflict"];
                 };
             };
         };
@@ -1624,7 +1630,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemNoticeOverrideMissing"] | components["schemas"]["ProblemNoMailConnector"] | components["schemas"]["ProblemStateTransitionRefused"];
+                    "application/problem+json": components["schemas"]["ProblemSendInvitationRefused"];
                 };
             };
         };
@@ -1823,7 +1829,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemMotionNotLate"] | components["schemas"]["ProblemAdmissionExists"];
+                    "application/problem+json": components["schemas"]["ProblemMotionAdmissionConflict"];
                 };
             };
         };

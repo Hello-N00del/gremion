@@ -961,17 +961,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemOverrideExists"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemOverrideNotRequired"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemInvitationAlreadyDispatched"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemNoticeOverrideConflict"
                 }
               }
             }
@@ -1038,17 +1028,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemNoticeOverrideMissing"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemNoMailConnector"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemStateTransitionRefused"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemSendInvitationRefused"
                 }
               }
             }
@@ -1365,14 +1345,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemMotionNotLate"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemAdmissionExists"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemMotionAdmissionConflict"
                 }
               }
             }
@@ -1902,6 +1875,45 @@
             "format": "uri-reference"
           }
         }
+      },
+      "ProblemNoticeOverrideConflict": {
+        "description": "Why a notice override was refused: one already exists (append-only, at most one per invitation), notice was met so none is needed, or the invitation was already dispatched (PRD-MTG-002b).",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProblemOverrideExists"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemOverrideNotRequired"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemInvitationAlreadyDispatched"
+          }
+        ]
+      },
+      "ProblemSendInvitationRefused": {
+        "description": "Why a dispatch was refused, by name: notice missed with no override recorded, no mail connector for the body (GOV never picks one), or the invitation is not in a sendable state (PRD-MTG-002a/002b).",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProblemNoticeOverrideMissing"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemNoMailConnector"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemStateTransitionRefused"
+          }
+        ]
+      },
+      "ProblemMotionAdmissionConflict": {
+        "description": "Why an admission decision was refused: the motion is not late, or its admission is already decided (append-only, PRD-MTG-003).",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProblemMotionNotLate"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemAdmissionExists"
+          }
+        ]
       },
       "UuidId": {
         "type": "string",

@@ -35,3 +35,47 @@ describe('N1 - a partial update of an agenda item requires no field', () => {
     }
   })
 })
+
+describe('N2 - every error response body is a named $ref, never an inline union', () => {
+  // the three 409s that refuse by more than one name
+  const MULTI_409: Record<string, { path: string; method: string; members: string[] }> = {
+    createNoticeOverride: {
+      path: '/api/v1/invitations/{invitationId}/notice-override', method: 'post',
+      members: ['ProblemOverrideExists', 'ProblemOverrideNotRequired', 'ProblemInvitationAlreadyDispatched'],
+    },
+    sendInvitation: {
+      path: '/api/v1/invitations/{invitationId}/send', method: 'post',
+      members: ['ProblemNoticeOverrideMissing', 'ProblemNoMailConnector', 'ProblemStateTransitionRefused'],
+    },
+    createMotionAdmission: {
+      path: '/api/v1/motions/{motionId}/admissions', method: 'post',
+      members: ['ProblemMotionNotLate', 'ProblemAdmissionExists'],
+    },
+  }
+
+  it('no operation response anywhere carries an inline schema (4xx/5xx included)', () => {
+    const doc = loadOpenApi()
+    const inline: string[] = []
+    for (const [p, item] of Object.entries<any>(doc.paths)) {
+      for (const [m, op] of Object.entries<any>(item)) {
+        if (!op?.operationId) continue
+        for (const [code, resp] of Object.entries<any>(op.responses ?? {})) {
+          for (const [ct, media] of Object.entries<any>(resp.content ?? {})) {
+            if (!media.schema?.$ref) inline.push(`${m.toUpperCase()} ${p} ${code} ${ct}`)
+          }
+        }
+      }
+    }
+    expect(inline).toEqual([])
+  })
+
+  for (const [opId, { path, method, members }] of Object.entries(MULTI_409)) {
+    it(`${opId} 409 names a union schema whose members are its named refusals`, () => {
+      const doc = loadOpenApi()
+      const ref: string = doc.paths[path][method].responses['409'].content['application/problem+json'].schema.$ref
+      expect(ref).toMatch(/^#\/components\/schemas\/Problem\w+$/)
+      const union = doc.components.schemas[ref.split('/').pop()!]
+      expect(union.oneOf.map((b: any) => b.$ref.split('/').pop()).sort()).toEqual([...members].sort())
+    })
+  }
+})
