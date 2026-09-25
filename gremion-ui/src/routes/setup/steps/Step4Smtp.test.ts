@@ -8,10 +8,11 @@ import { render, fireEvent, screen } from '@testing-library/svelte'
 // dead-ends on the bare German refusal exactly as the wizard would.
 // (`wizard-submit-schema.test.ts` also names the endpoint, but it is a test
 // stub, not a UI surface.)
-vi.mock('$app/stores', async () => {
-  const { readable } = await import('svelte/store')
-  return { page: readable({ data: { brand: null } }) }
-})
+// TASK-032 (TRD-410 [D R20-D5]): $app/state's `page` is a plain reactive
+// object (not a Svelte store) — no `readable()` wrapper needed or possible.
+vi.mock('$app/state', () => ({
+  page: { data: { brand: null } },
+}))
 
 import Step4Smtp from './Step4Smtp.svelte'
 

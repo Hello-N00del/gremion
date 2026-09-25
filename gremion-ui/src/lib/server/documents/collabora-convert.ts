@@ -5,10 +5,9 @@
 // to HTML / PDF via Collabora's convert-to endpoint on COLLABORA_URL (the
 // /cool/convert-to/* contract — distinct from the newsletter leaf's
 // /lool/convert-to/* on COLLABORA_INTERNAL_URL).
-import { env } from '$env/dynamic/private'
 
 export async function convertOdtToHtml(odtBuffer: Buffer): Promise<string> {
-  const collaboraUrl = (env.COLLABORA_URL ?? 'http://collabora:9980').replace(/\/$/, '')
+  const collaboraUrl = (process.env.COLLABORA_URL ?? 'http://collabora:9980').replace(/\/$/, '')
   const formData = new FormData()
   formData.append('data', new Blob([new Uint8Array(odtBuffer)], { type: 'application/vnd.oasis.opendocument.text' }), 'doc.odt')
   const res = await fetch(`${collaboraUrl}/cool/convert-to/html`, { method: 'POST', body: formData })
@@ -17,7 +16,7 @@ export async function convertOdtToHtml(odtBuffer: Buffer): Promise<string> {
 }
 
 export async function convertOdtToPdf(odtBuffer: Buffer): Promise<Buffer> {
-  const collaboraUrl = (env.COLLABORA_URL ?? 'http://collabora:9980').replace(/\/$/, '')
+  const collaboraUrl = (process.env.COLLABORA_URL ?? 'http://collabora:9980').replace(/\/$/, '')
   const formData = new FormData()
   formData.append('data', new Blob([new Uint8Array(odtBuffer)], { type: 'application/vnd.oasis.opendocument.text' }), 'doc.odt')
   const res = await fetch(`${collaboraUrl}/cool/convert-to/pdf`, { method: 'POST', body: formData })

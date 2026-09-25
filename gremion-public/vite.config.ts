@@ -8,6 +8,7 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
+import svelteConfig from './kit.config.js';
 
 export default defineConfig({
   // #436 — Tailwind v4 via its own Vite plugin, mirroring gremion-ui. This
@@ -15,7 +16,10 @@ export default defineConfig({
   // entries): vite 8's rolldown-based CSS resolver mis-resolves the bare
   // `@import 'tailwindcss'` specifier through postcss-import, and v4 does its
   // own vendor prefixing via Lightning CSS, so neither postcss entry survives.
-  plugins: [tailwindcss(), sveltekit()],
+  // TASK-032: kit 3 requires Svelte(Kit) config to be passed through the
+  // `sveltekit(...)` plugin call rather than auto-discovered from
+  // kit.config.js.
+  plugins: [tailwindcss(), sveltekit(svelteConfig)],
   ssr: {
     noExternal: ['@gremion/db']
   },

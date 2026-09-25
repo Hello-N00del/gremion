@@ -1,6 +1,10 @@
 import { handle as authHandle } from './auth'
-import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
-import { sequence } from '@sveltejs/kit/hooks'
+import { redirect } from '@sveltejs/kit'
+// TASK-032 (TRD-410 [D R20-D5]): kit 3 moved the Handle/HandleFetch/
+// HandleServerError hook types out of the main '@sveltejs/kit' entry into
+// '@sveltejs/kit/hooks' (upstream CHANGELOG.md, "breaking: move hooks-related
+// types to @sveltejs/kit/hooks") — already imported here for `sequence`.
+import { sequence, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit/hooks'
 import { readOrMintCorrelationId, CORRELATION_HEADER } from '$lib/server/ports/tracer'
 import { canAccess, pageAccessForTenant, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
@@ -597,12 +601,22 @@ export const handleFetch: HandleFetch = tenantForwardFetch
  * renders it as "Referenz ERR-XXXXXX" so a user can quote it to the IT team;
  * the same id is logged alongside the stack here so ops can correlate the two.
  *
- * Expected errors thrown via `error(status, …)` (403/404 etc.) bypass this
- * hook entirely — SvelteKit only calls handleError for *unexpected* throws —
- * so the reference id is naturally scoped to 500s.
+ * TASK-032 (TRD-410 [D R20-D5]): kit 3's `handleError` now runs for every
+ * error, discriminated by `kind` (upstream CHANGELOG.md, "breaking: run all
+ * errors through the handleError hook") — the old flat
+ * `{ error, status, message }` shape is gone (`CaughtError<Issue>`). Expected
+ * app errors thrown via `error(status, …)` used to bypass this hook entirely;
+ * that no longer holds at the kit level, so `kind === 'app'` is checked
+ * explicitly here to preserve the original intent: no errId, no log line, for
+ * an error the app deliberately threw with an intentional status/message.
+ * Returning nothing lets SvelteKit apply the caught error's own defaults
+ * (App.Error's `message` is required, but the return type makes it optional
+ * — omitted fields are inherited from the caught error, per kit's own
+ * `handleError` doc comment).
  */
-export const handleError: HandleServerError = ({ error, status, message }) => {
+export const handleError: HandleServerError = ({ error, event, kind }) => {
+  if (kind === 'app') return
   const errId = generateErrId()
-  console.error(`[error] ${errId} (status ${status}):`, error)
-  return { message, errId }
+  console.error(`[error] ${errId} (kind ${kind}, ${event.route.id ?? event.url.pathname}):`, error)
+  return { errId }
 }

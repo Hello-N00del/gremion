@@ -1,7 +1,6 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { createConnection } from 'node:net'
-import { env } from '$env/dynamic/private'
 import { defaultTenantEnv } from '$lib/server/tenant/default-env'
 import type { ApiResponse } from '$lib/api-response'
 import { validateSetupToken } from '$lib/server/setup-token'
@@ -59,11 +58,11 @@ export const GET: RequestHandler = async ({ request, locals }) => {
     return json({ success: false, error: 'Invalid or missing setup token' }, { status: 401 })
   }
 
-  const postgresHost = env.POSTGRES_HOST ?? 'postgres'
-  const postgresPort = parseInt(env.POSTGRES_PORT ?? '5432', 10)
+  const postgresHost = process.env.POSTGRES_HOST ?? 'postgres'
+  const postgresPort = parseInt(process.env.POSTGRES_PORT ?? '5432', 10)
   const keycloakUrl = (defaultTenantEnv('KEYCLOAK_ADMIN_URL') ?? 'http://keycloak:8080').replace(/\/$/, '')
-  const redisHost = env.REDIS_HOST ?? 'redis'
-  const redisPort = parseInt(env.REDIS_PORT ?? '6379', 10)
+  const redisHost = process.env.REDIS_HOST ?? 'redis'
+  const redisPort = parseInt(process.env.REDIS_PORT ?? '6379', 10)
 
   // Reachability probes. (open-core carve) The Nextcloud + Helios probes were
   // removed with those satellite services — the governance kernel ships neither,

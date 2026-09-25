@@ -1,7 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import type { Snippet } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state'
   import { base } from '$app/paths';
   import type { LayoutData } from './$types';
   import PortalHeader from '$lib/components/PortalHeader.svelte';
@@ -19,7 +19,7 @@
     { href: `${base}/#kontakt`,       label: 'Kontakt' },
   ];
 
-  let currentPath = $derived($page.url.pathname);
+  let currentPath = $derived(page.url.pathname);
 </script>
 
 <!-- Skip-to-content — WCAG 2.4.1 -->

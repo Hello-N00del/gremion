@@ -14,7 +14,7 @@
     required_majority: 'simple' | 'two_thirds' | 'absolute'
   }
   import { hasRole, Role } from '$lib/auth'
-  import { page } from '$app/stores'
+  import { page } from '$app/state'
   import { Button } from '$lib/components/ui/button'
   import Pill from '$lib/components/pills/Pill.svelte'
   import AttendanceChips from '$lib/components/protocols/AttendanceChips.svelte'
@@ -24,7 +24,7 @@
 
   let { data }: { data: PageData } = $props()
 
-  const user = $derived($page.data.user)
+  const user = $derived(page.data.user)
   const isAdmin = $derived(user && hasRole(user.roles, Role.CouncilAdmin))
   const isEditable = $derived(data.protocol.status === 'draft')
 

@@ -2,6 +2,7 @@ import { sveltekit } from '@sveltejs/kit/vite'
 import { svelteTesting } from '@testing-library/svelte/vite'
 import tailwindcss from '@tailwindcss/vite'
 import { configDefaults, defineConfig } from 'vitest/config'
+import svelteConfig from './kit.config.js'
 
 export default defineConfig({
   // svelteTesting() resolves Svelte's browser build + DOM cleanup for
@@ -12,7 +13,11 @@ export default defineConfig({
   // (ENOENT opening a literal "tailwindcss" file), a known rolldown-vite/
   // postcss-import interaction. The official fix is Tailwind's own Vite
   // plugin, which bypasses postcss's import resolution entirely.
-  plugins: [tailwindcss(), sveltekit(), svelteTesting()],
+  // TASK-032: kit 3 requires Svelte(Kit) config to be passed through the
+  // `sveltekit(...)` plugin call rather than auto-discovered from
+  // kit.config.js (upstream CHANGELOG.md, "breaking: require Svelte
+  // config options to be passed through the Vite plugin").
+  plugins: [tailwindcss(), sveltekit(svelteConfig), svelteTesting()],
   server: {
     // #260: default to loopback so `pnpm dev` does NOT expose the dev server
     // (source via /@fs, HMR websocket) to the LAN of the operator box that also

@@ -3,7 +3,6 @@
 // Uses a dedicated low-privilege Postgres connection (GREMION_PUBLIC_DB_URL).
 
 import postgres from 'postgres';
-import { env } from '$env/dynamic/private';
 import type { PublicProtocol, PublicCommittee } from '@gremion/db/public-types';
 import { isUuid } from '$lib/validate';
 
@@ -11,7 +10,7 @@ let _db: ReturnType<typeof postgres> | null = null;
 
 export function getPublicDb(): ReturnType<typeof postgres> {
   if (!_db) {
-    const url = env.GREMION_PUBLIC_DB_URL;
+    const url = process.env.GREMION_PUBLIC_DB_URL;
     if (!url) throw new Error('GREMION_PUBLIC_DB_URL not configured');
     _db = postgres(url, { max: 5 });
   }

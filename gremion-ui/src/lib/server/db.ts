@@ -1,5 +1,4 @@
 import postgres from 'postgres'
-import { env } from '$env/dynamic/private'
 import { requireTenant } from '$lib/server/tenant/context'
 import { getPoolForTenant } from '$lib/server/db/pool-registry'
 import type { Sql } from '@gremion/db'
@@ -192,7 +191,7 @@ export async function runMigrations(): Promise<void> {
   // tampered migration aborts the boot rather than silently running.
   const manifest = loadMigrationManifest(dir)
 
-  const skipSeeds = env.GREMION_DISABLE_SEEDS === 'true'
+  const skipSeeds = process.env.GREMION_DISABLE_SEEDS === 'true'
 
   // A file numbered into a gap BELOW this database's high-water mark is a
   // back-fill, not a forward migration: the apply loop picks it up out of

@@ -3,7 +3,6 @@ import type { GremionConfig } from '../config'
 import type { GremionBlueprint } from './org-blueprint'
 import { validateBlueprint } from './org-blueprint'
 import { seedMunicipalDemo } from './seed-municipal-demo'
-import { env } from '$env/dynamic/private'
 import { getDb } from '../db'
 import { createOrgUnit, addOrgUnitMember } from '../governance/org-units-db'
 import { GREMION_ORG_SCHEMA, orgSchemaFromBlueprint } from '../governance/org-schema'
@@ -367,7 +366,7 @@ export async function runSeed(bp: GremionBlueprint, deps: SeedDeps = {}): Promis
   if (problems.length > 0) {
     throw new Error(`invalid blueprint: ${problems.join('; ')}`)
   }
-  const password = deps.password ?? env.SEED_USER_PASSWORD
+  const password = deps.password ?? process.env.SEED_USER_PASSWORD
   if (!password) throw new Error('runSeed: SEED_USER_PASSWORD is not set')
   // P2.1b T4: out-of-request callers run inside an explicit runWithTenant
   // scope (worker entrypoints are wrapped by worker-fleet.ts
@@ -376,7 +375,7 @@ export async function runSeed(bp: GremionBlueprint, deps: SeedDeps = {}): Promis
   // deps.kc / have ALS from the resolution seam.
   const kc = deps.kc ?? getKeycloakAdminClientForCurrentTenant()
   const adapters = deps.adapters ?? defaultAdapters()
-  const includeDemo = deps.includeDemo ?? env.SEED_DEMO_FIXTURES === 'true'
+  const includeDemo = deps.includeDemo ?? process.env.SEED_DEMO_FIXTURES === 'true'
 
   const userMap = await seedUsers(bp, kc, password)
   await seedDevAdminGroups(kc, userMap)

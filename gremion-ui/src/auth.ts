@@ -4,7 +4,6 @@ import type { RequestEvent } from '@sveltejs/kit'
 import { Role, type SessionUser } from '$lib/auth/types'
 import { safeDecodeAccessToken } from '$lib/auth/decode'
 import { acrToLoa, LOA } from '$lib/auth/step-up'
-import { env } from '$env/dynamic/private'
 import { resolveSecret } from '$lib/server/tenant/secrets'
 import { getTenant, getTenantOrNull, type TenantContext } from '$lib/server/tenant/context'
 import { DEFAULT_ROLE_VOCABULARY, roleVocabularyForTenant } from '$lib/server/tenant/role-vocabulary'
@@ -55,7 +54,7 @@ function currentRoleVocabulary(): readonly string[] | undefined {
 export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAuthConfig> {
   const tenant = event.locals.tenant as TenantContext | undefined
   if (!tenant) throw new Error('buildAuthConfig: no tenant resolved (tenantResolveHandle must run first)')
-  const authSecret = env.AUTH_SECRET
+  const authSecret = process.env.AUTH_SECRET
   if (!authSecret) throw new Error('AUTH_SECRET must be set')
   const externalBase = tenant.authExternalBase.replace(/\/$/, '')
   const internalBase = tenant.kcInternal.replace(/\/$/, '')

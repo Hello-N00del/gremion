@@ -5,7 +5,6 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname } from 'node:path'
-import { env } from '$env/dynamic/private'
 import { defaultTenantEnv } from '$lib/server/tenant/default-env'
 import { randomUUID } from 'node:crypto'
 
@@ -29,11 +28,11 @@ function getConfigDir(): string {
 }
 
 function getBackupLogsDir(): string {
-  return env.BACKUP_LOGS_DIR ?? `${getConfigDir()}/backup/logs`
+  return process.env.BACKUP_LOGS_DIR ?? `${getConfigDir()}/backup/logs`
 }
 
 function getCheckTriggerPath(): string {
-  return env.BACKUP_CHECK_TRIGGER ?? `${getConfigDir()}/backup/check-requested`
+  return process.env.BACKUP_CHECK_TRIGGER ?? `${getConfigDir()}/backup/check-requested`
 }
 
 function readRecentRuns(limit = 20): BackupRun[] {

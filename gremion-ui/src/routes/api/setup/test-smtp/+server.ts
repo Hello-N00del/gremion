@@ -1,6 +1,5 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
-import { env } from '$env/dynamic/private'
 import { readConfig } from '$lib/server/config'
 import { z } from 'zod'
 import nodemailer from 'nodemailer'
@@ -287,7 +286,7 @@ async function resolveSmtpTarget(host: string): Promise<SmtpTarget> {
   // every branch below still runs, so `localhost`, `127.0.0.1`, the link-local
   // metadata address, CGNAT (100.64/10) and the blocked suffixes stay refused
   // with it set.
-  const allowPrivate = env.SMTP_TEST_ALLOW_PRIVATE === '1'
+  const allowPrivate = process.env.SMTP_TEST_ALLOW_PRIVATE === '1'
 
   if (BLOCKED_HOST_NAMES.includes(name)) return { allowed: false, reason: 'blocked' }
   if (BLOCKED_HOST_SUFFIXES.some((s) => name.endsWith(s)))

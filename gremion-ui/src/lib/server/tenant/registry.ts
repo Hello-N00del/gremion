@@ -3,7 +3,6 @@
 // Reads ONLY the control pool (getControlDb) — never a tenant data-plane pool,
 // never the ALS resolver. The ledger functions mirror ledger.ts's idempotency
 // pattern at tenant granularity, keyed by (tenant_id, subsystem).
-import { env } from '$env/dynamic/private'
 import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
 import { normaliseHost } from './host'
@@ -399,7 +398,7 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
   const issuer = row.issuer.replace(/\/$/, '')
   const kcInternal = row.kcInternal.replace(/\/$/, '')
   // CR1: per-tenant audiences come from the registry row (seeded for `default`
-  // from parseAudiences(env.AUTH_JWT_AUDIENCES) at registration — Task 30); the
+  // from parseAudiences(process.env.AUTH_JWT_AUDIENCES) at registration — Task 30); the
   // parseAudiences(undefined) fallback only fires for a malformed empty row.
   const audiences = row.audiences.length ? Array.from(row.audiences) : parseAudiences(undefined)
   const matrixSpace = row.matrixSpace as {
@@ -749,9 +748,9 @@ export async function updateTenantProvisioning(
   return rows[0] ? hydrate(rows[0]) : null
 }
 
-/** The `default` tenant keeps env.CONFIG_PATH; others use a per-slug data dir. */
+/** The `default` tenant keeps process.env.CONFIG_PATH; others use a per-slug data dir. */
 function configPathForTenant(slug: string): string {
-  return slug === 'default' ? (env.CONFIG_PATH ?? '/app/config/config.json') : `/data/${slug}/config.json`
+  return slug === 'default' ? (process.env.CONFIG_PATH ?? '/app/config/config.json') : `/data/${slug}/config.json`
 }
 
 /**
@@ -763,7 +762,7 @@ function configPathForTenant(slug: string): string {
  */
 function authExternalBaseForTenant(slug: string, issuer: string): string {
   if (slug === 'default') {
-    return (env.AUTH_KEYCLOAK_BASE ?? env.AUTH_KEYCLOAK_ISSUER ?? issuer).replace(/\/$/, '')
+    return (process.env.AUTH_KEYCLOAK_BASE ?? process.env.AUTH_KEYCLOAK_ISSUER ?? issuer).replace(/\/$/, '')
   }
   return issuer
 }

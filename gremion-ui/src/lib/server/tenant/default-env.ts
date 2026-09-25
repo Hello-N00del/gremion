@@ -1,5 +1,3 @@
-import { env } from '$env/dynamic/private'
-
 /**
  * P2.1c (T14, §7.7): the SINGLE allowlisted seam for per-tenant env reads that are
  * NOT routed through a per-tenant registry accessor.
@@ -20,10 +18,10 @@ import { env } from '$env/dynamic/private'
  * Callers MUST supply their own fallback (`?? '...'`): this returns `undefined` when the
  * var is unset, exactly like a direct `env.<VAR>` read, so behavior is byte-identical.
  *
- * The dynamic `env[name]` read (variable, not a literal) is invisible to the guard regex
- * — it matches only `env.<LITERAL>` / `env['<LITERAL>']` — but this file is allowlisted
+ * The dynamic `process.env[name]` read (variable, not a literal) is invisible to the guard regex
+ * — it matches only `env.<LITERAL>` / `process.env['<LITERAL>']` — but this file is allowlisted
  * regardless, so the seam is single-sourced rather than relying on the regex shape.
  */
 export function defaultTenantEnv(name: string): string | undefined {
-  return env[name]
+  return process.env[name]
 }

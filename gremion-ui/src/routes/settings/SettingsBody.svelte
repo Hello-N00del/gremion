@@ -100,7 +100,11 @@
   function selectSection(k: SectionKey) {
     activeKey = k
     // Keep the deep-link URL in sync (shareable) without a hard nav.
-    goto(`/settings/${k}`, { replaceState: true, noScroll: true, keepFocus: true })
+    // TASK-032 (TRD-410 [D R20-D5]): kit 3's GotoOptions dropped `noScroll` +
+    // `keepFocus` in favour of a single `reset` flag (`reset: false` leaves
+    // both scroll position and focus alone, same combined effect as the old
+    // pair), and `replaceState` is deprecated in favour of `replace`.
+    goto(`/settings/${k}`, { replace: true, reset: false })
   }
 
   // ---- profile card (unchanged from the old landing page) ----

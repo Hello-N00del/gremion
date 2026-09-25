@@ -1,13 +1,14 @@
 import { describe, test, expect, vi, afterEach } from 'vitest'
 import { render, fireEvent, waitFor, cleanup } from '@testing-library/svelte'
-import { readable } from 'svelte/store'
 import { configUpdateSchema } from '$lib/server/config'
 
-// Step4Smtp reads $page.data.brand (resolveBrand's placeholder-name fallback).
-// Outside a real SvelteKit router context $page has no value, so stub it —
-// resolveBrand() itself already tolerates a missing/null brand.
-vi.mock('$app/stores', () => ({
-  page: readable({ data: {} }),
+// Step4Smtp reads page.data.brand (resolveBrand's placeholder-name fallback).
+// Outside a real SvelteKit router context $app/state's `page` has no value,
+// so stub it — resolveBrand() itself already tolerates a missing/null brand.
+// TASK-032 (TRD-410 [D R20-D5]): $app/state's `page` is a plain reactive
+// object (not a Svelte store) — no `readable()` wrapper needed or possible.
+vi.mock('$app/state', () => ({
+  page: { data: {} },
 }))
 import Step1Health from './Step1Health.svelte'
 import Step2Org from './Step2Org.svelte'

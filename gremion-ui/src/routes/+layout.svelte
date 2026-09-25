@@ -20,7 +20,7 @@
   import type { LayoutData } from './$types'
   import type { SessionUser } from '$lib/auth/types'
   import type { Snippet } from 'svelte'
-  import { page } from '$app/stores'
+  import { page } from '$app/state'
   import { onMount } from 'svelte'
   import { initTheme } from '$lib/stores/theme'
 
@@ -42,13 +42,13 @@
   let groups = $derived((user as { groups?: string[] } | undefined)?.groups ?? [])
   let nav = $derived(data.nav)
   let counts = $derived(data.counts ?? { approvals: 0, liveVotes: 0, unread: 0 })
-  let activeHref = $derived($page.url.pathname)
+  let activeHref = $derived(page.url.pathname)
 
   // Don't show shell on auth/legal pages
   let isShellRoute = $derived(
-    !$page.url.pathname.startsWith('/auth') &&
-    !$page.url.pathname.startsWith('/legal') &&
-    !$page.url.pathname.startsWith('/setup')
+    !page.url.pathname.startsWith('/auth') &&
+    !page.url.pathname.startsWith('/legal') &&
+    !page.url.pathname.startsWith('/setup')
   )
 </script>
 

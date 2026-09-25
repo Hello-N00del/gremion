@@ -3,11 +3,11 @@
   import Pill from '$lib/components/pills/Pill.svelte'
   import { Button } from '$lib/components/ui/button'
   import { hasRole, Role } from '$lib/auth'
-  import { page } from '$app/stores'
+  import { page } from '$app/state'
 
   let { data }: { data: PageData } = $props()
 
-  const user = $derived($page.data.user)
+  const user = $derived(page.data.user)
   const isAdmin = $derived(user && hasRole(user.roles, Role.CouncilAdmin))
 
   const TYPE_LABELS: Record<string, string> = {

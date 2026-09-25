@@ -7,12 +7,21 @@
 // The governance-only kernel ships only the local backend; the Nextcloud
 // backend rides with the (carved-out) files feature module.
 //
-// Construction is lazy via getStorage() so module-import order and
-// SvelteKit's $env/dynamic/private timing don't matter; the `storage`
-// proxy below keeps the ergonomic `import { storage } from ...` shape
-// the plan asks for.
+// Construction is lazy via getStorage() so module-import order doesn't
+// matter; the `storage` proxy below keeps the ergonomic
+// `import { storage } from ...` shape the plan asks for.
+//
+// TASK-032 (TRD-410 [D R20-D5]): reads process.env directly rather than
+// SvelteKit's dynamic-private-env module. Kit 3 made that module's values
+// come only from vars explicitly declared via `defineEnvVars` (nothing here
+// is), so an undeclared read now silently resolves to `undefined` instead of
+// the live process value — a correctness/security regression for a
+// singleton selected at module-load time. adapter-node's dynamic env was
+// itself backed by `process.env` at runtime, so this is behavior-preserving
+// for this deployment target, and it keeps the `process.env.X = ...`
+// test-setup overrides working exactly as before (that was already the
+// fallback half of the old `env[name] ?? process.env[name]` read).
 
-import { env } from '$env/dynamic/private'
 import type { StorageBackend } from './types'
 import { LocalStorageBackend } from './local'
 
@@ -20,13 +29,8 @@ export type { StorageBackend } from './types'
 
 let cached: StorageBackend | null = null
 
-/** Read a value from SvelteKit's dynamic env first, then process.env. The
- *  dynamic env is populated by the SvelteKit server at boot — in vitest it
- *  stays empty (`set_private_env` is never called), so the process.env
- *  fallback is what makes the integration tests actually see test-only
- *  overrides set via `process.env.X = ...` in test setup. */
 function readEnv(name: string): string | undefined {
-  return env[name] ?? process.env[name]
+  return process.env[name]
 }
 
 function build(): StorageBackend {

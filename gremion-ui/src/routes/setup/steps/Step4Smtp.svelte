@@ -3,13 +3,13 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import { page } from '$app/stores'
+  import { page } from '$app/state'
   import { resolveBrand } from '$lib/brand'
 
   export let smtp: { configured: boolean; host: string; port: number; from_address: string; from_name: string }
   export let itAdminEmail: string
 
-  $: brand = resolveBrand($page.data.brand)
+  $: brand = resolveBrand(page.data.brand)
 
   const dispatch = createEventDispatcher<{ advance: void; back: void }>()
 

@@ -17,7 +17,6 @@
 // old -> new per column. The DO UPDATE carries an IS DISTINCT FROM guard so an
 // unchanged env writes nothing (updated_at stays put). Values logged are refs
 // and issuer URLs — never secret material.
-import { env } from '$env/dynamic/private'
 import { getControlDb } from './control-db'
 import { getTenantBySlug, type Tenant } from './registry'
 import { parseAudiences } from '$lib/auth/audience'
@@ -54,7 +53,7 @@ export interface DefaultTenantEnv {
  * override, or when the issuer is not Keycloak-shaped.
  */
 export function resolveDefaultTenantEnv(): DefaultTenantEnv {
-  const rawIssuer = env.AUTH_KEYCLOAK_ISSUER?.trim()
+  const rawIssuer = process.env.AUTH_KEYCLOAK_ISSUER?.trim()
   if (!rawIssuer) {
     throw new Error(
       'registerDefaultTenant: AUTH_KEYCLOAK_ISSUER is not set. It is the OIDC issuer of the ' +
@@ -63,17 +62,17 @@ export function resolveDefaultTenantEnv(): DefaultTenantEnv {
     )
   }
   const issuer = rawIssuer.replace(/\/$/, '')
-  const kcInternal = (env.AUTH_KEYCLOAK_INTERNAL?.trim() || issuer).replace(/\/$/, '')
-  const realmName = env.KEYCLOAK_REALM?.trim() || realmFromIssuer(issuer)
+  const kcInternal = (process.env.AUTH_KEYCLOAK_INTERNAL?.trim() || issuer).replace(/\/$/, '')
+  const realmName = process.env.KEYCLOAK_REALM?.trim() || realmFromIssuer(issuer)
   // Tenant #1's audiences track AUTH_JWT_AUDIENCES exactly like the global
   // verifyBearerJwt did — not a hardcoded literal. With AUTH_JWT_AUDIENCES
   // unset this yields DEFAULT_AUDIENCES (['gremion-ui','gremion-mobile']).
-  const audiences = parseAudiences(env.AUTH_JWT_AUDIENCES)
+  const audiences = parseAudiences(process.env.AUTH_JWT_AUDIENCES)
   // matrix_space is a messaging-module field the governance kernel does not
   // own. With no messaging module configured it stays EMPTY — an absent field
   // means "env fallback at the consuming module" (see registry.ts), which is
   // the honest answer; a guessed server name is not.
-  const serverName = env.SYNAPSE_SERVER_NAME?.trim()
+  const serverName = process.env.SYNAPSE_SERVER_NAME?.trim()
   const matrixSpace: Record<string, unknown> = serverName ? { serverName } : {}
   return { issuer, kcInternal, realmName, audiences, matrixSpace }
 }
@@ -97,7 +96,7 @@ export async function registerDefaultTenant(): Promise<Tenant> {
   const authClientRef = 'env:AUTH_KEYCLOAK_SECRET'
 
   // (open-core carve) nc_target held the files module's Nextcloud URL (from
-  // env.NEXTCLOUD_URL). That satellite is carved out of the governance kernel, so
+  // process.env.NEXTCLOUD_URL). That satellite is carved out of the governance kernel, so
   // this registry column stays empty; a re-added files module repopulates it.
   const ncTarget = { url: '' }
 

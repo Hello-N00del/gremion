@@ -6,7 +6,6 @@
 // missing env var throws — never returns an empty secret silently.
 import { readFileSync } from 'node:fs'
 import { posix } from 'node:path'
-import { env } from '$env/dynamic/private'
 
 // P2.1c (T7) — file: refs come from the trusted control DB, but a registry-WRITE
 // surface (the provisioner) now exists, so the ref is no longer beyond reach of
@@ -36,7 +35,7 @@ export function resolveSecret(ref: string): string {
   }
   if (ref.startsWith('env:')) {
     const name = ref.slice('env:'.length)
-    const val = env[name]
+    const val = process.env[name]
     if (val === undefined) throw new Error(`secret ref env:${name} is unset`)
     return val
   }
@@ -62,6 +61,6 @@ export function tenantSecretHostPath(ref: string): string {
     throw new Error(`tenantSecretHostPath: ref file:${raw} is not under the ${TENANT_SUBDIR} tenants subdir`)
   }
   const name = normalized.slice(TENANT_SUBDIR.length)
-  const hostRoot = (env.TENANT_SECRETS_DIR ?? './secrets/tenants').replace(/\/$/, '')
+  const hostRoot = (process.env.TENANT_SECRETS_DIR ?? './secrets/tenants').replace(/\/$/, '')
   return `${hostRoot}/${name}`
 }

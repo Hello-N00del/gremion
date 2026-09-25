@@ -1,5 +1,9 @@
 // src/lib/server/tenant/resolve.ts
-import type { Handle, HandleFetch } from '@sveltejs/kit'
+// TASK-032 (TRD-410 [D R20-D5]): kit 3 moved the Handle/HandleFetch hook
+// types out of the main '@sveltejs/kit' entry into '@sveltejs/kit/hooks'
+// (mechanical import-path migration only — see brief §3 "beyond mechanical
+// renames").
+import type { Handle, HandleFetch } from '@sveltejs/kit/hooks'
 import {
   resolveTenantBySlug,
   getTenantStatusBySlug,

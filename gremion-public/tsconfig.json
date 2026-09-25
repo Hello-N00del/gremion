@@ -1,5 +1,11 @@
 {
-  "extends": "./.svelte-kit/tsconfig.json",
+  "extends": "$app/tsconfig",
+  // TASK-032 (TRD-410 [D R20-D5]): see gremion-ui/tsconfig.json's comment —
+  // kit 3's generated `$app/tsconfig` carries no `include` of its own, so
+  // without one here TypeScript defaults to "**/*" and would sweep in
+  // `scripts/build-stamp.test.mjs` (a node --test file, not meant to be
+  // svelte-checked, same as gremion-ui's node --test guard scripts).
+  "include": ["src", "tests", "*"],
   "compilerOptions": {
     "allowJs": true,
     "checkJs": true,

@@ -1,5 +1,4 @@
 import { json, error } from '@sveltejs/kit'
-import { env } from '$env/dynamic/private'
 import { listOrgUnits } from '$lib/server/governance/org-units-db'
 import { runSeed } from '$lib/server/seed/seed'
 import { resolveBlueprint } from '$lib/server/seed/blueprint-registry'
@@ -37,7 +36,7 @@ export const POST: RequestHandler = async (event) => {
   const token = request.headers.get('x-seed-token')
   // #257-4: constant-time compare (the project standard — internal-fetch.ts,
   // setup-token.ts) instead of a variable-time `!==` on a bearer-style token.
-  if (!env.SEED_TOKEN || !constantTimeEqual(token ?? '', env.SEED_TOKEN)) {
+  if (!process.env.SEED_TOKEN || !constantTimeEqual(token ?? '', process.env.SEED_TOKEN)) {
     throw error(403, 'invalid or missing seed token')
   }
   if ((await listOrgUnits()).length > 0) {

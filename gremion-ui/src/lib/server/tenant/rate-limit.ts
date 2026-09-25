@@ -1,5 +1,4 @@
 // src/lib/server/tenant/rate-limit.ts
-import { env } from '$env/dynamic/private'
 
 /**
  * P2.1b T10 (§7.6, D-RATE): per-tenant token bucket at the resolution seam.
@@ -51,7 +50,7 @@ function warnOnce(msg: string): void {
 
 /** null = limiter OFF (the default). */
 function readConfig(): { rps: number; burst: number } | null {
-  const rawRps = env.TENANT_RATE_LIMIT_RPS
+  const rawRps = process.env.TENANT_RATE_LIMIT_RPS
   if (rawRps === undefined || rawRps === '') return null // default OFF
   const rps = Number(rawRps)
   if (!Number.isFinite(rps) || rps <= 0) {
@@ -61,7 +60,7 @@ function readConfig(): { rps: number; burst: number } | null {
     return null
   }
   let burst = Math.max(1, Math.ceil(rps))
-  const rawBurst = env.TENANT_RATE_LIMIT_BURST
+  const rawBurst = process.env.TENANT_RATE_LIMIT_BURST
   if (rawBurst !== undefined && rawBurst !== '') {
     const b = Number(rawBurst)
     if (Number.isFinite(b) && b >= 1) {

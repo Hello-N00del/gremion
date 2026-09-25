@@ -6,10 +6,11 @@ import { render, fireEvent, screen } from '@testing-library/svelte'
 //   gremion-ui/src/routes/settings/tabs/TabEmail.svelte  (Settings → E-Mail, this file)
 // Shipping the `hint` rendering to the wizard only leaves an operator who
 // reaches SMTP through Settings dead-ending on the bare German refusal.
-vi.mock('$app/stores', async () => {
-  const { readable } = await import('svelte/store')
-  return { page: readable({ data: { brand: null } }) }
-})
+// TASK-032 (TRD-410 [D R20-D5]): $app/state's `page` is a plain reactive
+// object (not a Svelte store) — no `readable()` wrapper needed or possible.
+vi.mock('$app/state', () => ({
+  page: { data: { brand: null } },
+}))
 
 import TabEmail from './TabEmail.svelte'
 

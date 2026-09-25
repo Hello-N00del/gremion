@@ -1,5 +1,18 @@
 {
-  "extends": "./.svelte-kit/tsconfig.json",
+  "extends": "$app/tsconfig",
+  // TASK-032 (TRD-410 [D R20-D5]): kit 3's own `svelte-kit sync` nudges
+  // toward this exact include/exclude shape ("tsconfig.json should extend
+  // SvelteKit's built-in configuration"). Adding it here is not cosmetic: kit
+  // 3's generated `$app/tsconfig` no longer carries its own `include` (the
+  // old `.svelte-kit/tsconfig.json` did), so without one of our own,
+  // TypeScript falls back to its default "**/*", which newly sweeps
+  // `scripts/**` into `svelte-check`'s scope — ~22 pre-existing files with
+  // their own implicit-any / unknown-catch-variable issues, none of them kit
+  // migration fallout. This restores the pre-migration scope (src + the
+  // vitest `tests/` dir + root-level config files) rather than fixing
+  // unrelated scripts/ debt under this task.
+  "include": ["src", "tests", "*"],
+  "exclude": ["src/service-worker"],
   "compilerOptions": {
     "allowJs": true,
     "checkJs": true,

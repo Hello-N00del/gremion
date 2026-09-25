@@ -23,29 +23,29 @@
 // recommendation verbatim and to align with the bearer-JWT path that
 // hooks.server.ts already exercises for mobile/API clients.
 
-import { env } from '$env/dynamic/private'
 import { timingSafeEqual } from 'node:crypto'
 import { getTenantOrNull } from '$lib/server/tenant/context'
 
-// `PUBLIC_BASE_URL` cannot be read from `$env/dynamic/private` (the
-// PUBLIC_* prefix excludes it from that module), and `$env/dynamic/public`
-// is awkward in a server-only helper. We fall through to `process.env`
-// directly for the base URL — this module is gated by the `lib/server/`
-// path so it never runs client-side. INTERNAL_BASE_URL and
-// INTERNAL_PUSH_SECRET come from the private dynamic env where supported.
+// TASK-032 (TRD-410 [D R20-D5]): reads `process.env` directly for every name
+// here, including PUBLIC_BASE_URL. Kit 3 made SvelteKit's dynamic-private-env
+// module expose only vars explicitly declared via `defineEnvVars` (nothing
+// here is declared that way), so continuing to read it would silently
+// resolve every one of these to `undefined` — a correctness/security
+// regression for a helper that sets the internal-call base URL and bearer
+// secret. adapter-node's dynamic env was itself backed by `process.env` at
+// runtime, so this is behavior-preserving for this deployment target; the
+// old two-source fallback (dynamic env, then `process.env`) collapses to one
+// source because both already read the same underlying value.
 //
-// T14 §7.7 env-guard note: this dynamic `(env as Record<…>)[name]` read is
+// T14 §7.7 env-guard note: this dynamic `process.env[name]` read is
 // invisible to the guard (the scanner matches only literal `env.<VAR>` /
 // `env['<VAR>']` shapes) AND every name it ever resolves
 // (INTERNAL_BASE_URL / INTERNAL_PUSH_SECRET / PUBLIC_BASE_URL /
 // TENANT_PROXY_SHARED_SECRET) is a deployment-WIDE process secret, NOT a
 // per-tenant variable — so it needs no allowlist entry and stays as-is.
 function readEnv(name: string): string | undefined {
-  const fromPrivate = (env as Record<string, string | undefined>)[name]
-  if (typeof fromPrivate === 'string' && fromPrivate.length > 0) return fromPrivate
-  const fromProcess = process.env[name]
-  if (typeof fromProcess === 'string' && fromProcess.length > 0) return fromProcess
-  return undefined
+  const value = process.env[name]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 /**

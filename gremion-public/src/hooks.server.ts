@@ -1,4 +1,6 @@
-import type { Handle } from '@sveltejs/kit'
+// TASK-032 (TRD-410 [D R20-D5]): kit 3 moved the Handle hook type out of the
+// main '@sveltejs/kit' entry into '@sveltejs/kit/hooks'.
+import type { Handle } from '@sveltejs/kit/hooks'
 
 /**
  * #259-2: app-layer security headers for the PUBLIC portal.
