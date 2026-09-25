@@ -1,17 +1,9 @@
-import { describe, test, expect, vi } from 'vitest'
+import { describe, test, expect } from 'vitest'
 import { render } from '@testing-library/svelte'
 import Sidebar from './Sidebar.svelte'
 import type { NavItem } from './nav-schema'
 import { resolveActiveHref, navHrefs } from './nav-active'
 
-// $lib/i18n reads localStorage at import time; jsdom's localStorage is not
-// wired in this config (see CommandPalette.test.ts), so serve the German
-// dictionary through a plain store.
-vi.mock('$lib/i18n', async () => {
-  const { readable } = await import('svelte/store')
-  const de = (await import('$lib/i18n/de')).default
-  return { t: readable((k: string) => de[k] ?? k) }
-})
 
 // Fixture navigation: /messages and /messages/manage both exist (a module's
 // member view and its admin view), which the old prefix rule marked together.

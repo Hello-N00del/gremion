@@ -4,26 +4,27 @@
   // says the choice is stored on this device. `expanded` is null until the
   // shell has hydrated and knows the state, so SSR never guesses it.
   import Icon from '$lib/components/ui/Icon.svelte'
-  import { t } from '$lib/i18n'
+  import { DEFAULT_NAV_LABELS, type NavLabels } from './nav-labels'
 
   let {
     expanded = null,
-    ontoggle
-  }: { expanded?: boolean | null; ontoggle?: () => void } = $props()
+    ontoggle,
+    labels = DEFAULT_NAV_LABELS
+  }: { expanded?: boolean | null; ontoggle?: () => void; labels?: NavLabels } = $props()
 </script>
 
 <button
   type="button"
   class="nav-toggle"
-  aria-label={$t('nav.sidebar')}
+  aria-label={labels['nav.sidebar']}
   aria-expanded={expanded === null ? undefined : expanded}
   aria-describedby="nav-toggle-desc"
-  data-nav-label={$t('nav.sidebar')}
+  data-nav-label={labels['nav.sidebar']}
   onclick={() => ontoggle?.()}
 >
   <Icon name="sidebar" size={18} />
 </button>
-<span id="nav-toggle-desc" hidden>{$t('nav.sidebar.saved')}</span>
+<span id="nav-toggle-desc" hidden>{labels['nav.sidebar.saved']}</span>
 
 <style>
   .nav-toggle {

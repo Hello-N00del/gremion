@@ -15,7 +15,7 @@
   import { resolveBrand, type Brand } from '$lib/brand'
   import { resolveSourceUrl } from '$lib/source-offer'
   import { navHrefs, resolveActiveHref } from './nav-active'
-  import { t } from '$lib/i18n'
+  import { DEFAULT_NAV_LABELS, type NavLabels } from './nav-labels'
 
   let {
     nav = [],
@@ -23,7 +23,6 @@
     counts = { approvals: 0, liveVotes: 0, unread: 0 },
     userName = '',
     roles = [],
-    groups = [],
     brand: brandProp,
     // AGPL-3.0 section 13 — the offer of the Corresponding Source has to be
     // reachable from the running program, not only from the repository. The
@@ -32,13 +31,15 @@
     sourceUrl = resolveSourceUrl(),
     mode = null,
     ontoggle,
-    suppressCurrent = false
+    suppressCurrent = false,
+    labels = DEFAULT_NAV_LABELS
   }: {
     nav?: NavItem[]
     activeHref?: string
     counts?: { approvals: number; liveVotes: number; unread: number }
     userName?: string
     roles?: string[]
+    /** Accepted for prop-shape stability; the footer shows friendly role labels only (WP-2). */
     groups?: string[]
     brand?: Partial<Brand> | null
     sourceUrl?: string
@@ -47,8 +48,9 @@
     ontoggle?: () => void
     /** While the drawer is open its copy carries aria-current, not this one. */
     suppressCurrent?: boolean
+    /** Translated strings (AppShell passes navLabels($t)). */
+    labels?: NavLabels
   } = $props()
-  void groups
 
   // Tenant brand (v4 re-audit slice 10) — prop-drilled from the root layout via
   // AppShell; canonical defaults back-fill so the brand never renders blank.
@@ -60,7 +62,7 @@
   let column: HTMLElement | undefined = $state()
 </script>
 
-<aside class="nav-col sidebar" aria-label={$t('nav.sidebar')} bind:this={column}>
+<aside class="nav-col sidebar" aria-label={labels['nav.sidebar']} bind:this={column}>
   <div class="sb-brand">
     <!-- P2.2-data: per-tenant logo (config.brand.logo_url → brand.logoUrl).
          Same .sb-logo size/box classes as the letter mark; null = today's
@@ -74,15 +76,15 @@
       <div class="n">{brand.product}</div>
       <div class="s">{brand.orgShort} · {brand.term}</div>
     </div>
-    <NavToggle expanded={mode === null || mode === 'drawer' ? null : mode === 'expanded'} {ontoggle} />
+    <NavToggle expanded={mode === null || mode === 'drawer' ? null : mode === 'expanded'} {ontoggle} {labels} />
   </div>
 
-  <nav class="sb-nav" aria-label={$t('nav.main')}>
+  <nav class="sb-nav" aria-label={labels['nav.main']}>
     <NavList {nav} {counts} {currentHref} idPrefix="nav-col" />
   </nav>
 
   <NavUser {userName} {roles} />
-  <LegalMenu {sourceUrl} idPrefix="nav-col" />
+  <LegalMenu {sourceUrl} idPrefix="nav-col" {labels} />
 
   <RailTooltip container={column} enabled={mode === 'rail'} />
 </aside>

@@ -14,6 +14,7 @@
   import { MQ_COLUMN, MQ_WIDE, navShellCss } from './nav-constants'
   import { applyNavPrefClass, createNavPrefStore, effectiveNavMode, type NavMode, type NavPref } from './nav-state'
   import { navHrefs, resolveActiveHref } from './nav-active'
+  import { navLabels } from './nav-labels'
 
   let {
     nav = [],
@@ -139,6 +140,7 @@
     {mode}
     ontoggle={toggleSidebar}
     suppressCurrent={drawerOpen}
+    labels={navLabels($t)}
   />
   <div class="app-shell-body">
     <TopBar {brand} {nav} unread={counts.unread} modules={topbarModules} {bodyContext}>

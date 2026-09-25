@@ -3,14 +3,15 @@
   // expanded sidebar and in the drawer; in the icon rail they sit behind one
   // disclosure button ('Rechtliches'), because a 64 px column cannot hold them.
   import Icon from '$lib/components/ui/Icon.svelte'
-  import { t } from '$lib/i18n'
+  import { DEFAULT_NAV_LABELS, type NavLabels } from './nav-labels'
   import { SOURCE_OFFER_LABEL } from '$lib/source-offer'
 
   let {
     sourceUrl,
     idPrefix,
-    onnavigate
-  }: { sourceUrl: string; idPrefix: string; onnavigate?: (href: string) => void } = $props()
+    onnavigate,
+    labels = DEFAULT_NAV_LABELS
+  }: { sourceUrl: string; idPrefix: string; onnavigate?: (href: string) => void; labels?: NavLabels } = $props()
 
   let open = $state(false)
   let button: HTMLButtonElement | undefined = $state()
@@ -41,10 +42,10 @@
     bind:this={button}
     type="button"
     class="legal-btn nav-rail-only"
-    aria-label={$t('nav.legal')}
+    aria-label={labels['nav.legal']}
     aria-expanded={open}
     aria-controls="{idPrefix}-legal"
-    data-nav-label={$t('nav.legal')}
+    data-nav-label={labels['nav.legal']}
     onclick={() => (open = !open)}
   >
     <Icon name="scale" size={18} />

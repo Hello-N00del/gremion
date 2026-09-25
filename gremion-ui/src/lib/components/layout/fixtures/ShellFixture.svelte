@@ -31,9 +31,9 @@
   <span class="fixture-chip" data-testid="fixture-chip" style="font: 10px monospace; padding: 4px 9px; white-space: nowrap;">MATRIX · VERBUNDEN</span>
 {/snippet}
 {#snippet fixtureBell()}
-  <a href="/messages" class="fixture-bell" data-testid="fixture-bell" aria-label="Benachrichtigungen (3 ungelesen)">
+  <button type="button" class="fixture-bell" data-testid="fixture-bell" aria-label="Benachrichtigungen (3 ungelesen)">
     <Icon name="bell" size={16} />
-  </a>
+  </button>
 {/snippet}
 
 <div data-shell-fixture style="display: contents">

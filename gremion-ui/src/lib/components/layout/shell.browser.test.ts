@@ -542,7 +542,7 @@ describe('(12) topbarModuleSlot: chips, live-call indicator, bell', () => {
   test('below 768 px the fixture chip is hidden and the bell stays, named, at control size', async () => {
     await mount({ width: 390, height: 844, withModules: true })
     expect(visible($('[data-testid="fixture-chip"]')!)).toBe(false)
-    const bell = vpage.getByRole('link', { name: /Benachrichtigungen/ })
+    const bell = vpage.getByRole('button', { name: /Benachrichtigungen/ })
     await expect.element(bell).toBeVisible()
     expect(size(bell.element()).width).toBeGreaterThanOrEqual(NAV_CONTROL_SIZE.normal)
     expect(size(bell.element()).height).toBeGreaterThanOrEqual(NAV_CONTROL_SIZE.normal)

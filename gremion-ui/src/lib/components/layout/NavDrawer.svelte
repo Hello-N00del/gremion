@@ -17,6 +17,7 @@
   import { resolveBrand, type Brand } from '$lib/brand'
   import { themeMode } from '$lib/stores/theme'
   import { t } from '$lib/i18n'
+  import { navLabels } from './nav-labels'
 
   let {
     id,
@@ -103,7 +104,7 @@
     </div>
 
     <NavUser {userName} {roles} />
-    <LegalMenu {sourceUrl} idPrefix="nav-drawer" {onnavigate} />
+    <LegalMenu {sourceUrl} idPrefix="nav-drawer" {onnavigate} labels={navLabels($t)} />
   </div>
 </div>
 

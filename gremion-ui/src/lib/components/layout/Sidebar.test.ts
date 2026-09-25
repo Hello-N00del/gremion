@@ -1,16 +1,8 @@
-import { describe, test, expect, vi } from 'vitest'
+import { describe, test, expect } from 'vitest'
 import { render } from '@testing-library/svelte'
 import Sidebar from './Sidebar.svelte'
 import type { NavItem } from './nav-schema'
 
-// $lib/i18n reads localStorage at import time; jsdom's localStorage is not
-// wired in this config (see CommandPalette.test.ts), so serve the German
-// dictionary through a plain store.
-vi.mock('$lib/i18n', async () => {
-  const { readable } = await import('svelte/store')
-  const de = (await import('$lib/i18n/de')).default
-  return { t: readable((k: string) => de[k] ?? k) }
-})
 
 const minimalNav: NavItem[] = [
   { kind: 'item', href: '/', label: 'Home', icon: 'home' },
