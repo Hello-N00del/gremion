@@ -28,13 +28,13 @@ commit, the gap is stated rather than hidden.
 
 | System | Upstream repository | Version read | Deployed as (2026-09-25) | Commit read (linked) | Licence file | What the file states | SPDX expression | Plain wording for copy |
 |---|---|---|---|---|---|---|---|---|
-| Nextcloud (server) | nextcloud/server | tag `v33.0.9` | the upstream Nextcloud 33 image line, extended by the distribution; the 33.x patch level floats with that line | [`4d7d05e`](https://github.com/nextcloud/server/blob/4d7d05e778398cdce1428b20d8687386edbc8268/COPYING) | `COPYING` (full AGPL v3 text) + `COPYING-README` | GNU Affero General Public License v3; `COPYING-README` carries `SPDX-License-Identifier: AGPL-3.0-or-later` and says "or any later version of the AGPL, unless otherwise noted" | `AGPL-3.0-or-later` | "GNU AGPL v3 or later" |
-| Collabora Online | CollaboraOnline/online | tag `cp-24.04.10-1` | the Collabora Online Development Edition (CODE) image, release 24.04.10.1.1; the source repository does not tag CODE builds, so the tag was matched by version number | [`3799c09`](https://github.com/CollaboraOnline/online/blob/3799c094dabf7528da564b50db3e91df9007e35f/COPYING) | `COPYING` | "subject to the terms of the Mozilla Public License, v. 2.0" | `MPL-2.0` | "Mozilla Public License 2.0" |
+| Nextcloud (server) | nextcloud/server | tag `v33.0.9` | the upstream Nextcloud 33 image line, extended by the distribution; the 33.x patch level floats with that line | [`4d7d05e`](https://github.com/nextcloud/server/blob/4d7d05e778398cdce1428b20d8687386edbc8268/COPYING) | `COPYING` (full AGPL v3 text) + `COPYING-README` | GNU Affero General Public License v3; `COPYING-README` carries `SPDX-License-Identifier: AGPL-3.0-or-later` and says "or any later version of the AGPL, unless otherwise noted". The root `LICENSES/` directory holds per-file REUSE texts for bundled components; it is not the project licence | `AGPL-3.0-or-later` | "GNU AGPL v3 or later" |
+| Collabora Online | CollaboraOnline/online | tag `cp-24.04.10-1` | the Collabora Online Development Edition (CODE) image, release 24.04.10.1.1; the source repository does not tag CODE 24.04 builds, so the tag was matched by version number | [`3799c09`](https://github.com/CollaboraOnline/online/blob/3799c094dabf7528da564b50db3e91df9007e35f/COPYING) | `COPYING` | "subject to the terms of the Mozilla Public License, v. 2.0" | `MPL-2.0` | "Mozilla Public License 2.0" |
 | Matrix homeserver (Synapse) | element-hq/synapse | tag `v1.124.0` | the upstream Synapse image, release v1.124.0 | [`c1b7c6b`](https://github.com/element-hq/synapse/blob/c1b7c6b12e7b9b2cf586a3210145f70a5e30ed67/LICENSE) | `LICENSE` (full AGPL v3 text) | GNU Affero General Public License v3; the same commit's `pyproject.toml` declares `license = "AGPL-3.0-or-later"` | `AGPL-3.0-or-later` | "GNU AGPL v3 or later" |
-| LiveKit (server) | livekit/livekit | tag `v1.7.2` | the upstream LiveKit server image, release v1.7.2, pinned by digest | [`28f7977`](https://github.com/livekit/livekit/blob/28f797786b4537dbd12feec25c9f50e8270871ba/LICENSE) | `LICENSE` (+ `NOTICE`) | Apache License, Version 2.0 | `Apache-2.0` | "Apache License 2.0" |
-| Element Call | element-hq/element-call | tag `v0.26.0` (latest release on 2026-09-25) | an upstream CI build pinned by image digest; **that digest is not mapped to a release tag** (see section 3) | [`71593f1`](https://github.com/element-hq/element-call/blob/71593f1a245b1afa971e3940596e1c500edf9548/LICENSE-AGPL-3.0) | `LICENSE-AGPL-3.0` + `LICENSE-COMMERCIAL` | GNU Affero General Public License v3 (the file does not state "only" or "or later"); `LICENSE-COMMERCIAL` offers a separate commercial licence from the vendor as an alternative | `AGPL-3.0` (or the vendor's commercial licence) | "GNU AGPL v3 (dual-licensed; a commercial licence is available from the vendor)" |
+| LiveKit (server) | livekit/livekit | tag `v1.7.2` | **not deployed today**; the target is the upstream LiveKit server image v1.7.2, to be digest-pinned at re-initialisation (docs/ops/topology.md, section 2) | [`28f7977`](https://github.com/livekit/livekit/blob/28f797786b4537dbd12feec25c9f50e8270871ba/LICENSE) | `LICENSE` (+ `NOTICE`) | Apache License, Version 2.0 | `Apache-2.0` | "Apache License 2.0" |
+| Element Call | element-hq/element-call | tag `v0.26.0` (latest release on 2026-09-25) | **no pin in this repository** and not observed in the 2026-09-24 container census (docs/ops/topology.md); the release read is the latest, not a deployed version (see section 3) | [`71593f1`](https://github.com/element-hq/element-call/blob/71593f1a245b1afa971e3940596e1c500edf9548/LICENSE-AGPL-3.0) | `LICENSE-AGPL-3.0` + `LICENSE-COMMERCIAL` | GNU Affero General Public License v3; the file does not state "only" or "or later", the same commit's source headers declare `SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial` (e.g. `src/main.tsx`), while its `README.md` says "or (at your option) any later version". `LICENSE-COMMERCIAL` offers a separate commercial licence from the vendor as an alternative | `AGPL-3.0-only OR LicenseRef-Element-Commercial` (the narrower, per-file declared reading) | "GNU AGPL v3 (dual-licensed; a commercial licence is available from the vendor)" |
 | Keycloak | keycloak/keycloak | tag `26.6.1` | the upstream Keycloak image, release 26.6.1 (pinned in this repository's compose files) | [`5bebfac`](https://github.com/keycloak/keycloak/blob/5bebfac09dd9abc5fe8b43f00ac596f0a5c998d1/LICENSE.txt) | `LICENSE.txt` | Apache License, Version 2.0 | `Apache-2.0` | "Apache License 2.0" |
-| Vaultwarden | dani-garcia/vaultwarden | tag `1.36.0` | the upstream Vaultwarden image, release 1.36.0 | [`f21a3ad`](https://github.com/dani-garcia/vaultwarden/blob/f21a3adae2fbb8582b60b121783c597fe6895ff4/LICENSE.txt) | `LICENSE.txt` (full AGPL v3 text) | GNU Affero General Public License v3; the same commit's `Cargo.toml` declares `license = "AGPL-3.0-only"` | `AGPL-3.0-only` | "GNU AGPL v3" |
+| Vaultwarden | dani-garcia/vaultwarden | tag `1.36.0` | **not bundled**: the council's own externally operated instance, version not known to the distribution; 1.36.0 is the release read, not a deployed pin (docs/ops/topology.md, section 2) | [`f21a3ad`](https://github.com/dani-garcia/vaultwarden/blob/f21a3adae2fbb8582b60b121783c597fe6895ff4/LICENSE.txt) | `LICENSE.txt` (full AGPL v3 text) | GNU Affero General Public License v3; the same commit's `Cargo.toml` declares `license = "AGPL-3.0-only"` | `AGPL-3.0-only` | "GNU AGPL v3" |
 | Helios (elections overlay) | benadida/helios-server | the commit the distribution pins as its `helios-src` submodule | that submodule commit, checked at every bump by `ops/scripts/helios-submodule-check.sh` | [`c7d5e60`](https://github.com/benadida/helios-server/blob/c7d5e60fbf9123be13d250a2ad9dae9efd8978e3/LICENSE) | `LICENSE` | Apache License, Version 2.0 | `Apache-2.0` | "Apache License 2.0" |
 
 Full commit SHAs and the SHA-256 of each licence file as read, so a later reader can
@@ -51,20 +51,28 @@ tell whether a file changed without trusting this table:
 | Element Call | `71593f1a245b1afa971e3940596e1c500edf9548` | `LICENSE-COMMERCIAL` | `1197de6d29c5037c6d9b5c3607d72eaa90b5045f2d623400e870825fdcf7666e` |
 | Keycloak | `5bebfac09dd9abc5fe8b43f00ac596f0a5c998d1` | `LICENSE.txt` | `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` |
 | Vaultwarden | `f21a3adae2fbb8582b60b121783c597fe6895ff4` | `LICENSE.txt` | `8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef` |
-| Helios | `c7d5e60fbf9123be13d250a2ad9dae9efd8978e3` | `LICENSE` | `e03ba41d7fab20700769fe4118bab50d800cb74f990353a05d2f5fff1c228363` |
+| Helios | `c7d5e60fbf9123be13d250a2ad9dae9efd8978e3` | `LICENSE` | `b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1` |
 
 Identical hashes across rows are expected: those projects ship the unmodified licence
 text (Synapse and Element Call the same AGPL v3 file; LiveKit and Keycloak the same
-Apache 2.0 file). The Helios file differs from the stock Apache text because its
-appendix is filled in; its terms were checked by the bump script, not by hash.
+Apache 2.0 file). The Helios file differs from the stock Apache text only in its
+appendix placeholders (`{}` in place of `[]`, the older template); its terms section
+(from "TERMS AND CONDITIONS" to "END OF TERMS AND CONDITIONS", whitespace-normalised) is
+identical to LiveKit's and Keycloak's, and the bump script checks exactly that. Hashes are
+of the blob at the commit (LF line endings), not of a checked-out working copy.
 
 ## 3. Known gaps, stated openly
 
-- **Element Call:** the distribution runs an image pinned by digest from an upstream CI
-  build, which does not name a release. The licence was read at the latest release
-  instead. Before any copy names Element Call's licence, either the deployed digest is
-  mapped to a release tag and the row re-read at that tag, or the copy cites this row
-  together with this gap.
+- **Element Call:** this repository pins no Element Call image and the 2026-09-24 census
+  shows no such container, so no deployed version exists to read at. The licence was read
+  at the latest release instead. The upstream declarations also disagree on "only" versus
+  "or later" (see the row); the register records the narrower reading. Before any copy
+  names Element Call's licence, the deployed release is fixed and the row re-read at that
+  tag, or the copy cites this row together with this gap.
+- **LiveKit and Vaultwarden:** neither runs as a pinned component of the distribution
+  today (LiveKit is a re-initialisation target; Vaultwarden is the council's external
+  instance). Each row records the licence of the release read; when a version is
+  deployed or bundled, the row is re-read at that version under rule 3.
 - **Nextcloud:** the image line floats within major version 33. The licence was read at
   the newest 33.x release on the date above; a new 33.x release is a bump under rule 3
   only if it changes `COPYING` or `COPYING-README`.
@@ -86,7 +94,9 @@ appendix is filled in; its terms were checked by the bump script, not by hash.
    any SPDX identifier the same commit declares in its package metadata, the SHA-256 of
    each file, and the date.
 4. Derive the "SPDX expression" from what was read. Where the file does not say "only"
-   or "or later", say so and use the bare identifier.
+   or "or later", say so, record every other statement the same commit makes (package
+   metadata, source headers, README), and use the narrower `-only` form: the bare
+   `AGPL-3.0` / `GPL-3.0` identifiers are deprecated in the SPDX License List.
 5. For Helios, run `ops/scripts/helios-submodule-check.sh` in the repository that
    carries the submodule and paste its `PASS` line into the bump (see
    [elections-scope.md](elections-scope.md), section 4).
