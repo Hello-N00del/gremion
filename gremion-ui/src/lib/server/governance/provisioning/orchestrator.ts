@@ -4,11 +4,12 @@ import { getKeycloakAdminClientForCurrentTenant } from '../../keycloak-admin'
 import { buildModuleProvisioningSubsystems } from '$lib/server/modules/runtime-registry'
 import {
   getOrgUnit, listOrgUnitMembers,
-  addOrgUnitMember, removeOrgUnitMember, getOrgUnitIdsForUser
+  addOrgUnitMember, removeOrgUnitMember, getOrgUnitIdsForUser, setSubsystemWanted
 } from '../org-units-db'
 import type { MembershipType, OrgUnit } from '../org-units-db'
 import {
-  ensureResourceRow, getResource, getResources, markResourceOk, markResourceFailed
+  ensureResourceRow, enqueueResources, getResource, getResources, detachResource,
+  markResourceOk, markResourceFailed
 } from './ledger'
 import type { ProvisioningResource } from './ledger'
 import { enqueueMemberRemoveOps } from './member-ops'
@@ -141,6 +142,53 @@ async function provisionOrgUnitLocked(
   }
 
   return buildReport(unitId, results)
+}
+
+/** FLOW-MSG-001 (TASK-009 lane B): turn on one optional subsystem and provision it
+ *  inline, through the same ledger + lock path the worker uses — a double attach
+ *  cannot double-create the external resource by construction (ensureResource is
+ *  only ever called from provisionOrgUnitLocked, which is unit-locked and checks
+ *  the ledger's 'ok' row first). The flag flip and the enqueue co-commit in one tx
+ *  so a crash between them cannot leave `wants_*` true with no ledger row (or vice
+ *  versa) — worst case a duplicate INSERT ... ON CONFLICT DO NOTHING no-ops. */
+export async function attachSubsystem(
+  unitId: string, subsystem: 'matrix' | 'nextcloud', adapters: Adapters = defaultAdapters()
+): Promise<ProvisioningReport> {
+  await getDb().begin(async (tx) => {
+    await setSubsystemWanted(tx, unitId, subsystem, true)
+    await enqueueResources(tx, unitId, [subsystem])
+  })
+  return provisionOrgUnit(unitId, adapters)
+}
+
+/** FLOW-MSG-001 (TASK-009 lane B): the inverse of attachSubsystem — detach a
+ *  subsystem from the ledger so the worker stops driving it (listDueOrgUnitIds,
+ *  fanOut and removeUserEverywhere all key off the ledger row, so removing it is
+ *  sufficient; no separate "ignore this subsystem" flag is needed anywhere else).
+ *
+ *  Order is deliberate: `teardown` (the caller's Matrix-side work — see
+ *  room-admin.ts's archive/delete) runs FIRST, under the unit lock so it cannot
+ *  race a concurrent provision/reconcile of the same unit; the DB detach runs
+ *  only after teardown succeeds. If teardown throws, the ledger row and the
+ *  `wants_*` flag are left untouched and the error propagates — the caller (or
+ *  the worker's own backoff) can retry teardown against a still-consistent
+ *  ledger. Returns the external_id that was released (or null if there was
+ *  none), for the caller's own bookkeeping (e.g. an audit entry). */
+export async function releaseSubsystem(
+  unitId: string,
+  subsystem: 'matrix' | 'nextcloud',
+  teardown: (externalId: string | null) => Promise<void>
+): Promise<string | null> {
+  return withUnitLock(unitId, async () => {
+    const before = await getResource(unitId, subsystem)
+    const externalId = before?.external_id ?? null
+    await teardown(externalId)
+    await getDb().begin(async (tx) => {
+      await setSubsystemWanted(tx, unitId, subsystem, false)
+      await detachResource(tx, unitId, subsystem)
+    })
+    return externalId
+  })
 }
 
 /** Children first; Keycloak is the parent identity (Matrix/NC group-membership
