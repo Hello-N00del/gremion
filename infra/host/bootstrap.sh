@@ -59,6 +59,7 @@ BACKUP_ONCALENDAR="${BACKUP_ONCALENDAR:-*-*-* 02:00:00}"
 STATE_ENV="${STATE_ENV:-}"
 HOST_FQDN="${HOST_FQDN:-}"
 DEPLOY_PUBKEY_FILE="${DEPLOY_PUBKEY_FILE:-}"
+COSIGN_PUBKEY_FILE="${COSIGN_PUBKEY_FILE:-}"
 EXPECT_PTR=0
 DNS_RESOLVER="${DNS_RESOLVER:-1.1.1.1}"
 
@@ -80,12 +81,14 @@ Stages:
   agent        gremion-hostd unit + restricted deploy key
   timers       gremion-backup.timer + gremion-verify.service
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
+  trust        pinned cosign + the release public key       (not part of 'all')
   all          base user docker addresses networks firewall agent timers
 
 Options:
   --env-file PATH        state env file (default: <root>/etc/env/state.env)
   --fqdn NAME            host FQDN for the 'addresses' stage
   --deploy-pubkey PATH   public key for the 'agent' stage
+  --cosign-pubkey PATH   release-signing PUBLIC key for the 'trust' stage
   --expect-ptr           'addresses' also verifies both PTR records
   -h, --help             this text
 
@@ -1033,6 +1036,80 @@ atomic_render() {
     return "$rc"
 }
 
+# ──────────────────────────────────────────────────────────────────────────
+# trust — the release trust anchor (TASK-046, TRD-441)
+# ──────────────────────────────────────────────────────────────────────────
+# gremion-deploy verifies every first-party image against <root>/etc/cosign.pub
+# with the cosign on PATH, and refuses when either is missing. This stage is
+# the ONLY writer of both. The key is the operator's PUBLIC key (the private
+# half lives in the operator vault and the recovery kit, never on a host); the
+# release tree is never a source for it. Not part of 'all': the key is an
+# operator activation input, and a deploy without it fails closed anyway.
+#
+# cosign is pinned by version AND by the sha256 of the release asset; the pin
+# must equal scripts/release/lib/tools.mjs (a node test asserts it).
+COSIGN_VERSION="v2.6.5"
+COSIGN_SHA256="c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644"
+COSIGN_URL="https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+COSIGN_INSTALL_DIR="${COSIGN_INSTALL_DIR:-/usr/local/bin}"
+
+cosign_is_pinned() { # <path>
+    [[ -f "$1" ]] || return 1
+    [[ "$(sha256sum "$1" | awk '{print $1}')" == "$COSIGN_SHA256" ]]
+}
+
+install_cosign() {
+    local dst="${COSIGN_INSTALL_DIR}/cosign" tmp
+    if cosign_is_pinned "$dst"; then
+        ok "cosign ${COSIGN_VERSION} already installed at ${dst}"
+        return 0
+    fi
+    info "installing cosign ${COSIGN_VERSION} (sha256-pinned) to ${dst}"
+    tmp="$(mktemp)"
+    if ! curl -fsSL "$COSIGN_URL" -o "$tmp"; then
+        rm -f -- "$tmp"
+        die "cosign download failed: ${COSIGN_URL}" 1
+    fi
+    if ! cosign_is_pinned "$tmp"; then
+        rm -f -- "$tmp"
+        die "cosign download does not match the pinned sha256 ${COSIGN_SHA256} — refusing to install" 1
+    fi
+    install -d -m 755 "$COSIGN_INSTALL_DIR"
+    install -m 0755 "$tmp" "$dst"
+    rm -f -- "$tmp"
+    cosign_is_pinned "$dst" || die "installed ${dst} is not the pinned cosign" 1
+    ok "cosign ${COSIGN_VERSION} installed at ${dst}"
+}
+
+stage_trust() {
+    require_root
+    local root dst src="${COSIGN_PUBKEY_FILE}"
+    root="$(gremion_root)"
+    dst="${root}/etc/cosign.pub"
+    [[ -n "$src" ]] || die "COSIGN_PUBKEY_FILE is not set (pass --cosign-pubkey)" 2
+    [[ -f "$src" ]] || die "cosign public key not found: ${src}" 2
+    # Refuse the key's private half outright, before anything is installed.
+    if grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$src"; then
+        die "refusing ${src}: it holds a PRIVATE key — pass the .pub half only" 1
+    fi
+    grep -q -- '-----BEGIN PUBLIC KEY-----' "$src" \
+        || die "${src} is not a PEM public key" 1
+    openssl pkey -pubin -in "$src" -noout >/dev/null 2>&1 \
+        || die "${src} does not parse as a public key" 1
+    [[ -d "${root}/etc" ]] || die "precondition: ${root}/etc absent — run the 'user' stage first" 2
+
+    install_cosign
+
+    install -m 0644 "$src" "${dst}.tmp"
+    mv -f -T "${dst}.tmp" "$dst"
+    chown root:root "$dst"
+    # Post-conditions on the installed state, not on install's exit code.
+    cmp -s "$src" "$dst" || die "${dst} differs from ${src} after install" 1
+    [[ ! -L "$dst" ]] || die "${dst} is a symlink" 1
+    [[ "$(stat -c '%a' "$dst")" == "644" ]] || die "${dst} is not mode 644" 1
+    ok "release trust anchor installed at ${dst} ($(sha256sum "$dst" | awk '{print $1}'))"
+}
+
 main() {
     local stage=""
     while [[ $# -gt 0 ]]; do
@@ -1040,6 +1117,7 @@ main() {
             --env-file)       STATE_ENV="${2:-}";          shift 2 ;;
             --fqdn)           HOST_FQDN="${2:-}";          shift 2 ;;
             --deploy-pubkey)  DEPLOY_PUBKEY_FILE="${2:-}"; shift 2 ;;
+            --cosign-pubkey)  COSIGN_PUBKEY_FILE="${2:-}"; shift 2 ;;
             --expect-ptr)     EXPECT_PTR=1;                shift ;;
             -h|--help)        usage; return 0 ;;
             -*)               die "unknown option: $1 (see --help)" 2 ;;
@@ -1059,6 +1137,7 @@ main() {
         agent)       stage_agent ;;
         timers)      stage_timers ;;
         harden-ssh)  stage_harden_ssh ;;
+        trust)       stage_trust ;;
         all)         stage_base; stage_user; stage_docker; stage_addresses
                      stage_networks; stage_firewall; stage_agent; stage_timers
                      echo; info "'all' does not include harden-ssh — run it explicitly." ;;
