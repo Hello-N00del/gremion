@@ -197,8 +197,17 @@ export function checkSbomDoc(doc, { grype = {}, accepted = [] } = {}) {
 export function firstPartyDigests(pinsText, prefix) {
   const refs = []
   const unparsed = []
-  for (const l of pinsText.split('\n')) {
-    if (/^\s*#/.test(l) || !/image/.test(l)) continue
+  // YAML features a line reader cannot follow (anchors/aliases, merge keys,
+  // escaped or explicit keys, extra documents, extends) could hide an image
+  // compose would resolve: each such line is a problem in its own right.
+  const HOSTILE = /(^|[\s:[{,])[&*][\w-]|<<\s*:|\\|^---|^\s*\?\s|\bextends\s*:/
+  for (const [i, l] of pinsText.split('\n').entries()) {
+    if (/^\s*#/.test(l)) continue
+    if (HOSTILE.test(l) && !(i === 0 && /^---\s*$/.test(l))) {
+      unparsed.push(l.trim())
+      continue
+    }
+    if (!/image/.test(l)) continue
     const m = /^\s*image:\s*["']?([^\s"'{}#,]+)["']?\s*$/.exec(l)
     if (!m) unparsed.push(l.trim())
     else if (m[1].toLowerCase().startsWith(prefix.toLowerCase())) refs.push(m[1])

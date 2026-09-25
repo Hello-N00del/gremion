@@ -111,10 +111,18 @@ export function checkEvidence(ev, { now = new Date(), repos = REPOS } = {}) {
       add('missing-repo', `no evidence for ${want}`)
       continue
     }
+    // A saved file is re-checked as strictly as a live read: a missing or
+    // non-boolean `enabled` must never read as "Actions off".
+    const arrays = ['secrets', 'dependabot', 'organization', 'environments', 'runners']
+    if (typeof r.actions?.enabled !== 'boolean' || arrays.some((k) => !Array.isArray(r[k])) ||
+        r.environments.some((e) => !Array.isArray(e?.secrets))) {
+      add('evidence-malformed', `${want}: evidence lacks a boolean actions.enabled or one of ${arrays.join('/')} arrays`)
+      continue
+    }
     const scoped = [
       ...r.secrets.map((s) => ({ s, where: 'repository' })),
-      ...(r.dependabot ?? []).map((s) => ({ s, where: 'dependabot' })),
-      ...(r.organization ?? []).map((s) => ({ s, where: 'organization' })),
+      ...r.dependabot.map((s) => ({ s, where: 'dependabot' })),
+      ...r.organization.map((s) => ({ s, where: 'organization' })),
       ...r.environments.flatMap((e) => e.secrets.map((s) => ({ s, where: `environment ${e.name}` }))),
     ].filter((x) => classifySecret(x.s) === 'key-class')
     if (r.actions.enabled) {

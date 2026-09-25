@@ -271,3 +271,14 @@ test('a key-material allowance is pinned to the file content: an edited file fai
   const unpinned = runSopsCheck(repo({ ...clean, 'f.txt': body }, { allow: { allow: [{ ...entry, blob: undefined }] } }))
   assert.deepEqual(codes(unpinned), ['allow-unpinned', 'key-material'])
 })
+
+test('round 2: no finding echoes a secret key — not as a foreign recipient, not as a "sentinel"', () => {
+  const sk = ALICE.secret.trim().split('\n').pop()
+  const enc = encrypt('k: v\n', 'yaml').replace(/recipient: age1\S+/, `recipient: ${sk}`)
+  const a = runSopsCheck(repo({ ...clean, 'secrets/x.yaml': enc }))
+  assert.ok(a.problems.length >= 1)
+  assert.ok(!JSON.stringify(a).includes(sk.slice(20)), 'foreign-recipient echoed a secret key')
+  const b = runSopsCheck(repo(clean, { sops: sopsYaml(`<${sk}>`) }))
+  assert.ok(b.problems.length >= 1)
+  assert.ok(!JSON.stringify(b).includes(sk.slice(20)), 'sentinel-recipient echoed a secret key')
+})

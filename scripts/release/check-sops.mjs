@@ -273,7 +273,9 @@ export function runSopsCheck(root) {
       if (!r.recipients.length) add('bad-recipient', '.sops.yaml', 'a creation rule names no age recipient')
       for (const [i, rc] of r.recipients.entries()) {
         if (SENTINEL_RE.test(rc)) {
-          add('sentinel-recipient', '.sops.yaml', `age recipient is the placeholder ${rc} — operator activation pending`)
+          // Echo the placeholder only when it is plainly one (<UPPER_SNAKE>).
+          const shown = /^<[A-Z0-9_]+>$/.test(rc) && !KEY_MARKERS.some((k) => k.re.test(rc)) ? rc : '(value withheld)'
+          add('sentinel-recipient', '.sops.yaml', `age recipient is the placeholder ${shown} — operator activation pending`)
         } else if (!AGE_RECIPIENT_RE.test(rc)) {
           // Never echo the value: the classic mistake is pasting the SECRET half.
           const secret = KEY_MARKERS.some((k) => k.re.test(rc))
@@ -297,7 +299,10 @@ export function runSopsCheck(root) {
         if (!v.ok) add('plaintext-secret', path, `secret-class file is not SOPS-encrypted: ${v.why}`)
         else {
           const foreign = v.recipients.filter((r) => !known.has(r))
-          if (foreign.length) add('foreign-recipient', path, `encrypted to recipient(s) .sops.yaml does not name: ${foreign.join(', ')}`)
+          // Only well-formed PUBLIC recipients are printed; anything else
+          // (a pasted secret key above all) is withheld.
+          const shown = foreign.map((r) => (AGE_RECIPIENT_RE.test(r) ? r : '(value withheld)'))
+          if (foreign.length) add('foreign-recipient', path, `encrypted to recipient(s) .sops.yaml does not name: ${shown.join(', ')}`)
         }
       }
     }

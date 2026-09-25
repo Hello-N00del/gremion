@@ -185,3 +185,19 @@ test('a pins image line that cannot be parsed is a problem, not a skip', () => {
   assert.deepEqual(r.refs, [`ghcr.io/hello-n00del/a@sha256:${D}`])
   assert.equal(r.unparsed.length, 2)
 })
+
+test('round 2: YAML features that hide an image from a line reader are problems (alias, merge, escape, extra document, extends)', () => {
+  const D = 'a'.repeat(64)
+  const ok = `services:\n  a:\n    image: ghcr.io/hello-n00del/a@sha256:${D}\n`
+  for (const extra of [
+    '  b:\n    image: *img\n',
+    '  x: &svc {"image": docker.io/evil/y:latest}\n  b:\n    <<: *svc\n',
+    '  b:\n    "\\x69mage": docker.io/evil/x@sha256:' + D + '\n',
+    '---\nservices:\n  a:\n    "\\x69mage": docker.io/evil/x\n',
+    '  b:\n    extends: {file: other.yml, service: m}\n',
+  ]) {
+    const r = firstPartyDigests(ok + extra, 'ghcr.io/hello-n00del/')
+    assert.ok(r.unparsed.length >= 1, `not flagged: ${JSON.stringify(extra)}`)
+  }
+  assert.deepEqual(firstPartyDigests(ok, 'ghcr.io/hello-n00del/').unparsed, [])
+})

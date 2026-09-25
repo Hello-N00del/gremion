@@ -118,3 +118,16 @@ test('organisation secrets visible to the repo and Dependabot secrets count as r
   assert.match(r.problems.map((p) => p.message).join('\n'), /organization secret ORG_DEPLOY_KEY/)
   assert.match(r.problems.map((p) => p.message).join('\n'), /dependabot secret SIGNING_KEY/)
 })
+
+test('round 2: a saved evidence file without a boolean `enabled` or without its arrays fails', async () => {
+  const ev = await evidenceOf('disabled-with-key')
+  const noBool = structuredClone(ev)
+  noBool.repos[0].actions = {}
+  assert.deepEqual(codes(checkEvidence(noBool, { now: NOW })), ['evidence-malformed'])
+  const zero = structuredClone(ev)
+  zero.repos[0].actions.enabled = 0
+  assert.deepEqual(codes(checkEvidence(zero, { now: NOW })), ['evidence-malformed'])
+  const noRunners = structuredClone(ev)
+  delete noRunners.repos[1].runners
+  assert.deepEqual(codes(checkEvidence(noRunners, { now: NOW })), ['evidence-malformed'])
+})
