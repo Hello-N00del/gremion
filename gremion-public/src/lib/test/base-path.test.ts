@@ -1,9 +1,9 @@
 // v12 apex topology — source guards for the build-time base path.
 //
 // The portal is mounted at `/` when BASE_PATH is unset (the kernel default) and
-// under a prefix such as `/portal` when it is set (kit.paths.base in
-// svelte.config.js). That only holds while EVERY internal link routes through
-// `base` from `$app/paths`. A single `href="/protokolle"` slipping back in
+// under a prefix such as `/portal` when it is set (`paths.base` in
+// kit.config.js). That only holds while EVERY internal link routes through
+// `base` from `$lib/base` (kit 3 removed `base` from `$app/paths`). A single `href="/protokolle"` slipping back in
 // produces a link that works in the default build and silently 404s in a
 // base-path build — exactly the class of bug a cheap source guard catches.
 import { describe, it, expect } from 'vitest';

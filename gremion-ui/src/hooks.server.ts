@@ -465,7 +465,8 @@ export const authGuard: Handle = async ({ event, resolve }) => {
  *   - 'unsafe-inline' on script-src is required for SvelteKit hydration
  *     (the framework injects inline <script>__sveltekit_xxx.data = …</script>
  *     into the SSR'd HTML). Closing it requires nonce/hash-based CSP, which in
- *     SvelteKit 2 is owned by `svelte.config.js kit.csp` ({mode:'auto'}) — that
+ *     SvelteKit is owned by the kit config's `csp` option (kit.config.js; it was
+ *     `svelte.config.js kit.csp` before kit 3) ({mode:'auto'}) — that
  *     path emits its OWN CSP (header/meta) with a per-response nonce auto-stamped
  *     on the framework's inline scripts. Because the policy here is set MANUALLY
  *     in cspGuard, simply deleting 'unsafe-inline' from THIS header (without the

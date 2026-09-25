@@ -10,8 +10,8 @@ ships none of them.**
 | `apple-touch-icon.png` | iOS home screen (iOS applies its own corner mask, so design it full-bleed) | 180×180 PNG |
 
 Drop files with exactly those names here and they are served automatically — no
-config change. `%sveltekit.assets%` resolves through `kit.paths.base`, so they
-follow the portal when it is mounted under a base path (see `svelte.config.js`).
+config change. `%sveltekit.assets%` resolves through the kit `paths.base`, so they
+follow the portal when it is mounted under a base path (see `kit.config.js`).
 
 ## Why the directory is empty
 
