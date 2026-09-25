@@ -62,6 +62,19 @@ test('discoverTestFiles finds only the five named test-file shapes, honouring th
   }
 })
 
+test('walkFiles excludes __fixtures__ (the JS/TS convention) same as "fixtures" — real case: gremion-ui/scripts/__fixtures__/env-guard/*.test.ts is planted input data for check-tenant-env-guard\'s own real test, never a suite of its own', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-local-discover-fx-'))
+  try {
+    mkdirSync(join(root, 'scripts', '__fixtures__', 'env-guard'), { recursive: true })
+    writeFileSync(join(root, 'scripts', '__fixtures__', 'env-guard', 'planted-read.test.ts'), '')
+    const files = walkFiles(root)
+    assert.ok(!files.some((f) => f.includes('__fixtures__')))
+    assert.deepEqual(discoverTestFiles(root), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('TEST_FILE_RE matches every named shape and rejects a plain .ts file', () => {
   for (const f of ['a.test.ts', 'a.spec.ts', 'a.test.mjs', 'a.bats', 'a_test.dart']) {
     assert.ok(TEST_FILE_RE.test(f), `expected ${f} to match`)

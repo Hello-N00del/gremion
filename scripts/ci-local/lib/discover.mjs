@@ -22,6 +22,12 @@ export const DEFAULT_EXCLUDE_DIRS = new Set([
   '.next',
   'test_helper', // bats fixture helpers, never a suite themselves
   'fixtures',
+  '__fixtures__', // JS/TS convention for the same thing — e.g. gremion-ui's
+  // scripts/__fixtures__/env-guard/*.test.ts, which check-tenant-env-guard's
+  // OWN real test reads as planted input data (see that fixture file's own
+  // header comment: "Tests legitimately pin env behavior and do NOT ship").
+  // Discovered here anyway, it is a real, false "unclaimed" finding on both
+  // repos' real tips — verified against the actual kernel and StuRaOS trees.
 ])
 
 /** A test file, by the five extensions the brief names. */
