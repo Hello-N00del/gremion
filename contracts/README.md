@@ -46,7 +46,10 @@ Route-directory coverage:
 `api/auth`, `api/committees/[id]/beschluesse*` (protocols domain), `api/internal`,
 `api/members`, `api/protocols`, `api/public`, `api/settings`, `api/setup` — satellite glue.
 (`api/users*` is not excluded, it is ABSENT: the users-admin surface left the kernel
-with its module in the carve, which is what `info.version` 0.2.0 records.)
+with its module in the carve. That break is what the spec's own `info.description`
+still narrates ("v0.2.0 (breaking)"); `info.version` itself is `1.0.0` — TASK-030
+decision 3 bumped every spec to 1.0.0 since the re-init has no consumers yet, so the
+plain major/minor rule applies going forward, and the carve break predates that reset.)
 
 ## 3. Contract-first protocol
 
@@ -130,14 +133,27 @@ TASK-030 (PRD-PLAT-002b/008, TRD-403/404/405). `packages/generated-clients/` own
 - Structural validation + `$ref` closure (percent-decoded) on all four registered specs,
   including calendar and content (closes the `../KNOWN_ISSUES.md` gap referenced in §3.2).
 - The OpenAPI compat gate (`oasdiff-gate.ts`, ported from `gremion-ui/scripts/contracts-gate.ts`
-  `ab45a0e` — PATH `oasdiff`, then `tufin/oasdiff` only if the docker daemon answers, never a
+  `ab45a0e` — PATH `oasdiff`, then the Docker fallback only if the daemon answers, never a
   bare docker exit code as a verdict) plus the version-bump rule: remove/narrow without a
   MAJOR bump fails, add without a MINOR bump fails, description-only passes regardless of
   version. No `CONTRACTS_ALLOW_BREAKING` bypass — a bump is the only way through.
+  **Tool pin:** PATH install is `go install github.com/oasdiff/oasdiff@v1.32.1` (match the
+  Docker fallback's pinned tag below so both routes give the same verdict for the same spec
+  pair). The Docker fallback image is pinned by tag AND digest in `oasdiff-gate.ts`
+  (`OASDIFF_DOCKER_IMAGE`) — bump both together, never drift to `latest`. Whichever tool
+  actually answered is recorded in the gate's own output as `<tool> (PATH|docker, version
+  <version>)`, per spec, on every run.
 - The same rule for AsyncAPI 3.0 payloads (`asyncapi-compat.ts`), via a purpose-built
   `components.messages.*.payload` comparator (no mature `@asyncapi/diff` 3.0 support in this
   lockfile) scoped to: removed/newly-required property, narrowed/changed type, removed enum
-  value (major), new optional property (minor).
+  value (major), new optional property (minor). It resolves local `$ref`s and flattens `allOf`
+  first (every real message payload here is `$ref` to an `allOf[Envelope, {...}]` schema), then
+  recurses into nested `object` properties at any depth.
+  **Scope limitation:** this comparator only looks at message *payloads*. Removing a **channel**
+  or an **operation** entirely (not a message) is not classified as breaking today, so it passes
+  with only a minor bump even though a subscriber wired to that channel/operation would lose it.
+  Out of the brief's decision-6 payload scope; treat a channel/operation removal as a manual
+  major-bump discipline item until this is extended.
 - The codegen drift check (`codegen-drift.ts`): the committed TypeScript client under
   `packages/generated-clients/src/generated/` must equal what regenerating from the current
   spec produces — catches a hand edit, a spec changed without regeneration, or a missing
