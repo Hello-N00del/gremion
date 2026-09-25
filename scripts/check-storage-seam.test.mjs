@@ -93,6 +93,47 @@ test('RED — s3 sees aliased, namespace, require, dynamic-import and getBuiltin
   }
 })
 
+test('RED — review round 1: comment prefix, bracket access, references, destructures, re-exports, template names, test-named dirs', () => {
+  const tree = emptyTree()
+  const fsImport = "import fs from 'node:fs'\n"
+  seed(tree, 'gremion-ui/src/c1.ts', fsImport + "/* ok */ fs.writeFileSync('p', 'd')\n")
+  seed(tree, 'gremion-ui/src/c2.ts', fsImport + "fs['appendFileSync']('p', 'd')\n")
+  seed(tree, 'gremion-ui/src/c3.ts', fsImport + "const w = fs.createWriteStream\nw('p')\n")
+  seed(tree, 'gremion-ui/src/c4.ts', fsImport + "const { writeFileSync } = fs\nwriteFileSync('p', 'd')\n")
+  seed(tree, 'gremion-ui/src/c5.ts', "import {\n  readFileSync,\n  writeFileSync,\n} from 'node:fs'\nwriteFileSync('p', 'd')\n")
+  seed(tree, 'gremion-ui/src/c6.ts', "export * from 'node:fs'\n")
+  seed(tree, 'gremion-ui/src/c7.ts', "const fs = require(`fs`)\nfs.rmSync('p')\n")
+  seed(tree, 'gremion-ui/src/c8.ts', fsImport + "const f = fs\nf.writeFileSync('p', 'd')\n")
+  seed(tree, 'gremion-ui/src/lib/server/tests/helper.ts', BYPASS)
+  seed(tree, 'gremion-ui/src/routes/build/+server.ts', BYPASS)
+  seed(tree, 'gremion-ui/src/c9.ts', "const dir = process.env.RECEIPT_STORAGE_DIR\n")
+  try {
+    const r = scan({ root: tree, allowlist: [] })
+    const files = [...new Set(r.findings.filter((f) => f.guard === 's3').map((f) => f.file))].sort()
+    assert.deepEqual(files, [
+      'gremion-ui/src/c1.ts', 'gremion-ui/src/c2.ts', 'gremion-ui/src/c3.ts', 'gremion-ui/src/c4.ts',
+      'gremion-ui/src/c5.ts', 'gremion-ui/src/c6.ts', 'gremion-ui/src/c7.ts', 'gremion-ui/src/c8.ts',
+      'gremion-ui/src/c9.ts', 'gremion-ui/src/lib/server/tests/helper.ts', 'gremion-ui/src/routes/build/+server.ts',
+    ])
+  } finally {
+    rmSync(tree, { recursive: true, force: true })
+  }
+})
+
+test('RED — an allowlisted file that GROWS a new write site is a problem (entries pin their site count)', () => {
+  const tree = emptyTree()
+  seed(tree, 'gremion-ui/src/w.ts', BYPASS + "export function more() {\n  writeFileSync('/data/y.pdf', 'z')\n}\n")
+  try {
+    const r = scan({
+      root: tree,
+      allowlist: [{ path: 'gremion-ui/src/w.ts', sites: 2, reason: 'fixture reason long enough', residual: 'fixture residual long enough' }],
+    })
+    assert.match(r.problems.join('\n'), /allowlist entry gremion-ui\/src\/w\.ts pins 2 write site\(s\) but the file has 3/)
+  } finally {
+    rmSync(tree, { recursive: true, force: true })
+  }
+})
+
 test('GREEN — reads, the seam itself, and test files are not s3 findings', () => {
   const tree = emptyTree()
   seed(tree, 'gremion-ui/src/read.ts', "import { readFileSync, existsSync } from 'node:fs'\nreadFileSync('x')\n")
@@ -175,6 +216,8 @@ test('every allowlist entry carries a reason and a residual', () => {
     assert.ok(typeof e.path === 'string' && e.path.length > 0)
     assert.ok(typeof e.reason === 'string' && e.reason.length > 20, `${e.path}: no reason`)
     assert.ok(typeof e.residual === 'string' && e.residual.length > 20, `${e.path}: no residual`)
+    assert.ok(Number.isInteger(e.sites) && e.sites > 0, `${e.path}: no pinned site count`)
+    assert.ok(!e.path.endsWith('/'), `${e.path}: directory-wide entries are not allowed`)
   }
 })
 
@@ -185,9 +228,9 @@ test('RED — a stale allowlist entry (matches no write) and an entry with no re
     const r = scan({
       root: tree,
       allowlist: [
-        { path: 'gremion-ui/src/w.ts', reason: 'fixture reason long enough', residual: 'fixture residual long enough' },
-        { path: 'gremion-ui/src/gone.ts', reason: 'fixture reason long enough', residual: 'fixture residual long enough' },
-        { path: 'gremion-ui/src/w2.ts', reason: '', residual: '' },
+        { path: 'gremion-ui/src/w.ts', sites: 2, reason: 'fixture reason long enough', residual: 'fixture residual long enough' },
+        { path: 'gremion-ui/src/gone.ts', sites: 1, reason: 'fixture reason long enough', residual: 'fixture residual long enough' },
+        { path: 'gremion-ui/src/w2.ts', sites: 1, reason: '', residual: '' },
       ],
     })
     assert.deepEqual(r.findings, [])
