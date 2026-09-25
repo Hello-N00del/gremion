@@ -5,6 +5,7 @@
 // file per client to the WHOLE file set of each surface package: the check
 // regenerates every surface through the same injected `generate` function
 // the writer uses and compares the result with what is on disk.
+import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DART_PACKAGES_DIR, loadDartSurfaces, type DartSurface } from './registry.ts'
@@ -53,6 +54,16 @@ export function listPackageFiles(dir: string): string[] {
   return out.sort(byPath)
 }
 
+/** Provenance stamp every generated package carries: the spec it came from
+ *  and that spec's sha256 (LF-normalised). Written by the generator pipeline,
+ *  checked here WITHOUT regenerating. */
+export const STAMP_FILE = '.generated-from'
+
+export function specStamp(repoRoot: string, s: DartSurface): string {
+  const lf = readFileSync(join(repoRoot, s.specFile), 'utf8').replace(/\r\n/g, '\n')
+  return `${s.specFile}\nsha256:${createHash('sha256').update(lf).digest('hex')}\n`
+}
+
 export interface DriftOptions {
   generate: GenerateFn
 }
@@ -66,6 +77,14 @@ export function checkDartCodegenDrift(repoRoot: string, opts: DriftOptions): Dri
       problems.push(`${s.packageDir}: missing output — no Dart package for registry surface "${s.name}" (spec ${s.specFile}). Run \`pnpm --filter @gremion/generated-clients-dart generate\`.`)
       continue
     }
+    const before = problems.length
+    // Stale spec: checked from the stamp alone, before and independent of
+    // regeneration, so the message says WHY the package no longer matches.
+    const stampPath = join(repoRoot, s.packageDir, STAMP_FILE)
+    const stamp = existsSync(stampPath) ? readFileSync(stampPath, 'utf8') : null
+    if (stamp !== specStamp(repoRoot, s)) {
+      problems.push(`${s.packageDir}/${STAMP_FILE}: stale — ${stamp === null ? 'the provenance stamp is missing' : `${s.specFile} changed since this package was generated`}. ${REGENERATE}`)
+    }
     let expectedFiles: GeneratedFiles
     try {
       expectedFiles = opts.generate(repoRoot, s)
@@ -73,7 +92,6 @@ export function checkDartCodegenDrift(repoRoot: string, opts: DriftOptions): Dri
       problems.push(`${s.packageDir}: generating surface "${s.name}" from ${s.specFile} failed: ${(e as Error).message}`)
       continue
     }
-    const before = problems.length
     for (const [rel, bytes] of [...expectedFiles].sort(([a], [b]) => byPath(a, b))) {
       const onDisk = join(repoRoot, s.packageDir, rel)
       if (!existsSync(onDisk)) {

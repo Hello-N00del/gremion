@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { GenerateFn } from './codegen-drift.ts'
+import { specStamp, STAMP_FILE, type GenerateFn } from './codegen-drift.ts'
 import { SCRATCH_ROOT } from './registry.ts'
 
 export const MINI_SPEC = {
@@ -43,12 +43,13 @@ export function writeFile(root: string, rel: string, content: string | Buffer): 
 /** Deterministic stand-in for the real pipeline: output depends only on the
  *  spec's bytes, like the real generator's. */
 export const fakeGenerate: GenerateFn = (root, s) => {
-  const h = createHash('sha256').update(readFileSync(join(root, s.specFile))).digest('hex')
+  const h = createHash('sha256').update(readFileSync(join(root, s.specFile), 'utf8').replace(/\r\n/g, '\n')).digest('hex')
   const lib = `lib/${s.pubName}.dart`
   return new Map([
     ['.openapi-generator/FILES', Buffer.from(`${lib}\npubspec.yaml\n`)],
     ['pubspec.yaml', Buffer.from(`name: ${s.pubName}\n`)],
     [lib, Buffer.from(`// generated from spec sha256 ${h}\n`)],
+    [STAMP_FILE, Buffer.from(specStamp(root, s))],
   ])
 }
 

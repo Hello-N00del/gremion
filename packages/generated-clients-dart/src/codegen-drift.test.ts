@@ -2,8 +2,8 @@
 // §6 tests 1-4, 6 run without Docker/Java/Dart).
 import { describe, it, expect, afterEach } from 'vitest'
 import { rmSync } from 'node:fs'
-import { checkDartCodegenDrift } from './codegen-drift.ts'
-import { fakeGenerate, makeFixtureRepo, writeFile, writeGenerated } from './fixture.ts'
+import { checkDartCodegenDrift, STAMP_FILE } from './codegen-drift.ts'
+import { fakeGenerate, makeFixtureRepo, MINI_SPEC, writeFile, writeGenerated } from './fixture.ts'
 import { loadDartSurfaces } from './registry.ts'
 
 const roots: string[] = []
@@ -94,5 +94,32 @@ describe('test 2b — whole file set, not per output', () => {
     writeFile(root, 'packages/generated-clients-dart/src/client.dart', 'class C {}\n')
     const { problems } = checkDartCodegenDrift(root, { generate: fakeGenerate })
     expect(problems.some((p) => p.startsWith('packages/generated-clients-dart/src/client.dart:'))).toBe(true)
+  })
+})
+
+describe('test 3 — spec changed without regeneration', () => {
+  it('names the stale package file and says the spec changed', () => {
+    const root = fixture([{ name: 'widgets', type: 'openapi' }])
+    const s = generated(root)
+    const mutated = { ...MINI_SPEC, paths: { ...MINI_SPEC.paths, '/api/widgets': { get: { operationId: 'listWidgets', responses: { '200': { description: 'ok' } } } } } }
+    writeFile(root, s.specFile, JSON.stringify(mutated, null, 2))
+    const { problems, checked } = checkDartCodegenDrift(root, { generate: fakeGenerate })
+    expect(problems.some((p) => p.startsWith(`${s.packageDir}/${STAMP_FILE}:`) && /stale/.test(p) && p.includes(s.specFile))).toBe(true)
+    expect(checked).toBe(0)
+  })
+
+  it('names a missing provenance stamp', () => {
+    const root = fixture([{ name: 'widgets', type: 'openapi' }])
+    const s = generated(root)
+    rmSync(`${root}/${s.packageDir}/${STAMP_FILE}`)
+    const { problems } = checkDartCodegenDrift(root, { generate: fakeGenerate })
+    expect(problems.some((p) => p.startsWith(`${s.packageDir}/${STAMP_FILE}:`) && /stale|missing/.test(p))).toBe(true)
+  })
+
+  it('a CRLF checkout of the same spec is not stale', () => {
+    const root = fixture([{ name: 'widgets', type: 'openapi' }])
+    const s = generated(root)
+    writeFile(root, s.specFile, JSON.stringify(MINI_SPEC, null, 2).replace(/\n/g, '\r\n'))
+    expect(checkDartCodegenDrift(root, { generate: fakeGenerate }).problems).toEqual([])
   })
 })
