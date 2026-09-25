@@ -8,6 +8,8 @@
   import { INSTANCE_STATE_META, instanceReady, type InstanceState } from '$lib/instance-status'
   import CommandPalette from '$lib/components/CommandPalette.svelte'
   import type { NavItem } from './nav-schema'
+  import type { Snippet } from 'svelte'
+  import type { TopbarModuleSlot } from './topbar-slot'
 
   // Tenant brand (v4 re-audit slice 10) — prop-drilled from AppShell; canonical
   // defaults back-fill so the breadcrumb root never renders blank. `nav` is the
@@ -16,8 +18,21 @@
   let {
     brand: brandProp,
     nav = [],
-    unread = 0
-  }: { brand?: Partial<Brand> | null; nav?: NavItem[]; unread?: number } = $props()
+    unread = 0,
+    leading,
+    bodyContext,
+    modules
+  }: {
+    brand?: Partial<Brand> | null
+    nav?: NavItem[]
+    unread?: number
+    /** TASK-208: the leading-edge slot (AppShell's hamburger, below 768 px). */
+    leading?: Snippet
+    /** TASK-208: the body-context slot (the body switcher, TASK-115). */
+    bodyContext?: Snippet
+    /** TASK-208: module-supplied chips, live-call indicator and bell (topbar-slot.ts). */
+    modules?: TopbarModuleSlot
+  } = $props()
   let brand = $derived(resolveBrand(brandProp))
   // (open-core carve) `unread` is still accepted from AppShell for prop-shape
   // stability but no longer drives a bell badge here — the messages module owns
@@ -117,6 +132,8 @@
 </script>
 
 <header class="topbar">
+  {@render leading?.()}
+
   <!-- Breadcrumbs (mono / uppercase, per chrome.jsx .crumbs) -->
   <nav class="crumbs" aria-label="Breadcrumb">
     <a href="/" class="root" class:last={crumbs.length === 0}>{brand.product}</a>
@@ -125,6 +142,10 @@
       <span class:last={i === crumbs.length - 1}>{crumb}</span>
     {/each}
   </nav>
+
+  {#if bodyContext}
+    <div class="topbar-body-context">{@render bodyContext()}</div>
+  {/if}
 
   <!-- Search affordance — opens the ⌘K command palette -->
   <button
@@ -135,7 +156,7 @@
     aria-haspopup="dialog"
   >
     <Icon name="search" size={14} aria-hidden="true" />
-    <span>Antrag, Datei, Person…</span>
+    <span class="search-text">Antrag, Datei, Person…</span>
     <span class="k" aria-hidden="true">⌘ K</span>
   </button>
 
@@ -150,19 +171,28 @@
       title="Bereitstellung & Konvergenz · Systemstatus öffnen"
     >
       <Icon name={instanceMeta.icon} size={11} aria-hidden="true" />
-      INSTANZ · {instanceMeta.label}
+      <span class="inst-txt">INSTANZ · {instanceMeta.label}</span>
     </a>
   {/if}
 
   <!-- (open-core carve) The CALL·LIVE / Matrix status chips and the /messages
-       notification bell belonged to the messages/video module and were removed
-       with it; a re-added module supplies its own status chip + bell via a
-       registered topbar slot. -->
+       notification bell belong to the messages/video module; a module hands
+       them in through the topbarModuleSlot contract (topbar-slot.ts), and the
+       TopBar owns where they sit and what happens to them below 768 px. -->
+  {#if modules?.chips}
+    <div class="topbar-chips nav-column-only" data-topbar-slot="chips">{@render modules.chips()}</div>
+  {/if}
+  {#if modules?.liveCall}
+    <div class="topbar-live" data-topbar-slot="liveCall">{@render modules.liveCall()}</div>
+  {/if}
+  {#if modules?.bell}
+    <div class="topbar-bell" data-topbar-slot="bell">{@render modules.bell()}</div>
+  {/if}
 
-  <!-- Theme toggle -->
+  <!-- Theme toggle (below 768 px it lives in the navigation drawer) -->
   <button
     type="button"
-    class="icon-btn"
+    class="icon-btn nav-column-only"
     onclick={() => themeMode.set($themeMode === 'dark' ? 'light' : 'dark')}
     aria-label={$themeMode === 'dark' ? 'Helles Thema' : 'Dunkles Thema'}
     aria-pressed={$themeMode === 'dark'}
@@ -172,7 +202,7 @@
   </button>
 
   <!-- Logout -->
-  <form method="POST" action="/auth/logout" class="logout">
+  <form method="POST" action="/auth/logout" class="logout nav-column-only">
     <button type="submit" class="icon-btn" aria-label="Abmelden" title="Abmelden">
       <Icon name="log-out" size={16} />
     </button>
@@ -181,7 +211,7 @@
 
 <style>
   .topbar {
-    height: 56px;
+    min-height: 56px;
     flex-shrink: 0;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
@@ -202,8 +232,10 @@
     gap: 8px;
     flex-shrink: 1;
     min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
+    /* TASK-208: crumbs wrap rather than clip (320 px reflow, SC 1.4.12). */
+    flex-wrap: wrap;
+    row-gap: 2px;
+    overflow-wrap: anywhere;
   }
   .crumbs .sep {
     color: var(--ink-faint);
@@ -354,15 +386,17 @@
     display: flex;
     flex-shrink: 0;
   }
-  /* Hide the lower-priority chips first as the bar narrows */
-  @media (max-width: 720px) {
-    .search {
-      display: none;
-    }
+  .topbar-chips,
+  .topbar-live,
+  .topbar-bell,
+  .topbar-body-context {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    min-width: 0;
   }
-  @media (max-width: 560px) {
-    .topbar-status {
-      display: none;
-    }
-  }
+  /* Below 768 px (TASK-208) the search button and the instance badge take
+     their icon forms, and the crumbs wrap: those rules are in navShellCss
+     (nav-constants.ts) with the breakpoint itself. */
 </style>

@@ -51,7 +51,11 @@ export function navShellCss(): string {
     .nav-col .legal-list:not(.open) { display: none !important; }
     .nav-col .legal-list.open { position: fixed; z-index: 60; left: calc(var(--nav-rail-w) + 4px); bottom: 8px; flex-direction: column; align-items: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--sh-2); padding: 6px; }
     .nav-col .sb-item { justify-content: center; padding: 0; width: var(--nav-control); min-height: var(--nav-control); margin-inline: auto; }
-    .nav-col .sb-section-rule { display: block; }`
+    .nav-col .sb-brand { flex-direction: column; padding: 10px 0; gap: 8px; }
+    .nav-col .sb-nav { padding: 0 0 8px; }
+    .nav-col .sb-badge { position: absolute; top: 1px; right: 1px; padding: 0 4px; font-size: 9px; line-height: 14px; }
+    .nav-col .sb-item.active::before { left: -10px; }
+    .nav-col .sb-foot, .nav-col .sb-legal-wrap { padding-inline: 0; }`
   const expanded = `
     .nav-col { width: var(--nav-sidebar-w); }`
   return `
@@ -70,8 +74,19 @@ html.density-gross {
 .nav-rail-only { display: none !important; }
 .app-shell { display: flex; width: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
 .app-shell-body { display: flex; flex: 1 1 0%; min-width: 0; flex-direction: column; overflow: hidden; }
+html.density-gross { --nav-font: 16px; }
+.app-main { flex: 1 1 0%; min-width: 0; overflow: auto; display: flex; flex-direction: column; padding: 24px; }
 @media ${MQ_DRAWER} {
   .nav-col, .nav-column-only { display: none !important; }
+  .app-main { padding: 16px; }
+  html .topbar { padding: 0 8px; gap: 8px; }
+  html .topbar .crumbs > :not(:last-child) { display: none; }
+  html .topbar .search { flex: 0 0 auto; width: var(--nav-control); height: var(--nav-control); max-width: none; padding: 0; justify-content: center; }
+  html .topbar .search > span { display: none; }
+  html .topbar .topbar-status.inst { min-width: var(--nav-control); min-height: var(--nav-control); padding: 0; justify-content: center; border-radius: var(--r-sm); }
+  html .topbar .inst-txt { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  html .topbar .topbar-bell :is(a, button) { min-width: var(--nav-control); min-height: var(--nav-control); display: inline-grid; place-items: center; }
+  html .topbar .topbar-live { max-width: 96px; overflow: hidden; }
 }
 @media ${MQ_COLUMN} {
   .nav-drawer-only { display: none !important; }

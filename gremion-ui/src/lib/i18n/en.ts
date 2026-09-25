@@ -12,6 +12,17 @@ const en: Record<string, string> = {
   'nav.settings':   'Settings',
   'nav.groups':     'Groups',
 
+  // ── Responsive navigation shell (TASK-208) ────────────────────────────────
+  'nav.main':           'Main navigation',
+  'nav.menu':           'Menu',
+  'nav.drawer':         'Navigation',
+  'nav.drawer.close':   'Close navigation',
+  'nav.sidebar':        'Sidebar',
+  'nav.sidebar.saved':  'Saved on this device',
+  'nav.sidebar.expanded':  'Sidebar expanded',
+  'nav.sidebar.collapsed': 'Sidebar collapsed',
+  'nav.legal':          'Legal',
+
   // ── Committees / Governance ───────────────────────────────────────────────
   'members.title':              'Committees',
   'members.select':             'Select a committee to view details.',
