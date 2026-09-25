@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-validate-env — is this rendered env file fit to run its project?
+#
+#   gremion-validate-env --env-file FILE [--release DIR] [--template FILE]
+#
+# Spec B section 6 (B-08): load_env in lib/common.sh is THE single env reader,
+# and this program adds only what load_env lacks. It never re-reads the file
+# itself; every value it judges was exported by load_env.
+#
+#   1. the file exists             -- absent: exit 2, "run setup first" (TRD-099).
+#                                     An absent file is a host not yet set up,
+#                                     not a failed validation.
+#   2. load_env accepts it         -- duplicates, malformed lines, CHANGE_ME_
+#                                     sentinels, empty template-marked secrets:
+#                                     load_env's own refusal, exit 2.
+#   3. compose-file fitness        -- COMPOSE_FILE is set and every entry
+#                                     (split on COMPOSE_PATH_SEPARATOR, default
+#                                     ':') exists under the release tree: exit 1.
+#   4. alias equality              -- keys whose template values share one
+#                                     generated sentinel group hold one value;
+#                                     a value that EMBEDS a group (the reader
+#                                     password in GREMION_PUBLIC_DB_URL) contains
+#                                     it: exit 1.
+#
+# NO VALUE IS EVER PRINTED. Findings name keys, sentinel groups and compose
+# file names -- never what a key holds.
+#
+# --release defaults to <gremion root>/current, the tree gremion-deploy runs
+# compose from. mail.env and ops.env name compose files in their own project
+# directories; pass that directory as --release for them.
+#
+# StuRaOS scripts/validate-env.sh is deliberately NOT ported (its first-
+# occurrence reads are the #476 defect).
+#
+# EXIT CODES: 0 ok - 1 post-condition failed - 2 usage/precondition.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+ENV_FILE=""
+RELEASE_DIR=""
+TEMPLATE=""
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-validate-env --env-file FILE [--release DIR] [--template FILE]
+
+  --env-file FILE   the rendered env file to validate (e.g. etc/env/state.env)
+  --release DIR     where COMPOSE_FILE's entries live (default: <root>/current)
+  --template FILE   the template FILE was rendered from (default: derived from
+                    the file name: state, app-blue/app-green, mail, ops)
+EOF
+}
+
+need_value() {
+    [[ "$2" -ge 2 ]] || { usage; die "${1} requires a value" "$GREMION_EXIT_USAGE"; }
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --env-file) need_value --env-file "$#"; ENV_FILE="$2"; shift 2 ;;
+            --release)  need_value --release  "$#"; RELEASE_DIR="$2"; shift 2 ;;
+            --template) need_value --template "$#"; TEMPLATE="$2"; shift 2 ;;
+            -h|--help)  usage; exit "$GREMION_EXIT_OK" ;;
+            *) usage; die "unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    [[ -n "$ENV_FILE" ]] || { usage; die "--env-file is required" "$GREMION_EXIT_USAGE"; }
+    [[ -n "$RELEASE_DIR" ]] || RELEASE_DIR="$(gremion_root)/current"
+}
+
+# The setup-first answer, BEFORE anything reads or renders (TRD-099).
+require_present() {
+    if [[ ! -e "$ENV_FILE" ]]; then
+        bad "gremion-validate-env: no env file at ${ENV_FILE} -- this host is not set up yet; run setup first (gremion-init-secrets renders etc/env/*.env). Nothing was validated."
+        exit "$GREMION_EXIT_USAGE"
+    fi
+}
+
+resolve_template() {
+    [[ -n "$TEMPLATE" ]] || TEMPLATE="$(env_template_for "$ENV_FILE")"
+    [[ -n "$TEMPLATE" ]] \
+        || die "cannot tell which template ${ENV_FILE} was rendered from; pass --template" \
+            "$GREMION_EXIT_USAGE"
+    [[ -f "$TEMPLATE" ]] || die "template not found: ${TEMPLATE}" "$GREMION_EXIT_USAGE"
+}
+
+FAILURES=0
+fail() { bad "$1"; FAILURES=$((FAILURES + 1)); }
+
+check_compose_files() {
+    [[ -d "$RELEASE_DIR" ]] || die "release tree not found: ${RELEASE_DIR}" "$GREMION_EXIT_USAGE"
+    if [[ -z "${COMPOSE_FILE:-}" ]]; then
+        fail "COMPOSE_FILE is not set: the env file does not name its composition (N20)"
+        return 0
+    fi
+    local sep="${COMPOSE_PATH_SEPARATOR:-:}" entry path absent=0 n=0
+    local -a entries=()
+    IFS="$sep" read -r -a entries <<< "$COMPOSE_FILE"
+    for entry in "${entries[@]}"; do
+        [[ -n "$entry" ]] || { fail "COMPOSE_FILE has an empty entry"; absent=1; continue; }
+        n=$((n + 1))
+        if [[ "$entry" == /* ]]; then path="$entry"; else path="${RELEASE_DIR}/${entry}"; fi
+        if [[ ! -f "$path" ]]; then
+            fail "COMPOSE_FILE names ${entry}, which is not a file under ${RELEASE_DIR}"
+            absent=1
+        fi
+    done
+    [[ "$absent" -eq 1 ]] || ok "COMPOSE_FILE: all ${n} compose file(s) present under ${RELEASE_DIR}"
+}
+
+# Alias equality, driven by the template: a key whose template value is
+# EXACTLY one generated sentinel belongs to that sentinel's group; a key whose
+# value merely contains one embeds it.
+check_aliases() {
+    local -A group_of=() first_of=() embeds=()
+    local key tmpl_value group pairs=0
+    while IFS='=' read -r key tmpl_value; do
+        if [[ "$tmpl_value" =~ ^CHANGE_ME_GEN_(hex32|alnum32)_([a-z0-9_]+)$ ]]; then
+            group="${BASH_REMATCH[2]}"
+            group_of["$key"]="$group"
+            [[ -n "${first_of[$group]:-}" ]] || first_of["$group"]="$key"
+        elif [[ "$tmpl_value" =~ CHANGE_ME_GEN_(hex32|alnum32)_([a-z0-9_]+) ]]; then
+            embeds["$key"]="${BASH_REMATCH[2]}"
+        fi
+    done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME_GEN_' "$TEMPLATE")
+
+    # Every template-marked key must be DECLARED: load_env refuses an empty
+    # one, but a key missing altogether would compare equal to its missing
+    # alias and pass. Presence is read from the file (key names only).
+    local before="$FAILURES"
+    for key in $(printf '%s\n' "${!group_of[@]}" "${!embeds[@]}" | sort -u); do
+        grep -q "^${key}=" "$ENV_FILE" \
+            || fail "${key} is missing: $(basename "$TEMPLATE") declares it as a generated secret"
+    done
+
+    local ref
+    for key in $(printf '%s\n' "${!group_of[@]}" | sort); do
+        group="${group_of[$key]}"
+        ref="${first_of[$group]}"
+        [[ "$key" != "$ref" ]] || continue
+        pairs=$((pairs + 1))
+        if [[ "${!key-}" != "${!ref-}" ]]; then
+            fail "alias drift: ${ref} and ${key} share the generated group '${group}' but hold different values"
+        fi
+    done
+    for key in $(printf '%s\n' "${!embeds[@]}" | sort); do
+        group="${embeds[$key]}"
+        ref="${first_of[$group]:-}"
+        [[ -n "$ref" ]] || continue
+        pairs=$((pairs + 1))
+        if [[ -z "${!ref-}" || "${!key-}" != *"${!ref}"* ]]; then
+            fail "alias drift: ${key} must embed the value of ${ref} (generated group '${group}'), and does not"
+        fi
+    done
+    [[ "$FAILURES" -gt "$before" ]] || ok "alias equality: ${pairs} aliased key(s) agree"
+}
+
+main() {
+    parse_args "$@"
+    need_cmd grep sed
+    require_present
+    resolve_template
+    # load_env refuses (exit 2) on its own; reaching the next line means the
+    # file is structurally sound, complete, and every secret is non-empty.
+    load_env "$ENV_FILE" "$TEMPLATE"
+    ok "load_env accepts $(basename "$ENV_FILE") (template $(basename "$TEMPLATE"))"
+    check_compose_files
+    check_aliases
+    if [[ "$FAILURES" -gt 0 ]]; then
+        die "VALIDATE-ENV: ${FAILURES} problem(s) in $(basename "$ENV_FILE")" "$GREMION_EXIT_ASSERT"
+    fi
+    printf 'VALIDATE-ENV: ok %s\n' "$(basename "$ENV_FILE")"
+}
+
+main "$@"
