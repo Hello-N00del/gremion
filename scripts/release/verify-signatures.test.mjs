@@ -77,6 +77,7 @@ let caseNo = 0
  *   noCosign  — PATH carries no cosign at all
  *   registry  — REGISTRY_HOST override
  *   thirdParty — repositories written to the host's etc/third-party-images
+ *   extraResolved — an image compose resolves that no canonical pins line names
  */
 function deploy(images, opts = {}) {
   caseNo += 1
@@ -98,6 +99,7 @@ function deploy(images, opts = {}) {
     join(root, 'etc/env/state.env'),
     'STACK=teststack\nCOMPOSE_PROJECT_NAME=teststack-state\nSOAK_MINUTES=0\nINTERNAL_PUSH_SECRET=test-push-secret\n',
   )
+  for (const c of ['blue', 'green']) writeFileSync(join(root, `etc/env/app-${c}.env`), `STACK=teststack\nCOLOUR=${c}\n`)
   const shim = (name, body) => {
     const p = join(shims, name)
     writeFileSync(p, `#!/usr/bin/env bash\nprintf '%s %s\\n' ${name} "$*" >> "${shims}/calls.log"\n${body}\n`)
@@ -109,7 +111,14 @@ case "$1" in
   rev-parse|rev-list) printf "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n"; exit 0 ;;
 esac
 exit 0`)
+  // `docker compose … config --images` answers what compose would resolve:
+  // the tree's canonical pins plus opts.extraResolved.
   shim('docker', `case "$1" in login) cat >/dev/null; exit 0 ;; esac
+case "$*" in *"config --images"*)
+  grep -E '^[[:space:]]*image:' "${tree}/docker-compose.pins.yml" | sed -E 's/^[[:space:]]*image:[[:space:]]*//'
+  ${opts.extraResolved ? `printf '%s\\n' '${opts.extraResolved}'` : ':'}
+  exit 0 ;;
+esac
 exit 0`)
 
   let path = `${shims}:${process.env.PATH}`
@@ -219,4 +228,10 @@ test('an unsigned image renamed OUT of the first-party prefix is refused, even b
   const listed = deploy([refs.signedUi, renamed], { thirdParty: [renamed.split('@')[0]] })
   assert.ok(passedStep2(listed), listed.out)
   assert.match(listed.out, /1 first-party image\(s\) verified .* 1 third-party image\(s\) on the host list/)
+})
+
+test('an unsigned first-party image that only compose resolves (not a canonical pin) is refused live', () => {
+  const res = deploy([refs.signedUi], { extraResolved: refs.unsigned })
+  assert.ok(refusedAtStep2(res), `compose-only unsigned image got through:\n${res.out}\n${res.log}`)
+  assert.match(res.out, /signature verification failed for .*gremion-ui@sha256:/)
 })

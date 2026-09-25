@@ -284,6 +284,21 @@ verify_first_party_signatures() {
         tp_list="$(grep -vE '^[[:space:]]*(#|$)' "$tp_file" | tr -d '[:blank:]' | tr '[:upper:]' '[:lower:]' || true)"
     fi
 
+    # The set verified is the set COMPOSE resolves — over the state project
+    # and both colours, exactly the projects step 3 pulls — not what a grep of
+    # the pins file finds: escaped keys, anchors and merge keys, a second YAML
+    # document, `extends:` or a service only in docker-compose.app.yml all
+    # resolve to images no grep sees. A project that cannot be resolved, or
+    # an empty set, is a refusal.
+    local resolved="" project imgs
+    for project in state app-blue app-green; do
+        imgs="$(compose "$project" config --images)" \
+            || die "compose ${project} config --images failed — cannot resolve the image set (refusing)" 1
+        resolved+="${imgs}"$'\n'
+    done
+    resolved="$(printf '%s' "$resolved" | sed -e 's/\r$//' -e '/^[[:space:]]*$/d' | sort -u)"
+    [[ -n "$resolved" ]] || die "compose resolves no image for this release — cannot resolve the image set (refusing)" 1
+
     local prefix ref lc repo digest out n=0 t=0
     prefix="$(printf '%s' "${REGISTRY_HOST}/hello-n00del/" | tr '[:upper:]' '[:lower:]')"
     while IFS= read -r ref; do
@@ -306,7 +321,7 @@ verify_first_party_signatures() {
                 and (.critical.identity["docker-reference"] | ascii_downcase) == $r)' >/dev/null 2>&1 \
             || die "signature verification failed for $ref: no claim binds $digest to $repo" 1
         n=$(( n + 1 ))
-    done <<< "$PINNED_IMAGES"
+    done <<< "$resolved"
     [[ "$n" -ge 1 ]] \
         || die "no first-party image (${prefix}*) in the pins — refusing to deploy an unverifiable set" 1
     ok "${n} first-party image(s) verified against ${pub}; ${t} third-party image(s) on the host list"

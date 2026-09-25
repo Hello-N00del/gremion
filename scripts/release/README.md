@@ -9,7 +9,7 @@ verified against the host's pinned public key (D R20-D18).
 
 | Piece | Where | What it asserts |
 |---|---|---|
-| `infra/host/bin/gremion-deploy` (step 2, `verify_first_party_signatures`) | host | every first-party pinned digest verifies with `$ROOT/etc/cosign.pub`; cosign's JSON must bind that digest to that repository; missing cosign, missing key, empty set, unreachable registry = refusal before step 3's pull |
+| `infra/host/bin/gremion-deploy` (step 2, `verify_first_party_signatures`) | host | every image compose resolves is either first-party and verifies with `$ROOT/etc/cosign.pub`, or on the host's `etc/third-party-images`; cosign's JSON must bind that digest to that repository; missing cosign, missing key, empty set, unreachable registry = refusal before step 3's pull |
 | `infra/host/bootstrap.sh --cosign-pubkey PATH trust` | host (root) | installs cosign v2.6.5 (sha256-pinned) and the public key as `$ROOT/etc/cosign.pub` 0644; refuses a private key |
 | `sign-release.sh --key K <repo>@sha256:…` | operator workstation | clean tree + green `scripts/verify/check-record.mjs --commit HEAD` (absent = refuse); signs + attests by digest only, no tlog; post-verifies both in the registry |
 | `check-sops.mjs` | `verify` | no plaintext secret-class file, no key material, recipients from `.sops.yaml` only |
@@ -34,22 +34,29 @@ failure is expected, and nothing here signs with a real key before it.
 2. **Host trust anchor.** On every host:
    `sudo infra/host/bootstrap.sh --cosign-pubkey /path/to/cosign.pub trust`.
    Until then `gremion-deploy` refuses at step 2 (`trust anchor absent`).
-3. **age recipient.** Generate the age identity (the private half goes to the
+3. **Host third-party list.** Step 2 verifies every image that
+   `docker compose config --images` resolves for the state project and both
+   colours. An image outside `<registry>/hello-n00del/` is refused unless its
+   repository is listed, one per line with no tag or digest, in
+   `$ROOT/etc/third-party-images`. That file lives on the host and is never
+   read from the release tree. List exactly the third-party repositories the
+   stack runs (for example the database image).
+4. **age recipient.** Generate the age identity (the private half goes to the
    vault and the recovery kit), then replace the
    `<OPERATOR_AGE_PUBLIC_KEY_REPLACE_VIA_BOOTSTRAP_SOPS_SH>` sentinel in
    `/.sops.yaml` with the `age1…` public recipient. Until then
    `node scripts/release/check-sops.mjs` fails with `sentinel-recipient`, and
    only with that.
-4. **Grype DB.** On the workstation that runs `verify`, allow `grype db update`
+5. **Grype DB.** On the workstation that runs `verify`, allow `grype db update`
    to reach the Anchore DB host, or `check-sbom` fails with `grype-db`.
-5. **Runner scope evidence.** With a token that can read Actions settings on
+6. **Runner scope evidence.** With a token that can read Actions settings on
    both repos:
    `node scripts/release/check-runner-scope.mjs --live --out <vault>/evidence/runner-scope-<date>.json`.
    Evidence older than 7 days fails. If Actions is off, the run records
    "no runner in use" and lists dormant key-class secrets (for example
    `DEPLOY_SSH_KEY`). Removing them is the operator's call (Q6). Re-enabling
    Actions with any of them present fails the check.
-6. **First signed release.** `COSIGN_PASSWORD=… scripts/release/sign-release.sh --key <vault path> <each image>@sha256:…`
+7. **First signed release.** `COSIGN_PASSWORD=… scripts/release/sign-release.sh --key <vault path> <each image>@sha256:…`
    once the check record for HEAD is green (TASK-045/048).
 
 ## Tests

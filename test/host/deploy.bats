@@ -59,6 +59,18 @@ EOF
 seed_trust_anchor() {
     printf '%s\n' '-----BEGIN PUBLIC KEY-----' 'placeholder-not-a-key' '-----END PUBLIC KEY-----' \
         > "${GREMION_ROOT}/etc/cosign.pub"
+    # What `docker compose config --images` resolves: the canonical pins plus
+    # anything a test injects through EXTRA_RESOLVED (images compose would
+    # pull although no canonical `image:` line names them). Every docker shim
+    # in this file answers `compose … config --images` through this helper.
+    cat > "${GREMION_ROOT}/.resolve-images" <<'RESOLVE'
+#!/usr/bin/env bash
+grep -E '^[[:space:]]*image:' "$FIXTURE_RELEASE/docker-compose.pins.yml" \
+    | sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//'
+[ -z "${EXTRA_RESOLVED:-}" ] || printf '%s\n' "$EXTRA_RESOLVED"
+exit "${RESOLVE_STATUS:-0}"
+RESOLVE
+    chmod +x "${GREMION_ROOT}/.resolve-images"
     shim cosign '
 ref="${*: -1}"
 repo="$(printf "%s" "${ref%@*}" | tr "[:upper:]" "[:lower:]")"
@@ -123,6 +135,7 @@ case "$1" in
       esac
       exit 0 ;;
   compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
       colour=""
       case "$args" in *app-blue.env*) colour=blue ;; *app-green.env*) colour=green ;; esac
       case "$args" in
@@ -390,7 +403,7 @@ case "$1" in
   login) cat >/dev/null; exit 0 ;;
   manifest) printf "{\"config\":{\"size\":1},\"layers\":[{\"size\":1}]}\n"; exit 0 ;;
   image) exit 1 ;;
-  compose) exit 0 ;;
+  compose) case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac; exit 0 ;;
 esac
 exit 0
 '
@@ -455,7 +468,7 @@ case "$1" in
   manifest) printf "{\"config\":{\"size\":1},\"layers\":[{\"size\":1}]}\n"; exit 0 ;;
   image) exit 0 ;;
   ps) printf "leftover-migrate\n"; exit 0 ;;
-  compose) exit 0 ;;
+  compose) case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac; exit 0 ;;
 esac
 exit 0
 '
@@ -497,6 +510,7 @@ case "$1" in
       esac
       exit 0 ;;
   compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
       case "$args" in
         *" up -d"*) : > "$st/up-blue"; exit 0 ;;
         *" down"*)  rm -f "$st/up-blue"; exit 0 ;;
@@ -531,6 +545,7 @@ case "$1" in
       esac
       exit 0 ;;
   compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
       case "$args" in
         *" up -d"*) : > "$st/up-blue"; exit 0 ;;
         *" down"*)  rm -f "$st/up-blue"; exit 0 ;;
@@ -568,6 +583,7 @@ case "$1" in
       esac
       exit 0 ;;
   compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
       case "$args" in
         *" up -d"*) : > "$st/up-blue"; exit 0 ;;
         *" down"*)  rm -f "$st/up-blue"; exit 0 ;;
@@ -757,7 +773,7 @@ exit 0
     shim cosign 'printf "Error: no matching signatures\n" >&2; exit 12'
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-ui@sha256:"* ]]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-"* ]]
     grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
     # The call log proves what did NOT happen: the verifier ran, no manifest
     # was read and nothing was pulled. Counts, not `! grep`.
@@ -775,7 +791,7 @@ printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"
 exit 0'
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no claim binds sha256:1111"* ]]
+    [[ "$output" == *"no claim binds sha256:"* ]]
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
 
@@ -923,4 +939,50 @@ PINS
         [[ "$output" == *"unrecognised image declaration"* || "$output" == *"pin is not <repo>@sha256"* ]] || { echo "$output"; return 1; }
         [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
     done
+}
+
+
+# The gate verifies what COMPOSE resolves (`config --images` over the state
+# project and both colours), not what a grep of the pins file finds: escaped
+# keys, anchors/merge keys, a second YAML document, `extends:` or a service in
+# docker-compose.app.yml all resolve to images the grep never sees.
+@test "an image compose resolves but no canonical pins line names is refused when unlisted" {
+    stub_all
+    export EXTRA_RESOLVED="docker.io/evil/x@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"docker.io/evil/x@sha256:5555"*"is neither first-party"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -c 'config --images' "$SHIM_LOG")" -ge 3 ]
+}
+
+@test "a first-party image only compose resolves is signature-verified too" {
+    stub_all
+    export EXTRA_RESOLVED="ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    shim cosign '
+ref="${*: -1}"
+case "$ref" in *5555*) echo "Error: no signatures found" >&2; exit 10 ;; esac
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref%@*}" "${ref##*@}"'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/evil@sha256:5555"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a tag-only image resolved by compose is refused" {
+    stub_all
+    export EXTRA_RESOLVED="docker.io/evil/y:latest"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"pin is not <repo>@sha256:<64 hex>: docker.io/evil/y:latest"* ]]
+}
+
+@test "compose failing to resolve the image set is a refusal, never a skip" {
+    stub_all
+    export RESOLVE_STATUS=1
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot resolve the image set"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
