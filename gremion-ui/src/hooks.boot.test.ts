@@ -49,6 +49,11 @@ vi.mock('$lib/server/db', () => ({
   waitForDbReady: vi.fn(async () => {}),
   runMigrations: () => migrationsImpl(),
   getDb: () => ({}),
+  // TASK-023: boot classifies its failure with the db module's classifier. The
+  // real one is pinned in db-startup.test.ts; this stand-in knows the two codes
+  // the tests below throw.
+  isTransientDbStartupError: (err: unknown) =>
+    ['ECONNREFUSED', '57P03'].includes(String((err as { code?: unknown } | null)?.code)),
 }))
 
 vi.mock('$lib/server/config', () => ({
@@ -134,6 +139,11 @@ vi.mock('./auth', () => ({
 // `import nodemailer from 'nodemailer'` statement resolves.
 vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }))
 
+// TASK-023: a non-transient boot failure calls process.exit(1) through
+// bootRuntime.exit. boot() starts at module load, before a test could reach the
+// module's own seam, so process.exit itself is stubbed for every test.
+let exitSpy: ReturnType<typeof vi.spyOn>
+
 beforeEach(() => {
   // Each test gets a clean module registry so the module-scoped boot state
   // (`_bootComplete`, `_bootError`, `_bootPromise`, the readiness map) starts
@@ -142,11 +152,33 @@ beforeEach(() => {
   process.exitCode = 0
   migrationsImpl = async () => {}
   controlMigrationsImpl = async () => {}
+  exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
 })
 
 afterEach(() => {
   process.exitCode = 0
+  exitSpy.mockRestore()
+  vi.useRealTimers()
 })
+
+/**
+ * Wait for the boot() that hooks.server.ts starts at module load to settle,
+ * WITHOUT calling boot() — after a transient failure that call would start the
+ * next attempt. Microtasks only, so it is safe under fake timers.
+ */
+async function settleModuleLoadBoot(mod: typeof import('./hooks.server')): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    const s = mod.getBootStatus()
+    if (s.complete || s.error) return
+    await Promise.resolve()
+  }
+  throw new Error('module-load boot did not settle')
+}
+
+/** An error the db classifier calls transient (Postgres went away mid-boot). */
+function refused(): Error {
+  return Object.assign(new Error('connect ECONNREFUSED 10.0.0.2:5432'), { code: 'ECONNREFUSED' })
+}
 
 describe('hooks.server boot sequencing (T4.1 / G-014 + P2.1b T3 / D-READY)', () => {
   it('a CONTROL-plane boot failure leaves _bootComplete=false and populates _bootError (process-wide 503)', async () => {
@@ -166,6 +198,9 @@ describe('hooks.server boot sequencing (T4.1 / G-014 + P2.1b T3 / D-READY)', () 
     // The unhealthy-exit signal is how an orchestrator notices and recycles
     // the container; without it the pod would just sit there serving 503s.
     expect(process.exitCode).toBe(1)
+    // TASK-023: a non-transient failure exits, so `restart: unless-stopped`
+    // recycles the container instead of it latching a permanent 503.
+    expect(exitSpy).toHaveBeenCalledWith(1)
   })
 
   it('a default-tenant DATA-plane migration failure no longer fails boot — readiness is tenant-scoped (D-READY)', async () => {
@@ -292,6 +327,233 @@ describe('hooks.server authGuard 503 while booting (T4.1 / G-014)', () => {
     expect(response.status).toBe(503)
     expect(response.headers.get('Retry-After')).toBeNull()
     expect(await response.text()).toBe('Service Unavailable: boot failed')
+  })
+})
+
+describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
+  it('a transient failure drops the memo: no exit, exitCode untouched (Q3), and the 2nd call re-attempts', async () => {
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      if (calls === 1) throw refused()
+    }
+    const mod = await import('./hooks.server')
+    await settleModuleLoadBoot(mod)
+
+    expect(mod.getBootStatus().complete).toBe(false)
+    expect(mod.getBootStatus().error?.message).toContain('ECONNREFUSED')
+    expect(process.exitCode).toBe(0)
+    expect(exitSpy).not.toHaveBeenCalled()
+
+    await mod.boot()
+    expect(calls).toBe(2)
+    expect(mod.getBootStatus()).toEqual({ complete: true, error: null })
+  })
+
+  it('concurrent callers share one attempt', async () => {
+    const pending: { resolve?: () => void } = {}
+    let calls = 0
+    controlMigrationsImpl = () => {
+      calls++
+      return new Promise<void>((r) => {
+        pending.resolve = r
+      })
+    }
+    const mod = await import('./hooks.server')
+    const a = mod.boot()
+    const b = mod.boot()
+    expect(a).toBe(b)
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+    pending.resolve?.()
+    await Promise.all([a, b])
+    expect(calls).toBe(1)
+    expect(mod.getBootStatus().complete).toBe(true)
+  })
+
+  it('a non-transient failure calls bootRuntime.exit(1) and sets exitCode = 1 (Q3)', async () => {
+    controlMigrationsImpl = async () => {
+      throw Object.assign(new Error('password authentication failed for user "gremion"'), { code: '28P01' })
+    }
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    expect(exitSpy).toHaveBeenCalledTimes(1)
+    expect(exitSpy).toHaveBeenCalledWith(1)
+    expect(process.exitCode).toBe(1)
+    // The memo is kept: nothing re-attempts a non-transient failure.
+    expect(mod.boot()).toBe(mod.boot())
+  })
+
+  it('bootRuntime.exit delegates to process.exit; bootRuntime.schedule unrefs its timer', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    mod.bootRuntime.exit(7)
+    expect(exitSpy).toHaveBeenCalledWith(7)
+    const t = mod.bootRuntime.schedule(() => {}, 60_000)
+    expect(t.hasRef()).toBe(false)
+    clearTimeout(t)
+  })
+
+  it('Q2: one re-attempt is scheduled on a timer of at most 30 s, and it completes boot', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      if (calls === 1) throw refused()
+    }
+    const mod = await import('./hooks.server')
+    expect(mod.BOOT_RETRY_DELAY_MS).toBeGreaterThan(0)
+    expect(mod.BOOT_RETRY_DELAY_MS).toBeLessThanOrEqual(30_000)
+    await settleModuleLoadBoot(mod)
+    expect(mod.getBootStatus().complete).toBe(false)
+    expect(vi.getTimerCount()).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(mod.BOOT_RETRY_DELAY_MS - 1)
+    expect(calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await mod.boot()
+    expect(calls).toBe(2)
+    expect(mod.getBootStatus().complete).toBe(true)
+    // Nothing re-attempts a completed boot.
+    await vi.advanceTimersByTimeAsync(mod.BOOT_RETRY_DELAY_MS * 2)
+    expect(calls).toBe(2)
+  })
+
+  it('Q2: repeated transient failures never stack more than one pending re-attempt', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      throw refused()
+    }
+    const mod = await import('./hooks.server')
+    await settleModuleLoadBoot(mod)
+    await mod.boot()
+    await mod.boot()
+    expect(calls).toBe(3)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('/healthz never triggers a re-attempt', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      throw refused()
+    }
+    const mod = await import('./hooks.server')
+    await settleModuleLoadBoot(mod)
+    expect(calls).toBe(1)
+    for (let i = 0; i < 5; i++) {
+      const res = (await mod.authGuard({
+        event: makeFakeEvent('/healthz') as never,
+        resolve: async () => new Response('{"ok":true}', { status: 200 }),
+      } as never)) as Response
+      expect(res.status).toBe(200)
+    }
+    await Promise.resolve()
+    expect(calls).toBe(1)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+})
+
+describe('authGuard boot gate (TASK-023 item 3)', () => {
+  async function guard(mod: typeof import('./hooks.server'), path: string, tenant?: unknown) {
+    const event = makeFakeEvent(path)
+    if (tenant) event.locals.tenant = tenant
+    let reached = false
+    const res = (await mod.authGuard({
+      event: event as never,
+      resolve: async () => {
+        reached = true
+        return new Response('handler', { status: 200 })
+      },
+    } as never)) as Response
+    return { res, reached }
+  }
+
+  it('while booting: /healthz answers, every other path is 503 booting with Retry-After: 5', async () => {
+    const pending: { resolve?: () => void } = {}
+    controlMigrationsImpl = () =>
+      new Promise<void>((r) => {
+        pending.resolve = r
+      })
+    const mod = await import('./hooks.server')
+
+    const h = await guard(mod, '/healthz')
+    expect(h.reached).toBe(true)
+    expect(h.res.status).toBe(200)
+
+    for (const path of ['/dashboard', '/api/health', '/healthzx', '/api/members']) {
+      const o = await guard(mod, path)
+      expect(o.reached, path).toBe(false)
+      expect(o.res.status).toBe(503)
+      expect(o.res.headers.get('Retry-After')).toBe('5')
+      expect(await o.res.text()).toBe('Service Unavailable: booting')
+    }
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+    pending.resolve?.()
+    await mod.boot()
+  })
+
+  it('while booting: an unresolved /api/internal/ request passes, a tenant-resolved one is gated', async () => {
+    const pending: { resolve?: () => void } = {}
+    controlMigrationsImpl = () =>
+      new Promise<void>((r) => {
+        pending.resolve = r
+      })
+    const mod = await import('./hooks.server')
+
+    expect((await guard(mod, '/api/internal/evict')).reached).toBe(true)
+    const resolved = await guard(mod, '/api/internal/newsletter/render', { id: 't1', slug: 't1' })
+    expect(resolved.reached).toBe(false)
+    expect(resolved.res.status).toBe(503)
+
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+    pending.resolve?.()
+    await mod.boot()
+  })
+
+  it('after a transient failure (re-attempt pending) other paths stay 503 booting with Retry-After: 5', async () => {
+    vi.useFakeTimers()
+    controlMigrationsImpl = async () => {
+      throw refused()
+    }
+    const mod = await import('./hooks.server')
+    await settleModuleLoadBoot(mod)
+    const o = await guard(mod, '/dashboard')
+    expect(o.res.status).toBe(503)
+    expect(o.res.headers.get('Retry-After')).toBe('5')
+    expect(await o.res.text()).toBe('Service Unavailable: booting')
+  })
+
+  it("after a non-retryable failure other paths are 503 'boot failed'; /healthz still answers 200 (Q5)", async () => {
+    controlMigrationsImpl = async () => {
+      throw new Error('control migration 002 failed')
+    }
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const o = await guard(mod, '/dashboard')
+    expect(o.res.status).toBe(503)
+    expect(await o.res.text()).toBe('Service Unavailable: boot failed')
+    // Q5 (accepted, handed off to TASK-040/086): /healthz is liveness, not
+    // readiness. A switch gate must read /api/health as well.
+    expect((await guard(mod, '/healthz')).res.status).toBe(200)
+  })
+
+  it('after boot: /healthz and an /api/internal/ route skip the session guard (they are not session-authenticated)', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    for (const path of ['/healthz', '/api/internal/evict']) {
+      const event = makeFakeEvent(path)
+      event.locals.auth = async () => {
+        throw new Error(`auth must not run for ${path}`)
+      }
+      const res = (await mod.authGuard({
+        event: event as never,
+        resolve: async () => new Response('ok', { status: 200 }),
+      } as never)) as Response
+      expect(res.status, path).toBe(200)
+    }
   })
 })
 
