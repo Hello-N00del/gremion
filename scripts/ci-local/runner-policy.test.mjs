@@ -12,6 +12,7 @@ import {
   waiverProblem,
   evaluateRepo,
   loadWaivers,
+  main,
 } from './runner-policy.mjs'
 
 function makeRepo(files) {
@@ -233,6 +234,45 @@ test('loadWaivers reads a real waivers.json and [] when the path is missing or a
     assert.deepEqual(loadWaivers(undefined), [])
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('HIGH fix: suites.json\'s kernel-runner-policy-guard command labels this repo "kernel" (--kernel), not "--repo ." — a bare --repo labels itself by its own path and can never match the repo-scoped committed waiver', () => {
+  const suites = JSON.parse(readFileSync(fileURLToPath(new URL('./suites.json', import.meta.url)), 'utf8'))
+  const suite = suites.kernel.find((s) => s.id === 'kernel-runner-policy-guard')
+  assert.ok(suite, 'expected a kernel-runner-policy-guard suite in suites.json')
+  assert.match(
+    suite.command,
+    /runner-policy\.mjs --kernel \. --waivers scripts\/ci-local\/waivers\.json/,
+    'the committed suite command must pass --kernel (not --repo) so main() labels this repo "kernel"',
+  )
+})
+
+test('HIGH fix: main(), given suites.json\'s ACTUAL kernel-runner-policy-guard argv shape, exits 0 end-to-end against the real kernel tree — the committed waiver suppresses deploy.yml', () => {
+  const kernelRoot = fileURLToPath(new URL('../../', import.meta.url))
+  const waiversPath = fileURLToPath(new URL('./waivers.json', import.meta.url))
+  const before = process.exitCode
+  process.exitCode = undefined
+  try {
+    main(['--kernel', kernelRoot, '--waivers', waiversPath])
+    assert.equal(process.exitCode, undefined, 'expected exit 0 (unset): the committed kernel waiver must suppress deploy.yml\'s known findings end-to-end')
+  } finally {
+    process.exitCode = before
+  }
+})
+
+test('regression guard: the OLD "--repo ." shape (this unit\'s prior bug) mislabels the kernel repo and fails even with the committed waiver live', () => {
+  const kernelRoot = fileURLToPath(new URL('../../', import.meta.url))
+  const waiversPath = fileURLToPath(new URL('./waivers.json', import.meta.url))
+  const before = process.exitCode
+  process.exitCode = undefined
+  try {
+    // A bare --repo labels itself by its own path (here, kernelRoot), never
+    // "kernel" — so it can never match a waiver scoped to repo: "kernel".
+    main(['--repo', kernelRoot, '--waivers', waiversPath])
+    assert.equal(process.exitCode, 1, 'a bare --repo must NOT benefit from the kernel-scoped waiver (documents why --kernel is required)')
+  } finally {
+    process.exitCode = before
   }
 })
 

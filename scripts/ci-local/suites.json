@@ -158,7 +158,7 @@
       "category": "tree-guard",
       "cwd": ".",
       "kind": "guard",
-      "command": "node --test --test-reporter=tap scripts/ci-local/runner-policy.test.mjs && node scripts/ci-local/runner-policy.mjs --repo . --waivers scripts/ci-local/waivers.json",
+      "command": "node --test --test-reporter=tap scripts/ci-local/runner-policy.test.mjs && node scripts/ci-local/runner-policy.mjs --kernel . --waivers scripts/ci-local/waivers.json",
       "requiresStack": false,
       "testGlobs": ["scripts/ci-local/runner-policy.test.mjs"]
     }
