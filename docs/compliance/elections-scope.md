@@ -96,7 +96,12 @@ ops/scripts/helios-submodule-check.sh --repo . --path helios-src --rev HEAD
 kernel checkout.) The script reads `.python-version` and `LICENSE` **from the commit the
 superproject pins**, not from the submodule's working tree, and blocks the bump unless
 `.python-version` names Python 3.13 or a later 3.x and `LICENSE` is the Apache License
-2.0 text with no other licence's terms added (TRD-268). Exit 1 means the pin fails a
+2.0 text (TRD-268). A later 3.x counts as confirmed-compatible because it is the pinned
+upstream commit itself that declares it; the script does not test Helios against that
+interpreter. The licence check compares the header, the whole terms section (by SHA-256
+after whitespace normalisation) and the appendix with the stock Apache text, and fails if
+any other licence-shaped file (`COPYING*`, `LICENSE-*`, a second `LICENSE.*`) sits at the
+root of the pinned commit. Exit 1 means the pin fails a
 check; exit 2 means the check could not run (no gitlink, submodule not initialised,
 pinned commit not fetched). **Both block the bump.**
 
@@ -108,11 +113,15 @@ current on 2026-09-25:
 helios-submodule-check: PASS commit=c7d5e60fbf9123be13d250a2ad9dae9efd8978e3 python=3.13 licence=Apache-2.0 file=LICENSE source=HEAD
 ```
 
-The script's tests: `node --test ops/scripts/helios-submodule-check.test.mjs` (14 cases:
-pass, later 3.x, below 3.13, missing or unparseable `.python-version`, non-Apache,
-Apache plus other terms, missing `LICENSE`, pinned commit versus working tree, staged
-bump versus `--rev HEAD`, pinned commit not fetched, submodule not initialised, path not
-a gitlink, bad argument). Set `HELIOS_CHECK_TEST_TMP` to move the fixture directory off
+The script's tests: `node --test ops/scripts/helios-submodule-check.test.mjs` (21 cases:
+pass, later 3.x, below 3.13, missing, unparseable, oversized or zero-padded
+`.python-version`, non-Apache, Apache plus other terms, an MIT text quoting the Apache
+header, a preamble before the Apache text, altered terms, extra text after the appendix,
+a second licence file, the Helios `{}` appendix template, missing `LICENSE`, pinned commit
+versus working tree, staged bump versus `--rev HEAD`, pinned commit not fetched,
+submodule not initialised, path not a gitlink, bad argument). They also run on every
+`make lint` through `make lint-compliance`. The stock Apache text they use is
+`ops/scripts/fixtures/apache-2.0.txt`. Set `HELIOS_CHECK_TEST_TMP` to move the fixture directory off
 the system temp directory, and `BASH_BIN` to choose the bash binary.
 
 **Not wired yet:** the Helios submodule does not live in this repository, so no hook or

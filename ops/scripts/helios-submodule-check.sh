@@ -7,8 +7,10 @@
 # commit -- and fails the bump unless:
 #   * `.python-version` names Python 3.13 or a later 3.x (first entry, the one
 #     pyenv and uv select), and
-#   * `LICENSE` (or LICENSE.txt / LICENSE.md) is the Apache License 2.0 text
-#     with no other licence's terms added to it.
+#   * `LICENSE` (or LICENSE.txt / LICENSE.md) is the Apache License 2.0 text:
+#     its header, its terms section byte-identical (whitespace-normalised) to
+#     the stock text, nothing after it but the "How to apply" appendix, and no
+#     other licence-shaped file (COPYING*, LICENSE-*) at the root.
 #
 # On success it prints ONE record line, meant to be pasted into the bump's
 # commit message or PR description ("recorded at each bump", TRD-268):
@@ -35,6 +37,11 @@ set -euo pipefail
 
 PROG="helios-submodule-check"
 MIN_MINOR=13
+# SHA-256 of the Apache License 2.0 terms section (TERMS AND CONDITIONS FOR
+# USE ... END OF TERMS AND CONDITIONS) with every whitespace run collapsed to
+# one space. Identical for the stock text and Helios' older-template copy
+# (docs/compliance/licence-register.md, section 2).
+APACHE_TERMS_SHA256=b316b715c7f48af32f6265b3de80b9656fdbddc57f5854215c8a4c6e0ad42c05
 CR=$'\r'
 WS=$'\r\n\t'
 
@@ -69,7 +76,7 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die "$repo is not a git re
 # Index:    "<mode> <sha> <stage>\t<path>"      (git ls-files -s)
 # Revision: "<mode> <type> <sha>\t<path>"       (git ls-tree)
 if [ -z "$rev" ]; then
-  entry="$(git -C "$repo" ls-files -s -- "$path")"
+  entry="$(git -C "$repo" ls-files -s -- "$path")" || die "cannot read the index of $repo"
   source_desc="index"
   mode="${entry%% *}"
   rest="${entry#* }"
@@ -119,20 +126,25 @@ if pyfile="$(git -C "$sub" show "${sha}:.python-version" 2>/dev/null)"; then
       break
     fi
   done <<<"$pyfile"
-  if [[ "$python" =~ ^(cpython-)?([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]]; then
-    major="${BASH_REMATCH[2]}"
-    minor="${BASH_REMATCH[3]}"
-    if [ "$major" -ne 3 ] || [ "$minor" -lt "$MIN_MINOR" ]; then
+  # Major pinned to 3 and components bounded, so the integer test below can
+  # never error: a `[ ... -lt ... ]` error inside an `if` is just "false",
+  # which is how "3.99999999999999999999" used to fall through to PASS.
+  if [[ "$python" =~ ^(cpython-)?3\.(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,3}))?$ ]]; then
+    minor="${BASH_REMATCH[2]}"
+    if [ "$minor" -lt "$MIN_MINOR" ]; then
       report_fail "python .python-version reports $python, below 3.$MIN_MINOR (or not a confirmed-compatible 3.x)"
     fi
   else
-    report_fail "python .python-version entry '${python}' is unrecognised; expected 3.<minor>[.<patch>]"
+    report_fail "python .python-version entry '${python}' is unrecognised; expected 3.<minor>[.<patch>] without leading zeros"
   fi
 else
   report_fail "python .python-version is missing at the pinned commit"
 fi
 
 # -- 4. LICENSE -------------------------------------------------------------------
+# Every licence-shaped file at the root is looked at, not only the first: an
+# Apache LICENSE next to a COPYING or LICENSE-COMMERCIAL is not "Apache-2.0".
+root_names="$(git -C "$sub" ls-tree --name-only "$sha")" || die "cannot list the root of $sha in $path"
 licence_file=""
 licence_text=""
 for candidate in LICENSE LICENSE.txt LICENSE.md; do
@@ -141,29 +153,67 @@ for candidate in LICENSE LICENSE.txt LICENSE.md; do
     break
   fi
 done
+shopt -s nocasematch
+while IFS= read -r name; do
+  [ -n "$name" ] && [ "$name" != "$licence_file" ] || continue
+  if [[ "$name" =~ ^(LICEN[CS]E|COPYING|UNLICENSE) ]]; then
+    report_fail "licence the pinned commit also carries licence file $name next to ${licence_file:-no LICENSE}; review it and this check"
+  fi
+done <<<"$root_names"
+shopt -u nocasematch
+
 if [ -z "$licence_file" ]; then
   report_fail "licence LICENSE file is missing at the pinned commit"
 else
-  # Whitespace collapsed so a re-wrapped header still matches; compared
-  # case-insensitively.
+  # Whitespace collapsed (the Apache text is re-wrapped freely), then three
+  # parts are checked against the stock text:
+  #   header  "Apache License Version 2.0, January 2004 <url>" and nothing else,
+  #   terms   TERMS AND CONDITIONS ... END OF TERMS AND CONDITIONS, by SHA-256
+  #           (identical in every stock copy, including Helios' older template),
+  #   tail    empty, or the "How to apply" appendix and nothing after it.
   flat="${licence_text//[$WS]/ }"
   while [[ "$flat" == *"  "* ]]; do flat="${flat//  / }"; done
-  shopt -s nocasematch
-  if [[ "$flat" != *"Apache License"* ]] \
-    || [[ "$flat" != *"Version 2.0, January 2004"* ]] \
-    || [[ "$flat" != *"TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"* ]]; then
-    report_fail "licence $licence_file is not Apache-2.0 (Apache License 2.0 header and terms not found)"
+  flat="${flat# }"
+  flat="${flat% }"
+  terms_start="TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"
+  terms_end="END OF TERMS AND CONDITIONS"
+  header="${flat%%"$terms_start"*}"
+  if [[ "$flat" != *"$terms_start"*"$terms_end"* ]]; then
+    report_fail "licence $licence_file is not Apache-2.0 (Apache License 2.0 terms section not found)"
+  elif [[ ! "$header" =~ ^Apache\ License\ Version\ 2\.0,\ January\ 2004\ (https?://www\.apache\.org/licenses/?\ )?$ ]]; then
+    report_fail "licence $licence_file does not begin with the Apache License 2.0 header (text before the terms: '${header:0:80}')"
   else
+    after_start="${flat#"$header"}"
+    terms="${after_start%%"$terms_end"*}$terms_end"
+    tail="${after_start#"$terms"}"
+    tail="${tail# }"
+    if command -v sha256sum >/dev/null 2>&1; then
+      digest="$(printf '%s' "$terms" | sha256sum)" || die "sha256sum failed"
+    elif command -v shasum >/dev/null 2>&1; then
+      digest="$(printf '%s' "$terms" | shasum -a 256)" || die "shasum failed"
+    else
+      die "neither sha256sum nor shasum is available to compare the licence terms"
+    fi
+    digest="${digest%% *}"
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || die "could not hash the licence terms (got '$digest')"
+    if [ "$digest" != "$APACHE_TERMS_SHA256" ]; then
+      report_fail "licence $licence_file terms differ from the Apache License 2.0 text (normalised terms sha256 $digest)"
+    fi
+    shopt -s nocasematch
     for other in 'GNU AFFERO GENERAL PUBLIC LICENSE' 'GNU GENERAL PUBLIC LICENSE' \
                  'GNU LESSER GENERAL PUBLIC LICENSE' 'Mozilla Public License' \
                  'Commons Clause' 'Business Source License' \
-                 'Server Side Public License' 'Elastic License'; do
-      if [[ "$flat" == *"$other"* ]]; then
+                 'Server Side Public License' 'Elastic License' 'MIT License'; do
+      if [[ "$tail" == *"$other"* ]]; then
         report_fail "licence $licence_file is not plain Apache-2.0: it also contains '$other'"
       fi
     done
+    shopt -u nocasematch
+    if [ -n "$tail" ] \
+      && ! [[ "$tail" == "APPENDIX: How to apply the Apache License to your work."*"limitations under the License." ]]; then
+      report_fail "licence $licence_file text after the terms is not the Apache appendix"
+    fi
   fi
-  shopt -u nocasematch
 fi
 
 if [ "$fail" -ne 0 ]; then

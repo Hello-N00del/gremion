@@ -18,7 +18,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,17 +28,12 @@ const SCRIPT = join(HERE, 'helios-submodule-check.sh')
 const BASH = process.env.BASH_BIN || 'bash'
 const TMP_ROOT = process.env.HELIOS_CHECK_TEST_TMP || tmpdir()
 
-const APACHE = `
-                                 Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
-
-   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
-
-   1. Definitions.
-   (abridged fixture)
-   END OF TERMS AND CONDITIONS
-`
+// The stock Apache License 2.0 text (as LiveKit and Keycloak ship it). The
+// script compares the terms section by hash, so an abridged fixture would not
+// do. HELIOS_APACHE is the older template Helios ships: `{}` placeholders in
+// the appendix instead of `[]`.
+const APACHE = readFileSync(join(HERE, 'fixtures', 'apache-2.0.txt'), 'utf8')
+const HELIOS_APACHE = APACHE.replace('[]', '{}').replace('[yyyy] [name of copyright owner]', '{yyyy} {name of copyright owner}')
 const MIT = `MIT License
 
 Copyright (c) fixture
@@ -71,7 +66,7 @@ function git(env, cwd, ...args) {
 // Build a superproject whose `helios-src` gitlink pins a commit carrying the
 // given .python-version / LICENSE content (null = file absent). Returns the
 // paths, the env, and a helper that commits another revision in the submodule.
-function fixture({ python = '3.13\n', license = APACHE, licenseName = 'LICENSE' } = {}) {
+function fixture({ python = '3.13\n', license = APACHE, licenseName = 'LICENSE', extra = {} } = {}) {
   const root = mkdtempSync(join(TMP_ROOT, 'helios-check-'))
   const env = makeEnv(root)
   const superDir = join(root, 'super')
@@ -80,12 +75,15 @@ function fixture({ python = '3.13\n', license = APACHE, licenseName = 'LICENSE' 
   git(env, superDir, 'init', '-q')
   git(env, sub, 'init', '-q')
 
-  const commitSub = (py, lic, name = 'LICENSE') => {
-    for (const f of ['.python-version', 'LICENSE', 'LICENSE.txt']) {
+  let extraNames = []
+  const commitSub = (py, lic, name = 'LICENSE', more = {}) => {
+    for (const f of ['.python-version', 'LICENSE', 'LICENSE.txt', ...extraNames]) {
       rmSync(join(sub, f), { force: true })
     }
     if (py !== null) writeFileSync(join(sub, '.python-version'), py)
     if (lic !== null) writeFileSync(join(sub, name), lic)
+    extraNames = Object.keys(more)
+    for (const [f, body] of Object.entries(more)) writeFileSync(join(sub, f), body)
     writeFileSync(join(sub, 'marker'), String(Math.random()))
     git(env, sub, 'add', '-A')
     git(env, sub, 'commit', '-q', '-m', 'fixture')
@@ -93,7 +91,7 @@ function fixture({ python = '3.13\n', license = APACHE, licenseName = 'LICENSE' 
   }
   const pin = (sha) => git(env, superDir, 'update-index', '--add', '--cacheinfo', `160000,${sha},helios-src`)
 
-  const sha = commitSub(python, license, licenseName)
+  const sha = commitSub(python, license, licenseName, extra)
   pin(sha)
   writeFileSync(join(superDir, 'README'), 'fixture superproject\n')
   git(env, superDir, 'add', 'README')
@@ -272,4 +270,66 @@ test('rejects an unknown argument with a usage error', () => {
   } finally {
     cleanup(fx)
   }
+})
+
+// ── critic round (TASK-005): licence and version paths that used to PASS ────
+
+function expectFail(opts, re, status = 1) {
+  const fx = fixture(opts)
+  try {
+    const r = run(fx)
+    assert.equal(r.status, status, r.all)
+    assert.doesNotMatch(r.out, /PASS/)
+    assert.match(r.err, re)
+  } finally {
+    cleanup(fx)
+  }
+}
+
+test('passes the Helios appendix template ({} placeholders) and a filled-in appendix', () => {
+  for (const license of [HELIOS_APACHE, APACHE.replace('[yyyy] [name of copyright owner]', '2026 Example Project')]) {
+    const fx = fixture({ license })
+    try {
+      const r = run(fx)
+      assert.equal(r.status, 0, r.all)
+      assert.match(r.out, /licence=Apache-2\.0 file=LICENSE /)
+    } finally {
+      cleanup(fx)
+    }
+  }
+})
+
+test('fails an MIT licence that merely quotes the Apache header strings', () => {
+  expectFail({
+    license: 'This project is licensed under the MIT License. Parts derived from code under the Apache License, ' +
+      'Version 2.0, January 2004 (TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION apply to those parts).\n',
+  }, /FAIL .*LICENSE.*not Apache-2\.0/i)
+})
+
+test('fails a proprietary preamble in front of the full Apache text', () => {
+  expectFail({ license: 'Copyright (c) Foo. All rights reserved. Proprietary; no licence granted.\n\n' + APACHE },
+    /FAIL .*LICENSE.*does not begin with the Apache License 2\.0 header/i)
+})
+
+test('fails an Apache text whose terms were altered', () => {
+  const altered = APACHE.replace('hereby grants to You a perpetual,', 'hereby grants to You a revocable,')
+  assert.notEqual(altered, APACHE, 'fixture edit did not apply')
+  expectFail({ license: altered },
+    /FAIL .*LICENSE.*terms differ from the Apache License 2\.0/i)
+})
+
+test('fails extra text after the Apache appendix', () => {
+  expectFail({ license: APACHE + '\nAdditionally, commercial use requires a separate agreement.\n' },
+    /FAIL .*LICENSE.*after the terms is not the Apache appendix/i)
+})
+
+test('fails a second licence-shaped file next to an Apache LICENSE', () => {
+  expectFail({ extra: { COPYING: 'GNU GENERAL PUBLIC LICENSE\n' } }, /FAIL .*also carries licence file COPYING/i)
+  expectFail({ extra: { 'LICENSE-COMMERCIAL': 'Commercial terms.\n' } }, /FAIL .*also carries licence file LICENSE-COMMERCIAL/i)
+})
+
+test('fails an oversized or zero-padded version instead of crashing into PASS', () => {
+  expectFail({ python: '3.99999999999999999999\n' }, /FAIL .*unrecognised/i)
+  expectFail({ python: '3.013\n' }, /FAIL .*unrecognised/i)
+  expectFail({ python: '4.0\n' }, /FAIL .*unrecognised/i)
 })
