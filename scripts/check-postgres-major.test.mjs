@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import {
   POSTGRES_MAJOR,
   POSTGRES_IMAGE_TAG,
+  POSTGRES_IMAGE_REF,
   S14_CONSUMERS,
   EVIDENCE_PATH,
   checkEvidence,
@@ -128,9 +129,9 @@ test('scanText reads a shell parameter-expansion default — the tag that actual
 })
 
 test('a shell default on the pinned tag passes, and is counted exactly once', () => {
-  const hits = scanText('x.sh', `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"`)
+  const hits = scanText('x.sh', `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_REF}}"`)
   assert.equal(hits.length, 1, `expected exactly one hit, got ${JSON.stringify(hits)}`)
-  assert.deepEqual(checkFiles([{ path: 'x.sh', text: `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"` }]), [])
+  assert.deepEqual(checkFiles([{ path: 'x.sh', text: `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_REF}}"` }]), [])
 })
 
 test('a shell default naming the bare port is still not an image reference', () => {
@@ -154,7 +155,7 @@ test('checkFiles refuses to pass on an empty match set', () => {
 
 test('checkFiles goes RED on a stale major and on a floating tag', () => {
   const problems = checkFiles([
-    { path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
     { path: 'b.yml', text: `    image: ${STALE_TAG}\n` },
     { path: 'c.yml', text: `    image: ${FLOATING_TAG}\n` },
   ])
@@ -170,7 +171,7 @@ test('checkFiles excludes the frozen spec copies by rule, not by accident', () =
       path: 'docs/superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md',
       text: `\`${STALE_TAG}\` today\n`,
     },
-    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
   ])
   assert.deepEqual(problems, [])
 })
@@ -380,7 +381,7 @@ test('scanText reads every untagged spelling, and never the same line twice', ()
     assert.equal(classify(hits[0]), 'unpinned', `${line} must classify as unpinned`)
   }
   // a TAGGED line is matched once, by the tag scanner, not twice
-  const tagged = scanText('a.yml', `    image: ${POSTGRES_IMAGE_TAG}`)
+  const tagged = scanText('a.yml', `    image: ${POSTGRES_IMAGE_REF}`)
   assert.equal(tagged.length, 1, JSON.stringify(tagged))
   assert.equal(classify(tagged[0]), 'ok')
 })
@@ -404,7 +405,7 @@ test('checkFiles goes RED when one fragment of a good set is untagged', () => {
   // guard cannot see this — the set is far from empty — so without its own net
   // the whole run stays green.
   const problems = checkFiles([
-    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
     { path: 'compose/calendar.yml', text: `${UNTAGGED}\n` },
   ])
   assert.equal(problems.length, 1, problems.join('\n'))
@@ -446,4 +447,100 @@ test('trackedTextFiles reads the extensionless host scripts too', () => {
   assert.ok(paths.includes('infra/host/bin/gremion-restore-into'),
     'infra/host/bin/gremion-restore-into must be scanned')
   assert.ok(paths.includes('.env.example'), '.env.example must be scanned')
+})
+
+// ── TASK-019: the digest net (TRD-350) ─────────────────────────────────────
+//
+// A tag is a pointer the registry may move; a digest is the content. Every
+// DECLARATION (compose/workflow `image:`, a shell assignment or default, a
+// `docker run`, a Dockerfile FROM) must carry the ONE pinned index digest.
+// Prose (.md) and comment lines stay major-only. Built at runtime like the
+// stale tags above, so this file never spells a declaration of its own.
+
+import {
+  POSTGRES_IMAGE_DIGEST,
+  checkDigests,
+} from './check-postgres-major.mjs'
+
+// A well-formed digest that is NOT the pin: the pin's own hex, rotated.
+const OTHER_DIGEST = `sha256:${POSTGRES_IMAGE_DIGEST.slice(7).split('').reverse().join('')}`
+
+test('the pinned reference is <tag>@<one sha256 index digest>', () => {
+  assert.match(POSTGRES_IMAGE_DIGEST, /^sha256:[0-9a-f]{64}$/)
+  assert.equal(POSTGRES_IMAGE_REF, `${POSTGRES_IMAGE_TAG}@${POSTGRES_IMAGE_DIGEST}`)
+  assert.match(OTHER_DIGEST, /^sha256:[0-9a-f]{64}$/)
+  assert.notEqual(OTHER_DIGEST, POSTGRES_IMAGE_DIGEST)
+})
+
+test('the record carries a "Pinned digest" line equal to the exported constant', () => {
+  assert.ok(EVIDENCE.includes(`- **Pinned digest**: ${POSTGRES_IMAGE_DIGEST}\n`),
+    'docs/ops/postgres-major.md must carry the pinned digest line')
+  const drifted = EVIDENCE.replace(POSTGRES_IMAGE_DIGEST, OTHER_DIGEST)
+  assert.notEqual(drifted, EVIDENCE, 'fixture did not apply')
+  assert.match(checkEvidence(drifted).join('\n'), /postgres-major\.md pins digest sha256:[0-9a-f]{64}, check-postgres-major\.mjs exports/)
+  const missing = EVIDENCE.split('\n').filter((l) => !l.startsWith('- **Pinned digest**')).join('\n')
+  assert.match(checkEvidence(missing).join('\n'), /no "- \*\*Pinned digest\*\*: sha256:<64 hex>" line/)
+})
+
+test('scanText records the digest a reference carries', () => {
+  const hits = scanText('docker-compose.yml', `    image: ${POSTGRES_IMAGE_REF}`)
+  assert.equal(hits.length, 1, JSON.stringify(hits))
+  assert.equal(hits[0].digest, POSTGRES_IMAGE_DIGEST)
+  assert.equal(classify(hits[0]), 'ok')
+  assert.equal(scanText('a.yml', `    image: ${POSTGRES_IMAGE_TAG}`)[0].digest, null)
+})
+
+test('TDD-1: an undigested declaration is reported (compose, workflow, shell, Dockerfile, docker run)', () => {
+  for (const [path, line] of [
+    ['docker-compose.yml', `    image: ${POSTGRES_IMAGE_TAG}`],
+    ['.github/workflows/gremion-ui.yml', `        image: ${POSTGRES_IMAGE_TAG}`],
+    ['gremion-ui/scripts/fresh-init-proof.sh', `DEFAULT_IMAGE="${POSTGRES_IMAGE_TAG}"`],
+    ['x.sh', `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"`],
+    ['x.bats', `  run docker run --rm ${POSTGRES_IMAGE_TAG} postgres --version`],
+    ['docker/pg/Dockerfile', `FROM ${POSTGRES_IMAGE_TAG}`],
+    ['infra/host/bin/gremion-x', `docker run --rm ${POSTGRES_IMAGE_TAG} pg_dump --version`],
+    ['compose/x.yaml.tmpl', `    image: ${POSTGRES_IMAGE_TAG}`],
+  ]) {
+    const problems = checkFiles([{ path, text: `${line}\n` }])
+    assert.equal(problems.length, 1, `${path}: ${problems.join('\n')}`)
+    assert.ok(problems[0].startsWith(`undigested: ${path}:1 ${POSTGRES_IMAGE_TAG}`), problems[0])
+    assert.ok(problems[0].includes(`expected ${POSTGRES_IMAGE_REF}`), problems[0])
+  }
+})
+
+test('prose and comment lines stay major-only: no digest demanded there', () => {
+  const problems = checkFiles([
+    { path: 'docs/ops/x.md', text: `runs \`${POSTGRES_IMAGE_TAG}\` today\n` },
+    { path: 'docker-compose.prod.yml', text: `  # (${POSTGRES_IMAGE_TAG} also defaults to 100\n` },
+    { path: 'x.sh', text: `# Re-measured on ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'gremion-ui/src/lib/x.ts', text: ` * relying on ${POSTGRES_IMAGE_TAG}'s default\n` },
+    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
+  ])
+  assert.deepEqual(problems, [])
+})
+
+test('TDD-2: a digest that is not the pinned one is drift, in any file kind', () => {
+  for (const path of ['docker-compose.yml', 'docs/ops/x.md', 'x.sh']) {
+    const problems = checkFiles([{ path, text: `    image: ${POSTGRES_IMAGE_TAG}@${OTHER_DIGEST}\n` }])
+    assert.equal(problems.length, 1, `${path}: ${problems.join('\n')}`)
+    assert.ok(problems[0].startsWith(`digest-drift: ${path}:1`), problems[0])
+  }
+})
+
+test('TDD-2: a truncated or malformed digest is drift, never a pass', () => {
+  const short = POSTGRES_IMAGE_DIGEST.slice(0, 20)
+  const problems = checkFiles([{ path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_TAG}@${short}\n` }])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.match(problems[0], /^digest-drift: a\.yml:1/)
+})
+
+test('TDD-2: two different digests in one tree are reported as a split pin', () => {
+  const hits = [
+    ...scanText('a.yml', `    image: ${POSTGRES_IMAGE_REF}`),
+    ...scanText('b.yml', `    image: ${POSTGRES_IMAGE_TAG}@${OTHER_DIGEST}`),
+  ]
+  const problems = checkDigests(hits)
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.match(problems[0], /^split pin: 2 distinct postgres digests in one tree/)
+  assert.deepEqual(checkDigests(hits.slice(0, 1)), [])
 })

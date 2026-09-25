@@ -6,6 +6,15 @@
   consumer supports"), unit `B37-postgres-major-pin`.
 - **Pinned major**: 18
 - Pinned tag: `postgres:18-alpine`
+- **Pinned digest**: sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+- Pinned reference (TASK-019, TRD-350): `postgres:18-alpine@<the digest above>`
+  on every declaration — compose and workflow `image:` lines, shell
+  assignments and defaults, `docker run`, Dockerfiles, `infra/host/bin`. It is
+  the multi-arch **index** digest (`docker buildx imagetools inspect
+  postgres:18-alpine`, the top `Digest:`, read 2026-09-25: index for 18.6 on
+  alpine 3.24), never a per-platform manifest. Prose and comments stay
+  major-only. `POSTGRES_IMAGE_DIGEST` in `scripts/check-postgres-major.mjs`
+  must equal the line above; the guard asserts both directions.
 
 ## S14 evidence
 

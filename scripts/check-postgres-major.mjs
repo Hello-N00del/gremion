@@ -19,6 +19,14 @@ import { fileURLToPath } from 'node:url'
 /** The major S14 settled on. Change this ONLY together with the record. */
 export const POSTGRES_MAJOR = 18
 export const POSTGRES_IMAGE_TAG = `postgres:${POSTGRES_MAJOR}-alpine`
+// TRD-350: the tag is a pointer the registry may move; the digest is the
+// content. This is the multi-arch INDEX digest (`docker buildx imagetools
+// inspect postgres:<major>-alpine`, the top `Digest:`), never a per-platform
+// manifest: an index digest resolves to the right image on amd64 and arm64
+// alike, a platform digest pins one architecture and breaks the other. ONE
+// digest everywhere, recorded as "- **Pinned digest**:" in the evidence file.
+export const POSTGRES_IMAGE_DIGEST = 'sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873'
+export const POSTGRES_IMAGE_REF = `${POSTGRES_IMAGE_TAG}@${POSTGRES_IMAGE_DIGEST}`
 export const EVIDENCE_PATH = 'docs/ops/postgres-major.md'
 
 // The consumers P3 names. A consumer with no evidence row is a consumer nobody
@@ -31,6 +39,12 @@ export function checkEvidence(text) {
   if (!m) return [`${EVIDENCE_PATH} carries no "- **Pinned major**: <n>" line`]
   if (Number(m[1]) !== POSTGRES_MAJOR) {
     problems.push(`${EVIDENCE_PATH} pins ${m[1]}, check-postgres-major.mjs exports ${POSTGRES_MAJOR}`)
+  }
+  const d = text.match(/^- \*\*Pinned digest\*\*: (sha256:[0-9a-f]{64})$/m)
+  if (!d) {
+    problems.push(`${EVIDENCE_PATH} carries no "- **Pinned digest**: sha256:<64 hex>" line`)
+  } else if (d[1] !== POSTGRES_IMAGE_DIGEST) {
+    problems.push(`${EVIDENCE_PATH} pins digest ${d[1]}, check-postgres-major.mjs exports ${POSTGRES_IMAGE_DIGEST}`)
   }
   const rows = text.split('\n').filter((l) => l.trim().startsWith('|'))
   for (const c of S14_CONSUMERS) {
@@ -74,7 +88,14 @@ export const EXCLUDED = [
 // refused a second time below, because one net is one forgotten char from
 // silently excusing a real tag — and the kernel prose writes bare `postgres:5432`
 // in a dozen places with nothing in front of it.
-const TAG_RE = /(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])/g
+//
+// A trailing `@<algo>:<hex>` is captured as the reference's digest (group 2).
+// It is captured loosely on purpose — `@sha256:abc` is read, not skipped — so a
+// truncated or malformed digest is compared against the pin and reported as
+// drift instead of disappearing from the scan.
+const DIGEST_TAIL = String.raw`(?:@([A-Za-z0-9]+:[A-Za-z0-9]*))?`
+const TAG_RE = new RegExp(
+  String.raw`(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
 
 // The SECOND net, for the reference that has no tag at all for TAG_RE to match:
 // `image: postgres`, `image: "postgres"`, `image: postgres:` with nothing after
@@ -90,8 +111,12 @@ const TAG_RE = /(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+
 // The optional registry/namespace prefix accepts `docker.io/library/postgres`
 // while refusing `mypostgres` and `timescale/timescaledb-postgis`: the reference
 // must END at `postgres`, and any prefix must end in a slash.
+//
+// TASK-019: a DIGEST without a tag (`image: postgres@sha256:...`) is read here
+// too. It may even be the right content, but no reader and no scanner can tell
+// its major from the text, and the pin is written `<tag>@<digest>` everywhere.
 const UNTAGGED_IMAGE_RE =
-  /^\s*(?:-\s*)?image:\s*(["']?)((?:[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]+)?\/)*postgres):?\1\s*(?:#.*)?$/
+  /^\s*(?:-\s*)?image:\s*(["']?)((?:[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]+)?\/)*postgres):?(?:@\S*?)?\1\s*(?:#.*)?$/
 
 // The THIRD net: a shell parameter-expansion DEFAULT, `${VAR:-postgres:18-alpine}`.
 // TAG_RE structurally CANNOT see one. The lookbehind that keeps
@@ -106,27 +131,50 @@ const UNTAGGED_IMAGE_RE =
 // before the reference is `=`, which the lookbehind does not drop, so TAG_RE
 // already reads those. Matching them twice would report one stale default as two
 // findings — the narrower net is what keeps each occurrence counted exactly once.
-const SHELL_DEFAULT_RE =
-  /\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])/g
+const SHELL_DEFAULT_RE = new RegExp(
+  String.raw`\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
+
+// Q3 (TASK-019): the file kinds in which a reference is a DECLARATION — the
+// thing that is pulled and run — and so must carry the digest: compose and
+// workflow YAML, shell (.sh/.bats), templates, Dockerfiles, the extensionless
+// host CLI and the dotted env files (a shell assignment). Prose (.md) and code
+// comments (.mjs/.ts) stay major-only: they NAME the image, they do not pull it.
+const DECLARING = /\.(ya?ml|sh|bats|tmpl)$|(^|\/)Dockerfile[^/]*$|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
+
+// Where the comment part of a line starts in a #-comment file kind, or
+// Infinity. `#` only opens a comment at the start or after whitespace, so a
+// shell `${VAR#prefix}` or a URL fragment is not taken for one.
+function commentStart(line) {
+  const m = line.match(/(^|\s)#/)
+  return m ? m.index + m[1].length : Infinity
+}
 
 export function scanText(path, text) {
   const hits = []
+  const declaring = DECLARING.test(path)
   text.split('\n').forEach((line, i) => {
+    // A hit is a declaration when its file kind declares images and it sits
+    // before any comment on the line.
+    const cut = declaring ? commentStart(line) : -1
+    const hit = (m, tag) => ({
+      path, line: i + 1, tag, ref: `postgres:${tag}`,
+      digest: m[2] ?? null, decl: m.index < cut,
+    })
     for (const m of line.matchAll(TAG_RE)) {
       if (m[1] === '5432') continue
-      hits.push({ path, line: i + 1, tag: m[1], ref: `postgres:${m[1]}` })
+      hits.push(hit(m, m[1]))
     }
     // Read on the SAME line pass, after TAG_RE: the two nets cannot both match one
     // occurrence (TAG_RE's lookbehind is precisely what blinds it here), so no
     // line is ever counted twice.
     for (const m of line.matchAll(SHELL_DEFAULT_RE)) {
       if (m[1] === '5432') continue
-      hits.push({ path, line: i + 1, tag: m[1], ref: `postgres:${m[1]}` })
+      hits.push(hit(m, m[1]))
     }
     // A line carrying a real tag has already been read above; this fires only
     // where there is no tag at all, so no line is ever counted twice.
     const u = line.replace(/\r$/, '').match(UNTAGGED_IMAGE_RE)
-    if (u) hits.push({ path, line: i + 1, tag: null, ref: u[2] })
+    if (u) hits.push({ path, line: i + 1, tag: null, ref: u[2], digest: null, decl: true })
   })
   return hits
 }
@@ -139,7 +187,25 @@ export function classify(hit) {
   if (!hit.tag || hit.tag === 'latest' || hit.tag === 'alpine') return 'unpinned'
   const major = hit.tag.split(/[.-]/)[0]
   if (!/^\d+$/.test(major)) return 'unpinned'
-  return Number(major) === POSTGRES_MAJOR ? 'ok' : 'mismatched'
+  if (Number(major) !== POSTGRES_MAJOR) return 'mismatched'
+  // The major is right; now the content. A digest that is present and not the
+  // pin is drift wherever it is written — prose included, because a record
+  // naming another digest is a record of a different image. A missing digest
+  // is a finding only on a declaration (Q3).
+  if (hit.digest != null && hit.digest !== POSTGRES_IMAGE_DIGEST) return 'digest-drift'
+  if (hit.decl && hit.digest == null) return 'undigested'
+  return 'ok'
+}
+
+/**
+ * ONE digest everywhere. Each drifted reference is already a per-line finding;
+ * this names the tree-level state as well, so a split pin reads as one problem
+ * with every digest listed rather than as a scatter of unrelated lines.
+ */
+export function checkDigests(hits) {
+  const seen = [...new Set(hits.map((h) => h.digest).filter((d) => d != null))]
+  if (seen.length <= 1) return []
+  return [`split pin: ${seen.length} distinct postgres digests in one tree (${seen.join(', ')}); expected only ${POSTGRES_IMAGE_DIGEST}`]
 }
 
 /** @param files [{path, text}] */
@@ -150,9 +216,12 @@ export function checkFiles(files) {
   if (hits.length === 0) {
     return ['found zero postgres: image references — the guard would pass vacuously']
   }
-  return hits
-    .filter((h) => classify(h) !== 'ok')
-    .map((h) => `${classify(h)}: ${h.path}:${h.line} ${h.ref} (expected ${POSTGRES_IMAGE_TAG})`)
+  return [
+    ...hits
+      .filter((h) => classify(h) !== 'ok')
+      .map((h) => `${classify(h)}: ${h.path}:${h.line} ${h.ref}${h.digest != null ? `@${h.digest}` : ''} (expected ${POSTGRES_IMAGE_REF})`),
+    ...checkDigests(hits),
+  ]
 }
 
 // ── the data-directory contract ────────────────────────────────────────────

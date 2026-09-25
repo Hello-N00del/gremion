@@ -59,7 +59,7 @@ PORT="${FRESH_INIT_PROOF_PORT:-15433}"
 # guard reads a `${VAR:-postgres:...}` default too (that gap is what let this
 # file sit on 16 for a whole unit), but a plain literal is the form every net
 # sees and the form a reader greps for.
-DEFAULT_IMAGE="postgres:18-alpine"
+DEFAULT_IMAGE="postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873"
 IMAGE="${FRESH_INIT_PROOF_IMAGE:-$DEFAULT_IMAGE}"
 NAME="gremion-fresh-init-$$"
 OMIT="${FRESH_INIT_PROOF_OMIT:-}"
