@@ -1,0 +1,11 @@
+{
+  "comment": "Every path under a mapped module directory that differs from, or is absent at, the StuRa tag extraction-source-f1 (services/** and the content UI half). scripts/check-module-source-parity.mjs refuses any unlisted difference, any listed path that does not differ (stale), and any set-A path.",
+  "source": { "tag": "extraction-source-f1", "commit": "0c9d342e9a1f9785b6f976719008134237198d0d" },
+  "entries": [
+    {
+      "path": "modules/content/app/migrations/1200_content_news_posts.sql",
+      "reason": "added: kernel-origin content creation migration (B4a-news-posts-ownership), moved bytes-unchanged from modules/content/migrations/ into the content app chain (Q7); not a StuRa file",
+      "owner": "TASK-200"
+    }
+  ]
+}
