@@ -40,8 +40,10 @@ export interface StorageFs {
   rename(from: string, to: string): Promise<void>
   readFile(path: string): Promise<Uint8Array>
   unlink(path: string): Promise<void>
+  /** lstat — used to refuse symlinks on the way to an object. */
+  lstat(path: string): Promise<{ isSymbolicLink(): boolean }>
   /** Recursive listing: every entry below `path`, as paths relative to it,
-   *  regular files only (symlinks and directories are not returned). */
+   *  regular files only. Symlinks are neither returned nor descended into. */
   listFiles(path: string): Promise<string[]>
   /** Synchronous text read — used only for the mount table. */
   readTextSync(path: string): string
@@ -58,4 +60,9 @@ export interface StorageConfig {
   mountinfoPath?: string
   /** Filesystem operations; defaults to node:fs. */
   fs?: StorageFs
+  /** Must be true to select 'memory': the double loses every object on
+   *  restart, so it is never selectable by a stray STORAGE_BACKEND alone. */
+  allowTestDouble?: boolean
+  /** Host platform for the mount check; defaults to process.platform (tests). */
+  platform?: string
 }

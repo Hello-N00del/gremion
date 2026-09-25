@@ -44,7 +44,7 @@ describe('storage config adapter', () => {
   it('the memory double is refused outside vitest', () => {
     process.env.STORAGE_BACKEND = 'memory'
     delete process.env.VITEST
-    expect(() => adapter.getStorageFor(A)).toThrow(/refused outside vitest/)
+    expect(() => adapter.getStorageFor(A)).toThrow(/in-memory test double; it is refused unless allowTestDouble/)
   })
 
   it('STORAGE_BACKEND=local reads RECEIPT_STORAGE_DIR and refuses it when it is not a mount point', () => {

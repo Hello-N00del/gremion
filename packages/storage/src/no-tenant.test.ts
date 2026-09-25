@@ -28,6 +28,7 @@ beforeEach(async () => {
     ]),
   ) as unknown as StorageFs
   configureStorage({ backend: 'local', root, mountinfoPath, fs: spyFs })
+  calls = [] // configuration's one mount-table read is not under test here
 })
 afterEach(async () => {
   resetStorageForTest()
@@ -42,13 +43,26 @@ describe('no tenant -> synchronous throw before any I/O', () => {
     ['whitespace', ' '],
     ['traversal', '../x'],
   ])('getStorageFor(%s) throws synchronously with zero fs calls', (_label, bad) => {
-    expect(() => getStorageFor(bad as never).put('r.pdf', new Uint8Array([1]))).toThrow(/storage: (no|invalid) tenant id/)
+    let thrown: unknown
+    try {
+      void getStorageFor(bad as never).put('r.pdf', new Uint8Array([1]))
+    } catch (err) {
+      thrown = err
+    }
+    // the spy first: a re-break that lets the call through must show its fs calls
     expect(calls).toEqual([])
+    expect(String(thrown)).toMatch(/storage: (no|invalid) tenant id/)
   })
 
   it('the backend constructor itself refuses an empty tenant before reading the mount table', () => {
-    expect(() => new LocalStorageBackend('', { root, mountinfoPath, fs: spyFs })).toThrow(/storage: no tenant id/)
+    let thrown: unknown
+    try {
+      new LocalStorageBackend('', { root, mountinfoPath, fs: spyFs })
+    } catch (err) {
+      thrown = err
+    }
     expect(calls).toEqual([])
+    expect(String(thrown)).toMatch(/storage: no tenant id/)
   })
 
   it('the tenant check runs before the not-configured check', () => {

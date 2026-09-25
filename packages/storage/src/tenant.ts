@@ -12,6 +12,10 @@
 
 import { posix } from 'node:path'
 
+/** The local backend's in-flight temp files are `.<name>.<uuid>.partial`.
+ *  Such names are reserved on every backend so list() can skip them safely. */
+export const PARTIAL_NAME_RE = /^\..+\.[0-9a-f-]{36}\.partial$/
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Q5 residual: the pre-registry single-tenant id. Accepted as an explicit
@@ -58,6 +62,9 @@ export function composeKey(backend: string, tenantId: string, relPath: unknown):
   const norm = posix.normalize(stripped)
   if (norm === '.' || norm === '..' || norm.startsWith('../') || norm.endsWith('/')) {
     throw new Error(`storage(${backend}): path escapes tenant root: ${JSON.stringify(relPath)}`)
+  }
+  if (PARTIAL_NAME_RE.test(posix.basename(norm))) {
+    throw new Error(`storage(${backend}): reserved temp-file name: ${JSON.stringify(relPath)}`)
   }
   return `${tenantId}/${norm}`
 }

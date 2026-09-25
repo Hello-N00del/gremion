@@ -18,7 +18,7 @@ describe.each(CONTRACT_BACKENDS)('StorageBackend contract: STORAGE_BACKEND=%s', 
   beforeEach(async () => {
     const m = await mountedScratchRoot(`contract-${backend}`)
     cleanup = m.cleanup
-    configureStorage({ backend, root: m.root, mountinfoPath: m.mountinfoPath })
+    configureStorage({ backend, root: m.root, mountinfoPath: m.mountinfoPath, allowTestDouble: true })
   })
   afterEach(async () => {
     resetStorageForTest()
@@ -105,11 +105,26 @@ describe.each(CONTRACT_BACKENDS)('StorageBackend contract: STORAGE_BACKEND=%s', 
     expect(rB.every((x) => x === 0xbb) && rB.length === payloadB.length).toBe(true)
   })
 
+  it('a directory-shaped handle behaves the same on every backend: read ENOENT, delete no-op', async () => {
+    await getStorageFor(A).put('news/x.odt', new Uint8Array([1]))
+    await expect(getStorageFor(A).read(`${A}/news`)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(getStorageFor(A).delete(`${A}/news`)).resolves.toBeUndefined()
+    expect(await getStorageFor(A).list()).toEqual([`${A}/news/x.odt`])
+  })
+
+  it('refuses a relPath shaped like the local backend\'s in-flight temp names', async () => {
+    await expect(
+      getStorageFor(A).put('d/.x.odt.12345678-1234-4234-8234-123456789012.partial', new Uint8Array([1])),
+    ).rejects.toThrow(/reserved temp-file name/)
+  })
+
   it('memoises one backend per tenant; reconfiguring drops the map', async () => {
     const a1 = getStorageFor(A)
     expect(getStorageFor(A)).toBe(a1)
     expect(getStorageFor(B)).not.toBe(a1)
     expect(a1.tenantId).toBe(A)
+    configureStorage({ backend: 'memory', allowTestDouble: true })
+    expect(getStorageFor(A)).not.toBe(a1)
     resetStorageForTest()
     expect(() => getStorageFor(A)).toThrow(/not configured/)
   })
@@ -125,8 +140,24 @@ describe('selectability guard', () => {
     expect(() => configureStorage({ backend: '' })).toThrow(/unknown STORAGE_BACKEND/)
   })
 
+  it('the memory test double must be explicitly allowed (review round 1)', () => {
+    expect(() => configureStorage({ backend: 'memory' })).toThrow(/test double.*allowTestDouble/)
+  })
+
+  it('local: the root is mount-checked at configuration time, not first use (review round 1)', async () => {
+    const m = await mountedScratchRoot('eager')
+    try {
+      expect(() => configureStorage({ backend: 'local', root: `${m.root}/sub`, mountinfoPath: m.mountinfoPath })).toThrow(
+        /is not a mount point/,
+      )
+      expect(() => getStorageFor(A)).toThrow(/not configured/)
+    } finally {
+      await m.cleanup()
+    }
+  })
+
   it('backend names are case- and whitespace-insensitive', () => {
-    configureStorage({ backend: ' MEMORY ' })
+    configureStorage({ backend: ' MEMORY ', allowTestDouble: true })
     expect(getStorageFor(A).constructor.name).toBe('MemoryStorageBackend')
     resetStorageForTest()
   })

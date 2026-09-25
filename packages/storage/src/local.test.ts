@@ -4,10 +4,10 @@
 // absolute-path/drive-letter refusal, ENOENT-idempotent delete. Roots now live
 // under <checkout>/.scratch/t117 instead of mkdtemp(tmpdir()).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { stat, readFile } from 'node:fs/promises'
+import { stat, readFile, symlink, mkdir, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { LocalStorageBackend } from './local.js'
-import { mountedScratchRoot, TENANT_A } from '../test/support.js'
+import { mountedScratchRoot, TENANT_A, TENANT_B } from '../test/support.js'
 
 let root: string
 let backend: LocalStorageBackend
@@ -68,5 +68,37 @@ describe('LocalStorageBackend.read / delete', () => {
     const outside = join(root, '..', 'definitely-not-mine.txt')
     await expect(backend.read(outside)).rejects.toThrow(/escapes tenant root/)
     await expect(backend.delete(outside)).rejects.toThrow(/escapes tenant root/)
+  })
+})
+
+describe('LocalStorageBackend symlink refusal (review round 1, security M1)', () => {
+  it('a symlink planted under the tenant root into another tenant is never followed', async () => {
+    const other = join(root, TENANT_B, 'secret')
+    await mkdir(other, { recursive: true })
+    await writeFile(join(other, 's.txt'), 'B-SECRET')
+    await mkdir(join(root, TENANT_A), { recursive: true })
+    await symlink(join(root, TENANT_B), join(root, TENANT_A, 'link'))
+    await expect(backend.read(`${TENANT_A}/link/secret/s.txt`)).rejects.toThrow(/refusing symlink/)
+    await expect(backend.put('link/secret/planted.txt', new Uint8Array([1]))).rejects.toThrow(/refusing symlink/)
+    await expect(backend.delete(`${TENANT_A}/link/secret/s.txt`)).rejects.toThrow(/refusing symlink/)
+    await expect(backend.list('link')).rejects.toThrow(/refusing symlink/)
+    expect(await backend.list()).toEqual([])
+    await expect(stat(join(other, 'planted.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(join(other, 's.txt'), 'utf8')).toBe('B-SECRET')
+  })
+
+  it('a symlinked file under the tenant root is refused too', async () => {
+    await mkdir(join(root, TENANT_A), { recursive: true })
+    await writeFile(join(root, 'outside.txt'), 'X')
+    await symlink(join(root, 'outside.txt'), join(root, TENANT_A, 'f.txt'))
+    await expect(backend.read(`${TENANT_A}/f.txt`)).rejects.toThrow(/refusing symlink/)
+  })
+})
+
+describe('LocalStorageBackend.list when the root vanished (review round 1, silent-failure)', () => {
+  it('throws instead of reporting an empty tenant', async () => {
+    await backend.put('x.txt', new Uint8Array([1]))
+    await rm(root, { recursive: true, force: true })
+    await expect(backend.list()).rejects.toThrow(/storage root .* is missing/)
   })
 })

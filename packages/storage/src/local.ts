@@ -11,18 +11,16 @@
 //
 // Construction refuses a root that is not a mount point (assertMountedRoot).
 
-import { mkdir, writeFile, rename, readFile, unlink, readdir } from 'node:fs/promises'
+import { mkdir, writeFile, rename, readFile, unlink, readdir, lstat } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import type { StorageBackend, StorageFs } from './types.js'
 import { assertMountedRoot, type MountCheck } from './assertMountedRoot.js'
-import { assertHandleInTenant, assertKeyInTenant, assertTenantId, composeKey } from './tenant.js'
+import { assertHandleInTenant, assertKeyInTenant, assertTenantId, composeKey, PARTIAL_NAME_RE } from './tenant.js'
 
 export const DEFAULT_LOCAL_ROOT = './var/storage'
 
-/** In-flight temp files are `.<name>.<uuid>.partial`; list() never returns them. */
-const PARTIAL_RE = /^\..+\.[0-9a-f-]{36}\.partial$/
 
 export const nodeFs: StorageFs = {
   mkdir: (p, o) => mkdir(p, o),
@@ -33,9 +31,21 @@ export const nodeFs: StorageFs = {
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
   },
   unlink: (p) => unlink(p),
+  lstat: (p) => lstat(p),
   listFiles: async (p) => {
-    const entries = await readdir(p, { recursive: true, withFileTypes: true })
-    return entries.filter((e) => e.isFile()).map((e) => relative(p, join(e.parentPath, e.name)))
+    // Own walk instead of readdir({ recursive }), which descends into
+    // symlinked directories. Dirent.isDirectory()/isFile() are false for a
+    // symlink, so links are neither followed nor returned.
+    const out: string[] = []
+    const walk = async (dir: string): Promise<void> => {
+      for (const e of await readdir(dir, { withFileTypes: true })) {
+        const abs = join(dir, e.name)
+        if (e.isDirectory()) await walk(abs)
+        else if (e.isFile()) out.push(relative(p, abs))
+      }
+    }
+    await walk(p)
+    return out
   },
   readTextSync: (p) => readFileSync(p, 'utf8'),
 }
@@ -44,7 +54,12 @@ export interface LocalStorageOptions {
   root?: string
   mountinfoPath?: string
   fs?: StorageFs
+  /** Host platform for the mount check; defaults to process.platform (tests). */
+  platform?: string
 }
+
+const enoent = (key: string): Error =>
+  Object.assign(new Error(`storage(local): no object at ${JSON.stringify(key)}`), { code: 'ENOENT' })
 
 function toBytes(bytes: unknown): Uint8Array {
   if (!(bytes instanceof Uint8Array)) throw new TypeError('storage(local): bytes must be a Uint8Array')
@@ -65,7 +80,7 @@ export class LocalStorageBackend implements StorageBackend {
     this.tenantId = assertTenantId(tenantId)
     this.fs = options.fs ?? nodeFs
     this.root = resolve(options.root ?? DEFAULT_LOCAL_ROOT)
-    this.mountCheck = assertMountedRoot(this.root, options.mountinfoPath, (p) => this.fs.readTextSync(p))
+    this.mountCheck = assertMountedRoot(this.root, options.mountinfoPath, (p) => this.fs.readTextSync(p), options.platform)
     if (!this.mountCheck.checked) {
       console.warn(`storage(local): mount-point check SKIPPED: ${this.mountCheck.reason}`)
     }
@@ -82,6 +97,30 @@ export class LocalStorageBackend implements StorageBackend {
     return abs
   }
 
+  /** Refuse a symlink anywhere from <root>/<tenantId> down to `abs`: a link
+   *  planted under the tenant root must never carry I/O into another tenant
+   *  or out of the root. Stops at the first missing component (put creates
+   *  the rest as real directories). Residual: a link swapped in between this
+   *  check and the I/O (TOCTOU) is not covered; only this seam writes here. */
+  private async assertNoSymlinks(abs: string, key: string): Promise<void> {
+    const rel = relative(this.tenantRoot, abs)
+    const parts = rel === '' ? [] : rel.split(sep)
+    let p = this.tenantRoot
+    for (let i = 0; i <= parts.length; i++) {
+      if (i > 0) p = join(p, parts[i - 1]!)
+      let st: { isSymbolicLink(): boolean }
+      try {
+        st = await this.fs.lstat(p)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return
+        throw err
+      }
+      if (st.isSymbolicLink()) {
+        throw new Error(`storage(local): refusing symlink in path: ${JSON.stringify(key)}`)
+      }
+    }
+  }
+
   put(relPath: string, bytes: Uint8Array): Promise<string> {
     let key: string
     let abs: string
@@ -94,7 +133,9 @@ export class LocalStorageBackend implements StorageBackend {
     } catch (err) {
       return Promise.reject(err)
     }
-    return this.write(abs, data).then(() => key)
+    return this.assertNoSymlinks(abs, key)
+      .then(() => this.write(abs, data))
+      .then(() => key)
   }
 
   /** Write via a sibling temp file + rename, so a concurrent reader sees the
@@ -113,25 +154,37 @@ export class LocalStorageBackend implements StorageBackend {
 
   read(handle: string): Promise<Uint8Array> {
     let abs: string
+    let key: string
     try {
-      abs = this.toAbs(assertHandleInTenant('local', this.tenantId, handle))
+      key = assertHandleInTenant('local', this.tenantId, handle)
+      abs = this.toAbs(key)
     } catch (err) {
       return Promise.reject(err)
     }
-    return this.fs.readFile(abs)
+    return this.assertNoSymlinks(abs, key)
+      .then(() => this.fs.readFile(abs))
+      .catch((err: NodeJS.ErrnoException) => {
+        // A directory is not an object: same answer as the memory backend.
+        throw err?.code === 'EISDIR' ? enoent(key) : err
+      })
   }
 
   delete(handle: string): Promise<void> {
     let abs: string
+    let key: string
     try {
-      abs = this.toAbs(assertHandleInTenant('local', this.tenantId, handle))
+      key = assertHandleInTenant('local', this.tenantId, handle)
+      abs = this.toAbs(key)
     } catch (err) {
       return Promise.reject(err)
     }
-    return this.fs.unlink(abs).catch((err: NodeJS.ErrnoException) => {
-      // ENOENT is idempotent — only re-throw other errors.
-      if (err?.code !== 'ENOENT') throw err
-    })
+    return this.assertNoSymlinks(abs, key)
+      .then(() => this.fs.unlink(abs))
+      .catch((err: NodeJS.ErrnoException) => {
+        // ENOENT is idempotent, and a directory holds no object (EISDIR):
+        // both are "nothing to delete". Re-throw everything else.
+        if (err?.code !== 'ENOENT' && err?.code !== 'EISDIR') throw err
+      })
   }
 
   list(prefix?: string): Promise<string[]> {
@@ -143,16 +196,25 @@ export class LocalStorageBackend implements StorageBackend {
     } catch (err) {
       return Promise.reject(err)
     }
-    return this.fs.listFiles(dir).then(
-      (files) =>
-        files
-          .filter((rel) => !PARTIAL_RE.test(basename(rel)))
-          .map((rel) => `${keyPrefix}/${rel.split(sep).join('/')}`)
-          .sort(),
-      (err: NodeJS.ErrnoException) => {
-        if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return []
-        throw err
-      },
-    )
+    return this.assertNoSymlinks(dir, keyPrefix)
+      .then(() => this.fs.listFiles(dir))
+      .then(
+        (files) =>
+          files
+            .filter((rel) => !PARTIAL_NAME_RE.test(basename(rel)))
+            .map((rel) => `${keyPrefix}/${rel.split(sep).join('/')}`)
+            .sort(),
+        async (err: NodeJS.ErrnoException) => {
+          if (err?.code !== 'ENOENT' && err?.code !== 'ENOTDIR') throw err
+          // Nothing stored under this prefix yet — unless the storage root
+          // itself is gone (volume detached), which must not read as "empty".
+          try {
+            await this.fs.lstat(this.root)
+          } catch {
+            throw new Error(`storage(local): storage root ${this.root} is missing`)
+          }
+          return []
+        },
+      )
   }
 }

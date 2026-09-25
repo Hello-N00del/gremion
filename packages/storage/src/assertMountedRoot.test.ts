@@ -43,8 +43,27 @@ describe('assertMountedRoot', () => {
     expect(() => assertMountedRoot('/srv/gremion/storage', EMPTY)).toThrow(/lists no mount points/)
   })
 
-  it('a MISSING mount table skips the check and says why (never a silent pass)', () => {
-    const result = assertMountedRoot('/srv/gremion/storage', MISSING)
+  it('a MISSING mount table on Linux fails closed (review round 1)', () => {
+    expect(() => assertMountedRoot('/srv/gremion/storage', MISSING, undefined, 'linux')).toThrow(
+      /mount table .* does not exist on Linux/,
+    )
+  })
+
+  it('refuses the rootfs and non-durable filesystems as a storage root (review round 1)', () => {
+    const table =
+      '22 1 0:21 / / rw - overlay overlay rw\n' +
+      '30 22 0:30 / /dev/shm rw - tmpfs shm rw\n' +
+      '31 22 0:31 / /srv/ram rw - ramfs none rw\n' +
+      '98 22 8:1 /v /srv/ok rw shared:2 - ext4 /dev/sda1 rw\n'
+    const read = () => table
+    expect(() => assertMountedRoot('/', 'x', read)).toThrow(/is the root filesystem/)
+    expect(() => assertMountedRoot('/dev/shm', 'x', read)).toThrow(/non-durable filesystem \(tmpfs\)/)
+    expect(() => assertMountedRoot('/srv/ram', 'x', read)).toThrow(/non-durable filesystem \(ramfs\)/)
+    expect(assertMountedRoot('/srv/ok', 'x', read)).toEqual({ checked: true })
+  })
+
+  it('a MISSING mount table on a non-Linux host skips the check and says why (never a silent pass)', () => {
+    const result = assertMountedRoot('/srv/gremion/storage', MISSING, undefined, 'win32')
     expect(result.checked).toBe(false)
     expect(result).toMatchObject({ reason: expect.stringMatching(/does not exist .*cannot be determined/) })
   })
@@ -69,11 +88,17 @@ describe('LocalStorageBackend construction', () => {
     expect(b.mountCheck).toEqual({ checked: true })
   })
 
-  it('logs the skip reason when the mount table is missing', () => {
+  it('logs the skip reason when the mount table is missing on a non-Linux host', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const b = new LocalStorageBackend(TENANT_A, { root: '/srv/gremion/storage', mountinfoPath: MISSING })
+    const b = new LocalStorageBackend(TENANT_A, { root: '/srv/gremion/storage', mountinfoPath: MISSING, platform: 'darwin' })
     expect(b.mountCheck.checked).toBe(false)
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/mount-point check SKIPPED: .*does not exist/))
+  })
+
+  it('a missing mount table on Linux refuses construction', () => {
+    expect(() => new LocalStorageBackend(TENANT_A, { root: '/srv/gremion/storage', mountinfoPath: MISSING, platform: 'linux' })).toThrow(
+      /does not exist on Linux/,
+    )
   })
 
   it('the default root (./var/storage) is refused on a Linux host where it is not a mount', () => {

@@ -23,13 +23,12 @@ function readEnv(name: string): string | undefined {
 export function getStorageFor(tenantId: string): StorageBackend {
   assertTenantId(tenantId) // fail closed before any configuration or I/O
   if (!isStorageConfigured()) {
-    const backend = readEnv('STORAGE_BACKEND') ?? 'local'
-    // The in-memory double loses every object on restart: never let a stray
-    // STORAGE_BACKEND=memory reach a running server.
-    if (backend.trim().toLowerCase() === 'memory' && !process.env.VITEST) {
-      throw new Error("storage: STORAGE_BACKEND='memory' is the test double and is refused outside vitest")
-    }
-    configureStorage({ backend, root: readEnv('RECEIPT_STORAGE_DIR') })
+    configureStorage({
+      backend: readEnv('STORAGE_BACKEND') ?? 'local',
+      root: readEnv('RECEIPT_STORAGE_DIR'),
+      // the in-memory double loses every object on restart: vitest only
+      allowTestDouble: Boolean(process.env.VITEST),
+    })
   }
   return seamFor(tenantId)
 }

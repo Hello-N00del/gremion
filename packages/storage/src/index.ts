@@ -16,14 +16,16 @@
 // north-star object-store cutover (TRD-223): bound or drop it there.
 
 import type { StorageBackend, StorageConfig, StorageFs } from './types.js'
-import { LocalStorageBackend } from './local.js'
+import { LocalStorageBackend, DEFAULT_LOCAL_ROOT, nodeFs } from './local.js'
+import { assertMountedRoot } from './assertMountedRoot.js'
+import { resolve } from 'node:path'
 import { MemoryStorageBackend } from './memory.js'
 import { assertTenantId } from './tenant.js'
 
 export type { StorageBackend, StorageConfig, StorageFs } from './types.js'
 export { LocalStorageBackend, DEFAULT_LOCAL_ROOT } from './local.js'
 export { MemoryStorageBackend } from './memory.js'
-export { assertMountedRoot, parseMountPoints, DEFAULT_MOUNTINFO_PATH, type MountCheck } from './assertMountedRoot.js'
+export { assertMountedRoot, parseMountPoints, parseMountTable, DEFAULT_MOUNTINFO_PATH, type MountCheck } from './assertMountedRoot.js'
 export { assertTenantId, LEGACY_DEFAULT_TENANT_ID } from './tenant.js'
 
 /** The backends selectable by configuration alone (STORAGE_BACKEND). */
@@ -35,6 +37,7 @@ interface ActiveSeam {
   readonly root: string | undefined
   readonly mountinfoPath: string | undefined
   readonly fs: StorageFs | undefined
+  readonly platform: string | undefined
   readonly perTenant: Map<string, StorageBackend>
   /** The memory double's single shared store (unused by 'local'). */
   readonly memoryStore: Map<string, Uint8Array>
@@ -53,13 +56,29 @@ function parseBackendName(value: unknown): StorageBackendName {
 }
 
 /** Select and configure the backend for this process. Replaces any previous
- *  configuration and drops every memoised per-tenant backend. Does no I/O. */
+ *  configuration and drops every memoised per-tenant backend. For 'local' the
+ *  root is mount-checked HERE (the only I/O: one mount-table read), so a
+ *  misconfigured root fails at configuration rather than at first upload; on
+ *  failure the seam is left unconfigured. The memory double must be allowed
+ *  explicitly (allowTestDouble). */
 export function configureStorage(config: StorageConfig): void {
+  const backend = parseBackendName(config.backend)
+  if (backend === 'memory' && config.allowTestDouble !== true) {
+    throw new Error(
+      "storage: STORAGE_BACKEND='memory' is the in-memory test double; it is refused unless allowTestDouble is set",
+    )
+  }
+  active = null
+  if (backend === 'local') {
+    const fs = config.fs ?? nodeFs
+    assertMountedRoot(resolve(config.root ?? DEFAULT_LOCAL_ROOT), config.mountinfoPath, (p) => fs.readTextSync(p), config.platform)
+  }
   active = {
-    backend: parseBackendName(config.backend),
+    backend,
     root: config.root,
     mountinfoPath: config.mountinfoPath,
     fs: config.fs,
+    platform: config.platform,
     perTenant: new Map(),
     memoryStore: new Map(),
   }
@@ -82,7 +101,12 @@ export function getStorageFor(tenantId: string): StorageBackend {
   if (cached !== undefined) return cached
   const built: StorageBackend =
     active.backend === 'local'
-      ? new LocalStorageBackend(id, { root: active.root, mountinfoPath: active.mountinfoPath, fs: active.fs })
+      ? new LocalStorageBackend(id, {
+          root: active.root,
+          mountinfoPath: active.mountinfoPath,
+          fs: active.fs,
+          platform: active.platform,
+        })
       : new MemoryStorageBackend(id, active.memoryStore)
   active.perTenant.set(id, built)
   return built
