@@ -55,7 +55,7 @@ The **production profile** (`profiles: [production]` in
 
 | Service | Role |
 |---------|------|
-| `traefik` | Reverse proxy / TLS termination at the edge |
+| `traefik` | The public edge: reverse proxy and TLS termination with certificates it obtains itself over ACME HTTP-01. Pinned image `traefik:v3.7.1` (PRD-DEP-003) |
 | `docker-socket-proxy` | Read-only Docker API gateway so Traefik never mounts the raw socket |
 
 And `docker-compose.prod.yml` layers on the production-only services:
@@ -69,8 +69,8 @@ And `docker-compose.prod.yml` layers on the production-only services:
 There are two supported deployment paths:
 
 1. **Single-host Docker Compose** — the primary path. Best for local
-   development, evaluation, and self-hosted single-node production behind a
-   Cloudflare Tunnel.
+   development, evaluation, and self-hosted single-node production with
+   Traefik as the public ACME edge.
 2. **Kubernetes (Kustomize)** — the portable reference path, rendered and
    validated on a local k3d cluster. All resources live in the `gremion-system`
    namespace.
@@ -169,20 +169,106 @@ Before bringing the stack up, set the production values in `.env`:
   header on every request reaching `gremion-ui`, and the tenant resolver 403s any
   request lacking a match, so `x-forwarded-host` trust no longer rests on
   network topology alone. Unset = the gate is a byte-identical no-op.
-- TLS, PgBouncer auth, backup, and tunnel values per the comments in
-  `.env.example`.
+- The **Edge** block (bind addresses, ports, ACME contact and directory,
+  pinned subnets; see [The edge](#the-edge-traefik--acme) below), PgBouncer
+  auth and backup values per the comments in `.env.example`.
 
 > **Reload `.env` with a recreate, not a restart.** A plain
 > `docker compose restart` does **not** re-read `.env`. After changing an
 > environment value, use `docker compose up -d --force-recreate <service>` and
 > verify the value inside the container before declaring the change live.
 
-The internal-TLS / Cloudflare-Tunnel topology (Keycloak `:8443` internal
-listener, `cloudflared` outbound tunnel to `traefik:443`, the per-tenant edge
-routing) is described inline in `docker-compose.prod.yml`. The reference
-single-host production deployment terminates TLS at Traefik with a Cloudflare
-Origin Certificate and is reached only through an outbound Cloudflare Tunnel —
-no inbound ports are opened on the host.
+### The edge (Traefik + ACME)
+
+Traefik (`traefik:v3.7.1`, pinned in `docker-compose.yml`) is the public edge.
+It terminates TLS with certificates it obtains itself from an ACME CA (Let's
+Encrypt) over **HTTP-01** through the `le-http` resolver; the host publishes
+`:80` and `:443` on its edge address and requests arrive there directly. There
+is no Cloudflare Origin Certificate and no default-certificate store any more:
+a router that names no resolver is served Traefik's own self-signed default,
+which fails loudly instead of looking healthy.
+
+- **Bind addresses.** Every publish names its host address; nothing binds
+  `0.0.0.0` or `::`. `web` (:80) and `websecure` (:443) publish on
+  `EDGE_BIND_IP` and `EDGE_BIND_IP6`. The read-only Traefik API (`:8080`,
+  no dashboard) and the `internaltest` entrypoint (`:8081`, which
+  `gremion-verify` uses to reach the inactive colour) publish on
+  `127.0.0.1` only. The `ping` entrypoint (`:8082`) is not published; the
+  container healthcheck probes it. The `x-required-env` block at the top of
+  `docker-compose.yml` refuses every `docker compose` verb while any edge key
+  is unset or empty.
+- **Static configuration.** `docker/traefik/traefik.yml` holds no host value.
+  Its four markers `@ACME_EMAIL@`, `@ACME_CA_SERVER@`, `@EDGE_V4_SUBNET@` and
+  `@EDGE_V6_SUBNET@` are substituted from the container's environment into
+  `/tmp/traefik.yml` at start-up (Traefik itself performs no `${}` expansion
+  and ignores CLI flags alongside `--configFile`). The container refuses to
+  start, naming the reason, if `ACME_EMAIL` is empty while
+  `TRAEFIK_CERT_RESOLVER` is set, if the CA or a subnet is empty, or if a
+  marker survives the render.
+- **ACME.** `ACME_EMAIL` is the account contact. `ACME_CA_SERVER` defaults to
+  the production directory; point it at
+  `https://acme-staging-v02.api.letsencrypt.org/directory` while rehearsing —
+  the production duplicate-certificate limit cannot be un-spent. The
+  `:80 -> :443` redirect never captures `/.well-known/acme-challenge/`
+  (measured). Set `TRAEFIK_CERT_RESOLVER=` (empty) only where TLS terminates
+  in front of Traefik; `ACME_EMAIL` is then not required.
+- **State.** The ACME account and certificates live only in the external
+  volume `${STACK}_traefik_acme` (created by `infra/host/bootstrap.sh`),
+  mounted at `/letsencrypt`. Nothing is carried in: a from-zero rebuild
+  issues certificates fresh.
+- **Routers.** The file provider watches `/etc/traefik/dynamic`, which is the
+  single read-only bind mount of `${GREMION_ROOT}/etc/edge` (per-tenant router
+  files, `active.yml`). A file written there registers without a restart.
+  `docker/traefik/dynamic/dev-csp.yaml` is kept in the repository but is no
+  longer mounted by any composition (TASK-041 decides its home).
+- **Known gap until TASK-034.** The routers in `docker-compose.yml` and
+  `docker-compose.prod.yml` still carry `tls=true` without a `certresolver`,
+  and a TLS router does **not** inherit the entrypoint's resolver (measured),
+  so until TASK-034 labels them they serve Traefik's default certificate.
+  Nothing deploys before the pilot re-init (TASK-038), which carries TASK-034.
+
+Proofs: `make lint-edge-render` (the render guard,
+`scripts/check-compose-edge.test.mjs`), and `make test-edge-static`
+(`test/host/integration/edge-static.sh` — a scratch stack with Pebble as the
+CA, including issuance and a forced renewal — followed by
+`scripts/verify-traefik-acme-wiring.sh`, the mechanism proof against the
+pinned image). `test/host/edge-env.bats` keeps the edge keys declared in both
+`infra/host/templates/env/state.env.tmpl` and `.env.example`.
+
+### Pilot-host edge checklist (TASK-038)
+
+Re-assert on the pilot host after the re-init, with the real `state.env`
+values (`EDGE_BIND_IP`, `EDGE_BIND_IP6`, a real hostname `<host>` served by a
+router carrying `certresolver=le-http`):
+
+1. **Nothing on all interfaces.**
+   `ss -tlnp '( sport = :80 or sport = :443 or sport = :8080 or sport = :8081 or sport = :8082 )'`
+   — `:80`/`:443` listen only on `EDGE_BIND_IP` and `[EDGE_BIND_IP6]`;
+   `:8080`/`:8081` only on `127.0.0.1`; `:8082` not at all; no `0.0.0.0:*`
+   or `[::]:*` line for any of them.
+2. **Health.** `docker inspect -f '{{.State.Health.Status}}' <traefik>` is
+   `healthy`, and `.Config.Healthcheck.Test` probes `127.0.0.1:8082/ping`.
+3. **API: loopback yes, public no.**
+   `curl -fsS http://127.0.0.1:8080/api/http/routers | jq length` answers;
+   `curl --max-time 3 http://EDGE_BIND_IP:8080/api/http/routers` and
+   `curl -g --max-time 3 'http://[EDGE_BIND_IP6]:8080/api/http/routers'`
+   are refused (curl exit 7); the same for `:8081`.
+4. **One read-only router mount, hot reload.**
+   `docker inspect <traefik> | jq '[.[0].Mounts[] | select(.Destination == "/etc/traefik/dynamic")]'`
+   shows exactly one entry, `"RW": false`, source `/opt/gremion/etc/edge`; a
+   router file written there appears in `/api/http/routers` with
+   `RestartCount` unchanged.
+5. **Let's Encrypt issuer.**
+   `openssl s_client -connect EDGE_BIND_IP:443 -servername <host> </dev/null | openssl x509 -noout -issuer -enddate`
+   names Let's Encrypt (not `TRAEFIK DEFAULT CERT`), over IPv4 and over
+   `[EDGE_BIND_IP6]`; `/.well-known/acme-challenge/<x>` on `:80` answers 404,
+   never a redirect.
+6. **gremion-verify.** `gremion-verify` passes with the default
+   `CERT_MIN_DAYS=20` (every host's certificate has more than 20 days left) and
+   its acme-challenge probe.
+7. **From zero.** `${STACK}_traefik_acme` is the only place `acme.json`
+   exists; rehearse against the staging directory first, then switch
+   `ACME_CA_SERVER` to production.
 
 ### Updating the legal pages
 
