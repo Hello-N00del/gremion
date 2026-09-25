@@ -1,0 +1,4 @@
+# TASK-017 fixture: strictDepBuilds on, NO onlyBuiltDependencies entry for
+# toolchain-fixture-dep. Its postinstall must be blocked and the install
+# must fail loudly (not silently skip) — see check-toolchain.test.mjs.
+strictDepBuilds: true

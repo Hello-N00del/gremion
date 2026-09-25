@@ -296,6 +296,10 @@ function markerExists(work) {
 }
 
 function runInstall(work, { expectFailure }) {
+  // shell:true is required on Windows to resolve the `pnpm` shim
+  // (pnpm.cmd/pnpm.ps1 are not directly executable); it is not a shell-
+  // injection risk here because every argument is a fixed literal, never
+  // caller- or fixture-controlled input.
   const res = spawnSync('pnpm', ['install', '--frozen-lockfile', '--offline'], {
     cwd: work, encoding: 'utf8', shell: true,
   })
