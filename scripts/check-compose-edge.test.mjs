@@ -258,3 +258,52 @@ test('guard 1: an empty bind address is refused at render, never published on ev
   }
 })
 
+
+// ── 2. the static file ─────────────────────────────────────────────────────
+
+const staticText = () => readFileSync(path.join(REPO_ROOT, TRAEFIK_YML), 'utf8')
+const staticDoc = () => parseYamlSubset(staticText())
+
+test('guard 2: exactly the four entrypoints, at their fixed addresses, with the :80 -> :443 redirect', () => {
+  const ep = staticDoc().entryPoints
+  assert.deepEqual(Object.keys(ep ?? {}).sort(), ['internaltest', 'ping', 'web', 'websecure'])
+  assert.equal(ep.web.address, ':80')
+  assert.equal(ep.websecure.address, ':443')
+  assert.equal(ep.ping.address, ':8082')
+  assert.equal(ep.internaltest.address, ':8081')
+  assert.deepEqual(ep.web.http?.redirections?.entryPoint, { to: 'websecure', scheme: 'https', permanent: true })
+})
+
+test('guard 2: the ping block, the API without dashboard, the le-http resolver and the directory provider', () => {
+  const doc = staticDoc()
+  assert.deepEqual(doc.ping, { entryPoint: 'ping' })
+  assert.equal(doc.api?.dashboard, false)
+  assert.equal(doc.api?.insecure, true, 'the API must answer on the traefik entrypoint, which only a loopback publish exposes')
+  const acme = doc.certificatesResolvers?.['le-http']?.acme
+  assert.equal(acme?.storage, '/letsencrypt/acme.json')
+  assert.deepEqual(acme?.httpChallenge, { entryPoint: 'web' })
+  assert.deepEqual(doc.providers?.file, { directory: '/etc/traefik/dynamic', watch: true })
+})
+
+test('guard 2: the four markers sit where the render substitutes them, and no other marker exists', () => {
+  const doc = staticDoc()
+  const acme = doc.certificatesResolvers?.['le-http']?.acme
+  assert.equal(acme?.email, '@ACME_EMAIL@')
+  assert.equal(acme?.caServer, '@ACME_CA_SERVER@')
+  assert.deepEqual(doc.entryPoints?.websecure?.forwardedHeaders?.trustedIPs, ['127.0.0.1/32', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@'])
+  const found = [...new Set(staticText().match(/@[A-Z][A-Z0-9_]*@/g) ?? [])].sort()
+  assert.deepEqual(found, [...MARKERS].sort())
+})
+
+test('guard 2: no host literal -- 127.0.0.1 or :8081 appears exactly twice (TRD-039)', () => {
+  const hits = staticText()
+    .split(/\r?\n/)
+    .filter((l) => /127\.0\.0\.1|:8081/.test(l))
+    .map((l) => l.trim())
+  assert.deepEqual(hits, ['- "127.0.0.1/32"', 'address: ":8081"'])
+})
+
+test('guard 2: dynamic/tls.yml and every Cloudflare Origin certificate reference are gone (TRD-042)', () => {
+  assert.equal(existsSync(path.join(REPO_ROOT, 'docker/traefik/dynamic/tls.yml')), false, 'docker/traefik/dynamic/tls.yml exists')
+  assert.doesNotMatch(staticText(), /tls\.yml|cf-origin|\/certs\//)
+})
