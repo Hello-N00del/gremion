@@ -155,7 +155,12 @@ function routeSchema(op: SpecOperation): { schema: JsonObject; multipart: boolea
  * `doc` must already be $ref-inlined (spec.ts inlineRefs) and the handler
  * table already checked (checkHandlerTable).
  */
-export function registerRoutes(app: FastifyInstance, doc: OpenApiDocument, handlers: HandlerTable): void {
+export function registerRoutes(
+  app: FastifyInstance,
+  doc: OpenApiDocument,
+  handlers: HandlerTable,
+  uploadCeilingBytes: number,
+): void {
   const ops = listOperations(doc)
   const specKeys = new Set(ops.map((op) => routeKey(op.method, op.path)))
   for (const op of ops) {
@@ -168,7 +173,7 @@ export function registerRoutes(app: FastifyInstance, doc: OpenApiDocument, handl
       ...(multipart
         ? {
             preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
-              armUploadLimit(request, reply)
+              armUploadLimit(request, reply, uploadCeilingBytes)
             },
           }
         : {}),

@@ -142,6 +142,35 @@ describe('no truncation: a file over the ceiling never yields a success', () => 
     expect((iterationError as { code?: string } | undefined)?.code).toBe('FST_REQ_FILE_TOO_LARGE')
   })
 
+  it.each([
+    ['file()', 'file'],
+    ['files()', 'files'],
+    ['parts()', 'parts'],
+  ])('a handler cannot raise the ceiling per call via %s({ limits: { fileSize } })', async (_label, accessor) => {
+    const app = service(1024, async (request, reply) => {
+      const opts = { limits: { fileSize: 10 * MIB }, throwFileSizeLimit: false }
+      const req = request as any
+      const part = accessor === 'file' ? await req.file(opts) : (await req[accessor](opts)[Symbol.asyncIterator]().next()).value
+      let bytes = 0
+      for await (const chunk of part.file) bytes += chunk.length
+      reply.code(201)
+      return { sha256: '0'.repeat(64), bytes }
+    })
+    expectTyped413(await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) }), 1024)
+  })
+
+  it('a handler may still LOWER the limit per call', async () => {
+    const app = service(MIB, async (request, reply) => {
+      const part = await (request as any).file({ limits: { fileSize: 100 } })
+      let bytes = 0
+      for await (const chunk of part.file) bytes += chunk.length
+      reply.code(201)
+      return { sha256: '0'.repeat(64), bytes }
+    })
+    const res = await app.inject({ method: 'POST', url: '/uploads', ...multipart(200) })
+    expect(res.statusCode).toBe(413)
+  })
+
   it('layer 2: a handler that swallows the error and answers 201 is still answered 413', async () => {
     const app = service(1024, async (request, reply) => {
       const part = await (request as any).file()

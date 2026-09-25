@@ -55,7 +55,24 @@ function armPart(request: Tracked, part: FilePart | undefined): void {
   else file.once('limit', trip)
 }
 
-export function armUploadLimit(request: FastifyRequest, _reply: FastifyReply): void {
+/**
+ * @fastify/multipart deep-merges per-call options over the plugin's, so a
+ * handler could pass `{ limits: { fileSize: <more> } }` (or turn
+ * throwFileSizeLimit off) and raise the platform ceiling from handler code.
+ * The ceiling moves only through validated config: a per-call fileSize is
+ * clamped to it (a LOWER per-call limit is kept) and throwFileSizeLimit is
+ * forced on.
+ */
+function clampOptions(args: unknown[], ceilingBytes: number): unknown[] {
+  const [first, ...rest] = args
+  const opts = first && typeof first === 'object' ? (first as Record<string, unknown>) : {}
+  const limits = opts.limits && typeof opts.limits === 'object' ? (opts.limits as Record<string, unknown>) : {}
+  const asked = limits.fileSize
+  const fileSize = typeof asked === 'number' && Number.isSafeInteger(asked) && asked >= 0 && asked < ceilingBytes ? asked : ceilingBytes
+  return [{ ...opts, limits: { ...limits, fileSize }, throwFileSizeLimit: true }, ...rest]
+}
+
+export function armUploadLimit(request: FastifyRequest, _reply: FastifyReply, ceilingBytes: number): void {
   const tracked = request as Tracked
   const req = request as unknown as MultipartMethods
   if (typeof req.file !== 'function') return
@@ -63,13 +80,13 @@ export function armUploadLimit(request: FastifyRequest, _reply: FastifyReply): v
   const files = req.files
   const parts = req.parts
   req.file = async function (...args: unknown[]) {
-    const part = await file.apply(this, args)
+    const part = await file.apply(this, clampOptions(args, ceilingBytes))
     armPart(tracked, part)
     return part
   }
   const wrapIterator = (source: (...a: unknown[]) => AsyncIterable<FilePart>) =>
     async function* (this: unknown, ...args: unknown[]) {
-      for await (const part of source.apply(this, args)) {
+      for await (const part of source.apply(this, clampOptions(args, ceilingBytes))) {
         if (part && part.type === 'file') armPart(tracked, part)
         yield part
       }

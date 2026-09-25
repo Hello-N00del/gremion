@@ -167,6 +167,6 @@ export function createService(options: CreateServiceOptions): FastifyInstance {
     throwFileSizeLimit: true,
   })
 
-  registerRoutes(app, doc, options.handlers)
+  registerRoutes(app, doc, options.handlers, uploadCeilingBytes)
   return app
 }
