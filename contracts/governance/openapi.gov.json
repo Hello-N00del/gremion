@@ -39,6 +39,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
           }
         },
         "security": [
@@ -71,6 +81,12 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
           },
           "403": {
             "$ref": "#/components/responses/Forbidden",
@@ -122,6 +138,13 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
           "404": {
             "$ref": "#/components/responses/NotFound",
             "description": "No such meeting"
@@ -149,6 +172,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation (the chair's grant with resource = meeting; the PDP decides)"
           },
           "404": {
             "$ref": "#/components/responses/NotFound",
@@ -210,9 +243,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
           "403": {
             "$ref": "#/components/responses/Forbidden",
             "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           },
           "409": {
             "description": "The meeting is not in the invited state",
@@ -260,9 +300,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
           "403": {
             "$ref": "#/components/responses/Forbidden",
             "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           },
           "409": {
             "description": "The meeting is not in session",
@@ -310,9 +357,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
           "403": {
             "$ref": "#/components/responses/Forbidden",
             "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           },
           "409": {
             "description": "The meeting is neither planned nor invited",
@@ -359,6 +413,20 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           }
         },
         "security": [
@@ -392,9 +460,19 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
           "403": {
             "$ref": "#/components/responses/Forbidden",
             "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           },
           "409": {
             "description": "The invitation has already been issued",
@@ -451,6 +529,12 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
           },
           "403": {
             "$ref": "#/components/responses/Forbidden",
@@ -515,6 +599,20 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           }
         },
         "security": [
@@ -547,6 +645,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
           },
           "404": {
             "$ref": "#/components/responses/NotFound",
@@ -598,6 +706,13 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
           "404": {
             "$ref": "#/components/responses/NotFound",
             "description": "No such agenda item"
@@ -625,6 +740,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation (the chair's grant with resource = meeting; the PDP decides)"
           },
           "404": {
             "$ref": "#/components/responses/NotFound",
@@ -675,6 +800,20 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           }
         },
         "security": [
@@ -708,9 +847,19 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
           "403": {
             "$ref": "#/components/responses/Forbidden",
             "description": "Only the chair issues an invitation (resource = meeting)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           }
         },
         "requestBody": {
@@ -757,6 +906,20 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation (the chair's grant with resource = meeting; the PDP decides)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such invitation"
           },
           "409": {
             "description": "An override already exists, notice was met, or the invitation is already dispatched",
@@ -824,6 +987,17 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation (the chair's grant with resource = meeting; the PDP decides)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such invitation"
+          },
           "409": {
             "description": "Refused by name: notice missed with no override, no mail connector for the body, or the invitation is not in a sendable state",
             "content": {
@@ -879,6 +1053,20 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such invitation"
           }
         },
         "security": [
@@ -923,6 +1111,20 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
           }
         },
         "security": [
@@ -955,6 +1157,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
           },
           "404": {
             "$ref": "#/components/responses/NotFound",
@@ -1006,6 +1218,13 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
           "404": {
             "$ref": "#/components/responses/NotFound",
             "description": "No such motion"
@@ -1046,9 +1265,19 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
           "403": {
             "$ref": "#/components/responses/Forbidden",
             "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such motion"
           },
           "409": {
             "description": "The motion is not late, or its admission is already decided",

@@ -154,12 +154,50 @@ describe('H2 - every error response declares named RFC 9457 problem types (brief
   })
 })
 
-describe('H1b - list responses stay pages', () => {
-  it('no GET returns a bare array (restated after H2 edits)', () => {
+// DOMAIN: "Only the chair issues it" (INVITATION), "recorded by: the chair"
+// (NOTICE-OVERRIDE), "Only the chair reorders sections" (AGENDA-SECTION),
+// "Only the chair decides" (MOTION-ADMISSION); the Meeting and Agenda item
+// lifecycles put open/close/cancel/place/call with the chair.
+const CHAIR_ONLY = [
+  'updateMeeting', 'openMeeting', 'closeMeeting', 'cancelMeeting',
+  'createAgendaSection', 'updateAgendaSection', 'updateAgendaItem',
+  'createInvitation', 'createNoticeOverride', 'sendInvitation', 'createMotionAdmission',
+]
+
+describe('H3 - 401, 403, 404 and 400 are documented where they can occur', () => {
+  it('every operation documents 401 (bearer OIDC on every call) and 403 (the PDP decides every call)', () => {
     const doc = loadOpenApi()
-    for (const { path, op } of allOperations(doc)) {
-      const schema = op.responses['200']?.content?.['application/json']?.schema
-      if (schema) expect(schema.type, `${path}`).not.toBe('array')
+    for (const { path, method, op } of allOperations(doc)) {
+      expect(op.responses['401'], `${method} ${path} 401`).toBeDefined()
+      expect(op.responses['403'], `${method} ${path} 403`).toBeDefined()
+    }
+  })
+
+  it('every chair-only operation exists and its 403 names the chair', () => {
+    const doc = loadOpenApi()
+    const byId = new Map(allOperations(doc).map((o) => [o.op.operationId, o.op]))
+    for (const id of CHAIR_ONLY) {
+      const op = byId.get(id)
+      expect(op, id).toBeDefined()
+      expect(op.responses['403']?.description ?? '', id).toMatch(/chair/i)
+    }
+  })
+
+  it('every operation addressed by a path id documents 404', () => {
+    const doc = loadOpenApi()
+    let checked = 0
+    for (const { path, method, op } of allOperations(doc)) {
+      if (!/\{[A-Za-z]+Id\}/.test(path)) continue
+      expect(op.responses['404'], `${method} ${path} 404`).toBeDefined()
+      checked++
+    }
+    expect(checked).toBeGreaterThan(10)
+  })
+
+  it('every operation with a request body documents 400', () => {
+    const doc = loadOpenApi()
+    for (const { path, method, op } of allOperations(doc)) {
+      if (op.requestBody) expect(op.responses['400'], `${method} ${path} 400`).toBeDefined()
     }
   })
 })

@@ -943,6 +943,10 @@ export interface operations {
                     "application/json": components["schemas"]["MeetingPage"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
         };
     };
     createMeeting: {
@@ -967,6 +971,8 @@ export interface operations {
                     "application/json": components["schemas"]["Meeting"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
             /** @description Missing the meeting-create grant */
             403: components["responses"]["Forbidden"];
         };
@@ -991,6 +997,9 @@ export interface operations {
                     "application/json": components["schemas"]["Meeting"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
             /** @description No such meeting */
             404: components["responses"]["NotFound"];
         };
@@ -1019,6 +1028,10 @@ export interface operations {
                     "application/json": components["schemas"]["Meeting"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description Chair-only operation (the chair's grant with resource = meeting; the PDP decides) */
+            403: components["responses"]["Forbidden"];
             /** @description No such meeting */
             404: components["responses"]["NotFound"];
             /** @description The meeting is no longer in a reschedulable state (planned or invited) */
@@ -1052,8 +1065,11 @@ export interface operations {
                     "application/json": components["schemas"]["Meeting"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
             /** @description Chair-only operation */
             403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
             /** @description The meeting is not in the invited state */
             409: {
                 headers: {
@@ -1085,8 +1101,11 @@ export interface operations {
                     "application/json": components["schemas"]["Meeting"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
             /** @description Chair-only operation */
             403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
             /** @description The meeting is not in session */
             409: {
                 headers: {
@@ -1118,8 +1137,11 @@ export interface operations {
                     "application/json": components["schemas"]["Meeting"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
             /** @description Chair-only operation */
             403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
             /** @description The meeting is neither planned nor invited */
             409: {
                 headers: {
@@ -1156,6 +1178,12 @@ export interface operations {
                     "application/json": components["schemas"]["AgendaSectionPage"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
         };
     };
     createAgendaSection: {
@@ -1182,8 +1210,12 @@ export interface operations {
                     "application/json": components["schemas"]["AgendaSection"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
             /** @description Chair-only operation */
             403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
             /** @description The invitation has already been issued */
             409: {
                 headers: {
@@ -1219,6 +1251,8 @@ export interface operations {
                     "application/json": components["schemas"]["AgendaSection"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
             /** @description Chair-only operation */
             403: components["responses"]["Forbidden"];
             /** @description No such section */
@@ -1259,6 +1293,12 @@ export interface operations {
                     "application/json": components["schemas"]["AgendaItemPage"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
         };
     };
     createAgendaItem: {
@@ -1285,6 +1325,10 @@ export interface operations {
                     "application/json": components["schemas"]["AgendaItem"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
             /** @description No such meeting */
             404: components["responses"]["NotFound"];
         };
@@ -1309,6 +1353,9 @@ export interface operations {
                     "application/json": components["schemas"]["AgendaItem"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
             /** @description No such agenda item */
             404: components["responses"]["NotFound"];
         };
@@ -1337,6 +1384,10 @@ export interface operations {
                     "application/json": components["schemas"]["AgendaItem"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description Chair-only operation (the chair's grant with resource = meeting; the PDP decides) */
+            403: components["responses"]["Forbidden"];
             /** @description No such agenda item */
             404: components["responses"]["NotFound"];
         };
@@ -1366,6 +1417,12 @@ export interface operations {
                     "application/json": components["schemas"]["InvitationPage"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
         };
     };
     createInvitation: {
@@ -1392,8 +1449,12 @@ export interface operations {
                     "application/json": components["schemas"]["Invitation"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
             /** @description Only the chair issues an invitation (resource = meeting) */
             403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
         };
     };
     createNoticeOverride: {
@@ -1420,6 +1481,12 @@ export interface operations {
                     "application/json": components["schemas"]["NoticeOverride"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description Chair-only operation (the chair's grant with resource = meeting; the PDP decides) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such invitation */
+            404: components["responses"]["NotFound"];
             /** @description An override already exists, notice was met, or the invitation is already dispatched */
             409: {
                 headers: {
@@ -1451,6 +1518,11 @@ export interface operations {
                     "application/json": components["schemas"]["Invitation"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Chair-only operation (the chair's grant with resource = meeting; the PDP decides) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such invitation */
+            404: components["responses"]["NotFound"];
             /** @description Refused by name: notice missed with no override, no mail connector for the body, or the invitation is not in a sendable state */
             409: {
                 headers: {
@@ -1487,6 +1559,12 @@ export interface operations {
                     "application/json": components["schemas"]["InvitationRecipientPage"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such invitation */
+            404: components["responses"]["NotFound"];
         };
     };
     listMotions: {
@@ -1514,6 +1592,12 @@ export interface operations {
                     "application/json": components["schemas"]["MotionPage"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such meeting */
+            404: components["responses"]["NotFound"];
         };
     };
     createMotion: {
@@ -1540,6 +1624,10 @@ export interface operations {
                     "application/json": components["schemas"]["Motion"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
             /** @description No such meeting */
             404: components["responses"]["NotFound"];
         };
@@ -1564,6 +1652,9 @@ export interface operations {
                     "application/json": components["schemas"]["Motion"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
             /** @description No such motion */
             404: components["responses"]["NotFound"];
         };
@@ -1592,8 +1683,12 @@ export interface operations {
                     "application/json": components["schemas"]["MotionAdmission"];
                 };
             };
+            400: components["responses"]["ValidationFailed"];
+            401: components["responses"]["Unauthenticated"];
             /** @description Chair-only operation */
             403: components["responses"]["Forbidden"];
+            /** @description No such motion */
+            404: components["responses"]["NotFound"];
             /** @description The motion is not late, or its admission is already decided */
             409: {
                 headers: {
