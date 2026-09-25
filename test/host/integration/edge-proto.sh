@@ -65,10 +65,58 @@ HOSTS_FILE="$PROTO_ROOT/hosts.txt"
 RESULT_S10="fail" RESULT_S11="fail"
 RESULT_PIN="fail" RESULT_CERT="fail" RESULT_ACME="fail" RESULT_MW="fail"
 
+# ── The compose project is CHECKOUT-UNIQUE, and teardown is BY NAME ─────────
+#
+# This driver used to run `docker compose down -v` against the fixed project
+# `edgeproto`. Two checkouts on one Docker host (a second worktree, a CI runner
+# sharing the daemon) are the SAME project under that name, so one checkout's
+# cleanup tore down the other's running drill mid-assertion — and `down -v`
+# takes every volume the project owns with it. A test's teardown must only ever
+# remove what that test created.
+#
+# So the project is `edgeproto-<sha8>`, where sha8 is derived from this
+# checkout's absolute path and written ONCE to the gitignored
+# test/host/fixtures/edge-proto/.env.local (re-read on every later run, so an
+# interrupted run's leftovers are found again by the same names). Teardown is
+# `docker rm -f` of the three containers this fixture names explicitly
+# (container_name in docker-compose.yml) and `docker network rm` of the one
+# network it declares; the fixture declares no volume. Never `compose down`,
+# never a prune.
+LOCAL_ENV="$FIXTURE_DIR/.env.local"
+
+edgeproto_project() {
+    local sha8 line
+    if [[ -f "$LOCAL_ENV" ]]; then
+        line="$(grep -E '^EDGEPROTO_PROJECT=edgeproto-[0-9a-f]{8}$' "$LOCAL_ENV" | head -n1 || true)"
+        if [[ -n "$line" ]]; then
+            printf '%s' "${line#EDGEPROTO_PROJECT=}"
+            return 0
+        fi
+        die "$LOCAL_ENV exists but carries no EDGEPROTO_PROJECT=edgeproto-<8 hex> line; refusing to guess the project name" 2
+    fi
+    sha8="$(printf '%s' "$REPO_ROOT" | sha256sum | cut -c1-8)"
+    printf 'EDGEPROTO_PROJECT=edgeproto-%s\n' "$sha8" > "$LOCAL_ENV"
+    printf 'edgeproto-%s' "$sha8"
+}
+
+EDGEPROTO_PROJECT="$(edgeproto_project)"
+PROTO_CONTAINERS=("${EDGEPROTO_PROJECT}-traefik" "${EDGEPROTO_PROJECT}-stub-blue" "${EDGEPROTO_PROJECT}-stub-green")
+PROTO_NETWORK="${EDGEPROTO_PROJECT}_edge"
+
 compose() { ( cd "$FIXTURE_DIR" && docker compose --env-file "$ENV_FILE" "$@" ); }
 
+# Removes exactly the named containers and the named network, each by name.
+# `|| true` per object: an object that was never created is not an error here.
+teardown_by_name() {
+    local c
+    for c in "${PROTO_CONTAINERS[@]}"; do
+        docker rm -f "$c" >/dev/null 2>&1 || true
+    done
+    docker network rm "$PROTO_NETWORK" >/dev/null 2>&1 || true
+}
+
 cleanup() {
-    compose down -v --remove-orphans >/dev/null 2>&1 || true
+    teardown_by_name
     rm -rf "$PROTO_ROOT"
 }
 trap cleanup EXIT
@@ -97,8 +145,9 @@ INTERNAL_PUSH_SECRET=proto-not-a-real-secret
 VERIFY_MARKER_PATH=/healthz
 EOF
 
-    cat > "$PROTO_ROOT/edge-proto.env" <<'EOF'
-COMPOSE_PROJECT_NAME=edgeproto
+    cat > "$PROTO_ROOT/edge-proto.env" <<EOF
+COMPOSE_PROJECT_NAME=${EDGEPROTO_PROJECT}
+EDGEPROTO_PROJECT=${EDGEPROTO_PROJECT}
 COMPOSE_FILE=docker-compose.yml
 EDGE_BIND_IP=127.0.0.1
 EDGE_HTTP_PORT=8090
@@ -490,6 +539,9 @@ EOF
 }
 
 main() {
+    # A previous run of THIS checkout that was killed before its trap ran left
+    # its containers behind under the same names; clear exactly those.
+    teardown_by_name
     prepare_root
     make_cert 30
     compose up -d

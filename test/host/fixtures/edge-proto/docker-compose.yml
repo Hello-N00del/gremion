@@ -20,6 +20,12 @@
 # mistake does not fail quietly — it fails the prototype — but it is worth not
 # making: `docker compose config` shows the interpolated text.
 #
+# Every container carries an explicit container_name under the checkout-unique
+# project ${EDGEPROTO_PROJECT} (edgeproto-<sha8>, see edge-proto.sh), because the
+# driver tears down BY NAME — `docker rm -f` of exactly these three and
+# `docker network rm` of ${EDGEPROTO_PROJECT}_edge — and never runs a
+# `compose down`, which under a shared project name reached other checkouts.
+#
 # Driven only by test/host/integration/edge-proto.sh, which writes .proto-root/
 # (env file, dynamic directory, certificates) and removes it again. This is a
 # throwaway test fixture, not part of any production composition: images carry
@@ -27,6 +33,7 @@
 # through the socket proxy.
 services:
   traefik:
+    container_name: "${EDGEPROTO_PROJECT}-traefik"
     image: traefik:v3.7
     restart: "no"
     command: ["--configFile=/etc/traefik/traefik.yml"]
@@ -63,6 +70,7 @@ services:
       retries: 12
 
   stub-blue:
+    container_name: "${EDGEPROTO_PROJECT}-stub-blue"
     image: nginx:1.29-alpine
     restart: "no"
     environment:
@@ -97,6 +105,7 @@ services:
       retries: 12
 
   stub-green:
+    container_name: "${EDGEPROTO_PROJECT}-stub-green"
     image: nginx:1.29-alpine
     restart: "no"
     environment:
