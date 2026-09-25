@@ -44,7 +44,15 @@ export function runFixtureVitestAllskip({ uiVitestBin } = {}) {
 }
 
 /** Brief S6 item 2: proves the missing-tool path independent of the host's
- * actual toolset -- this binary can never exist, on any machine. */
+ * actual toolset -- this binary can never exist, on any machine. Counts are
+ * seeded non-zero (matching guard.test.mjs's own "missing tool fails before
+ * any count is consulted" proof) so lib/guard.mjs rule 1 (toolMissing) is
+ * independently load-bearing here, not merely riding along on rule 3
+ * (zero-collected) -- an earlier ledger entry claimed disabling rule 1 alone
+ * against this fixture produced a silent {status:'pass'}, which is not
+ * reproducible with collected:0 (rule 3 still catches it); with non-zero
+ * counts, disabling rule 1 alone genuinely does turn this fixture green,
+ * which is what "rule 1 is load-bearing" is supposed to mean. */
 export function runFixtureMissingTool() {
-  return { toolMissing: 'definitely-not-a-real-binary-xyz-task045', unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0 }
+  return { toolMissing: 'definitely-not-a-real-binary-xyz-task045', unparseable: false, collected: 999, passed: 999, failed: 0, skipped: 0 }
 }
