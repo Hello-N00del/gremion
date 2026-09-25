@@ -7,7 +7,7 @@
 // binding in a set-up working copy is still a FAIL.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { main } from '../../scripts/check-app-port-binding.mjs'
@@ -106,11 +106,25 @@ describe('check-app-port-binding on a working copy that is not set up', () => {
     expect(out).not.toContain('SAFETY')
   })
 
-  it('importing the script runs nothing (import-safe main)', async () => {
-    // The import at the top of this file would already have exited the
-    // worker if the module ran main() on import; re-importing must be inert.
-    const mod = await import('../../scripts/check-app-port-binding.mjs')
-    expect(typeof mod.main).toBe('function')
+  it('importing the script runs nothing (import-safe main), in a fresh process', () => {
+    const res = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', `await import(${JSON.stringify(PORT_CHECK)}); console.log('IMPORTED')`],
+      { encoding: 'utf8', env: { ...process.env, GREMION_REPO_ROOT: composeCopy() }, timeout: 60_000 },
+    )
+    expect(res.status).toBe(0)
+    expect(res.stdout.trim()).toBe('IMPORTED')
+    expect(res.stderr).not.toContain('port-binding')
+  })
+
+  it('the CLI still RUNS when invoked through a symlinked path (review finding HIGH)', () => {
+    const root = composeCopy()
+    const link = path.join(tmp, 'linked-scripts')
+    symlinkSync(path.dirname(PORT_CHECK), link)
+    const res = runCli(path.join(link, path.basename(PORT_CHECK)), root)
+    const out = `${res.stdout}${res.stderr}`
+    expect(res.status).not.toBe(0)
+    expect(out).toContain(SETUP_FIRST)
   })
 })
 
@@ -130,6 +144,47 @@ describe.skipIf(!dockerUp)('check-app-port-binding on a SET-UP working copy (nee
     expect(res.status).toBe(1)
     expect(out).toContain('non-loopback')
     expect(out).not.toContain(SETUP_FIRST)
+  })
+})
+
+describe.skipIf(!dockerUp)('the stderr second net answers setup-first ONLY for the local env files (needs docker)', () => {
+  it('a missing env_file that is NOT one of them is a render ERROR, not "run setup first"', () => {
+    const root = composeCopy()
+    cpSync(path.join(REPO_ROOT, '.env.example'), path.join(root, '.env'))
+    mkdirSync(path.join(root, 'legal'))
+    writeFileSync(path.join(root, 'legal', 'legal.env'), '')
+    writeFileSync(
+      path.join(root, 'docker-compose.override.yml'),
+      'services:\n  gremion-ui:\n    env_file: [secrets/typo.env]\n',
+    )
+    const res = runCli(PORT_CHECK, root)
+    const out = `${res.stdout}${res.stderr}`
+    expect(res.status).toBe(1)
+    expect(out).toContain('ERROR')
+    expect(out).not.toContain(SETUP_FIRST)
+    expect(out).not.toContain('not a security finding')
+  })
+})
+
+const kubectlUp = spawnSync('kubectl', ['version', '--client'], { encoding: 'utf8' }).status === 0
+
+describe.skipIf(!kubectlUp)('kernel-hygiene g2 second net (needs kubectl)', () => {
+  it('a dev overlay naming a DIFFERENT missing env file is "render FAILED", not "run setup first"', () => {
+    const clone = path.join(tmp, 'clone')
+    expect(spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone]).status).toBe(0)
+    writeFileSync(path.join(clone, '.env'), 'A=1\n')
+    mkdirSync(path.join(clone, 'legal'), { recursive: true })
+    writeFileSync(path.join(clone, 'legal', 'legal.env'), '')
+    const k = path.join(clone, 'k8s', 'overlays', 'dev', 'kustomization.yaml')
+    writeFileSync(k, readFileSync(k, 'utf8').replace('../../../legal/legal.env', '../../../legal/legl.env'))
+    const res = spawnSync(process.execPath, [HYGIENE], {
+      encoding: 'utf8',
+      env: { ...process.env, GREMION_REPO_ROOT: clone },
+      timeout: 120_000,
+    })
+    const g2 = `${res.stdout}${res.stderr}`.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
+    expect(g2).toMatch(/dev: render FAILED/)
+    expect(g2).not.toContain(SETUP_FIRST)
   })
 })
 

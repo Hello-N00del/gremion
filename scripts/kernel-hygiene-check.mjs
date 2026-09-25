@@ -14,14 +14,15 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { execFileSync, execSync, spawnSync } from 'node:child_process'
-import { join, dirname, relative } from 'node:path'
+import { join, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { missingLocalEnvFiles, SETUP_FIRST } from './env/local-setup.mjs'
+import { LOCAL_ENV_FILES, missingLocalEnvFiles, SETUP_FIRST } from './env/local-setup.mjs'
 
 // GREMION_REPO_ROOT points the whole run at another tree; the g2 unit test in
 // gremion-ui/tests/unit/check-app-port-binding.test.ts uses it on a temp copy.
 const ROOT = process.env.GREMION_REPO_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..')
+if (process.env.GREMION_REPO_ROOT) console.warn(`[kernel-hygiene] checking ${ROOT} (GREMION_REPO_ROOT override)`)
 const failures = []
 const checks = []
 
@@ -418,12 +419,23 @@ function stderrCause(text) {
 // generators read those files; any other overlay is always rendered. The
 // stderr match below is only the second net.
 const LOCAL_ENV_OVERLAYS = new Set(['dev'])
-const MISSING_LOCAL_ENV = missingLocalEnvFiles(ROOT)
+// A stat error other than ENOENT (EACCES, ENOTDIR) is not "absent"; it is
+// reported by g2 itself instead of killing every other check at import.
+let MISSING_LOCAL_ENV = []
+let LOCAL_ENV_ERROR = null
+try {
+  MISSING_LOCAL_ENV = missingLocalEnvFiles(ROOT)
+} catch (err) {
+  LOCAL_ENV_ERROR = err
+}
 
-function missingLocalEnvFile(text) {
+// Only a LOCAL_ENV_FILES path counts: an overlay naming any other missing file
+// is broken, and "run setup first" would not fix it.
+function missingLocalEnvFile(text, overlay) {
   const m = /env source files: \[([^\]]+)\]/.exec(text)
-  if (m && /no such file|cannot find the file/i.test(text)) return m[1].trim()
-  return null
+  if (!m || !/no such file|cannot find the file/i.test(text)) return null
+  const rel = relative(ROOT, resolve(OVERLAY_ROOT, overlay, m[1].trim())).replace(/\\/g, '/')
+  return LOCAL_ENV_FILES.includes(rel) ? rel : null
 }
 
 const notSetUp = (name, missing) =>
@@ -431,6 +443,7 @@ const notSetUp = (name, missing) =>
 
 check('g2 every overlay renders, and renders a non-zero number of image: lines', () => {
   const problems = []
+  if (LOCAL_ENV_ERROR) problems.push(`local env files could not be checked: ${LOCAL_ENV_ERROR.message}`)
   for (const name of overlayNames) {
     if (LOCAL_ENV_OVERLAYS.has(name) && MISSING_LOCAL_ENV.length > 0) {
       problems.push(notSetUp(name, MISSING_LOCAL_ENV.join(', ')))
@@ -442,7 +455,7 @@ check('g2 every overlay renders, and renders a non-zero number of image: lines',
       problems.push(`${r.name}: rendered zero image: lines`)
       continue
     }
-    const missing = missingLocalEnvFile(r.error)
+    const missing = missingLocalEnvFile(r.error, r.name)
     problems.push(missing ? notSetUp(r.name, missing) : `${r.name}: render FAILED — ${stderrCause(r.error)}`)
   }
   return problems.length ? problems.join(' | ') : null

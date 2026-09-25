@@ -37,8 +37,8 @@
  */
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { missingLocalEnvFiles, SETUP_FIRST } from '../../scripts/env/local-setup.mjs'
+import { fileURLToPath } from 'node:url'
+import { LOCAL_ENV_FILES, missingLocalEnvFiles, SETUP_FIRST } from '../../scripts/env/local-setup.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_ROOT = path.resolve(__dirname, '..', '..')
@@ -66,13 +66,15 @@ function isLoopback(hostIp) {
   return hostIp === 'localhost' || hostIp.startsWith('127.')
 }
 
-/** A compose render that failed because the working copy has not been set up
- *  yet (no .env, no legal/legal.env) rather than because anything is wrong. */
-function missingSetupPrerequisite(stderr) {
+/** The second net: a render that failed on one of the LOCAL_ENV_FILES (the
+ *  files scripts/setup.sh writes) although the preflight saw it -- e.g. it
+ *  vanished between the two. Any OTHER missing file is a composition defect
+ *  and stays a render error: "run setup first" would not fix it. */
+function missingSetupPrerequisite(stderr, root) {
   const m = /env file (.+?) not found/i.exec(stderr)
-  if (m) return m[1].trim()
-  if (/(no such file|cannot find the file)/i.test(stderr) && stderr.includes('.env')) return '.env'
-  return null
+  if (!m) return null
+  const rel = path.relative(root, path.resolve(root, m[1].trim())).split(path.sep).join('/')
+  return LOCAL_ENV_FILES.includes(rel) ? rel : null
 }
 
 /** Renders one file set. Returns { ok, skip, prereq, ports } — skip=true when
@@ -97,7 +99,7 @@ function renderPorts(fileSet, root) {
     if (/cannot connect to the docker daemon|is the docker daemon running/i.test(stderr)) {
       return { skip: true, reason: 'docker daemon not reachable' }
     }
-    const prereq = missingSetupPrerequisite(stderr)
+    const prereq = missingSetupPrerequisite(stderr, root)
     if (prereq) return { prereq }
     return { ok: false, reason: `docker compose config (${fileSet.name}) failed: ${stderr.trim()}` }
   }
@@ -128,6 +130,7 @@ function setupFirst(missing) {
  * @returns {number}
  */
 export function main({ root = process.env.GREMION_REPO_ROOT || DEFAULT_ROOT } = {}) {
+  if (root !== DEFAULT_ROOT) console.warn(`[port-binding] checking ${root} (not this script's own tree)`)
   // D1: the preflight, BEFORE any render. Only absent files answer here.
   const absent = missingLocalEnvFiles(root)
   if (absent.length > 0) return setupFirst(absent)
@@ -192,6 +195,10 @@ export function main({ root = process.env.GREMION_REPO_ROOT || DEFAULT_ROOT } = 
   return 0
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// import.meta.main (Node >= 24.2), not an argv[1] comparison: Node gives the
+// entry module its REALPATH as import.meta.url, so comparing it with argv[1]
+// silently skipped main() -- exit 0, no output -- whenever the path held a
+// symlink.
+if (import.meta.main) {
   process.exitCode = main()
 }
