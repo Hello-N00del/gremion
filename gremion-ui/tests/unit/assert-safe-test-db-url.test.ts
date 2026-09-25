@@ -105,6 +105,21 @@ describe('assertNonProductionDbUrl', () => {
     expect(refusal(`postgres://g:${FAKE_PW}@db.example.org:5432/x`, 'gremion')).not.toContain(FAKE_PW)
   })
 
+  it('9b. refuses an authority postgres.js would read as several hosts (review finding HIGH)', () => {
+    // postgres.js v3 splits the raw text between the first @ and the first / or ?
+    // on commas and tries each host; WHATWG URL sees only one. Each of these
+    // was ACCEPTED while the client could reach postgres-gremion.
+    for (const url of [
+      'postgres://u:p@postgres-staging#,postgres-gremion',
+      'postgres://u:p@postgres-gremion,x@postgres-staging/db',
+      'postgres://u:p@postgres-gremion:5432,a@postgres-staging:5432/db',
+      'postgres://u:p@postgres-staging,postgres-other/db',
+      'postgres://u:p@postgres-staging/db#frag',
+    ]) {
+      expect(refusal(url, 'gremion'), url).toMatch(/one host/)
+    }
+  })
+
   it('10. reads no environment variable but GREMION_PRODUCTION_STACK (no escape hatch)', () => {
     const src = readFileSync(GUARD_SRC, 'utf8')
     const reads = [...src.matchAll(/process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*['"]([^'"]+)['"]\s*\])/g)].map(

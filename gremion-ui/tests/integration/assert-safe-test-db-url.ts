@@ -73,6 +73,23 @@ export function assertNonProductionDbUrl(url: string, varName: string): void {
     refuse(varName, 'GREMION_PRODUCTION_STACK is neither `none` nor a stack name (^[a-z][a-z0-9-]{0,31}$).')
   }
 
+  // The client does not parse the URL the way WHATWG URL does: postgres.js v3
+  // takes the raw text between the first `@` and the first `/` or `?` as a
+  // comma-separated host LIST and tries each in turn (a `#` does not end it).
+  // A URL whose authority can be read as more than one host is therefore
+  // refused outright -- the guard must judge the host the client dials.
+  const schemeEnd = url.indexOf('://')
+  const authority = schemeEnd < 0 ? '' : url.slice(schemeEnd + 3).split(/[/?]/)[0]
+  let decoded = authority
+  try {
+    decoded = decodeURIComponent(authority)
+  } catch {
+    refuse(varName, 'has an undecodable authority.')
+  }
+  if (url.includes('#') || /[,\\\s]/.test(decoded) || (authority.match(/@/g) ?? []).length > 1) {
+    refuse(varName, 'must name exactly one host: its authority contains `,`, `#`, whitespace, a backslash or a second `@`.')
+  }
+
   let parsed: URL
   try {
     parsed = new URL(url)
