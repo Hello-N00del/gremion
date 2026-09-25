@@ -236,13 +236,13 @@ services:
     networks:
       - gremion-net
     healthcheck:
-      # P2.1c: the fail-closed tenant resolver 404s any request lacking an
-      # x-forwarded-host, and (once TENANT_PROXY_SHARED_SECRET is set) the
-      # proxy-trust gate 403s any request lacking the edge-injected x-proxy-trust.
-      # The direct localhost probe bypasses Traefik, so it carries BOTH headers
-      # itself — reflecting real serving, not a resolver 404 / proxy-trust 403
-      # (#285). x-proxy-trust is empty (a byte-identical no-op) when unset.
-      test: ["CMD", "wget", "-qO-", "--header=X-Forwarded-Host: default.${DOMAIN}", "--header=x-proxy-trust: ${TENANT_PROXY_SHARED_SECRET:-}", "http://127.0.0.1:3000/"]
+      # TASK-023 (B-05): /healthz is on the closed boot-and-resolve exemption
+      # list, so this probe needs no host header, no proxy-trust secret and no
+      # tenant row, and it no longer names the `default` tenant. It is LIVENESS
+      # only: a still-booting or boot-failed process also answers 200 here
+      # (/api/health is the boot probe). A non-transient boot failure exits 1
+      # instead, and `restart: unless-stopped` recycles the container.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -323,9 +323,10 @@ services:
       # bucket. Pairs with forwardedHeaders.trustedIPs in docker/traefik/traefik.yml.
       - "traefik.http.middlewares.public-ratelimit.ratelimit.sourceCriterion.requestHeaderName=CF-Connecting-IP"
     healthcheck:
-      # Follows PUBLIC_BASE_PATH: under a base path the portal 404s on `/`, the
-      # container is marked unhealthy, and Traefik v3 removes its routers.
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000${PUBLIC_BASE_PATH:-}/"]
+      # Follows PUBLIC_BASE_PATH: under a base path the portal 404s outside it,
+      # the container is marked unhealthy, and Traefik v3 removes its routers.
+      # TASK-023: probes the database-free /healthz marker, not the home page.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000${PUBLIC_BASE_PATH:-}/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
