@@ -19,35 +19,35 @@ Containers observed (docker-reported), 32 total, all `Up 8 days`:
 | Container | Image (as running) | Health |
 |---|---|---|
 | gremion-public | locally built (first-party image, no registry reference) | healthy |
-| gremion-ui | `gremion/ui:latest` | healthy |
-| messages-service | `gremion/messages:latest` | healthy |
+| gremion-ui | host-local first-party `ui` image, floating `:latest` (built on the host, no registry pull) | healthy |
+| messages-service | host-local first-party `messages` image, floating `:latest` (built on the host, no registry pull) | healthy |
 | matrix | locally built (first-party image, no registry reference) | healthy |
-| content-service | `gremion/content:latest` | healthy |
-| vault-service | `gremion/vault:latest` | healthy |
-| newsletter-service | `gremion/newsletter:latest` | healthy |
-| finance-service | `gremion/finance-service:latest` | healthy |
-| calendar-service | `gremion/calendar:latest` | healthy |
-| board-service | `gremion/board:latest` | healthy |
-| content-postgres | `postgres:16-alpine` | healthy |
-| vault-postgres | `postgres:16-alpine` | healthy |
-| newsletter-postgres | `postgres:16-alpine` | healthy |
-| vector | `gremion/vector:latest` | no healthcheck declared |
-| finance-postgres | `postgres:16-alpine` | healthy |
-| nextcloud | `gremion/nextcloud:33-apache` | healthy |
-| board-postgres | `postgres:16-alpine` | healthy |
+| content-service | host-local first-party `content` image, floating `:latest` (built on the host, no registry pull) | healthy |
+| vault-service | host-local first-party `vault` image, floating `:latest` (built on the host, no registry pull) | healthy |
+| newsletter-service | host-local first-party `newsletter` image, floating `:latest` (built on the host, no registry pull) | healthy |
+| finance-service | host-local first-party `finance-service` image, floating `:latest` (built on the host, no registry pull) | healthy |
+| calendar-service | host-local first-party `calendar` image, floating `:latest` (built on the host, no registry pull) | healthy |
+| board-service | host-local first-party `board` image, floating `:latest` (built on the host, no registry pull) | healthy |
+| content-postgres | PostgreSQL 16, Alpine image (upstream official image) | healthy |
+| vault-postgres | PostgreSQL 16, Alpine image (upstream official image) | healthy |
+| newsletter-postgres | PostgreSQL 16, Alpine image (upstream official image) | healthy |
+| vector | host-local first-party `vector` image, floating `:latest` (built on the host, no registry pull) | no healthcheck declared |
+| finance-postgres | PostgreSQL 16, Alpine image (upstream official image) | healthy |
+| nextcloud | host-local first-party `nextcloud` image, tag `33-apache` (built on the host, no registry pull) | healthy |
+| board-postgres | PostgreSQL 16, Alpine image (upstream official image) | healthy |
 | mailpit | `axllent/mailpit:v1.30.1` | healthy |
-| calendar-postgres | `postgres:16-alpine` | healthy |
-| helios | `gremion/helios:latest` | healthy |
+| calendar-postgres | PostgreSQL 16, Alpine image (upstream official image) | healthy |
+| helios | host-local first-party `helios` image, floating `:latest` (built on the host, no registry pull) | healthy |
 | legal | locally built (first-party image, no registry reference) | healthy |
-| files-service | `gremion/files:latest` | healthy |
-| votes-service | `gremion/votes:latest` | healthy |
+| files-service | host-local first-party `files` image, floating `:latest` (built on the host, no registry pull) | healthy |
+| votes-service | host-local first-party `votes` image, floating `:latest` (built on the host, no registry pull) | healthy |
 | collabora | `collabora/code:24.04.10.1.1` | healthy |
 | traefik | `traefik:v3.7.1` | healthy |
-| fallback | `gremion/fallback:latest` | no healthcheck declared |
+| fallback | host-local first-party `fallback` image, floating `:latest` (built on the host, no registry pull) | no healthcheck declared |
 | pgbouncer | `edoburu/pgbouncer:v1.25.2-p0` | no healthcheck declared |
 | keycloak | `quay.io/keycloak/keycloak:26.6.1` | healthy |
 | docker-socket-proxy | `tecnativa/docker-socket-proxy:0.1.1` | no healthcheck declared |
-| postgres | `postgres:16-alpine` | healthy |
+| postgres | PostgreSQL 16, Alpine image (upstream official image) | healthy |
 | redis | `redis:7-alpine` | healthy |
 | nats | `nats:2.12-alpine` | healthy |
 
@@ -71,9 +71,8 @@ Compose-declared services (`docker compose config --services`, same host, 32 ser
   health state rather than `unhealthy`; this is a gap against TRD-179 (idle-colour healthcheck
   requirement) to close by TASK-086, not a running-vs-declared mismatch.
 - **Floating tags:** eleven first-party service images run on the mutable `:latest` tag rather than
-  a version or digest: `gremion/ui`, `gremion/messages`, `gremion/content`, `gremion/vault`,
-  `gremion/newsletter`, `gremion/finance-service`, `gremion/calendar`, `gremion/board`,
-  `gremion/vector`, `gremion/helios`, `gremion/fallback`. This is the known gap TRD-350
+  a version or digest: the host-local `ui`, `messages`, `content`, `vault`, `newsletter`,
+  `finance-service`, `calendar`, `board`, `vector`, `helios` and `fallback` images. This is the known gap TRD-350
   gates at re-init (`both · re-init`), not a violation today; it is exactly what §3 below marks
   `[A] to pin at re-init`.
 - **Locally built images without a registry digest:** `gremion-public`, `matrix`, `legal` build
@@ -103,7 +102,7 @@ is not yet fixed — TRD-352 assigns pinning it to the re-init, owner the operat
 
 | Component | Kind | Version today (as found) | Status |
 |---|---|---|---|
-| PostgreSQL (per-module + platform) | database | `postgres:16-alpine` | pinned |
+| PostgreSQL (per-module + platform) | database | PostgreSQL 16, Alpine image (upstream official image) | pinned |
 | Redis | cache | `redis:7-alpine` | pinned (rebuild replaces with Valkey, below) |
 | Keycloak | identity | `quay.io/keycloak/keycloak:26.6.1` | pinned |
 | NATS | broker | `nats:2.12-alpine` | pinned |
@@ -113,8 +112,8 @@ is not yet fixed — TRD-352 assigns pinning it to the re-init, owner the operat
 | PgBouncer | connection pooler | `edoburu/pgbouncer:v1.25.2-p0` (digest-pinned) | pinned |
 | Mailpit | dev mail capture | `axllent/mailpit:v1.30.1` | pinned |
 | Edge gateway (`docker-socket-proxy`) | ops/socket proxy | `tecnativa/docker-socket-proxy:0.1.1` | pinned |
-| Nextcloud | files | `gremion/nextcloud:33-apache` | pinned |
-| gremion/ui, /messages, /content, /vault, /newsletter, /finance-service, /calendar, /board, /vector, /helios, /fallback | first-party services | `:latest` (floating) | `[A]` to pin at re-init |
+| Nextcloud | files | host-local first-party `nextcloud` image, tag `33-apache` (built on the host, no registry pull) | pinned |
+| host-local first-party images ui, messages, content, vault, newsletter, finance-service, calendar, board, vector, helios, fallback | first-party services | `:latest` (floating) | `[A]` to pin at re-init |
 | gremion-public, matrix, legal | first-party, locally built | local content digest | `[A]` to pin at re-init |
 | PostgreSQL 18 (native uuidv7) | database | — [D R19-D14] | `[A]` to pin at re-init |
 | Node 26 | runtime | — [D R19-D34] | `[A]` to pin at re-init |
