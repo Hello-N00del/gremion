@@ -140,6 +140,23 @@ const UNTAGGED_IMAGE_RE =
 const SHELL_DEFAULT_RE = new RegExp(
   String.raw`\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
 
+// The FOURTH net (TASK-019): a REGISTRY-PREFIXED reference,
+// `docker.io/library/postgres:<tag>` or `registry:5000/mirror/postgres:<tag>`.
+// Docker resolves the first to exactly the image the short form names, and
+// TAG_RE cannot see either: its lookbehind drops the `/` in front of
+// `postgres`. The prefix is one or more `<segment>/`, and the FIRST segment
+// must not be glued to a word char, `.`, `/`, `@`, `:` or `-` — which keeps
+// URLs (`https://hub.docker.com/_/postgres`, `http://db/postgres:5432`) and
+// `timescale-postgres` out — EXCEPT the `-` of a shell default `${V:-...}`,
+// which is read on purpose for the same reason SHELL_DEFAULT_RE exists.
+// Disjoint from TAG_RE (which needs no `/` before `postgres`) and from
+// SHELL_DEFAULT_RE (which needs `-` directly before it), so no occurrence is
+// counted twice.
+const REGISTRY_RE = new RegExp(
+  String.raw`(?:(?<![\w./@:-])|(?<=\$\{[A-Za-z_][A-Za-z0-9_]*:?-))` +
+  String.raw`((?:[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?\/)+)postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` +
+  DIGEST_TAIL, 'g')
+
 // Q3 (TASK-019): the file kinds in which a reference is a DECLARATION — the
 // thing that is pulled and run — and so must carry the digest: compose and
 // workflow YAML, shell (.sh/.bats), templates, Dockerfiles, the extensionless
@@ -162,20 +179,24 @@ export function scanText(path, text) {
     // A hit is a declaration when its file kind declares images and it sits
     // before any comment on the line.
     const cut = declaring ? commentStart(line) : -1
-    const hit = (m, tag) => ({
-      path, line: i + 1, tag, ref: `postgres:${tag}`,
-      digest: m[2] ?? null, decl: m.index < cut,
+    const hit = (m, prefix, tag, digest) => ({
+      path, line: i + 1, tag, ref: `${prefix}postgres:${tag}`,
+      digest: digest ?? null, decl: m.index < cut,
     })
     for (const m of line.matchAll(TAG_RE)) {
       if (m[1] === '5432') continue
-      hits.push(hit(m, m[1]))
+      hits.push(hit(m, '', m[1], m[2]))
+    }
+    for (const m of line.matchAll(REGISTRY_RE)) {
+      if (m[2] === '5432') continue
+      hits.push(hit(m, m[1], m[2], m[3]))
     }
     // Read on the SAME line pass, after TAG_RE: the two nets cannot both match one
     // occurrence (TAG_RE's lookbehind is precisely what blinds it here), so no
     // line is ever counted twice.
     for (const m of line.matchAll(SHELL_DEFAULT_RE)) {
       if (m[1] === '5432') continue
-      hits.push(hit(m, m[1]))
+      hits.push(hit(m, '', m[1], m[2]))
     }
     // A line carrying a real tag has already been read above; this fires only
     // where there is no tag at all, so no line is ever counted twice.

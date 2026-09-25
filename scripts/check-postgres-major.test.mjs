@@ -571,3 +571,52 @@ test('TDD-6: a stale tag or an old data mount under k8s/ is not reported', () =>
   // ...and k8s alone is an EMPTY scan, which still fails loudly
   assert.match(checkFiles([k8s]).join('\n'), /zero postgres: image references/)
 })
+
+// ── TASK-019: the registry-prefix net ──────────────────────────────────────
+//
+// `image: docker.io/library/postgres:<stale>-alpine` was INVISIBLE: TAG_RE's
+// lookbehind drops the `/` in front of `postgres`, and UNTAGGED_IMAGE_RE only
+// reads a reference with no tag. Docker resolves that spelling to exactly the
+// image the short form names, so it has to be held to exactly the same pin.
+
+const PREFIXED_STALE = `docker.io/library/${STALE_TAG}`
+
+test('TDD-3: a registry-prefixed stale tag is reported as mismatched', () => {
+  for (const [path, line] of [
+    ['docker-compose.yml', `    image: ${PREFIXED_STALE}`],
+    ['compose/calendar.yml', `    image: "${PREFIXED_STALE}@${POSTGRES_IMAGE_DIGEST}"`],
+    ['x.sh', `docker run --rm ${PREFIXED_STALE} psql --version`],
+    ['x.sh', `IMAGE="\${PG_IMAGE:-${PREFIXED_STALE}}"`],
+    ['a.yml', `    image: registry.example:5000/mirror/${STALE_TAG}`],
+    ['docs/x.md', `we used to run \`${PREFIXED_STALE}\``],
+  ]) {
+    const hits = scanText(path, line)
+    assert.equal(hits.length, 1, `${line} -> ${JSON.stringify(hits)}`)
+    const problems = checkFiles([{ path, text: `${line}\n` }])
+    assert.equal(problems.length, 1, `${line}: ${problems.join('\n')}`)
+    assert.ok(problems[0].startsWith(`mismatched: ${path}:1`), problems[0])
+    assert.ok(problems[0].includes(STALE_TAG), problems[0])
+  }
+})
+
+test('a registry-prefixed reference is held to the digest pin like the short form', () => {
+  const pinned = `    image: docker.io/library/${POSTGRES_IMAGE_REF}`
+  assert.equal(scanText('a.yml', pinned).length, 1, 'counted exactly once')
+  assert.deepEqual(checkFiles([{ path: 'a.yml', text: `${pinned}\n` }]), [])
+  const bare = checkFiles([{ path: 'a.yml', text: `    image: docker.io/library/${POSTGRES_IMAGE_TAG}\n` }])
+  assert.equal(bare.length, 1, bare.join('\n'))
+  assert.match(bare[0], /^undigested: a\.yml:1/)
+})
+
+test('the registry-prefix net does not read URLs, paths or host:ports as images', () => {
+  for (const line of [
+    'https://hub.docker.com/_/postgres',
+    'see https://github.com/docker-library/postgres/pull/1259',
+    'wget -qO- http://postgres:5432',
+    'DATABASE_URL=postgresql://u:pw@db.internal/postgres:5432',
+    '      - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init.sh:ro',
+    '    image: timescale/timescaledb-postgis:2.19.0-pg17',
+  ]) {
+    assert.deepEqual(scanText('a.yml', line), [], `${line} must not be read as a postgres image`)
+  }
+})
