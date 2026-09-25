@@ -1,6 +1,5 @@
 // No shebang: invoked via `node …` (matches the sibling check-domain-regex.mjs /
 // check-tenant-env-guard.mjs convention).
-// @ts-nocheck — standalone node build script (CLI-invoked, not TS-typed).
 /**
  * TASK-032 (TRD-410 [D R20-D5]): SvelteKit-3 major-version guard.
  *
@@ -29,7 +28,13 @@ export const APPS = ['gremion-ui', 'gremion-public']
 
 const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/
 
-/** Raw declared range/version string for `name` in a package.json's text, or null. */
+/**
+ * Raw declared range/version string for `name` in a package.json's text, or null.
+ *
+ * @param {string} pkgJsonText
+ * @param {string} name
+ * @returns {string | null}
+ */
 export function readDep(pkgJsonText, name) {
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const re = new RegExp(`"${esc}":\\s*"([^"]+)"`)
@@ -42,6 +47,9 @@ export function readDep(pkgJsonText, name) {
  * caret/tilde, an explicit comparator, an OR range, a workspace/tag protocol,
  * or a bare wildcard. An exact prerelease pin (no leading operator) is the
  * only shape this returns false for.
+ *
+ * @param {string} v
+ * @returns {boolean}
  */
 export function hasRangeOperator(v) {
   const s = String(v).trim()
@@ -49,7 +57,12 @@ export function hasRangeOperator(v) {
   return true
 }
 
-/** The semver major of a version string, ignoring any leading range operator. */
+/**
+ * The semver major of a version string, ignoring any leading range operator.
+ *
+ * @param {string} v
+ * @returns {number | null}
+ */
 export function majorOf(v) {
   const m = String(v).match(VERSION)
   if (!m) return null
@@ -57,8 +70,15 @@ export function majorOf(v) {
   return Number.isFinite(major) ? major : null
 }
 
-/** Every problem with one app's manifest text. */
+/**
+ * Every problem with one app's manifest text.
+ *
+ * @param {string} app
+ * @param {string} pkgJsonText
+ * @returns {string[]}
+ */
 export function checkManifest(app, pkgJsonText) {
+  /** @type {string[]} */
   const problems = []
 
   const kit = readDep(pkgJsonText, '@sveltejs/kit')
@@ -96,10 +116,17 @@ export function checkManifest(app, pkgJsonText) {
   return problems
 }
 
-/** Every top-level lockfile resolution of `name` at a 2.x version. */
+/**
+ * Every top-level lockfile resolution of `name` at a 2.x version.
+ *
+ * @param {string} lockText
+ * @param {string} name
+ * @returns {string[]}
+ */
 export function findLockfile2xResolutions(lockText, name) {
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const re = new RegExp(`^ {2}'?${esc}@(${VERSION.source})`, 'gm')
+  /** @type {Set<string>} */
   const found = new Set()
   for (const m of String(lockText).matchAll(re)) {
     if (majorOf(m[1]) === 2) found.add(m[1])
@@ -107,8 +134,14 @@ export function findLockfile2xResolutions(lockText, name) {
   return [...found]
 }
 
-/** Problems from the lockfile still resolving a 2.x copy of kit anywhere. */
+/**
+ * Problems from the lockfile still resolving a 2.x copy of kit anywhere.
+ *
+ * @param {string} lockText
+ * @returns {string[]}
+ */
 export function checkLockfile(lockText) {
+  /** @type {string[]} */
   const problems = []
   const stale = findLockfile2xResolutions(lockText, '@sveltejs/kit')
   for (const v of stale) {
@@ -123,8 +156,12 @@ export function checkLockfile(lockText) {
  * that app; if EVERY app is null, this is treated as a guard-itself failure
  * (a run that silently checked nothing would pass vacuously) rather than
  * reported per-app.
+ *
+ * @param {{ uiPkg: string | null | undefined, publicPkg: string | null | undefined, lock: string | null | undefined }} inputs
+ * @returns {string[]}
  */
 export function runAllChecks({ uiPkg, publicPkg, lock }) {
+  /** @type {Array<[string, string | null | undefined]>} */
   const manifests = [
     ['gremion-ui', uiPkg],
     ['gremion-public', publicPkg],
@@ -132,6 +169,7 @@ export function runAllChecks({ uiPkg, publicPkg, lock }) {
   if (manifests.every(([, text]) => text === null || text === undefined)) {
     return ['found zero package.json manifests to check — the guard would otherwise pass vacuously']
   }
+  /** @type {string[]} */
   const problems = []
   for (const [app, text] of manifests) {
     if (text === null || text === undefined) {
@@ -149,6 +187,7 @@ export function runAllChecks({ uiPkg, publicPkg, lock }) {
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 if (isMain) {
   const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+  /** @param {string} p @returns {string | null} */
   const read = (p) => {
     try {
       return readFileSync(join(ROOT, p), 'utf8')

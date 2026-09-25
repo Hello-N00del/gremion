@@ -1,6 +1,5 @@
 // No shebang: invoked via `node …` (matches the sibling check-domain-regex.mjs
 // convention).
-// @ts-nocheck — standalone node build script (CLI-invoked, not TS-typed).
 /**
  * TASK-032 (TRD-410 [D R20-D5], brief §6 item 3): removed-kit-3-API guard.
  *
@@ -64,6 +63,11 @@ export const ENV_DYNAMIC_FIXTURE_FILES = new Map([
   ],
 ])
 
+/**
+ * @param {string} dir
+ * @param {string[]} [out]
+ * @returns {string[]}
+ */
 function collectFiles(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -76,8 +80,16 @@ function collectFiles(dir, out = []) {
   return out
 }
 
-/** Every problem found in one file's text. */
+/**
+ * Every problem found in one file's text.
+ *
+ * @param {string} relPath
+ * @param {string} text
+ * @param {{ envDynamicExempt?: boolean }} [options]
+ * @returns {string[]}
+ */
 export function checkFileText(relPath, text, { envDynamicExempt = false } = {}) {
+  /** @type {string[]} */
   const problems = []
   for (const ban of BANNED) {
     const esc = ban.specifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -110,8 +122,14 @@ export function checkFileText(relPath, text, { envDynamicExempt = false } = {}) 
   return problems
 }
 
-/** Scan one app's src/ directory for every banned import. */
+/**
+ * Scan one app's src/ directory for every banned import.
+ *
+ * @param {string} srcRoot
+ * @returns {string[]}
+ */
 export function checkAppSrc(srcRoot) {
+  /** @type {string[]} */
   const problems = []
   const files = collectFiles(srcRoot)
   for (const file of files) {
