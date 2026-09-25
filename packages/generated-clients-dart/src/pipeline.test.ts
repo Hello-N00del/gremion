@@ -20,6 +20,8 @@ interface Knobs {
   model?: string // content of lib/src/model/a.dart
   analyze?: string
   analyzeFails?: boolean
+  enforceFails?: boolean // pub get --enforce-lockfile exits non-zero
+  newLock?: string // what a plain pub get writes over the lock
 }
 
 function fakeTools(k: Knobs = {}) {
@@ -48,6 +50,8 @@ function fakeTools(k: Knobs = {}) {
     run(args, o) {
       calls.push(['dart', ...args])
       if (args[0] === 'pub') {
+        if (args.includes('--enforce-lockfile') && k.enforceFails) throw new Error('fake-dart pub get exited 65:\nWarning: lockfile does not satisfy pubspec')
+        if (!args.includes('--enforce-lockfile') && k.newLock !== undefined) w(o, 'pubspec.lock', k.newLock)
         if (!existsSync(join(o.workDir, 'out', 'pubspec.lock'))) w(o, 'pubspec.lock', 'packages: {}\n')
         if (k.pubExtra) w(o, k.pubExtra, 'x')
       } else if (args[0] === 'run') {
@@ -91,14 +95,28 @@ describe('generateDartPackage with fake tools', () => {
     expect(gen).toContain('network=false')
   })
 
-  it('lock mode: the check enforces the committed lock, the writer may update it', () => {
-    const seed = (root: string) => writeFile(root, 'packages/generated-clients-dart/widgets/pubspec.lock', 'packages: {}\n')
-    const enforce = run({}, { lockMode: 'enforce' }, seed)
-    enforce.run()
-    expect(enforce.calls.find((c) => c[1] === 'pub')).toEqual(['dart', 'pub', 'get', '--enforce-lockfile'])
-    const update = run({}, { lockMode: 'update' }, seed)
-    update.run()
-    expect(update.calls.find((c) => c[1] === 'pub')).toEqual(['dart', 'pub', 'get'])
+  const LOCK = (v: string, h: string) => `packages:\n  dio:\n    dependency: "direct main"\n    description:\n      name: dio\n      sha256: "${h}"\n      url: "https://pub.dev"\n    source: hosted\n    version: "${v}"\n`
+  const seed = (root: string) => writeFile(root, 'packages/generated-clients-dart/widgets/pubspec.lock', LOCK('5.0.0', 'aaa'))
+  const pubCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'pub').map((c) => c.slice(1).join(' '))
+
+  it('lock mode enforce (the check): pub get --enforce-lockfile against the committed lock', () => {
+    const r = run({}, { lockMode: 'enforce' }, seed)
+    r.run()
+    expect(pubCalls(r.calls)).toEqual(['pub get --enforce-lockfile'])
+  })
+
+  it('lock mode update (the writer): enforce first, and only a failing enforce falls back to plain pub get', () => {
+    const ok = run({}, { lockMode: 'update' }, seed)
+    ok.run()
+    expect(pubCalls(ok.calls)).toEqual(['pub get --enforce-lockfile'])
+    const bump = run({ enforceFails: true, newLock: LOCK('5.1.0', 'bbb') }, { lockMode: 'update' }, seed)
+    expect(bump.run().get('pubspec.lock')!.toString()).toContain('5.1.0')
+    expect(pubCalls(bump.calls)).toEqual(['pub get --enforce-lockfile', 'pub get'])
+  })
+
+  it('lock mode update refuses a package whose version stayed but whose content hash changed', () => {
+    const r = run({ enforceFails: true, newLock: LOCK('5.0.0', 'ccc') }, { lockMode: 'update' }, seed)
+    expect(r.run).toThrow(/dio 5\.0\.0.*sha256 changed/)
   })
 
   it.each<[string, Knobs, RegExp]>([

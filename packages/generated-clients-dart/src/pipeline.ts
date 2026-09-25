@@ -14,6 +14,7 @@
 // tool change) fails here instead of being committed unnoticed.
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { load } from 'js-yaml'
 import { checkAnalysisOptions, checkIgnoreComments, evaluateAnalyze } from './analyze-gate.ts'
 import { byPath, listPackageFiles, specStamp, STAMP_FILE, type GeneratedFiles, type GenerateFn } from './codegen-drift.ts'
 import { normalizeFor31 } from './spec-normalize.ts'
@@ -74,6 +75,24 @@ function seedLock(repoRoot: string, s: DartSurface): { path: string; own: boolea
     if (name !== s.name && existsSync(p) && existsSync(join(root, name, STAMP_FILE))) return { path: p, own: false }
   }
   return null
+}
+
+interface LockPackage { version?: string; description?: { sha256?: string } }
+
+/** Packages present in both locks at the SAME version with a DIFFERENT
+ *  sha256. */
+export function hashChangedAtSameVersion(before: string, after: string): string[] {
+  const pk = (t: string) => ((load(t) as { packages?: Record<string, LockPackage> } | null)?.packages ?? {})
+  const a = pk(before)
+  const b = pk(after)
+  const out: string[] = []
+  for (const [name, p] of Object.entries(a)) {
+    const q = b[name]
+    if (q && p.version === q.version && p.description?.sha256 && q.description?.sha256 && p.description.sha256 !== q.description.sha256) {
+      out.push(`${name} ${p.version}: sha256 changed`)
+    }
+  }
+  return out
 }
 
 export function runAnalyzeGate(dart: Tool, workDir: string, cwd: string, log: (m: string) => void): void {
@@ -146,9 +165,30 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
 
     const lock = seedLock(repoRoot, s)
     if (lock) copyFileSync(lock.path, join(out, 'pubspec.lock'))
-    const pubArgs = lock?.own && (opts.lockMode ?? 'enforce') === 'enforce' ? ['pub', 'get', '--enforce-lockfile'] : ['pub', 'get']
-    log(`[${s.name}] dart ${pubArgs.join(' ')} via ${tools.dart.describe}${lock ? (lock.own ? ' (committed lock)' : ' (lock seeded from another surface)') : ' (no lock yet: fresh resolution)'}`)
-    tools.dart.run(pubArgs, { workDir: work, cwd: 'out' })
+    const mode = opts.lockMode ?? 'enforce'
+    const where = lock ? (lock.own ? 'committed lock' : 'lock seeded from another surface') : 'no lock yet: fresh resolution'
+    const pub = (args: string[]): void => {
+      log(`[${s.name}] dart ${args.join(' ')} via ${tools.dart.describe} (${where})`)
+      const out = tools.dart.run(args, { workDir: work, cwd: 'out' })
+      for (const l of out.split('\n')) if (/warning|content-hash/i.test(l)) log(`  pub: ${l.trim()}`)
+    }
+    if (!lock?.own) pub(['pub', 'get'])
+    else if (mode === 'enforce') pub(['pub', 'get', '--enforce-lockfile'])
+    else {
+      // The writer: keep the committed lock whenever it still satisfies the
+      // pubspec. Only when it no longer does (a generator bump changed a
+      // constraint) resolve again, and even then never accept a package
+      // whose version stayed while its content hash changed: that is a
+      // re-published or tampered archive, not an update.
+      try {
+        pub(['pub', 'get', '--enforce-lockfile'])
+      } catch (e) {
+        log(`[${s.name}] committed lock no longer satisfies the pubspec; re-resolving (${(e as Error).message.split('\n')[0]})`)
+        pub(['pub', 'get'])
+        const changed = hashChangedAtSameVersion(readFileSync(lock.path, 'utf8'), readFileSync(join(out, 'pubspec.lock'), 'utf8'))
+        if (changed.length > 0) throw new Error(`pubspec.lock: ${changed.join('; ')} — refusing a re-published/tampered archive`)
+      }
+    }
 
     const beforeBuild = new Set(listPackageFiles(out))
     log(`[${s.name}] dart run build_runner build --delete-conflicting-outputs`)
