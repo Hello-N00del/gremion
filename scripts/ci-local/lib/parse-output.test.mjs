@@ -10,6 +10,15 @@ import {
   parseCounts,
 } from './parse-output.mjs'
 
+test('parsers record skipped tests (only when > 0), so an all-skipped suite is distinguishable from a pass', () => {
+  assert.deepEqual(parseVitest('      Tests  12 skipped (12)\n'), { collected: 12, passed: 0, failed: 0, skipped: 12 })
+  assert.deepEqual(parsePlaywright('  3 skipped\n'), { collected: 3, passed: 0, failed: 0, skipped: 3 })
+  assert.deepEqual(parseNodeTest('# tests 4\n# pass 0\n# fail 0\n# skipped 3\n# todo 1\n'), { collected: 4, passed: 0, failed: 0, skipped: 4 })
+  assert.deepEqual(parseBats('1..2\nok 1 a # skip not on windows\nok 2 b\n'), { collected: 2, passed: 1, failed: 0, skipped: 1 })
+  assert.deepEqual(parseFlutter('00:05 +40 ~2 -1: Some tests failed.\n'), { collected: 43, passed: 40, failed: 1, skipped: 2 })
+  assert.deepEqual(parseFlutter('00:04 +42: All tests passed!\n'), { collected: 42, passed: 42, failed: 0 })
+})
+
 test('parseNodeTest reads the TAP summary comment lines', () => {
   const out = `TAP version 13\n1..38\n# tests 38\n# suites 0\n# pass 37\n# fail 1\n# duration_ms 12`
   assert.deepEqual(parseNodeTest(out), { collected: 38, passed: 37, failed: 1 })

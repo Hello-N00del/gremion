@@ -26,7 +26,7 @@ import { isDirty, headInfo, isGitRepo } from './lib/git.mjs'
 import { loadManifest, validateManifest, suitesFor } from './lib/manifest.mjs'
 import { discoverTestFiles } from './lib/discover.mjs'
 import { run } from './lib/run.mjs'
-import { evaluateSuite, findUnclaimed, unclaimedRows, overallExit, snapshotBaseName, renderMarkdown } from './lib/snapshot-core.mjs'
+import { evaluateSuite, findUnclaimed, unclaimedRows, unknownOnlyRows, overallExit, snapshotBaseName, renderMarkdown } from './lib/snapshot-core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_MANIFEST = join(HERE, 'suites.json')
@@ -115,7 +115,7 @@ export function main(argv = process.argv.slice(2)) {
 
   const kernelRows = evaluateRepo('kernel', kernelPath, manifest, onlyIds, stackEnvFile)
   const sturaosRows = evaluateRepo('vertical', sturaosPath, manifest, onlyIds, stackEnvFile)
-  const suites = [...kernelRows, ...sturaosRows]
+  const suites = [...kernelRows, ...sturaosRows, ...unknownOnlyRows(onlyIds, manifest)]
   const finishedAt = new Date().toISOString()
 
   const date = startedAt.slice(0, 10)

@@ -256,3 +256,26 @@ test('main(): happy path writes <date>-<ksha7>-<ssha7>.json and .md, names both 
     rmSync(outDir, { recursive: true, force: true })
   }
 })
+
+test('main(): an --only id that names no suite exits non-zero with an only:<id> FAIL row, even though every suite that did run PASSed (MEDIUM fix)', () => {
+  const kernel = makeFixtureRepo()
+  const vertical = makeFixtureRepo()
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    const code = withCleanExitCode(() =>
+      main(['--kernel', kernel, '--vertical', vertical, '--out', outDir, '--manifest', manifestPath, '--only', 'kernel-unit,kernel-unti']),
+    )
+    assert.equal(code, 1)
+    const snapshot = JSON.parse(readFileSync(join(outDir, readdirSync(outDir).find((f) => f.endsWith('.json'))), 'utf8'))
+    assert.equal(snapshot.suites.find((r) => r.id === 'kernel-unit').status, 'PASS')
+    const unknown = snapshot.suites.find((r) => r.id === 'only:kernel-unti')
+    assert.equal(unknown.status, 'FAIL')
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})

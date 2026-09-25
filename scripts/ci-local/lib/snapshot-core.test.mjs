@@ -5,6 +5,7 @@ import {
   findUnclaimed,
   unclaimedRows,
   overallExit,
+  unknownOnlyRows,
   snapshotBaseName,
   renderMarkdown,
 } from './snapshot-core.mjs'
@@ -163,9 +164,34 @@ test('unclaimedRows shapes each orphan as a FAIL row', () => {
   assert.match(rows[0].reason, /not claimed/)
 })
 
-test('overallExit is 0 only when every row PASSed, and 1 when the row list is empty is NOT trusted as green by callers (documented, not enforced here)', () => {
+test('overallExit is 0 only when every row PASSed, and 1 for an empty row list (a snapshot that recorded nothing is never green — MEDIUM fix)', () => {
   assert.equal(overallExit([{ status: 'PASS' }, { status: 'PASS' }]), 0)
   assert.equal(overallExit([{ status: 'PASS' }, { status: 'FAIL' }]), 1)
+  assert.equal(overallExit([]), 1)
+})
+
+test('evaluateSuite: a suite whose every collected test was skipped is a FAIL, never a PASS (MEDIUM fix: fail-closed verify allows no skip)', () => {
+  const suite = { id: 'v1', repo: 'vertical', category: 'unit', cwd: '.', kind: 'vitest', command: 'pnpm test', testGlobs: ['src/**/*.test.ts'] }
+  const allSkipped = evaluateSuite(suite, ['src/a.test.ts'], baseOpts({ runFn: () => ({ exitCode: 0, output: '      Tests  12 skipped (12)\n', timedOut: false, spawnError: null }) }))
+  assert.equal(allSkipped.status, 'FAIL')
+  assert.match(allSkipped.reason, /all 12 collected test\(s\) were skipped/)
+  assert.equal(allSkipped.skipped, 12)
+
+  // Some skipped alongside real passes is still a PASS, with the skip count recorded.
+  const partly = evaluateSuite(suite, ['src/a.test.ts'], baseOpts({ runFn: () => ({ exitCode: 0, output: '      Tests  10 passed | 2 skipped (12)\n', timedOut: false, spawnError: null }) }))
+  assert.equal(partly.status, 'PASS')
+  assert.equal(partly.skipped, 2)
+})
+
+test('unknownOnlyRows: an --only id that names no suite in either repo is a FAIL row; known ids add nothing (MEDIUM fix: a typo used to give an empty, green snapshot)', () => {
+  const manifest = { kernel: [{ id: 'kernel-a' }], vertical: [{ id: 'vertical-b' }] }
+  assert.deepEqual(unknownOnlyRows(undefined, manifest), [])
+  assert.deepEqual(unknownOnlyRows(['kernel-a', 'vertical-b'], manifest), [])
+  const rows = unknownOnlyRows(['kernel-a', 'kernal-a'], manifest)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].status, 'FAIL')
+  assert.equal(rows[0].id, 'only:kernal-a')
+  assert.match(rows[0].reason, /not a suite id/)
 })
 
 test('snapshotBaseName composes date + both short SHAs', () => {
@@ -182,7 +208,7 @@ test('renderMarkdown includes both repos\' sha/branch, the overall exit and one 
     finishedAt: '2026-09-25T01:00:05.000Z',
     overallExit: 1,
     suites: [
-      { repo: 'kernel', category: 'unit', id: 'k1', collected: 5, passed: 5, failed: 0, status: 'PASS', reason: undefined },
+      { repo: 'kernel', category: 'unit', id: 'k1', command: 'pnpm vitest run', collected: 5, passed: 5, failed: 0, status: 'PASS', exitCode: 0, reason: undefined },
       { repo: 'kernel', category: 'shell', id: 'k2', collected: 0, passed: 0, failed: 0, status: 'FAIL', reason: 'no stack' },
     ],
   }
@@ -191,6 +217,6 @@ test('renderMarkdown includes both repos\' sha/branch, the overall exit and one 
   assert.match(md, /aaaaaaa/)
   assert.match(md, /bbbbbbb/)
   assert.match(md, /overall exit: 1/)
-  assert.match(md, /\| kernel \| unit \| k1 \|/)
+  assert.match(md, /\| kernel \| unit \| k1 \| `pnpm vitest run` \| 5 \| 5 \| 0 \| 0 \| PASS \| 0 \|/)
   assert.match(md, /no stack/)
 })

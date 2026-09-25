@@ -70,6 +70,11 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
   } else if (counts.collected === 0) {
     status = 'FAIL'
     reason = counts.reason ?? '0 tests collected'
+  } else if ((counts.skipped ?? 0) > 0 && counts.passed === 0 && counts.failed === 0) {
+    // MEDIUM fix: "Tests  12 skipped (12)" used to be collected 12 = PASS.
+    // A suite that ran nothing is not a pass (fail-closed verify, no skip).
+    status = 'FAIL'
+    reason = `all ${counts.skipped} collected test(s) were skipped — nothing actually ran`
   } else if (counts.failed > 0 || exitCode !== 0) {
     status = 'FAIL'
     reason = counts.reason
@@ -114,6 +119,7 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
     collected: counts.collected,
     passed: counts.passed,
     failed: counts.failed,
+    skipped: counts.skipped ?? 0,
     status,
     exitCode,
     reason,
@@ -150,9 +156,36 @@ export function unclaimedRows(repo, unclaimedFiles) {
   }))
 }
 
-/** 0 if every row PASSed, 1 if any row FAILed. Never trusts an absent row list as green. */
+/** 0 if every row PASSed, 1 if any row FAILed — and 1 for an empty row list: a snapshot that recorded nothing is never green. */
 export function overallExit(rows) {
+  if (rows.length === 0) return 1
   return rows.some((r) => r.status === 'FAIL') ? 1 : 0
+}
+
+/**
+ * FAIL rows for `--only` ids that name no suite in either repo. A mistyped
+ * id used to produce a snapshot with zero suite rows and exit 0.
+ */
+export function unknownOnlyRows(onlyIds, manifest) {
+  if (!onlyIds) return []
+  const known = new Set(Object.values(manifest).flatMap((suites) => (Array.isArray(suites) ? suites.map((s) => s.id) : [])))
+  return onlyIds
+    .filter((id) => !known.has(id))
+    .map((id) => ({
+      id: `only:${id}`,
+      repo: null,
+      category: 'only',
+      command: null,
+      cwd: null,
+      matchedFiles: [],
+      collected: 0,
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      status: 'FAIL',
+      exitCode: null,
+      reason: `--only names '${id}', which is not a suite id in suites.json`,
+    }))
 }
 
 /** `<YYYY-MM-DD>-<ksha7>-<ssha7>` — the snapshot's base filename, no extension. */
@@ -172,11 +205,12 @@ export function renderMarkdown(snapshot) {
   lines.push(`- finished: ${snapshot.finishedAt}`)
   lines.push(`- overall exit: ${snapshot.overallExit}`)
   lines.push('')
-  lines.push('| repo | category | suite | collected | passed | failed | status | reason |')
-  lines.push('|---|---|---|---:|---:|---:|---|---|')
+  lines.push('| repo | category | suite | command | collected | passed | failed | skipped | status | exit | reason |')
+  lines.push('|---|---|---|---|---:|---:|---:|---:|---|---:|---|')
+  const cell = (v) => String(v ?? '').replace(/\|/g, '\\|')
   for (const r of snapshot.suites) {
     lines.push(
-      `| ${r.repo} | ${r.category} | ${r.id} | ${r.collected} | ${r.passed} | ${r.failed} | ${r.status} | ${(r.reason ?? '').replace(/\|/g, '\\|')} |`,
+      `| ${r.repo} | ${r.category} | ${r.id} | ${r.command ? `\`${cell(r.command)}\`` : ''} | ${r.collected} | ${r.passed} | ${r.failed} | ${r.skipped ?? 0} | ${r.status} | ${r.exitCode ?? ''} | ${cell(r.reason)} |`,
     )
   }
   lines.push('')

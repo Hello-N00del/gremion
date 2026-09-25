@@ -9,20 +9,33 @@
 // returns, but each parser also refuses to invent a collected count it did
 // not actually read off the output (a parser that cannot find a count returns
 // collected: 0 with a `reason`, it never guesses).
+//
+// `skipped` is added only when the runner reported skipped tests (> 0), so
+// a suite whose every collected test was skipped can be told apart from a
+// real pass (snapshot-core FAILs it: fail-closed verify allows no skip).
+
+function withSkipped(counts, skipped) {
+  return skipped > 0 ? { ...counts, skipped } : counts
+}
 
 /** node's own TAP summary lines: `# tests N`, `# pass N`, `# fail N`. */
 export function parseNodeTest(output) {
   const tests = output.match(/^# tests (\d+)$/m)
   const pass = output.match(/^# pass (\d+)$/m)
   const fail = output.match(/^# fail (\d+)$/m)
+  const skipped = output.match(/^# skipped (\d+)$/m)
+  const todo = output.match(/^# todo (\d+)$/m)
   if (!tests) {
     return { collected: 0, passed: 0, failed: 0, reason: 'no TAP "# tests" summary line found in output' }
   }
-  return {
-    collected: Number(tests[1]),
-    passed: pass ? Number(pass[1]) : 0,
-    failed: fail ? Number(fail[1]) : 0,
-  }
+  return withSkipped(
+    {
+      collected: Number(tests[1]),
+      passed: pass ? Number(pass[1]) : 0,
+      failed: fail ? Number(fail[1]) : 0,
+    },
+    (skipped ? Number(skipped[1]) : 0) + (todo ? Number(todo[1]) : 0),
+  )
 }
 
 /**
@@ -43,7 +56,7 @@ export function parseVitest(output) {
   const f = failed ? Number(failed[1]) : 0
   const s = skipped ? Number(skipped[1]) : 0
   const collected = total ? Number(total[1]) : p + f + s
-  return { collected, passed: p, failed: f }
+  return withSkipped({ collected, passed: p, failed: f }, s)
 }
 
 /**
@@ -60,7 +73,7 @@ export function parsePlaywright(output) {
   const p = passed ? Number(passed[1]) : 0
   const f = failed ? Number(failed[1]) : 0
   const s = skipped ? Number(skipped[1]) : 0
-  return { collected: p + f + s, passed: p, failed: f }
+  return withSkipped({ collected: p + f + s, passed: p, failed: f }, s)
 }
 
 /**
@@ -78,19 +91,22 @@ export function parseBats(output) {
   }
   const collected = Number(plan[1])
   const failed = (output.match(/^not ok /gm) || []).length
-  const passed = (output.match(/^ok /gm) || []).length
-  return { collected, passed, failed }
+  const skipped = (output.match(/^ok .*#\s*skip\b/gim) || []).length
+  const passed = (output.match(/^ok /gm) || []).length - skipped
+  return withSkipped({ collected, passed, failed }, skipped)
 }
 
 /** flutter test's summary line, e.g. "00:04 +42: All tests passed!" or "+40 -2: Some tests failed." */
 export function parseFlutter(output) {
-  const m = output.match(/\+(\d+)(?:\s+-(\d+))?:/)
+  // flutter prints skipped tests as "~N" between the pass and fail counts.
+  const m = output.match(/\+(\d+)(?:\s+~(\d+))?(?:\s+-(\d+))?:/)
   if (!m) {
     return { collected: 0, passed: 0, failed: 0, reason: 'no "+N -M:" summary found in flutter test output' }
   }
   const passed = Number(m[1])
-  const failed = m[2] ? Number(m[2]) : 0
-  return { collected: passed + failed, passed, failed }
+  const skipped = m[2] ? Number(m[2]) : 0
+  const failed = m[3] ? Number(m[3]) : 0
+  return withSkipped({ collected: passed + skipped + failed, passed, failed }, skipped)
 }
 
 /**
