@@ -28,6 +28,24 @@ export interface GateResult { breaking: boolean; output: string; tool: string }
 
 const VERDICT_CODES = new Set([0, 1])
 
+// LOW finding (round 1): the Docker fallback used the unpinned `tufin/oasdiff`
+// (== `latest`), so which tool VERSION rendered a verdict was neither pinned
+// nor recorded — brief §5 "Pin generator versions exactly" and §7 "record
+// which tool gave the verdict". Pinned here to the newest tagged release as
+// of TASK-030 (2026-09-25); bump deliberately (update both the tag and the
+// digest together) rather than silently drifting with `latest`.
+const OASDIFF_DOCKER_IMAGE = 'tufin/oasdiff:v1.32.1@sha256:3b14fe0112e5d1bf862f91ab234a4bcd161a3f399e98f8b0b665ce70857694ac'
+
+/** Best-effort version string for whichever oasdiff actually ran. Never
+ *  throws and never affects the verdict — a version probe that fails to
+ *  start or to parse must not turn a real verdict into "no verdict". */
+function probeVersion(cmd: string, args: string[], env?: NodeJS.ProcessEnv): string {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', env })
+  if (r.error) return 'unknown'
+  const out = ((r.stdout ?? '') + (r.stderr ?? '')).trim()
+  return out.length > 0 ? out.split('\n')[0] : 'unknown'
+}
+
 interface RunOpts { env?: NodeJS.ProcessEnv }
 
 function tryRun(cmd: string, args: string[], env?: NodeJS.ProcessEnv): { code: number; out: string } | null {
@@ -65,11 +83,17 @@ export function runOasdiffBreaking(oldSpec: string, newSpec: string, opts: RunOp
     // added-param fixture: unchanged at WARN), so the "add without a minor
     // bump fails" branch below is unaffected.
     let r = tryRun('oasdiff', ['breaking', join(dir, 'old.json'), join(dir, 'new.json'), '--fail-on', 'WARN'], env)
-    if (r) return { breaking: r.code !== 0, output: r.out, tool: 'oasdiff (PATH)' }
+    if (r) {
+      const version = probeVersion('oasdiff', ['--version'], env)
+      return { breaking: r.code !== 0, output: r.out, tool: `oasdiff (PATH, version ${version})` }
+    }
     if (dockerDaemonAvailable(env)) {
-      r = tryRun('docker', ['run', '--rm', '-v', `${dir}:/specs:ro`, 'tufin/oasdiff',
+      r = tryRun('docker', ['run', '--rm', '-v', `${dir}:/specs:ro`, OASDIFF_DOCKER_IMAGE,
         'breaking', '/specs/old.json', '/specs/new.json', '--fail-on', 'WARN'], env)
-      if (r) return { breaking: r.code !== 0, output: r.out, tool: 'tufin/oasdiff (docker)' }
+      if (r) {
+        const version = probeVersion('docker', ['run', '--rm', OASDIFF_DOCKER_IMAGE, '--version'], env)
+        return { breaking: r.code !== 0, output: r.out, tool: `${OASDIFF_DOCKER_IMAGE} (docker, version ${version})` }
+      }
     }
     throw new Error(
       '[oasdiff-gate] no oasdiff verdict: neither an `oasdiff` binary nor a working docker ran the '
