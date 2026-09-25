@@ -263,15 +263,31 @@ verify_first_party_signatures() {
     cosign="$(command -v cosign 2>/dev/null || true)"
     [[ -n "$cosign" ]] || die "cosign not on PATH — cannot verify image signatures (refusing)" 1
 
-    local prefix ref lc repo digest out n=0
+    # Which images are third-party is the HOST's decision, not the tree's: a
+    # pin outside the first-party prefix is refused unless its repository is
+    # listed in $ROOT/etc/third-party-images (one repository per line, no tag,
+    # no digest). Otherwise one signed image could carry any number of
+    # unsigned ones renamed out of the prefix (ghcr.io:443/…, docker.io/…).
+    local tp_file="$ROOT/etc/third-party-images" tp_list=""
+    if [[ -e "$tp_file" ]]; then
+        [[ -f "$tp_file" && ! -L "$tp_file" ]] || die "$tp_file is not a regular file" 1
+        tp_list="$(grep -vE '^[[:space:]]*(#|$)' "$tp_file" | tr -d '[:blank:]' | tr '[:upper:]' '[:lower:]' || true)"
+    fi
+
+    local prefix ref lc repo digest out n=0 t=0
     prefix="$(printf '%s' "${REGISTRY_HOST}/hello-n00del/" | tr '[:upper:]' '[:lower:]')"
     while IFS= read -r ref; do
         [[ -n "$ref" ]] || continue
         lc="$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')"
-        [[ "$lc" == "$prefix"* ]] || continue
-        [[ "$lc" =~ ^([^@]+)@(sha256:[0-9a-f]{64})$ ]] \
-            || die "first-party pin is not <repo>@sha256:<64 hex>: $ref" 1
+        [[ "$lc" =~ ^([^@[:space:]]+)@(sha256:[0-9a-f]{64})$ ]] \
+            || die "pin is not <repo>@sha256:<64 hex>: $ref" 1
         repo="${BASH_REMATCH[1]}"; digest="${BASH_REMATCH[2]}"
+        if [[ "$lc" != "$prefix"* ]]; then
+            grep -qxF -- "$repo" <<< "$tp_list" \
+                || die "pin $ref is neither first-party (${prefix}*) nor on the host third-party list $tp_file — refusing" 1
+            t=$(( t + 1 ))
+            continue
+        fi
         out="$("$cosign" verify --key "$pub" --insecure-ignore-tlog=true --output json "$ref" 2>/dev/null)" \
             || die "signature verification failed for $ref against $pub" 1
         printf '%s' "$out" | jq -e --arg d "$digest" --arg r "$repo" '
@@ -283,7 +299,7 @@ verify_first_party_signatures() {
     done <<< "$PINNED_IMAGES"
     [[ "$n" -ge 1 ]] \
         || die "no first-party image (${prefix}*) in the pins — refusing to deploy an unverifiable set" 1
-    ok "${n} first-party image(s) verified against ${pub}"
+    ok "${n} first-party image(s) verified against ${pub}; ${t} third-party image(s) on the host list"
 }
 
 validate_release_tree() { # <dir>

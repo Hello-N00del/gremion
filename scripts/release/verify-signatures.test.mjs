@@ -76,6 +76,7 @@ let caseNo = 0
  *   treePub   — a cosign.pub planted inside the RELEASE TREE (the attacker's)
  *   noCosign  — PATH carries no cosign at all
  *   registry  — REGISTRY_HOST override
+ *   thirdParty — repositories written to the host's etc/third-party-images
  */
 function deploy(images, opts = {}) {
   caseNo += 1
@@ -92,6 +93,7 @@ function deploy(images, opts = {}) {
     copyFileSync(opts.treePub, join(tree, 'etc', 'cosign.pub'))
   }
   if (opts.hostPub !== null) copyFileSync(opts.hostPub ?? hostKey.pub, join(root, 'etc', 'cosign.pub'))
+  if (opts.thirdParty) writeFileSync(join(root, 'etc', 'third-party-images'), opts.thirdParty.join('\n') + '\n')
   writeFileSync(
     join(root, 'etc/env/state.env'),
     'STACK=teststack\nCOMPOSE_PROJECT_NAME=teststack-state\nSOAK_MINUTES=0\nINTERNAL_PUSH_SECRET=test-push-secret\n',
@@ -163,6 +165,7 @@ test('an image signed with ANOTHER key is refused', () => {
 test('a tag re-pushed after signing (new digest pinned) is refused', () => {
   const res = deploy([refs.repushed, refs.signedPublic])
   assert.ok(refusedAtStep2(res), `re-pushed tag was not refused:\n${res.out}\n${res.log}`)
+  assert.match(res.out, /signature verification failed for .*gremion-ui@sha256:/)
 })
 
 test('a cosign.pub swapped into the release tree changes nothing: the host key is the anchor', () => {
@@ -185,7 +188,7 @@ test('a missing host key ($ROOT/etc/cosign.pub) is a refusal, never a skip', () 
 test('cosign absent from PATH is a refusal, never a skip', () => {
   const res = deploy([refs.signedUi], { noCosign: true })
   assert.ok(refusedAtStep2(res), `deploy proceeded without cosign:\n${res.out}\n${res.log}`)
-  assert.match(res.out, /cosign/)
+  assert.match(res.out, /cosign not on PATH/)
 })
 
 test('an unreachable registry is a refusal, never a skip', async () => {
@@ -194,12 +197,26 @@ test('an unreachable registry is a refusal, never a skip', async () => {
   const img = refs.signedUi.replace(h.registry, dead)
   const res = deploy([img], { registry: dead })
   assert.ok(refusedAtStep2(res), `deploy proceeded with the registry down:\n${res.out}\n${res.log}`)
+  assert.match(res.out, /signature verification failed for 127\.0\.0\.1:9\//)
 })
 
 test('an empty first-party set is a refusal, never a vacuous pass', () => {
   // Only third-party pins: nothing under <REGISTRY_HOST>/hello-n00del/.
   const third = 'mirror.gcr.io/library/registry@sha256:' + 'a'.repeat(64)
-  const res = deploy([third])
+  const res = deploy([third], { thirdParty: ['mirror.gcr.io/library/registry'] })
   assert.ok(refusedAtStep2(res), `deploy proceeded with no first-party image:\n${res.out}\n${res.log}`)
   assert.match(res.out, /no first-party image/)
+})
+
+test('an unsigned image renamed OUT of the first-party prefix is refused, even beside a signed one', () => {
+  // Same registry, same repository, spelled with an explicit port: it escapes
+  // a prefix match, so only the host's third-party list may admit it.
+  const renamed = refs.unsigned.replace(`${h.registry}/`, `${h.registry.replace(/:\d+$/, '')}:${h.port}/`).replace('127.0.0.1', 'localhost')
+  const res = deploy([refs.signedUi, renamed])
+  assert.ok(refusedAtStep2(res), `renamed unsigned image got through:\n${res.out}\n${res.log}`)
+  assert.match(res.out, /is neither first-party .* nor on the host third-party list/)
+  // Listed by the host it is admitted as third-party — the host decides, not the tree.
+  const listed = deploy([refs.signedUi, renamed], { thirdParty: [renamed.split('@')[0]] })
+  assert.ok(passedStep2(listed), listed.out)
+  assert.match(listed.out, /1 first-party image\(s\) verified .* 1 third-party image\(s\) on the host list/)
 })

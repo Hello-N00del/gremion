@@ -834,6 +834,7 @@ services:
     image: docker.io/library/postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
 PINS
     export FIXTURE_RELEASE="$tp"
+    printf 'docker.io/library/postgres\n' > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 1 ]
     [[ "$output" == *"no first-party image"* ]]
@@ -847,7 +848,56 @@ PINS
     # digests instead. Either way: refused at step 2, nothing pulled.
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"cosign"* ]]
+    if command -v cosign >/dev/null 2>&1; then
+        [[ "$output" == *"signature verification failed"* ]]
+    else
+        [[ "$output" == *"cosign not on PATH"* ]]
+    fi
     grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a pin renamed out of the first-party prefix is refused unless the HOST lists it as third-party" {
+    # The tree picks image names. Were "not first-party" to mean "skip", one
+    # signed image would carry any number of unsigned ones renamed elsewhere.
+    stub_all
+    local mix="${BATS_TEST_TMPDIR}/mixed"
+    mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
+    cat > "$mix/docker-compose.pins.yml" <<'PINS'
+services:
+  gremion-ui:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-ui@sha256:1111111111111111111111111111111111111111111111111111111111111111
+  gremion-public:
+    build: !reset null
+    image: docker.io/evil/gremion-public@sha256:2222222222222222222222222222222222222222222222222222222222222222
+  migrate:
+    build: !reset null
+    image: ghcr.io:443/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333
+PINS
+    export FIXTURE_RELEASE="$mix"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"is neither first-party"*"nor on the host third-party list"* ]]
+    [[ "$output" == *"docker.io/evil/gremion-public@sha256:2222"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a third-party pin listed in the host's etc/third-party-images passes unverified; first-party still verified" {
+    stub_all
+    local mix="${BATS_TEST_TMPDIR}/withpg"
+    mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
+    cat >> "$mix/docker-compose.pins.yml" <<'PINS'
+  postgres:
+    image: docker.io/library/postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
+PINS
+    export FIXTURE_RELEASE="$mix"
+    printf '# third-party repositories this host may run unsigned (digest-pinned)\ndocker.io/library/postgres\n' \
+        > "${GREMION_ROOT}/etc/third-party-images"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 3 ]
+    [ "$(grep -c 'postgres' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*postgres' "$SHIM_LOG"
+    [[ "$output" == *"1 third-party image(s) on the host list"* ]]
 }
