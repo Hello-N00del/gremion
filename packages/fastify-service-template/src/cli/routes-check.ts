@@ -22,7 +22,8 @@ import { listOperations, loadSpec, type OpenApiDocument } from '../spec.ts'
 // A service imports the template by package name. Resolve that name to THIS
 // source tree, so the check runs the template it ships with (and works for a
 // service directory pnpm has not linked, e.g. a fresh scaffold).
-const SELF = new URL('../index.ts', import.meta.url).href
+// (`.ts` when run from source, `.js` when run from the built dist/.)
+const SELF = new URL(import.meta.url.endsWith('.ts') ? '../index.ts' : '../index.js', import.meta.url).href
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === TEMPLATE_PACKAGE) return { url: SELF, shortCircuit: true }
