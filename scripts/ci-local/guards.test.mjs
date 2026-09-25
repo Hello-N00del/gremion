@@ -255,6 +255,47 @@ test('runGitleaksArm proves the real binary is on PATH for this test run (missin
   assert.notEqual(result.reason, 'gitleaks binary not found on PATH — a missing scanner is a failure, never a skip')
 })
 
+test('runGitleaksArm, missing binary: with gitleaks off PATH the arm FAILs with its own reason, in both modes, and never runs a scan (TDD item 5)', () => {
+  const saved = process.env.PATH
+  const never = () => {
+    throw new Error('must never run a scan when the binary is missing')
+  }
+  try {
+    process.env.PATH = ''
+    for (const base of [undefined, 'main']) {
+      const r = runGitleaksArm('kernel', process.cwd(), base, { runFn: never, verifyBaseRefFn: () => true })
+      assert.equal(r.status, 'FAIL')
+      assert.match(r.reason, /gitleaks binary not found on PATH/)
+    }
+  } finally {
+    process.env.PATH = saved
+  }
+})
+
+test('runGitleaksArm (diff-scoped), REAL binary: a synthetic PEM committed after the base goes RED; with the key removed again the range is GREEN; a base that does not exist in this repo FAILs', () => {
+  const root = makeSecretRepo()
+  try {
+    const base = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+    writeFileSync(join(root, 'fixture.pem'), PEM_FIXTURE)
+    execFileSync('git', ['-C', root, 'add', 'fixture.pem'])
+    execFileSync('git', ['-C', root, 'commit', '-q', '-m', 'seed a synthetic PEM'])
+    const red = runGitleaksArm('vertical', root, base)
+    assert.equal(red.status, 'FAIL', `expected RED with the PEM in the range; got: ${JSON.stringify(red)}`)
+    assert.match(red.reason, /leak in the diff/)
+
+    // Drop the seed commit: the branch no longer adds the key.
+    execFileSync('git', ['-C', root, 'reset', '-q', '--hard', base])
+    const green = runGitleaksArm('vertical', root, base)
+    assert.equal(green.status, 'PASS', `expected GREEN once removed; got: ${JSON.stringify(green)}`)
+
+    const missing = runGitleaksArm('vertical', root, 'release-1/does-not-exist-here')
+    assert.equal(missing.status, 'FAIL')
+    assert.match(missing.reason, /does not resolve to a commit/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 function makeSecretRepo(sentinelEnvLine) {
   const root = mkdtempSync(join(tmpdir(), 'ci-local-guards-secrets-'))
   const run = (args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' })
