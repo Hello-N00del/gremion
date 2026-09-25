@@ -7,7 +7,18 @@ import { env } from '$env/dynamic/private'
 import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
 import { normaliseHost } from './host'
-import { isReservedPlatformHost } from './reserved-hosts'
+import {
+  TENANT_EVICT_CHANNEL,
+  type TenantDomain,
+  type AddTenantDomainOptions,
+  listAllTenantDomains as tdListAll,
+  listTenantDomains as tdList,
+  primaryHostForTenant as tdPrimaryHostForTenant,
+  readPrimaryHost as tdReadPrimaryHost,
+  addTenantDomain as tdAdd,
+  removeTenantDomain as tdRemove,
+  setPrimaryDomain as tdSetPrimary,
+} from './tenant-domain'
 import { evictTenantRateLimit } from './rate-limit'
 import { clampConnProfile } from './conn-profile'
 import { resolveSecret } from './secrets'
@@ -245,13 +256,13 @@ export async function finishTenantMigrationRun(
 // so a cached context's pool is never capacity-drained underneath it.
 export const RESOLUTION_CACHE_TTL_MS = 30_000
 
-/**
- * G-XPROC: the control-DB LISTEN/NOTIFY channel name for cross-process tenant
- * eviction. updateTenantStatus issues `pg_notify(tenant_evict, '<tenantId>')`
- * same-transaction with the status flip, and evict-listener.ts subscribes every
- * app process to it. Shared here so the notifier and the listener never drift.
- */
-export const TENANT_EVICT_CHANNEL = 'tenant_evict'
+// G-XPROC: the control-DB LISTEN/NOTIFY channel name for cross-process tenant
+// eviction. updateTenantStatus issues `pg_notify(TENANT_EVICT_CHANNEL, '<tenantId>')`
+// same-transaction with the status flip, and evict-listener.ts subscribes every
+// app process to it. TASK-025: the constant itself now lives in tenant-domain.ts
+// (imported above, re-exported below) — every tenant_domain write uses the SAME
+// channel, so there is exactly one definition for the notifier and the listener
+// to ever drift from.
 
 interface ResolvedEntry { ctx: TenantContext; expiresAt: number }
 const _resolutionCache = new Map<string, ResolvedEntry>()
@@ -766,80 +777,31 @@ function kcAdminUrlFromInternal(kcInternal: string): string {
 // ── Spec B §T.1 — tenant_domain (control migration 004, owned by B4) ─────────
 //
 // The table, its CHECK and its indexes come from
-// B4-migrations-portback-nine's migrations-control/004_tenant_domain.sql. This
-// section is the ACCESSOR half only.
+// B4-migrations-portback-nine's migrations-control/004_tenant_domain.sql.
 //
-// The registry already carries a WRITE-TIME clash guard for realm_name/issuer
-// (registerTenant) because 001 gave neither a UNIQUE. `tenant_domain.host` is
-// the PRIMARY KEY, so the equivalent guarantee is free — but a raw
-// `duplicate key value violates unique constraint "tenant_domain_pkey"` names
-// neither the host nor the owning tenant, so addTenantDomain pre-reads the
-// owner inside the transaction and throws a loud, named error instead.
+// TASK-025 (L3-17): the accessor implementations now live in tenant-domain.ts,
+// which is kernel-portable (no SvelteKit import, see kernel-portable.guard.
+// test.ts) — every function below is a THIN WRAPPER that supplies the three
+// things only registry.ts is allowed to know about: getControlDb() (the
+// control pool), env.PLATFORM_DOMAIN, and evictTenantRuntime (the runtime
+// eviction callback). No behaviour change: same exports, same signatures,
+// same errors — the extraction moved code, not semantics.
+export type { TenantDomain }
 
-export interface TenantDomain {
-  readonly host: string
-  readonly tenantId: string
-  readonly isPrimary: boolean
-  readonly verifiedAt: Date | null
-  readonly createdAt: Date
-}
-
-interface TenantDomainRow {
-  host: string
-  tenant_id: string
-  is_primary: boolean
-  verified_at: Date | null
-  created_at: Date
-}
-
-function hydrateDomain(r: TenantDomainRow): TenantDomain {
-  return {
-    host: r.host,
-    tenantId: r.tenant_id,
-    isPrimary: r.is_primary,
-    verifiedAt: r.verified_at,
-    createdAt: r.created_at,
-  }
-}
-
-/** uuid guard so a malformed tenant id fails loudly here, not as a PG cast error. */
-const TENANT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-function assertTenantId(fn: string, tenantId: string): void {
-  if (typeof tenantId !== 'string' || !TENANT_ID_PATTERN.test(tenantId)) {
-    throw new Error(`${fn}: "${tenantId}" is not a tenant id (uuid)`)
-  }
-}
-
-/** Normalise-or-throw: the WRITE path shares the resolver's normaliser, so a row
- *  the resolver could never match can never be persisted (host.ts docblock). */
-function assertHost(fn: string, rawHost: string): string {
-  const host = normaliseHost(rawHost)
-  if (!host) {
-    throw new Error(
-      `${fn}: "${rawHost}" is not a valid host — it must be an ASCII (punycode) ` +
-      `hostname with no list separator, no empty label and no ambiguous authority form`,
-    )
-  }
-  return host
-}
+/** Re-exported so registry.ts's own updateTenantStatus and every existing
+ *  caller/test keep importing ONE channel name from ONE place. */
+export { TENANT_EVICT_CHANNEL }
 
 /** Every `tenant_domain` row in the deployment, in ONE statement — one snapshot,
  *  never `listTenants().map(listTenantDomains)` (an N+1 that can also observe a
  *  claim set that never existed if a write lands between two of its reads). */
 export async function listAllTenantDomains(): Promise<readonly TenantDomain[]> {
-  const rows = await getControlDb()<TenantDomainRow[]>`
-    SELECT * FROM tenant_domain ORDER BY tenant_id, is_primary DESC, host`
-  return rows.map(hydrateDomain)
+  return tdListAll(getControlDb())
 }
 
 /** Every host registered to a tenant, primary first then alphabetical. */
 export async function listTenantDomains(tenantId: string): Promise<readonly TenantDomain[]> {
-  assertTenantId('listTenantDomains', tenantId)
-  const rows = await getControlDb()<TenantDomainRow[]>`
-    SELECT * FROM tenant_domain WHERE tenant_id = ${tenantId}
-    ORDER BY is_primary DESC, host`
-  return rows.map(hydrateDomain)
+  return tdList(getControlDb(), tenantId)
 }
 
 /**
@@ -849,8 +811,7 @@ export async function listTenantDomains(tenantId: string): Promise<readonly Tena
  * substitute — that construction is exactly what spec B deletes.
  */
 export async function primaryHostForTenant(tenantId: string): Promise<string | null> {
-  assertTenantId('primaryHostForTenant', tenantId)
-  return readPrimaryHost(tenantId)
+  return tdPrimaryHostForTenant(getControlDb(), tenantId)
 }
 
 /**
@@ -861,87 +822,25 @@ export async function primaryHostForTenant(tenantId: string): Promise<string | n
  * constraint on registry ROWS. One statement, one shape, one place.
  */
 async function readPrimaryHost(tenantId: string): Promise<string | null> {
-  const rows = await getControlDb()<Array<{ host: string }>>`
-    SELECT host FROM tenant_domain WHERE tenant_id = ${tenantId} AND is_primary`
-  return rows[0]?.host ?? null
+  return tdReadPrimaryHost(getControlDb(), tenantId)
 }
 
 /**
  * Register `host` for `tenantId`. Idempotent for the SAME tenant, and REFUSED
  * with a named error when another tenant already owns the host — the host PK
- * makes takeover impossible, this just makes the refusal readable.
- *
- * `isPrimary: true` clears the tenant's previous primary in the SAME
- * transaction (clear-then-set), so `tenant_domain_one_primary` is never
- * transiently violated and a crash can never leave a tenant with two primaries.
- *
- * pg_notify(TENANT_EVICT_CHANNEL) runs INSIDE the transaction: a host->tenant
- * mapping change must bust every replica's host-resolution cache on commit and
- * on nothing else. Without it, an operator who moves a host from tenant A to
- * tenant B leaves other replicas serving A's data on B's host for a full TTL.
+ * makes takeover impossible, this just makes the refusal readable. See
+ * tenant-domain.ts:addTenantDomain for the full transaction (owner pre-read,
+ * clear-then-set primary, same-tx pg_notify).
  */
 export async function addTenantDomain(
   tenantId: string,
   rawHost: string,
-  opts: { isPrimary?: boolean; verified?: boolean } = {},
+  opts: AddTenantDomainOptions = {},
 ): Promise<TenantDomain> {
-  assertTenantId('addTenantDomain', tenantId)
-  // Spec A §C / §H.2 — reserved platform names, BEFORE normalisation (so the
-  // underscore in `_dmarc` is refused as reserved, not as malformed) and BEFORE
-  // any DNS pre-flight (which cannot catch names that already point at us).
-  // ONE error shape for both call sites: an operator must never be told a
-  // reserved name is merely malformed.
-  const platformDomain = env.PLATFORM_DOMAIN ?? ''
-  const refuseReserved = (candidate: string) => {
-    if (isReservedPlatformHost(candidate, platformDomain)) {
-      throw new Error(
-        `addTenantDomain: reserved platform host: ${candidate} — reserved for the platform ` +
-        `under PLATFORM_DOMAIN=${platformDomain}, it can never be a tenant host (spec A §C)`,
-      )
-    }
-  }
-  refuseReserved(rawHost.trim().toLowerCase().replace(/:[0-9]{1,5}$/, '').replace(/\.$/, ''))
-  const host = assertHost('addTenantDomain', rawHost)
-  refuseReserved(host)
-  const isPrimary = opts.isPrimary === true
-  const sql = getControlDb()
-  const row = await sql.begin(async (tx) => {
-    const owner = await tx<Array<{ tenant_id: string; slug: string }>>`
-      SELECT d.tenant_id, t.slug FROM tenant_domain d
-      JOIN tenant t ON t.id = d.tenant_id
-      WHERE d.host = ${host}
-      FOR UPDATE OF d`
-    if (owner[0] && owner[0].tenant_id !== tenantId) {
-      throw new Error(
-        `addTenantDomain: host "${host}" is already registered to tenant "${owner[0].slug}" ` +
-        `(${owner[0].tenant_id}) — a host belongs to exactly one tenant`,
-      )
-    }
-    if (!owner[0]) {
-      const t = await tx<Array<{ slug: string }>>`SELECT slug FROM tenant WHERE id = ${tenantId}`
-      if (!t[0]) throw new Error(`addTenantDomain: unknown tenant id ${tenantId}`)
-    }
-    if (isPrimary) {
-      await tx`UPDATE tenant_domain SET is_primary = false
-               WHERE tenant_id = ${tenantId} AND is_primary AND host <> ${host}`
-    }
-    const rows = await tx<TenantDomainRow[]>`
-      INSERT INTO tenant_domain (host, tenant_id, is_primary, verified_at)
-      VALUES (${host}, ${tenantId}, ${isPrimary},
-              CASE WHEN ${opts.verified === true} THEN now() ELSE NULL END)
-      ON CONFLICT (host) DO UPDATE SET
-        is_primary  = tenant_domain.is_primary OR EXCLUDED.is_primary,
-        verified_at = COALESCE(EXCLUDED.verified_at, tenant_domain.verified_at)
-      WHERE tenant_domain.tenant_id = EXCLUDED.tenant_id
-      RETURNING *`
-    if (!rows[0]) {
-      throw new Error(`addTenantDomain: host "${host}" was claimed by another tenant concurrently`)
-    }
-    await tx`SELECT pg_notify(${TENANT_EVICT_CHANNEL}, ${tenantId})`
-    return rows[0]
+  return tdAdd(getControlDb(), tenantId, rawHost, opts, {
+    platformDomain: env.PLATFORM_DOMAIN ?? '',
+    onEvict: evictTenantRuntime,
   })
-  evictTenantRuntime(tenantId)
-  return hydrateDomain(row as unknown as TenantDomainRow)
 }
 
 /**
@@ -952,34 +851,7 @@ export async function addTenantDomain(
  * "this tenant goes dark" operation.
  */
 export async function removeTenantDomain(tenantId: string, rawHost: string): Promise<boolean> {
-  assertTenantId('removeTenantDomain', tenantId)
-  const host = assertHost('removeTenantDomain', rawHost)
-  const sql = getControlDb()
-  const removed = await sql.begin(async (tx) => {
-    const rows = await tx<TenantDomainRow[]>`
-      DELETE FROM tenant_domain d
-      WHERE d.tenant_id = ${tenantId}
-        AND d.host = ${host}
-        AND (NOT d.is_primary
-             OR NOT EXISTS (SELECT 1 FROM tenant_domain o
-                            WHERE o.tenant_id = d.tenant_id AND o.host <> d.host))
-      RETURNING *`
-    if (rows[0]) {
-      await tx`SELECT pg_notify(${TENANT_EVICT_CHANNEL}, ${tenantId})`
-      return true
-    }
-    const existing = await tx<Array<{ is_primary: boolean }>>`
-      SELECT is_primary FROM tenant_domain WHERE tenant_id = ${tenantId} AND host = ${host}`
-    if (existing[0]?.is_primary) {
-      throw new Error(
-        `removeTenantDomain: host "${host}" is tenant ${tenantId}'s PRIMARY host and the tenant ` +
-        `has other hosts — setPrimaryDomain to one of them before removing it`,
-      )
-    }
-    return false
-  })
-  if (removed) evictTenantRuntime(tenantId)
-  return removed === true
+  return tdRemove(getControlDb(), tenantId, rawHost, evictTenantRuntime)
 }
 
 /**
@@ -990,26 +862,7 @@ export async function removeTenantDomain(tenantId: string, rawHost: string): Pro
  * transient two-primaries state depending on row order.
  */
 export async function setPrimaryDomain(tenantId: string, rawHost: string): Promise<TenantDomain> {
-  assertTenantId('setPrimaryDomain', tenantId)
-  const host = assertHost('setPrimaryDomain', rawHost)
-  const sql = getControlDb()
-  const row = await sql.begin(async (tx) => {
-    await tx`UPDATE tenant_domain SET is_primary = false
-             WHERE tenant_id = ${tenantId} AND is_primary AND host <> ${host}`
-    const rows = await tx<TenantDomainRow[]>`
-      UPDATE tenant_domain SET is_primary = true
-      WHERE tenant_id = ${tenantId} AND host = ${host}
-      RETURNING *`
-    if (!rows[0]) {
-      throw new Error(
-        `setPrimaryDomain: host "${host}" is not registered to tenant ${tenantId} — register it first`,
-      )
-    }
-    await tx`SELECT pg_notify(${TENANT_EVICT_CHANNEL}, ${tenantId})`
-    return rows[0]
-  })
-  evictTenantRuntime(tenantId)
-  return hydrateDomain(row as unknown as TenantDomainRow)
+  return tdSetPrimary(getControlDb(), tenantId, rawHost, evictTenantRuntime)
 }
 
 
