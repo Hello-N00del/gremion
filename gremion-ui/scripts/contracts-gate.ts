@@ -98,16 +98,31 @@ export interface GateStagedOpts {
 export function gateStagedSpecs(repoRoot: string, opts: GateStagedOpts = {}): string[] {
   const compare = opts.compare ?? runOasdiffBreaking
   const git = (args: string[]) => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' })
-  const staged = git(['diff', '--cached', '--name-only', '--diff-filter=ACMR'])
-    .split('\n').map((s) => s.trim()).filter(Boolean)
+  // -M with -z: a staged rename is `R<score>\0<old>\0<new>`, so a renamed spec is
+  // compared against HEAD under its OLD path. Before TASK-018-FU this listed
+  // names only, `git show HEAD:<new path>` failed, and `git mv` + a break was
+  // skipped as a "new file".
+  const fields = git(['diff', '--cached', '--name-status', '-M', '-z', '--diff-filter=ACMR']).split('\0')
+  const staged: Array<{ path: string; oldPath: string }> = []
+  for (let i = 0; i < fields.length && fields[i]; ) {
+    if (fields[i].startsWith('R') || fields[i].startsWith('C')) {
+      // A copy (C) leaves its source in place: the copy itself is new.
+      staged.push({ path: fields[i + 2], oldPath: fields[i].startsWith('R') ? fields[i + 1] : fields[i + 2] })
+      i += 3
+    } else {
+      staged.push({ path: fields[i + 1], oldPath: fields[i + 1] })
+      i += 2
+    }
+  }
   // `newsletter` was in this alternation until the module and its contract left
   // with the carve; that half matched nothing. contracts/kernel/ is the only
   // OpenAPI directory this repository has.
-  const specs = staged.filter((p) => /^contracts\/kernel\/openapi\..+\.json$/.test(p))
+  const isSpec = (p: string) => /^contracts\/kernel\/openapi\..+\.json$/.test(p)
+  const specs = staged.filter((s) => isSpec(s.path) || isSpec(s.oldPath))
   const problems: string[] = []
-  for (const p of specs) {
+  for (const { path: p, oldPath } of specs) {
     let oldSpec: string
-    try { oldSpec = git(['show', `HEAD:${p}`]) } catch { continue /* new file — nothing to break */ }
+    try { oldSpec = git(['show', `HEAD:${oldPath}`]) } catch { continue /* new file — nothing to break */ }
     const newSpec = git(['show', `:${p}`])
     const res = compare(oldSpec, newSpec)
     if (res.breaking) {
@@ -118,7 +133,7 @@ export function gateStagedSpecs(repoRoot: string, opts: GateStagedOpts = {}): st
         const before = specMajor(oldSpec)
         const after = specMajor(newSpec)
         if (before.major === null || after.major === null || after.major <= before.major) {
-          problems.push(`${p}: breaking change detected by ${res.tool}; CONTRACTS_ALLOW_BREAKING=1 still requires a MAJOR bump of info.version, got ${before.version} -> ${after.version}.\n${res.output}`)
+          problems.push(`${p}: breaking change detected by ${res.tool}; CONTRACTS_ALLOW_BREAKING=1 still requires a MAJOR bump of info.version (strict MAJOR.MINOR.PATCH on both sides), got ${before.version} -> ${after.version}.\n${res.output}`)
           continue
         }
         console.warn(`[contracts-gate] BREAKING change in ${p} ALLOWED via CONTRACTS_ALLOW_BREAKING=1 (major bump ${before.version} -> ${after.version}) — note it in the PR description.\n${res.output}`)

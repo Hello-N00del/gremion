@@ -134,6 +134,21 @@ describe('gateStagedSpecs — CONTRACTS_ALLOW_BREAKING=1 still requires a MAJOR 
     expect(gate.gateStagedSpecs(dir, { compare: breaking })).toHaveLength(1)
   })
 
+  // Round-1 verifier HIGH (pre-existing): `git mv` + a break was staged as
+  // R096, `git show HEAD:<new path>` failed and the spec was skipped as "new".
+  it('a staged RENAME with a break is compared against HEAD under the old path', () => {
+    vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '')
+    dir = stagedBreak('1.4.2')
+    git(dir, ['mv', SPEC_PATH, 'contracts/kernel/openapi.z.json'])
+    const seen: Array<[string, string]> = []
+    const problems = gate.gateStagedSpecs(dir, { compare: (o, n) => { seen.push([o, n]); return breaking() } })
+    expect(seen).toHaveLength(1)
+    expect(seen[0][0]).toBe(spec('1.4.2', true))
+    expect(seen[0][1]).toBe(spec('1.4.2', false))
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('contracts/kernel/openapi.z.json')
+  })
+
   it('a non-breaking verdict passes regardless of version', () => {
     vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '')
     dir = stagedBreak('1.4.2')
