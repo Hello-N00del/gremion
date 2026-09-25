@@ -164,6 +164,24 @@ describe('T4: the handler table must match the spec exactly, or the service does
     expect(() => createService({ spec: remote, handlers: fixtureHandlers() })).toThrow(/other\.json/)
   })
 
+  it('a servers[].url with a base path is refused, named, instead of silently serving at the wrong prefix', () => {
+    for (const [where, place] of [
+      ['root', (s: any) => (s.servers = [{ url: 'https://{host}/api/v1', variables: { host: { default: 'x.example' } } }])],
+      ['relative root', (s: any) => (s.servers = [{ url: '/api/v1' }])],
+      ['path item', (s: any) => (s.paths['/widgets'].servers = [{ url: '/v2' }])],
+      ['operation', (s: any) => (s.paths['/widgets'].get.servers = [{ url: 'https://x.example/v2/' }])],
+    ] as const) {
+      const spec = fixtureSpec()
+      place(spec)
+      expect(() => createService({ spec, handlers: fixtureHandlers() }), where).toThrow(/servers.*base path/)
+    }
+    for (const url of ['https://{host}', 'https://x.example/', '/', 'http://localhost:3000']) {
+      const spec = fixtureSpec()
+      spec.servers = [{ url, variables: { host: { default: 'x.example' } } }]
+      expect(() => createService({ spec, handlers: fixtureHandlers() }), url).not.toThrow()
+    }
+  })
+
   it('collects every mapping problem in one error, not just the first', () => {
     const handlers: Record<string, OperationHandler> = { ...fixtureHandlers(), extra1: async () => null }
     delete handlers.listWidgets

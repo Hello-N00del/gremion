@@ -65,7 +65,49 @@ export function loadSpec(source: SpecSource): OpenApiDocument {
   if (paths !== undefined && (typeof paths !== 'object' || paths === null || Array.isArray(paths))) {
     throw new SpecLoadError(['spec "paths" is not an object'])
   }
+  const basePaths = serversWithBasePath(doc as OpenApiDocument)
+  if (basePaths.length) throw new SpecLoadError(basePaths)
   return doc as OpenApiDocument
+}
+
+/** The path part of a Server Object url: `https://{host}/api/` -> `/api/`, `/v1` -> `/v1`. */
+function serverUrlPath(url: string): string {
+  const withoutOrigin = url.replace(/^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/]*/, '')
+  return withoutOrigin.split(/[?#]/)[0]
+}
+
+/**
+ * Routes are served at the paths exactly as the spec writes them. A `servers`
+ * entry (root, path item or operation) whose url carries a base path would
+ * make the spec's real URLs `<base><path>`, which the template does not
+ * apply: refused, named, rather than silently served at the wrong prefix.
+ */
+function serversWithBasePath(doc: OpenApiDocument): string[] {
+  const problems: string[] = []
+  const inspect = (servers: unknown, where: string) => {
+    if (!Array.isArray(servers)) return
+    servers.forEach((server, i) => {
+      const url = (server as JsonObject | null)?.url
+      if (typeof url !== 'string') return
+      const path = serverUrlPath(url)
+      if (path !== '' && path !== '/') {
+        problems.push(
+          `${where}servers[${i}].url ${JSON.stringify(url)} has a base path ${JSON.stringify(path)}; the template serves ` +
+            'paths exactly as written, so write the full path in "paths" and keep servers to origins',
+        )
+      }
+    })
+  }
+  inspect(doc.servers, '')
+  for (const [path, item] of Object.entries(doc.paths ?? {})) {
+    if (!item || typeof item !== 'object') continue
+    inspect(item.servers, `paths[${JSON.stringify(path)}].`)
+    for (const method of HTTP_METHODS) {
+      const op = item[method] as JsonObject | undefined
+      if (op && typeof op === 'object') inspect(op.servers, `paths[${JSON.stringify(path)}].${method}.`)
+    }
+  }
+  return problems
 }
 
 /**
