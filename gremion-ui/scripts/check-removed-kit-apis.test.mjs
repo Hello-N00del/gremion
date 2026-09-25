@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 import { checkFileText, checkAppSrc, ENV_DYNAMIC_FIXTURE_FILES } from './check-removed-kit-apis.mjs'
 
@@ -85,6 +85,23 @@ test('the $env/dynamic exemption list names only existing files, each with a rea
   for (const [rel, reason] of ENV_DYNAMIC_FIXTURE_FILES) {
     assert.ok(reason.trim().length > 0, `${rel} has no reason`)
     assert.ok(existsSync(join(REPO_ROOT, rel)), `${rel} does not exist`)
+  }
+})
+
+// ── wiring (round-1 MEDIUM: a guard nothing runs protects nothing) ──────────
+// `pnpm check` runs in both apps' CI workflows (gremion-ui.yml,
+// gremion-public.yml), each path-filtered to its own app, so EACH app's check
+// script must invoke the kit-3 guards itself.
+
+test("both apps' `check` scripts run the kit-3 guards and the build-stamp test", () => {
+  const scriptOf = (app) => JSON.parse(readFileSync(join(REPO_ROOT, app, 'package.json'), 'utf8')).scripts?.check ?? ''
+  const ui = scriptOf('gremion-ui')
+  for (const needle of ['check-sveltekit-major.mjs', 'check-removed-kit-apis.mjs', 'scripts/build-stamp.test.mjs', 'check-sveltekit-major.test.mjs', 'check-removed-kit-apis.test.mjs']) {
+    assert.ok(ui.includes(needle), `gremion-ui check does not run ${needle}: ${ui}`)
+  }
+  const pub = scriptOf('gremion-public')
+  for (const needle of ['../gremion-ui/scripts/check-sveltekit-major.mjs', '../gremion-ui/scripts/check-removed-kit-apis.mjs', 'scripts/build-stamp.test.mjs']) {
+    assert.ok(pub.includes(needle), `gremion-public check does not run ${needle}: ${pub}`)
   }
 })
 

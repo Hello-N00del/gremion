@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+    "check": "node ../gremion-ui/scripts/check-sveltekit-major.mjs && node ../gremion-ui/scripts/check-removed-kit-apis.mjs && node --test scripts/build-stamp.test.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
     "@gremion/db": "workspace:*",
