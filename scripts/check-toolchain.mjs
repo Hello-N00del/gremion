@@ -63,6 +63,23 @@ export const LIFECYCLE_KEYS = ['preinstall', 'install', 'postinstall', 'prepare'
 // listed here with a reason, exactly like the dependency table above.
 export const ALLOWED_FIRST_PARTY_LIFECYCLE = {}
 
+// First-party `@ts-nocheck` files explicitly allowed, path -> reason. These
+// five scripts under gremion-ui/scripts/ are cross-owned by TASK-032 (app
+// source, out of this task's file ownership — see brief §3), so their
+// @ts-nocheck cannot be removed here; each is recorded with the reason
+// already carried in the file's own header. install-git-hooks.mjs is the one
+// that matters most: its own header says it is pulled into the svelte-check
+// program by a unit-test import, so its @ts-nocheck is a real escape inside a
+// typechecked program, not dead code — recorded as a residual for TASK-032,
+// not silently unguarded (verifier MEDIUM finding 5).
+export const ALLOWED_FIRST_PARTY_TS_NOCHECK = {
+  'gremion-ui/scripts/check-app-port-binding.mjs': 'standalone node build script (CLI-invoked, not TS-typed); owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
+  'gremion-ui/scripts/check-domain-regex.mjs': 'standalone node build script (CLI-invoked, not TS-typed); owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
+  'gremion-ui/scripts/check-tenant-env-guard.mjs': 'standalone node build script (invoked via the CLI, not TS-typed); owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
+  'gremion-ui/scripts/check-tenant-secrets-dir.mjs': 'standalone node build script (CLI-invoked, not TS-typed); owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
+  'gremion-ui/scripts/install-git-hooks.mjs': 'standalone node build script imported by a unit test, which pulls it into the svelte-check (checkJs+strict) program — a real escape, not dead code; owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
+}
+
 // pnpm 10.33 keys that control which dependency build scripts run. A root
 // package.json `pnpm` field carrying any of these takes PRIORITY over
 // pnpm-workspace.yaml's onlyBuiltDependencies for install purposes — watched
@@ -269,7 +286,8 @@ export function checkFirstPartyLifecycle(packages, allowlist = ALLOWED_FIRST_PAR
 
 // ── strict TS ──────────────────────────────────────────────────────────
 
-const BANNED_DIRECTIVE_RE = /@ts-nocheck\b|@ts-ignore\b/
+const TS_NOCHECK_RE = /@ts-nocheck\b/
+const TS_IGNORE_RE = /@ts-ignore\b/
 const TS_EXPECT_ERROR_RE = /@ts-expect-error\b/
 
 /**
@@ -362,17 +380,32 @@ export function checkStrictTsconfigs(tsconfigs) {
   return problems
 }
 
-/** @param files [{path, text}] first-party .ts/.svelte source files */
-export function checkNoSuppressionDirectives(files) {
+/**
+ * @param files [{path, text}] first-party TS/Svelte/JS source files — .js,
+ *   .mjs, .cjs, .mts and .cts are scanned alongside .ts/.svelte/.tsx because
+ *   a first-party build script can be pulled into a typechecked program
+ *   (checkJs) by a plain import, same as a .ts file (verifier MEDIUM
+ *   finding 5)
+ * @param allowlist {path: reason} — a first-party file whose @ts-nocheck is
+ *   recorded here with a non-empty reason is not flagged for it (still
+ *   flagged for @ts-ignore/@ts-expect-error on any other line); defaults to
+ *   ALLOWED_FIRST_PARTY_TS_NOCHECK
+ */
+export function checkNoSuppressionDirectives(files, allowlist = ALLOWED_FIRST_PARTY_TS_NOCHECK) {
   if (files.length === 0) {
-    return ['found zero first-party TS/Svelte source files — the suppression-directive check would pass vacuously']
+    return ['found zero first-party TS/Svelte/JS source files — the suppression-directive check would pass vacuously']
   }
   const problems = []
   for (const { path, text } of files) {
     const isTest = /\.test\.ts$/.test(path)
+    const nocheckReason = allowlist[path]
+    const nocheckAllowed = typeof nocheckReason === 'string' && nocheckReason.trim() !== ''
     text.split('\n').forEach((line, i) => {
-      if (BANNED_DIRECTIVE_RE.test(line)) {
-        problems.push(`${path}:${i + 1}: banned suppression directive (@ts-nocheck/@ts-ignore) — use a real type or, in a test only, @ts-expect-error`)
+      if (TS_IGNORE_RE.test(line)) {
+        problems.push(`${path}:${i + 1}: banned suppression directive (@ts-ignore) — use a real type or, in a test only, @ts-expect-error`)
+      }
+      if (TS_NOCHECK_RE.test(line) && !nocheckAllowed) {
+        problems.push(`${path}:${i + 1}: banned suppression directive (@ts-nocheck) — use a real type, or add a non-empty reason to ALLOWED_FIRST_PARTY_TS_NOCHECK`)
       }
       if (!isTest && TS_EXPECT_ERROR_RE.test(line)) {
         problems.push(`${path}:${i + 1}: @ts-expect-error outside a *.test.ts file (Q2: allowed only in tests)`)
@@ -460,7 +493,7 @@ export function gatherRepoState(root) {
 
   const srcFiles = [...tracked]
     .filter((p) => allDirs.some((d) => d !== '.' && (p === `${d}` || p.startsWith(`${d}/`))))
-    .filter((p) => /\.(ts|svelte)$/.test(p))
+    .filter((p) => /\.(ts|tsx|svelte|js|mjs|cjs|mts|cts)$/.test(p))
     .filter((p) => !p.includes('/.svelte-kit/'))
     .map((p) => ({ path: p, text: readFileSync(join(root, p), 'utf8') }))
 

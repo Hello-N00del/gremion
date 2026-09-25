@@ -17,6 +17,7 @@ import {
   NODE_ENGINE_RANGE,
   ALLOWED_BUILD_DEPS,
   ALLOWED_FIRST_PARTY_LIFECYCLE,
+  ALLOWED_FIRST_PARTY_TS_NOCHECK,
   checkNodeMajorDockerfiles,
   checkNodeVersionFiles,
   checkEnginesNode,
@@ -295,6 +296,48 @@ test('suppression directives: GREEN — @ts-expect-error inside a *.test.ts file
 
 test('suppression directives: an empty source set is refused, not a vacuous pass', () => {
   assert.match(checkNoSuppressionDirectives([]).join('\n'), /pass vacuously/)
+})
+
+// ── verifier MEDIUM finding 5: the scan only reads .ts/.svelte, missing .mjs ─
+
+test('suppression directives: RED — @ts-nocheck in a tracked .mjs file with no allow-list entry is flagged', () => {
+  const problems = checkNoSuppressionDirectives([{ path: 'packages/ports/src/x.mjs', text: '// @ts-nocheck\nexport const a = 1\n' }], {})
+  assert.match(problems.join('\n'), /banned suppression directive \(@ts-nocheck\)/)
+})
+
+test('suppression directives: GREEN — @ts-nocheck in a .mjs file WITH a non-empty allow-list reason passes', () => {
+  const problems = checkNoSuppressionDirectives(
+    [{ path: 'packages/ports/src/x.mjs', text: '// @ts-nocheck\nexport const a = 1\n' }],
+    { 'packages/ports/src/x.mjs': 'standalone build script, not TS-typed' },
+  )
+  assert.deepEqual(problems, [])
+})
+
+test('suppression directives: an allow-list entry with an empty reason does not suppress the finding', () => {
+  const problems = checkNoSuppressionDirectives(
+    [{ path: 'packages/ports/src/x.mjs', text: '// @ts-nocheck\n' }],
+    { 'packages/ports/src/x.mjs': '' },
+  )
+  assert.match(problems.join('\n'), /banned suppression directive/)
+})
+
+test('suppression directives: an allow-listed file is still flagged for @ts-ignore on another line', () => {
+  const problems = checkNoSuppressionDirectives(
+    [{ path: 'packages/ports/src/x.mjs', text: '// @ts-nocheck\nconst a: number = 1\n// @ts-ignore\nconst b: string = a\n' }],
+    { 'packages/ports/src/x.mjs': 'reason' },
+  )
+  assert.match(problems.join('\n'), /banned suppression directive \(@ts-ignore\)/)
+})
+
+test("suppression directives: the real tree's five known .mjs @ts-nocheck files are all named in the allow-list with reasons", () => {
+  const files = [
+    'gremion-ui/scripts/check-app-port-binding.mjs',
+    'gremion-ui/scripts/check-domain-regex.mjs',
+    'gremion-ui/scripts/check-tenant-env-guard.mjs',
+    'gremion-ui/scripts/check-tenant-secrets-dir.mjs',
+    'gremion-ui/scripts/install-git-hooks.mjs',
+  ].map((p) => ({ path: p, text: readFileSync(join(ROOT, p), 'utf8') }))
+  assert.deepEqual(checkNoSuppressionDirectives(files, ALLOWED_FIRST_PARTY_TS_NOCHECK), [])
 })
 
 // ── package discovery ───────────────────────────────────────────────────────
