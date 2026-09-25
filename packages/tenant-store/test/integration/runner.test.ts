@@ -7,7 +7,9 @@ import { afterAll, beforeEach, describe, expect, inject, it } from 'vitest'
 import { ADVISORY_LOCKS } from '../../src/advisory-locks.js'
 import { tenantModuleDbName } from '../../src/names.js'
 import { MigrationRunnerError, runMigrations, type PreApplyContext } from '../../src/runner.js'
-import { connect, ddlLog, resetWithProbe } from '../harness/db.js'
+import { openMigrationDb } from '../../src/store.js'
+import { envResolveTarget } from '../../src/names.js'
+import { assertNonProductionDbUrl, connect, ddlAttempts, ddlLog, ledgerFiles, resetWithProbe, serverUrl } from '../harness/db.js'
 import { cleanupFixtures, copyFixture, FIXTURE_MIGRATIONS, writeManifest } from '../harness/migrations.js'
 
 const quiet = { log: () => {} }
@@ -31,9 +33,7 @@ describe('runMigrations on a real database', () => {
   })
   afterAll(() => resetWithProbe(db))
 
-  const ledger = async () =>
-    (await watcher<{ filename: string }[]>`
-      SELECT filename FROM public.schema_migrations ORDER BY filename`.catch(() => [])).map((r) => r.filename)
+  const ledger = () => ledgerFiles(watcher)
   const migrationLocks = () =>
     watcher<{ pid: number; granted: boolean }[]>`
       SELECT pid, granted FROM pg_locks
@@ -52,9 +52,9 @@ describe('runMigrations on a real database', () => {
 
   it('a second run with nothing pending executes no DDL at all (not even the ledger CREATE)', async () => {
     await runMigrations({ sql, dir: FIXTURE_MIGRATIONS, ...quiet })
-    const before = (await ddlLog(watcher)).length
+    const before = await ddlAttempts(watcher)
     expect(await runMigrations({ sql, dir: FIXTURE_MIGRATIONS, ...quiet })).toEqual({ applied: [], alreadyApplied: 3 })
-    expect((await ddlLog(watcher)).length).toBe(before)
+    expect(await ddlAttempts(watcher)).toBe(before)
   })
 
   it('G-078: a failing file rolls back with its ledger row; earlier files stay; the lock is released', async () => {
@@ -73,9 +73,9 @@ describe('runMigrations on a real database', () => {
     const dir = copyFixture()
     writeFileSync(join(dir, '004_commit.sql'), 'CREATE TABLE c1 (id int);\nCOMMIT;\nCREATE TABLE c2 (id int);\n')
     writeManifest(dir)
-    const before = (await ddlLog(watcher)).length
+    const before = await ddlAttempts(watcher)
     await expect(runMigrations({ sql, dir, ...quiet })).rejects.toThrow(/unbalanced|transaction control/)
-    expect((await ddlLog(watcher)).length).toBe(before)
+    expect(await ddlAttempts(watcher)).toBe(before)
   })
 
   describe('hooks.preApply (TASK-029, TASK-075)', () => {
@@ -119,6 +119,7 @@ describe('runMigrations on a real database', () => {
       expect(err?.cause).toBe(boom)
       expect(await ledger()).toEqual([])
       expect(await ddlLog(watcher)).toEqual([])
+      expect(await ddlAttempts(watcher)).toBe(0)
       expect(await migrationLocks()).toEqual([])
     })
 
@@ -146,13 +147,75 @@ describe('runMigrations on a real database', () => {
       const full = copyFixture()
       writeFileSync(join(full, '005_later.sql'), 'CREATE TABLE later (id int);\n')
       writeManifest(full)
-      const before = (await ddlLog(watcher)).length
+      const before = await ddlAttempts(watcher)
       const err = await rejection(runMigrations({ sql, dir: full, ...quiet }))
       expect(err?.code).toBe('OUT_OF_ORDER')
       expect(err?.files).toEqual(['002_item_state.sql', '003_item_state_idx.sql'])
       expect(err?.message).toMatch(/002_item_state\.sql, 003_item_state_idx\.sql/)
-      expect((await ddlLog(watcher)).length).toBe(before)
+      expect(await ddlAttempts(watcher)).toBe(before)
       expect(await ledger()).toEqual(['001_init.sql', '005_later.sql'])
+    })
+  })
+
+  describe('review round 1', () => {
+    it('session state a body sets (SET ROLE, search_path, statement_timeout) is reset after its COMMIT', async () => {
+      const one = connect(db, { max: 1 })
+      try {
+        await one.unsafe('CREATE ROLE t020_other NOLOGIN').catch(() => {})
+        const dir = copyFixture()
+        writeFileSync(join(dir, '004_session.sql'), "SET statement_timeout = '1234ms';\nSET search_path = pg_catalog;\nSET ROLE t020_other;\n")
+        writeManifest(dir)
+        await runMigrations({ sql: one, dir, ...quiet })
+        const [r] = await one<{ st: string; sp: string; role: string }[]>`
+          SELECT current_setting('statement_timeout') AS st, current_setting('search_path') AS sp, current_user AS role`
+        expect(r).toEqual({ st: '0', sp: '"$user", public', role: 't020_test' })
+      } finally {
+        await one.end()
+      }
+    })
+
+    it('a body that releases the lock (pg_advisory_unlock_all) is rolled back, not committed', async () => {
+      const dir = copyFixture()
+      writeFileSync(join(dir, '004_unlock.sql'), 'CREATE TABLE sneaky (id int);\nSELECT pg_advisory_unlock_all();\n')
+      writeManifest(dir)
+      const err = await rejection(runMigrations({ sql, dir, ...quiet }))
+      expect(err?.code).toBe('LOCK_NOT_HELD')
+      expect(await ledger()).toEqual(FILES)
+      expect(await watcher`SELECT to_regclass('public.sneaky') AS r`).toEqual([{ r: null }])
+      expect(await migrationLocks()).toEqual([])
+    })
+
+    it('a lock held elsewhere bounds the wait (LOCK_TIMEOUT), logs the holder, and executes no DDL', async () => {
+      const holder = connect(db, { max: 1, connection: { application_name: 't020-holder' } })
+      try {
+        await holder`SELECT pg_advisory_lock(${ADVISORY_LOCKS.migration.classid}::int4, ${ADVISORY_LOCKS.migration.objid}::int4)`
+        const lines: string[] = []
+        const err = await rejection(runMigrations({ sql, dir: FIXTURE_MIGRATIONS, lockWaitTimeoutMs: 300, log: (l) => lines.push(l) }))
+        expect(err?.code).toBe('LOCK_TIMEOUT')
+        expect(lines.join('\n')).toMatch(/waiting for the migration lock \(held by pid \d+ 't020-holder'\)/)
+        expect(await ddlAttempts(watcher)).toBe(0)
+        // the lock_timeout used for the wait did not stay on the connection
+        const [lt] = await sql<{ lt: string }[]>`SELECT current_setting('lock_timeout') AS lt`
+        expect(lt!.lt).toBe('0')
+      } finally {
+        await holder.end()
+      }
+    })
+
+    it('openMigrationDb gives the runner its direct connection (GREMION_<MODULE>_PG_DIRECT_URL)', async () => {
+      const resolve = envResolveTarget({ GREMION_FIXTURE_PG_DIRECT_URL: serverUrl() }, 'direct')
+      const direct = await openMigrationDb(A, 'fixture', {
+        resolveTarget: (t, m) => {
+          const target = resolve(t, m)
+          assertNonProductionDbUrl(target.url)
+          return target
+        },
+      })
+      try {
+        expect((await runMigrations({ sql: direct, dir: FIXTURE_MIGRATIONS, ...quiet })).applied).toEqual(FILES)
+      } finally {
+        await direct.end()
+      }
     })
   })
 })

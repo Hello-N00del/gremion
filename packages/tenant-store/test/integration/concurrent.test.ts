@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeEach, describe, expect, inject, it } from 'vitest'
 import { ADVISORY_LOCKS } from '../../src/advisory-locks.js'
 import { tenantModuleDbName } from '../../src/names.js'
-import { connect, dbUrl, resetWithProbe } from '../harness/db.js'
+import { connect, dbUrl, ledgerFiles, resetWithProbe } from '../harness/db.js'
 import { FIXTURE_MIGRATIONS } from '../harness/migrations.js'
 
 const CHILD = fileURLToPath(new URL('../harness/child-runner.ts', import.meta.url))
@@ -16,7 +16,7 @@ const HOLD_MS = 1500
 interface ChildResult {
   name: string
   applied: string[]
-  error?: { code?: string; message: string }
+  error?: { code?: string; message: string; file?: string; sawPending?: string[] }
 }
 
 function startChild(name: string, db: string, variant: string) {
@@ -78,10 +78,9 @@ async function raceTwoRunners(db: string, variant: 'runner' | 'readThenApply') {
   const results = (await Promise.all([p1.nextLine(), p2.nextLine()])).map((l) => JSON.parse(l) as ChildResult)
   polling = false
   await poll
-  const ledger = await watcher<{ filename: string }[]>`
-    SELECT filename FROM public.schema_migrations ORDER BY filename`.catch(() => [])
+  const ledger = await ledgerFiles(watcher)
   await watcher.end()
-  return { results, waiters, ledger: ledger.map((r) => r.filename) }
+  return { results, waiters, ledger }
 }
 
 const FILES = ['001_init.sql', '002_item_state.sql', '003_item_state_idx.sql']
@@ -98,11 +97,24 @@ describe('two concurrent runner processes, one (tenant, module) database', () =>
   })
 
   it('RED guard: the readThenApply variant applies twice (the harness can see a double apply)', async () => {
-    const { results } = await raceTwoRunners(db, 'readThenApply')
-    const errors = results.filter((r) => r.error)
-    expect(errors.length).toBeGreaterThanOrEqual(1)
-    // duplicate_table, duplicate_object, duplicate_column, unique_violation
-    expect(['42P07', '42710', '42701', '23505']).toContain(errors[0]!.error!.code)
+    // The ledger exists before the race, so the only thing the two can
+    // collide on is applying the same migration: not the ledger's own
+    // CREATE TABLE IF NOT EXISTS (which can itself race on pg_type).
+    const pre = connect(db, { max: 1 })
+    await pre`CREATE TABLE public.schema_migrations (filename text PRIMARY KEY, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT clock_timestamp())`
+    await pre.end()
+    const { results, ledger } = await raceTwoRunners(db, 'readThenApply')
+    const failed = results.filter((r) => r.error)
+    expect(failed).toHaveLength(1)
+    const e = failed[0]!.error!
+    // both read the same, empty ledger; the loser then re-applied 001
+    expect(e.sawPending).toEqual(FILES)
+    expect(e.file).toBe('001_init.sql')
+    // duplicate_table (item), duplicate_object (the enum type), or the
+    // catalog's unique index when both CREATE TABLE item at once (23505 on
+    // pg_type) — every one of them a second apply of 001
+    expect(['42P07', '42710', '23505']).toContain(e.code)
+    expect(ledger).toEqual(FILES)
   })
 
   it('runMigrations: each file applied exactly once; process 2 waited on the lock, then applied nothing', async () => {

@@ -9,7 +9,7 @@ import { afterAll, beforeEach, describe, expect, inject, it } from 'vitest'
 import { MigrationManifestError } from '../../src/manifest.js'
 import { MigrationRunnerError, runMigrations } from '../../src/runner.js'
 import { tenantModuleDbName } from '../../src/names.js'
-import { connect, ddlLog, resetWithProbe } from '../harness/db.js'
+import { connect, ddlAttempts, ddlLog, resetWithProbe } from '../harness/db.js'
 import { cleanupFixtures, copyFixture, writeManifest } from '../harness/migrations.js'
 
 const quiet = { log: () => {} }
@@ -34,8 +34,20 @@ describe('the whole manifest is checked before any DDL', () => {
     return r!.present
   }
 
+  /**
+   * The positive control: the probe logs a committed CREATE TABLE, AND counts
+   * one that is rolled back (the sequence), so "zero DDL" also rules out DDL
+   * a runner ran inside a transaction and then rolled back.
+   */
   async function expectProbeLive(before: number) {
+    const attempts = await ddlAttempts(sql)
     await sql`CREATE TABLE public.t020_positive_control (x int)`
+    expect((await ddlLog(sql)).length).toBe(before + 1)
+    await sql.begin(async (tx) => {
+      await tx`CREATE TABLE public.t020_rolled_back (x int)`
+      throw new Error('rollback')
+    }).catch(() => {})
+    expect(await ddlAttempts(sql)).toBe(attempts + 2)
     expect((await ddlLog(sql)).length).toBe(before + 1)
   }
 
@@ -53,6 +65,7 @@ describe('the whole manifest is checked before any DDL', () => {
     appendFileSync(join(dir, '003_item_state_idx.sql'), ' ')
     expect(await problemCodes(runMigrations({ sql, dir, ...quiet }))).toEqual(['HASH_MISMATCH 003_item_state_idx.sql'])
     expect(await ddlLog(sql)).toEqual([])
+    expect(await ddlAttempts(sql)).toBe(0)
     expect(await ledgerPresent()).toBe(false)
     await expectProbeLive(0)
   })
@@ -62,6 +75,7 @@ describe('the whole manifest is checked before any DDL', () => {
     writeFileSync(join(dir, '004_extra.sql'), 'CREATE TABLE extra (id int);\n')
     expect(await problemCodes(runMigrations({ sql, dir, ...quiet }))).toEqual(['FILE_NOT_IN_MANIFEST 004_extra.sql'])
     expect(await ddlLog(sql)).toEqual([])
+    expect(await ddlAttempts(sql)).toBe(0)
     await expectProbeLive(0)
   })
 
@@ -70,6 +84,7 @@ describe('the whole manifest is checked before any DDL', () => {
     rmSync(join(dir, '003_item_state_idx.sql'))
     expect(await problemCodes(runMigrations({ sql, dir, ...quiet }))).toEqual(['MANIFEST_ENTRY_WITHOUT_FILE 003_item_state_idx.sql'])
     expect(await ddlLog(sql)).toEqual([])
+    expect(await ddlAttempts(sql)).toBe(0)
     await expectProbeLive(0)
   })
 
@@ -77,7 +92,10 @@ describe('the whole manifest is checked before any DDL', () => {
     async function applyFirstTwo() {
       const r = await runMigrations({ sql, dir: copyFixture({ only: ['001_init.sql', '002_item_state.sql'] }), ...quiet })
       expect(r.applied).toEqual(['001_init.sql', '002_item_state.sql'])
-      return (await ddlLog(sql)).length
+      const logged = (await ddlLog(sql)).length
+      // nothing was rolled back so far: every attempt is logged
+      expect(await ddlAttempts(sql)).toBe(logged)
+      return logged
     }
 
     it('manifest untouched: the manifest check fails on the applied file, zero new DDL, 003 not applied', async () => {
@@ -86,6 +104,7 @@ describe('the whole manifest is checked before any DDL', () => {
       appendFileSync(join(dir, '001_init.sql'), '-- edited after apply\n')
       expect(await problemCodes(runMigrations({ sql, dir, ...quiet }))).toEqual(['HASH_MISMATCH 001_init.sql'])
       expect((await ddlLog(sql)).length).toBe(before)
+      expect(await ddlAttempts(sql)).toBe(before)
       expect((await sql`SELECT filename FROM public.schema_migrations`).length).toBe(2)
       await expectProbeLive(before)
     })
@@ -103,6 +122,7 @@ describe('the whole manifest is checked before any DDL', () => {
       expect((err as MigrationRunnerError).code).toBe('LEDGER_HASH_MISMATCH')
       expect((err as MigrationRunnerError).files).toEqual(['001_init.sql'])
       expect((await ddlLog(sql)).length).toBe(before)
+      expect(await ddlAttempts(sql)).toBe(before)
       expect((await sql`SELECT filename FROM public.schema_migrations`).length).toBe(2)
       await expectProbeLive(before)
     })
@@ -115,6 +135,7 @@ describe('the whole manifest is checked before any DDL', () => {
       const err = await runMigrations({ sql, dir, ...quiet }).catch((e: unknown) => e)
       expect((err as MigrationRunnerError).code).toBe('LEDGER_UNKNOWN_FILE')
       expect((await ddlLog(sql)).length).toBe(before)
+      expect(await ddlAttempts(sql)).toBe(before)
     })
   })
 })

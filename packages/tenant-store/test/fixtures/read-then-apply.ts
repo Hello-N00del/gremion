@@ -17,10 +17,14 @@ export async function readThenApply({ sql, dir, holdMs = 0 }: { sql: postgres.Sq
   const done: string[] = []
   for (const m of migrations) {
     if (applied.has(m.file)) continue
-    await sql.begin(async (tx) => {
-      await tx.unsafe(stripOuterTransaction(m.text))
-      await tx`INSERT INTO public.schema_migrations (filename, sha256) VALUES (${m.file}, ${m.sha256})`
-    })
+    try {
+      await sql.begin(async (tx) => {
+        await tx.unsafe(stripOuterTransaction(m.text))
+        await tx`INSERT INTO public.schema_migrations (filename, sha256) VALUES (${m.file}, ${m.sha256})`
+      })
+    } catch (err) {
+      throw Object.assign(err as Error, { file: m.file, sawPending: migrations.filter((x) => !applied.has(x.file)).map((x) => x.file) })
+    }
     done.push(m.file)
   }
   return { applied: done }

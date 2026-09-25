@@ -7,7 +7,7 @@ import { isUuidV7, tenantModuleDbName, envResolveTarget } from '../../src/names.
 import { checkSchemaCurrent, schemaGate } from '../../src/schema-gate.js'
 import { createTenantStore } from '../../src/store.js'
 import { runMigrations } from '../../src/runner.js'
-import { assertNonProductionDbUrl, connect, ddlLog, resetWithProbe, serverUrl } from '../harness/db.js'
+import { assertNonProductionDbUrl, connect, ddlAttempts, ddlLog, resetWithProbe, serverUrl } from '../harness/db.js'
 import { cleanupFixtures, copyFixture, FIXTURE_MIGRATIONS } from '../harness/migrations.js'
 import { createFixtureService } from '../fixtures/service.js'
 
@@ -22,6 +22,8 @@ describe('the fixture service: schemaGate in front, openTenantDb behind, two ten
   let base: string
   let stop: () => Promise<void>
   let bLedgerBefore: { n: number; last: string }
+  let attemptsBefore: { a: number; b: number }
+  let gate: ReturnType<typeof schemaGate>
 
   const bLedger = async () => {
     const [r] = await b<{ n: number; last: string }[]>`SELECT count(*)::int AS n, max(applied_at)::text AS last FROM public.schema_migrations`
@@ -36,8 +38,12 @@ describe('the fixture service: schemaGate in front, openTenantDb behind, two ten
     await runMigrations({ sql: a, dir: FIXTURE_MIGRATIONS, ...quiet })
     // B is one file behind the manifest.
     await runMigrations({ sql: b, dir: copyFixture({ only: ['001_init.sql', '002_item_state.sql'] }), ...quiet })
+    // the probe saw the setup's migrations (it is live), then starts empty
+    expect((await ddlLog(a)).length).toBeGreaterThan(0)
+    expect((await ddlLog(b)).length).toBeGreaterThan(0)
     await a`TRUNCATE t020_probe.ddl_log`
     await b`TRUNCATE t020_probe.ddl_log`
+    attemptsBefore = { a: await ddlAttempts(a), b: await ddlAttempts(b) }
     bLedgerBefore = await bLedger()
 
     const env = envResolveTarget({ GREMION_FIXTURE_PG_URL: serverUrl() })
@@ -48,7 +54,7 @@ describe('the fixture service: schemaGate in front, openTenantDb behind, two ten
         return target
       },
     })
-    const gate = schemaGate({ dir: FIXTURE_MIGRATIONS, openDb: (t) => store.openTenantDb(t, 'fixture'), retryAfterSeconds: 7, cacheTtlMs: 0, log: () => {} })
+    gate = schemaGate({ dir: FIXTURE_MIGRATIONS, openDb: (t) => store.openTenantDb(t, 'fixture'), retryAfterSeconds: 7, cacheTtlMs: 0, log: () => {} })
     const server = createFixtureService({ store, gate, tenants: new Set([A, B]) })
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -74,6 +80,8 @@ describe('the fixture service: schemaGate in front, openTenantDb behind, two ten
     expect((await fetch(`${base}/t/${B}/items`)).status).toBe(503)
     expect(await ddlLog(a)).toEqual([])
     expect(await ddlLog(b)).toEqual([])
+    expect(await ddlAttempts(a)).toBe(attemptsBefore.a)
+    expect(await ddlAttempts(b)).toBe(attemptsBefore.b)
   })
 
   it('TDD 5: B, one file behind, gets 503 with Retry-After; A still gets 200', async () => {
@@ -87,12 +95,16 @@ describe('the fixture service: schemaGate in front, openTenantDb behind, two ten
       const ra = await fetch(`${base}/t/${A}/items`)
       expect(ra.status).toBe(200)
     }
+    // 503 because B is BEHIND — not because its database was unreachable
+    expect(await gate.check(B)).toEqual({ ok: false, reason: 'behind', retryAfterSeconds: 7 })
   })
 
   it('TDD 5: B\'s schema_migrations count(*) and max(applied_at) are unchanged, and neither database gained DDL', async () => {
     expect(await bLedger()).toEqual(bLedgerBefore)
     expect(await ddlLog(b)).toEqual([])
     expect(await ddlLog(a)).toEqual([])
+    expect(await ddlAttempts(b)).toBe(attemptsBefore.b)
+    expect(await ddlAttempts(a)).toBe(attemptsBefore.a)
   })
 
   it('checkSchemaCurrent names the state and runs read-only: B behind by 003, A current', async () => {

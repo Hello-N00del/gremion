@@ -45,8 +45,9 @@ async function main() {
           })
     process.stdout.write(JSON.stringify({ name, applied: result.applied }) + '\n')
   } catch (err) {
-    const e = err as { code?: string; cause?: { code?: string }; message: string }
-    process.stdout.write(JSON.stringify({ name, applied: [], error: { code: e.cause?.code ?? e.code, message: e.message } }) + '\n')
+    const e = err as { code?: string; cause?: { code?: string }; message: string; file?: string; files?: string[]; sawPending?: string[] }
+    const file = e.file ?? e.files?.[0]
+    process.stdout.write(JSON.stringify({ name, applied: [], error: { code: e.cause?.code ?? e.code, message: e.message, file, sawPending: e.sawPending } }) + '\n')
   } finally {
     await sql.end({ timeout: 5 })
   }
