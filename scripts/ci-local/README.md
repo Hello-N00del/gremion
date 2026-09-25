@@ -162,16 +162,24 @@ tree (and rotate it — this script cannot do that for you).
 
 ## `runner-policy.mjs`
 
-Fails on any `.github/workflows/*.yml` that names a `self-hosted` runner
-(inline scalar/list/flow-map, YAML block list, block flow map, or a
-matrix-supplied `runs-on` — the last fails closed if `self-hosted` appears
-anywhere in the file) or references a signing/age/SSH/deploy secret
-(TRD-364; `secrets.NAME`, `secrets['NAME']`, `toJSON(secrets)` and
-`secrets: inherit` are all covered — the last two fail closed since they can
-carry ANY secret, not just a named one). Each `waivers.json`
+Parses each `.github/workflows/*.yml` with `yaml` and fails on any job whose
+`runs-on` does not provably resolve to GitHub-hosted labels (an allowlist:
+a custom label, a runner group, an unresolvable expression or an
+unparseable file all fail closed). A matrix-supplied `runs-on`
+(`${{ matrix.<key> }}`) passes only when every value of that key — the base
+list AND every `strategy.matrix.include` entry — is a hosted label; a
+matrix, `include` or `exclude` that is an expression or not a list of
+mappings fails closed. It also fails on any reference to a signing/age/SSH/
+deploy secret (TRD-364). Context and function names are matched ignoring
+case, as GitHub does: `secrets.NAME`, `SECRETS.NAME` and `secrets['NAME']`
+give `secret:NAME` (name upper-cased); `toJson(secrets)`, a computed index
+(`secrets[format(...)]`, `secrets[matrix.k]`), any other use of the whole
+context inside an expression, and `secrets: inherit` all fail closed, since
+they can carry ANY secret, not just a named one. Each `waivers.json`
 entry is `{repo, file, owner, expiresOn, covers, reason}`. `covers` lists
 the exact finding ids the waiver mutes (`secret:DEPLOY_SSH_KEY`,
-`self-hosted`, `secrets-tojson`, `secrets-inherit`); any other finding in
+`self-hosted`, `secrets-tojson`, `secrets-dynamic-index`,
+`secrets-context`, `secrets-inherit`); any other finding in
 the waived file still fails, so a waiver cannot grow silently. An entry
 whose `expiresOn` is not a real `YYYY-MM-DD` date, or with no `covers`, is
 never live (fail closed). Matching uses BOTH `repo` and `file` — a

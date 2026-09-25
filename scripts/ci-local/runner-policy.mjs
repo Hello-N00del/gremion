@@ -36,8 +36,25 @@ import { parseDocument } from 'yaml'
 // everything else — a custom label, a `group`/`labels` object, an
 // unresolvable expression, a malformed job body, or a workflow that fails
 // to parse at all — fails CLOSED.
-const SECRET_REF_RE = /secrets(?:\.([A-Za-z0-9_]+)|\[\s*['"]([A-Za-z0-9_]+)['"]\s*\])/g
-const SECRETS_TOJSON_RE = /toJSON\(\s*secrets\s*\)/
+//
+// TASK-012-FU finding 2 (HIGH): both regexes were case-sensitive and
+// literal-index only, but GitHub expressions ignore case in context and
+// function names — `${{ toJson(secrets) }}`, `${{ SECRETS.DEPLOY_SSH_KEY }}`
+// and `${{ secrets[format('DEPLOY_{0}','SSH_KEY')] }}` all returned NO
+// finding. Both are now /i, a secret name is upper-cased for its finding id
+// (GitHub secret names are case-insensitive), and inside an expression any
+// `secrets[` whose index is not one quoted literal, or any use of the whole
+// `secrets` context (bare, `secrets.*`, passed to a function), is its own
+// fail-closed sensitive finding — see scanExpressionForSecrets.
+const SECRET_REF_RE = /secrets\s*(?:\.\s*([A-Za-z0-9_]+)|\[\s*['"]([A-Za-z0-9_]+)['"]\s*\])/gi
+const SECRETS_TOJSON_RE = /toJSON\s*\(\s*secrets\s*\)/i
+const SECRETS_WORD_RE = /\bsecrets\b/gi
+const EXPR_BODY_RE = /\$\{\{([\s\S]*?)\}\}/g
+const WHOLE_CONTEXT_DETAIL = {
+  'secrets-tojson': 'toJSON(secrets) serializes the entire secrets context — treated as sensitive, fail closed',
+  'secrets-dynamic-index': 'secrets[<expression>] computes the secret name at run time, so it can name ANY secret — treated as sensitive, fail closed',
+  'secrets-context': 'the whole secrets context is used (bare, secrets.*, or passed to a function), so it can carry ANY secret — treated as sensitive, fail closed',
+}
 // Bounded so a name that merely CONTAINS "age" (STAGE_ENV_NAME, MESSAGE_ID)
 // never false-positives: AGE must stand alone between start/end and `_`.
 const SENSITIVE_SECRET_NAME_RE = /DEPLOY|SIGN(ING)?|SSH|GPG|SOPS|COSIGN|KEYSTORE|PRIVATE_KEY|HOST_KEY|(?:^|_)AGE(?:_|$)/i
@@ -144,6 +161,57 @@ function collectStrings(node, out = []) {
 }
 
 /**
+ * Every expression body GitHub evaluates in a parsed workflow tree: each
+ * `${{ ... }}` segment of a string leaf, plus the whole value of an `if:`
+ * key that has no `${{` (GitHub evaluates a bare `if:` as an expression).
+ * Plain `run:` text outside `${{ }}` is shell, not an expression, so it is
+ * not returned here — the whole-context/dynamic-index checks only look at
+ * what GitHub itself will evaluate.
+ */
+function collectExpressionBodies(node, key, out = []) {
+  if (typeof node === 'string') {
+    let any = false
+    for (const m of node.matchAll(EXPR_BODY_RE)) {
+      any = true
+      out.push(m[1])
+    }
+    if (!any && typeof key === 'string' && key.toLowerCase() === 'if') out.push(node)
+  } else if (Array.isArray(node)) {
+    for (const v of node) collectExpressionBodies(v, undefined, out)
+  } else if (node && typeof node === 'object') {
+    for (const [k, v] of Object.entries(node)) collectExpressionBodies(v, k, out)
+  }
+  return out
+}
+
+/**
+ * Whole-context and computed-index uses of `secrets` inside ONE expression
+ * body, as finding ids: 'secrets-tojson' (toJson(secrets)),
+ * 'secrets-dynamic-index' (secrets[<anything but one quoted literal>]) or
+ * 'secrets-context' (the whole context used any other way — bare, passed to
+ * a function, `secrets.*`). A named access (`secrets.NAME`,
+ * `secrets['NAME']`) is left to SECRET_REF_RE. A property that merely has
+ * the name `secrets` on another context (`inputs.secrets`) is not the
+ * secrets context and is skipped. Case-insensitive throughout.
+ */
+export function scanExpressionForSecrets(body) {
+  const out = []
+  for (const m of body.matchAll(SECRETS_WORD_RE)) {
+    const before = body.slice(0, m.index)
+    if (/\.\s*$/.test(before)) continue // `<ctx>.secrets` — a property of something else
+    const rest = body.slice(m.index + m[0].length)
+    if (/^\s*\.\s*[A-Za-z_][A-Za-z0-9_]*/.test(rest)) continue // secrets.NAME
+    if (/^\s*\[\s*(['"])[A-Za-z0-9_]+\1\s*\]/.test(rest)) continue // secrets['NAME']
+    if (/^\s*\[/.test(rest)) {
+      out.push('secrets-dynamic-index')
+      continue
+    }
+    out.push(/toJSON\s*\(\s*$/i.test(before) && /^\s*\)/.test(rest) ? 'secrets-tojson' : 'secrets-context')
+  }
+  return out
+}
+
+/**
  * True if `repoRoot` exists on disk as a directory. MEDIUM fix:
  * `listWorkflowFiles` used to catch EVERY `readdirSync` error (including
  * `repoRoot` itself not existing) and return `[]`, which `evaluateRepo` then
@@ -245,17 +313,23 @@ export function checkWorkflowText(text) {
   const seen = new Set()
   for (const s of collectStrings(parsed)) {
     for (const m of s.matchAll(SECRET_REF_RE)) {
-      const name = m[1] ?? m[2]
+      // GitHub secret names are case-insensitive: one id per name, however spelled.
+      const name = (m[1] ?? m[2]).toUpperCase()
       if (seen.has(`secret:${name}`)) continue
       if (SENSITIVE_SECRET_NAME_RE.test(name)) {
         seen.add(`secret:${name}`)
         findings.push({ rule: 'sensitive-secret', id: `secret:${name}`, detail: `references secrets.${name} (signing/age/SSH/deploy)` })
       }
     }
-    if (SECRETS_TOJSON_RE.test(s) && !seen.has('secrets-tojson')) {
-      seen.add('secrets-tojson')
-      findings.push({ rule: 'sensitive-secret', id: 'secrets-tojson', detail: 'toJSON(secrets) serializes the entire secrets context — treated as sensitive, fail closed' })
-    }
+    if (SECRETS_TOJSON_RE.test(s)) addWholeContext('secrets-tojson')
+  }
+  for (const body of collectExpressionBodies(parsed)) {
+    for (const id of scanExpressionForSecrets(body)) addWholeContext(id)
+  }
+  function addWholeContext(id) {
+    if (seen.has(id)) return
+    seen.add(id)
+    findings.push({ rule: 'sensitive-secret', id, detail: WHOLE_CONTEXT_DETAIL[id] })
   }
   // `secrets: inherit` is a structural key/value pair on a reusable-workflow
   // CALL job, not a text pattern — checked directly against the parsed job

@@ -102,6 +102,41 @@ test('checkWorkflowText flags the canonical SOPS age var name (AGE_SECRET_KEY, n
   assert.equal(flags('STAGE_ENV_NAME'), 0, 'a name that merely CONTAINS "age" as a substring must not false-positive')
 })
 
+// --- TASK-012-FU finding 2 (HIGH): secret references, any case, any index --
+// GitHub expressions ignore case in context and function names, and
+// secrets[<expr>] can compute ANY secret name at run time.
+
+const ids = (text) => checkWorkflowText(text).map((f) => f.id)
+
+test('FU-2: toJson(secrets) in any case is the whole-context finding (secrets-tojson)', () => {
+  assert.deepEqual(ids('env:\n  ALL: ${{ toJson(secrets) }}\n'), ['secrets-tojson'])
+  assert.deepEqual(ids('env:\n  ALL: ${{ TOJSON( SECRETS ) }}\n'), ['secrets-tojson'])
+})
+
+test('FU-2: SECRETS.DEPLOY_SSH_KEY (upper-case context) is caught, and the id is the upper-cased secret name', () => {
+  assert.deepEqual(ids('env:\n  K: ${{ SECRETS.DEPLOY_SSH_KEY }}\n'), ['secret:DEPLOY_SSH_KEY'])
+  assert.deepEqual(ids("env:\n  K: ${{ Secrets['deploy_ssh_key'] }}\n"), ['secret:DEPLOY_SSH_KEY'])
+})
+
+test("FU-2: secrets[format('DEPLOY_{0}','SSH_KEY')] and secrets[matrix.k] are fail-closed sensitive findings (non-literal index)", () => {
+  const a = checkWorkflowText("env:\n  K: ${{ secrets[format('DEPLOY_{0}','SSH_KEY')] }}\n")
+  assert.deepEqual(a.map((f) => [f.rule, f.id]), [['sensitive-secret', 'secrets-dynamic-index']])
+  assert.deepEqual(ids('env:\n  K: ${{ secrets[matrix.k] }}\n'), ['secrets-dynamic-index'])
+  assert.deepEqual(ids('env:\n  K: ${{ SECRETS[ inputs.name ] }}\n'), ['secrets-dynamic-index'])
+})
+
+test('FU-2: the whole secrets context passed to any other function (or bare) inside an expression fails closed (secrets-context)', () => {
+  assert.deepEqual(ids("env:\n  K: ${{ format('{0}', secrets) }}\n"), ['secrets-context'])
+  assert.deepEqual(ids('jobs:\n  x:\n    runs-on: ubuntu-latest\n    if: join(secrets) != \'\'\n'), ['secrets-context'])
+  assert.deepEqual(ids('env:\n  K: ${{ secrets.* }}\n'), ['secrets-context'])
+})
+
+test('FU-2: precision - ordinary text mentioning "secrets", a non-sensitive secret and a property named secrets on another context are not findings', () => {
+  assert.deepEqual(ids('jobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo "no secrets[0] here" && cat secrets.txt\n'), [])
+  assert.deepEqual(ids("env:\n  T: ${{ secrets.GITHUB_TOKEN }}\n  N: ${{ secrets['NPM_TOKEN'] }}\n"), [])
+  assert.deepEqual(ids('env:\n  S: ${{ github.event.inputs.secrets }}\n'), [])
+})
+
 // --- round-5 HIGH fix: structural runs-on classification, fail closed ------
 // The old text-regex denylist failed OPEN on every one of these — proven in
 // round 4's verifier probe (.scratch/probe-rp.mjs) against the PRE-fix code.
