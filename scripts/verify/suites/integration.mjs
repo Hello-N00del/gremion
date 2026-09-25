@@ -9,8 +9,21 @@ import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { headSha } from '../lib/git.mjs'
 import { parseVitestJsonFile, summarizeVitestFailures } from '../lib/parsers.mjs'
 import { run, toolAvailable } from '../lib/proc.mjs'
+
+// Brief S9: the container name is unique per run. Task-045 round-1 review
+// (LOW) found this using `Date.now().toString(16)` whenever GITHUB_SHA was
+// unset -- i.e. on every local run -- instead of the HEAD sha8 the brief
+// actually specifies. verify.mjs already refuses to run any real suite
+// (integration included) against a dirty tree (Q5), so HEAD is guaranteed to
+// describe the exact tree this suite is testing by the time this runs; using
+// it here (rather than a wall-clock value with no relation to the commit
+// under test) makes a leftover/orphaned container from a killed run
+// identifiable by the commit that produced it.
+export const DEFERRED_BATS_NOTE =
+  'test/integration/*.bats: deferred to TASK-036/re-init (needs the full stack including Keycloak) -- never run or reported as passed by this suite (Q4)'
 
 const REPO_ROOT = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
 
@@ -116,7 +129,7 @@ export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
     return { toolMissing: 'docker', unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0 }
   }
   const uiDir = path.join(root, 'gremion-ui')
-  const sha8 = (process.env.GITHUB_SHA || Date.now().toString(16)).slice(0, 8)
+  const sha8 = headSha(root).slice(0, 8)
   const db = startTestDb({ sha8, pid: process.pid })
   if (!db.ok) {
     stopTestDb(db.name)

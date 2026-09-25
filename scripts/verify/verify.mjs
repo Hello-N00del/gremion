@@ -22,7 +22,7 @@ import { writeRecord } from './lib/record.mjs'
 import { allowedSkipsForSuite, loadAllowedSkips } from './lib/skips.mjs'
 import { runCarveLintSuite } from './suites/carve-lint.mjs'
 import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } from './suites/fixtures.mjs'
-import { runIntegrationSuite } from './suites/integration.mjs'
+import { DEFERRED_BATS_NOTE, runIntegrationSuite } from './suites/integration.mjs'
 import { runMigrationHashSuite } from './suites/migration-hash.mjs'
 import { runTypecheckSuite } from './suites/typecheck.mjs'
 import { runUnitSuite } from './suites/unit.mjs'
@@ -168,7 +168,14 @@ async function main() {
 
   if (touchesRealSuite) {
     const sha = headSha(REPO_ROOT)
-    const { path: recordFile } = writeRecord({ sha, suites: results, only: partial ? names.join(',') : null, startedAt, finishedAt })
+    const { path: recordFile } = writeRecord({
+      sha,
+      suites: results,
+      only: partial ? names.join(',') : null,
+      startedAt,
+      finishedAt,
+      deferred: [DEFERRED_BATS_NOTE],
+    })
     console.log(`[verify] record: ${recordFile}${partial ? ' (partial -- never satisfies check-record.mjs)' : ''}`)
   }
 

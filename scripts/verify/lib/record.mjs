@@ -19,8 +19,14 @@ export function recordPath(sha) {
  * @param {string|null} input.only the `--only <suite>` value, or null for a full run.
  * @param {string} input.startedAt ISO timestamp.
  * @param {string} input.finishedAt ISO timestamp.
+ * @param {string[]} [input.deferred] checks the brief excludes from every
+ *   suite's counts on purpose (Q4: `test/integration/*.bats` needs the full
+ *   stack including Keycloak). Recorded so the record itself says what was
+ *   never run and why, rather than a deferred check's absence looking like
+ *   an oversight -- and so nothing can mistake this list for a suite that
+ *   passed: check-record.mjs never reads it, only `suites`.
  */
-export function writeRecord({ sha, suites, only, startedAt, finishedAt }) {
+export function writeRecord({ sha, suites, only, startedAt, finishedAt, deferred = [] }) {
   mkdirSync(OUT_DIR, { recursive: true })
   const partial = only !== null && only !== undefined
   const allPass = Object.values(suites).every((s) => s.status === 'pass')
@@ -31,6 +37,7 @@ export function writeRecord({ sha, suites, only, startedAt, finishedAt }) {
     partial,
     startedAt,
     finishedAt,
+    deferred,
     suites,
     // `ok` mirrors what check-record.mjs re-derives independently -- kept here
     // only for human/log convenience, never trusted by check-record.mjs itself
