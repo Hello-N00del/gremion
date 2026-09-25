@@ -1,230 +1,186 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { assertSafeTestDbUrl } from '../integration/assert-safe-test-db-url'
+// @vitest-environment node
+//
+// The truncating-harness guard (spec B section 6 "no-truncate suite", AM-B-05;
+// TASK-028 / B15 task 11). Every harness that truncates or drops refuses to
+// start unless its database URL names a host whose stack differs from the
+// production stack of this host, as GREMION_PRODUCTION_STACK declares it.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { readFileSync, readdirSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import path from 'node:path'
+import * as guardModule from '../integration/assert-safe-test-db-url'
+import { assertNonProductionDbUrl } from '../integration/assert-safe-test-db-url'
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+const UI_ROOT = path.resolve(__dirname, '..', '..')
+const GUARD_SRC = path.join(UI_ROOT, 'tests', 'integration', 'assert-safe-test-db-url.ts')
+const KEY = 'GREMION_PRODUCTION_STACK'
+// An obvious fake credential: it must never appear in a refusal.
+const FAKE_PW = 'fake-pw-0000'
 
-/** Call the guard and return the thrown error message, or null if it didn't throw. */
-function guardError(url: string, varName = 'DATABASE_URL', env: Record<string, string> = {}): string | null {
-  const saved = process.env.GREMION_ALLOW_DANGEROUS_DB_URL
-  for (const [k, v] of Object.entries(env)) {
-    process.env[k] = v
-  }
+let saved: string | undefined
+beforeEach(() => {
+  saved = process.env[KEY]
+  delete process.env[KEY]
+})
+afterEach(() => {
+  if (saved === undefined) delete process.env[KEY]
+  else process.env[KEY] = saved
+})
+
+/** The refusal message, or null when the guard accepts. */
+function refusal(url: string, prod: string | undefined, varName = 'DATABASE_URL'): string | null {
+  if (prod === undefined) delete process.env[KEY]
+  else process.env[KEY] = prod
   try {
-    assertSafeTestDbUrl(url, varName)
+    assertNonProductionDbUrl(url, varName)
     return null
-  } catch (e: unknown) {
+  } catch (e) {
     return e instanceof Error ? e.message : String(e)
-  } finally {
-    if (saved === undefined) {
-      delete process.env.GREMION_ALLOW_DANGEROUS_DB_URL
-    } else {
-      process.env.GREMION_ALLOW_DANGEROUS_DB_URL = saved
-    }
-    // NOTE: env entries are deleted in finally rather than restored-to-prior.
-    // Safe as long as `env` never overlaps a key already set in process.env
-    // (GREMION_ALLOW_DANGEROUS_DB_URL has its own save/restore above).
-    for (const k of Object.keys(env)) {
-      delete process.env[k]
-    }
   }
 }
 
-// ── documented fixture — always allowed ──────────────────────────────────────
-
-describe('assertSafeTestDbUrl — documented fixture', () => {
-  it('allows the exact documented DATABASE_URL fixture', () => {
-    expect(guardError('postgres://gremion:gremion_test@localhost:5432/gremion')).toBeNull()
+describe('assertNonProductionDbUrl', () => {
+  it('1. is the ONLY export of the module (the old name and its hatch are gone)', () => {
+    expect(Object.keys(guardModule).sort()).toEqual(['assertNonProductionDbUrl'])
   })
 
-  it('allows the exact documented CONTROL_DATABASE_URL fixture', () => {
-    expect(guardError('postgres://gremion:gremion_test@localhost:5432/control', 'CONTROL_DATABASE_URL')).toBeNull()
-  })
-
-  it('treats postgresql:// scheme same as postgres://', () => {
-    expect(guardError('postgresql://gremion:gremion_test@localhost:5432/gremion')).toBeNull()
-  })
-})
-
-// ── localhost + test-name convention ─────────────────────────────────────────
-
-describe('assertSafeTestDbUrl — localhost + test convention', () => {
-  it('allows localhost:5432 with a test-prefixed database name', () => {
-    expect(guardError('postgres://user:pass@localhost:5432/test_db')).toBeNull()
-  })
-
-  it('allows localhost:5432 with test in db name (not prefix)', () => {
-    expect(guardError('postgres://user:pass@localhost:5432/gremion_test')).toBeNull()
-  })
-
-  it('allows localhost with a test-named username', () => {
-    expect(guardError('postgres://test_user:pass@localhost:5432/mydb')).toBeNull()
-  })
-
-  it('allows 127.0.0.1 with test in database name', () => {
-    expect(guardError('postgres://user:pass@127.0.0.1:5432/test_db')).toBeNull()
-  })
-
-  it('allows 127.0.0.1 with test in username', () => {
-    expect(guardError('postgres://test_user:pw@127.0.0.1:5432/mydb')).toBeNull()
-  })
-
-  it('allows ::1 (IPv6 localhost) with test in database name', () => {
-    expect(guardError('postgres://user:pass@[::1]:5432/test_db')).toBeNull()
-  })
-
-  it('allows ::1 with test in username', () => {
-    expect(guardError('postgres://test_user:pw@[::1]:5432/mydb')).toBeNull()
-  })
-
-  it('allows localhost without explicit port with test name', () => {
-    expect(guardError('postgres://user:pw@localhost/test_db')).toBeNull()
-  })
-})
-
-// ── staging-shaped URL — must be REJECTED ─────────────────────────────────────
-
-describe('assertSafeTestDbUrl — staging-shaped URL REJECTED', () => {
-  it('rejects staging URL: localhost:5433 with user/db both "stura" (no test convention)', () => {
-    const err = guardError('postgres://stura:some_password@localhost:5433/stura')
-    expect(err).not.toBeNull()
-    expect(err).toContain('DATABASE_URL')
-    expect(err).toContain('GREMION_ALLOW_DANGEROUS_DB_URL')
-  })
-
-  it('rejects localhost with no test convention on db or username', () => {
-    const err = guardError('postgres://myuser:pw@localhost:5432/mydb')
-    expect(err).not.toBeNull()
-  })
-
-  it('rejects 127.0.0.1 with no test convention on db or username', () => {
-    const err = guardError('postgres://stura:pw@127.0.0.1:5433/stura')
-    expect(err).not.toBeNull()
-  })
-})
-
-// ── password containing 'test' does NOT qualify ───────────────────────────────
-
-describe('assertSafeTestDbUrl — password with "test" does NOT qualify', () => {
-  it('rejects when only the password contains "test" but db/user do not', () => {
-    const err = guardError('postgres://stura:gremion_test@localhost:5433/stura')
-    expect(err).not.toBeNull()
-  })
-
-  it('rejects when only the password contains "test" on remote host', () => {
-    const err = guardError('postgres://user:testpassword@db.example.com:5432/mydb')
-    expect(err).not.toBeNull()
-  })
-})
-
-// ── remote host — REJECTED even with test-convention name ────────────────────
-
-describe('assertSafeTestDbUrl — remote host REJECTED', () => {
-  it('rejects a remote host even when db name contains "test"', () => {
-    const err = guardError('postgres://user:pw@db.example.com:5432/test_db')
-    expect(err).not.toBeNull()
-    expect(err).toContain('DATABASE_URL')
-  })
-
-  it('rejects a remote host even when username contains "test"', () => {
-    const err = guardError('postgres://test_user:pw@db.example.com:5432/mydb')
-    expect(err).not.toBeNull()
-  })
-
-  it('rejects docker-internal host even with test db name', () => {
-    const err = guardError('postgres://stura:pw@postgres:5432/test_db')
-    expect(err).not.toBeNull()
-  })
-
-  it('rejects "keycloak" docker network host', () => {
-    const err = guardError('postgres://user:pw@keycloak:5432/test_db')
-    expect(err).not.toBeNull()
-  })
-})
-
-// ── escape hatch ──────────────────────────────────────────────────────────────
-
-describe('assertSafeTestDbUrl — GREMION_ALLOW_DANGEROUS_DB_URL escape hatch', () => {
-  afterEach(() => {
-    delete process.env.GREMION_ALLOW_DANGEROUS_DB_URL
-  })
-
-  it('allows any URL when GREMION_ALLOW_DANGEROUS_DB_URL is set (truthy)', () => {
-    process.env.GREMION_ALLOW_DANGEROUS_DB_URL = '1'
-    const err = guardError('postgres://stura:pw@localhost:5433/stura')
-    expect(err).toBeNull()
-  })
-
-  it('warns to stderr when GREMION_ALLOW_DANGEROUS_DB_URL is set', () => {
-    process.env.GREMION_ALLOW_DANGEROUS_DB_URL = '1'
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      assertSafeTestDbUrl('postgres://stura:pw@localhost:5433/stura', 'DATABASE_URL')
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('GREMION_ALLOW_DANGEROUS_DB_URL'))
-    } finally {
-      warnSpy.mockRestore()
+  it('2. refuses while GREMION_PRODUCTION_STACK is unset, empty or blank, and names the fix', () => {
+    for (const prod of [undefined, '', '   ']) {
+      const msg = refusal('postgres://gremion:gremion_test@localhost:5432/gremion', prod)
+      expect(msg, `prod=${JSON.stringify(prod)}`).toMatch(/GREMION_PRODUCTION_STACK/)
+      expect(msg).toMatch(/none/)
     }
   })
 
-  it('does NOT throw for the escape hatch with a completely remote dangerous URL', () => {
-    process.env.GREMION_ALLOW_DANGEROUS_DB_URL = '1'
-    const err = guardError('postgres://prod:secret@prod.example.com:5432/production')
-    expect(err).toBeNull()
+  it('3. refuses a GREMION_PRODUCTION_STACK that is not a stack name or `none`', () => {
+    for (const prod of ['Gremion', 'gremion!', 'none,gremion', '-x', 'a'.repeat(33)]) {
+      expect(refusal('postgres://u:p@postgres-staging:5432/db', prod), prod).toMatch(/GREMION_PRODUCTION_STACK/)
+    }
   })
 
-  it('does NOT bypass guard when GREMION_ALLOW_DANGEROUS_DB_URL is "false"', () => {
-    process.env.GREMION_ALLOW_DANGEROUS_DB_URL = 'false'
-    const err = guardError('postgres://stura:pw@localhost:5433/stura')
-    expect(err).not.toBeNull()
+  it('4. refuses postgres-<prod>: the production database of this host', () => {
+    const msg = refusal('postgres://g:p@postgres-gremion:5432/gremion', 'gremion')
+    expect(msg).toMatch(/production/i)
+    expect(msg).toContain('postgres-gremion')
+    expect(refusal('postgresql://g:p@POSTGRES-GREMION:5432/x', 'gremion')).toMatch(/production/i)
   })
 
-  it('does NOT bypass guard when GREMION_ALLOW_DANGEROUS_DB_URL is "0"', () => {
-    process.env.GREMION_ALLOW_DANGEROUS_DB_URL = '0'
-    const err = guardError('postgres://stura:pw@localhost:5433/stura')
-    expect(err).not.toBeNull()
+  it('5. refuses a loopback host while this host HAS a production stack', () => {
+    for (const host of ['localhost', '127.0.0.1', '127.9.9.9', '[::1]']) {
+      const msg = refusal(`postgres://gremion:gremion_test@${host}:5432/gremion_test`, 'gremion')
+      expect(msg, host).toMatch(/loopback/i)
+    }
+  })
+
+  it('6. accepts loopback only when GREMION_PRODUCTION_STACK=none, and only a test database there', () => {
+    expect(refusal('postgres://gremion:gremion_test@localhost:5432/gremion', 'none')).toBeNull()
+    expect(refusal('postgres://gremion:gremion_test@localhost:5432/control', 'none', 'CONTROL_DATABASE_URL')).toBeNull()
+    expect(refusal('postgresql://gremion_test:x@127.0.0.1:55432/portal_case_1', 'none')).toBeNull()
+    expect(refusal('postgres://u:p@[::1]:5432/test_db', 'none')).toBeNull()
+    // the staging shape on a dev box: loopback, but not a test database
+    expect(refusal('postgres://stura:stura@localhost:5433/stura', 'none')).toMatch(/test/)
+  })
+
+  it('7. refuses any host that is not stack-qualified (postgres-<stack>)', () => {
+    for (const host of ['postgres', 'pgbouncer', 'db.example.org', '10.1.2.3', 'postgres-', 'postgres-Gremion_x', 'mypostgres-staging']) {
+      const msg = refusal(`postgres://u:p@${host}:5432/db`, 'gremion')
+      expect(msg, host).toMatch(/stack-qualified/)
+    }
+    expect(refusal('postgres://u:p@postgres:5432/db', 'none')).toMatch(/stack-qualified/)
+  })
+
+  it('8. accepts a stack-qualified host of ANOTHER stack', () => {
+    expect(refusal('postgres://u:p@postgres-staging:5432/db', 'gremion')).toBeNull()
+    expect(refusal('postgres://u:p@postgres-gremion-canary:5432/db', 'gremion')).toBeNull()
+    expect(refusal('postgres://u:p@postgres-staging:5432/db', 'none')).toBeNull()
+  })
+
+  it('9. fails closed on a malformed URL, a wrong scheme or no host -- and never prints the password', () => {
+    for (const url of ['', 'not a url', `mysql://u:${FAKE_PW}@postgres-staging/db`, `postgres://u:${FAKE_PW}@/db`, `postgres//u:${FAKE_PW}@x`]) {
+      const msg = refusal(url, 'gremion')
+      expect(msg, url).not.toBeNull()
+      expect(msg).not.toContain(FAKE_PW)
+    }
+    expect(refusal(`postgres://g:${FAKE_PW}@postgres-gremion:5432/gremion`, 'gremion')).not.toContain(FAKE_PW)
+    expect(refusal(`postgres://g:${FAKE_PW}@db.example.org:5432/x`, 'gremion')).not.toContain(FAKE_PW)
+  })
+
+  it('10. reads no environment variable but GREMION_PRODUCTION_STACK (no escape hatch)', () => {
+    const src = readFileSync(GUARD_SRC, 'utf8')
+    const reads = [...src.matchAll(/process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*['"]([^'"]+)['"]\s*\])/g)].map(
+      (m) => m[1] ?? m[2],
+    )
+    expect(new Set(reads)).toEqual(new Set([KEY]))
+    expect(src).not.toMatch(/process\.env\[(?!\s*['"])/) // no computed key
+    expect(src).not.toMatch(/\bconsole\.(warn|log)\b/) // nothing to warn about: no bypass exists
   })
 })
 
-// ── malformed / unparseable URL — fail closed ────────────────────────────────
+describe('the harnesses call it and give it no default (D2)', () => {
+  const HARNESS_FILES = [
+    'vitest.integration.config.ts',
+    'vitest.deselection.config.ts',
+    'tests/integration/setup.ts',
+    'tests/integration/deselection-setup.ts',
+  ]
 
-describe('assertSafeTestDbUrl — malformed URL (fail-closed)', () => {
-  it('rejects an empty string', () => {
-    const err = guardError('')
-    expect(err).not.toBeNull()
+  it('no harness file assigns GREMION_PRODUCTION_STACK a value', () => {
+    for (const f of HARNESS_FILES) {
+      const src = readFileSync(path.join(UI_ROOT, f), 'utf8')
+      expect(src, f).not.toMatch(/GREMION_PRODUCTION_STACK['"\]]?\s*(\?\?|\|\||&&)?=(?!=)/)
+    }
   })
 
-  it('rejects a non-URL string', () => {
-    const err = guardError('not-a-url')
-    expect(err).not.toBeNull()
+  it('setup.ts, deselection-setup.ts and the integration config each guard every URL they use', () => {
+    const expected: Record<string, string[]> = {
+      'vitest.integration.config.ts': ['DATABASE_URL', 'CONTROL_DATABASE_URL'],
+      'tests/integration/setup.ts': ['DATABASE_URL', 'CONTROL_DATABASE_URL'],
+      'tests/integration/deselection-setup.ts': ['DATABASE_URL'],
+    }
+    for (const [f, vars] of Object.entries(expected)) {
+      const src = readFileSync(path.join(UI_ROOT, f), 'utf8')
+      for (const v of vars) {
+        expect(src, `${f} guards ${v}`).toContain(`assertNonProductionDbUrl(process.env.${v} ?? '', '${v}')`)
+      }
+    }
   })
 
-  it('rejects a URL with no hostname', () => {
-    const err = guardError('postgres:///mydb')
-    expect(err).not.toBeNull()
+  it('no integration test file reads the guard module under its old name', () => {
+    const offenders: string[] = []
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === 'node_modules' || e.name.startsWith('.')) continue
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.(ts|mjs|js)$/.test(e.name) && readFileSync(p, 'utf8').includes('assertSafe' + 'TestDbUrl')) {
+          offenders.push(path.relative(UI_ROOT, p))
+        }
+      }
+    }
+    walk(path.join(UI_ROOT, 'src'))
+    walk(path.join(UI_ROOT, 'tests'))
+    expect(offenders).toEqual([])
   })
 
-  it('rejects a URL with wrong scheme (mysql://)', () => {
-    // Not a postgres URL — fail-closed
-    const err = guardError('mysql://user:pw@localhost:3306/testdb')
-    expect(err).not.toBeNull()
-  })
-
-  it('includes varName in error message for a malformed URL', () => {
-    const err = guardError('not-a-url', 'CONTROL_DATABASE_URL')
-    expect(err).not.toBeNull()
-    expect(err).toContain('CONTROL_DATABASE_URL')
-  })
-})
-
-// ── varName reflected in error message ───────────────────────────────────────
-
-describe('assertSafeTestDbUrl — varName in error message', () => {
-  it('includes the varName in the thrown error for DATABASE_URL', () => {
-    const err = guardError('postgres://stura:pw@localhost:5433/stura', 'DATABASE_URL')
-    expect(err).toContain('DATABASE_URL')
-  })
-
-  it('includes the varName in the thrown error for CONTROL_DATABASE_URL', () => {
-    const err = guardError('postgres://stura:pw@localhost:5433/stura', 'CONTROL_DATABASE_URL')
-    expect(err).toContain('CONTROL_DATABASE_URL')
-  })
+  it('the integration config refuses to LOAD while GREMION_PRODUCTION_STACK is unset', () => {
+    const env: NodeJS.ProcessEnv = { ...process.env }
+    delete env[KEY]
+    delete env.DATABASE_URL
+    delete env.CONTROL_DATABASE_URL
+    const res = spawnSync(
+      process.execPath,
+      [
+        path.join(UI_ROOT, 'node_modules', 'vitest', 'vitest.mjs'),
+        'run',
+        '--config',
+        'vitest.integration.config.ts',
+        '--passWithNoTests',
+        'src/no-such-file-task028',
+      ],
+      { cwd: UI_ROOT, env, encoding: 'utf8', timeout: 120_000 },
+    )
+    const out = `${res.stdout}${res.stderr}`
+    expect(res.status, out).not.toBe(0)
+    expect(out).toContain(KEY)
+  }, 150_000)
 })
