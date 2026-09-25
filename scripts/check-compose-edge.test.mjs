@@ -36,7 +36,7 @@
 import { test as nodeTest } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -251,6 +251,18 @@ test('guard 2: dynamic/tls.yml and every Cloudflare Origin certificate reference
 test('guard 3: exactly one mount targets /etc/traefik/dynamic, read-only, from ${GREMION_ROOT}/etc/edge', () => {
   const mounts = (traefik().volumes ?? []).filter((v) => v.target === '/etc/traefik/dynamic')
   assert.equal(mounts.length, 1, `${mounts.length} mounts target /etc/traefik/dynamic`)
+  // Compose MERGES mounts that share a target (the last wins), so the render
+  // alone can never show two. Count the declarations in every compose SOURCE
+  // too: a second one is the defect even when the merge hides it.
+  const decl = /^\s*(?:-\s*"?[^"#\s]*:\/etc\/traefik\/dynamic(?::[a-z,]+)?"?|target:\s*\/etc\/traefik\/dynamic)\s*$/
+  const sources = readdirSync(REPO_ROOT).filter((f) => /^docker-compose.*\.ya?ml$/.test(f))
+  const declared = sources.flatMap((f) =>
+    readFileSync(path.join(REPO_ROOT, f), 'utf8')
+      .split(/\r?\n/)
+      .filter((l) => decl.test(l))
+      .map((l) => `${f}: ${l.trim()}`),
+  )
+  assert.deepEqual(declared, ['docker-compose.yml: target: /etc/traefik/dynamic'])
   assert.equal(mounts[0].type, 'bind')
   assert.equal(mounts[0].read_only, true)
   assert.equal(mounts[0].source, `${fixtureEnv().GREMION_ROOT}/etc/edge`)

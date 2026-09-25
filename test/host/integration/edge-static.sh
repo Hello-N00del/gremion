@@ -174,7 +174,7 @@ build_from_module() {
     # Checksum database and proxy pinned, whatever the caller's go env says:
     # every dependency is verified against sum.golang.org, not just the main
     # module hash asserted below.
-    CGO_ENABLED=0 GOBIN="$gobin" GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GONOSUMDB='' GONOSUMCHECK='' GOPRIVATE='' \
+    CGO_ENABLED=0 GOBIN="$gobin" GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GONOSUMDB='' GOPRIVATE='' \
         GOPROXY=https://proxy.golang.org GOINSECURE='' go install \
         "github.com/letsencrypt/pebble/v2/cmd/${cmd}@v${PEBBLE_VERSION}" >/dev/null 2>&1 || { rm -rf "$ctx"; return 1; }
     sum="$(go version -m "${gobin}/${cmd}" | awk '$1 == "mod" && $2 == "github.com/letsencrypt/pebble/v2" { print $4 }')"

@@ -244,15 +244,17 @@ router carrying `certresolver=le-http`):
 1. **Nothing on all interfaces.**
    `ss -tlnp '( sport = :80 or sport = :443 or sport = :8080 or sport = :8081 or sport = :8082 )'`
    — `:80`/`:443` listen only on `EDGE_BIND_IP` and `[EDGE_BIND_IP6]`;
-   `:8080`/`:8081` only on `127.0.0.1`; `:8082` not at all; no `0.0.0.0:*`
-   or `[::]:*` line for any of them.
+   `TRAEFIK_API_PORT`/`INTERNALTEST_PORT` (default `8080`/`8081`) only on
+   `127.0.0.1`; `:8082` not at all; no `0.0.0.0:*` or `[::]:*` line for any
+   of them. (Nothing refuses a wildcard VALUE in `state.env` -- compose only
+   refuses an empty one -- so this line is the check.)
 2. **Health.** `docker inspect -f '{{.State.Health.Status}}' <traefik>` is
    `healthy`, and `.Config.Healthcheck.Test` probes `127.0.0.1:8082/ping`.
 3. **API: loopback yes, public no.**
-   `curl -fsS http://127.0.0.1:8080/api/http/routers | jq length` answers;
-   `curl --max-time 3 http://EDGE_BIND_IP:8080/api/http/routers` and
-   `curl -g --max-time 3 'http://[EDGE_BIND_IP6]:8080/api/http/routers'`
-   are refused (curl exit 7); the same for `:8081`.
+   `curl -fsS http://127.0.0.1:TRAEFIK_API_PORT/api/http/routers | jq length`
+   answers; `curl --max-time 3 http://EDGE_BIND_IP:TRAEFIK_API_PORT/api/http/routers`
+   and `curl -g --max-time 3 'http://[EDGE_BIND_IP6]:TRAEFIK_API_PORT/api/http/routers'`
+   are refused (curl exit 7); the same for `INTERNALTEST_PORT`.
 4. **One read-only router mount, hot reload.**
    `docker inspect <traefik> | jq '[.[0].Mounts[] | select(.Destination == "/etc/traefik/dynamic")]'`
    shows exactly one entry, `"RW": false`, source `/opt/gremion/etc/edge`; a
