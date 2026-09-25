@@ -564,3 +564,22 @@ test('main(): --out is no longer required to get a dated JSON result — omittin
     rmSync(outDir, { recursive: true, force: true })
   }
 })
+
+test('runGitleaksArm (whole-tree) lists WHERE each tracked leak is (file, rule, line) and never copies the matched value into the result', () => {
+  const root = makeSecretRepo()
+  try {
+    const runFn = (command) => {
+      writeFileSync(
+        command[command.indexOf('--report-path') + 1],
+        JSON.stringify([{ File: '.env', RuleID: 'generic-api-key', StartLine: 1, Secret: 'VALUE-MUST-NOT-LEAK', Match: 'K=VALUE-MUST-NOT-LEAK' }]),
+      )
+      return { exitCode: 0, output: 'leaks found: 1', timedOut: false, spawnError: null }
+    }
+    const r = runGitleaksArm('kernel', root, undefined, { runFn })
+    assert.equal(r.status, 'FAIL')
+    assert.deepEqual(r.findings, [{ file: '.env', rule: 'generic-api-key', line: 1 }])
+    assert.doesNotMatch(JSON.stringify(r), /VALUE-MUST-NOT-LEAK/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

@@ -169,3 +169,27 @@ test('loadDenylistFile refuses a key that is not a lower-case SHA-256 hex digest
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('trackedFiles/scanRepo skip a submodule gitlink (mode 160000) — it is a commit pointer whose checkout is a directory, not an unreadable file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-local-known-secrets-gitlink-'))
+  const git = (args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' })
+  try {
+    git(['init', '-q', '-b', 'main'])
+    git(['config', 'user.email', 'ci-local-test@example.invalid'])
+    git(['config', 'user.name', 'ci-local-test'])
+    writeFileSync(join(root, 'keep.txt'), 'ordinary text\n')
+    git(['add', 'keep.txt'])
+    git(['commit', '-q', '-m', 'seed'])
+    const head = git(['rev-parse', 'HEAD']).trim()
+    git(['update-index', '--add', '--cacheinfo', `160000,${head},vendored-sub`])
+    git(['commit', '-q', '-m', 'add a gitlink'])
+    mkdirSync(join(root, 'vendored-sub')) // an initialised submodule checkout is a directory
+
+    assert.deepEqual(trackedFiles(root), ['keep.txt'])
+    const { findings, scanned } = scanRepo(root, syntheticDenylist())
+    assert.equal(findings.length, 0)
+    assert.equal(scanned, 1)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

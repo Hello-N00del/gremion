@@ -317,6 +317,9 @@ export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyB
       trackedFindings.length === 0
         ? undefined
         : `gitleaks found ${trackedFindings.length} leak(s) in tracked files (of ${rawFindings.length} raw match(es) incl. untracked)`,
+    // Where, never what: file, rule and line only. gitleaks' Secret/Match
+    // fields are never copied into the result (the scan runs --redact too).
+    findings: trackedFindings.map((f) => ({ file: String(f.File ?? '').split('\\').join('/'), rule: f.RuleID, line: f.StartLine })),
     output,
   }
 }

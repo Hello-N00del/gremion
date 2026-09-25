@@ -78,12 +78,26 @@ export function scanText(relPath, text, denylist = KNOWN_COMPROMISED) {
   return findings
 }
 
+/**
+ * Tracked FILES (repo-relative), excluding submodule gitlinks (mode
+ * 160000): a gitlink is a commit pointer, not content — on disk it is a
+ * directory (or nothing, when the submodule is not initialised), and the
+ * submodule's own tree is scanned as its own repo if at all.
+ */
 export function trackedFiles(repoRoot) {
-  const out = execFileSync('git', ['-C', repoRoot, 'ls-files', '-z'], {
+  const out = execFileSync('git', ['-C', repoRoot, 'ls-files', '-s', '-z'], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   })
-  return out.split('\0').filter(Boolean)
+  const files = []
+  for (const entry of out.split('\0')) {
+    if (!entry) continue
+    const tab = entry.indexOf('\t')
+    const mode = entry.slice(0, entry.indexOf(' '))
+    if (mode === '160000') continue
+    files.push(entry.slice(tab + 1))
+  }
+  return files
 }
 
 /**
