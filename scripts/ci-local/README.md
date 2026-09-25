@@ -16,8 +16,16 @@ case-sensitive and only owns the lower-case identifier form.
 ## The one-line call a re-enabled pipeline makes unchanged
 
 ```
-node scripts/ci-local/guards.mjs --kernel <kernel-path> --vertical <vertical-path> --base <base-ref>
+node scripts/ci-local/guards.mjs --kernel <kernel-path> --vertical <vertical-path> --kernel-base <kernel-base-ref> --vertical-base <vertical-base-ref>
 ```
+
+Give each repo its own base ref: the kernel's default branch is `main`,
+StuRaOS's is `master`. A shared `--base` is still accepted, but it must
+resolve in BOTH repos — a base that does not resolve in a repo FAILs that
+repo's secret-scan instead of scanning an empty range. Leave out the bases
+for a whole-tree scan. A result JSON is written on every run (`--out` below);
+a pipeline sets `CI_LOCAL_GUARDS_OUT` (or passes `--out`) to its artifact
+directory.
 
 Exit code is the merge gate: non-zero means at least one arm failed and the
 merge must be blocked. This is exactly the call a re-enabled `ci.yml` (or the
@@ -30,7 +38,7 @@ keeps a re-enabled Actions runner honest about TRD-364 in the first place.
 ### `guards.mjs` — the single merge-gate entry point
 
 ```
-node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--out <dir>]
+node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--known-secrets-denylist <path>] [--out <dir>]
 ```
 
 Runs every arm below, in order, **all of them every time** — a failing arm
@@ -75,7 +83,19 @@ never skips the rest, so the dated result always shows every arm's outcome:
 6. **runner-policy** — `runner-policy.mjs` on both repos' `.github/workflows/*.yml`.
 
 `--waivers <path>` defaults to the committed `scripts/ci-local/waivers.json`.
-`--out <dir>` additionally writes a dated `<dir>/<date>-guards.json`.
+
+Every run writes `<out>/<YYYY-MM-DD>T<hhmmss>Z-<kernel-sha7>-<vertical-sha7>-guards.json`
+(a new name each second, so a RED record is never overwritten by the GREEN
+re-run). `<out>` is `--out <dir>`, else `$CI_LOCAL_GUARDS_OUT`, else
+`<os tmpdir>/ci-local-guards-results` — never inside either repo.
+
+Every guard command is spawned as an argument array with no shell
+(`lib/run.mjs`), so a ref or a path is never parsed by a shell, and a base
+ref with whitespace, a leading `-`, `..` or shell metacharacters is refused
+before git or gitleaks sees it. The script arms (native known-secrets,
+cve-floor, overrides-drift) run the script's own `node --test` first and
+FAIL if it collected 0 tests. Only `suites.json` commands (committed text,
+no runtime value) go through a shell.
 
 ### `snapshot.mjs` — the dated pass/fail census
 

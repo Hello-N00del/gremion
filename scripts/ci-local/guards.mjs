@@ -4,7 +4,7 @@
 // disabled, and that a re-enabled Actions pipeline can call unchanged
 // (README.md has the one-line invocation).
 //
-//   node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--known-secrets-denylist <path>]
+//   node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--known-secrets-denylist <path>] [--out <dir>]
 //   node --test scripts/ci-local/guards.test.mjs
 //
 // Arms, run in this order, ALL of them, every time (a failing arm never
