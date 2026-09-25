@@ -1,0 +1,53 @@
+{
+  "name": "@gremion/fastify-service-template",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Spec-first Fastify service template for Gremion services: routes loaded from a committed OpenAPI 3.1 spec, a scaffold CLI, routes:check, and the platform upload ceiling",
+  "type": "module",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hello-N00del/gremion.git",
+    "directory": "packages/fastify-service-template"
+  },
+  "homepage": "https://github.com/Hello-N00del/gremion/tree/main/packages/fastify-service-template",
+  "bugs": "https://github.com/Hello-N00del/gremion/issues",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": ["dist", "src", "!src/**/*.test.ts", "README.md", "LICENSE"],
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:int": "vitest run test/upload-ceiling.int.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
+    "scaffold": "node src/cli/scaffold.ts",
+    "routes:check": "node src/cli/routes-check.ts"
+  },
+  "dependencies": {
+    "@fastify/multipart": "10.1.2",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "fastify": "5.12.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}
