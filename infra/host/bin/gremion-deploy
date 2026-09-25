@@ -237,7 +237,53 @@ step_2_checkout() {
     [[ -d "$RELEASE_DIR" ]] || die "release tree absent after checkout: $RELEASE_DIR" 1
     require_spec_b_contracts "$RELEASE_DIR"
     validate_release_tree "$RELEASE_DIR"
+    verify_first_party_signatures
     ok "release tree $RELEASE_DIR"
+}
+
+# verify_first_party_signatures — TRD-441 (TASK-046). Every first-party pinned
+# digest must carry a cosign signature that verifies against the HOST-installed
+# public key, $ROOT/etc/cosign.pub (bootstrap.sh 'trust' stage). Nothing in the
+# release tree is consulted: a cosign.pub shipped in the tree is exactly what an
+# attacker who controls the tree would ship. Runs inside step 2, after the pins
+# are validated and before step 3 spends the token on a pull.
+#
+# Every failure is a refusal (die), never a skip: no cosign, no host key, an
+# empty first-party set, an unreachable registry, a missing or foreign
+# signature. The verdict is cosign's JSON, re-read here: each claim must name
+# the pinned digest and the pinned repository, not merely exit 0.
+# The public tlog is ignored by design (key-based signing, no Rekor upload).
+verify_first_party_signatures() {
+    local pub="$ROOT/etc/cosign.pub"
+    [[ -f "$pub" && ! -L "$pub" && -s "$pub" ]] \
+        || die "trust anchor absent: $pub (install it with bootstrap.sh --cosign-pubkey PATH trust)" 1
+    grep -q -- '-----BEGIN PUBLIC KEY-----' "$pub" \
+        || die "trust anchor $pub is not a PEM public key" 1
+    local cosign
+    cosign="$(command -v cosign 2>/dev/null || true)"
+    [[ -n "$cosign" ]] || die "cosign not on PATH — cannot verify image signatures (refusing)" 1
+
+    local prefix ref lc repo digest out n=0
+    prefix="$(printf '%s' "${REGISTRY_HOST}/hello-n00del/" | tr '[:upper:]' '[:lower:]')"
+    while IFS= read -r ref; do
+        [[ -n "$ref" ]] || continue
+        lc="$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')"
+        [[ "$lc" == "$prefix"* ]] || continue
+        [[ "$lc" =~ ^([^@]+)@(sha256:[0-9a-f]{64})$ ]] \
+            || die "first-party pin is not <repo>@sha256:<64 hex>: $ref" 1
+        repo="${BASH_REMATCH[1]}"; digest="${BASH_REMATCH[2]}"
+        out="$("$cosign" verify --key "$pub" --insecure-ignore-tlog=true --output json "$ref" 2>/dev/null)" \
+            || die "signature verification failed for $ref against $pub" 1
+        printf '%s' "$out" | jq -e --arg d "$digest" --arg r "$repo" '
+            type == "array" and length >= 1 and all(.[];
+                .critical.image["docker-manifest-digest"] == $d
+                and (.critical.identity["docker-reference"] | ascii_downcase) == $r)' >/dev/null 2>&1 \
+            || die "signature verification failed for $ref: no claim binds $digest to $repo" 1
+        n=$(( n + 1 ))
+    done <<< "$PINNED_IMAGES"
+    [[ "$n" -ge 1 ]] \
+        || die "no first-party image (${prefix}*) in the pins — refusing to deploy an unverifiable set" 1
+    ok "${n} first-party image(s) verified against ${pub}"
 }
 
 validate_release_tree() { # <dir>
