@@ -8,8 +8,8 @@
 # servers (`<id>-postgres`, D14) start empty and get no init script: their
 # per-(tenant, module) databases are created by the provisioner (D13).
 #
-# NOT MIRRORED: k8s/base/postgres/configmap.yaml carries an older inline copy
-# of this logic. k8s/** is frozen (D16) — not a release-1 target, not edited,
+# NOT MIRRORED: k8s/base/postgres/configmap.yaml carries a separate inline
+# copy of this logic. k8s/** is frozen (D16) — not a release-1 target, not edited,
 # out of the postgres-major scan — so a change here is NOT carried over to it,
 # and that copy is no reference for this one.
 

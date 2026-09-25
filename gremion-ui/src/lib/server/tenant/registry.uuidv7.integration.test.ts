@@ -61,7 +61,7 @@ describe('control-registry boundary ids (RFC 9562)', () => {
     expect(t.id).toMatch(UUID_V7)
     // the version the SERVER reads off the same value, not only our regex
     const [{ v }] = await getControlDb()<{ v: number }[]>`SELECT uuid_extract_version(${t.id}::uuid) AS v`
-    expect(Number(v)).toBe(7)
+    expect(v).toBe(7)
     // a v7 id carries its creation instant: it must be THIS insert's, within
     // clock skew between this process and the database container
     const ms = unixMsOf(t.id)

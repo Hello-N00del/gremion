@@ -110,7 +110,7 @@ test('TDD-7: zero containers is a FAILURE, never a vacuous pass', () => {
   assert.match(problems.join('\n'), /found zero Postgres containers labelled org\.gremion\.postgres in project t019-test/)
 })
 
-test('TDD-7: zero containers fails even when nothing is expected', () => {
+test('TDD-7: zero containers fails even when nothing is expected (and names zero containers)', () => {
   const { docker } = fakeDocker([])
   assert.match(checkRunning({ project: PROJECT, expected: [], docker }).problems.join('\n'), /found zero/)
 })
@@ -184,4 +184,24 @@ test('a version() text that disagrees with server_version_num is RED', () => {
 test('a docker ps that fails throws instead of looking like zero containers', () => {
   const { docker } = fakeDocker([], { psFails: true })
   assert.throws(() => checkRunning({ project: PROJECT, expected: [KERNEL], docker }), /docker ps failed.*Cannot connect/)
+})
+
+// ── review round 1 ─────────────────────────────────────────────────────────
+
+test('R1: expectedServices can be narrowed to the active profiles; the kernel is always expected', () => {
+  const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
+  assert.deepEqual(expectedServices([text], []).map((e) => e.service), ['postgres'])
+  assert.deepEqual(expectedServices([text], ['vault']).map((e) => e.service).sort(), ['postgres', 'vault-postgres'])
+})
+
+test('R1: an empty expected set is RED — a compose scan that found nothing proves nothing', () => {
+  const { docker } = fakeDocker(good())
+  assert.match(checkRunning({ project: PROJECT, expected: [], docker }).problems.join('\n'),
+    /the compose scan expects zero Postgres services/)
+})
+
+test('R1: a container whose label disagrees with its service is RED', () => {
+  const { docker } = fakeDocker(good({ cal: { label: 'kernel' } }))
+  assert.match(checkRunning({ project: PROJECT, expected: [KERNEL, CAL], docker }).problems.join('\n'),
+    /calendar-postgres is labelled kernel, expected module:calendar/)
 })

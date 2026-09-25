@@ -18,8 +18,13 @@
 // profile-gated ones included — that has no running container, on a labelled
 // container that is not running, on empty psql output and on a failing probe.
 //
-// Run:  node scripts/check-postgres-major-running.mjs --project <p> [--compose <file>]...
-//       (--compose defaults to the kernel docker-compose.yml)
+// Run:  node scripts/check-postgres-major-running.mjs --project <p>
+//         [--compose <file>]...   (default: the kernel docker-compose.yml)
+//         [--profile <id>]... | [--no-profiles]
+//       With neither profile flag every labelled service is expected, the six
+//       profile-gated module servers included. --profile narrows the expected
+//       module servers to the profiles the run enabled; --no-profiles expects
+//       the kernel server alone (what postgres-major-proof.sh starts).
 // Test: node --test scripts/check-postgres-major-running.test.mjs
 
 import { spawnSync } from 'node:child_process'
@@ -40,11 +45,15 @@ export const PS_FORMAT =
  * applied on purpose — a profile-gated module server is still expected, and
  * a run that forgot its `--profile` is exactly what this is meant to catch.
  */
-export function expectedServices(composeTexts) {
+export function expectedServices(composeTexts, profiles = null) {
   const out = new Map()
   for (const text of composeTexts) {
     for (const s of composeServices(text)) {
-      if (s.label != null) out.set(s.name, { service: s.name, label: s.label })
+      if (s.label == null) continue
+      // `profiles` narrows the set to what a run actually enabled (the kernel
+      // server, which has none, is always expected); null means all of them.
+      if (profiles && s.profiles.length && !s.profiles.some((p) => profiles.includes(p))) continue
+      out.set(s.name, { service: s.name, label: s.label })
     }
   }
   return [...out.values()]
@@ -88,9 +97,16 @@ export function checkRunning({ project, expected, docker }) {
     problems.push(`found zero Postgres containers labelled ${POSTGRES_LABEL} in project ${project} — the check would pass vacuously`)
     return { problems, rows }
   }
+  if (expected.length === 0) {
+    problems.push('the compose scan expects zero Postgres services — nothing to hold the running containers to')
+  }
   for (const e of expected) {
-    if (!containers.some((c) => c.service === e.service)) {
+    const mine = containers.filter((c) => c.service === e.service)
+    if (mine.length === 0) {
       problems.push(`expected service ${e.service} (${e.label}) has no container in project ${project}`)
+    }
+    for (const c of mine.filter((c) => c.label !== e.label)) {
+      problems.push(`${e.service} is labelled ${c.label}, expected ${e.label} (${c.name})`)
     }
   }
   for (const c of containers) {
@@ -151,7 +167,9 @@ if (isMain) {
   }
   const composeFiles = args.flatMap((a, i) => (a === '--compose' ? [args[i + 1]] : []))
   const files = composeFiles.length ? composeFiles : [join(ROOT, 'docker-compose.yml')]
-  const expected = expectedServices(files.map((f) => readFileSync(f, 'utf8')))
+  const profileArgs = args.flatMap((a, i) => (a === '--profile' ? [args[i + 1]] : []))
+  const profiles = args.includes('--no-profiles') ? [] : profileArgs.length ? profileArgs : null
+  const expected = expectedServices(files.map((f) => readFileSync(f, 'utf8')), profiles)
   const docker = (a) => {
     const r = spawnSync('docker', a, { encoding: 'utf8' })
     return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? String(r.error ?? '') }

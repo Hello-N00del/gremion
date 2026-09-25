@@ -90,6 +90,12 @@ digest-only `image:`, and (new) a registry-prefixed reference such as
 service whose `image:` is a variable, a pinned default included, is refused:
 the variable is exactly how the default gets overridden.
 
+Files TASK-019 had to touch because control migration `006` moves a count,
+each on its count line only: `gremion-ui/scripts/fresh-init-proof.sh` (control
+files applied: 5), `gremion-ui/src/lib/modules/migration-manifest-staleness.test.ts`
+(5 control files), `gremion-ui/migrations/README.md` and `docs/about-gremion.md`
+(5 control migrations; `kernel-hygiene` n1/n2 read those).
+
 ## The 18+ data-directory contract — read this before wiping anything
 
 **Crossing into 18 is not only a tag change.** At major 18 the Docker official

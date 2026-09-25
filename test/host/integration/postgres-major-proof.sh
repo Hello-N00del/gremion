@@ -167,6 +167,29 @@ while IFS= read -r img; do
 done <<<"$IMGS"
 echo "  ok  rendered compose: $(printf '%s' "$IMGS" | tr '\n' ' ')"
 
+# 1b. the six profile-gated module servers (TASK-019, D14) are not rendered
+# without their profiles, so they are rendered WITH them, and every service
+# carrying the org.gremion.postgres label is read by its label — not by an
+# image that happens to start with `postgres:`, which a `pgvector/...`
+# override would not.
+MODULE_IDS="$(cd "$ROOT" && node -e \
+    "import('./scripts/check-postgres-major.mjs').then((m) => console.log(m.MODULE_POSTGRES_IDS.join(' ')))")"
+[ -n "$MODULE_IDS" ] || { echo "precondition: could not read MODULE_POSTGRES_IDS"; exit 2; }
+PROFILE_ARGS=()
+for id in $MODULE_IDS; do PROFILE_ARGS+=(--profile "$id"); done
+ALL_JSON="$(cd "$ROOT" && docker compose -f docker-compose.yml "${PROFILE_ARGS[@]}" config --format json 2>/dev/null)" \
+    || { echo "precondition: docker compose config with the module profiles did not render"; exit 2; }
+LABELLED="$(json_of "$ALL_JSON" \
+    'Object.entries(cfg.services).filter(([, s]) => (s.labels || {})["org.gremion.postgres"]).map(([n, s]) => n + "=" + s.image).join("\n")')"
+EXPECTED_N=$(( $(wc -w <<<"$MODULE_IDS") + 1 ))
+[ "$(printf '%s\n' "$LABELLED" | sed '/^$/d' | wc -l)" -eq "$EXPECTED_N" ] \
+    || { echo "FAIL: expected ${EXPECTED_N} labelled Postgres services with all module profiles, got: $(printf '%s' "$LABELLED" | tr '\n' ' ')"; exit 1; }
+while IFS= read -r row; do
+    [ "${row#*=}" = "$WANT" ] \
+        || { echo "FAIL: rendered ${row%%=*} runs '${row#*=}', expected ${WANT}"; exit 1; }
+done <<<"$LABELLED"
+echo "  ok  rendered labelled Postgres services (${EXPECTED_N}, all module profiles): every one is ${WANT}"
+
 # ── 2. the MOUNT the rendered compose declares for the data volume ─────────
 # The tag and the mount are one contract: the 18+ entrypoint refuses to start
 # against a mount at the pre-18 path, so a right tag on a wrong mount is a
@@ -334,6 +357,13 @@ for bin in pg_dump psql; do
         || { echo "FAIL: ${bin} inside the running service reports '${V}', expected major ${MAJOR}"; exit 1; }
     echo "  ok  ${bin} inside the running service: ${V}"
 done
+
+# 5e. the RUNNING check (scripts/check-postgres-major-running.mjs, TASK-019)
+#     against this very container, by its org.gremion.postgres label: the
+#     proof starts the kernel server only, so no module profile is expected.
+RUNNING="$(cd "$ROOT" && node scripts/check-postgres-major-running.mjs --project "$PROJECT" --no-profiles 2>&1)" \
+    || { echo "FAIL: check-postgres-major-running.mjs on project ${PROJECT}:"; printf '%s\n' "$RUNNING"; exit 1; }
+echo "  ok  running check: $(printf '%s\n' "$RUNNING" | tail -1)"
 
 # ── 6. the ONE standalone backup-client image in the tree (k8s overlay) ────
 # k8s/** is frozen (D16) and out of the digest scan, so this reads the MAJOR

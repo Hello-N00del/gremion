@@ -15,8 +15,8 @@
 # Per-module PostgreSQL (D14) — the shape every <id>-postgres shares
 # ============================================================
 # One server per module, one database per (tenant, module) inside it (D13).
-# The databases are created by the provisioner (TASK-021), not here: each
-# server starts EMPTY. The image is the kernel's own pin — tag AND index
+# The per-(tenant, module) databases are created by the provisioner
+# (TASK-021), not here: each server starts with only the image's defaults. The image is the kernel's own pin — tag AND index
 # digest, asserted by `make lint-postgres-major` — and the data volume is
 # mounted at /var/lib/postgresql, the 18+ layout (see
 # docs/ops/postgres-major.md). Each service adds its own profile, label,
@@ -81,7 +81,9 @@ services:
     networks:
       - gremion-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      # over TCP: the entrypoint's temporary init server listens on no
+      # address, so "healthy" can never mean that server
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 5

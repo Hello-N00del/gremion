@@ -101,9 +101,13 @@ export const EXCLUDED = [
 // It is captured loosely on purpose — `@sha256:abc` is read, not skipped — so a
 // truncated or malformed digest is compared against the pin and reported as
 // drift instead of disappearing from the scan.
+//
+// The tag set includes the FLOATING distro codenames (`bookworm`, `trixie`,
+// `alpine3.22`, ...): each is a real registry tag that silently moves to the
+// newest major, so each is read and classified `unpinned` rather than missed.
 const DIGEST_TAIL = String.raw`(?:@([A-Za-z0-9]+:[A-Za-z0-9]*))?`
 const TAG_RE = new RegExp(
-  String.raw`(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
+  String.raw`(?<![\w./@-])postgres:(latest|alpine[\d.]*|bookworm|bullseye|buster|trixie|forky|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
 
 // The SECOND net, for the reference that has no tag at all for TAG_RE to match:
 // `image: postgres`, `image: "postgres"`, `image: postgres:` with nothing after
@@ -140,7 +144,7 @@ const UNTAGGED_IMAGE_RE =
 // already reads those. Matching them twice would report one stale default as two
 // findings — the narrower net is what keeps each occurrence counted exactly once.
 const SHELL_DEFAULT_RE = new RegExp(
-  String.raw`\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
+  String.raw`\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine[\d.]*|bookworm|bullseye|buster|trixie|forky|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
 
 // The FOURTH net (TASK-019): a REGISTRY-PREFIXED reference,
 // `docker.io/library/postgres:<tag>` or `registry:5000/mirror/postgres:<tag>`.
@@ -156,7 +160,7 @@ const SHELL_DEFAULT_RE = new RegExp(
 // counted twice.
 const REGISTRY_RE = new RegExp(
   String.raw`(?:(?<![\w./@:-])|(?<=\$\{[A-Za-z_][A-Za-z0-9_]*:?-))` +
-  String.raw`((?:[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?\/)+)postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` +
+  String.raw`((?:[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?\/)+)postgres:(latest|alpine[\d.]*|bookworm|bullseye|buster|trixie|forky|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` +
   DIGEST_TAIL, 'g')
 
 // Q3 (TASK-019): the file kinds in which a reference is a DECLARATION — the
@@ -164,14 +168,21 @@ const REGISTRY_RE = new RegExp(
 // workflow YAML, shell (.sh/.bats), templates, Dockerfiles, the extensionless
 // host CLI and the dotted env files (a shell assignment). Prose (.md) and code
 // comments (.mjs/.ts) stay major-only: they NAME the image, they do not pull it.
-const DECLARING = /\.(ya?ml|sh|bats|tmpl)$|(^|\/)Dockerfile[^/]*$|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
+const DECLARING = /\.(ya?ml|sh|bats|tmpl|Dockerfile|env)$|(^|\/)(Dockerfile|Containerfile)[^/]*$|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
 
 // Where the comment part of a line starts in a #-comment file kind, or
-// Infinity. `#` only opens a comment at the start or after whitespace, so a
-// shell `${VAR#prefix}` or a URL fragment is not taken for one.
+// Infinity. `#` only opens a comment at the start or after whitespace, and
+// never inside a single- or double-quoted string, so a shell `${VAR#prefix}`,
+// a URL fragment or `echo "a #b" && docker run ...` is not taken for one.
 function commentStart(line) {
-  const m = line.match(/(^|\s)#/)
-  return m ? m.index + m[1].length : Infinity
+  let quote = null
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (quote) { if (ch === quote) quote = null; continue }
+    if (ch === '"' || ch === "'") { quote = ch; continue }
+    if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) return i
+  }
+  return Infinity
 }
 
 export function scanText(path, text) {
@@ -217,6 +228,10 @@ export function classify(hit) {
   const major = hit.tag.split(/[.-]/)[0]
   if (!/^\d+$/.test(major)) return 'unpinned'
   if (Number(major) !== POSTGRES_MAJOR) return 'mismatched'
+  // On a declaration the tag is exactly `<major>-alpine`: `18-bookworm` or
+  // `18.6-alpine3.24` is the right major on a different image line, and with a
+  // digest it would even pass a digest-only check.
+  if (hit.decl && hit.tag !== `${POSTGRES_MAJOR}-alpine`) return 'tag-drift'
   // The major is right; now the content. A digest that is present and not the
   // pin is drift wherever it is written — prose included, because a record
   // naming another digest is a record of a different image. A missing digest
@@ -308,7 +323,7 @@ export function composeServices(text) {
     const ind = l.match(/^ */)[0].length
     if (svcIndent === null) svcIndent = ind
     if (ind <= svcIndent) {
-      const m = l.match(/^\s*([A-Za-z0-9._-]+):\s*(#.*)?$/)
+      const m = l.match(/^\s*["']?([A-Za-z0-9._-]+)["']?:\s*(&\S+\s*)?(#.*)?$/)
       cur = m && ind === svcIndent
         ? { name: m[1], line: i + 1, image: null, imageLine: null, label: null,
             profiles: [], merge: false, mounts: [], propIndent: null }
@@ -346,8 +361,20 @@ export function composeServices(text) {
 }
 
 function readLabel(svc, text) {
-  const m = text.match(/org\.gremion\.postgres["']?\s*[:=]\s*["']?([^"'\s,}\]]+)/)
+  const m = text.match(/(?:^|[\s"'{,-])org\.gremion\.postgres["']?\s*[:=]\s*["']?([^"'\s,}\]]+)/)
   if (m) svc.label = m[1]
+}
+
+/** The `image:` of the top-level `x-module-postgres` anchor, or null. */
+export function moduleAnchorImage(text) {
+  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''))
+  const start = lines.findIndex((l) => /^x-module-postgres:/.test(l))
+  if (start < 0) return null
+  for (let i = start + 1; i < lines.length && !/^[^\s#]/.test(lines[i]); i++) {
+    const m = lines[i].match(/^ {2}image:\s*(.*)$/)
+    if (m) return unquote(m[1])
+  }
+  return null
 }
 
 /** Top-level `volumes:` of one compose file: key -> fixed `name:` (or null). */
@@ -407,14 +434,30 @@ export function checkModuleSet(text) {
   const svcs = composeServices(text)
   const byName = new Map(svcs.map((s) => [s.name, s]))
   const volumeNames = composeVolumeNames(text)
-  if (byName.get('postgres')?.label !== 'kernel') {
+  const kernel = byName.get('postgres')
+  if (kernel?.label !== 'kernel') {
     problems.push(`the kernel postgres service is not labelled ${POSTGRES_LABEL}=kernel`)
+  }
+  // The IMAGE, not just its text: a module server that overrides the anchor
+  // with `pgvector/pgvector:pg16` carries no `postgres:` reference for the tag
+  // nets to read, so the set itself is held to the exact pinned reference.
+  if (kernel && kernel.image !== POSTGRES_IMAGE_REF) {
+    problems.push(`the kernel postgres service runs image ${kernel.image}, expected ${POSTGRES_IMAGE_REF}`)
+  }
+  const anchorImage = moduleAnchorImage(text)
+  if (anchorImage !== POSTGRES_IMAGE_REF) {
+    problems.push(`the x-module-postgres anchor runs image ${anchorImage}, expected ${POSTGRES_IMAGE_REF}`)
   }
   const seenVolumes = new Map()
   for (const id of MODULE_POSTGRES_IDS) {
     const name = `${id}-postgres`
     const s = byName.get(name)
     if (!s) { problems.push(`no ${name} service: the module set (D14) is ${MODULE_POSTGRES_IDS.join(', ')}`); continue }
+    if (s.image != null && s.image !== POSTGRES_IMAGE_REF) {
+      problems.push(`${name} runs image ${s.image}, expected ${POSTGRES_IMAGE_REF} (or none, taken from the anchor)`)
+    } else if (s.image == null && !s.merge) {
+      problems.push(`${name} declares no image and merges no anchor`)
+    }
     if (s.label !== `module:${id}`) {
       problems.push(`${name} is labelled ${POSTGRES_LABEL}=${s.label}, expected module:${id}`)
     }
@@ -522,7 +565,7 @@ export function checkDataMounts(files) {
 // and the dotted env templates (`.env.example`). A `postgres:<tag>` written into
 // one of those would be pinned by nobody.
 const TEXTUAL =
-  /\.(ya?ml|md|ts|mjs|js|sh|bats|json|tmpl)$|(^|\/)(Dockerfile|Makefile)|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
+  /\.(ya?ml|md|ts|mjs|js|sh|bats|json|tmpl|Dockerfile|env)$|(^|\/)(Dockerfile|Containerfile|Makefile)|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
 
 export function trackedTextFiles(root) {
   const out = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })

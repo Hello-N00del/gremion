@@ -800,11 +800,11 @@ test('the stale-fixture rule names exactly the two stale fixtures, not tree-clea
 
 // ── TDD-9: the suites cannot shrink silently ───────────────────────────────
 //
-// B37 shipped 38 tests here; TASK-019 added 29 (this one included: 30) and a
+// B37 shipped 38 tests here; TASK-019 added 35 (this one included: 36) and a
 // 15-test suite for the running check. A test deleted to get a red run green
 // would otherwise leave every remaining test passing and nothing to notice.
 const B37_TESTS = 38
-const TASK019_TESTS = 30
+const TASK019_TESTS = 36
 const RUNNING_TESTS = 15
 
 const countTests = (text) => (text.match(/^test\(/gm) ?? []).length
@@ -816,4 +816,76 @@ test('TDD-9: the suites hold at least 38 + the TASK-019 tests', () => {
   const running = countTests(readFileSync(join(ROOT, 'scripts/check-postgres-major-running.test.mjs'), 'utf8'))
   assert.ok(running >= RUNNING_TESTS,
     `check-postgres-major-running.test.mjs has ${running} tests, expected >= ${RUNNING_TESTS}`)
+})
+
+// ── review round 1 (TASK-019): the evasions the silent-failure lens built ───
+
+test('R1: floating codename tags are unpinned, bare or registry-prefixed', () => {
+  for (const tag of ['bookworm', 'trixie', 'bullseye', 'alpine3.22']) {
+    for (const line of [`    image: postgres:${tag}`, `FROM docker.io/library/postgres:${tag}`]) {
+      const path = line.startsWith('FROM') ? 'Dockerfile' : 'a.yml'
+      const problems = checkFiles([{ path, text: `${line}\n` }])
+      assert.equal(problems.length, 1, `${line}: ${problems.join('\n')}`)
+      assert.match(problems[0], /^unpinned: /, `${line}: ${problems[0]}`)
+    }
+  }
+})
+
+test('R1: on a declaration the tag must be exactly <major>-alpine, digest or not', () => {
+  for (const tag of [`${POSTGRES_MAJOR}-bookworm`, `${POSTGRES_MAJOR}.6-alpine3.24`, `${POSTGRES_MAJOR}`]) {
+    const problems = checkFiles([{ path: 'a.yml', text: `    image: postgres:${tag}@${POSTGRES_IMAGE_DIGEST}\n` }])
+    assert.equal(problems.length, 1, `${tag}: ${problems.join('\n')}`)
+    assert.match(problems[0], /^tag-drift: a\.yml:1/, problems[0])
+  }
+  // prose may still name the major any way it likes
+  assert.deepEqual(checkFiles([
+    { path: 'docs/x.md', text: `PostgreSQL \`postgres:${POSTGRES_MAJOR}\` family\n` },
+    { path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
+  ]), [])
+})
+
+test('R1: a # inside quotes does not start a comment', () => {
+  const hits = scanText('x.yml', `    command: echo "a #b" && docker run ${POSTGRES_IMAGE_TAG}`)
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0].decl, true)
+  assert.equal(classify(hits[0]), 'undigested')
+  // a real trailing comment still is one
+  assert.equal(scanText('x.yml', `    image: nginx  # was ${POSTGRES_IMAGE_TAG}`)[0].decl, false)
+})
+
+test('R1: Containerfile, *.Dockerfile and *.env files declare', () => {
+  for (const path of ['Containerfile', 'docker/pg.Dockerfile', 'deploy/prod.env']) {
+    const line = path.endsWith('.env') ? `PG_IMAGE=${POSTGRES_IMAGE_TAG}` : `FROM ${POSTGRES_IMAGE_TAG}`
+    assert.match(checkFiles([{ path, text: `${line}\n` }]).join('\n'), /^undigested: /, path)
+  }
+})
+
+test('R1: a module service or the anchor carrying a non-pinned image is refused', () => {
+  const own = moduleCompose().replace('  board-postgres:\n    <<: *module-postgres\n',
+    '  board-postgres:\n    <<: *module-postgres\n    image: pgvector/pgvector:pg16\n')
+  assert.match(checkModuleSet(own).join('\n'), /board-postgres runs image pgvector\/pgvector:pg16, expected postgres:/)
+  const anchor = moduleCompose().replace(`  image: ${POSTGRES_IMAGE_REF}\nservices:`, '  image: bitnami/postgresql:16\nservices:')
+  assert.notEqual(anchor, moduleCompose(), 'fixture did not apply')
+  assert.match(checkModuleSet(anchor).join('\n'), /x-module-postgres anchor runs image bitnami\/postgresql:16/)
+  const kernel = moduleCompose().replace(`    image: ${POSTGRES_IMAGE_REF}\n    labels:\n      org.gremion.postgres: "kernel"`,
+    `    image: pgvector/pgvector:pg18\n    labels:\n      org.gremion.postgres: "kernel"`)
+  assert.match(checkModuleSet(kernel).join('\n'), /the kernel postgres service runs image pgvector\/pgvector:pg18/)
+})
+
+test('R1: anchored and quoted service keys are parsed; a prefixed label key is not the label', () => {
+  const text = [
+    'services:',
+    '  extra-postgres: &ex',
+    '    image: ${X}',
+    '  "other-postgres":',
+    '    image: ${Y}',
+    '  db:',
+    `    image: ${POSTGRES_IMAGE_REF}`,
+    '    labels:',
+    '      x.org.gremion.postgres: "module:board"',
+  ].join('\n')
+  const s = composeServices(text)
+  assert.deepEqual(s.map((x) => x.name), ['extra-postgres', 'other-postgres', 'db'])
+  assert.equal(s[2].label, null)
+  assert.equal(checkComposeServices([{ path: 'docker-compose.yml', text }]).length, 2)
 })
