@@ -4,11 +4,14 @@
 # the control-plane registry, and the read-only public portal reader.
 # Environment variables are injected by docker-compose.
 #
-# IMPORTANT: An equivalent copy of this logic exists inline in
-# k8s/base/postgres/configmap.yaml (used by the K8s StatefulSet init
-# container). Both implementations are intentionally separate because
-# they run in different contexts (Docker vs Kubernetes). Any change to
-# the SQL logic here must be mirrored in the ConfigMap, and vice versa.
+# Runs in the KERNEL server only (the `postgres` service). The per-module
+# servers (`<id>-postgres`, D14) start empty and get no init script: their
+# per-(tenant, module) databases are created by the provisioner (D13).
+#
+# NOT MIRRORED: k8s/base/postgres/configmap.yaml carries an older inline copy
+# of this logic. k8s/** is frozen (D16) — not a release-1 target, not edited,
+# out of the postgres-major scan — so a change here is NOT carried over to it,
+# and that copy is no reference for this one.
 
 set -eu
 

@@ -51,8 +51,10 @@ every leaf Postgres declared by a module compose fragment
 board, calendar, content, finance, newsletter, vault — measured on the frozen
 extraction source StuRaOS `f276af59`, whose seventh `postgres:` image occurrence,
 `docker-compose.yml:21`, is the shared kernel server and not a leaf; files,
-messages and votes declare none), the kernel k8s manifests, the CI service
-containers, and the `pg_dump`/`pg_restore` client.
+messages and votes declare none), the six per-module servers of the kernel
+base compose (TASK-019, below), the CI service containers, and the
+`pg_dump`/`pg_restore` client. The kernel k8s manifests carry the pinned
+**tag** but not the digest: `k8s/**` is frozen (D16) and out of the scan set.
 
 There is **no dedicated backup image** in the kernel at `f7ac826` and none is
 planned: the host backup path runs its client **inside the pinned server image**
@@ -60,8 +62,33 @@ planned: the host backup path runs its client **inside the pinned server image**
 exec -T <service> pg_dump -U "$POSTGRES_USER" <db>`; `scripts/restore.sh:109,122`,
 `docker compose exec -T postgres psql`), so that client major follows this pin.
 The only standalone client image is
-`k8s/overlays/production/patches/backup-cronjob.yaml:31`, and it is pinned here
-too.
+`k8s/overlays/production/patches/backup-cronjob.yaml:31`; it carries the pinned
+tag, and since D16 froze `k8s/**` it is held to the tag only (by
+`postgres-major-proof.sh` step 6), not to the digest.
+
+### Per-module servers and the digest (TASK-019, 2026-09-25)
+
+D14 fixed one Postgres **per module** at the rebuild. The kernel base compose
+therefore declares, next to its own `postgres` (labelled
+`org.gremion.postgres: "kernel"`), one `<id>-postgres` per extraction-source
+leaf — board, calendar, content, finance, newsletter, vault — built from one
+`x-module-postgres` anchor (the pinned image, restart, logging, network,
+`pg_isready` healthcheck), each under `profiles: [<id>]`, labelled
+`org.gremion.postgres: "module:<id>"`, mounted at `/var/lib/postgresql`, and
+**empty**: the per-(tenant, module) databases (D13) are the provisioner's
+(TASK-021). TASK-040 re-sizes them and moves them to the state project.
+
+Their volumes are `gremion_module_<id>_pg_data`. They must **never** be
+`gremion_<id>_pg_data`: that is the name the extraction source's running stack
+gives each leaf's PG16 volume, so a PG18 server declared on it would mount
+live PG16 data. `checkModuleSet` refuses those names and `gremion_pg_data`.
+
+Every declaration carries the digest above (`POSTGRES_IMAGE_REF`). The guard's
+four nets read: a plain tag, a shell default `${V:-...}`, an untagged or
+digest-only `image:`, and (new) a registry-prefixed reference such as
+`docker.io/library/postgres:<tag>`, which was invisible before. A Postgres
+service whose `image:` is a variable, a pinned default included, is refused:
+the variable is exactly how the default gets overridden.
 
 ## The 18+ data-directory contract — read this before wiping anything
 
@@ -93,9 +120,10 @@ Where that mount is declared, all of it guarded by
 `node scripts/check-postgres-major.mjs` (`POSTGRES_DATA_MOUNT`,
 `checkDataMounts`), which runs inside `make lint`:
 
-- `docker-compose.yml:47`
+- `docker-compose.yml`, the kernel `postgres` service and each of the six
+  `<id>-postgres` module servers (TASK-019)
 - `k8s/base/postgres/statefulset.yaml:42` (init container) and `:79` (server) —
-  the two must agree
+  the two agree today; since D16 froze `k8s/**` they are out of the scan set
 - `test/host/integration/restore-proof.sh:81` and `:94`, so the restore fixture
   keeps mirroring the shipped compose
 
@@ -149,8 +177,18 @@ Two guards, both watched RED before they were trusted:
   tree is the pinned tag, every Postgres data mount is `POSTGRES_DATA_MOUNT`,
   this record and the code agree on the number, and an empty match set FAILS
   instead of passing.
-- `test/host/integration/postgres-major-proof.sh` — the running half, and the
-  only one that can tell a bootable stack from an unbootable one. It starts the
+- `node scripts/check-postgres-major-running.mjs --project <p>` (TASK-019) —
+  the running half **across the whole stack**. It finds the project's
+  containers by the `org.gremion.postgres` label, runs `SELECT version()` /
+  `server_version_num` and `SELECT uuid_extract_version(uuidv7())` inside each
+  one, and requires major 18 and UUID version 7. It fails on zero containers,
+  on any labelled compose service (profile-gated ones included) with no
+  running container, and on empty or failing psql output. Measured 2026-09-25
+  on a scratch stack with all six profiles: seven containers, each
+  `PostgreSQL 18.6 on x86_64-pc-linux-musl`, each `uuid_version=7`.
+- `test/host/integration/postgres-major-proof.sh` — the running half for the
+  kernel server, and the only one that can tell a bootable stack from an
+  unbootable one. It starts the
   base compose's `postgres` service with its real mounts and init script, then
   reads back `server_version_num`, `data_directory`, `PG_VERSION` on disk, the
   databases `docker/postgres/init-databases.sh` created, and the `pg_dump` /
@@ -175,6 +213,9 @@ a one-off measurement, not a guard: the standing signal remains the workflow,
 whenever Actions are re-enabled.
 
 ## Still open: the six leaf fragments — re-enter this unit after D6
+
+(TASK-019 added the six per-module servers to the **kernel** base compose. The
+module repos' own fragments below are still a separate, later step.)
 
 The post-condition "pinned in **every** leaf Postgres declared by a module
 compose fragment" is **not satisfied yet, and cannot be**: no
