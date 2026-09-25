@@ -8,7 +8,7 @@
 // environment is the value tenant-domain.ts receives.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { tdAdd } = vi.hoisted(() => ({ tdAdd: vi.fn(async () => ({ host: 'x' })) }))
+const { tdAdd } = vi.hoisted(() => ({ tdAdd: vi.fn(async (..._args: unknown[]) => ({ host: 'x' })) }))
 vi.mock('./control-db', () => ({ getControlDb: () => ({ __control: true }) }))
 vi.mock('./tenant-domain', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./tenant-domain')>()),
