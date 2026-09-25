@@ -7,7 +7,11 @@
 
   export let smtp: { configured: boolean; host: string; port: number; from_address: string; from_name: string }
 
-  $: brand = resolveBrand(page.data.brand)
+  // TASK-032: the brand is read in the template (placeholder below), not in a
+  // legacy `$:` statement. `$:` tracks only compile-time component variables,
+  // so it would never re-run on a `$app/state` page change; a template
+  // expression is a render effect and tracks the rune-backed `page`.
+  // Pinned by src/routes/settings/tabs/brand-reactivity.test.ts.
 
   let host = smtp.host
   let port = smtp.port
@@ -125,7 +129,7 @@
       </div>
       <div class="space-y-1">
         <Label for="e-name">Absender-Name</Label>
-        <Input id="e-name" bind:value={fromName} placeholder={brand.product} />
+        <Input id="e-name" bind:value={fromName} placeholder={resolveBrand(page.data.brand).product} />
       </div>
     </div>
 
