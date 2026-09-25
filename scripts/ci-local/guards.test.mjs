@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { run } from './lib/run.mjs'
 import {
   gitleaksCommand,
   runGitleaksArm,
@@ -16,6 +17,8 @@ import {
   runRunnerPolicyArm,
   runAllArms,
   listDockerfiles,
+  isSafeRef,
+  runSteps,
   guardsResultFileName,
   defaultGuardsOutDir,
   main,
@@ -31,20 +34,57 @@ function withCleanExitCode(fn) {
 }
 
 function fakeRun(map) {
-  // map: command substring -> {exitCode, output, timedOut, spawnError}
+  // map: command substring -> {exitCode, output, timedOut, spawnError}.
+  // Guard commands are argv arrays (no shell); match on the joined words.
   return (command) => {
+    const text = Array.isArray(command) ? command.join(' ') : command
     for (const [needle, result] of Object.entries(map)) {
-      if (command.includes(needle)) return result
+      if (text.includes(needle)) return result
     }
-    throw new Error(`fakeRun: no fixture for command: ${command}`)
+    throw new Error(`fakeRun: no fixture for command: ${text}`)
   }
 }
 
 test('gitleaksCommand always scans "." with a RELATIVE --config: the repo comes from the process cwd the caller runs it in, never from a path embedded in the command string, so an absolute-vs-relative repoPath can never change which .gitleaks.toml allowlist paths match (HIGH fix)', () => {
   const dirCmd = gitleaksCommand(undefined, '/tmp/report.json')
-  assert.equal(dirCmd, 'gitleaks dir "." --config ".gitleaks.toml" --redact --exit-code 0 --report-format json --report-path "/tmp/report.json"')
+  assert.deepEqual(dirCmd, ['gitleaks', 'dir', '.', '--config', '.gitleaks.toml', '--redact', '--exit-code', '0', '--report-format', 'json', '--report-path', '/tmp/report.json'])
   const gitCmd = gitleaksCommand('main')
-  assert.equal(gitCmd, 'gitleaks git "." --log-opts "main..HEAD" --config ".gitleaks.toml" --redact --exit-code 1')
+  assert.deepEqual(gitCmd, ['gitleaks', 'git', '.', '--log-opts', 'main..HEAD', '--config', '.gitleaks.toml', '--redact', '--exit-code', '1'])
+})
+
+test('isSafeRef accepts branch, remote, tag, SHA and rev-suffix refs, and refuses whitespace, a leading "-", ".." and shell metacharacters (CRITICAL fix)', () => {
+  for (const ok of ['main', 'master', 'origin/main', 'release-1/local-integration', 'HEAD~1', 'HEAD^', '66acee6', 'v1.2.3', 'main@{u}']) {
+    assert.equal(isSafeRef(ok), true, ok)
+  }
+  for (const bad of ['$(touch pwned)', 'main' + String.fromCharCode(96) + 'id' + String.fromCharCode(96), 'a b', '--output=/tmp/x', '-x', 'a..b', 'main;id', 'main|id', '', undefined]) {
+    assert.equal(isSafeRef(bad), false, String(bad))
+  }
+})
+
+test('runGitleaksArm (diff-scoped) refuses an unsafe --base before git or gitleaks ever sees it (CRITICAL fix)', () => {
+  const never = () => {
+    throw new Error('must never run anything for an unsafe base ref')
+  }
+  const r = runGitleaksArm('kernel', '/repo', '$(touch pwned)', { runFn: never, verifyBaseRefFn: never })
+  assert.equal(r.status, 'FAIL')
+  assert.match(r.reason, /not a plain ref name/)
+})
+
+test('runGitleaksArm (diff-scoped), REAL binary: --base reaches gitleaks as ONE argv element, spawned with no shell', () => {
+  const root = makeSecretRepo()
+  try {
+    let seen
+    const spy = (command, cwd, opts) => {
+      seen = command
+      return run(command, cwd, opts)
+    }
+    const r = runGitleaksArm('kernel', root, 'HEAD', { runFn: spy })
+    assert.ok(Array.isArray(seen))
+    assert.equal(seen[seen.indexOf('--log-opts') + 1], 'HEAD..HEAD')
+    assert.equal(r.status, 'PASS', JSON.stringify(r))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('runGitleaksArm (diff-scoped, --base given) is PASS on exit 0, FAIL on a non-zero exit (a leak found), via an injected runFn', () => {
@@ -143,8 +183,7 @@ test('runGitleaksArm (whole-tree) FAILs when the report is missing despite a rep
 
 test('runGitleaksArm (whole-tree) FAILs when the report file is not valid JSON (never coerced to "0 findings")', () => {
   const runFn = (command) => {
-    const m = command.match(/--report-path "([^"]+)"/)
-    writeFileSync(m[1], 'not json at all {{{')
+    writeFileSync(command[command.indexOf('--report-path') + 1], 'not json at all {{{')
     return { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null }
   }
   const root = makeSecretRepo()
@@ -176,9 +215,8 @@ test('runGitleaksArm (whole-tree, no --base) filters the JSON report down to git
     // but that can never reach a merge.
     writeFileSync(join(root, 'local-only.json'), '{"token":"whatever"}')
     const runFn = (command) => {
-      const m = command.match(/--report-path "([^"]+)"/)
       writeFileSync(
-        m[1],
+        command[command.indexOf('--report-path') + 1],
         JSON.stringify([
           { File: join(root, 'local-only.json'), RuleID: 'generic-api-key' },
           { File: join(root, '.env'), RuleID: 'generic-api-key' }, // this one IS tracked
@@ -199,8 +237,7 @@ test('runGitleaksArm (whole-tree, no --base) is PASS when every raw finding is i
   try {
     writeFileSync(join(root, 'local-only.json'), '{"token":"whatever"}')
     const runFn = (command) => {
-      const m = command.match(/--report-path "([^"]+)"/)
-      writeFileSync(m[1], JSON.stringify([{ File: join(root, 'local-only.json'), RuleID: 'generic-api-key' }]))
+      writeFileSync(command[command.indexOf('--report-path') + 1], JSON.stringify([{ File: join(root, 'local-only.json'), RuleID: 'generic-api-key' }]))
       return { exitCode: 0, output: 'leaks found: 1', timedOut: false, spawnError: null }
     }
     const r = runGitleaksArm('kernel', root, undefined, { runFn })
@@ -282,7 +319,7 @@ test('runKnownSecretsArm is FAIL when scanRepo throws (0 tracked files) — neve
 
 test('runVerticalNativeKnownSecretsArm runs StuRaOS\'s OWN check-no-known-secrets.mjs (its 2 real incident digests), PASS/FAIL by the injected command\'s exit code (HIGH fix: the kernel-ported known-secrets.mjs arm can never fail on its own empty denylist, so StuRaOS\'s real incidents need its own script run too)', () => {
   const pass = runVerticalNativeKnownSecretsArm('/vertical', {
-    runFn: fakeRun({ 'check-no-known-secrets': { exitCode: 0, output: 'ok', timedOut: false, spawnError: null } }),
+    runFn: fakeRun({ 'check-no-known-secrets': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null } }),
   })
   assert.equal(pass.status, 'PASS')
   assert.equal(pass.arm, 'known-secrets-vertical-native')
@@ -293,7 +330,7 @@ test('runVerticalNativeKnownSecretsArm runs StuRaOS\'s OWN check-no-known-secret
 })
 
 test('runCveFloorArm is PASS/FAIL by the injected command\'s exit code', () => {
-  const pass = runCveFloorArm('/kernel', { runFn: fakeRun({ 'check-cve-floors': { exitCode: 0, output: 'ok', timedOut: false, spawnError: null } }) })
+  const pass = runCveFloorArm('/kernel', { runFn: fakeRun({ 'check-cve-floors': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null } }) })
   assert.equal(pass.status, 'PASS')
   const fail = runCveFloorArm('/kernel', { runFn: fakeRun({ 'check-cve-floors': { exitCode: 1, output: 'bad', timedOut: false, spawnError: null } }) })
   assert.equal(fail.status, 'FAIL')
@@ -303,11 +340,55 @@ test('runOverridesDriftArm points --kernel at the given kernel PATH\'s pnpm-work
   let seenCommand
   const runFn = (command) => {
     seenCommand = command
-    return { exitCode: 0, output: 'ok', timedOut: false, spawnError: null }
+    return { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null }
   }
   const r = runOverridesDriftArm('/vertical', '/my/kernel/worktree', { runFn })
   assert.equal(r.status, 'PASS')
-  assert.match(seenCommand, /--kernel "[/\\]my[/\\]kernel[/\\]worktree[/\\]pnpm-workspace\.yaml"/)
+  // argv, no shell: the path is its own element, never spliced into a string.
+  assert.ok(Array.isArray(seenCommand))
+  const k = seenCommand[seenCommand.indexOf('--kernel') + 1]
+  assert.match(k, /[/\\]my[/\\]kernel[/\\]worktree[/\\]pnpm-workspace\.yaml$/)
+})
+
+test('runOverridesDriftArm resolves a RELATIVE kernel path against the caller, not against the vertical cwd it runs in', () => {
+  let seenCommand
+  const runFn = (command) => {
+    seenCommand = command
+    return { exitCode: 0, output: '# tests 3\n', timedOut: false, spawnError: null }
+  }
+  runOverridesDriftArm('/vertical', 'rel/kernel', { runFn })
+  assert.equal(seenCommand[seenCommand.indexOf('--kernel') + 1], join(process.cwd(), 'rel', 'kernel', 'pnpm-workspace.yaml'))
+})
+
+test('runSteps stops at the first failing step (like && with no shell) and FAILs a node --test step that collected 0 tests', () => {
+  const calls = []
+  const runFn = (argv) => {
+    calls.push(argv[1])
+    if (argv[1] === 'fail') return { exitCode: 2, output: 'boom', timedOut: false, spawnError: null }
+    if (argv[1] === 'vacuous') return { exitCode: 0, output: '1..0\n# tests 0\n# pass 0\n', timedOut: false, spawnError: null }
+    return { exitCode: 0, output: '# tests 4\n# pass 4\n', timedOut: false, spawnError: null }
+  }
+  const failed = runSteps([{ argv: ['node', 'fail'] }, { argv: ['node', 'after'] }], '/x', runFn, { timeoutMs: 1000 })
+  assert.equal(failed.exitCode, 2)
+  assert.deepEqual(calls, ['fail'])
+
+  const vacuous = runSteps([{ argv: ['node', 'vacuous'], tap: true }, { argv: ['node', 'guard'] }], '/x', runFn, { timeoutMs: 1000 })
+  assert.equal(vacuous.exitCode, 1)
+  assert.match(vacuous.reason, /collected 0 tests/)
+
+  const ok = runSteps([{ argv: ['node', 'tests'], tap: true }, { argv: ['node', 'guard'] }], '/x', runFn, { timeoutMs: 1000 })
+  assert.equal(ok.exitCode, 0)
+})
+
+test('runCveFloorArm FAILs when its own node --test step collected 0 tests (node --test exits 0 on an empty file)', () => {
+  const r = runCveFloorArm('/kernel', {
+    runFn: fakeRun({
+      'check-cve-floors.test.mjs': { exitCode: 0, output: '# tests 0\n', timedOut: false, spawnError: null },
+      'check-cve-floors.mjs': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null },
+    }),
+  })
+  assert.equal(r.status, 'FAIL')
+  assert.match(r.reason, /collected 0 tests/)
 })
 
 function makeWorkflowRepo(files) {
@@ -372,8 +453,8 @@ test('runAllArms: overall exit is non-zero when even one arm fails, and every ar
     const runFn = fakeRun({
       gitleaks: { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null },
       'check-cve-floors': { exitCode: 1, output: 'FLOOR BROKEN', timedOut: false, spawnError: null }, // forced FAIL
-      'check-overrides-drift': { exitCode: 0, output: 'ok', timedOut: false, spawnError: null },
-      'check-no-known-secrets': { exitCode: 0, output: 'ok', timedOut: false, spawnError: null },
+      'check-overrides-drift': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null },
+      'check-no-known-secrets': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null },
     })
     const { arms, overallExit } = runAllArms({ kernelPath: kernel, sturaosPath: vertical, waiversPath: undefined, runFn })
     assert.equal(overallExit, 1)

@@ -42,12 +42,13 @@
 // path is handed in, so a scratch clone works exactly like a real checkout.
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join, dirname, relative, resolve, isAbsolute } from 'node:path'
 import { walkFiles } from './lib/discover.mjs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { run } from './lib/run.mjs'
+import { parseNodeTest } from './lib/parse-output.mjs'
 import { headInfo } from './lib/git.mjs'
 import { scanRepo as knownSecretsScanRepo, trackedFiles, loadDenylistFile } from './known-secrets.mjs'
 import { evaluateRepo as runnerPolicyEvaluateRepo, loadWaivers, todayIso } from './runner-policy.mjs'
@@ -82,11 +83,54 @@ const HERE = dirname(fileURLToPath(import.meta.url))
  * git-tracked files before deciding pass/fail.
  */
 export function gitleaksCommand(base, reportPath) {
+  // An argv ARRAY, spawned with no shell (lib/run.mjs). CRITICAL fix: this
+  // used to be a string with ${base} and the report path spliced in, run
+  // with shell:true — a git ref may legally contain `$(`, `)` and
+  // backticks, so a CI-supplied --base could execute code on the runner.
   if (base) {
-    return `gitleaks git "." --log-opts "${base}..HEAD" --config ".gitleaks.toml" --redact --exit-code 1`
+    return ['gitleaks', 'git', '.', '--log-opts', `${base}..HEAD`, '--config', '.gitleaks.toml', '--redact', '--exit-code', '1']
   }
-  return `gitleaks dir "." --config ".gitleaks.toml" --redact --exit-code 0 --report-format json --report-path "${reportPath}"`
+  return ['gitleaks', 'dir', '.', '--config', '.gitleaks.toml', '--redact', '--exit-code', '0', '--report-format', 'json', '--report-path', reportPath]
 }
+
+/**
+ * A base ref this guard is willing to hand to git/gitleaks. Even with no
+ * shell involved, gitleaks splits --log-opts on whitespace and passes the
+ * pieces to `git log`, so a ref with a space or a leading `-` could smuggle
+ * a git option (`--output=<file>`). Accepts branch names, remote refs, tags,
+ * SHAs and rev suffixes (`~N`, `^`, `@{u}`); rejects whitespace, a leading
+ * `-`, `..` (the caller builds the range itself) and shell metacharacters.
+ */
+export function isSafeRef(ref) {
+  return typeof ref === 'string' && /^[A-Za-z0-9_][A-Za-z0-9._/~^@{}+-]*$/.test(ref) && !ref.includes('..')
+}
+
+/**
+ * Run argv steps in order, like `a && b` but with no shell: stop at the
+ * first step that fails. A step with `tap: true` is a `node --test` run and
+ * must also report at least one collected test — `node --test` exits 0 on a
+ * file that registers nothing, the vacuity the Makefile's
+ * lint-extraction-source check exists for.
+ *
+ * @returns {{ exitCode, output, timedOut, spawnError, reason? }}
+ */
+export function runSteps(steps, cwd, runFn, { timeoutMs }) {
+  let output = ''
+  for (const step of steps) {
+    const r = runFn(step.argv, cwd, { timeoutMs })
+    output += (output ? '\n' : '') + (r.output ?? '')
+    if (r.spawnError || r.timedOut || r.exitCode !== 0) return { ...r, output }
+    if (step.tap) {
+      const tap = parseNodeTest(r.output ?? '')
+      if (tap.collected === 0) {
+        return { exitCode: 1, output, timedOut: false, spawnError: null, reason: `${step.argv.slice(1).join(' ')} collected 0 tests — a vacuous test run is a failure` }
+      }
+    }
+  }
+  return { exitCode: 0, output, timedOut: false, spawnError: null }
+}
+
+const NODE = process.execPath
 
 /**
  * Read a gitleaks JSON report written by a dir-mode run. Called ONLY after
@@ -159,6 +203,16 @@ export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyB
   }
 
   if (base) {
+    // Refuse a ref that could carry an option or a shell payload before it
+    // reaches git or gitleaks at all (see isSafeRef).
+    if (!isSafeRef(base)) {
+      return {
+        arm: 'secret-scan',
+        repo: repoLabel,
+        status: 'FAIL',
+        reason: `base ref ${JSON.stringify(base)} is not a plain ref name (whitespace, a leading '-', '..' or shell metacharacters) — refused`,
+      }
+    }
     // Fail closed on an undefined range instead of vacuously scanning zero
     // commits — see baseRefResolves' header.
     if (!verifyBaseRefFn(absRepoPath, base)) {
@@ -186,16 +240,34 @@ export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyB
   }
 
   // Whole-tree mode: run, then filter the report to git-tracked files only.
-  const reportPath = join(tmpdir(), `ci-local-gitleaks-${repoLabel}-${process.pid}-${Date.now()}.json`)
+  // A private, freshly created directory (mkdtemp, mode 0700 on POSIX), not
+  // a predictable name in the shared tmpdir that another local user could
+  // pre-create as a directory or symlink.
+  const reportDir = mkdtempSync(join(tmpdir(), 'ci-local-gitleaks-'))
+  const reportPath = join(reportDir, 'report.json')
   const command = gitleaksCommand(undefined, reportPath)
   const { exitCode, output, timedOut, spawnError } = runFn(command, absRepoPath, { timeoutMs: 180_000 })
-  if (spawnError) return { arm: 'secret-scan', repo: repoLabel, status: 'FAIL', reason: `could not run gitleaks: ${spawnError.message}` }
-  if (timedOut) return { arm: 'secret-scan', repo: repoLabel, status: 'FAIL', reason: 'gitleaks timed out' }
+  const cleanup = () => {
+    try {
+      rmSync(reportDir, { recursive: true, force: true })
+    } catch {
+      /* best effort cleanup */
+    }
+  }
+  if (spawnError) {
+    cleanup()
+    return { arm: 'secret-scan', repo: repoLabel, status: 'FAIL', reason: `could not run gitleaks: ${spawnError.message}` }
+  }
+  if (timedOut) {
+    cleanup()
+    return { arm: 'secret-scan', repo: repoLabel, status: 'FAIL', reason: 'gitleaks timed out' }
+  }
   // HIGH fix: dir mode runs with --exit-code 0, so a non-zero exit can ONLY
   // mean gitleaks itself errored (bad config, bad path, ...) — never "leaks
   // found" (that is neutralized by --exit-code 0) and never "clean". The
   // previous version ignored exitCode entirely in this branch.
   if (exitCode !== 0) {
+    cleanup()
     return {
       arm: 'secret-scan',
       repo: repoLabel,
@@ -205,6 +277,7 @@ export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyB
     }
   }
   if (hasFatalLog(output)) {
+    cleanup()
     return { arm: 'secret-scan', repo: repoLabel, status: 'FAIL', reason: 'gitleaks logged an ERR/FTL line despite exiting 0 — treated as a failure', output }
   }
 
@@ -214,11 +287,7 @@ export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyB
   } catch (err) {
     return { arm: 'secret-scan', repo: repoLabel, status: 'FAIL', reason: `could not read gitleaks report: ${err.message}`, output }
   } finally {
-    try {
-      rmSync(reportPath, { force: true })
-    } catch {
-      /* best effort cleanup */
-    }
+    cleanup()
   }
 
   let tracked
@@ -296,17 +365,24 @@ export function runKnownSecretsArm(repoLabel, repoPath, { denylistPath } = {}) {
  * from the product (the open-core boundary §5 Q2 exists to protect).
  */
 export function runVerticalNativeKnownSecretsArm(sturaosPath, { runFn = run } = {}) {
-  const command = 'node --test --test-reporter=tap scripts/check-no-known-secrets.test.mjs && node scripts/check-no-known-secrets.mjs'
-  const { exitCode, output, timedOut, spawnError } = runFn(command, sturaosPath, { timeoutMs: 60_000 })
-  if (spawnError) return { arm: 'known-secrets-vertical-native', repo: 'vertical', status: 'FAIL', reason: `could not run: ${spawnError.message}` }
-  if (timedOut) return { arm: 'known-secrets-vertical-native', repo: 'vertical', status: 'FAIL', reason: 'timed out' }
-  return {
-    arm: 'known-secrets-vertical-native',
-    repo: 'vertical',
-    status: exitCode === 0 ? 'PASS' : 'FAIL',
-    reason: exitCode === 0 ? undefined : 'check-no-known-secrets.mjs failed (see output)',
-    output,
-  }
+  return runScriptArm('known-secrets-vertical-native', 'vertical', resolve(sturaosPath), runFn, [
+    { argv: [NODE, '--test', '--test-reporter=tap', 'scripts/check-no-known-secrets.test.mjs'], tap: true },
+    { argv: [NODE, 'scripts/check-no-known-secrets.mjs'] },
+  ])
+}
+
+/**
+ * Shared shape of the subprocess arms (native known-secrets, cve-floor,
+ * overrides-drift): the script's own test first, then the guard, as argv
+ * steps with no shell (see runSteps).
+ */
+function runScriptArm(arm, repo, cwd, runFn, steps) {
+  const { exitCode, output, timedOut, spawnError, reason } = runSteps(steps, cwd, runFn, { timeoutMs: 60_000 })
+  if (spawnError) return { arm, repo, status: 'FAIL', reason: `could not run: ${spawnError.message}`, output }
+  if (timedOut) return { arm, repo, status: 'FAIL', reason: 'timed out', output }
+  if (exitCode === 0) return { arm, repo, status: 'PASS', output }
+  const script = steps[steps.length - 1].argv[1]
+  return { arm, repo, status: 'FAIL', reason: reason ?? `${script} (or its own test) failed — see output`, output }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,11 +398,10 @@ export function runCveFloorArm(kernelPath, { runFn = run } = {}) {
   // still falls back to the bare exit-code arm without it), but forcing TAP
   // keeps the declared-vs-collected check meaningful for every node-test
   // suite this package invokes.
-  const command = 'node --test --test-reporter=tap scripts/check-cve-floors.test.mjs && node scripts/check-cve-floors.mjs'
-  const { exitCode, output, timedOut, spawnError } = runFn(command, kernelPath, { timeoutMs: 60_000 })
-  if (spawnError) return { arm: 'cve-floor', repo: 'kernel', status: 'FAIL', reason: `could not run: ${spawnError.message}` }
-  if (timedOut) return { arm: 'cve-floor', repo: 'kernel', status: 'FAIL', reason: 'timed out' }
-  return { arm: 'cve-floor', repo: 'kernel', status: exitCode === 0 ? 'PASS' : 'FAIL', reason: exitCode === 0 ? undefined : 'check-cve-floors failed (see output)', output }
+  return runScriptArm('cve-floor', 'kernel', resolve(kernelPath), runFn, [
+    { argv: [NODE, '--test', '--test-reporter=tap', 'scripts/check-cve-floors.test.mjs'], tap: true },
+    { argv: [NODE, 'scripts/check-cve-floors.mjs'] },
+  ])
 }
 
 // ---------------------------------------------------------------------------
@@ -334,12 +409,13 @@ export function runCveFloorArm(kernelPath, { runFn = run } = {}) {
 // ---------------------------------------------------------------------------
 
 export function runOverridesDriftArm(sturaosPath, kernelPath, { runFn = run } = {}) {
-  const kernelWorkspace = join(kernelPath, 'pnpm-workspace.yaml')
-  const command = `node --test --test-reporter=tap scripts/check-overrides-drift.test.mjs && node scripts/check-overrides-drift.mjs --kernel "${kernelWorkspace}"`
-  const { exitCode, output, timedOut, spawnError } = runFn(command, sturaosPath, { timeoutMs: 60_000 })
-  if (spawnError) return { arm: 'overrides-drift', repo: 'vertical', status: 'FAIL', reason: `could not run: ${spawnError.message}` }
-  if (timedOut) return { arm: 'overrides-drift', repo: 'vertical', status: 'FAIL', reason: 'timed out' }
-  return { arm: 'overrides-drift', repo: 'vertical', status: exitCode === 0 ? 'PASS' : 'FAIL', reason: exitCode === 0 ? undefined : 'check-overrides-drift failed (see output)', output }
+  // Absolute, so the vertical cwd never re-resolves a relative kernel path,
+  // and passed as its own argv element, never spliced into a shell string.
+  const kernelWorkspace = join(resolve(kernelPath), 'pnpm-workspace.yaml')
+  return runScriptArm('overrides-drift', 'vertical', resolve(sturaosPath), runFn, [
+    { argv: [NODE, '--test', '--test-reporter=tap', 'scripts/check-overrides-drift.test.mjs'], tap: true },
+    { argv: [NODE, 'scripts/check-overrides-drift.mjs', '--kernel', kernelWorkspace] },
+  ])
 }
 
 // ---------------------------------------------------------------------------

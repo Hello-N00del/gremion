@@ -16,6 +16,22 @@ test('run reports a non-zero exit code and combined stdout+stderr on a failing c
   assert.match(r.output, /boom/)
 })
 
+test('run with an argv ARRAY spawns without a shell: shell metacharacters in an argument stay inert data (CRITICAL fix)', () => {
+  const payload = '$(echo INJECTED)`echo INJECTED2`; echo INJECTED3 && echo INJECTED4'
+  const r = run([process.execPath, '-e', 'console.log(JSON.stringify(process.argv[1]))', payload], process.cwd())
+  assert.equal(r.exitCode, 0)
+  assert.equal(JSON.parse(r.output.trim()), payload, 'the argument must arrive byte-for-byte, never shell-expanded')
+
+  let seen
+  run(['tool', 'a b', '$(x)'], process.cwd(), {
+    spawnFn: (file, args, opts) => {
+      seen = { file, args, shell: opts.shell }
+      return { stdout: '', stderr: '', status: 0, signal: null, error: null }
+    },
+  })
+  assert.deepEqual(seen, { file: 'tool', args: ['a b', '$(x)'], shell: false })
+})
+
 test('run is RED (exitCode 1, spawnError set) on a missing tool, via an injected spawnFn — never exitCode 0', () => {
   const fakeEnoent = () => ({
     stdout: '',

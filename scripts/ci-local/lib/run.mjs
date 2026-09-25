@@ -34,23 +34,35 @@ function cleanEnv() {
 }
 
 /**
- * Run `command` (a shell string — suites.json commands are plain shell, e.g.
- * "pnpm run test:unit" or "node --test x.test.mjs && node x.mjs") in `cwd`.
+ * Run `command` in `cwd`. Two forms, and the difference is a security
+ * boundary:
+ *
+ *  - an ARRAY `[file, ...args]` is spawned directly, with NO shell. Every
+ *    command that carries a runtime value (a --base ref, a repo path, a
+ *    report path) must use this form: nothing in `args` is ever parsed by a
+ *    shell, so a git ref named `$(touch x)` or a path holding backticks
+ *    stays inert data (CRITICAL fix: guards.mjs used to interpolate --base
+ *    and paths into a shell string run with shell:true).
+ *  - a STRING is run through the shell. Only for suites.json commands,
+ *    which are committed, reviewed text with no runtime value spliced in
+ *    (they need the shell for `pnpm` shims and `&&`).
  *
  * @returns {{ exitCode: number, output: string, timedOut: boolean, spawnError: Error|null }}
  *   exitCode is 1 on a timeout or a spawn error (missing tool, bad cwd) —
  *   never 0 — so a caller that only checks exitCode still fails closed.
  */
 export function run(command, cwd, { timeoutMs = DEFAULT_TIMEOUT_MS, spawnFn = spawnSync } = {}) {
-  const result = spawnFn(command, {
+  const options = {
     cwd,
-    shell: true,
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
     env: cleanEnv(),
-  })
+  }
+  const result = Array.isArray(command)
+    ? spawnFn(command[0], command.slice(1), { ...options, shell: false })
+    : spawnFn(command, { ...options, shell: true })
 
   const stdout = result.stdout ?? ''
   const stderr = result.stderr ?? ''
