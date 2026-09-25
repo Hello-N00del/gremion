@@ -12,7 +12,7 @@
   },
   "homepage": "https://github.com/Hello-N00del/gremion/tree/main/packages/generated-clients",
   "bugs": "https://github.com/Hello-N00del/gremion/issues",
-  "files": ["dist", "src", "!src/**/*.test.ts", "README.md", "LICENSE"],
+  "files": ["dist", "src", "!src/**/*.test.ts", "!src/consumer-fixture/**", "README.md", "LICENSE"],
   "exports": {
     "./registry": {
       "import": "./src/registry.ts"

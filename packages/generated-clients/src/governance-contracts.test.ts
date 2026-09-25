@@ -242,6 +242,20 @@ describe('T8 — consumer fixture typechecks both import shapes', () => {
     const build = JSON.parse(readFileSync(join(PKG_DIR, 'tsconfig.build.json'), 'utf8'))
     expect(build.exclude).toContain('src/consumer-fixture/**')
   })
+
+  it('the consumer fixtures are not shipped in the npm tarball either (files ships src/)', () => {
+    // the real post-condition: ask npm what it would pack, not the manifest
+    const args = ['pack', '--dry-run', '--json', '--ignore-scripts']
+    const out = execFileSync(
+      process.platform === 'win32' ? 'cmd' : 'npm',
+      process.platform === 'win32' ? ['/d', '/s', '/c', 'npm', ...args] : args,
+      { cwd: PKG_DIR, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+    const packed: string[] = JSON.parse(out)[0].files.map((f: { path: string }) => f.path)
+    // vacuity guard: the tarball does carry the generated client from src/
+    expect(packed).toContain('src/generated/governance-client.ts')
+    expect(packed.filter((p) => p.startsWith('src/consumer-fixture/'))).toEqual([])
+  }, 120_000)
 })
 
 describe('T9 — breaking demo: a required response field removed is RED at 1.0.0, GREEN at 2.0.0', () => {
