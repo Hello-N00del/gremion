@@ -1,0 +1,85 @@
+# Gremion governance contract (TASK-083)
+
+## 1. What lives here
+
+- `openapi.gov.json` — OpenAPI 3.1, the governance service's own `/api/v1`
+  HTTP surface: meetings, agenda-sections, agenda-items, invitations (with
+  notice-override and recipients), and motions (with motion-admissions).
+- `asyncapi.gov.json` — AsyncAPI 3.0, the governance lifecycle event class:
+  meeting scheduled/rescheduled/cancelled/opened/closed, invitation.issued,
+  notice.overridden, and motion submitted/withheld/admitted/deferred.
+- `fixtures/` — self-contained oasdiff fixtures for the breaking-change demo
+  (brief §1, acceptance item 3): a required response field removed at the
+  same version is RED, and GREEN once the version is bumped.
+
+Built from `DOMAIN-gremion.md` v0.4's `DB-GOV-*` rows (§ "Governance core"),
+not from `release-1`'s `contracts/kernel/openapi.governance.json` routes —
+see §2 below.
+
+This is **distinct** from `contracts/kernel/openapi.governance.json`, which
+is the kernel's own committee surface (org-units, committee roles) and is
+out of scope for this package; `boundary-lint` scans `contracts/kernel/`
+only, so this directory triggers no route-coverage check there.
+
+## 2. Release-1 reuse — checked, not taken
+
+`B5-governance-320-subsystem` (commit `45f5bdd`, ref `…/r3b` @ `5f0d420`)
+touched only `contracts/kernel/openapi.governance.json`, adding a mandate
+recall endpoint, an `ended_reason: 'recalled'` value and a `DegradedWorker`
+health schema. No PRD-MTG or TRD-005/408 row backs either:
+
+- the recall belongs to bodies (L3) and stays out of this spec;
+- degraded health belongs to TASK-084's `/healthz`.
+
+Neither was taken. This spec is built from DOMAIN, not from those routes.
+
+## 3. Scope and P3 exclusions
+
+Only the six resource families named in the brief's acceptance (§1) are
+covered. Protocol, resolution, register and poll resources — and their
+events — are P3-additive (DOMAIN's events table) and are deliberately
+**absent** from both documents.
+
+## 4. Decisions carried into the spec (brief §5, orchestrator R23-26 defaults)
+
+1. **Channel address**: `gremion.{tenantId}.gov.{entity}.{event}`, matching
+   the ports subject grammar. The `govSubject` helper and its NATS topology
+   entry are **not** added here — they belong to TASK-079/084; this spec
+   only names the subject shape the helper must produce.
+2. **Importers**: neither the governance service (TASK-084, W11) nor the
+   web app's real usage (TASK-032's `gremion-ui/**`) exists yet in this
+   wave. A consumer fixture in `packages/generated-clients` proves both
+   import shapes (node-style and browser-style) typecheck against the
+   generated client now; TASK-084 and TASK-038 assert the real importers.
+3. **Dart**: a smoke run only (`openapitools/openapi-generator-cli` via
+   Docker, `-g dart-dio`, into a gitignored scratch dir), no package
+   committed. TASK-124 (P3) owns `generated-clients-dart/**`.
+4. **Ids**: section/override/admission ids are bigint, exposed as strings
+   matching `^[0-9]+$` to avoid JS precision loss. Meeting/agenda-item/
+   invitation/motion/recipient ids are UUIDv7, `format: uuid`.
+5. **Invitation recipients**: a read-only
+   `GET /api/v1/invitations/{invitationId}/recipients` is included, because
+   PRD-MTG-002a's per-recipient proof needs it. No address or e-mail is
+   ever exposed on that schema (DOMAIN DB-GOV-INVITATION-RECIPIENT
+   invariant); the evidence lives only in MAIL.
+6. **Error shape**: `application/problem+json` (RFC 9457), with a `type`
+   URI per named refusal.
+7. **Pagination**: a cursor (`?cursor=&limit=`) on list endpoints.
+
+## 5. Ownership note (brief §3)
+
+This directory (`contracts/governance/**`) is fully owned here. The
+following edits happen **outside** this directory and are called out per
+the brief's ownership rule:
+
+- two appended entries in `contracts/registry.json` (`governance-http`,
+  `governance-lifecycle`);
+- one codegen entry in `packages/generated-clients/src/codegen.ts` plus a
+  one-line export in its `package.json`, and the codegen output itself
+  (`packages/generated-clients/src/generated/governance-client.ts`,
+  produced only by `pnpm --filter @gremion/generated-clients generate`);
+- a consumer-fixture test and the governance-scoped TDD suite (T1-T9) in
+  `packages/generated-clients/src/`.
+
+No generator was added; TASK-030's existing `openapi-typescript` +
+`openapi-fetch` pipeline picked up the new spec unchanged.
