@@ -203,6 +203,44 @@ describe('D4 - server-recorded DOMAIN fields are readable; append-only records h
   })
 })
 
+describe('D5 - every envelope names its own DB-PLT-EVENT-TYPE; the document describes only what GOV sends', () => {
+  // DOMAIN DB-PLT-EVENT-TYPE / brief §5: de.gremion.gov.<entity>.<verb>.v1.
+  // The type travels in the envelope (CloudEvents 1.0 `type`, reverse-DNS),
+  // so a consumer on gremion.*.gov.> can dispatch on it without parsing the
+  // subject. Each message pins its own value.
+  for (const [eventType, { schema }] of Object.entries(DOMAIN_EVENT_FIELDS)) {
+    it(`${schema}.eventType is the const ${eventType}`, () => {
+      const env = loadAsyncApi().components.schemas[schema]
+      expect(env.allOf[1].properties.eventType?.const).toBe(eventType)
+      expect(env.allOf[1].required ?? []).toContain('eventType')
+    })
+  }
+
+  it('the base envelope cites no helper or union that does not exist', () => {
+    const base = loadAsyncApi().components.schemas.EventEnvelope
+    expect(base.properties.eventType.description).not.toMatch(/GovernanceEvent/)
+    // the base pattern admits every DOMAIN event type and nothing short or foreign
+    const re = new RegExp(base.properties.eventType.pattern)
+    for (const t of Object.keys(DOMAIN_EVENT_FIELDS)) expect(re.test(t), t).toBe(true)
+    for (const bad of ['meeting.scheduled', 'de.gremion.cal.event.created.v1', 'deXgremion.gov.meeting.scheduled.v1']) {
+      expect(re.test(bad), bad).toBe(false)
+    }
+  })
+
+  it('no receive operation stands for all eleven channels while bound to one', () => {
+    const ops = Object.values<any>(loadAsyncApi().operations)
+    expect(ops.filter((o) => o.action === 'receive')).toEqual([])
+    expect(ops.filter((o) => o.action === 'send')).toHaveLength(Object.keys(DOMAIN_EVENT_FIELDS).length)
+  })
+
+  it('motion.deferred carries a null target_meeting_id for a defer to the next meeting', () => {
+    // SCHEMA gov.motion.target_meeting_id: "Null ... after a deferral 'to the
+    // next meeting' until one is chosen"; DB-GOV-MOTION-ADMISSION allows it
+    const p = payloadSchema(loadAsyncApi(), 'EnvelopeMotionDeferred')
+    expect(p.properties.target_meeting_id.type).toEqual(['string', 'null'])
+  })
+})
+
 describe('D2 - every state enum equals its DOMAIN lifecycle diagram', () => {
   for (const [schema, states] of Object.entries(DOMAIN_LIFECYCLES)) {
     it(`${schema}.state enum = DOMAIN ${schema} lifecycle`, () => {

@@ -3,7 +3,7 @@
   "info": {
     "title": "Gremion governance module — meeting, invitation and motion lifecycle events",
     "version": "1.0.0",
-    "description": "Eleven lifecycle events emitted by the governance service (TASK-083, DOMAIN DB-GOV events table): meeting scheduled/rescheduled/cancelled/opened/closed, invitation.issued, notice.overridden, and motion submitted/withheld/admitted/deferred. Subject grammar: gremion.{tenantId}.gov.{event} — built by govSubject() in @gremion/ports/broker (single source of truth for the wire subject; TASK-079/084 add the helper and topology entry). EventEnvelope field-matched to packages/ports/src/broker.ts EventEnvelope interface. Protocol, resolution, register and poll events are P3-additive and out of scope here (DOMAIN DB-GOV events table)."
+    "description": "Eleven lifecycle events emitted by the governance service (TASK-083, DOMAIN DB-GOV events table): meeting scheduled/rescheduled/cancelled/opened/closed, invitation.issued, notice.overridden, and motion submitted/withheld/admitted/deferred. This document describes what GOV sends. Its consumers (CAL, MSG, NTF, OPS, IDT per the DOMAIN Serves column) subscribe on gremion.*.gov.>, receive at-least-once delivery and MUST dedupe on eventId. Subject grammar: gremion.{tenantId}.gov.{entity}.{event}, matching the @gremion/ports/broker subject grammar. The govSubject() helper and its NATS topology entry do not exist yet: TASK-079/084 add them, and until then no code may build these subjects by hand. EventEnvelope is field-matched to the EventEnvelope interface in packages/ports/src/broker.ts. Protocol, resolution, register and poll events are P3-additive and out of scope here (DOMAIN DB-GOV events table)."
   },
   "defaultContentType": "application/json",
   "channels": {
@@ -239,13 +239,6 @@
         "$ref": "#/channels/gremion.%7BtenantId%7D.gov.motion.deferred"
       },
       "summary": "GOV publishes de.gremion.gov.motion.deferred.v1."
-    },
-    "consumeGovernanceEvents": {
-      "action": "receive",
-      "channel": {
-        "$ref": "#/channels/gremion.%7BtenantId%7D.gov.meeting.scheduled"
-      },
-      "summary": "Consumers (CAL, MSG, NTF, OPS, IDT per DOMAIN's Serves column) subscribe on gremion.*.gov.> (6+ token subjects). At-least-once delivery; consumers MUST dedupe on eventId."
     }
   },
   "components": {
@@ -346,7 +339,8 @@
           },
           "eventType": {
             "type": "string",
-            "description": "Short event type from @gremion/ports/broker's GovernanceEvent union."
+            "pattern": "^de[.]gremion[.]gov[.][a-z]+[.][a-z]+[.]v[0-9]+$",
+            "description": "The DB-PLT-EVENT-TYPE name, de.gremion.gov.<entity>.<verb>.v<major> (DOMAIN GOV events table; the reverse-DNS form of a CloudEvents 1.0 type). Each message pins its own value, so a consumer on gremion.*.gov.> dispatches on it without parsing the subject."
           },
           "tenantId": {
             "type": "string",
@@ -377,6 +371,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.meeting.scheduled.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -419,7 +416,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -431,6 +431,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.meeting.rescheduled.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -463,7 +466,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -475,6 +481,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.meeting.cancelled.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -506,7 +515,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -518,6 +530,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.meeting.opened.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -541,7 +556,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -553,6 +571,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.meeting.closed.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -581,7 +602,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -593,6 +617,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.invitation.issued.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -632,7 +659,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -644,6 +674,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.notice.overridden.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -693,7 +726,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -705,6 +741,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.motion.submitted.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -741,7 +780,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -753,6 +795,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.motion.withheld.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -776,7 +821,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -788,6 +836,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.motion.admitted.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -816,7 +867,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       },
@@ -828,6 +882,9 @@
           {
             "type": "object",
             "properties": {
+              "eventType": {
+                "const": "de.gremion.gov.motion.deferred.v1"
+              },
               "payload": {
                 "allOf": [
                   {
@@ -843,8 +900,12 @@
                         "format": "uuid"
                       },
                       "target_meeting_id": {
-                        "type": "string",
-                        "format": "uuid"
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "uuid",
+                        "description": "The meeting the motion is deferred to; null for a defer to \"the next meeting\" while none is chosen (DOMAIN DB-GOV-MOTION-ADMISSION, SCHEMA gov.motion.target_meeting_id)."
                       },
                       "actor_person_id": {
                         "type": "string",
@@ -856,7 +917,10 @@
                   }
                 ]
               }
-            }
+            },
+            "required": [
+              "eventType"
+            ]
           }
         ]
       }
