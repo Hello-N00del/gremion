@@ -48,6 +48,18 @@ describe('checkOpenApiCompat — T3 fixtures', () => {
     expect(res.bump).toBe('major')
   })
 
+  // MEDIUM finding (round 1): surviving mutant G1b — `bump === 'major'`
+  // loosened to `bump === 'major' || bump === 'minor'` in both
+  // oasdiff-gate.ts and asyncapi-compat.ts, and all 38 existing tests stayed
+  // green because none of the T3/T4 fixtures covered a breaking change with
+  // only a MINOR bump.
+  it('remove (breaking) with only a MINOR bump: FAILS', () => {
+    const res = checkOpenApiCompat(base, load('removed-endpoint-1.1.0.json'))
+    expect(res.ok).toBe(false)
+    expect(res.breaking).toBe(true)
+    expect(res.bump).toBe('minor')
+  })
+
   it('narrow (breaking) with NO bump: FAILS', () => {
     const res = checkOpenApiCompat(base, load('narrowed-param-1.0.0.json'))
     expect(res.ok).toBe(false)
