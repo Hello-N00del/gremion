@@ -81,8 +81,10 @@ own tenant). Every container, volume and image is removed by name.
   covers this repository only. Duplicated, tenant-blind storage code in the
   downstream deployment repository is not scanned. The council-owned file
   server integration is out of scope (PRD-PLAT-004) and not present here. The
-  scan is a regex tripwire: runtime-computed module names, shell-outs and raw
-  reads are not covered.
+  scan is a regex tripwire: runtime-computed module names, shell-outs, raw
+  reads, and some non-call forms (e.g. `(await import('fs')).writeFileSync`
+  taken as a reference, or a `.then(({ writeFileSync: w }) => …)` destructure)
+  are not covered.
 - **Symlink TOCTOU.** Links are refused by an `lstat` walk before each
   operation; a link swapped in between the check and the I/O is not covered.
   Only this seam writes under the root.

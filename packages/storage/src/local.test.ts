@@ -12,11 +12,13 @@ import { mountedScratchRoot, TENANT_A, TENANT_B } from '../test/support.js'
 let root: string
 let backend: LocalStorageBackend
 let cleanup: () => Promise<void>
+let mountinfo: string
 
 beforeEach(async () => {
   const m = await mountedScratchRoot('local')
   root = m.root
   cleanup = m.cleanup
+  mountinfo = m.mountinfoPath
   backend = new LocalStorageBackend(TENANT_A, { root, mountinfoPath: m.mountinfoPath })
 })
 afterEach(async () => {
@@ -99,6 +101,22 @@ describe('LocalStorageBackend.list when the root vanished (review round 1, silen
   it('throws instead of reporting an empty tenant', async () => {
     await backend.put('x.txt', new Uint8Array([1]))
     await rm(root, { recursive: true, force: true })
-    await expect(backend.list()).rejects.toThrow(/storage root .* is missing/)
+    await expect(backend.list()).rejects.toThrow(/storage root .* is missing \(ENOENT\)/)
+  })
+})
+
+describe('review round 2 (LocalStorageBackend)', () => {
+  it('delete/read through a path whose middle component is a FILE are "no object", not ENOTDIR', async () => {
+    const h = await backend.put('file', new Uint8Array([1]))
+    await expect(backend.delete(`${h}/y`)).resolves.toBeUndefined()
+    await expect(backend.read(`${h}/y`)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('list() refuses when the root is no longer a mount point (volume detached, directory left behind)', async () => {
+    await backend.put('x.txt', new Uint8Array([1]))
+    await rm(join(root, TENANT_A), { recursive: true, force: true })
+    const detached = new LocalStorageBackend(TENANT_A, { root, mountinfoPath: mountinfo })
+    await writeFile(mountinfo, '22 1 8:1 / / rw - ext4 /dev/sda1 rw\n')
+    await expect(detached.list()).rejects.toThrow(/is not a mount point/)
   })
 })

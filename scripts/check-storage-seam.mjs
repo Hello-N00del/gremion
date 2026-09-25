@@ -18,10 +18,12 @@
 //         gremion-ui's config adapter;
 //       - a file that imports an fs module (static/multi-line import, `import
 //         x = require`, require, dynamic import, process.getBuiltinModule,
+//         any call with an fs module literal such as createRequire(…)('fs'),
 //         with ' " or ` quotes) may not import a write-capable function,
-//         reference one on the module (`fs.writeFile`, called or not),
-//         destructure one from it, alias the whole module, use computed
-//         access on it (`fs['x']`), call one as a member, or re-export fs.
+//         reference one on the module or its promises namespace
+//         (`fs.writeFile`, called or not), destructure one from it, alias,
+//         export or pass on the whole module, use computed access on it
+//         (`fs['x']`), call one as a member, or re-export fs.
 //
 // Scope: *.ts/*.js/*.mjs/*.cjs/*.mts/*.cts/*.svelte, minus node_modules,
 // .svelte-kit, __tests__/, packages/<pkg>/{dist,build,test,tests} and test
@@ -111,7 +113,9 @@ const Q = String.raw`['"\x60]`
 const FS_IMPORT_RES = [
   new RegExp(String.raw`\bfrom\s*${Q}(?:${FS_MODULE})${Q}`),
   new RegExp(String.raw`\bimport\s*${Q}(?:${FS_MODULE})${Q}`),
-  new RegExp(String.raw`\b(?:require|import)\s*\(\s*${Q}(?:${FS_MODULE})${Q}\s*\)`),
+  // require('fs'), import('fs'), and ANY call with an fs module literal —
+  // createRequire(import.meta.url)('fs'), req('fs') …
+  new RegExp(String.raw`[\w$)]\s*\(\s*${Q}(?:${FS_MODULE})${Q}\s*\)`),
   new RegExp(String.raw`\bgetBuiltinModule\s*\(\s*${Q}(?:${FS_MODULE})${Q}\s*\)`),
 ]
 /** Re-exporting an fs module (or its members) launders it past the import check. */
@@ -188,6 +192,18 @@ function fsBindings(text) {
   for (const m of text.matchAll(new RegExp(String.raw`\bimport\s+([\w$]+)\s*=\s*require\s*\(\s*${Q}(?:${FS_MODULE})${Q}`, 'g'))) add(m[1])
   for (const m of text.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+([\w$]+)\s*=\s*(?:await\s+)?(?:require|import|process\.getBuiltinModule)\s*\(\s*${Q}(?:${FS_MODULE})${Q}`, 'g'))) add(m[1])
   for (const m of text.matchAll(/\bpromises\s*(?:as|:)\s*([\w$]+)/g)) add(m[1])
+  // `import { promises } from 'fs'` binds the bare name
+  for (const m of text.matchAll(new RegExp(String.raw`\{([^{}]*)\}\s*from\s*${Q}(?:${FS_MODULE})${Q}`, 'g'))) {
+    if (/(?:^|,)\s*promises\s*(?:,|$)/.test(m[1])) add('promises')
+  }
+  // derived namespaces: const fsp = fs.promises (to a fixed point)
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const b of [...out]) {
+      const re = new RegExp(String.raw`\b(?:const|let|var)\s+([\w$]+)\s*=\s*${escapeRe(b)}\s*\.\s*promises\b`, 'g')
+      for (const m of text.matchAll(re)) if (!out.has(m[1])) (out.add(m[1]), (grew = true))
+    }
+  }
   return out
 }
 
@@ -252,6 +268,11 @@ function scanFile(rel, text) {
           new RegExp(String.raw`\{[^}]*\b(${WRITE_NAME})\b[^}]*\}\s*=\s*(?:await\s+)?(?:${b})\b`),
           // const f = fs — a whole-module alias escapes binding tracking
           new RegExp(String.raw`=\s*(?:await\s+)?(${b})\s*(?:;|,|$)`),
+          // export default fs / export { fs } — laundering the module to other files
+          new RegExp(String.raw`\bexport\s+default\s+(${b})\b`),
+          new RegExp(String.raw`\bexport\s*\{[^}]*\b(${b})\b[^}]*\}`),
+          // helper(fs) — handing the module to other code
+          new RegExp(String.raw`[(,]\s*(${b})\s*[,)]`),
         ]
       : []
     lines.forEach((line, i) => {
@@ -260,7 +281,10 @@ function scanFile(rel, text) {
       if (isImportLine) return add('s3', i, 'imports a write-capable fs function')
       for (const re of bindingUse) {
         const m = re.exec(line)
-        if (m) return add('s3', i, m[1] === '[' ? 'computed access on an fs module' : `fs write reference: ${m[1]}`)
+        if (m) {
+          const what = m[1] === '[' ? 'computed access on an fs module' : bindings.has(m[1]) ? `fs module escapes via ${m[1]}` : `fs write reference: ${m[1]}`
+          return add('s3', i, what)
+        }
       }
       const m = MEMBER_WRITE.exec(line) ?? (bare ? bare.exec(line) : null)
       if (m) add('s3', i, `fs write call: ${m[1]}`)

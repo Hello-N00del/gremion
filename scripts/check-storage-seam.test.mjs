@@ -120,6 +120,24 @@ test('RED — review round 1: comment prefix, bracket access, references, destru
   }
 })
 
+test('RED — review round 2: module laundering, createRequire, derived namespaces', () => {
+  const tree = emptyTree()
+  const fsImport = "import fs from 'node:fs'\n"
+  seed(tree, 'gremion-ui/src/d1.ts', fsImport + 'export default fs\n')
+  seed(tree, 'gremion-ui/src/d2.ts', fsImport + 'export { fs }\n')
+  seed(tree, 'gremion-ui/src/d3.ts', fsImport + 'helper(fs)\n')
+  seed(tree, 'gremion-ui/src/d4.ts', "import { createRequire } from 'node:module'\nconst req = createRequire(import.meta.url)\nreq('fs').writeFileSync('p', 'd')\n")
+  seed(tree, 'gremion-ui/src/d5.ts', "import { promises } from 'fs'\nconst { writeFile } = promises\n")
+  seed(tree, 'gremion-ui/src/d6.ts', fsImport + 'const fsp = fs.promises\nconst w = fsp.writeFile\n')
+  try {
+    const r = scan({ root: tree, allowlist: [] })
+    const files = [...new Set(r.findings.filter((f) => f.guard === 's3').map((f) => f.file))].sort()
+    assert.deepEqual(files, ['gremion-ui/src/d1.ts', 'gremion-ui/src/d2.ts', 'gremion-ui/src/d3.ts', 'gremion-ui/src/d4.ts', 'gremion-ui/src/d5.ts', 'gremion-ui/src/d6.ts'])
+  } finally {
+    rmSync(tree, { recursive: true, force: true })
+  }
+})
+
 test('RED — an allowlisted file that GROWS a new write site is a problem (entries pin their site count)', () => {
   const tree = emptyTree()
   seed(tree, 'gremion-ui/src/w.ts', BYPASS + "export function more() {\n  writeFileSync('/data/y.pdf', 'z')\n}\n")

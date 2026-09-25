@@ -38,7 +38,16 @@ export const nodeFs: StorageFs = {
     // symlink, so links are neither followed nor returned.
     const out: string[] = []
     const walk = async (dir: string): Promise<void> => {
-      for (const e of await readdir(dir, { withFileTypes: true })) {
+      let entries
+      try {
+        entries = await readdir(dir, { withFileTypes: true })
+      } catch (err) {
+        // Only the START directory's absence means "nothing listed"; a
+        // subdirectory vanishing mid-walk must not collapse into an empty list.
+        if (dir !== p) throw Object.assign(new Error(`storage(local): listing changed during walk at ${dir}`), { cause: err })
+        throw err
+      }
+      for (const e of entries) {
         const abs = join(dir, e.name)
         if (e.isDirectory()) await walk(abs)
         else if (e.isFile()) out.push(relative(p, abs))
@@ -73,12 +82,16 @@ export class LocalStorageBackend implements StorageBackend {
   readonly mountCheck: MountCheck
   private readonly tenantRoot: string
   private readonly fs: StorageFs
+  private readonly mountinfoPath: string | undefined
+  private readonly platform: string | undefined
 
   constructor(tenantId: string, options: LocalStorageOptions = {}) {
     // Tenant first: a missing/malformed tenant throws before the mount table
     // (or anything else) is read.
     this.tenantId = assertTenantId(tenantId)
     this.fs = options.fs ?? nodeFs
+    this.mountinfoPath = options.mountinfoPath
+    this.platform = options.platform
     this.root = resolve(options.root ?? DEFAULT_LOCAL_ROOT)
     this.mountCheck = assertMountedRoot(this.root, options.mountinfoPath, (p) => this.fs.readTextSync(p), options.platform)
     if (!this.mountCheck.checked) {
@@ -112,7 +125,9 @@ export class LocalStorageBackend implements StorageBackend {
       try {
         st = await this.fs.lstat(p)
       } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return
+        // missing, or a file where a directory was expected: nothing there
+        const code = (err as NodeJS.ErrnoException)?.code
+        if (code === 'ENOENT' || code === 'ENOTDIR') return
         throw err
       }
       if (st.isSymbolicLink()) {
@@ -165,7 +180,7 @@ export class LocalStorageBackend implements StorageBackend {
       .then(() => this.fs.readFile(abs))
       .catch((err: NodeJS.ErrnoException) => {
         // A directory is not an object: same answer as the memory backend.
-        throw err?.code === 'EISDIR' ? enoent(key) : err
+        throw err?.code === 'EISDIR' || err?.code === 'ENOTDIR' ? enoent(key) : err
       })
   }
 
@@ -183,7 +198,7 @@ export class LocalStorageBackend implements StorageBackend {
       .catch((err: NodeJS.ErrnoException) => {
         // ENOENT is idempotent, and a directory holds no object (EISDIR):
         // both are "nothing to delete". Re-throw everything else.
-        if (err?.code !== 'ENOENT' && err?.code !== 'EISDIR') throw err
+        if (err?.code !== 'ENOENT' && err?.code !== 'EISDIR' && err?.code !== 'ENOTDIR') throw err
       })
   }
 
@@ -207,12 +222,16 @@ export class LocalStorageBackend implements StorageBackend {
         async (err: NodeJS.ErrnoException) => {
           if (err?.code !== 'ENOENT' && err?.code !== 'ENOTDIR') throw err
           // Nothing stored under this prefix yet — unless the storage root
-          // itself is gone (volume detached), which must not read as "empty".
+          // itself is gone or no longer mounted (volume detached, directory
+          // left behind), which must not read as "empty".
           try {
             await this.fs.lstat(this.root)
-          } catch {
-            throw new Error(`storage(local): storage root ${this.root} is missing`)
+          } catch (e) {
+            throw new Error(
+              `storage(local): storage root ${this.root} is missing (${(e as NodeJS.ErrnoException)?.code ?? String(e)})`,
+            )
           }
+          assertMountedRoot(this.root, this.mountinfoPath, (p) => this.fs.readTextSync(p), this.platform)
           return []
         },
       )
