@@ -1,4 +1,4 @@
-// gremion-public/svelte.config.js
+// gremion-public/kit.config.js
 import { createRequire } from 'node:module';
 import adapter from '@sveltejs/adapter-node';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
@@ -33,55 +33,99 @@ if (rawBase !== '' && !rawBase.startsWith('/')) {
 /** @type {'' | `/${string}`} */
 const base = /** @type {any} */ (rawBase);
 
+/** The validated build-time base path, shared with vite.config.ts's `define`. */
+export const basePath = base;
+
 // TASK-032 (TRD-410 [D R20-D5], Q4): kit 3 requires Svelte(Kit) config to be
 // passed through the `sveltekit(...)` Vite plugin call rather than
-// auto-discovered — `svelte-kit sync` now warns "svelte.config.js is no
-// longer used" if nothing imports it. This module still exists (svelte-check
-// still reads it for `preprocess`), but vite.config.ts now imports it and
-// passes it into `sveltekit()` explicitly. The shape is also flattened: kit
-// 3's `Config` type puts `adapter`/`alias`/`paths`/`version` at the top level
-// instead of nested under a `kit:` key. Same mechanics as gremion-ui.
+// auto-discovered — `svelte-kit sync` warns "svelte.config.js is no longer
+// used" if nothing imports it. vite.config.ts therefore calls
+// `createKitConfig()` and passes the result into `sveltekit()`.
+// The shape is also flattened: kit 3's `Config` type puts
+// `adapter`/`alias`/`paths`/`version` at the top level instead of nested under
+// a `kit:` key. Same mechanics as gremion-ui/kit.config.js.
 const require = createRequire(import.meta.url);
 
-function versionName() {
-  const sha = process.env.BUILD_SHA;
+// Q4: the stamp is public on this anonymous portal, so it carries the kit
+// MAJOR and a 7-char commit sha only: no full version, no environment data.
+const SHORT_SHA = /^[0-9a-f]{7}$/;
+
+/**
+ * The build-version stamp `kit<major>+civitas.<sha>` (see
+ * gremion-ui/kit.config.js). A build without a valid `BUILD_SHA` FAILS; it
+ * never falls back to a timestamp.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+export function versionName(env) {
+  const sha = env.BUILD_SHA;
   if (!sha) {
     throw new Error(
       'BUILD_SHA is required to compute the SvelteKit build-version stamp (kit3+civitas.<sha>) — set it as a build ARG, never fall back to a timestamp'
     );
   }
+  if (!SHORT_SHA.test(sha)) {
+    throw new Error('BUILD_SHA must be exactly 7 lowercase hex characters (git rev-parse --short=7 HEAD)');
+  }
   const kitMajor = require('@sveltejs/kit/package.json').version.split('.')[0];
   return `kit${kitMajor}+civitas.${sha}`;
 }
 
-// TASK-032 (TRD-410 [D R20-D5]): kit 3 moved the `Config` type from the main
-// '@sveltejs/kit' entry into '@sveltejs/kit/vite'.
-/** @type {import('@sveltejs/kit/vite').Config} */
-const config = {
-  preprocess: vitePreprocess(),
-  // TASK-032 (TRD-410 [D R20-D5]): adapter-node 6's AdapterOptions dropped
-  // `port` (upstream CHANGELOG.md has no explicit breaking-change line for
-  // this, but the type is gone in 6.0.0-next.13's ambient .d.ts). No
-  // behavior change: the built server's own runtime default is already
-  // `env('PORT', '3000')` (src/index.js), so `{ port: 3000 }` was setting a
-  // build-time value identical to the existing runtime default.
-  adapter: adapter(),
-  paths: { base },
-  // kit 3 removes the automatic `$lib` alias in favour of `#lib` (upstream
-  // CHANGELOG.md, 3.0.0-next.9: "replace the `$lib` alias with `#lib` and
-  // remove `files.lib` config"), but `alias` itself is only DEPRECATED, not
-  // removed (3.0.0-next.17/24: "deprecate the `alias` option") — it still
-  // works and still feeds svelte-kit's generated tsconfig path mapping, so
-  // this reinstates `$lib` explicitly rather than rewriting the ~1000 `$lib`
-  // imports across this app's source tree to `#lib`. Matches
-  // gremion-ui/svelte.config.js, which already declared this alias
-  // explicitly before kit 3 needed it.
-  alias: {
-    $lib: 'src/lib',
-  },
-  version: {
-    name: versionName(),
-  },
-};
+/**
+ * The SvelteKit config. It stamps `version.name` when BUILD_SHA is set (and
+ * rejects a malformed one), and otherwise loads WITHOUT a stamp, because
+ * `svelte-kit sync` (pnpm check), vitest and `vite dev` all resolve it and
+ * sync even resolves it as command `build`. `buildStampGuard` enforces "no
+ * BUILD_SHA, no build" for a real `vite build` only.
+ *
+ * @param {{ env?: Record<string, string | undefined> }} [options]
+ * @returns {import('@sveltejs/kit/vite').Config}
+ */
+export function createKitConfig({ env = process.env } = {}) {
+  // TASK-032 (TRD-410 [D R20-D5]): kit 3 moved the `Config` type from the
+  // main '@sveltejs/kit' entry into '@sveltejs/kit/vite'.
+  /** @type {import('@sveltejs/kit/vite').Config} */
+  const config = {
+    preprocess: vitePreprocess(),
+    // TASK-032 (TRD-410 [D R20-D5]): adapter-node 6's AdapterOptions dropped
+    // `port` (the type is gone in 6.0.0-next.13's ambient .d.ts). No
+    // behavior change: the built server's own runtime default is already
+    // `env('PORT', '3000')` (src/index.js), so `{ port: 3000 }` was setting a
+    // build-time value identical to the existing runtime default.
+    adapter: adapter(),
+    paths: { base },
+    // kit 3 removes the automatic `$lib` alias in favour of `#lib` (upstream
+    // CHANGELOG.md, 3.0.0-next.9: "replace the `$lib` alias with `#lib` and
+    // remove `files.lib` config"), but `alias` itself is only DEPRECATED, not
+    // removed (3.0.0-next.17/24: "deprecate the `alias` option") — it still
+    // works and still feeds svelte-kit's generated tsconfig path mapping, so
+    // this reinstates `$lib` explicitly rather than rewriting every `$lib`
+    // import to `#lib`. Matches gremion-ui/kit.config.js.
+    alias: {
+      $lib: 'src/lib',
+    },
+  };
+  if (env.BUILD_SHA !== undefined) {
+    config.version = { name: versionName(env) };
+  }
+  return config;
+}
 
-export default config;
+/**
+ * A build-only Vite plugin that fails `vite build` without a valid BUILD_SHA.
+ * `apply: 'build'` keeps it out of dev/vitest; `buildStart` runs only when
+ * Rollup actually builds, never while a tool merely resolves the config.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {{ name: string, apply: 'build', buildStart: () => void }}
+ */
+export function buildStampGuard(env = process.env) {
+  return {
+    name: 'gremion:build-stamp-guard',
+    apply: 'build',
+    buildStart() {
+      versionName(env);
+    },
+  };
+}

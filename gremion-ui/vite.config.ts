@@ -2,7 +2,7 @@ import { sveltekit } from '@sveltejs/kit/vite'
 import { svelteTesting } from '@testing-library/svelte/vite'
 import tailwindcss from '@tailwindcss/vite'
 import { configDefaults, defineConfig } from 'vitest/config'
-import svelteConfig from './kit.config.js'
+import { buildStampGuard, createKitConfig } from './kit.config.js'
 
 export default defineConfig({
   // svelteTesting() resolves Svelte's browser build + DOM cleanup for
@@ -16,8 +16,10 @@ export default defineConfig({
   // TASK-032: kit 3 requires Svelte(Kit) config to be passed through the
   // `sveltekit(...)` plugin call rather than auto-discovered from
   // kit.config.js (upstream CHANGELOG.md, "breaking: require Svelte
-  // config options to be passed through the Vite plugin").
-  plugins: [tailwindcss(), sveltekit(svelteConfig), svelteTesting()],
+  // config options to be passed through the Vite plugin"). The config loads
+  // without BUILD_SHA (sync, vitest, dev); buildStampGuard() fails only a
+  // real `vite build` that lacks a valid BUILD_SHA (TASK-032 Q4).
+  plugins: [tailwindcss(), sveltekit(createKitConfig()), buildStampGuard(), svelteTesting()],
   server: {
     // #260: default to loopback so `pnpm dev` does NOT expose the dev server
     // (source via /@fs, HMR websocket) to the LAN of the operator box that also

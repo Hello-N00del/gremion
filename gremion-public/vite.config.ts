@@ -8,7 +8,7 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
-import svelteConfig from './kit.config.js';
+import { basePath, buildStampGuard, createKitConfig } from './kit.config.js';
 
 export default defineConfig({
   // #436 — Tailwind v4 via its own Vite plugin, mirroring gremion-ui. This
@@ -18,14 +18,16 @@ export default defineConfig({
   // own vendor prefixing via Lightning CSS, so neither postcss entry survives.
   // TASK-032: kit 3 requires Svelte(Kit) config to be passed through the
   // `sveltekit(...)` plugin call rather than auto-discovered from
-  // kit.config.js.
-  plugins: [tailwindcss(), sveltekit(svelteConfig)],
+  // kit.config.js. The config loads without BUILD_SHA (sync, vitest, dev);
+  // buildStampGuard() fails only a real `vite build` that lacks a valid
+  // BUILD_SHA (TASK-032 Q4).
+  plugins: [tailwindcss(), sveltekit(createKitConfig()), buildStampGuard()],
   // TASK-032: kit 3 removed `base` from `$app/paths`; `$lib/base.ts` reads it
   // back from this build-time constant instead, sourced from the SAME
   // `kit.config.js` value SvelteKit itself uses for `paths.base` (one
   // computation, not a second env-var read that could drift from it).
   define: {
-    __BASE_PATH__: JSON.stringify(svelteConfig.paths?.base ?? ''),
+    __BASE_PATH__: JSON.stringify(basePath),
   },
   ssr: {
     noExternal: ['@gremion/db']
