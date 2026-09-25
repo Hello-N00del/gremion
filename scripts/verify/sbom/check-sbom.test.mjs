@@ -28,6 +28,7 @@ import {
   verifyAttestation,
   runGrype,
   checkSbomDoc,
+  firstPartyDigests,
 } from './check-sbom.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -61,6 +62,14 @@ before(async () => {
     'app/node_modules/left-pad/package.json': '{"name":"left-pad","version":"1.3.0"}\n',
   })
   h.attest(refs.strangerAttested, stranger.key, p)
+  // A component IN the floor table, below its floor, attested with the right
+  // key: the floor verdict needs no vulnerability DB, so it runs live here.
+  refs.undici = h.pushImage('gremion-migrate', 'sbom-undici', {
+    'app/node_modules/undici/package.json': '{"name":"undici","version":"7.0.0"}\n',
+  })
+  const u = join(h.tmp, 'sbom-undici.cdx.json')
+  writeFileSync(u, JSON.stringify(sbomOfImage(refs.undici, { name: h.name('syft-u') })))
+  h.attest(refs.undici, key.key, u)
 })
 after(() => h?.teardown())
 
@@ -143,7 +152,7 @@ test('a missing grype vulnerability DB is a FAIL, never a pass', () => {
   assert.equal(r.report, null)
 })
 
-test('checkSbomDoc on the attested minimist predicate FAILS here (CRITICAL where a DB exists, missing DB otherwise)', () => {
+test('checkSbomDoc never passes the attested minimist predicate: with no DB it fails on grype-db (the CRITICAL verdict itself is the fixture test above)', () => {
   const vol = h.name('grypedb2')
   h.volumes.push(vol)
   const { predicate } = verifyAttestation(refs.minimist, key.pub)
@@ -158,4 +167,21 @@ test('the source SBOM of the committed lockfile is CycloneDX 1.6 and meets every
   assert.ok(s.components.length > 100, `only ${s.components.length} components`)
   assert.ok(s.components.some((c) => c.name === 'undici'), 'undici is absent from the lockfile SBOM')
   assert.deepEqual(floorProblems(s), [])
+})
+
+test('live: an attested image with undici@7.0.0 fails on the cve floor, independent of the grype DB', () => {
+  const vol = h.name('grypedb3')
+  h.volumes.push(vol)
+  const { problems, predicate } = verifyAttestation(refs.undici, key.pub)
+  assert.deepEqual(problems, [])
+  const ps = checkSbomDoc(predicate, { grype: { name: h.name('grype3'), volume: vol, update: false }, accepted: [] })
+  assert.ok(ps.some((p) => p.code === 'below-floor' && /undici@7\.0\.0/.test(p.message)), JSON.stringify(ps))
+})
+
+test('a pins image line that cannot be parsed is a problem, not a skip', () => {
+  const D = 'a'.repeat(64)
+  const pins = `services:\n  a:\n    image: ghcr.io/hello-n00del/a@sha256:${D}\n  b:\n    image: ghcr.io/hello-n00del/b@sha256:${D}  # prod\n  c: {image: ghcr.io/hello-n00del/c@sha256:${D}}\n`
+  const r = firstPartyDigests(pins, 'ghcr.io/hello-n00del/')
+  assert.deepEqual(r.refs, [`ghcr.io/hello-n00del/a@sha256:${D}`])
+  assert.equal(r.unparsed.length, 2)
 })

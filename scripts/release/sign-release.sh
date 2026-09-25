@@ -10,6 +10,7 @@
 # For every image, by digest only:
 #   1. cosign sign   --key K --tlog-upload=false        (no public transparency log)
 #   2. syft (digest-pinned container) → CycloneDX 1.6 SBOM of that digest
+#      (all SBOMs are built before the first signature is pushed)
 #   3. cosign attest --key K --type cyclonedx --tlog-upload=false
 #   4. post-conditions: `cosign verify` and `cosign verify-attestation` with the
 #      public half derived from K both pass, and the output carries no tlog line.
@@ -70,10 +71,12 @@ main() {
     command -v jq >/dev/null 2>&1 || die "jq not on PATH"
     command -v node >/dev/null 2>&1 || die "node not on PATH (check-record.mjs)"
 
-    local root head record
+    local root head record status
     root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" || die "not inside a git checkout"
     head="$(git -C "$root" rev-parse --verify HEAD)"
-    [[ -z "$(git -C "$root" status --porcelain)" ]] \
+    # Captured first: inside [[ -z "$(…)" ]] a failing `git status` would read as clean.
+    status="$(git -C "$root" status --porcelain)" || die "git status failed"
+    [[ -z "$status" ]] \
         || die "working tree is not clean — the check record must describe exactly what is signed"
 
     record="$root/scripts/verify/check-record.mjs"
@@ -101,24 +104,34 @@ main() {
     cosign public-key --key "$key" > "$WORK/cosign.pub" 2>/dev/null \
         || die "cannot derive the public key from $key (wrong COSIGN_PASSWORD?)"
 
+    # Every SBOM is produced and checked BEFORE the first signature is pushed,
+    # so a syft failure on image N cannot leave images 1..N-1 signed but
+    # unattested.
     local out sbom n_comp i=0
+    local -a comps=()
     for ref in "${refs[@]}"; do
         i=$(( i + 1 ))
-        out="$(cosign sign --key "$key" --tlog-upload=false --yes "$ref" 2>&1)" \
-            || { printf '%s\n' "$out" >&2; die "cosign sign failed for $ref"; }
-        no_tlog "$out"
-        printf 'SIGNED %s\n' "$ref"
-
         sbom="$WORK/sbom-${i}.cdx.json"
         docker run --rm --network host \
             -v "${DOCKER_CONFIG:-$HOME/.docker}:/config:ro" -e DOCKER_CONFIG=/config \
             -e SYFT_CHECK_FOR_APP_UPDATE=false \
             "$SYFT_IMAGE" -q "registry:${ref}" -o cyclonedx-json@1.6 > "$sbom" \
-            || die "syft could not produce an SBOM for $ref"
+            || die "syft could not produce an SBOM for $ref (nothing signed)"
         jq -e '.bomFormat == "CycloneDX" and .specVersion == "1.6"' "$sbom" >/dev/null \
-            || die "SBOM for $ref is not CycloneDX 1.6"
+            || die "SBOM for $ref is not CycloneDX 1.6 (nothing signed)"
         n_comp="$(jq '[.components // [] | .[]] | length' "$sbom")"
-        [[ "$n_comp" -ge 1 ]] || die "SBOM for $ref lists no components"
+        [[ "$n_comp" -ge 1 ]] || die "SBOM for $ref lists no components (nothing signed)"
+        comps+=("$n_comp")
+    done
+
+    i=0
+    for ref in "${refs[@]}"; do
+        i=$(( i + 1 ))
+        sbom="$WORK/sbom-${i}.cdx.json"
+        out="$(cosign sign --key "$key" --tlog-upload=false --yes "$ref" 2>&1)" \
+            || { printf '%s\n' "$out" >&2; die "cosign sign failed for $ref"; }
+        no_tlog "$out"
+        printf 'SIGNED %s\n' "$ref"
 
         out="$(cosign attest --key "$key" --type cyclonedx --predicate "$sbom" \
                   --tlog-upload=false --yes "$ref" 2>&1)" \
@@ -131,7 +144,7 @@ main() {
         cosign verify-attestation --key "$WORK/cosign.pub" --type cyclonedx \
             --insecure-ignore-tlog=true "$ref" >/dev/null 2>&1 \
             || die "post-condition: the SBOM attestation on $ref does not verify"
-        printf 'ATTESTED %s cyclonedx 1.6 components=%s\n' "$ref" "$n_comp"
+        printf 'ATTESTED %s cyclonedx 1.6 components=%s\n' "$ref" "${comps[$(( i - 1 ))]}"
     done
     printf 'sign-release: %d image(s) signed and attested for %s\n' "${#refs[@]}" "$head"
 }

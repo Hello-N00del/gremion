@@ -158,3 +158,13 @@ test('a dirty tree, no key, or no image is refused', () => {
   assert.ok(!verifies(ref, key.pub))
   assert.ok(existsSync(join(r, 'untracked.txt')))
 })
+
+test('an SBOM failure on a later image leaves NO image signed (all SBOMs before any signature)', () => {
+  const r = repo()
+  const first = h.pushImage('gremion-ui', 'order-1', { 'app/node_modules/a/package.json': '{"name":"a","version":"1.0.0"}\n' })
+  const missing = `${h.registry}/hello-n00del/gremion-ui@sha256:${'e'.repeat(64)}` // no such manifest
+  const res = sign(r, ['--key', key.key, first, missing])
+  assert.notEqual(res.status, 0)
+  assert.match(res.out, /syft could not produce an SBOM .*nothing signed/)
+  assert.ok(!verifies(first, key.pub), 'the first image was signed before the second SBOM failed')
+})

@@ -82,7 +82,7 @@ export class Harness {
   }
 
   stopRegistry() {
-    sh('docker', ['rm', '-f', this.name('reg')])
+    sh('docker', ['rm', '-f', '-v', this.name('reg')])
   }
 
   /**
@@ -150,7 +150,9 @@ export class Harness {
   }
 
   teardown() {
-    if (this.containers.length) sh('docker', ['rm', '-f', ...this.containers])
+    // -v: the registry image declares a VOLUME; without it every run leaks one
+    // anonymous volume (found by the review verifier).
+    if (this.containers.length) sh('docker', ['rm', '-f', '-v', ...this.containers])
     if (this.volumes.length) sh('docker', ['volume', 'rm', ...this.volumes])
     rmSync(this.tmp, { recursive: true, force: true })
   }

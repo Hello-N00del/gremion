@@ -188,11 +188,22 @@ export function checkSbomDoc(doc, { grype = {}, accepted = [] } = {}) {
   return out
 }
 
+/**
+ * {refs, unparsed}: first-party digest refs from the canonical
+ * `<indent>image: <ref>` lines, and every non-comment line that mentions
+ * `image` in any other form (flow mapping, quoted key, trailing comment) —
+ * those are problems, never silently skipped.
+ */
 export function firstPartyDigests(pinsText, prefix) {
-  return pinsText
-    .split('\n')
-    .map((l) => /^\s*image:\s*["']?([^"'\s]+)["']?\s*$/.exec(l)?.[1])
-    .filter((ref) => ref && ref.toLowerCase().startsWith(prefix.toLowerCase()))
+  const refs = []
+  const unparsed = []
+  for (const l of pinsText.split('\n')) {
+    if (/^\s*#/.test(l) || !/image/.test(l)) continue
+    const m = /^\s*image:\s*["']?([^\s"'{}#,]+)["']?\s*$/.exec(l)
+    if (!m) unparsed.push(l.trim())
+    else if (m[1].toLowerCase().startsWith(prefix.toLowerCase())) refs.push(m[1])
+  }
+  return { refs, unparsed }
 }
 
 // ── CLI ────────────────────────────────────────────────────────────────────
@@ -216,7 +227,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (pins || key) {
     if (!pins || !key) problems.push({ code: 'usage', message: '--pins and --key go together', where: 'cli' })
     else {
-      const refs = firstPartyDigests(readFileSync(pins, 'utf8'), prefix)
+      const { refs, unparsed } = firstPartyDigests(readFileSync(pins, 'utf8'), prefix)
+      for (const u of unparsed) problems.push({ code: 'unparsed-pin', message: `unrecognised image declaration: ${u}`, where: pins })
       if (!refs.length) problems.push({ code: 'no-first-party', message: `no ${prefix}* image in ${pins}`, where: pins })
       for (const ref of refs) {
         const a = verifyAttestation(ref, key)
