@@ -11,6 +11,11 @@
 //   GET /repos/{r}/environments                    environments
 //   GET /repos/{r}/environments/{e}/secrets        environment secret NAMES
 //   GET /repos/{r}/actions/runners                 self-hosted runners
+//   GET /repos/{r}/dependabot/secrets              Dependabot secret NAMES
+//   GET /users/{owner} -> type; for an Organization also
+//   GET /repos/{r}/actions/organization-secrets    org secrets visible to the repo
+// Every list must carry its array and be complete (length == total_count);
+// a permissions answer without a boolean `enabled` is an error.
 //
 // Verdict:
 //   Actions ON  -> FAIL on any key-class secret (repository or environment)
@@ -33,31 +38,48 @@ import { fileURLToPath } from 'node:url'
 
 export const REPOS = ['Hello-N00del/gremion', 'Hello-N00del/StuRaOS']
 export const MAX_AGE_DAYS = 7
-const REGISTRY_RE = /^(GHCR|NPM|PNPM|REGISTRY|DOCKERHUB)_[A-Z0-9_]*TOKEN$/
+// Exact registry-token names only: a free-form middle would admit
+// GHCR_DEPLOY_SSH_PRIVATE_KEY_TOKEN as a "registry token".
+const REGISTRY_RE = /^(GHCR|NPM|PNPM|REGISTRY|DOCKERHUB)(_(READ|PULL|PUSH|PUBLISH))?_TOKEN$/
 
 export function classifySecret(name) {
   return REGISTRY_RE.test(name) ? 'registry' : 'key-class'
 }
 
 /** Evidence from a `get(path) -> json` function (live fetch or recorded map). Throws on any API error. */
+/** The `key` array of a list answer, complete, or throw. */
+async function list(get, path, key) {
+  const body = await get(path)
+  const arr = body?.[key]
+  if (!Array.isArray(arr)) throw new Error(`GET ${path}: answer has no ${key} array`)
+  if (typeof body.total_count === 'number' && body.total_count !== arr.length) {
+    throw new Error(`GET ${path}: truncated — ${arr.length} of total_count ${body.total_count} ${key}`)
+  }
+  return arr
+}
+
 export async function collectEvidence(get, { fetchedAt = new Date().toISOString(), repos = REPOS } = {}) {
   const out = { source: 'github-api', fetchedAt, repos: [] }
   for (const repo of repos) {
     const base = `/repos/${repo}`
+    const owner = await get(`/users/${repo.split('/')[0]}`)
+    if (owner?.type !== 'User' && owner?.type !== 'Organization') throw new Error(`GET /users/${repo.split('/')[0]}: unknown owner type`)
     const perms = await get(`${base}/actions/permissions`)
-    const secrets = (await get(`${base}/actions/secrets`)).secrets.map((s) => s.name)
-    const envList = (await get(`${base}/environments`)).environments ?? []
+    if (typeof perms?.enabled !== 'boolean') throw new Error(`GET ${base}/actions/permissions: no boolean enabled field`)
+    const names = (a) => a.map((s) => s.name)
+    const secrets = names(await list(get, `${base}/actions/secrets`, 'secrets'))
+    const dependabot = names(await list(get, `${base}/dependabot/secrets`, 'secrets'))
+    const organization = owner.type === 'Organization' ? names(await list(get, `${base}/actions/organization-secrets`, 'secrets')) : []
     const environments = []
-    for (const e of envList) {
-      const es = await get(`${base}/environments/${encodeURIComponent(e.name)}/secrets`)
-      environments.push({ name: e.name, secrets: es.secrets.map((s) => s.name) })
+    for (const e of await list(get, `${base}/environments`, 'environments')) {
+      environments.push({ name: e.name, secrets: names(await list(get, `${base}/environments/${encodeURIComponent(e.name)}/secrets`, 'secrets')) })
     }
-    const runners = (await get(`${base}/actions/runners`)).runners.map((r) => ({
+    const runners = (await list(get, `${base}/actions/runners`, 'runners')).map((r) => ({
       name: r.name,
       os: r.os,
       labels: (r.labels ?? []).map((l) => l.name),
     }))
-    out.repos.push({ repo, actions: { enabled: perms.enabled === true }, secrets, environments, runners })
+    out.repos.push({ repo, ownerType: owner.type, actions: { enabled: perms.enabled }, secrets, dependabot, organization, environments, runners })
   }
   return out
 }
@@ -75,6 +97,10 @@ export function checkEvidence(ev, { now = new Date(), repos = REPOS } = {}) {
     add('evidence-undated', 'evidence carries no fetchedAt date')
     return { problems, notes }
   }
+  if (at - now.getTime() > 5 * 60e3) {
+    add('evidence-future', `evidence is dated ${ev.fetchedAt}, in the future`)
+    return { problems, notes }
+  }
   if (now.getTime() - at > MAX_AGE_DAYS * 86400e3) {
     add('evidence-stale', `evidence from ${ev.fetchedAt} is older than ${MAX_AGE_DAYS} days`)
     return { problems, notes }
@@ -87,6 +113,8 @@ export function checkEvidence(ev, { now = new Date(), repos = REPOS } = {}) {
     }
     const scoped = [
       ...r.secrets.map((s) => ({ s, where: 'repository' })),
+      ...(r.dependabot ?? []).map((s) => ({ s, where: 'dependabot' })),
+      ...(r.organization ?? []).map((s) => ({ s, where: 'organization' })),
       ...r.environments.flatMap((e) => e.secrets.map((s) => ({ s, where: `environment ${e.name}` }))),
     ].filter((x) => classifySecret(x.s) === 'key-class')
     if (r.actions.enabled) {
@@ -111,7 +139,18 @@ async function liveGet(path) {
     const body = (await res.text()).slice(0, 200)
     throw Object.assign(new Error(`GitHub API ${res.status} on GET ${path}: ${body}`), { status: res.status })
   }
-  return res.json()
+  const body = await res.json()
+  // Follow rel="next" and merge the list, so collectEvidence's total_count
+  // check sees the whole list (it throws on anything shorter).
+  let next = /<([^>]+)>;\s*rel="next"/.exec(res.headers.get('link') ?? '')?.[1]
+  const key = Object.keys(body).find((k) => Array.isArray(body[k]))
+  while (next && key) {
+    const more = await fetch(next, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } })
+    if (!more.ok) throw Object.assign(new Error(`GitHub API ${more.status} on ${next}`), { status: more.status })
+    body[key].push(...((await more.json())[key] ?? []))
+    next = /<([^>]+)>;\s*rel="next"/.exec(more.headers.get('link') ?? '')?.[1]
+  }
+  return body
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

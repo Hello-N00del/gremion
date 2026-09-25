@@ -17,6 +17,14 @@
     "/repos/Hello-N00del/gremion/actions/runners": {
       "total_count": 0,
       "runners": []
+    },
+    "/users/Hello-N00del": {
+      "login": "Hello-N00del",
+      "type": "User"
+    },
+    "/repos/Hello-N00del/gremion/dependabot/secrets": {
+      "total_count": 0,
+      "secrets": []
     }
   }
 }
