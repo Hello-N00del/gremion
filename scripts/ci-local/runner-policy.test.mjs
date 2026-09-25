@@ -102,6 +102,76 @@ test('checkWorkflowText flags the canonical SOPS age var name (AGE_SECRET_KEY, n
   assert.equal(flags('STAGE_ENV_NAME'), 0, 'a name that merely CONTAINS "age" as a substring must not false-positive')
 })
 
+// --- round-5 HIGH fix: structural runs-on classification, fail closed ------
+// The old text-regex denylist failed OPEN on every one of these — proven in
+// round 4's verifier probe (.scratch/probe-rp.mjs) against the PRE-fix code.
+// checkWorkflowText must now flag every one of them.
+
+test('checkWorkflowText is RED on runs-on: self-hosted with a trailing YAML comment (the round-4 HIGH: the old end-of-line-anchored regex could not see past it)', () => {
+  assert.equal(checkWorkflowText('jobs:\n  x:\n    runs-on: self-hosted  # our GPU box\n').length, 1)
+})
+
+test('checkWorkflowText is RED on the same trailing-comment shape over CRLF line endings', () => {
+  assert.equal(checkWorkflowText('jobs:\r\n  x:\r\n    runs-on: self-hosted  # pi box\r\n').length, 1)
+})
+
+test('checkWorkflowText is RED on a quoted \'runs-on\' key (structural: a real parser treats a quoted key identically to a bare one)', () => {
+  assert.equal(checkWorkflowText("jobs:\n  x:\n    'runs-on': self-hosted\n").length, 1)
+})
+
+test('checkWorkflowText is RED on a custom label with no "self-hosted" string at all (runs-on: my-raspberry-pi) — GitHub lets a self-hosted runner be targeted by a custom label alone', () => {
+  assert.equal(checkWorkflowText('jobs:\n  x:\n    runs-on: my-raspberry-pi\n').length, 1)
+})
+
+test('checkWorkflowText is RED on a runner-group-only object with no "labels" or "self-hosted" text anywhere', () => {
+  assert.equal(checkWorkflowText('jobs:\n  x:\n    runs-on:\n      group: prod-runners\n').length, 1)
+})
+
+test('checkWorkflowText is RED on an unresolvable runs-on expression (${{ vars.RUNNER }} / ${{ inputs.runner }}), never having contained "self-hosted"', () => {
+  assert.equal(checkWorkflowText('jobs:\n  x:\n    runs-on: ${{ vars.RUNNER }}\n').length, 1)
+  assert.equal(checkWorkflowText('jobs:\n  x:\n    runs-on: ${{ inputs.runner }}\n').length, 1)
+})
+
+test('checkWorkflowText is RED on a folded/literal block-scalar runs-on value (runs-on: >-\\n  self-hosted)', () => {
+  assert.equal(checkWorkflowText('jobs:\n  x:\n    runs-on: >-\n      self-hosted\n').length, 1)
+})
+
+test('checkWorkflowText is GREEN when a matrix-supplied runs-on resolves EVERY declared combination to a hosted label (precision improvement over the old "self-hosted anywhere in the file" fallback)', () => {
+  const text = 'jobs:\n  x:\n    strategy:\n      matrix:\n        os: [ubuntu-latest, windows-2022]\n    runs-on: ${{ matrix.os }}\n'
+  assert.deepEqual(checkWorkflowText(text), [])
+})
+
+test('checkWorkflowText is RED when a matrix key referenced by runs-on is not declared in strategy.matrix at all (unresolved, fails closed)', () => {
+  const text = 'jobs:\n  x:\n    strategy:\n      matrix:\n        os: [ubuntu-latest]\n    runs-on: ${{ matrix.arch }}\n'
+  assert.equal(checkWorkflowText(text).length, 1)
+})
+
+test('checkWorkflowText does not flag a reusable-workflow call job (uses:, no runs-on) alongside an ordinary hosted job', () => {
+  const text = 'jobs:\n  call:\n    uses: ./.github/workflows/other.yml\n  build:\n    runs-on: ubuntu-latest\n'
+  assert.deepEqual(checkWorkflowText(text), [])
+})
+
+test('checkWorkflowText is RED (rule: unparseable) on a workflow that fails to parse at all, and reports nothing else', () => {
+  const text = 'jobs:\n  x:\n    runs-on: [self-hosted, ubuntu-latest\n' // unclosed flow sequence
+  const findings = checkWorkflowText(text)
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].rule, 'unparseable')
+})
+
+test('checkWorkflowText is RED (rule: unparseable) on tab-indented YAML, which real GitHub Actions also refuses to run', () => {
+  const findings = checkWorkflowText('jobs:\n  x:\n\trun-on: ubuntu-latest\n')
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].rule, 'unparseable')
+})
+
+test('checkWorkflowText is RED on a job body that is a plain scalar, not a mapping (malformed, fails closed rather than crashing)', () => {
+  assert.equal(checkWorkflowText('jobs:\n  x: "oops"\n').length, 1)
+})
+
+test('checkWorkflowText scans SCALAR VALUES, not raw text — a comment that merely mentions a sensitive secret name is never a finding', () => {
+  assert.deepEqual(checkWorkflowText('# this workflow used to have a secrets.DEPLOY_SSH_KEY, removed\njobs:\n  x:\n    runs-on: ubuntu-latest\n'), [])
+})
+
 test('todayIso returns YYYY-MM-DD from an injected clock', () => {
   assert.equal(todayIso(new Date('2026-09-25T12:00:00Z')), '2026-09-25')
 })

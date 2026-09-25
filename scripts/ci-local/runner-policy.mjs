@@ -20,54 +20,86 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { parseDocument } from 'yaml'
 
-// Inline forms only: a scalar (`runs-on: self-hosted`), an inline list
-// (`runs-on: [self-hosted, ...]`) or an inline flow map
-// (`runs-on: {labels: self-hosted}`) — all on the SAME line as `runs-on:`.
-// Block forms (a YAML list or map on the following, more-indented lines) are
-// not regex-shaped at all; `detectSelfHostedRunner` below handles those by
-// scanning indentation instead of trying to extend this regex.
-const SELF_HOSTED_INLINE_RE = /runs-on:\s*(\[[^\]]*\bself-hosted\b[^\]]*\]|\{[^}]*\bself-hosted\b[^}]*\}|['"]?self-hosted['"]?\s*$)/im
-const MATRIX_RUNS_ON_RE = /runs-on:\s*\$\{\{\s*matrix\./i
+// HIGH fix (round 5): the previous regex denylist scanned raw text lines
+// and failed OPEN on ordinary YAML a scanner should have no trouble with —
+// a trailing comment on a plain-scalar `runs-on: self-hosted  # gpu box`
+// slipped past its end-of-line anchor entirely, and a custom label
+// (`runs-on: my-raspberry-pi`), a runner `group:`, a `${{ vars.* }}` /
+// `${{ inputs.* }}` expression and a quoted key all returned NO finding.
+// This file now parses each workflow structurally with `yaml` (already
+// resolved in the lockfile — see package.json/pnpm-lock.yaml, no build
+// script) and classifies every `jobs.*.runs-on` against an ALLOWLIST of
+// GitHub-hosted runner labels, rather than denylisting known-bad ones:
+// PASS only when a value resolves to one or more allowlisted labels;
+// everything else — a custom label, a `group`/`labels` object, an
+// unresolvable expression, a malformed job body, or a workflow that fails
+// to parse at all — fails CLOSED.
 const SECRET_REF_RE = /secrets(?:\.([A-Za-z0-9_]+)|\[\s*['"]([A-Za-z0-9_]+)['"]\s*\])/g
 const SECRETS_TOJSON_RE = /toJSON\(\s*secrets\s*\)/
-const SECRETS_INHERIT_RE = /secrets:\s*inherit\b/
 // Bounded so a name that merely CONTAINS "age" (STAGE_ENV_NAME, MESSAGE_ID)
 // never false-positives: AGE must stand alone between start/end and `_`.
 const SENSITIVE_SECRET_NAME_RE = /DEPLOY|SIGN(ING)?|SSH|GPG|SOPS|COSIGN|KEYSTORE|PRIVATE_KEY|HOST_KEY|(?:^|_)AGE(?:_|$)/i
 
+// GitHub-hosted runner labels only: ubuntu-latest/windows-latest/macos-latest,
+// their dated variants (ubuntu-22.04, windows-2022, macos-14) and GitHub's own
+// larger-runner suffixes (-{4,8,16,32,64}-cores on ubuntu/windows, -large/
+// -xlarge on macos). Anything that is not one of these — a custom label, a
+// runner-group name, an unresolved expression — is NOT github-hosted as far
+// as this guard can prove, so `isSafeRunsOn` below fails closed on it.
+const GITHUB_HOSTED_LABEL_RE =
+  /^ubuntu-(?:latest|\d{2}\.\d{2})(?:-(?:4|8|16|32|64)-cores)?$|^windows-(?:latest|\d{4})(?:-(?:4|8|16|32|64)-cores)?$|^macos-(?:latest|\d{1,2})(?:-(?:large|xlarge))?$/i
+const MATRIX_EXPR_RE = /^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$/
+const ANY_EXPR_RE = /\$\{\{/
+
+function isHostedLabel(value) {
+  return typeof value === 'string' && GITHUB_HOSTED_LABEL_RE.test(value.trim())
+}
+
+/** `strategy.matrix.<key>` for one job body, or undefined if it is not a plain array/object shape this file resolves. */
+function resolveMatrixKey(jobBody, key) {
+  const matrix = jobBody && typeof jobBody === 'object' ? jobBody.strategy?.matrix : undefined
+  if (!matrix || typeof matrix !== 'object' || Array.isArray(matrix)) return undefined
+  return matrix[key]
+}
+
 /**
- * `runs-on:` beyond the inline forms `SELF_HOSTED_INLINE_RE` already covers:
- *  - a YAML BLOCK list (`runs-on:` with no value, then indented `- item`
- *    lines below it) or a block flow map (indented `key: value` lines) —
- *    found by scanning lines more-indented than `runs-on:` itself, stopping
- *    at the first line that is not (dedent = end of this block).
- *  - a MATRIX-supplied runner (`runs-on: ${{ matrix.os }}`) — this file
- *    never resolves what matrix.os expands to at any given run, so it fails
- *    CLOSED: if the word `self-hosted` appears anywhere in the file (in
- *    practice, in that same job's `strategy.matrix` values), the runner is
- *    treated as possibly self-hosted.
+ * True only when `value` (a job's `runs-on`, or one element of it) resolves
+ * PROVABLY to GitHub-hosted runner(s). Anything this cannot prove — an
+ * object (`group`/`labels` form), a non-matrix expression, an unresolved or
+ * partially-resolved matrix reference, a number/null/other type, or a plain
+ * string that is not an allowlisted label — returns false (fail closed).
  */
-export function detectSelfHostedRunner(text) {
-  if (SELF_HOSTED_INLINE_RE.test(text)) return true
-  const lines = text.split(/\r?\n/)
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^(\s*)runs-on:\s*(.*)$/)
-    if (!m) continue
-    const [, indentStr, rest] = m
-    const indent = indentStr.length
-    if (rest.trim() === '') {
-      for (let j = i + 1; j < lines.length; j++) {
-        if (lines[j].trim() === '') continue
-        const lineIndent = lines[j].match(/^(\s*)/)[1].length
-        if (lineIndent <= indent) break
-        if (/self-hosted/i.test(lines[j])) return true
-      }
-    } else if (MATRIX_RUNS_ON_RE.test(lines[i]) && /self-hosted/i.test(text)) {
-      return true
+export function isSafeRunsOn(value, jobBody) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    const matrixMatch = trimmed.match(MATRIX_EXPR_RE)
+    if (matrixMatch) {
+      const resolved = resolveMatrixKey(jobBody, matrixMatch[1])
+      // Every combination the matrix declares for this key must itself
+      // resolve to a hosted label, or this fails closed — an unresolved
+      // matrix key (undefined), a non-array value, or an empty list all
+      // count as unresolvable rather than as an empty (vacuous) PASS.
+      return Array.isArray(resolved) && resolved.length > 0 && resolved.every((v) => isSafeRunsOn(v, jobBody))
     }
+    if (ANY_EXPR_RE.test(trimmed)) return false // ${{ vars.* }}, ${{ inputs.* }}, etc. — cannot classify, fail closed
+    return isHostedLabel(trimmed)
   }
+  if (Array.isArray(value)) {
+    return value.length > 0 && value.every((v) => isSafeRunsOn(v, jobBody))
+  }
+  // An object (`{group: ..., labels: ...}`), null, a number, a boolean — none
+  // of these is "a string or list of strings you can classify" as hosted.
   return false
+}
+
+/** Every string LEAF value in a parsed workflow tree (never keys, never comments — those are not value nodes at all once parsed). */
+function collectStrings(node, out = []) {
+  if (typeof node === 'string') out.push(node)
+  else if (Array.isArray(node)) for (const v of node) collectStrings(v, out)
+  else if (node && typeof node === 'object') for (const v of Object.values(node)) collectStrings(v, out)
+  return out
 }
 
 /**
@@ -115,27 +147,85 @@ export function listWorkflowFiles(repoRoot) {
 
 /**
  * Findings in one workflow file's text: `{ rule, detail }[]`.
- * rule is 'self-hosted' or 'sensitive-secret'.
+ * rule is 'self-hosted', 'sensitive-secret' or 'unparseable'.
+ *
+ * Structural, not line-oriented: the file is parsed with `yaml` and every
+ * check below walks the parsed tree. A workflow that fails to parse is its
+ * own (fail-closed) finding and nothing further is checked — an unparseable
+ * file is never a vacuous PASS.
  */
 export function checkWorkflowText(text) {
   const findings = []
-  if (detectSelfHostedRunner(text)) {
-    findings.push({ rule: 'self-hosted', id: 'self-hosted', detail: 'runs-on names (or may resolve to) a self-hosted runner' })
+  let doc
+  try {
+    doc = parseDocument(text, { strict: true })
+  } catch (err) {
+    return [{ rule: 'unparseable', id: 'unparseable', detail: `workflow YAML failed to parse (${err.message}) — failing closed` }]
   }
-  const seen = new Set()
-  for (const m of text.matchAll(SECRET_REF_RE)) {
-    const name = m[1] ?? m[2]
-    if (seen.has(name)) continue
-    if (SENSITIVE_SECRET_NAME_RE.test(name)) {
-      seen.add(name)
-      findings.push({ rule: 'sensitive-secret', id: `secret:${name}`, detail: `references secrets.${name} (signing/age/SSH/deploy)` })
+  if (doc.errors.length > 0) {
+    return [
+      {
+        rule: 'unparseable',
+        id: 'unparseable',
+        detail: `workflow YAML failed to parse (${doc.errors.map((e) => e.message.split('\n')[0]).join('; ')}) — failing closed`,
+      },
+    ]
+  }
+  let parsed
+  try {
+    parsed = doc.toJS()
+  } catch (err) {
+    return [{ rule: 'unparseable', id: 'unparseable', detail: `workflow YAML could not be resolved (${err.message}) — failing closed` }]
+  }
+
+  const jobsObj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.jobs : undefined
+  const reasons = []
+  if (jobsObj !== undefined && (jobsObj === null || typeof jobsObj !== 'object' || Array.isArray(jobsObj))) {
+    reasons.push(`'jobs' is not a mapping (${JSON.stringify(jobsObj)}) — failing closed`)
+  } else if (jobsObj) {
+    for (const [jobName, jobBody] of Object.entries(jobsObj)) {
+      if (jobBody === null || typeof jobBody !== 'object' || Array.isArray(jobBody)) {
+        reasons.push(`job '${jobName}': body is not a mapping — failing closed`)
+        continue
+      }
+      if (!('runs-on' in jobBody)) continue // no runner declared here (e.g. a reusable-workflow `uses:` call)
+      if (!isSafeRunsOn(jobBody['runs-on'], jobBody)) {
+        reasons.push(`job '${jobName}': runs-on ${JSON.stringify(jobBody['runs-on'])} does not resolve to a known GitHub-hosted runner — failing closed`)
+      }
     }
   }
-  if (SECRETS_TOJSON_RE.test(text)) {
-    findings.push({ rule: 'sensitive-secret', id: 'secrets-tojson', detail: 'toJSON(secrets) serializes the entire secrets context — treated as sensitive, fail closed' })
+  if (reasons.length > 0) {
+    findings.push({ rule: 'self-hosted', id: 'self-hosted', detail: reasons.join('; ') })
   }
-  if (SECRETS_INHERIT_RE.test(text)) {
-    findings.push({ rule: 'sensitive-secret', id: 'secrets-inherit', detail: 'secrets: inherit passes every secret to a reusable workflow — treated as sensitive, fail closed' })
+
+  // Secret references: scan every parsed STRING VALUE (never a comment,
+  // never a key), so a hit can only come from something the workflow will
+  // actually evaluate at run time.
+  const seen = new Set()
+  for (const s of collectStrings(parsed)) {
+    for (const m of s.matchAll(SECRET_REF_RE)) {
+      const name = m[1] ?? m[2]
+      if (seen.has(`secret:${name}`)) continue
+      if (SENSITIVE_SECRET_NAME_RE.test(name)) {
+        seen.add(`secret:${name}`)
+        findings.push({ rule: 'sensitive-secret', id: `secret:${name}`, detail: `references secrets.${name} (signing/age/SSH/deploy)` })
+      }
+    }
+    if (SECRETS_TOJSON_RE.test(s) && !seen.has('secrets-tojson')) {
+      seen.add('secrets-tojson')
+      findings.push({ rule: 'sensitive-secret', id: 'secrets-tojson', detail: 'toJSON(secrets) serializes the entire secrets context — treated as sensitive, fail closed' })
+    }
+  }
+  // `secrets: inherit` is a structural key/value pair on a reusable-workflow
+  // CALL job, not a text pattern — checked directly against the parsed job
+  // bodies rather than re-scanning strings for the substring "inherit".
+  if (jobsObj && typeof jobsObj === 'object' && !Array.isArray(jobsObj)) {
+    for (const jobBody of Object.values(jobsObj)) {
+      if (jobBody && typeof jobBody === 'object' && jobBody.secrets === 'inherit' && !seen.has('secrets-inherit')) {
+        seen.add('secrets-inherit')
+        findings.push({ rule: 'sensitive-secret', id: 'secrets-inherit', detail: 'secrets: inherit passes every secret to a reusable workflow — treated as sensitive, fail closed' })
+      }
+    }
   }
   return findings
 }
