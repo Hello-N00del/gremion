@@ -120,3 +120,51 @@ workstation; it was operator-local glue, not kernel surface, and has been remove
   is enforced by the boundary backstop (`lib/server/boundary/kernel-clean.test.ts`).
   `$lib/server/governance/org-units-db` is consumed repo-wide. Rules R-FK + R-IMP-1..5 implement
   the two rules the design §7 explicitly names. (See plan §3 for the complete allowlist rationale.)
+
+## 6. Spec-first pipeline (`@gremion/generated-clients`)
+
+TASK-030 (PRD-PLAT-002b/008, TRD-403/404/405). `packages/generated-clients/` owns:
+
+- `registry.json` (this directory) — every first-party spec, one entry each; the check
+  fails on an unregistered spec, a missing file, or an empty registry.
+- Structural validation + `$ref` closure (percent-decoded) on all four registered specs,
+  including calendar and content (closes the `../KNOWN_ISSUES.md` gap referenced in §3.2).
+- The OpenAPI compat gate (`oasdiff-gate.ts`, ported from `gremion-ui/scripts/contracts-gate.ts`
+  `ab45a0e` — PATH `oasdiff`, then `tufin/oasdiff` only if the docker daemon answers, never a
+  bare docker exit code as a verdict) plus the version-bump rule: remove/narrow without a
+  MAJOR bump fails, add without a MINOR bump fails, description-only passes regardless of
+  version. No `CONTRACTS_ALLOW_BREAKING` bypass — a bump is the only way through.
+- The same rule for AsyncAPI 3.0 payloads (`asyncapi-compat.ts`), via a purpose-built
+  `components.messages.*.payload` comparator (no mature `@asyncapi/diff` 3.0 support in this
+  lockfile) scoped to: removed/newly-required property, narrowed/changed type, removed enum
+  value (major), new optional property (minor).
+- The codegen drift check (`codegen-drift.ts`): the committed TypeScript client under
+  `packages/generated-clients/src/generated/` must equal what regenerating from the current
+  spec produces — catches a hand edit, a spec changed without regeneration, or a missing
+  output, naming the file.
+- `validateModuleContracts` (`module-contracts.ts`, `schema/module-contracts.schema.json`) —
+  a module's provides/requires declaration against this registry (D2 adapted; the
+  migration-range and nav/realm checks are TASK-021's, per the brief's decision 5).
+
+Run: `pnpm --filter @gremion/generated-clients contracts:check` (Q2 default — `verify`,
+TASK-045, wires this in once it lands).
+
+**Acceptance demo, run against the real tree** (`contracts/kernel/openapi.governance.json`,
+`CONTRACTS_BASE_REF=HEAD` to isolate a single seeded edit from the committed 0.2.0->1.0.0
+bump already in this spec's history):
+
+- Removed `OrgUnit.properties.description` (a real response field), no bump:
+  `contracts:check` FAILS — `breaking change (oasdiff (PATH)) requires a MAJOR bump; got
+  1.0.0 -> 1.0.0 (none)`, reason `response-optional-property-removed` (oasdiff WARN level).
+  Re-run with the field re-added: OK.
+- Added a field to the same schema, no bump: `contracts:check` FAILS — `non-breaking
+  structural change (an addition) requires at least a MINOR bump; got 1.0.0 -> 1.0.0
+  (none)`. Bumped to 1.1.0: OK.
+
+Both seeded edits were scratch-only (never committed); see `ecc1168` for the two real bugs
+this demo caught before the gate could be trusted to enforce either rule: `oasdiff`'s default
+`--fail-on ERR` does not flag an optional-property removal (WARN level, not ERR — fixed to
+`--fail-on WARN`), and `stripCompatNoise` matched the OpenAPI/AsyncAPI narrative `description`
+key by name alone, so a data field literally named `description` (as above) was stripped
+before comparison and the two documents looked identical — fixed to only strip a
+`description` key whose value is a plain string.
