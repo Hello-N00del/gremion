@@ -121,18 +121,21 @@ The `gremion-ui` marker needs no host header, no proxy-trust header and no tenan
 row. That is possible because `/healthz` is on a **closed** list,
 `BOOT_AND_RESOLVE_EXEMPT_PATHS` (`gremion-ui/src/lib/server/boot-exempt.ts`),
 which is exactly `['/healthz', '/api/internal/']`; a test pins it by value, so a
-third entry is a reviewed change, not a drive-by. A request on that list is
-handed on by the tenant resolver without a lookup and is answered while the
-process boots:
+third entry is a reviewed change, not a drive-by. A request on that list that
+names no tenant is handed on by the tenant resolver without a lookup, skips
+Auth.js and the session guard, and is answered while the process boots:
 
 - `/healthz` always.
 - `/api/internal/…` only when the request names no tenant (no
   `x-forwarded-host`, no `x-tenant-id`), e.g. the switch's evict fan-out on the
   container network. A leaf callback or an internal hop that names a tenant is
-  resolved and gated as before, and the edge always stamps `x-forwarded-host`,
-  so nothing arriving through Traefik takes the exemption. Every handler under
-  `routes/api/internal/` must call `isInternalTrustRequest` or
-  `constantTimeEqual`; a static test fails the build otherwise.
+  resolved and gated as before — resolver, boot 503, session, Bearer,
+  iss-match and module gates — and the edge always stamps `x-forwarded-host`,
+  so nothing arriving through Traefik takes the exemption. Every endpoint that
+  can serve a path under `/api/internal/` (route groups and params included)
+  must call `isInternalTrustRequest` or `constantTimeEqual`, and no page or
+  layout may serve one; a static test fails the build otherwise. It is a
+  tripwire, not a proof: each such handler still needs review.
 
 Two properties are accepted and deliberate:
 
@@ -142,8 +145,11 @@ Two properties are accepted and deliberate:
   half-booted colour — the switch gate — has to read `/api/health` as well.
 - **Slug disclosure.** Anyone who can reach `/healthz` can ask whether a host is
   a registered tenant and learn its slug. The lookup goes through the registry's
-  cached host resolution, and misses are remembered for the cache lifetime, so a
-  probe never costs one database query.
+  cached host resolution, misses are remembered for the cache lifetime (errors
+  and lookups slower than 2 s for 5 s, answering `null`), and concurrent probes
+  of one host share one lookup, so repeated probes of a host do not cost one
+  database query each. A never-seen host costs one lookup, as it does on the
+  tenant resolver.
 
 ## Boot determinism
 
@@ -157,7 +163,10 @@ answers `503` with `Retry-After: 5`.
 What happens when boot fails depends on the failure:
 
 - **Transient** (the database went away mid-boot): the attempt is dropped and one
-  re-attempt is scheduled 5 s later; the process heals without a restart.
+  re-attempt is scheduled 5 s later; the process heals without a restart. The
+  tenth consecutive transient failure is treated as non-transient, so a
+  database that answers but keeps failing boot cannot keep the process in a
+  healthy-looking `503` state forever.
 - **Non-transient** (wrong credentials, a schema fault, or the 60-attempt budget
   running out, roughly 14–27 minutes): boot logs the cause and exits with status
   1, and `restart: unless-stopped` starts a fresh container. A wrong database
