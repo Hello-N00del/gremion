@@ -49,6 +49,21 @@ EOF
     done
     printf '{"ts":"2026-09-09T02:00:00Z","ok":true,"label":"daily","bytes":1000}\n' \
         > "${GREMION_ROOT}/runtime/last-backup.json"
+    seed_trust_anchor
+}
+
+# TASK-046: step 2 verifies every first-party pinned digest against the host
+# key. Every case gets the host key and a cosign that vouches for exactly the
+# digest and repository it was asked about; section J breaks each on purpose.
+# The key body is a placeholder (cosign is shimmed): no key material here.
+seed_trust_anchor() {
+    printf '%s\n' '-----BEGIN PUBLIC KEY-----' 'placeholder-not-a-key' '-----END PUBLIC KEY-----' \
+        > "${GREMION_ROOT}/etc/cosign.pub"
+    shim cosign '
+ref="${*: -1}"
+repo="$(printf "%s" "${ref%@*}" | tr "[:upper:]" "[:lower:]")"
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"},\"type\":\"cosign container image signature\"},\"optional\":null}]\n" "$repo" "${ref##*@}"
+exit 0'
 }
 
 stub_git() {
@@ -710,4 +725,129 @@ exit 0
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3 --soak-minutes"
     [ "$status" -eq 2 ]
     [[ "$output" == *"option --soak-minutes needs a value"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# J. first-party image signatures (TASK-046, TRD-441)
+# ---------------------------------------------------------------------------
+
+@test "every first-party pinned digest is verified with the host key before any manifest read or pull" {
+    stub_all
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    local img
+    for img in gremion-ui@sha256:1111111111111111111111111111111111111111111111111111111111111111 \
+               gremion-public@sha256:2222222222222222222222222222222222222222222222222222222222222222 \
+               gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333; do
+        assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
+    done
+    [[ "$output" == *"3 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    # Order: the last verify precedes the first manifest read and the first pull.
+    local last_verify first_manifest first_pull
+    last_verify="$(grep -n '^cosign verify' "$SHIM_LOG" | tail -1 | cut -d: -f1)"
+    first_manifest="$(grep -n '^docker manifest inspect' "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    first_pull="$(grep -n '^docker compose .* pull' "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    [ -n "$last_verify" ] && [ -n "$first_manifest" ] && [ -n "$first_pull" ]
+    [ "$last_verify" -lt "$first_manifest" ]
+    [ "$last_verify" -lt "$first_pull" ]
+}
+
+@test "a failing signature verification dies at step 2, before any compose pull" {
+    stub_all
+    shim cosign 'printf "Error: no matching signatures\n" >&2; exit 12'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-ui@sha256:"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    # The call log proves what did NOT happen: the verifier ran, no manifest
+    # was read and nothing was pulled. Counts, not `! grep`.
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -ge 1 ]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -c '^docker manifest' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -cE ' STEP (3|4|5|6|7|8|9|10|11|12) ' "${GREMION_ROOT}/runtime/deploy.log")" -eq 0 ]
+}
+
+@test "a cosign that exits 0 but vouches for another digest is refused" {
+    stub_all
+    shim cosign '
+ref="${*: -1}"
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"sha256:%064d\"}}}]\n" "${ref%@*}" 0
+exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no claim binds sha256:1111"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a cosign that vouches for the digest under another repository is refused" {
+    stub_all
+    shim cosign '
+ref="${*: -1}"
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"ghcr.io/someone-else/x\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref##*@}"
+exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no claim binds"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a missing host trust anchor is a refusal at step 2, never a skip" {
+    stub_all
+    rm -f "${GREMION_ROOT}/etc/cosign.pub"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"trust anchor absent: ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c '^cosign' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a symlinked host trust anchor is refused (the anchor is a file the host owns)" {
+    stub_all
+    mv "${GREMION_ROOT}/etc/cosign.pub" "${BATS_TEST_TMPDIR}/elsewhere.pub"
+    ln -s "${BATS_TEST_TMPDIR}/elsewhere.pub" "${GREMION_ROOT}/etc/cosign.pub"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"trust anchor absent"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a cosign.pub shipped in the release tree is never passed to cosign" {
+    stub_all
+    local tree="${BATS_TEST_TMPDIR}/treekey"
+    mkdir -p "$tree"; cp -R "${FIXTURES}/valid"/. "$tree"/
+    printf '%s\n' '-----BEGIN PUBLIC KEY-----' 'tree-placeholder' '-----END PUBLIC KEY-----' > "$tree/cosign.pub"
+    export FIXTURE_RELEASE="$tree"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 3 ]
+    [ "$(grep -c 'releases/dist-v1.2.3/cosign.pub' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a pins layer with no first-party image is refused, not passed vacuously" {
+    stub_all
+    local tp="${BATS_TEST_TMPDIR}/thirdparty"
+    mkdir -p "$tp"; cp -R "${FIXTURES}/valid"/. "$tp"/
+    cat > "$tp/docker-compose.pins.yml" <<'PINS'
+services:
+  postgres:
+    image: docker.io/library/postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
+PINS
+    export FIXTURE_RELEASE="$tp"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no first-party image"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "cosign missing from the host is a refusal, never a skip" {
+    stub_all
+    rm -f "${SHIM_DIR}/cosign"
+    # A dev box may carry a real cosign; it then fails on the synthetic
+    # digests instead. Either way: refused at step 2, nothing pulled.
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cosign"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
