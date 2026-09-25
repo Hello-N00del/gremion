@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleDisplayName</key>
+    <string>StuRaOS</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>stura</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(FLUTTER_BUILD_NAME)</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleVersion</key>
+    <string>$(FLUTTER_BUILD_NUMBER)</string>
+
+    <!--
+        AppAuth redirect: stura://auth/callback (custom scheme, not a
+        Universal Link).
+
+        G-051: custom URI schemes are interceptable. Any other iOS app
+        declaring the same scheme in CFBundleURLSchemes registers as a
+        handler. Mitigations (kept consistent with lib/services/auth_service.dart):
+          - PKCE on by default (flutter_appauth v7+).
+          - `state` parameter auto-generated and validated per authorize().
+        Migration to a Universal Link is blocked on flutter_appauth issue
+        #566 (authorize() never returns with a Universal Link redirect URI).
+        See docs/specs/mobile-oidc-scheme-migration.md.
+    -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>com.stura.app</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>stura</string>
+            </array>
+        </dict>
+    </array>
+
+    <!--
+        TASK-166: UIBackgroundModes [fetch, remote-notification] removed with
+        FCM. There is no active push transport on iOS (TRD-293); the push
+        unit (TASK-176) brings back whatever background mode it needs.
+    -->
+
+    <!--
+        G-046: no NSAppTransportSecurity exception in this (Release/Profile)
+        plist. Debug builds use Info-Debug.plist instead (selected by
+        INFOPLIST_FILE in Flutter/Debug.xcconfig), which is this file plus
+        NSAppTransportSecurity { NSAllowsLocalNetworking = true } for
+        plain-HTTP dev services. test/guards/ios_info_plist_guard_test.dart
+        keeps the two files identical apart from that one key.
+    -->
+
+    <!--
+        Debug only (see Info.plist and Flutter/Debug.xcconfig): lets a debug
+        build reach plain-HTTP dev services on the local network.
+    -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+
+    <!-- Required by local_auth for Face ID -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>StuRaOS uses Face ID to unlock the app.</string>
+
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <!--
+        Flutter 3.41 scaffold (TASK-166): UIScene lifecycle. AppDelegate
+        registers plugins in didInitializeImplicitFlutterEngine, which runs
+        through the scene configuration below (SceneDelegate).
+    -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+        <key>UISceneConfigurations</key>
+        <dict>
+            <key>UIWindowSceneSessionRoleApplication</key>
+            <array>
+                <dict>
+                    <key>UISceneClassName</key>
+                    <string>UIWindowScene</string>
+                    <key>UISceneConfigurationName</key>
+                    <string>flutter</string>
+                    <key>UISceneDelegateClassName</key>
+                    <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+                    <key>UISceneStoryboardFile</key>
+                    <string>Main</string>
+                </dict>
+            </array>
+        </dict>
+    </dict>
+    <key>UIApplicationSupportsIndirectInputEvents</key>
+    <true/>
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+    <key>UIMainStoryboardFile</key>
+    <string>Main</string>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+</dict>
+</plist>

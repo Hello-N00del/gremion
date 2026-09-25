@@ -38,7 +38,8 @@ android {
 
     defaultConfig {
         applicationId = "com.stura.app"
-        minSdk = flutter.minSdkVersion
+        // TRD-290: Android 10+ (API 29), a literal (TASK-166). targetSdk is TASK-179.
+        minSdk = 29
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

@@ -1,0 +1,10 @@
+#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
+#include "Generated.xcconfig"
+
+// G-046 / TASK-166: Debug builds use Runner/Info-Debug.plist, which is
+// Runner/Info.plist plus NSAppTransportSecurity { NSAllowsLocalNetworking }
+// so a debug build can reach plain-HTTP dev services on the local network.
+// Release and Profile keep Runner/Info.plist (set in project.pbxproj), which
+// has no ATS exception. The Runner target's Debug configuration deliberately
+// does not set INFOPLIST_FILE, so this value applies.
+INFOPLIST_FILE = Runner/Info-Debug.plist

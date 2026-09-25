@@ -50,33 +50,56 @@
         </dict>
     </array>
 
-    <key>UIBackgroundModes</key>
-    <array>
-        <string>fetch</string>
-        <string>remote-notification</string>
-    </array>
+    <!--
+        TASK-166: UIBackgroundModes [fetch, remote-notification] removed with
+        FCM. There is no active push transport on iOS (TRD-293); the push
+        unit (TASK-176) brings back whatever background mode it needs.
+    -->
 
     <!--
-        G-046: `NSAppTransportSecurity { NSAllowsLocalNetworking = true }`
-        was removed from this production plist. Allowing local networking
-        in release builds relaxed ATS for production users.
-
-        The plan's strategy was to split the plist via xcconfig (debug-only
-        overlay) and ship a clean release plist. That split requires a
-        full `Runner.xcodeproj` scaffold — which does NOT currently exist
-        in this tree (the iOS project has Info.plist + GeneratedPluginRegistrant
-        only). Recorded as addendum-2 §2 A-014: future iOS macOS pass must
-        re-scaffold the xcodeproj and reintroduce `NSAllowsLocalNetworking`
-        in Debug-only via `Info-Debug.plist` + `Debug.xcconfig`. Until then,
-        local dev on iOS that needs to talk to plain-HTTP localhost will
-        require a separate, local-only patch — release is safe.
+        G-046: no NSAppTransportSecurity exception in this (Release/Profile)
+        plist. Debug builds use Info-Debug.plist instead (selected by
+        INFOPLIST_FILE in Flutter/Debug.xcconfig), which is this file plus
+        NSAppTransportSecurity { NSAllowsLocalNetworking = true } for
+        plain-HTTP dev services. test/guards/ios_info_plist_guard_test.dart
+        keeps the two files identical apart from that one key.
     -->
 
     <!-- Required by local_auth for Face ID -->
     <key>NSFaceIDUsageDescription</key>
     <string>StuRaOS uses Face ID to unlock the app.</string>
 
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
     <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <!--
+        Flutter 3.41 scaffold (TASK-166): UIScene lifecycle. AppDelegate
+        registers plugins in didInitializeImplicitFlutterEngine, which runs
+        through the scene configuration below (SceneDelegate).
+    -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+        <key>UISceneConfigurations</key>
+        <dict>
+            <key>UIWindowSceneSessionRoleApplication</key>
+            <array>
+                <dict>
+                    <key>UISceneClassName</key>
+                    <string>UIWindowScene</string>
+                    <key>UISceneConfigurationName</key>
+                    <string>flutter</string>
+                    <key>UISceneDelegateClassName</key>
+                    <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+                    <key>UISceneStoryboardFile</key>
+                    <string>Main</string>
+                </dict>
+            </array>
+        </dict>
+    </dict>
+    <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>
@@ -85,6 +108,13 @@
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
