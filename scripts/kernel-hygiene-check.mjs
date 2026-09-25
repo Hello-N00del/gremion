@@ -1756,6 +1756,154 @@ check('n3 the "absent from the kernel" arithmetic is the product chain minus wha
   return wrong.length ? wrong.join(' | ') : null
 })
 
+// ── (j) the edge router emitter's perimeter (TASK-034) ─────────────────────
+// Three post-conditions the per-tenant router library depends on, each watched
+// RED on a seeded plant by packages/edge-routers/test/hygiene-j.test.ts:
+//
+//   j2  no CDN API token variable anywhere in the kernel. The edge issues its
+//       own certificates over ACME HTTP-01; a CDN DNS-API credential in the
+//       tree means a DNS-01/CDN path crept back, and it would be the one
+//       secret able to repoint every tenant hostname.
+//   j3  no carrier of the deleted StuRa edge planner (spec B B-06): not the
+//       file, not an import of it, not its origin-server constant or its
+//       NS-delegation renderer. Only renderTenantRouter emits routers.
+//   j4  etc/edge is bind-mounted EXACTLY ONCE across the kernel compose files,
+//       read-only, into the traefik service. The app process never holds a
+//       writable mount of the router directory: an app-level compromise must
+//       not be able to publish a Host() router.
+//
+// There is no j1: the StuRa j1 banned Vaultwarden, which is supported here
+// (R8-4, TRD-263). The needles are assembled from parts so this file carries
+// none of the literals it hunts for. docs/superpowers/specs/ is the B0
+// carve-out (byte-identical approved specs that describe these deletions).
+
+const J_TRACKED = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
+  .split('\0')
+  .filter(Boolean)
+  .filter((f) => !SPEC_DOCS_REL.test(f))
+const J_BINARY = /\.(png|jpe?g|gif|ico|pdf|woff2?|ttf|otf|gz|tgz|zip)$/i
+
+function jScan(needle) {
+  const hits = []
+  let scanned = 0
+  for (const f of J_TRACKED) {
+    if (J_BINARY.test(f)) continue
+    const abs = join(ROOT, f)
+    if (!existsSync(abs)) continue
+    scanned++
+    if (needle.test(f)) hits.push(`${f} (path)`)
+    const lines = readFileSync(abs, 'utf8').split('\n')
+    lines.forEach((l, i) => {
+      if (needle.test(l)) hits.push(`${f}:${i + 1}`)
+    })
+  }
+  return { hits, scanned }
+}
+
+const J_MIN_SCANNED = 200 // the kernel tracks ~1100 files; far fewer means the scan is looking at the wrong tree
+
+check('j2 no CDN API token variable in the kernel', () => {
+  const needle = new RegExp(['CF', 'API', 'TOKEN'].join('_'), 'i')
+  const { hits, scanned } = jScan(needle)
+  if (scanned < J_MIN_SCANNED) return `scanned only ${scanned} tracked file(s) — the scan proves nothing`
+  return hits.length ? `found in: ${hits.join(' | ')}` : null
+})
+
+check('j3 no carrier of the deleted edge planner', () => {
+  const needle = new RegExp(
+    [
+      ['edge', 'plan'].join('[-_]'),
+      ['edge', 'Plan'].join(''),
+      ['render', 'Ns', 'Delegation'].join(''),
+      ['DEFAULT', 'ORIGIN', 'SERVER', 'NAME'].join('_'),
+    ].join('|'),
+  )
+  const { hits, scanned } = jScan(needle)
+  if (scanned < J_MIN_SCANNED) return `scanned only ${scanned} tracked file(s) — the scan proves nothing`
+  return hits.length ? `found in: ${hits.join(' | ')}` : null
+})
+
+// j4 reads the compose files as TEXT, because the question is about every
+// spelling that could mount the directory — short syntax, long syntax, a named
+// volume's bind driver_opts — not about what one parser makes of one file. A
+// line naming etc/edge that is neither a recognised short-syntax nor a
+// long-syntax `source:` is itself a failure: unrecognised is not "not a mount".
+const J_COMPOSE = /^(docker-compose[^/]*\.ya?ml|compose\/.+\.ya?ml)$/
+const J_EDGE_DIR = /etc\/edge(?![A-Za-z0-9_-])/
+
+function jServiceAt(lines, i) {
+  for (let k = i; k >= 0; k--) {
+    const m = /^ {2}([A-Za-z0-9._-]+):\s*(#.*)?$/.exec(lines[k])
+    if (m) return m[1]
+    if (/^\S/.test(lines[k]) && !lines[k].startsWith('#')) return null
+  }
+  return null
+}
+
+function jEdgeMounts() {
+  const mounts = []
+  const problems = []
+  const files = J_TRACKED.filter((f) => J_COMPOSE.test(f) && existsSync(join(ROOT, f)))
+  for (const f of files) {
+    const lines = readFileSync(join(ROOT, f), 'utf8').split('\n')
+    lines.forEach((line, i) => {
+      if (/^\s*#/.test(line) || !J_EDGE_DIR.test(line)) return
+      const where = `${f}:${i + 1}`
+      const short = /^\s*-\s*["']?([^"'\s]+)["']?\s*(#.*)?$/.exec(line)
+      const long = /^(\s*)(?:-\s*)?source:\s*["']?([^"'\s]+)["']?\s*(#.*)?$/.exec(line)
+      if (short && !/^\s*-\s*source:/.test(line)) {
+        const parts = short[1].split(':')
+        if (!J_EDGE_DIR.test(parts[0])) {
+          problems.push(`${where}: etc/edge appears in a mount's target or options, not its source: ${line.trim()}`)
+          return
+        }
+        const opts = (parts[2] ?? '').split(',')
+        mounts.push({ where, service: jServiceAt(lines, i), target: parts[1] ?? '', ro: opts.includes('ro') })
+      } else if (long) {
+        const indent = long[1].length
+        let ro = false
+        let target = ''
+        // The rest of this list item: the lines after `source:` indented at
+        // least as deep, plus the lines before it up to the item's `- ` marker.
+        let start = i
+        for (let k = i - 1; k >= 0; k--) {
+          const depth = lines[k].search(/\S/)
+          if (/^\s*-\s/.test(lines[k]) && depth < indent) {
+            start = k // the item's own `- ` marker
+            break
+          }
+          if (depth < indent) break
+          start = k
+        }
+        for (let k = start; k < lines.length; k++) {
+          if (k > i && (lines[k].search(/\S/) < indent || /^\s*-\s/.test(lines[k]))) break
+          if (/^\s*read_only:\s*true\s*(#.*)?$/.test(lines[k])) ro = true
+          const t = /^\s*target:\s*["']?([^"'\s]+)/.exec(lines[k])
+          if (t) target = t[1]
+        }
+        mounts.push({ where, service: jServiceAt(lines, i), target, ro })
+      } else {
+        problems.push(`${where}: names etc/edge in a shape j4 cannot classify, so it cannot prove this is not a mount: ${line.trim()}`)
+      }
+    })
+  }
+  return { files, mounts, problems }
+}
+
+check('j4 etc/edge is mounted exactly once, read-only, into traefik', () => {
+  const { files, mounts, problems } = jEdgeMounts()
+  if (files.length === 0) return 'no kernel compose file found — the scan proves nothing'
+  if (mounts.length !== 1) {
+    problems.push(`${mounts.length} mounts of etc/edge (expected exactly 1): ${mounts.map((m) => `${m.where} [${m.service}]`).join(', ')}`)
+  }
+  for (const m of mounts) {
+    if (!m.ro) problems.push(`${m.where}: the etc/edge mount in service ${m.service} is not read-only`)
+    if (m.service !== 'traefik') problems.push(`${m.where}: etc/edge is mounted into service ${m.service}, not traefik`)
+    if (m.target !== '/etc/traefik/dynamic') problems.push(`${m.where}: etc/edge is mounted at ${m.target || '(no target)'}, not /etc/traefik/dynamic`)
+  }
+  return problems.length ? problems.join(' | ') : null
+})
+
 // ── report ─────────────────────────────────────────────────────────────────
 
 if (failures.length > 0) {
