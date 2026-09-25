@@ -65,7 +65,58 @@ function nodeTestSubcheck({ cwd, files }) {
   return { unparseable: false, collected, passed, failed, skipped }
 }
 
+// On win32 the npm bats shim rejects the C:/ path the recipe's own shell
+// reports as its cwd (Makefile test-host-docker comment), and native bats
+// runs ~200x slower even when it does start. Route through the same
+// container image `make test-host-docker` builds (plus python3, for
+// test/configure-keycloak.bats's `python3 -m json.tool` -- see
+// bats-runner/Dockerfile), against a REAL CLONE: a linked worktree's `.git`
+// is a file whose gitdir line is a host-absolute path the container cannot
+// resolve.
+function batsSubcheckWindows({ cwd, patterns }) {
+  if (!toolAvailable('docker')) {
+    return { toolMissing: 'docker' }
+  }
+  const runnerDir = path.join(cwd, 'test', 'host', 'runner')
+  const batsRunnerDockerfile = path.join(cwd, 'scripts', 'verify', 'bats-runner')
+  const baseBuild = run('docker', ['build', '-q', '-t', 'gremion-bats:local', runnerDir])
+  if (baseBuild.code !== 0) {
+    return { unparseable: true, detail: `docker build gremion-bats:local failed:\n${tail(baseBuild.stdout + baseBuild.stderr)}` }
+  }
+  const pyBuild = run('docker', ['build', '-q', '-t', 'gremion-bats-py:local', batsRunnerDockerfile])
+  if (pyBuild.code !== 0) {
+    return { unparseable: true, detail: `docker build gremion-bats-py:local failed:\n${tail(pyBuild.stdout + pyBuild.stderr)}` }
+  }
+
+  const cloneDir = mkdtempSync(path.join(tmpdir(), 'verify-bats-clone-'))
+  try {
+    const clone = run('git', ['clone', '--no-hardlinks', cwd, cloneDir])
+    if (clone.code !== 0) {
+      return { unparseable: true, detail: `git clone into scratch failed:\n${tail(clone.stdout + clone.stderr)}` }
+    }
+    const files = patterns.flatMap((p) => globSync(p, { cwd: cloneDir })).sort()
+    if (files.length === 0) {
+      return { unparseable: false, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
+    }
+    const res = run(
+      'docker',
+      ['run', '--rm', '-v', `${cloneDir}:/wt`, '-w', '/wt', 'gremion-bats-py:local', '--tap', ...files],
+      { env: { ...process.env, MSYS_NO_PATHCONV: '1' } },
+    )
+    const parsed = parseBatsTap(res.stdout + res.stderr)
+    if (!parsed) {
+      return { unparseable: true, detail: `bats (container) produced no parseable TAP plan\n${tail(res.stdout + res.stderr)}` }
+    }
+    return { unparseable: false, ...parsed }
+  } finally {
+    rmSync(cloneDir, { recursive: true, force: true })
+  }
+}
+
 function batsSubcheck({ cwd, patterns }) {
+  if (process.platform === 'win32') {
+    return batsSubcheckWindows({ cwd, patterns })
+  }
   if (!toolAvailable('bats')) {
     return { toolMissing: 'bats' }
   }
