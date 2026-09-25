@@ -13,21 +13,38 @@ const executable = (f: string) =>
     .filter((l) => !/^\s*--/.test(l))
     .join('\n')
 
-// The kernel-guaranteed least-privilege set the ported 058 grants. news_posts is
-// NOT here: kernel 008_public_portal.sql:4-6 records that it moved out with the
-// content module, so a content-OFF kernel-only install has no such table.
+// The tables the anonymous public portal actually reads (R-E13:
+// gremion-public/src/lib/server/public-db.ts:51,82,105 reads only `protocols`
+// and `org_units`, nothing else). news_posts is NOT here: kernel
+// 008_public_portal.sql:4-6 records that it moved out with the content
+// module, so a content-OFF kernel-only install has no such table;
 // B4a-news-posts-ownership gives content its own grant.
-const KERNEL_PORTAL_TABLES = [
+const KERNEL_PORTAL_TABLES = ['org_units', 'protocols']
+
+// Tables 058 actively REVOKEs rather than merely omitting from portal_tables.
+// `protocol_attendance`, `protocol_action_items` and `protocol_resolutions`
+// are granted directly to gremion_public_reader by kernel
+// 008_public_portal.sql (008:23-29); `resolution_challenges` by
+// 055_resolution_challenges.sql (055:69). Both run before 058 on every
+// install, so these four REVOKEs are load-bearing on a fresh install too —
+// without them gremion_public_reader would still end up holding all four via
+// 008/055 alone. `calendar_events` and `event_recurrence` are not granted by
+// any kernel migration today; their REVOKE is defensive (R-E13). Editing 058
+// in place cannot converge a database that already applied an earlier,
+// six-table version of this filename — the migration runner skips a filename
+// it has already recorded before re-checking its hash — but no such database
+// exists: kernel 058 has never shipped on `main` or `origin/main`.
+const REVOKED_TABLES = [
+  'protocol_attendance',
+  'protocol_action_items',
   'calendar_events',
   'event_recurrence',
-  'org_units',
-  'protocols',
   'protocol_resolutions',
   'resolution_challenges',
 ]
 
 describe('058 public-reader grants', () => {
-  it('055 sorts strictly before 058 — 058 requires resolution_challenges', () => {
+  it('055 sorts strictly before 058 — the REVOKE must run after 055 GRANTs resolution_challenges', () => {
     const list = sorted()
     expect(list.indexOf('055_resolution_challenges.sql')).toBeGreaterThanOrEqual(0)
     expect(list.indexOf('055_resolution_challenges.sql')).toBeLessThan(
@@ -35,12 +52,30 @@ describe('058 public-reader grants', () => {
     )
   })
 
-  it('portal_tables is exactly the kernel-guaranteed set', () => {
+  it('portal_tables is exactly the two tables the anonymous portal reads', () => {
     const body = executable('058_public_reader_grants.sql')
     const block = body.match(/portal_tables CONSTANT text\[\] := ARRAY\[([^\]]*)\]/)
     expect(block, 'portal_tables ARRAY literal not found').not.toBeNull()
     const names = [...block![1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort()
     expect(names).toEqual([...KERNEL_PORTAL_TABLES].sort())
+  })
+
+  it('revoked_tables is a superset of the four tables narrowed out of portal_tables (R-E13)', () => {
+    const body = executable('058_public_reader_grants.sql')
+    const block = body.match(/revoked_tables CONSTANT text\[\] := ARRAY\[([^\]]*)\]/)
+    expect(block, 'revoked_tables ARRAY literal not found').not.toBeNull()
+    const names = [...block![1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1])
+    for (const t of ['calendar_events', 'event_recurrence', 'protocol_resolutions', 'resolution_challenges']) {
+      expect(names, `revoked_tables is missing ${t}`).toContain(t)
+    }
+    // Full-set pin, not just superset: a stray extra revoke is as much a
+    // least-privilege regression as a missing one.
+    expect([...names].sort()).toEqual([...REVOKED_TABLES].sort())
+  })
+
+  it('does not grant news_posts — that table is content-owned (1200_content_news_posts.sql)', () => {
+    const body = executable('058_public_reader_grants.sql')
+    expect(body).not.toMatch(/'news_posts'/)
   })
 
   it('058 still aborts on a missing table rather than granting a partial set', () => {

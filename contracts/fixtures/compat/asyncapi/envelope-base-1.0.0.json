@@ -1,0 +1,52 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "compat fixture (envelope shape)",
+    "version": "1.0.0",
+    "description": "T4 regression fixture: the message payload is a $ref to a components.schemas entry that is itself allOf[Envelope, {properties:{payload:{...}}}] — the real shape every kernel spec uses. Round-1 verifier finding: the comparator only read the message's inline top-level payload.properties and never resolved this, so a nested removal (e.g. payload.payload.attempts) was invisible."
+  },
+  "channels": {
+    "widget.created": {
+      "address": "gremion.default.widget.created.v1"
+    }
+  },
+  "operations": {
+    "onWidgetCreated": {
+      "action": "receive",
+      "channel": { "$ref": "#/channels/widget.created" }
+    }
+  },
+  "components": {
+    "messages": {
+      "WidgetCreated": {
+        "payload": { "$ref": "#/components/schemas/EnvelopeWidget" }
+      }
+    },
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": ["eventId", "payload"],
+        "properties": {
+          "eventId": { "type": "string" },
+          "correlationId": { "type": ["string", "null"] },
+          "payload": { "type": "object" }
+        }
+      },
+      "EnvelopeWidget": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Envelope" },
+          { "type": "object", "properties": { "payload": {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "attempts": { "type": "integer" },
+              "status": { "type": "string", "enum": ["draft", "active", "archived"] }
+            }
+          } } }
+        ]
+      }
+    }
+  }
+}

@@ -26,6 +26,28 @@
 # (it ran on 16 until then, i.e. it asserted of 18 what it measured on 16):
 # 28 data-plane + 4 control files applied and all 26 in-database
 # post-conditions held, ending "all post-conditions hold".
+#
+# Re-measured 2026-09-25 (TASK-054, R-E13): the six-table grant loop above was
+# replaced by an exact-set assertion, two explicit negatives and a live
+# permission-denied probe (see the "anonymous portal holds SELECT on EXACTLY
+# what it reads" block below). Watched FAIL in a scratch copy with 058 restored
+# (`git show`) to fa99132, "058 as merged" — B4a merged, R-E13 not yet applied,
+# six-table grant set with no revoke of calendar_events/event_recurrence/
+# protocol_resolutions/resolution_challenges:
+#   FAIL gremion_public_reader's grantable relations are exactly
+#   org_units,protocols: expected 'org_units,protocols', got
+#   'calendar_events,event_recurrence,org_units,protocol_resolutions,protocols,
+#   resolution_challenges'
+#   FAIL gremion_public_reader has no SELECT on resolution_challenges:
+#   expected 'f', got 't'
+#   FAIL gremion_public_reader has no SELECT on calendar_events: expected 'f',
+#   got 't'
+#   FAIL live probe: expected 'permission denied' reading resolution_challenges
+#   as gremion_public_reader, got: (empty — the SELECT succeeded and returned
+#   no rows)
+#   [fresh-init] FAILED, exit 1
+# After the fix: 28 data-plane + 4 control files applied, 24 in-database
+# post-conditions held, ending "all post-conditions hold".
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -115,13 +137,33 @@ expect_eq "protocol_resolutions.adoption_mode exists" \
 expect_eq "role_assignment_history CHECK admits 'recalled'" \
   "$(q gremion "SELECT pg_get_constraintdef(oid) LIKE '%recalled%' FROM pg_constraint WHERE conname='role_assignment_history_ended_reason_check'")" "t"
 
-# -- the anonymous portal actually has its grants (058) ------------------------
-for t in calendar_events event_recurrence org_units protocols protocol_resolutions resolution_challenges; do
-  expect_eq "gremion_public_reader can SELECT $t" \
-    "$(q gremion "SELECT count(*) FROM information_schema.role_table_grants WHERE grantee='gremion_public_reader' AND table_name='$t' AND privilege_type='SELECT'")" "1"
-done
-expect_eq "the two revoked tables stay revoked" \
+# -- the anonymous portal holds SELECT on EXACTLY what it reads (058, R-E13) ---
+# Exact-set, not per-table: has_table_privilege over every relation in `public`
+# in one query, so a table this migration forgot to REVOKE cannot hide behind
+# a check that only ever asks about tables it expects to find.
+expect_eq "gremion_public_reader's grantable relations are exactly org_units,protocols" \
+  "$(q gremion "SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','v','m','p') AND has_table_privilege('gremion_public_reader', c.oid, 'SELECT')")" \
+  "org_units,protocols"
+expect_eq "gremion_public_reader has no SELECT on resolution_challenges" \
+  "$(q gremion "SELECT has_table_privilege('gremion_public_reader', 'resolution_challenges', 'SELECT')")" "f"
+expect_eq "gremion_public_reader has no SELECT on calendar_events" \
+  "$(q gremion "SELECT has_table_privilege('gremion_public_reader', 'calendar_events', 'SELECT')")" "f"
+expect_eq "the pre-existing two revoked tables stay revoked" \
   "$(q gremion "SELECT count(*) FROM information_schema.role_table_grants WHERE grantee='gremion_public_reader' AND table_name IN ('protocol_attendance','protocol_action_items')")" "0"
+
+# Live probe, not just a catalog check: SET ROLE and run the SELECT the
+# catalog above says must fail. This cannot go through `q` (ON_ERROR_STOP=1 +
+# `set -euo pipefail` would kill the script on the very failure this probe
+# expects), so it runs its own psql call with the exit code discarded and the
+# combined stdout+stderr inspected for Postgres's own denial text instead.
+probe_out="$(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -U postgres -X -tAq -d gremion \
+  -c "SET ROLE gremion_public_reader; SELECT 1 FROM resolution_challenges LIMIT 1;" 2>&1 || true)"
+if echo "$probe_out" | grep -q 'permission denied'; then
+  say "ok live probe: gremion_public_reader SELECT on resolution_challenges -> permission denied"
+else
+  echo "FAIL live probe: expected 'permission denied' reading resolution_challenges as gremion_public_reader, got: $probe_out"
+  fail=1
+fi
 
 # -- control 004 ---------------------------------------------------------------
 expect_eq "control tenant_domain exists" \

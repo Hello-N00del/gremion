@@ -24,7 +24,7 @@ function applyList(offModuleId: string): string[] {
 }
 
 describe('cross-cutting kernel DDL survives a module-OFF fresh init', () => {
-  it('calendar OFF still applies 003, and before 058 needs calendar_events', () => {
+  it('calendar OFF still applies 003, which still sorts before 058 in the kernel chain', () => {
     const list = applyList('calendar')
     expect(list).toContain('003_calendar_schema.sql')
     expect(list.indexOf('003_calendar_schema.sql')).toBeLessThan(

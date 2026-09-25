@@ -2,7 +2,7 @@
   "asyncapi": "3.0.0",
   "info": {
     "title": "Gremion content module — publish lifecycle events",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "description": "Lifecycle events emitted by the content module (which lives in the module repo, not here) after each publish attempt and per-channel dispatch. Five events: publish.succeeded, publish.failed, channel.email.sent, channel.portal.sent, channel.instagram.enqueued. Subject grammar: gremion.{tenantId}.content.{event} — built by contentSubject() in @gremion/ports/broker (single source of truth for the wire subject). EventEnvelope field-matched to packages/ports/src/broker.ts EventEnvelope interface. JetStream mapping: Nats-Msg-Id = envelope.eventId. The relay publishes; its audit consumer — which lives in the module repo, not here — subscribes on gremion.*.content.> (6+ token subjects). The AsyncAPI channel address is verified at test time against contentSubject() — see packages/ports/src/content-contract.test.ts assertion."
   },
   "defaultContentType": "application/json",
