@@ -18,7 +18,7 @@
 // ramfs, ...) are refused as a storage root: both lose objects.
 
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { posix, resolve } from 'node:path'
 
 export const DEFAULT_MOUNTINFO_PATH = '/proc/self/mountinfo'
 
@@ -27,6 +27,14 @@ export type MountCheck = { readonly checked: true } | { readonly checked: false;
 /** mountinfo escapes space, tab, newline and backslash as \ooo octal. */
 function unescapeMountField(field: string): string {
   return field.replace(/\\([0-7]{3})/g, (_, oct: string) => String.fromCharCode(parseInt(oct, 8)))
+}
+
+/** The mount table's mount points are POSIX paths. A POSIX-absolute root is
+ *  therefore compared in POSIX form on every host (win32's resolve() would turn
+ *  `/srv/x` into `C:\srv\x`, which no mount table lists); any other root is
+ *  resolved natively. On Linux, the only host with a real table, both agree. */
+export function resolveMountRoot(root: string): string {
+  return root.startsWith('/') ? posix.resolve(root) : resolve(root)
 }
 
 /** Filesystem types that lose their contents on restart. */
@@ -62,7 +70,7 @@ export function assertMountedRoot(
   readText: (path: string) => string = (p) => readFileSync(p, 'utf8'),
   platform: string = process.platform,
 ): MountCheck {
-  const abs = resolve(root)
+  const abs = resolveMountRoot(root)
   let text: string
   try {
     text = readText(mountinfoPath)

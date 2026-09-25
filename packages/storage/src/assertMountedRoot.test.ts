@@ -102,6 +102,9 @@ describe('LocalStorageBackend construction', () => {
   })
 
   it('the default root (./var/storage) is refused on a Linux host where it is not a mount', () => {
-    expect(() => new LocalStorageBackend(TENANT_A, { mountinfoPath: UNMOUNTED })).toThrow(/var\/storage is not a mount point/)
+    // A relative root resolves natively (C:\...\var\storage on a Windows gate host).
+    expect(() => new LocalStorageBackend(TENANT_A, { mountinfoPath: UNMOUNTED, platform: 'linux' })).toThrow(
+      /var[\\/]storage is not a mount point/,
+    )
   })
 })

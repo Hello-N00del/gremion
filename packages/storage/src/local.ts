@@ -78,6 +78,9 @@ function toBytes(bytes: unknown): Uint8Array {
 export class LocalStorageBackend implements StorageBackend {
   readonly tenantId: string
   readonly root: string
+  /** The root as configured: the mount check compares it in mount-table
+   *  (POSIX) form, independent of the host's native path resolution. */
+  private readonly configuredRoot: string
   /** Outcome of the mount-point check (see assertMountedRoot). */
   readonly mountCheck: MountCheck
   private readonly tenantRoot: string
@@ -92,8 +95,9 @@ export class LocalStorageBackend implements StorageBackend {
     this.fs = options.fs ?? nodeFs
     this.mountinfoPath = options.mountinfoPath
     this.platform = options.platform
-    this.root = resolve(options.root ?? DEFAULT_LOCAL_ROOT)
-    this.mountCheck = assertMountedRoot(this.root, options.mountinfoPath, (p) => this.fs.readTextSync(p), options.platform)
+    this.configuredRoot = options.root ?? DEFAULT_LOCAL_ROOT
+    this.root = resolve(this.configuredRoot)
+    this.mountCheck = assertMountedRoot(this.configuredRoot, options.mountinfoPath, (p) => this.fs.readTextSync(p), options.platform)
     if (!this.mountCheck.checked) {
       console.warn(`storage(local): mount-point check SKIPPED: ${this.mountCheck.reason}`)
     }
@@ -231,7 +235,7 @@ export class LocalStorageBackend implements StorageBackend {
               `storage(local): storage root ${this.root} is missing (${(e as NodeJS.ErrnoException)?.code ?? String(e)})`,
             )
           }
-          assertMountedRoot(this.root, this.mountinfoPath, (p) => this.fs.readTextSync(p), this.platform)
+          assertMountedRoot(this.configuredRoot, this.mountinfoPath, (p) => this.fs.readTextSync(p), this.platform)
           return []
         },
       )
