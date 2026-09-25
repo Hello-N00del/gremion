@@ -9,13 +9,14 @@
 import { spawnSync } from 'node:child_process'
 import { DART_IMAGE, dockerDaemonAvailable, GENERATOR_IMAGE, localDart, localGenerator } from '../src/tools.ts'
 
+/** @param {string} m */
 const log = (m) => console.log(`[images:pull] ${m}`)
 const needed = []
 try {
   if (!localGenerator({ log })) needed.push(GENERATOR_IMAGE)
   if (!localDart({ log })) needed.push(DART_IMAGE)
 } catch (e) {
-  console.error(`[images:pull] ${e.message}`)
+  console.error(`[images:pull] ${/** @type {Error} */ (e).message}`)
   process.exit(1)
 }
 if (needed.length === 0) {

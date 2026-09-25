@@ -13,7 +13,9 @@
     "isolatedModules": true,
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
+    "allowJs": true,
+    "checkJs": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "tools/**/*.mjs", "vitest.config.ts"]
 }

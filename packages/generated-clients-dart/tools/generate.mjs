@@ -11,12 +11,13 @@ import { REPO_ROOT } from '../src/repo-root.ts'
 import { resolveDart, resolveGenerator } from '../src/tools.ts'
 import { syncDartPackages } from '../src/writer.ts'
 
+/** @param {string} m */
 const log = (m) => console.log(`[dart-codegen] ${m}`)
 try {
   const tools = { generator: resolveGenerator({ log }), dart: resolveDart({ log }) }
   const written = syncDartPackages(REPO_ROOT, realGenerate(tools, log, 'update'), log)
   log(`done: ${written.length} package(s)${written.length ? `: ${written.join(', ')}` : ''}`)
 } catch (e) {
-  console.error(`[dart-codegen] FAILED — ${e.message}`)
+  console.error(`[dart-codegen] FAILED — ${/** @type {Error} */ (e).message}`)
   process.exit(1)
 }
