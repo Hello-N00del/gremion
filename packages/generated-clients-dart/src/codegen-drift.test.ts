@@ -104,7 +104,7 @@ describe('test 3 — spec changed without regeneration', () => {
     const mutated = { ...MINI_SPEC, paths: { ...MINI_SPEC.paths, '/api/widgets': { get: { operationId: 'listWidgets', responses: { '200': { description: 'ok' } } } } } }
     writeFile(root, s.specFile, JSON.stringify(mutated, null, 2))
     const { problems, checked } = checkDartCodegenDrift(root, { generate: fakeGenerate })
-    expect(problems.some((p) => p.startsWith(`${s.packageDir}/${STAMP_FILE}:`) && /stale/.test(p) && p.includes(s.specFile))).toBe(true)
+    expect(problems.some((p) => p.startsWith(`${s.packageDir}/${STAMP_FILE}: stale`) && p.includes(`${s.specFile} changed since this package was generated`))).toBe(true)
     expect(checked).toBe(0)
   })
 
@@ -113,7 +113,7 @@ describe('test 3 — spec changed without regeneration', () => {
     const s = generated(root)
     rmSync(`${root}/${s.packageDir}/${STAMP_FILE}`)
     const { problems } = checkDartCodegenDrift(root, { generate: fakeGenerate })
-    expect(problems.some((p) => p.startsWith(`${s.packageDir}/${STAMP_FILE}:`) && /stale|missing/.test(p))).toBe(true)
+    expect(problems.some((p) => p.startsWith(`${s.packageDir}/${STAMP_FILE}: stale`) && /provenance stamp is missing/.test(p))).toBe(true)
   })
 
   it('a CRLF checkout of the same spec is not stale', () => {
