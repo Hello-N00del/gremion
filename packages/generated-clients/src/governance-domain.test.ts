@@ -163,11 +163,43 @@ describe('D4 - server-recorded DOMAIN fields are readable; append-only records h
     }
   })
 
-  it('a defer admission must name its target: a meeting id or the next meeting (DB-GOV-MOTION-ADMISSION)', () => {
-    const create = loadOpenApi().components.schemas.MotionAdmissionCreate
+  it('reading a missing override is a 404, and the admissions list is cursor-paginated like every other list', () => {
+    const doc = loadOpenApi()
+    const get = doc.paths['/api/v1/invitations/{invitationId}/notice-override'].get
+    expect(get.responses['200'].content['application/json'].schema.$ref).toBe('#/components/schemas/NoticeOverride')
+    expect(get.responses['404']).toBeDefined()
+    const list = doc.paths['/api/v1/motions/{motionId}/admissions'].get
+    expect(list.responses['200'].content['application/json'].schema.$ref).toBe('#/components/schemas/MotionAdmissionPage')
+    const names = (list.parameters ?? []).map((p: any) => p.name ?? p.$ref)
+    expect(names.join(' ')).toMatch(/cursor/i)
+    expect(names.join(' ')).toMatch(/limit/i)
+  })
+
+  it('AgendaItem exposes the DB-GOV-AGENDA-ITEM outcome read-only (set when dealt, SCHEMA agenda_item_outcome_check)', () => {
+    const s = loadOpenApi().components.schemas
+    const outcome = s.AgendaItem.properties.outcome
+    expect(outcome?.readOnly).toBe(true)
+    expect([...outcome.enum].sort()).toEqual(['no_decision', 'noted', 'referred', 'rejected', 'resolved', null].sort())
+    expect(s.AgendaItemCreate.properties.outcome).toBeUndefined()
+  })
+
+  it('a defer admission must name exactly one target: a meeting id or the next meeting (DB-GOV-MOTION-ADMISSION)', () => {
+    const s = loadOpenApi().components.schemas
+    const create = s.MotionAdmissionCreate
     expect(create.if?.properties?.outcome?.const).toBe('defer')
-    const alternatives = (create.then?.oneOf ?? []).map((b: any) => b.required).flat()
+    expect(create.if?.required).toContain('outcome')
+    const branches: any[] = create.then?.oneOf ?? []
+    const alternatives = branches.map((b: any) => b.required).flat()
     expect(alternatives).toEqual(expect.arrayContaining(['deferred_to_meeting_id', 'defer_to_next_meeting']))
+    // "next meeting" is chosen by sending true; false is not a target
+    const nextBranch = branches.find((b: any) => (b.required ?? []).includes('defer_to_next_meeting'))
+    expect(nextBranch.properties.defer_to_next_meeting.const).toBe(true)
+    // admit names no target (SCHEMA motion_admission_defer_check)
+    expect(create.else?.properties?.deferred_to_meeting_id).toBe(false)
+    expect(create.else?.properties?.defer_to_next_meeting).toBe(false)
+    // the recorded admission shows which target was chosen
+    expect(s.MotionAdmission.properties.defer_to_next_meeting?.type).toBe('boolean')
+    expect(s.MotionAdmission.required).toContain('defer_to_next_meeting')
   })
 })
 

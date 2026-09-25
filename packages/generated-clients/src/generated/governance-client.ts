@@ -214,7 +214,8 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        /** Read the one notice-override recorded for this invitation (read-only; the record is append-only) */
+        get: operations["getNoticeOverride"];
         put?: never;
         /** Record the override of a missed Ladungsfrist, before dispatch (POST only — append-only, no PUT/PATCH/DELETE) */
         post: operations["createNoticeOverride"];
@@ -310,7 +311,8 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        /** List the admission decisions recorded for this motion (read-only; the records are append-only) */
+        get: operations["listMotionAdmissions"];
         put?: never;
         /** Chair decides a late motion's admission (append-only; only the chair decides) */
         post: operations["createMotionAdmission"];
@@ -683,6 +685,11 @@ export interface components {
             state: "proposed" | "placed" | "declined" | "withdrawn" | "called" | "dealt" | "adjourned";
             /** Format: uuid */
             proposer_person_id?: string | null;
+            /**
+             * @description How the item was dealt with (DOMAIN DB-GOV-AGENDA-ITEM); set by the server exactly when state is dealt, null otherwise.
+             * @enum {string|null}
+             */
+            readonly outcome?: "noted" | "resolved" | "rejected" | "referred" | "no_decision" | null;
         };
         /** @description One page of AgendaItem, in the list's stable server order. */
         AgendaItemPage: {
@@ -723,6 +730,11 @@ export interface components {
             notice_met: boolean;
             /** Format: date-time */
             sent_at?: string | null;
+            /**
+             * Format: uuid
+             * @description Opaque person reference of the chair who issued the invitation (DOMAIN DB-GOV-INVITATION); null until sent.
+             */
+            readonly sender_person_id?: string | null;
             recipient_count: number;
         };
         /** @description One page of Invitation, in the list's stable server order. */
@@ -759,6 +771,8 @@ export interface components {
             /** Format: uuid */
             curing_basis_id?: string | null;
             curing_basis_version?: number | null;
+            /** @description The curing basis text and citation as they stood when the override was recorded (DOMAIN DB-GOV-NOTICE-OVERRIDE); server-written, so a later change to the body's basis never changes a recorded override. Null when no curing basis was referenced. */
+            readonly curing_basis_snapshot?: string | null;
         };
         NoticeOverrideCreate: {
             /** @description Required (DOMAIN [D R20-D26-5]). */
@@ -816,6 +830,11 @@ export interface components {
             submitter_person_id?: string | null;
             /** Format: date-time */
             submitted_at: string;
+            /**
+             * Format: date-time
+             * @description The meeting's motion deadline as it stood when the motion was submitted (DOMAIN DB-GOV-MOTION); is_late is computed from it on the server. Null while the motion is a draft.
+             */
+            readonly deadline_snapshot?: string | null;
             /** @description Computed on the server (submitted_at after deadline_snapshot). Never accepted from the client (PRD-MTG-003, FLOW-MTG-003 B1). */
             readonly is_late: boolean;
             /**
@@ -852,22 +871,33 @@ export interface components {
             outcome: "admit" | "defer";
             /**
              * Format: uuid
-             * @description Required when outcome is defer (a target meeting, PRD-MTG-003).
+             * @description The target meeting of a defer (PRD-MTG-003). Null for admit, and for a defer to the next meeting.
              */
             deferred_to_meeting_id?: string | null;
+            /** @description True when the chair deferred the motion to "the next meeting" instead of naming one (DOMAIN DB-GOV-MOTION-ADMISSION). Always false for admit. */
+            defer_to_next_meeting: boolean;
             /** Format: uuid */
             actor_person_id: string;
             /** Format: date-time */
             decided_at: string;
         };
+        /** @description One page of MotionAdmission, in the list's stable server order. */
+        MotionAdmissionPage: {
+            items: components["schemas"]["MotionAdmission"][];
+            /** @description Opaque cursor for the next page, or null at the end. */
+            nextCursor: string | null;
+        };
+        /** @description A defer names exactly one target: deferred_to_meeting_id, or defer_to_next_meeting: true. An admit names neither (DOMAIN DB-GOV-MOTION-ADMISSION). */
         MotionAdmissionCreate: {
             /** @enum {string} */
             outcome: "admit" | "defer";
             /**
              * Format: uuid
-             * @description Required when outcome is defer.
+             * @description The target meeting of a defer. Exactly one of this and defer_to_next_meeting is sent for a defer; neither for admit.
              */
             deferred_to_meeting_id?: string;
+            /** @description Send true to defer the motion to "the next meeting" instead of naming one. Exactly one of this and deferred_to_meeting_id is sent for a defer; neither for admit. */
+            defer_to_next_meeting?: boolean;
         };
     };
     responses: {
@@ -1457,6 +1487,33 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    getNoticeOverride: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invitationId: components["schemas"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoticeOverride"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such invitation, or no override is recorded for it */
+            404: components["responses"]["NotFound"];
+        };
+    };
     createNoticeOverride: {
         parameters: {
             query?: never;
@@ -1652,6 +1709,39 @@ export interface operations {
                     "application/json": components["schemas"]["Motion"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            /** @description The PDP denied the call (module gate, body isolation or grant) */
+            403: components["responses"]["Forbidden"];
+            /** @description No such motion */
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listMotionAdmissions: {
+        parameters: {
+            query?: {
+                /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description Page size; the server default applies when omitted. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                motionId: components["schemas"]["UuidId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MotionAdmissionPage"];
+                };
+            };
+            400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
             /** @description The PDP denied the call (module gate, body isolation or grant) */
             403: components["responses"]["Forbidden"];

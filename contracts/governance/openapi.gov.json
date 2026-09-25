@@ -890,6 +890,41 @@
           }
         }
       ],
+      "get": {
+        "operationId": "getNoticeOverride",
+        "summary": "Read the one notice-override recorded for this invitation (read-only; the record is append-only)",
+        "tags": [
+          "invitations"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticeOverride"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such invitation, or no override is recorded for it"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      },
       "post": {
         "operationId": "createNoticeOverride",
         "summary": "Record the override of a missed Ladungsfrist, before dispatch (POST only — append-only, no PUT/PATCH/DELETE)",
@@ -1248,6 +1283,52 @@
           }
         }
       ],
+      "get": {
+        "operationId": "listMotionAdmissions",
+        "summary": "List the admission decisions recorded for this motion (read-only; the records are append-only)",
+        "tags": [
+          "motions"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MotionAdmissionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such motion"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      },
       "post": {
         "operationId": "createMotionAdmission",
         "summary": "Chair decides a late motion's admission (append-only; only the chair decides)",
@@ -2208,6 +2289,22 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "noted",
+              "resolved",
+              "rejected",
+              "referred",
+              "no_decision",
+              null
+            ],
+            "readOnly": true,
+            "description": "How the item was dealt with (DOMAIN DB-GOV-AGENDA-ITEM); set by the server exactly when state is dealt, null otherwise."
           }
         }
       },
@@ -2326,6 +2423,15 @@
             ],
             "format": "date-time"
           },
+          "sender_person_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "readOnly": true,
+            "description": "Opaque person reference of the chair who issued the invitation (DOMAIN DB-GOV-INVITATION); null until sent."
+          },
           "recipient_count": {
             "type": "integer"
           }
@@ -2419,6 +2525,14 @@
               "integer",
               "null"
             ]
+          },
+          "curing_basis_snapshot": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "readOnly": true,
+            "description": "The curing basis text and citation as they stood when the override was recorded (DOMAIN DB-GOV-NOTICE-OVERRIDE); server-written, so a later change to the body's basis never changes a recorded override. Null when no curing basis was referenced."
           }
         }
       },
@@ -2575,6 +2689,15 @@
             "type": "string",
             "format": "date-time"
           },
+          "deadline_snapshot": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "readOnly": true,
+            "description": "The meeting's motion deadline as it stood when the motion was submitted (DOMAIN DB-GOV-MOTION); is_late is computed from it on the server. Null while the motion is a draft."
+          },
           "is_late": {
             "type": "boolean",
             "readOnly": true,
@@ -2657,7 +2780,8 @@
           "motion_id",
           "outcome",
           "actor_person_id",
-          "decided_at"
+          "decided_at",
+          "defer_to_next_meeting"
         ],
         "description": "Append-only (DOMAIN DB-GOV-MOTION-ADMISSION). Only the chair decides (FLOW-MTG-003 C1).",
         "properties": {
@@ -2684,7 +2808,11 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Required when outcome is defer (a target meeting, PRD-MTG-003)."
+            "description": "The target meeting of a defer (PRD-MTG-003). Null for admit, and for a defer to the next meeting."
+          },
+          "defer_to_next_meeting": {
+            "type": "boolean",
+            "description": "True when the chair deferred the motion to \"the next meeting\" instead of naming one (DOMAIN DB-GOV-MOTION-ADMISSION). Always false for admit."
           },
           "actor_person_id": {
             "type": "string",
@@ -2693,6 +2821,29 @@
           "decided_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "MotionAdmissionPage": {
+        "type": "object",
+        "description": "One page of MotionAdmission, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MotionAdmission"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
           }
         }
       },
@@ -2712,7 +2863,57 @@
           "deferred_to_meeting_id": {
             "type": "string",
             "format": "uuid",
-            "description": "Required when outcome is defer."
+            "description": "The target meeting of a defer. Exactly one of this and defer_to_next_meeting is sent for a defer; neither for admit."
+          },
+          "defer_to_next_meeting": {
+            "type": "boolean",
+            "description": "Send true to defer the motion to \"the next meeting\" instead of naming one. Exactly one of this and deferred_to_meeting_id is sent for a defer; neither for admit."
+          }
+        },
+        "description": "A defer names exactly one target: deferred_to_meeting_id, or defer_to_next_meeting: true. An admit names neither (DOMAIN DB-GOV-MOTION-ADMISSION).",
+        "if": {
+          "required": [
+            "outcome"
+          ],
+          "properties": {
+            "outcome": {
+              "const": "defer"
+            }
+          }
+        },
+        "then": {
+          "oneOf": [
+            {
+              "required": [
+                "deferred_to_meeting_id"
+              ],
+              "not": {
+                "required": [
+                  "defer_to_next_meeting"
+                ]
+              }
+            },
+            {
+              "required": [
+                "defer_to_next_meeting"
+              ],
+              "properties": {
+                "defer_to_next_meeting": {
+                  "const": true
+                }
+              },
+              "not": {
+                "required": [
+                  "deferred_to_meeting_id"
+                ]
+              }
+            }
+          ]
+        },
+        "else": {
+          "properties": {
+            "deferred_to_meeting_id": false,
+            "defer_to_next_meeting": false
           }
         }
       }
