@@ -82,6 +82,27 @@ describe('checkOpenApiCompat — T3 fixtures', () => {
     const res = checkOpenApiCompat(base, base)
     expect(res.ok).toBe(true)
   })
+
+  // Acceptance demo (brief §6 footer): "remove a governance response field
+  // with no bump; record it passing before wiring and failing after." Own
+  // base+variant pair (not the shared `base` above) because it needs a
+  // response schema with a removable property, which base-1.0.0.json has
+  // none of. Verified empirically this was a real gap: oasdiff classifies
+  // "response-optional-property-removed" as WARN, not ERR — at the gate's
+  // original `--fail-on ERR` this exact case passed with NO bump, which is
+  // the acceptance criterion's "remove ... without a major bump fails"
+  // failing to hold for an optional field. `--fail-on WARN` closes it.
+  const respBase = load('base-with-response-property-1.0.0.json')
+  it('remove optional response property with NO bump: FAILS', () => {
+    const res = checkOpenApiCompat(respBase, load('removed-response-property-1.0.0.json'))
+    expect(res.ok).toBe(false)
+    expect(res.breaking).toBe(true)
+  })
+  it('remove optional response property with a MAJOR bump: PASSES', () => {
+    const res = checkOpenApiCompat(respBase, load('removed-response-property-2.0.0.json'))
+    expect(res.ok).toBe(true)
+    expect(res.bump).toBe('major')
+  })
 })
 
 describe('runOasdiffBreaking — T5: fail closed with no verdict', () => {

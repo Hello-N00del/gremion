@@ -55,11 +55,20 @@ export function runOasdiffBreaking(oldSpec: string, newSpec: string, opts: RunOp
   try {
     writeFileSync(join(dir, 'old.json'), oldSpec)
     writeFileSync(join(dir, 'new.json'), newSpec)
-    let r = tryRun('oasdiff', ['breaking', join(dir, 'old.json'), join(dir, 'new.json'), '--fail-on', 'ERR'], env)
+    // `--fail-on WARN`, not `ERR`: verified empirically (acceptance demo,
+    // seeding a removed OPTIONAL response field with no bump) that oasdiff
+    // classifies "response-optional-property-removed" as WARN, not ERR — at
+    // `--fail-on ERR` a real removed field silently passed with no bump,
+    // which is exactly the acceptance criterion this gate exists to catch
+    // (brief §1: "remove ... without a major bump fails"). WARN still lets
+    // pure additions through as non-breaking (verified against the T3
+    // added-param fixture: unchanged at WARN), so the "add without a minor
+    // bump fails" branch below is unaffected.
+    let r = tryRun('oasdiff', ['breaking', join(dir, 'old.json'), join(dir, 'new.json'), '--fail-on', 'WARN'], env)
     if (r) return { breaking: r.code !== 0, output: r.out, tool: 'oasdiff (PATH)' }
     if (dockerDaemonAvailable(env)) {
       r = tryRun('docker', ['run', '--rm', '-v', `${dir}:/specs:ro`, 'tufin/oasdiff',
-        'breaking', '/specs/old.json', '/specs/new.json', '--fail-on', 'ERR'], env)
+        'breaking', '/specs/old.json', '/specs/new.json', '--fail-on', 'WARN'], env)
       if (r) return { breaking: r.code !== 0, output: r.out, tool: 'tufin/oasdiff (docker)' }
     }
     throw new Error(
@@ -92,15 +101,28 @@ export function classifyVersionBump(oldVersion: string, newVersion: string): Ver
   return 'none'
 }
 
-/** Strip every `description` key (recursively) so a prose-only edit compares
- *  equal to the unedited document — "description-only passes" regardless of
- *  version, per brief §1. */
+/** Strip every NARRATIVE `description` key (recursively) so a prose-only
+ *  edit compares equal to the unedited document — "description-only passes"
+ *  regardless of version, per brief §1.
+ *
+ *  Guard-efficacy proof / acceptance demo caught a real bug here: a JSON
+ *  Schema data field can itself be named "description" (verified against
+ *  the real spec — `OrgUnit.properties.description`, a plain string
+ *  response field, not documentation prose). The original version matched
+ *  on key name alone, so removing that FIELD made the two documents compare
+ *  structurally equal — `structuralChange: false` — and the compat gate
+ *  never even ran, silently treating a real breaking removal as a no-op.
+ *  OpenAPI/AsyncAPI's own `description` slots (info, operations, parameters,
+ *  responses, schemas-as-documentation) are always a plain STRING value; a
+ *  schema property definition named "description" is always an OBJECT (its
+ *  own schema, e.g. `{"type":"string"}`). That type check is what
+ *  disambiguates the two without needing to track JSON-pointer position. */
 export function stripCompatNoise(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(stripCompatNoise)
   if (node && typeof node === 'object') {
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      if (k === 'description') continue
+      if (k === 'description' && typeof v === 'string') continue
       out[k] = stripCompatNoise(v)
     }
     return out

@@ -1,0 +1,42 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "compat fixture (description-named payload property)",
+    "version": "1.0.0",
+    "description": "T4: removes the description-named payload property with NO version bump — must FAIL (regression: stripCompatNoise must not treat a data field literally named description as narrative prose)."
+  },
+  "channels": {
+    "widget.created": {
+      "address": "gremion.default.widget.created.v1"
+    }
+  },
+  "operations": {
+    "onWidgetCreated": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/widget.created"
+      }
+    }
+  },
+  "components": {
+    "messages": {
+      "WidgetCreated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "name"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

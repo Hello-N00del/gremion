@@ -76,4 +76,23 @@ describe('checkAsyncApiCompat — T4 fixtures', () => {
   it('identical document: PASSES', () => {
     expect(checkAsyncApiCompat(base, base).ok).toBe(true)
   })
+
+  // Regression for the stripCompatNoise bug the OpenAPI acceptance demo
+  // caught (oasdiff-gate.ts): a payload property literally named
+  // "description" (realistic here — calendar/content events carry one) must
+  // not be mistaken for narrative documentation and silently dropped from
+  // the comparison. Own base+variant pair: base-1.0.0.json's payload has no
+  // "description" property to remove.
+  const descBase = load('base-with-description-property-1.0.0.json')
+  it('removed description-named payload property with NO bump: FAILS', () => {
+    const res = checkAsyncApiCompat(descBase, load('removed-description-property-1.0.0.json'))
+    expect(res.ok).toBe(false)
+    expect(res.breaking).toBe(true)
+    expect(res.structuralChange).toBe(true)
+  })
+  it('removed description-named payload property with a MAJOR bump: PASSES', () => {
+    const res = checkAsyncApiCompat(descBase, load('removed-description-property-2.0.0.json'))
+    expect(res.ok).toBe(true)
+    expect(res.bump).toBe('major')
+  })
 })
