@@ -63,6 +63,37 @@ export const LIFECYCLE_KEYS = ['preinstall', 'install', 'postinstall', 'prepare'
 // listed here with a reason, exactly like the dependency table above.
 export const ALLOWED_FIRST_PARTY_LIFECYCLE = {}
 
+// pnpm 10.33 keys that control which dependency build scripts run. A root
+// package.json `pnpm` field carrying any of these takes PRIORITY over
+// pnpm-workspace.yaml's onlyBuiltDependencies for install purposes — watched
+// empirically: with msw removed from the yaml list and
+// `"pnpm":{"onlyBuiltDependencies":["msw"]}` in package.json, the yaml list
+// was ignored and the install failed naming esbuild instead; with all four
+// deps allowed under package.json's `pnpm` field, the install and the old
+// guard both stayed green with zero recorded reasons (verifier HIGH
+// finding 1). This is a second, unreasoned allow-list surface the guard
+// must close.
+const PNPM_BUILD_CONTROL_KEY_RE = /Built/
+
+/** @param rootPackageJson the parsed root package.json */
+export function checkPackageJsonPnpmBuildControl(rootPackageJson) {
+  const pnpmField = rootPackageJson?.pnpm
+  if (!pnpmField || typeof pnpmField !== 'object') return []
+  const problems = []
+  for (const key of Object.keys(pnpmField)) {
+    if (PNPM_BUILD_CONTROL_KEY_RE.test(key) || key === 'dangerouslyAllowAllBuilds') {
+      problems.push(
+        `root package.json sets "pnpm.${key}" — pnpm 10.33 gives this priority over ` +
+        'pnpm-workspace.yaml\'s onlyBuiltDependencies allow-list (Q3), so it can silently ' +
+        'bypass the reasoned allow-list this guard enforces there; remove it, or move the ' +
+        'allowance into pnpm-workspace.yaml\'s onlyBuiltDependencies with a reason in ' +
+        'ALLOWED_BUILD_DEPS',
+      )
+    }
+  }
+  return problems
+}
+
 // ── node-major ──────────────────────────────────────────────────────────
 
 const FROM_NODE_RE = /^FROM\s+node:(\d+)(?:[.\w-]*)?\b/gm
@@ -366,6 +397,7 @@ export function runAllChecks(state) {
     ...checkEnginesNode(state.rootPackageJson),
     ...checkEngineStrictOn(state.workspaceYamlText),
     ...checkAllowList(state.workspaceYamlText, state.lockText),
+    ...checkPackageJsonPnpmBuildControl(state.rootPackageJson),
     ...checkFirstPartyLifecycle(state.packageJsons),
     ...checkStrictTsconfigs(state.tsconfigs),
     ...checkNoSuppressionDirectives(state.srcFiles),

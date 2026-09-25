@@ -22,6 +22,7 @@ import {
   checkEnginesNode,
   checkEngineStrictOn,
   checkAllowList,
+  checkPackageJsonPnpmBuildControl,
   checkFirstPartyLifecycle,
   checkStrictTsconfigs,
   checkNoSuppressionDirectives,
@@ -80,6 +81,39 @@ test('node-major: GREEN — engines.node ">=26 <27" passes', () => {
 test('node-major: engineStrict must be on at the workspace root', () => {
   assert.match(checkEngineStrictOn('packages:\n  - a\n').join('\n'), /engineStrict/)
   assert.deepEqual(checkEngineStrictOn('engineStrict: true\npackages:\n  - a\n'), [])
+})
+
+// ── verifier HIGH finding 1: package.json `pnpm` build-control priority ───
+// pnpm 10.33 gives a root package.json `pnpm` field PRIORITY over
+// pnpm-workspace.yaml for build-script control. Watched empirically: with
+// msw removed from the yaml list and `"pnpm":{"onlyBuiltDependencies":
+// ["msw"]}` in package.json, `pnpm install --frozen-lockfile --offline`
+// still failed loudly (ERR_PNPM_IGNORED_BUILDS naming esbuild) because the
+// yaml list was consulted for esbuild — but with ALL four fixture deps
+// listed under package.json's `pnpm` field, the install exits 0 and the old
+// guard printed OK: an unreasoned, unguarded second allow-list surface.
+
+test('package.json pnpm field: RED — onlyBuiltDependencies in package.json is flagged', () => {
+  const problems = checkPackageJsonPnpmBuildControl({ pnpm: { onlyBuiltDependencies: ['better-sqlite3'] } })
+  assert.match(problems.join('\n'), /pnpm\.onlyBuiltDependencies/)
+})
+
+test('package.json pnpm field: RED — every build-control key variant is flagged', () => {
+  const keys = ['onlyBuiltDependencies', 'onlyBuiltDependenciesFile', 'neverBuiltDependencies', 'ignoredBuiltDependencies', 'dangerouslyAllowAllBuilds']
+  for (const key of keys) {
+    const problems = checkPackageJsonPnpmBuildControl({ pnpm: { [key]: true } })
+    assert.match(problems.join('\n'), new RegExp(`pnpm\\.${key}`), `expected a finding for pnpm.${key}`)
+  }
+})
+
+test('package.json pnpm field: GREEN — no pnpm field, or a pnpm field with unrelated keys, passes', () => {
+  assert.deepEqual(checkPackageJsonPnpmBuildControl({}), [])
+  assert.deepEqual(checkPackageJsonPnpmBuildControl({ pnpm: { overrides: {} } }), [])
+})
+
+test('package.json pnpm field: the real root package.json carries no build-control pnpm field', () => {
+  const root = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+  assert.deepEqual(checkPackageJsonPnpmBuildControl(root), [])
 })
 
 // ── 2. allow-list ─────────────────────────────────────────────────────────
