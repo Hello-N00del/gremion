@@ -347,13 +347,19 @@ test('seeded install: with strictDepBuilds + no allowance, the fixture postinsta
   }
 })
 
-test('seeded install: allow-listing the fixture dependency makes the install succeed and the frozen lockfile still catches a stale range', { timeout: 60_000 }, () => {
+test('seeded install: allow-listing the fixture dependency makes the install succeed, its postinstall actually runs, and the frozen lockfile still catches a stale range', { timeout: 60_000 }, () => {
+  // Verifier MEDIUM finding 4: pnpm's side-effects cache can restore an
+  // already-built package without re-running its postinstall, so "marker
+  // absent" alone (in the BLOCKED test above) proves nothing without a
+  // positive control here. --config.side-effects-cache=false forces a real
+  // postinstall run, so the marker's presence here is that positive control.
   const fixtureRoot = join(ROOT, 'scripts/fixtures/toolchain/seeded-install-allowed')
   const work = mkdtempSync(join(tmpdir(), 'toolchain-seeded-allowed-'))
   try {
     execCopy(fixtureRoot, work)
     const out = runInstall(work, { expectFailure: false })
     assert.equal(out.status, 0, out.combined)
+    assert.ok(markerExists(work), 'the allowed postinstall must have run — its marker file must be present (positive control for the blocked test\'s marker check)')
     // Edit the dependency range without relocking, then --frozen-lockfile
     // must refuse.
     editRange(work)
@@ -379,10 +385,13 @@ function runInstall(work, { expectFailure }) {
   // shell:true is required on Windows to resolve the `pnpm` shim
   // (pnpm.cmd/pnpm.ps1 are not directly executable); it is not a shell-
   // injection risk here because every argument is a fixed literal, never
-  // caller- or fixture-controlled input.
-  const res = spawnSync('pnpm', ['install', '--frozen-lockfile', '--offline'], {
-    cwd: work, encoding: 'utf8', shell: true,
-  })
+  // caller- or fixture-controlled input. Passed as ONE command string (not an
+  // args array) so Node 26 does not emit DEP0190 ("Passing args to a child
+  // process with shell option true") — verifier LOW finding 10.
+  // --config.side-effects-cache=false forces a real postinstall run instead
+  // of a cache-restore that would skip it (verifier MEDIUM finding 4).
+  const cmd = 'pnpm install --frozen-lockfile --offline --config.side-effects-cache=false'
+  const res = spawnSync(cmd, { cwd: work, encoding: 'utf8', shell: true })
   const combined = `${res.stdout || ''}\n${res.stderr || ''}`
   if (expectFailure) {
     assert.notEqual(res.status, 0, `expected the install to fail; got status ${res.status}\n${combined}`)
