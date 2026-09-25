@@ -192,7 +192,7 @@ plant_repo() {  # $1 = directory to create as a throwaway git repo
 
 @test "an SRI integrity hash in pnpm-lock.yaml that happens to contain a pattern is not a leak" {
   # Measured 2026-09-26 on the TASK-076 merge: a new dependency's sha512 value
-  # contained ...hJINWx3... and the registrar pattern matched inside random
+  # contained the registrar token (sample 6) and the pattern matched inside random
   # base64. A Subresource Integrity value cannot carry a host name.
   local d="$BATS_TEST_TMPDIR/sri-only"
   plant_repo "$d"
