@@ -6,6 +6,11 @@
   },
   "entries": [
     {
+      "path": "modules/board/migrations/manifest.json",
+      "reason": "upstream stale manifest: at the tag, manifest.json records sha256 5c406c47… for 001_init.sql while the tag's 001_init.sql hashes to fae5fb11… (unchanged since at least e1814598). The package's prebuild (scripts/build-migration-manifest.mjs) rewrites it on every build — the leaf image already ships the regenerated value — so the committed file now equals the generator's output and a build leaves the tree clean",
+      "owner": "TASK-200"
+    },
+    {
       "path": "modules/board/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
       "owner": "TASK-200"
