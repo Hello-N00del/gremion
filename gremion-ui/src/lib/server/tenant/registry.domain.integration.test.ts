@@ -19,12 +19,13 @@ import {
   type TenantInput,
 } from './registry'
 import { reservedPlatformHosts } from './reserved-hosts'
-// TASK-025 round-2 fix (MED #1, verify-round1.md residual "(e)"): the
-// registry.ts wrapper never exposes a seam to force the real ON-CONFLICT
-// interleave, so this suite drops down to tenant-domain.ts's own
-// addTenantDomain directly — the ONLY caller in the whole tree allowed to set
-// afterOwnerPreRead (a test-only hook, never wired by registry.ts).
-import { addTenantDomain as tdAddTenantDomainDirect } from './tenant-domain'
+// TASK-025 round-3 fix (house review MEDIUM #3): the round-2 seam lived on
+// TenantDomainWriteDeps (the production-facing type registry.ts's addTenantDomain
+// takes), guarded only by a comment. Production addTenantDomain's signature now
+// has NO parameter for it at all, so this suite is the ONLY importer in the
+// tree of the explicitly-named __testing surface, which alone can set
+// afterOwnerPreRead to force the real ON-CONFLICT interleave.
+import { __testing as tenantDomainTesting } from './tenant-domain'
 
 const SLUG = 'rat-musterstadt'
 let tenantId: string
@@ -304,15 +305,20 @@ describe('concurrent claim on one never-before-claimed host', () => {
     const sql = getControlDb()
     let evicted = false
     await expect(
-      tdAddTenantDomainDirect(sql, other.id, host, {}, {
-        platformDomain: process.env.PLATFORM_DOMAIN ?? '',
-        onEvict: () => { evicted = true },
-        afterOwnerPreRead: async () => {
-          // A SECOND connection (the pool, not the open tx) — commits
-          // immediately, independent of `other`'s still-open transaction.
-          await sql`INSERT INTO tenant_domain (host, tenant_id) VALUES (${host}, ${tenantId})`
+      tenantDomainTesting.addTenantDomainWithHooks(
+        sql, other.id, host, {},
+        {
+          platformDomain: process.env.PLATFORM_DOMAIN ?? '',
+          onEvict: () => { evicted = true },
         },
-      }),
+        {
+          afterOwnerPreRead: async () => {
+            // A SECOND connection (the pool, not the open tx) — commits
+            // immediately, independent of `other`'s still-open transaction.
+            await sql`INSERT INTO tenant_domain (host, tenant_id) VALUES (${host}, ${tenantId})`
+          },
+        },
+      ),
     ).rejects.toThrow(/claimed by another tenant concurrently/)
     // The loser's refusal must not have been paired with an eviction notice.
     expect(evicted).toBe(false)

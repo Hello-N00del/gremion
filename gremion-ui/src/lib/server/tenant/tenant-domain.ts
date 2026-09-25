@@ -139,7 +139,10 @@ export interface AddTenantDomainOptions {
 /** Everything registry.ts injects for a write: the reserved-host apex and the
  *  post-commit runtime-eviction callback. Neither is read from $env here — the
  *  caller (registry.ts) is the one file allowed to know about env vars and
- *  evictTenantRuntime. */
+ *  evictTenantRuntime. PRODUCTION-FACING: no test-only field lives here (see
+ *  AddTenantDomainTestHooks / __testing below) — round-2 put the seam ON this
+ *  type behind a comment; round-3 fix MEDIUM #3 moves it OFF, so the compiler,
+ *  not a comment, keeps a production wrapper from ever setting it. */
 export interface TenantDomainWriteDeps {
   /** The apex under which the nine platform names are reserved (PLATFORM_DOMAIN). */
   platformDomain: string
@@ -147,18 +150,26 @@ export interface TenantDomainWriteDeps {
    *  (resolution caches, pools, KC/JWKS/mail clients, …) must be evicted.
    *  Never called for a refused write. */
   onEvict: (tenantId: string) => void
-  /**
-   * TEST-ONLY seam (TASK-025 round-2 fix, verify-round1.md residual "(e)" /
-   * MED #1): invoked once inside the transaction, immediately after the owner
-   * pre-read resolves and BEFORE this call's own INSERT ... ON CONFLICT runs.
-   * Defaults to a no-op and MUST NEVER be set by a production wrapper —
-   * registry.ts's addTenantDomain never sets it. It exists solely so
-   * registry.domain.integration.test.ts can force the ON-CONFLICT interleave
-   * DETERMINISTICALLY (a second connection commits a competing owner between
-   * this call's pre-read and its own upsert) instead of relying on
-   * Promise.allSettled's undefined scheduling, which never actually reached
-   * that code path in 8 verifier runs.
-   */
+}
+
+/**
+ * TEST-ONLY (TASK-025 round-3 fix MEDIUM #3, verify-round1.md/round-2-review
+ * residual: "the test-only afterOwnerPreRead hook sits on the exported
+ * production-facing TenantDomainWriteDeps, so only a comment prevents
+ * production wiring"). A SEPARATE type, accepted only by addTenantDomainImpl
+ * and reachable only through `__testing.addTenantDomainWithHooks` below —
+ * production `addTenantDomain`'s signature has no parameter for it at all, so
+ * registry.ts's production wrapper cannot set it even by mistake; there is no
+ * comment left to violate.
+ */
+interface AddTenantDomainTestHooks {
+  /** Invoked once inside the transaction, immediately after the owner
+   *  pre-read resolves and BEFORE this call's own INSERT ... ON CONFLICT
+   *  runs. Exists so registry.domain.integration.test.ts can force the
+   *  ON-CONFLICT interleave DETERMINISTICALLY (a second connection commits a
+   *  competing owner between this call's pre-read and its own upsert)
+   *  instead of relying on Promise.allSettled's undefined scheduling, which
+   *  never actually reached that code path in 8 verifier runs. */
   afterOwnerPreRead?: () => void | Promise<void>
 }
 
@@ -182,6 +193,24 @@ export async function addTenantDomain(
   rawHost: string,
   opts: AddTenantDomainOptions,
   deps: TenantDomainWriteDeps,
+): Promise<TenantDomain> {
+  return addTenantDomainImpl(sql, tenantId, rawHost, opts, deps)
+}
+
+/**
+ * The real implementation, extended with an optional TEST-ONLY hooks
+ * parameter (round-3 fix MEDIUM #3). `addTenantDomain` above — the only
+ * production-facing signature, and the only one registry.ts imports — always
+ * calls this with `hooks` omitted, so `deps.afterOwnerPreRead` cannot exist:
+ * there is no fifth production parameter for it to arrive on.
+ */
+async function addTenantDomainImpl(
+  sql: Sql,
+  tenantId: string,
+  rawHost: string,
+  opts: AddTenantDomainOptions,
+  deps: TenantDomainWriteDeps,
+  hooks: AddTenantDomainTestHooks = {},
 ): Promise<TenantDomain> {
   assertTenantId('addTenantDomain', tenantId)
   // Spec A §C / §H.2 — reserved platform names, BEFORE normalisation (so the
@@ -218,9 +247,10 @@ export async function addTenantDomain(
       const t = await tx<Array<{ slug: string }>>`SELECT slug FROM tenant WHERE id = ${tenantId}`
       if (!t[0]) throw new Error(`addTenantDomain: unknown tenant id ${tenantId}`)
     }
-    // TEST-ONLY seam — see TenantDomainWriteDeps.afterOwnerPreRead. A no-op in
-    // every production call (registry.ts never sets it).
-    if (deps.afterOwnerPreRead) await deps.afterOwnerPreRead()
+    // TEST-ONLY seam — see AddTenantDomainTestHooks.afterOwnerPreRead. Always
+    // a no-op on the production path: addTenantDomain (the only export
+    // registry.ts calls) never passes a `hooks` argument at all.
+    if (hooks.afterOwnerPreRead) await hooks.afterOwnerPreRead()
     if (isPrimary) {
       await tx`UPDATE tenant_domain SET is_primary = false
                WHERE tenant_id = ${tenantId} AND is_primary AND host <> ${host}`
@@ -318,4 +348,17 @@ export async function setPrimaryDomain(
   })
   onEvict(tenantId)
   return hydrateDomain(row as unknown as TenantDomainRow)
+}
+
+/**
+ * TEST-ONLY surface (TASK-025 round-3 fix MEDIUM #3). The name is deliberately
+ * loud and the export is a namespaced object, not a bare function, so a grep
+ * for `__testing` or an accidental `import { addTenantDomainWithHooks }` typo
+ * both surface the intent immediately. registry.ts imports ONLY the plain
+ * `addTenantDomain` above; the only importer of this export in the tree is
+ * registry.domain.integration.test.ts, which uses it to force the
+ * ON-CONFLICT interleave deterministically (see AddTenantDomainTestHooks).
+ */
+export const __testing = {
+  addTenantDomainWithHooks: addTenantDomainImpl,
 }
