@@ -114,9 +114,19 @@ export function parseFlutter(output) {
  * run first in the same command, is what supplies a real collected count —
  * see the `guard` composite in run.mjs). Standing alone, a guard is one
  * pass/fail arm.
+ *
+ * LOW fix: a FAIL used to carry no `reason` at all — evaluateSuite's FAIL
+ * row showed an empty reason for e.g. kernel-runner-policy-guard, and a
+ * reader of the snapshot could not tell why it failed without re-running it
+ * by hand. `exitCode !== 0` now names the exit code.
  */
 export function parseGuard(output, exitCode) {
-  return { collected: 1, passed: exitCode === 0 ? 1 : 0, failed: exitCode === 0 ? 0 : 1 }
+  return {
+    collected: 1,
+    passed: exitCode === 0 ? 1 : 0,
+    failed: exitCode === 0 ? 0 : 1,
+    reason: exitCode === 0 ? undefined : `guard script exited ${exitCode}`,
+  }
 }
 
 export const PARSERS = {
@@ -143,11 +153,15 @@ export function parseCounts(kind, output, exitCode) {
         return { collected: tap.collected, passed: tap.passed, failed: tap.failed }
       }
       // The test phase was clean and the guard script ran; its exit code is
-      // one more pass/fail arm on top of the suite's own count.
+      // one more pass/fail arm on top of the suite's own count. LOW fix: a
+      // nonzero exit here used to leave `reason` undefined — evaluateSuite
+      // reports `counts.reason` verbatim, so the FAIL row named neither the
+      // exit code nor anything else.
       return {
         collected: tap.collected + 1,
         passed: tap.passed + (exitCode === 0 ? 1 : 0),
         failed: tap.failed + (exitCode === 0 ? 0 : 1),
+        reason: exitCode === 0 ? undefined : `guard script exited ${exitCode}`,
       }
     }
     return parseGuard(output, exitCode)

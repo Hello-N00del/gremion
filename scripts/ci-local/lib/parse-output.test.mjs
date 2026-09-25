@@ -86,18 +86,24 @@ test('parseFlutter reads a mixed summary', () => {
 })
 
 test('parseGuard treats a zero exit as one passed arm and non-zero as one failed arm', () => {
-  assert.deepEqual(parseGuard('ok', 0), { collected: 1, passed: 1, failed: 0 })
-  assert.deepEqual(parseGuard('boom', 1), { collected: 1, passed: 0, failed: 1 })
+  assert.deepEqual(parseGuard('ok', 0), { collected: 1, passed: 1, failed: 0, reason: undefined })
+  assert.deepEqual(parseGuard('boom', 1), { collected: 1, passed: 0, failed: 1, reason: 'guard script exited 1' })
 })
 
 test('parseCounts("guard", ...) composes the suite\'s own TAP summary with the guard step exit code', () => {
   const out = '1..5\n# tests 5\n# pass 5\n# fail 0\nGUARD-OK\n'
-  assert.deepEqual(parseCounts('guard', out, 0), { collected: 6, passed: 6, failed: 0 })
+  assert.deepEqual(parseCounts('guard', out, 0), { collected: 6, passed: 6, failed: 0, reason: undefined })
 })
 
 test('parseCounts("guard", ...) does not add a phantom pass when the guard step itself fails', () => {
   const out = '1..5\n# tests 5\n# pass 5\n# fail 0\nGUARD FAILED\n'
-  assert.deepEqual(parseCounts('guard', out, 1), { collected: 6, passed: 5, failed: 1 })
+  assert.deepEqual(parseCounts('guard', out, 1), { collected: 6, passed: 5, failed: 1, reason: 'guard script exited 1' })
+})
+
+test('LOW fix: parseCounts("guard", ...) names the guard script\'s exit code in `reason` when the guard step itself fails (it used to be undefined — an empty reason on the FAIL row)', () => {
+  const out = '1..5\n# tests 5\n# pass 5\n# fail 0\nGUARD FAILED\n'
+  const counts = parseCounts('guard', out, 1)
+  assert.equal(counts.reason, 'guard script exited 1')
 })
 
 test('parseCounts("guard", ...) never runs the guard step when the suite\'s own test failed (&& short-circuit)', () => {
@@ -108,7 +114,7 @@ test('parseCounts("guard", ...) never runs the guard step when the suite\'s own 
 })
 
 test('parseCounts("guard", ...) falls back to a bare pass/fail arm when there is no TAP summary at all', () => {
-  assert.deepEqual(parseCounts('guard', 'no test framework output', 0), { collected: 1, passed: 1, failed: 0 })
+  assert.deepEqual(parseCounts('guard', 'no test framework output', 0), { collected: 1, passed: 1, failed: 0, reason: undefined })
 })
 
 test('parseCounts dispatches by kind', () => {
