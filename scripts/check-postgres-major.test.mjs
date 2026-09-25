@@ -179,7 +179,7 @@ test('checkFiles excludes the frozen spec copies by rule, not by accident', () =
 test('the exclusion list is narrow: a stale tag anywhere else is still a finding', () => {
   // Proves the rule above is an exclusion of two NAMED paths and not a hole a
   // stale tag can wander into.
-  for (const path of ['docs/deployment.md', 'k8s/base/postgres/statefulset.yaml',
+  for (const path of ['docs/deployment.md', 'docs/k8s/postgres.yaml', 'infra/k8s/x.yaml',
                       'test/host/fixtures/postgres-major/tree-clean/compose/calendar.yml']) {
     const problems = checkFiles([{ path, text: `    image: ${STALE_TAG}\n` }])
     assert.ok(problems.join('\n').includes(`mismatched: ${path}:1`), `${path} must not be excluded`)
@@ -301,7 +301,7 @@ test('checkDataMounts goes RED on a mount that hardcodes the current major', () 
   // finding.
   const pinned = `/var/lib/postgresql/${POSTGRES_MAJOR}/docker`
   const problems = checkDataMounts([
-    { path: 'k8s/base/postgres/statefulset.yaml', text: `              mountPath: ${pinned}\n` },
+    { path: 'compose/calendar.yml', text: `              target: ${pinned}\n` },
   ])
   assert.equal(problems.length, 1, problems.join('\n'))
   assert.ok(problems[0].includes(`mounts ${pinned}`), problems[0])
@@ -543,4 +543,31 @@ test('TDD-2: two different digests in one tree are reported as a split pin', () 
   assert.equal(problems.length, 1, problems.join('\n'))
   assert.match(problems[0], /^split pin: 2 distinct postgres digests in one tree/)
   assert.deepEqual(checkDigests(hits.slice(0, 1)), [])
+})
+
+// ── TASK-019: k8s/** is frozen (D16) and leaves the scan set ───────────────
+
+import { EXCLUDED } from './check-postgres-major.mjs'
+
+test('TDD-6: EXCLUDED holds exactly three NAMED rules: specs, the stale fixtures, k8s', () => {
+  assert.equal(EXCLUDED.length, 3, EXCLUDED.map(String).join(' '))
+  const hit = (p) => EXCLUDED.filter((re) => re.test(p)).length
+  assert.equal(hit('docs/superpowers/specs/spec-b-x.md'), 1)
+  assert.equal(hit('test/host/fixtures/postgres-major/tree-stale/compose/calendar.yml'), 1)
+  assert.equal(hit('k8s/base/postgres/statefulset.yaml'), 1)
+  // the rule is anchored: a path that merely CONTAINS k8s is still scanned
+  for (const p of ['docs/k8s.md', 'infra/k8s/x.yaml', 'k8sx/a.yaml', 'docker-compose.yml']) {
+    assert.equal(hit(p), 0, `${p} must not be excluded`)
+  }
+})
+
+test('TDD-6: a stale tag or an old data mount under k8s/ is not reported', () => {
+  const k8s = { path: 'k8s/base/postgres/statefulset.yaml',
+                text: `          image: ${STALE_TAG}\n              mountPath: ${LEGACY_MOUNT}\n` }
+  const good = { path: 'docker-compose.yml',
+                 text: `    image: ${POSTGRES_IMAGE_REF}\n      - pg-data:${POSTGRES_DATA_MOUNT}\n` }
+  assert.deepEqual(checkFiles([k8s, good]), [])
+  assert.deepEqual(checkDataMounts([k8s, good]), [])
+  // ...and k8s alone is an EMPTY scan, which still fails loudly
+  assert.match(checkFiles([k8s]).join('\n'), /zero postgres: image references/)
 })

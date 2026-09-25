@@ -66,7 +66,7 @@ export function checkEvidence(text) {
 
 // ── the scanner ────────────────────────────────────────────────────────────
 
-// Two NAMED exclusions, and only two. Anything not on this list is scanned.
+// Three NAMED exclusions, and only three. Anything not on this list is scanned.
 //
 //  1. Frozen copies of the APPROVED specs quote the pre-pin tag verbatim. They
 //     are a record of what was decided, not a place a tag is configured;
@@ -77,9 +77,15 @@ export function checkEvidence(text) {
 //     `--tree` goes RED. Excluding the whole `postgres-major` fixture directory
 //     would also excuse `tree-clean`, so the rule names `tree-stale` alone and
 //     `tree-clean` stays scanned like any other file (and is pinned).
+//  3. `k8s/**` is FROZEN (decision D16): the Kubernetes manifests are not a
+//     release-1 deployment target, nobody edits them, and a pin nobody may
+//     write cannot be demanded of them. They keep the major-only tag they
+//     carry; TASK-126 owns them. Anchored at the repo root, so `docs/k8s.md` or
+//     `infra/k8s/` would still be scanned.
 export const EXCLUDED = [
   /^docs\/superpowers\/specs\//,
   /^test\/host\/fixtures\/postgres-major\/tree-stale\//,
+  /^k8s\//,
 ]
 
 // `postgresql://user:pw@postgres:5432/db` is a HOST:PORT, not an image tag. The
@@ -368,5 +374,5 @@ if (isMain) {
     for (const p of problems) console.error(`  x ${p}`)
     process.exit(1)
   }
-  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: reference is ${POSTGRES_IMAGE_TAG} and every data mount is ${POSTGRES_DATA_MOUNT}`)
+  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: declaration is ${POSTGRES_IMAGE_REF} and every data mount is ${POSTGRES_DATA_MOUNT}`)
 }
