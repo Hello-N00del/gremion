@@ -1,0 +1,33 @@
+{
+  "$comment": "DB-PLT-API-CONTRACT / DB-PLT-EVENT-TYPE registry (TASK-030, PRD-PLAT-002b/008, TRD-403/404/405). Every first-party HTTP or event surface's spec MUST have an entry here, file MUST exist, and discovery (contracts/**/{openapi,asyncapi}.*.json plus services/*/{openapi,asyncapi}/**/*.json) MUST find no spec that isn't registered. See contracts/README.md §1 and §6 for scope and the per-lane registration protocol.",
+  "specs": [
+    {
+      "name": "kernel-governance",
+      "type": "openapi",
+      "file": "contracts/kernel/openapi.governance.json",
+      "status": "active",
+      "owner": "gov"
+    },
+    {
+      "name": "kernel-provisioning",
+      "type": "asyncapi",
+      "file": "contracts/kernel/asyncapi.provisioning.json",
+      "status": "active",
+      "owner": "gov"
+    },
+    {
+      "name": "calendar-lifecycle",
+      "type": "asyncapi",
+      "file": "contracts/calendar/asyncapi.calendar.json",
+      "status": "active",
+      "owner": "cal"
+    },
+    {
+      "name": "content-lifecycle",
+      "type": "asyncapi",
+      "file": "contracts/content/asyncapi.content.json",
+      "status": "active",
+      "owner": "pub"
+    }
+  ]
+}

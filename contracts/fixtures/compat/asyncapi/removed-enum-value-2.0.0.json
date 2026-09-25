@@ -1,0 +1,49 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "compat fixture",
+    "version": "2.0.0",
+    "description": "T4: same removal as removed-enum-value-1.0.0.json, but with the required MAJOR bump — must PASS."
+  },
+  "channels": {
+    "widget.created": {
+      "address": "gremion.default.widget.created.v1"
+    }
+  },
+  "operations": {
+    "onWidgetCreated": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/widget.created"
+      }
+    }
+  },
+  "components": {
+    "messages": {
+      "WidgetCreated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "name"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "active"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

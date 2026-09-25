@@ -1,0 +1,39 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "compat fixture (response property)",
+    "version": "1.0.0",
+    "description": "T3: removes the optional response description field with NO version bump — must FAIL (acceptance demo: a removed governance response field)."
+  },
+  "paths": {
+    "/widgets/{id}": {
+      "get": {
+        "summary": "Get a widget",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

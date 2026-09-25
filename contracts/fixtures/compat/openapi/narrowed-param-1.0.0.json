@@ -1,0 +1,30 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "compat fixture",
+    "version": "1.0.0",
+    "description": "T3: narrows `limit` from optional to required (breaking for existing callers) with NO version bump — must FAIL."
+  },
+  "paths": {
+    "/widgets": {
+      "get": {
+        "summary": "List widgets",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    },
+    "/widgets/{id}": {
+      "get": {
+        "summary": "Get a widget",
+        "responses": {
+          "200": { "description": "ok" },
+          "404": { "description": "not found" }
+        }
+      }
+    }
+  }
+}

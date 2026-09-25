@@ -47,6 +47,17 @@ export async function enqueueResources(
   }
 }
 
+/** FLOW-MSG-001 (TASK-009 lane B): removes the ledger row for (unit, subsystem).
+ *  Paired with org-units-db.setSubsystemWanted(false) in one tx by releaseSubsystem —
+ *  after this, listDueOrgUnitIds no longer sees the unit for this subsystem, so the
+ *  worker never recreates what was just torn down. */
+export async function detachResource(
+  tx: PgTransaction | undefined, orgUnitId: string, subsystem: Subsystem
+): Promise<void> {
+  const sql = getRunner(tx, getDb)
+  await sql`DELETE FROM provisioning_resources WHERE org_unit_id = ${orgUnitId} AND subsystem = ${subsystem}`
+}
+
 export async function getResources(orgUnitId: string): Promise<readonly ProvisioningResource[]> {
   return getDb()<ProvisioningResource[]>`
     SELECT * FROM provisioning_resources WHERE org_unit_id = ${orgUnitId}`

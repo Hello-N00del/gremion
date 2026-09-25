@@ -1,0 +1,51 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "compat fixture (envelope shape)",
+    "version": "1.1.0",
+    "description": "T4 MEDIUM-finding regression (survived mutant G1b): same nested removal as envelope-removed-nested-property-1.0.0.json, but with only a MINOR bump — must still FAIL, because a breaking removal needs MAJOR, not minor."
+  },
+  "channels": {
+    "widget.created": {
+      "address": "gremion.default.widget.created.v1"
+    }
+  },
+  "operations": {
+    "onWidgetCreated": {
+      "action": "receive",
+      "channel": { "$ref": "#/channels/widget.created" }
+    }
+  },
+  "components": {
+    "messages": {
+      "WidgetCreated": {
+        "payload": { "$ref": "#/components/schemas/EnvelopeWidget" }
+      }
+    },
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": ["eventId", "payload"],
+        "properties": {
+          "eventId": { "type": "string" },
+          "correlationId": { "type": ["string", "null"] },
+          "payload": { "type": "object" }
+        }
+      },
+      "EnvelopeWidget": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Envelope" },
+          { "type": "object", "properties": { "payload": {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "status": { "type": "string", "enum": ["draft", "active", "archived"] }
+            }
+          } } }
+        ]
+      }
+    }
+  }
+}
