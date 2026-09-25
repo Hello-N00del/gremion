@@ -1,5 +1,5 @@
 {
-  "comment": "Every path under a mapped module directory that differs from, or is absent at, the StuRa tag extraction-source-f1 (services/** and the content UI half). scripts/check-module-source-parity.mjs refuses any unlisted difference, any listed path that does not differ (stale), and any set-A path.",
+  "comment": "Every path under a mapped module directory that differs from, or is absent at, the StuRa tag extraction-source-f1 (services/** and the content UI half). scripts/check-module-source-parity.mjs refuses any unlisted difference, any listed path that does not differ (stale), any set-A path, and any entry whose pinned kernel blob no longer matches (a further edit updates its entry).",
   "source": {
     "tag": "extraction-source-f1",
     "commit": "0c9d342e9a1f9785b6f976719008134237198d0d"
@@ -8,152 +8,182 @@
     {
       "path": "modules/board/migrations/manifest.json",
       "reason": "upstream stale manifest: at the tag, manifest.json records sha256 5c406c47… for 001_init.sql while the tag's 001_init.sql hashes to fae5fb11… (unchanged since at least e1814598). The package's prebuild (scripts/build-migration-manifest.mjs) rewrites it on every build — the leaf image already ships the regenerated value — so the committed file now equals the generator's output and a build leaves the tree clean",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "d9f35ed80842e07e55851c97c61979ab662d8d55"
     },
     {
       "path": "modules/board/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "0719eac1bc578fec4536f94112cfad29284f11de"
     },
     {
       "path": "modules/calendar/test/kernel-client.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "16e00150ac28e7541a8150d1fa513c37db8eb228"
     },
     {
       "path": "modules/calendar/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "e8001d9539f6ed68805a07418052bf8767417a21"
     },
     {
       "path": "modules/calendar/test/tenant-store.init-retry.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "9aeeeb41fce47402c261bad800dfbf0ae5552bdd"
     },
     {
       "path": "modules/calendar/tsconfig.test.json",
       "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "b7657adb0ccd629df81b20045a5b72a96dac9b1d"
     },
     {
       "path": "modules/content/app/lib/server/content/caption.ts",
       "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "5cd14c9d2f865e0169842b029de6bf9c6e1b1c0c"
     },
     {
       "path": "modules/content/app/lib/server/content/channels/instagram-renderer.ts",
       "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "fd9d2cbb6c5722b0e5c620ccc41eabb456852989"
     },
     {
       "path": "modules/content/app/lib/server/content/jsdom-shim.d.ts",
       "reason": "added: ambient `jsdom` declaration replacing three @ts-expect-error lines (toolchain guard, TASK-017 Q2)",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "5c37bc2a416e001ada04da05a0ad868726e02de7"
     },
     {
       "path": "modules/content/app/lib/server/content/segment.ts",
       "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "b9b048a3e3d1fda70970fb3629d01dbcefb26505"
     },
     {
       "path": "modules/content/app/migrations/1200_content_news_posts.sql",
       "reason": "added: kernel-origin content creation migration (B4a-news-posts-ownership), moved bytes-unchanged from modules/content/migrations/ into the content app chain (Q7); not a StuRa file",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "a16a92e9225d131085ae963c80b204d336a37c63"
     },
     {
       "path": "modules/content/app/migrations/1205_news_posts_public_reader_columns.sql",
       "reason": "added: forward migration narrowing 1200's whole-table public-reader grant to the seven portal columns of published rows, with RLS (Q9); not a StuRa file",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "c33f863ac6b64391e88bae0ed7479c6ae2ee3d9d"
     },
     {
       "path": "modules/content/app/scripts/news-posts-public-grant-proof.sh",
       "reason": "added: plain-docker-run postgres:18-alpine proof of the Q9 grant (RED with --through 1200_content_news_posts.sql, GREEN on the chain); not a StuRa file",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "8022de093539a7ae5bd6a2958c543c321960fa6c"
     },
     {
       "path": "modules/content/test/guard.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "ba6a7948e9415bab9db865cebd7304d4265a4651"
     },
     {
       "path": "modules/content/test/kernel-client.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "39e7783915eccb5690dd0409b5d42aff42ae7008"
     },
     {
       "path": "modules/content/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "9304214551d4e915a7c9ff772b3394945ac08c9d"
     },
     {
       "path": "modules/content/test/tenant-store.init-retry.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "04aad5246f6caa3a59beaa25fe753d14579ebb08"
     },
     {
       "path": "modules/content/tsconfig.test.json",
       "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "8ae42549a76ff483e918787cb1796d89d1a6aa1c"
     },
     {
       "path": "modules/finance/test/api.integration.test.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "964e8fa4fb82ff08d65165b7b583d59e3ed63358"
     },
     {
       "path": "modules/finance/test/org-unit-mirror.integration.test.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "6578e97a47f0aa10efe0d227c37ef48eae7fe485"
     },
     {
       "path": "modules/finance/test/tenant-store.init-retry.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "f2b8186c41e7ec620abcba6f9db62d57d8958461"
     },
     {
       "path": "modules/finance/tsconfig.test.json",
       "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "191a604d7a7a062687191aaf40d66eb867af485a"
     },
     {
       "path": "modules/publishing/src/dispatch.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "0d5d13733a8ddfe8a4f4aeece997a7cfdf938df8"
     },
     {
       "path": "modules/publishing/test/guard.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "43536182a2bb433675becbf037c1f53e9d6e5f8f"
     },
     {
       "path": "modules/publishing/test/kernel-client.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "7296832e4ef7f282110871002579c9eaecfa3903"
     },
     {
       "path": "modules/publishing/test/origin.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "383e7a45ce7258560c65ddad58156b1cc1833277"
     },
     {
       "path": "modules/publishing/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "7dea3d923120ce4b7d2013455b7213950d34c75b"
     },
     {
       "path": "modules/publishing/test/tenant-store.init-retry.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "40501dbdfcc2ff9a3e1c86a4566e465dcefc0358"
     },
     {
       "path": "modules/publishing/tsconfig.test.json",
       "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "8ae42549a76ff483e918787cb1796d89d1a6aa1c"
     },
     {
       "path": "modules/vault/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
-      "owner": "TASK-200"
+      "owner": "TASK-200",
+      "blob": "3b454ab23dfbd00fe99c8c8ab91a5b614553380f"
     }
   ]
 }

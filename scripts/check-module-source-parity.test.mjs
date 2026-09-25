@@ -41,6 +41,10 @@ function git(cwd, ...args) {
   }).trim()
 }
 
+function blobOf(root, rel) {
+  return execFileSync('git', ['hash-object', rel], { cwd: root, encoding: 'utf8' }).trim()
+}
+
 function put(root, rel, text) {
   mkdirSync(dirname(join(root, rel)), { recursive: true })
   writeFileSync(join(root, rel), text)
@@ -61,6 +65,7 @@ function fixture() {
   put(stura, 'services/finance/src/a.ts', 'export const a = 1\n')
   put(stura, 'services/messages/src/m.ts', 'export const m = 1\n')
   put(stura, 'services/newsletter/src/n.ts', 'export const n = 1\n')
+  put(stura, 'services/votes/src/v.ts', 'export const v = 1\n')
   put(stura, 'gremion-ui/src/lib/server/content/c.ts', 'export const c = 1\n')
   put(stura, 'gremion-ui/src/lib/server/governance/g.ts', 'not content\n')
   git(stura, 'add', '-A')
@@ -76,6 +81,7 @@ function fixture() {
   put(kernel, 'modules/finance/src/a.ts', 'export const a = 2\n')
   put(kernel, 'modules/messaging/src/m.ts', 'export const m = 1\n')
   put(kernel, 'modules/publishing/src/n.ts', 'export const n = 1\n')
+  put(kernel, 'modules/votes/src/v.ts', 'export const v = 1\n')
   put(kernel, 'modules/content/app/lib/server/content/c.ts', 'export const c = 1\n')
   put(kernel, 'modules/EXTRACTION-DELTA.json', JSON.stringify({ entries: [] }))
   return {
@@ -110,7 +116,7 @@ test('GREEN: a byte-equal copy reports zero mismatches in every set', () => {
     const r = runParity(f.opts)
     assert.deepEqual(r.problems, [])
     assert.equal(r.sets.A.total, 1)
-    assert.equal(r.sets.B.total, 3)
+    assert.equal(r.sets.B.total, 4)
     assert.equal(r.sets.C.total, 1)
     for (const s of ['A', 'B', 'C']) assert.deepEqual(r.sets[s].mismatches, [])
     assert.match(formatReport(r), /RESULT: OK/)
@@ -149,7 +155,9 @@ test('RED: a one-byte edit in a set-B file fails unless EXTRACTION-DELTA.json li
       f.kernel,
       'modules/EXTRACTION-DELTA.json',
       JSON.stringify({
-        entries: [{ path: 'modules/messaging/src/m.ts', reason: 'kernel hygiene h2/(i)', owner: 'TASK-200' }],
+        entries: [
+          { path: 'modules/messaging/src/m.ts', reason: 'kernel hygiene h2/(i)', owner: 'TASK-200', blob: blobOf(f.kernel, 'modules/messaging/src/m.ts') },
+        ],
       }),
     )
     r = runParity(f.opts)
@@ -200,7 +208,9 @@ test('RED: an unlisted extra file inside a module directory fails', () => {
     put(
       f.kernel,
       'modules/EXTRACTION-DELTA.json',
-      JSON.stringify({ entries: [{ path: 'modules/finance/src/extra.ts', reason: 'added', owner: 'TASK-200' }] }),
+      JSON.stringify({
+        entries: [{ path: 'modules/finance/src/extra.ts', reason: 'added', owner: 'TASK-200', blob: blobOf(f.kernel, 'modules/finance/src/extra.ts') }],
+      }),
     )
     r = runParity(f.opts)
     assert.deepEqual(r.problems, [])
@@ -242,6 +252,53 @@ test('RED: a copied file that .gitignore hides would never be committed — refu
   }
 })
 
+test('RED: a set-A path listed in the delta fails even when it is byte-equal', () => {
+  const f = fixture()
+  try {
+    put(
+      f.kernel,
+      'modules/EXTRACTION-DELTA.json',
+      JSON.stringify({ entries: [{ path: 'modules/finance/src/a.ts', reason: 'x', owner: 'TASK-200' }] }),
+    )
+    const r = runParity(f.opts)
+    assert.ok(r.problems.some((p) => /set-A path/.test(p)), r.problems.join('\n'))
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a delta entry pins the blob it excuses — a further edit to a listed file fails', () => {
+  const f = fixture()
+  try {
+    put(f.kernel, 'modules/messaging/src/m.ts', 'export const m = 2\n')
+    const blob = execFileSync('git', ['hash-object', 'modules/messaging/src/m.ts'], { cwd: f.kernel, encoding: 'utf8' }).trim()
+    const entry = { path: 'modules/messaging/src/m.ts', reason: 'r', owner: 'TASK-200', blob }
+    put(f.kernel, 'modules/EXTRACTION-DELTA.json', JSON.stringify({ entries: [entry] }))
+    assert.deepEqual(runParity(f.opts).problems, [])
+    put(f.kernel, 'modules/messaging/src/m.ts', 'export const m = 3\n')
+    assert.ok(runParity(f.opts).problems.some((p) => /pins blob/.test(p)))
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a mode change (chmod +x) or a symlink in place of a copied file fails', () => {
+  const f = fixture()
+  try {
+    execFileSync('git', ['add', '-A'], { cwd: f.kernel })
+    execFileSync('chmod', ['+x', join(f.kernel, 'modules/messaging/src/m.ts')])
+    assert.ok(runParity(f.opts).problems.some((p) => /mode/.test(p) && /m\.ts/.test(p)))
+    execFileSync('chmod', ['-x', join(f.kernel, 'modules/messaging/src/m.ts')])
+    assert.deepEqual(runParity(f.opts).problems, [])
+    put(f.kernel, 'modules/elsewhere.ts', 'export const m = 1\n')
+    rmSync(join(f.kernel, 'modules/messaging/src/m.ts'))
+    execFileSync('ln', ['-s', '../../elsewhere.ts', join(f.kernel, 'modules/messaging/src/m.ts')])
+    assert.ok(runParity(f.opts).problems.some((p) => /symlink/.test(p)))
+  } finally {
+    f.cleanup()
+  }
+})
+
 test('validateDelta refuses a missing reason, a missing owner and a duplicate path', () => {
   assert.ok(validateDelta({ entries: [{ path: 'modules/a', owner: 'TASK-1' }] }).some((p) => /reason/.test(p)))
   assert.ok(validateDelta({ entries: [{ path: 'modules/a', reason: 'r' }] }).some((p) => /owner/.test(p)))
@@ -254,6 +311,7 @@ test('validateDelta refuses a missing reason, a missing owner and a duplicate pa
     }).some((p) => /duplicate/.test(p)),
   )
   assert.ok(validateDelta({}).some((p) => /entries/.test(p)))
+  assert.ok(validateDelta({ entries: [{ path: 'modules/a', reason: 'r', owner: 'TASK-1', blob: 'xyz' }] }).some((p) => /blob/.test(p)))
   assert.deepEqual(validateDelta({ entries: [] }), [])
 })
 
@@ -317,4 +375,36 @@ test('Q6: the postgres exemption excuses exactly two set-A paths and one ref, an
     staleExemptions(PATH_EXEMPTIONS.map((e) => ({ path: e.path, text: `x ${stale}\n` }))).length,
     0,
   )
+})
+
+test('RED: extras anywhere under modules/ — a stray top-level file, an unknown module dir, a non-content app/ file', () => {
+  const f = fixture()
+  try {
+    put(f.kernel, 'modules/stray.ts', 'x')
+    put(f.kernel, 'modules/newmod/index.ts', 'x')
+    put(f.kernel, 'modules/finance/app/evil.ts', 'x')
+    const r = runParity(f.opts)
+    assert.ok(r.problems.some((p) => /modules\/stray\.ts sits directly under modules/.test(p)), r.problems.join('\n'))
+    assert.ok(r.problems.some((p) => /modules\/newmod\/index\.ts .*unknown module directory/.test(p)))
+    assert.ok(r.problems.some((p) => /extra: modules\/finance\/app\/evil\.ts/.test(p)))
+  } finally {
+    f.cleanup()
+  }
+})
+
+test("RED: source 'head' checks the committed tree and refuses an uncommitted modules/", () => {
+  const f = fixture()
+  try {
+    execFileSync('git', ['add', '-A'], { cwd: f.kernel })
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.org', 'commit', '-qm', 'k'], { cwd: f.kernel })
+    assert.deepEqual(runParity({ ...f.opts, source: 'head' }).problems, [])
+    // untracked from the index but still on disk: the worktree view would pass, HEAD must not
+    execFileSync('git', ['rm', '-q', '--cached', 'modules/votes/src/v.ts'], { cwd: f.kernel })
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.org', 'commit', '-qm', 'drop'], { cwd: f.kernel })
+    const r = runParity({ ...f.opts, source: 'head' })
+    assert.ok(r.problems.some((p) => /uncommitted or untracked/.test(p)), r.problems.join('\n'))
+    assert.ok(r.problems.some((p) => /modules\/votes\/src\/v\.ts/.test(p)))
+  } finally {
+    f.cleanup()
+  }
 })

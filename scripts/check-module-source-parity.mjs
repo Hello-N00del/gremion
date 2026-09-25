@@ -34,7 +34,7 @@
 // Test: node --test scripts/check-module-source-parity.test.mjs
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, statSync, lstatSync, readlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -111,6 +111,8 @@ export function validateDelta(delta) {
     if (typeof e.reason !== 'string' || e.reason.trim() === '') problems.push(`${where} (${e.path}): empty or missing "reason"`)
     if (typeof e.owner !== 'string' || !/^TASK-\d+[a-z]?$/.test(e.owner.trim()))
       problems.push(`${where} (${e.path}): "owner" must name a task (TASK-<n>)`)
+    if (!(e.blob === null || (typeof e.blob === 'string' && /^[0-9a-f]{40}$/.test(e.blob))))
+      problems.push(`${where} (${e.path}): "blob" must pin the kernel blob it excuses (40 lowercase hex; null for a removed file)`)
     if (seen.has(e.path)) problems.push(`${where}: duplicate path ${e.path}`)
     seen.add(e.path)
   })
@@ -160,36 +162,76 @@ function assertSource({ sturaPath, tag, base, expectedTagCommit }) {
   return peeled
 }
 
-/** `git ls-tree -r` at the tag, restricted to pathspecs: Map path -> blob sha. */
-function tagBlobs(sturaPath, tag, pathspecs) {
-  const out = git(sturaPath, ['ls-tree', '-r', '-z', `refs/tags/${tag}^{commit}`, '--', ...pathspecs])
-  const blobs = new Map()
+/** `git ls-tree -r` output -> Map path -> { mode, blob }. Newline-safe (-z). */
+function parseLsTree(out, where) {
+  const entries = new Map()
   const problems = []
   for (const rec of out.split('\0').filter(Boolean)) {
-    const m = /^(\d+) (\w+) ([0-9a-f]{40})\t(.+)$/.exec(rec)
-    if (!m) throw new Error(`unparseable ls-tree record: ${rec}`)
-    if (m[2] !== 'blob') problems.push(`${m[4]} is a ${m[2]} at the tag — a gitlink cannot be copied by blob`)
-    else blobs.set(m[4], m[3])
+    const m = /^(\d+) (\w+) ([0-9a-f]{40})\t([\s\S]+)$/.exec(rec)
+    if (!m) throw new Error(`unparseable ls-tree record: ${JSON.stringify(rec)}`)
+    if (m[2] !== 'blob') problems.push(`${m[4]} is a ${m[2]} ${where} — a gitlink cannot be copied by blob`)
+    else entries.set(m[4], { mode: m[1], blob: m[3] })
   }
-  return { blobs, problems }
+  return { entries, problems }
 }
 
-/** Kernel paths -> blob sha of the working-tree file (null when absent). Filters apply by path, as git would. */
-function kernelBlobs(kernelRoot, paths) {
-  const present = paths.filter((p) => existsSync(join(kernelRoot, p)) && statSync(join(kernelRoot, p)).isFile())
-  const shas = present.length ? git(kernelRoot, ['hash-object', '--stdin-paths'], present.join('\n') + '\n').trim().split('\n') : []
-  if (shas.length !== present.length) throw new Error(`git hash-object returned ${shas.length} hashes for ${present.length} paths`)
-  const map = new Map(paths.map((p) => [p, null]))
-  present.forEach((p, i) => map.set(p, shas[i]))
-  return map
+function tagBlobs(sturaPath, tag, pathspecs) {
+  const { entries, problems } = parseLsTree(
+    git(sturaPath, ['ls-tree', '-r', '-z', `refs/tags/${tag}^{commit}`, '--', ...pathspecs]),
+    'at the tag',
+  )
+  return { blobs: entries, problems }
 }
 
-/** Every file (tracked or untracked-not-ignored) under the given kernel directories. */
-function kernelFilesUnder(kernelRoot, dirs) {
-  if (dirs.length === 0) return []
-  const out = git(kernelRoot, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...dirs])
-  return [...new Set(out.split('\0').filter(Boolean))].filter((p) => existsSync(join(kernelRoot, p)))
+/**
+ * The kernel side, as { files: Map path -> { mode, blob }, problems }, over everything under modules/.
+ *   'head'     — the COMMITTED tree (`git ls-tree -r HEAD`), and a refusal while modules/ has any
+ *                uncommitted or untracked change: what a clone gets is what is checked.
+ *   'worktree' — the working tree (tests, and a pre-commit look): tracked plus untracked-not-ignored
+ *                files, hashed with git's own filters; symlinks and the exec bit are read with lstat.
+ *                A mapped file that exists on disk but is ignored by git is refused.
+ */
+function kernelState(kernelRoot, source) {
+  const problems = []
+  if (source === 'head') {
+    const dirty = git(kernelRoot, ['status', '--porcelain', '-z', '--untracked-files=all', '--', 'modules']).split('\0').filter(Boolean)
+    if (dirty.length)
+      problems.push(`modules/ has ${dirty.length} uncommitted or untracked change(s) (e.g. ${dirty[0].trim()}) — parity checks the committed tree; commit or stash first`)
+    const { entries, problems: p } = parseLsTree(git(kernelRoot, ['ls-tree', '-r', '-z', 'HEAD', '--', 'modules/']), 'in the kernel')
+    return { files: entries, problems: [...problems, ...p] }
+  }
+  const listedPaths = [
+    ...new Set(
+      git(kernelRoot, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'modules/'])
+        .split('\0')
+        .filter(Boolean),
+    ),
+  ]
+  const files = new Map()
+  const regular = []
+  for (const p of listedPaths) {
+    let st
+    try {
+      st = lstatSync(join(kernelRoot, p))
+    } catch {
+      continue // tracked but deleted on disk: absent
+    }
+    if (st.isSymbolicLink()) {
+      const blob = git(kernelRoot, ['hash-object', '--stdin'], readlinkSync(join(kernelRoot, p))).trim()
+      files.set(p, { mode: '120000', blob })
+    } else if (st.isFile()) {
+      files.set(p, { mode: st.mode & 0o111 ? '100755' : '100644', blob: null })
+      regular.push(p)
+    }
+  }
+  const shas = regular.length ? git(kernelRoot, ['hash-object', '--stdin-paths'], regular.join('\n') + '\n').trim().split('\n') : []
+  if (shas.length !== regular.length) throw new Error(`git hash-object returned ${shas.length} hashes for ${regular.length} paths`)
+  regular.forEach((p, i) => (files.get(p).blob = shas[i]))
+  return { files, problems }
 }
+
+/** Files that may sit directly under modules/ (not in a module directory). */
+export const MODULES_ROOT_FILES = Object.freeze(['modules/EXTRACTION-DELTA.json', 'modules/COUPLED-TESTS.json', 'modules/disabled.json'])
 
 // ── the check ────────────────────────────────────────────────────────────
 
@@ -228,24 +270,37 @@ export function runParity(opts) {
   problems.push(...deltaProblems)
   const listed = new Map((delta?.entries ?? []).map((e) => [e.path, e]))
 
-  const moduleDirs = [...new Set(Object.values(MODULE_ID_MAP))].map((id) => `modules/${id}`)
-  const onDisk = kernelFilesUnder(kernelRoot, moduleDirs)
+  const knownIds = new Set(Object.values(MODULE_ID_MAP))
+  const state = kernelState(kernelRoot, opts.source ?? 'worktree')
+  problems.push(...state.problems)
   const mappedTargets = new Set([...b.blobs.keys(), ...c.blobs.keys()].map(mapSourcePath).filter(Boolean))
   const setAPaths = setA.map((a) => mapSourcePath(a.path)).filter(Boolean)
-  const hashes = kernelBlobs(kernelRoot, [...new Set([...mappedTargets, ...setAPaths, ...onDisk])])
 
-  // A mapped file that exists on disk but that git would never commit (ignored
-  // by a .gitignore) hashes equal here and is missing from every clone. Refuse.
-  const committable = new Set(onDisk)
-  for (const p of mappedTargets)
-    if (hashes.get(p) !== null && !committable.has(p))
-      problems.push(`${p} exists on disk but is ignored by git — it would never be committed, so a clone would lack it`)
+  if ((opts.source ?? 'worktree') === 'worktree')
+    for (const p of mappedTargets)
+      if (!state.files.has(p) && existsSync(join(kernelRoot, p)))
+        problems.push(`${p} exists on disk but is ignored by git — it would never be committed, so a clone would lack it`)
 
-  const compare = (sourcePath, sourceBlob) => {
+  const compare = (sourcePath, source) => {
     const kernelPath = mapSourcePath(sourcePath)
-    const kernelBlob = hashes.get(kernelPath) ?? null
-    return { sourcePath, kernelPath, sourceBlob, kernelBlob, listed: listed.has(kernelPath) }
+    const k = state.files.get(kernelPath) ?? null
+    return {
+      sourcePath,
+      kernelPath,
+      sourceBlob: source?.blob ?? null,
+      kernelBlob: k?.blob ?? null,
+      sourceMode: source?.mode ?? null,
+      kernelMode: k?.mode ?? null,
+      listed: listed.has(kernelPath),
+    }
   }
+  const differs = (r) => r.sourceBlob !== r.kernelBlob || r.sourceMode !== r.kernelMode
+  const why = (r) =>
+    r.kernelMode === '120000' && r.sourceMode !== '120000'
+      ? 'is a symlink in the kernel'
+      : r.sourceBlob !== r.kernelBlob
+        ? 'differs'
+        : `differs in mode (tag ${r.sourceMode}, kernel ${r.kernelMode})`
 
   const sets = {
     A: { label: `services/** changed ${base.slice(0, 8)}..${tag}`, total: setA.length, mismatches: [] },
@@ -254,41 +309,52 @@ export function runParity(opts) {
   }
 
   for (const { status, path } of setA) {
-    const r = status === 'D' ? { ...compare(path, null) } : compare(path, b.blobs.get(path))
-    if (r.sourceBlob !== r.kernelBlob) {
+    const r = compare(path, status === 'D' ? null : b.blobs.get(path))
+    if (differs(r)) {
       sets.A.mismatches.push(r)
-      problems.push(`set A: ${r.kernelPath} differs from ${tag}:${path} (${status}) — set A is never scrubbed, listed or not`)
+      problems.push(`set A: ${r.kernelPath} ${why(r)} from ${tag}:${path} (${status}) — set A is never scrubbed, listed or not`)
     }
   }
   for (const [key, blobs] of [['B', b.blobs], ['C', c.blobs]]) {
-    for (const [path, blob] of blobs) {
-      const r = compare(path, blob)
-      if (r.sourceBlob === r.kernelBlob) continue
+    for (const [path, entry] of blobs) {
+      const r = compare(path, entry)
+      if (!differs(r)) continue
       sets[key].mismatches.push(r)
-      if (copy) problems.push(`set ${key}: ${r.kernelPath} differs from ${tag}:${path} — --copy asserts the byte-equal copy, and a listed delta does not excuse it`)
-      else if (!r.listed) problems.push(`set ${key}: ${r.kernelPath} differs from ${tag}:${path} and ${DELTA_PATH} does not list it`)
+      if (copy) problems.push(`set ${key}: ${r.kernelPath} ${why(r)} from ${tag}:${path} — --copy asserts the byte-equal copy, and a listed delta does not excuse it`)
+      else if (!r.listed) problems.push(`set ${key}: ${r.kernelPath} ${why(r)} from ${tag}:${path} and ${DELTA_PATH} does not list it`)
     }
   }
 
-  // Reverse direction. Other modules' app/ trees are TASK-205's and not a copy of services/**.
-  const extras = onDisk
-    .filter((p) => !mappedTargets.has(p))
-    .filter((p) => p.startsWith(CONTENT_APP_ROOT) || !/^modules\/[^/]+\/app\//.test(p))
-    .map((p) => ({ kernelPath: p, listed: listed.has(p) }))
-  // An addition is never a modification of a copied byte, so --copy treats it
-  // like the tip does: listed (path, reason, owner) or refused.
+  // Reverse direction, over ALL of modules/: a file no tag path maps to is an
+  // extra (listed or refused) — other modules' app/ trees included, until
+  // TASK-205 gives them their own rule. Only the three metadata files may sit
+  // directly under modules/, and only mapped module ids may exist.
+  const extras = []
+  for (const p of state.files.keys()) {
+    if (mappedTargets.has(p) || MODULES_ROOT_FILES.includes(p)) continue
+    const m = /^modules\/([^/]+)\/[\s\S]+$/.exec(p)
+    if (!m) problems.push(`${p} sits directly under modules/ — only ${MODULES_ROOT_FILES.join(', ')} may`)
+    else if (!knownIds.has(m[1])) problems.push(`${p} is in modules/${m[1]}/, which no StuRa service maps to — an unknown module directory`)
+    else extras.push({ kernelPath: p, listed: listed.has(p), kernelBlob: state.files.get(p).blob })
+  }
   for (const e of extras)
     if (!e.listed) problems.push(`extra: ${e.kernelPath} is in a module directory but no ${tag} path maps to it and ${DELTA_PATH} does not list it`)
 
-  // Stale delta entries: listed, but nothing differs there, or nothing is there at all.
-  const differing = new Set([
-    ...sets.B.mismatches.map((m) => m.kernelPath),
-    ...sets.C.mismatches.map((m) => m.kernelPath),
-    ...extras.map((e) => e.kernelPath),
-  ])
-  for (const path of listed.keys()) {
-    if (setAPaths.includes(path)) continue // already refused above
-    if (!differing.has(path)) problems.push(`stale delta entry: ${path} is listed in ${DELTA_PATH} but does not differ from ${tag} (or is not in any set) — delete the entry`)
+  // Listed entries: never a set-A path; must differ (else stale); must pin the blob they excuse.
+  const differing = new Map(
+    [...sets.B.mismatches, ...sets.C.mismatches, ...extras].map((m) => [m.kernelPath, m.kernelBlob ?? null]),
+  )
+  for (const [path, e] of listed) {
+    if (setAPaths.includes(path)) {
+      problems.push(`set-A path ${path} is listed in ${DELTA_PATH} — set A stays byte-equal to the tag, so it is never a delta`)
+      continue
+    }
+    if (!differing.has(path)) {
+      problems.push(`stale delta entry: ${path} is listed in ${DELTA_PATH} but does not differ from ${tag} (or is not in any set) — delete the entry`)
+      continue
+    }
+    if (e.blob !== undefined && e.blob !== differing.get(path))
+      problems.push(`${DELTA_PATH} entry ${path} pins blob ${e.blob} but the kernel file is ${differing.get(path) ?? 'absent'} — a further edit to a listed file must update its entry`)
   }
 
   for (const [key, s] of Object.entries(sets)) if (s.total === 0) problems.push(`set ${key} is empty — the parity check would pass vacuously`)
@@ -331,7 +397,7 @@ if (isMain) {
   try {
     parsed = parseArgs({
       args: process.argv.slice(2),
-      options: { copy: { type: 'boolean' }, write: { type: 'string' } },
+      options: { copy: { type: 'boolean' }, write: { type: 'string' }, worktree: { type: 'boolean' } },
       strict: true,
       allowPositionals: true,
     })
@@ -346,7 +412,7 @@ if (isMain) {
   }
   let r
   try {
-    r = runParity({ sturaPath, tag, copy: parsed.values.copy === true })
+    r = runParity({ sturaPath, tag, copy: parsed.values.copy === true, source: parsed.values.worktree ? 'worktree' : 'head' })
   } catch (err) {
     console.error(`[module-source-parity] refused — ${err.message}`)
     process.exit(1)
