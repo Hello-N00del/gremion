@@ -65,6 +65,13 @@ describe.each(implementations)('%s', (_name, strip) => {
   })
 })
 
+describe('the B22 regex (kept as the RED guard)', () => {
+  it('still cuts the plpgsql BEGIN out of a DO body, which is why it was replaced', () => {
+    expect(b22Strip(DO_BLOCK)).not.toBe(DO_BLOCK)
+    expect(stripOuterTransaction(DO_BLOCK)).toBe(DO_BLOCK)
+  })
+})
+
 describe('stripOuterTransaction rules', () => {
   it('accepts the other spellings of the wrapper', () => {
     expect(stripOuterTransaction('begin transaction;\nSELECT 1;\nend work;\n')).toBe('\nSELECT 1;\n\n')
