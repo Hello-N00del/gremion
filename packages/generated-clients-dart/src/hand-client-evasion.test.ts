@@ -43,8 +43,19 @@ describe('hand-written client evasions are caught', () => {
     ['ev5 adjacent literals', "final p = '/api/governance/' 'committees/$id/provision';"],
     ['ev8 no leading slash', "final p = 'api/governance/committees/$id';"],
     ['quoted interpolation', "final p = \"/api/groups/${ids['a']}\";"],
+    ['r2 StringBuffer ..write chain', "final b = StringBuffer()..write('/api/governance')..write('/committees/')..write(id)..write('/roles');"],
+    ['r2 path.url.join', "final p = p.url.join('/api', 'governance', 'committees', id, 'members');"],
   ])('%s', (_n, dart) => {
     expect(scan(dart).join('\n')).toMatch(/apps\/mobile\/lib\/api\/x\.dart: hand-written client/)
+  })
+
+  it.each([
+    ["GoRoute(path: '/groups/:id')"],
+    ["firestore.doc('groups/$groupId')"],
+    ["Image.asset('assets/committees/$id.png')"],
+    ["context.go('/committees/${c.id}')"],
+  ])('round 2: no false positive on ordinary Flutter code: %s', (dart) => {
+    expect(scan(dart)).toEqual([])
   })
 
   it('still passes Dart that names no spec path (no false positive on common text)', () => {

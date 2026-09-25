@@ -18,7 +18,9 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-const PARAM = String.raw`(?:\$\{[^}]*\}|[^/'"\s?#]+)`
+// A parameter segment is one interpolation or run of non-separators. It may
+// not start with ':' so a router pattern ('/groups/:id') is not a call.
+const PARAM = String.raw`(?:\$\{[^}]*\}|[^/'"\s?#:][^/'"\s?#]*)`
 
 function keyBody(segments: string[]): string {
   return segments.map((seg) => seg.split(/\{[^}]*\}/).map(escapeRe).join(PARAM)).join('/')
@@ -39,14 +41,17 @@ export function pathKeyPattern(key: string): RegExp {
 }
 
 /** Suffixes of a key that a client with the prefix in its base URL would
- *  write (baseUrl '…/api' + '/governance/committees/$id'): every tail of at
- *  least two segments that starts with a literal segment. */
+ *  write (baseUrl '…/api' + '/governance/committees/$id'): every tail that
+ *  starts with a literal segment and holds at least TWO literal segments.
+ *  A shorter tail ('/groups/{id}') is ordinary app text (routes, asset
+ *  paths, document ids) far more often than it is an API call (round-2
+ *  finding), so it is not searched. That gap is documented. */
 export function suffixPatterns(key: string): RegExp[] {
   const segs = key.split('/').slice(1)
   const out: RegExp[] = []
   for (let i = 1; i <= segs.length - 2; i++) {
     const tail = segs.slice(i)
-    if (isParam(tail[0])) continue
+    if (isParam(tail[0]) || tail.filter((t) => !isParam(t)).length < 2) continue
     out.push(new RegExp(`(?:/|(?<=['"]))${keyBody(tail)}(?![\\w-]|/[\\w\${])`))
   }
   return out
@@ -67,18 +72,28 @@ export function normalizeDartSource(text: string): string {
   let t = text
   const consts = new Map<string, string>()
   for (const m of t.matchAll(/\b(?:const|final|var|String)\s+(?:String\s+)?([A-Za-z_$][\w$]*)\s*=\s*(['"])([^'"\n]*)\2/g)) consts.set(m[1], m[3])
-  for (const [name, value] of consts) {
-    t = t.replace(new RegExp(String.raw`\$\{${escapeRe(name)}\}|\$${escapeRe(name)}(?![\w$])`, 'g'), () => value)
+  // One pass over the text for all referenced consts (per-const passes were
+  // quadratic on large generated constant files: round-2 finding).
+  const used = [...consts.keys()].filter((n) => t.includes(`$${n}`) || t.includes(`\${${n}}`))
+  if (used.length > 0) {
+    const alt = used.map(escapeRe).join('|')
+    t = t.replace(new RegExp(String.raw`\$\{(${alt})\}|\$(${alt})(?![\w$])`, 'g'), (_m, a: string | undefined, b: string | undefined) => consts.get(a ?? b ?? '') ?? '')
   }
-  const lists: string[] = []
-  for (const m of t.matchAll(LIST)) {
-    const items = [...m[1].matchAll(new RegExp(LIST_ITEM, 'g'))].map((i) => (/^['"]/.test(i[0]) ? i[0].slice(1, -1) : 'P')).filter((x) => x.length > 0)
-    lists.push(`'/${items.join('/')}'`)
+  const extra: string[] = []
+  const segs = (items: string[]) => `'/${items.map((i) => i.replace(/^\/+|\/+$/g, '')).filter((x) => x.length > 0).join('/')}'`
+  const itemsOf = (s: string) => [...s.matchAll(new RegExp(LIST_ITEM, 'g'))].map((i) => (/^['"]/.test(i[0]) ? i[0].slice(1, -1) : 'P'))
+  for (const m of t.matchAll(LIST)) extra.push(segs(itemsOf(m[1])))
+  // path.join / p.url.join('api', 'governance', id)
+  for (const m of t.matchAll(new RegExp(String.raw`\bjoin\(\s*(${LIST_ITEM}(?:\s*,\s*${LIST_ITEM})+)\s*,?\s*\)`, 'g'))) extra.push(segs(itemsOf(m[1])))
+  // StringBuffer()..write('/api')..write(id)..write('/roles')
+  for (const m of t.matchAll(new RegExp(String.raw`(?:\.\.write\(\s*(?:${LIST_ITEM}|${EXPR})\s*\)\s*){2,}`, 'g'))) {
+    const parts = [...m[0].matchAll(/\.\.write\(\s*([^)]*?)\s*\)/g)].map((w) => (/^['"]/.test(w[1]) ? w[1].slice(1, -1) : 'P'))
+    extra.push(`'${parts.join('')}'`)
   }
   t = t.replace(new RegExp(String.raw`(['"])\s*\+\s*${EXPR}\s*\+\s*(['"])`, 'g'), 'P')
   t = t.replace(new RegExp(String.raw`(['"])\s*\+\s*${EXPR}`, 'g'), 'P$1')
   t = t.replace(/(['"])\s*\+?\s*(['"])/g, '')
-  return `${t}\n${lists.join('\n')}\n`
+  return `${t}\n${extra.join('\n')}\n`
 }
 
 /** Every *.dart file in the tree, repo-relative. In a git work tree this is
