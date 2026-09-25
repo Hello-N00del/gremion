@@ -33,14 +33,26 @@
  * COMPOSE_FILE the fixture names.
  */
 
-import { test } from 'node:test'
+import { test as nodeTest } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const SELF = fileURLToPath(import.meta.url)
+const REPO_ROOT = path.resolve(path.dirname(SELF), '..')
+
+// TASK-034 imports renderState from this file. node:test registers every
+// test() a module declares when it is IMPORTED, so without this the whole
+// suite below would run again inside the importer's. The suite registers only
+// when this file is the process entry -- which `node --test <file>` makes it
+// (one process per file). If a runner ever changes that, the suite registers
+// nothing and `make lint-edge-render` fails on its collected-count check
+// rather than passing on zero tests.
+const IS_ENTRY = process.argv[1] !== undefined && path.resolve(process.argv[1]) === SELF
+const test = IS_ENTRY ? nodeTest : () => {}
 export const FIXTURE = 'test/host/fixtures/edge-render/state.env'
 const TRAEFIK_YML = 'docker/traefik/traefik.yml'
 const MARKERS = ['@ACME_EMAIL@', '@ACME_CA_SERVER@', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@']
@@ -213,6 +225,31 @@ test('renderState renders the fixture through the production profile, independen
     assert.ok(!ips.includes('198.51.100.99'), 'the caller shell decided a bind address')
   } finally {
     delete process.env.EDGE_BIND_IP
+  }
+})
+
+test('importing renderState from another test file registers none of this suite', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'edge-import-'))
+  try {
+    const importer = path.join(dir, 'importer.test.mjs')
+    writeFileSync(
+      importer,
+      [
+        `import { renderState } from ${JSON.stringify(pathToFileURL(SELF).href)}`,
+        `import { test } from 'node:test'`,
+        `test('importer probe', () => { if (typeof renderState !== 'function') throw new Error('no renderState') })`,
+        '',
+      ].join('\n'),
+    )
+    // A child `node --test` that inherits NODE_TEST_CONTEXT reports to THIS
+    // runner instead of to its stdout; it must run as a standalone runner.
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    const res = spawnSync(process.execPath, ['--test', '--test-reporter=tap', importer], { encoding: 'utf8', env })
+    assert.equal(res.status, 0, res.stdout + res.stderr)
+    assert.match(res.stdout, /^1\.\.1$/m, `the importer ran more than its own test:\n${res.stdout}`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 
