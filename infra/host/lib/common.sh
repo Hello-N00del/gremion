@@ -208,20 +208,67 @@ atomic_write() {
     fi
 }
 
-# load_env <file>
-# Exports every KEY=VALUE. Refuses, with exit 2:
+# The directory the env templates live in: <lib>/../templates/env, which is
+# the source tree's infra/host/templates/env and the host's
+# /opt/gremion/templates/env alike (bin/, lib/ and templates/ are installed side
+# by side). GREMION_ENV_TEMPLATE_DIR overrides it for tests.
+GREMION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# env_template_for <env-file> -> the template path a host env file is rendered
+# from, or nothing for a file that is not one of the five host env files.
+env_template_for() {
+    local dir="${GREMION_ENV_TEMPLATE_DIR:-${GREMION_LIB_DIR}/../templates/env}"
+    case "$(basename "$1")" in
+        state.env)                 printf '%s\n' "${dir}/state.env.tmpl" ;;
+        app-blue.env|app-green.env) printf '%s\n' "${dir}/app.env.tmpl" ;;
+        mail.env)                  printf '%s\n' "${dir}/mail.env.tmpl" ;;
+        ops.env)                   printf '%s\n' "${dir}/ops.env.tmpl" ;;
+        *) ;;
+    esac
+}
+
+# secret_marked_keys <template> -> every key whose template value carries a
+# generated sentinel (CHANGE_ME_GEN_), whole or embedded (a URL's password).
+secret_marked_keys() {
+    grep -E '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME_GEN_' "$1" | sed 's/=.*//' || true
+}
+
+# load_env <file> [<template>]
+# THE single env reader under infra/host/ (spec B section 6, TRD-039; a guard in
+# test/host/validate-env.bats fails on a second one). Exports every KEY=VALUE.
+# Refuses, with exit 2:
 #   - a missing file
-#   - any line that is not a comment, blank, or KEY=VALUE
-#   - ANY duplicate key. StuRaOS #476: validate-env silently read the LAST
-#     occurrence, so a stale duplicate above a corrected value won. Here a
-#     duplicate is never resolved, it is refused.
+#   - any line that is not a comment, blank, or KEY=VALUE. The line itself is
+#     never echoed, only its number: a malformed line may hold a secret.
+#   - ANY duplicate key. StuRaOS #476: validate-env.sh read the FIRST occurrence
+#     (head -n1) while compose takes the LAST, so the validator and the
+#     container disagreed about which value was live. Here a duplicate is never
+#     resolved, it is refused.
 #   - any value beginning CHANGE_ME_ , unless ALLOW_SENTINELS=1. That is the
 #     one gate that makes the two-shape sentinel scheme of section G real:
 #     an env file the operator has not finished filling in cannot be loaded.
+#   - an EMPTY value for a key the template marks secret (its template value
+#     carries CHANGE_ME_GEN_). ALLOW_SENTINELS does not waive this: an empty
+#     secret is not an unfinished file, it is a broken one. The template is
+#     <template> when given, else the one the file name maps to (state.env,
+#     app-blue.env, app-green.env, mail.env, ops.env); for one of those five
+#     names a missing template is itself a refusal, never a skipped check.
 load_env() {
-    local file="${1:-}"
-    [[ -n "$file" ]] || die "load_env: usage: load_env <file>" "$GREMION_EXIT_USAGE"
+    local file="${1:-}" tmpl="${2:-}"
+    [[ -n "$file" ]] || die "load_env: usage: load_env <file> [<template>]" "$GREMION_EXIT_USAGE"
     [[ -f "$file" ]] || die "load_env: no such env file: ${file}" "$GREMION_EXIT_USAGE"
+
+    [[ -n "$tmpl" ]] || tmpl="$(env_template_for "$file")"
+    local -A secret_key=()
+    if [[ -n "$tmpl" ]]; then
+        [[ -f "$tmpl" ]] \
+            || die "load_env: ${file}: its template ${tmpl} is missing; cannot tell which keys are secret" \
+                "$GREMION_EXIT_USAGE"
+        local k
+        while IFS= read -r k; do
+            [[ -n "$k" ]] && secret_key["$k"]=1
+        done < <(secret_marked_keys "$tmpl")
+    fi
 
     local dupes
     dupes="$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$file" \
@@ -233,12 +280,13 @@ load_env() {
         exit "$GREMION_EXIT_USAGE"
     fi
 
-    local line key value
+    local line key value n=0
     while IFS= read -r line || [[ -n "$line" ]]; do
+        n=$((n + 1))
         line="${line%$'\r'}"
         [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
         if [[ ! "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-            bad "load_env: ${file}: not KEY=VALUE: ${line}"
+            bad "load_env: ${file}: line ${n} is not KEY=VALUE (content not shown)"
             exit "$GREMION_EXIT_USAGE"
         fi
         key="${line%%=*}"
@@ -246,6 +294,10 @@ load_env() {
         # strip one layer of matching quotes, the way compose --env-file does
         if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then
             value="${value:1:${#value}-2}"
+        fi
+        if [[ -z "$value" && -n "${secret_key[$key]:-}" ]]; then
+            bad "load_env: ${file}: ${key} is empty, but its template marks it a generated secret"
+            exit "$GREMION_EXIT_USAGE"
         fi
         if [[ "$value" == CHANGE_ME_* && "${ALLOW_SENTINELS:-0}" != "1" ]]; then
             bad "load_env: ${file}: ${key} still holds the sentinel ${value}"

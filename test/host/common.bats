@@ -325,6 +325,104 @@ PROBE
     [[ "$output" == *"not KEY=VALUE"* ]]
 }
 
+# -- load_env against a REAL gremion-init-secrets render (TASK-028, B15 1-2) --
+#
+# The fixtures above are hand-written; these run the actual renderer into the
+# throwaway root and then damage one line, so the gate is measured against the
+# files a host really loads. ALLOW_SENTINELS=1 because a fresh render still
+# carries the operator's CHANGE_ME_OPERATOR_ keys; the refusals under test are
+# the ones that flag does NOT waive.
+
+render_real_env() {
+    "${HOST_SRC}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack teststack >/dev/null
+}
+
+# set_key <file> <KEY> <value> -- replace the single KEY= line in place.
+set_key() {
+    sed -i "s|^$2=.*|$2=$3|" "$1"
+    grep -q "^$2=$3\$" "$1" || { echo "set_key: $2 not rewritten in $1"; return 1; }
+}
+
+@test "load_env loads an untouched real render (sentinels allowed)" {
+    render_real_env
+    local f
+    for f in state app-blue app-green mail ops; do
+        run_with 'ALLOW_SENTINELS=1 load_env "$1"' "${GREMION_ROOT}/etc/env/${f}.env"
+        [ "$status" -eq 0 ] || { echo "${f}.env: $output"; return 1; }
+    done
+}
+
+@test "load_env refuses a duplicate key in a real rendered app-blue.env, naming the key" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'COLOUR=green\n' >> "$f"
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"' "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"duplicate key"* ]]
+    [[ "$output" == *"COLOUR"* ]]
+}
+
+@test "load_env refuses an EMPTY value for a key app.env.tmpl marks CHANGE_ME_GEN_" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/app-blue.env"
+    set_key "$f" AUTH_SECRET ''
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"' "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"AUTH_SECRET"* ]]
+    [[ "$output" == *"empty"* ]]
+}
+
+@test "load_env refuses an EMPTY value for a key state.env.tmpl marks CHANGE_ME_GEN_ (embedded in a URL)" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/state.env"
+    set_key "$f" GREMION_PUBLIC_DB_URL ''
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"' "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"GREMION_PUBLIC_DB_URL"* ]]
+}
+
+@test "load_env keeps accepting an empty key the template does NOT mark secret (SEED_TOKEN)" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^SEED_TOKEN=$' "$f"
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"; echo "[${SEED_TOKEN}]"' "$f"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[]"* ]]
+}
+
+@test "load_env takes the template as an explicit second argument" {
+    printf 'SECRET_A=\nPLAIN=\n' > "${GREMION_ROOT}/t.env"
+    printf 'SECRET_A=CHANGE_ME_GEN_hex32_a\nPLAIN=\n' > "${GREMION_ROOT}/t.env.tmpl"
+    run_with 'load_env "$1" "$2"' "${GREMION_ROOT}/t.env" "${GREMION_ROOT}/t.env.tmpl"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"SECRET_A"* ]]
+    [[ "$output" != *"PLAIN"* ]]
+}
+
+@test "load_env fails closed when a host env file's template cannot be found" {
+    render_real_env
+    run_with 'GREMION_ENV_TEMPLATE_DIR="$2" ALLOW_SENTINELS=1 load_env "$1"' \
+        "${GREMION_ROOT}/etc/env/state.env" "${GREMION_ROOT}/no-such-dir"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"template"* ]]
+}
+
+@test "load_env never echoes a malformed line (it may hold a secret)" {
+    printf 'A=1\nexport LEAKY=fake-secret-value-0000\n' > "${GREMION_ROOT}/t.env"
+    run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"not KEY=VALUE"* ]]
+    [[ "$output" == *"line 2"* ]]
+    [[ "$output" != *"fake-secret-value-0000"* ]]
+}
+
+@test "the load_env header states the #476 defect the right way round (first occurrence read)" {
+    run grep -c 'read the FIRST occurrence' "$COMMON_SH"
+    [ "$output" -ge 1 ]
+    run grep -c 'silently read the LAST occurrence' "$COMMON_SH"
+    [ "$output" -eq 0 ]
+}
+
 # ---------------------------------------------------------------------------
 # common.sh — atomic_write
 # ---------------------------------------------------------------------------
