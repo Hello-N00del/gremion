@@ -18,13 +18,18 @@
 - **Off by default everywhere else.** For every newly provisioned council the module is
   disabled until an administrator explicitly enables it (PRD-ELE-001; the provisioning
   behaviour and its test belong to TRD-030, not to this page).
-- **Honest-scope notice.** Wherever the module is enabled, it shows a notice that it does
-  not run the university's statutory election and that it is optional and off by default
-  (PRD-ELE-002). Suggested wording:
+- **Honest-scope notice.** Wherever the module is enabled, it is to show a notice that it
+  does not run the university's statutory election and that it is optional and off by
+  default (PRD-ELE-002). Suggested wording:
   - DE: „Dieses Modul führt keine satzungsgemäßen Wahlen der Hochschule durch. Es ist
     optional und standardmäßig ausgeschaltet."
   - EN: "This module does not run the university's statutory elections. It is optional
     and switched off by default."
+- **Required, not yet built.** The default-off rule and the notice are requirements, not
+  a description of today's build: the PRD records that the module is currently enabled
+  by default (PRD section 15, block C12), and no notice string exists in the product UI
+  yet. The provisioning change belongs to TRD-030 and the notice to the PRD-ELE-002
+  wording pass. The wording rules in section 2 apply today regardless.
 
 ## 2. What no material may say
 
