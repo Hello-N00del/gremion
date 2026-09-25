@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { BOOT_AND_RESOLVE_EXEMPT_PATHS, isBootAndResolveExempt } from './boot-exempt'
+import { BOOT_AND_RESOLVE_EXEMPT_PATHS, isBootAndResolveExempt, isResolveExemptRequest } from './boot-exempt'
 
 /**
  * TASK-023 (B-05 option 1): the CLOSED allow-list of paths that skip BOTH the
@@ -45,5 +45,31 @@ describe('isBootAndResolveExempt', () => {
     for (const p of ['/', '', '/api/health', '/api/healthz', '/HEALTHZ', '/x/healthz', '/api/public/internal/']) {
       expect(isBootAndResolveExempt(p), p).toBe(false)
     }
+  })
+})
+
+describe('isResolveExemptRequest', () => {
+  const none = new Headers()
+  const host = new Headers({ 'x-forwarded-host': 'tenant.example.org' })
+  const id = new Headers({ 'x-tenant-id': 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa' })
+
+  it('/healthz is exempt whatever it carries (it reads the host itself)', () => {
+    expect(isResolveExemptRequest('/healthz', none)).toBe(true)
+    expect(isResolveExemptRequest('/healthz', host)).toBe(true)
+    expect(isResolveExemptRequest('/healthz', id)).toBe(true)
+  })
+
+  it('an /api/internal/ request that names no tenant is exempt', () => {
+    expect(isResolveExemptRequest('/api/internal/evict', none)).toBe(true)
+  })
+
+  it('an /api/internal/ request that names a tenant is resolved (leaf callbacks, internalFetch hops, the edge)', () => {
+    expect(isResolveExemptRequest('/api/internal/evict', host)).toBe(false)
+    expect(isResolveExemptRequest('/api/internal/newsletter/render', id)).toBe(false)
+  })
+
+  it('a path off the list is never exempt', () => {
+    expect(isResolveExemptRequest('/api/health', none)).toBe(false)
+    expect(isResolveExemptRequest('/healthzx', none)).toBe(false)
   })
 })
