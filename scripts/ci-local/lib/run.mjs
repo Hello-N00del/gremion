@@ -10,6 +10,29 @@ import { spawnSync } from 'node:child_process'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 
+// A suite command that itself invokes `node --test` (kind 'node-test' or
+// 'guard') must never inherit these — Node's own test runner sets them on
+// every child-process-isolated test file (NODE_TEST_CONTEXT=child-v8,
+// NODE_TEST_WORKER_ID=<n>), and a NESTED `node --test` that inherits them
+// silently changes behaviour: it stops printing its TAP/spec summary to
+// stdout at all (it believes it is itself one of the parent's coordinated
+// test workers). That is invisible unless you diff env vars — the nested
+// run still exits 0, it just produces no "# tests" line, so
+// parse-output.mjs's parseNodeTest reads it as "0 collected" and the whole
+// suite row goes FAIL for a reason that has nothing to do with the suite
+// itself. This bites for real, not just in this package's own dev-loop:
+// suites.json's kernel-scripts-node-test suite runs `node --test
+// scripts/ci-local/**/*.test.mjs`, which includes snapshot.test.mjs, whose
+// tests spawn suite commands via this very function — so a real snapshot
+// run inherits NODE_TEST_CONTEXT one level up unless it is stripped here.
+const NODE_TEST_ENV_KEYS = ['NODE_TEST_CONTEXT', 'NODE_TEST_WORKER_ID']
+
+function cleanEnv() {
+  const env = { ...process.env }
+  for (const key of NODE_TEST_ENV_KEYS) delete env[key]
+  return env
+}
+
 /**
  * Run `command` (a shell string — suites.json commands are plain shell, e.g.
  * "pnpm run test:unit" or "node --test x.test.mjs && node x.mjs") in `cwd`.
@@ -26,6 +49,7 @@ export function run(command, cwd, { timeoutMs = DEFAULT_TIMEOUT_MS, spawnFn = sp
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
+    env: cleanEnv(),
   })
 
   const stdout = result.stdout ?? ''

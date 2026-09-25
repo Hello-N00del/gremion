@@ -53,3 +53,31 @@ test('run enforces a real timeout end-to-end on a command that never exits (shor
   assert.equal(r.exitCode, 1)
   assert.ok(elapsed < 15_000, `expected the timeout to cut this off quickly, took ${elapsed}ms`)
 })
+
+test('run never leaks NODE_TEST_CONTEXT / NODE_TEST_WORKER_ID into the spawned command\'s environment, even when THIS process has them set', () => {
+  // Simulates snapshot.mjs (or any suite command) being spawned from inside
+  // a node --test child-process-isolated test file, which is exactly what
+  // happens for real: suites.json's kernel-scripts-node-test suite runs
+  // `node --test .../*.test.mjs`, which includes this very file. Without
+  // stripping these two vars, a suite command that is itself `node --test
+  // ...` silently stops printing its TAP summary (see run.mjs's comment) —
+  // this test proves the leak never reaches the child, using a plain env
+  // dump rather than a nested node --test (so it stays fast and does not
+  // depend on the reporter-default bug it is guarding against).
+  const savedContext = process.env.NODE_TEST_CONTEXT
+  const savedWorkerId = process.env.NODE_TEST_WORKER_ID
+  process.env.NODE_TEST_CONTEXT = 'child-v8'
+  process.env.NODE_TEST_WORKER_ID = '7'
+  try {
+    const r = run('node -e "console.log(JSON.stringify({ctx: process.env.NODE_TEST_CONTEXT ?? null, wid: process.env.NODE_TEST_WORKER_ID ?? null}))"', process.cwd())
+    assert.equal(r.exitCode, 0)
+    const seen = JSON.parse(r.output)
+    assert.equal(seen.ctx, null, 'NODE_TEST_CONTEXT must not reach the spawned command')
+    assert.equal(seen.wid, null, 'NODE_TEST_WORKER_ID must not reach the spawned command')
+  } finally {
+    if (savedContext === undefined) delete process.env.NODE_TEST_CONTEXT
+    else process.env.NODE_TEST_CONTEXT = savedContext
+    if (savedWorkerId === undefined) delete process.env.NODE_TEST_WORKER_ID
+    else process.env.NODE_TEST_WORKER_ID = savedWorkerId
+  }
+})

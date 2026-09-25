@@ -169,7 +169,15 @@ export function runKnownSecretsArm(repoLabel, repoPath) {
 // ---------------------------------------------------------------------------
 
 export function runCveFloorArm(kernelPath, { runFn = run } = {}) {
-  const command = 'node --test scripts/check-cve-floors.test.mjs && node scripts/check-cve-floors.mjs'
+  // --test-reporter=tap: recent `node --test` versions default to the
+  // human-facing "spec" reporter even when stdout is not a TTY (observed on
+  // the installed Node here), so lib/parse-output.mjs's TAP "# tests"
+  // regex never matches unless a reporter is forced. This affects only
+  // pass/fail correctness of the composite parse (parseCounts('guard', ...)
+  // still falls back to the bare exit-code arm without it), but forcing TAP
+  // keeps the declared-vs-collected check meaningful for every node-test
+  // suite this package invokes.
+  const command = 'node --test --test-reporter=tap scripts/check-cve-floors.test.mjs && node scripts/check-cve-floors.mjs'
   const { exitCode, output, timedOut, spawnError } = runFn(command, kernelPath, { timeoutMs: 60_000 })
   if (spawnError) return { arm: 'cve-floor', repo: 'kernel', status: 'FAIL', reason: `could not run: ${spawnError.message}` }
   if (timedOut) return { arm: 'cve-floor', repo: 'kernel', status: 'FAIL', reason: 'timed out' }
@@ -182,7 +190,7 @@ export function runCveFloorArm(kernelPath, { runFn = run } = {}) {
 
 export function runOverridesDriftArm(sturaosPath, kernelPath, { runFn = run } = {}) {
   const kernelWorkspace = join(kernelPath, 'pnpm-workspace.yaml')
-  const command = `node --test scripts/check-overrides-drift.test.mjs && node scripts/check-overrides-drift.mjs --kernel "${kernelWorkspace}"`
+  const command = `node --test --test-reporter=tap scripts/check-overrides-drift.test.mjs && node scripts/check-overrides-drift.mjs --kernel "${kernelWorkspace}"`
   const { exitCode, output, timedOut, spawnError } = runFn(command, sturaosPath, { timeoutMs: 60_000 })
   if (spawnError) return { arm: 'overrides-drift', repo: 'sturaos', status: 'FAIL', reason: `could not run: ${spawnError.message}` }
   if (timedOut) return { arm: 'overrides-drift', repo: 'sturaos', status: 'FAIL', reason: 'timed out' }

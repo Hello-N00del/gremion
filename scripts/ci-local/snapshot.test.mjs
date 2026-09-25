@@ -43,12 +43,16 @@ function writeFixtureManifest(dir) {
     requiresStack,
     testGlobs,
   })
+  // --test-reporter=tap: forced so lib/parse-output.mjs's TAP "# tests"
+  // regex has something to match — the installed Node's `node --test` with
+  // no reporter flag defaults to the human-facing "spec" reporter (no "#
+  // tests" line at all) even when stdout is piped, not just on a TTY.
   const perRepo = (prefix) => [
-    { ...suite(`${prefix}-unit`, 'unit', 'node --test a.test.mjs', ['a.test.mjs']), repo: prefix },
-    { ...suite(`${prefix}-integration`, 'integration', 'node --test a.test.mjs', ['a.test.mjs'], true), repo: prefix },
-    { ...suite(`${prefix}-e2e`, 'e2e', 'node --test a.test.mjs', ['a.test.mjs'], true), repo: prefix },
-    { ...suite(`${prefix}-shell`, 'shell', 'node --test a.test.mjs', ['a.test.mjs']), repo: prefix },
-    { ...suite(`${prefix}-guard`, 'tree-guard', 'node --test a.test.mjs && node -e "process.exit(0)"', ['a.test.mjs']), repo: prefix },
+    { ...suite(`${prefix}-unit`, 'unit', 'node --test --test-reporter=tap a.test.mjs', ['a.test.mjs']), repo: prefix },
+    { ...suite(`${prefix}-integration`, 'integration', 'node --test --test-reporter=tap a.test.mjs', ['a.test.mjs'], true), repo: prefix },
+    { ...suite(`${prefix}-e2e`, 'e2e', 'node --test --test-reporter=tap a.test.mjs', ['a.test.mjs'], true), repo: prefix },
+    { ...suite(`${prefix}-shell`, 'shell', 'node --test --test-reporter=tap a.test.mjs', ['a.test.mjs']), repo: prefix },
+    { ...suite(`${prefix}-guard`, 'tree-guard', 'node --test --test-reporter=tap a.test.mjs && node -e "process.exit(0)"', ['a.test.mjs']), repo: prefix },
   ]
   const manifest = { kernel: perRepo('kernel'), sturaos: perRepo('sturaos') }
   const p = join(dir, 'fixture-suites.json')
