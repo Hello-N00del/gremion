@@ -18,7 +18,7 @@ import '../../models/calendar_event.dart';
 import '../../models/election.dart';
 import '../../services/api_client.dart';
 import '../../services/auth_service.dart';
-import '../../services/matrix_service.dart';
+import '../../matrix/matrix_service.dart';
 import '../../tokens/design_tokens.dart';
 
 class HomeScreen extends StatefulWidget {

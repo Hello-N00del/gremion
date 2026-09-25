@@ -72,6 +72,10 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   mocktail: ^1.0.5
+  # test/matrix/: serves the sqflite_common Database contract on the host
+  # (sqflite_sqlcipher is a device-only plugin), on SQLCipher via the hook
+  # user-defines below.
+  sqflite_common_ffi: ^2.4.0
   flutter_launcher_icons: ^0.14.1
   flutter_native_splash: ^2.4.1
 
@@ -95,3 +99,22 @@ flutter:
     - family: JetBrains Mono
       fonts:
         - asset: assets/fonts/JetBrainsMono.ttf
+
+# package:sqlite3 (a dependency of matrix since SDK 9) resolves a native
+# SQLite through a build hook. The app never opens a database through it on a
+# device (sqflite_sqlcipher ships its own SQLCipher), so `system` keeps the
+# hook from bundling anything into the APK/IPA: the default (`sqlite3`)
+# would add an unused libsqlite3, and `sqlcipher` a second libsqlcipher.so
+# next to sqflite_sqlcipher's. On host platforms (flutter test) the lookup
+# is SQLCipher, so test/matrix/ exercises real encryption; it needs a
+# system SQLCipher library there (Debian/Ubuntu: libsqlcipher-dev; macOS:
+# brew install sqlcipher; Windows: sqlcipher.dll on PATH) and fails loudly
+# without one. (sqlite3 3.6.0's per-OS `source` map would avoid that, but
+# 3.6.0 needs meta ^1.19.0 and Flutter 3.41 pins meta 1.17.0.)
+hooks:
+  user_defines:
+    sqlite3:
+      source: system
+      name_linux: sqlcipher
+      name_macos: sqlcipher
+      name_windows: sqlcipher

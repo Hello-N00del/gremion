@@ -5,14 +5,11 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
-// #245: SQLCipher-backed sqflite. Its Database extends the sqflite_common
-// Database that MatrixSdkDatabase.init accepts, and openDatabase() takes a
-// `password:` so the whole DB file (Synapse token, refresh_token, pickled
-// OLM identity keys, decrypted message cache) is encrypted at rest.
 import 'package:sqflite_sqlcipher/sqflite.dart' as sqlcipher;
+
+import 'matrix_store.dart';
 
 /// G-053: identifier of a Matrix room whose joined members are trusted to
 /// auto-accept invites on the user's behalf. Typically the internal
@@ -91,14 +88,8 @@ class MatrixService extends ChangeNotifier {
     final dir = await getApplicationSupportDirectory();
     _dbPath = '${dir.path}/stura_matrix.db';
     final key = await _getOrCreateDbKey();
-    final db = await sqlcipher.openDatabase(_dbPath!, password: key);
-    final matrixDb = await MatrixSdkDatabase.init('stura', database: db);
-    return Client(
-      'stura',
-      database: matrixDb,
-      nativeImplementations:
-          NativeImplementationsIsolate(compute, vodozemacInit: vod.init),
-    );
+    final store = await openMatrixStore(path: _dbPath!, password: key);
+    return buildMatrixClient(store);
   }
 
   /// #245: return the stored SQLCipher key, or mint a new random 256-bit key

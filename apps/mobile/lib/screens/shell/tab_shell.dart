@@ -10,7 +10,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import '../../services/matrix_service.dart';
+import '../../matrix/matrix_service.dart';
 import '../../tokens/design_tokens.dart';
 
 class TabShell extends StatelessWidget {

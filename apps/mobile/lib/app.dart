@@ -12,7 +12,7 @@ import 'router/app_router.dart';
 import 'screens/lock_screen.dart';
 import 'services/auth_service.dart';
 import 'services/api_client.dart';
-import 'services/matrix_service.dart';
+import 'matrix/matrix_service.dart';
 import 'services/push_service.dart';
 import 'theme/app_theme.dart';
 

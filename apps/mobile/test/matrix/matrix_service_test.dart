@@ -1,4 +1,4 @@
-// mobile/test/services/matrix_service_test.dart
+// mobile/test/matrix/matrix_service_test.dart
 //
 // Wave 3c T1.1 (G-047) — small smoke coverage for MatrixService lifecycle.
 //
@@ -8,7 +8,7 @@
 // path doesn't crash. Full reconnect-cancel-and-resubscribe behaviour is
 // verified by manual hot-restart on the Android emulator (commit body).
 import 'package:flutter_test/flutter_test.dart';
-import 'package:stura/services/matrix_service.dart';
+import 'package:stura/matrix/matrix_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

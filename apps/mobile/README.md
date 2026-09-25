@@ -39,7 +39,7 @@ These also exist in the source and are read the same way:
 | `ENABLE_SELF_HOSTED_PUSH` | `push_service.dart` | Opt-in for the self-hosted push transport (UnifiedPush + Sygnal pusher, TRD-293). Off = no push transport at all. | `false` |
 | `KEYCLOAK_CLIENT_ID` | `auth_service.dart` | OIDC client id used for authorization, token, refresh, and the JWT `aud` check. | `stura-mobile` |
 | `AUTH_CALLBACK_URL` | `auth_service.dart` | AppAuth redirect URI. The default is a custom URI scheme (see the G-051 security note in `auth_service.dart`). | `stura://auth/callback` |
-| `MATRIX_ADMIN_ROOM_ID` | `matrix_service.dart` | Room whose joined members may auto-accept invites; empty = strict mode, every invite is surfaced for manual review (G-053). | `` (empty) |
+| `MATRIX_ADMIN_ROOM_ID` | `lib/matrix/matrix_service.dart` | Room whose joined members may auto-accept invites; empty = strict mode, every invite is surfaced for manual review (G-053). | `` (empty) |
 | `BRAND_PRODUCT`, `BRAND_LOGO_LETTER`, `BRAND_ORG_SHORT`, `BRAND_TERM`, `BRAND_ORG_NAME`, `BRAND_DOMAIN`, `BRAND_MATRIX_HOMESERVER` | `lib/brand.dart` | Tenant-branding strings (mirrors `gremion-ui/src/lib/brand.ts`). Defaults to HS Harz values. | `StuRaOS` / `S` / `HS Harz` / `SoSe 26` / `Studierendenrat der Hochschule Harz` / `stura.hs-harz.de` / `stura.hs-harz.de` |
 
 ## Build & run
@@ -96,12 +96,15 @@ lib/
   brand.dart       Tenant-branding constants (--dart-define BRAND_*).
   router/
     app_router.dart  GoRouter route table + auth-aware redirects.
+  matrix/
+    matrix_service.dart  Embedded Matrix client (Matrix Dart SDK 13 +
+                         vodozemac), login-with-token, sync, invite handling.
+    matrix_store.dart    SQLCipher-encrypted MatrixSdkDatabase + Client
+                         construction (guarded by test/matrix/).
   services/
     auth_service.dart    OIDC login/refresh/logout (AppAuth + PKCE), JWT
                          verification against Keycloak JWKS, Matrix token
                          exchange via the gateway, secure-storage session.
-    matrix_service.dart  Embedded Matrix client (matrix SDK + vodozemac),
-                         login-with-token, sync, invite handling.
     push_service.dart    Self-hosted push (UnifiedPush) + Sygnal pusher
                          registration; off unless ENABLE_SELF_HOSTED_PUSH=true.
                          No FCM (TASK-166).

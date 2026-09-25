@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 import 'package:provider/provider.dart';
 
-import '../../services/matrix_service.dart';
+import '../../matrix/matrix_service.dart';
 import '../../tokens/app_tokens.dart';
 
 class RoomScreen extends StatefulWidget {
