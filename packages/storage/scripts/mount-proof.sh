@@ -14,7 +14,8 @@
 set -euo pipefail
 
 PKG="$(cd "$(dirname "$0")/.." && pwd)"
-SHA="$(git -C "$PKG" rev-parse --short HEAD)"
+# T117_SHA overrides the name suffix where git is unavailable.
+SHA="${T117_SHA:-$(git -C "$PKG" rev-parse --short HEAD)}"
 IMAGE="t117-storage-proof:${SHA}"
 CONTAINER="t117-mount-${SHA}"
 VOLUME="t117-root-${SHA}"

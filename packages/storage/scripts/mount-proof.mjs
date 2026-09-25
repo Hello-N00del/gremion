@@ -15,9 +15,10 @@ const B = '22222222-2222-4222-8222-222222222222'
 const REL = 'news/drafts/concurrent.odt'
 const sha = (b) => createHash('sha256').update(b).digest('hex')
 
-configureStorage({ backend: 'local', root: process.env.STORAGE_ROOT })
 let a, b
 try {
+  // configureStorage() mount-checks the root; each backend re-checks it.
+  configureStorage({ backend: 'local', root: process.env.STORAGE_ROOT })
   a = getStorageFor(A)
   b = getStorageFor(B)
 } catch (err) {
