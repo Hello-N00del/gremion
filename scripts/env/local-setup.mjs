@@ -29,11 +29,19 @@ export const LOCAL_ENV_FILES = Object.freeze(['.env', 'legal/legal.env'])
 /** The exact instruction every setup-first message carries (pinned by tests). */
 export const SETUP_FIRST = 'run scripts/setup.sh first'
 
+/** @param {unknown} err */
+const isEnoent = (err) =>
+  typeof err === 'object' && err !== null && /** @type {{ code?: unknown }} */ (err).code === 'ENOENT'
+
+/**
+ * @param {string} abs
+ * @returns {boolean}
+ */
 function absent(abs) {
   try {
     lstatSync(abs)
   } catch (err) {
-    if (err && err.code === 'ENOENT') return true
+    if (isEnoent(err)) return true
     throw err
   }
   // A symlink whose target is gone is as absent as no file: compose and
@@ -42,7 +50,7 @@ function absent(abs) {
     statSync(abs)
     return false
   } catch (err) {
-    if (err && err.code === 'ENOENT') return true
+    if (isEnoent(err)) return true
     throw err
   }
 }
