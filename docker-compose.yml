@@ -33,7 +33,9 @@ x-module-postgres: &module-postgres
   networks:
     - gremion-net
   healthcheck:
-    test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\""]
+    # over TCP: the entrypoint's temporary init server listens on no address,
+    # so it can never be mistaken for the final one
+    test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\""]
     interval: 10s
     timeout: 5s
     retries: 5

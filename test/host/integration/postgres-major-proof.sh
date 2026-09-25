@@ -279,9 +279,14 @@ MOUNTS="$(docker inspect "$CID" \
     || { echo "FAIL: the running container's Postgres mounts are '${MOUNTS}', expected exactly '${MOUNT}'"; exit 1; }
 echo "  ok  running container mounts: ${MOUNTS}"
 
+# Ready means the FINAL server, reached over TCP. The image's entrypoint runs
+# the init scripts on a temporary server started with listen_addresses='' and
+# then shuts it down; a socket-only pg_isready passes against that temporary
+# server, and the next query meets "the database system is shutting down"
+# (measured 2026-09-25, TASK-019). -h 127.0.0.1 cannot be answered by it.
 READY=false
 for _ in $(seq 1 60); do
-    if dc exec -T postgres pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1; then READY=true; break; fi
+    if dc exec -T postgres pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" >/dev/null 2>&1; then READY=true; break; fi
     sleep 1
 done
 if [ "$READY" != true ]; then
