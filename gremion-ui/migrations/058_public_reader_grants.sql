@@ -37,17 +37,24 @@
 --
 -- Idempotent: re-running only re-issues GRANTs that are already in place.
 
--- WHY EVERY TABLE IS UNCONDITIONAL
--- --------------------------------
+-- WHY EVERY TABLE IS UNCONDITIONAL, AND WHY NEWS_POSTS IS NOT HERE
+-- ----------------------------------------------------------------
 -- The first draft wrapped each GRANT in `IF EXISTS (information_schema.tables)`
--- and justified it with the P0.2 module skip. That justification is FALSE: none
--- of these seven tables belongs to a toggleable module (grep the module
--- manifests — 003_calendar_schema.sql and 007_protocols.sql are kernel
--- migrations, unlike the finance set), so an absent one always means a broken
--- replay. Worse, the per-table ELSE branch was the very silent-skip shape this
--- migration exists to delete: with only news_posts hard-required, 058 could
--- report success having granted one table out of seven and the portal would
--- still be broken. Every table is now required, and a missing one aborts.
+-- and justified it with the P0.2 module skip. That justification is FALSE for
+-- every table below: each one is produced by a KERNEL migration
+-- (003_calendar_schema.sql, 007_protocols.sql, 010_org_units.sql,
+-- 055_resolution_challenges.sql), so an absent one always means a broken
+-- replay. The per-table ELSE branch was also the very silent-skip shape this
+-- migration exists to delete. Every table below is required, and a missing one
+-- aborts.
+--
+-- news_posts is DELIBERATELY ABSENT (B4a-news-posts-ownership). The kernel's
+-- 008_public_portal.sql:4-6 records that it moved out with the calendar/news
+-- modules during the carve, so the kernel creates it nowhere and requiring it
+-- here aborted every content-OFF kernel-only fresh init. The table AND its
+-- public-reader GRANT now live in the content module's own creation migration
+-- 1200_content_news_posts.sql. Kernel grants what the kernel guarantees;
+-- content grants what content creates.
 
 DO $$
 DECLARE
@@ -57,7 +64,8 @@ DECLARE
   -- no gremion-public query touches either, and attendance is personal data
   -- (who sat in which meeting) that must not be reachable by an anonymous,
   -- internet-facing role. `committees` is absent because 010_org_units.sql
-  -- renamed it to org_units.
+  -- renamed it to org_units. `news_posts` is absent because it is content-owned
+  -- (see the header block); content's 1200_content_news_posts.sql grants it.
   portal_tables CONSTANT text[] := ARRAY[
     'calendar_events',
     'event_recurrence',
@@ -125,9 +133,12 @@ BEGIN
   IF array_length(missing, 1) IS NOT NULL THEN
     RAISE EXCEPTION
       'the anonymous public portal reads table(s) that do not exist: %. '
-      'These are kernel tables (008_public_portal.sql, 003_calendar_schema.sql, '
-      '007_protocols.sql, 010_org_units.sql, 055_resolution_challenges.sql), not '
-      'module-gated ones, so a missing table means the migration replay is broken. '
+      'These are KERNEL tables (003_calendar_schema.sql, 007_protocols.sql, '
+      '010_org_units.sql, 055_resolution_challenges.sql), not module-gated ones, '
+      'so a missing table means the migration replay is broken. news_posts is '
+      'deliberately not in this list: the content module migration '
+      '1200_content_news_posts.sql creates and grants it, so a content-OFF '
+      'install completes green with a working portal. '
       'This migration refuses to grant a partial set and report success.',
       array_to_string(missing, ', ');
   END IF;
