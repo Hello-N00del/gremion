@@ -62,10 +62,22 @@ test('headInfo reports a 40-char sha, its 7-char prefix, and the branch name', (
 test('isGitRepo is true for a real repo and false for a plain directory', () => {
   const repo = makeRepo()
   const plain = mkdtempSync(join(tmpdir(), 'ci-local-notgit-'))
+  // LOW fix: this assertion depends on its environment — it went RED
+  // whenever os.tmpdir() itself sits inside a git work tree (e.g. TMP
+  // pointed at a worktree's own .scratch dir), because git's normal upward
+  // search from `plain` then finds that ANCESTOR .git and reports it as
+  // "inside a work tree" too. GIT_CEILING_DIRECTORIES tells git never to
+  // search above tmpdir(), so `plain` (which has no .git of its own) is
+  // judged on its own merits regardless of what encloses the temp dir on
+  // this machine.
+  const savedCeiling = process.env.GIT_CEILING_DIRECTORIES
+  process.env.GIT_CEILING_DIRECTORIES = tmpdir()
   try {
     assert.equal(isGitRepo(repo), true)
     assert.equal(isGitRepo(plain), false)
   } finally {
+    if (savedCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES
+    else process.env.GIT_CEILING_DIRECTORIES = savedCeiling
     rmSync(repo, { recursive: true, force: true })
     rmSync(plain, { recursive: true, force: true })
   }
