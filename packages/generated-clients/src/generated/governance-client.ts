@@ -418,6 +418,9 @@ export interface components {
             /** @enum {string} */
             publication_class: "public" | "non_public";
         };
+        AgendaSectionReorder: {
+            position: number;
+        };
         AgendaItem: {
             /**
              * Format: uuid
@@ -935,9 +938,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    position?: number;
-                };
+                "application/json": components["schemas"]["AgendaSectionReorder"];
             };
         };
         responses: {

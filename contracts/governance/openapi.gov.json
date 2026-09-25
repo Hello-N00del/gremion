@@ -537,12 +537,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "position": {
-                    "type": "integer"
-                  }
-                }
+                "$ref": "#/components/schemas/AgendaSectionReorder"
               }
             }
           }
@@ -1397,6 +1392,17 @@
               "public",
               "non_public"
             ]
+          }
+        }
+      },
+      "AgendaSectionReorder": {
+        "type": "object",
+        "required": [
+          "position"
+        ],
+        "properties": {
+          "position": {
+            "type": "integer"
           }
         }
       },
