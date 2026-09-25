@@ -7,7 +7,8 @@
 // uses, so there is one implementation, not two.
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { byPath, listPackageFiles, STAMP_FILE, type GenerateFn } from './codegen-drift.ts'
+import { STAMP_FILE, type GenerateFn } from './codegen-drift.ts'
+import { byPath, listCommittable } from './tree-files.ts'
 import { DART_PACKAGES_DIR, loadDartSurfaces } from './registry.ts'
 
 function removeEmptyDirs(dir: string, isRoot: boolean): void {
@@ -32,7 +33,7 @@ export function syncDartPackages(repoRoot: string, generate: GenerateFn, log: (m
       mkdirSync(dirname(p), { recursive: true })
       if (!existsSync(p) || !readFileSync(p).equals(bytes)) writeFileSync(p, bytes)
     }
-    for (const rel of listPackageFiles(pkg)) {
+    for (const rel of listCommittable(repoRoot, s.packageDir)) {
       if (!files.has(rel)) {
         rmSync(join(pkg, rel))
         log(`removed ${s.packageDir}/${rel} (no longer generated)`)

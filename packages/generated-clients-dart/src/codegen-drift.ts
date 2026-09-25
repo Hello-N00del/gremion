@@ -6,8 +6,9 @@
 // regenerates every surface through the same injected `generate` function
 // the writer uses and compares the result with what is on disk.
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { byPath, listCommittable } from './tree-files.ts'
 import { DART_PACKAGES_DIR, loadDartSurfaces, NODE_SIDE, type DartSurface } from './registry.ts'
 
 /** package-relative, forward-slash path → exact bytes */
@@ -24,31 +25,10 @@ export interface DriftResult {
 
 const REGENERATE = 'Run `pnpm --filter @gremion/generated-clients-dart generate`; never edit generated files by hand.'
 
-/** Code-unit order, independent of the host locale. */
-export function byPath(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0
-}
+export { byPath, listPackageFiles } from './tree-files.ts'
 
 /** Node-side dirs whose content is ours and must hold no Dart. */
 const NODE_SOURCE_DIRS = ['src', 'tools']
-
-/** Every file under `dir` (package-relative, forward-slash), skipping only
- *  `.dart_tool/` at the package root — pub's cache, never committed. A
- *  symlink is listed as a file, never followed. */
-export function listPackageFiles(dir: string): string[] {
-  const out: string[] = []
-  const walk = (abs: string, rel: string): void => {
-    for (const name of readdirSync(abs)) {
-      if (rel === '' && name === '.dart_tool') continue
-      const childAbs = join(abs, name)
-      const childRel = rel === '' ? name : `${rel}/${name}`
-      if (lstatSync(childAbs).isDirectory()) walk(childAbs, childRel)
-      else out.push(childRel)
-    }
-  }
-  walk(dir, '')
-  return out.sort(byPath)
-}
 
 /** Provenance stamp every generated package carries: the spec it came from
  *  and that spec's sha256 (LF-normalised). Written by the generator pipeline,
@@ -99,7 +79,7 @@ export function checkDartCodegenDrift(repoRoot: string, opts: DriftOptions): Dri
         problems.push(`${s.packageDir}/${rel}: differs from what ${s.specFile} generates — a hand edit (or a stale spec). ${REGENERATE}`)
       }
     }
-    for (const rel of listPackageFiles(join(repoRoot, s.packageDir))) {
+    for (const rel of listCommittable(repoRoot, s.packageDir)) {
       if (!expectedFiles.has(rel)) {
         problems.push(`${s.packageDir}/${rel}: extra — the generator does not emit this file (hand-written?). Generated packages hold generator output only.`)
       }
@@ -108,18 +88,15 @@ export function checkDartCodegenDrift(repoRoot: string, opts: DriftOptions): Dri
   }
 
   // Nothing but the Node side and the registered surfaces may live here.
-  const pkgRoot = join(repoRoot, DART_PACKAGES_DIR)
+  const pkgFiles = listCommittable(repoRoot, DART_PACKAGES_DIR)
   const surfaceNames = new Set(surfaces.map((x) => x.name))
-  if (existsSync(pkgRoot)) {
-    for (const name of readdirSync(pkgRoot).sort(byPath)) {
-      if (surfaceNames.has(name) || NODE_SIDE.has(name)) continue
-      problems.push(`${DART_PACKAGES_DIR}/${name}: not an openapi+active surface in contracts/registry.json and not part of the Node tooling — remove it, or register its spec and regenerate.`)
-    }
-    for (const dir of NODE_SOURCE_DIRS) {
-      if (!existsSync(join(pkgRoot, dir))) continue
-      for (const rel of listPackageFiles(join(pkgRoot, dir))) {
-        if (rel.endsWith('.dart')) problems.push(`${DART_PACKAGES_DIR}/${dir}/${rel}: a Dart file in the Node tooling side — Dart here is generator output under a surface directory only.`)
-      }
+  for (const name of [...new Set(pkgFiles.map((f) => f.split('/')[0]))].sort(byPath)) {
+    if (surfaceNames.has(name) || NODE_SIDE.has(name)) continue
+    problems.push(`${DART_PACKAGES_DIR}/${name}: not an openapi+active surface in contracts/registry.json and not part of the Node tooling — remove it, or register its spec and regenerate.`)
+  }
+  for (const f of pkgFiles) {
+    if (NODE_SOURCE_DIRS.some((d) => f.startsWith(`${d}/`)) && f.endsWith('.dart')) {
+      problems.push(`${DART_PACKAGES_DIR}/${f}: a Dart file in the Node tooling side — Dart here is generator output under a surface directory only.`)
     }
   }
   return { problems, checked, expected: surfaces.length }

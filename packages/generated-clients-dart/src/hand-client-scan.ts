@@ -7,10 +7,10 @@
 // path from a registered OpenAPI spec's `paths` keys is named. Path
 // parameters match whatever a hand-written client interpolates there
 // ('{id}', '$id', '${x.id}', a literal '42').
-import { spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadDartSurfaces } from './registry.ts'
+import { gitListFiles, isGitWorkTree } from './tree-files.ts'
 
 const WALK_SKIP = new Set(['.git', 'node_modules', '.dart_tool', '.gen-work'])
 
@@ -31,11 +31,7 @@ export function pathKeyPattern(key: string): RegExp {
  *  plain directory (unit fixtures) a filesystem walk. A git failure throws —
  *  an empty list would read as "nothing hand-written". */
 export function listDartFiles(repoRoot: string): string[] {
-  if (existsSync(join(repoRoot, '.git'))) {
-    const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.dart'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
-    if (r.error || r.status !== 0) throw new Error(`git ls-files failed (${r.error?.message ?? `exit ${r.status}`}): ${r.stderr}`)
-    return [...new Set(r.stdout.split('\0').filter((f) => f.length > 0))].filter((f) => existsSync(join(repoRoot, f))).sort()
-  }
+  if (isGitWorkTree(repoRoot)) return gitListFiles(repoRoot, ['*.dart'])
   const out: string[] = []
   const walk = (abs: string, rel: string): void => {
     for (const name of readdirSync(abs)) {

@@ -46,6 +46,7 @@ export const fakeGenerate: GenerateFn = (root, s) => {
   const h = createHash('sha256').update(readFileSync(join(root, s.specFile), 'utf8').replace(/\r\n/g, '\n')).digest('hex')
   const lib = `lib/${s.pubName}.dart`
   return new Map([
+    ['.gitignore', Buffer.from('.dart_tool/\nbuild/\n')],
     ['.openapi-generator/FILES', Buffer.from(`${lib}\npubspec.yaml\n`)],
     ['pubspec.yaml', Buffer.from(`name: ${s.pubName}\n`)],
     [lib, Buffer.from(`// generated from spec sha256 ${h}\n`)],
