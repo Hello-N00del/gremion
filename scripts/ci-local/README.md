@@ -186,6 +186,15 @@ was actually exercised, not just an empty `findings` array. See
 `waivers.json`'s own entry for why `deploy.yml` is waived today and who owns
 removing the waiver.
 
+**Accepted heuristic limit:** `SENSITIVE_SECRET_NAME_RE` matches secret names
+only, on a fixed set of substrings (DEPLOY/SIGN(ING)/SSH/GPG/SOPS/COSIGN/
+KEYSTORE/PRIVATE_KEY/HOST_KEY/AGE). A deploy credential whose *name* does not
+contain one of those (e.g. `KUBECONFIG`, `SERVER_TOKEN`) is not flagged, even
+though it may be exactly the kind of secret TRD-364 cares about. This is a
+known, accepted gap in the heuristic, not a bug: extending the list is cheap
+(add a term to the regex) whenever a real workflow secret name falls outside
+it.
+
 ## The image-build job
 
 "The image-build job" (TRD-342) is the existing `docker-build` jobs, which
