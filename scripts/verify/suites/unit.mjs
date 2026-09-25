@@ -22,7 +22,13 @@ export function vitestSubcheck({ cwd, testScript = 'test:unit' }) {
   // equivalent, but a future change to any one of them (a --coverage flag,
   // a different config, swapping tools entirely) would have kept being
   // ignored forever, since `testScript` was accepted but never read.
-  const res = run('pnpm', ['run', testScript, '--', '--reporter=json', `--outputFile=${outFile}`], {
+  //
+  // NO `--` before the flags: pnpm 10 forwards a literal `--` to the script,
+  // and vitest then treats everything after it as positional, ignores
+  // --reporter/--outputFile and writes no JSON at all (reproduced against
+  // packages/ports: "no parseable JSON report (exit 0)"). pnpm 10 appends
+  // extra arguments after the script name to the script's command as-is.
+  const res = run('pnpm', ['run', testScript, '--reporter=json', `--outputFile=${outFile}`], {
     cwd,
   })
   const parsed = parseVitestJsonFile(outFile)
