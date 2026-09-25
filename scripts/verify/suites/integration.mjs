@@ -51,11 +51,23 @@ function startTestDb({ sha8, pid }) {
   if (runRes.code !== 0) {
     return { ok: false, name, detail: `docker run failed: ${runRes.stderr || runRes.stdout}` }
   }
+  // The official postgres image starts TWO servers on a first run: a
+  // temporary, unix-socket-only postmaster that runs initdb's own scripts,
+  // then a full restart into the real one. `pg_isready` can observe the
+  // temporary server's brief accepting-connections window and report ready
+  // moments before it shuts down for the restart -- caught by actually
+  // running this suite: `pg_isready` succeeded, port lookup succeeded, and
+  // the very next call (`CREATE DATABASE control`, ~1-2s later) failed with
+  // "connection ... failed: No such file or directory" because the socket
+  // it had just seen was gone again mid-restart. `pg_isready` alone cannot
+  // tell the two servers apart; a real `SELECT 1` through psql can, because
+  // it only ever succeeds against a server actually accepting queries, and
+  // retrying it (not just checking once) rides out the restart gap.
   const deadline = Date.now() + 60_000
   let port = null
   while (Date.now() < deadline) {
-    const ready = run('docker', ['exec', '-e', `PGPASSWORD=${password}`, name, 'pg_isready', '-U', 'gremion_test'])
-    if (ready.code === 0) {
+    const probe = run('docker', ['exec', '-e', `PGPASSWORD=${password}`, name, 'psql', '-U', 'gremion_test', '-d', 'postgres', '-tAc', 'SELECT 1'])
+    if (probe.code === 0 && probe.stdout.trim() === '1') {
       const portRes = run('docker', ['port', name, '5432/tcp'])
       const m = portRes.stdout.match(/:(\d+)\s*$/m)
       if (m) {
@@ -63,11 +75,21 @@ function startTestDb({ sha8, pid }) {
         break
       }
     }
+    sleepMs(300)
   }
   if (port === null) {
     return { ok: false, name, detail: `${name} never became ready within 60s` }
   }
   return { ok: true, name, port, password }
+}
+
+// Kept dependency-free and synchronous (this whole suite is spawnSync
+// throughout, see lib/proc.mjs's own doc comment on why): Atomics.wait on a
+// fresh SharedArrayBuffer blocks the calling thread for exactly `ms` without
+// spawning a process per poll.
+function sleepMs(ms) {
+  const sab = new SharedArrayBuffer(4)
+  Atomics.wait(new Int32Array(sab), 0, 0, ms)
 }
 
 function stopTestDb(name) {
