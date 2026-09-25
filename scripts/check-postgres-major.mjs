@@ -251,6 +251,190 @@ export function checkFiles(files) {
   ]
 }
 
+// ── the Postgres service set (TASK-019, Q1, D14) ──────────────────────────
+//
+// D14: per-module Postgres. The kernel base compose declares, besides its own
+// `postgres`, one `<id>-postgres` for each of the six extraction-source leaves,
+// profile-gated under `profiles: [<id>]` and labelled
+// org.gremion.postgres=module:<id>; the kernel server is labelled `kernel`.
+// The label is how the RUNNING check (check-postgres-major-running.mjs) finds
+// containers, so an unlabelled Postgres is a server nobody verifies.
+export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault']
+export const POSTGRES_LABEL = 'org.gremion.postgres'
+
+// Volume names a module server must never mount: the kernel's own cluster and
+// the fixed names the extraction source's running stack gives its PG16 leaf
+// volumes (`gremion_<id>_pg_data`, measured in its docker-compose.yml on
+// 2026-09-25). On a box that still carries that stack, a PG18 server declared
+// on one of those names would be mounted on live PG16 data.
+export const FORBIDDEN_MODULE_VOLUMES = new Set([
+  'gremion_pg_data',
+  ...MODULE_POSTGRES_IDS.map((id) => `gremion_${id}_pg_data`),
+])
+
+const isPostgresService = (s) => s.name === 'postgres' || /-postgres$/.test(s.name) || s.label != null
+
+const unquote = (v) => v.replace(/\s+#.*$/, '').trim().replace(/^(["'])(.*)\1$/, '$2')
+
+/** The lines under a column-0 `<key>:` — [start, end) indices, or null. */
+function topBlock(lines, key) {
+  const start = lines.findIndex((l) => new RegExp(`^${key}:\\s*(#.*)?$`).test(l))
+  if (start < 0) return null
+  let end = start + 1
+  while (end < lines.length && !/^[^\s#]/.test(lines[end])) end++
+  return [start + 1, end]
+}
+
+/**
+ * The services of ONE compose file, read line by line (the guard stays
+ * dependency-free). Per service: its name and line, its OWN `image:` (null when
+ * it has none, e.g. it takes one from a `<<: *anchor` merge), the
+ * org.gremion.postgres label in map or list form, its profiles and its volume
+ * mounts. Top-level volume names are returned alongside.
+ */
+export function composeServices(text) {
+  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''))
+  const block = topBlock(lines, 'services')
+  if (!block) return []
+  const out = []
+  let svcIndent = null
+  let cur = null
+  let section = null
+  for (let i = block[0]; i < block[1]; i++) {
+    const l = lines[i]
+    if (/^\s*(#.*)?$/.test(l)) continue
+    const ind = l.match(/^ */)[0].length
+    if (svcIndent === null) svcIndent = ind
+    if (ind <= svcIndent) {
+      const m = l.match(/^\s*([A-Za-z0-9._-]+):\s*(#.*)?$/)
+      cur = m && ind === svcIndent
+        ? { name: m[1], line: i + 1, image: null, imageLine: null, label: null,
+            profiles: [], merge: false, mounts: [], propIndent: null }
+        : null
+      if (cur) out.push(cur)
+      section = null
+      continue
+    }
+    if (!cur) continue
+    if (cur.propIndent === null) cur.propIndent = ind
+    if (ind === cur.propIndent) {
+      const kv = l.match(/^\s*([A-Za-z0-9_<.-]+):\s*(.*)$/)
+      section = kv ? kv[1] : null
+      const val = kv ? kv[2] : ''
+      if (section === 'image') { cur.image = unquote(val); cur.imageLine = i + 1 }
+      if (section === '<<') cur.merge = true
+      if (section === 'profiles' && val.startsWith('[')) {
+        cur.profiles = val.replace(/[[\]\s"']/g, '').split(',').filter(Boolean)
+      }
+      if (section === 'labels' && val) readLabel(cur, val)
+      continue
+    }
+    // a line deeper than the service's own keys belongs to the current section
+    if (section === 'profiles') {
+      const m = l.match(/^\s*-\s*["']?([^"'\s#]+)/)
+      if (m) cur.profiles.push(m[1])
+    }
+    if (section === 'labels') readLabel(cur, l)
+    if (section === 'volumes') {
+      const m = l.match(/^\s*-\s*["']?([^:"'\s]+):([^:"'\s]+)/)
+      if (m) cur.mounts.push({ source: m[1], target: m[2] })
+    }
+  }
+  return out
+}
+
+function readLabel(svc, text) {
+  const m = text.match(/org\.gremion\.postgres["']?\s*[:=]\s*["']?([^"'\s,}\]]+)/)
+  if (m) svc.label = m[1]
+}
+
+/** Top-level `volumes:` of one compose file: key -> fixed `name:` (or null). */
+export function composeVolumeNames(text) {
+  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''))
+  const block = topBlock(lines, 'volumes')
+  const names = new Map()
+  if (!block) return names
+  let key = null
+  for (let i = block[0]; i < block[1]; i++) {
+    const k = lines[i].match(/^ {2}([A-Za-z0-9._-]+):\s*(\{.*\})?\s*(#.*)?$/)
+    if (k) {
+      key = k[1]
+      const inline = (k[2] ?? '').match(/name:\s*["']?([^"'\s,}]+)/)
+      names.set(key, inline ? inline[1] : null)
+      continue
+    }
+    const n = lines[i].match(/^ {4}name:\s*["']?([^"'\s#]+)/)
+    if (n && key) names.set(key, n[1])
+  }
+  return names
+}
+
+// A file whose services DECLARE rather than overlay: the base compose and a
+// module fragment. An override file's `postgres:` entry legitimately carries no
+// image of its own, so the no-image rule does not apply there.
+const BASE_COMPOSE = /(^|\/)docker-compose\.ya?ml$|(^|\/)compose\/[^/]+\.ya?ml$/
+
+/**
+ * Every Postgres service (named `postgres` / `*-postgres`, or labelled) pins
+ * its image LITERALLY. `image: ${CALENDAR_PG_IMAGE}` runs whatever major the
+ * environment says, and no text scan can read it; a pinned DEFAULT does not
+ * help, because the variable is exactly how the default gets overridden.
+ */
+export function checkComposeServices(files) {
+  const problems = []
+  for (const f of files.filter((f) => /\.ya?ml$/.test(f.path))) {
+    for (const s of composeServices(f.text).filter(isPostgresService)) {
+      if (s.image != null && s.image.includes('${')) {
+        problems.push(`variable image: ${f.path}:${s.imageLine} service ${s.name} image ${s.image} — a Postgres service pins its image literally (${POSTGRES_IMAGE_REF}); a variable runs whatever major the environment names`)
+      } else if (s.image == null && !s.merge && BASE_COMPOSE.test(f.path)) {
+        problems.push(`no image: ${f.path}:${s.line} service ${s.name} declares no image and merges none from an anchor`)
+      }
+    }
+  }
+  return problems
+}
+
+/**
+ * The kernel base compose declares exactly the Postgres set D14 names: the
+ * kernel server labelled `kernel`, one `<id>-postgres` per module labelled
+ * `module:<id>` under `profiles: [<id>]`, on a volume that is not a live one,
+ * and no Postgres service outside that set.
+ */
+export function checkModuleSet(text) {
+  const problems = []
+  const svcs = composeServices(text)
+  const byName = new Map(svcs.map((s) => [s.name, s]))
+  const volumeNames = composeVolumeNames(text)
+  if (byName.get('postgres')?.label !== 'kernel') {
+    problems.push(`the kernel postgres service is not labelled ${POSTGRES_LABEL}=kernel`)
+  }
+  const seenVolumes = new Map()
+  for (const id of MODULE_POSTGRES_IDS) {
+    const name = `${id}-postgres`
+    const s = byName.get(name)
+    if (!s) { problems.push(`no ${name} service: the module set (D14) is ${MODULE_POSTGRES_IDS.join(', ')}`); continue }
+    if (s.label !== `module:${id}`) {
+      problems.push(`${name} is labelled ${POSTGRES_LABEL}=${s.label}, expected module:${id}`)
+    }
+    if (s.profiles.length !== 1 || s.profiles[0] !== id) {
+      problems.push(`${name} is not gated under profiles: [${id}] (has [${s.profiles.join(', ')}])`)
+    }
+    const data = s.mounts.find((m) => m.target === POSTGRES_DATA_MOUNT)
+    if (!data) { problems.push(`${name} mounts no volume at ${POSTGRES_DATA_MOUNT}`); continue }
+    const vol = volumeNames.get(data.source) ?? data.source
+    if (FORBIDDEN_MODULE_VOLUMES.has(vol)) {
+      problems.push(`${name} mounts volume ${vol}, which is the kernel's cluster or a live extraction-source PG16 volume`)
+    }
+    if (seenVolumes.has(vol)) problems.push(`${name} shares volume ${vol} with ${seenVolumes.get(vol)}`)
+    seenVolumes.set(vol, name)
+  }
+  const known = new Set(['postgres', ...MODULE_POSTGRES_IDS.map((id) => `${id}-postgres`)])
+  for (const s of svcs.filter(isPostgresService)) {
+    if (!known.has(s.name)) problems.push(`${s.name} is a Postgres service outside the module set (${[...known].join(', ')})`)
+  }
+  return problems
+}
+
 // ── the data-directory contract ────────────────────────────────────────────
 //
 // A second, SEPARATE post-condition, because the tag guard above cannot see it.
@@ -384,11 +568,13 @@ if (isMain) {
   if (i >= 0 && !tree) { console.error('[postgres-major] --tree needs a directory'); process.exit(2) }
   const files = tree ? fragmentFiles(tree) : trackedTextFiles(ROOT)
   const problems = tree
-    ? [...checkFiles(files), ...checkDataMounts(files)]
+    ? [...checkFiles(files), ...checkDataMounts(files), ...checkComposeServices(files)]
     : [
         ...checkEvidence(readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')),
         ...checkFiles(files),
         ...checkDataMounts(files),
+        ...checkComposeServices(files.filter((f) => !EXCLUDED.some((re) => re.test(f.path)))),
+        ...checkModuleSet(readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')),
       ]
   if (problems.length > 0) {
     console.error(`[postgres-major] ${problems.length} problem(s) in ${tree ?? 'the kernel tree'}:`)

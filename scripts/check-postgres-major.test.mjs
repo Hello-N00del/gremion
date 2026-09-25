@@ -620,3 +620,151 @@ test('the registry-prefix net does not read URLs, paths or host:ports as images'
     assert.deepEqual(scanText('a.yml', line), [], `${line} must not be read as a postgres image`)
   }
 })
+
+// ── TASK-019: the module service set (Q1, D14) ─────────────────────────────
+//
+// Per-module Postgres: `<id>-postgres` for the six extraction-source leaves,
+// each profile-gated under its id and labelled org.gremion.postgres=module:<id>;
+// the kernel server is labelled `kernel`. The label is what the RUNNING check
+// finds containers by, so a service without it is a server nobody verifies.
+
+import {
+  MODULE_POSTGRES_IDS,
+  composeServices,
+  checkComposeServices,
+  checkModuleSet,
+} from './check-postgres-major.mjs'
+
+const VAR_IMAGE = '    image: ${CALENDAR_PG_IMAGE}'
+
+test('the module set is the six extraction-source leaves', () => {
+  assert.deepEqual([...MODULE_POSTGRES_IDS].sort(),
+    ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault'])
+})
+
+test('composeServices reads name, image, label, profiles and merge key off a compose file', () => {
+  const text = [
+    'x-module-postgres: &module-postgres',
+    `  image: ${POSTGRES_IMAGE_REF}`,
+    'services:',
+    '  postgres:',
+    `    image: ${POSTGRES_IMAGE_REF}`,
+    '    labels:',
+    '      org.gremion.postgres: "kernel"',
+    '  calendar-postgres:',
+    '    <<: *module-postgres',
+    '    profiles: [calendar]',
+    '    labels:',
+    '      - "org.gremion.postgres=module:calendar"',
+    '    healthcheck:',
+    '      test: ["CMD-SHELL", "pg_isready"]',
+    '  web:',
+    '    image: nginx:1.29',
+    'volumes:',
+    '  calendar-pg-data:',
+    '    name: gremion_module_calendar_pg_data',
+  ].join('\n')
+  const s = composeServices(text)
+  assert.deepEqual(s.map((x) => x.name), ['postgres', 'calendar-postgres', 'web'])
+  assert.equal(s[0].image, POSTGRES_IMAGE_REF)
+  assert.equal(s[0].label, 'kernel')
+  assert.equal(s[1].image, null)
+  assert.equal(s[1].merge, true)
+  assert.equal(s[1].label, 'module:calendar')
+  assert.deepEqual(s[1].profiles, ['calendar'])
+  assert.equal(s[2].label, null)
+})
+
+test('TDD-4: a variable-only image on a *-postgres service is a problem', () => {
+  const text = `services:\n  calendar-postgres:\n${VAR_IMAGE}\n`
+  const problems = checkComposeServices([{ path: 'compose/calendar.yml', text }])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.match(problems[0], /^variable image: compose\/calendar\.yml:3 service calendar-postgres/)
+})
+
+test('TDD-4: a variable image with a pinned default is still a problem on a postgres service', () => {
+  const text = `services:\n  calendar-postgres:\n    image: \${CALENDAR_PG_IMAGE:-${POSTGRES_IMAGE_REF}}\n`
+  assert.match(checkComposeServices([{ path: 'a.yml', text }]).join('\n'), /^variable image: a\.yml:3/)
+})
+
+test('TDD-4: a variable-only image on a LABELLED service of any name is a problem', () => {
+  const text = `services:\n  db:\n${VAR_IMAGE}\n    labels:\n      org.gremion.postgres: "module:calendar"\n`
+  assert.match(checkComposeServices([{ path: 'a.yml', text }]).join('\n'), /^variable image: a\.yml:3 service db/)
+})
+
+test('TDD-4: a postgres service with no image and no merge key is a problem', () => {
+  const text = 'services:\n  calendar-postgres:\n    build: ./pg\n'
+  assert.match(checkComposeServices([{ path: 'compose/calendar.yml', text }]).join('\n'),
+    /^no image: compose\/calendar\.yml:2 service calendar-postgres/)
+  // an OVERRIDE file's postgres entry overlays the base and carries no image
+  assert.deepEqual(checkComposeServices([{ path: 'docker-compose.override.yml', text }]), [])
+})
+
+test('a variable image on a service that is not Postgres is none of this guard\'s business', () => {
+  const text = 'services:\n  web:\n    image: ${WEB_IMAGE}\n'
+  assert.deepEqual(checkComposeServices([{ path: 'a.yml', text }]), [])
+})
+
+/** A docker-compose.yml body carrying the full, correct module set. */
+function moduleCompose({ skip = null, override = {} } = {}) {
+  const lines = [
+    'x-module-postgres: &module-postgres',
+    `  image: ${POSTGRES_IMAGE_REF}`,
+    'services:',
+    '  postgres:',
+    `    image: ${POSTGRES_IMAGE_REF}`,
+    '    labels:',
+    '      org.gremion.postgres: "kernel"',
+  ]
+  const vols = ['volumes:', '  pg-data:', '    name: gremion_pg_data']
+  for (const id of MODULE_POSTGRES_IDS) {
+    if (id === skip) continue
+    const o = override[id] ?? {}
+    lines.push(`  ${o.name ?? `${id}-postgres`}:`, '    <<: *module-postgres',
+      `    profiles: [${o.profile ?? id}]`, '    labels:',
+      `      org.gremion.postgres: "${o.label ?? `module:${id}`}"`,
+      '    volumes:', `      - ${id}-pg-data:${POSTGRES_DATA_MOUNT}`)
+    vols.push(`  ${id}-pg-data:`, `    name: ${o.volume ?? `gremion_module_${id}_pg_data`}`)
+  }
+  return [...lines, ...vols].join('\n') + '\n'
+}
+
+test('checkModuleSet passes on the full set', () => {
+  assert.deepEqual(checkModuleSet(moduleCompose()), [])
+})
+
+test('checkModuleSet goes RED on a missing module server', () => {
+  assert.match(checkModuleSet(moduleCompose({ skip: 'vault' })).join('\n'), /no vault-postgres service/)
+})
+
+test('checkModuleSet goes RED on a wrong label, a wrong profile and an unlabelled kernel', () => {
+  assert.match(checkModuleSet(moduleCompose({ override: { board: { label: 'module:vault' } } })).join('\n'),
+    /board-postgres is labelled org\.gremion\.postgres=module:vault, expected module:board/)
+  assert.match(checkModuleSet(moduleCompose({ override: { board: { profile: 'content' } } })).join('\n'),
+    /board-postgres is not gated under profiles: \[board\]/)
+  const noKernel = moduleCompose().replace('      org.gremion.postgres: "kernel"\n', '')
+  assert.match(checkModuleSet(noKernel).join('\n'), /the kernel postgres service is not labelled org\.gremion\.postgres=kernel/)
+})
+
+test('checkModuleSet goes RED on a stray labelled or *-postgres service outside the set', () => {
+  const stray = moduleCompose().replace('\nvolumes:\n', '\n  files-postgres:\n    <<: *module-postgres\nvolumes:\n')
+  assert.match(checkModuleSet(stray).join('\n'), /files-postgres is a Postgres service outside the module set/)
+})
+
+test('checkModuleSet refuses a module volume that reuses a live extraction-source name', () => {
+  // The extraction source's own stack names its PG16 leaf volumes
+  // gremion_<id>_pg_data. A PG18 server mounted on one of those is mounted on
+  // somebody's live data.
+  const problems = checkModuleSet(moduleCompose({ override: { calendar: { volume: 'gremion_calendar_pg_data' } } }))
+  assert.match(problems.join('\n'), /calendar-postgres mounts volume gremion_calendar_pg_data/)
+  const shared = checkModuleSet(moduleCompose({ override: { calendar: { volume: 'gremion_pg_data' } } }))
+  assert.match(shared.join('\n'), /calendar-postgres mounts volume gremion_pg_data/)
+})
+
+test('the committed docker-compose.yml carries the full, correct module set', () => {
+  const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
+  assert.deepEqual(checkModuleSet(text), [])
+  assert.deepEqual(checkComposeServices([{ path: 'docker-compose.yml', text }]), [])
+  const labelled = composeServices(text).filter((s) => s.label)
+  assert.equal(labelled.length, 1 + MODULE_POSTGRES_IDS.length)
+})
