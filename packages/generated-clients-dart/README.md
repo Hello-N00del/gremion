@@ -53,62 +53,106 @@ the diff.
 
 The writer and the check call the same function, one per surface:
 
-1. Stage the spec under `.gen-work/`. The spec is LF-normalised, and 3.0-style
-   `nullable: true` becomes 3.1 `type: [T, "null"]` (see below).
-2. `openapi-generator generate -g dart-dio` with
-   `--global-property apiTests=false,modelTests=false,apiDocs=false,modelDocs=false`
-   and a seeded `.openapi-generator-ignore` covering `test/**`, `doc/**` and the
-   generator's `.gitignore`, which would ignore `pubspec.lock`.
+1. Stage the spec under `.gen-work/`. The spec is LF-normalised, and the
+   generator input is normalised for OpenAPI 3.1 (see below).
+2. `openapi-generator generate -g dart-dio`, run offline, with:
+   - `--global-property apiTests=false,modelTests=false,apiDocs=false,modelDocs=false`;
+   - a seeded `.openapi-generator-ignore` covering `test/**`, `doc/**` and the
+     generator's `.gitignore`, which would ignore `pubspec.lock`;
+   - `serializationLibrary=built_value`, `dateLibrary=core`,
+     `enumUnknownDefaultCase=true` (a server enum value the client does not
+     know decodes to a fallback case) and `pubPublishTo=none` (these clients
+     are private).
 3. Overlay a package-local `.gitattributes` (`* text eol=lf`), `.gitignore`
    (`.dart_tool/`, `build/`) and `.generated-from` (the spec path and its
    sha256).
-4. `dart pub get --enforce-lockfile` against the committed `pubspec.lock`. A new
-   surface seeds its lock from an existing surface, so all packages resolve
-   the same versions.
+4. `dart pub get`. The check runs `--enforce-lockfile` against the committed
+   `pubspec.lock`. The writer runs plain `pub get`, which keeps every locked
+   version that still satisfies the pubspec, so a generator bump can update
+   the lock, and the check then compares it byte for byte. A new surface
+   seeds its lock from an existing surface. **To re-resolve on purpose,
+   delete the surface's `pubspec.lock` and run `generate`.**
 5. `dart run build_runner build --delete-conflicting-outputs`. The `*.g.dart`
-   outputs are committed. build_runner 2.16.1 (locked) ignores the flag and warns that
-   it was removed.
+   outputs are committed. build_runner 2.16.1 (locked) ignores the flag and
+   warns that it was removed.
 6. `dart analyze --no-fatal-warnings`. The gate requires exit 0, a summary
    line, zero `error -` lines, and parsed lines that add up to the summary.
-   Warnings are counted and logged. `analysis_options.yaml` must not exclude
-   `lib/**` or re-map a diagnostic that is not on the reviewed allowlist. The
-   same allowlist applies to in-file `// ignore:` codes.
+   Warnings are counted and logged. The run also fails on any of these:
+   - an `analysis_options.yaml` exclude that is not a plain `test/` or `doc/`
+     glob;
+   - a remap of a diagnostic that is not on the reviewed allowlist;
+   - an in-file `// ignore:` code that is not on the allowlist;
+   - a string `'null'` default in `lib/`.
 7. The resulting file set must equal `.openapi-generator/FILES` plus the
    generator meta, the build_runner outputs and the overlay. Any other file
    fails the run.
 
-**Nullability.** openapi-generator 7.12.0 ignores `nullable` in OpenAPI 3.1
-mode, and the committed specs are 3.1.0 written with the 3.0 keyword. Without
-step 1, required nullable fields such as `child_term` would come out
-non-nullable and fail to deserialize a `null`. The rewrite changes the
-generator input only and never the committed spec. A `nullable` it cannot map
-faithfully fails the run: one without a `type`, or one with an `enum`. Once the
-specs use the 3.1 spelling, the rewrite does nothing.
+Every tool run has a 20-minute wall-clock limit. A run that times out is
+reported as not having finished, never as a result.
+
+### OpenAPI 3.1 normalisation (`src/spec-normalize.ts`)
+
+openapi-generator 7.12.0's 3.1 support ("still in beta", as it logs) gets
+several spellings wrong. The committed specs are 3.1.0 but use 3.0
+spellings. These rewrites apply to the generator input only and never to the
+committed spec. Each was reproduced on the pinned image:
+
+| Spec says | Generator alone | Normalised to |
+|---|---|---|
+| `type: T, nullable: true` | ignores `nullable`, so a required field becomes non-nullable and fails to decode `null` | `type: [T, "null"]` |
+| `nullable` + `default: null` | the STRING default `'null'`, sent on every request | the default is dropped |
+| `const: true` (typed or not) | `JsonObject?`, or a single-value EnumClass with wire name `'true'` that cannot decode a JSON `true` | the type only (`bool`) |
+
+A spelling it cannot map faithfully fails the run: `nullable` without a type,
+`nullable` next to `$ref`/`allOf`/`oneOf`/`anyOf`, `nullable` with an `enum`,
+`default: null` on a non-nullable type, or a non-string `enum`. The walk
+decides what counts as a schema by its position, so a property named
+`default` and `responses.default` are still covered. Once the specs use the
+3.1 spelling, the rewrites do nothing. Current counts for kernel-governance:
+20 nullable, 5 `default: null`, 21 const.
 
 ## What `codegen:check` fails on
 
 - A registered surface with no package, or a stale `.generated-from` (the spec
   changed and was not regenerated).
-- Any extra, missing or differing file anywhere in a surface package. The whole
-  file set is regenerated and compared byte for byte; only `.dart_tool/` is
-  skipped.
+- Any extra, missing or differing file in a surface package. The whole
+  committable file set is regenerated and compared byte for byte: tracked plus
+  untracked-not-ignored files, including anything force-added under
+  `.dart_tool/`. Ignored local clutter is not counted.
 - A directory under `packages/generated-clients-dart/` that is not a
   registered surface or the Node tooling, and Dart files in `src/` or `tools/`.
 - A hand-written client: any `*.dart` outside the surface packages
-  (`apps/mobile/**` included, tracked or untracked-not-ignored) that contains a
-  path from any registered OpenAPI spec's `paths`. Path parameters match
-  whatever gets interpolated (`{id}`, `$id`, `${x.id}`, `42`).
+  (`apps/mobile/**` included) that contains a path from any registered OpenAPI
+  spec's `paths`. Path parameters match whatever gets interpolated (`{id}`,
+  `$id`, `${x['id']}`, `42`). The scan also sees a path that was assembled:
+  - from string consts (`'$base/committees/$id'`);
+  - by `+` concatenation or adjacent literals;
+  - from segment lists (`pathSegments: [...]`, `[...].join('/')`);
+  - without a leading slash;
+  - as a tail of at least two segments behind a base URL that carries the
+    prefix (`baseUrl: '…/api'` + `'/governance/committees'`).
+
+  Known gaps: paths computed at runtime, and a single-segment remainder
+  behind a base URL (e.g. `'/health'`). The scan also fails if it saw no path
+  keys, or if its file listing does not include the generated packages.
 - Vacuity. The check reports `N of M`, where M is the number of openapi+active
-  registry entries. It fails unless M >= 1 and N == M.
+  registry entries. It fails unless M >= 1 and N == M. Registry entries with an
+  unknown `status`, a `type` that disagrees with the document, or a name that
+  collides with the tooling make the check throw.
 - A missing generator or SDK at the pinned versions, or a failure in pub get,
   build_runner or analyze.
 
-## Not covered here
+## Known limitations and residuals
 
 - Registration in the `verify` suite (TASK-045). Until then the gate is the
   standalone `codegen:check` above.
 - The StuRaOS mobile app's hand-written client (`mobile/lib/services/api_client.dart`,
   a different repository), which this check cannot see.
-- The generated pubspecs carry no `publish_to: none`, because the generator
-  template has no such option and generated files are never patched.
-  Publishing needs an explicit `dart pub publish`.
+- dart-dio has no JsonNullable option, so an optional nullable field that is
+  `null` is omitted rather than sent as `null`. A PATCH cannot clear such a
+  field; the spec would have to make it required-nullable.
+- The generated pubspec keeps the template's `sdk: '>=2.18.0 <4.0.0'`, while
+  the committed lock needs Dart >= 3.11. Consumers resolve their own floor.
+- POSIX-first: on Windows, a PATH `.cmd` wrapper for the generator or Dart is
+  not run (no shell), so resolution falls back to the pinned Docker images.
+  The tool-resolution unit tests use `/bin/sh` fakes.
