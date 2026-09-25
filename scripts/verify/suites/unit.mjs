@@ -14,9 +14,15 @@ import { run, toolAvailable } from '../lib/proc.mjs'
 
 const REPO_ROOT = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
 
-function vitestSubcheck({ cwd, testScript = 'test:unit' }) {
+export function vitestSubcheck({ cwd, testScript = 'test:unit' }) {
   const outFile = path.join(mkdtempSync(path.join(tmpdir(), 'verify-vitest-')), 'result.json')
-  const res = run('pnpm', ['exec', 'vitest', 'run', '--reporter=json', `--outputFile=${outFile}`], {
+  // Runs the package's OWN script (`pnpm run <testScript>`), not a
+  // hand-assembled `vitest run` -- all three call sites happen to define
+  // that script as exactly `vitest run` today, so this was silently
+  // equivalent, but a future change to any one of them (a --coverage flag,
+  // a different config, swapping tools entirely) would have kept being
+  // ignored forever, since `testScript` was accepted but never read.
+  const res = run('pnpm', ['run', testScript, '--', '--reporter=json', `--outputFile=${outFile}`], {
     cwd,
   })
   const parsed = parseVitestJsonFile(outFile)
