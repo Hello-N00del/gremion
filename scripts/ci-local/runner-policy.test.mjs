@@ -146,6 +146,56 @@ test('checkWorkflowText is RED when a matrix key referenced by runs-on is not de
   assert.equal(checkWorkflowText(text).length, 1)
 })
 
+// --- TASK-012-FU finding 1 (HIGH): strategy.matrix.include/exclude --------
+// GitHub ADDS a combination for every `include` entry, so a runs-on resolved
+// through a matrix key must also classify that key in every include entry.
+
+const matrixJob = (matrixYaml) => `jobs:\n  x:\n    strategy:\n      matrix:\n${matrixYaml}    runs-on: \${{ matrix.os }}\n`
+
+test('FU-1: checkWorkflowText is RED when matrix.include adds a self-hosted value for the runs-on key (os: [ubuntu-latest] + include: [{os: self-hosted}])', () => {
+  const text = matrixJob('        os: [ubuntu-latest]\n        include:\n          - os: self-hosted\n')
+  const findings = checkWorkflowText(text)
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].id, 'self-hosted')
+})
+
+test('FU-1: checkWorkflowText is RED when the runs-on key exists ONLY in include entries and one of them is a custom label', () => {
+  const text = matrixJob('        include:\n          - os: ubuntu-latest\n          - os: my-raspberry-pi\n')
+  assert.equal(checkWorkflowText(text).length, 1)
+})
+
+test('FU-1: checkWorkflowText is GREEN when the runs-on key exists only in include entries and every one is hosted', () => {
+  const text = matrixJob('        include:\n          - os: ubuntu-latest\n            node: 22\n          - os: windows-2022\n')
+  assert.deepEqual(checkWorkflowText(text), [])
+})
+
+test('FU-1: checkWorkflowText is GREEN when include entries extend hosted combinations without touching the runs-on key', () => {
+  const text = matrixJob('        os: [ubuntu-latest, macos-14]\n        include:\n          - node: 24\n')
+  assert.deepEqual(checkWorkflowText(text), [])
+})
+
+test('FU-1: checkWorkflowText is RED (fail closed) when include or exclude is an expression rather than a list of mappings', () => {
+  assert.equal(checkWorkflowText(matrixJob('        os: [ubuntu-latest]\n        include: ${{ fromJSON(inputs.extra) }}\n')).length, 1)
+  assert.equal(checkWorkflowText(matrixJob('        os: [ubuntu-latest]\n        exclude: ${{ fromJSON(inputs.drop) }}\n')).length, 1)
+  assert.equal(checkWorkflowText(matrixJob('        os: [ubuntu-latest]\n        include:\n          - self-hosted\n')).length, 1)
+  assert.equal(checkWorkflowText(matrixJob('        os: [ubuntu-latest]\n        include:\n          os: self-hosted\n')).length, 1)
+})
+
+test('FU-1: checkWorkflowText is RED (fail closed) when the whole matrix is an expression', () => {
+  const text = 'jobs:\n  x:\n    strategy:\n      matrix: ${{ fromJSON(inputs.m) }}\n    runs-on: ${{ matrix.os }}\n'
+  assert.equal(checkWorkflowText(text).length, 1)
+})
+
+test('FU-1: matrix keys resolve case-insensitively (GitHub expression property access ignores case), so include {OS: self-hosted} is still caught', () => {
+  const text = matrixJob('        os: [ubuntu-latest]\n        include:\n          - OS: self-hosted\n')
+  assert.equal(checkWorkflowText(text).length, 1)
+})
+
+test('FU-1: a matrix value that itself references the matrix fails closed instead of recursing forever', () => {
+  const text = matrixJob("        os: ['${{ matrix.os }}']\n")
+  assert.equal(checkWorkflowText(text).length, 1)
+})
+
 test('checkWorkflowText does not flag a reusable-workflow call job (uses:, no runs-on) alongside an ordinary hosted job', () => {
   const text = 'jobs:\n  call:\n    uses: ./.github/workflows/other.yml\n  build:\n    runs-on: ubuntu-latest\n'
   assert.deepEqual(checkWorkflowText(text), [])

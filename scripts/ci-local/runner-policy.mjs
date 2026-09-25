@@ -57,11 +57,50 @@ function isHostedLabel(value) {
   return typeof value === 'string' && GITHUB_HOSTED_LABEL_RE.test(value.trim())
 }
 
-/** `strategy.matrix.<key>` for one job body, or undefined if it is not a plain array/object shape this file resolves. */
-function resolveMatrixKey(jobBody, key) {
-  const matrix = jobBody && typeof jobBody === 'object' ? jobBody.strategy?.matrix : undefined
-  if (!matrix || typeof matrix !== 'object' || Array.isArray(matrix)) return undefined
-  return matrix[key]
+function isPlainMapping(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+}
+
+/** Values of every property of `obj` whose name equals `key` ignoring case (GitHub expression property access is case-insensitive). */
+function valuesForKey(obj, key) {
+  const lower = key.toLowerCase()
+  return Object.entries(obj)
+    .filter(([k]) => k.toLowerCase() === lower)
+    .map(([, v]) => v)
+}
+
+/**
+ * Every value `matrix.<key>` can take in one job, or undefined when this
+ * file cannot prove the full set (fail closed).
+ *
+ * TASK-012-FU finding 1 (HIGH): this used to read only `matrix[key]`, but
+ * GitHub ADDS a combination for every `strategy.matrix.include` entry, so
+ * `os: [ubuntu-latest]` + `include: [{os: self-hosted}]` scheduled a
+ * self-hosted job while the guard returned no finding. Now:
+ *  - the matrix itself must be a mapping (an expression is unresolvable);
+ *  - a base `matrix.<key>` must be a list (each element is one value);
+ *  - `include` and `exclude`, when present, must each be a list of
+ *    mappings — an expression or any other shape fails closed;
+ *  - every include entry that names the key adds its value to the set.
+ * `exclude` can only remove combinations, so its entries add nothing, but a
+ * shape this file cannot read still fails closed. Keys match ignoring case.
+ */
+function resolveMatrixValues(jobBody, key) {
+  const matrix = isPlainMapping(jobBody) ? jobBody.strategy?.matrix : undefined
+  if (!isPlainMapping(matrix)) return undefined
+  const values = []
+  for (const [k, v] of Object.entries(matrix)) {
+    const lower = k.toLowerCase()
+    if (lower === 'include' || lower === 'exclude') {
+      if (!Array.isArray(v) || !v.every(isPlainMapping)) return undefined
+      if (lower === 'include') for (const entry of v) values.push(...valuesForKey(entry, key))
+      continue
+    }
+    if (lower !== key.toLowerCase()) continue
+    if (!Array.isArray(v)) return undefined
+    values.push(...v)
+  }
+  return values
 }
 
 /**
@@ -76,12 +115,14 @@ export function isSafeRunsOn(value, jobBody) {
     const trimmed = value.trim()
     const matrixMatch = trimmed.match(MATRIX_EXPR_RE)
     if (matrixMatch) {
-      const resolved = resolveMatrixKey(jobBody, matrixMatch[1])
-      // Every combination the matrix declares for this key must itself
-      // resolve to a hosted label, or this fails closed — an unresolved
-      // matrix key (undefined), a non-array value, or an empty list all
-      // count as unresolvable rather than as an empty (vacuous) PASS.
-      return Array.isArray(resolved) && resolved.length > 0 && resolved.every((v) => isSafeRunsOn(v, jobBody))
+      const resolved = resolveMatrixValues(jobBody, matrixMatch[1])
+      // Every value the matrix (base list AND include entries) declares for
+      // this key must itself resolve to a hosted label, or this fails
+      // closed — an unresolvable matrix shape (undefined) or an empty set
+      // counts as unresolvable rather than as an empty (vacuous) PASS. Each
+      // value is classified WITHOUT the job body, so a value that itself
+      // references `matrix.*` fails closed instead of recursing forever.
+      return Array.isArray(resolved) && resolved.length > 0 && resolved.every((v) => isSafeRunsOn(v, undefined))
     }
     if (ANY_EXPR_RE.test(trimmed)) return false // ${{ vars.* }}, ${{ inputs.* }}, etc. — cannot classify, fail closed
     return isHostedLabel(trimmed)
