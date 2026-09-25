@@ -4,15 +4,25 @@
 // TRD-426: no tenant database connection is opened outside @gremion/tenant-store.
 // Scans every source file under --root (default: the repository) for
 //   calls:   postgres(  createDb(  new Pool(  new Client(
-//   imports: a VALUE import of 'postgres' or 'pg' (import ... from, export ... from,
-//            require(), import()) — so an alias (import pg from 'postgres'; pg(url))
-//            cannot slip past the call patterns. Type-only imports are not counted.
+//   imports: a VALUE import of a driver — 'postgres', 'pg', 'pg-pool',
+//            'pg-native', or any subpath of them — (import ... from, export ...
+//            from, require(), import(), any quote style), and a value import or
+//            re-export of createDb (renamed or not) or a namespace/default
+//            import of '@gremion/db' — so an alias (import pg from 'postgres';
+//            pg(url) / import { createDb as mk } ...; mk(p)) cannot slip past the
+//            call patterns. Type-only imports are not counted.
+//   also:    createDb referenced by string ('createDb') or through
+//            .call / .apply / .bind.
 // and fails on any hit outside the package that has no allow-list row, on a
 // row whose counts no longer match the file exactly (stale, or a new site in an
 // allow-listed file), on a malformed row, and on a scan that saw zero files.
 //
 // Allowed by rule, not by row: packages/tenant-store/** (the package itself) and
 // the @gremion/db factory (packages/db/src/client.ts and its spec).
+//
+// Not scanned: directories named node_modules, dist, build or coverage, and
+// dot-directories (.git, .svelte-kit, .scratch, .github, ...); measured
+// 2026-09-25, no tracked source file sits under one. Symlinks are not followed.
 //
 // Usage: node check-tenant-db-access.mjs [--root <dir>] [--allow-list <file>] [--json]
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -32,52 +42,72 @@ export const RULE_ALLOWED = [
   { path: 'packages/db/src/client.test.ts', reason: 'the factory spec' },
 ]
 
-const CALL_PATTERNS = [/\bpostgres\s*\(/g, /\bcreateDb\s*\(/g, /\bnew\s+Pool\s*\(/g, /\bnew\s+Client\s*\(/g]
-const DRIVER = `['"](?:postgres|pg)['"]`
-// import X from 'postgres' / import * as X / import { a, b } / export { x } from — type-only excluded below
-const STATIC_IMPORT = new RegExp(String.raw`\b(import|export)\s+(type\s+)?([^;'"]*?)\s*from\s*${DRIVER}`, 'g')
-const DYNAMIC_IMPORT = new RegExp(String.raw`\b(?:require|import)\s*\(\s*${DRIVER}\s*\)`, 'g')
+const CALL_PATTERNS = [
+  /\bpostgres\s*\(/g,
+  /\bcreateDb\s*\(/g,
+  /\bnew\s+Pool\s*\(/g,
+  /\bnew\s+Client\s*\(/g,
+  /['"`]createDb['"`]/g,
+  /\bcreateDb\s*\.\s*(?:call|apply|bind)\b/g,
+]
+const Q = `['"\`]`
+const DRIVER = String.raw`${Q}(?:postgres|pg|pg-pool|pg-native)(?:/[^'"\`]*)?${Q}`
+const FACTORY = String.raw`${Q}@gremion/db(?:/[^'"\`]*)?${Q}`
+// import X from '…' / import * as X / import { a, b } / export { x } from — type-only excluded below
+const STATIC_IMPORT = new RegExp(String.raw`\b(import|export)\s+(type\s+)?([^;'"\`]*?)\s*from\s*${DRIVER}`, 'g')
+// import('x').Name is a TypeScript type query, not a load: not counted.
+const NOT_TYPE_QUERY = String.raw`(?!\s*\.\s*[A-Z])`
+const DYNAMIC_IMPORT = new RegExp(String.raw`\b(?:require|import)\s*\(\s*${DRIVER}\s*\)${NOT_TYPE_QUERY}`, 'g')
+const FACTORY_IMPORT = new RegExp(String.raw`\b(import|export)\s+(type\s+)?([^;'"\`]*?)\s*from\s*${FACTORY}`, 'g')
+const FACTORY_DYNAMIC = new RegExp(String.raw`\b(?:require|import)\s*\(\s*${FACTORY}\s*\)${NOT_TYPE_QUERY}`, 'g')
 
 /**
- * Blanks comment-only content, keeping line numbers: a line whose first
- * non-space characters are // , and a block comment that OPENS a line
- * (through its closing star-slash; code after it on that line is still scanned).
- * Code that merely contains // or /* mid-line is scanned whole, so a comment
- * can never hide code that runs.
+ * Blanks comments, keeping line numbers and every other character: a small
+ * scanner that knows '…', "…" and `…` strings (with escapes), so a // or /*
+ * INSIDE a string never starts a comment and cannot hide the code after it.
+ * Strings themselves are kept, so their content is still scanned. A regex
+ * literal is not recognised; a quote inside one can only make the scanner
+ * treat MORE text as code (never less), because it strips nothing but
+ * comments.
  */
-export function stripCommentLines(text) {
-  const out = []
-  let inBlock = false
-  for (const line of text.split('\n')) {
-    if (inBlock) {
-      const end = line.indexOf('*/')
-      if (end < 0) {
-        out.push('')
+export function stripComments(text) {
+  let out = ''
+  let i = 0
+  let quote = null
+  while (i < text.length) {
+    const c = text[i]
+    if (quote) {
+      out += c
+      if (c === '\\') {
+        out += text[i + 1] ?? ''
+        i += 2
         continue
       }
-      inBlock = false
-      out.push(' '.repeat(end + 2) + line.slice(end + 2))
+      if (c === quote || (c === '\n' && quote !== '`')) quote = null
+      i++
       continue
     }
-    const t = line.trimStart()
-    if (t.startsWith('//')) {
-      out.push('')
+    if (c === "'" || c === '"' || c === '`') {
+      quote = c
+      out += c
+      i++
       continue
     }
-    if (t.startsWith('/*')) {
-      const start = line.indexOf('/*')
-      const end = line.indexOf('*/', start + 2)
-      if (end < 0) {
-        inBlock = true
-        out.push('')
-        continue
-      }
-      out.push(' '.repeat(end + 2) + line.slice(end + 2))
+    if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++
       continue
     }
-    out.push(line)
+    if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2)
+      const stop = end < 0 ? text.length : end + 2
+      out += text.slice(i, stop).replace(/[^\n]/g, ' ')
+      i = stop
+      continue
+    }
+    out += c
+    i++
   }
-  return out.join('\n')
+  return out
 }
 
 function isTypeOnlyClause(typeKw, clause) {
@@ -90,13 +120,26 @@ function isTypeOnlyClause(typeKw, clause) {
 }
 
 /** Counts the connection sites in one file's text. */
+/** Does an import/export clause from '@gremion/db' bring the factory in as a value? */
+function importsFactory(typeKw, clause) {
+  if (typeKw) return false
+  const c = clause.trim()
+  if (/^\*/.test(c)) return true // namespace import, or export * from
+  const named = /\{([\s\S]*)\}/.exec(c)
+  if (/^[A-Za-z_$][\w$]*/.test(c) && !/^\{/.test(c)) return true // a default import
+  if (!named) return false
+  return named[1].split(',').map((s) => s.trim()).some((s) => /^(?:default|createDb)\b/.test(s))
+}
+
 export function countSites(text) {
-  const code = stripCommentLines(text)
+  const code = stripComments(text)
   let calls = 0
   for (const re of CALL_PATTERNS) calls += (code.match(re) ?? []).length
   let imports = 0
   for (const m of code.matchAll(STATIC_IMPORT)) if (!isTypeOnlyClause(m[2], m[3])) imports++
   imports += (code.match(DYNAMIC_IMPORT) ?? []).length
+  for (const m of code.matchAll(FACTORY_IMPORT)) if (importsFactory(m[2], m[3])) imports++
+  imports += (code.match(FACTORY_DYNAMIC) ?? []).length
   return { calls, imports }
 }
 

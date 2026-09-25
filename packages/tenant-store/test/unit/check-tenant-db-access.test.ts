@@ -93,10 +93,35 @@ describe('check-tenant-db-access (TRD-426)', () => {
     expect(countSites("export { default } from 'postgres'\n")).toEqual({ calls: 0, imports: 1 })
   })
 
-  it('does not count type-only imports or comment-only lines, and a comment cannot hide code after it', () => {
+  it('does not count type-only imports or comments, and a comment cannot hide code after it', () => {
     expect(countSites("import type { Sql } from 'postgres'\nimport { type Sql as S } from 'postgres'\n")).toEqual({ calls: 0, imports: 0 })
+    expect(countSites("type T = import('@gremion/db').Sql\nlet p: import('postgres').Options<{}>\n")).toEqual({ calls: 0, imports: 0 })
     expect(countSites('// postgres(url)\n/*\n postgres(url)\n*/\n * not a jsdoc: postgres(a)\n')).toEqual({ calls: 1, imports: 0 })
-    expect(countSites('/* x */ postgres(url)\nconst a = 1 // postgres(b)\n')).toEqual({ calls: 2, imports: 0 })
+    expect(countSites('/* x */ postgres(url)\nconst a = 1 // postgres(b)\n')).toEqual({ calls: 1, imports: 0 })
+  })
+
+  it('a /* or // inside a string starts no comment and hides nothing (security review M2)', () => {
+    expect(countSites('const t = `\n/* not a comment\n`\npostgres(url)\nconst e = "*/"\n')).toEqual({ calls: 1, imports: 0 })
+    expect(countSites("const u = 'http://x'; postgres(url)\n")).toEqual({ calls: 1, imports: 0 })
+    expect(countSites('const s = "a\\"//"; postgres(url)\n')).toEqual({ calls: 1, imports: 0 })
+  })
+
+  it('catches the factory under another name (security review M1)', () => {
+    expect(countSites("import { createDb as mk } from '@gremion/db'\nmk({ url })\n")).toEqual({ calls: 0, imports: 1 })
+    expect(countSites("import * as db from '@gremion/db'\ndb['createDb'](p)\n")).toEqual({ calls: 1, imports: 1 })
+    expect(countSites("import db from '@gremion/db'\n")).toEqual({ calls: 0, imports: 1 })
+    expect(countSites("export { createDb as makeDb } from '@gremion/db'\n")).toEqual({ calls: 0, imports: 1 })
+    expect(countSites("export * from '@gremion/db'\n")).toEqual({ calls: 0, imports: 1 })
+    expect(countSites('const f = createDb.bind(null)\n')).toEqual({ calls: 1, imports: 0 })
+    expect(countSites("const { createDb: mk } = await import('@gremion/db')\n")).toEqual({ calls: 0, imports: 1 })
+    // the types and a non-factory value from @gremion/db are not a site
+    expect(countSites("import { type DbProfile, type Sql } from '@gremion/db'\nimport { committeeSchema } from '@gremion/db'\n")).toEqual({ calls: 0, imports: 0 })
+  })
+
+  it('catches driver subpaths, pg-pool / pg-native, and backtick-quoted requires (security review L1)', () => {
+    expect(countSites("import p from 'postgres/cjs/src/index.js'\n")).toEqual({ calls: 0, imports: 1 })
+    expect(countSites("import Pool from 'pg-pool'\nconst n = require('pg-native')\n")).toEqual({ calls: 0, imports: 2 })
+    expect(countSites('const pg = require(`postgres`)\n')).toEqual({ calls: 0, imports: 1 })
   })
 
   it('refuses malformed allow-list rows: no task, no date, a glob, a traversal, a rule-allowed path, a duplicate', () => {

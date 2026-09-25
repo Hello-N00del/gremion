@@ -3,7 +3,7 @@
     {
       "path": "gremion-ui/src/lib/server/db/pool-registry.ts",
       "calls": 1,
-      "imports": 0,
+      "imports": 1,
       "adoptedBy": "TASK-077",
       "since": "2026-09-25",
       "reason": "gremion-ui's per-tenant pool registry (createDb); replaced by openTenantDb when gremion-ui adopts the package"
