@@ -218,7 +218,21 @@ export function baseRefResolves(repoPath, ref) {
  * (via `gitleaks version`) so it is reported as its own reason rather than
  * folded into "leaks found".
  */
-export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyBaseRefFn = baseRefResolves } = {}) {
+/**
+ * Number of commits in `<base>..HEAD` for one repo, or null when git cannot
+ * say (the arm's status stays with gitleaks; the count is a record).
+ */
+export function countRangeCommits(repoPath, base) {
+  try {
+    const out = execFileSync('git', ['-C', repoPath, 'rev-list', '--count', `${base}..HEAD`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const n = Number(out.trim())
+    return Number.isInteger(n) && n >= 0 ? n : null
+  } catch {
+    return null
+  }
+}
+
+export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyBaseRefFn = baseRefResolves, countCommitsFn = countRangeCommits } = {}) {
   const absRepoPath = resolve(repoPath)
   let binaryPresent = true
   try {
@@ -263,11 +277,18 @@ export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyB
     if (hasFatalLog(output)) {
       return { arm: 'secret-scan', repo: repoLabel, status: 'FAIL', reason: 'gitleaks logged an ERR/FTL line despite its exit code — treated as a failure', output }
     }
+    // TASK-012-FU (LOW): record how many commits the range held. A base
+    // that resolves to HEAD is a legitimate, empty range (defensible for a
+    // merge gate), but it is marked as such rather than a bare PASS.
+    const commitsScanned = countCommitsFn(absRepoPath, base)
+    const note = commitsScanned === 0 ? 'empty range, 0 commits' : commitsScanned === null ? 'could not count the commits in the range' : undefined
     return {
       arm: 'secret-scan',
       repo: repoLabel,
       status: exitCode === 0 ? 'PASS' : 'FAIL',
       reason: exitCode === 0 ? undefined : 'gitleaks found a leak in the diff (see output)',
+      commitsScanned,
+      ...(note ? { note } : {}),
       output,
     }
   }
@@ -647,7 +668,7 @@ export function main(argv = process.argv.slice(2)) {
 
   console.log(`\nci-local guards — ${new Date().toISOString()}\n`)
   for (const arm of arms) {
-    console.log(`  [${arm.status}] ${arm.arm} (${arm.repo})${arm.reason ? ` — ${arm.reason}` : ''}`)
+    console.log(`  [${arm.status}] ${arm.arm} (${arm.repo})${arm.reason ? ` — ${arm.reason}` : ''}${arm.note ? ` [${arm.note}]` : ''}`)
   }
   console.log(`\nguards: overall ${overallExit === 0 ? 'PASS' : 'FAIL'} (${arms.filter((a) => a.status === 'FAIL').length}/${arms.length} arm(s) failed)\n`)
 

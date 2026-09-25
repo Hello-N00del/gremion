@@ -665,3 +665,27 @@ test('runGitleaksArm (whole-tree) lists WHERE each tracked leak is (file, rule, 
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// --- TASK-012-FU LOW: an empty diff range is recorded, never silent ---------
+
+test('FU-L2: runGitleaksArm (diff-scoped) records commitsScanned, and marks base == HEAD as "empty range, 0 commits" instead of a bare PASS', () => {
+  const root = makeSecretRepo()
+  try {
+    const runFn = fakeRun({ gitleaks: { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null } })
+    const empty = runGitleaksArm('kernel', root, 'HEAD', { runFn })
+    assert.equal(empty.status, 'PASS')
+    assert.equal(empty.commitsScanned, 0)
+    assert.equal(empty.note, 'empty range, 0 commits')
+
+    execFileSync('git', ['-C', root, 'tag', 'fu-base'])
+    writeFileSync(join(root, 'more.txt'), 'x\n')
+    execFileSync('git', ['-C', root, 'add', 'more.txt'])
+    execFileSync('git', ['-C', root, 'commit', '-q', '-m', 'more'])
+    const one = runGitleaksArm('kernel', root, 'fu-base', { runFn })
+    assert.equal(one.status, 'PASS')
+    assert.equal(one.commitsScanned, 1)
+    assert.equal(one.note, undefined)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

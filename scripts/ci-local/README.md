@@ -72,7 +72,10 @@ never skips the rest, so the dated result always shows every arm's outcome:
    range (HIGH fix: one `--base` applied to both repos silently no-opped
    whichever repo's default branch it did not match — kernel `main` vs.
    StuRaOS `master`). An `ERR`/`FTL` line in gitleaks' own output FAILs the
-   arm even if the exit code alone would have looked clean.
+   arm even if the exit code alone would have looked clean. A diff-scoped
+   result records `commitsScanned`. A base that resolves to `HEAD` still
+   PASSes, but carries `note: "empty range, 0 commits"`, so a zero-commit
+   scan is visible in the dated JSON.
 2. **known-secrets** — `known-secrets.mjs`'s SHA-256 digest denylist, run
    against **both** repos (the kernel owns the scanner; §5 Q2 below).
    `--known-secrets-denylist <path>` merges an extra JSON `{digest: note}`
