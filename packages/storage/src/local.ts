@@ -140,6 +140,14 @@ export class LocalStorageBackend implements StorageBackend {
     }
   }
 
+  private async isDirectory(abs: string): Promise<boolean> {
+    try {
+      return (await this.fs.lstat(abs)).isDirectory()
+    } catch {
+      return false
+    }
+  }
+
   put(relPath: string, bytes: Uint8Array): Promise<string> {
     let key: string
     let abs: string
@@ -199,10 +207,15 @@ export class LocalStorageBackend implements StorageBackend {
     }
     return this.assertNoSymlinks(abs, key)
       .then(() => this.fs.unlink(abs))
-      .catch((err: NodeJS.ErrnoException) => {
+      .catch(async (err: NodeJS.ErrnoException) => {
         // ENOENT is idempotent, and a directory holds no object (EISDIR):
-        // both are "nothing to delete". Re-throw everything else.
-        if (err?.code !== 'ENOENT' && err?.code !== 'EISDIR' && err?.code !== 'ENOTDIR') throw err
+        // both are "nothing to delete". win32 and macOS answer unlink(dir)
+        // with EPERM instead of EISDIR, so EPERM counts as "no object" only
+        // when lstat confirms a directory; on an object it is a real
+        // permission failure and is re-thrown. Re-throw everything else.
+        if (err?.code === 'ENOENT' || err?.code === 'EISDIR' || err?.code === 'ENOTDIR') return
+        if (err?.code === 'EPERM' && (await this.isDirectory(abs))) return
+        throw err
       })
   }
 

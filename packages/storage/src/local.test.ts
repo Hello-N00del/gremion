@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { stat, readFile, symlink, mkdir, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { LocalStorageBackend } from './local.js'
+import { LocalStorageBackend, nodeFs } from './local.js'
 import { mountedScratchRoot, TENANT_A, TENANT_B } from '../test/support.js'
 
 let root: string
@@ -118,5 +118,32 @@ describe('review round 2 (LocalStorageBackend)', () => {
     const detached = new LocalStorageBackend(TENANT_A, { root, mountinfoPath: mountinfo })
     await writeFile(mountinfo, '22 1 8:1 / / rw - ext4 /dev/sda1 rw\n')
     await expect(detached.list()).rejects.toThrow(/is not a mount point/)
+  })
+})
+
+describe('intake round 1: unlink(dir) is EPERM on win32/macOS, EISDIR on Linux', () => {
+  // Host-independent: the injected fs answers unlink the way win32 and macOS
+  // do, so this runs (and guards) on the Linux gate too.
+  const epermUnlink = (isDir: boolean) => ({
+    ...nodeFs,
+    unlink: async (p: string) => {
+      throw Object.assign(new Error(`EPERM: operation not permitted, unlink '${p}'`), { code: 'EPERM' })
+    },
+    lstat: async (p: string) => {
+      const real = await nodeFs.lstat(p)
+      return { isSymbolicLink: () => real.isSymbolicLink(), isDirectory: () => isDir }
+    },
+  })
+
+  it('delete() on a directory-shaped handle is a no-op when unlink reports EPERM', async () => {
+    await backend.put('news/x.odt', new Uint8Array([1]))
+    const b = new LocalStorageBackend(TENANT_A, { root, mountinfoPath: mountinfo, fs: epermUnlink(true) })
+    await expect(b.delete(`${TENANT_A}/news`)).resolves.toBeUndefined()
+  })
+
+  it('delete() still rejects EPERM on a real object (a permission failure is never swallowed)', async () => {
+    await backend.put('news/x.odt', new Uint8Array([1]))
+    const b = new LocalStorageBackend(TENANT_A, { root, mountinfoPath: mountinfo, fs: epermUnlink(false) })
+    await expect(b.delete(`${TENANT_A}/news/x.odt`)).rejects.toMatchObject({ code: 'EPERM' })
   })
 })

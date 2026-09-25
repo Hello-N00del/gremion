@@ -40,8 +40,9 @@ export interface StorageFs {
   rename(from: string, to: string): Promise<void>
   readFile(path: string): Promise<Uint8Array>
   unlink(path: string): Promise<void>
-  /** lstat — used to refuse symlinks on the way to an object. */
-  lstat(path: string): Promise<{ isSymbolicLink(): boolean }>
+  /** lstat — used to refuse symlinks on the way to an object, and to tell a
+   *  directory apart from an object when unlink answers EPERM. */
+  lstat(path: string): Promise<{ isSymbolicLink(): boolean; isDirectory(): boolean }>
   /** Recursive listing: every entry below `path`, as paths relative to it,
    *  regular files only. Symlinks are neither returned nor descended into. */
   listFiles(path: string): Promise<string[]>
