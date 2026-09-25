@@ -20,7 +20,7 @@ them while a named pilot is running; rule 4 overrides all three.
 |---|---|
 | **Release** | One annotated `dist-vX.Y.Z` tag, deployed through `.github/workflows/deploy.yml` and `infra/host/bin/gremion-deploy`. |
 | **Feature release** | A release that changes what users can see or do, or how they work. Every release that is not a security fix is treated as a feature release. |
-| **Security fix** | A release whose only purpose is to close a security vulnerability. A release that bundles a security fix with feature changes is a feature release; the fix ships on its own instead. |
+| **Security fix** | A release whose only purpose is to close a security vulnerability. How a release that also carries feature changes is treated is an open point (see [Open points](#open-points)). |
 | **Semester break** | The lecture-free period between two semesters at the hosted council's institution. There are two per year. |
 | **Release cycle** | The span from one semester-break release window to the next. |
 | **Named pilot** | A pilot with a hosted council that is named in a written pilot agreement and has a stated end date. |
@@ -40,7 +40,8 @@ Every feature release carries, **before it is announced**:
    the traffic switch to the new colour (FLOW-OPS-010, PRD-SUP-004, PRD-SUP-009);
 2. **updated training material** covering every change the list names.
 
-A release without both artefacts is not announced and not switched to.
+A feature release without both artefacts is not announced, and without its
+change list it is not switched to.
 
 ## Rule 2 — a hosted council may defer one feature release by one cycle (TRD-357)
 
@@ -60,8 +61,7 @@ council in the next semester-break window instead.
 
 While a named pilot is running, **rules 1 and 2 are suspended by agreement
 with the pilot council**, until the pilot's stated end date. Feature releases
-may then ship outside semester breaks and more often than twice a year, so that
-findings from the pilot can be acted on quickly.
+may then ship outside semester breaks and more often than twice a year.
 
 - The suspension exists only through a **dated agreement record** with the
   pilot council. No non-security feature release ships during the pilot without
@@ -87,12 +87,15 @@ BSI IT-Grundschutz OPS.1.1.3 (patch and change management, edition 2023).
 
 ## How a release moves (FLOW-OPS-010)
 
-The cadence decides *whether* a release may ship. Once it may, FLOW-OPS-010
-runs, web only, by the platform operator:
+The cadence decides *whether* a release may ship. Once it may, a release
+follows FLOW-OPS-010, web only, run by the platform operator. This is the
+target flow the release/deploy units implement; the current host tooling (see
+below) does not yet take the short-lived dump or write test records:
 
 1. The feature release is prepared and its DE/EN change list is written.
 2. If the release carries a schema migration, a short-lived database dump is
-   taken first [D R18-4]. It is not a backup regime.
+   taken first (FLOW-OPS-010; decided for the pilot in [D R18-4]). It is not a
+   backup regime.
 3. The idle colour is built and its health is checked per container, with no
    manual override (TRD-179, TRD-189). The check writes marked test records
    into the pilot tenant and removes them afterwards.
@@ -112,7 +115,7 @@ The dump in steps 2 and 4 is distinct from the pre-release restic snapshot that
 
 | Rule | What must exist | Fails when |
 |---|---|---|
-| 1 (TRD-355) | For every release tag outside a named pilot: a dated DE/EN change list and updated training material, both in place before the announcement | either artefact is missing or later than the announcement; a third feature release ships in one year |
+| 1 (TRD-355) | For every feature-release tag outside a named pilot: a dated DE/EN change list and updated training material, both in place before the announcement | either artefact is missing or later than the announcement; a third feature release ships in one year |
 | 2 (TRD-357) | A deferral record per deferral: date, release tag, the cycle it defers to | a second consecutive deferral exists without its own request |
 | 3 (TRD-358) | A dated agreement record with the pilot council covering the pilot period | a non-security feature release ships during the pilot without it |
 | 4 (TRD-359) | The security fix shipped outside the window with no deferral check, and the PRD-DEP-003 notice to affected councils | the fix waited for a window or a deferral, or the notice lagged the fix |
@@ -133,8 +136,14 @@ guessed:
   would need an operator decision.
 - **Where the change list and training material are published**, and where the
   deferral and agreement records are filed, is for the release/deploy units to
-  fix. The bilingual change list and updated training material are marked in
-  the TRD as not yet confirmed by the operator (TRD-355 basis).
+  fix.
+- **Unconfirmed parts.** The bilingual change list and updated training
+  material (TRD-355), the deferral right (TRD-357) and the pilot suspension
+  (TRD-358) are marked in the TRD as not yet confirmed by the operator
+  [D-nc]; only the cadence itself and the security-fix exemption rest on a
+  confirmed decision [D R5-2].
+- **Mixed releases.** Whether a security fix bundled with feature changes may
+  use the rule 4 exemption is not stated in the sources.
 
 ## Related documents
 
@@ -153,7 +162,7 @@ guessed:
 | Rule | Requirement ids | Decision basis |
 |---|---|---|
 | 1 | PRD-PLAT-003, TRD-355 | cadence of two feature releases a year at semester breaks, security fixes any time [D R5-2]; dated bilingual change list and training material [D R18, PRD 15.1 A5], marked not yet confirmed in TRD-355; change fatigue is a stated council concern [E R2-2]. TRD-105 and TRD-186..188 retire into TRD-355, TRD-357, TRD-358, TRD-359. |
-| 2 | PRD-PLAT-003, TRD-357, PRD-DEP-003 | deferral right [D R18, PRD 15.1 A5] |
-| 3 | PRD-PLAT-003, TRD-358 | pilot suspension [D R18, PRD 15.1 A5] |
+| 2 | PRD-PLAT-003, TRD-357, PRD-DEP-003 | deferral right [D R18, PRD 15.1 A5]; not yet confirmed in TRD-357 [D-nc] |
+| 3 | PRD-PLAT-003, TRD-358 | pilot suspension [D R18, PRD 15.1 A5]; not yet confirmed in TRD-358 [D-nc] |
 | 4 | PRD-PLAT-003, PRD-DEP-003, TRD-359 | [D R5-2]; ISO/IEC 27001:2022 Annex A 8.8; BSI IT-Grundschutz OPS.1.1.3 (edition 2023) |
 | Flow | FLOW-OPS-010; PRD-SUP-004, PRD-SUP-009; TRD-179, TRD-189 | one dump before each schema migration, deleted after a successful switch, not a backup regime [D R18-4] |
