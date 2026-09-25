@@ -61,6 +61,16 @@ test('verify.mjs carries no skip mechanism of any kind -- no VERIFY_SKIP env var
   assert.deepEqual(parseArgs(['--skip', 'unit']), { only: null })
 })
 
+test('verify.mjs carries no dirty-tree bypass of any kind -- Q5 has no VERIFY_ALLOW_DIRTY escape hatch', async () => {
+  // House review + verifier finding (HIGH, CONFIRMED): VERIFY_ALLOW_DIRTY=1
+  // silently defeated the sha-integrity guarantee the whole gate is built
+  // on -- reproduced writing a green migration-hash record for a tampered,
+  // then working-tree-restored HEAD. Q5's refusal must be unconditional.
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('./verify.mjs', import.meta.url), 'utf8')
+  assert.doesNotMatch(src, /process\.env\.VERIFY_ALLOW_DIRTY/)
+})
+
 test('--only writes results that runAll can produce for a single suite, and parseArgs supports comma and repeated forms', async () => {
   const { parseArgs } = await import('./verify.mjs')
   assert.deepEqual(parseArgs(['--only', 'unit,integration']), { only: ['unit', 'integration'] })

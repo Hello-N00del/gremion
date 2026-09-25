@@ -135,17 +135,25 @@ async function main() {
   const required = loadRequiredSuites()
   const names = only ?? required
 
+  // Q5, no escape hatch: a record is keyed by HEAD sha (TRD-341) and must
+  // describe the exact tree that was tested, so this refusal is unconditional
+  // for every real suite. An earlier VERIFY_ALLOW_DIRTY=1 env var bypassed it
+  // -- undocumented, untested, and reachable on every real merge decision, not
+  // just local iteration (house review + verifier finding, both HIGH:
+  // reproduced writing a green migration-hash record for a tampered-then-
+  // restored HEAD). Removed rather than flagged in the record, because this
+  // file's own header already promises "NO skip mechanism of any kind" and a
+  // flagged-dirty record is still one more field a merge step must remember
+  // to check.
   const touchesRealSuite = names.some((n) => !isFixtureName(n))
-  if (touchesRealSuite && process.env.VERIFY_ALLOW_DIRTY !== '1') {
-    if (isDirty(REPO_ROOT)) {
-      console.error(
-        '[verify] refusing to run: the tracked tree has uncommitted changes. ' +
-          'A result record is keyed by HEAD sha (TRD-341) and must describe the exact tree that was ' +
-          'tested (Q5) -- commit or stash first.',
-      )
-      process.exitCode = 1
-      return
-    }
+  if (touchesRealSuite && isDirty(REPO_ROOT)) {
+    console.error(
+      '[verify] refusing to run: the tracked tree has uncommitted changes. ' +
+        'A result record is keyed by HEAD sha (TRD-341) and must describe the exact tree that was ' +
+        'tested (Q5) -- commit or stash first.',
+    )
+    process.exitCode = 1
+    return
   }
 
   const startedAt = new Date().toISOString()
