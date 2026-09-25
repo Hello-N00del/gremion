@@ -1,0 +1,10 @@
+{
+  "name": "toolchain-fixture-dep",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TASK-017 seeded-install fixture: a dependency whose postinstall must NOT run while unlisted, and DOES write this marker when it does.",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node -e \"require('fs').writeFileSync(require('path').join(process.env.INIT_CWD || process.cwd(), 'node_modules', '.toolchain-fixture-marker'), String(Date.now()))\""
+  }
+}

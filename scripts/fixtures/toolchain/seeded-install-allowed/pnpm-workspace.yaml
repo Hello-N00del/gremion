@@ -1,0 +1,5 @@
+# TASK-017 fixture: strictDepBuilds on, WITH toolchain-fixture-dep explicitly
+# allow-listed. The install must succeed and its postinstall must run.
+strictDepBuilds: true
+onlyBuiltDependencies:
+  - toolchain-fixture-dep

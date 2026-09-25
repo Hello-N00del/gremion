@@ -1,7 +1,10 @@
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /repo
 
-RUN corepack enable pnpm
+# node:26-alpine no longer bundles corepack (dropped from core in Node 25+);
+# install it from npm first so `corepack enable pnpm` has a binary to enable.
+# Mirrors gremion-ui/Dockerfile — see its comment for the full rationale.
+RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -35,7 +38,7 @@ WORKDIR /repo
 RUN pnpm --filter gremion-public deploy --prod --legacy /deploy
 
 # ---- runtime ----
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 

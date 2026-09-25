@@ -12,7 +12,7 @@
 # It is NOT used by CI: ci.yml installs bats and its dependencies on
 # ubuntu-latest directly and calls `make test-unit`. Pinning both the base image
 # tag and the bats version keeps the local runner and CI on the same bats.
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 
 # shellcheck        -- `make lint-sh` inside the container
 # openssl           -- key/cert fixtures in the secrets and mail suites

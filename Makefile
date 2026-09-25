@@ -5,7 +5,7 @@
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
-        lint-unshipped-migrations fresh-init-proof \
+        lint-unshipped-migrations lint-toolchain fresh-init-proof \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -339,6 +339,32 @@ lint-extraction-source:
 	 fi; \
 	 echo "[extraction-source] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-extraction-source.mjs --modules-root test/fixtures/extraction-source/agree
+
+# TASK-017 (TRD-400/401/402): Node major, the pnpm build-script allow-list,
+# first-party lifecycle scripts and strict TS, all in one guard. NOT wired
+# into the `lint` aggregate below — TASK-045 (scripts/verify/**) owns that
+# wiring per post-condition "Guard callable by verify; its suite runs first".
+# The suite's own test count is asserted the same way lint-extraction-source
+# does: `node --test` exits 0 on a file that collects zero tests, so the
+# collector's own TAP plan is checked against its declared `test(` count.
+lint-toolchain:
+	@echo "Checking the pinned toolchain (Node major, build allow-list, TS strictness)..."
+	@declared=$$(grep -c '^test(' scripts/check-toolchain.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-toolchain.test.mjs 2>&1); \
+	 status=$$?; \
+	 printf '%s\n' "$$out" >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ]; then \
+	   echo "lint-toolchain: scripts/check-toolchain.test.mjs declares no top-level test() -- the suite collects nothing and would still exit 0." >&2; \
+	   exit 1; \
+	 fi; \
+	 if [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-toolchain: the suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[toolchain] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-toolchain.mjs
 
 lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations
 	@echo "All linters passed."

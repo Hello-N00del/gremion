@@ -55,13 +55,13 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
-          # 22, NOT the 26 in .node-version, and that is deliberate rather than
-          # drift: gremion-public/Dockerfile builds and runs on node:22-alpine,
-          # and dependabot.yml pins that base image at the current major. CI
-          # should exercise the runtime this app actually ships on. The repo's
-          # floor is `engines.node: >=22` in the root package.json; .node-version
-          # / .nvmrc name 26 as the version to develop against.
-          node-version: 22
+          # TASK-017: gremion-public/Dockerfile now builds and runs on
+          # node:26-alpine (was 22), and the root package.json engines.node
+          # floor moved to ">=26 <27" with engineStrict on — so 26 here is
+          # what actually ships, not merely what .node-version names to
+          # develop against. dependabot.yml's node-major ignore rule for
+          # /gremion-public moved with it (pinned major 22 -> 26).
+          node-version: 26
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
