@@ -24,8 +24,9 @@ PRD-DEP-003 and TRD-106 name five systems. This table shows where each one
 actually lives and what version is pinned, measured in this repository on
 2026-09-25. A notice has to name the version a council actually runs, so the
 **source of truth for the version is the release being shipped** (its
-`docker-compose.pins.yml`, written by the release workflow), not this
-table.
+`docker-compose.pins.yml`, which `deploy.yml` requires at the tag's tree
+root), not this table. The release workflow that is to write that file is
+specified but not yet in this repository; see `docs/deployment-architecture.md`.
 
 | System | Role in Gremion | Where it is defined | Version recorded in this repository (2026-09-25) |
 |---|---|---|---|
@@ -204,8 +205,13 @@ The sources do not settle these, so they are left open rather than guessed:
 - **"Major release" under 0.x.** While Gremion is below 1.0, the X in
   `dist-vX.Y.Z` does not move. Whether a 0.Y bump counts as major for TRD-096
   needs an operator decision.
-- **Unconfirmed basis.** TRD-106 and TRD-096 are marked `[D-nc]` (decided, not
-  yet confirmed by the operator).
+- **Decision status.** The notice duty itself is confirmed: it is PRD-DEP-003,
+  confirmed by the operator [D R18-§15.1 F4], and the gremion.de channel is
+  PRD-SUP-004 [D R18-§15.1 F5]. TRD-106 restates that duty and still carries a
+  `[D-nc]` marker (a proposal the operator has not confirmed); the concrete
+  steps in §3–§6 are this procedure's own. TRD-096, and TRD-095 which it
+  extends, are `[D-nc]` proposals, so §7 stays provisional until the operator
+  confirms them.
 
 ## Related documents
 
