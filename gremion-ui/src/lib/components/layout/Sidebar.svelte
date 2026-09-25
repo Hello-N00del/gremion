@@ -4,6 +4,7 @@
   import { resolveBrand, type Brand } from '$lib/brand'
   import { roleLabels } from '$lib/auth/labels'
   import { resolveSourceUrl, SOURCE_OFFER_LABEL } from '$lib/source-offer'
+  import { navHrefs, resolveActiveHref } from './nav-active'
 
   let {
     nav = [],
@@ -33,9 +34,11 @@
   // AppShell; canonical defaults back-fill so the brand never renders blank.
   let brand = $derived(resolveBrand(brandProp))
 
+  // One current link: the longest matching nav href (nav-active.ts).
+  let currentHref = $derived(resolveActiveHref(navHrefs(nav), activeHref))
+
   function isActive(href: string): boolean {
-    if (href === '/') return activeHref === '/'
-    return activeHref === href || activeHref.startsWith(href + '/')
+    return href === currentHref
   }
 
   function badgeCount(item: Extract<NavItem, { kind: 'item' }>): number {
