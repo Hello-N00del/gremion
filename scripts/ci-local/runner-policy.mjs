@@ -18,7 +18,7 @@
 // waiver, still fails the guard — the waiver only mutes the ONE named file,
 // and only until its expiry.
 
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Inline forms only: a scalar (`runs-on: self-hosted`), an inline list
@@ -70,14 +70,42 @@ export function detectSelfHostedRunner(text) {
   return false
 }
 
-/** Every `.github/workflows/*.yml` (and `.yaml`) file, repo-relative POSIX paths. */
+/**
+ * True if `repoRoot` exists on disk as a directory. MEDIUM fix:
+ * `listWorkflowFiles` used to catch EVERY `readdirSync` error (including
+ * `repoRoot` itself not existing) and return `[]`, which `evaluateRepo` then
+ * read as "no workflows" — a clean, vacuous PASS. Proven: `node
+ * runner-policy.mjs --repo does-not-exist` printed "OK across 1 repo(s) - 0
+ * unwaived findings" and exited 0. A missing (or non-directory) repo root
+ * must be reported as its own failure instead, never silently folded into
+ * "nothing to check here".
+ */
+export function repoRootExists(repoRoot) {
+  try {
+    return statSync(repoRoot).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Every `.github/workflows/*.yml` (and `.yaml`) file, repo-relative POSIX
+ * paths. Only ENOENT on the `.github/workflows` directory itself is treated
+ * as "no workflows" (a real, valid state for a repo root that legitimately
+ * has none) — every other `readdirSync` error (permission denied, a file
+ * where a directory was expected, …) propagates, since it means something
+ * other than "no workflows" is wrong and must not be swallowed into a PASS.
+ * Callers that need to tell "repo root missing" apart from "repo root valid,
+ * no workflows dir" call `repoRootExists` first (see `evaluateRepo`).
+ */
 export function listWorkflowFiles(repoRoot) {
   const dir = join(repoRoot, '.github', 'workflows')
   let entries
   try {
     entries = readdirSync(dir)
-  } catch {
-    return []
+  } catch (err) {
+    if (err.code === 'ENOENT') return []
+    throw err
   }
   return entries
     .filter((f) => /\.ya?ml$/i.test(f))
@@ -169,6 +197,26 @@ export function waiverProblem(w) {
  * it is evaluating should not be evaluating waivers at all.
  */
 export function evaluateRepo(repoLabel, repoRoot, waivers, today = todayIso()) {
+  // MEDIUM fix: a repo root that does not exist (or is not a directory) is
+  // its own failure, reported the same shape as any other unwaived finding —
+  // never silently read as "no workflows found, PASS".
+  if (!repoRootExists(repoRoot)) {
+    return [
+      {
+        path: '(repo root)',
+        findings: [
+          {
+            rule: 'invalid-repo',
+            id: 'invalid-repo',
+            detail: `repo root '${repoRoot}' does not exist (or is not a directory) — refusing to report a vacuous "no workflows" pass`,
+          },
+        ],
+        waiver: undefined,
+        waived: false,
+        waivedFindings: [],
+      },
+    ]
+  }
   const files = listWorkflowFiles(repoRoot)
   const perFile = []
   for (const relPath of files) {

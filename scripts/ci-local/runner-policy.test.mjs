@@ -12,6 +12,7 @@ import {
   waiverProblem,
   evaluateRepo,
   loadWaivers,
+  repoRootExists,
   main,
 } from './runner-policy.mjs'
 
@@ -213,6 +214,38 @@ test('the committed waivers.json covers exactly the findings on the real kernel 
   assert.equal(entries.length, 1)
   assert.equal(entries[0].waived, true, JSON.stringify(entries[0].findings))
   assert.deepEqual(entries[0].waivedFindings.map((f) => f.id).sort(), [...waivers[0].covers].sort())
+})
+
+test('MEDIUM fix: repoRootExists is false for a nonexistent path and for a path that is a plain file, true for a real directory', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-repo-exists-'))
+  try {
+    assert.equal(repoRootExists(dir), true)
+    assert.equal(repoRootExists(join(dir, 'does-not-exist')), false)
+    const filePath = join(dir, 'a-file.txt')
+    writeFileSync(filePath, 'x')
+    assert.equal(repoRootExists(filePath), false, 'a plain file is not a valid repo root')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('MEDIUM fix: evaluateRepo reports a nonexistent repo root as its own failure, never a vacuous "no workflows" PASS', () => {
+  const missing = join(mkdtempSync(join(tmpdir(), 'ci-local-repo-missing-')), 'does-not-exist')
+  const result = evaluateRepo('kernel', missing, [], '2026-09-25')
+  assert.equal(result.length, 1)
+  assert.equal(result[0].waived, false)
+  assert.equal(result[0].findings[0].rule, 'invalid-repo')
+})
+
+test('MEDIUM fix: main(), given --repo pointing at a nonexistent path, exits non-zero (regression: it used to print "OK" and exit 0)', () => {
+  const before = process.exitCode
+  process.exitCode = undefined
+  try {
+    main(['--repo', join(mkdtempSync(join(tmpdir(), 'ci-local-repo-missing-')), 'does-not-exist')])
+    assert.equal(process.exitCode, 1)
+  } finally {
+    process.exitCode = before
+  }
 })
 
 test('evaluateRepo: a clean tree reports no entries at all', () => {
