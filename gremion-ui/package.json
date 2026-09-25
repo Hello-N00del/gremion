@@ -22,6 +22,9 @@
     "provision": "tsx scripts/tenant-provision.mjs"
   },
   "devDependencies": {
+    "@auth/sveltekit": "^1.11.3",
+    "@gremion/db": "workspace:*",
+    "@gremion/ports": "workspace:*",
     "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-node": "6.0.0-next.13",
     "@sveltejs/kit": "3.0.0-next.28",
@@ -43,12 +46,9 @@
   },
   "dependencies": {
     "@auth/core": "^0.41.3",
-    "@auth/sveltekit": "^1.11.3",
     "@fontsource/archivo-narrow": "^5.3.0",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
-    "@gremion/db": "workspace:*",
-    "@gremion/ports": "workspace:*",
     "clsx": "^2.1.1",
     "isomorphic-dompurify": "^3.19.0",
     "jsdom": "^29.1.1",

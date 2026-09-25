@@ -13,7 +13,6 @@
     "check": "node ../gremion-ui/scripts/check-sveltekit-major.mjs && node ../gremion-ui/scripts/check-removed-kit-apis.mjs && node ../gremion-ui/scripts/check-kit-plugin-config.mjs && node --test scripts/build-stamp.test.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
-    "@gremion/db": "workspace:*",
     "@sveltejs/adapter-node": "6.0.0-next.13",
     "@sveltejs/kit": "3.0.0-next.28",
     "svelte": "^5.57.1",
@@ -21,15 +20,16 @@
     "postgres": "^3.4.4"
   },
   "devDependencies": {
+    "@gremion/db": "workspace:*",
+    "@playwright/test": "^1.63.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/dompurify": "^3.0.5",
     "@types/node": "^26.6.0",
+    "svelte-check": "^4.7.6",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
     "vite": "^8.3.0",
-    "vitest": "^4.1.11",
-    "svelte-check": "^4.7.6",
-    "@playwright/test": "^1.63.0"
+    "vitest": "^4.1.11"
   }
 }

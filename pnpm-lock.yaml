@@ -22,9 +22,6 @@ importers:
 
   gremion-public:
     dependencies:
-      '@gremion/db':
-        specifier: workspace:*
-        version: link:../packages/db
       '@sveltejs/adapter-node':
         specifier: 6.0.0-next.13
         version: 6.0.0-next.13(@sveltejs/kit@3.0.0-next.28(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.57.1)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.57.1)(typescript@6.0.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))
@@ -41,6 +38,9 @@ importers:
         specifier: ^5.57.1
         version: 5.57.1
     devDependencies:
+      '@gremion/db':
+        specifier: workspace:*
+        version: link:../packages/db
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
@@ -77,9 +77,6 @@ importers:
       '@auth/core':
         specifier: ^0.41.3
         version: 0.41.3(nodemailer@9.1.1)
-      '@auth/sveltekit':
-        specifier: ^1.11.3
-        version: 1.11.3(@sveltejs/kit@3.0.0-next.28(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.57.1)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.57.1)(typescript@6.0.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(nodemailer@9.1.1)(svelte@5.57.1)
       '@fontsource/archivo-narrow':
         specifier: ^5.3.0
         version: 5.3.0
@@ -89,12 +86,6 @@ importers:
       '@fontsource/jetbrains-mono':
         specifier: ^5.3.0
         version: 5.3.0
-      '@gremion/db':
-        specifier: workspace:*
-        version: link:../packages/db
-      '@gremion/ports':
-        specifier: workspace:*
-        version: link:../packages/ports
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -126,6 +117,15 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
+      '@auth/sveltekit':
+        specifier: ^1.11.3
+        version: 1.11.3(@sveltejs/kit@3.0.0-next.28(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.57.1)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.57.1)(typescript@6.0.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(nodemailer@9.1.1)(svelte@5.57.1)
+      '@gremion/db':
+        specifier: workspace:*
+        version: link:../packages/db
+      '@gremion/ports':
+        specifier: workspace:*
+        version: link:../packages/ports
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
