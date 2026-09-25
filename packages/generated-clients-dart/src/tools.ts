@@ -32,6 +32,7 @@ export const DART_IMAGE = 'dart:3.11.5@sha256:03b628160f6906098352a6d9c97a147afa
 /** Docker-side pub cache, persistent across runs, gitignored. */
 export const DOCKER_PUB_CACHE = join(SCRATCH_ROOT, 'pub-cache')
 
+const DART_PREFIX = ['--suppress-analytics']
 const DOCKER_ENGINE_FAILURE = new Set([125, 126, 127])
 const PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy']
 
@@ -65,7 +66,7 @@ function probe(cmd: string, args: string[], env: NodeJS.ProcessEnv): { ok: boole
   return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() }
 }
 
-function dockerDaemonAvailable(env: NodeJS.ProcessEnv): boolean {
+export function dockerDaemonAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
   return probe('docker', ['version', '--format', '{{.Server.Version}}'], env).ok
 }
 
@@ -147,20 +148,30 @@ function dockerFallback(image: string, env: NodeJS.ProcessEnv, tried: string[], 
   }
 }
 
-/** openapi-generator at GENERATOR_VERSION: PATH (`openapi-generator-cli`,
- *  then `openapi-generator`), else GENERATOR_IMAGE. */
-export function resolveGenerator(opts: ResolveOpts = {}): Tool {
+/** openapi-generator at GENERATOR_VERSION on PATH (`openapi-generator-cli`,
+ *  then `openapi-generator`), or null. `tried` collects why not. */
+export function localGenerator(opts: ResolveOpts = {}, tried: string[] = []): Tool | null {
   const env = opts.env ?? process.env
-  const tried: string[] = []
+  let seen = false
   for (const cand of ['openapi-generator-cli', 'openapi-generator']) {
     const p = probe(cand, ['version'], env)
     if (!p.ok) continue
+    seen = true
     const v = p.out.split('\n').pop()?.trim() ?? ''
     if (v === GENERATOR_VERSION) return pathTool(cand, `${cand} (PATH, version ${v})`, env)
     tried.push(`PATH ${cand} reports version "${v}", pinned is ${GENERATOR_VERSION}`)
     opts.log?.(`ignoring ${cand} on PATH: version "${v}" is not the pinned ${GENERATOR_VERSION}`)
   }
-  if (tried.length === 0) tried.push('no openapi-generator-cli / openapi-generator on PATH')
+  if (!seen) tried.push('no openapi-generator-cli / openapi-generator on PATH')
+  return null
+}
+
+/** openapi-generator at GENERATOR_VERSION: PATH, else GENERATOR_IMAGE. */
+export function resolveGenerator(opts: ResolveOpts = {}): Tool {
+  const env = opts.env ?? process.env
+  const tried: string[] = []
+  const local = localGenerator(opts, tried)
+  if (local) return local
   dockerFallback(GENERATOR_IMAGE, env, tried, `openapi-generator ${GENERATOR_VERSION}`)
   return dockerTool(GENERATOR_IMAGE, env, [], () => [])
 }
@@ -171,29 +182,37 @@ function dartVersionOf(bin: string, env: NodeJS.ProcessEnv): string | null {
   return /Dart SDK version: (\S+)/.exec(p.out)?.[1] ?? ''
 }
 
-/** Dart SDK at DART_SDK_VERSION: $DART_BIN, else PATH `dart`, else
- *  DART_IMAGE (with a persistent pub cache under .gen-work/). */
-export function resolveDart(opts: ResolveOpts = {}): Tool {
+/** Dart SDK at DART_SDK_VERSION from $DART_BIN or PATH, or null. A set but
+ *  unusable $DART_BIN throws: an explicit choice never falls through. */
+export function localDart(opts: ResolveOpts = {}, tried: string[] = []): Tool | null {
   const env = opts.env ?? process.env
-  const prefix = ['--suppress-analytics']
   const explicit = env.DART_BIN
   if (explicit) {
     const v = existsSync(explicit) ? dartVersionOf(explicit, env) : null
-    if (v === DART_SDK_VERSION) return pathTool(explicit, `${explicit} ($DART_BIN, SDK ${v})`, env, prefix)
+    if (v === DART_SDK_VERSION) return pathTool(explicit, `${explicit} ($DART_BIN, SDK ${v})`, env, DART_PREFIX)
     throw failClosed(`Dart SDK ${DART_SDK_VERSION}`, [
       v === null ? `$DART_BIN (${explicit}) does not exist or does not run` : `$DART_BIN (${explicit}) is SDK "${v}", pinned is ${DART_SDK_VERSION}`,
     ])
   }
-  const tried: string[] = []
   const v = dartVersionOf('dart', env)
-  if (v === DART_SDK_VERSION) return pathTool('dart', `dart (PATH, SDK ${v})`, env, prefix)
-  if (v === null) tried.push('no dart on PATH')
+  if (v === DART_SDK_VERSION) return pathTool('dart', `dart (PATH, SDK ${v})`, env, DART_PREFIX)
+  if (v === null) tried.push('no $DART_BIN, no dart on PATH')
   else {
     tried.push(`PATH dart is SDK "${v}", pinned is ${DART_SDK_VERSION}`)
     opts.log?.(`ignoring dart on PATH: SDK "${v}" is not the pinned ${DART_SDK_VERSION}`)
   }
+  return null
+}
+
+/** Dart SDK at DART_SDK_VERSION: $DART_BIN, else PATH `dart`, else
+ *  DART_IMAGE (with a persistent pub cache under .gen-work/). */
+export function resolveDart(opts: ResolveOpts = {}): Tool {
+  const env = opts.env ?? process.env
+  const tried: string[] = []
+  const local = localDart(opts, tried)
+  if (local) return local
   dockerFallback(DART_IMAGE, env, tried, `Dart SDK ${DART_SDK_VERSION}`)
-  return dockerTool(DART_IMAGE, env, ['dart', ...prefix], () => {
+  return dockerTool(DART_IMAGE, env, ['dart', ...DART_PREFIX], () => {
     mkdirSync(DOCKER_PUB_CACHE, { recursive: true }) // else docker creates it root-owned
     return ['-v', `${DOCKER_PUB_CACHE}:/pub-cache`, '-e', 'PUB_CACHE=/pub-cache']
   })
