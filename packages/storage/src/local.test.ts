@@ -1,3 +1,4 @@
+// @vitest-environment node
 // LocalStorageBackend unit tests — moved from gremion-ui/src/lib/server/storage
 // (TASK-117 §6.8) with their three behaviours kept: path-traversal refusal,
 // absolute-path/drive-letter refusal, ENOENT-idempotent delete. Roots now live

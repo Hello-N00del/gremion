@@ -95,6 +95,9 @@ importers:
       '@gremion/ports':
         specifier: workspace:*
         version: link:../packages/ports
+      '@gremion/storage':
+        specifier: workspace:*
+        version: link:../packages/storage
       clsx:
         specifier: ^2.1.1
         version: 2.1.1

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // TASK-117 TDD 3 — the local backend refuses an unmounted root (spec-b §1.3).
 // Fixture mount tables stand in for /proc/self/mountinfo; the live proof
 // (paired `docker run`, with and without a volume) is in scripts/mount-proof.mjs.

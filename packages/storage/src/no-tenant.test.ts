@@ -1,3 +1,4 @@
+// @vitest-environment node
 // TASK-117 TDD 2 — a write with no tenant throws SYNCHRONOUSLY, before any I/O.
 // The local backend's filesystem is an injected spy: every refused call below
 // must leave its call log empty. (spec-b S2; TRD-067.)

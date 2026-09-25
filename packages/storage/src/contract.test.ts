@@ -1,3 +1,4 @@
+// @vitest-environment node
 // TASK-117 TDD 4 (+7, Q6) — the backend-selectability contract (TRD-066).
 //
 // ONE suite, run against every backend in STORAGE_BACKENDS. The ONLY thing

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // TASK-117 TDD 2b + 6 — tenant-id allowlist and tenant-prefixed key shape.
 import { describe, it, expect } from 'vitest'
 import { assertTenantId, assertKeyInTenant, assertHandleInTenant, composeKey, LEGACY_DEFAULT_TENANT_ID } from './tenant.js'

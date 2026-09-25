@@ -1,3 +1,4 @@
+// @vitest-environment node
 // TASK-117 TDD 1 — cross-tenant isolation through the seam (TRD-065/067).
 // A handle tenant A's backend produced must be refused by tenant B's backend
 // on read AND delete, and A's bytes must survive the attempt.

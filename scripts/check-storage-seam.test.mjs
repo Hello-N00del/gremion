@@ -132,6 +132,7 @@ test('RED — s2: an ambient tenant read under a storage/ directory fails', () =
   seed(tree, 'gremion-ui/src/lib/server/storage/index.ts', "import { currentTenantId } from '../tenant/context'\nconst t = currentTenantId()\n")
   seed(tree, `${SEAM_DIR}/src/index.ts`, 'const t = requireTenant().id\n')
   seed(tree, 'gremion-ui/src/lib/server/other.ts', 'const t = currentTenantId()\n')
+  seed(tree, 'gremion-ui/src/lib/server/storage/prose.ts', '// callers pass requireTenant().id\n * currentTenantId() is banned here\nexport const x = 1\n')
   try {
     const r = scan({ root: tree, allowlist: [] })
     assert.deepEqual(guards(r).sort(), [

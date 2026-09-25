@@ -143,9 +143,13 @@ function importedWriteNames(text) {
   return names
 }
 
+/** Whole-line comments (`//`, `/*`, ` * `) are blanked so prose that names a
+ *  guarded call is not a finding; code cannot hide on such a line. */
+const COMMENT_LINE = /^\s*(?:\/\/|\/\*|\*)/
+
 function scanFile(rel, text) {
   const findings = []
-  const lines = text.split('\n')
+  const lines = text.split('\n').map((l) => (COMMENT_LINE.test(l) ? '' : l))
   const add = (guard, i, why) => findings.push({ guard, file: rel, line: i + 1, text: lines[i].trim(), why })
 
   // s1
