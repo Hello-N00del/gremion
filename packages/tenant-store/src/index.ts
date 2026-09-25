@@ -1,1 +1,15 @@
-export {}
+// @gremion/tenant-store — the only way into a tenant database (TRD-426), and
+// the one migration runner for it (DL-001). See README.md.
+export { ADVISORY_LOCK_CLASS_ID, ADVISORY_LOCKS, assertDistinctLockKeys } from './advisory-locks.js'
+export type { AdvisoryLockKey } from './advisory-locks.js'
+export { assertTargetMatches, envResolveTarget, isUuidV7, moduleUrlVariable, tenantModuleDbName } from './names.js'
+export type { ResolveTarget, TenantTarget } from './names.js'
+export { createTenantStore, openTenantDb } from './store.js'
+export type { TenantStore, TenantStoreOptions } from './store.js'
+export { loadManifest, MigrationManifestError, readVerifiedMigrations } from './manifest.js'
+export type { ManifestProblem, ManifestProblemCode, VerifiedMigration } from './manifest.js'
+export { MigrationSqlError, splitStatements, stripOuterTransaction } from './strip-outer-transaction.js'
+export { assertNotPooler, MigrationRunnerError, runMigrations } from './runner.js'
+export type { PreApplyContext, RunMigrationsHooks, RunMigrationsOptions, RunMigrationsResult } from './runner.js'
+export { checkSchemaCurrent, schemaGate } from './schema-gate.js'
+export type { GateResult, SchemaGate, SchemaGateOptions, SchemaState, SchemaStatus } from './schema-gate.js'
