@@ -45,6 +45,11 @@
         if (cb === 'rg') h.classList.add('cb-rg');
         else if (cb === 'by') h.classList.add('cb-by');
         h.lang = l;
+        // TASK-208: the per-device navigation choice (nav-constants.ts
+        // NAV_STORAGE_KEY), read only, so the first paint has its final width.
+        var nav = localStorage.getItem('gremion.nav');
+        if (nav === 'rail') h.classList.add('nav-rail');
+        else if (nav === 'expanded') h.classList.add('nav-expanded');
       } catch (e) {}
     </script>
     %sveltekit.head%
