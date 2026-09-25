@@ -72,6 +72,11 @@ async function importFromGremionUi(specifier: string) {
 
 export default defineConfig(async () => {
   const { sveltekit } = await importFromGremionUi('@sveltejs/kit/vite')
+  // TASK-032 (kit 3): the kit config is no longer auto-discovered, so a bare
+  // sveltekit() runs without the `$lib` alias ("`$lib` has been removed").
+  // Pass gremion-ui's own createKitConfig(), exactly as its vite.config.ts does;
+  // imported by absolute path so its own imports resolve from gremion-ui/.
+  const { createKitConfig } = await import(pathToFileURL(path.join(gremionUiDir, 'kit.config.js')).href)
   // Two of the guards under test/f1-defect/guards/ are Svelte COMPONENT
   // render tests (@testing-library/svelte): svelteTesting() resolves
   // Svelte's browser build + DOM cleanup, and the environment must be
@@ -80,7 +85,7 @@ export default defineConfig(async () => {
 
   return {
     root: gremionUiDir,
-    plugins: [sveltekit(), svelteTesting()],
+    plugins: [sveltekit(createKitConfig()), svelteTesting()],
     resolve: {
       alias: {
         '@testing-library/svelte': resolveFromGremionUi('@testing-library/svelte'),
