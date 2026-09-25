@@ -307,3 +307,41 @@ test('guard 2: dynamic/tls.yml and every Cloudflare Origin certificate reference
   assert.equal(existsSync(path.join(REPO_ROOT, 'docker/traefik/dynamic/tls.yml')), false, 'docker/traefik/dynamic/tls.yml exists')
   assert.doesNotMatch(staticText(), /tls\.yml|cf-origin|\/certs\//)
 })
+
+// ── 3. the service ─────────────────────────────────────────────────────────
+
+test('guard 3: exactly one mount targets /etc/traefik/dynamic, read-only, from ${GREMION_ROOT}/etc/edge', () => {
+  const mounts = (traefik().volumes ?? []).filter((v) => v.target === '/etc/traefik/dynamic')
+  assert.equal(mounts.length, 1, `${mounts.length} mounts target /etc/traefik/dynamic`)
+  assert.equal(mounts[0].type, 'bind')
+  assert.equal(mounts[0].read_only, true)
+  assert.equal(mounts[0].source, `${fixtureEnv().GREMION_ROOT}/etc/edge`)
+})
+
+test('guard 3: ACME state lives only in the external ${STACK}_traefik_acme volume, mounted at /letsencrypt', () => {
+  const svc = traefik()
+  const acme = (svc.volumes ?? []).filter((v) => v.target === '/letsencrypt')
+  assert.equal(acme.length, 1)
+  assert.equal(acme[0].type, 'volume')
+  assert.equal(acme[0].source, 'traefik-acme')
+  assert.deepEqual(state().volumes?.['traefik-acme'], { name: 'guardstack_traefik_acme', external: true })
+  const cf = (svc.volumes ?? []).filter((v) => /cf-origin/.test(String(v.source)) || String(v.target).startsWith('/certs'))
+  assert.deepEqual(cf, [], 'a Cloudflare Origin certificate is still mounted')
+})
+
+test('guard 3: the healthcheck probes the ping entrypoint (TRD-178)', () => {
+  const hc = traefik().healthcheck
+  assert.ok(hc && !hc.disable, 'traefik has no healthcheck')
+  assert.match([].concat(hc.test).join(' '), /http:\/\/127\.0\.0\.1:8082\/ping/)
+})
+
+test('guard 3: Traefik runs from the rendered /tmp copy of the read-only committed file, on the pinned image', () => {
+  const svc = traefik()
+  assert.equal(svc.image, 'traefik:v3.7.1')
+  const cmd = commandText(svc)
+  assert.match(cmd, /\/etc\/traefik\/traefik\.yml > \/tmp\/traefik\.yml/)
+  assert.match(cmd, /exec \/entrypoint\.sh traefik --configFile=\/tmp\/traefik\.yml/)
+  const stat = (svc.volumes ?? []).filter((v) => v.target === '/etc/traefik/traefik.yml')
+  assert.equal(stat.length, 1)
+  assert.equal(stat[0].read_only, true)
+})

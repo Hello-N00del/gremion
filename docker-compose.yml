@@ -22,6 +22,11 @@
 # is declared in infra/host/templates/env/state.env.tmpl and in .env.example
 # (test/host/edge-env.bats).
 x-required-env:
+  stack: "${STACK:?STACK required}"
+  gremion-root: "${GREMION_ROOT:?GREMION_ROOT required}"
+  acme-ca-server: "${ACME_CA_SERVER:?ACME_CA_SERVER required}"
+  edge-v4-subnet: "${EDGE_V4_SUBNET:?EDGE_V4_SUBNET required}"
+  edge-v6-subnet: "${EDGE_V6_SUBNET:?EDGE_V6_SUBNET required}"
   edge-bind-ip: "${EDGE_BIND_IP:?EDGE_BIND_IP required}"
   edge-bind-ip6: "${EDGE_BIND_IP6:?EDGE_BIND_IP6 required}"
   edge-http-port: "${EDGE_HTTP_PORT:?EDGE_HTTP_PORT required}"
@@ -418,8 +423,61 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    environment:
+      # Traefik cannot read these itself: with --configFile it ignores CLI
+      # flags and TRAEFIK_* variables, and the static file performs no ${}
+      # expansion (measured, scripts/verify-traefik-acme-wiring.sh). The
+      # command below substitutes them into a rendered COPY at start-up.
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      # Whether this host issues its own certificates, and so whether
+      # ACME_EMAIL is required. Dash, not colon-dash: an explicitly EMPTY value
+      # means "TLS terminates in front of Traefik", the supported staging mode.
+      TRAEFIK_CERT_RESOLVER: ${TRAEFIK_CERT_RESOLVER-le-http}
+      ACME_CA_SERVER: ${ACME_CA_SERVER}
+      EDGE_V4_SUBNET: ${EDGE_V4_SUBNET}
+      EDGE_V6_SUBNET: ${EDGE_V6_SUBNET}
+    # Render-at-start (spec B "Edge" §2): a plain `sed` of the four markers
+    # into /tmp, then the image's OWN entrypoint, so Traefik runs exactly as it
+    # did before. `$$` escapes compose interpolation so the CONTAINER's shell
+    # expands these, against the environment block above. Every refusal names
+    # its reason and stops the container before Traefik starts:
+    #   - a resolver with a blank contact registers an ACME account that can
+    #     never be recovered, so ACME_EMAIL is required while
+    #     TRAEFIK_CERT_RESOLVER is non-empty (and only then);
+    #   - an empty CA or subnet, or a value carrying a sed metacharacter
+    #     (| & or backslash), would render a different file than the one
+    #     reviewed;
+    #   - a marker that survives the render means a sed expression is missing.
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --configFile=/etc/traefik/traefik.yml
+      - >-
+        set -eu;
+        if [ -n "$${TRAEFIK_CERT_RESOLVER}" ] && [ -z "$${ACME_EMAIL}" ]; then
+        echo "FATAL: TRAEFIK_CERT_RESOLVER=$${TRAEFIK_CERT_RESOLVER} means this host issues its own certificates, so ACME_EMAIL is required." >&2;
+        exit 1; fi;
+        for v in "$${ACME_CA_SERVER}" "$${EDGE_V4_SUBNET}" "$${EDGE_V6_SUBNET}"; do
+        [ -n "$$v" ] || { echo "FATAL: ACME_CA_SERVER, EDGE_V4_SUBNET and EDGE_V6_SUBNET are required." >&2; exit 1; }; done;
+        case "$${ACME_EMAIL}$${ACME_CA_SERVER}$${EDGE_V4_SUBNET}$${EDGE_V6_SUBNET}" in
+        *'|'*|*'&'*|*'\'*) echo "FATAL: an edge value carries a sed metacharacter (| & or backslash)." >&2; exit 1;; esac;
+        sed -e "s|@ACME_EMAIL@|$${ACME_EMAIL:-acme-unused@invalid}|g"
+        -e "s|@ACME_CA_SERVER@|$${ACME_CA_SERVER}|g"
+        -e "s|@EDGE_V4_SUBNET@|$${EDGE_V4_SUBNET}|g"
+        -e "s|@EDGE_V6_SUBNET@|$${EDGE_V6_SUBNET}|g"
+        /etc/traefik/traefik.yml > /tmp/traefik.yml;
+        if grep -q '@[A-Z][A-Z0-9_]*@' /tmp/traefik.yml; then
+        echo "FATAL: a @MARKER@ survived the render of /tmp/traefik.yml." >&2; exit 1; fi;
+        exec /entrypoint.sh traefik --configFile=/tmp/traefik.yml
+    # TRD-178. The entrypoint above is a shell: if the render produces a file
+    # Traefik rejects, the container could sit "Up" routing nothing. This
+    # probes the ping entrypoint (:8082, unpublished). `traefik healthcheck`
+    # is not used: it re-reads configuration and cannot see the /tmp copy.
+    # busybox wget is present in traefik:v3.7.1.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/ping | grep -q OK || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     ports:
       # Nothing here binds 0.0.0.0 (spec A §A). web/websecure publish on the
       # edge IP of each family; :80 carries the ACME HTTP-01 challenge and the
@@ -440,9 +498,13 @@ services:
       - docker-socket-proxy
     volumes:
       - ./docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./docker/traefik/dynamic:/etc/traefik/dynamic:ro
-      - ./secrets/cf-origin.pem:/certs/cf-origin.pem:ro
-      - ./secrets/cf-origin.key:/certs/cf-origin.key:ro
+      # The host's router directory (per-tenant files, etc/edge/active.yml):
+      # the ONLY mount of /etc/traefik/dynamic any container holds, and
+      # read-only -- writers work on the host side (spec B "Edge" §2).
+      - ${GREMION_ROOT}/etc/edge:/etc/traefik/dynamic:ro
+      # ACME account and certificates live only here (TRD-042). The Cloudflare
+      # Origin certificate mounts left with dynamic/tls.yml.
+      - traefik-acme:/letsencrypt
       - traefik-logs:/logs
     networks:
       - gremion-net
@@ -523,6 +585,12 @@ volumes:
     name: gremion_tenant_config_data
   traefik-logs:
     name: gremion_traefik_logs
+  # Created by infra/host/bootstrap.sh (stage_networks) and never by compose,
+  # so a `down -v` cannot take the ACME account with it. Stack-scoped name
+  # (spec A §E): a hardcoded gremion_traefik_acme is forbidden.
+  traefik-acme:
+    name: ${STACK}_traefik_acme
+    external: true
   vector-processed-logs:
     name: gremion_vector_processed_logs
 
