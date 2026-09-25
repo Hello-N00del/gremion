@@ -55,7 +55,10 @@ MAJOR="$(read_const POSTGRES_MAJOR)"
 MOUNT="$(read_const POSTGRES_DATA_MOUNT)"
 [ -n "$MAJOR" ] || { echo "precondition: could not read POSTGRES_MAJOR"; exit 2; }
 [ -n "$MOUNT" ] || { echo "precondition: could not read POSTGRES_DATA_MOUNT"; exit 2; }
-WANT="postgres:${MAJOR}-alpine"
+# TASK-019 (TRD-350): the proof pulls and runs the pinned REFERENCE — tag and
+# index digest — and every rendered image must equal it byte for byte.
+WANT="$(read_const POSTGRES_IMAGE_REF)"
+[ -n "$WANT" ] || { echo "precondition: could not read POSTGRES_IMAGE_REF"; exit 2; }
 
 # A project name of our own, and proof-scoped names for EVERY named resource the
 # kernel compose fixes project-independently, so nothing here can touch — or be
@@ -328,10 +331,13 @@ for bin in pg_dump psql; do
 done
 
 # ── 6. the ONE standalone backup-client image in the tree (k8s overlay) ────
+# k8s/** is frozen (D16) and out of the digest scan, so this reads the MAJOR
+# only: the frozen manifest must not have drifted off the pinned tag.
+WANT_TAG="$(read_const POSTGRES_IMAGE_TAG)"
 K8S="$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(postgres:[^[:space:]]*\).*$/\1/p' \
     "${ROOT}/k8s/overlays/production/patches/backup-cronjob.yaml" | head -1)"
-[ "$K8S" = "$WANT" ] \
-    || { echo "FAIL: backup cronjob client image is '${K8S}', expected ${WANT}"; exit 1; }
+[ -n "$WANT_TAG" ] && [ "$K8S" = "$WANT_TAG" ] \
+    || { echo "FAIL: backup cronjob client image is '${K8S}', expected ${WANT_TAG} (k8s is frozen at the tag, D16)"; exit 1; }
 echo "  ok  k8s backup cronjob client: ${K8S}"
 
 # ── 7. the host backup and restore paths take their client from the SERVER ─
