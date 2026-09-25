@@ -4,7 +4,8 @@
 # B15 tasks 3, 4 and the single-reader rule).
 # Run: bats test/host/validate-env.bats
 #
-# Unit only.
+# Unit, except the render tests at the bottom: those need a docker CLI (never a
+# running container -- `config` and `--dry-run` only) and skip loudly without one.
 
 load 'test_helper/host'
 
@@ -215,4 +216,68 @@ second_readers() {
     printf '#!/usr/bin/env bash\n# never: set -a; . state.env\n' > "$copy/bin/gremion-seeded-4"
     run second_readers "$copy"
     [[ "$output" != *"gremion-seeded-4"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# PLATFORM_DOMAIN: bound once, required by the production render (B15 task 4)
+# ---------------------------------------------------------------------------
+
+DOMAIN_BINDING='DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
+
+@test "DOMAIN is bound from PLATFORM_DOMAIN exactly once across the compose files" {
+    local n
+    n="$(cat "${KERNEL_ROOT}/docker-compose.yml" "${KERNEL_ROOT}/docker-compose.prod.yml" \
+        | grep -cF "$DOMAIN_BINDING" || true)"
+    [ "$n" -eq 1 ]
+}
+
+# A private project directory holding the three compose files and an EMPTY
+# legal/legal.env, rendered with ONLY the edge fixture as input: no .env, no
+# caller environment beyond what docker needs to find its daemon.
+prod_render() {
+    local proj="${GREMION_ROOT}/proj" envf="${GREMION_ROOT}/render.env"
+    mkdir -p "$proj/legal"
+    : > "$proj/legal/legal.env"
+    cp "${KERNEL_ROOT}"/docker-compose.yml "${KERNEL_ROOT}"/docker-compose.prod.yml "$proj/"
+    grep -v '^COMPOSE_FILE=\|^COMPOSE_PROFILES=\|^COMPOSE_PATH_SEPARATOR=' \
+        "${KERNEL_ROOT}/test/host/fixtures/edge-render/state.env" > "$envf"
+    if [[ "${1:-}" == "--without-platform-domain" ]]; then
+        sed -i '/^PLATFORM_DOMAIN=/d' "$envf"
+        shift
+    fi
+    run env -i PATH="$PATH" HOME="${HOME:-/root}" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+        docker compose --project-directory "$proj" --env-file "$envf" \
+        -f "$proj/docker-compose.yml" -f "$proj/docker-compose.prod.yml" --profile production "$@"
+}
+
+need_docker_cli() {
+    command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
+        || skip "docker compose CLI unavailable -- the render tests did NOT run"
+}
+
+@test "the production render with PLATFORM_DOMAIN unset aborts with 'PLATFORM_DOMAIN required'" {
+    need_docker_cli
+    prod_render --without-platform-domain config
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"PLATFORM_DOMAIN required"* ]]
+}
+
+@test "the production render with PLATFORM_DOMAIN set binds gremion-ui's DOMAIN to it" {
+    need_docker_cli
+    prod_render config --format json
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local got
+    got="$(printf '%s' "$output" | sed -n '/^{/,$p' | jq -r '.services["gremion-ui"].environment.DOMAIN')"
+    [ "$got" = "guard.example.org" ]
+}
+
+@test "':?' aborts an 'up' before any container is created (compose --dry-run)" {
+    need_docker_cli
+    docker info >/dev/null 2>&1 || skip "docker daemon unavailable -- the dry-run test did NOT run"
+    local project="task028-dryrun-$$"
+    prod_render --without-platform-domain -p "$project" --dry-run up -d
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"PLATFORM_DOMAIN required"* ]]
+    run docker ps -aq --filter "label=com.docker.compose.project=${project}"
+    [ -z "$output" ]
 }
