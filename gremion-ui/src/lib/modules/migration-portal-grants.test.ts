@@ -13,21 +13,36 @@ const executable = (f: string) =>
     .filter((l) => !/^\s*--/.test(l))
     .join('\n')
 
-// The kernel-guaranteed least-privilege set the ported 058 grants. news_posts is
-// NOT here: kernel 008_public_portal.sql:4-6 records that it moved out with the
-// content module, so a content-OFF kernel-only install has no such table.
+// The tables the anonymous public portal actually reads (R-E13:
+// gremion-public/src/lib/server/public-db.ts:51,82,105 reads only `protocols`
+// and `org_units`, nothing else). news_posts is NOT here: kernel
+// 008_public_portal.sql:4-6 records that it moved out with the content
+// module, so a content-OFF kernel-only install has no such table;
 // B4a-news-posts-ownership gives content its own grant.
-const KERNEL_PORTAL_TABLES = [
+const KERNEL_PORTAL_TABLES = ['org_units', 'protocols']
+
+// Tables 058 actively REVOKEs rather than merely omitting from portal_tables.
+// `protocol_attendance`/`protocol_action_items` predate this unit (008 granted
+// them under the retired role name; a rename-in-place elsewhere carried the
+// grant forward by role OID). `calendar_events`, `event_recurrence`,
+// `protocol_resolutions` and `resolution_challenges` are this unit's own
+// narrowing (R-E13): an earlier 058 granted the whole kernel-guaranteed set,
+// not only what the portal reads, exposing resolution_challenges.raised_by/
+// grounds and calendar_events.created_by anonymously. Any database that ran
+// that 058 already HOLDS those grants (Postgres keys privileges to the role
+// OID), so dropping them from portal_tables alone converges only a fresh
+// install — the REVOKE is what fixes an existing deployment.
+const REVOKED_TABLES = [
+  'protocol_attendance',
+  'protocol_action_items',
   'calendar_events',
   'event_recurrence',
-  'org_units',
-  'protocols',
   'protocol_resolutions',
   'resolution_challenges',
 ]
 
 describe('058 public-reader grants', () => {
-  it('055 sorts strictly before 058 — 058 requires resolution_challenges', () => {
+  it('055 sorts strictly before 058 — the REVOKE must run after 055 GRANTs resolution_challenges', () => {
     const list = sorted()
     expect(list.indexOf('055_resolution_challenges.sql')).toBeGreaterThanOrEqual(0)
     expect(list.indexOf('055_resolution_challenges.sql')).toBeLessThan(
@@ -35,12 +50,30 @@ describe('058 public-reader grants', () => {
     )
   })
 
-  it('portal_tables is exactly the kernel-guaranteed set', () => {
+  it('portal_tables is exactly the two tables the anonymous portal reads', () => {
     const body = executable('058_public_reader_grants.sql')
     const block = body.match(/portal_tables CONSTANT text\[\] := ARRAY\[([^\]]*)\]/)
     expect(block, 'portal_tables ARRAY literal not found').not.toBeNull()
     const names = [...block![1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort()
     expect(names).toEqual([...KERNEL_PORTAL_TABLES].sort())
+  })
+
+  it('revoked_tables is a superset of the four tables narrowed out of portal_tables (R-E13)', () => {
+    const body = executable('058_public_reader_grants.sql')
+    const block = body.match(/revoked_tables CONSTANT text\[\] := ARRAY\[([^\]]*)\]/)
+    expect(block, 'revoked_tables ARRAY literal not found').not.toBeNull()
+    const names = [...block![1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1])
+    for (const t of ['calendar_events', 'event_recurrence', 'protocol_resolutions', 'resolution_challenges']) {
+      expect(names, `revoked_tables is missing ${t}`).toContain(t)
+    }
+    // Full-set pin, not just superset: a stray extra revoke is as much a
+    // least-privilege regression as a missing one.
+    expect([...names].sort()).toEqual([...REVOKED_TABLES].sort())
+  })
+
+  it('does not grant news_posts — that table is content-owned (1200_content_news_posts.sql)', () => {
+    const body = executable('058_public_reader_grants.sql')
+    expect(body).not.toMatch(/'news_posts'/)
   })
 
   it('058 still aborts on a missing table rather than granting a partial set', () => {
