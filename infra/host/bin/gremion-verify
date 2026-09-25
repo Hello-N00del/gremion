@@ -371,10 +371,17 @@ check_routers() {
 # rule_shape <rule> -> "ok <host>" or "bad <reason>". The allow-list, in awk so
 # the parenthesis depth and backtick/double-quote strings can be tracked.
 rule_shape() {
-    awk -v r="$1" 'BEGIN {
+    # ENVIRON, not -v: `awk -v` interprets backslash escapes and would hand the
+    # scan a different rule than the one Traefik parsed.
+    RULE="$1" awk 'BEGIN {
+        r = ENVIRON["RULE"]
         if (match(r, /^Host\(`[a-z0-9.-]+`\)/) == 0) {
             print "bad does not begin with exactly one literal Host(`<lowercase host>`)"; exit
         }
+        # A backslash can escape a quote and hide a top-level || from the scan
+        # below (measured against traefik v3.7, review round 2); no rule this
+        # edge emits needs one, so any backslash fails closed.
+        if (index(r, "\\") > 0) { print "bad contains a backslash escape, which can hide a top-level ||"; exit }
         host = substr(r, 7, RLENGTH - 8); rest = substr(r, RLENGTH + 1)
         l = tolower(r); n = gsub(/host(regexp|header|sni)?\(/, "", l)
         if (n != 1) { print "bad carries " n " host matchers (expected exactly 1)"; exit }
@@ -477,11 +484,11 @@ check_router_universal() {
                 edge-hsts-platform|edge-hsts-custom)
                     [[ "$(jq -r '(.headers.stsSeconds // 0) > 0' <<<"$mj")" == "true" ]] && has_hsts=1 ;;
                 edge-ratelimit-?*)
-                    [[ "$(jq -r '. != null and .rateLimit != null' <<<"$mj")" == "true" ]] && has_rl=1 ;;
+                    [[ "$(jq -r '. != null and ((.rateLimit.average // 0) > 0)' <<<"$mj")" == "true" ]] && has_rl=1 ;;
             esac
         done
         (( has_hsts )) || fail "router $name: no HSTS middleware (edge-hsts-platform|edge-hsts-custom with stsSeconds > 0)"
-        (( has_rl ))   || fail "router $name: no edge-ratelimit-* middleware"
+        (( has_rl ))   || fail "router $name: no edge-ratelimit-* middleware (a rateLimit with average > 0)"
     done
     (( subjects > 0 )) \
         || fail "router universal: traefik reports no public router — a universal over nothing proves nothing"

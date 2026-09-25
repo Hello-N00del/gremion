@@ -944,6 +944,26 @@ rule_case() {  # <router> <rule> -> runs verify with that router's rule replaced
     [[ "$output" == *"etc/edge does not exist"* ]]
 }
 
+@test "universal: an escaped double quote cannot hide a top-level ||" {
+    rule_case whoami@docker 'Host(`tenant-a.example.org`) && Header(`X-Q`, "x\"") || PathPrefix(`/`) || Header(`X-Y`, "z")'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router whoami@docker: rule contains a backslash escape"* ]]
+}
+
+@test "universal: an edge-ratelimit-* that is not a rate limiter does not count" {
+    api_edit middlewares '(.[] | select(.name=="edge-ratelimit-app@docker")) |= {name, provider, type: "headers", headers: {}}'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: no edge-ratelimit-* middleware"* ]]
+}
+
+@test "universal: a rate limiter with average 0 (no limit in traefik) does not count" {
+    api_edit middlewares '(.[] | select(.name=="edge-ratelimit-app@docker")).rateLimit.average = 0'
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"router tenant-a@file: no edge-ratelimit-* middleware"* ]]
+}
+
 # ── middleware placement ─────────────────────────────────────────────────────
 
 @test "placement: a middleware declared on an app-tier container fails, naming it" {
