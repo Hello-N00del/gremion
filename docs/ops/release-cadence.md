@@ -137,11 +137,13 @@ guessed:
 - **Where the change list and training material are published**, and where the
   deferral and agreement records are filed, is for the release/deploy units to
   fix.
-- **Unconfirmed parts.** The bilingual change list and updated training
+- **Stale marker in the TRD.** The bilingual change list and updated training
   material (TRD-355), the deferral right (TRD-357) and the pilot suspension
-  (TRD-358) are marked in the TRD as not yet confirmed by the operator
-  [D-nc]; only the cadence itself and the security-fix exemption rest on a
-  confirmed decision [D R5-2].
+  (TRD-358) were confirmed by the operator together with the other PRD
+  section 15.1 block A proposals [D R18-§15.1 A; PRD section 15 block A5]; the
+  cadence itself and the security-fix exemption rest on [D R5-2]. The three
+  TRD rows still carry the older [D-nc] marker; that marker is out of date
+  and does not make these rules provisional.
 - **Mixed releases.** Whether a security fix bundled with feature changes may
   use the rule 4 exemption is not stated in the sources.
 
@@ -161,8 +163,8 @@ guessed:
 
 | Rule | Requirement ids | Decision basis |
 |---|---|---|
-| 1 | PRD-PLAT-003, TRD-355 | cadence of two feature releases a year at semester breaks, security fixes any time [D R5-2]; dated bilingual change list and training material [D R18, PRD 15.1 A5], marked not yet confirmed in TRD-355; change fatigue is a stated council concern [E R2-2]. TRD-105 and TRD-186..188 retire into TRD-355, TRD-357, TRD-358, TRD-359. |
-| 2 | PRD-PLAT-003, TRD-357, PRD-DEP-003 | deferral right [D R18, PRD 15.1 A5]; not yet confirmed in TRD-357 [D-nc] |
-| 3 | PRD-PLAT-003, TRD-358 | pilot suspension [D R18, PRD 15.1 A5]; not yet confirmed in TRD-358 [D-nc] |
+| 1 | PRD-PLAT-003, TRD-355 | cadence of two feature releases a year at semester breaks, security fixes any time [D R5-2]; dated bilingual change list and training material [D R18-§15.1 A, PRD section 15 block A5] (the TRD-355 row still shows a stale [D-nc]); change fatigue is a stated council concern [E R2-2]. TRD-105 and TRD-186..188 retire into TRD-355, TRD-357, TRD-358, TRD-359. |
+| 2 | PRD-PLAT-003, TRD-357, PRD-DEP-003 | deferral right [D R18-§15.1 A, PRD section 15 block A5] (the TRD-357 row still shows a stale [D-nc]) |
+| 3 | PRD-PLAT-003, TRD-358 | pilot suspension [D R18-§15.1 A, PRD section 15 block A5] (the TRD-358 row still shows a stale [D-nc]) |
 | 4 | PRD-PLAT-003, PRD-DEP-003, TRD-359 | [D R5-2]; ISO/IEC 27001:2022 Annex A 8.8; BSI IT-Grundschutz OPS.1.1.3 (edition 2023) |
-| Flow | FLOW-OPS-010; PRD-SUP-004, PRD-SUP-009; TRD-179, TRD-189 | one dump before each schema migration, deleted after a successful switch, not a backup regime [D R18-4] |
+| Flow | FLOW-OPS-010; PRD-SUP-004, PRD-SUP-009; TRD-179, TRD-189 | one dump before each schema migration, deleted after a successful switch, not a backup regime [D R18-4]; the idle-colour check's marked test records in the pilot tenant, removed after the check [D R20-R18-6] |
