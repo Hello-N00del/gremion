@@ -41,8 +41,8 @@ export const NODE_VERSION_FILES = ['.node-version', '.nvmrc']
 
 // ── TRD-402 [D R19-D1]: the allow-list, Q3's machine-checked table ────────
 // Every entry here is a DEPENDENCY build script pnpm would otherwise skip
-// under strictDepBuilds. Each reason is why running it is safe — read it
-// before adding a third entry.
+// under strictDepBuilds. Each reason is why running it is safe — read them
+// before adding another entry.
 export const ALLOWED_BUILD_DEPS = {
   'better-sqlite3': 'native SQLite binding (install: prebuild-install, else node-gyp ' +
     'rebuild) — dev-only: a devDependency of the in-tree calendar, content and ' +
