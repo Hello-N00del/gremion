@@ -36,13 +36,31 @@ const READER = 'gremion_public_reader'
 const EXACT_READ_SET = ['org_units', 'protocols']
 const MUST_NOT_READ = ['calendar_events', 'event_recurrence', 'protocol_resolutions', 'resolution_challenges']
 
-/** The same server, another database. The derived URL is guarded as well. */
-function urlFor(db: string): string {
+/** The same server and user as the (guarded) DATABASE_URL, another database. */
+function sameServer(db: string): string {
   const u = new URL(process.env.DATABASE_URL as string)
   u.pathname = `/${db}`
-  const url = u.toString()
+  return u.toString()
+}
+
+/** A scratch database URL -- guarded again, and its name carries "test". */
+function urlFor(db: string): string {
+  const url = sameServer(db)
   assertNonProductionDbUrl(url, `DATABASE_URL (database ${db})`)
   return url
+}
+
+/**
+ * The maintenance connection that CREATEs and DROPs the scratch databases. Not
+ * re-guarded on purpose: it is the server and credentials of DATABASE_URL,
+ * which the guard judged at import, and only the database name differs. The
+ * loopback test-name convention is about which database a harness TRUNCATES;
+ * run through it, `postgres` (the maintenance database) would refuse the
+ * documented fixture. This connection only ever drops the databases this file
+ * created, by the names it recorded.
+ */
+function adminUrl(): string {
+  return sameServer('postgres')
 }
 
 /** The kernel chain, sorted, seeds skipped -- what db.ts runs with seeds off. */
@@ -53,11 +71,14 @@ function kernelChain(): Array<{ name: string; sql: string }> {
     .sort()
     .map((name) => ({
       name,
-      sql: readFileSync(name === '058_public_reader_grants.sql' && override ? override : path.join(MIGRATIONS, name), 'utf8'),
+      sql: readFileSync(
+        name === '058_public_reader_grants.sql' && override ? override : path.join(MIGRATIONS, name),
+        'utf8',
+      ),
     }))
 }
 
-const RUN = `${process.pid}`
+const RUN = `${process.pid}_${Math.random().toString(36).slice(2, 8)}`
 const created: string[] = []
 let admin: postgres.Sql
 let createdRole = false
@@ -103,7 +124,7 @@ async function selectAsReader(sql: postgres.Sql, table: string): Promise<string 
 }
 
 beforeAll(async () => {
-  admin = postgres(urlFor('postgres'), { max: 1, onnotice: () => {} })
+  admin = postgres(adminUrl(), { max: 1, onnotice: () => {} })
   const [{ exists }] = await admin<{ exists: boolean }[]>`
     SELECT EXISTS (SELECT FROM pg_roles WHERE rolname = ${READER}) AS exists`
   if (!exists) {
@@ -115,21 +136,33 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!admin) return
+  // Every step is attempted even when an earlier one fails; the first error is
+  // re-thrown at the end so a failed cleanup is never silent.
+  const errors: unknown[] = []
   for (const name of created) {
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
-  }
-  if (createdRole) {
-    // Only when THIS file created the role: every grant it holds was made
-    // here. 008 grants CONNECT on a database by fixed name (`gremion`), i.e.
-    // outside the scratch database, and a database-level grant blocks DROP ROLE.
-    const dbs = await admin<{ datname: string }[]>`
-      SELECT datname FROM pg_database WHERE datacl::text LIKE ${'%' + READER + '=%'}`
-    for (const { datname } of dbs) {
-      await admin.unsafe(`REVOKE ALL ON DATABASE "${datname.replace(/"/g, '""')}" FROM ${READER}`)
+    try {
+      await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
+    } catch (e) {
+      errors.push(e)
     }
-    await admin.unsafe(`DROP ROLE IF EXISTS ${READER}`)
+  }
+  try {
+    if (createdRole) {
+      // Only when THIS file created the role: every grant it holds was made
+      // here. 008 grants CONNECT on a database by fixed name (`gremion`), i.e.
+      // outside the scratch database, and a database-level grant blocks DROP ROLE.
+      const dbs = await admin<{ datname: string }[]>`
+      SELECT datname FROM pg_database WHERE datacl::text LIKE ${'%' + READER + '=%'}`
+      for (const { datname } of dbs) {
+        await admin.unsafe(`REVOKE ALL ON DATABASE "${datname.replace(/"/g, '""')}" FROM ${READER}`)
+      }
+      await admin.unsafe(`DROP ROLE IF EXISTS ${READER}`)
+    }
+  } catch (e) {
+    errors.push(e)
   }
   await admin.end()
+  if (errors.length > 0) throw errors[0]
 })
 
 describe('portal reader grants (B4a Task 3 on the TASK-054 result)', () => {
@@ -141,12 +174,16 @@ describe('portal reader grants (B4a Task 3 on the TASK-054 result)', () => {
       await applyAll(sql, chain)
       expect(await readable(sql)).toEqual(EXACT_READ_SET)
       for (const t of MUST_NOT_READ) {
-        const [{ exists }] = await sql<{ exists: boolean }[]>`SELECT to_regclass(${'public.' + t}) IS NOT NULL AS exists`
+        const [{ exists }] = await sql<
+          { exists: boolean }[]
+        >`SELECT to_regclass(${'public.' + t}) IS NOT NULL AS exists`
         expect(exists, `${t} exists (else the negative below is vacuous)`).toBe(true)
         expect(await selectAsReader(sql, t), t).toMatch(/permission denied/)
       }
       for (const t of EXACT_READ_SET) expect(await selectAsReader(sql, t), t).toBeNull()
-      const [{ n }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM to_regclass('public.news_posts') r WHERE r IS NOT NULL`
+      const [{ n }] = await sql<
+        { n: number }[]
+      >`SELECT count(*)::int AS n FROM to_regclass('public.news_posts') r WHERE r IS NOT NULL`
       expect(n, 'content-OFF creates no news_posts').toBe(0)
     } finally {
       await sql.end()
@@ -169,7 +206,13 @@ describe('portal reader grants (B4a Task 3 on the TASK-054 result)', () => {
   it('content-ON: 1200 after the kernel chain gives a news_posts the reader can SELECT', async () => {
     const sql = await scratchDb('on')
     try {
-      await applyAll(sql, [...kernelChain(), { name: '1200_content_news_posts.sql', sql: readFileSync(CONTENT_1200, 'utf8') }])
+      await applyAll(sql, [
+        ...kernelChain(),
+        {
+          name: '1200_content_news_posts.sql',
+          sql: readFileSync(CONTENT_1200, 'utf8'),
+        },
+      ])
       expect(await readable(sql)).toEqual([...EXACT_READ_SET, 'news_posts'].sort())
       expect(await selectAsReader(sql, 'news_posts')).toBeNull()
     } finally {

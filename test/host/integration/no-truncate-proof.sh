@@ -21,6 +21,10 @@
 #   5. a URL naming postgres-<GREMION_STACK> is ACCEPTED -- a guard that
 #      refuses everything would pass 3 and 4 and prove nothing.
 #
+# `docker run --env-file` does NOT strip quotes (compose and load_env do): the
+# rendered host env files are unquoted, and a quoted value would reach the
+# proof with its quotes and fail step 5 rather than pass silently.
+#
 # Only the two keys are ever printed; the env file may carry real secrets.
 # The container is `docker run -d --rm`, named for this proof, and removed by
 # name in the EXIT trap (`docker rm -f`). Nothing else is created or removed:
@@ -62,15 +66,17 @@ fail() { printf 'PROOF FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
 
 NAME="task028-no-truncate-proof-$$"
 CID=""
+# By NAME, not only by id: an interrupt between `docker run` creating the
+# container and CID being assigned would otherwise leave it running.
 cleanup() {
-    if [[ -n "$CID" ]]; then docker rm -f "$CID" >/dev/null 2>&1 || true; fi
+    docker rm -f "${CID:-$NAME}" >/dev/null 2>&1 || docker rm -f "$NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 # The image's own CMD would boot the app; the proof needs a process that only
 # keeps the container alive for `docker exec`.
 CID="$(docker run -d --rm --name "$NAME" --env-file "$ENV_FILE" \
-    --entrypoint /bin/sh "$IMAGE" -c 'sleep 600')"
+    --entrypoint /bin/sh "$IMAGE" -c 'sleep 600')" || CID=""
 [[ -n "$CID" ]] || { echo "precondition: the scratch container did not start"; exit 2; }
 
 # key_in_container <KEY> -> the value the CONTAINER holds, read with `env`.
@@ -89,7 +95,8 @@ else
     fail "1 GREMION_PRODUCTION_STACK and GREMION_STACK must both be set inside the container"
 fi
 
-docker cp "$GUARD" "${CID}:/tmp/no-truncate-guard.ts" >/dev/null
+docker cp "$GUARD" "${CID}:/tmp/no-truncate-guard.ts" >/dev/null \
+    || { echo "precondition: could not copy the guard into the container"; exit 2; }
 
 # guard <url> [extra docker-exec args...] -> the guard's exit status; its
 # refusal text goes to $GUARD_OUT (it never contains the URL).
