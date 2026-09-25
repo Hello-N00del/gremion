@@ -107,7 +107,16 @@ function batsSubcheckWindows({ cwd, patterns }) {
     )
     const parsed = parseBatsTap(res.stdout + res.stderr)
     if (!parsed) {
-      return { unparseable: true, detail: `bats (container) produced no parseable TAP plan\n${tail(res.stdout + res.stderr)}` }
+      return { unparseable: true, detail: `bats (container) produced no parseable or complete TAP plan (docker exit ${res.code})\n${tail(res.stdout + res.stderr)}` }
+    }
+    // A TAP stream can look complete (plan matches ok+not-ok count) while the
+    // container itself still exited non-zero for a reason the TAP never
+    // recorded as a `not ok` -- e.g. the runner crashed AFTER printing its
+    // last result line. `parsed.failed > 0` already explains a non-zero exit;
+    // a non-zero exit with no reported failure at all is not explained by
+    // anything this parser saw, so it is treated as untrustworthy, not clean.
+    if (res.code !== 0 && parsed.failed === 0) {
+      return { unparseable: true, detail: `bats (container) exited ${res.code} but its TAP output reported no failures -- untrusted\n${tail(res.stdout + res.stderr)}` }
     }
     return { unparseable: false, ...parsed }
   } finally {
@@ -129,7 +138,10 @@ function batsSubcheck({ cwd, patterns }) {
   const res = run('bats', ['--tap', ...files], { cwd })
   const parsed = parseBatsTap(res.stdout + res.stderr)
   if (!parsed) {
-    return { unparseable: true, detail: `bats produced no parseable TAP plan\n${tail(res.stdout + res.stderr)}` }
+    return { unparseable: true, detail: `bats produced no parseable or complete TAP plan (exit ${res.code})\n${tail(res.stdout + res.stderr)}` }
+  }
+  if (res.code !== 0 && parsed.failed === 0) {
+    return { unparseable: true, detail: `bats exited ${res.code} but its TAP output reported no failures -- untrusted\n${tail(res.stdout + res.stderr)}` }
   }
   return { unparseable: false, ...parsed }
 }

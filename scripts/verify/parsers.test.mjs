@@ -54,6 +54,15 @@ test('parseBatsTap returns null with no 1..N plan line', () => {
   assert.equal(parseBatsTap('ok 1 first\n'), null)
 })
 
+test('parseBatsTap returns null for a truncated run whose ok/not-ok lines fall short of its own plan', () => {
+  // Reproduces a real truncated bats run: a 4-test file whose 2nd test kills
+  // the file runner prints "1..4", "ok 1", "ok 2" and a bats warning, with no
+  // "not ok" for tests 3/4 at all -- the declared plan is the only signal a
+  // truncation happened.
+  const tap = '1..4\nok 1 first\nok 2 second\n# bats warning: Executed 2 instead of expected 4 tests\n'
+  assert.equal(parseBatsTap(tap), null)
+})
+
 test('parseVitestJsonFile reads the jest-shaped summary and folds pending+todo into skipped', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'verify-parsers-test-'))
   const file = path.join(dir, 'result.json')
@@ -89,6 +98,60 @@ test('parseVitestJsonFile returns null when a required numeric field is missing'
   writeFileSync(file, JSON.stringify({ numTotalTests: 5, numPassedTests: 5 }))
   try {
     assert.equal(parseVitestJsonFile(file), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('parseVitestJsonFile returns null when the per-test counts do not sum to the total (untrustworthy shape)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'verify-parsers-test-'))
+  const file = path.join(dir, 'result.json')
+  writeFileSync(file, JSON.stringify({ numTotalTests: 5, numPassedTests: 3, numFailedTests: 1, numPendingTests: 0, numTodoTests: 0 }))
+  try {
+    assert.equal(parseVitestJsonFile(file), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('parseVitestJsonFile folds a file that threw at collection time into failed, not a silent pass', () => {
+  // Reproduces the exact shape vitest emits for one passing file plus one
+  // file that throws at import: every per-test count is internally
+  // consistent (1 = 1 passed + 0 failed + 0 skipped) -- only `success` and
+  // `numFailedTestSuites` say the second file never ran at all.
+  const dir = mkdtempSync(path.join(tmpdir(), 'verify-parsers-test-'))
+  const file = path.join(dir, 'result.json')
+  writeFileSync(
+    file,
+    JSON.stringify({
+      success: false,
+      numTotalTests: 1,
+      numPassedTests: 1,
+      numFailedTests: 0,
+      numPendingTests: 0,
+      numTodoTests: 0,
+      numFailedTestSuites: 1,
+    }),
+  )
+  try {
+    const r = parseVitestJsonFile(file)
+    assert.ok(r, 'expected a parsed result, not null')
+    assert.ok(r.failed > 0, `expected the dropped suite to count as a failure, got ${JSON.stringify(r)}`)
+    assert.equal(r.collected, r.passed + r.failed + r.skipped, 'the returned counts must stay internally consistent')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('parseVitestJsonFile is unaffected by numFailedTestSuites when success is true (no regression on the ordinary green case)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'verify-parsers-test-'))
+  const file = path.join(dir, 'result.json')
+  writeFileSync(
+    file,
+    JSON.stringify({ success: true, numTotalTests: 5, numPassedTests: 5, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0, numFailedTestSuites: 0 }),
+  )
+  try {
+    assert.deepEqual(parseVitestJsonFile(file), { collected: 5, passed: 5, failed: 0, skipped: 0 })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

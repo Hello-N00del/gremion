@@ -65,6 +65,15 @@ export function countDeclaredNodeTests(sourceTexts) {
  * bats' own TAP output: a `1..N` plan, `ok`/`not ok` result lines, and a
  * `# skip` comment on a skipped line (bats' skip form is
  * `ok N description # skip[ reason]`, never `not ok`).
+ *
+ * A truncated run (the file's test runner crashes or is killed partway
+ * through, e.g. by a timeout) prints fewer `ok`/`not ok` lines than its own
+ * declared plan, WITHOUT ever emitting a `not ok` for the tests it never got
+ * to -- bats has no line at all for a test that never ran. Reproduced with a
+ * real 4-test file whose 2nd test kills the runner: `1..4`, `ok 1`, `ok 2`,
+ * then a bats warning, docker exit 1. Comparing the plan against what was
+ * actually reported is what catches that: a mismatch is unparseable (a FAIL
+ * via lib/guard.mjs), never a partial pass.
  */
 export function parseBatsTap(text) {
   const planMatch = text.match(/^1\.\.(\d+)\s*$/m)
@@ -73,6 +82,9 @@ export function parseBatsTap(text) {
   const okLines = text.match(/^ok \d+/gm) ?? []
   const notOkLines = text.match(/^not ok \d+/gm) ?? []
   const skipLines = text.match(/^ok \d+[^\n]*#\s*skip/gim) ?? []
+  if (okLines.length + notOkLines.length !== collected) {
+    return null
+  }
   const failed = notOkLines.length
   const skipped = skipLines.length
   const passed = okLines.length - skipped
@@ -81,11 +93,23 @@ export function parseBatsTap(text) {
 
 /**
  * `vitest run --reporter=json --outputFile=<path>`'s top-level Jest-shaped
- * summary. `numPendingTests` covers both `it.skip` and a test that never ran
- * because its file threw at collection time; vitest's own `success` flag is
- * NOT used here on purpose -- vitest reports `success: true` for a file whose
- * only test is `it.skip` (proved empirically while building this suite), the
- * exact all-skipped-passes-anyway shape this guard exists to catch.
+ * summary. `numPendingTests` covers `it.skip`/`it.todo`, but NOT a test file
+ * that throws at collection time (a syntax error, a bad import, a top-level
+ * throw) -- that file drops out of `numTotalTests` entirely instead of
+ * counting as pending, so the per-test counts alone can look like a clean
+ * pass while a whole file silently never ran (reproduced empirically: one
+ * passing file plus one file that throws at import gave vitest exit=1 and
+ * `{success:false, numTotalTests:1, numPassedTests:1, numFailedTests:0,
+ * numFailedTestSuites:1}` -- every per-test count is internally consistent,
+ * only `success`/`numFailedTestSuites` say anything went wrong). `success` is
+ * ALSO not trusted alone for the opposite reason -- vitest reports
+ * `success: true` for a file whose only test is `it.skip` (proved empirically
+ * while building this suite), the exact all-skipped-passes-anyway shape this
+ * guard exists to catch. So both signals are used: the per-test counts decide
+ * skip-vacuity, and `numFailedTestSuites`/`success` catch a file that never
+ * contributed a count at all -- matching the release-1 gate's
+ * `grep '[0-9]+ failed'` on "Test Files N failed", which this JSON parser
+ * replaces.
  */
 export function parseVitestJsonFile(outputFilePath) {
   let text
@@ -102,17 +126,37 @@ export function parseVitestJsonFile(outputFilePath) {
   }
   const collected = data.numTotalTests
   const passed = data.numPassedTests
-  const failed = data.numFailedTests
-  const skipped = (data.numPendingTests ?? 0) + (data.numTodoTests ?? 0)
+  const rawFailed = data.numFailedTests
+  const pending = data.numPendingTests ?? 0
+  const todo = data.numTodoTests ?? 0
+  const failedSuites = data.numFailedTestSuites ?? 0
   if (
     typeof collected !== 'number' ||
     typeof passed !== 'number' ||
-    typeof failed !== 'number' ||
-    typeof skipped !== 'number'
+    typeof rawFailed !== 'number' ||
+    typeof pending !== 'number' ||
+    typeof todo !== 'number' ||
+    typeof failedSuites !== 'number'
   ) {
     return null
   }
-  return { collected, passed, failed, skipped }
+  const skipped = pending + todo
+  // The per-test counts are trustworthy only when every test vitest
+  // attempted actually contributed to one of these buckets. A mismatch means
+  // the reporter's shape does not mean what this parser assumes it means, so
+  // it is unparseable, not a best-effort pass.
+  if (collected !== passed + rawFailed + skipped) {
+    return null
+  }
+  // Fold in whole files that threw at collection time and never contributed
+  // ANY count above: each is a real failure this parser must not lose.
+  const droppedSuites = data.success === false ? Math.max(failedSuites, 1) : failedSuites
+  return {
+    collected: collected + droppedSuites,
+    passed,
+    failed: rawFailed + droppedSuites,
+    skipped,
+  }
 }
 
 /**
