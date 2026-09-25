@@ -374,7 +374,10 @@ export interface components {
              * @description Display-only projection of msg.calllink.set.v1. MSG owns the meeting-to-call association; GOV never writes it except from MSG's event.
              */
             readonly call_link_id?: string | null;
-            /** @enum {string} */
+            /**
+             * @description DOMAIN Meeting lifecycle. Moves only by that lifecycle (DB-GOV-MEETING invariant).
+             * @enum {string}
+             */
             state: "planned" | "invited" | "in_session" | "suspended" | "closed" | "cancelled";
             /** @description Ladungsfrist in days, snapshotted from the body's governance settings when the meeting was planned; later settings changes never alter it (DB-GOV-MEETING invariant). */
             readonly notice_period_days_snapshot: number;
@@ -467,8 +470,11 @@ export interface components {
             kind: "report" | "motion" | "previous_protocol_approval" | "election" | "misc";
             /** @enum {string|null} */
             own_publication_class?: "public" | "non_public" | null;
-            /** @enum {string} */
-            state: "proposed" | "placed" | "withdrawn";
+            /**
+             * @description DOMAIN Agenda item lifecycle (PRD-MTG-001/004).
+             * @enum {string}
+             */
+            state: "proposed" | "placed" | "declined" | "withdrawn" | "called" | "dealt" | "adjourned";
             /** Format: uuid */
             proposer_person_id?: string | null;
         };
@@ -496,8 +502,11 @@ export interface components {
             version: number;
             /** @description Frozen agenda snapshot (bigint, carried as a string to avoid JS precision loss) */
             agenda_snapshot_id?: string;
-            /** @enum {string} */
-            state: "draft" | "checked" | "dispatching" | "sent" | "failed";
+            /**
+             * @description DOMAIN Invitation lifecycle (PRD-MTG-002a/002b, FLOW-MTG-002). blocked = notice not met and no override yet; override_logged = the one notice-override is recorded; dispatch_refused = MAIL reports no connector for the body; partly_failed = some recipients failed or bounced. A blocked invitation never blocks the Sitzung [D R20-D26-5].
+             * @enum {string}
+             */
+            state: "draft" | "checked" | "blocked" | "override_logged" | "dispatching" | "dispatch_refused" | "sent" | "partly_failed";
             /** @description False when sent_at would be after notice_due_at; a flag, never a block (PRD-MTG-002b). */
             notice_met: boolean;
             /** Format: date-time */
@@ -585,8 +594,11 @@ export interface components {
             submitted_at: string;
             /** @description Computed on the server (submitted_at after deadline_snapshot). Never accepted from the client (PRD-MTG-003, FLOW-MTG-003 B1). */
             readonly is_late: boolean;
-            /** @enum {string} */
-            state: "submitted" | "withheld" | "placed" | "withdrawn";
+            /**
+             * @description DOMAIN Motion lifecycle (PRD-MTG-003, FLOW-MTG-003). withheld = submitted after the deadline and marked late, off the agenda until an admission; pending_verification and expired belong to public intake, which stays off per body (DOMAIN GOV question 1).
+             * @enum {string}
+             */
+            state: "draft" | "pending_verification" | "submitted" | "on_agenda" | "withheld" | "deferred" | "decided" | "adjourned" | "withdrawn" | "expired";
             /** @enum {string} */
             publication_class?: "public" | "non_public";
         };

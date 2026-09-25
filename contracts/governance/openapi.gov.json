@@ -1264,7 +1264,8 @@
               "suspended",
               "closed",
               "cancelled"
-            ]
+            ],
+            "description": "DOMAIN Meeting lifecycle. Moves only by that lifecycle (DB-GOV-MEETING invariant)."
           },
           "notice_period_days_snapshot": {
             "type": "integer",
@@ -1522,8 +1523,13 @@
             "enum": [
               "proposed",
               "placed",
-              "withdrawn"
-            ]
+              "declined",
+              "withdrawn",
+              "called",
+              "dealt",
+              "adjourned"
+            ],
+            "description": "DOMAIN Agenda item lifecycle (PRD-MTG-001/004)."
           },
           "proposer_person_id": {
             "type": [
@@ -1606,10 +1612,14 @@
             "enum": [
               "draft",
               "checked",
+              "blocked",
+              "override_logged",
               "dispatching",
+              "dispatch_refused",
               "sent",
-              "failed"
-            ]
+              "partly_failed"
+            ],
+            "description": "DOMAIN Invitation lifecycle (PRD-MTG-002a/002b, FLOW-MTG-002). blocked = notice not met and no override yet; override_logged = the one notice-override is recorded; dispatch_refused = MAIL reports no connector for the body; partly_failed = some recipients failed or bounced. A blocked invitation never blocks the Sitzung [D R20-D26-5]."
           },
           "notice_met": {
             "type": "boolean",
@@ -1833,11 +1843,18 @@
           "state": {
             "type": "string",
             "enum": [
+              "draft",
+              "pending_verification",
               "submitted",
+              "on_agenda",
               "withheld",
-              "placed",
-              "withdrawn"
-            ]
+              "deferred",
+              "decided",
+              "adjourned",
+              "withdrawn",
+              "expired"
+            ],
+            "description": "DOMAIN Motion lifecycle (PRD-MTG-003, FLOW-MTG-003). withheld = submitted after the deadline and marked late, off the agenda until an admission; pending_verification and expired belong to public intake, which stays off per body (DOMAIN GOV question 1)."
           },
           "publication_class": {
             "type": "string",
