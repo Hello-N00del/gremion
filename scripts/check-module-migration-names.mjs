@@ -10,6 +10,10 @@
 // (The runner skipping a recorded filename before re-checking its hash is its
 // own defect, routed to TASK-020/021; this guard only keeps names apart.)
 //
+// Numbers too: no number twice in one chain, and an app chain — which runs in
+// the kernel database — never reuses a kernel number (leaf chains have their
+// own databases).
+//
 // Refuses zero kernel files and zero module files: an empty side proves nothing.
 //
 // Run:  node scripts/check-module-migration-names.mjs
@@ -55,6 +59,29 @@ export function checkMigrationNames(root) {
   for (const m of modules)
     if (k.has(m.base))
       problems.push(`${m.path} has the basename of kernel ${KERNEL_MIGRATIONS}/${m.base} — the kernel file wins; rename the module migration into its own block`)
+  // Numbers. Every chain: no number twice. App chains (modules/<id>/app/migrations)
+  // run in the KERNEL database, so their numbers must also stay clear of the
+  // kernel's; leaf chains run against their own databases and may reuse 001...
+  const num = (f) => {
+    const m = /^(\d+)_/.exec(f)
+    return m ? Number(m[1]) : null
+  }
+  const kernelNums = new Map(kernel.filter((f) => num(f) !== null).map((f) => [num(f), f]))
+  const byDir = new Map()
+  for (const m of modules) {
+    const dir = m.path.slice(0, -m.base.length - 1)
+    if (!byDir.has(dir)) byDir.set(dir, new Map())
+    const n = num(m.base)
+    if (n === null) {
+      problems.push(`${m.path} carries no numeric prefix — the runner orders by filename, so its place in the chain is undefined`)
+      continue
+    }
+    const seen = byDir.get(dir)
+    if (seen.has(n)) problems.push(`${m.path} uses number ${n} twice in ${dir}/ (also ${seen.get(n)}) — the same number in one chain orders by the rest of the name, silently`)
+    else seen.set(n, m.base)
+    if (/\/app\/migrations$/.test(dir) && kernelNums.has(n))
+      problems.push(`${m.path} is an app chain (kernel database) file numbered ${n}, like kernel ${KERNEL_MIGRATIONS}/${kernelNums.get(n)} — take the next free number in the module's own block`)
+  }
   return { problems, kernel: kernel.length, modules: modules.length, dirs: new Set(modules.map((m) => m.path.replace(/\/[^/]+$/, ''))).size }
 }
 
@@ -66,5 +93,5 @@ if (isMain) {
     for (const p of r.problems) console.error(`  x ${p}`)
     process.exit(1)
   }
-  console.log(`[module-migration-names] OK — ${r.modules} module migration(s) in ${r.dirs} chain(s); none shares a basename with the ${r.kernel} kernel migrations`)
+  console.log(`[module-migration-names] OK — ${r.modules} module migration(s) in ${r.dirs} chain(s); none shares a basename with the ${r.kernel} kernel migrations, no chain reuses a number, and no app chain reuses a kernel number`)
 }

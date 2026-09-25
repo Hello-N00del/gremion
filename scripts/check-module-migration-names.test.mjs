@@ -68,7 +68,9 @@ test('RED: a seeded modules/finance/migrations/058_public_reader_grants.sql coll
 test('RED: the same collision inside an app/migrations chain', () => {
   const t = tree([...BASE, 'modules/content/app/migrations/001_governance_schema.sql'])
   try {
-    assert.equal(checkMigrationNames(t.root).problems.length, 1)
+    const { problems } = checkMigrationNames(t.root)
+    assert.ok(problems.some((p) => /has the basename of kernel/.test(p)), problems.join('\n'))
+    assert.ok(problems.some((p) => /numbered 1,/.test(p)), problems.join('\n'))
   } finally {
     t.cleanup()
   }
@@ -86,5 +88,27 @@ test('RED: zero kernel migrations or zero module migrations refuse instead of pa
     assert.ok(checkMigrationNames(b.root).problems.some((p) => /module/.test(p) && /zero/.test(p)))
   } finally {
     b.cleanup()
+  }
+})
+
+test('RED: an app chain number equal to a kernel number, or a number used twice in one chain, fails', () => {
+  const a = tree([...BASE, 'modules/content/app/migrations/1205_x.sql', 'modules/content/app/migrations/1205_y.sql'])
+  try {
+    assert.ok(checkMigrationNames(a.root).problems.some((p) => /1205/.test(p) && /twice|same number/.test(p)))
+  } finally {
+    a.cleanup()
+  }
+  const b = tree([...BASE, 'modules/content/app/migrations/0058_other.sql'])
+  try {
+    assert.ok(checkMigrationNames(b.root).problems.some((p) => /0058_other/.test(p) && /kernel/.test(p)))
+  } finally {
+    b.cleanup()
+  }
+  // leaf chains run against their own databases: a leaf 001 beside kernel 001 is fine
+  const c = tree(BASE)
+  try {
+    assert.deepEqual(checkMigrationNames(c.root).problems, [])
+  } finally {
+    c.cleanup()
   }
 })
