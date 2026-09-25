@@ -797,3 +797,23 @@ test('the stale-fixture rule names exactly the two stale fixtures, not tree-clea
   assert.equal(hit('test/host/fixtures/postgres-major/tree-clean/compose/calendar.yml'), 0)
   assert.equal(hit('test/host/fixtures/postgres-major/tree-stale-other/compose/calendar.yml'), 0)
 })
+
+// ── TDD-9: the suites cannot shrink silently ───────────────────────────────
+//
+// B37 shipped 38 tests here; TASK-019 added 29 (this one included: 30) and a
+// 15-test suite for the running check. A test deleted to get a red run green
+// would otherwise leave every remaining test passing and nothing to notice.
+const B37_TESTS = 38
+const TASK019_TESTS = 30
+const RUNNING_TESTS = 15
+
+const countTests = (text) => (text.match(/^test\(/gm) ?? []).length
+
+test('TDD-9: the suites hold at least 38 + the TASK-019 tests', () => {
+  const own = countTests(readFileSync(fileURLToPath(import.meta.url), 'utf8'))
+  assert.ok(own >= B37_TESTS + TASK019_TESTS,
+    `check-postgres-major.test.mjs has ${own} tests, expected >= ${B37_TESTS} + ${TASK019_TESTS}`)
+  const running = countTests(readFileSync(join(ROOT, 'scripts/check-postgres-major-running.test.mjs'), 'utf8'))
+  assert.ok(running >= RUNNING_TESTS,
+    `check-postgres-major-running.test.mjs has ${running} tests, expected >= ${RUNNING_TESTS}`)
+})
