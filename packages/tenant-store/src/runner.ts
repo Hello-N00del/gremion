@@ -7,11 +7,12 @@
 // Order of a run, and why:
 //   1. reserve ONE connection (sql.reserve()); every step below runs on it.
 //   2. refuse a pooler (Q3): a session advisory lock does not survive
-//      PgBouncer transaction pooling.
+//      PgBouncer transaction pooling (assertNotPooler says how it is told).
 //   3. pg_advisory_lock(ADVISORY_LOCKS.migration) — BEFORE schema_migrations
 //      is read. Read-then-lock lets two runners both see the same pending
-//      set; the second waits here instead, then reads a ledger that already
-//      has everything.
+//      set; the second waits here instead (bounded by lockWaitTimeoutMs,
+//      logging who holds it), then reads a ledger that already has
+//      everything.
 //   4. verify the WHOLE manifest (every file, both directions, every sha256)
 //      and prepare every pending body (stripOuterTransaction) — pure, no DDL.
 //   5. read the ledger WITHOUT DDL (to_regclass) and check it against the
@@ -58,6 +59,17 @@ export interface RunMigrationsOptions {
   dir: string
   hooks?: RunMigrationsHooks
   log?: (line: string) => void
+  /**
+   * How long to wait for another runner's migration lock, in ms (0 = no
+   * limit). Default 10 minutes; past it the run fails with LOCK_TIMEOUT.
+   */
+  lockWaitTimeoutMs?: number
+  /**
+   * lock_timeout for each file's transaction (SET LOCAL), so an ALTER TABLE
+   * waiting on a busy table fails instead of queueing every runtime query
+   * behind it. Default: the server's setting.
+   */
+  ddlLockTimeoutMs?: number
 }
 
 export interface RunMigrationsResult {
@@ -65,20 +77,23 @@ export interface RunMigrationsResult {
   alreadyApplied: number
 }
 
+export type MigrationRunnerErrorCode =
+  | 'POOLER_TARGET'
+  | 'LOCK_NOT_HELD'
+  | 'LOCK_TIMEOUT'
+  | 'LEDGER_FORMAT'
+  | 'LEDGER_UNKNOWN_FILE'
+  | 'LEDGER_HASH_MISMATCH'
+  | 'OUT_OF_ORDER'
+  | 'PRE_APPLY_FAILED'
+  | 'APPLY_FAILED'
+  | 'TRANSACTION_ESCAPED'
+  | 'UNLOCK_FAILED'
+
 export class MigrationRunnerError extends Error {
   override name = 'MigrationRunnerError'
   constructor(
-    readonly code:
-      | 'POOLER_TARGET'
-      | 'LOCK_NOT_HELD'
-      | 'LEDGER_FORMAT'
-      | 'LEDGER_UNKNOWN_FILE'
-      | 'LEDGER_HASH_MISMATCH'
-      | 'OUT_OF_ORDER'
-      | 'PRE_APPLY_FAILED'
-      | 'APPLY_FAILED'
-      | 'TRANSACTION_ESCAPED'
-      | 'UNLOCK_FAILED',
+    readonly code: MigrationRunnerErrorCode,
     message: string,
     readonly files: readonly string[] = [],
     options?: { cause?: unknown },
@@ -96,10 +111,29 @@ const LEDGER_DDL = `CREATE TABLE ${LEDGER} (
 )`
 
 /**
- * Q3: PgBouncer answers `SHOW pool_mode`; Postgres does not know the
- * parameter (42704). Anything else is not a verdict, so it is rethrown.
+ * Q3: a session advisory lock does not survive PgBouncer transaction pooling,
+ * so the runner refuses anything but a direct connection. Two signals:
+ *
+ *  1. the backend pid the server announced in the protocol (BackendKeyData,
+ *     which postgres-js keeps as `result.state.pid`) must equal
+ *     pg_backend_pid(). A pooler answers the handshake itself, with its own
+ *     cancel key, so the two differ — measured on PgBouncer 1.25.2 in
+ *     transaction mode (and a TCP proxy that is not a pooler passes);
+ *  2. `SHOW pool_mode` must be unknown (42704). The brief's Q3 signal, kept,
+ *     but NOT sufficient on its own: PgBouncer forwards it to the server on
+ *     an ordinary connection and Postgres answers 42704 (measured).
+ * Any other error is not a verdict and is rethrown.
  */
-export async function assertNotPooler(sql: Pick<Sql, 'unsafe'>): Promise<void> {
+export async function assertNotPooler(sql: Reserved | Sql): Promise<void> {
+  const res = await sql<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`
+  const announced = (res as unknown as { state?: { pid?: number | null } }).state?.pid
+  const actual = res[0]?.pid
+  if (typeof announced !== 'number' || announced !== actual) {
+    throw new MigrationRunnerError(
+      'POOLER_TARGET',
+      `the migration target is not a direct Postgres connection: the protocol announced backend ${announced} but the server runs ${actual} — a pooler sits in between, and a session advisory lock does not survive transaction pooling; connect the runner directly to Postgres`,
+    )
+  }
   let answered: unknown
   try {
     answered = await sql.unsafe('SHOW pool_mode')
@@ -109,7 +143,7 @@ export async function assertNotPooler(sql: Pick<Sql, 'unsafe'>): Promise<void> {
   }
   throw new MigrationRunnerError(
     'POOLER_TARGET',
-    `the migration target answers SHOW pool_mode (${JSON.stringify(answered)}): it is a pooler, and a session advisory lock does not survive transaction pooling — connect the runner directly to Postgres`,
+    `the migration target answers SHOW pool_mode (${JSON.stringify(answered)}): it is a pooler — connect the runner directly to Postgres`,
   )
 }
 
@@ -128,18 +162,71 @@ async function readLedger(sql: Reserved): Promise<LedgerRow[] | null> {
   }
 }
 
+const MAX_LOCK_TIMEOUT_MS = 2 ** 31 - 1
+
+function assertTimeout(name: string, ms: number | undefined): void {
+  if (ms !== undefined && (!Number.isInteger(ms) || ms < 0 || ms > MAX_LOCK_TIMEOUT_MS)) {
+    throw new RangeError(`${name} must be an integer number of milliseconds (0 = no limit)`)
+  }
+}
+
 export async function runMigrations(options: RunMigrationsOptions): Promise<RunMigrationsResult> {
   const { sql, dir, hooks = {}, log = (l) => console.info(`[tenant-store] ${l}`) } = options
+  const lockWaitTimeoutMs = options.lockWaitTimeoutMs ?? 10 * 60_000
+  const ddlLockTimeoutMs = options.ddlLockTimeoutMs
+  assertTimeout('lockWaitTimeoutMs', lockWaitTimeoutMs)
+  assertTimeout('ddlLockTimeoutMs', ddlLockTimeoutMs)
   const { classid, objid } = ADVISORY_LOCKS.migration
   const reserved = await sql.reserve()
   let locked = false
+  let pid = -1
+  // Set when the reserved connection may still hold the lock or an open
+  // transaction: it is then terminated, never handed back to the pool.
+  let poisoned: unknown
   let failure: unknown
+
+  const lockHeld = async () => {
+    const [held] = await reserved<{ ok: boolean }[]>`
+      SELECT pg_backend_pid() = ${pid} AND EXISTS (
+        SELECT 1 FROM pg_locks
+         WHERE locktype = 'advisory' AND pid = ${pid} AND granted
+           AND classid = ${classid}::oid AND objid = ${objid}::oid AND objsubid = 2
+           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+      ) AS ok`
+    return held?.ok === true
+  }
+
   try {
     await assertNotPooler(reserved)
+    const [me] = await reserved<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`
+    pid = me!.pid
 
-    await reserved`SELECT pg_advisory_lock(${classid}::int4, ${objid}::int4)`
+    const [first] = await reserved<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(${classid}::int4, ${objid}::int4) AS ok`
+    if (!first?.ok) {
+      const holders = await reserved<{ pid: number; app: string | null }[]>`
+        SELECT l.pid, a.application_name AS app
+          FROM pg_locks l LEFT JOIN pg_stat_activity a ON a.pid = l.pid
+         WHERE l.locktype = 'advisory' AND l.granted
+           AND l.classid = ${classid}::oid AND l.objid = ${objid}::oid AND l.objsubid = 2
+           AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`
+      log(
+        `waiting for the migration lock (held by ${holders.map((h) => `pid ${h.pid}${h.app ? ` '${h.app}'` : ''}`).join(', ') || 'another session'}); giving up after ${lockWaitTimeoutMs === 0 ? 'no limit' : `${lockWaitTimeoutMs} ms`}`,
+      )
+      // lock_timeout bounds the advisory-lock wait too; the wait stays a
+      // real pg_locks waiter (not a try-lock loop), so it is observable.
+      await reserved`SELECT set_config('lock_timeout', ${String(lockWaitTimeoutMs)}, false)`
+      try {
+        await reserved`SELECT pg_advisory_lock(${classid}::int4, ${objid}::int4)`
+      } catch (err) {
+        if ((err as { code?: string }).code === '55P03') {
+          throw new MigrationRunnerError('LOCK_TIMEOUT', `the migration lock was not granted within ${lockWaitTimeoutMs} ms`, [], { cause: err })
+        }
+        throw err
+      } finally {
+        await reserved.unsafe('RESET lock_timeout')
+      }
+    }
     locked = true
-    const [{ pid } = { pid: -1 }] = await reserved<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`
 
     // Everything below this line and above the first BEGIN is read-only.
     const migrations = readVerifiedMigrations(dir)
@@ -183,21 +270,17 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
       try {
         await hooks.preApply?.(m.file, ctx)
       } catch (err) {
-        throw new MigrationRunnerError('PRE_APPLY_FAILED', `preApply refused ${m.file}; it and every later file were not applied`, [m.file], { cause: err })
+        throw new MigrationRunnerError('PRE_APPLY_FAILED', `preApply refused ${m.file}; it and every later file were not applied (earlier files of this run stay applied)`, [m.file], { cause: err })
       }
       // Defence in depth for Q3: the lock must still be ours, on this backend.
-      const [held] = await reserved<{ ok: boolean }[]>`
-        SELECT pg_backend_pid() = ${pid} AND EXISTS (
-          SELECT 1 FROM pg_locks
-           WHERE locktype = 'advisory' AND pid = ${pid} AND granted
-             AND classid = ${classid}::oid AND objid = ${objid}::oid AND objsubid = 2
-             AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-        ) AS ok`
-      if (!held?.ok) throw new MigrationRunnerError('LOCK_NOT_HELD', `the migration lock is not held by this connection before ${m.file}`, [m.file])
+      if (!(await lockHeld())) throw new MigrationRunnerError('LOCK_NOT_HELD', `the migration lock is not held by this connection before ${m.file}`, [m.file])
 
       await reserved.unsafe('BEGIN')
       try {
         const [before] = await reserved<{ xid: string }[]>`SELECT pg_current_xact_id()::text AS xid`
+        if (ddlLockTimeoutMs !== undefined) {
+          await reserved`SELECT set_config('lock_timeout', ${String(ddlLockTimeoutMs)}, true)`
+        }
         if (!ledgerPresent) await reserved.unsafe(LEDGER_DDL)
         await reserved.unsafe(m.body)
         // A COMMIT that slipped past stripOuterTransaction would leave the
@@ -206,13 +289,26 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
         if (after?.xid !== before?.xid) {
           throw new MigrationRunnerError('TRANSACTION_ESCAPED', `${m.file} ended the runner's transaction; its statements before that point are committed without a ledger row`, [m.file])
         }
+        // The ledger row is written as the runner's own identity, whatever
+        // role the body switched to.
+        await reserved.unsafe('RESET ROLE; RESET SESSION AUTHORIZATION')
+        // ... and a body that released the lock must not commit (e.g. pg_advisory_unlock_all()).
+        if (!(await lockHeld())) throw new MigrationRunnerError('LOCK_NOT_HELD', `${m.file} released the migration lock; rolled back`, [m.file])
         await reserved`INSERT INTO public.schema_migrations (filename, sha256) VALUES (${m.file}, ${m.sha256})`
         await reserved.unsafe('COMMIT')
       } catch (err) {
-        await reserved.unsafe('ROLLBACK').catch(() => {})
+        try {
+          await reserved.unsafe('ROLLBACK')
+        } catch (rollbackErr) {
+          poisoned = rollbackErr
+        }
         if (err instanceof MigrationRunnerError) throw err
         throw new MigrationRunnerError('APPLY_FAILED', `${m.file} failed and was rolled back: ${(err as Error).message}`, [m.file], { cause: err })
       }
+      // Session state a body set (SET ROLE, search_path, statement_timeout,
+      // ...) survives COMMIT: reset it, so the next file — and the caller's
+      // pool this connection goes back to — start from the defaults.
+      await reserved.unsafe('RESET ALL; RESET ROLE; RESET SESSION AUTHORIZATION')
       ledgerPresent = true
       done.push(m.file)
       log(`applied ${m.file}`)
@@ -223,19 +319,29 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
     throw err
   } finally {
     try {
-      if (locked) {
-        const [r] = await reserved<{ ok: boolean }[]>`SELECT pg_advisory_unlock(${classid}::int4, ${objid}::int4) AS ok`
-        if (!r?.ok) throw new Error('pg_advisory_unlock returned false')
+      if (locked && poisoned === undefined) {
+        try {
+          const [r] = await reserved<{ ok: boolean }[]>`SELECT pg_advisory_unlock(${classid}::int4, ${objid}::int4) AS ok`
+          if (!r?.ok) throw new Error('pg_advisory_unlock returned false')
+        } catch (unlockErr) {
+          poisoned = unlockErr
+        }
       }
-    } catch (unlockErr) {
-      // Last resort: drop every session lock this backend holds. If even that
-      // fails the connection is gone, and its session locks went with it.
-      await reserved`SELECT pg_advisory_unlock_all()`.catch(() => {})
-      if (failure === undefined) {
-        // eslint-disable-next-line no-unsafe-finally
-        throw new MigrationRunnerError('UNLOCK_FAILED', `releasing the migration lock failed: ${(unlockErr as Error).message}`, [], { cause: unlockErr })
+      if (poisoned !== undefined && pid > 0) {
+        // The connection may still hold the lock (or an aborted transaction).
+        // Terminate its backend from another connection instead of handing it
+        // back to the pool: its session lock dies with it.
+        const killed = await sql<{ ok: boolean }[]>`SELECT pg_terminate_backend(${pid}) AS ok`.then(
+          (r) => r[0]?.ok === true,
+          () => false,
+        )
+        const msg = `releasing the migration lock failed (${(poisoned as Error).message}); backend ${pid} ${killed ? 'was terminated' : 'could NOT be terminated — the lock may stay held until that connection closes'}`
+        if (failure === undefined) {
+          // eslint-disable-next-line no-unsafe-finally
+          throw new MigrationRunnerError('UNLOCK_FAILED', msg, [], { cause: poisoned })
+        }
+        log(msg)
       }
-      log(`releasing the migration lock failed after an earlier error: ${(unlockErr as Error).message}`)
     } finally {
       reserved.release()
     }
