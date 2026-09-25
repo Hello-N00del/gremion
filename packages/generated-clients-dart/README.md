@@ -66,10 +66,11 @@ The writer and the check call the same function, one per surface:
 3. Overlay a package-local `.gitattributes` (`* text eol=lf`), `.gitignore`
    (`.dart_tool/`, `build/`) and `.generated-from` (the spec path and its
    sha256).
-4. `dart pub get`. The check runs `--enforce-lockfile` against the committed
-   `pubspec.lock`. The writer runs plain `pub get`, which keeps every locked
-   version that still satisfies the pubspec, so a generator bump can update
-   the lock, and the check then compares it byte for byte. A new surface
+4. `dart pub get --enforce-lockfile` against the committed `pubspec.lock`. The
+   writer re-resolves with plain `pub get` only when the committed lock no
+   longer satisfies the pubspec, for example after a generator bump. Even then
+   it refuses any package whose version stayed but whose sha256 changed. The
+   check always enforces, then compares the lock byte for byte. A new surface
    seeds its lock from an existing surface. **To re-resolve on purpose,
    delete the surface's `pubspec.lock` and run `generate`.**
 5. `dart run build_runner build --delete-conflicting-outputs`. The `*.g.dart`
@@ -127,14 +128,20 @@ decides what counts as a schema by its position, so a property named
   `$id`, `${x['id']}`, `42`). The scan also sees a path that was assembled:
   - from string consts (`'$base/committees/$id'`);
   - by `+` concatenation or adjacent literals;
-  - from segment lists (`pathSegments: [...]`, `[...].join('/')`);
+  - from segment lists (`pathSegments: [...]`, `[...].join('/')`,
+    `path.url.join(...)`) and `StringBuffer()..write(...)` chains;
   - without a leading slash;
-  - as a tail of at least two segments behind a base URL that carries the
-    prefix (`baseUrl: '…/api'` + `'/governance/committees'`).
+  - as a tail behind a base URL that carries the prefix
+    (`baseUrl: '…/api'` + `'/governance/committees'`), provided the tail
+    holds at least two literal segments. Shorter tails such as
+    `/groups/{id}` are ordinary route, asset and document-id text too often.
 
-  Known gaps: paths computed at runtime, and a single-segment remainder
-  behind a base URL (e.g. `'/health'`). The scan also fails if it saw no path
-  keys, or if its file listing does not include the generated packages.
+  Known gaps of this text scan: paths computed at runtime; segments behind
+  getters, maps or `${'literal'}`; unicode escapes; and a remainder behind a
+  base URL with fewer than two literal segments (e.g. `'/health'`,
+  `'/groups/$id'`). Router patterns (`'/groups/:id'`) are deliberately not
+  matched. The scan also fails if it saw no path keys, or if its file
+  listing does not include the generated packages.
 - Vacuity. The check reports `N of M`, where M is the number of openapi+active
   registry entries. It fails unless M >= 1 and N == M. Registry entries with an
   unknown `status`, a `type` that disagrees with the document, or a name that
