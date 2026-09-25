@@ -1300,7 +1300,13 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "enum": [
+              "cancelled_by_chair",
+              "body_archived",
+              null
+            ],
+            "description": "Set when state is cancelled: the chair cancelled, or the body was archived (DOMAIN Meeting lifecycle) [A: value names chosen here]."
           }
         }
       },

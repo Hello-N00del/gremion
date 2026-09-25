@@ -392,7 +392,11 @@ export interface components {
             opened_at?: string | null;
             /** Format: date-time */
             closed_at?: string | null;
-            cancel_reason?: string | null;
+            /**
+             * @description Set when state is cancelled: the chair cancelled, or the body was archived (DOMAIN Meeting lifecycle) [A: value names chosen here].
+             * @enum {string|null}
+             */
+            cancel_reason?: "cancelled_by_chair" | "body_archived" | null;
         };
         MeetingCreate: {
             /**

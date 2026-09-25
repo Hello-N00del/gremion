@@ -414,7 +414,8 @@
                         "type": "integer"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.meeting.scheduled.v1. Deliberately carries no title and no location — consumers read those live through gov.meeting-read v1 (DB-GOV-MEETING invariant)."
+                    "description": "DOMAIN de.gremion.gov.meeting.scheduled.v1. Deliberately carries no title and no location — consumers read those live through gov.meeting-read v1 (DB-GOV-MEETING invariant).",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -457,7 +458,8 @@
                         "type": "integer"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.meeting.rescheduled.v1. No title or location."
+                    "description": "DOMAIN de.gremion.gov.meeting.rescheduled.v1. No title or location.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -488,13 +490,19 @@
                         "format": "uuid"
                       },
                       "cancel_reason": {
-                        "type": "string"
+                        "type": "string",
+                        "enum": [
+                          "cancelled_by_chair",
+                          "body_archived"
+                        ],
+                        "description": "The Meeting lifecycle's two Cancelled edges: the chair cancels, or the body is archived (DOMAIN Meeting lifecycle) [A: value names chosen here]."
                       },
                       "aggregate_version": {
                         "type": "integer"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.meeting.cancelled.v1. No title or location."
+                    "description": "DOMAIN de.gremion.gov.meeting.cancelled.v1. No title or location.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -528,7 +536,8 @@
                         "format": "date-time"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.meeting.opened.v1."
+                    "description": "DOMAIN de.gremion.gov.meeting.opened.v1.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -567,7 +576,8 @@
                         "format": "date-time"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.meeting.closed.v1."
+                    "description": "DOMAIN de.gremion.gov.meeting.closed.v1.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -617,7 +627,8 @@
                         "type": "boolean"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.invitation.issued.v1. In-app delivery only; the mail copy goes through mail.send, not this event."
+                    "description": "DOMAIN de.gremion.gov.invitation.issued.v1. In-app delivery only; the mail copy goes through mail.send, not this event.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -641,7 +652,9 @@
                       "invitation_id",
                       "meeting_id",
                       "actor_person_id",
-                      "days_short"
+                      "days_short",
+                      "curing_basis_id",
+                      "curing_basis_version"
                     ],
                     "properties": {
                       "invitation_id": {
@@ -664,16 +677,19 @@
                           "string",
                           "null"
                         ],
-                        "format": "uuid"
+                        "format": "uuid",
+                        "description": "Null when the body has no curing basis configured; the override then states that none is configured (DB-GOV-CURING-BASIS [A])."
                       },
                       "curing_basis_version": {
                         "type": [
                           "integer",
                           "null"
-                        ]
+                        ],
+                        "description": "Version of the curing basis as recorded; null with curing_basis_id."
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.notice.overridden.v1. Deliberately carries no free-text reason — never the override's reason field — per DOMAIN [D R20-D26-5]: only OPS's log stream consumes this, and the reason is not repeated into the event bus."
+                    "description": "DOMAIN de.gremion.gov.notice.overridden.v1. Deliberately carries no free-text reason — never the override's reason field — per DOMAIN [D R20-D26-5]: only OPS's log stream consumes this, and the reason is not repeated into the event bus.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -720,7 +736,8 @@
                         "type": "boolean"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.motion.submitted.v1."
+                    "description": "DOMAIN de.gremion.gov.motion.submitted.v1.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -754,7 +771,8 @@
                         "format": "uuid"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.motion.withheld.v1."
+                    "description": "DOMAIN de.gremion.gov.motion.withheld.v1.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -793,7 +811,8 @@
                         "format": "uuid"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.motion.admitted.v1."
+                    "description": "DOMAIN de.gremion.gov.motion.admitted.v1.",
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -832,7 +851,8 @@
                         "format": "uuid"
                       }
                     },
-                    "description": "DOMAIN de.gremion.gov.motion.deferred.v1."
+                    "description": "DOMAIN de.gremion.gov.motion.deferred.v1.",
+                    "additionalProperties": false
                   }
                 ]
               }

@@ -68,6 +68,76 @@ const DOMAIN_LIFECYCLES: Record<string, string[]> = {
   ],
 }
 
+function loadAsyncApi(): any {
+  return JSON.parse(readFileSync(join(REPO_ROOT, 'contracts/governance/asyncapi.gov.json'), 'utf8'))
+}
+
+// DOMAIN v0.4 GOV events table (DB-PLT-EVENT-TYPE rows), payload column,
+// field for field. "new start and end" = scheduled_start/scheduled_end;
+// "recipient person_ids" = recipient_person_ids; "curing_basis_id and
+// version" = curing_basis_id + curing_basis_version.
+const DOMAIN_EVENT_FIELDS: Record<string, { schema: string; fields: string[] }> = {
+  'de.gremion.gov.meeting.scheduled.v1': {
+    schema: 'EnvelopeMeetingScheduled',
+    fields: ['meeting_id', 'body_id', 'org_unit_id', 'scheduled_start', 'scheduled_end', 'aggregate_version'],
+  },
+  'de.gremion.gov.meeting.rescheduled.v1': {
+    schema: 'EnvelopeMeetingRescheduled',
+    fields: ['meeting_id', 'scheduled_start', 'scheduled_end', 'aggregate_version'],
+  },
+  'de.gremion.gov.meeting.cancelled.v1': {
+    schema: 'EnvelopeMeetingCancelled',
+    fields: ['meeting_id', 'cancel_reason', 'aggregate_version'],
+  },
+  'de.gremion.gov.meeting.opened.v1': { schema: 'EnvelopeMeetingOpened', fields: ['meeting_id', 'opened_at'] },
+  'de.gremion.gov.meeting.closed.v1': { schema: 'EnvelopeMeetingClosed', fields: ['meeting_id', 'body_id', 'closed_at'] },
+  'de.gremion.gov.invitation.issued.v1': {
+    schema: 'EnvelopeInvitationIssued',
+    fields: ['invitation_id', 'meeting_id', 'version', 'recipient_person_ids', 'notice_met'],
+  },
+  'de.gremion.gov.notice.overridden.v1': {
+    schema: 'EnvelopeNoticeOverridden',
+    fields: ['invitation_id', 'meeting_id', 'actor_person_id', 'days_short', 'curing_basis_id', 'curing_basis_version'],
+  },
+  'de.gremion.gov.motion.submitted.v1': {
+    schema: 'EnvelopeMotionSubmitted',
+    fields: ['motion_id', 'meeting_id', 'submitter_kind', 'is_late'],
+  },
+  'de.gremion.gov.motion.withheld.v1': { schema: 'EnvelopeMotionWithheld', fields: ['motion_id', 'meeting_id'] },
+  'de.gremion.gov.motion.admitted.v1': {
+    schema: 'EnvelopeMotionAdmitted',
+    fields: ['motion_id', 'meeting_id', 'actor_person_id'],
+  },
+  'de.gremion.gov.motion.deferred.v1': {
+    schema: 'EnvelopeMotionDeferred',
+    fields: ['motion_id', 'target_meeting_id', 'actor_person_id'],
+  },
+}
+
+function payloadSchema(async: any, schemaKey: string): any {
+  // allOf[EventEnvelope, {properties:{payload:{allOf:[<payload object>]}}}]
+  return async.components.schemas[schemaKey].allOf[1].properties.payload.allOf[0]
+}
+
+describe('D3 - every event payload equals its DOMAIN field list, closed against extras', () => {
+  it('the table covers exactly the 11 messages in the document', () => {
+    const async = loadAsyncApi()
+    const envelopes = Object.keys(async.components.schemas).filter((k) => k.startsWith('Envelope'))
+    expect(envelopes.sort()).toEqual(Object.values(DOMAIN_EVENT_FIELDS).map((e) => e.schema).sort())
+  })
+
+  for (const [eventType, { schema, fields }] of Object.entries(DOMAIN_EVENT_FIELDS)) {
+    it(`${eventType}: payload keys = DOMAIN fields, all required, no additional properties`, () => {
+      const p = payloadSchema(loadAsyncApi(), schema)
+      expect(Object.keys(p.properties).sort()).toEqual([...fields].sort())
+      expect([...p.required].sort()).toEqual([...fields].sort())
+      // minimisation made structural: a producer cannot slip a title,
+      // location, reason or address in beside the listed fields
+      expect(p.additionalProperties).toBe(false)
+    })
+  }
+})
+
 describe('D2 - every state enum equals its DOMAIN lifecycle diagram', () => {
   for (const [schema, states] of Object.entries(DOMAIN_LIFECYCLES)) {
     it(`${schema}.state enum = DOMAIN ${schema} lifecycle`, () => {
