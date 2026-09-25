@@ -295,8 +295,8 @@ recorded before re-checking its hash — but no such database exists: kernel
 `058` has never shipped on `main` or `origin/main`.
 
 `news_posts` and its `GRANT SELECT` live in the content module's
-`1200_content_news_posts.sql`, staged outside this directory
-(`modules/content/migrations/`) until the content module repo exists; that
+`1200_content_news_posts.sql`, staged outside this directory in the content
+module's app chain (`modules/content/app/migrations/`); that
 grant covers the whole row today, drafts and `author_id` included, since no
 portal query reads `news_posts` yet — narrowing it to a published-only view
 is a follow-on unit, not this one. The consequence is the rule: a

@@ -58,6 +58,8 @@ describe('migrations/README.md — table ownership (B4a)', () => {
   it('names the content-owned creation migration and the reader role', () => {
     expect(readme).toContain('1200_content_news_posts.sql')
     expect(readme).toContain('gremion_public_reader')
+    // Where it lives (TASK-200 Q7): the content APP chain, not the leaf chain.
+    expect(readme).toContain('modules/content/app/migrations/')
   })
 
   it('states the content-OFF rule the split exists for', () => {
