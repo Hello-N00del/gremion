@@ -874,6 +874,15 @@ export async function setPrimaryDomain(tenantId: string, rawHost: string): Promi
  * The lookup joins tenant_domain -> tenant. Because `host` is tenant_domain's
  * PK the join yields at most one row, so an ambiguous host is not merely
  * improbable — it is unrepresentable.
+ *
+ * TASK-025 Q1 (ledger): on this base, resolve.ts's request path still selects
+ * the tenant by the leftmost DNS label (extractLeftmostLabel) — this function
+ * has NO production caller yet. TASK-025 proves the request clause HERE,
+ * against this function directly, via registry.domain.integration.test.ts's
+ * two-tenant-isolation and B8-post-condition blocks (real Postgres, real
+ * tenant_domain rows, a raw-host lookup). The request-path cut-over — wiring
+ * resolve.ts's Handle to call resolveTenantByHost instead of extractLeftmostLabel
+ * — is TASK-041 (B10-resolver-fullhost), not this task.
  */
 export async function resolveTenantByHost(
   host: string | undefined | null,
