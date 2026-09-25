@@ -348,6 +348,13 @@ export function runKnownSecretsArm(repoLabel, repoPath, { denylistPath } = {}) {
       status: findings.length === 0 ? 'PASS' : 'FAIL',
       reason: findings.length === 0 ? undefined : `${findings.length} known-compromised digest match(es)`,
       scanned,
+      // LOW fix: this arm used to report only a bare count. known-secrets.mjs's
+      // own CLI already prints file:line for each hit (see
+      // check-no-known-secrets.mjs), but guards.mjs's entry point dropped that
+      // location, so a RED here gave no lead on WHERE without re-running the
+      // scan by hand. Location only, same as the gitleaks arm above — never
+      // the matched value or the denylist's own note text.
+      findings: findings.map((f) => ({ file: f.file, line: f.line })),
     }
   } catch (err) {
     return { arm: 'known-secrets', repo: repoLabel, status: 'FAIL', reason: `could not scan: ${err.message}` }

@@ -341,6 +341,9 @@ test('runKnownSecretsArm: an entry-point-level FAIL on an injected --known-secre
     const red = runKnownSecretsArm('kernel', root, { denylistPath })
     assert.equal(red.status, 'FAIL')
     assert.match(red.reason, /1 known-compromised digest match/)
+    // LOW fix: a RED here must say WHERE (file:line), not just a bare count.
+    assert.deepEqual(red.findings, [{ file: 'leaked.env', line: 1 }])
+    assert.equal(JSON.stringify(red.findings).includes(SENTINEL), false, 'the matched value itself must never appear in the arm result')
   } finally {
     rmSync(root, { recursive: true, force: true })
     rmSync(denylistDir, { recursive: true, force: true })
