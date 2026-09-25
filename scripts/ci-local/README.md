@@ -149,7 +149,11 @@ Every `node --test` invocation in this package's own commands passes
 `--test-reporter=tap` explicitly (the installed Node's `node --test` with no
 reporter flag defaults to the human "spec" reporter, which has no `# tests`
 summary line at all — see `lib/run.mjs`'s header comment for the related
-`NODE_TEST_CONTEXT` leak this package also guards against).
+`NODE_TEST_CONTEXT` leak this package also guards against). A suite this
+package does not spell out itself (a `pnpm run test:carve` script in the
+other repo) still gets the spec reporter, so `parseNodeTest` also reads the
+spec summary (`ℹ tests N` / `ℹ pass N` / `ℹ fail N`) when no TAP summary is
+present, ignoring ANSI colour codes and CRLF line ends.
 
 ## `known-secrets.mjs`
 

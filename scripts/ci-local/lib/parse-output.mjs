@@ -18,15 +18,35 @@ function withSkipped(counts, skipped) {
   return skipped > 0 ? { ...counts, skipped } : counts
 }
 
-/** node's own TAP summary lines: `# tests N`, `# pass N`, `# fail N`. */
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;]*m/g
+
+/**
+ * node's own test-runner summary lines, in either reporter's form: TAP
+ * (`# tests N`, `# pass N`, `# fail N`, ...) or spec (`ℹ tests N`,
+ * `ℹ pass N`, ...). TAP is read when present; spec is the fallback.
+ *
+ * TASK-012-FU finding 4 (MEDIUM): only the TAP form used to be read, and
+ * this package forces `--test-reporter=tap` only on the `node --test`
+ * commands it spells out itself. A node-test suite that suites.json runs
+ * through pnpm (`pnpm run test:carve`) gets Node 26's default spec reporter
+ * even with stdout piped, so the snapshot recorded FAIL "no TAP summary"
+ * with exit 0 for a suite whose 84 tests all passed. ANSI colour codes
+ * (FORCE_COLOR) and CRLF line ends are stripped before matching.
+ */
 export function parseNodeTest(output) {
-  const tests = output.match(/^# tests (\d+)$/m)
-  const pass = output.match(/^# pass (\d+)$/m)
-  const fail = output.match(/^# fail (\d+)$/m)
-  const skipped = output.match(/^# skipped (\d+)$/m)
-  const todo = output.match(/^# todo (\d+)$/m)
+  const text = String(output ?? '').replace(ANSI_RE, '').replace(/\r\n?/g, '\n')
+  // One reporter per read: when a TAP summary exists, spec lines are never
+  // mixed in (and vice versa), so counts always come from ONE summary block.
+  const tap = /^# tests \d+$/m.test(text)
+  const field = (name) => text.match(tap ? new RegExp(`^# ${name} (\\d+)$`, 'm') : new RegExp(`^\\s*ℹ ${name} (\\d+)\\s*$`, 'm'))
+  const tests = field('tests')
+  const pass = field('pass')
+  const fail = field('fail')
+  const skipped = field('skipped')
+  const todo = field('todo')
   if (!tests) {
-    return { collected: 0, passed: 0, failed: 0, reason: 'no TAP "# tests" summary line found in output' }
+    return { collected: 0, passed: 0, failed: 0, reason: 'no test-runner summary ("# tests N" TAP or "ℹ tests N" spec) found in output' }
   }
   return withSkipped(
     {
