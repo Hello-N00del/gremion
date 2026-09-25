@@ -96,3 +96,97 @@ describe('checkAsyncApiCompat — T4 fixtures', () => {
     expect(res.bump).toBe('major')
   })
 })
+
+// Round-1 verifier HIGH finding: every REAL payload in this repo is a $ref
+// to a components.schemas entry that is allOf[Envelope, {...}] — the base
+// fixture above has neither. These fixtures reproduce that exact shape so
+// the regression is pinned in the unit suite, not only in the real-tree
+// test below.
+describe('compareAsyncApiPayloads — $ref + allOf envelope shape (round-1 verifier HIGH)', () => {
+  const envelopeBase = loadDoc('envelope-base-1.0.0.json')
+
+  it('resolves the $ref payload and flattens allOf to see the NESTED property', () => {
+    const res = compareAsyncApiPayloads(envelopeBase, loadDoc('envelope-removed-nested-property-1.0.0.json'))
+    expect(res.breaking).toBe(true)
+    expect(res.reasons.some((r) => r.includes('payload.payload.attempts'))).toBe(true)
+  })
+
+  it('a type expressed as ["string","null"] on both sides is NOT a false-positive change', () => {
+    // envelope-base's Envelope.correlationId is ["string", "null"] on both
+    // sides of every fixture in this block — if `type` were compared with
+    // !== on the raw array instead of as a set, this alone would (wrongly)
+    // report a breaking change even with no real edit.
+    const res = compareAsyncApiPayloads(envelopeBase, loadDoc('envelope-removed-nested-property-2.0.0.json'))
+    expect(res.reasons.some((r) => r.includes('correlationId'))).toBe(false)
+  })
+})
+
+describe('checkAsyncApiCompat — $ref + allOf envelope shape (round-1 verifier HIGH)', () => {
+  const envelopeBase = load('envelope-base-1.0.0.json')
+
+  it('nested removal (breaking) with NO bump: FAILS', () => {
+    const res = checkAsyncApiCompat(envelopeBase, load('envelope-removed-nested-property-1.0.0.json'))
+    expect(res.ok).toBe(false)
+    expect(res.breaking).toBe(true)
+  })
+
+  it('nested removal (breaking) with a MAJOR bump: PASSES', () => {
+    const res = checkAsyncApiCompat(envelopeBase, load('envelope-removed-nested-property-2.0.0.json'))
+    expect(res.ok).toBe(true)
+    expect(res.bump).toBe('major')
+  })
+
+  // MEDIUM finding (survived mutant G1b: `bump === 'major'` loosened to
+  // `bump === 'major' || bump === 'minor'` and all tests stayed green). A
+  // minor bump is NOT enough for a breaking removal.
+  it('nested removal (breaking) with only a MINOR bump: FAILS', () => {
+    const res = checkAsyncApiCompat(envelopeBase, load('envelope-removed-nested-property-1.1.0.json'))
+    expect(res.ok).toBe(false)
+    expect(res.breaking).toBe(true)
+    expect(res.bump).toBe('minor')
+  })
+})
+
+// Round-1 verifier HIGH finding, reproduced against the REAL kernel spec
+// (not a fixture): the exact probe from the review — remove `attempts` from
+// EnvelopeOrgUnit's nested payload, remove `failed`/`abandoned` from the
+// `status` enum, drop `status` from required, and bump only to 1.1.0 (minor).
+// Before the fix this passed as "non-breaking AsyncAPI payload addition";
+// it must now fail.
+describe('checkAsyncApiCompat — real tree (contracts/kernel/asyncapi.provisioning.json)', () => {
+  const realSpecPath = join(REPO_ROOT, 'contracts', 'kernel', 'asyncapi.provisioning.json')
+  const realRaw = readFileSync(realSpecPath, 'utf8')
+  const realDoc = JSON.parse(realRaw) as Record<string, unknown>
+
+  function mutateOrgUnitPayload(mutate: (payload: Record<string, unknown>) => void, version: string): string {
+    const doc = JSON.parse(JSON.stringify(realDoc)) as {
+      info: { version: string }
+      components: { schemas: { EnvelopeOrgUnit: { allOf: unknown[] } } }
+    }
+    doc.info.version = version
+    const member = doc.components.schemas.EnvelopeOrgUnit.allOf[1] as { properties: { payload: Record<string, unknown> } }
+    mutate(member.properties.payload)
+    return JSON.stringify(doc)
+  }
+
+  it('removing attempts + narrowing the status enum + dropping status from required, with only a MINOR bump: FAILS', () => {
+    const mutated = mutateOrgUnitPayload((payload) => {
+      delete (payload.properties as Record<string, unknown>).attempts
+      const status = (payload.properties as Record<string, { enum: string[] }>).status
+      status.enum = status.enum.filter((v) => v !== 'failed' && v !== 'abandoned')
+      payload.required = (payload.required as string[]).filter((r) => r !== 'status')
+    }, '1.1.0')
+    const res = checkAsyncApiCompat(realRaw, mutated)
+    expect(res.ok).toBe(false)
+    expect(res.breaking).toBe(true)
+    expect(res.reason).toMatch(/attempts|status/)
+  })
+
+  it('the same removal with a MAJOR bump: PASSES', () => {
+    const mutated = mutateOrgUnitPayload((payload) => {
+      delete (payload.properties as Record<string, unknown>).attempts
+    }, '2.0.0')
+    const res = checkAsyncApiCompat(realRaw, mutated)
+    expect(res.ok).toBe(true)
+  })
+})
