@@ -6,9 +6,9 @@
 // callers can unit-test the FAIL paths (timeout, missing tool) without
 // actually spawning anything slow.
 
-import { spawnSync } from 'node:child_process'
+import { spawnSync, execFileSync } from 'node:child_process'
 
-const DEFAULT_TIMEOUT_MS = 120_000
+export const DEFAULT_TIMEOUT_MS = 120_000
 
 // A suite command that itself invokes `node --test` (kind 'node-test' or
 // 'guard') must never inherit these — Node's own test runner sets them on
@@ -34,6 +34,40 @@ function cleanEnv() {
 }
 
 /**
+ * Best-effort kill of `pid`'s whole process tree/group, not just `pid`
+ * itself. HIGH fix: spawnSync's own `timeout` option only guarantees the
+ * IMMEDIATE spawned process is signaled. For a STRING command (run with
+ * shell:true), that immediate process is the shell (`cmd.exe` on Windows,
+ * `/bin/sh` on POSIX) — a long-running grandchild it forked (vitest,
+ * Playwright) is never touched by that signal and keeps running as an
+ * orphan after `run()` returns. Measured directly: a kernel gremion-ui
+ * vitest run that exceeded the old 120s default left its node process
+ * (observed PID, started at the timeout) still running minutes later.
+ *
+ *  - Windows: `taskkill /T /F /PID <pid>` walks the process's own child
+ *    tree by parent PID and force-kills all of it.
+ *  - POSIX: `run()` spawns with `detached: true`, which makes the child the
+ *    leader of its OWN process group (pgid === its pid). Signaling the
+ *    NEGATIVE pid delivers to the whole group in one call.
+ *
+ * Never throws: the target may have already exited (a real race, not the
+ * bug this exists for), which both `taskkill` and `kill(-pid)` report as an
+ * error — that failure is expected and silently swallowed.
+ */
+export function killProcessTree(pid, { platform = process.platform, killFn = process.kill, execFileFn = execFileSync } = {}) {
+  if (pid === undefined || pid === null) return
+  try {
+    if (platform === 'win32') {
+      execFileFn('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore' })
+    } else {
+      killFn(-pid, 'SIGKILL')
+    }
+  } catch {
+    /* best effort — the tree may already be gone */
+  }
+}
+
+/**
  * Run `command` in `cwd`. Two forms, and the difference is a security
  * boundary:
  *
@@ -50,8 +84,14 @@ function cleanEnv() {
  * @returns {{ exitCode: number, output: string, timedOut: boolean, spawnError: Error|null }}
  *   exitCode is 1 on a timeout or a spawn error (missing tool, bad cwd) —
  *   never 0 — so a caller that only checks exitCode still fails closed.
+ *   `timedOut` and `spawnError` are mutually exclusive: a timeout is always
+ *   reported as `timedOut: true, spawnError: null`, even though Node's own
+ *   spawnSync also sets `result.error` (ETIMEDOUT) in that case — a caller
+ *   that checked `spawnError` first used to misreport a timeout as "could
+ *   not run" instead of "timed out" (HIGH fix, see snapshot-core.mjs).
  */
-export function run(command, cwd, { timeoutMs = DEFAULT_TIMEOUT_MS, spawnFn = spawnSync } = {}) {
+export function run(command, cwd, { timeoutMs = DEFAULT_TIMEOUT_MS, spawnFn = spawnSync, killTreeFn = killProcessTree } = {}) {
+  const isWindows = process.platform === 'win32'
   const options = {
     cwd,
     encoding: 'utf8',
@@ -59,6 +99,11 @@ export function run(command, cwd, { timeoutMs = DEFAULT_TIMEOUT_MS, spawnFn = sp
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
     env: cleanEnv(),
+    // POSIX only: makes the spawned shell/process the leader of its own
+    // process group, so killProcessTree can signal the whole group by its
+    // negative pid. Windows has no equivalent spawn option — taskkill /T
+    // walks the tree by parent PID instead.
+    detached: !isWindows,
   }
   const result = Array.isArray(command)
     ? spawnFn(command[0], command.slice(1), { ...options, shell: false })
@@ -68,22 +113,34 @@ export function run(command, cwd, { timeoutMs = DEFAULT_TIMEOUT_MS, spawnFn = sp
   const stderr = result.stderr ?? ''
   const output = stdout + (stderr ? `\n${stderr}` : '')
 
+  // Checked FIRST, before result.error: spawnSync's own timeout sets BOTH
+  // result.error (ETIMEDOUT) and, on POSIX, result.signal — a real "could
+  // not run" spawn error (ENOENT, bad cwd) never sets either.
+  const timedOut = result.signal === 'SIGTERM' || /ETIMEDOUT/.test(String(result.error ?? ''))
+  if (timedOut) {
+    killTreeFn(result.pid)
+    return {
+      exitCode: 1,
+      output: output || String(result.error?.message ?? result.error ?? 'suite timed out'),
+      timedOut: true,
+      spawnError: null,
+    }
+  }
+
   if (result.error) {
-    // ENOENT (missing tool), a bad cwd, or (per Node docs) the timeout itself
-    // surfacing as an error on some platforms.
-    const timedOut = result.signal === 'SIGTERM' || /ETIMEDOUT/.test(String(result.error))
+    // ENOENT (missing tool), a bad cwd, or another spawn-time failure.
     return {
       exitCode: 1,
       output: output || String(result.error.message ?? result.error),
-      timedOut,
+      timedOut: false,
       spawnError: result.error,
     }
   }
 
   if (result.signal) {
-    // Killed by a signal (spawnSync sets this on timeout, and it may leave
-    // status null) — always a FAIL, never a bare "it ran to some exit code".
-    return { exitCode: 1, output, timedOut: result.signal === 'SIGTERM', spawnError: null }
+    // Killed by a non-timeout signal — always a FAIL, never a bare "it ran
+    // to some exit code".
+    return { exitCode: 1, output, timedOut: false, spawnError: null }
   }
 
   return { exitCode: result.status ?? 1, output, timedOut: false, spawnError: null }

@@ -8,6 +8,7 @@
 
 import { filterMatching } from './discover.mjs'
 import { parseCounts, parseNodeTest } from './parse-output.mjs'
+import { DEFAULT_TIMEOUT_MS } from './run.mjs'
 
 /**
  * Evaluate one suite.
@@ -56,17 +57,29 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
   }
 
   const cwd = suite.cwd ? opts.joinRepo(suite.cwd) : opts.joinRepo('.')
-  const { exitCode, output, timedOut, spawnError } = opts.runFn(suite.command, cwd)
+  // HIGH fix: every suite used to inherit run.mjs's DEFAULT_TIMEOUT_MS
+  // (120s) with no way to raise it, so a genuinely passing, merely SLOW
+  // suite (measured: a kernel vitest unit run taking 220s) was recorded as a
+  // false FAIL — "could not run: ... ETIMEDOUT" — on every reading.
+  // suite.timeoutMs (suites.json) lets the manifest give the largest suites
+  // real headroom; suites that omit it keep the same 120s default.
+  const timeoutMs = suite.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const { exitCode, output, timedOut, spawnError } = opts.runFn(suite.command, cwd, { timeoutMs })
   const counts = parseCounts(suite.kind, output, exitCode)
 
   let status = 'PASS'
   let reason
-  if (spawnError) {
+  // HIGH fix: checked BEFORE spawnError. run.mjs now reports a timeout as
+  // `timedOut: true, spawnError: null` (mutually exclusive), but this order
+  // is kept defensively so a caller-supplied runFn that still sets both
+  // (e.g. an older or third-party implementation) is never misattributed as
+  // a generic "could not run" — the honest, more specific reason wins.
+  if (timedOut) {
+    status = 'FAIL'
+    reason = `suite timed out after ${Math.round(timeoutMs / 1000)}s`
+  } else if (spawnError) {
     status = 'FAIL'
     reason = `could not run: ${spawnError.message ?? spawnError}`
-  } else if (timedOut) {
-    status = 'FAIL'
-    reason = 'suite timed out'
   } else if (counts.collected === 0) {
     status = 'FAIL'
     reason = counts.reason ?? '0 tests collected'

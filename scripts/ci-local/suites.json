@@ -8,6 +8,7 @@
       "cwd": "gremion-ui",
       "kind": "vitest",
       "command": "pnpm run test:unit",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": [
         "gremion-ui/tests/unit/**/*.test.ts",
@@ -24,6 +25,7 @@
       "cwd": "gremion-ui",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
     },
@@ -34,6 +36,7 @@
       "cwd": "gremion-ui",
       "kind": "vitest",
       "command": "pnpm run test:deselection",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
     },
@@ -44,6 +47,7 @@
       "cwd": "gremion-ui",
       "kind": "playwright",
       "command": "pnpm run test:e2e",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-ui/tests/e2e/**/*.spec.ts"]
     },
@@ -54,6 +58,7 @@
       "cwd": "gremion-public",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["gremion-public/src/**/*.test.ts"]
     },
@@ -64,6 +69,7 @@
       "cwd": "gremion-public",
       "kind": "playwright",
       "command": "pnpm run test:e2e",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-public/tests/e2e/**/*.spec.ts"]
     },
@@ -74,6 +80,7 @@
       "cwd": "packages/ports",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["packages/ports/src/**/*.test.ts"]
     },
@@ -84,6 +91,7 @@
       "cwd": ".",
       "kind": "vitest",
       "command": "bash packages/ports/scripts/nats-test.sh",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["packages/ports/src/*.integration.test.ts"]
     },
@@ -171,6 +179,7 @@
       "cwd": "gremion-ui",
       "kind": "vitest",
       "command": "pnpm run test:unit",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": [
         "gremion-ui/tests/unit/**/*.test.ts",
@@ -185,6 +194,7 @@
       "cwd": "gremion-ui",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
     },
@@ -195,6 +205,7 @@
       "cwd": "gremion-ui",
       "kind": "vitest",
       "command": "pnpm run test:deselection",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
     },
@@ -205,6 +216,7 @@
       "cwd": "gremion-ui",
       "kind": "playwright",
       "command": "pnpm run test:e2e",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-ui/tests/e2e/**/*.spec.ts"]
     },
@@ -215,6 +227,7 @@
       "cwd": "gremion-public",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["gremion-public/src/**/*.test.ts"]
     },
@@ -225,6 +238,7 @@
       "cwd": "gremion-public",
       "kind": "playwright",
       "command": "pnpm run test:e2e",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-public/tests/e2e/**/*.spec.ts"]
     },
@@ -235,6 +249,7 @@
       "cwd": "services/board",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/board/test/**/*.test.ts"]
     },
@@ -245,6 +260,7 @@
       "cwd": "services/board",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/board/test/**/*.integration.test.ts"]
     },
@@ -255,6 +271,7 @@
       "cwd": "services/calendar",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/calendar/test/**/*.test.ts"]
     },
@@ -265,6 +282,7 @@
       "cwd": "services/calendar",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/calendar/test/**/*.integration.test.ts", "services/calendar/test/relay.test.ts"]
     },
@@ -275,6 +293,7 @@
       "cwd": "services/content",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/content/test/**/*.test.ts"]
     },
@@ -285,6 +304,7 @@
       "cwd": "services/content",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/content/test/**/*.integration.test.ts", "services/content/test/relay.test.ts"]
     },
@@ -295,6 +315,7 @@
       "cwd": "services/files",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/files/test/**/*.test.ts"]
     },
@@ -305,6 +326,7 @@
       "cwd": "services/files",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/files/test/**/*.integration.test.ts"]
     },
@@ -315,6 +337,7 @@
       "cwd": "services/finance",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/finance/test/**/*.test.ts"]
     },
@@ -325,6 +348,7 @@
       "cwd": "services/finance",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/finance/test/**/*.integration.test.ts"]
     },
@@ -335,6 +359,7 @@
       "cwd": "services/messages",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/messages/test/**/*.test.ts"]
     },
@@ -345,6 +370,7 @@
       "cwd": "services/messages",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/messages/test/**/*.integration.test.ts"]
     },
@@ -355,6 +381,7 @@
       "cwd": "services/newsletter",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/newsletter/test/**/*.test.ts"]
     },
@@ -365,6 +392,7 @@
       "cwd": "services/newsletter",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/newsletter/test/**/*.integration.test.ts", "services/newsletter/test/relay.test.ts"]
     },
@@ -375,6 +403,7 @@
       "cwd": "services/vault",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/vault/test/**/*.test.ts"]
     },
@@ -385,6 +414,7 @@
       "cwd": "services/vault",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/vault/test/**/*.integration.test.ts"]
     },
@@ -395,6 +425,7 @@
       "cwd": "services/votes",
       "kind": "vitest",
       "command": "pnpm run test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["services/votes/test/**/*.test.ts"]
     },
@@ -405,6 +436,7 @@
       "cwd": "services/votes",
       "kind": "vitest",
       "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["services/votes/test/**/*.integration.test.ts"]
     },
@@ -473,6 +505,7 @@
       "cwd": ".",
       "kind": "vitest",
       "command": "pnpm --dir gremion-ui exec vitest run --config ../test/f1-defect/vitest.config.ts",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["test/f1-defect/guards/**/*.test.ts"]
     },
@@ -483,6 +516,7 @@
       "cwd": "gremion-ui",
       "kind": "playwright",
       "command": "pnpm exec playwright test --config=../test/f1-defect/e2e/playwright.config.ts",
+      "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["test/f1-defect/e2e/**/*.spec.ts"]
     },
@@ -493,6 +527,7 @@
       "cwd": "mobile",
       "kind": "flutter",
       "command": "flutter test",
+      "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["mobile/**/*_test.dart"]
     }

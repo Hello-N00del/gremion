@@ -9,6 +9,7 @@ import {
   snapshotBaseName,
   renderMarkdown,
 } from './snapshot-core.mjs'
+import { DEFAULT_TIMEOUT_MS } from './run.mjs'
 
 function baseOpts(overrides = {}) {
   return {
@@ -93,12 +94,36 @@ test('evaluateSuite: a suite that could not run (missing tool) is a FAIL, not a 
   assert.match(row.reason, /could not run/)
 })
 
-test('evaluateSuite: a timed-out suite is a FAIL with a "timed out" reason', () => {
-  const suite = { id: 'k5', repo: 'kernel', category: 'unit', cwd: '.', kind: 'vitest', command: 'x', testGlobs: ['a.test.ts'] }
+test('evaluateSuite: a timed-out suite is a FAIL with a "timed out after Ns" reason naming the resolved timeout', () => {
+  const suite = { id: 'k5', repo: 'kernel', category: 'unit', cwd: '.', kind: 'vitest', command: 'x', timeoutMs: 600_000, testGlobs: ['a.test.ts'] }
   const opts = baseOpts({ runFn: () => ({ exitCode: 1, output: '', timedOut: true, spawnError: null }) })
   const row = evaluateSuite(suite, ['a.test.ts'], opts)
   assert.equal(row.status, 'FAIL')
-  assert.match(row.reason, /timed out/)
+  assert.match(row.reason, /timed out after 600s/)
+})
+
+test('evaluateSuite: passes the suite\'s own timeoutMs to runFn, and falls back to run.mjs\'s DEFAULT_TIMEOUT_MS when the suite omits it', () => {
+  const seen = []
+  const record = (command, cwd, runOpts) => (seen.push(runOpts), { exitCode: 0, output: '      Tests  1 passed (1)\n', timedOut: false, spawnError: null })
+
+  const withTimeout = { id: 'k5a', repo: 'kernel', category: 'unit', cwd: '.', kind: 'vitest', command: 'x', timeoutMs: 600_000, testGlobs: ['a.test.ts'] }
+  evaluateSuite(withTimeout, ['a.test.ts'], baseOpts({ runFn: record }))
+  assert.equal(seen[0].timeoutMs, 600_000)
+
+  const withoutTimeout = { id: 'k5b', repo: 'kernel', category: 'unit', cwd: '.', kind: 'vitest', command: 'x', testGlobs: ['a.test.ts'] }
+  evaluateSuite(withoutTimeout, ['a.test.ts'], baseOpts({ runFn: record }))
+  assert.equal(seen[1].timeoutMs, DEFAULT_TIMEOUT_MS)
+})
+
+test('evaluateSuite: HIGH fix — a timeout is reported as "timed out", never the generic "could not run", even when runFn also sets spawnError (defense-in-depth against the old misattribution)', () => {
+  const suite = { id: 'k5c', repo: 'kernel', category: 'unit', cwd: '.', kind: 'vitest', command: 'x', timeoutMs: 120_000, testGlobs: ['a.test.ts'] }
+  const opts = baseOpts({
+    runFn: () => ({ exitCode: 1, output: '', timedOut: true, spawnError: new Error('spawnSync ETIMEDOUT') }),
+  })
+  const row = evaluateSuite(suite, ['a.test.ts'], opts)
+  assert.equal(row.status, 'FAIL')
+  assert.match(row.reason, /timed out after 120s/)
+  assert.doesNotMatch(row.reason, /could not run/)
 })
 
 test('evaluateSuite: a clean run is a PASS with real counts', () => {

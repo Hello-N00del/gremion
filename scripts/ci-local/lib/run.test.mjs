@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { run } from './run.mjs'
+import { run, killProcessTree, DEFAULT_TIMEOUT_MS } from './run.mjs'
 
 test('run captures stdout and a zero exit code for a real command', () => {
   const r = run('node -e "console.log(\'hello-ci-local\')"', process.cwd())
@@ -68,6 +68,59 @@ test('run enforces a real timeout end-to-end on a command that never exits (shor
   const elapsed = Date.now() - started
   assert.equal(r.exitCode, 1)
   assert.ok(elapsed < 15_000, `expected the timeout to cut this off quickly, took ${elapsed}ms`)
+})
+
+test('DEFAULT_TIMEOUT_MS is exported so callers (snapshot-core.mjs) can name it in a "suite timed out after Ns" reason', () => {
+  assert.equal(DEFAULT_TIMEOUT_MS, 120_000)
+})
+
+test('killProcessTree on win32 shells out to "taskkill /T /F /PID <pid>" (walks the process\'s own child tree by parent PID)', () => {
+  let seen
+  killProcessTree(4242, { platform: 'win32', execFileFn: (file, args, opts) => (seen = { file, args, opts }) })
+  assert.equal(seen.file, 'taskkill')
+  assert.deepEqual(seen.args, ['/T', '/F', '/PID', '4242'])
+})
+
+test('killProcessTree on POSIX signals the NEGATIVE pid (the whole process group, since run() spawns with detached: true)', () => {
+  let seen
+  killProcessTree(4242, { platform: 'linux', killFn: (pid, sig) => (seen = { pid, sig }) })
+  assert.deepEqual(seen, { pid: -4242, sig: 'SIGKILL' })
+})
+
+test('killProcessTree never throws when the target is already gone (ESRCH / "not found") — a real, expected race, not the bug it exists for', () => {
+  assert.doesNotThrow(() => killProcessTree(4242, { platform: 'win32', execFileFn: () => { throw new Error('not found') } }))
+  assert.doesNotThrow(() => killProcessTree(4242, { platform: 'linux', killFn: () => { throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' }) } }))
+})
+
+test('killProcessTree is a no-op for a null/undefined pid (a suite command that never actually spawned)', () => {
+  assert.doesNotThrow(() => killProcessTree(undefined))
+  assert.doesNotThrow(() => killProcessTree(null))
+})
+
+test('HIGH fix: run() kills the process tree on a real timeout, and reports timedOut/spawnError as mutually exclusive even when the injected spawnFn sets both (the old misattribution bug)', () => {
+  let killedPid
+  const fakeTimeout = () => ({
+    stdout: 'partial output before the wedge\n',
+    stderr: '',
+    status: null,
+    pid: 9999,
+    signal: 'SIGTERM',
+    error: Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+  })
+  const r = run('sleep 999', process.cwd(), {
+    spawnFn: fakeTimeout,
+    killTreeFn: (pid) => { killedPid = pid },
+  })
+  assert.equal(r.exitCode, 1)
+  assert.equal(r.timedOut, true)
+  assert.equal(r.spawnError, null, 'a timeout must never also report spawnError — that was the old "could not run" misattribution')
+  assert.equal(killedPid, 9999)
+})
+
+test('run() does NOT call killTreeFn on a normal (non-timeout) run', () => {
+  let called = false
+  run('node -e "process.exit(0)"', process.cwd(), { killTreeFn: () => { called = true } })
+  assert.equal(called, false)
 })
 
 test('run never leaks NODE_TEST_CONTEXT / NODE_TEST_WORKER_ID into the spawned command\'s environment, even when THIS process has them set', () => {
