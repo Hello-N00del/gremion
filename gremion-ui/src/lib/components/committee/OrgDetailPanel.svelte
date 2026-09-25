@@ -83,7 +83,17 @@
     <!-- Carve note: Board/Matrix/Dokumente quick-links (→ /tasks, /messages,
          /files) are DROPPED here — those routes live in the product, not this
          governance-only kernel. The carve regeneration re-syncs from product
-         where the routes exist. -->
+         where the routes exist. Verwalten stays: /members/committees/{id} is
+         a governance route the kernel itself owns (TASK-009 lane A, G1). -->
+    {#if isAdmin}
+      <div class="detail-links">
+        <!-- LOW (r1-kernel-nav-roomsB2): this label repeats verbatim across
+             every committee's detail panel — an aria-label naming the unit
+             makes it distinguishable for screen-reader users navigating by
+             a links list, without changing the visible text. -->
+        <a class="btn" href={`/members/committees/${node.id}`} aria-label={`Verwalten — ${node.label}`}>Verwalten</a>
+      </div>
+    {/if}
   </aside>
 {:else}
   <aside class="detail-panel empty"><p class="mono">Einheit wählen</p></aside>
@@ -188,4 +198,18 @@
     color: var(--ink);
   }
   .mono { font-family: var(--font-mono); }
+  .detail-links { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn {
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 8px 12px;
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    color: var(--ink);
+    background: var(--surface);
+  }
+  .btn:hover { border-color: var(--c); color: var(--c); }
 </style>
