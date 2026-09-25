@@ -8,9 +8,12 @@ import { playwright } from '@vitest/browser-playwright'
 // browser mode, Playwright provider). CHROMIUM_EXECUTABLE_PATH points it at a
 // preinstalled Chromium where Playwright's pinned build cannot be downloaded;
 // unset, Playwright launches its own pinned browser.
-const chromiumLaunch = process.env.CHROMIUM_EXECUTABLE_PATH
-  ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH }
-  : {}
+// CHROMIUM_SHOW_SCROLLBARS=1 drops Playwright's default --hide-scrollbars, so
+// the reflow checks also run with classic (layout-taking) scrollbars.
+const chromiumLaunch = {
+  ...(process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : {}),
+  ...(process.env.CHROMIUM_SHOW_SCROLLBARS === '1' ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {})
+}
 const BROWSER_TESTS = 'src/lib/components/layout/**/*.browser.test.ts'
 const DSF2_BROWSER_TESTS = 'src/lib/components/layout/**/*.dsf2.browser.test.ts'
 
