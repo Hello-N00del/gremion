@@ -106,6 +106,19 @@ describe('check-tenant-db-access (TRD-426)', () => {
     expect(countSites('const s = "a\\"//"; postgres(url)\n')).toEqual({ calls: 1, imports: 0 })
   })
 
+  it('a // or /* inside a regex literal starts no comment and hides nothing (round-2 review HIGH)', () => {
+    expect(countSites('const re = /\\/\\//; const s = postgres(url)\n')).toEqual({ calls: 1, imports: 0 })
+    expect(countSites("if (/https?:\\/\\//.test(u)) mk(u); import { createDb as mk } from '@gremion/db'\n")).toEqual({ calls: 0, imports: 1 })
+    expect(countSites('const re = /[/*]/\npostgres(a)\n/** doc */\n')).toEqual({ calls: 1, imports: 0 })
+    // division is not a regex: a comment after it is still a comment
+    expect(countSites('const x = a / b // postgres(c)\n')).toEqual({ calls: 0, imports: 0 })
+    expect(countSites('return /x/.test(s) && postgres(u)\n')).toEqual({ calls: 1, imports: 0 })
+  })
+
+  it('catches the factory module imported by a relative path', () => {
+    expect(countSites("import { createDb as mk } from '../../packages/db/src/client.js'\n")).toEqual({ calls: 0, imports: 1 })
+  })
+
   it('catches the factory under another name (security review M1)', () => {
     expect(countSites("import { createDb as mk } from '@gremion/db'\nmk({ url })\n")).toEqual({ calls: 0, imports: 1 })
     expect(countSites("import * as db from '@gremion/db'\ndb['createDb'](p)\n")).toEqual({ calls: 1, imports: 1 })

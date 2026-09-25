@@ -52,7 +52,8 @@ const CALL_PATTERNS = [
 ]
 const Q = `['"\`]`
 const DRIVER = String.raw`${Q}(?:postgres|pg|pg-pool|pg-native)(?:/[^'"\`]*)?${Q}`
-const FACTORY = String.raw`${Q}@gremion/db(?:/[^'"\`]*)?${Q}`
+// the package, or its factory module reached by a relative path
+const FACTORY = String.raw`${Q}(?:@gremion/db(?:/[^'"\`]*)?|[^'"\`]*packages/db/src/(?:client|index)(?:\.[jt]s)?)${Q}`
 // import X from '…' / import * as X / import { a, b } / export { x } from — type-only excluded below
 const STATIC_IMPORT = new RegExp(String.raw`\b(import|export)\s+(type\s+)?([^;'"\`]*?)\s*from\s*${DRIVER}`, 'g')
 // import('x').Name is a TypeScript type query, not a load: not counted.
@@ -63,34 +64,31 @@ const FACTORY_DYNAMIC = new RegExp(String.raw`\b(?:require|import)\s*\(\s*${FACT
 
 /**
  * Blanks comments, keeping line numbers and every other character: a small
- * scanner that knows '…', "…" and `…` strings (with escapes), so a // or /*
- * INSIDE a string never starts a comment and cannot hide the code after it.
- * Strings themselves are kept, so their content is still scanned. A regex
- * literal is not recognised; a quote inside one can only make the scanner
- * treat MORE text as code (never less), because it strips nothing but
- * comments.
+ * scanner that knows '…', "…" and `…` strings (with escapes) and regex
+ * literals (/…/ with escapes and [...] classes), so a // or /* inside a
+ * string or a regex never starts a comment and cannot hide the code after
+ * it. Strings and regexes themselves are kept, so their content is still
+ * scanned. A / opens a regex where an expression may start: at the start of
+ * the text, after one of ( , = : [ ! & | ? { } ; + - * % < > ~ ^, or after
+ * the keywords return / typeof / case / do / else / in / of / new / delete /
+ * void / throw / yield / await; elsewhere it is division.
  */
+const REGEX_AFTER = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '<', '>', '~', '^'])
+const REGEX_KEYWORDS = /\b(?:return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await)$/
+
 export function stripComments(text) {
   let out = ''
   let i = 0
-  let quote = null
+  // the last significant (non-space, non-comment) source text, for the regex rule
+  let prev = ''
   while (i < text.length) {
     const c = text[i]
-    if (quote) {
-      out += c
-      if (c === '\\') {
-        out += text[i + 1] ?? ''
-        i += 2
-        continue
-      }
-      if (c === quote || (c === '\n' && quote !== '`')) quote = null
-      i++
-      continue
-    }
     if (c === "'" || c === '"' || c === '`') {
-      quote = c
-      out += c
-      i++
+      let j = i + 1
+      while (j < text.length && text[j] !== c && !(c !== '`' && text[j] === '\n')) j += text[j] === '\\' ? 2 : 1
+      out += text.slice(i, j + 1)
+      i = j + 1
+      prev = c
       continue
     }
     if (c === '/' && text[i + 1] === '/') {
@@ -104,7 +102,27 @@ export function stripComments(text) {
       i = stop
       continue
     }
+    if (c === '/') {
+      const tail = prev.trimEnd()
+      const last = tail.at(-1)
+      if (last === undefined || REGEX_AFTER.has(last) || REGEX_KEYWORDS.test(tail)) {
+        let j = i + 1
+        let inClass = false
+        while (j < text.length && text[j] !== '\n') {
+          if (text[j] === '\\') j += 2
+          else if (text[j] === '[') (inClass = true), j++
+          else if (text[j] === ']') (inClass = false), j++
+          else if (text[j] === '/' && !inClass) break
+          else j++
+        }
+        out += text.slice(i, j + 1)
+        i = j + 1
+        prev = '/'
+        continue
+      }
+    }
     out += c
+    if (!/\s/.test(c)) prev = (prev + c).slice(-16)
     i++
   }
   return out
