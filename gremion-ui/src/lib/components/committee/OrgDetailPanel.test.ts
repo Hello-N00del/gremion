@@ -63,6 +63,14 @@ describe('OrgDetailPanel — authority badge (#289)', () => {
     })
     expect(container.querySelector('.caucus-composition')).toBeNull()
   })
+
+  test('LOW fix (r1-kernel-nav-roomsB2): the "Verwalten" link carries an aria-label naming the unit, distinguishing it from every other committee\'s identical link text', () => {
+    const { getByText } = render(OrgDetailPanel, {
+      props: { node: node({ label: 'Finanzausschuss' }), isAdmin: true },
+    })
+    const link = getByText('Verwalten')
+    expect(link.getAttribute('aria-label')).toBe('Verwalten — Finanzausschuss')
+  })
 })
 
 describe('TermMapPanel — Begriffe dieser Instanz (#289)', () => {

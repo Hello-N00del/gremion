@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { getDb } from '../../db'
 import { createOrgUnit } from '../org-units-db'
 import {
-  ensureResourceRow, getResource, getResources,
+  ensureResourceRow, getResource, getResources, detachResource,
   markResourceOk, markResourceFailed, listDueOrgUnitIds,
   GIVE_UP_AFTER_SECONDS
 } from './ledger'
@@ -72,5 +72,15 @@ describe('provisioning ledger', () => {
     const row = rows[0]
     expect(row.first_failed_at).toBeNull()
     expect(row.attempts).toBe(0)
+  })
+
+  it('detachResource removes the row (FLOW-MSG-001, TASK-009 lane B)', async () => {
+    const u = await freshUnit()
+    await ensureResourceRow(u.id, 'matrix')
+    await markResourceOk(u.id, 'matrix', '!room:server')
+    await detachResource(undefined, u.id, 'matrix')
+    expect(await getResource(u.id, 'matrix')).toBeNull()
+    // idempotent — detaching an already-gone row is a no-op, not an error
+    await detachResource(undefined, u.id, 'matrix')
   })
 })

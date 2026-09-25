@@ -247,6 +247,7 @@ g080-throwaway-realm.json
 # P2.1b T11: PgBouncer auth credential — rendered at deploy from
 # docker/pgbouncer/userlist.txt.example (which IS committed), NEVER committed.
 docker/pgbouncer/userlist.txt
+docker-compose.local-testdb.yml
 
 # B-01 (spec B §T.4): realm-export.json is a generator OUTPUT, never imported
 # at boot and never committed. gremion-ui/scripts/gen-realm-export.ts writes it
