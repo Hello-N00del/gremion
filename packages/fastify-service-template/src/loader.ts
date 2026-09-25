@@ -1,5 +1,5 @@
 // THE route loader. This is the only module in the template that registers a
-// route (the grep test in test/no-hand-written-routes.test.ts holds that): every
+// route (the grep test in test/scaffold.test.ts holds that): every
 // route a template service answers is either an operation of its OpenAPI spec,
 // looked up by operationId in the handler table, or one of PLATFORM_ROUTES.
 //
@@ -9,7 +9,7 @@
 // object"; (b) invented an operationId (makeOperationId) for an operation that
 // has none; (c) registered a request-time "not implemented" stub for a missing
 // handler instead of failing boot. (b) and (c) are the two failures this
-// template exists to refuse, so this ~200-line loader replaces it.
+// template exists to refuse, so this own loader replaces it.
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from 'fastify'
 import { ServiceBootError } from './errors.ts'
 import { armUploadLimit } from './upload.ts'
