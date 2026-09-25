@@ -5,9 +5,13 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+/// CRLF-safe read: the operator's Windows checkout uses core.autocrlf=true.
+String _read(String path) =>
+    File(path).readAsStringSync().replaceAll('\r\n', '\n');
+
 void main() {
   test('Android: literal minSdk = 29 (Android 10)', () {
-    final gradle = File('android/app/build.gradle.kts').readAsStringSync();
+    final gradle = _read('android/app/build.gradle.kts');
     final minSdk = RegExp(r'^\s*minSdk\s*=\s*(.+?)\s*$', multiLine: true)
         .allMatches(gradle)
         .map((m) => m[1])
@@ -19,7 +23,7 @@ void main() {
   group('iOS: deployment target 16.0', () {
     test('every build configuration in project.pbxproj', () {
       final pbxproj =
-          File('ios/Runner.xcodeproj/project.pbxproj').readAsStringSync();
+          _read('ios/Runner.xcodeproj/project.pbxproj');
       final configs = RegExp(
         r'^\t\t\w+ /\* (\w+) \*/ = \{\n\t\t\tisa = XCBuildConfiguration;\n'
         r'([\s\S]*?)\n\t\t\};',
@@ -45,7 +49,7 @@ void main() {
     });
 
     test("Podfile: platform :ios, '16.0'", () {
-      final podfile = File('ios/Podfile').readAsStringSync();
+      final podfile = _read('ios/Podfile');
       final platforms = RegExp(r'^\s*platform\s+:ios\s*,\s*(.+?)\s*$',
               multiLine: true)
           .allMatches(podfile)

@@ -5,8 +5,9 @@
 // On device the database comes from sqflite_sqlcipher (a platform plugin
 // that does not exist under `flutter test`). Here the same sqflite_common
 // Database contract is served by sqflite_common_ffi on SQLCipher (package
-// sqlite3, `source: sqlcipher` for host platforms in pubspec.yaml), and the
-// key is applied with the SDK's own SQfLiteEncryptionHelper.
+// sqlite3 looks up the system SQLCipher library on host platforms, see the
+// hooks block in pubspec.yaml), and the key is applied with the SDK's own
+// SQfLiteEncryptionHelper.
 import 'dart:convert';
 import 'dart:io';
 
@@ -95,7 +96,11 @@ void main() {
     await store.storeAccountData('org.gremion.probe', {'x': 1});
     await store.close();
 
-    await expectLater(_openStore(path, 'wrong-key'), throwsA(anything));
+    await expectLater(
+      _openStore(path, 'wrong-key'),
+      throwsA(isA<DatabaseException>().having(
+          (e) => e.toString(), 'message', contains('not a database'))),
+    );
   });
 
   test('refuses a database without SQLCipher (would be plaintext)', () async {

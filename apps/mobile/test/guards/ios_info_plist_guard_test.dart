@@ -13,7 +13,9 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-String _read(String path) => File(path).readAsStringSync();
+/// CRLF-safe read: the operator's Windows checkout uses core.autocrlf=true.
+String _read(String path) =>
+    File(path).readAsStringSync().replaceAll('\r\n', '\n');
 
 String _withoutComments(String xml) =>
     xml.replaceAll(RegExp(r'<!--[\s\S]*?-->'), '');

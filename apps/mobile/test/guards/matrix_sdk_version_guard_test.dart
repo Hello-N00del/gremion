@@ -16,7 +16,9 @@ String? lockedVersion(String lock, String package) {
 }
 
 void main() {
-  final lock = File('pubspec.lock').readAsStringSync();
+  // CRLF-safe: the operator's Windows checkout uses core.autocrlf=true.
+  final lock =
+      File('pubspec.lock').readAsStringSync().replaceAll('\r\n', '\n');
 
   test('pubspec.lock resolves matrix to a 13.x.y release', () {
     final version = lockedVersion(lock, 'matrix');
@@ -26,7 +28,8 @@ void main() {
   });
 
   test('pubspec.yaml keeps matrix inside the 13 major', () {
-    final pubspec = File('pubspec.yaml').readAsStringSync();
+    final pubspec =
+        File('pubspec.yaml').readAsStringSync().replaceAll('\r\n', '\n');
     final constraint = RegExp(r'^  matrix:\s*(\S+)', multiLine: true)
         .firstMatch(pubspec)?[1];
     expect(constraint, isNotNull, reason: 'matrix is not a direct dependency');
