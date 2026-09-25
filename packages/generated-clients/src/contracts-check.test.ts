@@ -12,8 +12,23 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO_ROOT } from './repo-root.js'
+import { validateRegistry } from './registry.js'
 
 const PKG_DIR = join(REPO_ROOT, 'packages', 'generated-clients')
+
+/** True when `file` exists at `ref` in the real repo — used only to compute
+ *  the expected non-vacuity count in the T9 real-tree test (a spec new since
+ *  the base ref is correctly NOT compat-checked, so entryCount is the wrong
+ *  thing to compare compatChecked against; see the test for the full
+ *  rationale). */
+function existsAtRef(repoRoot: string, ref: string, file: string): boolean {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${ref}:${file}`], { cwd: repoRoot, encoding: 'utf8' })
+    return true
+  } catch {
+    return false
+  }
+}
 
 type RunContractsCheck = (repoRoot: string, opts?: { env?: NodeJS.ProcessEnv }) => {
   ok: boolean; problems: string[]; entryCount: number; compatChecked: number; baseRef: string | null
@@ -41,12 +56,25 @@ beforeAll(async () => {
 }, 60_000)
 
 describe('runContractsCheck — the real tree (T9)', () => {
-  it('is green: ok, and every registered spec was compat-checked (non-vacuity)', () => {
+  it('is green: ok, and every spec present at the base ref was compat-checked (non-vacuity)', () => {
     const result = runContractsCheck(REPO_ROOT)
     expect(result.problems).toEqual([])
     expect(result.ok).toBe(true)
     expect(result.entryCount).toBeGreaterThan(0)
-    expect(result.compatChecked).toBe(result.entryCount) // vacuity guard: nothing was silently skipped
+    // MEDIUM finding (round 1): asserting `compatChecked === entryCount`
+    // makes this test go RED on every future branch that registers a spec
+    // NEW since the base ref (TASK-077/080/081/204 all add specs) even
+    // though nothing is wrong — a spec new since base is CORRECTLY skipped
+    // by the compat step (it has no prior version to diff), just registered.
+    // The non-vacuity intent (brief: nothing was silently skipped) is
+    // instead checked against the count of specs that actually EXISTED at
+    // the base ref, which is what should have been, and was, diffed.
+    const baseRef = result.baseRef
+    expect(baseRef).not.toBeNull()
+    const { entries } = validateRegistry(REPO_ROOT)
+    const presentAtBase = entries.filter((e) => existsAtRef(REPO_ROOT, baseRef as string, e.file)).length
+    expect(presentAtBase).toBeGreaterThan(0)
+    expect(result.compatChecked).toBe(presentAtBase)
   })
 
   it('resolveBaseRef finds a real, resolvable commit', () => {
@@ -54,9 +82,22 @@ describe('runContractsCheck — the real tree (T9)', () => {
     expect(ref).toMatch(/^[0-9a-f]{40}$/)
   })
 
-  it('CONTRACTS_BASE_REF overrides discovery', () => {
+  it('CONTRACTS_BASE_REF overrides discovery (resolveBaseRef itself does not validate — runContractsCheck does, see below)', () => {
     const ref = resolveBaseRef(REPO_ROOT, { CONTRACTS_BASE_REF: 'deadbeef' })
     expect(ref).toBe('deadbeef')
+  })
+
+  // Round-1 verifier HIGH finding, reproduced verbatim: an unresolvable
+  // CONTRACTS_BASE_REF must fail closed, not silently report "OK ... 0
+  // compat-checked" with exit 0. Before the fix, readAtRef() turned the
+  // resulting `git show` failure into `null` ("new since base"), the vacuity
+  // guard saw `allNew === true`, and stayed quiet.
+  it('an unresolvable CONTRACTS_BASE_REF fails CLOSED — named, not silently skipped', () => {
+    const env = { ...process.env, CONTRACTS_BASE_REF: 'no-such-ref-xyz' }
+    const result = runContractsCheck(REPO_ROOT, { env })
+    expect(result.ok).toBe(false)
+    expect(result.compatChecked).toBe(0)
+    expect(result.problems.some((p) => /does not resolve to a real commit/.test(p))).toBe(true)
   })
 })
 

@@ -48,11 +48,27 @@ export function resolveBaseRef(repoRoot, env = process.env) {
   return null
 }
 
+/** True only when `ref` resolves to a real commit. Callers must check this
+ *  BEFORE trusting a `null` from `readAtRef` as "new since base" — an
+ *  unresolvable ref (e.g. a typo'd `CONTRACTS_BASE_REF` override, which
+ *  `resolveBaseRef` passes through verbatim without validating) makes every
+ *  `git show <ref>:<file>` fail the SAME way a genuinely-new file does, and
+ *  conflating the two silently skips every compat check instead of failing
+ *  closed (round-1 verifier HIGH finding). */
+function isResolvableCommit(repoRoot, ref) {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: repoRoot, encoding: 'utf8' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function readAtRef(repoRoot, ref, file) {
   try {
     return execFileSync('git', ['show', `${ref}:${file}`], { cwd: repoRoot, encoding: 'utf8' })
   } catch {
-    return null // file is new since base, or the ref/path genuinely has nothing
+    return null // file is new since base — ref is guaranteed valid by the isResolvableCommit gate in runContractsCheck
   }
 }
 
@@ -83,12 +99,22 @@ export function runContractsCheck(repoRoot, opts = {}) {
   }
 
   const baseRef = resolveBaseRef(repoRoot, env)
+  let baseRefValid = false
   if (baseRef === null) {
     problems.push('[contracts-check] could not resolve a base ref (tried CONTRACTS_BASE_REF, then ' + BASE_REF_CANDIDATES.join(', ') + ') — failing closed. Set CONTRACTS_BASE_REF explicitly.')
+  } else if (!isResolvableCommit(repoRoot, baseRef)) {
+    // An unresolved ref must fail closed, not silently skip every compat
+    // check (brief §5 "Base ref": "an unresolved ref fails closed"). This
+    // is deliberately separate from "baseRef === null" above: here a ref WAS
+    // supplied (usually CONTRACTS_BASE_REF), it just does not name a real
+    // commit.
+    problems.push(`[contracts-check] base ref '${baseRef}' does not resolve to a real commit — failing closed. There is no environment bypass; fix CONTRACTS_BASE_REF or unset it to use automatic discovery.`)
+  } else {
+    baseRefValid = true
   }
 
   let compatChecked = 0
-  if (baseRef !== null) {
+  if (baseRefValid) {
     for (const entry of entries) {
       const oldRaw = readAtRef(repoRoot, baseRef, entry.file)
       if (oldRaw === null) continue // new since base: registered (checked above), no prior version to diff
@@ -112,7 +138,7 @@ export function runContractsCheck(repoRoot, opts = {}) {
   // both mean this pipeline checked nothing real.
   if (entries.length === 0) {
     problems.push('vacuity: contracts/registry.json has zero entries — nothing was checked')
-  } else if (baseRef !== null && compatChecked === 0) {
+  } else if (baseRefValid && compatChecked === 0) {
     const allNew = entries.every((e) => readAtRef(repoRoot, baseRef, e.file) === null)
     if (!allNew) problems.push(`vacuity: compat-checked 0 of ${entries.length} registered spec(s) against base ${baseRef}`)
   }
