@@ -258,13 +258,35 @@ function argValue(argv, flag) {
   return i === -1 ? null : argv[i + 1]
 }
 
+/**
+ * LOW fix: a waivers.json that is valid JSON but not an array (e.g. `{}`)
+ * used to parse without error and be returned as-is, and every caller
+ * treats the result as an array (`waivers.find`, `.some`, spreading into
+ * `evaluateRepo`'s loop) — an uncaught `TypeError` crashed guards.mjs's
+ * runRunnerPolicyArm BEFORE the dated JSON result was ever written
+ * (TASK-012 acceptance item 5: "any failing guard ... writes a dated
+ * JSON result", which a crash defeats). A missing file (no `path`, or
+ * ENOENT) is still the one case that legitimately means "no waivers" and
+ * returns `[]`; every other failure — invalid JSON syntax, or valid JSON
+ * that is not an array — now THROWS instead of being silently swallowed,
+ * so callers (guards.mjs's runRunnerPolicyArm, this file's own `main`) can
+ * turn it into an explicit, reported FAIL rather than a crash or a silent
+ * "no waivers" that would have widened what counts as unwaived anyway.
+ */
 export function loadWaivers(path) {
   if (!path) return []
+  let text
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
-  } catch {
-    return []
+    text = readFileSync(path, 'utf8')
+  } catch (err) {
+    if (err.code === 'ENOENT') return []
+    throw err
   }
+  const parsed = JSON.parse(text)
+  if (!Array.isArray(parsed)) {
+    throw new Error(`waivers file '${path}' must be a JSON array, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`)
+  }
+  return parsed
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -282,7 +304,18 @@ export function main(argv = process.argv.slice(2)) {
     process.exitCode = 1
     return
   }
-  const waivers = loadWaivers(argValue(argv, '--waivers'))
+  let waivers
+  try {
+    waivers = loadWaivers(argValue(argv, '--waivers'))
+  } catch (err) {
+    // LOW fix: a malformed --waivers file (bad JSON, or valid JSON that is
+    // not an array) is a clean, reported failure — never an uncaught throw
+    // that would exit this CLI with a raw stack trace and no dated-result
+    // guarantee from a caller like guards.mjs.
+    console.error(`runner-policy: could not load --waivers: ${err.message}`)
+    process.exitCode = 1
+    return
+  }
   const today = todayIso()
 
   let failures = 0

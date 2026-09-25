@@ -270,6 +270,45 @@ test('loadWaivers reads a real waivers.json and [] when the path is missing or a
   }
 })
 
+test('loadWaivers THROWS (never silently []) when the file is valid JSON but not an array (LOW fix: a malformed-but-parseable waivers.json used to make `waivers.find` crash uncaught downstream, before guards.mjs ever got to write the dated JSON result)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-waivers-'))
+  try {
+    const p = join(dir, 'waivers.json')
+    writeFileSync(p, JSON.stringify({ not: 'an array' }))
+    assert.throws(() => loadWaivers(p), /must be a JSON array/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('loadWaivers THROWS on genuinely invalid JSON syntax too, rather than silently treating a corrupted waivers.json as "no waivers" (LOW fix)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-waivers-'))
+  try {
+    const p = join(dir, 'waivers.json')
+    writeFileSync(p, '{ not valid json')
+    assert.throws(() => loadWaivers(p))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('main(): a malformed (non-array) --waivers file is a clean, reported failure — not an uncaught crash (LOW fix)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-runner-policy-'))
+  const kernel = makeRepo({})
+  try {
+    const p = join(dir, 'waivers.json')
+    writeFileSync(p, JSON.stringify({ not: 'an array' }))
+    const before = process.exitCode
+    process.exitCode = undefined
+    assert.doesNotThrow(() => main(['--kernel', kernel, '--waivers', p]))
+    assert.equal(process.exitCode, 1)
+    process.exitCode = before
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(kernel, { recursive: true, force: true })
+  }
+})
+
 test('HIGH fix: suites.json\'s kernel-runner-policy-guard command labels this repo "kernel" (--kernel), not "--repo ." — a bare --repo labels itself by its own path and can never match the repo-scoped committed waiver', () => {
   const suites = JSON.parse(readFileSync(fileURLToPath(new URL('./suites.json', import.meta.url)), 'utf8'))
   const suite = suites.kernel.find((s) => s.id === 'kernel-runner-policy-guard')

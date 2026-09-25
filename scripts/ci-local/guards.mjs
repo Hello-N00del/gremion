@@ -87,10 +87,26 @@ export function gitleaksCommand(base, reportPath) {
   // used to be a string with ${base} and the report path spliced in, run
   // with shell:true — a git ref may legally contain `$(`, `)` and
   // backticks, so a CI-supplied --base could execute code on the runner.
+  //
+  // HIGH fix: `--no-color` is REQUIRED, not cosmetic. gitleaks 8.30.1
+  // colours its log lines even when stdout/stderr are piped (no TTY
+  // detection on this path), e.g. `\x1b[31mERR\x1b[0m` — so the byte
+  // IMMEDIATELY before "ERR"/"FTL" is `m` (the end of the SGR escape), never
+  // whitespace or a line start. hasFatalLog's regex requires exactly that
+  // whitespace/start boundary, so every colourised ERR/FTL line silently
+  // failed to match. Proven with the real binary: a scratch repo with a
+  // committed EC private key in `basetag..HEAD` and that blob's git object
+  // deleted (simulating a broken partial fetch / missing object) makes
+  // `gitleaks git` log `\x1b[31mERR\x1b[0m [git] fatal: unable to read
+  // <sha>` and `error="stderr is not empty"`, then `INF 1 commits
+  // scanned.` / `INF no leaks found`, and EXIT 0 — a scan that never
+  // actually read the range, reported as a clean PASS. With `--no-color`
+  // the same run logs `10:34AM ERR [git] fatal: ...` (a plain space before
+  // ERR), which hasFatalLog's existing regex already matches.
   if (base) {
-    return ['gitleaks', 'git', '.', '--log-opts', `${base}..HEAD`, '--config', '.gitleaks.toml', '--redact', '--exit-code', '1']
+    return ['gitleaks', 'git', '.', '--log-opts', `${base}..HEAD`, '--config', '.gitleaks.toml', '--redact', '--exit-code', '1', '--no-color']
   }
-  return ['gitleaks', 'dir', '.', '--config', '.gitleaks.toml', '--redact', '--exit-code', '0', '--report-format', 'json', '--report-path', reportPath]
+  return ['gitleaks', 'dir', '.', '--config', '.gitleaks.toml', '--redact', '--exit-code', '0', '--report-format', 'json', '--report-path', reportPath, '--no-color']
 }
 
 /**
@@ -157,9 +173,26 @@ function readGitleaksReport(reportPath) {
   return parsed
 }
 
-/** A gitleaks FTL/ERR log line despite a "successful" exit code — defense in depth, never trusted as the sole signal. */
+/**
+ * A gitleaks FTL/ERR log line despite a "successful" exit code — defense in
+ * depth, never trusted as the sole signal (the exit-code / report checks
+ * around each call site are the primary signal; this is a second layer for
+ * the case gitleaks logs a fatal line but still exits 0, e.g. a `git log`
+ * failure mid-scan — see gitleaksCommand's header).
+ *
+ * HIGH fix, second layer: strip ANSI SGR escapes (`\x1b[...m`) before
+ * matching. `--no-color` (gitleaksCommand) is the primary fix — it stops
+ * gitleaks from emitting colour in the first place — but this strip means
+ * hasFatalLog still catches a colourised ERR/FTL line even if a future
+ * gitleaks version, a different terminal-detection heuristic, or a caller
+ * that constructs its own argv without --no-color reintroduces colour.
+ * Without either fix, `\x1b[31mERR\x1b[0m` puts `m` (end of the escape),
+ * never whitespace or a line start, immediately before "ERR", so the regex
+ * below never matched — proven with the real binary (see gitleaksCommand).
+ */
 function hasFatalLog(output) {
-  return /(^|[\s[])(FTL|ERR)([\s\]:]|$)/m.test(output ?? '')
+  const plain = (output ?? '').replace(/\x1b\[[0-9;]*m/g, '')
+  return /(^|[\s[])(FTL|ERR)([\s\]:]|$)/m.test(plain)
 }
 
 /**
@@ -433,7 +466,18 @@ export function runOverridesDriftArm(sturaosPath, kernelPath, { runFn = run } = 
 // ---------------------------------------------------------------------------
 
 export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
-  const waivers = loadWaivers(waiversPath)
+  // LOW fix: loadWaivers now THROWS on a waivers file that is valid JSON but
+  // not an array (or has invalid JSON syntax) rather than silently returning
+  // []. Wrapped here the same way runKnownSecretsArm wraps its scan, so a
+  // malformed waivers.json is a reported FAIL arm — never an uncaught crash
+  // that stops guards.mjs from ever reaching the point where it writes the
+  // dated JSON result (acceptance item 5).
+  let waivers
+  try {
+    waivers = loadWaivers(waiversPath)
+  } catch (err) {
+    return { arm: 'runner-policy', repo: 'both', status: 'FAIL', reason: `could not load --waivers '${waiversPath}': ${err.message}` }
+  }
   const today = todayIso()
   const results = []
   const waived = []

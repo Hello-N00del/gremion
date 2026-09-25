@@ -47,9 +47,70 @@ function fakeRun(map) {
 
 test('gitleaksCommand always scans "." with a RELATIVE --config: the repo comes from the process cwd the caller runs it in, never from a path embedded in the command string, so an absolute-vs-relative repoPath can never change which .gitleaks.toml allowlist paths match (HIGH fix)', () => {
   const dirCmd = gitleaksCommand(undefined, '/tmp/report.json')
-  assert.deepEqual(dirCmd, ['gitleaks', 'dir', '.', '--config', '.gitleaks.toml', '--redact', '--exit-code', '0', '--report-format', 'json', '--report-path', '/tmp/report.json'])
+  assert.deepEqual(dirCmd, ['gitleaks', 'dir', '.', '--config', '.gitleaks.toml', '--redact', '--exit-code', '0', '--report-format', 'json', '--report-path', '/tmp/report.json', '--no-color'])
   const gitCmd = gitleaksCommand('main')
-  assert.deepEqual(gitCmd, ['gitleaks', 'git', '.', '--log-opts', 'main..HEAD', '--config', '.gitleaks.toml', '--redact', '--exit-code', '1'])
+  assert.deepEqual(gitCmd, ['gitleaks', 'git', '.', '--log-opts', 'main..HEAD', '--config', '.gitleaks.toml', '--redact', '--exit-code', '1', '--no-color'])
+})
+
+test('gitleaksCommand passes --no-color in both modes: gitleaks 8.30.1 colours ERR/FTL log lines even when piped, which put "m" (end of the SGR escape) rather than whitespace immediately before "ERR"/"FTL" and made hasFatalLog never match (HIGH fix)', () => {
+  for (const cmd of [gitleaksCommand(undefined, '/tmp/r.json'), gitleaksCommand('main')]) {
+    assert.ok(cmd.includes('--no-color'), cmd.join(' '))
+  }
+})
+
+test('runGitleaksArm (diff-scoped) FAILs on a colourised ERR line even though gitleaks exited 0 — real gitleaks 8.30.1 bytes, not a hand-written fixture (HIGH fix, regression guard for the ANSI-color bug)', () => {
+  // Byte-for-byte the output `gitleaks git ... ` produces WITHOUT --no-color
+  // when `git log` fails mid-scan (a missing blob object) but gitleaks still
+  // exits 0 — captured against the real 8.30.1 binary in a scratch repo with
+  // a committed EC key and its blob object deleted (see gitleaksCommand's
+  // header). \x1b[31m...\x1b[0m wraps "ERR"; the byte before "ERR" is "m".
+  const coloured =
+    '\x1b[90m10:33AM\x1b[0m \x1b[31mERR\x1b[0m \x1b[1m[git] fatal: unable to read 9526b5fc29df16146f806b6be9c499dbd429ffcd\x1b[0m\n' +
+    '\x1b[90m10:33AM\x1b[0m \x1b[31mERR\x1b[0m \x1b[36merror=\x1b[0m\x1b[31m\x1b[1m"stderr is not empty"\x1b[0m\x1b[0m\n' +
+    '\x1b[90m10:33AM\x1b[0m \x1b[32mINF\x1b[0m \x1b[1m1 commits scanned.\x1b[0m\n' +
+    '\x1b[90m10:33AM\x1b[0m \x1b[32mINF\x1b[0m \x1b[1mno leaks found\x1b[0m\n'
+  const r = runGitleaksArm('kernel', '/repo', 'basetag', {
+    runFn: () => ({ exitCode: 0, output: coloured, timedOut: false, spawnError: null }),
+    verifyBaseRefFn: () => true,
+  })
+  assert.equal(r.status, 'FAIL')
+  assert.match(r.reason, /ERR\/FTL/)
+})
+
+test('runGitleaksArm (diff-scoped), real gitleaks 8.30.1 binary: a committed secret in the scanned range whose git blob object is missing (simulating a partial-fetch/promisor failure) must FAIL, never vacuously PASS — the exact scenario gitleaksCommand\'s header documents', { skip: (() => { try { execFileSync('gitleaks', ['version'], { stdio: 'ignore' }); return false } catch { return 'gitleaks binary not on PATH' } })() }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-gitleaks-repro-'))
+  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+  git('init', '-q')
+  execFileSync('git', ['-C', dir, 'config', 'user.email', 'a@b.c'])
+  execFileSync('git', ['-C', dir, 'config', 'user.name', 'tester'])
+  writeFileSync(join(dir, 'README.md'), 'hello\n')
+  git('add', 'README.md')
+  git('commit', '-q', '-m', 'base')
+  git('tag', 'basetag')
+  // Assembled at runtime, not written as one contiguous literal — same
+  // reason as PEM_FIXTURE below: this file is itself scanned by the real
+  // whole-tree gitleaks arm (guards.mjs's own gate), and a literal
+  // "-----BEGIN EC PRIVATE KEY-----" sitting in THIS source file would trip
+  // that scan on every future run of this very test suite. Still fully
+  // synthetic (a fake base64 body, never a real key).
+  const pemFixture = ['-----BEGIN', ' EC PRIVATE KEY', '-----\n', 'MHcCAQEEIOSynthNotRealNotRealNotRealNotRealNotRealNotReal0123456\n', '-----END', ' EC PRIVATE KEY', '-----\n'].join('')
+  writeFileSync(join(dir, 'secret.pem'), pemFixture)
+  git('add', 'secret.pem')
+  git('commit', '-q', '-m', 'add secret')
+  writeFileSync(join(dir, '.gitleaks.toml'), '[extend]\nuseDefault = true\n')
+  git('add', '.gitleaks.toml')
+  git('commit', '-q', '-m', 'add config')
+  const blob = git('rev-parse', 'HEAD~1:secret.pem').trim()
+  const objPath = join(dir, '.git', 'objects', blob.slice(0, 2), blob.slice(2))
+  rmSync(objPath, { force: true })
+
+  const r = runGitleaksArm('kernel', dir, 'basetag', { runFn: run })
+  // RED first: without --no-color this arm returns PASS (gitleaks logs the
+  // git failure but still exits 0). The assertion below is what makes it
+  // GREEN once gitleaksCommand's --no-color + hasFatalLog's ANSI strip are
+  // both in place.
+  assert.equal(r.status, 'FAIL', `expected FAIL (git failed to read a blob mid-scan), got ${r.status}: ${JSON.stringify(r.reason)}\n${r.output ?? ''}`)
+  assert.match(r.reason, /ERR\/FTL/)
 })
 
 test('isSafeRef accepts branch, remote, tag, SHA and rev-suffix refs, and refuses whitespace, a leading "-", ".." and shell metacharacters (CRITICAL fix)', () => {
@@ -449,6 +510,24 @@ test('runRunnerPolicyArm aggregates both repos and FAILs when either has an unwa
     const r = runRunnerPolicyArm(kernel, vertical, undefined) // no waivers file
     assert.equal(r.status, 'FAIL')
     assert.match(r.reason, /vertical\/\.github\/workflows\/deploy\.yml/)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
+  }
+})
+
+test('runRunnerPolicyArm returns a FAIL arm (never throws) when --waivers names a file that is valid JSON but not an array (LOW fix: this used to crash uncaught inside waivers.find, before guards.mjs ever wrote its dated JSON result — acceptance item 5)', () => {
+  const kernel = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
+  const vertical = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
+  const waiversPath = join(mkdtempSync(join(tmpdir(), 'ci-local-waivers-')), 'waivers.json')
+  writeFileSync(waiversPath, JSON.stringify({ not: 'an array' }))
+  try {
+    let r
+    assert.doesNotThrow(() => {
+      r = runRunnerPolicyArm(kernel, vertical, waiversPath)
+    })
+    assert.equal(r.status, 'FAIL')
+    assert.match(r.reason, /waivers/i)
   } finally {
     rmSync(kernel, { recursive: true, force: true })
     rmSync(vertical, { recursive: true, force: true })
