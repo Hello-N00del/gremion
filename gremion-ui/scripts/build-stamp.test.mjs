@@ -20,7 +20,9 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { buildStampGuard, createKitConfig, versionName } from '../kit.config.js'
+import { readFileSync } from 'node:fs'
+
+import { applyDevEnvFiles, buildStampGuard, createKitConfig, versionName } from '../kit.config.js'
 
 const APP = 'gremion-ui'
 const APP_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -90,4 +92,32 @@ test(`${APP} svelte-kit sync (pnpm check's first step) exits 0 without BUILD_SHA
   const r = spawnSync(process.execPath, [cli, 'sync'], { cwd: APP_DIR, env: childEnv(undefined), encoding: 'utf8', timeout: 120000 })
   assert.equal(r.status, 0, r.stderr + r.stdout)
   assert.doesNotMatch(r.stderr + r.stdout, /BUILD_SHA is required/)
+})
+
+// ── dev .env parity (round-1 LOW, deletion-aware) ────────────────────────────
+// Under kit 2, `vite dev` exposed .env / .env.local values through
+// $env/dynamic/private (`make dev-configure` writes gremion-ui/.env.local).
+// The code now reads process.env, which never sees those files, so the dev
+// server fills process.env from them: only keys that are unset (the process
+// env wins, as it did in kit), only for `serve`, and never under vitest.
+
+test(`${APP} applyDevEnvFiles: serve fills only unset keys from the env files`, () => {
+  const target = { KEEP: 'from-process' }
+  const applied = applyDevEnvFiles({ command: 'serve', isTest: false, fileEnv: { KEEP: 'from-file', AUTH_KEYCLOAK_ISSUER: 'http://kc.test/realms/x' }, target })
+  assert.deepEqual(applied, ['AUTH_KEYCLOAK_ISSUER'])
+  assert.equal(target.KEEP, 'from-process')
+  assert.equal(target.AUTH_KEYCLOAK_ISSUER, 'http://kc.test/realms/x')
+})
+
+test(`${APP} applyDevEnvFiles: never applies for build (svelte-kit sync, vite build) or under vitest`, () => {
+  for (const [command, isTest] of [['build', false], ['serve', true]]) {
+    const target = {}
+    assert.deepEqual(applyDevEnvFiles({ command, isTest, fileEnv: { A: '1' }, target }), [])
+    assert.deepEqual(target, {})
+  }
+})
+
+test(`${APP} vite.config.ts wires applyDevEnvFiles with Vite's loadEnv`, () => {
+  const src = readFileSync(join(APP_DIR, 'vite.config.ts'), 'utf8')
+  assert.match(src, /applyDevEnvFiles\(\{[^}]*command[^}]*fileEnv:\s*loadEnv\(mode,/s)
 })

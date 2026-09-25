@@ -1,10 +1,15 @@
 import { sveltekit } from '@sveltejs/kit/vite'
 import { svelteTesting } from '@testing-library/svelte/vite'
 import tailwindcss from '@tailwindcss/vite'
+import { loadEnv } from 'vite'
 import { configDefaults, defineConfig } from 'vitest/config'
-import { buildStampGuard, createKitConfig } from './kit.config.js'
+import { applyDevEnvFiles, buildStampGuard, createKitConfig } from './kit.config.js'
 
-export default defineConfig({
+export default defineConfig(({ command, mode }) => {
+  // TASK-032: dev parity for .env files ($env/dynamic/private used to expose
+  // them under `vite dev`); see applyDevEnvFiles in kit.config.js.
+  applyDevEnvFiles({ command, isTest: !!process.env.VITEST, fileEnv: loadEnv(mode, process.cwd(), '') })
+  return {
   // svelteTesting() resolves Svelte's browser build + DOM cleanup for
   // @testing-library/svelte component tests; VITEST-gated, so prod/dev unaffected.
   // tailwindcss() replaces the old postcss.config.js (@tailwindcss/postcss)
@@ -54,4 +59,5 @@ export default defineConfig({
     setupFiles: ['tests/unit/setup.ts'],
     fileParallelism: false
   }
+}
 })

@@ -7,10 +7,15 @@
 // vite.config.ts (which imports the same helper from 'vitest/config').
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
+import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
-import { basePath, buildStampGuard, createKitConfig } from './kit.config.js';
+import { applyDevEnvFiles, basePath, buildStampGuard, createKitConfig } from './kit.config.js';
 
-export default defineConfig({
+export default defineConfig(({ command, mode }) => {
+  // TASK-032: dev parity for .env files ($env/dynamic/private used to expose
+  // them under `vite dev`); see applyDevEnvFiles in kit.config.js.
+  applyDevEnvFiles({ command, isTest: !!process.env.VITEST, fileEnv: loadEnv(mode, process.cwd(), '') });
+  return {
   // #436 — Tailwind v4 via its own Vite plugin, mirroring gremion-ui. This
   // replaces the v3 postcss.config.js (`tailwindcss` + `autoprefixer`
   // entries): vite 8's rolldown-based CSS resolver mis-resolves the bare
@@ -35,4 +40,5 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
   },
+};
 });

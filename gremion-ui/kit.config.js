@@ -90,3 +90,29 @@ export function buildStampGuard(env = process.env) {
     }
   }
 }
+
+/**
+ * TASK-032 (deletion-aware, dev parity): under kit 2, `vite dev` exposed the
+ * app's .env / .env.local / .env.[mode] values through $env/dynamic/private
+ * (`make dev-configure` writes gremion-ui/.env.local). The code now reads
+ * process.env, which never sees those files, so vite.config.ts hands Vite's
+ * loadEnv() result here for the dev server. Only UNSET keys are filled (the
+ * process env wins, as it did in kit), only for `serve`, and never under
+ * vitest, so tests stay hermetic. A built (adapter-node) server is untouched:
+ * it reads the real process env at runtime, exactly as before.
+ *
+ * @param {{ command: string, isTest: boolean, fileEnv: Record<string, string>, target?: Record<string, string | undefined> }} options
+ * @returns {string[]} the keys that were filled
+ */
+export function applyDevEnvFiles({ command, isTest, fileEnv, target = process.env }) {
+  if (command !== 'serve' || isTest) return []
+  /** @type {string[]} */
+  const applied = []
+  for (const [key, value] of Object.entries(fileEnv)) {
+    if (target[key] === undefined) {
+      target[key] = value
+      applied.push(key)
+    }
+  }
+  return applied
+}
