@@ -214,6 +214,36 @@ test('strict-ts: a tsconfig that only "extends" (e.g. the generated .svelte-kit 
   assert.deepEqual(problems, [])
 })
 
+// ── verifier HIGH finding 2: `extends` alone must never satisfy strict ────
+// checkStrictTsconfigs used to accept ANY `extends` key as proof of strict,
+// including a generated .svelte-kit/tsconfig.json that itself sets no
+// strict — watched empirically: removing "strict": true from
+// gremion-ui/tsconfig.json in a scratch worktree left the guard printing OK.
+
+test('strict-ts: RED — extends a generated (.svelte-kit) config with no strict of its own is flagged, not accepted', () => {
+  const problems = checkStrictTsconfigs([
+    { path: 'gremion-ui/tsconfig.json', text: '{"extends": "./.svelte-kit/tsconfig.json", "compilerOptions": {}}' },
+  ])
+  assert.match(problems.join('\n'), /does not set "strict": true/)
+})
+
+test('strict-ts: RED — extends a first-party config that is NOT itself strict is flagged', () => {
+  const problems = checkStrictTsconfigs([
+    { path: 'packages/x/tsconfig.json', text: '{"compilerOptions": {"strict": false}}' },
+    { path: 'packages/x/tsconfig.build.json', text: '{"extends": "./tsconfig.json", "compilerOptions": {}}' },
+  ])
+  assert.match(problems.join('\n'), /packages\/x\/tsconfig\.json: sets "strict": false/)
+  assert.match(problems.join('\n'), /packages\/x\/tsconfig\.build\.json.*not.*strict/)
+})
+
+test('strict-ts: GREEN — extends a first-party sibling tsconfig that IS strict:true is accepted (packages/*/tsconfig.build.json case)', () => {
+  const problems = checkStrictTsconfigs([
+    { path: 'packages/db/tsconfig.json', text: '{"compilerOptions": {"strict": true}}' },
+    { path: 'packages/db/tsconfig.build.json', text: '{"extends": "./tsconfig.json", "compilerOptions": {"outDir": "dist"}}' },
+  ])
+  assert.deepEqual(problems, [])
+})
+
 test('strict-ts: every real first-party tsconfig*.json is strict:true', () => {
   const files = [
     'gremion-ui/tsconfig.json', 'gremion-public/tsconfig.json',

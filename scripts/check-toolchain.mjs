@@ -254,30 +254,92 @@ export function checkFirstPartyLifecycle(packages, allowlist = ALLOWED_FIRST_PAR
 const BANNED_DIRECTIVE_RE = /@ts-nocheck\b|@ts-ignore\b/
 const TS_EXPECT_ERROR_RE = /@ts-expect-error\b/
 
-/** @param tsconfigs [{path, text}] */
+/**
+ * Resolve a tsconfig's relative `extends` value against its own repo-relative
+ * path, POSIX-style (repo paths always use "/"). Returns null for a
+ * non-relative extends (a package name, e.g. "@tsconfig/svelte") — those are
+ * never first-party and are never trusted for strict, same as a generated
+ * .svelte-kit/tsconfig.json that happens not to be in the scanned set.
+ */
+export function resolveExtendsPath(fromPath, extendsValue) {
+  if (!extendsValue || !(extendsValue.startsWith('./') || extendsValue.startsWith('../'))) return null
+  const fromDir = fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/')) : '.'
+  const parts = (fromDir === '.' ? [] : fromDir.split('/')).concat(extendsValue.split('/'))
+  const stack = []
+  for (const part of parts) {
+    if (part === '.' || part === '') continue
+    if (part === '..') stack.pop()
+    else stack.push(part)
+  }
+  return stack.join('/')
+}
+
+/**
+ * @param tsconfigs [{path, text}] first-party tsconfig*.json files
+ *
+ * `extends` alone is never proof of strict: a tsconfig that sets no
+ * "strict": true itself is accepted ONLY when its `extends` resolves to
+ * another tsconfig IN THIS SAME SCANNED SET that is itself (transitively)
+ * strict:true — e.g. packages/db/tsconfig.build.json extending its sibling
+ * tsconfig.json. A generated file (.svelte-kit/tsconfig.json — absent in a
+ * clean clone, never tracked) or a third-party package extend is never in
+ * the scanned set, so it can never satisfy this — closing the escape where
+ * gremion-ui/tsconfig.json could drop "strict": true and rely solely on
+ * extending .svelte-kit/tsconfig.json, which sets no strict of its own
+ * (verifier HIGH finding 2).
+ */
 export function checkStrictTsconfigs(tsconfigs) {
   if (tsconfigs.length === 0) {
     return ['found zero first-party tsconfig*.json files — the strict-TS check would pass vacuously']
   }
   const problems = []
+  const parsed = new Map()
   for (const { path, text } of tsconfigs) {
-    let json
     try {
       // tsconfig.json commonly carries // comments; strip them for JSON.parse
       // the same way tsc's own JSONC reader tolerates them, without pulling in
       // a JSONC dependency for one field read.
       const stripped = text.replace(/^\s*\/\/.*$/gm, '')
-      json = JSON.parse(stripped)
+      parsed.set(path, JSON.parse(stripped))
     } catch (e) {
       problems.push(`${path}: not parseable as JSON(C): ${e.message}`)
+    }
+  }
+
+  function isEffectivelyStrict(path, seen) {
+    if (seen.has(path)) return false // extends cycle: never trust it
+    seen.add(path)
+    const json = parsed.get(path)
+    if (!json) return false
+    const co = json.compilerOptions ?? {}
+    if (co.strict === true) return true
+    if (co.strict === false) return false
+    if (typeof json.extends === 'string') {
+      const resolved = resolveExtendsPath(path, json.extends)
+      if (resolved && parsed.has(resolved)) return isEffectivelyStrict(resolved, seen)
+    }
+    return false
+  }
+
+  for (const [path, json] of parsed) {
+    const co = json.compilerOptions ?? {}
+    if (co.strict === false) {
+      problems.push(`${path}: sets "strict": false`)
       continue
     }
-    const co = json.compilerOptions ?? {}
-    if (co.strict === false) problems.push(`${path}: sets "strict": false`)
     if (co.noImplicitAny === false) problems.push(`${path}: sets "noImplicitAny": false`)
-    if (co.strict !== true && !('extends' in json)) {
-      problems.push(`${path}: does not set "strict": true and extends nothing that could set it`)
+    if (co.strict === true) continue
+    if (typeof json.extends === 'string') {
+      const resolved = resolveExtendsPath(path, json.extends)
+      if (resolved && parsed.has(resolved) && isEffectivelyStrict(resolved, new Set())) continue
+      problems.push(
+        `${path}: does not set "strict": true, and its "extends" (${json.extends}) is not a ` +
+        'first-party strict tsconfig in the scanned set — a generated (e.g. .svelte-kit) or ' +
+        'third-party base is never trusted for strict',
+      )
+      continue
     }
+    problems.push(`${path}: does not set "strict": true and extends nothing that could set it`)
   }
   return problems
 }
