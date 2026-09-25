@@ -63,7 +63,7 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
    check `$ref` resolution — the staged-file collector only picks up
    `gremion-ui/**/*.{ts,sql}`, so a staged contract never reaches the lint engine at
    all. Structural validation is step 2's job, and the unit suite's. An intentional
-   break re-commits with `CONTRACTS_ALLOW_BREAKING=1`, bumps `info.version` and is
+   break re-commits with `CONTRACTS_ALLOW_BREAKING=1`, bumps `info.version`'s MAJOR (still enforced under the bypass) and is
    recorded in the PR description. `--gate-self-test` proves the oasdiff gate still
    works by running it over the fixtures in `contracts/fixtures/oasdiff/`; with
    neither an `oasdiff` binary nor a reachable docker daemon it fails closed and says
@@ -88,7 +88,7 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
 
 **Introducing a breaking change** (e.g. P0.3b's committees POST 201->202 flip) requires:
 - `CONTRACTS_ALLOW_BREAKING=1` set on the commit
-- A version bump of the affected spec's `info.version`
+- A MAJOR version bump of the affected spec's `info.version` (the gate refuses the bypass without one)
 - A PR-description note explaining the break
 
 ## 4. Gates

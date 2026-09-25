@@ -1,13 +1,22 @@
 // gremion-ui/scripts/contracts-gate.ts
 // P0.4 oasdiff breaking-change gate (design §3.2 Contracts row). Resolution
-// order: `oasdiff` on PATH, else docker image tufin/oasdiff. This gate runs on
-// the pre-commit hook and in `--gate-self-test`.
+// order: `oasdiff` on PATH, else the digest-pinned docker image below. This gate
+// runs on the pre-commit hook and in `--gate-self-test`.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 export interface GateResult { breaking: boolean; output: string; tool: string }
+
+// Pinned by tag AND digest (TASK-018-FU): the unpinned `tufin/oasdiff` meant
+// `latest`, so which tool version rendered a verdict drifted silently. This is
+// the SAME image packages/generated-clients/src/oasdiff-gate.ts pins (TASK-030).
+// It is duplicated, not imported — gremion-ui does not depend on that package,
+// and install-git-hooks.test.ts copies this file into a scratch repo on its own
+// — so contracts-gate-staged.test.ts asserts the two are equal. Bump both
+// together.
+export const OASDIFF_DOCKER_IMAGE = 'tufin/oasdiff:v1.32.1@sha256:3b14fe0112e5d1bf862f91ab234a4bcd161a3f399e98f8b0b665ce70857694ac'
 
 // oasdiff `breaking --fail-on ERR` answers with an EXIT CODE: 0 = clean,
 // 1 = breaking change found. Any OTHER code means the tool did not reach a
@@ -50,15 +59,15 @@ export function runOasdiffBreaking(oldSpec: string, newSpec: string): GateResult
     if (r) return { breaking: r.code !== 0, output: r.out, tool: 'oasdiff (PATH)' }
     // 2) docker fallback — only when the DAEMON answers (see dockerDaemonAvailable)
     if (dockerDaemonAvailable()) {
-      r = tryRun('docker', ['run', '--rm', '-v', `${dir}:/specs:ro`, 'tufin/oasdiff',
+      r = tryRun('docker', ['run', '--rm', '-v', `${dir}:/specs:ro`, OASDIFF_DOCKER_IMAGE,
         'breaking', '/specs/old.json', '/specs/new.json', '--fail-on', 'ERR'])
-      if (r) return { breaking: r.code !== 0, output: r.out, tool: 'tufin/oasdiff (docker)' }
+      if (r) return { breaking: r.code !== 0, output: r.out, tool: `${OASDIFF_DOCKER_IMAGE} (docker)` }
     }
     throw new Error(
       '[contracts-gate] no oasdiff verdict: neither an `oasdiff` binary nor a working '
       + 'docker ran the comparison (a tool that starts and then errors — e.g. `docker run` '
       + 'with the daemon stopped — is NOT a verdict and is deliberately not read as one). '
-      + 'Install: https://github.com/oasdiff/oasdiff (or `docker pull tufin/oasdiff`), '
+      + `Install: https://github.com/oasdiff/oasdiff (or \`docker pull ${OASDIFF_DOCKER_IMAGE}\`), `
       + 'or start the docker daemon. A staged contract change CANNOT be verified — failing closed.',
     )
   } finally {
@@ -66,8 +75,28 @@ export function runOasdiffBreaking(oldSpec: string, newSpec: string): GateResult
   }
 }
 
+const SEMVER_MAJOR = /^(\d+)\.\d+\.\d+$/
+
+/** info.version's major, or null when the document or version is unparseable. */
+function specMajor(raw: string): { version: string; major: number | null } {
+  let version = ''
+  try {
+    const v = (JSON.parse(raw) as { info?: { version?: unknown } }).info?.version
+    version = typeof v === 'string' ? v : ''
+  } catch { /* unparseable document: no version */ }
+  const m = SEMVER_MAJOR.exec(version)
+  return { version: version || '(none)', major: m ? Number(m[1]) : null }
+}
+
+export interface GateStagedOpts {
+  /** The breaking-change comparison; defaults to runOasdiffBreaking. Injected
+   *  by contracts-gate-staged.test.ts so the bump rule is tested hermetically. */
+  compare?: (oldSpec: string, newSpec: string) => GateResult
+}
+
 /** Gate staged spec files against their HEAD version. Returns failure messages. */
-export function gateStagedSpecs(repoRoot: string): string[] {
+export function gateStagedSpecs(repoRoot: string, opts: GateStagedOpts = {}): string[] {
+  const compare = opts.compare ?? runOasdiffBreaking
   const git = (args: string[]) => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' })
   const staged = git(['diff', '--cached', '--name-only', '--diff-filter=ACMR'])
     .split('\n').map((s) => s.trim()).filter(Boolean)
@@ -80,12 +109,21 @@ export function gateStagedSpecs(repoRoot: string): string[] {
     let oldSpec: string
     try { oldSpec = git(['show', `HEAD:${p}`]) } catch { continue /* new file — nothing to break */ }
     const newSpec = git(['show', `:${p}`])
-    const res = runOasdiffBreaking(oldSpec, newSpec)
+    const res = compare(oldSpec, newSpec)
     if (res.breaking) {
       if (process.env.CONTRACTS_ALLOW_BREAKING === '1') {
-        console.warn(`[contracts-gate] BREAKING change in ${p} ALLOWED via CONTRACTS_ALLOW_BREAKING=1 — bump info.version + note it in the PR description.\n${res.output}`)
+        // The bypass acknowledges an INTENTIONAL break; it does not waive the
+        // major bump that break requires (TASK-018-FU). An unparseable version
+        // on either side cannot prove a bump, so it fails closed.
+        const before = specMajor(oldSpec)
+        const after = specMajor(newSpec)
+        if (before.major === null || after.major === null || after.major <= before.major) {
+          problems.push(`${p}: breaking change detected by ${res.tool}; CONTRACTS_ALLOW_BREAKING=1 still requires a MAJOR bump of info.version, got ${before.version} -> ${after.version}.\n${res.output}`)
+          continue
+        }
+        console.warn(`[contracts-gate] BREAKING change in ${p} ALLOWED via CONTRACTS_ALLOW_BREAKING=1 (major bump ${before.version} -> ${after.version}) — note it in the PR description.\n${res.output}`)
       } else {
-        problems.push(`${p}: breaking change detected by ${res.tool}. Intentional? Re-commit with CONTRACTS_ALLOW_BREAKING=1, bump info.version, and record it in the PR description.\n${res.output}`)
+        problems.push(`${p}: breaking change detected by ${res.tool}. Intentional? Re-commit with CONTRACTS_ALLOW_BREAKING=1, bump info.version's MAJOR, and record it in the PR description.\n${res.output}`)
       }
     }
   }
