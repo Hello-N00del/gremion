@@ -5,6 +5,7 @@
 // run collided with other work's shared volumes). The container and any
 // volume it creates are named uniquely per run and torn down in a `finally`
 // with plain `docker rm -f` / `docker volume rm`, never `docker compose down`.
+import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -13,8 +14,21 @@ import { run, toolAvailable } from '../lib/proc.mjs'
 
 const REPO_ROOT = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
 
+// A fresh, unguessable password per run -- never committed, never logged.
+// Earlier draft of this suite hard-coded POSTGRES_PASSWORD=gremion_test,
+// which is fine for a throwaway container nothing else can reach, but a
+// literal credential in a public kernel repo is exactly the shape the
+// public-flip leak check exists to catch, and costs nothing to avoid: this
+// container is torn down at the end of the same function and the password
+// is never printed (run()'s own stdout/stderr capture is never logged for
+// this call site) or written to the result record.
+function randomTestPassword() {
+  return randomBytes(24).toString('base64url')
+}
+
 function startTestDb({ sha8, pid }) {
   const name = `verify-${sha8}-${pid}-db`
+  const password = randomTestPassword()
   // POSTGRES_USER contains "test" so assert-safe-test-db-url.ts's non-5432
   // convention check passes (brief S9) without touching the documented
   // fixture URLs. `-p 127.0.0.1::5432` binds an ephemeral host port so this
@@ -27,7 +41,7 @@ function startTestDb({ sha8, pid }) {
     '-e',
     'POSTGRES_USER=gremion_test',
     '-e',
-    'POSTGRES_PASSWORD=gremion_test',
+    `POSTGRES_PASSWORD=${password}`,
     '-e',
     'POSTGRES_DB=gremion_test',
     '-p',
@@ -40,7 +54,7 @@ function startTestDb({ sha8, pid }) {
   const deadline = Date.now() + 60_000
   let port = null
   while (Date.now() < deadline) {
-    const ready = run('docker', ['exec', name, 'pg_isready', '-U', 'gremion_test'])
+    const ready = run('docker', ['exec', '-e', `PGPASSWORD=${password}`, name, 'pg_isready', '-U', 'gremion_test'])
     if (ready.code === 0) {
       const portRes = run('docker', ['port', name, '5432/tcp'])
       const m = portRes.stdout.match(/:(\d+)\s*$/m)
@@ -53,7 +67,7 @@ function startTestDb({ sha8, pid }) {
   if (port === null) {
     return { ok: false, name, detail: `${name} never became ready within 60s` }
   }
-  return { ok: true, name, port }
+  return { ok: true, name, port, password }
 }
 
 function stopTestDb(name) {
@@ -75,11 +89,13 @@ export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
   }
 
   try {
-    const dataUrl = `postgres://gremion_test:gremion_test@127.0.0.1:${db.port}/gremion_test`
-    const controlUrl = `postgres://gremion_test:gremion_test@127.0.0.1:${db.port}/control`
+    const dataUrl = `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion_test`
+    const controlUrl = `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/control`
 
     const createControl = run('docker', [
       'exec',
+      '-e',
+      `PGPASSWORD=${db.password}`,
       db.name,
       'psql',
       '-U',

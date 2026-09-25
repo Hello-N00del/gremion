@@ -6,6 +6,7 @@
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain fresh-init-proof \
+        verify \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -368,6 +369,20 @@ lint-toolchain:
 
 lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations
 	@echo "All linters passed."
+
+# ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
+
+# The one fail-closed local gate: typecheck, unit, integration, migration-hash
+# and carve-lint (scripts/verify/required-suites.txt is the actual list this
+# target must not drift from -- scripts/verify/meta.test.mjs asserts the two
+# stay in step). Every suite is judged by scripts/verify/lib/guard.mjs, which
+# never trusts a tool's exit code alone: a suite that collects zero tests, is
+# skipped, or needs a missing tool FAILS here, it does not pass silently the
+# way an un-gated `pnpm test` would. Writes scripts/verify/out/<HEAD-sha>.json
+# (gitignored); `node scripts/verify/check-record.mjs` reads that record
+# without re-running anything and is the actual merge block.
+verify:
+	@node scripts/verify/verify.mjs
 
 # ── Repository labels ────────────────────────────────────────────────────
 

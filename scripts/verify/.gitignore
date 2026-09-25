@@ -1,0 +1,9 @@
+# Result records are keyed by HEAD sha (TRD-341) and are reproducible from
+# the tree they describe -- never committed.
+/out/
+
+# A worktree-unique, per-run Docker Compose override for the throwaway test
+# DB, if one is ever created here instead of the plain `docker run` this
+# suite uses today (brief S9's fallback option). Never shared, never
+# committed: its project name and port are unique per run.
+docker-compose.local-testdb.*.yml

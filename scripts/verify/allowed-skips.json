@@ -1,0 +1,23 @@
+{
+  "$comment": "TASK-045 Q3 (recommended default, applied). A skip inside an otherwise-passing suite fails it unless named here with a reason and a maxCount (summed per suite by lib/skips.mjs#allowedSkipsForSuite). An all-skipped suite fails regardless of this file (lib/guard.mjs evaluateSuite rule 5). Adding an entry here is a real grant, not a formality -- name the exact file and why it cannot run in this suite.",
+  "entries": [
+    {
+      "suite": "unit",
+      "file": "packages/ports/src/nats-broker.integration.test.ts",
+      "reason": "gated on NATS_TEST_URL (describeIf); the real proof against a live NATS JetStream server runs in the integration suite via `make test-ports-nats`, which asserts the file's own passing-test count rather than trusting vitest's exit code (see packages/ports/scripts/nats-test.sh).",
+      "maxCount": 20
+    },
+    {
+      "suite": "unit",
+      "file": "gremion-ui/scripts/install-git-hooks.test.ts",
+      "reason": "one it.skipIf(isWindows) case asserts a POSIX executable bit (0755); NTFS reports every file 0755 regardless, so the assertion cannot mean anything on a Windows unit run.",
+      "maxCount": 1
+    },
+    {
+      "suite": "integration",
+      "file": "gremion-ui/tests/integration/municipal-acceptance.integration.test.ts",
+      "reason": "one it.skipIf(!process.env.MUSTERSTADT_RECONCILE_VERIFY) case is an opt-in reconciliation check against a real Musterstadt-shaped tenant, not part of the default acceptance run.",
+      "maxCount": 1
+    }
+  ]
+}
