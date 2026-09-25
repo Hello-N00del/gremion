@@ -46,6 +46,16 @@ backups, and a `stat()` cannot tell it from a mounted volume — only the mount
 table can. On a host with no `/proc/self/mountinfo` (Windows/macOS development)
 the check is skipped and the skip is logged with its reason.
 
+### Live proof
+
+`bash packages/storage/scripts/mount-proof.sh` builds the package, bakes
+`dist/` into a `node:26-alpine` image and runs it twice with plain
+`docker run`: without a volume at the root (must exit non-zero with the
+refusal above) and with a named volume there (must succeed and pass a
+concurrent two-tenant write check — both tenants put the same relative path;
+the handles must be distinct, tenant-prefixed and each readable only by its
+own tenant). Every container, volume and image is removed by name.
+
 ## Status: 0.x
 
 Published at `0.1.0`; the contract is not frozen. Same packaging shape as
