@@ -12,7 +12,13 @@
   },
   "homepage": "https://github.com/Hello-N00del/gremion/tree/main/packages/tenant-store",
   "bugs": "https://github.com/Hello-N00del/gremion/issues",
-  "files": ["dist", "src", "!src/**/*.test.ts", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "import": "./src/index.ts"
@@ -29,7 +35,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration": "node test/harness/stack.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "check:access": "node scripts/check-tenant-db-access.mjs",
     "build": "tsc -p tsconfig.build.json",
