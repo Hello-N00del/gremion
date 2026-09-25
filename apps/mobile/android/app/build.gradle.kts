@@ -8,8 +8,9 @@ plugins {
 }
 
 // Exclude the JVM tink artifact — tink-android supersedes it on Android.
-// flutter_secure_storage uses tink-android; a JVM tink pulled in by any other
-// dependency would cause hundreds of duplicate class errors.
+// flutter_secure_storage uses tink-android; the JVM tink (today declared at
+// runtime by UnifiedPush's org.unifiedpush.android:connector) would cause
+// hundreds of duplicate class errors.
 configurations.all {
     exclude(group = "com.google.crypto.tink", module = "tink")
 }

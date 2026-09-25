@@ -53,18 +53,20 @@ void main() {
       final xml = _withoutComments(plist);
 
       test('registers the stura URL scheme (AppAuth redirect)', () {
+        // Inside CFBundleURLTypes, or iOS does not register it.
         expect(
           xml,
-          matches(RegExp(r'<key>CFBundleURLSchemes</key>\s*<array>\s*'
-              r'<string>stura</string>\s*</array>')),
+          matches(RegExp(r'<key>CFBundleURLTypes</key>\s*<array>\s*<dict>'
+              r'(?:(?!</dict>)[\s\S])*<key>CFBundleURLSchemes</key>\s*<array>'
+              r'\s*<string>stura</string>\s*</array>')),
         );
       });
 
       test('keeps the Face ID usage description', () {
         expect(
           xml,
-          matches(RegExp(
-              r'<key>NSFaceIDUsageDescription</key>\s*<string>[^<]+</string>')),
+          matches(RegExp(r'<key>NSFaceIDUsageDescription</key>\s*'
+              r'<string>\s*[^<\s][^<]*</string>')),
         );
       });
 

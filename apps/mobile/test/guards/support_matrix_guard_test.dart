@@ -12,12 +12,15 @@ String _read(String path) =>
 void main() {
   test('Android: literal minSdk = 29 (Android 10)', () {
     final gradle = _read('android/app/build.gradle.kts');
-    final minSdk = RegExp(r'^\s*minSdk\s*=\s*(.+?)\s*$', multiLine: true)
-        .allMatches(gradle)
-        .map((m) => m[1])
+    // Every minSdk / minSdkVersion(...) setting outside line comments: a
+    // second one would override the literal at build time.
+    final settings = gradle
+        .split('\n')
+        .map((line) => line.replaceFirst(RegExp(r'//.*'), '').trim())
+        .where((line) => RegExp(r'\bminSdk(Version)?\b').hasMatch(line))
         .toList();
-    expect(minSdk, ['29'],
-        reason: 'expected exactly one `minSdk = 29`, found $minSdk');
+    expect(settings, ['minSdk = 29'],
+        reason: 'expected exactly one `minSdk = 29`, found $settings');
   });
 
   group('iOS: deployment target 16.0', () {

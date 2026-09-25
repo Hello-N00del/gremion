@@ -19,10 +19,20 @@ import 'package:flutter_test/flutter_test.dart';
 
 final _forbidden = RegExp(
   [
+    // Flutter plugins and their Android classes.
     'firebase' '_messaging',
     'firebase' '_core',
     r'com\.google\.' 'firebase',
     'Firebase' 'Messaging',
+    r'Firebase\.' 'initializeApp',
+    // Native Firebase SDKs: CocoaPods subspecs, the Swift/ObjC core and app
+    // modules and their configure() call, Gradle artifacts (including the
+    // BoM) and the Google services Gradle plugin.
+    'Firebase' '/',
+    'Firebase' 'Core',
+    'Firebase' 'App',
+    'firebase' '-[a-z]',
+    r'com\.google\.' 'gms',
   ].join('|'),
 );
 
