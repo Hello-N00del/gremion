@@ -7,9 +7,10 @@
 // the replacement contract: no host-bearing defaults, fail loudly instead, and
 // derive the realm from the issuer the operator actually configured.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-
-const envMock = vi.hoisted(() => ({}) as Record<string, string | undefined>)
-vi.mock('$env/dynamic/private', () => ({ env: envMock }))
+// TASK-032 (TRD-410 [D R20-D5]): register-default.ts now reads process.env
+// directly (kit 3 dropped $env/dynamic/private's free-form var access) — see
+// process-env-mock.ts's header comment.
+import { envMock, resetEnvMock } from '../../../../tests/unit/process-env-mock'
 // The env resolution must happen BEFORE anything touches the control plane, so
 // both collaborators are stubbed to fail loudly if the code gets that far.
 vi.mock('./control-db', () => ({
@@ -28,7 +29,7 @@ import { registerDefaultTenant, resolveDefaultTenantEnv } from './register-defau
 const ISSUER = 'https://council.example/auth/realms/council'
 
 beforeEach(() => {
-  for (const k of Object.keys(envMock)) delete envMock[k]
+  resetEnvMock()
 })
 
 describe('registerDefaultTenant — env is the only source of tenant #1 identity', () => {

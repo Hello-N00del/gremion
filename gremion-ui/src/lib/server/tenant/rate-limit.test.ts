@@ -4,17 +4,16 @@
 // identity is an explicit parameter here (the seam calls the limiter with the
 // canonical ctx.id BEFORE entering runWithTenant), so no ALS default applies.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-// $env/dynamic/private snapshots process.env at module init — swap it for a
-// mutable mock so each test can toggle the limiter env without re-importing.
-const envMock = vi.hoisted(() => ({}) as Record<string, string | undefined>)
-vi.mock('$env/dynamic/private', () => ({ env: envMock }))
+// TASK-032 (TRD-410 [D R20-D5]): rate-limit.ts now reads process.env directly
+// (kit 3 dropped $env/dynamic/private's free-form var access) — see
+// process-env-mock.ts's header comment.
+import { envMock, resetEnvMock } from '../../../../tests/unit/process-env-mock'
 
 const { checkTenantRateLimit, __resetTenantRateLimit, evictTenantRateLimit } =
   await import('./rate-limit')
 
 beforeEach(() => {
-  for (const k of Object.keys(envMock)) delete envMock[k]
+  resetEnvMock()
   __resetTenantRateLimit()
 })
 

@@ -11,13 +11,12 @@
 // context (boot-time callers) it must send NEITHER header — today's behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('$env/dynamic/private', () => ({
-  env: {
-    INTERNAL_PUSH_SECRET: 'test-secret-32-bytes-of-padding-xxx',
-    PUBLIC_BASE_URL: 'http://stura.test:3000',
-    INTERNAL_BASE_URL: undefined,
-  },
-}))
+// TASK-032 (TRD-410 [D R20-D5]): internal-fetch.ts now reads process.env
+// directly (kit 3 dropped $env/dynamic/private's free-form var access) — see
+// internal-fetch.test.ts's header comment.
+process.env.INTERNAL_PUSH_SECRET = 'test-secret-32-bytes-of-padding-xxx'
+process.env.PUBLIC_BASE_URL = 'http://stura.test:3000'
+delete process.env.INTERNAL_BASE_URL
 
 import { internalFetch } from './internal-fetch'
 import { runWithTenant } from './tenant/context'

@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-
-const envMock: Record<string, string | undefined> = {}
-vi.mock('$env/dynamic/private', () => ({ env: envMock }))
+import { describe, it, expect, beforeEach } from 'vitest'
+// TASK-032 (TRD-410 [D R20-D5]): default-env.ts now reads process.env
+// directly (kit 3 dropped $env/dynamic/private's free-form var access) — see
+// process-env-mock.ts's header comment.
+import { envMock, resetEnvMock } from '../../../../tests/unit/process-env-mock'
 
 // P2.1c (T14, §7.7): defaultTenantEnv is the ONE allowlisted seam (it lives under
 // lib/server/tenant/, exempt from the env-guard) through which the default tenant's
@@ -10,10 +11,10 @@ vi.mock('$env/dynamic/private', () => ({ env: envMock }))
 // through here so the build-failing guard (--enforce) has exactly one place to point at.
 describe('defaultTenantEnv (T14 §7.7 allowlisted seam)', () => {
   beforeEach(() => {
-    for (const k of Object.keys(envMock)) delete envMock[k]
+    resetEnvMock()
   })
 
-  it('reads a value from $env/dynamic/private by name', async () => {
+  it('reads a value from process.env by name', async () => {
     envMock.MATRIX_URL = 'http://matrix:8008'
     const { defaultTenantEnv } = await import('./default-env')
     expect(defaultTenantEnv('MATRIX_URL')).toBe('http://matrix:8008')

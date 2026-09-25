@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as realFs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
+// TASK-032 (TRD-410 [D R20-D5]): the config-path resolution this exercises
+// now reads process.env directly (kit 3 dropped $env/dynamic/private's
+// free-form var access) — see process-env-mock.ts's header comment.
+import { envMock } from '../../../tests/unit/process-env-mock'
 
 // #256-5: the setup token used to be minted from env.CONFIG_PATH only — ONE
 // process-global secret that authorized the setup wizard (incl. KC admin
@@ -16,9 +20,6 @@ import * as os from 'node:os'
 // the on-disk token files prove the per-tenant paths end-to-end. Paths are
 // normalized to forward slashes — the module derives the directory with a
 // '/'-based replace, exactly like the Linux container paths it sees in prod.
-
-const envMock: { CONFIG_PATH?: string } = {}
-vi.mock('$env/dynamic/private', () => ({ env: envMock }))
 
 const tenantMock: { current: { id: string; configPath: string } } = {
   current: { id: 'default', configPath: '' },

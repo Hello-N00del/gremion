@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-
-const envMock: Record<string, string> = {}
-vi.mock('$env/dynamic/private', () => ({ env: envMock }))
+// TASK-032 (TRD-410 [D R20-D5]): secrets.ts now reads process.env directly
+// (kit 3 dropped $env/dynamic/private's free-form var access) — see
+// process-env-mock.ts's header comment.
+import { envMock, resetEnvMock } from '../../../../tests/unit/process-env-mock'
 
 // T7 file: allowlist — read mock so the resolver never actually touches /run/secrets.
 const readFileSyncMock = vi.fn<(path: string, enc: string) => string>()
@@ -12,7 +13,7 @@ vi.mock('node:fs', () => {
 
 describe('resolveSecret', () => {
   beforeEach(() => {
-    for (const k of Object.keys(envMock)) delete envMock[k]
+    resetEnvMock()
     readFileSyncMock.mockReset()
     readFileSyncMock.mockReturnValue('s3cret\n')
   })
@@ -58,7 +59,7 @@ describe('resolveSecret', () => {
 // backup) where /run/secrets does NOT exist. Translates the per-tenant container
 // prefix to the host bind-mount source.
 describe('tenantSecretHostPath', () => {
-  beforeEach(() => { for (const k of Object.keys(envMock)) delete envMock[k] })
+  beforeEach(() => { resetEnvMock() })
 
   it('translates file:/run/secrets/tenants/<name> to the default host path', async () => {
     const { tenantSecretHostPath } = await import('./secrets')

@@ -1,15 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Mock $env/dynamic/private BEFORE the SUT is imported. Vitest hoists
-// `vi.mock` calls to the top of the file, but we keep this explicit so the
-// dependency is obvious.
-vi.mock('$env/dynamic/private', () => ({
-  env: {
-    INTERNAL_PUSH_SECRET: 'test-secret-32-bytes-of-padding-xxx',
-    PUBLIC_BASE_URL: 'http://stura.test:3000',
-    INTERNAL_BASE_URL: undefined,
-  },
-}))
+// TASK-032 (TRD-410 [D R20-D5]): internal-fetch.ts now reads process.env
+// directly (kit 3 dropped $env/dynamic/private's free-form var access) — set
+// the real values BEFORE the SUT is imported (module load reads them lazily
+// per-call via readEnv(), not at import time, but this keeps the same
+// "configured before use" shape the old mock had).
+process.env.INTERNAL_PUSH_SECRET = 'test-secret-32-bytes-of-padding-xxx'
+process.env.PUBLIC_BASE_URL = 'http://stura.test:3000'
+delete process.env.INTERNAL_BASE_URL
 
 import {
   constantTimeEqual,

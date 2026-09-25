@@ -19,20 +19,20 @@
 // (not `default`).
 //
 // NOTE: a separate file from internal-fetch.tenant.test.ts is required because
-// vi.mock('$env/dynamic/private') is module-hoisted — that file pins the
-// PUBLIC_BASE_URL fallback (INTERNAL_BASE_URL: undefined) and must keep doing so.
+// each test FILE gets its own process.env (vitest's default per-file isolation)
+// — that file pins the PUBLIC_BASE_URL fallback (INTERNAL_BASE_URL unset) and
+// must keep doing so.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// INTERNAL_BASE_URL = the in-container origin; PUBLIC_BASE_URL = the public apex.
-// The two MUST differ for the bypass to be meaningful (the whole point of the
-// fix is that the inner hop does NOT use the apex origin).
-vi.mock('$env/dynamic/private', () => ({
-  env: {
-    INTERNAL_PUSH_SECRET: 'test-secret-32-bytes-of-padding-xxx',
-    PUBLIC_BASE_URL: 'https://stura.test',
-    INTERNAL_BASE_URL: 'http://gremion-ui:3000',
-  },
-}))
+// TASK-032 (TRD-410 [D R20-D5]): internal-fetch.ts now reads process.env
+// directly (kit 3 dropped $env/dynamic/private's free-form var access) — see
+// internal-fetch.test.ts's header comment. INTERNAL_BASE_URL = the
+// in-container origin; PUBLIC_BASE_URL = the public apex. The two MUST differ
+// for the bypass to be meaningful (the whole point of the fix is that the
+// inner hop does NOT use the apex origin).
+process.env.INTERNAL_PUSH_SECRET = 'test-secret-32-bytes-of-padding-xxx'
+process.env.PUBLIC_BASE_URL = 'https://stura.test'
+process.env.INTERNAL_BASE_URL = 'http://gremion-ui:3000'
 
 import { internalFetch } from './internal-fetch'
 import { runWithTenant } from './tenant/context'
