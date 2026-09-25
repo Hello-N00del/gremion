@@ -4,4 +4,5 @@
 // of etc/edge.
 export * from './names.ts'
 export * from './platform-middlewares.ts'
+export * from './classify.ts'
 export * from './render.ts'
