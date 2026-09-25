@@ -7,11 +7,13 @@
 // that scripts/verify/check-record.mjs is the only thing meant to read.
 //
 // Deliberately carries NO skip mechanism of any kind -- no `VERIFY_SKIP_*`
-// env var, no `--skip` flag. A required suite is either run and judged, or
-// its absence from the registry is itself a FAIL (see runAll below). Adding
-// one is exactly the defect brief S6 item 3 exists to keep out; if you are
-// tempted to add an escape hatch here, add it to allowed-skips.json instead
-// (Q3), which is scoped to individual tests inside a suite, not whole suites.
+// env var, no `--skip` flag, no dirty-tree override. The only argument is
+// `--only <suite[,suite]>`, and any other argument is a usage error (exit 1),
+// never silently ignored. A required suite is either run and judged, or its
+// absence from the registry is itself a FAIL (see runAll below). If you are
+// tempted to add an escape hatch here, add a per-file entry to
+// allowed-skips.json instead (Q3), which is scoped to individual tests inside
+// a suite, not whole suites.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -19,7 +21,7 @@ import { evaluateSuite } from './lib/guard.mjs'
 import { headSha, isDirty } from './lib/git.mjs'
 import { parseSvelteCheckMachine } from './lib/parsers.mjs'
 import { writeRecord } from './lib/record.mjs'
-import { allowedSkipsForSuite, loadAllowedSkips } from './lib/skips.mjs'
+import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
 import { runCarveLintSuite } from './suites/carve-lint.mjs'
 import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } from './suites/fixtures.mjs'
 import { DEFERRED_BATS_NOTE, runIntegrationSuite } from './suites/integration.mjs'
@@ -44,6 +46,11 @@ export const SUITE_REGISTRY = {
   __fixture_missing_tool__: runFixtureMissingTool,
 }
 
+/**
+ * required-suites.txt: one suite name per line; blank lines and `#` comment
+ * lines are ignored. See that file's header for the format contract other
+ * tasks (TASK-046 supply-chain, isolation, i18n, a11y) rely on.
+ */
 export function loadRequiredSuites(text = readFileSync(REQUIRED_SUITES_PATH, 'utf8')) {
   return text
     .split(/\r?\n/)
@@ -55,16 +62,54 @@ function isFixtureName(name) {
   return name.startsWith('__fixture')
 }
 
+export class UsageError extends Error {}
+
+function splitNames(value) {
+  const names = (value ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (value === undefined || value.startsWith('--') || names.length === 0) {
+    throw new UsageError('--only needs a suite name (--only <suite[,suite]>)')
+  }
+  return names
+}
+
+/** The only argument verify accepts is `--only`; anything else is a usage
+ * error, so a typo'd or invented flag (`--skip unit`) can never look like it
+ * did something. */
 export function parseArgs(argv) {
   const only = []
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--only') {
-      only.push(...argv[++i].split(',').map((s) => s.trim()).filter(Boolean))
-    } else if (argv[i].startsWith('--only=')) {
-      only.push(...argv[i].slice('--only='.length).split(',').map((s) => s.trim()).filter(Boolean))
+    const arg = argv[i]
+    if (arg === '--only') {
+      only.push(...splitNames(argv[++i]))
+    } else if (arg.startsWith('--only=')) {
+      only.push(...splitNames(arg.slice('--only='.length)))
+    } else {
+      throw new UsageError(`unknown argument: ${arg} -- verify accepts only --only <suite[,suite]> (there is no skip flag)`)
     }
   }
-  return { only: only.length ? only : null }
+  return { only: only.length ? [...new Set(only)] : null }
+}
+
+const UNATTRIBUTED_SUITE_SKIP = '(suite: skip not attributable to a file)'
+
+/**
+ * Q3 per file: every skip a suite reports must be attributed to a file with
+ * its own allow-list budget. Skips the suite reported in `skipped` but did
+ * not attribute (bats, node --test, a lost report) are booked under a key no
+ * entry matches, so they are judged with a zero budget. Without allow-list
+ * data at all, any skip is a violation.
+ */
+function skipViolations(name, raw, skipsData) {
+  const byFile = { ...(raw.skipsByFile ?? {}) }
+  const attributed = Object.values(byFile).reduce((a, n) => a + (n > 0 ? n : 0), 0)
+  const skipped = Number.isFinite(raw.skipped) ? raw.skipped : 0
+  if (skipped > attributed) byFile[UNATTRIBUTED_SUITE_SKIP] = skipped - attributed
+  if (!skipsData) {
+    return Object.entries(byFile)
+      .filter(([, n]) => n > 0)
+      .map(([file, n]) => `${file}: ${n} skip(s), and allowed-skips.json could not be loaded`)
+  }
+  return checkSkipsByFile(name, byFile, skipsData)
 }
 
 /**
@@ -74,23 +119,24 @@ export function parseArgs(argv) {
  * silently skipped -- this is what makes a dropped required suite (brief S6
  * item 3 / the meta-test) visible as a failing suite, not an absent line.
  */
-export function runAll(names, { skipsData = safeLoadAllowedSkips() } = {}) {
+export function runAll(names, { skipsData = loadAllowedSkips(), registry = SUITE_REGISTRY } = {}) {
   const results = {}
   for (const name of names) {
     const startedAt = Date.now()
-    const runner = SUITE_REGISTRY[name]
+    const runner = registry[name]
     let raw
     if (!runner) {
       raw = { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no such suite in the registry (dropped?)` }
     } else {
       try {
-        raw = runner()
+        raw = runner() ?? { unparseable: true, detail: 'runner returned nothing' }
       } catch (err) {
         raw = { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `threw: ${err.stack || err.message}` }
       }
     }
     const allowedSkips = skipsData ? allowedSkipsForSuite(name, skipsData) : 0
-    const verdict = evaluateSuite({ ...raw, allowedSkips })
+    const skipFileViolations = skipViolations(name, raw, skipsData)
+    const verdict = evaluateSuite({ ...raw, allowedSkips, skipFileViolations })
     results[name] = {
       status: verdict.status,
       reason: verdict.reason,
@@ -105,23 +151,13 @@ export function runAll(names, { skipsData = safeLoadAllowedSkips() } = {}) {
   return results
 }
 
-function safeLoadAllowedSkips() {
-  try {
-    return loadAllowedSkips()
-  } catch {
-    return null
-  }
-}
-
-function printLine(name, r) {
+function formatLine(name, r) {
   const label = r.status === 'pass' ? 'PASS' : 'FAIL'
   const secs = (r.durationMs / 1000).toFixed(1)
   const counts = `collected=${r.collected} passed=${r.passed} failed=${r.failed} skipped=${r.skipped}`
   const suffix = r.status === 'fail' ? ` -- ${r.reason}` : ''
-  console.log(`[verify] ${label} ${name} (${secs}s) ${counts}${suffix}`)
-  if (r.status === 'fail' && r.detail) {
-    console.log(indent(r.detail))
-  }
+  const line = `[verify] ${label} ${name} (${secs}s) ${counts}${suffix}`
+  return r.status === 'fail' && r.detail ? `${line}\n${indent(r.detail)}` : line
 }
 
 function indent(text) {
@@ -131,44 +167,94 @@ function indent(text) {
     .join('\n')
 }
 
-async function main() {
-  const { only } = parseArgs(process.argv.slice(2))
-  const required = loadRequiredSuites()
-  const names = only ?? required
+/**
+ * The whole CLI, with every side effect injectable so the tree/HEAD/record
+ * paths are testable (verify-r2.test.mjs). Returns the process exit code.
+ */
+export function runVerify(argv, deps = {}) {
+  const {
+    repoRoot = REPO_ROOT,
+    isDirtyFn = isDirty,
+    headShaFn = headSha,
+    runAllFn = runAll,
+    writeRecordFn = writeRecord,
+    loadRequiredFn = loadRequiredSuites,
+    loadSkipsFn = loadAllowedSkips,
+    log = console.log,
+    error = console.error,
+  } = deps
+
+  let only
+  try {
+    ;({ only } = parseArgs(argv))
+  } catch (err) {
+    if (err instanceof UsageError) {
+      error(`[verify] usage error: ${err.message}`)
+      return 1
+    }
+    throw err
+  }
+  const names = only ?? loadRequiredFn()
+
+  // Q3: judging with an empty allow-list would fail every allowed skip with a
+  // misleading reason; judging without the file's per-file budgets is not an
+  // option either. A broken allow-list is its own, named refusal.
+  let skipsData
+  try {
+    skipsData = loadSkipsFn()
+  } catch (err) {
+    error(`[verify] refusing to run: scripts/verify/allowed-skips.json could not be loaded: ${err.message}`)
+    return 1
+  }
 
   // Q5, no escape hatch: a record is keyed by HEAD sha (TRD-341) and must
   // describe the exact tree that was tested, so this refusal is unconditional
   // for every real suite. An earlier VERIFY_ALLOW_DIRTY=1 env var bypassed it
-  // -- undocumented, untested, and reachable on every real merge decision, not
-  // just local iteration (house review + verifier finding, both HIGH:
-  // reproduced writing a green migration-hash record for a tampered-then-
-  // restored HEAD). Removed rather than flagged in the record, because this
-  // file's own header already promises "NO skip mechanism of any kind" and a
-  // flagged-dirty record is still one more field a merge step must remember
-  // to check.
+  // (round-1 HIGH, reproduced writing a green migration-hash record for a
+  // tampered-then-restored HEAD); it is gone, not flagged.
   const touchesRealSuite = names.some((n) => !isFixtureName(n))
-  if (touchesRealSuite && isDirty(REPO_ROOT)) {
-    console.error(
-      '[verify] refusing to run: the tracked tree has uncommitted changes. ' +
-        'A result record is keyed by HEAD sha (TRD-341) and must describe the exact tree that was ' +
-        'tested (Q5) -- commit or stash first.',
-    )
-    process.exitCode = 1
-    return
+  let sha = null
+  if (touchesRealSuite) {
+    if (isDirtyFn(repoRoot)) {
+      error(
+        '[verify] refusing to run: the tree has uncommitted changes or untracked, non-ignored files. ' +
+          'A result record is keyed by HEAD sha (TRD-341) and must describe the exact tree that was ' +
+          'tested (Q5) -- commit, stash or remove them first.',
+      )
+      return 1
+    }
+    // Taken BEFORE the run: the record describes the commit that was
+    // actually tested, not whatever HEAD is when the run ends.
+    sha = headShaFn(repoRoot)
   }
 
   const startedAt = new Date().toISOString()
-  const results = runAll(names)
+  const results = runAllFn(names, { skipsData })
   const finishedAt = new Date().toISOString()
 
-  for (const name of names) printLine(name, results[name])
+  for (const name of names) log(formatLine(name, results[name]))
 
-  const allPass = Object.values(results).every((r) => r.status === 'pass')
+  if (touchesRealSuite) {
+    // A suite (or anything else) that edits tracked files, or a commit made
+    // in this checkout mid-run, means the results describe no single commit.
+    // No record is written: a green record here would authorize bytes that
+    // were never tested as a whole.
+    const shaAfter = headShaFn(repoRoot)
+    if (shaAfter !== sha) {
+      error(`[verify] FAILED -- HEAD moved during the run (${sha} -> ${shaAfter}); no record written, re-run on a quiet checkout`)
+      return 1
+    }
+    if (isDirtyFn(repoRoot)) {
+      error('[verify] FAILED -- the tree changed during the run (tracked edits or new untracked files); no record written')
+      return 1
+    }
+  }
+
+  const allPass = names.every((n) => results[n]?.status === 'pass')
   const partial = only !== null
 
   if (touchesRealSuite) {
-    const sha = headSha(REPO_ROOT)
-    const { path: recordFile } = writeRecord({
+    const { path: recordFile } = writeRecordFn({
       sha,
       suites: results,
       only: partial ? names.join(',') : null,
@@ -176,35 +262,42 @@ async function main() {
       finishedAt,
       deferred: [DEFERRED_BATS_NOTE],
     })
-    console.log(`[verify] record: ${recordFile}${partial ? ' (partial -- never satisfies check-record.mjs)' : ''}`)
+    log(`[verify] record: ${recordFile}${partial ? ' (partial -- never satisfies check-record.mjs)' : ''}`)
   }
 
   if (!allPass) {
-    console.error('[verify] FAILED')
-    process.exitCode = 1
-    return
+    error('[verify] FAILED')
+    return 1
   }
   if (partial) {
-    console.log('[verify] partial run OK (--only) -- this does NOT satisfy check-record.mjs')
-    return
+    log('[verify] partial run OK (--only) -- this does NOT satisfy check-record.mjs')
+    return 0
   }
-  console.log('[verify] all suites PASS')
+  log('[verify] all suites PASS')
+  return 0
 }
 
 // Re-exported for lib/parsers.mjs consumers that want the machine-check
 // parser without importing the whole suite module.
 export { parseSvelteCheckMachine }
 
-// Hand-built `file://` string comparisons (the previous form here) diverge
-// from `import.meta.url`'s own encoding for any path containing a character
-// URL-encodes, most commonly a space (%20) -- any Windows profile with a
-// space in it (this repo's own CI account name is one). Reproduced: copying
-// scripts/ to a path containing a space made this comparison false for every
-// invocation, so main() silently never ran and the process exited 0 with no
-// output at all -- a merge block calling this with no record present would
-// have passed on nothing. `pathToFileURL(...).href` is exactly how Node
-// derives `import.meta.url` for a local file, so this compares like with
-// like on every platform, spaces included.
+// Synchronous on purpose: nothing here awaits, and an `async main()` that
+// nobody awaited turned any throw into an unhandled rejection with Node's
+// default crash output instead of this file's own FAILED line (round-1
+// MEDIUM). Every unexpected error is a formatted failure with exit 1.
+function main() {
+  try {
+    process.exitCode = runVerify(process.argv.slice(2))
+  } catch (err) {
+    console.error(`[verify] FAILED -- internal error: ${err?.stack || err}`)
+    process.exitCode = 1
+  }
+}
+
+// `pathToFileURL(...).href` is exactly how Node derives `import.meta.url`
+// for a local file, so this compares like with like on every platform,
+// including a checkout path containing a space (a hand-built `file://`
+// string did not, and main() silently never ran -- round-1 HIGH).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
 }

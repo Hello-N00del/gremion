@@ -60,9 +60,11 @@ test('verify.mjs carries no skip mechanism of any kind -- no VERIFY_SKIP env var
   assert.doesNotMatch(src, /process\.env\.VERIFY_SKIP/)
   assert.doesNotMatch(src, /===\s*['"`]--skip/)
   // Behaviorally: parseArgs recognizes only --only; an unknown flag like
-  // --skip is silently ignored rather than acted on.
+  // --skip is a usage error (round 2: it used to be silently ignored, which
+  // at least never skipped anything, but a flag that "does nothing" invites
+  // someone to believe it worked).
   const { parseArgs } = await import('./verify.mjs')
-  assert.deepEqual(parseArgs(['--skip', 'unit']), { only: null })
+  assert.throws(() => parseArgs(['--skip', 'unit']), /unknown argument: --skip/)
 })
 
 test('verify.mjs carries no dirty-tree bypass of any kind -- Q5 has no VERIFY_ALLOW_DIRTY escape hatch', async () => {
