@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gremion.dev/contracts/schema/module-contracts.schema.json",
+  "title": "Gremion module contract declaration",
+  "description": "TASK-030 (brief §5 decision 5, D2 adapted). What a module PROVIDES and REQUIRES in terms of registered contracts/registry.json APIs and DB-PLT-EVENT-TYPE events. TASK-077 loads a document of this shape into DB-PLT-MODULE-VERSION(-API/-EVENT). Semantic checks (unknown api, unsatisfiable version range, non-canonical context) are enforced by packages/generated-clients/src/module-contracts.ts:validateModuleContracts, not by this schema alone — this schema is the STRUCTURAL half.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["module", "context"],
+  "properties": {
+    "module": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The module's own name, e.g. \"calendar\"."
+    },
+    "context": {
+      "type": "string",
+      "enum": ["tnt", "idt", "oac", "gov", "brd", "cal", "fil", "msg", "hnd", "pwd", "pub", "nws", "mail", "ntf", "plt", "ops", "fin", "ele"],
+      "description": "DB-PLT-MODULE's canonical context set."
+    },
+    "provides": { "$ref": "#/$defs/surface" },
+    "requires": { "$ref": "#/$defs/surface" }
+  },
+  "$defs": {
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "apis": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/apiRequirement" }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/eventDeclaration" }
+        }
+      }
+    },
+    "apiRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "versionRange"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Must match a contracts/registry.json entry's \"name\"." },
+        "versionRange": { "type": "string", "minLength": 1, "description": "An AND-list of comparators (e.g. \">=1.0.0 <2.0.0\") or ^/~ shorthand." }
+      }
+    },
+    "eventDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "pattern": "^de\\.gremion\\.[a-z]+\\.[a-z][a-zA-Z0-9]*\\.[a-z][a-zA-Z0-9]*\\.v\\d+$",
+          "description": "DB-PLT-EVENT-TYPE grammar: de.gremion.<ctx>.<entity>.<verb>.v<N>."
+        }
+      }
+    }
+  }
+}
