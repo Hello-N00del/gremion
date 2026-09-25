@@ -452,6 +452,32 @@ install_lib_only() {
     [[ "$output" == *"absent.tmpl"* ]]
 }
 
+@test "an ALLOW_SENTINELS=1 line inside the file does not waive the sentinel refusal (review finding)" {
+    printf 'ALLOW_SENTINELS=1\nACME_EMAIL=CHANGE_ME_OPERATOR_acme_email\n' > "${GREMION_ROOT}/t.env"
+    run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"ALLOW_SENTINELS"* ]]
+}
+
+@test "load_env refuses keys that steer the shell or the loader itself" {
+    local k
+    for k in ALLOW_SENTINELS GREMION_ENV_TEMPLATE_DIR PATH IFS BASH_ENV LD_PRELOAD; do
+        printf 'A=1\n%s=x\n' "$k" > "${GREMION_ROOT}/t.env"
+        run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
+        [ "$status" -eq 2 ] || { echo "$k was accepted"; return 1; }
+        [[ "$output" == *"$k"* ]]
+    done
+}
+
+@test "a whitespace-only value counts as empty for a template-marked secret" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/app-blue.env"
+    set_key "$f" AUTH_SECRET '"  "'
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"' "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"AUTH_SECRET"* ]]
+}
+
 @test "load_env never echoes a malformed line (it may hold a secret)" {
     printf 'A=1\nexport LEAKY=fake-secret-value-0000\n' > "${GREMION_ROOT}/t.env"
     run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"

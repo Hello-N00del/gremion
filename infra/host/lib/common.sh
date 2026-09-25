@@ -320,6 +320,10 @@ load_env() {
         exit "$GREMION_EXIT_USAGE"
     fi
 
+    # Read the waiver ONCE, before the file can say anything: a file line
+    # `ALLOW_SENTINELS=1` would otherwise be exported mid-loop and waive the
+    # refusal for every line after it.
+    local allow_sentinels="${ALLOW_SENTINELS:-0}"
     local line key value n=0
     while IFS= read -r line || [[ -n "$line" ]]; do
         n=$((n + 1))
@@ -331,15 +335,24 @@ load_env() {
         fi
         key="${line%%=*}"
         value="${line#*=}"
+        # Keys that steer this loader, the shell or the dynamic linker are not
+        # configuration: exported, they would change how every later line (and
+        # every later program) is judged.
+        case "$key" in
+            ALLOW_SENTINELS|GREMION_ENV_TEMPLATE_DIR|PATH|IFS|ENV|BASH_ENV|BASH_*|SHELLOPTS|BASHOPTS|PS4|LD_*)
+                bad "load_env: ${file}: line ${n} sets ${key}, which an env file may not set"
+                exit "$GREMION_EXIT_USAGE"
+                ;;
+        esac
         # strip one layer of matching quotes, the way compose --env-file does
         if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then
             value="${value:1:${#value}-2}"
         fi
-        if [[ -z "$value" && -n "${secret_key[$key]:-}" ]]; then
+        if [[ -z "${value//[[:space:]]/}" && -n "${secret_key[$key]:-}" ]]; then
             bad "load_env: ${file}: ${key} is empty, but its template marks it a generated secret"
             exit "$GREMION_EXIT_USAGE"
         fi
-        if [[ "$value" == CHANGE_ME_* && "${ALLOW_SENTINELS:-0}" != "1" ]]; then
+        if [[ "$value" == CHANGE_ME_* && "$allow_sentinels" != "1" ]]; then
             bad "load_env: ${file}: ${key} still holds the sentinel ${value}"
             exit "$GREMION_EXIT_USAGE"
         fi

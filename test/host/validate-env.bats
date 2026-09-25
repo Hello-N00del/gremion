@@ -157,6 +157,70 @@ refute_secrets_printed() {
     [[ "$output" == *"ACME_EMAIL"* ]]
 }
 
+@test "an env-file key cannot overwrite the validator's own state (review finding MEDIUM)" {
+    render_filled
+    local f="${ENV_DIR}/state.env" k
+    sed -i "s/^GREMION_UI_OIDC_CLIENT_SECRET=.*/GREMION_UI_OIDC_CLIENT_SECRET=$(printf '0%.0s' {1..64})/" "$f"
+    for k in TEMPLATE RELEASE_DIR FAILURES ENV_FILE; do
+        cp "$f" "${f}.bak"
+        printf '%s=/dev/null\n' "$k" >> "$f"
+        run "$VALIDATE" --env-file "$f" --release "$RELEASE"
+        [ "$status" -ne 0 ] || { echo "${k}= in the env file turned drift into: $output"; return 1; }
+        [[ "$output" != *"VALIDATE-ENV: ok"* ]]
+        mv "${f}.bak" "$f"
+    done
+}
+
+@test "a COMPOSE_FILE exported by the caller does not stand in for the file's (review finding)" {
+    render_filled
+    sed -i '/^COMPOSE_FILE=/d' "${ENV_DIR}/state.env"
+    COMPOSE_FILE=docker-compose.yml run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"COMPOSE_FILE is not set"* ]]
+}
+
+@test "a key under the reserved __gve_ prefix is refused" {
+    render_filled
+    printf '__gve_failures=0\n' >> "${ENV_DIR}/state.env"
+    run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"__gve_"* ]]
+}
+
+@test "ALLOW_SENTINELS exported by the caller does not waive the validator's sentinel refusal" {
+    render_filled
+    sed -i 's/^ACME_EMAIL=.*/ACME_EMAIL=CHANGE_ME_OPERATOR_acme_email/' "${ENV_DIR}/state.env"
+    ALLOW_SENTINELS=1 run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"ACME_EMAIL"* ]]
+}
+
+@test "a key the template declares but the file lacks exits 1, naming it (review finding)" {
+    render_filled
+    local k
+    for k in GREMION_PRODUCTION_STACK PLATFORM_DOMAIN; do
+        cp "${ENV_DIR}/state.env" "${ENV_DIR}/state.env.bak"
+        sed -i "/^${k}=/d" "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "$k missing: $output"; return 1; }
+        [[ "$output" == *"$k"* ]]
+        mv "${ENV_DIR}/state.env.bak" "${ENV_DIR}/state.env"
+    done
+}
+
+@test "an operator key left empty or blank exits 1 (review finding)" {
+    render_filled
+    local v
+    for v in '' '"  "'; do
+        cp "${ENV_DIR}/state.env" "${ENV_DIR}/state.env.bak"
+        sed -i "s/^GREMION_PRODUCTION_STACK=.*/GREMION_PRODUCTION_STACK=${v}/" "${ENV_DIR}/state.env"
+        run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+        [ "$status" -eq 1 ] || { echo "value [$v]: $output"; return 1; }
+        [[ "$output" == *"GREMION_PRODUCTION_STACK"* ]]
+        mv "${ENV_DIR}/state.env.bak" "${ENV_DIR}/state.env"
+    done
+}
+
 @test "no generated secret value is printed on success or on any failure" {
     render_filled
     local f="${ENV_DIR}/state.env" tmpl="${HOST_SRC}/templates/env/state.env.tmpl"
@@ -184,16 +248,35 @@ refute_secrets_printed() {
 # One env reader under infra/host/ (TRD-039, spec B section 6)
 # ---------------------------------------------------------------------------
 
-# second_readers <dir> -> every line under <dir> that reads an env file some
-# other way than load_env: `set -a` (the source-everything idiom), sourcing or
-# dotting a *.env file, or `export $(cat|grep|sed ...)`.
+# second_readers <dir> -> every line of a shell file under <dir> (bin/*,
+# *.sh) that reads an env file some other way than load_env:
+#   - allexport: `set -a`, `set -ea`, `set -o allexport`;
+#   - sourcing / dotting anything that is not a *.sh library, at COMMAND
+#     position (a bare `.` elsewhere is `grep -c .` or `jq -e .`): a *.env
+#     path, a variable path ("$STATE_ENV"), a process substitution;
+#   - `export|declare -x|eval|env` fed by $(cat|grep|sed|awk|xargs ...),
+#     and `eval "$(...)"` in general;
+#   - a dynamic `export "$k=$v"` (a hand-rolled read loop) -- except load_env's
+#     own line in lib/common.sh.
+# Allow-listed, by exact line: `. /etc/os-release` in bootstrap.sh (the OS's
+# identity file, not a gremion env file). Per-key readers (`sed -n
+# "s/^KEY=//p"`) are not whole-file readers and are out of this guard's scope.
 second_readers() {
-    grep -rnE \
-        -e '(^|[;&|[:space:]])set[[:space:]]+-a([[:space:]]|;|$)' \
-        -e '(^|[;&|[:space:]])(source|\.)[[:space:]]+[^;&|#]*\.env([^A-Za-z0-9_.]|$)' \
-        -e 'export[[:space:]]+"?\$\((cat|grep|sed|xargs|awk)' \
-        "$1" \
-        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true
+    local -a files=()
+    mapfile -t files < <(find "$1" -type f \( -name '*.sh' -o -path '*/bin/*' \) | sort)
+    [[ ${#files[@]} -gt 0 ]] || { echo "VACUOUS: no shell files under $1"; return 0; }
+    grep -nHE \
+        -e '(^|[;&|{([:space:]])set[[:space:]]+(-[A-Za-z]*a[A-Za-z]*|-o[[:space:]]+allexport)([[:space:];]|$)' \
+        -e '(^[[:space:]]*|[;&|{][[:space:]]*|(then|do|else)[[:space:]]+)(source|\.)[[:space:]]+[^[:space:];&|]' \
+        -e '(^|[^A-Za-z_])(export|declare[[:space:]]+-[A-Za-z]*x[A-Za-z]*|eval|env)[[:space:]]+"?\$\((cat|grep|sed|awk|xargs)' \
+        -e '(^|[^A-Za-z_])eval[[:space:]]+"?\$\(' \
+        -e 'export[[:space:]]+"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?=' \
+        "${files[@]}" \
+        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
+        | grep -vE '(source|\.)[[:space:]]+"?[^[:space:]";&|]*\.sh"?([[:space:];)]|$)' \
+        | grep -vE '^[^:]*/lib/common\.sh:[0-9]+:[[:space:]]+export "\$\{key\}=\$\{value\}"$' \
+        | grep -vE '^[^:]*/bootstrap\.sh:[0-9]+:[[:space:]]+\. /etc/os-release$' \
+        || true
 }
 
 @test "load_env is the only env reader under infra/host/" {
@@ -202,20 +285,40 @@ second_readers() {
     [ -z "$output" ] || { echo "second env reader(s):"; echo "$output"; return 1; }
 }
 
-@test "the one-reader guard is RED on a seeded 'set -a; .', 'source x.env' and 'export \$(cat ...)'" {
-    local copy="${GREMION_ROOT}/host-src"
+@test "the one-reader guard is RED on every seeded second-reader form, and quiet on the legitimate ones" {
+    local copy="${GREMION_ROOT}/host-src" i=0 form
     cp -r "$HOST_SRC" "$copy"
-    printf '#!/usr/bin/env bash\nset -a; . "$ENV_FILE"; set +a\n' > "$copy/bin/gremion-seeded-1"
-    printf '#!/usr/bin/env bash\nsource /opt/gremion/etc/env/state.env\n' > "$copy/bin/gremion-seeded-2"
-    printf '#!/usr/bin/env bash\nexport $(cat /opt/gremion/etc/env/app-blue.env | xargs)\n' > "$copy/ops/seeded-3.sh"
+    local -a forms=(
+        'set -a; . "$ENV_FILE"; set +a'
+        'source /opt/gremion/etc/env/state.env'
+        'export $(cat /opt/gremion/etc/env/app-blue.env | xargs)'
+        '. "$STATE_ENV"'
+        'source "$f" # load env'
+        'set -o allexport'
+        'set -ea'
+        "while IFS='=' read -r k v; do export \"\$k=\$v\"; done < \"\$f\""
+        'eval "$(cat /opt/gremion/etc/env/state.env)"'
+        "eval \$(sed 's/^/export /' state.env)"
+        'declare -x $(cat state.env)'
+        "source <(grep -v '^#' state.env)"
+        'env $(cat state.env | xargs) cmd'
+        'if true; then . state.env; fi'
+        'foo; source state.env'
+    )
+    for form in "${forms[@]}"; do
+        i=$((i + 1))
+        printf '#!/usr/bin/env bash\n%s\n' "$form" > "$copy/bin/gremion-seeded-$i"
+    done
     run second_readers "$copy"
-    [[ "$output" == *"gremion-seeded-1"* ]]
-    [[ "$output" == *"gremion-seeded-2"* ]]
-    [[ "$output" == *"seeded-3.sh"* ]]
-    # and a commented mention is not a reader
-    printf '#!/usr/bin/env bash\n# never: set -a; . state.env\n' > "$copy/bin/gremion-seeded-4"
+    for ((i = 1; i <= ${#forms[@]}; i++)); do
+        [[ "$output" == *"gremion-seeded-${i}:"* ]] || { echo "missed form ${i}: ${forms[$((i - 1))]}"; return 1; }
+    done
+    # legitimate lines stay quiet
+    rm -f "$copy"/bin/gremion-seeded-*
+    printf '#!/usr/bin/env bash\n# never: set -a; . state.env\n. "$SCRIPT_DIR/../lib/common.sh"\nn="$(grep -c . f)"\njq -e . f\nset -euo pipefail\n' \
+        > "$copy/bin/gremion-legit"
     run second_readers "$copy"
-    [[ "$output" != *"gremion-seeded-4"* ]]
+    [[ "$output" != *"gremion-legit"* ]] || { echo "false positive:"; echo "$output"; return 1; }
 }
 
 # ---------------------------------------------------------------------------
