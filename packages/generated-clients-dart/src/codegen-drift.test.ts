@@ -60,3 +60,39 @@ describe('test 2 — hand edit at an expected output path', () => {
     expect(r.problems.some((p) => p.includes('widgets') && /boom/.test(p))).toBe(true)
   })
 })
+
+describe('test 2b — whole file set, not per output', () => {
+  it('names an extra hand-written file inside a surface package', () => {
+    const root = fixture([{ name: 'widgets', type: 'openapi' }])
+    const s = generated(root)
+    const rel = `${s.packageDir}/lib/src/hand_client.dart`
+    writeFile(root, rel, 'class HandClient {}\n')
+    const { problems } = checkDartCodegenDrift(root, { generate: fakeGenerate })
+    expect(problems.some((p) => p.startsWith(`${rel}:`) && /extra/.test(p))).toBe(true)
+  })
+
+  it('ignores .dart_tool/ at the package root only', () => {
+    const root = fixture([{ name: 'widgets', type: 'openapi' }])
+    const s = generated(root)
+    writeFile(root, `${s.packageDir}/.dart_tool/package_config.json`, '{}')
+    expect(checkDartCodegenDrift(root, { generate: fakeGenerate }).problems).toEqual([])
+    writeFile(root, `${s.packageDir}/lib/.dart_tool/sneaky.dart`, 'class X {}\n')
+    expect(checkDartCodegenDrift(root, { generate: fakeGenerate }).problems.join('\n')).toMatch(/lib\/\.dart_tool\/sneaky\.dart: extra/)
+  })
+
+  it('names a package directory that is not a registered surface', () => {
+    const root = fixture([{ name: 'widgets', type: 'openapi' }])
+    generated(root)
+    writeFile(root, 'packages/generated-clients-dart/hand-made/pubspec.yaml', 'name: hand_made\n')
+    const { problems } = checkDartCodegenDrift(root, { generate: fakeGenerate })
+    expect(problems.some((p) => p.startsWith('packages/generated-clients-dart/hand-made:'))).toBe(true)
+  })
+
+  it('names a .dart file hidden in the Node tooling side of the package', () => {
+    const root = fixture([{ name: 'widgets', type: 'openapi' }])
+    generated(root)
+    writeFile(root, 'packages/generated-clients-dart/src/client.dart', 'class C {}\n')
+    const { problems } = checkDartCodegenDrift(root, { generate: fakeGenerate })
+    expect(problems.some((p) => p.startsWith('packages/generated-clients-dart/src/client.dart:'))).toBe(true)
+  })
+})
