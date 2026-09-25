@@ -726,6 +726,21 @@ export interface components {
             /** @enum {string} */
             own_publication_class?: "public" | "non_public";
         };
+        /** @description Partial update of an agenda item: send only the fields that change. state and outcome move only by the agenda-item lifecycle and are never written here (DOMAIN DB-GOV-AGENDA-ITEM). */
+        AgendaItemUpdate: {
+            section_id?: components["schemas"]["BigintId"];
+            position?: number;
+            title?: string;
+            /** @description Send null to clear the description (SCHEMA gov.agenda_item.description nullable). */
+            description?: string | null;
+            /** @enum {string} */
+            kind?: "report" | "motion" | "previous_protocol_approval" | "election" | "misc";
+            /**
+             * @description Send null to fall back to the section's class (SCHEMA gov.agenda_item.own_publication_class nullable).
+             * @enum {string|null}
+             */
+            own_publication_class?: "public" | "non_public" | null;
+        };
         Invitation: {
             /**
              * Format: uuid
@@ -1424,7 +1439,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AgendaItemCreate"];
+                "application/json": components["schemas"]["AgendaItemUpdate"];
             };
         };
         responses: {
