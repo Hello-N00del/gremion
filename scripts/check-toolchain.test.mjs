@@ -21,6 +21,7 @@ import {
   checkNodeVersionFiles,
   checkEnginesNode,
   checkEngineStrictOn,
+  checkStrictDepBuildsOn,
   checkAllowList,
   checkPackageJsonPnpmBuildControl,
   checkFirstPartyLifecycle,
@@ -114,6 +115,21 @@ test('package.json pnpm field: GREEN — no pnpm field, or a pnpm field with unr
 test('package.json pnpm field: the real root package.json carries no build-control pnpm field', () => {
   const root = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
   assert.deepEqual(checkPackageJsonPnpmBuildControl(root), [])
+})
+
+// ── verifier MEDIUM finding 3: strictDepBuilds has no guard of its own ────
+
+test('strictDepBuilds: RED — a workspace yaml without strictDepBuilds: true is flagged', () => {
+  assert.match(checkStrictDepBuildsOn('packages:\n  - a\n').join('\n'), /strictDepBuilds/)
+})
+
+test('strictDepBuilds: GREEN — strictDepBuilds: true passes', () => {
+  assert.deepEqual(checkStrictDepBuildsOn('strictDepBuilds: true\npackages:\n  - a\n'), [])
+})
+
+test('strictDepBuilds: the real pnpm-workspace.yaml sets it', () => {
+  const ws = readFileSync(join(ROOT, 'pnpm-workspace.yaml'), 'utf8')
+  assert.deepEqual(checkStrictDepBuildsOn(ws), [])
 })
 
 // ── 2. allow-list ─────────────────────────────────────────────────────────

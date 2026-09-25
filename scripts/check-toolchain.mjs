@@ -152,6 +152,24 @@ export function checkEngineStrictOn(workspaceYamlText) {
   return problems
 }
 
+/**
+ * strictDepBuilds is engineStrict's sibling for the OTHER install-time
+ * safety net: without it, an unlisted dependency build script is only a
+ * warning box ("Ignored build scripts: ...") and `pnpm install` exits 0 — the
+ * exact silent skip TRD-402 forbids. Watched empirically: removing this key
+ * from pnpm-workspace.yaml with msw unlisted leaves a fresh
+ * `pnpm install --frozen-lockfile` at exit 0 (verifier MEDIUM finding 3).
+ * @param workspaceYamlText the raw pnpm-workspace.yaml text
+ */
+export function checkStrictDepBuildsOn(workspaceYamlText) {
+  const problems = []
+  if (!/^strictDepBuilds:\s*true\s*$/m.test(workspaceYamlText)) {
+    problems.push('pnpm-workspace.yaml does not set "strictDepBuilds: true" at the workspace root — ' +
+      'without it an unlisted dependency build script only warns and the install exits 0')
+  }
+  return problems
+}
+
 // ── allow-list ──────────────────────────────────────────────────────────
 
 /**
@@ -458,6 +476,7 @@ export function runAllChecks(state) {
     ...checkNodeVersionFiles(state.nodeVersionFiles),
     ...checkEnginesNode(state.rootPackageJson),
     ...checkEngineStrictOn(state.workspaceYamlText),
+    ...checkStrictDepBuildsOn(state.workspaceYamlText),
     ...checkAllowList(state.workspaceYamlText, state.lockText),
     ...checkPackageJsonPnpmBuildControl(state.rootPackageJson),
     ...checkFirstPartyLifecycle(state.packageJsons),
