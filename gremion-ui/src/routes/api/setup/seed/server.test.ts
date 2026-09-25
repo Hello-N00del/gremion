@@ -6,20 +6,16 @@ import type { GremionBlueprint } from '$lib/server/seed/org-blueprint'
 // StuRa blueprint. These tests mock the tenant-resolution + seed seams so the
 // selection is asserted without a live DB / KC.
 const hoisted = vi.hoisted(() => ({
-  seedToken: undefined as string | undefined,
   orgUnits: [] as unknown[],
   tenantSlug: 'default',
   blueprintRef: 'STURA_BLUEPRINT@1',
   runSeed: vi.fn(async (_bp: GremionBlueprint) => ({ ok: true })),
 }))
 
-vi.mock('$env/dynamic/private', () => ({
-  env: {
-    get SEED_TOKEN() {
-      return hoisted.seedToken
-    },
-  },
-}))
+// TASK-032 (TRD-410 [D R20-D5]): the seed route now reads process.env
+// directly (kit 3 dropped $env/dynamic/private's free-form var access;
+// process.env itself does not accept an accessor descriptor, unlike a plain
+// object, so this sets the real value directly rather than a live getter).
 vi.mock('$lib/server/governance/org-units-db', () => ({ listOrgUnits: async () => hoisted.orgUnits }))
 vi.mock('$lib/server/seed/seed', () => ({ runSeed: hoisted.runSeed }))
 vi.mock('$lib/server/tenant/context', () => ({
@@ -45,7 +41,7 @@ function call(token: string | null) {
 }
 
 beforeEach(() => {
-  hoisted.seedToken = undefined
+  delete process.env.SEED_TOKEN
   hoisted.orgUnits = []
   hoisted.tenantSlug = 'default'
   hoisted.blueprintRef = 'STURA_BLUEPRINT@1'
@@ -61,21 +57,21 @@ describe('POST /api/setup/seed — token guard', () => {
   })
 
   it('rejects a request with a wrong seed token', async () => {
-    hoisted.seedToken = 'right'
+    process.env.SEED_TOKEN = 'right'
     await expect(call('definitely-wrong')).rejects.toMatchObject({ status: 403 })
   })
 })
 
 describe('POST /api/setup/seed — blueprint selection (T3)', () => {
   it('seeds the StuRa blueprint for the default tenant', async () => {
-    hoisted.seedToken = 'test-seed-token'
+    process.env.SEED_TOKEN = 'test-seed-token'
     await call('test-seed-token')
     expect(hoisted.runSeed).toHaveBeenCalledTimes(1)
     expect(hoisted.runSeed.mock.calls[0][0]).toBe(STURA_BLUEPRINT)
   })
 
   it('seeds the MUNICIPAL blueprint when the resolved tenant carries MUNICIPAL_BLUEPRINT@1', async () => {
-    hoisted.seedToken = 'test-seed-token'
+    process.env.SEED_TOKEN = 'test-seed-token'
     hoisted.tenantSlug = 'musterstadt'
     hoisted.blueprintRef = 'MUNICIPAL_BLUEPRINT@1'
     await call('test-seed-token')
@@ -84,7 +80,7 @@ describe('POST /api/setup/seed — blueprint selection (T3)', () => {
   })
 
   it('refuses on an already-seeded database (org_units not empty)', async () => {
-    hoisted.seedToken = 'test-seed-token'
+    process.env.SEED_TOKEN = 'test-seed-token'
     hoisted.orgUnits = [{ id: 'x' }]
     await expect(call('test-seed-token')).rejects.toMatchObject({ status: 409 })
     expect(hoisted.runSeed).not.toHaveBeenCalled()

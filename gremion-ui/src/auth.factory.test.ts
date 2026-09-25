@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { RequestEvent } from '@sveltejs/kit'
+// TASK-032 (TRD-410 [D R20-D5]): auth.ts now reads process.env directly
+// (kit 3 dropped $env/dynamic/private's free-form var access) — see
+// process-env-mock.ts's header comment.
+import { envMock } from '../tests/unit/process-env-mock'
 
-const envMock: Record<string, string> = {}
-vi.mock('$env/dynamic/private', () => ({ env: envMock }))
 vi.mock('$lib/server/tenant/secrets', () => ({ resolveSecret: (ref: string) => `secret-for-${ref}` }))
 
 type TenantAuth = {

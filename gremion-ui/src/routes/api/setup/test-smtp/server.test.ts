@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// TASK-032 (TRD-410 [D R20-D5]): the route now reads process.env directly
+// (kit 3 dropped $env/dynamic/private's free-form var access) — see
+// process-env-mock.ts's header comment.
+import { envMock, resetEnvMock } from '../../../../../tests/unit/process-env-mock'
 
 // SSRF guard for the test-smtp endpoint.
 //
@@ -35,7 +39,6 @@ const hoisted = vi.hoisted(() => ({
   sendMail: vi.fn(async () => ({ messageId: 'ok' })),
   createTransport: vi.fn(),
   readConfig: vi.fn(),
-  env: {} as Record<string, string | undefined>,
 }))
 hoisted.createTransport.mockImplementation(() => ({ sendMail: hoisted.sendMail }))
 
@@ -55,7 +58,6 @@ function resolveMock() {
   return hoisted.lookupAddresses
 }
 
-vi.mock('$env/dynamic/private', () => ({ env: hoisted.env }))
 vi.mock('$lib/server/config', () => ({ readConfig: hoisted.readConfig }))
 vi.mock('$lib/server/setup-token', () => ({ validateSetupToken: () => true }))
 // The route handler is called directly (no hooks.server.ts runWithTenant wrap),
@@ -91,7 +93,7 @@ beforeEach(() => {
   hoisted.sendMail.mockClear()
   hoisted.createTransport.mockClear()
   hoisted.readConfig.mockReturnValue({ setup_complete: false, smtp: { host: '' } })
-  for (const k of Object.keys(hoisted.env)) delete hoisted.env[k]
+  resetEnvMock()
 })
 
 describe('POST /api/setup/test-smtp — internal target guard', () => {
@@ -214,7 +216,7 @@ describe('POST /api/setup/test-smtp — no mutable host allowlist', () => {
   })
 
   it('refuses an internal relay name even when EMAIL_HOST names it', async () => {
-    hoisted.env.EMAIL_HOST = 'mailpit'
+    envMock.EMAIL_HOST = 'mailpit'
     hoisted.lookupAddresses = [{ address: '172.18.0.5', family: 4 }]
     const res = await call('mailpit', 1025)
     expect(res.status).toBe(400)
@@ -222,7 +224,7 @@ describe('POST /api/setup/test-smtp — no mutable host allowlist', () => {
   })
 
   it('refuses an internal relay name even when SMTP_HOST names it', async () => {
-    hoisted.env.SMTP_HOST = 'mailpit'
+    envMock.SMTP_HOST = 'mailpit'
     hoisted.lookupAddresses = [{ address: '172.18.0.5', family: 4 }]
     const res = await call('mailpit', 1025)
     expect(res.status).toBe(400)
@@ -247,7 +249,7 @@ describe('POST /api/setup/test-smtp — no mutable host allowlist', () => {
 // the blocked host names stay refused, and the resolve-once path still applies.
 describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-range opt-in', () => {
   it('allows an RFC1918 literal when SMTP_TEST_ALLOW_PRIVATE=1', async () => {
-    hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+    envMock.SMTP_TEST_ALLOW_PRIVATE = '1'
     const res = await call('10.0.0.5', 1025)
     expect(res.status).toBe(200)
     expect(hoisted.createTransport).toHaveBeenCalledTimes(1)
@@ -255,7 +257,7 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
   })
 
   it('allows a private NAME and connects by the RESOLVED IP with the name as servername', async () => {
-    hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+    envMock.SMTP_TEST_ALLOW_PRIVATE = '1'
     hoisted.lookupAddresses = [{ address: '172.18.0.5', family: 4 }]
     const res = await call('mailpit', 1025)
     expect(res.status).toBe(200)
@@ -278,7 +280,7 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
 
   for (const [label, host] of stillRefused) {
     it(`still refuses ${label} (${host}) with SMTP_TEST_ALLOW_PRIVATE=1`, async () => {
-      hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+      envMock.SMTP_TEST_ALLOW_PRIVATE = '1'
       const res = await call(host, 1025)
       expect(res.status).toBe(400)
       expect(hoisted.createTransport).not.toHaveBeenCalled()
@@ -286,7 +288,7 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
   }
 
   it('still refuses a NAME that resolves to loopback with SMTP_TEST_ALLOW_PRIVATE=1', async () => {
-    hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+    envMock.SMTP_TEST_ALLOW_PRIVATE = '1'
     hoisted.lookupAddresses = [{ address: '127.0.0.1', family: 4 }]
     const res = await call('localtest.me', 1025)
     expect(res.status).toBe(400)
@@ -294,7 +296,7 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
   })
 
   it('still refuses a private target when SMTP_TEST_ALLOW_PRIVATE is anything else', async () => {
-    hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '0'
+    envMock.SMTP_TEST_ALLOW_PRIVATE = '0'
     const res = await call('10.0.0.5', 1025)
     expect(res.status).toBe(400)
     expect(hoisted.createTransport).not.toHaveBeenCalled()
@@ -324,7 +326,7 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
     const flag = allowPrivate ? 'SMTP_TEST_ALLOW_PRIVATE=1' : 'no flag'
     const verb = status === 200 ? 'allows' : 'refuses'
     it(`${verb} ${label} (${host}) with ${flag}`, async () => {
-      if (allowPrivate) hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+      if (allowPrivate) envMock.SMTP_TEST_ALLOW_PRIVATE = '1'
       const res = await call(host, 1025)
       expect(res.status).toBe(status)
       if (status === 200) {
@@ -376,8 +378,8 @@ describe('POST /api/setup/test-smtp — resolve once, connect to the vetted IP',
     for (const [host, envVars, resolvesTo] of cases) {
       __resetRateLimits()
       hoisted.createTransport.mockClear()
-      for (const k of Object.keys(hoisted.env)) delete hoisted.env[k]
-      Object.assign(hoisted.env, envVars)
+      resetEnvMock()
+      Object.assign(envMock, envVars)
       hoisted.lookupAddresses = [{ address: resolvesTo, family: 4 }]
       const res = await call(host, 1025)
       expect(res.status, `status for ${host}`).toBe(200)
@@ -544,7 +546,7 @@ describe('POST /api/setup/test-smtp — the IPv6 metadata prefix is never waivab
     })
 
     it(`refuses ${label} (${host}) WITH SMTP_TEST_ALLOW_PRIVATE=1`, async () => {
-      hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+      envMock.SMTP_TEST_ALLOW_PRIVATE = '1'
       const res = await call(host, 80)
       expect(res.status).toBe(400)
       expect(hoisted.createTransport).not.toHaveBeenCalled()
@@ -552,7 +554,7 @@ describe('POST /api/setup/test-smtp — the IPv6 metadata prefix is never waivab
   }
 
   it('refuses a NAME that resolves into the metadata prefix even WITH the flag', async () => {
-    hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+    envMock.SMTP_TEST_ALLOW_PRIVATE = '1'
     hoisted.lookupAddresses = [{ address: 'fd00:ec2::254', family: 6 }]
     const res = await call('relay.internal.example', 25)
     expect(res.status).toBe(400)
@@ -561,7 +563,7 @@ describe('POST /api/setup/test-smtp — the IPv6 metadata prefix is never waivab
 
   it('still allows an ordinary ULA relay with the flag — the carve-out is the PREFIX only', async () => {
     // Narrowing must not swallow the opt-in it is carved out of.
-    hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+    envMock.SMTP_TEST_ALLOW_PRIVATE = '1'
     const res = await call('fd12:3456:789a::25', 1025)
     expect(res.status).toBe(200)
     expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({ host: 'fd12:3456:789a::25' })
