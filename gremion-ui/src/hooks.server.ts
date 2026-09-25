@@ -373,6 +373,11 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // the resolver handed on WITHOUT a tenant (/healthz; an /api/internal/ call
   // naming no tenant, which only the container network can make).
   const unresolvedExempt = isBootAndResolveExempt(path) && !event.locals.tenant
+  // Such a request with no matching route would have SvelteKit render its 404
+  // through the root layout, whose load needs locals.auth and a tenant — neither
+  // exists here (Auth.js was skipped), so it would surface as a 500. Answer the
+  // 404 without rendering anything.
+  if (unresolvedExempt && !event.route?.id) return new Response('Not Found', { status: 404 })
 
   // T4.1 (G-014): refuse traffic until boot has completed. If boot failed for
   // good, the process is exiting — return 'boot failed'. If boot is still

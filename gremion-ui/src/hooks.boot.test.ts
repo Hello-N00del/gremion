@@ -512,6 +512,42 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
   })
 })
 
+describe('an unresolved exempt request with no route (TASK-023)', () => {
+  // SvelteKit would render its 404 through the root layout, whose load needs
+  // locals.auth and a tenant — neither exists for such a request (Auth.js was
+  // skipped). Found on the running system as a 500 for /api/internal/<unknown>.
+  for (const booted of [false, true]) {
+    it(`is a plain 404 without rendering anything (${booted ? 'after boot' : 'while booting'})`, async () => {
+      const pending: { resolve?: () => void } = {}
+      if (!booted) {
+        controlMigrationsImpl = () =>
+          new Promise<void>((r) => {
+            pending.resolve = r
+          })
+      }
+      const mod = await import('./hooks.server')
+      const inflight = mod.boot()
+      if (booted) await inflight
+      let reached = false
+      const res = (await mod.authGuard({
+        event: makeFakeEvent('/api/internal/nope', null) as never,
+        resolve: async () => {
+          reached = true
+          return new Response('rendered', { status: 404 })
+        },
+      } as never)) as Response
+      expect(reached).toBe(false)
+      expect(res.status).toBe(404)
+      expect(await res.text()).toBe('Not Found')
+      if (!booted) {
+        await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+        pending.resolve?.()
+        await inflight
+      }
+    })
+  }
+})
+
 describe('the full handle sequence (TASK-023)', () => {
   async function throughHandle(mod: typeof import('./hooks.server'), path: string, tenant?: unknown) {
     const event = makeFakeEvent(path)
@@ -889,11 +925,13 @@ describe('cspGuard (G-011b)', () => {
 //    *after* the 503 check (in the success branch). The 503 short-circuit
 //    means the rest of the event object is never read, so a bare URL is
 //    enough.
-function makeFakeEvent(path: string) {
+function makeFakeEvent(path: string, routeId: string | null = path) {
   return {
     url: new URL(`http://localhost${path}`),
     request: new Request(`http://localhost${path}`),
     locals: {} as Record<string, unknown>,
     params: {},
+    // SvelteKit matches the route before `handle` runs; null = no route.
+    route: { id: routeId },
   }
 }
