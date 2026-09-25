@@ -62,17 +62,33 @@ test('extractSpecifiers reads static, re-export, side-effect, dynamic, require a
   assert.ok(!specs.includes('plain string'))
 })
 
-test('extractPathLiterals reads join/resolve over a file-dir base and new URL(.., import.meta.url)', () => {
+test('extractPathLiterals resolves every base idiom the copied modules use', () => {
   const src = [
     "const here = dirname(fileURLToPath(import.meta.url))",
+    "const HERE = fileURLToPath(new URL('.', import.meta.url))",
     "const a = path.join(__dirname, '..', '..', '..', 'docker-compose.yml')",
     "const b = resolve(here, '../../../k8s/base/nats')",
     "const c = new URL('../../../gremion-ui/x.ts', import.meta.url)",
     "const d = join(process.cwd(), '..', 'x')",
+    "const e = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'migrations')",
+    "const f = join(HERE, '..', 'src', 'aggregator')",
+    "const g = join(fileURLToPath(import.meta.url), '..', '..')",
+    "const h = join(someVar, 'x')",
+    "const i = join(HERE, name)",
+    "const s = parts.join('/')",
   ].join('\n')
-  const lits = extractPathLiterals(src)
-  assert.equal(lits.length, 4)
-  assert.deepEqual(lits.map((l) => l.base), ['file', 'file', 'file', 'module'])
+  const lits = extractPathLiterals(src, 'modules/votes/test/a.test.ts')
+  const by = Object.fromEntries(lits.map((l) => [l.line, l]))
+  assert.equal(lits.length, 9, JSON.stringify(lits))
+  assert.equal(by[2].resolved, 'modules/votes/test')
+  assert.equal(by[3].resolved, 'docker-compose.yml')
+  assert.equal(by[4].resolved, 'k8s/base/nats')
+  assert.equal(by[5].resolved, 'gremion-ui/x.ts')
+  assert.deepEqual([by[6].base, by[6].resolved], ['module', 'modules/x'])
+  assert.deepEqual([by[7].base, by[7].resolved], ['file', 'modules/votes/migrations'])
+  assert.deepEqual([by[8].base, by[8].resolved], ['file', 'modules/votes/src/aggregator'])
+  assert.equal(by[9].resolved, 'modules/votes')
+  assert.deepEqual([by[10].base, by[10].resolved], ['unknown', 'modules/votes/x'])
 })
 
 test('extractDockerCopySources skips --from= stages and reads every source of a COPY', () => {
@@ -163,6 +179,20 @@ test('RED: require(), import(), vi.mock() and a path literal leaving the module 
     const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
     const mine = r.problems.filter((p) => /deep\.test\.ts/.test(p))
     assert.equal(mine.length, 5, mine.join('\n'))
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('RED: a nested dirname(fileURLToPath(import.meta.url)) base that climbs out is a finding, not a parse miss', () => {
+  const t = tree({
+    ...BASE,
+    'modules/finance/test/nested.test.ts':
+      "const k = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'k8s', 'base')\n",
+  })
+  try {
+    const r = scanModules(t.root, { dockerAllowlist: NO_DOCKER })
+    assert.ok(r.problems.some((p) => /nested\.test\.ts:1/.test(p) && /resolves to k8s\/base/.test(p)), r.problems.join('\n'))
   } finally {
     t.cleanup()
   }

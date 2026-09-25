@@ -94,37 +94,135 @@ export function extractSpecifiers(text) {
   return out.sort((a, b) => a.line - b.line)
 }
 
-/**
- * Names that hold the file's own directory: __dirname, import.meta.dirname, and
- * any `const X = dirname(fileURLToPath(import.meta.url))` in the same file.
- */
-function fileDirNames(text) {
-  const names = new Set(['__dirname', 'import.meta.dirname'])
-  const re = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:path\s*\.\s*)?dirname\s*\(\s*(?:url\s*\.\s*)?fileURLToPath\s*\(\s*import\.meta\.url\s*\)\s*\)/g
-  for (const m of text.matchAll(re)) names.add(m[1])
-  return names
+// A tiny argument splitter: top-level commas of a call, string- and
+// bracket-aware. Enough for path.join/resolve calls; never evaluates code.
+function splitCall(text, open) {
+  const args = []
+  let depth = 0
+  let cur = ''
+  let quote = null
+  for (let i = open + 1; i < text.length; i++) {
+    const ch = text[i]
+    if (quote) {
+      cur += ch
+      if (ch === '\\') cur += text[++i] ?? ''
+      else if (ch === quote) quote = null
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`') quote = ch
+    else if ('([{'.includes(ch)) depth++
+    else if (')]}'.includes(ch)) {
+      if (depth === 0) {
+        args.push(cur.trim())
+        return { args: args.filter((a, k) => a !== '' || k < args.length - 1), end: i }
+      }
+      depth--
+    } else if (ch === ',' && depth === 0) {
+      args.push(cur.trim())
+      cur = ''
+      continue
+    }
+    cur += ch
+  }
+  return null
 }
 
-const JOIN_RE = /\b(?:path\s*\.\s*)?(?:join|resolve)\s*\(\s*([A-Za-z_$][\w$.]*(?:\(\s*\))?)\s*,\s*((?:(['"`])[^'"`\n]*\3\s*,?\s*)+)\)/g
+const STRING_LIT_RE = /^(['"`])([^'"`\n$]*)\1$/
+const CALL_RE = /\b(?:path\s*\.\s*)?(?:join|resolve)\s*\(/g
+
+/** const/let/var NAME = <expr> assignments of the file, NAME -> expr text. */
+function assignments(text) {
+  const env = new Map()
+  const re = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*/g
+  for (const m of text.matchAll(re)) {
+    let i = m.index + m[0].length
+    let depth = 0
+    let quote = null
+    let expr = ''
+    for (; i < text.length; i++) {
+      const ch = text[i]
+      if (quote) {
+        expr += ch
+        if (ch === quote) quote = null
+        continue
+      }
+      if (ch === "'" || ch === '"' || ch === '`') quote = ch
+      else if ('([{'.includes(ch)) depth++
+      else if (')]}'.includes(ch)) depth--
+      else if ((ch === ';' || ch === '\n') && depth <= 0) break
+      expr += ch
+    }
+    if (!env.has(m[1])) env.set(m[1], expr.trim())
+  }
+  return env
+}
+
+/**
+ * Resolve a base expression to a repo-relative POSIX path, or null when it is
+ * not statically known. Understood: __dirname, import.meta.dirname,
+ * dirname(fileURLToPath(import.meta.url)), fileURLToPath(import.meta.url) (the
+ * file itself), fileURLToPath(new URL('<lit>', import.meta.url)),
+ * process.cwd() (the module root: vitest and the package scripts run there),
+ * a nested join/resolve, and a same-file const holding any of those.
+ */
+function resolveBase(expr, ctx, depth = 0) {
+  const e = expr.replace(/\s+/g, '')
+  if (depth > 8) return null
+  if (e === '__dirname' || e === 'import.meta.dirname') return { path: ctx.fileDir, kind: 'file' }
+  if (e === 'process.cwd()') return { path: ctx.moduleRoot, kind: 'module' }
+  if (/^(?:path\.)?dirname\((?:url\.)?fileURLToPath\(import\.meta\.url\)\)$/.test(e)) return { path: ctx.fileDir, kind: 'file' }
+  if (/^(?:url\.)?fileURLToPath\(import\.meta\.url\)$/.test(e)) return { path: ctx.filePath, kind: 'file' }
+  const u = /^(?:url\.)?fileURLToPath\(newURL\((['"`])([^'"`]*)\1,import\.meta\.url\)\)$/.exec(e)
+  if (u) return { path: posix.normalize(posix.join(ctx.fileDir, u[2])), kind: 'file' }
+  const call = /^(?:path\.)?(?:join|resolve)\(/.exec(e)
+  if (call) {
+    const parsed = splitCall(e, call[0].length - 1)
+    if (parsed && parsed.end === e.length - 1) {
+      const lit = evalCall(parsed.args, ctx, depth + 1)
+      if (lit) return { path: lit.resolved, kind: lit.base }
+    }
+    return null
+  }
+  if (/^[A-Za-z_$][\w$]*$/.test(e) && ctx.env.has(e)) return resolveBase(ctx.env.get(e), ctx, depth + 1)
+  return null
+}
+
+function evalCall(args, ctx, depth) {
+  if (args.length < 2) return null
+  const segs = []
+  for (const a of args.slice(1)) {
+    const m = STRING_LIT_RE.exec(a)
+    if (!m) break // a variable segment: judge the literal prefix only
+    segs.push(m[2])
+  }
+  if (segs.length === 0) return null
+  const b = resolveBase(args[0], ctx, depth)
+  const from = b ? b.path : ctx.moduleRoot
+  return { rel: segs.join('/'), base: b ? b.kind : 'unknown', resolved: posix.normalize(posix.join(from, ...segs)) }
+}
+
 const URL_RE = /\bnew\s+URL\s*\(\s*(['"`])([^'"`\n]+)\1\s*,\s*import\.meta\.url\s*\)/g
 
 /**
- * path.join/resolve literals and new URL(.., import.meta.url).
- * base: 'file' (the file's directory), 'module' (process.cwd(), which vitest
- * and the package scripts set to the module root), or 'unknown' (any other
- * identifier — treated as the module root, the most sensitive position).
- * @returns [{ rel, base, line }]
+ * path.join/resolve literals and new URL('<lit>', import.meta.url), resolved
+ * against the file's location. base: 'file' (the file or its directory),
+ * 'module' (process.cwd()), or 'unknown' — any other base, which is judged
+ * from the module root, the most sensitive position.
+ * @param fileRel repo-relative path of the file (defaults to a file one level
+ *   inside a module, for callers that only want the literals)
+ * @returns [{ rel, base, resolved, line }]
  */
-export function extractPathLiterals(text) {
-  const fileDirs = fileDirNames(text)
+export function extractPathLiterals(text, fileRel = 'modules/x/src/file.ts', moduleRoot = fileRel.split('/').slice(0, 2).join('/')) {
+  const ctx = { filePath: fileRel, fileDir: posix.dirname(fileRel), moduleRoot, env: assignments(text) }
   const out = []
-  for (const m of text.matchAll(JOIN_RE)) {
-    const baseExpr = m[1].replace(/\s+/g, '')
-    const segs = [...m[2].matchAll(/(['"`])([^'"`\n]*)\1/g)].map((s) => s[2])
-    const base = fileDirs.has(baseExpr) ? 'file' : baseExpr === 'process.cwd()' ? 'module' : 'unknown'
-    out.push({ rel: segs.join('/'), base, line: lineOf(text, m.index) })
+  for (const m of text.matchAll(CALL_RE)) {
+    const parsed = splitCall(text, m.index + m[0].length - 1)
+    if (!parsed) continue
+    const lit = evalCall(parsed.args, ctx, 0)
+    if (lit) out.push({ ...lit, line: lineOf(text, m.index) })
   }
-  for (const m of text.matchAll(URL_RE)) out.push({ rel: m[2], base: 'file', line: lineOf(text, m.index) })
+  for (const m of text.matchAll(URL_RE))
+    out.push({ rel: m[2], base: 'file', resolved: posix.normalize(posix.join(ctx.fileDir, m[2])), line: lineOf(text, m.index) })
   return out.sort((a, b) => a.line - b.line)
 }
 
@@ -179,12 +277,11 @@ function specifierProblems(spec, fileRel, moduleRoot) {
   return why
 }
 
-function literalProblems(lit, fileRel, moduleRoot) {
+function literalProblems(lit, moduleRoot) {
   const why = []
   for (const [re, w] of SEGMENT_RULES) if (re.test(lit.rel)) why.push(w)
-  const from = lit.base === 'file' ? posix.dirname(fileRel) : moduleRoot
-  const resolved = posix.normalize(posix.join(from, lit.rel))
-  if (!(resolved === moduleRoot || resolved.startsWith(moduleRoot + '/'))) why.push(`leaves ${moduleRoot}/ (resolves to ${resolved}, base ${lit.base})`)
+  if (!(lit.resolved === moduleRoot || lit.resolved.startsWith(moduleRoot + '/')))
+    why.push(`leaves ${moduleRoot}/ (resolves to ${lit.resolved}, base ${lit.base})`)
   return why
 }
 
@@ -291,9 +388,9 @@ export function scanModules(root, { dockerAllowlist = DOCKERFILE_ALLOWLIST } = {
         const why = specifierProblems(s.spec, rel, moduleRoot)
         if (why.length) findings.push({ file: rel, line: s.line, what: `'${s.spec}'`, why })
       }
-      for (const l of extractPathLiterals(text)) {
+      for (const l of extractPathLiterals(text, rel, moduleRoot)) {
         literals++
-        const why = literalProblems(l, rel, moduleRoot)
+        const why = literalProblems(l, moduleRoot)
         if (why.length) findings.push({ file: rel, line: l.line, what: `path literal '${l.rel}'`, why })
       }
     }
