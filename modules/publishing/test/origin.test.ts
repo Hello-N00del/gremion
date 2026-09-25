@@ -329,7 +329,7 @@ describe('classifyLinkHost — the three unmailable host classes', () => {
   })
 
   it('lets a real public host through', () => {
-    expect(classify('sturaos.com')).toBeNull()
+    expect(classify('example.org')).toBeNull()
     expect(classify('news.example.org')).toBeNull()
     expect(classify('10.0.0.4'), 'a private LAN address is reachable from a LAN mail client').toBeNull()
   })
@@ -391,17 +391,17 @@ describe('resolveLinkBase — the deployed localhost default is UNUSABLE, and bo
   })
 
   it('accepts a real public base and records where it came from', () => {
-    const res = resolveLinkBase({ PUBLIC_BASE_URL: 'https://sturaos.com' }, 'boot')
+    const res = resolveLinkBase({ PUBLIC_BASE_URL: 'https://example.org' }, 'boot')
     expect(res.usable).toBe(true)
-    expect(res.base).toBe('https://sturaos.com')
+    expect(res.base).toBe('https://example.org')
     expect(res.source).toBe('PUBLIC_BASE_URL')
     expect(res.usable && res.loopbackOverride).toBe(false)
 
     const overridden = resolveLinkBase(
-      { ORIGIN: 'https://mail.sturaos.com', PUBLIC_BASE_URL: 'https://sturaos.com' },
+      { ORIGIN: 'https://mail.example.org', PUBLIC_BASE_URL: 'https://example.org' },
       'boot',
     )
-    expect(overridden.base, 'ORIGIN wins').toBe('https://mail.sturaos.com')
+    expect(overridden.base, 'ORIGIN wins').toBe('https://mail.example.org')
     expect(overridden.source).toBe('ORIGIN')
   })
 })
@@ -450,11 +450,11 @@ describe('logLinkBaseResolution — ONE line, on the right channel', () => {
 
   it('records the SOURCE on the happy path', () => {
     const s = sink()
-    logLinkBaseResolution(resolveLinkBase({ PUBLIC_BASE_URL: 'https://sturaos.com' }, 'boot'), logger(s))
+    logLinkBaseResolution(resolveLinkBase({ PUBLIC_BASE_URL: 'https://example.org' }, 'boot'), logger(s))
     expect(s.errors).toHaveLength(0)
     expect(s.warns).toHaveLength(0)
     expect(s.infos).toHaveLength(1)
-    expect(s.infos[0]).toContain('https://sturaos.com')
+    expect(s.infos[0]).toContain('https://example.org')
     expect(s.infos[0], 'which variable supplied it is the fact an operator needs').toContain(
       'PUBLIC_BASE_URL',
     )

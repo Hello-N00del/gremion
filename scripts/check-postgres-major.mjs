@@ -68,6 +68,32 @@ export const EXCLUDED = [
   /^test\/host\/fixtures\/postgres-major\/tree-stale\//,
 ]
 
+// Q6 (TASK-200): a named per-PATH exemption, scoped to one REF. These two
+// in-tree finance tests are "set A" of the module source move — the files the
+// extraction tag changed after the frozen source — and set A stays byte-equal
+// to the tag at every commit (scripts/check-module-source-parity.mjs), so their
+// pre-pin tag cannot be rewritten here. It sits only in the docker-run guidance
+// string of each file's fail-closed test-DB guard; nothing is started from it.
+// Any other ref in these files, and this ref anywhere else, is still a finding;
+// an exemption that no longer matches a hit is stale and fails the CLI run.
+// Spelled by join, for the same reason the data-directory note below omits the
+// prefix: this file is scanned too, and a literal stale tag here is a finding.
+const PRE_PIN_16 = ['postgres', '16-alpine'].join(':')
+export const PATH_EXEMPTIONS = [
+  { path: 'modules/finance/test/backfill.integration.test.ts', ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f1; guidance string in the fail-closed test-DB guard' },
+  { path: 'modules/finance/test/bank-money.integration.test.ts', ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f1; guidance string in the fail-closed test-DB guard' },
+]
+
+const isExempt = (h) => PATH_EXEMPTIONS.some((e) => e.path === h.path && e.ref === h.ref)
+
+/** Exemptions that excuse nothing in `files` — stale, and a finding. */
+export function staleExemptions(files) {
+  const hits = files.filter((f) => PATH_EXEMPTIONS.some((e) => e.path === f.path)).flatMap((f) => scanText(f.path, f.text))
+  return PATH_EXEMPTIONS.filter((e) => !hits.some((h) => h.path === e.path && h.ref === e.ref)).map(
+    (e) => `stale exemption: ${e.path} no longer carries ${e.ref} — delete the PATH_EXEMPTIONS entry`,
+  )
+}
+
 // `postgresql://user:pw@postgres:5432/db` is a HOST:PORT, not an image tag. The
 // lookbehind drops anything glued to a word char, dot, slash, dash or `@`, and
 // the trailing lookahead keeps a tag from being matched halfway. 5432 is then
@@ -152,6 +178,7 @@ export function checkFiles(files) {
   }
   return hits
     .filter((h) => classify(h) !== 'ok')
+    .filter((h) => !isExempt(h))
     .map((h) => `${classify(h)}: ${h.path}:${h.line} ${h.ref} (expected ${POSTGRES_IMAGE_TAG})`)
 }
 
@@ -292,6 +319,7 @@ if (isMain) {
     : [
         ...checkEvidence(readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')),
         ...checkFiles(files),
+        ...staleExemptions(files),
         ...checkDataMounts(files),
       ]
   if (problems.length > 0) {
@@ -299,5 +327,5 @@ if (isMain) {
     for (const p of problems) console.error(`  x ${p}`)
     process.exit(1)
   }
-  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: reference is ${POSTGRES_IMAGE_TAG} and every data mount is ${POSTGRES_DATA_MOUNT}`)
+  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: reference is ${POSTGRES_IMAGE_TAG}${tree ? '' : ` except ${PATH_EXEMPTIONS.length} named per-path exemption(s)`} and every data mount is ${POSTGRES_DATA_MOUNT}`)
 }

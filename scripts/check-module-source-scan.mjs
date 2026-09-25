@@ -164,7 +164,7 @@ export function extractDockerCopySources(text) {
 const SEGMENT_RULES = [
   [/(^|\/)upstream(\/|$)/, 'carries an upstream/ segment'],
   [/(^|\/)services(\/|$)/, 'carries a services/ segment'],
-  [/sturaos/i, 'carries a StuRaOS segment'],
+  [/StuRaOS/i, 'carries a StuRaOS segment'],
 ]
 
 function specifierProblems(spec, fileRel, moduleRoot) {

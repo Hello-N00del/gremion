@@ -1,10 +1,103 @@
 {
   "comment": "Every path under a mapped module directory that differs from, or is absent at, the StuRa tag extraction-source-f1 (services/** and the content UI half). scripts/check-module-source-parity.mjs refuses any unlisted difference, any listed path that does not differ (stale), and any set-A path.",
-  "source": { "tag": "extraction-source-f1", "commit": "0c9d342e9a1f9785b6f976719008134237198d0d" },
+  "source": {
+    "tag": "extraction-source-f1",
+    "commit": "0c9d342e9a1f9785b6f976719008134237198d0d"
+  },
   "entries": [
     {
       "path": "modules/content/app/migrations/1200_content_news_posts.sql",
       "reason": "added: kernel-origin content creation migration (B4a-news-posts-ownership), moved bytes-unchanged from modules/content/migrations/ into the content app chain (Q7); not a StuRa file",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/board/test/support/pg-test-guard.ts",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/calendar/test/kernel-client.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/calendar/test/support/pg-test-guard.ts",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.init-retry.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/test/guard.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/test/kernel-client.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/test/support/pg-test-guard.ts",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/test/tenant-store.init-retry.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/finance/test/api.integration.test.ts",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/finance/test/org-unit-mirror.integration.test.ts",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/finance/test/tenant-store.init-retry.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/publishing/src/dispatch.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/publishing/test/guard.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/publishing/test/kernel-client.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/publishing/test/origin.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/publishing/test/support/pg-test-guard.ts",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/publishing/test/tenant-store.init-retry.test.ts",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/vault/test/support/pg-test-guard.ts",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
       "owner": "TASK-200"
     }
   ]

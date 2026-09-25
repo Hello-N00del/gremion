@@ -240,7 +240,7 @@ describe('createKernelClient — the callback header set is closed', () => {
     })
     await client.render('/x.odt')
     const values = Object.values(calls[0]!.headers).join(' | ')
-    for (const host of ['rat-musterstadt.de', 'sturaos.com', `${TENANT.slug}.sturaos.com`]) {
+    for (const host of ['rat-musterstadt.de', 'example.org', `${TENANT.slug}.example.org`]) {
       expect(values).not.toContain(host)
     }
   })

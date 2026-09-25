@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { PATH_EXEMPTIONS, checkFiles, staleExemptions } from './check-postgres-major.mjs'
 import {
   MODULE_ID_MAP,
   CONTENT_UI_PREFIXES,
@@ -292,4 +293,28 @@ test('the CLI exits non-zero on a missing path, a missing tag and no arguments',
   } finally {
     f.cleanup()
   }
+})
+
+// Q6: the two set-A files keep their pre-pin tag, so check-postgres-major.mjs
+// carries a per-PATH, per-REF exemption for exactly them. Proven here because
+// that guard's own suite belongs to another unit.
+test('Q6: the postgres exemption excuses exactly two set-A paths and one ref, and goes stale loudly', () => {
+  const stale = ['postgres', '16-alpine'].join(':')
+  const other = ['postgres', '15-alpine'].join(':')
+  assert.deepEqual(
+    PATH_EXEMPTIONS.map((e) => e.path).sort(),
+    ['modules/finance/test/backfill.integration.test.ts', 'modules/finance/test/bank-money.integration.test.ts'],
+  )
+  const exempt = PATH_EXEMPTIONS[0].path
+  assert.deepEqual(checkFiles([{ path: exempt, text: `docker run ${stale}\n` }]), [])
+  // same path, another stale ref: still a finding
+  assert.equal(checkFiles([{ path: exempt, text: `docker run ${other}\n` }]).length, 1)
+  // same ref, any other path (a set-B sibling included): still a finding
+  assert.equal(checkFiles([{ path: 'modules/finance/test/api.integration.test.ts', text: `docker run ${stale}\n` }]).length, 1)
+  // an exemption whose file no longer carries the ref is stale
+  assert.equal(staleExemptions([{ path: exempt, text: 'nothing here\n' }]).length, 2)
+  assert.equal(
+    staleExemptions(PATH_EXEMPTIONS.map((e) => ({ path: e.path, text: `x ${stale}\n` }))).length,
+    0,
+  )
 })

@@ -90,7 +90,7 @@ describe('createKernelClient — minimal surface (no callback methods)', () => {
     expect(headers['x-forwarded-host']).toBeUndefined()
     expect(headers['x-proxy-trust']).toBeUndefined()
     const values = Object.values(headers).join(' | ')
-    for (const host of ['rat-musterstadt.de', 'sturaos.com', `${TENANT.slug}.sturaos.com`]) {
+    for (const host of ['rat-musterstadt.de', 'example.org', `${TENANT.slug}.example.org`]) {
       expect(values).not.toContain(host)
     }
   })

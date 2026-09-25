@@ -338,7 +338,7 @@ export function requireUsableLinkBase(
       `Got ${JSON.stringify(raw ?? '')}. Every dispatched newsletter carries an unsubscribe ` +
       `link built from it, and a ${fault} address is meaningless in a subscriber's mail ` +
       `client: it resolves to THEIR machine, not to this deployment. Set ${varNames} to this ` +
-      `deployment's PUBLIC base URL (e.g. https://sturaos.com).` +
+      `deployment's PUBLIC base URL (e.g. https://example.org).` +
       (fault === 'loopback'
         ? ` For local development ONLY, ${ALLOW_LOOPBACK_LINKS_VAR}=1 unlocks loopback bases.`
         : ''),

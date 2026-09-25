@@ -26,7 +26,7 @@ export function requireEphemeralTestPgUrl(): string {
         'default to localhost:5432 (the LIVE staging Postgres on this host, which this suite ' +
         'would CREATE/DROP/TRUNCATE against). Start an ephemeral throwaway container on a ' +
         'NON-5432 port and export the URL, e.g.:\n' +
-        '  docker run --rm -d --name cal-test-pg -p 127.0.0.1:55434:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16-alpine\n' +
+        '  docker run --rm -d --name cal-test-pg -p 127.0.0.1:55434:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18-alpine\n' +
         `  export ${ENV_VAR}=postgres://postgres@localhost:55434/postgres`,
     )
   }

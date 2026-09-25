@@ -1,7 +1,7 @@
 /**
  * tenant-store control-DB init retry guard.
  *
- * INCIDENT (2026-07-28/29, staging): `sturaos-finance-service-1` booted at
+ * INCIDENT (2026-07-28/29, staging): `gremion-finance-service-1` booted at
  * 16:25:12Z while `finance-postgres` was still replaying WAL. The very first
  * control-DB init lost the race and rejected with PostgresError 57P03
  * ("the database system is starting up"). Because `ensureControlDb` cached the

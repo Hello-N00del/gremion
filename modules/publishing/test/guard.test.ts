@@ -148,7 +148,7 @@ describe('checkGuard — the tenant shape is closed (HARDENING-3)', () => {
       'evil.com:80@rat-musterstadt.de', // ambiguous authority
       'a.example, b.example',           // comma-joined list
       'rat..de',                        // empty label
-      '*.sturaos.com',                  // wildcard
+      '*.example.org',                  // wildcard
       'München.de',                     // raw Unicode (punycode required)
       '',                               // present but empty
     ]) {
