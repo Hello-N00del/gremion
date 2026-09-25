@@ -1,4 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { BOOT_AND_RESOLVE_EXEMPT_PATHS, isBootAndResolveExempt, isResolveExemptRequest } from './boot-exempt'
 
 /**
@@ -71,5 +75,72 @@ describe('isResolveExemptRequest', () => {
   it('a path off the list is never exempt', () => {
     expect(isResolveExemptRequest('/api/health', none)).toBe(false)
     expect(isResolveExemptRequest('/healthzx', none)).toBe(false)
+  })
+})
+
+// ── Q4: every /api/internal/ handler authenticates its caller itself ────────
+//
+// /api/internal/ skips the resolver's proxy-trust gate (for a request naming no
+// tenant) and the session guard, so the handler's own check is the ONLY thing
+// between the container network and the route. The decided default (Q4): a
+// routes/api/internal/**/+server.{ts,js} must CALL isInternalTrustRequest or
+// constantTimeEqual. A mention in a comment does not count.
+
+const ROUTES_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'routes')
+const GUARD_CALL = /\b(?:isInternalTrustRequest|constantTimeEqual)\s*\(/
+
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+}
+
+/** Relative paths of every internal +server file under `routesRoot` that calls neither guard. */
+function internalRouteViolations(routesRoot: string): { scanned: number; violations: string[] } {
+  const base = join(routesRoot, 'api', 'internal')
+  const out = { scanned: 0, violations: [] as string[] }
+  if (!existsSync(base)) return out
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, e.name)
+      if (e.isDirectory()) walk(full)
+      else if (/^\+server\.(ts|js)$/.test(e.name)) {
+        out.scanned++
+        if (!GUARD_CALL.test(stripComments(readFileSync(full, 'utf8')))) {
+          out.violations.push(relative(routesRoot, full).split('\\').join('/'))
+        }
+      }
+    }
+  }
+  walk(base)
+  return out
+}
+
+describe('Q4 static guard: internal routes authenticate themselves', () => {
+  let fixture: string | null = null
+  afterEach(() => {
+    if (fixture) rmSync(fixture, { recursive: true, force: true })
+    fixture = null
+  })
+
+  function route(root: string, rel: string, body: string): void {
+    const dir = join(root, 'api', 'internal', rel)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, '+server.ts'), body)
+  }
+
+  it('the scanner flags a guard-less route, a comment-only mention and a nested route, and passes guarded ones', () => {
+    fixture = mkdtempSync(join(tmpdir(), 't023-internal-'))
+    route(fixture, 'evict', "export const POST = ({ request }) => { if (!isInternalTrustRequest(request)) return new Response(null, { status: 403 }) }")
+    route(fixture, 'push', "export const POST = ({ request }) => { if (!constantTimeEqual(a, b)) return deny() }")
+    route(fixture, 'open', 'export const POST = () => new Response(null, { status: 204 })')
+    route(fixture, 'commented', '// isInternalTrustRequest(request) is checked upstream\n/* constantTimeEqual( */\nexport const POST = () => new Response(null)')
+    route(fixture, 'a/deep', 'export const GET = () => new Response(null)')
+    const r = internalRouteViolations(fixture)
+    expect(r.scanned).toBe(5)
+    expect(r.violations.sort()).toEqual(['api/internal/a/deep/+server.ts', 'api/internal/commented/+server.ts', 'api/internal/open/+server.ts'])
+  })
+
+  it('the real routes tree has no guard-less internal route', () => {
+    expect(existsSync(ROUTES_ROOT)).toBe(true)
+    expect(internalRouteViolations(ROUTES_ROOT).violations).toEqual([])
   })
 })
