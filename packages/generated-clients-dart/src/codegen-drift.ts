@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DART_PACKAGES_DIR, loadDartSurfaces, type DartSurface } from './registry.ts'
+import { DART_PACKAGES_DIR, loadDartSurfaces, NODE_SIDE, type DartSurface } from './registry.ts'
 
 /** package-relative, forward-slash path → exact bytes */
 export type GeneratedFiles = Map<string, Buffer>
@@ -29,10 +29,6 @@ export function byPath(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
-/** The Node write/check side that shares packages/generated-clients-dart/
- *  with the surface packages. Every other top-level entry must be a
- *  registered surface. */
-const NODE_SIDE = new Set(['.gitignore', 'README.md', 'package.json', 'tsconfig.json', 'vitest.config.ts', 'src', 'tools', 'node_modules', '.gen-work'])
 /** Node-side dirs whose content is ours and must hold no Dart. */
 const NODE_SOURCE_DIRS = ['src', 'tools']
 

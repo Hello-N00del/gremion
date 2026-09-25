@@ -8,9 +8,14 @@ import { join } from 'node:path'
 import { loadDartSurfaces, pubNameFor, SCRATCH_ROOT } from './registry.ts'
 import { REPO_ROOT } from './repo-root.ts'
 
-function writeRegistry(root: string, specs: unknown[]): void {
+function writeRegistry(root: string, specs: Record<string, unknown>[]): void {
   mkdirSync(join(root, 'contracts'), { recursive: true })
   writeFileSync(join(root, 'contracts', 'registry.json'), JSON.stringify({ specs }))
+  for (const s of specs) {
+    if (typeof s.file !== 'string') continue
+    mkdirSync(join(root, s.file, '..'), { recursive: true })
+    writeFileSync(join(root, s.file), JSON.stringify(s.type === 'asyncapi' ? { asyncapi: '3.0.0' } : { openapi: '3.1.0', paths: {} }))
+  }
 }
 
 describe('loadDartSurfaces — fixtures', () => {
@@ -62,6 +67,31 @@ describe('loadDartSurfaces — fixtures', () => {
   it('rejects a YAML spec (JSON specs only, brief §5)', () => {
     writeRegistry(dir, [{ name: 'y', type: 'openapi', file: 'contracts/openapi.y.yaml', status: 'active' }])
     expect(() => loadDartSurfaces(dir)).toThrow(/JSON/)
+  })
+
+  it('throws on a status outside the known vocabulary instead of silently dropping the surface', () => {
+    writeRegistry(dir, [{ name: 'x', type: 'openapi', file: 'contracts/openapi.x.json', status: 'Active' }])
+    expect(() => loadDartSurfaces(dir)).toThrow(/status "Active"/)
+    writeRegistry(dir, [{ name: 'x', type: 'openapi', file: 'contracts/openapi.x.json', status: 'beta' }])
+    expect(() => loadDartSurfaces(dir)).toThrow(/status "beta"/)
+  })
+
+  it('throws when the registry type disagrees with the document (an OpenAPI spec registered as asyncapi would dodge codegen AND the scan)', () => {
+    mkdirSync(join(dir, 'contracts'), { recursive: true })
+    writeFileSync(join(dir, 'contracts', 'registry.json'), JSON.stringify({ specs: [{ name: 'x', type: 'asyncapi', file: 'contracts/x.json', status: 'active' }] }))
+    writeFileSync(join(dir, 'contracts', 'x.json'), JSON.stringify({ openapi: '3.1.0', paths: {} }))
+    expect(() => loadDartSurfaces(dir)).toThrow(/type "asyncapi".*openapi/)
+    writeFileSync(join(dir, 'contracts', 'registry.json'), JSON.stringify({ specs: [{ name: 'x', type: 'openapi', file: 'contracts/x.json', status: 'active' }] }))
+    writeFileSync(join(dir, 'contracts', 'x.json'), JSON.stringify({ asyncapi: '3.0.0' }))
+    expect(() => loadDartSurfaces(dir)).toThrow(/type "openapi"/)
+    rmSync(join(dir, 'contracts', 'x.json'))
+    expect(() => loadDartSurfaces(dir)).toThrow(/x\.json/)
+  })
+
+  it.each([['src'], ['tools'], ['node-modules'], ['package']])('rejects a surface named %s that would collide with the Node tooling', (n) => {
+    writeRegistry(dir, [{ name: n, type: 'openapi', file: `contracts/openapi.${n}.json`, status: 'active' }])
+    if (n === 'node-modules' || n === 'package') expect(() => loadDartSurfaces(dir)).not.toThrow()
+    else expect(() => loadDartSurfaces(dir)).toThrow(/collide/)
   })
 
   it('pubNameFor snake-cases the registry name', () => {

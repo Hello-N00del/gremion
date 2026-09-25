@@ -34,6 +34,18 @@ export interface DartSurface {
 
 const SURFACE_NAME = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/
 
+/** The Node write/check side that shares packages/generated-clients-dart/
+ *  with the surface packages. A surface may not take one of these names (the
+ *  writer would sync generated output over the tooling), and every other
+ *  top-level entry there must be a registered surface. */
+export const NODE_SIDE = new Set(['.gitignore', 'README.md', 'package.json', 'tsconfig.json', 'vitest.config.ts', 'src', 'tools', 'node_modules', '.gen-work'])
+
+/** No vocabulary is defined upstream (contracts/README.md, TASK-030's
+ *  validator only requires a non-empty string), so this one is closed: an
+ *  unknown or mistyped status ("Active", "beta") throws rather than silently
+ *  dropping an OpenAPI surface from codegen. Only `active` gets a client. */
+export const KNOWN_STATUSES = new Set(['active', 'draft', 'deprecated', 'retired'])
+
 export function pubNameFor(registryName: string): string {
   return `gremion_${registryName.replace(/-/g, '_')}_client`
 }
@@ -67,8 +79,22 @@ export function loadDartSurfaces(repoRoot: string): { surfaces: DartSurface[]; a
     if (typeof name !== 'string' || typeof file !== 'string') throw new Error(`${where}: "name" and "file" must be strings`)
     if (type !== 'openapi' && type !== 'asyncapi') throw new Error(`${where}: "type" must be "openapi" or "asyncapi", got ${JSON.stringify(type)}`)
     if (typeof status !== 'string' || status.length === 0) throw new Error(`${where}: missing "status"`)
+    if (!KNOWN_STATUSES.has(status)) throw new Error(`${where}: status "${status}" is not one of ${[...KNOWN_STATUSES].join(', ')} — refusing to guess whether it gets a Dart client`)
+    // The type decides codegen AND the hand-client scan, so it must agree
+    // with the document itself.
+    const specPath = join(repoRoot, file)
+    if (!existsSync(specPath)) throw new Error(`${where}: "${file}" does not exist`)
+    let docKind: string
+    try {
+      const doc = JSON.parse(readFileSync(specPath, 'utf8')) as Record<string, unknown>
+      docKind = 'openapi' in doc ? 'openapi' : 'asyncapi' in doc ? 'asyncapi' : 'neither'
+    } catch (e) {
+      throw new Error(`${where}: "${file}" is not valid JSON (JSON specs only): ${(e as Error).message}`)
+    }
+    if (docKind !== type) throw new Error(`${where}: registered as type "${type}" but "${file}" is ${docKind === 'neither' ? 'neither an openapi nor an asyncapi document' : `an ${docKind} document`}`)
     // AsyncAPI: registered but excluded from Dart codegen (TRD-409; same scope as the TS precedent, packages/generated-clients/src/codegen.ts).
     if (type !== 'openapi') continue
+    if (NODE_SIDE.has(name)) throw new Error(`${where}: surface name "${name}" would collide with the Node tooling in ${DART_PACKAGES_DIR}/`)
     if (!SURFACE_NAME.test(name)) throw new Error(`${where}: name "${name}" is not a valid surface directory / pub package name (lower-kebab-case)`)
     if (!file.endsWith('.json')) throw new Error(`${where}: "${file}" is not a JSON spec (JSON specs only)`)
     const surface = toSurface(name, file)
