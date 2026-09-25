@@ -235,6 +235,81 @@ describe('host-keyed resolution', () => {
   })
 })
 
+// TASK-025 TDD item 2 (brief §6.2): the DB constraint itself, exercised with a
+// RAW insert that bypasses addTenantDomain's own pre-check entirely — proving
+// TRD-074 ("one host, one customer, by DB constraint") holds even for a write
+// that never went through the JS ownership guard.
+describe('tenant_domain PK constraint (TRD-074)', () => {
+  it('a raw INSERT of an already-claimed host under a DIFFERENT tenant is rejected by the PK, not by application code', async () => {
+    await addTenantDomain(tenantId, 'rat-musterstadt.de', { isPrimary: true })
+    const other = await registerTenant(inputFor('rat-anderstadt'))
+    await expect(
+      getControlDb()`INSERT INTO tenant_domain (host, tenant_id) VALUES ('rat-musterstadt.de', ${other.id})`,
+    ).rejects.toMatchObject({ code: '23505', constraint_name: 'tenant_domain_pkey' })
+    // The rejected raw insert must not have landed a second row nor moved the first.
+    const rows = await getControlDb()<Array<{ tenant_id: string }>>`
+      SELECT tenant_id FROM tenant_domain WHERE host = 'rat-musterstadt.de'`
+    expect(rows).toEqual([{ tenant_id: tenantId }])
+    await getControlDb()`DELETE FROM tenant WHERE slug = 'rat-anderstadt'`
+  })
+})
+
+// TASK-025 TDD item 3 (brief §6.3): Promise.allSettled over two addTenantDomain
+// calls for the SAME never-before-claimed host, from two DIFFERENT tenants —
+// exactly one settles fulfilled with the row, the other throws. Neither
+// ordering the FOR UPDATE pre-read can observe (loser sees no owner yet and
+// loses the INSERT race, or loser sees the winner's already-committed row) is
+// a silent upsert: both are a loud, named refusal.
+describe('concurrent claim on one never-before-claimed host', () => {
+  it('exactly one of two racing addTenantDomain calls wins; the loser throws, no silent upsert', async () => {
+    const other = await registerTenant(inputFor('rat-anderstadt'))
+    const host = 'contested.rat-musterstadt.de'
+    const results = await Promise.allSettled([
+      addTenantDomain(tenantId, host),
+      addTenantDomain(other.id, host),
+    ])
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect((rejected[0].reason as Error).message).toMatch(
+      /already registered to tenant|was claimed by another tenant concurrently/,
+    )
+    // Exactly one row exists — the loser's error was not paired with a write.
+    const rows = await getControlDb()<Array<{ tenant_id: string }>>`
+      SELECT tenant_id FROM tenant_domain WHERE host = ${host}`
+    expect(rows).toHaveLength(1)
+    await getControlDb()`DELETE FROM tenant WHERE slug = 'rat-anderstadt'`
+  })
+})
+
+// TASK-025 TDD item 4 (brief §6.4): two tenants, each host resolves ONLY to its
+// own tenant; an unregistered host is null; moving a host from A to B (remove
+// then add) resolves it to B afterwards, with NO stale A entry in either the
+// control-DB row set or the host-keyed resolution cache (evictTenantRuntime
+// runs on both the remove and the add, see tenant-domain.ts).
+describe('two-tenant isolation and host reassignment', () => {
+  beforeEach(() => { _resetResolutionCacheForTests() })
+
+  it('each host resolves only its own tenant; moving a host away leaves the origin tenant with none', async () => {
+    const other = await registerTenant(inputFor('rat-anderstadt'))
+    await addTenantDomain(tenantId, 'a.rat-musterstadt.de', { isPrimary: true })
+    await addTenantDomain(other.id, 'b.rat-anderstadt.de', { isPrimary: true })
+
+    expect((await resolveTenantByHost('a.rat-musterstadt.de'))!.id).toBe(tenantId)
+    expect((await resolveTenantByHost('b.rat-anderstadt.de'))!.id).toBe(other.id)
+    expect(await resolveTenantByHost('unregistered.example')).toBeNull()
+
+    // Move a.rat-musterstadt.de from tenantId to other.id.
+    expect(await removeTenantDomain(tenantId, 'a.rat-musterstadt.de')).toBe(true)
+    await addTenantDomain(other.id, 'a.rat-musterstadt.de')
+
+    expect((await resolveTenantByHost('a.rat-musterstadt.de'))!.id).toBe(other.id)
+    expect(await listTenantDomains(tenantId)).toEqual([]) // no stale A row or cache entry
+    await getControlDb()`DELETE FROM tenant WHERE slug = 'rat-anderstadt'`
+  })
+})
+
 // The registry row for this unit, asserted in one place.
 describe('B8 post-condition', () => {
   // The host-keyed cache survives the outer beforeEach (which only touches the
