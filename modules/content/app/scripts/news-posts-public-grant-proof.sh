@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Proof for the content app chain's news_posts public-reader grant (TASK-200 Q9).
+#
+# Applies the content app migrations to a THROWAWAY postgres:18-alpine started
+# with a plain `docker run` (no compose), seeds one published, one unpublished
+# and one future-dated post, and asserts — as gremion_public_reader — that the
+# anonymous portal role:
+#   1. can read the seven columns the portal's public-db.ts selects,
+#   2. cannot read author_id,
+#   3. sees only rows with published_at IS NOT NULL AND published_at <= now(),
+# and — as the owning role that runs migrations — that the owner still sees
+# every row. Exit 0 only when every assertion holds.
+#
+# Usage: news-posts-public-grant-proof.sh [--through <basename>]
+#   --through 1200_content_news_posts.sql   apply only up to that file (the RED run)
+# Needs: docker. Binds 127.0.0.1 only; removes its container on exit.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MIGRATIONS="$HERE/../migrations"
+THROUGH=""
+if [ "${1:-}" = "--through" ]; then THROUGH="${2:?--through needs a migration basename}"; fi
+
+SHA="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+NAME="t200-testdb-$SHA-$$"
+PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+PW="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+READER_PW="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+
+cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+docker run -d --name "$NAME" -p "127.0.0.1:$PORT:5432" -e POSTGRES_PASSWORD="$PW" postgres:18-alpine >/dev/null
+for _ in $(seq 1 60); do
+  docker exec "$NAME" pg_isready -U postgres -q 2>/dev/null && break
+  sleep 1
+done
+# pg_isready can answer during the entrypoint's temporary init server; wait for the real one.
+for _ in $(seq 1 60); do
+  docker exec "$NAME" psql -U postgres -tAc 'SELECT 1' >/dev/null 2>&1 && break
+  sleep 1
+done
+
+su_psql() { docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -q -U postgres "$@"; }
+
+# Roles as the stack provisions them: an owning migrator role without
+# superuser, and the read-only portal role (docker/postgres/init-databases.sh).
+su_psql -d postgres <<SQL
+CREATE ROLE gremion LOGIN PASSWORD '$PW' NOSUPERUSER;
+CREATE ROLE gremion_public_reader LOGIN PASSWORD '$READER_PW' NOSUPERUSER;
+CREATE DATABASE gremion OWNER gremion;
+SQL
+su_psql -d gremion -c 'GRANT ALL ON SCHEMA public TO gremion'
+
+applied=()
+for f in "$MIGRATIONS"/*.sql; do
+  base="$(basename "$f")"
+  # A migration that fails must fail the proof: never pipe psql's status away.
+  if ! log="$(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -q -U gremion -d gremion <"$f" 2>&1)"; then
+    printf '%s\n' "$log" >&2
+    echo "RESULT: FAIL — $base did not apply" >&2
+    exit 1
+  fi
+  applied+=("$base")
+  [ "$base" = "$THROUGH" ] && break
+done
+echo "applied as gremion (owner): ${applied[*]}"
+# Idempotency: the head of the chain must survive a second application.
+last="${applied[${#applied[@]}-1]}"
+if ! log="$(docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -q -U gremion -d gremion <"$MIGRATIONS/$last" 2>&1)"; then
+  printf '%s\n' "$log" >&2
+  echo "RESULT: FAIL — $last is not idempotent" >&2
+  exit 1
+fi
+echo "re-applied $last (idempotent)"
+
+docker exec -i "$NAME" psql -v ON_ERROR_STOP=1 -q -U gremion -d gremion <<'SQL'
+INSERT INTO news_posts (title, slug, body_html, author_id, published_at) VALUES
+  ('published', 'published', '<p>p</p>', 'author-1', now() - interval '1 day'),
+  ('draft',     'draft',     '<p>d</p>', 'author-2', NULL),
+  ('scheduled', 'scheduled', '<p>s</p>', 'author-3', now() + interval '1 day');
+SQL
+
+fail=0
+# A refused query is an expected outcome here, so its exit status is captured
+# in the output rather than tripping set -e.
+reader() { docker exec -i "$NAME" psql -X -tA -U gremion_public_reader -d gremion -c "$1" 2>&1 || true; }
+owner() { docker exec -i "$NAME" psql -X -tA -U gremion -d gremion -c "$1" 2>&1 || true; }
+check() { # name, actual, expected
+  if [ "$2" = "$3" ]; then echo "  ok   $1 -> $2"; else echo "  FAIL $1 -> got [$2], want [$3]"; fail=1; fi
+}
+
+out="$(reader 'SELECT author_id FROM news_posts ORDER BY id LIMIT 1')"
+case "$out" in *"permission denied"*) got=denied ;; *) got="readable:$out" ;; esac
+check 'anon SELECT author_id' "$got" denied
+
+out="$(reader "SELECT string_agg(slug, ',' ORDER BY id) FROM news_posts")"
+check 'anon rows visible (all published_at states)' "$out" published
+
+out="$(reader 'SELECT count(*) FROM news_posts')"
+check 'anon count(*)' "$out" 1
+
+out="$(reader "SELECT id, title, slug, body_html, published_at IS NOT NULL, created_at IS NOT NULL, updated_at IS NOT NULL FROM news_posts WHERE slug = 'published'")"
+check 'anon reads the seven portal columns' "$(printf '%s' "$out" | cut -d'|' -f2-)" 'published|published|<p>p</p>|t|t|t'
+
+out="$(owner 'SELECT count(*) FROM news_posts')"
+check 'owner sees every row' "$out" 3
+
+out="$(reader "INSERT INTO news_posts (title, slug, author_id) VALUES ('x','x','x')")"
+case "$out" in *"permission denied"*) got=denied ;; *) got="allowed:$out" ;; esac
+check 'anon INSERT' "$got" denied
+
+if [ "$fail" -ne 0 ]; then echo "RESULT: FAIL"; exit 1; fi
+echo "RESULT: OK"

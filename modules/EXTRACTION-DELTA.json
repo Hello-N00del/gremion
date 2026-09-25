@@ -61,6 +61,16 @@
       "owner": "TASK-200"
     },
     {
+      "path": "modules/content/app/migrations/1205_news_posts_public_reader_columns.sql",
+      "reason": "added: forward migration narrowing 1200's whole-table public-reader grant to the seven portal columns of published rows, with RLS (Q9); not a StuRa file",
+      "owner": "TASK-200"
+    },
+    {
+      "path": "modules/content/app/scripts/news-posts-public-grant-proof.sh",
+      "reason": "added: plain-docker-run postgres:18-alpine proof of the Q9 grant (RED with --through 1200_content_news_posts.sql, GREEN on the chain); not a StuRa file",
+      "owner": "TASK-200"
+    },
+    {
       "path": "modules/content/test/guard.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
       "owner": "TASK-200"
