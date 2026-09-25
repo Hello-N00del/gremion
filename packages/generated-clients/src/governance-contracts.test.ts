@@ -226,6 +226,22 @@ describe('T8 — consumer fixture typechecks both import shapes', () => {
     const out = runTsc('tsconfig.consumer-browser.json')
     expect(out.trim()).toBe('')
   }, 120_000)
+
+  it('the browser-style import resolves through the package export map, not a paths shim', () => {
+    // package self-reference: bundler resolution reads package.json
+    // "exports"./governance-client, exactly as a linked consumer would
+    const cfg = JSON.parse(readFileSync(join(PKG_DIR, 'tsconfig.consumer-browser.json'), 'utf8'))
+    expect(cfg.compilerOptions?.paths).toBeUndefined()
+    expect(cfg.compilerOptions?.baseUrl).toBeUndefined()
+    expect(cfg.compilerOptions?.moduleResolution ?? 'bundler').toBe('bundler')
+    // only the fixture is the input; the client must be reached via the import
+    expect(cfg.include).toEqual(['src/consumer-fixture/browser-style.ts'])
+  })
+
+  it('the consumer fixtures are not compiled into the published dist', () => {
+    const build = JSON.parse(readFileSync(join(PKG_DIR, 'tsconfig.build.json'), 'utf8'))
+    expect(build.exclude).toContain('src/consumer-fixture/**')
+  })
 })
 
 describe('T9 — breaking demo: a required response field removed is RED at 1.0.0, GREEN at 2.0.0', () => {

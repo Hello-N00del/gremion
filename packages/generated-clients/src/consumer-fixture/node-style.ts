@@ -5,8 +5,8 @@
 // governance service) resolves a relative deep import with an explicit
 // `.js` specifier under `nodenext` resolution — the same resolution
 // tsconfig.build.json uses for the whole package. This file is
-// type-checked (not executed) by consumer-fixture.test.ts, against
-// tsconfig.consumer-node.json.
+// type-checked (not executed) by T8 in governance-contracts.test.ts, against
+// tsconfig.consumer-node.json. Excluded from tsconfig.build.json (never in dist).
 import { createGovernanceClient } from '../generated/governance-client.js'
 
 export function nodeStyleConsumer() {
