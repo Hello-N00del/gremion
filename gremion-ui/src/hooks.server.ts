@@ -65,6 +65,7 @@ let _bootComplete = false
 let _bootError: Error | null = null
 let _bootErrorRetryable = false
 let _bootPromise: Promise<void> | null = null
+let _bootAttemptId = 0
 let _bootRetryPending = false
 
 /** Q2: delay before the one scheduled re-attempt after a transient boot failure. */
@@ -103,9 +104,10 @@ export function getBootStatus(): { complete: boolean; error: Error | null } {
 
 export function boot(): Promise<void> {
   if (_bootPromise) return _bootPromise
-  const attempt: Promise<void> = (async () => {
-    // Yield once, so `attempt` is assigned to _bootPromise before any failure
-    // below can compare against it.
+  const attemptId = ++_bootAttemptId
+  _bootPromise = (async () => {
+    // Yield once, so _bootPromise holds this attempt before any failure below
+    // can drop it.
     await Promise.resolve()
     try {
       // Survive a reboot race: if the Docker daemon starts gremion-ui before
@@ -266,7 +268,7 @@ export function boot(): Promise<void> {
         // one re-attempt happens even if nothing else calls boot(). The authGuard
         // serves 503 booting (Retry-After: 5) in the meantime.
         console.error(`[boot] failed (transient), re-attempting in ${BOOT_RETRY_DELAY_MS} ms:`, err)
-        if (_bootPromise === attempt) _bootPromise = null
+        if (_bootAttemptId === attemptId) _bootPromise = null
         scheduleBootRetry()
       } else {
         // Not something waiting fixes: exit, so the restart policy recycles the
@@ -277,8 +279,7 @@ export function boot(): Promise<void> {
       }
     }
   })()
-  _bootPromise = attempt
-  return attempt
+  return _bootPromise
 }
 
 boot()
