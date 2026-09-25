@@ -356,17 +356,34 @@ export interface components {
              * @description Opaque IDT org-unit reference
              */
             org_unit_id: string;
+            /**
+             * Format: uuid
+             * @description Opaque IDT Wahlperiode reference (TRD-086). A mismatch with the body's current Wahlperiode warns and never blocks [D R17-14].
+             */
+            wahlperiode_id?: string | null;
             meeting_number: number;
+            /** @description DB-GOV-MEETING.title. Served here (gov.meeting-read v1) and deliberately never carried in event payloads (DOMAIN GOV events table). */
+            title: string;
             /** Format: date-time */
             scheduled_start: string;
             /** Format: date-time */
             scheduled_end: string;
             location?: string;
+            /**
+             * Format: uuid
+             * @description Display-only projection of msg.calllink.set.v1. MSG owns the meeting-to-call association; GOV never writes it except from MSG's event.
+             */
+            readonly call_link_id?: string | null;
             /** @enum {string} */
             state: "planned" | "invited" | "in_session" | "suspended" | "closed" | "cancelled";
+            /** @description Ladungsfrist in days, snapshotted from the body's governance settings when the meeting was planned; later settings changes never alter it (DB-GOV-MEETING invariant). */
+            readonly notice_period_days_snapshot: number;
             /** Format: date-time */
             notice_due_at: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Snapshotted from the body's motion deadline offset when the meeting was planned.
+             */
             motion_deadline_at?: string;
             /** Format: date-time */
             opened_at?: string | null;
@@ -380,14 +397,23 @@ export interface components {
              * @description Opaque IDT org-unit reference
              */
             org_unit_id: string;
+            /**
+             * Format: uuid
+             * @description Opaque IDT Wahlperiode reference. Optional: when omitted the server records the body's current Wahlperiode [A]. A mismatch warns and never blocks [D R17-14].
+             */
+            wahlperiode_id?: string;
+            /** @description DB-GOV-MEETING.title. */
+            title: string;
             /** Format: date-time */
             scheduled_start: string;
             /** Format: date-time */
             scheduled_end: string;
             location?: string;
         };
-        /** @description Reschedule. body_id is immutable and not accepted here (DOMAIN DB-GOV-MEETING invariant). */
+        /** @description Retitle, relocate or reschedule. body_id is immutable and not accepted here (DOMAIN DB-GOV-MEETING invariant). A change of start or end emits de.gremion.gov.meeting.rescheduled.v1. */
         MeetingUpdate: {
+            /** @description DB-GOV-MEETING.title (optional on update). */
+            title?: string;
             /** Format: date-time */
             scheduled_start?: string;
             /** Format: date-time */

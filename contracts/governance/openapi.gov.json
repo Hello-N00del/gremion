@@ -1196,9 +1196,11 @@
           "body_id",
           "org_unit_id",
           "meeting_number",
+          "title",
           "scheduled_start",
           "scheduled_end",
           "state",
+          "notice_period_days_snapshot",
           "notice_due_at"
         ],
         "properties": {
@@ -1217,8 +1219,21 @@
             "format": "uuid",
             "description": "Opaque IDT org-unit reference"
           },
+          "wahlperiode_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Opaque IDT Wahlperiode reference (TRD-086). A mismatch with the body's current Wahlperiode warns and never blocks [D R17-14]."
+          },
           "meeting_number": {
             "type": "integer"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "DB-GOV-MEETING.title. Served here (gov.meeting-read v1) and deliberately never carried in event payloads (DOMAIN GOV events table)."
           },
           "scheduled_start": {
             "type": "string",
@@ -1231,6 +1246,15 @@
           "location": {
             "type": "string"
           },
+          "call_link_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "readOnly": true,
+            "description": "Display-only projection of msg.calllink.set.v1. MSG owns the meeting-to-call association; GOV never writes it except from MSG's event."
+          },
           "state": {
             "type": "string",
             "enum": [
@@ -1242,13 +1266,20 @@
               "cancelled"
             ]
           },
+          "notice_period_days_snapshot": {
+            "type": "integer",
+            "minimum": 0,
+            "readOnly": true,
+            "description": "Ladungsfrist in days, snapshotted from the body's governance settings when the meeting was planned; later settings changes never alter it (DB-GOV-MEETING invariant)."
+          },
           "notice_due_at": {
             "type": "string",
             "format": "date-time"
           },
           "motion_deadline_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "Snapshotted from the body's motion deadline offset when the meeting was planned."
           },
           "opened_at": {
             "type": [
@@ -1276,6 +1307,7 @@
         "type": "object",
         "required": [
           "org_unit_id",
+          "title",
           "scheduled_start",
           "scheduled_end"
         ],
@@ -1284,6 +1316,16 @@
             "type": "string",
             "format": "uuid",
             "description": "Opaque IDT org-unit reference"
+          },
+          "wahlperiode_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Opaque IDT Wahlperiode reference. Optional: when omitted the server records the body's current Wahlperiode [A]. A mismatch warns and never blocks [D R17-14]."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "DB-GOV-MEETING.title."
           },
           "scheduled_start": {
             "type": "string",
@@ -1300,8 +1342,13 @@
       },
       "MeetingUpdate": {
         "type": "object",
-        "description": "Reschedule. body_id is immutable and not accepted here (DOMAIN DB-GOV-MEETING invariant).",
+        "description": "Retitle, relocate or reschedule. body_id is immutable and not accepted here (DOMAIN DB-GOV-MEETING invariant). A change of start or end emits de.gremion.gov.meeting.rescheduled.v1.",
         "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "DB-GOV-MEETING.title (optional on update)."
+          },
           "scheduled_start": {
             "type": "string",
             "format": "date-time"
