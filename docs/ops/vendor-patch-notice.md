@@ -24,13 +24,13 @@ PRD-DEP-003 and TRD-106 name five systems. This table shows where each one
 actually lives and what version is pinned, measured in this repository on
 2026-09-25. A notice has to name the version a council actually runs, so the
 **source of truth for the version is the release being shipped** (its
-`docker-compose.pins.yml`, which spec B's release workflow writes), not this
+`docker-compose.pins.yml`, written by the release workflow), not this
 table.
 
 | System | Role in Gremion | Where it is defined | Version recorded in this repository (2026-09-25) |
 |---|---|---|---|
 | **Keycloak** | identity provider for every tenant realm | kernel: `docker-compose.yml` (`keycloak` service), `k8s/base/keycloak/deployment.yaml` | `quay.io/keycloak/keycloak:26.6.1`, pinned by tag in both places |
-| **Synapse** (Matrix homeserver) | chat and rooms for the messages module | module-owned, not in this repository (spec B: the messages module ships it as a compose fragment) | no pin here; `docs/ops/topology.md` §1 records a locally built `matrix` image on the pilot host; `docs/ops/postgres-major.md` checked Synapse 1.160's support matrix, which is not a pin |
+| **Synapse** (Matrix homeserver) | chat and rooms for the messages module | module-owned, not in this repository (the messages module ships it) | no pin here; `docs/ops/topology.md` §1 records a locally built `matrix` image on the pilot host; `docs/ops/postgres-major.md` checked Synapse 1.160's support matrix, which is not a pin |
 | **LiveKit** (SFU, with its JWT auth-service) | audio/video calls | module-owned, not in this repository | no pin here; `docs/ops/topology.md` §2 records the target `livekit-server:v1.7.2`, not yet deployed (`[A]`, pin at re-init) |
 | **Element Call** | call front end on top of LiveKit | module-owned, not in this repository; its config is rendered by `gremion-render` (`docs/ops/host-tooling.md`) | no version recorded anywhere in this repository |
 | **Helios** | verifiable elections (elections module) | module-owned, not in this repository (`.github/workflows/ci.yml` notes it is absent) | no pin here; `docs/ops/topology.md` records a host-local image on a floating `:latest` tag (`[A]`, pin at re-init) |
@@ -52,8 +52,8 @@ advisories" watch setting and to the release feed covers most of them:
 
 | System | Primary advisory source | Also watch |
 |---|---|---|
-| Keycloak | GitHub security advisories of `keycloak/keycloak` | Keycloak release notes on keycloak.org |
-| Synapse | GitHub security advisories of `element-hq/synapse` | Synapse release notes on the same repository; Matrix.org security announcements |
+| Keycloak | GitHub security advisories of `keycloak/keycloak` | Keycloak release notes (upstream project site and GitHub releases) |
+| Synapse | GitHub security advisories of `element-hq/synapse` | Synapse release notes on the same repository; the Matrix project's security announcements |
 | LiveKit | GitHub security advisories of `livekit/livekit` | the JWT auth-service's repository (advisories and releases) |
 | Element Call | GitHub security advisories of `element-hq/element-call` | its release notes |
 | Helios | the upstream `helios-server` repository (releases, commits, issues). It has no dedicated advisory feed, so releases have to be watched and read by hand | the module's own repository, since Gremion builds the image locally |
@@ -86,8 +86,7 @@ For each trigger, record the following in the notice register (§6):
 5. **Owner.** Kernel (Keycloak) or the owning module repository (the other four).
 
 A security fix ships at any time. It is not held for a semester-break window,
-and a council's deferral of a feature release does not delay it (PRD-PLAT-003;
-rule 4 of the release-cadence policy, where that policy is published).
+and a council's deferral of a feature release does not delay it (PRD-PLAT-003).
 
 ## 4. The notice
 
@@ -117,13 +116,14 @@ sources do not require it for notices.
 `gremion.de`, in the same place as the change lists (PRD-SUP-004: advisories
 and patch notifications are reachable from gremion.de, and no second channel is
 needed). Hosted and self-hosted councils read the same page. There is no
-separate hosted-only notice and no e-mail or push message to members. This
-matches how PRD-PLAT-003's change lists are published rather than sent. The
-exact page path is left to whoever builds the site (see [Open points](#8-open-points)).
+separate hosted-only notice. PRD-SUP-004 does not require a second channel,
+so this procedure uses none. The exact page path is left to whoever builds the site (see [Open points](#8-open-points)).
 
 **Schedule.** A notice follows the schedule PRD-PLAT-003 sets for change lists
-(TRD-106). The change-list rule is that the dated list is published before the
-release is switched to. Carried over to a security fix, that gives:
+(TRD-106). PRD-PLAT-003 ties a dated change list to each release. This
+procedure applies the same rule to a security fix: the dated notice goes with
+the fix. It also adds its own rule that the notice must be public before hosted
+councils run the fixed release:
 
 - **Fix ready to ship.** The notice (status `applied`, or `planned` with that
   day's date) is published **no later than the traffic switch** to the fixed
@@ -191,8 +191,10 @@ release whose `dist-vX.Y.Z` tag raises X. That reading is this procedure's own
 
 The sources do not settle these, so they are left open rather than guessed:
 
-- **Maximum time from upstream advisory to notice.** No source sets one.
-  TRD-106 carries an `[A]` clause asking for the standard to be verified.
+- **Maximum time from upstream advisory to notice.** No source sets one. This
+  procedure only requires triage on the day a trigger is seen (§3) and
+  publication no later than the switch (§5). TRD-106 carries an `[A]` clause
+  asking for the standard to be verified.
 - **Page path on gremion.de** for notices and change lists. Choosing it belongs
   to whoever publishes the site. PRD-SUP-004 only requires that it is
   reachable from gremion.de.
@@ -213,15 +215,13 @@ The sources do not settle these, so they are left open rather than guessed:
 - `docs/ops/postgres-major.md` — the versions checked for the Postgres pin.
 - `docs/ops/host-tooling.md` — `gremion-render`, deploy, switch and rollback.
 - `docs/ops/go-live-gate.md` — the private annex where records are kept.
-- `docs/ops/release-cadence.md` — the PRD-PLAT-003 release cadence, where it
-  is published. This document does not depend on it.
 
 ## Sources and decisions
 
 | Topic | Ids | Basis |
 |---|---|---|
-| Notify every council of bundled-system security patches | PRD-DEP-003 (Must, Inspection) | [D R18 15.1 F4]; extends PRD-PLAT-003 and PRD-PLAT-005's self-hosting duty to security patches |
+| Notify every council of bundled-system security patches | PRD-DEP-003 (Must, Inspection) | [D R18 15.1 F4]; applies the change-list duty (PRD-PLAT-003) and the self-hosting duty (PRD-PLAT-005) to security patches |
 | Notice content, schedule and verification | TRD-106 | [D-nc]; ISO/IEC 29147; BSI IT-Grundschutz OPS.1.1.3; `[A]` standard to verify |
 | Change-list schedule, security fixes any time, deferral, pilot suspension | PRD-PLAT-003 | the cadence this procedure's schedule follows |
 | Channel reachable from gremion.de, no second channel | PRD-SUP-004 | traced by TRD-106 |
-| Re-assess and republish the ASVS L2 exception list at a major release | TRD-096, extends TRD-095 | [D-nc]; operator policy, ASVS 5.0 sets no cadence |
+| Re-assess and republish the ASVS L2 exception list at a major release | TRD-096, extends TRD-095 | [D-nc]; cadence is set by the operator, not by ASVS 5.0 |
