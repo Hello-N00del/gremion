@@ -54,7 +54,7 @@ function writeFixtureManifest(dir) {
     { ...suite(`${prefix}-shell`, 'shell', 'node --test --test-reporter=tap a.test.mjs', ['a.test.mjs']), repo: prefix },
     { ...suite(`${prefix}-guard`, 'tree-guard', 'node --test --test-reporter=tap a.test.mjs && node -e "process.exit(0)"', ['a.test.mjs']), repo: prefix },
   ]
-  const manifest = { kernel: perRepo('kernel'), sturaos: perRepo('sturaos') }
+  const manifest = { kernel: perRepo('kernel'), vertical: perRepo('vertical') }
   const p = join(dir, 'fixture-suites.json')
   writeFileSync(p, JSON.stringify(manifest, null, 2))
   return p
@@ -175,20 +175,20 @@ if (true) { /* pretend a refactor broke registration */ }
 
 test('main(): refuses a dirty tree — no snapshot files are written', () => {
   const kernel = makeFixtureRepo()
-  const sturaos = makeFixtureRepo()
+  const vertical = makeFixtureRepo()
   const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
   const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
   try {
-    writeFileSync(join(sturaos, 'untracked.txt'), 'surprise')
+    writeFileSync(join(vertical, 'untracked.txt'), 'surprise')
     const manifestPath = writeFixtureManifest(manifestDir)
     const code = withCleanExitCode(() =>
-      main(['--kernel', kernel, '--sturaos', sturaos, '--out', outDir, '--manifest', manifestPath]),
+      main(['--kernel', kernel, '--vertical', vertical, '--out', outDir, '--manifest', manifestPath]),
     )
     assert.equal(code, 1)
     assert.deepEqual(readdirSync(outDir), [])
   } finally {
     rmSync(kernel, { recursive: true, force: true })
-    rmSync(sturaos, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
     rmSync(manifestDir, { recursive: true, force: true })
     rmSync(outDir, { recursive: true, force: true })
   }
@@ -196,43 +196,43 @@ test('main(): refuses a dirty tree — no snapshot files are written', () => {
 
 test('main(): refuses an invalid manifest (missing category coverage) — exits non-zero, writes nothing', () => {
   const kernel = makeFixtureRepo()
-  const sturaos = makeFixtureRepo()
+  const vertical = makeFixtureRepo()
   const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
   const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
   try {
-    const bad = { kernel: [{ id: 'x', category: 'unit', cwd: '.', kind: 'node-test', command: 'true', testGlobs: [] }], sturaos: [] }
+    const bad = { kernel: [{ id: 'x', category: 'unit', cwd: '.', kind: 'node-test', command: 'true', testGlobs: [] }], vertical: [] }
     const p = join(manifestDir, 'bad.json')
     writeFileSync(p, JSON.stringify(bad))
-    const code = withCleanExitCode(() => main(['--kernel', kernel, '--sturaos', sturaos, '--out', outDir, '--manifest', p]))
+    const code = withCleanExitCode(() => main(['--kernel', kernel, '--vertical', vertical, '--out', outDir, '--manifest', p]))
     assert.equal(code, 1)
     assert.deepEqual(readdirSync(outDir), [])
   } finally {
     rmSync(kernel, { recursive: true, force: true })
-    rmSync(sturaos, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
     rmSync(manifestDir, { recursive: true, force: true })
     rmSync(outDir, { recursive: true, force: true })
   }
 })
 
-test('main(): requires --kernel, --sturaos and --out', () => {
+test('main(): requires --kernel, --vertical and --out', () => {
   const code = withCleanExitCode(() => main([]))
   assert.equal(code, 1)
 })
 
 test('main(): happy path writes <date>-<ksha7>-<ssha7>.json and .md, names both SHAs/branches, and exits non-zero on the expected "no stack" FAILs', () => {
   const kernel = makeFixtureRepo()
-  const sturaos = makeFixtureRepo()
+  const vertical = makeFixtureRepo()
   const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
   const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
   try {
     const manifestPath = writeFixtureManifest(manifestDir)
     const code = withCleanExitCode(() =>
-      main(['--kernel', kernel, '--sturaos', sturaos, '--out', outDir, '--manifest', manifestPath]),
+      main(['--kernel', kernel, '--vertical', vertical, '--out', outDir, '--manifest', manifestPath]),
     )
     assert.equal(code, 1) // the fixture's integration/e2e suites FAIL "no stack" by design
 
     const kernelSha = execFileSync('git', ['-C', kernel, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().slice(0, 7)
-    const sturaosSha = execFileSync('git', ['-C', sturaos, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().slice(0, 7)
+    const sturaosSha = execFileSync('git', ['-C', vertical, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().slice(0, 7)
     const files = readdirSync(outDir)
     const jsonFile = files.find((f) => f.endsWith('.json'))
     const mdFile = files.find((f) => f.endsWith('.md'))
@@ -242,7 +242,7 @@ test('main(): happy path writes <date>-<ksha7>-<ssha7>.json and .md, names both 
 
     const snapshot = JSON.parse(readFileSync(join(outDir, jsonFile), 'utf8'))
     assert.equal(snapshot.kernel.shortSha, kernelSha)
-    assert.equal(snapshot.sturaos.shortSha, sturaosSha)
+    assert.equal(snapshot.vertical.shortSha, sturaosSha)
     assert.equal(snapshot.kernel.branch, 'main')
     assert.equal(snapshot.suites.length, 10) // 5 categories x 2 repos, no orphans in this fixture
     assert.equal(snapshot.overallExit, 1)
@@ -251,7 +251,7 @@ test('main(): happy path writes <date>-<ksha7>-<ssha7>.json and .md, names both 
     assert.match(md, /overall exit: 1/)
   } finally {
     rmSync(kernel, { recursive: true, force: true })
-    rmSync(sturaos, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
     rmSync(manifestDir, { recursive: true, force: true })
     rmSync(outDir, { recursive: true, force: true })
   }

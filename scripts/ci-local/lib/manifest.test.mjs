@@ -9,7 +9,7 @@ function suite(id, category) {
 function fullManifest() {
   const suites = CATEGORIES.map((c, i) => suite(`k-${i}`, c))
   const suites2 = CATEGORIES.map((c, i) => suite(`s-${i}`, c))
-  return { kernel: suites, sturaos: suites2 }
+  return { kernel: suites, vertical: suites2 }
 }
 
 test('validateManifest is green when both repos cover every category', () => {
@@ -18,9 +18,9 @@ test('validateManifest is green when both repos cover every category', () => {
 
 test('validateManifest goes RED when a repo is missing entirely', () => {
   const m = fullManifest()
-  delete m.sturaos
+  delete m.vertical
   const problems = validateManifest(m)
-  assert.ok(problems.some((p) => p.includes("repo 'sturaos'")))
+  assert.ok(problems.some((p) => p.includes("repo 'vertical'")))
 })
 
 test('validateManifest goes RED when one category has zero suites for a repo (the "empty category exits non-zero" post-condition)', () => {

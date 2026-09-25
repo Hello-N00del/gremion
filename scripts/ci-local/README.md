@@ -5,10 +5,18 @@ run locally while GitHub Actions stays disabled (TRD-340/342/346/356/364).
 Everything here is pure Node (no external deps beyond `gitleaks` on PATH),
 so one call works unchanged on Windows, Debian and `ubuntu-latest`.
 
+The second repo's CLI flag, repo label and suite-id prefix are spelled
+`--vertical` / `vertical` / `vertical-*`, not the product's own name: the
+kernel hygiene check (`make lint-hygiene` rule h2) forbids the retired
+product token as a bare lower-case identifier anywhere in the tree, and this
+package's own flag/label/ids were exactly that. `StuRaOS` (capitalized, the
+vertical's proper noun) still appears in prose comments — h2 is
+case-sensitive and only owns the lower-case identifier form.
+
 ## The one-line call a re-enabled pipeline makes unchanged
 
 ```
-node scripts/ci-local/guards.mjs --kernel <kernel-path> --sturaos <sturaos-path> --base <base-ref>
+node scripts/ci-local/guards.mjs --kernel <kernel-path> --vertical <vertical-path> --base <base-ref>
 ```
 
 Exit code is the merge gate: non-zero means at least one arm failed and the
@@ -22,7 +30,7 @@ keeps a re-enabled Actions runner honest about TRD-364 in the first place.
 ### `guards.mjs` — the single merge-gate entry point
 
 ```
-node scripts/ci-local/guards.mjs --kernel <path> --sturaos <path> [--base <ref>] [--waivers <path>] [--out <dir>]
+node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--waivers <path>] [--out <dir>]
 ```
 
 Runs every arm below, in order, **all of them every time** — a failing arm
@@ -46,13 +54,13 @@ never skips the rest, so the dated result always shows every arm's outcome:
 ### `snapshot.mjs` — the dated pass/fail census
 
 ```
-node scripts/ci-local/snapshot.mjs --kernel <path> --sturaos <path> --out <dir> [--only <suite-id,...>] [--stack-env <file>]
+node scripts/ci-local/snapshot.mjs --kernel <path> --vertical <path> --out <dir> [--only <suite-id,...>] [--stack-env <file>]
 ```
 
 `--out` is **mandatory** (§5 Q3: nothing is committed to the kernel — the
 orchestrator files snapshots in the vault ledger). Refuses a dirty tree in
 either repo, and refuses an invalid `suites.json` (missing category
-coverage). Writes `<out>/<date>-<kernel-sha7>-<sturaos-sha7>.json` and the
+coverage). Writes `<out>/<date>-<kernel-sha7>-<vertical-sha7>.json` and the
 companion `.md`, naming both full SHAs, branches, the OS, start/finish times,
 and every suite's repo/category/command/collected/passed/failed/status/exit
 code. Exit is non-zero whenever **any** row is FAIL — including an honest
@@ -112,7 +120,7 @@ rather than a silent pass. See `waivers.json`'s own entry for why
 
 "The image-build job" (TRD-342) is the existing `docker-build` jobs, which
 stay beside `guards.mjs` unchanged (§5 Q5) — this package does not build
-images. `guards.mjs --kernel <path> --sturaos <path> --image-build` is purely
+images. `guards.mjs --kernel <path> --vertical <path> --image-build` is purely
 informational: it lists the Dockerfiles those jobs build (for both repos)
 and exits 0 without running any guard arm. A re-enabled pipeline runs
 `docker-build` as its own job, in parallel with (not instead of) the call at

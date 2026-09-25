@@ -4,7 +4,7 @@
 // disabled, and that a re-enabled Actions pipeline can call unchanged
 // (README.md has the one-line invocation).
 //
-//   node scripts/ci-local/guards.mjs --kernel <path> --sturaos <path> [--base <ref>] [--waivers <path>]
+//   node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--waivers <path>]
 //   node --test scripts/ci-local/guards.test.mjs
 //
 // Arms, run in this order, ALL of them, every time (a failing arm never
@@ -193,9 +193,9 @@ export function runOverridesDriftArm(sturaosPath, kernelPath, { runFn = run } = 
   const kernelWorkspace = join(kernelPath, 'pnpm-workspace.yaml')
   const command = `node --test --test-reporter=tap scripts/check-overrides-drift.test.mjs && node scripts/check-overrides-drift.mjs --kernel "${kernelWorkspace}"`
   const { exitCode, output, timedOut, spawnError } = runFn(command, sturaosPath, { timeoutMs: 60_000 })
-  if (spawnError) return { arm: 'overrides-drift', repo: 'sturaos', status: 'FAIL', reason: `could not run: ${spawnError.message}` }
-  if (timedOut) return { arm: 'overrides-drift', repo: 'sturaos', status: 'FAIL', reason: 'timed out' }
-  return { arm: 'overrides-drift', repo: 'sturaos', status: exitCode === 0 ? 'PASS' : 'FAIL', reason: exitCode === 0 ? undefined : 'check-overrides-drift failed (see output)', output }
+  if (spawnError) return { arm: 'overrides-drift', repo: 'vertical', status: 'FAIL', reason: `could not run: ${spawnError.message}` }
+  if (timedOut) return { arm: 'overrides-drift', repo: 'vertical', status: 'FAIL', reason: 'timed out' }
+  return { arm: 'overrides-drift', repo: 'vertical', status: exitCode === 0 ? 'PASS' : 'FAIL', reason: exitCode === 0 ? undefined : 'check-overrides-drift failed (see output)', output }
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
   const results = []
   for (const [label, path] of [
     ['kernel', kernelPath],
-    ['sturaos', sturaosPath],
+    ['vertical', sturaosPath],
   ]) {
     const perFile = runnerPolicyEvaluateRepo(path, waivers, today)
     for (const entry of perFile) {
@@ -246,9 +246,9 @@ export function listDockerfiles(repoRoot) {
 export function runAllArms({ kernelPath, sturaosPath, base, waiversPath, runFn = run }) {
   const arms = []
   arms.push(runGitleaksArm('kernel', kernelPath, base, { runFn }))
-  arms.push(runGitleaksArm('sturaos', sturaosPath, base, { runFn }))
+  arms.push(runGitleaksArm('vertical', sturaosPath, base, { runFn }))
   arms.push(runKnownSecretsArm('kernel', kernelPath))
-  arms.push(runKnownSecretsArm('sturaos', sturaosPath))
+  arms.push(runKnownSecretsArm('vertical', sturaosPath))
   arms.push(runCveFloorArm(kernelPath, { runFn }))
   arms.push(runOverridesDriftArm(sturaosPath, kernelPath, { runFn }))
   arms.push(runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath))
@@ -267,14 +267,14 @@ function argValue(argv, flag) {
 
 export function main(argv = process.argv.slice(2)) {
   const kernelPath = argValue(argv, '--kernel')
-  const sturaosPath = argValue(argv, '--sturaos')
+  const sturaosPath = argValue(argv, '--vertical')
   const base = argValue(argv, '--base') ?? undefined
   const waiversPath = argValue(argv, '--waivers') ?? join(HERE, 'waivers.json')
   const outDir = argValue(argv, '--out')
   const imageBuild = argv.includes('--image-build')
 
   if (!kernelPath || !sturaosPath) {
-    console.error('guards: --kernel <path> and --sturaos <path> are both required')
+    console.error('guards: --kernel <path> and --vertical <path> are both required')
     process.exitCode = 1
     return
   }
@@ -283,7 +283,7 @@ export function main(argv = process.argv.slice(2)) {
     console.log('\nci-local --image-build — Dockerfiles the existing docker-build jobs build (informational only, no gate effect):\n')
     for (const [label, path] of [
       ['kernel', kernelPath],
-      ['sturaos', sturaosPath],
+      ['vertical', sturaosPath],
     ]) {
       const files = listDockerfiles(path)
       console.log(`  ${label}:`)

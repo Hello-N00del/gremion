@@ -6,7 +6,7 @@
 // or the pilot host").
 //
 //   node scripts/ci-local/runner-policy.mjs --repo <path> [--repo <path> ...] [--waivers <path>]
-//   node scripts/ci-local/runner-policy.mjs --kernel <path> --sturaos <path> [--waivers <path>]
+//   node scripts/ci-local/runner-policy.mjs --kernel <path> --vertical <path> [--waivers <path>]
 //   node --test scripts/ci-local/runner-policy.test.mjs
 //
 // TASK-012 §5 Q1: this guard is RED on today's kernel tree —
@@ -125,10 +125,10 @@ export function main(argv = process.argv.slice(2)) {
   const repos = [
     ...argValues(argv, '--repo'),
     ...(argValue(argv, '--kernel') ? [argValue(argv, '--kernel')] : []),
-    ...(argValue(argv, '--sturaos') ? [argValue(argv, '--sturaos')] : []),
+    ...(argValue(argv, '--vertical') ? [argValue(argv, '--vertical')] : []),
   ]
   if (repos.length === 0) {
-    console.error('runner-policy: no --repo (or --kernel/--sturaos) given')
+    console.error('runner-policy: no --repo (or --kernel/--vertical) given')
     process.exitCode = 1
     return
   }

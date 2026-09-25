@@ -176,7 +176,7 @@ test('renderMarkdown includes both repos\' sha/branch, the overall exit and one 
   const snapshot = {
     date: '2026-09-25',
     kernel: { sha: 'a'.repeat(40), shortSha: 'aaaaaaa', branch: 'unit/TASK-012-ci-local' },
-    sturaos: { sha: 'b'.repeat(40), shortSha: 'bbbbbbb', branch: 'main' },
+    vertical: { sha: 'b'.repeat(40), shortSha: 'bbbbbbb', branch: 'main' },
     os: 'win32',
     startedAt: '2026-09-25T01:00:00.000Z',
     finishedAt: '2026-09-25T01:00:05.000Z',

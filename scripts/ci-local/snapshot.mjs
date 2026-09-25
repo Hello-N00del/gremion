@@ -2,7 +2,7 @@
 // Dated pass/fail snapshot of every test suite on both repositories' tips
 // (TASK-012 acceptance item 1, TRD-340).
 //
-//   node scripts/ci-local/snapshot.mjs --kernel <path> --sturaos <path> --out <dir>
+//   node scripts/ci-local/snapshot.mjs --kernel <path> --vertical <path> --out <dir>
 //     [--only <suite-id,suite-id,...>] [--manifest <path>] [--stack-env <file>]
 //   node --test scripts/ci-local/snapshot.test.mjs
 //
@@ -71,7 +71,7 @@ export function evaluateRepo(repoLabel, repoPath, manifest, onlyIds, stackEnvFil
 
 export function main(argv = process.argv.slice(2)) {
   const kernelPath = argValue(argv, '--kernel')
-  const sturaosPath = argValue(argv, '--sturaos')
+  const sturaosPath = argValue(argv, '--vertical')
   const outDir = argValue(argv, '--out')
   const manifestPath = argValue(argv, '--manifest') ?? DEFAULT_MANIFEST
   const onlyRaw = argValue(argv, '--only')
@@ -79,7 +79,7 @@ export function main(argv = process.argv.slice(2)) {
   const stackEnvFile = argValue(argv, '--stack-env') ?? undefined
 
   if (!kernelPath || !sturaosPath || !outDir) {
-    console.error('snapshot: --kernel <path>, --sturaos <path> and --out <dir> are all required')
+    console.error('snapshot: --kernel <path>, --vertical <path> and --out <dir> are all required')
     process.exitCode = 1
     return
   }
@@ -95,7 +95,7 @@ export function main(argv = process.argv.slice(2)) {
 
   for (const [label, path] of [
     ['kernel', kernelPath],
-    ['sturaos', sturaosPath],
+    ['vertical', sturaosPath],
   ]) {
     if (!isGitRepo(path)) {
       console.error(`snapshot: ${label} path '${path}' is not a git repository`)
@@ -114,7 +114,7 @@ export function main(argv = process.argv.slice(2)) {
   const sturaosInfo = headInfo(sturaosPath)
 
   const kernelRows = evaluateRepo('kernel', kernelPath, manifest, onlyIds, stackEnvFile)
-  const sturaosRows = evaluateRepo('sturaos', sturaosPath, manifest, onlyIds, stackEnvFile)
+  const sturaosRows = evaluateRepo('vertical', sturaosPath, manifest, onlyIds, stackEnvFile)
   const suites = [...kernelRows, ...sturaosRows]
   const finishedAt = new Date().toISOString()
 
@@ -122,7 +122,7 @@ export function main(argv = process.argv.slice(2)) {
   const snapshot = {
     date,
     kernel: kernelInfo,
-    sturaos: sturaosInfo,
+    vertical: sturaosInfo,
     os: `${process.platform} ${process.version}`,
     startedAt,
     finishedAt,

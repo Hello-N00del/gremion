@@ -166,7 +166,7 @@ export function renderMarkdown(snapshot) {
   lines.push(`# ci-local snapshot — ${snapshot.date}`)
   lines.push('')
   lines.push(`- kernel: \`${snapshot.kernel.branch}\` @ \`${snapshot.kernel.sha}\``)
-  lines.push(`- sturaos: \`${snapshot.sturaos.branch}\` @ \`${snapshot.sturaos.sha}\``)
+  lines.push(`- vertical: \`${snapshot.vertical.branch}\` @ \`${snapshot.vertical.sha}\``)
   lines.push(`- os: ${snapshot.os}`)
   lines.push(`- started: ${snapshot.startedAt}`)
   lines.push(`- finished: ${snapshot.finishedAt}`)

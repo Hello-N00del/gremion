@@ -139,7 +139,7 @@ test('runOverridesDriftArm points --kernel at the given kernel PATH\'s pnpm-work
     seenCommand = command
     return { exitCode: 0, output: 'ok', timedOut: false, spawnError: null }
   }
-  const r = runOverridesDriftArm('/sturaos', '/my/kernel/worktree', { runFn })
+  const r = runOverridesDriftArm('/vertical', '/my/kernel/worktree', { runFn })
   assert.equal(r.status, 'PASS')
   assert.match(seenCommand, /--kernel "[/\\]my[/\\]kernel[/\\]worktree[/\\]pnpm-workspace\.yaml"/)
 })
@@ -153,40 +153,40 @@ function makeWorkflowRepo(files) {
 
 test('runRunnerPolicyArm aggregates both repos and FAILs when either has an unwaived hit', () => {
   const kernel = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
-  const sturaos = makeWorkflowRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
+  const vertical = makeWorkflowRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
   try {
-    const r = runRunnerPolicyArm(kernel, sturaos, undefined) // no waivers file
+    const r = runRunnerPolicyArm(kernel, vertical, undefined) // no waivers file
     assert.equal(r.status, 'FAIL')
-    assert.match(r.reason, /sturaos\/\.github\/workflows\/deploy\.yml/)
+    assert.match(r.reason, /vertical\/\.github\/workflows\/deploy\.yml/)
   } finally {
     rmSync(kernel, { recursive: true, force: true })
-    rmSync(sturaos, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
   }
 })
 
 test('runRunnerPolicyArm PASSes when both repos are clean', () => {
   const kernel = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
-  const sturaos = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
+  const vertical = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
   try {
-    const r = runRunnerPolicyArm(kernel, sturaos, undefined)
+    const r = runRunnerPolicyArm(kernel, vertical, undefined)
     assert.equal(r.status, 'PASS')
   } finally {
     rmSync(kernel, { recursive: true, force: true })
-    rmSync(sturaos, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
   }
 })
 
 test('runAllArms: overall exit is non-zero when even one arm fails, and every arm still ran (no short-circuit)', () => {
   const kernel = makeSecretRepo()
   mkdirSync(join(kernel, '.github', 'workflows'), { recursive: true })
-  const sturaos = makeSecretRepo()
+  const vertical = makeSecretRepo()
   try {
     const runFn = fakeRun({
       gitleaks: { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null },
       'check-cve-floors': { exitCode: 1, output: 'FLOOR BROKEN', timedOut: false, spawnError: null }, // forced FAIL
       'check-overrides-drift': { exitCode: 0, output: 'ok', timedOut: false, spawnError: null },
     })
-    const { arms, overallExit } = runAllArms({ kernelPath: kernel, sturaosPath: sturaos, waiversPath: undefined, runFn })
+    const { arms, overallExit } = runAllArms({ kernelPath: kernel, sturaosPath: vertical, waiversPath: undefined, runFn })
     assert.equal(overallExit, 1)
     assert.equal(arms.length, 7) // 2 gitleaks + 2 known-secrets + cve-floor + overrides-drift + runner-policy
     const cve = arms.find((a) => a.arm === 'cve-floor')
@@ -195,7 +195,7 @@ test('runAllArms: overall exit is non-zero when even one arm fails, and every ar
     assert.ok(arms.every((a) => a.status === 'PASS' || a.status === 'FAIL'))
   } finally {
     rmSync(kernel, { recursive: true, force: true })
-    rmSync(sturaos, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
   }
 })
 

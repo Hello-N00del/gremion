@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 
 export const CATEGORIES = ['unit', 'integration', 'e2e', 'shell', 'tree-guard']
-export const REPOS = ['kernel', 'sturaos']
+export const REPOS = ['kernel', 'vertical']
 
 export function loadManifest(path) {
   const text = readFileSync(path, 'utf8')

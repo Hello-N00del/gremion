@@ -163,10 +163,10 @@
       "testGlobs": ["scripts/ci-local/runner-policy.test.mjs"]
     }
   ],
-  "sturaos": [
+  "vertical": [
     {
-      "id": "sturaos-ui-vitest-unit",
-      "repo": "sturaos",
+      "id": "vertical-ui-vitest-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "gremion-ui",
       "kind": "vitest",
@@ -179,8 +179,8 @@
       ]
     },
     {
-      "id": "sturaos-ui-vitest-integration",
-      "repo": "sturaos",
+      "id": "vertical-ui-vitest-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "gremion-ui",
       "kind": "vitest",
@@ -189,8 +189,8 @@
       "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
     },
     {
-      "id": "sturaos-ui-vitest-deselection",
-      "repo": "sturaos",
+      "id": "vertical-ui-vitest-deselection",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "gremion-ui",
       "kind": "vitest",
@@ -199,8 +199,8 @@
       "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
     },
     {
-      "id": "sturaos-ui-playwright",
-      "repo": "sturaos",
+      "id": "vertical-ui-playwright",
+      "repo": "vertical",
       "category": "e2e",
       "cwd": "gremion-ui",
       "kind": "playwright",
@@ -209,8 +209,8 @@
       "testGlobs": ["gremion-ui/tests/e2e/**/*.spec.ts"]
     },
     {
-      "id": "sturaos-public-vitest-unit",
-      "repo": "sturaos",
+      "id": "vertical-public-vitest-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "gremion-public",
       "kind": "vitest",
@@ -219,8 +219,8 @@
       "testGlobs": ["gremion-public/src/**/*.test.ts"]
     },
     {
-      "id": "sturaos-public-playwright",
-      "repo": "sturaos",
+      "id": "vertical-public-playwright",
+      "repo": "vertical",
       "category": "e2e",
       "cwd": "gremion-public",
       "kind": "playwright",
@@ -229,8 +229,8 @@
       "testGlobs": ["gremion-public/tests/e2e/**/*.spec.ts"]
     },
     {
-      "id": "sturaos-service-board-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-board-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/board",
       "kind": "vitest",
@@ -239,8 +239,8 @@
       "testGlobs": ["services/board/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-board-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-board-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/board",
       "kind": "vitest",
@@ -249,8 +249,8 @@
       "testGlobs": ["services/board/test/**/*.integration.test.ts"]
     },
     {
-      "id": "sturaos-service-calendar-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-calendar-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/calendar",
       "kind": "vitest",
@@ -259,8 +259,8 @@
       "testGlobs": ["services/calendar/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-calendar-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-calendar-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/calendar",
       "kind": "vitest",
@@ -269,8 +269,8 @@
       "testGlobs": ["services/calendar/test/**/*.integration.test.ts", "services/calendar/test/relay.test.ts"]
     },
     {
-      "id": "sturaos-service-content-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-content-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/content",
       "kind": "vitest",
@@ -279,8 +279,8 @@
       "testGlobs": ["services/content/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-content-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-content-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/content",
       "kind": "vitest",
@@ -289,8 +289,8 @@
       "testGlobs": ["services/content/test/**/*.integration.test.ts", "services/content/test/relay.test.ts"]
     },
     {
-      "id": "sturaos-service-files-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-files-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/files",
       "kind": "vitest",
@@ -299,8 +299,8 @@
       "testGlobs": ["services/files/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-files-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-files-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/files",
       "kind": "vitest",
@@ -309,8 +309,8 @@
       "testGlobs": ["services/files/test/**/*.integration.test.ts"]
     },
     {
-      "id": "sturaos-service-finance-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-finance-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/finance",
       "kind": "vitest",
@@ -319,8 +319,8 @@
       "testGlobs": ["services/finance/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-finance-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-finance-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/finance",
       "kind": "vitest",
@@ -329,8 +329,8 @@
       "testGlobs": ["services/finance/test/**/*.integration.test.ts"]
     },
     {
-      "id": "sturaos-service-messages-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-messages-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/messages",
       "kind": "vitest",
@@ -339,8 +339,8 @@
       "testGlobs": ["services/messages/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-messages-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-messages-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/messages",
       "kind": "vitest",
@@ -349,8 +349,8 @@
       "testGlobs": ["services/messages/test/**/*.integration.test.ts"]
     },
     {
-      "id": "sturaos-service-newsletter-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-newsletter-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/newsletter",
       "kind": "vitest",
@@ -359,8 +359,8 @@
       "testGlobs": ["services/newsletter/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-newsletter-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-newsletter-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/newsletter",
       "kind": "vitest",
@@ -369,8 +369,8 @@
       "testGlobs": ["services/newsletter/test/**/*.integration.test.ts", "services/newsletter/test/relay.test.ts"]
     },
     {
-      "id": "sturaos-service-vault-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-vault-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/vault",
       "kind": "vitest",
@@ -379,8 +379,8 @@
       "testGlobs": ["services/vault/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-vault-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-vault-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/vault",
       "kind": "vitest",
@@ -389,8 +389,8 @@
       "testGlobs": ["services/vault/test/**/*.integration.test.ts"]
     },
     {
-      "id": "sturaos-service-votes-unit",
-      "repo": "sturaos",
+      "id": "vertical-service-votes-unit",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "services/votes",
       "kind": "vitest",
@@ -399,8 +399,8 @@
       "testGlobs": ["services/votes/test/**/*.test.ts"]
     },
     {
-      "id": "sturaos-service-votes-integration",
-      "repo": "sturaos",
+      "id": "vertical-service-votes-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": "services/votes",
       "kind": "vitest",
@@ -409,8 +409,8 @@
       "testGlobs": ["services/votes/test/**/*.integration.test.ts"]
     },
     {
-      "id": "sturaos-bats-unit",
-      "repo": "sturaos",
+      "id": "vertical-bats-unit",
+      "repo": "vertical",
       "category": "shell",
       "cwd": ".",
       "kind": "bats",
@@ -419,8 +419,8 @@
       "testGlobs": ["test/*.bats"]
     },
     {
-      "id": "sturaos-bats-integration",
-      "repo": "sturaos",
+      "id": "vertical-bats-integration",
+      "repo": "vertical",
       "category": "integration",
       "cwd": ".",
       "kind": "bats",
@@ -429,8 +429,8 @@
       "testGlobs": ["test/integration/health.bats", "test/integration/oidc.bats", "test/integration/legal.bats"]
     },
     {
-      "id": "sturaos-ui-bats",
-      "repo": "sturaos",
+      "id": "vertical-ui-bats",
+      "repo": "vertical",
       "category": "shell",
       "cwd": ".",
       "kind": "bats",
@@ -439,8 +439,8 @@
       "testGlobs": ["gremion-ui/test/*.bats"]
     },
     {
-      "id": "sturaos-root-test-guards",
-      "repo": "sturaos",
+      "id": "vertical-root-test-guards",
+      "repo": "vertical",
       "category": "tree-guard",
       "cwd": ".",
       "kind": "guard",
@@ -457,8 +457,8 @@
       ]
     },
     {
-      "id": "sturaos-root-test-carve",
-      "repo": "sturaos",
+      "id": "vertical-root-test-carve",
+      "repo": "vertical",
       "category": "tree-guard",
       "cwd": ".",
       "kind": "node-test",
@@ -467,8 +467,8 @@
       "testGlobs": ["scripts/carve/carve.test.mjs", "scripts/carve/pnpm-deps.test.mjs"]
     },
     {
-      "id": "sturaos-mobile-flutter",
-      "repo": "sturaos",
+      "id": "vertical-mobile-flutter",
+      "repo": "vertical",
       "category": "unit",
       "cwd": "mobile",
       "kind": "flutter",
