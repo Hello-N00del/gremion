@@ -57,12 +57,33 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
   // Insertion order is recency order: a hit is deleted and re-set at the end.
   const pools = new Map<string, Sql>()
   const opening = new Map<string, Promise<Sql>>()
-  // Evicted pools waiting out their grace before end().
-  const draining = new Map<Sql, ReturnType<typeof setTimeout>>()
+  // Evicted pools waiting out their grace before end(), by key. Capped at
+  // maxPools: past it the oldest is ended early, so open pools stay within
+  // 2 x maxPools however fast pairs churn.
+  const draining = new Map<string, { sql: Sql; timer: ReturnType<typeof setTimeout> }>()
   let closed = false
 
   function end(sql: Sql, context: string): Promise<void> {
     return sql.end({ timeout: drainSeconds }).catch((err: unknown) => onError(err, context))
+  }
+
+  function evictOverflow(): void {
+    while (pools.size > maxPools) {
+      const [oldKey, oldSql] = pools.entries().next().value as [string, Sql]
+      pools.delete(oldKey)
+      const timer = setTimeout(() => {
+        draining.delete(oldKey)
+        void end(oldSql, `evicting pool ${oldKey}`)
+      }, evictGraceMs)
+      timer.unref?.()
+      draining.set(oldKey, { sql: oldSql, timer })
+      while (draining.size > maxPools) {
+        const [k, d] = draining.entries().next().value as [string, { sql: Sql; timer: ReturnType<typeof setTimeout> }]
+        clearTimeout(d.timer)
+        draining.delete(k)
+        void end(d.sql, `evicting pool ${k} early (drain cap)`)
+      }
+    }
   }
 
   async function open(key: string, tenantId: string, moduleId: string): Promise<Sql> {
@@ -73,16 +94,7 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
     if (closed) throw new Error('tenant store is closed')
     const sql = createDb({ url, max: maxConnections, prepare })
     pools.set(key, sql)
-    while (pools.size > maxPools) {
-      const [oldKey, oldSql] = pools.entries().next().value as [string, Sql]
-      pools.delete(oldKey)
-      const timer = setTimeout(() => {
-        draining.delete(oldSql)
-        void end(oldSql, `evicting pool ${oldKey}`)
-      }, evictGraceMs)
-      timer.unref?.()
-      draining.set(oldSql, timer)
-    }
+    evictOverflow()
     return sql
   }
 
@@ -100,6 +112,16 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
         pools.set(key, hit)
         return hit
       }
+      // Requested again during its grace: take the draining pool back rather
+      // than open a second one beside it.
+      const back = draining.get(key)
+      if (back) {
+        clearTimeout(back.timer)
+        draining.delete(key)
+        pools.set(key, back.sql)
+        evictOverflow()
+        return back.sql
+      }
       const pending = opening.get(key)
       if (pending) return pending
       const p = open(key, tenantId, moduleId).finally(() => opening.delete(key))
@@ -111,9 +133,9 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
       closed = true
       const all = [...pools.entries()]
       pools.clear()
-      for (const [sql, timer] of draining) {
-        clearTimeout(timer)
-        all.push(['evicted', sql])
+      for (const [key, d] of draining) {
+        clearTimeout(d.timer)
+        all.push([`${key} (evicted)`, d.sql])
       }
       draining.clear()
       await Promise.all(all.map(([key, sql]) => end(sql, `closing pool ${key}`)))

@@ -36,3 +36,13 @@ describe('assertNotPooler (Q3)', () => {
     await expect(assertNotPooler(fake({ announced: 74, actual: 74, show: () => { throw boom } }))).rejects.toBe(boom)
   })
 })
+
+describe('runMigrations pool size', () => {
+  it('refuses a pool of fewer than 2 connections (the terminate path needs a second one)', async () => {
+    const { runMigrations } = await import('./runner.js')
+    let reserved = 0
+    const sql = { options: { max: 1 }, reserve: async () => (reserved++, {}) } as never
+    await expect(runMigrations({ sql, dir: '/nonexistent', log: () => {} })).rejects.toThrow(/at least 2 connections/)
+    expect(reserved).toBe(0)
+  })
+})

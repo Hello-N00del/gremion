@@ -13,6 +13,23 @@ import { assertNonProductionDbUrl, connect, ddlAttempts, ddlLog, ledgerFiles, re
 import { cleanupFixtures, copyFixture, FIXTURE_MIGRATIONS, writeManifest } from '../harness/migrations.js'
 
 const quiet = { log: () => {} }
+const DEFAULT_SESSION = { st: '0', sp: '"$user", public', role: 't020_test' }
+
+/** The session state of EVERY connection of a 2-connection pool (both reserved at once). */
+async function sessionStates(pool: ReturnType<typeof connect>) {
+  const held = [await pool.reserve(), await pool.reserve()]
+  try {
+    const out = []
+    for (const r of held) {
+      const [x] = await r<{ st: string; sp: string; role: string }[]>`
+        SELECT current_setting('statement_timeout') AS st, current_setting('search_path') AS sp, current_user AS role`
+      out.push(x)
+    }
+    return out
+  } finally {
+    held.forEach((r) => r.release())
+  }
+}
 const FILES = ['001_init.sql', '002_item_state.sql', '003_item_state_idx.sql']
 
 describe('runMigrations on a real database', () => {
@@ -159,16 +176,37 @@ describe('runMigrations on a real database', () => {
 
   describe('review round 1', () => {
     it('session state a body sets (SET ROLE, search_path, statement_timeout) is reset after its COMMIT', async () => {
+      await watcher.unsafe('CREATE ROLE t020_other NOLOGIN').catch(() => {})
+      const dir = copyFixture()
+      writeFileSync(join(dir, '004_session.sql'), "SET statement_timeout = '1234ms';\nSET search_path = pg_catalog;\nSET ROLE t020_other;\n")
+      writeManifest(dir)
+      await runMigrations({ sql, dir, ...quiet })
+      expect(await sessionStates(sql)).toEqual([DEFAULT_SESSION, DEFAULT_SESSION])
+    })
+
+    it('session state preApply set is reset too, when it throws', async () => {
+      const err = await rejection(
+        runMigrations({
+          sql,
+          dir: FIXTURE_MIGRATIONS,
+          ...quiet,
+          hooks: {
+            async preApply(_f, ctx) {
+              await ctx.sql.unsafe("SET search_path = pg_catalog; SET statement_timeout = '999ms'")
+              throw new Error('no')
+            },
+          },
+        }),
+      )
+      expect(err?.code).toBe('PRE_APPLY_FAILED')
+      expect(await sessionStates(sql)).toEqual([DEFAULT_SESSION, DEFAULT_SESSION])
+    })
+
+    it('a pool of one connection is refused up front (the terminate path needs a second)', async () => {
       const one = connect(db, { max: 1 })
       try {
-        await one.unsafe('CREATE ROLE t020_other NOLOGIN').catch(() => {})
-        const dir = copyFixture()
-        writeFileSync(join(dir, '004_session.sql'), "SET statement_timeout = '1234ms';\nSET search_path = pg_catalog;\nSET ROLE t020_other;\n")
-        writeManifest(dir)
-        await runMigrations({ sql: one, dir, ...quiet })
-        const [r] = await one<{ st: string; sp: string; role: string }[]>`
-          SELECT current_setting('statement_timeout') AS st, current_setting('search_path') AS sp, current_user AS role`
-        expect(r).toEqual({ st: '0', sp: '"$user", public', role: 't020_test' })
+        await expect(runMigrations({ sql: one, dir: FIXTURE_MIGRATIONS, ...quiet })).rejects.toThrow(/at least 2 connections/)
+        expect(await ddlAttempts(watcher)).toBe(0)
       } finally {
         await one.end()
       }
@@ -178,8 +216,11 @@ describe('runMigrations on a real database', () => {
       const dir = copyFixture()
       writeFileSync(join(dir, '004_unlock.sql'), 'CREATE TABLE sneaky (id int);\nSELECT pg_advisory_unlock_all();\n')
       writeManifest(dir)
-      const err = await rejection(runMigrations({ sql, dir, ...quiet }))
+      const lines: string[] = []
+      const err = await rejection(runMigrations({ sql, dir, log: (l) => lines.push(l) }))
       expect(err?.code).toBe('LOCK_NOT_HELD')
+      // the unlock then fails (the lock is gone): the backend is terminated, not handed back
+      expect(lines.join('\n')).toMatch(/after the lock was already lost .* backend \d+ was terminated/)
       expect(await ledger()).toEqual(FILES)
       expect(await watcher`SELECT to_regclass('public.sneaky') AS r`).toEqual([{ r: null }])
       expect(await migrationLocks()).toEqual([])

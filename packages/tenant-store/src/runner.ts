@@ -112,7 +112,8 @@ const LEDGER_DDL = `CREATE TABLE ${LEDGER} (
 
 /**
  * Q3: a session advisory lock does not survive PgBouncer transaction pooling,
- * so the runner refuses anything but a direct connection. Two signals:
+ * so the runner refuses anything but a direct connection. A heuristic, with
+ * two signals (and the per-file lock re-check behind it):
  *
  *  1. the backend pid the server announced in the protocol (BackendKeyData,
  *     which postgres-js keeps as `result.state.pid`) must equal
@@ -177,6 +178,13 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
   assertTimeout('lockWaitTimeoutMs', lockWaitTimeoutMs)
   assertTimeout('ddlLockTimeoutMs', ddlLockTimeoutMs)
   const { classid, objid } = ADVISORY_LOCKS.migration
+  // The runner reserves one connection and, if it can never release its
+  // lock, terminates that backend over ANOTHER one: with max 1 that second
+  // query would wait forever for the reserved connection.
+  const poolMax = (sql as { options?: { max?: number } }).options?.max
+  if (typeof poolMax !== 'number' || poolMax < 2) {
+    throw new RangeError(`runMigrations needs a pool of at least 2 connections (got max ${poolMax}); openMigrationDb opens one`)
+  }
   const reserved = await sql.reserve()
   let locked = false
   let pid = -1
@@ -184,14 +192,17 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
   // transaction: it is then terminated, never handed back to the pool.
   let poisoned: unknown
   let failure: unknown
+  // preApply or a body may have set session state; reset before release.
+  let sessionTouched = false
 
   const lockHeld = async () => {
+    // pg_catalog-qualified: a body's search_path must not be able to fake it.
     const [held] = await reserved<{ ok: boolean }[]>`
-      SELECT pg_backend_pid() = ${pid} AND EXISTS (
-        SELECT 1 FROM pg_locks
+      SELECT pg_catalog.pg_backend_pid() = ${pid} AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_locks
          WHERE locktype = 'advisory' AND pid = ${pid} AND granted
            AND classid = ${classid}::oid AND objid = ${objid}::oid AND objsubid = 2
-           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+           AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())
       ) AS ok`
     return held?.ok === true
   }
@@ -214,16 +225,27 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
       )
       // lock_timeout bounds the advisory-lock wait too; the wait stays a
       // real pg_locks waiter (not a try-lock loop), so it is observable.
-      await reserved`SELECT set_config('lock_timeout', ${String(lockWaitTimeoutMs)}, false)`
+      // statement_timeout off for the wait, so a shorter role default does
+      // not surface as a raw 57014 instead of LOCK_TIMEOUT.
+      await reserved`SELECT set_config('lock_timeout', ${String(lockWaitTimeoutMs)}, false), set_config('statement_timeout', '0', false)`
+      let waitErr: unknown
       try {
         await reserved`SELECT pg_advisory_lock(${classid}::int4, ${objid}::int4)`
       } catch (err) {
-        if ((err as { code?: string }).code === '55P03') {
-          throw new MigrationRunnerError('LOCK_TIMEOUT', `the migration lock was not granted within ${lockWaitTimeoutMs} ms`, [], { cause: err })
+        waitErr = err
+      }
+      try {
+        await reserved.unsafe('RESET lock_timeout; RESET statement_timeout')
+      } catch (resetErr) {
+        // never mask the wait's own error; a failed reset poisons the connection
+        poisoned = resetErr
+        if (waitErr === undefined) throw resetErr
+      }
+      if (waitErr !== undefined) {
+        if ((waitErr as { code?: string }).code === '55P03') {
+          throw new MigrationRunnerError('LOCK_TIMEOUT', `the migration lock was not granted within ${lockWaitTimeoutMs} ms`, [], { cause: waitErr })
         }
-        throw err
-      } finally {
-        await reserved.unsafe('RESET lock_timeout')
+        throw waitErr
       }
     }
     locked = true
@@ -267,6 +289,7 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
     let ledgerPresent = ledger !== null
     const done: string[] = []
     for (const m of bodies) {
+      sessionTouched = true
       try {
         await hooks.preApply?.(m.file, ctx)
       } catch (err) {
@@ -319,6 +342,13 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
     throw err
   } finally {
     try {
+      if (sessionTouched && poisoned === undefined) {
+        try {
+          await reserved.unsafe('RESET ALL; RESET ROLE; RESET SESSION AUTHORIZATION')
+        } catch (resetErr) {
+          poisoned = resetErr
+        }
+      }
       if (locked && poisoned === undefined) {
         try {
           const [r] = await reserved<{ ok: boolean }[]>`SELECT pg_advisory_unlock(${classid}::int4, ${objid}::int4) AS ok`
@@ -331,11 +361,17 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
         // The connection may still hold the lock (or an aborted transaction).
         // Terminate its backend from another connection instead of handing it
         // back to the pool: its session lock dies with it.
-        const killed = await sql<{ ok: boolean }[]>`SELECT pg_terminate_backend(${pid}) AS ok`.then(
-          (r) => r[0]?.ok === true,
-          () => false,
-        )
-        const msg = `releasing the migration lock failed (${(poisoned as Error).message}); backend ${pid} ${killed ? 'was terminated' : 'could NOT be terminated — the lock may stay held until that connection closes'}`
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const killed = await Promise.race([
+          sql<{ ok: boolean }[]>`SELECT pg_terminate_backend(${pid}) AS ok`.then(
+            (r) => r[0]?.ok === true,
+            () => false,
+          ),
+          new Promise<false>((r) => (timer = setTimeout(() => r(false), 10_000))),
+        ])
+        clearTimeout(timer)
+        const cause = failure instanceof MigrationRunnerError && failure.code === 'LOCK_NOT_HELD' ? ' after the lock was already lost' : ''
+        const msg = `the connection could not be returned clean${cause} (${(poisoned as Error).message}); backend ${pid} ${killed ? 'was terminated' : 'could NOT be terminated — the lock may stay held until that connection closes'}`
         if (failure === undefined) {
           // eslint-disable-next-line no-unsafe-finally
           throw new MigrationRunnerError('UNLOCK_FAILED', msg, [], { cause: poisoned })

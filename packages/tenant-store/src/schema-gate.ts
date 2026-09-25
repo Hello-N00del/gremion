@@ -36,6 +36,8 @@ export interface CheckSchemaOptions {
 export async function checkSchemaCurrent({ sql, dir, manifest }: CheckSchemaOptions): Promise<SchemaStatus> {
   const expected = manifest ?? (dir !== undefined ? loadManifest(dir) : undefined)
   if (!expected) throw new TypeError('checkSchemaCurrent needs dir or manifest')
+  // An empty manifest would call every database current.
+  if (expected.size === 0) throw new TypeError('checkSchemaCurrent: the manifest lists no migration')
   type Row = { filename: string; sha256: string }
   const rows = (await sql.begin('read only', async (tx) => {
     const [reg] = await tx<{ present: boolean }[]>`SELECT to_regclass(${LEDGER}) IS NOT NULL AS present`

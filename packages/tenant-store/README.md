@@ -65,7 +65,9 @@ parameter as a startup parameter, and `database=`, `role=`, `options=` or
 
 ## The runner
 
-One reserved connection (`sql.reserve()`) for the whole run:
+One reserved connection (`sql.reserve()`) for the whole run, from a pool of
+at least two (the second is how the runner terminates the first if it can
+never release its lock; `openMigrationDb` opens such a pool):
 
 1. refuse a pooler (below);
 2. `pg_advisory_lock(ADVISORY_LOCKS.migration)` — **before** the ledger is read.
@@ -83,7 +85,10 @@ One reserved connection (`sql.reserve()`) for the whole run:
    is written. The ledger table is created inside the first file's
    transaction, so a run with nothing pending executes no DDL at all.
    `ddlLockTimeoutMs` sets a `LOCAL lock_timeout` per file. Session state a
-   body sets (`SET ROLE`, `search_path`, …) is reset after its COMMIT;
+   body sets (`SET ROLE`, `search_path`, …) is reset after its COMMIT, and
+   whatever `preApply` set is reset before release, even when it threw
+   (temp tables, `LISTEN`, prepared statements and held cursors are not
+   session settings and are not reset: a migration must not leave them);
 7. `pg_advisory_unlock` in `finally`, then release the connection — unless
    the unlock or a ROLLBACK failed: then the backend is terminated from
    another connection, so a connection still holding the lock never goes
@@ -161,8 +166,9 @@ a driver (`postgres`, `pg`, `pg-pool`, `pg-native`, any subpath) or of
 `createDb` from `@gremion/db` (renamed, namespace, default, re-export,
 dynamic), so an alias is caught too — anywhere outside this package, in
 `.ts .tsx .mts .cts .js .jsx .mjs .cjs .svelte`. Comments are stripped by a
-scanner that knows strings, so neither a comment nor a `/*` inside a string
-hides code. Not scanned: `node_modules`, `dist`, `build`, `coverage` and
+scanner that knows strings and regex literals, so neither a comment nor a
+`/*` or `//` inside a string or a regex hides code. Not scanned:
+`node_modules` anywhere; `dist`, `build`, `coverage` only at a package root;
 dot-directories (no tracked source sits under one, measured 2026-09-25). The existing
 sites are on `scripts/tenant-db-access.allow.json`, one dated row per file
 with its exact call and import counts and the task that adopts it (TASK-021,

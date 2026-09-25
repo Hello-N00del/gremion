@@ -60,6 +60,26 @@ describe('createTenantStore().openTenantDb', () => {
     }
   })
 
+  it('a pair requested again during its grace gets its draining pool back, not a second pool', async () => {
+    const f = fakeFactory()
+    const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 1, evictGraceMs: 60_000 })
+    const a = await store.openTenantDb(A, 'calendar')
+    await store.openTenantDb(B, 'calendar') // evicts A (draining)
+    expect(await store.openTenantDb(A, 'calendar')).toBe(a) // back; evicts B
+    expect(f.made).toHaveLength(2)
+    await store.close()
+  })
+
+  it('caps the draining pools at maxPools, ending the oldest early', async () => {
+    const f = fakeFactory()
+    const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 1, evictGraceMs: 60_000 })
+    await store.openTenantDb(A, 'calendar')
+    await store.openTenantDb(A, 'finance') // A/calendar draining
+    await store.openTenantDb(B, 'calendar') // A/finance draining; A/calendar ended early
+    expect(f.made.map((m) => m.end.mock.calls.length)).toEqual([1, 0, 0])
+    await store.close()
+  })
+
   it('close() also ends a pool still in its eviction grace', async () => {
     const f = fakeFactory()
     const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 1, evictGraceMs: 60_000 })
