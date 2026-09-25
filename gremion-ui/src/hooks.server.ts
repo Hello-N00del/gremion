@@ -51,7 +51,9 @@ import { runServerInitHooks } from '$lib/server/modules/runtime-registry'
 //       * TRANSIENT (Postgres went away mid-boot): the memo is dropped, so the
 //         next boot() call re-attempts, and ONE re-attempt is scheduled on an
 //         unref()'d timer (BOOT_RETRY_DELAY_MS, Q2). process.exitCode is NOT
-//         touched (Q3): the process is healing, not failing.
+//         touched (Q3): the process is healing, not failing. The healing has a
+//         ceiling: the BOOT_MAX_TRANSIENT_FAILURES-th consecutive transient
+//         failure is treated as non-transient.
 //       * NON-TRANSIENT (bad credentials, a schema fault, an exhausted startup
 //         budget -- Q1): process.exitCode = 1 and bootRuntime.exit(1), so the
 //         container's restart policy recycles it instead of it latching a
@@ -71,6 +73,14 @@ let _bootRetryPending = false
 
 /** Q2: delay before the one scheduled re-attempt after a transient boot failure. */
 export const BOOT_RETRY_DELAY_MS = 5_000
+/**
+ * The re-attempt ceiling. Each attempt starts waitForDbReady's budget afresh, so
+ * a database that answers the readiness ping but keeps cutting a later boot step
+ * off with a transient-looking error would otherwise re-attempt forever while
+ * /healthz stays green. This many consecutive transient failures exit 1.
+ */
+export const BOOT_MAX_TRANSIENT_FAILURES = 10
+let _bootTransientFailures = 0
 
 /**
  * The two process-level side effects of boot, behind a seam so tests can observe
@@ -261,20 +271,32 @@ export function boot(): Promise<void> {
       _bootComplete = true
       _bootError = null
       _bootErrorRetryable = false
+      _bootTransientFailures = 0
     } catch (err) {
       _bootError = err instanceof Error ? err : new Error(String(err))
-      _bootErrorRetryable = isTransientDbStartupError(err)
+      const transient = isTransientDbStartupError(err)
+      if (transient) _bootTransientFailures++
+      _bootErrorRetryable = transient && _bootTransientFailures < BOOT_MAX_TRANSIENT_FAILURES
       if (_bootErrorRetryable) {
         // Self-heal: drop the memo so the next boot() re-attempts, and make sure
         // one re-attempt happens even if nothing else calls boot(). The authGuard
         // serves 503 booting (Retry-After: 5) in the meantime.
-        console.error(`[boot] failed (transient), re-attempting in ${BOOT_RETRY_DELAY_MS} ms:`, err)
+        console.error(
+          `[boot] failed (transient ${_bootTransientFailures}/${BOOT_MAX_TRANSIENT_FAILURES}), re-attempting in ${BOOT_RETRY_DELAY_MS} ms:`,
+          err,
+        )
         if (_bootAttemptId === attemptId) _bootPromise = null
         scheduleBootRetry()
       } else {
-        // Not something waiting fixes: exit, so the restart policy recycles the
-        // container. exitCode first, in case exit is intercepted.
-        console.error('[boot] failed (non-transient), exiting 1:', err)
+        // Not something waiting fixes (or waiting has not fixed it): exit, so the
+        // restart policy recycles the container. exitCode first, in case exit is
+        // intercepted.
+        console.error(
+          transient
+            ? `[boot] failed (transient ${_bootTransientFailures}/${BOOT_MAX_TRANSIENT_FAILURES}: re-attempt ceiling reached), exiting 1:`
+            : '[boot] failed (non-transient), exiting 1:',
+          err,
+        )
         process.exitCode = 1
         bootRuntime.exit(1)
       }
@@ -339,17 +361,29 @@ function tenantMismatchResponse(path: string): Response {
 export const authGuard: Handle = async ({ event, resolve }) => {
   const path = event.url.pathname
 
+  // Default locals to a known shape before any branching. authGuard is the
+  // single place that populates `user` and `accessToken`; downstream routes
+  // (e.g. /api/finance/**) read `locals.accessToken` directly instead of
+  // calling `locals.auth()` a second time (G-006).
+  event.locals.user = null
+  event.locals.accessToken = null
+  event.locals.accessTokenExpires = null
+
+  // TASK-023: a request on the closed BOOT_AND_RESOLVE_EXEMPT_PATHS list that
+  // the resolver handed on WITHOUT a tenant (/healthz; an /api/internal/ call
+  // naming no tenant, which only the container network can make).
+  const unresolvedExempt = isBootAndResolveExempt(path) && !event.locals.tenant
+
   // T4.1 (G-014): refuse traffic until boot has completed. If boot failed for
   // good, the process is exiting — return 'boot failed'. If boot is still
   // running or re-attempting after a transient failure, hint the client to
   // retry in 5 s.
-  // TASK-023: a request on the closed BOOT_AND_RESOLVE_EXEMPT_PATHS list that
-  // the resolver handed on WITHOUT a tenant (/healthz; an /api/internal/ call
-  // naming no tenant) is answered during boot too. A tenant-resolved request is
-  // gated like any other: the per-tenant readiness gate is inert until the boot
-  // fleet runs, so this 503 is what keeps it off a half-migrated database.
+  // TASK-023: an unresolved exempt request is answered during boot too. A
+  // tenant-resolved request is gated like any other: the per-tenant readiness
+  // gate is inert until the boot fleet runs, so this 503 is what keeps it off a
+  // half-migrated database.
   if (!_bootComplete) {
-    if (isBootAndResolveExempt(path) && !event.locals.tenant) return resolve(event)
+    if (unresolvedExempt) return resolve(event)
     if (_bootError && !_bootErrorRetryable) {
       return new Response('Service Unavailable: boot failed', { status: 503 })
     }
@@ -359,18 +393,12 @@ export const authGuard: Handle = async ({ event, resolve }) => {
     })
   }
 
-  // TASK-023: the exempt paths are not session-authenticated — /healthz is
-  // public by design, and every /api/internal/ handler authenticates its caller
-  // itself (a static guard in boot-exempt.test.ts enforces that).
-  if (isBootAndResolveExempt(path)) return resolve(event)
-
-  // Default locals to a known shape before any branching. authGuard is the
-  // single place that populates `user` and `accessToken`; downstream routes
-  // (e.g. /api/finance/**) read `locals.accessToken` directly instead of
-  // calling `locals.auth()` a second time (G-006).
-  event.locals.user = null
-  event.locals.accessToken = null
-  event.locals.accessTokenExpires = null
+  // TASK-023: an unresolved exempt request is not session-authenticated either —
+  // /healthz is public by design, and an /api/internal/ handler authenticates
+  // its caller itself (a static guard in boot-exempt.test.ts enforces that). A
+  // tenant-resolved /api/internal/ request — anything through the edge — takes
+  // the session, Bearer, iss-match and module gates below exactly as before.
+  if (unresolvedExempt) return resolve(event)
 
   // Public routes — no auth required
   // /api/setup/seed self-guards with the X-Seed-Token header + an empty-DB check,

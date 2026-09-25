@@ -194,6 +194,14 @@ async function settleModuleLoadBoot(mod: typeof import('./hooks.server')): Promi
   throw new Error('module-load boot did not settle')
 }
 
+/**
+ * Let every queued microtask run (a boot attempt is a chain of awaits). Timers
+ * are untouched, so this is safe under fake timers.
+ */
+async function drainMicrotasks(): Promise<void> {
+  for (let i = 0; i < 200; i++) await Promise.resolve()
+}
+
 /** An error the db classifier calls transient (Postgres went away mid-boot). */
 function refused(): Error {
   return Object.assign(new Error('connect ECONNREFUSED 10.0.0.2:5432'), { code: 'ECONNREFUSED' })
@@ -429,9 +437,11 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
     expect(vi.getTimerCount()).toBe(1)
 
     await vi.advanceTimersByTimeAsync(mod.BOOT_RETRY_DELAY_MS - 1)
+    await drainMicrotasks()
     expect(calls).toBe(1)
+    // Nothing but the timer calls boot() here: the re-attempt is the timer's.
     await vi.advanceTimersByTimeAsync(1)
-    await mod.boot()
+    await drainMicrotasks()
     expect(calls).toBe(2)
     expect(mod.getBootStatus().complete).toBe(true)
     // Nothing re-attempts a completed boot.
@@ -471,9 +481,34 @@ describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
       } as never)) as Response
       expect(res.status).toBe(200)
     }
-    await Promise.resolve()
+    // A re-attempt would take a few awaits to reach controlMigrations; give it
+    // every chance to, without advancing the (fake) re-attempt timer.
+    await drainMicrotasks()
     expect(calls).toBe(1)
     expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('the re-attempts have a ceiling: the BOOT_MAX_TRANSIENT_FAILURES-th consecutive transient failure exits 1', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      throw refused()
+    }
+    const mod = await import('./hooks.server')
+    expect(mod.BOOT_MAX_TRANSIENT_FAILURES).toBeGreaterThan(1)
+    await mod.boot()
+    for (let i = 1; i < mod.BOOT_MAX_TRANSIENT_FAILURES; i++) {
+      expect(exitSpy).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(mod.BOOT_RETRY_DELAY_MS)
+      await drainMicrotasks()
+    }
+    expect(calls).toBe(mod.BOOT_MAX_TRANSIENT_FAILURES)
+    expect(exitSpy).toHaveBeenCalledTimes(1)
+    expect(exitSpy).toHaveBeenCalledWith(1)
+    expect(process.exitCode).toBe(1)
+    // Nothing further is scheduled once the ceiling is reached.
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 
@@ -481,6 +516,7 @@ describe('the full handle sequence (TASK-023)', () => {
   async function throughHandle(mod: typeof import('./hooks.server'), path: string, tenant?: unknown) {
     const event = makeFakeEvent(path)
     if (tenant) event.locals.tenant = tenant
+    event.locals.auth = async () => null
     return (await withRequestStore(event, () =>
       mod.handle({ event: event as never, resolve: async () => new Response('{"ok":true}', { status: 200 }) }),
     )) as Response
@@ -511,9 +547,10 @@ describe('the full handle sequence (TASK-023)', () => {
     const mod = await import('./hooks.server')
     await mod.boot()
     const tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
-    await throughHandle(mod, '/api/internal/newsletter/render', tenant)
-    await throughHandle(mod, '/healthz', tenant)
-    expect(authHandleCalls).toEqual(['/api/internal/newsletter/render', '/healthz'])
+    const res = await throughHandle(mod, '/api/internal/newsletter/render', tenant)
+    expect(authHandleCalls).toEqual(['/api/internal/newsletter/render'])
+    // ...and then the session guard: no session, so a machine-readable 401.
+    expect(res.status).toBe(401)
   })
 })
 
@@ -630,7 +667,7 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
     expect((await guard(mod, '/healthz')).res.status).toBe(200)
   })
 
-  it('after boot: /healthz and an /api/internal/ route skip the session guard (they are not session-authenticated)', async () => {
+  it('after boot: an unresolved /healthz or /api/internal/ request skips the session guard, with locals defaulted', async () => {
     const mod = await import('./hooks.server')
     await mod.boot()
     for (const path of ['/healthz', '/api/internal/evict']) {
@@ -643,7 +680,31 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
         resolve: async () => new Response('ok', { status: 200 }),
       } as never)) as Response
       expect(res.status, path).toBe(200)
+      expect(event.locals.user).toBeNull()
+      expect(event.locals.accessToken).toBeNull()
     }
+  })
+
+  it('after boot: a tenant-resolved /api/internal/ request (anything through the edge) still needs a session', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const o = await (async () => {
+      const event = makeFakeEvent('/api/internal/newsletter/render')
+      event.locals.tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
+      event.locals.auth = async () => null
+      let reached = false
+      const res = (await mod.authGuard({
+        event: event as never,
+        resolve: async () => {
+          reached = true
+          return new Response('handler', { status: 200 })
+        },
+      } as never)) as Response
+      return { res, reached }
+    })()
+    expect(o.reached).toBe(false)
+    expect(o.res.status).toBe(401)
+    expect(await o.res.json()).toEqual({ error: 'Unauthenticated', reason: 'no_session' })
   })
 })
 
