@@ -11,6 +11,24 @@
 #   make logs               (follow logs)
 ##############################################################
 
+# Required-variable guard for the edge (TASK-022, spec A §A/§E), copied from
+# infra/host/mail/docker-compose.yml. Compose interpolates the WHOLE document,
+# extension fields included, so an unset or empty variable named here aborts
+# every `docker compose` verb before a container starts. It cannot be written
+# inline on the ports entries: an empty EDGE_BIND_IP renders "- :80:80", which
+# publishes on 0.0.0.0 -- precisely what §A forbids -- and the ${VAR:?} form
+# would also hide the bind address from scripts/check-compose-edge.test.mjs.
+# So the ports stay plain and the requirement is asserted once, here. Every key
+# is declared in infra/host/templates/env/state.env.tmpl and in .env.example
+# (test/host/edge-env.bats).
+x-required-env:
+  edge-bind-ip: "${EDGE_BIND_IP:?EDGE_BIND_IP required}"
+  edge-bind-ip6: "${EDGE_BIND_IP6:?EDGE_BIND_IP6 required}"
+  edge-http-port: "${EDGE_HTTP_PORT:?EDGE_HTTP_PORT required}"
+  edge-https-port: "${EDGE_HTTPS_PORT:?EDGE_HTTPS_PORT required}"
+  traefik-api-port: "${TRAEFIK_API_PORT:?TRAEFIK_API_PORT required}"
+  internaltest-port: "${INTERNALTEST_PORT:?INTERNALTEST_PORT required}"
+
 services:
 
   # ============================================================
@@ -403,8 +421,17 @@ services:
     command:
       - --configFile=/etc/traefik/traefik.yml
     ports:
-      - "80:80"
-      - "443:443"
+      # Nothing here binds 0.0.0.0 (spec A §A). web/websecure publish on the
+      # edge IP of each family; :80 carries the ACME HTTP-01 challenge and the
+      # HTTPS redirect. The API (:8080) and internaltest (:8081) are loopback
+      # only: an unauthenticated Traefik API on every interface is the whole
+      # routing graph. ping (:8082) is not published at all.
+      - "${EDGE_BIND_IP}:${EDGE_HTTP_PORT}:80"
+      - "[${EDGE_BIND_IP6}]:${EDGE_HTTP_PORT}:80"
+      - "${EDGE_BIND_IP}:${EDGE_HTTPS_PORT}:443"
+      - "[${EDGE_BIND_IP6}]:${EDGE_HTTPS_PORT}:443"
+      - "127.0.0.1:${TRAEFIK_API_PORT}:8080"
+      - "127.0.0.1:${INTERNALTEST_PORT}:8081"
     # The Docker socket is no longer mounted here (#244): Traefik reaches the
     # Docker API through the read-only docker-socket-proxy over TCP instead, so a
     # compromise of this internet-facing edge proxy can no longer drive the full
