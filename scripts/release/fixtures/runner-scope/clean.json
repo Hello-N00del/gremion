@@ -1,0 +1,50 @@
+{
+  "$comment": "API-SHAPED fixture (GitHub REST v2022-11-28 response bodies for the five read-only endpoints check-runner-scope.mjs calls). Constructed, not recorded: the build sandbox's egress proxy refuses the Actions API paths.",
+  "fetchedAt": "2026-09-25T00:00:00Z",
+  "responses": {
+    "/repos/Hello-N00del/gremion/actions/permissions": {
+      "enabled": true,
+      "allowed_actions": "selected"
+    },
+    "/repos/Hello-N00del/gremion/actions/secrets": {
+      "total_count": 1,
+      "secrets": [
+        {
+          "name": "GHCR_TOKEN",
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "/repos/Hello-N00del/gremion/environments": {
+      "total_count": 0,
+      "environments": []
+    },
+    "/repos/Hello-N00del/gremion/actions/runners": {
+      "total_count": 0,
+      "runners": []
+    },
+    "/repos/Hello-N00del/StuRaOS/actions/permissions": {
+      "enabled": true,
+      "allowed_actions": "selected"
+    },
+    "/repos/Hello-N00del/StuRaOS/actions/secrets": {
+      "total_count": 1,
+      "secrets": [
+        {
+          "name": "NPM_TOKEN",
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "/repos/Hello-N00del/StuRaOS/environments": {
+      "total_count": 0,
+      "environments": []
+    },
+    "/repos/Hello-N00del/StuRaOS/actions/runners": {
+      "total_count": 0,
+      "runners": []
+    }
+  }
+}
