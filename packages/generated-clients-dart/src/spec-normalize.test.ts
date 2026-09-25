@@ -5,7 +5,9 @@
 //    governance spec (openapi 3.1.0) uses it 20 times.
 //  - `nullable` + `default: null` came out as the STRING default 'null', sent
 //    on every create-committee call (description/parentId/heliosElectionId).
-//  - an untyped `const: true` came out as `JsonObject?` (21 `success` fields).
+//  - an untyped `const: true` came out as `JsonObject?` (21 `success` fields),
+//    and a TYPED const as a single-value EnumClass with wire name 'true' (a
+//    string), which cannot decode the JSON boolean true.
 import { describe, it, expect } from 'vitest'
 import { normalizeFor31 } from './spec-normalize.ts'
 
@@ -70,11 +72,17 @@ describe('normalizeFor31 — default: null', () => {
   })
 })
 
-describe('normalizeFor31 — const', () => {
-  it('gives an untyped scalar const its JSON type', () => {
+describe('normalizeFor31 — const / non-string enum', () => {
+  it('drops a scalar const, keeping (or inferring) its type: the generator turns any const into a string-wire EnumClass that cannot decode a JSON true', () => {
     const { doc, report } = normalizeFor31(wrap({ ok: { const: true }, s: { const: 'x' }, i: { const: 3 }, f: { const: 1.5 }, t: { type: 'boolean', const: false } }))
-    expect(props(doc)).toEqual({ ok: { type: 'boolean', const: true }, s: { type: 'string', const: 'x' }, i: { type: 'integer', const: 3 }, f: { type: 'number', const: 1.5 }, t: { type: 'boolean', const: false } })
-    expect(report.constTyped).toHaveLength(4)
+    expect(props(doc)).toEqual({ ok: { type: 'boolean' }, s: { type: 'string' }, i: { type: 'integer' }, f: { type: 'number' }, t: { type: 'boolean' } })
+    expect(report.constDropped).toHaveLength(5)
+  })
+
+  it('fails closed on a non-string enum (same string-wire EnumClass problem)', () => {
+    expect(() => normalizeFor31(wrap({ b: { type: 'boolean', enum: [true] } }))).toThrow(/non-string enum/)
+    expect(() => normalizeFor31(wrap({ n: { type: 'integer', enum: [1, 2] } }))).toThrow(/non-string enum/)
+    expect(() => normalizeFor31(wrap({ s: { type: 'string', enum: ['a', 'b'] } }))).not.toThrow()
   })
 })
 

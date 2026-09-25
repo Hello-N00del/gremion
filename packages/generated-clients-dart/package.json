@@ -13,7 +13,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "test:unit": "vitest run --exclude 'src/**/*.integration.test.ts'",
+    "test:unit": "vitest run --project unit",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "images:pull": "node tools/pull-images.mjs",
     "generate": "node tools/pull-images.mjs && node tools/generate.mjs",

@@ -106,7 +106,7 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
     mkdirSync(join(work, 'in'))
     mkdirSync(join(work, 'out'))
     const { doc, report } = normalizeFor31(parsed)
-    log(`[${s.name}] generator input (src/spec-normalize.ts): ${report.nullable.length} nullable -> type array, ${report.nullableFalseDropped.length} nullable:false dropped, ${report.defaultNullDropped.length} default:null dropped, ${report.constTyped.length} const typed`)
+    log(`[${s.name}] generator input (src/spec-normalize.ts): ${report.nullable.length} nullable -> type array, ${report.nullableFalseDropped.length} nullable:false dropped, ${report.defaultNullDropped.length} default:null dropped, ${report.constDropped.length} scalar const dropped`)
     writeFileSync(join(work, 'in', 'spec.json'), `${JSON.stringify(doc, null, 2)}\n`)
     writeFileSync(join(work, 'out', '.openapi-generator-ignore'), GENERATOR_IGNORE)
 

@@ -6,9 +6,10 @@
 // file in the same generated package must fail the analyze gate. No tool ->
 // this FAILS (resolveGenerator/resolveDart throw); it never skips.
 import { describe, it, expect, afterAll } from 'vitest'
-import { rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { makeFixtureRepo } from './fixture.ts'
+import { makeFixtureRepo, writeFile } from './fixture.ts'
+import { REPO_ROOT } from './repo-root.ts'
 import { generateDartPackage, runAnalyzeGate } from './pipeline.ts'
 import { loadDartSurfaces } from './registry.ts'
 import { resolveDart, resolveGenerator } from './tools.ts'
@@ -31,7 +32,7 @@ const SPEC = {
     schemas: {
       Widget: {
         type: 'object',
-        required: ['id', 'note', 'legacy', 'day', 'data'],
+        required: ['id', 'note', 'legacy', 'day', 'data', 'ok', 'state'],
         properties: {
           id: { type: 'string' },
           note: { type: ['string', 'null'] },
@@ -39,6 +40,9 @@ const SPEC = {
           count: { type: 'integer' },
           day: { type: 'string', format: 'date', nullable: true },
           data: { type: 'object', nullable: true },
+          desc: { type: 'string', nullable: true, default: null },
+          ok: { const: true },
+          state: { type: 'string', enum: ['open', 'closed'] },
         },
       },
     },
@@ -52,6 +56,11 @@ describe('real pipeline (pinned generator + Dart SDK)', () => {
   it('generates an analyzable package with correct nullability, and the gate fails a malformed file', () => {
     const root = makeFixtureRepo([{ name: 'widgets', type: 'openapi', doc: SPEC }])
     roots.push(root)
+    // Resolve against the COMMITTED lock (seeded from a stamped sibling, the
+    // path a newly registered surface takes), not whatever pub.dev serves today.
+    const committed = join(REPO_ROOT, 'packages/generated-clients-dart/kernel-governance')
+    writeFile(root, 'packages/generated-clients-dart/sibling/pubspec.lock', readFileSync(join(committed, 'pubspec.lock')))
+    writeFile(root, 'packages/generated-clients-dart/sibling/.generated-from', readFileSync(join(committed, '.generated-from')))
     const [s] = loadDartSurfaces(root).surfaces
     const log: string[] = []
     const tools = { generator: resolveGenerator(), dart: resolveDart() }
@@ -79,6 +88,11 @@ describe('real pipeline (pinned generator + Dart SDK)', () => {
     expect(model).toMatch(/Date\? get day;/)
     expect(model).toMatch(/JsonObject\? get data;/)
 
+    expect(model).not.toMatch(/=\s*r?'null'/) // default: null is not a string default
+    expect(model).toMatch(/bool get ok;/) // untyped const: true
+    expect(files.get('lib/src/model/widget.dart')!.toString() + model).toMatch(/unknownDefaultOpenApi/) // enum fallback
+    expect(files.get('pubspec.yaml')!.toString()).toMatch(/^publish_to: none$/m)
+    expect(log.join('\n')).toMatch(/lock seeded from another surface/)
     expect(log.join('\n')).toMatch(/dart analyze: 0 error\(s\)/)
 
     // Same generated package, one malformed file: the real analyzer must fail the gate.

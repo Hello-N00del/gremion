@@ -14,8 +14,12 @@
 //     `'null'`, sent on every request that did not set the field. It is
 //     dropped wherever null is allowed: an absent default already means
 //     "null/unset" to the client.
-//  3. An untyped `const: true` became `JsonObject?`. The scalar const gets
-//     its JSON type (`type: boolean`), so the field is a `bool`.
+//  3. An untyped `const: true` became `JsonObject?`, and a typed one became a
+//     single-value EnumClass with the STRING wire name 'true', which cannot
+//     decode the JSON boolean. A scalar const is dropped, keeping (or
+//     inferring) its type, so the field is a `bool`. A client does not
+//     validate server constants. A non-string enum hits the same EnumClass
+//     problem and fails closed.
 //
 // Anything that cannot be mapped faithfully fails closed. The walk decides
 // what is a schema by POSITION, not by key name, so a property named
@@ -27,7 +31,7 @@ export interface NormalizeReport {
   nullable: string[]
   nullableFalseDropped: string[]
   defaultNullDropped: string[]
-  constTyped: string[]
+  constDropped: string[]
 }
 
 /** Keys whose value holds data, not schemas: never walked. */
@@ -50,7 +54,7 @@ function allowsNull(type: unknown): boolean {
 }
 
 export function normalizeFor31(input: unknown): { doc: unknown; report: NormalizeReport } {
-  const report: NormalizeReport = { nullable: [], nullableFalseDropped: [], defaultNullDropped: [], constTyped: [] }
+  const report: NormalizeReport = { nullable: [], nullableFalseDropped: [], defaultNullDropped: [], constDropped: [] }
   const version = (input as { openapi?: unknown } | null)?.openapi
   if (typeof version !== 'string' || !version.startsWith('3.1')) return { doc: input, report }
 
@@ -91,13 +95,20 @@ export function normalizeFor31(input: unknown): { doc: unknown; report: Normaliz
       report.defaultNullDropped.push(at)
     }
 
-    if ('const' in src && !('type' in src)) {
+    if (Array.isArray(src.enum) && src.enum.some((v) => typeof v !== 'string' && v !== null)) {
+      throw new Error(`${at}: non-string enum ${JSON.stringify(src.enum)} — openapi-generator 7.12.0 (dart-dio) makes a string-wire EnumClass that cannot decode it; use a plain type or string values`)
+    }
+    if ('const' in src) {
       const c = src.const
-      const t = c === null ? 'null' : typeof c === 'boolean' ? 'boolean' : typeof c === 'string' ? 'string'
+      const t = typeof c === 'boolean' ? 'boolean' : typeof c === 'string' ? 'string'
         : typeof c === 'number' ? (Number.isInteger(c) ? 'integer' : 'number') : null
       if (t !== null) {
-        out.type = t
-        report.constTyped.push(at)
+        // The generator turns any const into a single-value EnumClass whose
+        // wire name is a STRING ('true'), which cannot decode the JSON value.
+        // A client does not validate server constants; keep the type only.
+        delete out.const
+        if (!('type' in src)) out.type = t
+        report.constDropped.push(at)
       }
     }
     return out
