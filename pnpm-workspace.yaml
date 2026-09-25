@@ -3,6 +3,39 @@ packages:
   - 'gremion-public'
   - 'packages/*'
 
+# TASK-017 (TRD-401 [D R19-D34]): Node 26 everywhere. engineStrict makes a
+# mismatched engines.node (root package.json) a FAILED install, not a warning
+# — verified empirically: without this key, `pnpm install` on the wrong Node
+# major only warns; with it, it exits ERR_PNPM_UNSUPPORTED_ENGINE. This is the
+# workspace-root form; the per-app gremion-ui/.npmrc engine-strict=true line
+# is likely inert (pnpm reads config at the workspace root, not per-package)
+# and is left in place unfixed — recorded, not fixed, per the brief (§3).
+engineStrict: true
+
+# TASK-017 (TRD-402 [D R19-D1]): pnpm 10 skips a dependency's install/postinstall
+# script by default unless it is explicitly allowed here. strictDepBuilds makes
+# an UNDECIDED build script a hard install failure instead of a silent skip —
+# verified empirically: without it, an unlisted build script only warns and
+# `pnpm install` exits 0; with it, the install exits non-zero naming the dep.
+# Every name below must carry a reason in scripts/check-toolchain.mjs's
+# ALLOWED_BUILD_DEPS table — `make lint-toolchain` asserts the two sets are
+# identical in both directions (an allowance with no reason, or a reason with
+# no allowance, both fail the guard).
+#
+# `ignoredBuiltDependencies` was tried first (matching TRD-402's wording) but
+# does NOT suppress strictDepBuilds's hard failure in pnpm 10.33 — verified
+# empirically: esbuild + msw listed there still hard-failed the install.
+# `onlyBuiltDependencies` (an explicit ALLOW, which actually runs the script)
+# is the mechanism that works, and both scripts here are side-effect-free
+# dev/build-only steps (see the guard's reason table), so allowing them is
+# safe. `better-sqlite3` (the previous, stale allowance in package.json's
+# `pnpm` field) is gone: it is not a dependency of anything in this lockfile,
+# so it was dead weight the guard now rejects on sight.
+strictDepBuilds: true
+onlyBuiltDependencies:
+  - esbuild
+  - msw
+
 # CVE floors. `scripts/check-cve-floors.mjs` (wired into `make lint`) pins each entry
 # against a committed floor table, asserts the lockfile absorbed it, asserts the
 # resolved tree honours it, and rejects an UNBOUNDED replacement — a bare
