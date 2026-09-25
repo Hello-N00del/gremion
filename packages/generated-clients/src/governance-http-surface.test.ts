@@ -73,3 +73,93 @@ describe('H1 - every list operation is cursor-paginated (brief §5 Q7)', () => {
     }
   })
 })
+
+// The named problem types (RFC 9457 `type`), one URN per refusal. The
+// `urn:gremion:problem:<slug>` scheme is the one TASK-076's service
+// template already emits (not-found, validation-failed, ...); governance
+// refusals take the `gov:` prefix.
+const PROBLEM_URN = /^urn:gremion:problem:(gov:)?[a-z0-9-]+$/
+
+/** The problem `type` consts an error response declares, and the status
+ *  const each problem schema pins. */
+function declaredProblems(doc: any, response: any): Array<{ type: string; status: number }> {
+  const r = deref(doc, response)
+  const schema = r?.content?.['application/problem+json']?.schema
+  if (!schema) return []
+  const target = deref(doc, schema)
+  const members = target.oneOf ? target.oneOf.map((m: any) => deref(doc, m)) : [target]
+  return members.map((m: any) => {
+    // a named problem pins `type` and `status` either on its own
+    // properties (flat form) or on one allOf part
+    const pinned = m.properties?.type?.const ? m : (m.allOf ?? []).find((part: any) => part.properties?.type?.const)
+    return { type: pinned?.properties.type.const, status: pinned?.properties.status?.const }
+  })
+}
+
+// Named refusals the brief and DOMAIN require, per operation and status.
+const REQUIRED_REFUSALS: Array<{ op: string; status: string; types: string[] }> = [
+  // PRD-MTG-002b / brief §5: "send returns 409 with a named problem type";
+  // DOMAIN DB-GOV-INVITATION: no connector -> "refused with a named reason"
+  { op: 'sendInvitation', status: '409', types: ['urn:gremion:problem:gov:notice-override-missing', 'urn:gremion:problem:gov:no-mail-connector'] },
+  // DB-GOV-NOTICE-OVERRIDE: at most one; written before dispatch; only when notice is missed
+  {
+    op: 'createNoticeOverride',
+    status: '409',
+    types: [
+      'urn:gremion:problem:gov:override-exists',
+      'urn:gremion:problem:gov:override-not-required',
+      'urn:gremion:problem:gov:invitation-already-dispatched',
+    ],
+  },
+  // DB-GOV-MOTION-ADMISSION: decides a late motion, append-only
+  { op: 'createMotionAdmission', status: '409', types: ['urn:gremion:problem:gov:motion-not-late', 'urn:gremion:problem:gov:admission-exists'] },
+  // DB-GOV-AGENDA-SECTION: only before the invitation
+  { op: 'createAgendaSection', status: '409', types: ['urn:gremion:problem:gov:agenda-frozen'] },
+  { op: 'updateAgendaSection', status: '409', types: ['urn:gremion:problem:gov:agenda-frozen'] },
+]
+
+describe('H2 - every error response declares named RFC 9457 problem types (brief §5 Q6)', () => {
+  it('every 4xx/5xx response is problem+json with at least one pinned type URN and a matching status', () => {
+    const doc = loadOpenApi()
+    let checked = 0
+    for (const { path, method, op } of allOperations(doc)) {
+      for (const [status, response] of Object.entries<any>(op.responses)) {
+        if (!/^[45]/.test(status)) continue
+        const where = `${method} ${path} ${status}`
+        const problems = declaredProblems(doc, response)
+        expect(problems.length, `${where} declares no named problem type`).toBeGreaterThan(0)
+        for (const p of problems) {
+          expect(p.type, where).toMatch(PROBLEM_URN)
+          expect(p.status, where).toBe(Number(status))
+        }
+        checked++
+      }
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+
+  for (const { op, status, types } of REQUIRED_REFUSALS) {
+    it(`${op} ${status} declares ${types.map((t) => t.split(':').pop()).join(', ')}`, () => {
+      const doc = loadOpenApi()
+      const found = allOperations(doc).find((o) => o.op.operationId === op)
+      expect(found, op).toBeDefined()
+      const declared = declaredProblems(doc, found!.op.responses[status]).map((p) => p.type)
+      expect(declared).toEqual(expect.arrayContaining(types))
+    })
+  }
+
+  it('the base Problem schema carries no host-bound example type', () => {
+    const problem = loadOpenApi().components.schemas.Problem
+    expect(JSON.stringify(problem)).not.toMatch(/https?:\/\//)
+  })
+})
+
+describe('H1b - list responses stay pages', () => {
+  it('no GET returns a bare array (restated after H2 edits)', () => {
+    const doc = loadOpenApi()
+    for (const { path, op } of allOperations(doc)) {
+      const schema = op.responses['200']?.content?.['application/json']?.schema
+      if (schema) expect(schema.type, `${path}`).not.toBe('array')
+    }
+  })
+})

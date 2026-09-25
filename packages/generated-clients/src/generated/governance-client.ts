@@ -324,17 +324,212 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description RFC 9457 problem+json error envelope. */
+        /** @description RFC 9457 problem+json error envelope. Every refusal this service answers is one of the named Problem* schemas below, which have this shape and pin `type` (a urn:gremion:problem:<slug> URN, the scheme TASK-076's service template emits; governance refusals take the gov: prefix) and `status`. */
         Problem: {
             /**
              * Format: uri
-             * @description A URI identifying the named refusal, e.g. https://gremion.dev/problems/gov/notice-not-met.
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
              */
             type: string;
             title: string;
             status: number;
             detail?: string;
-            /** Format: uri */
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description No valid OIDC bearer token (TRD-409). */
+        ProblemUnauthenticated: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:unauthenticated";
+            title: string;
+            /** @constant */
+            status: 401;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description The request body or a parameter does not match this contract. */
+        ProblemValidationFailed: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:validation-failed";
+            title: string;
+            /** @constant */
+            status: 400;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description The PDP (idt.pdp v1; TASK-081 decides) denied the call. Chair-only operations need the chair's grant with resource = meeting. */
+        ProblemForbidden: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:forbidden";
+            title: string;
+            /** @constant */
+            status: 403;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description No such resource in the caller's tenant and body. */
+        ProblemNotFound: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:not-found";
+            title: string;
+            /** @constant */
+            status: 404;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description The aggregate's DOMAIN lifecycle has no edge from its current state for this operation. */
+        ProblemStateTransitionRefused: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:state-transition-refused";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description Sections are added or reordered only by the chair and only before the invitation (DB-GOV-AGENDA-SECTION). */
+        ProblemAgendaFrozen: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:agenda-frozen";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description notice_met is false and no notice-override is recorded for this invitation; record one first (PRD-MTG-002b, DB-GOV-INVITATION). The Sitzung itself is never blocked [D R20-D26-5]. */
+        ProblemNoticeOverrideMissing: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:notice-override-missing";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description MAIL reports no connector for the body (neither its own mailbox nor the main body's enabled fallback with a send-as grant); the invitation moves to dispatch_refused. GOV never picks a connector itself (DB-GOV-INVITATION, [D R20-D26-2]). */
+        ProblemNoMailConnector: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:no-mail-connector";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description This invitation already has its notice-override; at most one exists and it is never edited (DB-GOV-NOTICE-OVERRIDE). */
+        ProblemOverrideExists: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:override-exists";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description notice_met is true for this invitation, so no override is recorded. */
+        ProblemOverrideNotRequired: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:override-not-required";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description The override must be written before dispatch; this invitation is already dispatching or sent. */
+        ProblemInvitationAlreadyDispatched: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:invitation-already-dispatched";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description Admissions decide late motions only (is_late = true, state withheld); this motion is not late. */
+        ProblemMotionNotLate: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:motion-not-late";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
+            instance?: string;
+        };
+        /** @description The chair has already decided this motion's admission; admissions are append-only. */
+        ProblemAdmissionExists: {
+            /**
+             * Format: uri
+             * @description The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.
+             * @constant
+             */
+            type: "urn:gremion:problem:gov:admission-exists";
+            title: string;
+            /** @constant */
+            status: 409;
+            detail?: string;
+            /** Format: uri-reference */
             instance?: string;
         };
         /** Format: uuid */
@@ -675,7 +870,44 @@ export interface components {
             deferred_to_meeting_id?: string;
         };
     };
-    responses: never;
+    responses: {
+        /** @description No valid OIDC bearer token (TRD-409). */
+        Unauthenticated: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["ProblemUnauthenticated"];
+            };
+        };
+        /** @description The request body or a parameter does not match this contract. */
+        ValidationFailed: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["ProblemValidationFailed"];
+            };
+        };
+        /** @description The PDP (idt.pdp v1; TASK-081 decides) denied the call. Chair-only operations need the chair's grant with resource = meeting. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["ProblemForbidden"];
+            };
+        };
+        /** @description No such resource in the caller's tenant and body. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["ProblemNotFound"];
+            };
+        };
+    };
     parameters: {
         /** @description Opaque cursor from a previous page's nextCursor; omit for the first page. */
         Cursor: string;
@@ -736,14 +968,7 @@ export interface operations {
                 };
             };
             /** @description Missing the meeting-create grant */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
         };
     };
     getMeeting: {
@@ -767,14 +992,7 @@ export interface operations {
                 };
             };
             /** @description No such meeting */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            404: components["responses"]["NotFound"];
         };
     };
     updateMeeting: {
@@ -802,21 +1020,14 @@ export interface operations {
                 };
             };
             /** @description No such meeting */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The meeting is no longer in a reschedulable state */
+            404: components["responses"]["NotFound"];
+            /** @description The meeting is no longer in a reschedulable state (planned or invited) */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemStateTransitionRefused"];
                 };
             };
         };
@@ -842,21 +1053,14 @@ export interface operations {
                 };
             };
             /** @description Chair-only operation */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
             /** @description The meeting is not in the invited state */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemStateTransitionRefused"];
                 };
             };
         };
@@ -882,21 +1086,14 @@ export interface operations {
                 };
             };
             /** @description Chair-only operation */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
             /** @description The meeting is not in session */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemStateTransitionRefused"];
                 };
             };
         };
@@ -922,21 +1119,14 @@ export interface operations {
                 };
             };
             /** @description Chair-only operation */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The meeting can no longer be cancelled */
+            403: components["responses"]["Forbidden"];
+            /** @description The meeting is neither planned nor invited */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemStateTransitionRefused"];
                 };
             };
         };
@@ -993,21 +1183,14 @@ export interface operations {
                 };
             };
             /** @description Chair-only operation */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
             /** @description The invitation has already been issued */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemAgendaFrozen"];
                 };
             };
         };
@@ -1037,30 +1220,16 @@ export interface operations {
                 };
             };
             /** @description Chair-only operation */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
             /** @description No such section */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            404: components["responses"]["NotFound"];
             /** @description The invitation has already been issued */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemAgendaFrozen"];
                 };
             };
         };
@@ -1117,14 +1286,7 @@ export interface operations {
                 };
             };
             /** @description No such meeting */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            404: components["responses"]["NotFound"];
         };
     };
     getAgendaItem: {
@@ -1148,14 +1310,7 @@ export interface operations {
                 };
             };
             /** @description No such agenda item */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            404: components["responses"]["NotFound"];
         };
     };
     updateAgendaItem: {
@@ -1183,14 +1338,7 @@ export interface operations {
                 };
             };
             /** @description No such agenda item */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            404: components["responses"]["NotFound"];
         };
     };
     listInvitations: {
@@ -1245,14 +1393,7 @@ export interface operations {
                 };
             };
             /** @description Only the chair issues an invitation (resource = meeting) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
         };
     };
     createNoticeOverride: {
@@ -1279,13 +1420,13 @@ export interface operations {
                     "application/json": components["schemas"]["NoticeOverride"];
                 };
             };
-            /** @description An override already exists for this invitation (at most one) */
+            /** @description An override already exists, notice was met, or the invitation is already dispatched */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemOverrideExists"] | components["schemas"]["ProblemOverrideNotRequired"] | components["schemas"]["ProblemInvitationAlreadyDispatched"];
                 };
             };
         };
@@ -1310,13 +1451,13 @@ export interface operations {
                     "application/json": components["schemas"]["Invitation"];
                 };
             };
-            /** @description notice_met is false and no notice-override has been recorded; or MAIL reports no connector for the body */
+            /** @description Refused by name: notice missed with no override, no mail connector for the body, or the invitation is not in a sendable state */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemNoticeOverrideMissing"] | components["schemas"]["ProblemNoMailConnector"] | components["schemas"]["ProblemStateTransitionRefused"];
                 };
             };
         };
@@ -1400,14 +1541,7 @@ export interface operations {
                 };
             };
             /** @description No such meeting */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            404: components["responses"]["NotFound"];
         };
     };
     getMotion: {
@@ -1431,14 +1565,7 @@ export interface operations {
                 };
             };
             /** @description No such motion */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
+            404: components["responses"]["NotFound"];
         };
     };
     createMotionAdmission: {
@@ -1466,21 +1593,14 @@ export interface operations {
                 };
             };
             /** @description Chair-only operation */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The motion is not late, or already decided */
+            403: components["responses"]["Forbidden"];
+            /** @description The motion is not late, or its admission is already decided */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["Problem"];
+                    "application/problem+json": components["schemas"]["ProblemMotionNotLate"] | components["schemas"]["ProblemAdmissionExists"];
                 };
             };
         };
