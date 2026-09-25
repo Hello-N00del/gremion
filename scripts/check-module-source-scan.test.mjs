@@ -20,6 +20,7 @@ import {
   scanModules,
   checkDiscovery,
   coupledExcludes,
+  validateDisabled,
 } from './check-module-source-scan.mjs'
 
 const WS_OK = "packages:\n  - 'gremion-ui'\n  - 'packages/*'\n  - 'modules/*'\n"
@@ -310,6 +311,27 @@ test("discovery (TDD 4): 'modules/*' finds every module; RED with 'modules/*/*',
     assert.equal(probs.filter((p) => /silently/.test(p)).length, 3, probs.join('\n'))
     probs = checkDiscovery(t.root, "packages:\n  - 'gremion-ui'\n")
     assert.equal(probs.filter((p) => /silently/.test(p)).length, 3)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('disabled.json: each id is a private module with a reason; RED on an unknown id, a public package, no reason, a duplicate', () => {
+  const t = tree({
+    ...BASE,
+    'modules/finance/package.json': '{"name":"finance-service","private":true}',
+    'modules/votes/package.json': '{"name":"votes-service"}',
+  })
+  try {
+    const ok = { disabled: [{ id: 'finance', reason: 'R23-12: disabled by default' }] }
+    assert.deepEqual(validateDisabled(t.root, ok), [])
+    assert.ok(validateDisabled(t.root, { disabled: [{ id: 'nope', reason: 'r' }] }).some((p) => /nope/.test(p)))
+    assert.ok(validateDisabled(t.root, { disabled: [{ id: 'votes', reason: 'r' }] }).some((p) => /private/.test(p)))
+    assert.ok(validateDisabled(t.root, { disabled: [{ id: 'finance' }] }).some((p) => /reason/.test(p)))
+    assert.ok(
+      validateDisabled(t.root, { disabled: [ok.disabled[0], ok.disabled[0]] }).some((p) => /duplicate/.test(p)),
+    )
+    assert.ok(validateDisabled(t.root, {}).some((p) => /disabled/.test(p)))
   } finally {
     t.cleanup()
   }

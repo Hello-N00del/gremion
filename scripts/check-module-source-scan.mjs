@@ -41,6 +41,7 @@ import { resolvePackageDirs } from './check-toolchain.mjs'
 
 export const KERNEL_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 export const COUPLED_PATH = 'modules/COUPLED-TESTS.json'
+export const DISABLED_PATH = 'modules/disabled.json'
 
 const LEAF_DOCKERFILE_REASON =
   'leaf image Dockerfile, copied byte-equal: its COPY sources (upstream/gremion/packages/ports, ' +
@@ -416,6 +417,51 @@ export function scanModules(root, { dockerAllowlist = DOCKERFILE_ALLOWLIST } = {
   return { problems, findings, allowed, filesScanned, specifiers, literals, dockerfiles, modules: ids }
 }
 
+/**
+ * modules/disabled.json — modules that install and typecheck but are excluded
+ * from the default build/deploy. Each id must be a module directory whose
+ * package.json is "private": true, with a reason; no duplicates.
+ */
+export function validateDisabled(root, doc) {
+  if (!doc || !Array.isArray(doc.disabled)) return [`${DISABLED_PATH}: no "disabled" array`]
+  const problems = []
+  const seen = new Set()
+  doc.disabled.forEach((e, i) => {
+    const where = `${DISABLED_PATH} entry ${i}`
+    if (!e || typeof e.id !== 'string') {
+      problems.push(`${where}: "id" missing`)
+      return
+    }
+    if (seen.has(e.id)) problems.push(`${where}: duplicate id ${e.id}`)
+    seen.add(e.id)
+    if (typeof e.reason !== 'string' || e.reason.trim() === '') problems.push(`${where} (${e.id}): empty or missing "reason"`)
+    const pkg = join(root, 'modules', e.id, 'package.json')
+    if (!/^[a-z][a-z0-9-]*$/.test(e.id) || !existsSync(pkg)) {
+      problems.push(`${where}: ${e.id} is not a module directory with a package.json`)
+      return
+    }
+    let json
+    try {
+      json = JSON.parse(readFileSync(pkg, 'utf8'))
+    } catch (err) {
+      problems.push(`${where}: modules/${e.id}/package.json is not JSON — ${err.message}`)
+      return
+    }
+    if (json.private !== true) problems.push(`${where}: modules/${e.id}/package.json is not "private": true — a disabled module must never publish`)
+  })
+  return problems
+}
+
+function readDisabled(root) {
+  const abs = join(root, DISABLED_PATH)
+  if (!existsSync(abs)) return [`${DISABLED_PATH} is missing`]
+  try {
+    return validateDisabled(root, JSON.parse(readFileSync(abs, 'utf8')))
+  } catch (err) {
+    return [`${DISABLED_PATH}: not JSON — ${err.message}`]
+  }
+}
+
 /** TDD 4: every modules/<id> is a package the toolchain guard actually discovers. */
 export function checkDiscovery(root, workspaceYamlText) {
   const ids = moduleDirs(root)
@@ -473,7 +519,7 @@ if (isMain) {
   }
   const r = scanModules(KERNEL_ROOT)
   const disc = checkDiscovery(KERNEL_ROOT, readFileSync(join(KERNEL_ROOT, 'pnpm-workspace.yaml'), 'utf8'))
-  const problems = [...r.problems, ...disc]
+  const problems = [...r.problems, ...disc, ...readDisabled(KERNEL_ROOT)]
   if (problems.length) {
     console.error(`[module-source-scan] ${problems.length} problem(s):`)
     for (const p of problems) console.error(`  x ${p}`)
@@ -482,7 +528,7 @@ if (isMain) {
   console.log(
     `[module-source-scan] OK — ${r.filesScanned} files in ${r.modules.length} modules (${r.specifiers} specifiers, ` +
       `${r.literals} path literals, ${r.dockerfiles} Dockerfiles); 0 unallowlisted findings; ${r.allowed.length} allowlisted ` +
-      `in ${new Set(r.allowed.map((a) => a.file)).size} files; every module discovered by the workspace.`,
+      `in ${new Set(r.allowed.map((a) => a.file)).size} files; every module discovered by the workspace; ${DISABLED_PATH} valid.`,
   )
   for (const a of r.allowed) console.log(`  allowed ${a.file}:${a.line} ${a.what}`)
 }
