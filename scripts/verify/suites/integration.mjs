@@ -33,6 +33,19 @@ function startTestDb({ sha8, pid }) {
   // convention check passes (brief S9) without touching the documented
   // fixture URLs. `-p 127.0.0.1::5432` binds an ephemeral host port so this
   // run can never collide with another worktree's, or with staging's 5433.
+  //
+  // POSTGRES_DB is "gremion", not "gremion_test": found by actually running
+  // `pnpm migrate` against a "gremion_test" database --
+  // migrations/008_public_portal.sql hardcodes a bare `GRANT CONNECT ON
+  // DATABASE gremion TO gremion_public_reader` (058's own header names this
+  // as a known, un-fixed defect in 008 -- migration files are pinned by
+  // SHA-256 manifest and never edited after the fact). assert-safe-test-db-
+  // url.ts's OWN documented fixture URL is
+  // `postgres://gremion:gremion_test@localhost:5432/gremion` -- "gremion" is
+  // this repo's actual integration-suite database name; the safety
+  // convention (db name OR user name must contain "test") is satisfied here
+  // by POSTGRES_USER alone, so the database itself can and should be named
+  // to match what every migration assumes.
   const runRes = run('docker', [
     'run',
     '-d',
@@ -43,7 +56,7 @@ function startTestDb({ sha8, pid }) {
     '-e',
     `POSTGRES_PASSWORD=${password}`,
     '-e',
-    'POSTGRES_DB=gremion_test',
+    'POSTGRES_DB=gremion',
     '-p',
     '127.0.0.1::5432',
     'postgres:18-alpine',
@@ -111,7 +124,7 @@ export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
   }
 
   try {
-    const dataUrl = `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion_test`
+    const dataUrl = `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion`
     const controlUrl = `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/control`
 
     const createControl = run('docker', [
@@ -151,7 +164,7 @@ export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
     const publicReaderPassword = randomTestPassword()
     const createPublicReader = run(
       'docker',
-      ['exec', '-i', '-e', `PGPASSWORD=${db.password}`, db.name, 'psql', '-v', 'ON_ERROR_STOP=1', '-v', `_password=${publicReaderPassword}`, '-U', 'gremion_test', '-d', 'gremion_test'],
+      ['exec', '-i', '-e', `PGPASSWORD=${db.password}`, db.name, 'psql', '-v', 'ON_ERROR_STOP=1', '-v', `_password=${publicReaderPassword}`, '-U', 'gremion_test', '-d', 'gremion'],
       {
         input:
           "SELECT CASE WHEN NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'gremion_public_reader') " +
