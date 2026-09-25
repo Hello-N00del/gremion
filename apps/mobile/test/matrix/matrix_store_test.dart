@@ -117,6 +117,25 @@ void main() {
     );
   });
 
+  test('refuses a store that ends up unencrypted on disk (key not applied)',
+      () async {
+    // SQLCipher is loaded (cipher_version answers) but the opener "forgets"
+    // the key, as a device opener that dropped `password:` would.
+    final path = '${tmp.path}/stura_matrix.db';
+    await expectLater(
+      openMatrixStore(
+        path: path,
+        password: 'unused',
+        open: (p, _) => databaseFactoryFfi.openDatabase(
+          p,
+          options: OpenDatabaseOptions(singleInstance: false),
+        ),
+        sqfliteFactory: databaseFactoryFfi,
+      ),
+      throwsA(isA<StateError>()),
+    );
+  });
+
   test('opens the store written by SDK 6.2.0 without migrating it away',
       () async {
     final path = '${tmp.path}/stura_matrix.db';
