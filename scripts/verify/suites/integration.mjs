@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { parseVitestJsonFile } from '../lib/parsers.mjs'
+import { parseVitestJsonFile, summarizeVitestFailures } from '../lib/parsers.mjs'
 import { run, toolAvailable } from '../lib/proc.mjs'
 
 const REPO_ROOT = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
@@ -199,6 +199,10 @@ export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
       { cwd: uiDir, env },
     )
     const parsed = parseVitestJsonFile(outFile)
+    // Read failure summaries BEFORE the temp report is deleted -- found
+    // needed by actually running this suite: a bare "5 of 155 failed" gave no
+    // lead at all on which 5.
+    const vitestFailureLines = parsed && parsed.failed > 0 ? summarizeVitestFailures(outFile) : []
     rmSync(path.dirname(outFile), { recursive: true, force: true })
     if (!parsed) {
       return unparseable(`vitest test:integration produced no parseable JSON report (exit ${test.code})\n${tail(test.stdout + test.stderr)}`)
@@ -216,6 +220,7 @@ export function runIntegrationSuite({ root = REPO_ROOT } = {}) {
 
     const extraFailed = (freshInitOk ? 0 : 1) + (natsOk ? 0 : 1)
     const details = []
+    if (vitestFailureLines.length > 0) details.push(`vitest test:integration failures:\n  ${vitestFailureLines.join('\n  ')}`)
     if (!freshInitOk) details.push(`fresh-init-proof: ${tail(freshInit.stdout + freshInit.stderr)}`)
     if (!natsOk) details.push(`test-ports-nats: ${tail(natsTest.stdout + natsTest.stderr)}`)
 

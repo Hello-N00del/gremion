@@ -116,6 +116,34 @@ export function parseVitestJsonFile(outputFilePath) {
 }
 
 /**
+ * Names + first failure line for every failed test in a vitest JSON report,
+ * so a red `verify` run can say WHICH tests failed, not only the count.
+ * Found needed by actually running the integration suite for real: without
+ * this, "5 of 155 failed" gave no lead at all on which 5. Returns `[]` (never
+ * throws) for a missing/malformed file -- this is a diagnostics add-on, never
+ * itself a vacuity signal, so it must not turn a real failure into an
+ * unparseable one just because the report shape changed.
+ */
+export function summarizeVitestFailures(outputFilePath, limit = 10) {
+  let data
+  try {
+    data = JSON.parse(readFileSync(outputFilePath, 'utf8'))
+  } catch {
+    return []
+  }
+  const out = []
+  for (const tr of data.testResults ?? []) {
+    for (const ar of tr.assertionResults ?? []) {
+      if (ar.status !== 'failed') continue
+      const firstLine = (ar.failureMessages ?? [])[0]?.split('\n')[0] ?? '(no message)'
+      out.push(`${ar.fullName ?? ar.title ?? '(unnamed test)'}: ${firstLine}`)
+      if (out.length >= limit) return out
+    }
+  }
+  return out
+}
+
+/**
  * `svelte-check --output machine`'s final summary line:
  *   <ts> COMPLETED <n> FILES <n> ERRORS <n> WARNINGS <n> FILES_WITH_PROBLEMS
  * The release-1 gate (integration-gate.sh) parsed this with a tail `grep -oE`

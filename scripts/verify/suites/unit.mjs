@@ -9,7 +9,7 @@ import { globSync } from 'node:fs'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary, parseVitestJsonFile } from '../lib/parsers.mjs'
+import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary, parseVitestJsonFile, summarizeVitestFailures } from '../lib/parsers.mjs'
 import { run, toolAvailable } from '../lib/proc.mjs'
 
 const REPO_ROOT = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]):/, '$1:')
@@ -20,11 +20,13 @@ function vitestSubcheck({ cwd, testScript = 'test:unit' }) {
     cwd,
   })
   const parsed = parseVitestJsonFile(outFile)
+  const failureLines = parsed && parsed.failed > 0 ? summarizeVitestFailures(outFile) : []
   rmSync(path.dirname(outFile), { recursive: true, force: true })
   if (!parsed) {
     return { unparseable: true, detail: `${cwd}: vitest produced no parseable JSON report (exit ${res.code})\n${tail(res.stdout + res.stderr)}` }
   }
-  return { unparseable: false, ...parsed }
+  const detail = failureLines.length > 0 ? `${cwd}:\n  ${failureLines.join('\n  ')}` : ''
+  return { unparseable: false, ...parsed, detail }
 }
 
 // Runs node --test PER FILE, one process per file, exactly like the
@@ -160,6 +162,16 @@ export function runUnitSuite({ root = REPO_ROOT } = {}) {
   if (bats.unparseable) return unparseableResult(bats.detail)
 
   const parts = [ui, pub, ports, nodeSuite, bats]
+  // Found needed by actually running this suite with real vitest failures
+  // present: hard-coding detail: '' here discarded every sub-check's own
+  // failure summary the moment the suite as a whole was merely `failed`, not
+  // `unparseable` -- the aggregate correctly summed the failed count but gave
+  // no lead at all on which tests. Each sub-check's own `detail` (set only
+  // when it has something to say -- see vitestSubcheck) is preserved here.
+  const detail = parts
+    .map((p) => p.detail)
+    .filter((d) => d)
+    .join('\n')
   return {
     toolMissing: null,
     unparseable: false,
@@ -167,7 +179,7 @@ export function runUnitSuite({ root = REPO_ROOT } = {}) {
     passed: sum(parts, 'passed'),
     failed: sum(parts, 'failed'),
     skipped: sum(parts, 'skipped'),
-    detail: '',
+    detail,
   }
 }
 
