@@ -1,0 +1,48 @@
+{
+  "name": "@gremion/tenant-store",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Per-(tenant, module) database access and the one migration runner for the Gremion governance kernel",
+  "type": "module",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hello-N00del/gremion.git",
+    "directory": "packages/tenant-store"
+  },
+  "homepage": "https://github.com/Hello-N00del/gremion/tree/main/packages/tenant-store",
+  "bugs": "https://github.com/Hello-N00del/gremion/issues",
+  "files": ["dist", "src", "!src/**/*.test.ts", "README.md", "LICENSE"],
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check:access": "node scripts/check-tenant-db-access.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@gremion/db": "workspace:*",
+    "postgres": "^3.4.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11"
+  }
+}

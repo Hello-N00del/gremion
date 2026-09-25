@@ -1,0 +1,5 @@
+# the checkout-unique scratch-stack override (test/harness/stack.mjs writes it)
+docker-compose.local-testdb.yml
+# the scratch stack's connection state (ports, tenant ids), never committed
+.testdb-state.json
+dist/
