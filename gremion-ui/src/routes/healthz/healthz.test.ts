@@ -27,6 +27,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.useRealTimers()
   if (savedColour === undefined) delete process.env.COLOUR
   else process.env.COLOUR = savedColour
@@ -80,6 +81,7 @@ describe('GET /healthz (gremion-ui)', () => {
   })
 
   it('a registry throw still gives 200 with null', async () => {
+    vi.spyOn(console, 'warn').mockImplementationOnce(() => {})
     resolveTenantByHost.mockRejectedValue(new Error('control DB unreachable'))
     const mod = await import('./+server')
     const res = await probe(mod, 'musterstadt.example.org')
@@ -96,6 +98,49 @@ describe('GET /healthz (gremion-ui)', () => {
     const res = await pending
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('{"ok":true,"tenant":null,"colour":""}')
+  })
+
+  it('a timed-out lookup is logged and memoised as an error (5 s), not as a 30 s miss', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveTenantByHost.mockImplementation(() => new Promise(() => {}))
+    const mod = await import('./+server')
+    const first = probe(mod, 'musterstadt.example.org')
+    await vi.advanceTimersByTimeAsync(mod._HEALTHZ_LOOKUP_TIMEOUT_MS)
+    await first
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0].join(' '))).toMatch(/timed out/)
+    // Within the error memo: no new lookup.
+    await probe(mod, 'musterstadt.example.org')
+    expect(resolveTenantByHost).toHaveBeenCalledTimes(1)
+    // After it, the host is looked up again (a real tenant is not hidden for 30 s).
+    resolveTenantByHost.mockImplementation(async () => ({ slug: 'musterstadt' }))
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(await (await probe(mod, 'musterstadt.example.org')).text()).toBe(
+      '{"ok":true,"tenant":"musterstadt","colour":""}',
+    )
+    warn.mockRestore()
+  })
+
+  it('concurrent probes for one uncached host share a single lookup', async () => {
+    let release: (v: unknown) => void = () => {}
+    resolveTenantByHost.mockImplementation(() => new Promise((r) => (release = r)))
+    const mod = await import('./+server')
+    const probes = Array.from({ length: 10 }, () => probe(mod, 'musterstadt.example.org'))
+    await vi.waitFor(() => expect(resolveTenantByHost).toHaveBeenCalled())
+    release({ slug: 'musterstadt' })
+    const bodies = await Promise.all(probes.map(async (p) => (await p).text()))
+    expect(resolveTenantByHost).toHaveBeenCalledTimes(1)
+    expect(new Set(bodies)).toEqual(new Set(['{"ok":true,"tenant":"musterstadt","colour":""}']))
+  })
+
+  it('registry errors for many hosts log at most once per 5 s window', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveTenantByHost.mockRejectedValue(new Error('control DB unreachable'))
+    const mod = await import('./+server')
+    for (let i = 0; i < 20; i++) await probe(mod, `h${i}.example.org`)
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
   })
 
   it('the body is byte-identical for two probes of one host', async () => {
