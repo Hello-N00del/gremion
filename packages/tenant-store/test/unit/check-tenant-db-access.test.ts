@@ -117,6 +117,18 @@ describe('check-tenant-db-access (TRD-426)', () => {
 
   it('catches the factory module imported by a relative path', () => {
     expect(countSites("import { createDb as mk } from '../../packages/db/src/client.js'\n")).toEqual({ calls: 0, imports: 1 })
+    expect(countSites("import { createDb as mk } from '../../db/src/client.js'\n")).toEqual({ calls: 0, imports: 1 })
+  })
+
+  it('skips build output only at a package root; a source folder named build or dist is scanned', () => {
+    const root = scratchRoot({
+      'app/package.json': '{}',
+      'app/build/out.js': 'postgres(u)\n',
+      'app/src/routes/build/c.ts': 'postgres(u)\n',
+      'app/src/dist/d.ts': 'postgres(u)\n',
+    })
+    const r = check({ root, allowList: allowList([]) })
+    expect(r.sites.map((x) => x.path).sort()).toEqual(['app/src/dist/d.ts', 'app/src/routes/build/c.ts'])
   })
 
   it('catches the factory under another name (security review M1)', () => {

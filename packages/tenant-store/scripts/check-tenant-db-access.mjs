@@ -20,9 +20,10 @@
 // Allowed by rule, not by row: packages/tenant-store/** (the package itself) and
 // the @gremion/db factory (packages/db/src/client.ts and its spec).
 //
-// Not scanned: directories named node_modules, dist, build or coverage, and
-// dot-directories (.git, .svelte-kit, .scratch, .github, ...); measured
-// 2026-09-25, no tracked source file sits under one. Symlinks are not followed.
+// Not scanned: node_modules anywhere; dist, build and coverage only at a
+// package root (next to a package.json); dot-directories (.git, .svelte-kit,
+// .scratch, .github, ...) — measured 2026-09-25, no tracked source file sits
+// under one. Symlinks are not followed.
 //
 // Usage: node check-tenant-db-access.mjs [--root <dir>] [--allow-list <file>] [--json]
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -34,7 +35,11 @@ export const DEFAULT_ROOT = resolve(HERE, '../../..')
 export const DEFAULT_ALLOW_LIST = join(HERE, 'tenant-db-access.allow.json')
 
 export const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.svelte']
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage'])
+// node_modules anywhere; build output only at a package root (next to a
+// package.json) — a source folder named build or dist elsewhere, such as a
+// SvelteKit route, is scanned.
+const SKIP_ANYWHERE = new Set(['node_modules'])
+const SKIP_AT_PACKAGE_ROOT = new Set(['dist', 'build', 'coverage'])
 
 export const RULE_ALLOWED = [
   { prefix: 'packages/tenant-store/', reason: 'the package itself (TRD-426)' },
@@ -53,7 +58,7 @@ const CALL_PATTERNS = [
 const Q = `['"\`]`
 const DRIVER = String.raw`${Q}(?:postgres|pg|pg-pool|pg-native)(?:/[^'"\`]*)?${Q}`
 // the package, or its factory module reached by a relative path
-const FACTORY = String.raw`${Q}(?:@gremion/db(?:/[^'"\`]*)?|[^'"\`]*packages/db/src/(?:client|index)(?:\.[jt]s)?)${Q}`
+const FACTORY = String.raw`${Q}(?:@gremion/db(?:/[^'"\`]*)?|(?:[^'"\`]*/)?db/src/(?:client|index)(?:\.[jt]s)?)${Q}`
 // import X from '…' / import * as X / import { a, b } / export { x } from — type-only excluded below
 const STATIC_IMPORT = new RegExp(String.raw`\b(import|export)\s+(type\s+)?([^;'"\`]*?)\s*from\s*${DRIVER}`, 'g')
 // import('x').Name is a TypeScript type query, not a load: not counted.
@@ -162,8 +167,11 @@ export function countSites(text) {
 }
 
 function* walk(dir, root) {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue
+  const entries = readdirSync(dir, { withFileTypes: true })
+  const packageRoot = entries.some((e) => e.isFile() && e.name === 'package.json')
+  for (const e of entries) {
+    if (e.name.startsWith('.') || SKIP_ANYWHERE.has(e.name)) continue
+    if (e.isDirectory() && packageRoot && SKIP_AT_PACKAGE_ROOT.has(e.name)) continue
     const p = join(dir, e.name)
     if (e.isDirectory()) yield* walk(p, root)
     else if (e.isFile() && EXTENSIONS.some((x) => e.name.endsWith(x))) yield relative(root, p).split(sep).join('/')
