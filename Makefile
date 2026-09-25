@@ -204,7 +204,7 @@ test-ports-nats:
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck -x scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
+	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
 		[ -e "$$f" ] || continue; \
