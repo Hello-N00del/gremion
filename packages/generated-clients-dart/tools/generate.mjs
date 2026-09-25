@@ -14,7 +14,7 @@ import { syncDartPackages } from '../src/writer.ts'
 const log = (m) => console.log(`[dart-codegen] ${m}`)
 try {
   const tools = { generator: resolveGenerator({ log }), dart: resolveDart({ log }) }
-  const written = syncDartPackages(REPO_ROOT, realGenerate(tools, log), log)
+  const written = syncDartPackages(REPO_ROOT, realGenerate(tools, log, 'update'), log)
   log(`done: ${written.length} package(s)${written.length ? `: ${written.join(', ')}` : ''}`)
 } catch (e) {
   console.error(`[dart-codegen] FAILED — ${e.message}`)

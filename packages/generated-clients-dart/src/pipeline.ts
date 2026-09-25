@@ -23,6 +23,14 @@ import type { Tool } from './tools.ts'
 export interface PipelineTools { generator: Tool; dart: Tool }
 export interface PipelineOptions {
   log?: (m: string) => void
+  /** 'enforce' (the check, the default): `pub get --enforce-lockfile` against
+   *  the committed lock, so a lock that no longer satisfies the pubspec fails.
+   *  'update' (the writer): plain `pub get`, which keeps every locked version
+   *  that still satisfies the pubspec, so a generator bump that changes a
+   *  dependency constraint can regenerate its lock. The check then compares
+   *  that lock byte for byte like any other file. To re-resolve from scratch,
+   *  delete the surface's pubspec.lock and run `generate`. */
+  lockMode?: 'enforce' | 'update'
   /** test hook: keep the staging dir and hand its path over (caller removes it) */
   keepWorkDir?: (dir: string) => void
 }
@@ -113,6 +121,11 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
         `pubHomepage=${HOMEPAGE}`,
         'serializationLibrary=built_value',
         'dateLibrary=core',
+        // an enum value the client does not know yet decodes to a fallback
+        // case instead of failing the whole response
+        'enumUnknownDefaultCase=true',
+        // private surfaces: `dart pub publish` must refuse
+        'pubPublishTo=none',
       ].join(','),
     ], { workDir: work, network: false })
     for (const l of genOut.split('\n')) if (/\bWARN\b/.test(l) && !/Empty operationId/.test(l)) log(`  generator: ${l.trim()}`)
@@ -133,7 +146,7 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
 
     const lock = seedLock(repoRoot, s)
     if (lock) copyFileSync(lock.path, join(out, 'pubspec.lock'))
-    const pubArgs = lock?.own ? ['pub', 'get', '--enforce-lockfile'] : ['pub', 'get']
+    const pubArgs = lock?.own && (opts.lockMode ?? 'enforce') === 'enforce' ? ['pub', 'get', '--enforce-lockfile'] : ['pub', 'get']
     log(`[${s.name}] dart ${pubArgs.join(' ')} via ${tools.dart.describe}${lock ? (lock.own ? ' (committed lock)' : ' (lock seeded from another surface)') : ' (no lock yet: fresh resolution)'}`)
     tools.dart.run(pubArgs, { workDir: work, cwd: 'out' })
 
@@ -157,6 +170,14 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
     if (unaccounted.length > 0 || absent.length > 0) {
       throw new Error(`generated file set does not match the generator manifest + build_runner outputs + overlay: unaccounted [${unaccounted.join(', ')}], absent [${absent.join(', ')}]`)
     }
+    // openapi-generator renders some defaults as string literals; a string
+    // 'null' default is always that bug (see src/spec-normalize.ts), never
+    // intended, and dart analyze cannot see it.
+    for (const [rel, bytes] of files) {
+      if (rel.startsWith('lib/') && rel.endsWith('.dart') && /=\s*r?'null'\s*[;,)]/.test(bytes.toString('utf8'))) {
+        throw new Error(`${rel}: generated a string 'null' default — the client would send "null" as a value`)
+      }
+    }
     const ignoreProblems = checkIgnoreComments(files)
     if (ignoreProblems.length > 0) throw new Error(ignoreProblems.join('\n'))
     log(`[${s.name}] ${files.size} files (${manifest.length} generator, ${buildOutputs.length} build_runner)`)
@@ -170,6 +191,6 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
   }
 }
 
-export function realGenerate(tools: PipelineTools, log?: (m: string) => void): GenerateFn {
-  return (repoRoot, s) => generateDartPackage(repoRoot, s, tools, { log })
+export function realGenerate(tools: PipelineTools, log?: (m: string) => void, lockMode: 'enforce' | 'update' = 'enforce'): GenerateFn {
+  return (repoRoot, s) => generateDartPackage(repoRoot, s, tools, { log, lockMode })
 }
