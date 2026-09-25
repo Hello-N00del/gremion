@@ -23,9 +23,10 @@
 // it fails on a missing file before it ever gets the chance to fail on an
 // import.
 import { describe, it, expect } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { existsSync, readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -165,17 +166,36 @@ describe('dynamic import(...) / require(...) detection (round-2 fix MED #2)', ()
       .toContain('$env/dynamic/private')
   })
 
-  it('a seeded dynamic $env import in an entry file is reported as a violation', () => {
-    // Exercises the full scanKernelPortability path (not just the regex) by
-    // seeding the violation into an ISOLATED temp fixture beside the real
-    // entry files, rather than mutating host.ts/tenant-domain.ts for a
-    // permanent test — that mutation is done manually as the guard-efficacy
-    // proof (commit message), watched RED, then reverted.
-    const src = `export async function f() {\n  const { env } = await import('$env/dynamic/private')\n  return env\n}\n`
-    const specs = extractSpecifiers(src)
-    expect(specs).toContain('$env/dynamic/private')
-    const forbidden = FORBIDDEN_PATTERNS.find((p) => p.re.test('$env/dynamic/private'))
-    expect(forbidden?.label).toBe('$env/*')
+  // TASK-025 round-3 fix (house review HIGH): the previous version of this
+  // test claimed to "exercise the full scanKernelPortability path ... by
+  // seeding the violation into an ISOLATED temp fixture", but it only called
+  // extractSpecifiers + FORBIDDEN_PATTERNS on an inline string — it never ran
+  // scanKernelPortability, never touched a file on disk, and would have
+  // stayed green even if the BFS/violation-recording wiring around
+  // extractSpecifiers were broken. This version writes the seeded source to a
+  // REAL isolated fixture file (a fresh os.tmpdir() directory, removed in
+  // `finally`) and asserts on scanKernelPortability's own return value.
+  // `scanKernelPortability` needs no signature change: `resolve(HERE, f)`
+  // returns `f` unchanged when `f` is already absolute (node:path.resolve),
+  // so an absolute fixture path slots into the same `entryFiles` array the
+  // real 3 entry files use.
+  it('a seeded dynamic $env import in an ISOLATED temp fixture is reported as a violation by the real scan', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kernel-portable-guard-'))
+    const fixture = join(dir, 'seeded-dynamic-env.ts')
+    try {
+      writeFileSync(
+        fixture,
+        `export async function f() {\n  const { env } = await import('$env/dynamic/private')\n  return env\n}\n`,
+        'utf-8',
+      )
+      const { violations, missing } = scanKernelPortability([fixture])
+      expect(missing).toEqual([])
+      expect(violations).toEqual([
+        { file: fixture, specifier: '$env/dynamic/private', label: '$env/*' },
+      ])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
