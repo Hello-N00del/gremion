@@ -54,7 +54,7 @@ describe('checkAnalysisOptions', () => {
   it('accepts what openapi-generator 7.12.0 emits', () => {
     expect(checkAnalysisOptions(GEN)).toEqual([])
   })
-  it.each([['lib/**'], ['lib/src/*.dart'], ['**/*.g.dart'], ['**'], ['lib/src/model/**']])('rejects excluding %s', (pat) => {
+  it.each([['lib/**'], ['lib/src/*.dart'], ['**/*.g.dart'], ['**'], ['lib/src/model/**'], ['/work/out/lib/**'], ['[l]ib/**'], ['test/../lib/**'], ['./lib/a.dart']])('rejects excluding %s', (pat) => {
     expect(checkAnalysisOptions(`analyzer:\n  exclude:\n    - '${pat}'\n`).join('\n')).toMatch(/exclude/)
   })
   it('rejects re-mapping any diagnostic not on the reviewed allowlist', () => {

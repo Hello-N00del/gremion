@@ -49,20 +49,6 @@ const ALLOWED_IGNORES = new Set([
   'unused_import', // warning
 ])
 
-const LIB_PROBES = ['lib/a.dart', 'lib/src/a.dart', 'lib/src/api/a.dart', 'lib/src/model/a.dart', 'lib/src/model/a.g.dart', 'lib/src/auth/a.dart']
-
-function globToRegExp(glob: string): RegExp {
-  let re = ''
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i]
-    if (c === '*' && glob[i + 1] === '*') { re += '.*'; i++; if (glob[i + 1] === '/') i++ }
-    else if (c === '*') re += '[^/]*'
-    else if (c === '?') re += '[^/]'
-    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-  }
-  return new RegExp(`^${re}$`)
-}
-
 export function checkAnalysisOptions(text: string): string[] {
   let doc: unknown
   try {
@@ -80,9 +66,13 @@ export function checkAnalysisOptions(text: string): string[] {
   if (!Array.isArray(exclude)) problems.push('analysis_options.yaml: analyzer.exclude is not a list')
   else {
     for (const raw of exclude) {
+      // Allowlist, not a blocklist: only plain test/ or doc/ globs (what the
+      // generator emits). An absolute path, a character class, `..`, or
+      // anything else that could reach lib/ is rejected without trying to
+      // evaluate it.
       const pat = String(raw).replace(/^\.\//, '')
-      if (/^(lib\b|\*|\?|\{)/.test(pat) || LIB_PROBES.some((p) => globToRegExp(pat).test(p))) {
-        problems.push(`analysis_options.yaml: analyzer.exclude "${pat}" can exclude files under lib/ from the analyze gate`)
+      if (!/^(test|doc)\/[\w*.\-/]*$/.test(pat) || pat.includes('..')) {
+        problems.push(`analysis_options.yaml: analyzer.exclude "${pat}" is not a plain test/ or doc/ glob — it could exclude files under lib/ from the analyze gate`)
       }
     }
   }
