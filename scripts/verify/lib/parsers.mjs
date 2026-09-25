@@ -28,20 +28,34 @@ export function parseNodeTapSummary(text) {
 }
 
 /**
- * Top-level `test(` declarations across one or more node:test source files --
- * the same idiom the Makefile's lint-extraction-source / lint-toolchain
- * targets already use. `node --test` reports a file with ZERO of these as ONE
- * synthetic passing test (the file itself), which inflates `# tests`/`# pass`
- * without a single real assertion having run. Comparing this declared count
- * against parseNodeTapSummary(...).collected is what catches that -- a file
- * with 0 declared tests can never equal the >=1 collected the synthetic entry
+ * `test(` declarations across one or more node:test source files, at the
+ * start of a line and preceded only by whitespace -- so a `test(` nested
+ * inside a `describe(` block (scripts/port-back/check-do-not-overwrite.test.mjs's
+ * own style: every one of its 31 real tests is indented two spaces under a
+ * `describe`) is counted exactly like a column-0 one. The Makefile's own
+ * lint-extraction-source / lint-toolchain targets use a stricter `^test(`
+ * (column 0 only) because THEIR suites never nest under `describe` -- their
+ * own comments say so explicitly ("if the suite is ever restructured so its
+ * tests no longer start at column 0, this fails loudly"). suites/unit.mjs's
+ * node-test subcheck runs over every "scripts, any depth, *.test.mjs" file
+ * indiscriminately, including ones that do nest, so anchoring on indentation
+ * alone (not "no indentation") is what keeps a real, fully-tested file like
+ * check-do-not-overwrite.test.mjs from being misread as declaring zero tests
+ * -- caught by running this suite for real, not assumed (see the TASK-045
+ * commit message for the exact mismatch it produced before this fix).
+ *
+ * `node --test` reports a file with ZERO of these as ONE synthetic passing
+ * test (the file itself), which inflates `# tests`/`# pass` without a single
+ * real assertion having run. Comparing this declared count against
+ * parseNodeTapSummary(...).collected is what catches that -- a file with 0
+ * declared tests can never equal the >=1 collected the synthetic entry
  * produces, so the mismatch itself is the vacuity signal (see
  * suites/unit.mjs).
  */
 export function countDeclaredNodeTests(sourceTexts) {
   let n = 0
   for (const text of sourceTexts) {
-    const matches = text.match(/^test\(/gm)
+    const matches = text.match(/^[ \t]*test\(/gm)
     if (matches) n += matches.length
   }
   return n

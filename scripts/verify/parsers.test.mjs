@@ -27,9 +27,18 @@ test('parseNodeTapSummary returns null when any summary line is missing', () => 
   assert.equal(parseNodeTapSummary(''), null)
 })
 
-test('countDeclaredNodeTests counts only top-level test( at column 0', () => {
-  const src = "test('a', () => {})\ntest('b', () => {})\n  test('nested, not counted', () => {})\n"
-  assert.equal(countDeclaredNodeTests([src]), 2)
+test('countDeclaredNodeTests counts test( at column 0 AND indented under describe()', () => {
+  const src = "test('a', () => {})\ntest('b', () => {})\n  test('nested under describe, still counted', () => {})\n"
+  assert.equal(countDeclaredNodeTests([src]), 3)
+})
+
+test('countDeclaredNodeTests does not count test( that is not at the start of its line', () => {
+  const src = "const wrapped = maybeTest(() => {})\nreturn test('a real one', () => {})\n"
+  // "return test(..." has non-whitespace (the word "return") before test( on
+  // the same line, so it is not counted -- this is the shape that keeps a
+  // helper name ending in "test(" (like maybeTest() above) from being
+  // mistaken for a declaration too.
+  assert.equal(countDeclaredNodeTests([src]), 0)
 })
 
 test('countDeclaredNodeTests is 0 for a file with none -- the node-zero fixture shape', () => {
