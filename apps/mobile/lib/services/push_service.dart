@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:unifiedpush/unifiedpush.dart';
 
 /// TASK-166 (TRD-293): the self-hosted push transport (UnifiedPush + a Sygnal
@@ -21,9 +22,21 @@ const selfHostedPushEnabled = bool.fromEnvironment(
 /// [selfHostedPushEnabled]) and registers the push endpoint with Sygnal via
 /// the Matrix CS API pusher endpoint.
 class PushService {
-  PushService({required this.sygnalUrl, this.enabled = selfHostedPushEnabled});
+  PushService({
+    required this.sygnalUrl,
+    this.enabled = selfHostedPushEnabled,
+    http.Client? httpClient,
+  }) : _http = httpClient ?? http.Client();
+
+  /// Pusher app_id of the UnifiedPush transport.
+  static const unifiedPushAppId = 'com.stura.app.up';
+
+  /// SharedPreferences key holding the UnifiedPush endpoint registered as a
+  /// pusher (its pushkey), so logout can delete exactly that pusher.
+  static const unifiedPushEndpointKey = 'push.unifiedpush_endpoint';
 
   final String sygnalUrl;
+  final http.Client _http;
 
   /// Whether [init] registers the self-hosted transport. Defaults to the
   /// [selfHostedPushEnabled] build flag.
@@ -89,18 +102,22 @@ class PushService {
   Future<void> _initUnifiedPush() async {
     await UnifiedPush.initialize(
       onNewEndpoint: (endpoint, _) async {
-        await _registerWithSygnal(
+        final registered = await _registerWithSygnal(
           pushkey: endpoint.url,
-          appId: 'com.stura.app.up',
+          appId: unifiedPushAppId,
           kind: 'http',
         );
+        if (registered) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(unifiedPushEndpointKey, endpoint.url);
+        }
       },
       onRegistrationFailed: (_, __) {
         // G-091: developer.log auto-filtered in release.
         developer.log('UnifiedPush registration failed', name: 'PushService');
       },
       onUnregistered: (_) async {
-        await _deregisterFromSygnal(appId: 'com.stura.app.up');
+        await _deregisterStoredUnifiedPushPusher();
       },
       onMessage: (_, __) {
         // UnifiedPush delivers the push payload — show summary notification
@@ -126,12 +143,13 @@ class PushService {
     }
   }
 
-  Future<void> _registerWithSygnal({
+  /// Registers [pushkey] as a pusher; true when the homeserver accepted it.
+  Future<bool> _registerWithSygnal({
     required String pushkey,
     required String appId,
     required String kind,
   }) async {
-    if (_homeserverUrl == null || _matrixAccessToken == null) return;
+    if (_homeserverUrl == null || _matrixAccessToken == null) return false;
 
     final deviceName = await _resolveDeviceName();
 
@@ -149,7 +167,7 @@ class PushService {
     };
 
     try {
-      await http.put(
+      final response = await _http.put(
         Uri.parse('$_homeserverUrl/_matrix/client/v3/pushers/set'),
         headers: {
           'Content-Type': 'application/json',
@@ -157,26 +175,36 @@ class PushService {
         },
         body: jsonEncode(body),
       );
+      if (response.statusCode ~/ 100 == 2) return true;
+      developer.log(
+        'Sygnal registration rejected: HTTP ${response.statusCode}',
+        name: 'PushService',
+      );
     } catch (e) {
       developer.log('Sygnal registration failed',
           name: 'PushService', error: e);
     }
+    return false;
   }
 
   /// #233: remove every pusher this device registered (UnifiedPush) so a
   /// logged-out account stops receiving notifications. Best-effort — failures
-  /// are logged and swallowed so an offline logout still proceeds. Runs
+  /// are logged and swallowed so an offline logout still proceeds.
+  ///
+  /// The pusher is deleted directly by its stored endpoint (pushkey), awaited,
   /// whatever [enabled] says: a build without the flag may follow one that
-  /// registered a UnifiedPush pusher.
+  /// registered a pusher, and the UnifiedPush onUnregistered callback is
+  /// neither installed in such a build nor guaranteed to fire before the
+  /// token is revoked.
   ///
   /// MUST run BEFORE the Matrix token is revoked (MatrixService.logout()):
   /// /pushers/set is authenticated with [_matrixAccessToken], which becomes
-  /// invalid after logout, so deregistering afterwards would silently 401 and
-  /// leave the pushers live.
+  /// invalid after logout, so deregistering afterwards would 401 and leave
+  /// the pushers live.
   Future<void> deregisterAll() async {
+    await _deregisterStoredUnifiedPushPusher();
     if (Platform.isAndroid) {
       try {
-        // Fires onUnregistered → _deregisterFromSygnal for the UnifiedPush id.
         await UnifiedPush.unregister();
       } catch (e) {
         developer.log('UnifiedPush unregister failed',
@@ -185,11 +213,35 @@ class PushService {
     }
   }
 
-  Future<void> _deregisterFromSygnal(
-      {required String appId, String pushkey = ''}) async {
-    if (_homeserverUrl == null || _matrixAccessToken == null) return;
+  /// Deletes the pusher for the stored UnifiedPush endpoint. The endpoint is
+  /// forgotten only once the homeserver confirmed the deletion, so a failed
+  /// (e.g. offline) attempt is retried by the next one.
+  Future<void> _deregisterStoredUnifiedPushPusher() async {
     try {
-      await http
+      final prefs = await SharedPreferences.getInstance();
+      final endpoint = prefs.getString(unifiedPushEndpointKey);
+      if (endpoint == null || endpoint.isEmpty) return;
+      if (await _deregisterFromSygnal(
+        appId: unifiedPushAppId,
+        pushkey: endpoint,
+      )) {
+        await prefs.remove(unifiedPushEndpointKey);
+      }
+    } catch (e) {
+      developer.log('UnifiedPush pusher deregistration failed',
+          name: 'PushService', error: e);
+    }
+  }
+
+  /// Deletes the pusher ([appId], [pushkey]); true when the homeserver
+  /// accepted the deletion.
+  Future<bool> _deregisterFromSygnal({
+    required String appId,
+    required String pushkey,
+  }) async {
+    if (_homeserverUrl == null || _matrixAccessToken == null) return false;
+    try {
+      final response = await _http
           .put(
             Uri.parse('$_homeserverUrl/_matrix/client/v3/pushers/set'),
             headers: {
@@ -203,7 +255,16 @@ class PushService {
             }),
           )
           .timeout(const Duration(seconds: 10));
-    } catch (_) {}
+      if (response.statusCode ~/ 100 == 2) return true;
+      developer.log(
+        'Pusher deregistration rejected: HTTP ${response.statusCode}',
+        name: 'PushService',
+      );
+    } catch (e) {
+      developer.log('Pusher deregistration failed',
+          name: 'PushService', error: e);
+    }
+    return false;
   }
 
   Future<void> _showLocalNotification() async {
