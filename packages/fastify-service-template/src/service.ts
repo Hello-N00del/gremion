@@ -7,6 +7,7 @@ import multipart from '@fastify/multipart'
 import { STATUS_CODES } from 'node:http'
 import { resolveUploadCeiling } from './ceiling.ts'
 import { checkHandlerTable, registerRoutes, type HandlerTable, type OperationHandler } from './loader.ts'
+import { checkRequestMediaTypes, registerJsonMediaTypes } from './media-types.ts'
 import { PROBLEM_TYPES, sendProblem } from './problem.ts'
 import { inlineRefs, listOperations, loadSpec, routeKey, type SpecSource } from './spec.ts'
 import { uploadLimitWasHit } from './upload.ts'
@@ -83,7 +84,9 @@ export function createService(options: CreateServiceOptions): FastifyInstance {
   const config = options.config ?? {}
   const uploadCeilingBytes = resolveUploadCeiling(config.uploadCeilingBytes)
   const doc = inlineRefs(loadSpec(options.spec))
-  checkHandlerTable(listOperations(doc), options.handlers)
+  const ops = listOperations(doc)
+  checkHandlerTable(ops, options.handlers)
+  const jsonMediaTypes = checkRequestMediaTypes(ops)
 
   const app = Fastify({
     logger: config.logger ?? false,
@@ -91,6 +94,7 @@ export function createService(options: CreateServiceOptions): FastifyInstance {
     // No implicit HEAD twin per GET: the route table is exactly the spec.
     exposeHeadRoutes: false,
   })
+  registerJsonMediaTypes(app, jsonMediaTypes)
   const routeTable: string[] = []
   STATE.set(app, { routeTable, uploadCeilingBytes })
 
