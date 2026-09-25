@@ -61,7 +61,8 @@ updates:
         # for why a single dev-deps mega-bundle is unmaintainable.
         update-types: [patch, minor]
 
-  # Docker images — every Dockerfile in docker/ plus the gremion-ui one.
+  # Docker images — every Dockerfile in docker/, the gremion-ui one and the
+  # bats runner.
   # `directories:` (plural) with explicit paths is more reliable than a glob
   # for Dependabot v2; the alternative `directory: /` only finds /Dockerfile.
   # The list names exactly the Dockerfile directories this repository has — a
@@ -72,9 +73,15 @@ updates:
   # node-major ignore rule without affecting the other Dockerfiles' cadence.
   - package-ecosystem: docker
     directories:
+      - /docker/fallback
       - /docker/legal
       - /docker/vector
       - /gremion-ui
+      # The local bats runner image (test/host/runner). Not shipped, but it
+      # pins a base image like any other; scripts/release/
+      # check-dependabot-dockerfiles.mjs fails on a tracked Dockerfile whose
+      # directory no docker entry names (TASK-046).
+      - /test/host/runner
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
