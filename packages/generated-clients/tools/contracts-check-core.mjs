@@ -42,7 +42,7 @@ const BASE_REF_CANDIDATES = ['origin/main', 'main']
 
 function revParseHead(repoRoot) {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim()
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
   } catch {
     return null
   }
@@ -64,7 +64,10 @@ export function discoverBaseRef(repoRoot, env = process.env) {
   for (const branch of BASE_REF_CANDIDATES) {
     let ref = ''
     try {
-      ref = execFileSync('git', ['merge-base', 'HEAD', branch], { cwd: repoRoot, encoding: 'utf8' }).trim()
+      // stderr piped, not inherited: a missing candidate is expected, and a
+      // stray `fatal:` line on a run that then succeeds trains people to
+      // ignore `fatal:` lines.
+      ref = execFileSync('git', ['merge-base', 'HEAD', branch], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
     } catch {
       continue // this candidate branch does not exist locally — try the next one
     }
@@ -98,9 +101,62 @@ function isResolvableCommit(repoRoot, ref) {
   }
 }
 
+/** Commit SHA `ref` names, or null. */
+function revParseCommit(repoRoot, ref) {
+  try {
+    return execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  } catch {
+    return null
+  }
+}
+
+/** True when none of `files` differs between HEAD and the working tree. */
+function specsCleanAgainstHead(repoRoot, files) {
+  try {
+    execFileSync('git', ['diff', '--quiet', 'HEAD', '--', ...files], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The path `file` had at `ref` when it was renamed since (base vs working
+ *  tree, rename detection on), or null. Round-1 verifier HIGH: `git mv` of a
+ *  spec plus a break made the new path look "new since base", so it was never
+ *  diffed and the whole check said OK. */
+function renamedFrom(repoRoot, ref, file) {
+  let out = ''
+  try {
+    out = execFileSync('git', ['diff', '-M', '--name-status', '-z', ref, '--'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch {
+    return null
+  }
+  const f = out.split('\0')
+  for (let i = 0; i < f.length; ) {
+    const status = f[i]
+    if (!status) break
+    if (status.startsWith('R') || status.startsWith('C')) {
+      if (f[i + 2] === file && status.startsWith('R')) return f[i + 1]
+      i += 3
+    } else {
+      i += 2
+    }
+  }
+  return null
+}
+
+/** The base copy of a registered spec: at its own path, else at the path it
+ *  was renamed from. null = genuinely new since base. */
+function readBaseCopy(repoRoot, ref, file) {
+  const own = readAtRef(repoRoot, ref, file)
+  if (own !== null) return own
+  const old = renamedFrom(repoRoot, ref, file)
+  return old === null ? null : readAtRef(repoRoot, ref, old)
+}
+
 function readAtRef(repoRoot, ref, file) {
   try {
-    return execFileSync('git', ['show', `${ref}:${file}`], { cwd: repoRoot, encoding: 'utf8' })
+    return execFileSync('git', ['show', `${ref}:${file}`], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   } catch {
     return null // file is new since base — ref is guaranteed valid by the isResolvableCommit gate in runContractsCheck
   }
@@ -145,6 +201,15 @@ export function runContractsCheck(repoRoot, opts = {}) {
     // supplied (usually CONTRACTS_BASE_REF), it just does not name a real
     // commit.
     problems.push(`[contracts-check] base ref '${baseRef}' does not resolve to a real commit — failing closed. There is no environment bypass; fix CONTRACTS_BASE_REF or unset it to use automatic discovery.`)
+  } else if (env.CONTRACTS_BASE_REF
+    && revParseCommit(repoRoot, baseRef) === revParseCommit(repoRoot, 'HEAD')
+    && specsCleanAgainstHead(repoRoot, entries.map((e) => e.file))) {
+    // Round-1 review MEDIUM: an explicit ref that RESOLVES to HEAD (`HEAD`,
+    // `main`, or `origin/main` on a push to trunk) with no spec edits in the
+    // working tree diffs every spec against itself — the same vacuous OK the
+    // discovery guard above refuses. HEAD as the base for an UNCOMMITTED spec
+    // edit (the README's acceptance demo) is a real diff and still honoured.
+    problems.push(`[contracts-check] CONTRACTS_BASE_REF '${baseRef}' resolves to HEAD and no registered spec differs from HEAD — diffing every spec against itself would check nothing, so failing closed. Point CONTRACTS_BASE_REF at an earlier commit (e.g. HEAD~1).`)
   } else {
     baseRefValid = true
   }
@@ -152,7 +217,7 @@ export function runContractsCheck(repoRoot, opts = {}) {
   let compatChecked = 0
   if (baseRefValid) {
     for (const entry of entries) {
-      const oldRaw = readAtRef(repoRoot, baseRef, entry.file)
+      const oldRaw = readBaseCopy(repoRoot, baseRef, entry.file)
       if (oldRaw === null) continue // new since base: registered (checked above), no prior version to diff
       const newRaw = readFileSync(join(repoRoot, entry.file), 'utf8')
       let result
@@ -175,7 +240,7 @@ export function runContractsCheck(repoRoot, opts = {}) {
   if (entries.length === 0) {
     problems.push('vacuity: contracts/registry.json has zero entries — nothing was checked')
   } else if (baseRefValid && compatChecked === 0) {
-    const allNew = entries.every((e) => readAtRef(repoRoot, baseRef, e.file) === null)
+    const allNew = entries.every((e) => readBaseCopy(repoRoot, baseRef, e.file) === null)
     if (!allNew) problems.push(`vacuity: compat-checked 0 of ${entries.length} registered spec(s) against base ${baseRef}`)
   }
 

@@ -47,7 +47,10 @@ let discoverBaseRef: DiscoverBaseRef
  *  same invocation contracts/README.md documents for trunk. */
 function realTreeEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env }
-  if (env.CONTRACTS_BASE_REF) return env
+  // An inherited override (e.g. CONTRACTS_BASE_REF=HEAD left exported from
+  // the README demo) would make this run whatever the shell says; discovery
+  // is what the real-tree test is about.
+  delete env.CONTRACTS_BASE_REF
   if (discoverBaseRef(REPO_ROOT, env).baseIsHead) env.CONTRACTS_BASE_REF = 'HEAD~1'
   return env
 }
@@ -257,13 +260,56 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     }
   })
 
-  it('an explicit CONTRACTS_BASE_REF equal to HEAD is the operator\'s choice, not refused', () => {
+  // Round-1 review MEDIUM: an explicit ref that RESOLVES to HEAD (`HEAD`,
+  // `main`, `origin/main` on a trunk push) with no spec edits in the working
+  // tree diffs every spec against itself — the same vacuous OK, one step
+  // sideways. It fails closed; HEAD as the base for an UNCOMMITTED spec edit
+  // (the README's acceptance-demo invocation) is still honoured.
+  it('an explicit CONTRACTS_BASE_REF resolving to HEAD with no spec edits: fails CLOSED', () => {
     const d = trunkTree()
     try {
-      const env = { ...envWithout(), CONTRACTS_BASE_REF: 'HEAD' }
-      const result = runContractsCheck(d, { env })
+      for (const ref of ['HEAD', 'main']) {
+        const result = runContractsCheck(d, { env: { ...envWithout(), CONTRACTS_BASE_REF: ref } })
+        expect(result.ok).toBe(false)
+        expect(result.compatChecked).toBe(0)
+        expect(result.problems.some((p) => /resolves to HEAD/.test(p) && /CONTRACTS_BASE_REF/.test(p))).toBe(true)
+      }
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
+  })
+
+  it('an explicit CONTRACTS_BASE_REF=HEAD with an UNCOMMITTED spec edit is honoured (acceptance-demo invocation)', () => {
+    const d = trunkTree()
+    try {
+      writeSpec(d, { ...specRemoved, paths: {} })
+      const result = runContractsCheck(d, { env: { ...envWithout(), CONTRACTS_BASE_REF: 'HEAD' } })
       expect(result.baseRef).toBe('HEAD')
-      expect(result.problems.some((p) => /equals HEAD/.test(p))).toBe(false)
+      expect(result.compatChecked).toBe(1)
+      expect(result.problems.some((p) => /resolves to HEAD/.test(p))).toBe(false)
+      expect(result.problems.some((p) => /openapi\.x\.json: breaking change/.test(p))).toBe(true)
+    } finally {
+      rmSync(d, { recursive: true, force: true })
+    }
+  })
+
+  // Round-1 verifier HIGH (pre-existing): `git mv` of a spec plus a break made
+  // the new path "new since base", so it was never diffed and the check said
+  // OK. A renamed spec is diffed against its base copy under the OLD path.
+  it('a renamed spec with a break is still diffed against its base copy under the old path', () => {
+    const d = trunkTree()
+    try {
+      git(d, ['reset', '-q', '--hard', 'HEAD~1']) // main = v1 with /x and /y
+      git(d, ['checkout', '-q', '-b', 'unit/rename'])
+      git(d, ['mv', 'contracts/kernel/openapi.x.json', 'contracts/kernel/openapi.z.json'])
+      writeFileSync(join(d, 'contracts', 'kernel', 'openapi.z.json'), JSON.stringify(specRemoved))
+      writeFileSync(join(d, 'contracts', 'registry.json'), JSON.stringify({
+        specs: [{ name: 'x', type: 'openapi', file: 'contracts/kernel/openapi.z.json', status: 'active', owner: 'gov' }],
+      }))
+      git(d, ['commit', '-q', '-am', 'rename + remove /y, no bump'])
+      const result = runContractsCheck(d, { env: envWithout() })
+      expect(result.compatChecked).toBe(1)
+      expect(result.problems.some((p) => /openapi\.z\.json: breaking change/.test(p))).toBe(true)
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
