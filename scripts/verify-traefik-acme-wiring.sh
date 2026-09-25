@@ -218,17 +218,21 @@ echo "CLAIM 1 — a tls=true router does not inherit the entrypoint resolver"
 inherited_empty="$(node -e '
   const d = require(process.argv[1]);
   const r = d.routers["probe-tlsempty@file"];
-  process.stdout.write(r && r.tls && r.tls.certResolver ? r.tls.certResolver : "<none>");
+  process.stdout.write(!r ? "<missing>" : r.tls && r.tls.certResolver ? r.tls.certResolver : "<none>");
 ' "$WORK/rawdata.json")"
 inherited_none="$(node -e '
   const d = require(process.argv[1]);
   const r = d.routers["probe-notls@file"];
-  process.stdout.write(r && r.tls && r.tls.certResolver ? r.tls.certResolver : "<none>");
+  process.stdout.write(!r ? "<missing>" : r.tls && r.tls.certResolver ? r.tls.certResolver : "<none>");
 ' "$WORK/rawdata.json")"
 
 echo "        router with tls: {}   -> certResolver = ${inherited_empty}"
 echo "        router with no tls    -> certResolver = ${inherited_none}"
-if [[ "$inherited_empty" == "<none>" ]]; then
+# A router that never loaded reads as "<missing>", never as "<none>": without
+# this, a fixture Traefik did not load would PASS claim 1 vacuously.
+if [[ "$inherited_empty" == "<missing>" || "$inherited_none" == "<missing>" ]]; then
+    fail "a probe router did not load (tls={}: ${inherited_empty}, no tls: ${inherited_none}) -- claim 1 proves nothing"
+elif [[ "$inherited_empty" == "<none>" ]]; then
     pass "tls={} opts OUT of the entrypoint resolver — every router needs its own certresolver label"
 else
     fail "tls={} INHERITED '${inherited_empty}' — the per-router labels may no longer be required; re-derive before trusting them"
@@ -348,20 +352,16 @@ echo ""
 FIXTURE_ENV="test/host/fixtures/edge-render/state.env"
 
 # The kernel composition's `legal` service names the git-ignored
-# legal/legal.env; compose refuses to render without it. Created only if
-# absent, and removed again on the way out.
-CREATED_LEGAL_ENV=false
-if [[ ! -f legal/legal.env ]]; then
-    mkdir -p legal
-    : > legal/legal.env
-    CREATED_LEGAL_ENV=true
-fi
+# legal/legal.env; compose refuses to render without it. Created EMPTY only if
+# absent and left in place (what ci.yml's `touch` leaves): removing it again
+# would race any concurrent render that saw it present.
+mkdir -p legal
+[[ -f legal/legal.env ]] || : >> legal/legal.env
 NAME_C="traefik-acme-proof-c-$$"
 NAME_D="traefik-acme-proof-d-$$"
 cleanup_all() {
     cleanup
     docker rm -f "$NAME_C" "$NAME_D" >/dev/null 2>&1 || true
-    if [[ "$CREATED_LEGAL_ENV" == true ]]; then rm -f legal/legal.env; fi
 }
 trap cleanup_all EXIT
 
@@ -369,6 +369,8 @@ trap cleanup_all EXIT
 # --env-file, and this proof must measure the repository, not the caller.
 TRAEFIK_CMD=""
 if env -i PATH="$PATH" HOME="${HOME:-/root}" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+        ${DOCKER_CONFIG:+DOCKER_CONFIG="$DOCKER_CONFIG"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
+        ${DOCKER_CERT_PATH:+DOCKER_CERT_PATH="$DOCKER_CERT_PATH"} ${DOCKER_TLS_VERIFY:+DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY"} \
         docker compose --env-file "$FIXTURE_ENV" config --format json \
         > "$WORK/render.json" 2>"$WORK/render.err"; then
     # compose config re-escapes a literal $ as $$; the container sees one.
@@ -381,8 +383,12 @@ if env -i PATH="$PATH" HOME="${HOME:-/root}" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER
         console.error("traefik is not started as /bin/sh -c <one script>: " + JSON.stringify({ ep, cmd }))
         process.exit(1)
       }
+      if (c.image !== process.argv[2]) {
+        console.error("the render runs " + c.image + " but this proof measures " + process.argv[2])
+        process.exit(1)
+      }
       process.stdout.write(cmd[0].replace(/\$\$/g, "$"))
-    ' "$WORK/render.json")" || TRAEFIK_CMD=""
+    ' "$WORK/render.json" "$IMAGE")" || TRAEFIK_CMD=""
 else
     cat "$WORK/render.err" >&2
 fi
@@ -399,6 +405,18 @@ else
     # NOT create it: without it the resolver is dropped ("unable to get ACME
     # account") and no certificate is ever requested -- reproduce it here.
     mkdir -p "$WORK/letsencrypt" "$WORK/dynamic"
+    # A router that NAMES le-http, so the resolver's acceptance is read back
+    # positively from the API, not inferred from the absence of a log line.
+    cat > "$WORK/dynamic/claim4.yml" <<'YAML'
+http:
+  routers:
+    claim4-probe:
+      rule: "Host(`claim4.example.org`)"
+      entryPoints: [websecure]
+      service: noop@internal
+      tls:
+        certResolver: le-http
+YAML
     MSYS_NO_PATHCONV=1 docker run -d --name "$NAME_C" \
         -e "ACME_EMAIL=${PROOF_EMAIL}" \
         -e "TRAEFIK_CERT_RESOLVER=le-http" \
@@ -440,10 +458,19 @@ else
         fail "Traefik did not stay up on the rendered config; logs follow"
         sed 's/^/        /' "$WORK/logs-c.txt" >&2
     fi
+    probe_router="$(docker exec "$NAME_C" wget -qO- http://127.0.0.1:8080/api/http/routers/claim4-probe@file 2>/dev/null || true)"
+    probe_state="$(node -e '
+      let r; try { r = JSON.parse(process.argv[1]) } catch { r = null }
+      if (!r) { process.stdout.write("<missing>"); process.exit(0) }
+      process.stdout.write(r.status + "|" + (r.tls && r.tls.certResolver) + "|" + (r.error || []).join(";"))
+    ' "$probe_router")"
+    echo "        claim4-probe@file: ${probe_state}"
     if grep -q "ACME resolve is skipped from the resolvers list" "$WORK/logs-c.txt"; then
         fail "the le-http resolver was SKIPPED -- check that /letsencrypt is mounted (compose: traefik-acme volume)"
+    elif [[ "$probe_state" == "enabled|le-http|" ]] && ! grep -q "nonexistent certificate resolver" "$WORK/logs-c.txt"; then
+        pass "a router naming le-http is enabled with no error -- the resolver exists on the rendered config"
     else
-        pass "the le-http resolver was accepted into the resolvers list"
+        fail "a router naming le-http is not cleanly enabled (${probe_state}) -- the resolver is not in effect"
     fi
     if [[ "$(docker exec "$NAME_C" wget -qO- http://127.0.0.1:8082/ping 2>/dev/null)" == "OK" ]]; then
         pass "the ping entrypoint the healthcheck probes answers OK on the rendered config"
@@ -559,6 +586,18 @@ else
     # Non-vacuity: cut ONE marker's sed expression out of the command at a
     # time. The check above must go RED for every one of them; a check that
     # stayed green would be proving nothing.
+    # And one mutant that KEEPS every expression but substitutes a wrong value:
+    # it trips no FATAL guard, so it goes RED only through the probe-value
+    # comparison -- proving that half of the check is live too.
+    wrong="$(sed -E 's/\|@EDGE_V4_SUBNET@\|[^|]*\|g/|@EDGE_V4_SUBNET@|10.0.0.0\/8|g/' <<<"$TRAEFIK_CMD")"
+    if [[ "$wrong" == "$TRAEFIK_CMD" ]]; then
+        fail "could not build the wrong-value mutant for @EDGE_V4_SUBNET@"
+    elif all_substituted "$(render_only "$wrong")"; then
+        fail "a render substituting the WRONG value for @EDGE_V4_SUBNET@ still passed -- the value check is vacuous"
+    else
+        pass "a render substituting the wrong value for @EDGE_V4_SUBNET@ goes RED (the value comparison is live)"
+    fi
+
     for m in "${MARKERS[@]}"; do
         mutant="$(sed -E "s/-e \"s\\|@${m}@\\|[^\"]*\"//" <<<"$TRAEFIK_CMD")"
         if [[ "$mutant" == "$TRAEFIK_CMD" ]]; then

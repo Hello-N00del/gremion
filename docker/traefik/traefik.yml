@@ -6,9 +6,10 @@
 # address and requests arrive there directly. Replaced wholesale from the
 # StuRa-tree production file; the Cloudflare Origin default-certificate store
 # that used to sit in the dynamic directory is gone, so a router that names no
-# resolver now fails loud
-# with Traefik's self-signed default instead of quietly serving a CA-issued
-# certificate for the wrong host.
+# resolver now serves Traefik's self-signed default instead of a CA-issued
+# certificate for the wrong host. That is visible to every client but NOT to
+# the healthcheck or the Traefik log (mechanism 1): gremion-verify's
+# certificate check is what turns it red.
 #
 # THREE MECHANISMS THIS FILE DEPENDS ON, each MEASURED against the pinned image
 # by `bash scripts/verify-traefik-acme-wiring.sh` (traefik:v3.7.1), none of
@@ -61,13 +62,23 @@ entryPoints:
           permanent: true
   websecure:
     address: ":443"
+    # The ONLY default entrypoint. Without any asDefault, Traefik attaches a
+    # router that names no entryPoints to EVERY entrypoint -- internaltest
+    # included, where it could outrank active.yml's priority-1 test router and
+    # make gremion-verify probe the wrong colour.
+    asDefault: true
     # Traefik is the FIRST hop: a public client's connection terminates here,
     # so the connection's own remote address is the real client address, and
-    # nothing keyed on security may read a forwarded header. The list trusts
-    # the container's own loopback and the pinned ${STACK}_edge subnets, which
-    # is where Docker's userland proxy re-originates an IPv6 or host-local
-    # client from. Every extra range is an X-Forwarded-For forgery away for any
-    # container inside it, so nothing broader belongs here.
+    # nothing keyed on security may read a forwarded header. The list is the
+    # spec B contract: the container's own loopback and the pinned
+    # ${STACK}_edge subnets. Every range here is an X-Forwarded-For forgery
+    # away for any peer inside it -- including the subnet's gateway, which is
+    # where Docker's userland proxy re-originates IPv6 clients from.
+    # NOTE (TASK-022 residual): this composition still attaches traefik to
+    # gremion_net only, which is not ${STACK}_edge, so today these two entries
+    # match no peer (fail-closed: forwarded headers from the network are
+    # dropped, IPv6 clients all appear as the gremion_net gateway). Moving the
+    # service onto ${STACK}_edge is TASK-040's, and re-weighs this list.
     forwardedHeaders:
       trustedIPs:
         - "127.0.0.1/32"

@@ -444,9 +444,9 @@ services:
     #   - a resolver with a blank contact registers an ACME account that can
     #     never be recovered, so ACME_EMAIL is required while
     #     TRAEFIK_CERT_RESOLVER is non-empty (and only then);
-    #   - an empty CA or subnet, or a value carrying a sed metacharacter
-    #     (| & or backslash), would render a different file than the one
-    #     reviewed;
+    #   - an empty CA or subnet, a value carrying a sed or YAML metacharacter
+    #     (| & backslash or "), or a /0 subnet would render a different -- or
+    #     a wide-open -- file than the one reviewed;
     #   - a marker that survives the render means a sed expression is missing.
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -458,7 +458,9 @@ services:
         for v in "$${ACME_CA_SERVER}" "$${EDGE_V4_SUBNET}" "$${EDGE_V6_SUBNET}"; do
         [ -n "$$v" ] || { echo "FATAL: ACME_CA_SERVER, EDGE_V4_SUBNET and EDGE_V6_SUBNET are required." >&2; exit 1; }; done;
         case "$${ACME_EMAIL}$${ACME_CA_SERVER}$${EDGE_V4_SUBNET}$${EDGE_V6_SUBNET}" in
-        *'|'*|*'&'*|*'\'*) echo "FATAL: an edge value carries a sed metacharacter (| & or backslash)." >&2; exit 1;; esac;
+        *'|'*|*'&'*|*'\'*|*'"'*) echo "FATAL: an edge value carries a sed or YAML metacharacter (| & backslash or double quote)." >&2; exit 1;; esac;
+        case " $${EDGE_V4_SUBNET} $${EDGE_V6_SUBNET} " in
+        *' 0.0.0.0/0 '*|*' ::/0 '*) echo "FATAL: an EDGE subnet of /0 would trust every forwarded header on the internet." >&2; exit 1;; esac;
         sed -e "s|@ACME_EMAIL@|$${ACME_EMAIL:-acme-unused@invalid}|g"
         -e "s|@ACME_CA_SERVER@|$${ACME_CA_SERVER}|g"
         -e "s|@EDGE_V4_SUBNET@|$${EDGE_V4_SUBNET}|g"
@@ -501,7 +503,14 @@ services:
       # The host's router directory (per-tenant files, etc/edge/active.yml):
       # the ONLY mount of /etc/traefik/dynamic any container holds, and
       # read-only -- writers work on the host side (spec B "Edge" §2).
-      - ${GREMION_ROOT}/etc/edge:/etc/traefik/dynamic:ro
+      # Long syntax so a missing host directory is a refusal at `up`, not an
+      # empty directory Docker creates and Traefik watches forever.
+      - type: bind
+        source: ${GREMION_ROOT}/etc/edge
+        target: /etc/traefik/dynamic
+        read_only: true
+        bind:
+          create_host_path: false
       # ACME account and certificates live only here (TRD-042). The Cloudflare
       # Origin certificate mounts left with dynamic/tls.yml.
       - traefik-acme:/letsencrypt

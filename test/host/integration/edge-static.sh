@@ -102,7 +102,6 @@ IP_CHALL="10.231.${OCTET}.20"
 IP_PEBBLE="10.231.${OCTET}.30"
 
 # ── teardown, by explicit name only ─────────────────────────────────────────
-CREATED_LEGAL_ENV=false
 cleanup() {
     local rc=$?
     if [[ "${EDGE_STATIC_KEEP:-0}" != 1 ]]; then
@@ -113,7 +112,6 @@ cleanup() {
     else
         echo "EDGE_STATIC_KEEP=1: left ${STACK} running; remove by name: $C_TRAEFIK $C_PROXY $C_PEBBLE $C_CHALL $ACME_VOLUME $LOGS_VOLUME $NETWORK $WORK" >&2
     fi
-    if [[ "$CREATED_LEGAL_ENV" == true ]]; then rm -f legal/legal.env; fi
     exit "$rc"
 }
 trap cleanup EXIT
@@ -173,7 +171,11 @@ build_from_module() {
     ctx="$(mktemp -d)"
     gobin="${ctx}/bin"
     mkdir -p "$gobin"
-    CGO_ENABLED=0 GOBIN="$gobin" GOFLAGS=-mod=mod go install \
+    # Checksum database and proxy pinned, whatever the caller's go env says:
+    # every dependency is verified against sum.golang.org, not just the main
+    # module hash asserted below.
+    CGO_ENABLED=0 GOBIN="$gobin" GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GONOSUMDB= GONOSUMCHECK= GOPRIVATE= \
+        GOPROXY=https://proxy.golang.org GOINSECURE= go install \
         "github.com/letsencrypt/pebble/v2/cmd/${cmd}@v${PEBBLE_VERSION}" >/dev/null 2>&1 || { rm -rf "$ctx"; return 1; }
     sum="$(go version -m "${gobin}/${cmd}" | awk '$1 == "mod" && $2 == "github.com/letsencrypt/pebble/v2" { print $4 }')"
     if [[ "$sum" != "$PEBBLE_MODULE_SUM" ]]; then
@@ -203,11 +205,10 @@ echo "  (scratch CA: pebble ${PEBBLE_VERSION} from ${PEBBLE_SOURCE})"
 # ── the scratch root ────────────────────────────────────────────────────────
 rm -rf "$WORK"
 mkdir -p "$ROOT/etc/edge" "$WORK/pebble"
-if [[ ! -f legal/legal.env ]]; then
-    mkdir -p legal
-    : > legal/legal.env
-    CREATED_LEGAL_ENV=true
-fi
+# legal/legal.env: created EMPTY if absent and left in place (what ci.yml's
+# `touch` leaves), so a concurrent render never loses it mid-run.
+mkdir -p legal
+[[ -f legal/legal.env ]] || : >> legal/legal.env
 
 # Pebble's own trust root, lifted out of the image so Traefik can trust it via
 # LEGO_CA_CERTIFICATES.
