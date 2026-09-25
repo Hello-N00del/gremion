@@ -247,12 +247,76 @@ nevertheless applied by every tenant, module ON or OFF:
 
 They are kernel-applied by written rule, because later **ungated** kernel DDL
 depends on the tables existing — `010_org_units.sql` ALTERs
-`committee_elections`, and `058_public_reader_grants.sql` aborts on a missing
-portal table. The set is machine-readable as `CROSS_CUTTING_MIGRATIONS` in
+`committee_elections` — and `gremion-ui/scripts/fresh-init-proof.sh` measures
+all three against a real database regardless of module state. The set is
+machine-readable as `CROSS_CUTTING_MIGRATIONS` in
 [`../src/lib/modules/migration-ownership.ts`](../src/lib/modules/migration-ownership.ts)
 and is asserted against a module-OFF apply list in
 `../src/lib/modules/migration-ownership.test.ts`. It is a closed list: a new
 migration that touches a module-owned table belongs in that module's repository.
+
+### Table ownership: kernel-guaranteed vs module-owned
+
+A migration in **this** directory may only depend on tables **this** directory
+produces. A table a module owns is created by that module's own migration, in
+that module's block (B-04: kernel `0001`–`0199`, module blocks of 100 from
+`1000`), and is granted by that module's own migration too.
+
+`news_posts` is the worked example. `008_public_portal.sql` records that the
+table moved out with the calendar/news modules during the Civitas kernel carve,
+so nothing here creates it. `058_public_reader_grants.sql` grants the
+anonymous reader role `gremion_public_reader` only the tables the anonymous
+public portal actually reads (R-E13: `gremion-public/src/lib/server/public-db.ts`
+reads `protocols` and `org_units`, nothing else) —
+
+| Table | Produced by |
+|---|---|
+| `protocols` | `007_protocols.sql` |
+| `org_units` | `010_org_units.sql` (`ALTER TABLE committees RENAME TO org_units`) |
+
+— and still **aborts** when one of them is absent: an absent kernel table means
+a broken replay, and a silent skip is the defect `058` exists to close. `058`
+also **REVOKEs** SELECT on `calendar_events`, `event_recurrence`,
+`protocol_resolutions` and `resolution_challenges` — every kernel-guaranteed
+table the anonymous portal's own queries never read — alongside the
+pre-existing `protocol_attendance` / `protocol_action_items` revoke. The
+REVOKE is load-bearing on every install, fresh included: kernel
+`008_public_portal.sql` grants `protocol_resolutions`, `protocol_attendance`
+and `protocol_action_items` to `gremion_public_reader` directly, and
+`055_resolution_challenges.sql` grants `resolution_challenges` the same way —
+both run before `058`. Without the REVOKE, a brand-new database would still
+end up holding those grants. `calendar_events` and `event_recurrence` are not
+granted by any kernel migration today; revoking them is defensive. The REVOKE
+runs after `055_resolution_challenges.sql`'s own GRANT, keeping the `055` →
+`058` filename ordering load-bearing. Editing `058` in place does not converge
+a database that already applied an earlier, six-table version of it under
+this filename — the migration runner skips a filename it has already
+recorded before re-checking its hash — but no such database exists: kernel
+`058` has never shipped on `main` or `origin/main`.
+
+`news_posts` and its `GRANT SELECT` live in the content module's
+`1200_content_news_posts.sql`, staged outside this directory
+(`modules/content/migrations/`) until the content module repo exists; that
+grant covers the whole row today, drafts and `author_id` included, since no
+portal query reads `news_posts` yet — narrowing it to a published-only view
+is a follow-on unit, not this one. The consequence is the rule: a
+**content-OFF** kernel-only fresh init completes green and serves the
+anonymous portal on exactly `protocols` and `org_units`, and a content-ON
+install additionally grants `news_posts`.
+
+Row-level exposure is a separate, still-open gap: the table grants above let
+the anonymous role's own database connection select unpublished protocols and
+`committee_only` org units directly. Today only `public-db.ts`'s own `WHERE`
+clauses keep the portal's HTTP responses to published, publicly-visible rows —
+not a database-level restriction. A view or row-level-security policy that
+enforces that at the grant is a residual, not yet built.
+
+Enforced by `src/lib/modules/migration-portal-grants.test.ts` (`portal_tables`
+is exactly `org_units` and `protocols`, `revoked_tables` covers the four
+newly-narrowed tables, and no executable line here names the retired
+`stura_public_reader` role) and
+`src/lib/server/content-news-posts-migration.test.ts` (no file here creates
+`news_posts`); a database-backed integration proof follows in TASK-028.
 
 ### Numbering: the gaps are inherited, not corruption
 

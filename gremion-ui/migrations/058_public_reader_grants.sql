@@ -4,13 +4,14 @@
 -- THE BUG THIS CLOSES
 -- -------------------
 -- docker/postgres/init-databases.sh creates the read-only role literally named
--- `gremion_public_reader`. Migrations 008_public_portal.sql and
--- 055_resolution_challenges.sql guard their GRANTs with
--- `IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'stura_public_reader')` —
--- the RETIRED name. On any fresh install that test is false, both migrations
--- take a bare `RAISE NOTICE` ELSE branch, grant NOTHING, and the migration run
--- still EXITS GREEN. The anonymous public portal is then permanently broken
--- (`permission denied for table news_posts`) with no failing check anywhere.
+-- `gremion_public_reader`. Migrations 008_public_portal.sql (008:20) and
+-- 055_resolution_challenges.sql (055:68) guard their GRANTs with
+-- `IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'gremion_public_reader')`
+-- and take a bare `RAISE NOTICE` ELSE branch when that test is false: both
+-- migrations grant NOTHING and the migration run still EXITS GREEN. On any
+-- install where the role has not been provisioned yet, the anonymous public
+-- portal is then permanently broken (`permission denied for table protocols`)
+-- with no failing check anywhere.
 -- The tree this file was ported from never showed the bug: a one-off data-layer
 -- rename had already renamed the role in place there, so its databases INHERITED
 -- the grants instead of being granted them. That rename is not part of the
@@ -35,43 +36,86 @@
 -- k8s/base/postgres/configmap.yaml, both of which need PUBLIC_DB_PASSWORD set —
 -- then re-run.
 --
--- Idempotent: re-running only re-issues GRANTs that are already in place.
+-- Idempotent: re-running only re-issues GRANTs/REVOKEs that are already in
+-- place.
 
--- WHY EVERY TABLE IS UNCONDITIONAL
--- --------------------------------
+-- WHY THE REQUIRED SET IS UNCONDITIONAL, AND WHY NEWS_POSTS IS NOT HERE
+-- ----------------------------------------------------------------------
 -- The first draft wrapped each GRANT in `IF EXISTS (information_schema.tables)`
--- and justified it with the P0.2 module skip. That justification is FALSE: none
--- of these seven tables belongs to a toggleable module (grep the module
--- manifests — 003_calendar_schema.sql and 007_protocols.sql are kernel
--- migrations, unlike the finance set), so an absent one always means a broken
--- replay. Worse, the per-table ELSE branch was the very silent-skip shape this
--- migration exists to delete: with only news_posts hard-required, 058 could
--- report success having granted one table out of seven and the portal would
--- still be broken. Every table is now required, and a missing one aborts.
+-- and justified it with the P0.2 module skip. That justification is FALSE for
+-- both tables below: each is produced by a KERNEL migration
+-- (007_protocols.sql, 010_org_units.sql), so an absent one always means a
+-- broken replay. The per-table ELSE branch was also the very silent-skip shape
+-- this migration exists to delete. Every table in `portal_tables` is required,
+-- and a missing one aborts.
+--
+-- news_posts is DELIBERATELY ABSENT (B4a-news-posts-ownership). The kernel's
+-- 008_public_portal.sql:4-6 records that it moved out with the calendar/news
+-- modules during the carve, so the kernel creates it nowhere and requiring it
+-- here aborted every content-OFF kernel-only fresh init. The table AND its
+-- public-reader GRANT now live in the content module's own creation migration
+-- 1200_content_news_posts.sql. Kernel grants what the kernel guarantees;
+-- content grants what content creates.
+--
+-- WHY THE GRANT SET NARROWED TO TWO TABLES (R-E13)
+-- --------------------------------------------------
+-- An earlier version of this file granted every table the KERNEL chain
+-- produces that the portal's data model touches at all: calendar_events,
+-- event_recurrence, org_units, protocols, protocol_resolutions and
+-- resolution_challenges. That is broader than least privilege actually
+-- requires — gremion-public/src/lib/server/public-db.ts:51,82,105 reads only
+-- `protocols` and `org_units`; nothing in the anonymous portal ever queries
+-- the other four. Granting them anonymously exposed person data over the
+-- internet with no application code standing in the way:
+-- `resolution_challenges.raised_by` / `grounds` (who contested a resolution
+-- and on what grounds) and `calendar_events.created_by`. `portal_tables`
+-- below is therefore exactly the two tables the portal reads, and the four
+-- tables that used to be in it move to `revoked_tables` — REVOKE, not merely
+-- omission. `protocol_resolutions` and `resolution_challenges` are granted
+-- directly to gremion_public_reader by kernel 008_public_portal.sql and
+-- 055_resolution_challenges.sql on every install, fresh included, so the
+-- REVOKE is load-bearing there too, not only on a database that ran an
+-- earlier six-table version of this file (see the DECLARE block below for
+-- the full accounting, including why no such database can exist that this
+-- edit would need to converge).
 
 DO $$
 DECLARE
-  -- LEAST PRIVILEGE: exactly the tables gremion-public queries, verified against
-  -- gremion-public/src/lib/server/public-db.ts. `protocol_attendance` and
-  -- `protocol_action_items` were in the first draft and are deliberately GONE —
-  -- no gremion-public query touches either, and attendance is personal data
-  -- (who sat in which meeting) that must not be reachable by an anonymous,
-  -- internet-facing role. `committees` is absent because 010_org_units.sql
-  -- renamed it to org_units.
+  -- LEAST PRIVILEGE: exactly the tables the anonymous public portal reads,
+  -- verified against gremion-public/src/lib/server/public-db.ts:51,82,105
+  -- (R-E13). `protocol_attendance` and `protocol_action_items` were in the
+  -- first draft and were already GONE before R-E13 — no gremion-public query
+  -- touches either, and attendance is personal data (who sat in which
+  -- meeting) that must not be reachable by an anonymous, internet-facing
+  -- role. `committees` is absent because 010_org_units.sql renamed it to
+  -- org_units. `calendar_events`, `event_recurrence`, `protocol_resolutions`
+  -- and `resolution_challenges` are absent as of R-E13: the portal's own
+  -- queries never read them (see the header block above); they are now in
+  -- `revoked_tables`. `news_posts` is absent because it is content-owned (see
+  -- the header block); content's 1200_content_news_posts.sql grants it.
   portal_tables CONSTANT text[] := ARRAY[
-    'calendar_events',
-    'event_recurrence',
     'org_units',
-    'protocols',
-    'protocol_resolutions',
-    'resolution_challenges'
+    'protocols'
   ];
-  -- The two tables 008 granted and this migration takes BACK. Kept as an
-  -- explicit array rather than an implicit absence so the removal is executable
-  -- and auditable, not merely documented (see the REVOKE loop at the bottom).
+  -- Tables this migration actively takes SELECT back from the reader role.
+  -- `protocol_attendance`, `protocol_action_items` and `protocol_resolutions`
+  -- are granted directly to gremion_public_reader by 008_public_portal.sql
+  -- (008:23-29); `resolution_challenges` by 055_resolution_challenges.sql
+  -- (055:69). Both migrations run BEFORE this file on every install, so these
+  -- four REVOKEs are load-bearing on a fresh install too, not only on a
+  -- database that happened to run an earlier version of 058 (see the REVOKE
+  -- loop at the bottom for why editing 058 in place cannot converge such a
+  -- database, and why none exists to converge). `calendar_events` and
+  -- `event_recurrence` are not granted by any kernel migration today; their
+  -- REVOKE here is defensive, matching the exact-set assertion in
+  -- fresh-init-proof.sh rather than undoing an existing grant.
   revoked_tables CONSTANT text[] := ARRAY[
     'protocol_attendance',
-    'protocol_action_items'
+    'protocol_action_items',
+    'calendar_events',
+    'event_recurrence',
+    'protocol_resolutions',
+    'resolution_challenges'
   ];
   t text;
   missing text[] := ARRAY[]::text[];
@@ -97,8 +141,8 @@ BEGIN
       'PUBLIC_DB_PASSWORD and let docker/postgres/init-databases.sh (Docker) or '
       'the postgres-init-scripts ConfigMap (K8s) create it. '
       'This migration deliberately aborts instead of skipping: a silent skip is '
-      'precisely the defect it exists to close (008/055 tested for a RETIRED '
-      'reader-role name and granted nothing while reporting success).',
+      'precisely the defect it exists to close (008/055 silently skip their '
+      'GRANTs and report success when this role is missing).',
       current_database();
   END IF;
 
@@ -125,9 +169,11 @@ BEGIN
   IF array_length(missing, 1) IS NOT NULL THEN
     RAISE EXCEPTION
       'the anonymous public portal reads table(s) that do not exist: %. '
-      'These are kernel tables (008_public_portal.sql, 003_calendar_schema.sql, '
-      '007_protocols.sql, 010_org_units.sql, 055_resolution_challenges.sql), not '
-      'module-gated ones, so a missing table means the migration replay is broken. '
+      'These are KERNEL tables (007_protocols.sql, 010_org_units.sql), not '
+      'module-gated ones, so a missing table means the migration replay is '
+      'broken. news_posts is deliberately not in this list: the content '
+      'module migration 1200_content_news_posts.sql creates and grants it, '
+      'so a content-OFF install completes green with a working portal. '
       'This migration refuses to grant a partial set and report success.',
       array_to_string(missing, ', ');
   END IF;
@@ -140,22 +186,32 @@ BEGIN
 
   -- REVOKE, not merely "absent from the list above".
   --
-  -- Dropping the two tables from portal_tables only changes what a FRESH
-  -- install converges on. Every database that ever ran 008_public_portal.sql
-  -- while the role still carried its old name already HOLDS those grants:
-  -- 008:40-48 granted SELECT on protocol_attendance and protocol_action_items
-  -- to the reader role under its retired name, and the data-layer rename that
-  -- ran in that tree (not in this repository) renamed the role in place —
-  -- Postgres keys privileges to the role OID, so the rename carried every grant
-  -- across.
-  -- Staging holds all nine tables today. Without these REVOKEs a fresh install
-  -- would have seven and every real deployment nine: permanent, invisible
-  -- configuration drift, which is the same defect class this migration exists
-  -- to close, merely inverted.
+  -- protocol_attendance, protocol_action_items and protocol_resolutions are
+  -- granted directly to gremion_public_reader by 008_public_portal.sql
+  -- (008:23-29), and resolution_challenges by 055_resolution_challenges.sql
+  -- (055:69) — both run BEFORE this file on every install, fresh included.
+  -- Dropping a table from `portal_tables` above only stops 058 itself
+  -- granting it; without the REVOKE here, gremion_public_reader would still
+  -- end up holding SELECT on all four via 008/055 alone, even on a brand-new
+  -- database. This REVOKE is therefore load-bearing on every install, not
+  -- only on one that happened to run an earlier version of this file.
+  -- calendar_events and event_recurrence are not granted by any kernel
+  -- migration today; revoking them here is defensive, matching the
+  -- exact-set assertion in fresh-init-proof.sh rather than undoing an
+  -- existing grant.
   --
-  -- Existence-guarded because a database restored from before 007_protocols.sql
-  -- has no such tables, and idempotent because REVOKE on a privilege that was
-  -- never granted is a no-op.
+  -- This REVOKE does NOT converge a database that already applied an
+  -- earlier, six-table version of 058 under this same filename: kernel
+  -- db.ts's runMigrations skips any filename already recorded in
+  -- schema_migrations before it re-checks the file's hash, so editing 058 in
+  -- place never re-runs there. No such database exists — kernel 058 has
+  -- never shipped on `main` or `origin/main` (git ls-tree confirms it absent
+  -- on both) — and one that did surface would need a fresh re-init, not a
+  -- patch to this file.
+  --
+  -- Existence-guarded because a database restored from before the table's own
+  -- creating migration has no such table, and idempotent because REVOKE on a
+  -- privilege that was never granted is a no-op.
   FOREACH t IN ARRAY revoked_tables LOOP
     IF EXISTS (
       SELECT FROM information_schema.tables
