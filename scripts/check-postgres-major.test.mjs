@@ -800,11 +800,11 @@ test('the stale-fixture rule names exactly the two stale fixtures, not tree-clea
 
 // ── TDD-9: the suites cannot shrink silently ───────────────────────────────
 //
-// B37 shipped 38 tests here; TASK-019 added 35 (this one included: 36) and a
+// B37 shipped 38 tests here; TASK-019 added 40 (this one included: 41) and a
 // 15-test suite for the running check. A test deleted to get a red run green
 // would otherwise leave every remaining test passing and nothing to notice.
 const B37_TESTS = 38
-const TASK019_TESTS = 36
+const TASK019_TESTS = 41
 const RUNNING_TESTS = 15
 
 const countTests = (text) => (text.match(/^test\(/gm) ?? []).length
@@ -888,4 +888,39 @@ test('R1: anchored and quoted service keys are parsed; a prefixed label key is n
   assert.deepEqual(s.map((x) => x.name), ['extra-postgres', 'other-postgres', 'db'])
   assert.equal(s[2].label, null)
   assert.equal(checkComposeServices([{ path: 'docker-compose.yml', text }]).length, 2)
+})
+
+// ── review round 2 (TASK-019) ──────────────────────────────────────────────
+
+test('R2: a module service must merge exactly *module-postgres, not another anchor', () => {
+  for (const merge of ['<<: *evil', '<<: [*evil, *module-postgres]']) {
+    const text = moduleCompose().replace('  board-postgres:\n    <<: *module-postgres\n', `  board-postgres:\n    ${merge}\n`)
+    assert.match(checkModuleSet(text).join('\n'), /board-postgres merges \[.*evil.*\], expected exactly \[module-postgres\]/, merge)
+  }
+})
+
+test('R2: an unmatched apostrophe does not swallow a real comment; an escaped quote does not end a string', () => {
+  assert.equal(scanText('x.sh', `echo don't  # was ${POSTGRES_IMAGE_TAG}`)[0].decl, false)
+  assert.equal(scanText('a.yml', `description: Bob's db  # formerly ${POSTGRES_IMAGE_TAG}`)[0].decl, false)
+  assert.equal(scanText('x.sh', `echo "a\\" # " docker run ${POSTGRES_IMAGE_TAG}`)[0].decl, true)
+})
+
+test('R2: a label key glued to a hyphen is not the org.gremion.postgres label', () => {
+  const text = `services:\n  db:\n    image: ${POSTGRES_IMAGE_REF}\n    labels:\n      - x-org.gremion.postgres=module:board\n      com.acme-org.gremion.postgres: kernel\n`
+  assert.equal(composeServices(text)[0].label, null)
+  const ok = `services:\n  db:\n    labels:\n      - org.gremion.postgres=module:board\n`
+  assert.equal(composeServices(ok)[0].label, 'module:board')
+})
+
+test('R2: pre-release and suffixed codename tags are read and unpinned', () => {
+  for (const tag of [`${POSTGRES_MAJOR}beta3-alpine`, `${POSTGRES_MAJOR}rc1`, 'trixie-slim', 'bookworm-slim']) {
+    const problems = checkFiles([{ path: 'a.yml', text: `    image: postgres:${tag}\n` }])
+    assert.equal(problems.length, 1, `${tag}: ${problems.join('\n')}`)
+    assert.match(problems[0], /^unpinned: /, `${tag}: ${problems[0]}`)
+  }
+})
+
+test('R2: an inline profiles list with a trailing comment parses to its ids', () => {
+  const s = composeServices('services:\n  board-postgres:\n    profiles: [board] # note\n')
+  assert.deepEqual(s[0].profiles, ['board'])
 })

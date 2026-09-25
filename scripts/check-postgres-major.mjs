@@ -103,11 +103,13 @@ export const EXCLUDED = [
 // drift instead of disappearing from the scan.
 //
 // The tag set includes the FLOATING distro codenames (`bookworm`, `trixie`,
-// `alpine3.22`, ...): each is a real registry tag that silently moves to the
-// newest major, so each is read and classified `unpinned` rather than missed.
+// `alpine3.22`, `trixie-slim`, ...): each is a real registry tag that silently
+// moves to the newest major, so each is read and classified `unpinned` rather
+// than missed. A pre-release (`18beta3-alpine`, `18rc1`) is read too; its
+// major token is not a bare number, so it is `unpinned` as well.
 const DIGEST_TAIL = String.raw`(?:@([A-Za-z0-9]+:[A-Za-z0-9]*))?`
 const TAG_RE = new RegExp(
-  String.raw`(?<![\w./@-])postgres:(latest|alpine[\d.]*|bookworm|bullseye|buster|trixie|forky|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
+  String.raw`(?<![\w./@-])postgres:(latest|alpine[\d.]*|(?:bookworm|bullseye|buster|trixie|forky)(?:-[A-Za-z0-9.]+)*|\d{1,4}(?:[A-Za-z]+\d*)?(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
 
 // The SECOND net, for the reference that has no tag at all for TAG_RE to match:
 // `image: postgres`, `image: "postgres"`, `image: postgres:` with nothing after
@@ -144,7 +146,7 @@ const UNTAGGED_IMAGE_RE =
 // already reads those. Matching them twice would report one stale default as two
 // findings — the narrower net is what keeps each occurrence counted exactly once.
 const SHELL_DEFAULT_RE = new RegExp(
-  String.raw`\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine[\d.]*|bookworm|bullseye|buster|trixie|forky|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
+  String.raw`\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine[\d.]*|(?:bookworm|bullseye|buster|trixie|forky)(?:-[A-Za-z0-9.]+)*|\d{1,4}(?:[A-Za-z]+\d*)?(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
 
 // The FOURTH net (TASK-019): a REGISTRY-PREFIXED reference,
 // `docker.io/library/postgres:<tag>` or `registry:5000/mirror/postgres:<tag>`.
@@ -160,7 +162,7 @@ const SHELL_DEFAULT_RE = new RegExp(
 // counted twice.
 const REGISTRY_RE = new RegExp(
   String.raw`(?:(?<![\w./@:-])|(?<=\$\{[A-Za-z_][A-Za-z0-9_]*:?-))` +
-  String.raw`((?:[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?\/)+)postgres:(latest|alpine[\d.]*|bookworm|bullseye|buster|trixie|forky|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` +
+  String.raw`((?:[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?\/)+)postgres:(latest|alpine[\d.]*|(?:bookworm|bullseye|buster|trixie|forky)(?:-[A-Za-z0-9.]+)*|\d{1,4}(?:[A-Za-z]+\d*)?(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` +
   DIGEST_TAIL, 'g')
 
 // Q3 (TASK-019): the file kinds in which a reference is a DECLARATION — the
@@ -174,12 +176,26 @@ const DECLARING = /\.(ya?ml|sh|bats|tmpl|Dockerfile|env)$|(^|\/)(Dockerfile|Cont
 // Infinity. `#` only opens a comment at the start or after whitespace, and
 // never inside a single- or double-quoted string, so a shell `${VAR#prefix}`,
 // a URL fragment or `echo "a #b" && docker run ...` is not taken for one.
+//
+// A quote opens a string only if it is CLOSED later on the line: an apostrophe
+// in `echo don't  # was ...` or `Bob's db  # ...` is a literal, and the `#`
+// after it still opens the comment. Inside double quotes a backslash escapes
+// the next character, as in the shell.
+function closingQuote(line, i) {
+  const q = line[i]
+  for (let j = i + 1; j < line.length; j++) {
+    if (q === '"' && line[j] === '\\') { j++; continue }
+    if (line[j] === q) return j
+  }
+  return -1
+}
 function commentStart(line) {
-  let quote = null
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]
-    if (quote) { if (ch === quote) quote = null; continue }
-    if (ch === '"' || ch === "'") { quote = ch; continue }
+    if (ch === '"' || ch === "'") {
+      const j = closingQuote(line, i)
+      if (j > i) { i = j; continue }
+    }
     if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) return i
   }
   return Infinity
@@ -326,7 +342,7 @@ export function composeServices(text) {
       const m = l.match(/^\s*["']?([A-Za-z0-9._-]+)["']?:\s*(&\S+\s*)?(#.*)?$/)
       cur = m && ind === svcIndent
         ? { name: m[1], line: i + 1, image: null, imageLine: null, label: null,
-            profiles: [], merge: false, mounts: [], propIndent: null }
+            profiles: [], merge: false, merges: [], mounts: [], propIndent: null }
         : null
       if (cur) out.push(cur)
       section = null
@@ -339,9 +355,12 @@ export function composeServices(text) {
       section = kv ? kv[1] : null
       const val = kv ? kv[2] : ''
       if (section === 'image') { cur.image = unquote(val); cur.imageLine = i + 1 }
-      if (section === '<<') cur.merge = true
+      if (section === '<<') {
+        cur.merge = true
+        cur.merges = [...val.matchAll(/\*([A-Za-z0-9_.-]+)/g)].map((m) => m[1])
+      }
       if (section === 'profiles' && val.startsWith('[')) {
-        cur.profiles = val.replace(/[[\]\s"']/g, '').split(',').filter(Boolean)
+        cur.profiles = val.replace(/\].*$/, '').replace(/[[\s"']/g, '').split(',').filter(Boolean)
       }
       if (section === 'labels' && val) readLabel(cur, val)
       continue
@@ -361,7 +380,7 @@ export function composeServices(text) {
 }
 
 function readLabel(svc, text) {
-  const m = text.match(/(?:^|[\s"'{,-])org\.gremion\.postgres["']?\s*[:=]\s*["']?([^"'\s,}\]]+)/)
+  const m = text.match(/(?:^|[\s"'{,])org\.gremion\.postgres["']?\s*[:=]\s*["']?([^"'\s,}\]]+)/)
   if (m) svc.label = m[1]
 }
 
@@ -457,6 +476,11 @@ export function checkModuleSet(text) {
       problems.push(`${name} runs image ${s.image}, expected ${POSTGRES_IMAGE_REF} (or none, taken from the anchor)`)
     } else if (s.image == null && !s.merge) {
       problems.push(`${name} declares no image and merges no anchor`)
+    }
+    // The image it runs is the anchor's only if the anchor is the ONLY merge:
+    // `<<: [*other, *module-postgres]` takes `other`'s image first.
+    if (s.merge && (s.merges.length !== 1 || s.merges[0] !== 'module-postgres')) {
+      problems.push(`${name} merges [${s.merges.join(', ')}], expected exactly [module-postgres]`)
     }
     if (s.label !== `module:${id}`) {
       problems.push(`${name} is labelled ${POSTGRES_LABEL}=${s.label}, expected module:${id}`)

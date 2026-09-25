@@ -205,3 +205,14 @@ test('R1: a container whose label disagrees with its service is RED', () => {
   assert.match(checkRunning({ project: PROJECT, expected: [KERNEL, CAL], docker }).problems.join('\n'),
     /calendar-postgres is labelled kernel, expected module:calendar/)
 })
+
+test('R2: parseProfiles refuses unknown ids, a missing value and a contradictory pair', async () => {
+  const { parseProfiles } = await import('./check-postgres-major-running.mjs')
+  assert.equal(parseProfiles([]), null)
+  assert.deepEqual(parseProfiles(['--no-profiles']), [])
+  assert.deepEqual(parseProfiles(['--profile', 'vault', '--profile', 'board']), ['vault', 'board'])
+  assert.throws(() => parseProfiles(['--profile', 'boadr']), /unknown module profile 'boadr'/)
+  assert.throws(() => parseProfiles(['--profile']), /--profile needs a module id/)
+  assert.throws(() => parseProfiles(['--profile', '--no-profiles']), /--profile needs a module id/)
+  assert.throws(() => parseProfiles(['--no-profiles', '--profile', 'vault']), /either --profile or --no-profiles/)
+})

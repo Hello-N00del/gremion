@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { POSTGRES_MAJOR, POSTGRES_LABEL, composeServices } from './check-postgres-major.mjs'
+import { POSTGRES_MAJOR, POSTGRES_LABEL, MODULE_POSTGRES_IDS, composeServices } from './check-postgres-major.mjs'
 
 export const UUID_VERSION = '7'
 
@@ -57,6 +57,29 @@ export function expectedServices(composeTexts, profiles = null) {
     }
   }
   return [...out.values()]
+}
+
+/**
+ * --profile <id>... | --no-profiles -> the profile list, or null for "all".
+ * Refuses what would silently narrow the expected set: an unknown id (a typo),
+ * a --profile with no value, and both flags at once.
+ */
+export function parseProfiles(args) {
+  const ids = []
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== '--profile') continue
+    const v = args[i + 1]
+    if (!v || v.startsWith('--')) throw new Error('--profile needs a module id')
+    if (!MODULE_POSTGRES_IDS.includes(v)) {
+      throw new Error(`unknown module profile '${v}' (known: ${MODULE_POSTGRES_IDS.join(', ')})`)
+    }
+    ids.push(v)
+  }
+  if (args.includes('--no-profiles')) {
+    if (ids.length) throw new Error('use either --profile or --no-profiles, not both')
+    return []
+  }
+  return ids.length ? ids : null
 }
 
 /** Every container of the project that carries the label, running or not. */
@@ -167,8 +190,13 @@ if (isMain) {
   }
   const composeFiles = args.flatMap((a, i) => (a === '--compose' ? [args[i + 1]] : []))
   const files = composeFiles.length ? composeFiles : [join(ROOT, 'docker-compose.yml')]
-  const profileArgs = args.flatMap((a, i) => (a === '--profile' ? [args[i + 1]] : []))
-  const profiles = args.includes('--no-profiles') ? [] : profileArgs.length ? profileArgs : null
+  let profiles
+  try {
+    profiles = parseProfiles(args)
+  } catch (err) {
+    console.error(`[postgres-major-running] ${err.message}`)
+    process.exit(2)
+  }
   const expected = expectedServices(files.map((f) => readFileSync(f, 'utf8')), profiles)
   const docker = (a) => {
     const r = spawnSync('docker', a, { encoding: 'utf8' })
