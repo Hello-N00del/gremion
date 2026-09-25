@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { BOOT_AND_RESOLVE_EXEMPT_PATHS, isBootAndResolveExempt, isResolveExemptRequest } from './boot-exempt'
 
 /**
@@ -87,21 +88,39 @@ describe('isResolveExemptRequest', () => {
 // isInternalTrustRequest or constantTimeEqual, and no page or layout may live
 // there at all. "Can serve" is decided on the route's URL shape, so route groups
 // `(g)`, params `[x]`, optional params `[[x]]` and rest params `[...x]` are all
-// seen through. Comments and string literals do not count as a call.
+// seen through. The check parses the file (TypeScript AST): only a real call of
+// the bare identifier counts, never a comment, string or `x.guard(...)`.
 //
-// A tripwire, not a proof: a call whose result is ignored still passes. Review
-// of every /api/internal/ handler remains required.
+// A tripwire, not a proof: a call whose result is ignored, or a local function
+// shadowing the name, still passes. Review of every /api/internal/ handler
+// remains required.
 
 const ROUTES_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'routes')
-const GUARD_CALL = /\b(?:isInternalTrustRequest|constantTimeEqual)\s*\(/
 const ENDPOINT = /^\+server\.(ts|js)$/
 const PAGE_OR_LAYOUT = /^\+(page|layout)(@[^.]*)?(\.server)?\.(ts|js|svelte)$/
 
-function stripCommentsAndStrings(src: string): string {
-  return src
-    .replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''")
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+const GUARD_NAMES = new Set(['isInternalTrustRequest', 'constantTimeEqual'])
+
+/**
+ * Does the source contain a real call `isInternalTrustRequest(...)` or
+ * `constantTimeEqual(...)` -- a CallExpression whose callee is the bare
+ * identifier? Parsed with the TypeScript compiler, so comments, strings,
+ * template literals, regex literals and `x.isInternalTrustRequest(...)` never
+ * count.
+ */
+function callsGuard(src: string, fileName: string): boolean {
+  const sf = ts.createSourceFile(fileName, src, ts.ScriptTarget.Latest, true)
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && GUARD_NAMES.has(node.expression.text)) {
+      found = true
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return found
 }
 
 const isGroup = (seg: string) => /^\(.*\)$/.test(seg)
@@ -137,7 +156,7 @@ function internalRouteViolations(routesRoot: string): { routeFiles: number; viol
       if (!servesUnderInternal(segs)) continue
       const rel = relative(routesRoot, full).split('\\').join('/')
       if (!endpoint) out.violations.push(`${rel} (no page or layout may serve /api/internal/)`)
-      else if (!GUARD_CALL.test(stripCommentsAndStrings(readFileSync(full, 'utf8')))) out.violations.push(rel)
+      else if (!callsGuard(readFileSync(full, 'utf8'), full)) out.violations.push(rel)
     }
   }
   walk(routesRoot, [])
@@ -173,12 +192,15 @@ describe('Q4 static guard: internal routes authenticate themselves', () => {
     file(fixture, 'api/[[opt]]/internal/y', '+server.ts', open)
     file(fixture, 'api/internal/form', '+page.server.ts', 'export const actions = {}')
     file(fixture, 'api/internal/reset', '+page@.svelte', '<p>x</p>')
+    file(fixture, 'api/internal/ticked', '+server.ts', '/* isInternalTrustRequest(request) runs at the `edge` hop, so the `evict route does not repeat it */\nexport const POST = () => new Response(`ok`, { status: 200 })')
+    file(fixture, 'api/internal/colon', '+server.ts', 'const o = { k:// isInternalTrustRequest(request)\n 1 }\n' + open)
+    file(fixture, 'api/internal/method', '+server.ts', 'x.isInternalTrustRequest(request)\n' + open)
     // Not under /api/internal/: never flagged.
     file(fixture, 'api/members/[handle]', '+server.ts', open)
     file(fixture, 'api/health', '+server.ts', open)
     file(fixture, '', '+layout.server.ts', 'export const load = () => ({})')
     const r = internalRouteViolations(fixture)
-    expect(r.routeFiles).toBe(16)
+    expect(r.routeFiles).toBe(19)
     expect(r.violations.sort()).toEqual(
       [
         '(svc)/api/internal/grp/+server.ts',
@@ -187,7 +209,10 @@ describe('Q4 static guard: internal routes authenticate themselves', () => {
         'api/[[opt]]/internal/y/+server.ts',
         'api/[kind]/x/+server.ts',
         'api/internal/a/deep/+server.ts',
+        'api/internal/colon/+server.ts',
         'api/internal/commented/+server.ts',
+        'api/internal/method/+server.ts',
+        'api/internal/ticked/+server.ts',
         'api/internal/form/+page.server.ts (no page or layout may serve /api/internal/)',
         'api/internal/open/+server.ts',
         'api/internal/reset/+page@.svelte (no page or layout may serve /api/internal/)',
