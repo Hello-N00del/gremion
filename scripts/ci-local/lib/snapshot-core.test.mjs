@@ -69,11 +69,35 @@ test('evaluateSuite: a stack-requiring suite DOES run when --stack-env is given'
   }
   const opts = baseOpts({
     stackEnvFile: '/tmp/stack.env',
+    stackEnvExists: true,
     runFn: () => ({ exitCode: 0, output: '      Tests  3 passed (3)\n', timedOut: false, spawnError: null }),
   })
   const row = evaluateSuite(suite, ['src/a.integration.test.ts'], opts)
   assert.equal(row.status, 'PASS')
   assert.equal(row.collected, 3)
+})
+
+test('evaluateSuite: LOW fix — a requiresStack suite still FAILs "no stack" when --stack-env names a file that does not exist, and never runs the command', () => {
+  let ran = false
+  const suite = {
+    id: 'k2b',
+    repo: 'kernel',
+    category: 'integration',
+    cwd: '.',
+    kind: 'vitest',
+    command: 'pnpm test:integration',
+    requiresStack: true,
+    testGlobs: ['src/**/*.integration.test.ts'],
+  }
+  const opts = baseOpts({
+    stackEnvFile: '/does/not/exist/stack.env',
+    stackEnvExists: false,
+    runFn: () => ((ran = true), { exitCode: 0, output: '', timedOut: false, spawnError: null }),
+  })
+  const row = evaluateSuite(suite, ['src/a.integration.test.ts'], opts)
+  assert.equal(row.status, 'FAIL')
+  assert.match(row.reason, /does not exist/)
+  assert.equal(ran, false, 'a nonexistent --stack-env file must never let the suite actually run')
 })
 
 test('evaluateSuite: 0 collected is a FAIL even on exit code 0 — a scan that collected zero files never passes', () => {

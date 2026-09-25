@@ -19,7 +19,7 @@
 // stack" row — an honest FAIL is still a FAIL, and this script's job is to
 // record it, never to make it disappear.
 
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDirty, headInfo, isGitRepo } from './lib/git.mjs'
@@ -55,10 +55,16 @@ export function countDeclaredTests(repoPath, files) {
 export function evaluateRepo(repoLabel, repoPath, manifest, onlyIds, stackEnvFile) {
   const suites = suitesFor(manifest, repoLabel, onlyIds)
   const discovered = discoverTestFiles(repoPath)
+  // LOW fix: presence of --stack-env's FLAG used to be enough; the named
+  // file's actual existence was never checked, so a typo'd or missing
+  // --stack-env path let a requiresStack suite try to run for real (see
+  // snapshot-core.mjs's header on stackEnvExists).
+  const stackEnvExists = stackEnvFile !== undefined && existsSync(stackEnvFile)
   const opts = {
     joinRepo: (p) => join(repoPath, p),
     runFn: (command, cwd, runOpts) => run(command, cwd, runOpts),
     stackEnvFile,
+    stackEnvExists,
     countDeclared: (files) => countDeclaredTests(repoPath, files),
   }
   const rows = suites.map((s) => evaluateSuite(s, discovered, opts))

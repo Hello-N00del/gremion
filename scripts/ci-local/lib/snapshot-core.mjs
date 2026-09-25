@@ -15,7 +15,23 @@ import { DEFAULT_TIMEOUT_MS } from './run.mjs'
  *
  * @param suite            one suites.json entry
  * @param discoveredFiles  every test file (the 5 shapes) found under this repo
- * @param opts.stackEnvFile  path to a --stack-env file, or undefined
+ * @param opts.stackEnvFile   path to a --stack-env file, or undefined — for
+ *                            messages only; NEVER used to decide whether a
+ *                            requiresStack suite runs (see stackEnvExists)
+ * @param opts.stackEnvExists boolean: true only when the caller (snapshot.mjs)
+ *                            confirmed --stack-env's file actually exists on
+ *                            disk. LOW fix: a `--stack-env <file>` flag used
+ *                            to be treated as "stack present" whenever the
+ *                            flag was given at all, even for a nonexistent
+ *                            file — `--stack-env does-not-exist.env` let a
+ *                            requiresStack suite actually RUN (against no
+ *                            real stack), producing a confusing "no Tests
+ *                            summary line" FAIL instead of the honest,
+ *                            cheap "no stack" FAIL the brief calls for.
+ *                            Checking file existence is the CALLER's job
+ *                            (this module stays pure — no fs access, see the
+ *                            file header), so callers must resolve this
+ *                            boolean themselves before invoking evaluateSuite.
  * @param opts.runFn          (command, cwd) => {exitCode, output, timedOut, spawnError}
  */
 export function evaluateSuite(suite, discoveredFiles, opts) {
@@ -43,8 +59,10 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
   }
 
   // Q4 default: integration/e2e suites never bring up a stack themselves.
-  // Without --stack-env they FAIL with "no stack" and are never skipped.
-  if (suite.requiresStack && !opts.stackEnvFile) {
+  // Without a --stack-env file that actually EXISTS, they FAIL with "no
+  // stack" and are never skipped (LOW fix: presence of the flag used to be
+  // enough, regardless of whether the named file existed).
+  if (suite.requiresStack && !opts.stackEnvExists) {
     return {
       ...base,
       collected: 0,
@@ -52,7 +70,9 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
       failed: 0,
       status: 'FAIL',
       exitCode: null,
-      reason: 'no stack — pass --stack-env <file> to run this suite',
+      reason: opts.stackEnvFile
+        ? `--stack-env file '${opts.stackEnvFile}' does not exist — pass a real file to run this suite`
+        : 'no stack — pass --stack-env <file> to run this suite',
     }
   }
 

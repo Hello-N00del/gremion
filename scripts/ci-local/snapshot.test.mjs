@@ -116,16 +116,34 @@ test('evaluateRepo: unit/shell/tree-guard suites run for real and PASS; integrat
   }
 })
 
-test('evaluateRepo: with --stack-env, a requiresStack suite actually runs (and PASSes, since the fixture command is cheap)', () => {
+test('evaluateRepo: with --stack-env naming a file that EXISTS, a requiresStack suite actually runs (and PASSes, since the fixture command is cheap)', () => {
   const root = makeFixtureRepo()
   const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
   try {
     const manifestPath = writeFixtureManifest(manifestDir)
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-    const rows = evaluateRepo('kernel', root, manifest, undefined, '/some/stack.env')
+    const stackEnvFile = join(manifestDir, 'stack.env')
+    writeFileSync(stackEnvFile, '')
+    const rows = evaluateRepo('kernel', root, manifest, undefined, stackEnvFile)
     const integration = rows.find((r) => r.id === 'kernel-integration')
     assert.equal(integration.status, 'PASS')
     assert.equal(integration.collected, 2)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+  }
+})
+
+test('evaluateRepo: LOW fix — with --stack-env naming a file that does NOT exist, a requiresStack suite still FAILs "no stack" (does not try to actually run against no stack)', () => {
+  const root = makeFixtureRepo()
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    const rows = evaluateRepo('kernel', root, manifest, undefined, join(manifestDir, 'does-not-exist.env'))
+    const integration = rows.find((r) => r.id === 'kernel-integration')
+    assert.equal(integration.status, 'FAIL')
+    assert.match(integration.reason, /does not exist/)
   } finally {
     rmSync(root, { recursive: true, force: true })
     rmSync(manifestDir, { recursive: true, force: true })
