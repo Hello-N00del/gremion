@@ -78,6 +78,8 @@ export function loadManifest(dir: string): Map<string, string> {
     else out.set(file, hash)
   }
   if (problems.length) throw new MigrationManifestError(problems)
+  // An empty manifest would make every database look current to the gate.
+  if (out.size === 0) throw new MigrationManifestError([{ code: 'NO_MIGRATIONS', detail: 'the manifest lists no migration' }])
   return out
 }
 

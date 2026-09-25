@@ -9,7 +9,7 @@
 import type { ServerResponse } from 'node:http'
 import type { Sql } from '@gremion/db'
 import { loadManifest } from './manifest.js'
-import { assertTenantId } from './names.js'
+import { assertTenantId, isUuidV7 } from './names.js'
 import { LEDGER } from './runner.js'
 
 export type SchemaState = 'current' | 'behind' | 'diverged'
@@ -67,13 +67,18 @@ export interface SchemaGateOptions {
 
 export interface SchemaGate {
   check(tenantId: string): Promise<GateResult>
-  /** Answers 503 (Retry-After) and returns false when the tenant is not current; else true. */
+  /**
+   * Answers 503 (Retry-After) and returns false when the tenant is not
+   * current; answers 404 and returns false for an id that is not a UUIDv7;
+   * else returns true.
+   */
   guard(tenantId: string, res: ServerResponse): Promise<boolean>
 }
 
 /**
- * One gate per module (per migrations directory), so the verdict cache is
- * keyed by tenant within that module. A check that fails (database down) is
+ * ONE GATE PER MODULE (per migrations directory): the verdict cache is keyed
+ * by tenant within that module, so a gate shared by two modules would answer
+ * one module's verdict for the other. A check that fails (database down) is
  * a 503 too and is never cached.
  */
 export function schemaGate(options: SchemaGateOptions): SchemaGate {
@@ -107,6 +112,11 @@ export function schemaGate(options: SchemaGateOptions): SchemaGate {
   return {
     check,
     async guard(tenantId, res) {
+      if (!isUuidV7(tenantId)) {
+        // Not a tenant: answer, never throw into the caller's handler.
+        res.writeHead(404, { 'cache-control': 'no-store' }).end()
+        return false
+      }
       const result = await check(tenantId)
       if (result.ok) return true
       // The body names no file and no other tenant; details go to the log.

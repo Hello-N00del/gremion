@@ -63,6 +63,21 @@ describe('schemaGate', () => {
     expect(opened).toBe(0)
   })
 
+  it('guard answers 404 for an id that is not a UUIDv7, instead of throwing into the handler', async () => {
+    const gate = schemaGate({ dir, openDb: async () => fakeDb([]), log: () => {} })
+    let status = 0
+    const res = { writeHead: (s: number) => ((status = s), res), end: () => res } as never
+    await expect(gate.guard('../x', res)).resolves.toBe(false)
+    expect(status).toBe(404)
+  })
+
+  it('fails at construction on an EMPTY manifest (every tenant would look current)', () => {
+    const empty = mkdtempSync(join(tmpdir(), 't020-gate-empty-'))
+    writeFileSync(join(empty, 'manifest.json'), '{}')
+    expect(() => schemaGate({ dir: empty, openDb: async () => fakeDb([]) })).toThrow(/NO_MIGRATIONS/)
+    rmSync(empty, { recursive: true, force: true })
+  })
+
   it('fails at construction on a malformed manifest', () => {
     const bad = mkdtempSync(join(tmpdir(), 't020-gate-bad-'))
     writeFileSync(join(bad, 'manifest.json'), '[]')
