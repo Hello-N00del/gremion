@@ -1,0 +1,15 @@
+{
+  "$comment": "check-sops allowances (TASK-046, brief Q5). One entry per path and rule, each with a reason. A reasonless entry fails; an entry that suppresses nothing fails as stale. rule: secret-path | key-material.",
+  "allow": [
+    {
+      "path": "k8s/overlays/production/secrets/README.md",
+      "rule": "secret-path",
+      "reason": "documentation of the k8s secret workflow under a secrets/ directory; carries no values"
+    },
+    {
+      "path": "test/host/deploy-workflow.bats",
+      "rule": "key-material",
+      "reason": "bats fixture for the deploy-channel block: a PEM header around the literal body 'not-a-key', exported into a shimmed ssh-add; no key material"
+    }
+  ]
+}
