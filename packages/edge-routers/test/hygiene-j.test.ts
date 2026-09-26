@@ -11,13 +11,18 @@
 // credential is an obvious fake with no token shape at all.
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { REPO_ROOT } from './helpers.js'
 
 const CDN_TOKEN_VAR = ['CF', 'API', 'TOKEN'].join('_')
 const PLANNER = ['edge', 'plan'].join('-')
+
+// Each case copies the whole tracked tree; that belongs under the worktree's
+// own git-excluded scratch space, never under the OS temp dir (house MEDIUM
+// finding: hygiene-j scratch trees). mkdtempSync needs the parent to exist.
+const SCRATCH_ROOT = join(REPO_ROOT, '.scratch', 'hygiene-j')
+mkdirSync(SCRATCH_ROOT, { recursive: true })
 
 const trees: string[] = []
 
@@ -28,7 +33,7 @@ function git(cwd: string, args: string[]): string {
 }
 
 function copyTree(): string {
-  const dst = mkdtempSync(join(tmpdir(), 'hygiene-j-'))
+  const dst = mkdtempSync(join(SCRATCH_ROOT, 'hygiene-j-'))
   trees.push(dst)
   for (const rel of git(REPO_ROOT, ['ls-files', '-z']).split('\0').filter(Boolean)) {
     const src = join(REPO_ROOT, rel)
@@ -62,6 +67,7 @@ beforeAll(() => {
 }, 120_000)
 afterAll(() => {
   for (const t of trees) rmSync(t, { recursive: true, force: true })
+  rmSync(SCRATCH_ROOT, { recursive: true, force: true })
 })
 
 describe('kernel hygiene (j) — TDD 8', () => {

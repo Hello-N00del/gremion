@@ -5,6 +5,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { formatEdgeSyncReport, syncTenantRouters, type EdgeSyncTenant } from '../src/sync.js'
 import { deps } from './helpers.js'
 
+// See test/emit.test.ts: Windows has no exact rwxrwxrwx model, so emit.ts's
+// mode===0o644 "unchanged" check can never observe a match natively here
+// (house MEDIUM finding: emit.ts fsync/symlink/mode — Windows-native gate).
+const POSIX_MODE_BITS = process.platform !== 'win32'
+
 let dir: string
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'edge-sync-'))
@@ -21,7 +26,7 @@ const sync = (tenants: EdgeSyncTenant[], extra: Record<string, unknown> = {}) =>
 const listing = () => readdirSync(dir).sort()
 
 describe('syncTenantRouters — TDD 5', () => {
-  it('emits one file per routable tenant and is a no-op on the second run', () => {
+  it.skipIf(!POSIX_MODE_BITS)('emits one file per routable tenant and is a no-op on the second run', () => {
     const fleet = [t('acme', ['a.example.net']), t('beta', ['b.example.net', 'b2.example.net'])]
     const first = sync(fleet)
     expect(first.changed).toBe(true)

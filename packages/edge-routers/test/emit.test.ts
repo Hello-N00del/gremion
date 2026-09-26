@@ -1,9 +1,44 @@
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { emitTenantRouterFile, removeTenantRouterFile } from '../src/emit.js'
 import { deps } from './helpers.js'
+
+// Windows has no exact rwxrwxrwx permission model: chmodSync only toggles the
+// read-only attribute, so ANY writable request (0600, 0644, …) lands as 0666.
+// The 0644-exactness checks below are real on Linux/production and cannot be
+// satisfied natively on Windows without weakening what emit.ts actually
+// verifies, so they are skipped here rather than loosened (house MEDIUM
+// finding: emit.ts fsync/symlink/mode — Windows-native gate).
+const POSIX_MODE_BITS = process.platform !== 'win32'
+
+// Creating a symlink needs SeCreateSymbolicLinkPrivilege (admin, or Developer
+// Mode) on Windows; a non-privileged run gets EPERM before the guarded code
+// under test even executes. Detected once, at collection time.
+const CAN_SYMLINK = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'edge-symlink-probe-'))
+  const target = join(dir, 'target')
+  const link = join(dir, 'link')
+  try {
+    writeFileSync(target, '')
+    symlinkSync(target, link)
+    return true
+  } catch {
+    return false
+  } finally {
+    try {
+      unlinkSync(link)
+    } catch {
+      // never created — fine
+    }
+    try {
+      unlinkSync(target)
+    } catch {
+      // fine
+    }
+  }
+})()
 
 let dir: string
 beforeEach(() => {
@@ -22,12 +57,12 @@ describe('emitTenantRouterFile — TDD 4', () => {
     expect(r.action).toBe('written')
     expect(r.path).toBe(join(dir, 'tenant-acme.yml'))
     expect(readFileSync(r.path, 'utf8')).toBe(r.yaml)
-    expect(statSync(r.path).mode & 0o777).toBe(0o644)
+    if (POSIX_MODE_BITS) expect(statSync(r.path).mode & 0o777).toBe(0o644)
     expect(listing()).toEqual(['active.yml', 'tenant-acme.yml'])
     expect(readFileSync(join(dir, 'active.yml'), 'utf8')).toBe('http: {}\n')
   })
 
-  it('an identical rewrite reports unchanged and does not touch the file (mtime unchanged)', () => {
+  it.skipIf(!POSIX_MODE_BITS)('an identical rewrite reports unchanged and does not touch the file (mtime unchanged)', () => {
     const first = emit(['a.example.net'])
     const past = new Date('2020-01-01T00:00:00Z')
     utimesSync(first.path, past, past)
@@ -38,7 +73,7 @@ describe('emitTenantRouterFile — TDD 4', () => {
     expect(listing()).toEqual(['active.yml', 'tenant-acme.yml'])
   })
 
-  it('a same-content file with the wrong mode is rewritten 0644, not reported unchanged', () => {
+  it.skipIf(!POSIX_MODE_BITS)('a same-content file with the wrong mode is rewritten 0644, not reported unchanged', () => {
     const first = emit(['a.example.net'])
     chmodSync(first.path, 0o600)
     const again = emit(['a.example.net'])
@@ -104,7 +139,7 @@ describe('emitTenantRouterFile — TDD 4', () => {
     expect(existsSync(missing)).toBe(false)
   })
 
-  it('refuses to write through a symlink planted at the target name', () => {
+  it.skipIf(!CAN_SYMLINK)('refuses to write through a symlink planted at the target name', () => {
     const outside = mkdtempSync(join(tmpdir(), 'edge-outside-'))
     writeFileSync(join(outside, 'victim'), 'keep\n')
     symlinkSync(join(outside, 'victim'), join(dir, 'tenant-acme.yml'))

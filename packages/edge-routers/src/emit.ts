@@ -95,11 +95,30 @@ function targetState(path: string): 'file' | 'missing' {
   return 'file'
 }
 
-/** fsync a file or directory by path (a crash must never leave an empty router file). */
-function fsyncPath(path: string): void {
+/** fsync a regular file by path (a crash must never leave an empty router file).
+ * Opened 'r+', not 'r': a read-only handle cannot be flushed on Windows
+ * (FlushFileBuffers needs write access), which throws EPERM on every write. */
+function fsyncFile(path: string): void {
+  const fd = fs.openSync(path, 'r+')
+  try {
+    fs.fsyncSync(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+/** Best-effort fsync of the containing directory, so the rename survives a
+ * crash on filesystems that need it. Windows has no directory-fsync
+ * equivalent — FlushFileBuffers on a directory handle fails — so a failure
+ * there is tolerated on win32 only; NTFS/ReFS journal the metadata update
+ * regardless. Any other platform, or any other error, still throws. */
+function fsyncDir(path: string): void {
   const fd = fs.openSync(path, 'r')
   try {
     fs.fsyncSync(fd)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EISDIR' && code !== 'EINVAL')) throw err
   } finally {
     fs.closeSync(fd)
   }
@@ -138,9 +157,9 @@ export function emitTenantRouterFile(opts: EmitTenantRouterFileOptions): EmitTen
   try {
     io.writeFileSync(tmp, rendered.yaml, { encoding: 'utf8', mode: 0o644, flag: 'wx' })
     fs.chmodSync(tmp, 0o644) // the umask must not decide whether Traefik can read it
-    fsyncPath(tmp) // the bytes are durable BEFORE the name points at them
+    fsyncFile(tmp) // the bytes are durable BEFORE the name points at them
     io.renameSync(tmp, path)
-    fsyncPath(dirname(path)) // …and so is the rename
+    fsyncDir(dirname(path)) // …and so is the rename
   } catch (err) {
     try {
       fs.unlinkSync(tmp)
