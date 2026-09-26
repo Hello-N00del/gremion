@@ -20,8 +20,7 @@ const server = setupServer(
   }),
 
   // List users
-  http.get(`${BASE}/admin/realms/${REALM}/users`, ({ request }) => {
-    const url = new URL(request.url)
+  http.get(`${BASE}/admin/realms/${REALM}/users`, () => {
     return HttpResponse.json([
       { id: 'u1', username: 'anna', email: 'anna@test.local', firstName: 'Anna', lastName: 'M', enabled: true, emailVerified: true }
     ])

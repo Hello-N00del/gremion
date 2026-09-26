@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi } from 'vitest'
+import { it, expect, vi } from 'vitest'
 
 const kc = {
   listUsers: vi.fn(async ({ search }: { search?: string }) =>
