@@ -21,13 +21,14 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-// TASK-012-FU finding 3 (MEDIUM): `yaml` is a root devDependency (granted by
-// the orchestrator under R24-1), so it exists only after
-// `pnpm install --frozen-lockfile`. A STATIC import killed guards.mjs (which
-// imports this file) with ERR_MODULE_NOT_FOUND before it wrote any dated
-// JSON. The import is now dynamic and caught: a missing or broken `yaml`
-// becomes a reported, fail-closed FAIL (see yamlUnavailableReason), never a
-// crash and never a vacuous PASS.
+// TASK-012-FU finding 3 (MEDIUM): `yaml` is a root dependency (granted by
+// the orchestrator under R24-1; see package.json's own "dependencies", not
+// "devDependencies" — this comment previously said the latter), so it
+// exists only after `pnpm install --frozen-lockfile`. A STATIC import killed
+// guards.mjs (which imports this file) with ERR_MODULE_NOT_FOUND before it
+// wrote any dated JSON. The import is now dynamic and caught: a missing or
+// broken `yaml` becomes a reported, fail-closed FAIL (see
+// yamlUnavailableReason), never a crash and never a vacuous PASS.
 let parseDocument
 let yamlLoadError
 try {
