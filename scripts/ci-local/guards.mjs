@@ -103,10 +103,46 @@ export function gitleaksCommand(base, reportPath) {
   // actually read the range, reported as a clean PASS. With `--no-color`
   // the same run logs `10:34AM ERR [git] fatal: ...` (a plain space before
   // ERR), which hasFatalLog's existing regex already matches.
+  //
+  // TASK-012-FU review (HIGH): `--log-opts "<base>..HEAD"` alone forwards
+  // straight to `git log`, and plain `git log -p` shows NO diff at all for a
+  // merge commit (only its "Merge: <p1> <p2>" line) unless told to — so a
+  // credential added ONLY in a merge commit's own conflict resolution (never
+  // present in either parent's tree) produced zero diff hunks for gitleaks
+  // to scan and the arm PASSed despite the leak being in the range. Unit
+  // branches routinely carry exactly this shape of commit (a sync merge with
+  // a conflict resolved by hand — see this branch's own a0280fc). Appending
+  // `--diff-merges=first-parent` makes `git log` also emit the merge
+  // commit's diff against its first parent, which is precisely the content
+  // the merge introduced on top of the branch it merged into. Proven with
+  // the real binary (guards.test.mjs): the PEM-only-in-a-merge-commit
+  // fixture now scans `leaks found: 1`, exit 1, where it previously scanned
+  // `no leaks found`, exit 0.
   if (base) {
-    return ['gitleaks', 'git', '.', '--log-opts', `${base}..HEAD`, '--config', '.gitleaks.toml', '--redact', '--exit-code', '1', '--no-color']
+    return ['gitleaks', 'git', '.', '--log-opts', `${base}..HEAD --diff-merges=first-parent`, '--config', '.gitleaks.toml', '--redact', '--exit-code', '1', '--no-color']
   }
   return ['gitleaks', 'dir', '.', '--config', '.gitleaks.toml', '--redact', '--exit-code', '0', '--report-format', 'json', '--report-path', reportPath, '--no-color']
+}
+
+/**
+ * gitleaks' own "N commits scanned." line (its count of commits it actually
+ * walked and diffed), or null when the output carries no such line — e.g. a
+ * faked runFn in a unit test, or a gitleaks version that changes the
+ * wording. ANSI SGR escapes are stripped first (gitleaksCommand's --no-color
+ * should already prevent them, but this stays defensive, same as
+ * hasFatalLog).
+ *
+ * TASK-012-FU review (HIGH, part 2): this is the cross-check the finding
+ * asked for. countRangeCommits (git rev-list --count) is a real, independent
+ * count of every commit in the range; gitleaks' own "N commits scanned" can
+ * legitimately be smaller — e.g. `--diff-merges=first-parent` still counts
+ * the merge commit once, not once per parent — so runGitleaksArm compares
+ * them and fails closed on a genuine gap rather than assuming a match.
+ */
+export function parseGitleaksCommitsScanned(output) {
+  const plain = String(output ?? '').replace(/\x1b\[[0-9;]*m/g, '')
+  const m = plain.match(/(\d+)\s+commits? scanned/i)
+  return m ? Number(m[1]) : null
 }
 
 /**
@@ -282,12 +318,31 @@ export function runGitleaksArm(repoLabel, repoPath, base, { runFn = run, verifyB
     // merge gate), but it is marked as such rather than a bare PASS.
     const commitsScanned = countCommitsFn(absRepoPath, base)
     const note = commitsScanned === 0 ? 'empty range, 0 commits' : commitsScanned === null ? 'could not count the commits in the range' : undefined
+    // TASK-012-FU review (HIGH, part 2): cross-check our own independent
+    // commit count against what gitleaks itself says it scanned. This is a
+    // second layer, same spirit as hasFatalLog — the --diff-merges fix above
+    // is the primary fix, this catches a future regression (a gitleaks
+    // version or flag change that silently narrows what it walks) even when
+    // the exit code alone would still read as a clean PASS.
+    const gitleaksScanned = parseGitleaksCommitsScanned(output)
+    if (exitCode === 0 && gitleaksScanned !== null && commitsScanned !== null && gitleaksScanned < commitsScanned) {
+      return {
+        arm: 'secret-scan',
+        repo: repoLabel,
+        status: 'FAIL',
+        reason: `gitleaks reported scanning only ${gitleaksScanned} of ${commitsScanned} commit(s) in the range — a coverage gap (a commit's diff may not have been read; see gitleaksCommand's --diff-merges=first-parent)`,
+        commitsScanned,
+        gitleaksScanned,
+        output,
+      }
+    }
     return {
       arm: 'secret-scan',
       repo: repoLabel,
       status: exitCode === 0 ? 'PASS' : 'FAIL',
       reason: exitCode === 0 ? undefined : 'gitleaks found a leak in the diff (see output)',
       commitsScanned,
+      ...(gitleaksScanned !== null ? { gitleaksScanned } : {}),
       ...(note ? { note } : {}),
       output,
     }

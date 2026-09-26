@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import { run } from './lib/run.mjs'
 import {
   gitleaksCommand,
+  parseGitleaksCommitsScanned,
   runGitleaksArm,
   baseRefResolves,
   runKnownSecretsArm,
@@ -49,7 +50,7 @@ test('gitleaksCommand always scans "." with a RELATIVE --config: the repo comes 
   const dirCmd = gitleaksCommand(undefined, '/tmp/report.json')
   assert.deepEqual(dirCmd, ['gitleaks', 'dir', '.', '--config', '.gitleaks.toml', '--redact', '--exit-code', '0', '--report-format', 'json', '--report-path', '/tmp/report.json', '--no-color'])
   const gitCmd = gitleaksCommand('main')
-  assert.deepEqual(gitCmd, ['gitleaks', 'git', '.', '--log-opts', 'main..HEAD', '--config', '.gitleaks.toml', '--redact', '--exit-code', '1', '--no-color'])
+  assert.deepEqual(gitCmd, ['gitleaks', 'git', '.', '--log-opts', 'main..HEAD --diff-merges=first-parent', '--config', '.gitleaks.toml', '--redact', '--exit-code', '1', '--no-color'])
 })
 
 test('gitleaksCommand passes --no-color in both modes: gitleaks 8.30.1 colours ERR/FTL log lines even when piped, which put "m" (end of the SGR escape) rather than whitespace immediately before "ERR"/"FTL" and made hasFatalLog never match (HIGH fix)', () => {
@@ -141,7 +142,7 @@ test('runGitleaksArm (diff-scoped), REAL binary: --base reaches gitleaks as ONE 
     }
     const r = runGitleaksArm('kernel', root, 'HEAD', { runFn: spy })
     assert.ok(Array.isArray(seen))
-    assert.equal(seen[seen.indexOf('--log-opts') + 1], 'HEAD..HEAD')
+    assert.equal(seen[seen.indexOf('--log-opts') + 1], 'HEAD..HEAD --diff-merges=first-parent')
     assert.equal(r.status, 'PASS', JSON.stringify(r))
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -352,6 +353,43 @@ test('runGitleaksArm (diff-scoped), REAL binary: a synthetic PEM committed after
     const missing = runGitleaksArm('vertical', root, 'release-1/does-not-exist-here')
     assert.equal(missing.status, 'FAIL')
     assert.match(missing.reason, /does not resolve to a commit/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('runGitleaksArm (diff-scoped), REAL binary: a synthetic PEM key added ONLY in a merge commit\'s own conflict resolution (present in neither parent\'s tree) FAILs the range scan (HIGH fix — TASK-012-FU review: plain `git log -p` shows NO diff at all for a merge commit unless told to, so a credential introduced solely by resolving a merge conflict passed unseen; unit branches routinely carry sync merges with conflict resolutions, e.g. this very branch\'s a0280fc)', () => {
+  const root = makeSecretRepo()
+  try {
+    const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' })
+    const base = git('rev-parse', 'HEAD').trim()
+
+    writeFileSync(join(root, 'conflict.txt'), 'line1\n')
+    git('add', 'conflict.txt')
+    git('commit', '-q', '-m', 'seed conflict.txt')
+
+    git('checkout', '-q', '-b', 'side')
+    writeFileSync(join(root, 'conflict.txt'), 'line1\nfrom-side\n')
+    git('commit', '-q', '-am', 'side change')
+
+    git('checkout', '-q', 'main')
+    writeFileSync(join(root, 'conflict.txt'), 'line1\nfrom-main\n')
+    git('commit', '-q', '-am', 'main change')
+
+    try {
+      git('merge', '--no-ff', '-m', 'merge side', 'side')
+    } catch {
+      // Expected: conflicting edits to conflict.txt. Resolved by hand below.
+    }
+    // The PEM exists in NEITHER parent's tree — only here, in the merge
+    // commit's own resolved content.
+    writeFileSync(join(root, 'conflict.txt'), `line1\nfrom-main\nfrom-side\n${PEM_FIXTURE}`)
+    git('add', 'conflict.txt')
+    git('commit', '-q', '-m', 'merge: resolve conflict (adds the PEM)')
+
+    const r = runGitleaksArm('kernel', root, base)
+    assert.equal(r.status, 'FAIL', `expected FAIL — the PEM was added only in the merge commit's own conflict resolution; got: ${JSON.stringify(r)}`)
+    assert.match(r.reason, /leak in the diff/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -685,6 +723,35 @@ test('FU-L2: runGitleaksArm (diff-scoped) records commitsScanned, and marks base
     assert.equal(one.status, 'PASS')
     assert.equal(one.commitsScanned, 1)
     assert.equal(one.note, undefined)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('parseGitleaksCommitsScanned reads gitleaks\' own "N commits scanned." line (ANSI stripped), and returns null when no such line is present', () => {
+  assert.equal(parseGitleaksCommitsScanned('10:33AM INF 3 commits scanned.\n10:33AM INF no leaks found\n'), 3)
+  assert.equal(parseGitleaksCommitsScanned('\x1b[90m10:33AM\x1b[0m \x1b[32mINF\x1b[0m \x1b[1m1 commits scanned.\x1b[0m\n'), 1)
+  assert.equal(parseGitleaksCommitsScanned('no leaks found'), null)
+  assert.equal(parseGitleaksCommitsScanned(undefined), null)
+})
+
+test('FU-H1: runGitleaksArm (diff-scoped) FAILs closed on a coverage gap — gitleaks itself reports scanning fewer commits than actually exist in the range, exit 0 (a future regression the --diff-merges fix alone would not catch)', () => {
+  const root = makeSecretRepo()
+  try {
+    execFileSync('git', ['-C', root, 'tag', 'gap-base'])
+    writeFileSync(join(root, 'more.txt'), 'x\n')
+    execFileSync('git', ['-C', root, 'add', 'more.txt'])
+    execFileSync('git', ['-C', root, 'commit', '-q', '-m', 'more'])
+    writeFileSync(join(root, 'more2.txt'), 'y\n')
+    execFileSync('git', ['-C', root, 'add', 'more2.txt'])
+    execFileSync('git', ['-C', root, 'commit', '-q', '-m', 'more2'])
+    // Real range holds 2 commits; the (faked) gitleaks output claims only 1.
+    const runFn = fakeRun({ gitleaks: { exitCode: 0, output: '1 commits scanned.\nno leaks found', timedOut: false, spawnError: null } })
+    const r = runGitleaksArm('kernel', root, 'gap-base', { runFn })
+    assert.equal(r.status, 'FAIL', JSON.stringify(r))
+    assert.match(r.reason, /coverage gap/)
+    assert.equal(r.commitsScanned, 2)
+    assert.equal(r.gitleaksScanned, 1)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
