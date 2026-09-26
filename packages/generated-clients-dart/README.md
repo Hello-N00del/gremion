@@ -162,4 +162,7 @@ decides what counts as a schema by its position, so a property named
   the committed lock needs Dart >= 3.11. Consumers resolve their own floor.
 - POSIX-first: on Windows, a PATH `.cmd` wrapper for the generator or Dart is
   not run (no shell), so resolution falls back to the pinned Docker images.
-  The tool-resolution unit tests use `/bin/sh` fakes.
+  This includes Flutter's `bin/dart.bat`: set `$DART_BIN` to the SDK's
+  `bin/cache/dart-sdk/bin/dart.exe` instead, or it fails closed. The
+  tool-resolution unit tests inject a spawn that runs Node-script fakes, so
+  `test:unit` runs green on Windows and Linux alike.
