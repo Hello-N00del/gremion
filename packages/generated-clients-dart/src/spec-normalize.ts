@@ -20,6 +20,16 @@
 //     inferring) its type, so the field is a `bool`. A client does not
 //     validate server constants. A non-string enum hits the same EnumClass
 //     problem and fails closed.
+//  4. JSON Schema 2020-12 requires `null` to be listed INSIDE `enum` for a
+//     null instance to pass a nullable enum (the type array alone does not
+//     make `enum` accept it) — the real governance spec (openapi 3.1.0)
+//     spells four properties this way. openapi-generator 7.12.0 instead
+//     turns that `null` into an enum member with the STRING wire name
+//     'null'. Where the type already allows null, the null member is
+//     dropped: the field/enum being `?` in the generated Dart already
+//     expresses "may be null", so no enum member is needed for it. Where
+//     the type does NOT allow null, this is not a mapping this rewrite
+//     understands and it fails closed, same as an unmappable `nullable`.
 //
 // Anything that cannot be mapped faithfully fails closed. The walk decides
 // what is a schema by POSITION, not by key name, so a property named
@@ -32,6 +42,7 @@ export interface NormalizeReport {
   nullableFalseDropped: string[]
   defaultNullDropped: string[]
   constDropped: string[]
+  enumNullDropped: string[]
 }
 
 /** Keys whose value holds data, not schemas: never walked. */
@@ -54,7 +65,7 @@ function allowsNull(type: unknown): boolean {
 }
 
 export function normalizeFor31(input: unknown): { doc: unknown; report: NormalizeReport } {
-  const report: NormalizeReport = { nullable: [], nullableFalseDropped: [], defaultNullDropped: [], constDropped: [] }
+  const report: NormalizeReport = { nullable: [], nullableFalseDropped: [], defaultNullDropped: [], constDropped: [], enumNullDropped: [] }
   const version = (input as { openapi?: unknown } | null)?.openapi
   if (typeof version !== 'string' || !version.startsWith('3.1')) return { doc: input, report }
 
@@ -95,11 +106,20 @@ export function normalizeFor31(input: unknown): { doc: unknown; report: Normaliz
       report.defaultNullDropped.push(at)
     }
 
-    if (Array.isArray(src.enum) && src.enum.includes(null)) {
-      throw new Error(`${at}: enum containing null ${JSON.stringify(src.enum)} — openapi-generator 7.12.0 would make an enum member with wire name 'null'; express nullability with the type only`)
+    let enumValues = Array.isArray(src.enum) ? src.enum : null
+    if (enumValues && enumValues.includes(null)) {
+      if (!allowsNull(out.type)) {
+        throw new Error(`${at}: enum containing null ${JSON.stringify(enumValues)} — openapi-generator 7.12.0 would make an enum member with wire name 'null'; express nullability with the type only`)
+      }
+      // The type (left untouched) already expresses nullability; the null
+      // enum member is only there for JSON Schema validation and would
+      // become an undecodable wire name 'null' in the generated EnumClass.
+      enumValues = enumValues.filter((v) => v !== null)
+      out.enum = enumValues
+      report.enumNullDropped.push(at)
     }
-    if (Array.isArray(src.enum) && src.enum.some((v) => typeof v !== 'string')) {
-      throw new Error(`${at}: non-string enum ${JSON.stringify(src.enum)} — openapi-generator 7.12.0 (dart-dio) makes a string-wire EnumClass that cannot decode it; use a plain type or string values`)
+    if (enumValues && enumValues.some((v) => typeof v !== 'string')) {
+      throw new Error(`${at}: non-string enum ${JSON.stringify(enumValues)} — openapi-generator 7.12.0 (dart-dio) makes a string-wire EnumClass that cannot decode it; use a plain type or string values`)
     }
     if ('const' in src) {
       const c = src.const
