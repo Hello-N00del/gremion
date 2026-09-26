@@ -63,7 +63,7 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
    check `$ref` resolution — the staged-file collector only picks up
    `gremion-ui/**/*.{ts,sql}`, so a staged contract never reaches the lint engine at
    all. Structural validation is step 2's job, and the unit suite's. An intentional
-   break re-commits with `CONTRACTS_ALLOW_BREAKING=1`, bumps `info.version` and is
+   break re-commits with `CONTRACTS_ALLOW_BREAKING=1`, bumps `info.version`'s MAJOR (still enforced under the bypass) and is
    recorded in the PR description. `--gate-self-test` proves the oasdiff gate still
    works by running it over the fixtures in `contracts/fixtures/oasdiff/`; with
    neither an `oasdiff` binary nor a reachable docker daemon it fails closed and says
@@ -88,7 +88,7 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
 
 **Introducing a breaking change** (e.g. P0.3b's committees POST 201->202 flip) requires:
 - `CONTRACTS_ALLOW_BREAKING=1` set on the commit
-- A version bump of the affected spec's `info.version`
+- A MAJOR version bump of the affected spec's `info.version` (the gate refuses the bypass without one)
 - A PR-description note explaining the break
 
 ## 4. Gates
@@ -163,7 +163,9 @@ TASK-030 (PRD-PLAT-002b/008, TRD-403/404/405). `packages/generated-clients/` own
   migration-range and nav/realm checks are TASK-021's, per the brief's decision 5).
 
 Run: `pnpm --filter @gremion/generated-clients contracts:check` (Q2 default — `verify`,
-TASK-045, wires this in once it lands).
+TASK-045, wires this in once it lands). The base ref is the merge-base with `origin/main`, then
+`main`; on trunk itself that merge-base is HEAD and the check fails closed, so there pass it
+explicitly: `CONTRACTS_BASE_REF=HEAD~1 pnpm --filter @gremion/generated-clients contracts:check`.
 
 **Acceptance demo, run against the real tree** (`contracts/kernel/openapi.governance.json`,
 `CONTRACTS_BASE_REF=HEAD` to isolate a single seeded edit from the committed 0.2.0->1.0.0
