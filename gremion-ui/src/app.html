@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="%paraglide.lang%">
   <head>
     <meta charset="utf-8" />
 
@@ -43,14 +43,11 @@
         if (t === 'dark') h.classList.add('dark');
         if (cb === 'rg') h.classList.add('cb-rg');
         else if (cb === 'by') h.classList.add('cb-by');
-        // TASK-062 item 6: `lang` is deliberately NOT touched here anymore.
-        // i18nHandle (hooks.server.ts) already set the correct value above
-        // from resolveLocale's cascade before this script ran; overwriting
-        // it from a stale/foreign localStorage `gremion.lang` value here was
-        // exactly the SSR/client mismatch ("flash") item 6 is about. The
-        // $lib/i18n store's own getInitialLang() still reads/migrates that
-        // key for the reactive $t store's initial value, but only when the
-        // server hasn't already set a recognized <html lang> (see there).
+        // TASK-062: `lang` is never touched here. The server renders it
+        // (the html lang placeholder, filled by i18nHandle in hooks.server.ts)
+        // from the person's preference, the gremion.locale cookie or
+        // Accept-Language; the legacy gremion.lang/stura-lang keys are no
+        // longer a source of truth and are ignored.
       } catch (e) {}
       try {
         // TASK-208: the per-device navigation choice (nav-constants.ts

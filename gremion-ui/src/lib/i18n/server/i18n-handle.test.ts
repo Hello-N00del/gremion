@@ -10,9 +10,31 @@
 // unavailable, so an unconfigured port is caught and resolution just falls
 // through to cookie/Accept-Language/'de'.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { createI18nHandle, LOCALE_COOKIE, resolveRequestLocale } from './i18n-handle'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { Handle } from '@sveltejs/kit'
+import { sequence } from '@sveltejs/kit/hooks'
+// @ts-expect-error — runtime-only internal entry, same use and reason as
+// src/hooks.tenant-wiring.test.ts: sequence() needs the request store.
+import { with_request_store } from '@sveltejs/kit/internal/server'
+import { m } from '../paraglide/messages.js'
+import { createI18nHandle, LANG_PLACEHOLDER, LOCALE_COOKIE, resolveRequestLocale } from './i18n-handle'
 import { configureLocalePreference, resetLocalePreferenceForTest } from './locale-preference-port'
 import { configurePersonIdMapperForTest, resetPersonIdMapperForTest } from './person-id'
+
+const APP_HTML = readFileSync(join(__dirname, '..', '..', '..', 'app.html'), 'utf8')
+const customerIdOf = (l: unknown) => (l as { tenant?: { id: string } }).tenant?.id ?? null
+
+/** Stands in for SvelteKit's render: app.html through the merged transformPageChunk. */
+async function renderAppHtml(_event: unknown, opts?: { transformPageChunk?: (input: { html: string; done: boolean }) => string | undefined | Promise<string | undefined> }) {
+  const html = (await opts?.transformPageChunk?.({ html: APP_HTML, done: true })) ?? APP_HTML
+  return new Response(html, { headers: { 'content-type': 'text/html' } })
+}
+
+function withRequestStore<T>(event: unknown, fn: () => T): T {
+  const state = { tracing: { record_span: <R>({ fn }: { fn: (span: unknown) => Promise<R> }) => fn({}) } }
+  return with_request_store({ event, state } as never, fn)
+}
 
 function fakeEvent(opts: {
   cookie?: string | null
@@ -23,6 +45,7 @@ function fakeEvent(opts: {
   const cookies = new Map<string, string>()
   if (opts.cookie != null) cookies.set(LOCALE_COOKIE, opts.cookie)
   return {
+    url: new URL('https://pilot.test/'),
     cookies: { get: (name: string) => cookies.get(name) ?? undefined },
     request: { headers: { get: (name: string) => (name.toLowerCase() === 'accept-language' ? (opts.acceptLanguage ?? null) : null) } },
     locals: { user: opts.userId ? { id: opts.userId } : null, tenant: opts.tenantId ? { id: opts.tenantId } : undefined }
@@ -74,31 +97,60 @@ describe('resolveRequestLocale', () => {
   })
 })
 
-describe('createI18nHandle', () => {
+describe('createI18nHandle (TDD 2: the raw SSR response carries the resolved lang)', () => {
   beforeEach(() => {
     resetLocalePreferenceForTest()
     resetPersonIdMapperForTest()
   })
 
-  it('sets locals.locale and rewrites <html lang="de"> to the resolved locale', async () => {
-    const handle = createI18nHandle((l) => (l as any).tenant?.id ?? null)
-    const event = fakeEvent({ acceptLanguage: 'en-US' }) as any
-    const resolve = async (_event: unknown, opts?: { transformPageChunk?: (input: { html: string }) => string }) => {
-      const html = opts?.transformPageChunk?.({ html: '<!doctype html>\n<html lang="de">\n<head></head>' }) ?? ''
-      return new Response(html, { headers: { 'content-type': 'text/html' } })
-    }
-    const response = await handle({ event, resolve } as any)
-    expect(event.locals.locale).toBe('en')
-    const body = await response.text()
-    expect(body).toContain('<html lang="en">')
-    expect(body).not.toContain('lang="de"')
+  it('app.html declares the Paraglide lang placeholder, not a hardcoded lang', () => {
+    expect(APP_HTML).toMatch(/<html lang="%paraglide.lang%">/)
+    expect(APP_HTML).not.toMatch(/<html lang="(de|en)"/)
   })
 
-  it('leaves the response untouched when resolve provides no transformPageChunk hook path issue (still resolves locals)', async () => {
-    const handle = createI18nHandle((l) => (l as any).tenant?.id ?? null)
-    const event = fakeEvent({ cookie: 'de' }) as any
-    const resolve = async () => new Response('ok')
-    await handle({ event, resolve } as any)
-    expect(event.locals.locale).toBe('de')
+  it.each([
+    ['en-US', 'en'],
+    ['en-US;q=0.9,de;q=0.8', 'en'],
+    ['de-DE', 'de'],
+    [null, 'de']
+  ])('Accept-Language %j, no cookie -> <html lang="%s"> in the rendered app.html', async (header, expected) => {
+    const event = fakeEvent({ acceptLanguage: header })
+    const response = await createI18nHandle(customerIdOf)({ event, resolve: renderAppHtml } as never)
+    const body = await response.text()
+    expect((event.locals as { locale?: string }).locale).toBe(expected)
+    expect(body).toContain(`<html lang="${expected}">`)
+    expect(body).not.toContain(LANG_PLACEHOLDER)
+  })
+
+  it('SSR message calls inside resolve() see the request locale (Paraglide AsyncLocalStorage)', async () => {
+    const event = fakeEvent({ acceptLanguage: 'en-US' })
+    const resolve = async () => new Response(m['nav.files']())
+    const response = await createI18nHandle(customerIdOf)({ event, resolve } as never)
+    expect(await response.text()).toBe('Files')
+  })
+
+  it('never hands the request body to Paraglide (uploads are not cloned/teed)', async () => {
+    const event = fakeEvent({ acceptLanguage: 'en-US' })
+    let seen: unknown
+    const resolve = async (e: unknown) => {
+      seen = e
+      return new Response('ok')
+    }
+    await createI18nHandle(customerIdOf)({ event, resolve } as never)
+    expect(seen).toBe(event)
+  })
+})
+
+describe('i18nHandle + brand style handle in one sequence() (TDD 7)', () => {
+  it('both transformPageChunk rewrites land in the same response', async () => {
+    const brandStyle = '<style id="tenant-brand">:root{--ds-accent:oklch(50% 0.1 30)}</style>'
+    const brandHandle: Handle = ({ event, resolve }) =>
+      resolve(event, { transformPageChunk: ({ html }) => html.replace('</head>', `${brandStyle}</head>`) })
+    const composed = sequence(brandHandle, createI18nHandle(customerIdOf))
+    const event = fakeEvent({ acceptLanguage: 'en-US' })
+    const response = await withRequestStore(event, () => composed({ event, resolve: renderAppHtml } as never))
+    const body = await response.text()
+    expect(body).toContain('<html lang="en">')
+    expect(body).toContain(`${brandStyle}</head>`)
   })
 })

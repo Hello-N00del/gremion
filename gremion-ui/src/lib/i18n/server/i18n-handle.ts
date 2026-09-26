@@ -1,38 +1,48 @@
 // TASK-062 TDD 2/7 — i18nHandle (brief §6.2/6.7, TRD-412/TRD-324).
 //
-// Resolves the request's locale (resolveLocale's cascade) and rewrites the
-// static app.html's `lang="de"` to the resolved value via transformPageChunk
-// — the same mechanism tenantBrandStyleHandle already uses for the per-tenant
-// accent <style> tag, so both survive sequence() (brief §4). This is what
-// makes a no-cookie `Accept-Language: en-US` request come back with
-// `<html lang="en"` in the raw server response, before any client script runs
-// (item 2's acceptance).
+// 1. resolveRequestLocale() runs the cascade (resolve-locale.ts): explicit
+//    person preference -> cookie -> Accept-Language -> customer default -> 'de'.
+// 2. paraglideMiddleware() puts that locale into Paraglide's per-request
+//    AsyncLocalStorage, so every message function and the legacy `$t` shim
+//    render in it during SSR. It learns the locale through the single
+//    `custom-gremion` server strategy (see paraglide-options.js for why the
+//    cascade cannot be split over Paraglide's built-in strategies).
+// 3. transformPageChunk fills app.html's `%paraglide.lang%`, so the raw server
+//    response already carries `<html lang="en">` before any script runs. The
+//    same mechanism tenantBrandStyleHandle uses; sequence() merges both.
 //
-// Person-preference and customer-default lookups are best-effort:
-//   - LocalePreferencePort has no production adapter yet (Q1 residual) — an
-//     unconfigured port throws on getLocalePreferencePort(), which is caught
-//     here so a missing DB writer never turns into a 500 for an unrelated
-//     page load.
-//   - personIdOf() returns null until the subject->person mapping exists (Q2
-//     residual), so the person-preference branch is inert until TASK-031/080
-//     land it; the cookie step covers the gap meanwhile.
+// Person-preference and customer-default lookups are best-effort: an
+// unconfigured LocalePreferencePort (Q1: no production adapter is bound until
+// TASK-080) is caught so a missing DB writer never turns an unrelated page
+// load into a 500, and personIdOf() is null until the subject->person mapping
+// exists (Q2), so the cookie decides meanwhile.
 import type { Handle } from '@sveltejs/kit'
 import { resolveLocale, type Locale, type PersonLocalePreference } from './resolve-locale'
 import { personIdOf } from './person-id'
 import { getLocalePreferencePort } from './locale-preference-port'
+import { GREMION_STRATEGY, LOCALE_COOKIE } from '../locale'
+import { paraglideMiddleware } from '../paraglide/server.js'
+import { defineCustomServerStrategy } from '../paraglide/runtime.js'
 
-/** Per-device mirror of the signed-in person's choice (brief §5 Q4); Path=/ so
- * it applies to the whole app, SameSite=Lax (same posture as the session
- * cookie), Secure is added by the switch action itself once TLS is confirmed
- * at the call site (brief §7 review watch-item). */
-export const LOCALE_COOKIE = 'gremion.locale'
+export { LOCALE_COOKIE }
+
+/** The placeholder app.html carries in `<html lang="…">`. */
+export const LANG_PLACEHOLDER = '%paraglide.lang%'
 
 type LocalsLike = { user: { id: string } | null; tenant?: { id: string } | null }
 type MinimalRequestEvent = {
+  url?: URL
   cookies: { get(name: string): string | undefined }
   request: { headers: { get(name: string): string | null } }
   locals: LocalsLike
 }
+
+// The locale this handle resolved, keyed by the Request it hands to
+// paraglideMiddleware. A WeakMap, so nothing outlives the request.
+const resolvedLocales = new WeakMap<Request, Locale>()
+defineCustomServerStrategy(GREMION_STRATEGY, {
+  getLocale: (request) => (request ? resolvedLocales.get(request) : undefined)
+})
 
 /**
  * Pure-ish resolution step, split out from the Handle so it is testable
@@ -63,10 +73,12 @@ export async function resolveRequestLocale(
         personPreference = row?.locale ?? null
         customerDefaultLocale = await port.getCustomerDefault(customerId)
       }
-    } catch {
-      // LocalePreferencePort not configured in this environment yet (Q1
-      // residual) — resolve without a person-level preference rather than
-      // fail the request.
+    } catch (err) {
+      // Read side of Q1: resolve without the stored preference rather than
+      // fail the page. Logged so a broken adapter is visible, not silent.
+      console.warn('[i18n] locale preference read failed; falling back to cookie/header', {
+        error: err instanceof Error ? err.message : String(err)
+      })
     }
   }
 
@@ -83,9 +95,17 @@ export function createI18nHandle(customerIdOf: (locals: LocalsLike) => string | 
     const locale = await resolveRequestLocale(event as unknown as MinimalRequestEvent, customerIdOf)
     ;(event.locals as App.Locals & { locale?: Locale }).locale = locale
 
-    return resolve(event, {
-      transformPageChunk: ({ html }) => html.replace(/lang="de"/, `lang="${locale}"`)
-    })
+    // A body-less stand-in: Paraglide clones the Request it is given, and
+    // cloning an upload would tee (and buffer) its body. The stand-in carries
+    // only the URL, which is all a non-URL strategy needs.
+    const probe = new Request(event.url)
+    resolvedLocales.set(probe, locale)
+
+    return paraglideMiddleware(probe, ({ locale: requestLocale }) =>
+      resolve(event, {
+        transformPageChunk: ({ html }) => html.replace(LANG_PLACEHOLDER, requestLocale)
+      })
+    )
   }
   return handle
 }
