@@ -21,4 +21,4 @@
 creation_rules:
   - path_regex: (^|/)secrets/.+|\.enc\.(yaml|yml|json|env)$
     age: >-
-      <OPERATOR_AGE_PUBLIC_KEY_REPLACE_VIA_BOOTSTRAP_SOPS_SH>
+      age1ul80t2uw0ujjedcls3fzlhffugtulg9qtcymt3dp2gmh3wa90c2sckt6n5
