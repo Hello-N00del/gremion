@@ -72,15 +72,21 @@ describe('§8.7 backup-key invariants — every registry row', () => {
 
     const tenants = await listTenants()
     expect(tenants.length).toBe(3)
-    for (const t of tenants) {
-      const loc = backupKeyLocation(t.backupKeyRef)
-      if (loc.kind === 'file') {
-        // exactly-one: a single non-empty host path, no ambiguity.
-        expect(loc.hostPath).toMatch(/\/tenant_[a-z0-9-]+_backup_key$/)
-      } else {
-        expect(loc.kind).toBe('env')
-        expect(loc.envVar).toBe('BACKUP_KEY')
-      }
+    const locations = tenants.map((t) => backupKeyLocation(t.backupKeyRef))
+    // Split by kind BEFORE the loop (plain array filtering, not a
+    // conditional wrapped around expect) so no test body branches around
+    // its own expect calls (vitest(no-conditional-expect)).
+    const fileLocs = locations.filter((l): l is Extract<typeof l, { kind: 'file' }> => l.kind === 'file')
+    const envLocs = locations.filter((l): l is Extract<typeof l, { kind: 'env' }> => l.kind === 'env')
+    // Every location is EXACTLY one of the two kinds — replaces the old
+    // if/else's implicit exhaustiveness check with an explicit count.
+    expect(fileLocs.length + envLocs.length).toBe(locations.length)
+    for (const loc of fileLocs) {
+      // exactly-one: a single non-empty host path, no ambiguity.
+      expect(loc.hostPath).toMatch(/\/tenant_[a-z0-9-]+_backup_key$/)
+    }
+    for (const loc of envLocs) {
+      expect(loc.envVar).toBe('BACKUP_KEY')
     }
   })
 

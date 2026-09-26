@@ -1,0 +1,41 @@
+{
+  "$comment": "TASK-045 Q3 (recommended default, applied). A skip inside an otherwise-passing suite fails it unless named here with a reason and a maxCount (summed per suite by lib/skips.mjs#allowedSkipsForSuite). An all-skipped suite fails regardless of this file (lib/guard.mjs evaluateSuite rule 5). Adding an entry here is a real grant, not a formality -- name the exact file and why it cannot run in this suite.",
+  "entries": [
+    {
+      "suite": "unit",
+      "file": "packages/ports/src/nats-broker.integration.test.ts",
+      "reason": "gated on NATS_TEST_URL (describeIf); the real proof against a live NATS JetStream server runs in the integration suite via `make test-ports-nats`, which asserts the file's own passing-test count rather than trusting vitest's exit code (see packages/ports/scripts/nats-test.sh).",
+      "maxCount": 20
+    },
+    {
+      "suite": "unit",
+      "file": "gremion-ui/scripts/install-git-hooks.test.ts",
+      "reason": "one it.skipIf(isWindows) case asserts a POSIX executable bit (0755); NTFS reports every file 0755 regardless, so the assertion cannot mean anything on a Windows unit run.",
+      "maxCount": 1
+    },
+    {
+      "suite": "integration",
+      "file": "gremion-ui/tests/integration/municipal-acceptance.integration.test.ts",
+      "reason": "one it.skipIf(!process.env.MUSTERSTADT_RECONCILE_VERIFY) case is an opt-in reconciliation check against a real Musterstadt-shaped tenant, not part of the default acceptance run.",
+      "maxCount": 1
+    },
+    {
+      "suite": "unit",
+      "file": "packages/storage/src/local.test.ts",
+      "reason": "one it.skipIf(!canSymlinkFiles) case exercises a symlinked-file refusal; creating a symlink on Windows needs Developer Mode or elevation, so this host cannot prove the case either way. Collected via gremion-ui's vite include ('../packages/storage/src/**/*.test.ts').",
+      "maxCount": 1
+    },
+    {
+      "suite": "isolation",
+      "file": "packages/storage/src/local.test.ts",
+      "reason": "same it.skipIf(!canSymlinkFiles) case as the \"unit\" entry above, additionally collected here because the isolation suite runs @gremion/storage's own `test` script directly.",
+      "maxCount": 1
+    },
+    {
+      "suite": "unit",
+      "file": "gremion-ui/src/lib/server/boundary/contracts-gate-staged.test.ts",
+      "reason": "one it.skipIf(process.platform === 'win32') case asserts the exact docker invocation used to pin the oasdiff image; the assertion is Windows-path-shape-specific and does not apply on this host.",
+      "maxCount": 1
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+22 1 0:21 / / rw,relatime master:1 - overlay overlay rw,lowerdir=/l,upperdir=/u,workdir=/w
+23 22 0:22 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+24 22 0:23 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+97 22 8:1 /volumes/other/_data /srv/gremion rw,relatime - ext4 /dev/sda1 rw

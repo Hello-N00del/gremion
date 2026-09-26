@@ -1,0 +1,4 @@
+{
+  "$comment": "CRITICAL findings (TRD-102) accepted for release, one entry per advisory id. Every entry needs id, reason and date (YYYY-MM-DD); an incomplete entry fails `check-sbom` rather than accepting anything. Empty is the expected state.",
+  "accepted": []
+}

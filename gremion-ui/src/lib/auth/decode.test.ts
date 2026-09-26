@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { safeDecodeAccessToken } from './decode'
+import { safeDecodeAccessToken, type DecodedAccessToken } from './decode'
+
+/**
+ * Narrowing assertion helpers so the per-branch `expect`s below run
+ * unconditionally after the narrowing check — the earlier
+ * `expect('error' in result).toBe(...); if (...) { expect(...) }` shape
+ * hid a vitest(no-conditional-expect) risk (an expect that may never
+ * execute) even though the leading expect already made the branch
+ * unreachable on failure. `asserts` gives the same fail-fast behaviour
+ * without a conditional wrapping the follow-up expects.
+ */
+function assertOk(
+  result: DecodedAccessToken,
+): asserts result is Exclude<DecodedAccessToken, { error: string }> {
+  expect('error' in result).toBe(false)
+}
+
+function assertFailed(
+  result: DecodedAccessToken,
+): asserts result is Extract<DecodedAccessToken, { error: string }> {
+  expect('error' in result).toBe(true)
+}
 
 /**
  * Build a structurally-valid JWT WITHOUT signing it.
@@ -20,18 +41,14 @@ function makeJwt(payload: Record<string, unknown>): string {
 describe('safeDecodeAccessToken (G-018)', () => {
   it('returns TokenDecodeFailed for a malformed JWT instead of silent fallback', () => {
     const result = safeDecodeAccessToken('not.a.jwt')
-    expect('error' in result).toBe(true)
-    if ('error' in result) {
-      expect(result.error).toBe('TokenDecodeFailed')
-    }
+    assertFailed(result)
+    expect(result.error).toBe('TokenDecodeFailed')
   })
 
   it('returns TokenDecodeFailed for an empty string', () => {
     const result = safeDecodeAccessToken('')
-    expect('error' in result).toBe(true)
-    if ('error' in result) {
-      expect(result.error).toBe('TokenDecodeFailed')
-    }
+    assertFailed(result)
+    expect(result.error).toBe('TokenDecodeFailed')
   })
 
   it('returns TokenDecodeFailed for a non-JWT string', () => {
@@ -53,25 +70,21 @@ describe('safeDecodeAccessToken (G-018)', () => {
       groups: ['stura', 'finance-team'],
     })
     const result = safeDecodeAccessToken(token)
-    expect('error' in result).toBe(false)
-    if (!('error' in result)) {
-      expect(result.sub).toBe('user-uuid-123')
-      expect(result.preferredUsername).toBe('alice')
-      expect(result.realmRoles).toEqual(['member', 'finance', 'unknown-role'])
-      expect(result.groups).toEqual(['stura', 'finance-team'])
-    }
+    assertOk(result)
+    expect(result.sub).toBe('user-uuid-123')
+    expect(result.preferredUsername).toBe('alice')
+    expect(result.realmRoles).toEqual(['member', 'finance', 'unknown-role'])
+    expect(result.groups).toEqual(['stura', 'finance-team'])
   })
 
   it('returns empty arrays/undefineds (not error) when claims are missing', () => {
     const token = makeJwt({ sub: 'minimal-user' })
     const result = safeDecodeAccessToken(token)
-    expect('error' in result).toBe(false)
-    if (!('error' in result)) {
-      expect(result.sub).toBe('minimal-user')
-      expect(result.realmRoles).toEqual([])
-      expect(result.groups).toEqual([])
-      expect(result.preferredUsername).toBeUndefined()
-    }
+    assertOk(result)
+    expect(result.sub).toBe('minimal-user')
+    expect(result.realmRoles).toEqual([])
+    expect(result.groups).toEqual([])
+    expect(result.preferredUsername).toBeUndefined()
   })
 
   it('extracts acr and authTime when present in a valid JWT', () => {
@@ -83,11 +96,9 @@ describe('safeDecodeAccessToken (G-018)', () => {
       auth_time: 1717430400,
     })
     const result = safeDecodeAccessToken(token)
-    expect('error' in result).toBe(false)
-    if (!('error' in result)) {
-      expect(result.acr).toBe('2fa')
-      expect(result.authTime).toBe(1717430400)
-    }
+    assertOk(result)
+    expect(result.acr).toBe('2fa')
+    expect(result.authTime).toBe(1717430400)
   })
 
   it('returns acr and authTime as undefined when absent from the token', () => {
@@ -97,11 +108,9 @@ describe('safeDecodeAccessToken (G-018)', () => {
       groups: [],
     })
     const result = safeDecodeAccessToken(token)
-    expect('error' in result).toBe(false)
-    if (!('error' in result)) {
-      expect(result.acr).toBeUndefined()
-      expect(result.authTime).toBeUndefined()
-    }
+    assertOk(result)
+    expect(result.acr).toBeUndefined()
+    expect(result.authTime).toBeUndefined()
   })
 
   it('does NOT silently return empty roles for a malformed token (regression for G-018 silent reset)', () => {
@@ -125,8 +134,8 @@ describe('safeDecodeAccessToken — captures iss (CR2)', () => {
     // which is exactly why this file uses makeJwt throughout.)
     const jwt = makeJwt({ iss: 'https://kc.example.org/realms/tenant-a', realm_access: { roles: ['member'] }, sub: 'u1' })
     const decoded = safeDecodeAccessToken(jwt)
-    expect('error' in decoded).toBe(false)
-    if (!('error' in decoded)) expect(decoded.iss).toBe('https://kc.example.org/realms/tenant-a')
+    assertOk(decoded)
+    expect(decoded.iss).toBe('https://kc.example.org/realms/tenant-a')
   })
 })
 
@@ -141,15 +150,15 @@ describe('safeDecodeAccessToken — tenant vocabulary threading (P2.2-auth A3)',
   it('threads a provided vocabulary through to the result verbatim (same reference)', () => {
     const token = makeJwt({ sub: 'u1', realm_access: { roles: ['member'] } })
     const result = safeDecodeAccessToken(token, vocab)
-    expect('error' in result).toBe(false)
-    if (!('error' in result)) expect(result.vocabulary).toBe(vocab)
+    assertOk(result)
+    expect(result.vocabulary).toBe(vocab)
   })
 
   it('does NOT filter realmRoles by the vocabulary (extraction semantics identical — it feeds the filters, it is not one)', () => {
     const token = makeJwt({ sub: 'u1', realm_access: { roles: ['member', 'not-in-vocab'] } })
     const result = safeDecodeAccessToken(token, vocab)
-    expect('error' in result).toBe(false)
-    if (!('error' in result)) expect(result.realmRoles).toEqual(['member', 'not-in-vocab'])
+    assertOk(result)
+    expect(result.realmRoles).toEqual(['member', 'not-in-vocab'])
   })
 
   it('default no-vocabulary path is byte-identical: no vocabulary key in the result (golden pin)', () => {

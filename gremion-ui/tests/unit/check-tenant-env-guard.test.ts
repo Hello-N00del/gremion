@@ -12,7 +12,11 @@ describe('check-tenant-env-guard — scanForEnvViolations', () => {
   it('flags a per-tenant env read OUTSIDE the allowlist', async () => {
     const violations = await scanForEnvViolations(FIXTURES, { allowlist: ALLOWLIST })
     const bad = violations.filter((v) => v.file.endsWith('violation-outside-allowlist.ts'))
-    expect(bad.map((v) => v.varName).sort()).toEqual(['DATABASE_URL', 'NEXTCLOUD_ADMIN_PASSWORD', 'SYNAPSE_SERVER_NAME'])
+    expect(bad.map((v) => v.varName).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual([
+      'DATABASE_URL',
+      'NEXTCLOUD_ADMIN_PASSWORD',
+      'SYNAPSE_SERVER_NAME',
+    ])
   })
   it('does NOT flag a read INSIDE the allowlisted resolver path', async () => {
     const violations = await scanForEnvViolations(FIXTURES, { allowlist: ALLOWLIST })

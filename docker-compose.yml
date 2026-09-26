@@ -11,6 +11,36 @@
 #   make logs               (follow logs)
 ##############################################################
 
+# ============================================================
+# Per-module PostgreSQL (D14) — the shape every <id>-postgres shares
+# ============================================================
+# One server per module, one database per (tenant, module) inside it (D13).
+# The per-(tenant, module) databases are created by the provisioner
+# (TASK-021), not here: each server starts with only the image's defaults. The image is the kernel's own pin — tag AND index
+# digest, asserted by `make lint-postgres-major` — and the data volume is
+# mounted at /var/lib/postgresql, the 18+ layout (see
+# docs/ops/postgres-major.md). Each service adds its own profile, label,
+# credentials and volume; the org.gremion.postgres label is how
+# scripts/check-postgres-major-running.mjs finds the running servers.
+x-module-postgres: &module-postgres
+  image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+  networks:
+    - gremion-net
+  healthcheck:
+    # over TCP: the entrypoint's temporary init server listens on no address,
+    # so it can never be mistaken for the final one
+    test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\""]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 20s
+
 # Required-variable guard for the edge (TASK-022, spec A §A/§E), copied from
 # infra/host/mail/docker-compose.yml. Compose interpolates the WHOLE document,
 # extension fields included, so an unset or empty variable named here aborts
@@ -20,7 +50,9 @@
 # would also hide the bind address from scripts/check-compose-edge.test.mjs.
 # So the ports stay plain and the requirement is asserted once, here. Every key
 # is declared in infra/host/templates/env/state.env.tmpl and in .env.example
-# (test/host/edge-env.bats).
+# (test/host/edge-env.bats). Intended consequence: this binds EVERY profile and
+# verb, dev and `make lint-compose` included, so a local .env that predates the
+# edge must gain the Edge block from .env.example (docs/deployment.md).
 x-required-env:
   stack: "${STACK:?STACK required}"
   gremion-root: "${GREMION_ROOT:?GREMION_ROOT required}"
@@ -40,7 +72,7 @@ services:
   # PostgreSQL — database for Keycloak and the governance kernel
   # ============================================================
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     restart: unless-stopped
     logging:
       driver: json-file
@@ -69,14 +101,93 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql
       - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    labels:
+      org.gremion.postgres: "kernel"
     networks:
       - gremion-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      # over TCP: the entrypoint's temporary init server listens on no
+      # address, so "healthy" can never mean that server
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # ============================================================
+  # Per-module PostgreSQL (D14) — one per extraction-source leaf
+  # ============================================================
+  # Profile-gated: a plain `up` starts none of them, `--profile <id>` starts
+  # that module's server. Credentials come from <ID>_PG_USER /
+  # <ID>_PG_PASSWORD; an unset password makes the image refuse to initialise,
+  # loudly. The volumes carry names of their own (gremion_module_<id>_pg_data)
+  # and NEVER the extraction source's gremion_<id>_pg_data: those hold its
+  # live PG16 clusters (the guard refuses them, FORBIDDEN_MODULE_VOLUMES).
+  board-postgres:
+    <<: *module-postgres
+    profiles: [board]
+    labels:
+      org.gremion.postgres: "module:board"
+    environment:
+      POSTGRES_USER:     ${BOARD_PG_USER:-board}
+      POSTGRES_PASSWORD: ${BOARD_PG_PASSWORD}
+    volumes:
+      - board-pg-data:/var/lib/postgresql
+
+  calendar-postgres:
+    <<: *module-postgres
+    profiles: [calendar]
+    labels:
+      org.gremion.postgres: "module:calendar"
+    environment:
+      POSTGRES_USER:     ${CALENDAR_PG_USER:-calendar}
+      POSTGRES_PASSWORD: ${CALENDAR_PG_PASSWORD}
+    volumes:
+      - calendar-pg-data:/var/lib/postgresql
+
+  content-postgres:
+    <<: *module-postgres
+    profiles: [content]
+    labels:
+      org.gremion.postgres: "module:content"
+    environment:
+      POSTGRES_USER:     ${CONTENT_PG_USER:-content}
+      POSTGRES_PASSWORD: ${CONTENT_PG_PASSWORD}
+    volumes:
+      - content-pg-data:/var/lib/postgresql
+
+  finance-postgres:
+    <<: *module-postgres
+    profiles: [finance]
+    labels:
+      org.gremion.postgres: "module:finance"
+    environment:
+      POSTGRES_USER:     ${FINANCE_PG_USER:-finance}
+      POSTGRES_PASSWORD: ${FINANCE_PG_PASSWORD}
+    volumes:
+      - finance-pg-data:/var/lib/postgresql
+
+  newsletter-postgres:
+    <<: *module-postgres
+    profiles: [newsletter]
+    labels:
+      org.gremion.postgres: "module:newsletter"
+    environment:
+      POSTGRES_USER:     ${NEWSLETTER_PG_USER:-newsletter}
+      POSTGRES_PASSWORD: ${NEWSLETTER_PG_PASSWORD}
+    volumes:
+      - newsletter-pg-data:/var/lib/postgresql
+
+  vault-postgres:
+    <<: *module-postgres
+    profiles: [vault]
+    labels:
+      org.gremion.postgres: "module:vault"
+    environment:
+      POSTGRES_USER:     ${VAULT_PG_USER:-vault}
+      POSTGRES_PASSWORD: ${VAULT_PG_PASSWORD}
+    volumes:
+      - vault-pg-data:/var/lib/postgresql
 
   # ============================================================
   # Mailpit — SMTP catcher for staging / local dev (#162)
@@ -316,12 +427,20 @@ services:
       - "traefik.http.middlewares.public-ratelimit.ratelimit.average=100"
       - "traefik.http.middlewares.public-ratelimit.ratelimit.burst=50"
       - "traefik.http.middlewares.public-ratelimit.ratelimit.period=1m"
-      # #251: key the bucket on the real client IP (Cloudflare sets CF-Connecting-IP).
-      # Without an explicit sourceCriterion Traefik falls back to the request's
-      # remote address — which behind the cloudflared tunnel is the tunnel
-      # container's IP, collapsing ALL internet traffic into one shared 100 req/min
-      # bucket. Pairs with forwardedHeaders.trustedIPs in docker/traefik/traefik.yml.
-      - "traefik.http.middlewares.public-ratelimit.ratelimit.sourceCriterion.requestHeaderName=CF-Connecting-IP"
+      # TASK-022 (round-2 HIGH): #251's original comment here said "key the
+      # bucket on the real client IP (Cloudflare sets CF-Connecting-IP)". That
+      # was true when cloudflared sat in front of Traefik and rewrote the
+      # header itself. TASK-022 makes Traefik the first hop (see
+      # docker/traefik/traefik.yml's forwardedHeaders header: "nothing keyed
+      # on security may read a forwarded header"), so a sourceCriterion keyed
+      # on a request header is read verbatim from whatever the client sends --
+      # any client can rotate CF-Connecting-IP itself and mint a fresh 100
+      # req/min bucket per request, voiding the limit. No sourceCriterion is
+      # declared below, so Traefik falls back to the connection's own remote
+      # address, which is the real client now that nothing sits in front of
+      # it. Guarded by scripts/check-compose-edge.test.mjs guard 4, which reads
+      # every service's rendered labels for a ratelimit sourceCriterion keyed
+      # on CF-Connecting-IP / X-Forwarded-For / X-Real-IP.
     healthcheck:
       # Follows PUBLIC_BASE_PATH: under a base path the portal 404s outside it,
       # the container is marked unhealthy, and Traefik v3 removes its routers.
@@ -585,6 +704,18 @@ services:
 volumes:
   pg-data:
     name: gremion_pg_data
+  board-pg-data:
+    name: gremion_module_board_pg_data
+  calendar-pg-data:
+    name: gremion_module_calendar_pg_data
+  content-pg-data:
+    name: gremion_module_content_pg_data
+  finance-pg-data:
+    name: gremion_module_finance_pg_data
+  newsletter-pg-data:
+    name: gremion_module_newsletter_pg_data
+  vault-pg-data:
+    name: gremion_module_vault_pg_data
   mailpit-data:
     name: gremion_mailpit_data
   gremion-config-data:

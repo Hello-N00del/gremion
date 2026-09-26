@@ -39,9 +39,15 @@ describe('registerDefaultTenant', () => {
     const t = await getTenantBySlug('default')
     expect(t).not.toBeNull()
     expect(t!.status).toBe('active')
-    expect(t!.realmName).toBe('gremion-test')
+    // 70029f7 dropped the retired 'gremion-test' realm literal from every
+    // non-doc, non-*.test.ts carrier (spec B B-01), deferring the *.test.ts
+    // occurrences to a later ticket (never landed). CI's integration job and
+    // scripts/verify/suites/integration.mjs both set
+    // AUTH_KEYCLOAK_ISSUER=".../realms/gremion" (no suffix); this asserts the
+    // realm registerDefaultTenant actually derives from that env today.
+    expect(t!.realmName).toBe('gremion')
     expect(t!.dbConnRef).toBe('env:DATABASE_URL') // tenant #1 keeps env secrets — no content move
-    expect(t!.issuer).toContain('/realms/gremion-test')
+    expect(t!.issuer).toContain('/realms/gremion')
   })
 
   it('is idempotent — running it twice leaves exactly one default row with a stable id', async () => {

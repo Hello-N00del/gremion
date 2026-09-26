@@ -336,8 +336,11 @@ ACME_CA_SERVER=https://pebble:14000/dir
 TRAEFIK_CERT_RESOLVER=le-http
 EOF
 
+# PROGRAMFILES and USERPROFILE are unset on Linux; on Windows (Git Bash) the
+# docker CLI finds its cli-plugins, compose among them, only through them.
 compose() {
     env -i PATH="$PATH" HOME="${HOME:-/root}" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+        ${PROGRAMFILES:+PROGRAMFILES="$PROGRAMFILES"} ${USERPROFILE:+USERPROFILE="$USERPROFILE"} \
         docker compose --env-file "$ENV_FILE" "$@"
 }
 

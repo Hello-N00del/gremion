@@ -20,8 +20,7 @@ const server = setupServer(
   }),
 
   // List users
-  http.get(`${BASE}/admin/realms/${REALM}/users`, ({ request }) => {
-    const url = new URL(request.url)
+  http.get(`${BASE}/admin/realms/${REALM}/users`, () => {
     return HttpResponse.json([
       { id: 'u1', username: 'anna', email: 'anna@test.local', firstName: 'Anna', lastName: 'M', enabled: true, emailVerified: true }
     ])
@@ -159,7 +158,10 @@ describe('KeycloakAdminClient', () => {
       })
     )
     const client = makeClient()
-    await expect(client.listUsers()).rejects.toThrow()
+    // request() has no try/catch around fetch(), so the underlying
+    // TypeError bubbles up unchanged — this pins the real message instead of
+    // an unconditional toThrow() (vitest(require-to-throw-message)).
+    await expect(client.listUsers()).rejects.toThrow('Failed to fetch')
   })
 
   it('setGroupAttribute — immutable merge', async () => {
