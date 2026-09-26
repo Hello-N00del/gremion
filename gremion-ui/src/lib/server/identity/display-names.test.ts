@@ -103,7 +103,11 @@ describe('getDisplayNameResolver tenant isolation', () => {
   })
 
   test('throws fail-closed when no tenant is in ALS', () => {
-    expect(() => getDisplayNameResolver(() => ({ getUser: vi.fn() }))).toThrow()
+    // currentTenantId() -> getTenant() throws this exact message when called
+    // outside runWithTenant().
+    expect(() => getDisplayNameResolver(() => ({ getUser: vi.fn() }))).toThrow(
+      /No tenant context: getTenant\(\) called outside runWithTenant\(\)/,
+    )
   })
 
   test('T8: evictDisplayNameResolver(tenantId) drops ONLY that tenant resolver (cache drained)', async () => {
