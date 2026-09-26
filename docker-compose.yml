@@ -20,7 +20,9 @@
 # would also hide the bind address from scripts/check-compose-edge.test.mjs.
 # So the ports stay plain and the requirement is asserted once, here. Every key
 # is declared in infra/host/templates/env/state.env.tmpl and in .env.example
-# (test/host/edge-env.bats).
+# (test/host/edge-env.bats). Intended consequence: this binds EVERY profile and
+# verb, dev and `make lint-compose` included, so a local .env that predates the
+# edge must gain the Edge block from .env.example (docs/deployment.md).
 x-required-env:
   stack: "${STACK:?STACK required}"
   gremion-root: "${GREMION_ROOT:?GREMION_ROOT required}"

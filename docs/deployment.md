@@ -198,7 +198,12 @@ red.
   `127.0.0.1` only. The `ping` entrypoint (`:8082`) is not published; the
   container healthcheck probes it. The `x-required-env` block at the top of
   `docker-compose.yml` refuses every `docker compose` verb while any edge key
-  is unset or empty.
+  is unset or empty. This is intended, and it applies to every profile, not
+  only `production`: `make lint-compose`, `docker compose config` and a dev
+  `up` fail too. A local `.env` created before the ACME edge landed must gain
+  the **Edge** block from `.env.example` (`STACK`, `GREMION_ROOT`,
+  `ACME_CA_SERVER`, the `EDGE_*` keys, `TRAEFIK_API_PORT`,
+  `INTERNALTEST_PORT`). CI is unaffected because it copies `.env.example`.
 - **Static configuration.** `docker/traefik/traefik.yml` holds no host value.
   Its four markers `@ACME_EMAIL@`, `@ACME_CA_SERVER@`, `@EDGE_V4_SUBNET@` and
   `@EDGE_V6_SUBNET@` are substituted from the container's environment into
