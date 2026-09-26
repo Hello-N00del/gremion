@@ -22,6 +22,15 @@ importers:
 
   gremion-public:
     dependencies:
+      '@fontsource/archivo-narrow':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/inter':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource/jetbrains-mono':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@gremion/db':
         specifier: workspace:*
         version: link:../packages/db
