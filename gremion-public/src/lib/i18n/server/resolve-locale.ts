@@ -6,18 +6,16 @@
 // copy rather than a cross-app import — the two apps are separate
 // SvelteKit projects with no shared package between them.
 
-const SUPPORTED_LOCALES = ['de', 'en'] as const
+import { asSupportedLocale, type Locale } from '../locale'
 
-export type Locale = (typeof SUPPORTED_LOCALES)[number]
+export type { Locale }
 
 export interface ResolveLocaleInput {
   cookie?: string | null
   acceptLanguage?: string | null
 }
 
-function asLocale(value: string | null | undefined): Locale | null {
-  return value != null && (SUPPORTED_LOCALES as readonly string[]).includes(value) ? (value as Locale) : null
-}
+const asLocale = (value: string | null | undefined): Locale | null => asSupportedLocale(value)
 
 /**
  * Parses an Accept-Language header and returns the highest-quality
