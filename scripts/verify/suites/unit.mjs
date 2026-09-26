@@ -16,7 +16,7 @@
 // about three minutes, so the whole suite does not fit a single 4-minute
 // agent tool call. A part run is always a partial record; only a full
 // `verify` (every required suite, `unit` whole) satisfies check-record.
-import { globSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, globSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { combineParts } from '../lib/guard.mjs'
@@ -172,8 +172,43 @@ export const UNIT_PARTS = {
   ui: (root) => [vitestSubcheck({ cwd: path.join(root, 'gremion-ui'), testScript: 'test:unit', root, label: 'gremion-ui vitest (test:unit)' })],
   public: (root) => [vitestSubcheck({ cwd: path.join(root, 'gremion-public'), testScript: 'test', root, label: 'gremion-public vitest (test)' })],
   ports: (root) => [vitestSubcheck({ cwd: path.join(root, 'packages', 'ports'), testScript: 'test', root, label: '@gremion/ports vitest (test)' })],
+  // Not covered by gremion-ui's own vitest include (packagesCoveredByUiInclude
+  // below) -- without its own UNIT_PARTS key its 114 tests ran in NO verify
+  // suite and no gate on main (round 2 MEDIUM).
+  'generated-clients': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'generated-clients'), testScript: 'test', root, label: '@gremion/generated-clients vitest (test)' }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
+}
+
+/** Every packages/* directory whose package.json defines a `test` script --
+ * mirrors suites/typecheck.mjs#typecheckPackageDirs so a new package with
+ * tests is discoverable the same way a new package with a typecheck script
+ * already is. Returns bare directory NAMES (not paths), which is what
+ * UNIT_PARTS keys packages/* entries by and what
+ * packagesCoveredByUiInclude's set below compares against. */
+export function packageDirsWithTestScript(root = REPO_ROOT) {
+  const pkgsDir = path.join(root, 'packages')
+  return readdirSync(pkgsDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .filter((name) => {
+      const pj = path.join(pkgsDir, name, 'package.json')
+      if (!existsSync(pj)) return false
+      return typeof JSON.parse(readFileSync(pj, 'utf8')).scripts?.test === 'string'
+    })
+    .sort()
+}
+
+/** Which packages/* names gremion-ui's OWN vitest run already exercises via
+ * its `test.include` glob (vite.config.ts), so a package covered only that
+ * way does not also need its own UNIT_PARTS key to be "in the gate" -- parsed
+ * out of the config file itself (a `../packages/<name>/` include segment),
+ * never a hand-kept list that can drift from what the glob actually says. */
+export function packagesCoveredByUiInclude(root = REPO_ROOT) {
+  const viteConfig = readFileSync(path.join(root, 'gremion-ui', 'vite.config.ts'), 'utf8')
+  return new Set([...viteConfig.matchAll(/\.\.\/packages\/([^/'"]+)\//g)].map((m) => m[1]))
 }
 
 /**
