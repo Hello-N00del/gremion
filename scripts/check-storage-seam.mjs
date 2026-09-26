@@ -131,8 +131,6 @@ const WRITE_BASE = [
 const WRITE_NAME = String.raw`(?:${WRITE_BASE.join('|')})(?:Sync)?`
 /** `.writeFile(`, `fs.promises.rm (` … */
 const MEMBER_WRITE = new RegExp(String.raw`\.\s*(${WRITE_NAME})\s*\(`)
-/** `{ writeFileSync, rm as nuke }` — names inside an import/require/destructure brace. */
-const BRACE_SPEC = /\{([^{}]*)\}/g
 
 function isTest(rel) {
   return TEST_FILE.test(rel)
@@ -199,9 +197,17 @@ function fsBindings(text) {
   // derived namespaces: const fsp = fs.promises (to a fixed point)
   for (let grew = true; grew; ) {
     grew = false
-    for (const b of [...out]) {
+    // Snapshot before iterating: the inner loop adds to `out`, and this pass
+    // must run against the set as it stood when the pass started; the outer
+    // `while (grew)` re-runs once more to pick up anything just added.
+    for (const b of Array.from(out)) {
       const re = new RegExp(String.raw`\b(?:const|let|var)\s+([\w$]+)\s*=\s*${escapeRe(b)}\s*\.\s*promises\b`, 'g')
-      for (const m of text.matchAll(re)) if (!out.has(m[1])) (out.add(m[1]), (grew = true))
+      for (const m of text.matchAll(re)) {
+        if (!out.has(m[1])) {
+          out.add(m[1])
+          grew = true
+        }
+      }
     }
   }
   return out
