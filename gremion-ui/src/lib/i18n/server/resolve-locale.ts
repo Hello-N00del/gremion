@@ -10,9 +10,9 @@
 // already picked a language keeps it until something more specific (an
 // explicit person preference) overrides it.
 
-const SUPPORTED_LOCALES = ['de', 'en'] as const
+import { asSupportedLocale, type Locale } from '../locale'
 
-export type Locale = (typeof SUPPORTED_LOCALES)[number]
+export type { Locale }
 export type PersonLocalePreference = Locale | 'follow_customer' | null | undefined
 
 export interface ResolveLocaleInput {
@@ -22,9 +22,7 @@ export interface ResolveLocaleInput {
   customerDefaultLocale?: Locale | null
 }
 
-function asLocale(value: string | null | undefined): Locale | null {
-  return value != null && (SUPPORTED_LOCALES as readonly string[]).includes(value) ? (value as Locale) : null
-}
+const asLocale = (value: string | null | undefined): Locale | null => asSupportedLocale(value)
 
 /**
  * Parses an Accept-Language header and returns the highest-quality

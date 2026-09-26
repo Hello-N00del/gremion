@@ -1,58 +1,69 @@
+// TASK-062 (TRD-412, brief §4): the legacy `$t` / `$lang` API as a thin shim
+// over the Paraglide-compiled catalogue (messages/{de,en}.json). The 17
+// `$lib/i18n` consumers keep working unchanged; new code imports message
+// functions from './paraglide/messages.js' directly.
+//
+// The locale is never decided here. On the server it is the request's locale,
+// held by Paraglide's AsyncLocalStorage (server/i18n-handle.ts runs
+// paraglideMiddleware around resolve()). In the browser the `custom-gremion`
+// strategy reads back the `<html lang>` the server rendered. Server and client
+// therefore agree by construction, which removes the old flash (the store used
+// to return 'de' on the server and read localStorage in the browser).
+//
+// Both stores are evaluated when a component subscribes, never at module load:
+// a module-level value would be shared by every concurrent SSR request.
+//
+// Deletion ledger (brief §4): the per-device `gremion.lang` / `stura-lang`
+// localStorage keys are no longer read or written. The person's stored
+// preference (idt.preference) and its per-device cookie mirror replace them;
+// a stale key is left untouched and ignored.
 import { browser } from '$app/environment'
-import { writable, derived } from 'svelte/store'
-import de from './de'
-import en from './en'
+import type { Readable } from 'svelte/store'
+import * as compiled from './paraglide/messages.js'
+import { defineCustomClientStrategy, getLocale } from './paraglide/runtime.js'
+import { GREMION_STRATEGY, asSupportedLocale, type Locale } from './locale'
 
-export type Language = 'de' | 'en'
+export type Language = Locale
 
-// B8 (design-review 2026-07 T5): namespaced key with a one-time legacy
-// fallback (old key honored + migrated, never written again) — same treatment
-// as the theme stores in $lib/stores/theme.ts.
-const LANG_KEY = 'gremion.lang'
-const LEGACY_LANG_KEY = 'stura-lang'
+type MessageFn = (inputs?: Record<string, never>, options?: { locale?: Language }) => string
+const messages = compiled as unknown as Record<string, MessageFn | undefined>
 
-const translations: Record<Language, Record<string, string>> = { de, en }
-
-function getInitialLang(): Language {
-  if (!browser) return 'de'
-  // TASK-062 item 6: i18nHandle (hooks.server.ts) already set the correct
-  // <html lang> server-side from resolveLocale's cascade, before this script
-  // runs — honor it over localStorage so the reactive $t store agrees with
-  // what the server just rendered instead of a stale/foreign per-device
-  // value flashing over it. An empty/invalid attribute (not yet wired, or a
-  // test harness) falls through to the pre-existing logic unchanged.
-  const ssrLang = document.documentElement.lang
-  if (ssrLang === 'en' || ssrLang === 'de') return ssrLang
-  let raw = localStorage.getItem(LANG_KEY)
-  if (raw === null) {
-    raw = localStorage.getItem(LEGACY_LANG_KEY)
-    if (raw !== null) {
-      localStorage.setItem(LANG_KEY, raw)
-      localStorage.removeItem(LEGACY_LANG_KEY)
-    }
-  }
-  return raw === 'en' ? 'en' : 'de'
+if (browser) {
+  defineCustomClientStrategy(GREMION_STRATEGY, {
+    getLocale: () => asSupportedLocale(document.documentElement.lang) ?? undefined,
+    // Switching is a form POST + 303 (routes/settings/+page.server.ts), so the
+    // next document arrives already rendered in the new locale. Nothing to do.
+    setLocale: () => {}
+  })
 }
 
-const langStore = writable<Language>(getInitialLang())
+function currentLocale(): Language {
+  return asSupportedLocale(getLocale()) ?? 'de'
+}
 
-export const lang = {
-  subscribe: langStore.subscribe,
-  set(l: Language) {
-    langStore.set(l)
-    if (browser) {
-      localStorage.setItem(LANG_KEY, l)
-      document.documentElement.lang = l
+/** Looks a legacy dotted key up in the compiled catalogue; unknown keys fall back to the key itself. */
+export function translate(locale: Language): (key: string) => string {
+  return (key: string): string => {
+    const fn = messages[key]
+    return typeof fn === 'function' ? fn({}, { locale }) : key
+  }
+}
+
+function evaluatedOnSubscribe<T>(value: () => T): Readable<T> {
+  return {
+    subscribe(run) {
+      run(value())
+      return () => {}
     }
   }
 }
+
+/** The current locale ('de' | 'en'). Read-only: change it through the settings switch. */
+export const lang: Readable<Language> = evaluatedOnSubscribe(currentLocale)
 
 /**
  * Reactive translation function.
  * Usage in components: `$t('nav.files')`
  * Falls back to the key itself if no translation is found.
  */
-export const t = derived(langStore, ($lang) => {
-  const dict = translations[$lang]
-  return (key: string): string => dict[key] ?? key
-})
+export const t: Readable<(key: string) => string> = evaluatedOnSubscribe(() => translate(currentLocale()))
