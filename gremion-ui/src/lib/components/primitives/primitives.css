@@ -1,0 +1,100 @@
+/* Shared styles of the Bits UI primitives (TASK-082). Component-tier tokens
+ * only (--field-*, --popover-*; packages/tokens), plus the --bits-*-anchor-width
+ * variables Bits UI sets at runtime for positioning. Global because Bits UI
+ * portals the floating content out of the component's subtree. */
+
+.gp-field {
+  display: grid;
+  gap: var(--field-gap);
+}
+.gp-field-label {
+  font: var(--field-label-font);
+  letter-spacing: var(--field-label-font-tracking);
+  color: var(--field-label-text);
+}
+.gp-field-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--field-gap);
+  width: 100%;
+  min-height: var(--field-min-height);
+  padding: var(--field-padding-y) var(--field-padding-x);
+  color: var(--field-text);
+  background: var(--field-background);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  font: inherit;
+  text-align: start;
+}
+.gp-field-control:focus-visible,
+.gp-field-control:focus-within {
+  outline: 2px solid var(--field-focus-ring);
+  outline-offset: 2px;
+}
+.gp-field-control > input {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+}
+.gp-field-control > input::placeholder,
+.gp-placeholder {
+  color: var(--field-placeholder);
+}
+.gp-field-button {
+  cursor: pointer;
+}
+.gp-icon-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.gp-popover {
+  z-index: 60;
+  min-width: var(--bits-select-anchor-width, var(--bits-combobox-anchor-width, var(--bits-dropdown-menu-anchor-width, auto)));
+  padding: var(--popover-padding);
+  color: var(--popover-text);
+  background: var(--popover-background);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--popover-radius);
+  box-shadow: var(--popover-shadow);
+  transition: opacity var(--popover-duration);
+}
+.gp-popover-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--field-gap);
+  min-height: var(--popover-item-min-height);
+  padding: var(--popover-item-padding-y) var(--popover-item-padding-x);
+  border-radius: var(--popover-item-radius);
+  cursor: pointer;
+  outline: none;
+}
+.gp-popover-item[data-highlighted] {
+  color: var(--popover-item-highlight-text);
+  background: var(--popover-item-highlight-background);
+}
+.gp-popover-item[data-disabled] {
+  color: var(--popover-text-muted);
+  cursor: not-allowed;
+}
+.gp-popover-empty {
+  padding: var(--popover-item-padding-y) var(--popover-item-padding-x);
+  font: var(--popover-empty-font);
+  letter-spacing: var(--popover-empty-font-tracking);
+  color: var(--popover-text-muted);
+}
+.gp-check {
+  color: var(--popover-item-selected-indicator);
+}
