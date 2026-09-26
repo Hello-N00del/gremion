@@ -62,7 +62,9 @@
  * shadows, radii, spacing, motion, the touch-target floor, the type scale and
  * the component tier the Bits UI primitives read. Never hand-edit them:
  *   pnpm --filter @gremion/tokens build -- --write ../../gremion-ui/src/app.css
- * and `pnpm --filter @gremion/tokens check` fails when they are stale.
+ * and `pnpm --filter @gremion/tokens check` fails when they are stale. The
+ * gate enforces it through packages/tokens/test/build.test.mjs ("fences: the
+ * consumer stylesheet ... is in sync"), run by verify's unit:tokens part.
  * Everything outside the fences stays hand-written. The per-tenant accent
  * <style> (instance-theme.ts) is still injected after this file, and the
  * colour-blind overrides below still follow and win on specificity. */
