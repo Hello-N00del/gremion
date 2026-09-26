@@ -508,9 +508,10 @@ export const CSP_HEADER_VALUE = [
 ].join('; ')
 
 // TASK-062 (brief §3): exactly one exported i18nHandle, placed after
-// authGuard in the sequence below. Resolves event.locals.locale and rewrites
-// the raw HTML's `lang="de"` (app.html) to the resolved value via
-// transformPageChunk, the same mechanism tenantBrandStyleHandle already uses
+// authGuard in the sequence below. Resolves event.locals.locale, runs the
+// rest of the chain inside Paraglide's request scope and fills app.html's
+// <html lang> placeholder with the resolved value via transformPageChunk,
+// the same mechanism tenantBrandStyleHandle already uses
 // for the per-tenant accent tag — both survive sequence() (brief §4).
 export const i18nHandle: Handle = createI18nHandle((locals) => locals.tenant?.id ?? null)
 

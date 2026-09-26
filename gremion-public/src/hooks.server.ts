@@ -57,8 +57,8 @@ export const securityHeadersHandle: Handle = async ({ event, resolve }) => {
 }
 
 // TASK-062 (brief §3): the one hooks.server.ts change this unit is granted
-// here. i18nHandle runs first so its transformPageChunk rewrite of app.html's
-// `lang="de"` lands before securityHeadersHandle's own resolve() completes.
+// here. i18nHandle runs first: it resolves the locale, runs the chain inside
+// Paraglide's request scope and fills app.html's <html lang> placeholder.
 export const i18nHandle: Handle = createI18nHandle()
 
 export const handle = sequence(i18nHandle, securityHeadersHandle)
