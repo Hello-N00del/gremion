@@ -33,8 +33,8 @@ describe('committed migration manifests are not stale', () => {
     assertManifestFresh('migrations', 31)
   })
 
-  it('migrations-control/manifest.json covers all 4 control files', () => {
-    assertManifestFresh('migrations-control', 4)
+  it('migrations-control/manifest.json covers all 5 control files', () => {
+    assertManifestFresh('migrations-control', 5)
   })
 
   it('control 004_tenant_domain.sql creates the tenant_domain table and its unique index', () => {

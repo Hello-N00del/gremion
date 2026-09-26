@@ -237,7 +237,138 @@ step_2_checkout() {
     [[ -d "$RELEASE_DIR" ]] || die "release tree absent after checkout: $RELEASE_DIR" 1
     require_spec_b_contracts "$RELEASE_DIR"
     validate_release_tree "$RELEASE_DIR"
+    verify_first_party_signatures
     ok "release tree $RELEASE_DIR"
+}
+
+# strip_tag <repo[:tag]> -> the repository without a tag. A tag is the last
+# ':' segment containing no '/', so a registry port (host:5000/x) survives.
+strip_tag() {
+    local r="$1"
+    if [[ "$r" =~ ^(.+):[^/:]+$ ]]; then r="${BASH_REMATCH[1]}"; fi
+    printf '%s' "$r"
+}
+
+# canonical_repo <repo[:tag]> -> the tagless repository in docker's canonical
+# form: a first component that is not a registry (no '.', no ':', not
+# localhost) is on docker.io, and a docker.io name with one component is
+# under library/. `postgres`, `postgres:18-alpine`, `docker.io/postgres` and
+# `index.docker.io/library/postgres` all become docker.io/library/postgres.
+canonical_repo() {
+    local r first
+    r="$(strip_tag "$1")"
+    first="${r%%/*}"
+    if [[ "$r" != */* ]]; then
+        r="docker.io/library/$r"
+    elif [[ "$first" != *.* && "$first" != *:* && "$first" != localhost ]]; then
+        r="docker.io/$r"
+    fi
+    if [[ "$r" == index.docker.io/* ]]; then r="docker.io/${r#index.docker.io/}"; fi
+    if [[ "$r" =~ ^docker[.]io/[^/]+$ ]]; then r="docker.io/library/${r#docker.io/}"; fi
+    printf '%s' "$r"
+}
+
+# verify_first_party_signatures — TRD-441 (TASK-046). Every first-party pinned
+# digest must carry a cosign signature that verifies against the HOST-installed
+# public key, $ROOT/etc/cosign.pub (bootstrap.sh 'trust' stage). Nothing in the
+# release tree is consulted: a cosign.pub shipped in the tree is exactly what an
+# attacker who controls the tree would ship. Runs inside step 2, after the pins
+# are validated and before step 3 spends the token on a pull.
+#
+# Every failure is a refusal (die), never a skip: no cosign, no host key, an
+# empty first-party set, an unreachable registry, a missing or foreign
+# signature. The verdict is cosign's JSON, re-read here: each claim must name
+# the pinned digest and the pinned repository, not merely exit 0.
+# The public tlog is ignored by design (key-based signing, no Rekor upload).
+verify_first_party_signatures() {
+    local pub="$ROOT/etc/cosign.pub"
+    [[ -f "$pub" && ! -L "$pub" && -s "$pub" ]] \
+        || die "trust anchor absent: $pub (install it with bootstrap.sh --cosign-pubkey PATH trust)" 1
+    grep -q -- '-----BEGIN PUBLIC KEY-----' "$pub" \
+        || die "trust anchor $pub is not a PEM public key" 1
+    local cosign
+    cosign="$(command -v cosign 2>/dev/null || true)"
+    [[ -n "$cosign" ]] || die "cosign not on PATH — cannot verify image signatures (refusing)" 1
+
+    # The pin set is read from canonical `image: <ref>` lines only, so any
+    # other line that declares an image (a flow mapping, a quoted key, a
+    # trailing comment) would be pulled by compose yet never verified here.
+    local stray
+    stray="$(grep -vE '^[[:space:]]*#' "$RELEASE_DIR/docker-compose.pins.yml" \
+        | grep -E 'image' \
+        | grep -vE '^[[:space:]]*image:[[:space:]]*["'\'']?[^][:space:]"'\''{}#,]+["'\'']?[[:space:]]*$' || true)"
+    [[ -z "$stray" ]] \
+        || die "unrecognised image declaration in docker-compose.pins.yml (only '<indent>image: <repo>@sha256:<hex>' is verifiable): $(printf '%s' "$stray" | head -c 300)" 1
+
+    # Which images are third-party is the HOST's decision, not the tree's: a
+    # pin outside the first-party prefix is refused unless its repository is
+    # listed in $ROOT/etc/third-party-images (one repository per line, no tag,
+    # no digest). Otherwise one signed image could carry any number of
+    # unsigned ones renamed out of the prefix (ghcr.io:443/…, docker.io/…).
+    # Entries and pins are compared in one canonical form (canonical_repo): no
+    # tag, docker.io short names expanded. compose prints a pin as written, and
+    # pin-images.sh writes <repo>:<tag>@<digest>, so `postgres:18-alpine@…`
+    # must match a host entry `docker.io/library/postgres` (or `postgres`).
+    local tp_file="$ROOT/etc/third-party-images" tp_list="" tp_line
+    if [[ -e "$tp_file" ]]; then
+        [[ -f "$tp_file" && ! -L "$tp_file" ]] || die "$tp_file is not a regular file" 1
+        while IFS= read -r tp_line; do
+            [[ -n "$tp_line" ]] || continue
+            tp_list+="$(canonical_repo "$tp_line")"$'\n'
+        done < <(grep -vE '^[[:space:]]*(#|$)' "$tp_file" | tr -d '[:blank:]\r' | tr '[:upper:]' '[:lower:]' || true)
+    fi
+
+    # The set verified is the set COMPOSE resolves — over the state project
+    # and both colours, exactly the projects step 3 pulls — not what a grep of
+    # the pins file finds: escaped keys, anchors and merge keys, a second YAML
+    # document, `extends:` or a service only in docker-compose.app.yml all
+    # resolve to images no grep sees. A project that cannot be resolved, or
+    # an empty set, is a refusal.
+    #
+    # Every profile is turned on for this call only (COMPOSE_PROFILES='*'):
+    # compose leaves services under an inactive profile out of `config
+    # --images`, yet step 7's `compose run --rm migrate` enables the migrate
+    # profile and pulls and runs that image. The canonical pins
+    # ($PINNED_IMAGES, from validate_release_tree) are added to the set too,
+    # so every pin is verified whether or not compose shows it.
+    local resolved="" project imgs
+    for project in state app-blue app-green; do
+        imgs="$(export COMPOSE_PROFILES='*'; compose "$project" config --images)" \
+            || die "compose ${project} config --images failed — cannot resolve the image set (refusing)" 1
+        resolved+="${imgs}"$'\n'
+    done
+    resolved+="${PINNED_IMAGES:-}"$'\n'
+    resolved="$(printf '%s' "$resolved" | sed -e 's/\r$//' -e '/^[[:space:]]*$/d' | sort -u)"
+    [[ -n "$resolved" ]] || die "compose resolves no image for this release — cannot resolve the image set (refusing)" 1
+
+    local prefix ref lc repo digest out n=0 t=0
+    prefix="$(printf '%s' "${REGISTRY_HOST}/hello-n00del/" | tr '[:upper:]' '[:lower:]')"
+    while IFS= read -r ref; do
+        [[ -n "$ref" ]] || continue
+        lc="$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')"
+        [[ "$lc" =~ ^([^@[:space:]]+)@(sha256:[0-9a-f]{64})$ ]] \
+            || die "pin is not <repo>@sha256:<64 hex>: $ref" 1
+        # The tag is dropped: the digest is what is pulled, and cosign names
+        # the repository without a tag in docker-reference.
+        repo="$(strip_tag "${BASH_REMATCH[1]}")"; digest="${BASH_REMATCH[2]}"
+        if [[ "$repo" != "$prefix"* ]]; then
+            grep -qxF -- "$(canonical_repo "$repo")" <<< "$tp_list" \
+                || die "pin $ref is neither first-party (${prefix}*) nor on the host third-party list $tp_file — refusing" 1
+            t=$(( t + 1 ))
+            continue
+        fi
+        out="$("$cosign" verify --key "$pub" --insecure-ignore-tlog=true --output json "$ref" 2>/dev/null)" \
+            || die "signature verification failed for $ref against $pub" 1
+        printf '%s' "$out" | jq -e --arg d "$digest" --arg r "$repo" '
+            type == "array" and length >= 1 and all(.[];
+                .critical.image["docker-manifest-digest"] == $d
+                and (.critical.identity["docker-reference"] | ascii_downcase) == $r)' >/dev/null 2>&1 \
+            || die "signature verification failed for $ref: no claim binds $digest to $repo" 1
+        n=$(( n + 1 ))
+    done <<< "$resolved"
+    [[ "$n" -ge 1 ]] \
+        || die "no first-party image (${prefix}*) in the pins — refusing to deploy an unverifiable set" 1
+    ok "${n} first-party image(s) verified against ${pub}; ${t} third-party image(s) on the host list"
 }
 
 validate_release_tree() { # <dir>

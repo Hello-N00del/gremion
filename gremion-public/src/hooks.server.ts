@@ -17,9 +17,9 @@ import { createI18nHandle } from '$lib/i18n/server/i18n-handle'
  *   - frame-ancestors 'none': the portal embeds nothing and needs no framing,
  *     so it can use the strongest anti-clickjacking value (gremion-ui uses 'self'
  *     only because it embeds the same-origin Element Call iframe).
- *   - style-src / font-src allow Google Fonts: app.html loads the Inter /
- *     Archivo Narrow / JetBrains Mono stylesheet from fonts.googleapis.com and
- *     the font files from fonts.gstatic.com.
+ *   - style-src / font-src no longer need any third-party host: TASK-007
+ *     self-hosts Inter / Archivo Narrow / JetBrains Mono via @fontsource,
+ *     imported in routes/+layout.svelte — no Google Fonts request remains.
  *
  * 'unsafe-inline' on script-src is kept for the same reason as gremion-ui:
  * SvelteKit 2 injects an inline hydration <script>. Closing it requires the
@@ -32,9 +32,9 @@ import { createI18nHandle } from '$lib/i18n/server/i18n-handle'
 export const CSP_HEADER_VALUE = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
-  "font-src 'self' data: https://fonts.gstatic.com",
+  "font-src 'self' data:",
   "connect-src 'self'",
   "frame-src 'self'",
   "frame-ancestors 'none'",

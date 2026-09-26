@@ -7,12 +7,8 @@ import { load } from './+layout.server'
 
 describe('#189 members layout sign-in redirect', () => {
   it('redirects an unauthenticated user to the live /auth/login route', async () => {
-    try {
-      await load({ locals: { auth: async () => null } } as never)
-      expect.fail('expected the loader to redirect')
-    } catch (e) {
-      const r = e as { status?: number; location?: string }
-      expect(r.location).toBe('/auth/login')
-    }
+    await expect(
+      load({ locals: { auth: async () => null } } as never),
+    ).rejects.toMatchObject({ location: '/auth/login' })
   })
 })

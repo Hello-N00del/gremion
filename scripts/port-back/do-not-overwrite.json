@@ -27,16 +27,20 @@
     "classifies DIVERGED under diverged-bats-and-smoke (gremion-ui/tests/**) and so",
     "never entered the measured 43. B10 re-measures rather than assuming a count.",
     "No re-freeze unit exists or is needed — this file is a port-back guard, not a",
-    "tree inventory."
+    "tree inventory.",
+    "TASK-022 (the ACME edge) amends the set too: it deletes",
+    "docker/traefik/dynamic/tls.yml, the Cloudflare Origin default-certificate store,",
+    "on purpose (spec B Edge section 2, TRD-042), and removes that one row here",
+    "(43 -> 42 doNotDelete, expectedEntries 45 -> 44) together with its assertion,",
+    "which now asserts the path is absent from the set."
   ],
   "frozenAt": {
     "kernel": "f7ac82609eb4b6dedd415d2ef6d7f8d1736ae543",
     "stura": "f276af5925abacdcfd05f6613fc11afff2d804c5",
     "on": "2026-09-16"
   },
-  "expectedEntries": 45,
+  "expectedEntries": 44,
   "doNotDelete": [
-    "docker/traefik/dynamic/tls.yml",
     "gremion-ui/scripts/check-domain-regex.mjs",
     "gremion-ui/src/hooks.audit-integrity.test.ts",
     "gremion-ui/src/lib/components/committee/CommitteeCard.svelte",

@@ -52,6 +52,14 @@
         // key for the reactive $t store's initial value, but only when the
         // server hasn't already set a recognized <html lang> (see there).
       } catch (e) {}
+      try {
+        // TASK-208: the per-device navigation choice (nav-constants.ts
+        // NAV_STORAGE_KEY), read only, so the first paint has its final width.
+        // Its own try: a failing legacy-key migration above must not skip it.
+        var nav = localStorage.getItem('gremion.nav');
+        if (nav === 'rail') document.documentElement.classList.add('nav-rail');
+        else if (nav === 'expanded') document.documentElement.classList.add('nav-expanded');
+      } catch (e) {}
     </script>
     %sveltekit.head%
   </head>

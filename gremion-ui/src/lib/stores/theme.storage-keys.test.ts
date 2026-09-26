@@ -24,7 +24,7 @@ function makeStorageStub(): Storage {
 		getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
 		setItem: (k: string, v: string) => void store.set(String(k), String(v)),
 		removeItem: (k: string) => void store.delete(k),
-		clear: () => void store.clear(),
+		clear: () => store.clear(),
 		key: (i: number) => [...store.keys()][i] ?? null,
 		get length() {
 			return store.size

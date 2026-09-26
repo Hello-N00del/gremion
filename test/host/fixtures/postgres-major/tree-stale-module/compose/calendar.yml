@@ -1,0 +1,16 @@
+# Fixture (TASK-019): a per-module leaf server left on an OLDER major — and
+# digest-pinned, so a guard that only asks "is there a digest?" would wave it
+# through. The digest is the real multi-arch index digest of that older
+# alpine tag. This file EXISTS to be stale: scripts/check-postgres-major.mjs
+# names the tree-stale fixtures in EXCLUDED for exactly that reason, and
+# nothing else under the fixture directory is excluded.
+services:
+  calendar-postgres:
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    x-gremion-tier: state
+    labels:
+      org.gremion.postgres: "module:calendar"
+    volumes:
+      - calendar-pg-data:/var/lib/postgresql
+volumes:
+  calendar-pg-data:

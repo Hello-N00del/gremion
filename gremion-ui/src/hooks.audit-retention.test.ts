@@ -103,6 +103,11 @@ vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }))
 const DAY_MS = 24 * 60 * 60 * 1000
 
 let tick: () => unknown
+// vitest(no-standalone-expect): expect() inside beforeAll is flagged the
+// same as inside a mock factory (may run outside any it()). Capture the
+// preconditions instead and assert on them in a dedicated first test.
+let bootComplete: boolean | undefined
+let intervalCallFound: boolean
 
 beforeAll(async () => {
   // Boot needs the default tenant resolvable (control-plane sanity check).
@@ -110,10 +115,10 @@ beforeAll(async () => {
   const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
   const mod = await import('./hooks.server')
   await mod.boot()
-  expect(mod.getBootStatus().complete).toBe(true)
+  bootComplete = mod.getBootStatus().complete
   const call = setIntervalSpy.mock.calls.find((c) => c[1] === DAY_MS)
-  expect(call).toBeDefined()
-  tick = call![0] as () => unknown
+  intervalCallFound = call !== undefined
+  tick = call?.[0] as () => unknown
   setIntervalSpy.mockRestore()
 })
 
@@ -140,6 +145,11 @@ afterEach(() => {
 })
 
 describe('hooks.server audit-retention interval — P2.1b T4 fleet wrap', () => {
+  it('boot completes and schedules the 24h retention interval', () => {
+    expect(bootComplete).toBe(true)
+    expect(intervalCallFound).toBe(true)
+  })
+
   it('purges per ACTIVE tenant under explicit contexts with the configured retention window', async () => {
     activeTenants.push(
       { id: 'tid-default', slug: 'default', status: 'active' },

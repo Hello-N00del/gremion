@@ -11,13 +11,68 @@
 #   make logs               (follow logs)
 ##############################################################
 
+# ============================================================
+# Per-module PostgreSQL (D14) — the shape every <id>-postgres shares
+# ============================================================
+# One server per module, one database per (tenant, module) inside it (D13).
+# The per-(tenant, module) databases are created by the provisioner
+# (TASK-021), not here: each server starts with only the image's defaults. The image is the kernel's own pin — tag AND index
+# digest, asserted by `make lint-postgres-major` — and the data volume is
+# mounted at /var/lib/postgresql, the 18+ layout (see
+# docs/ops/postgres-major.md). Each service adds its own profile, label,
+# credentials and volume; the org.gremion.postgres label is how
+# scripts/check-postgres-major-running.mjs finds the running servers.
+x-module-postgres: &module-postgres
+  image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+  networks:
+    - gremion-net
+  healthcheck:
+    # over TCP: the entrypoint's temporary init server listens on no address,
+    # so it can never be mistaken for the final one
+    test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\""]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 20s
+
+# Required-variable guard for the edge (TASK-022, spec A §A/§E), copied from
+# infra/host/mail/docker-compose.yml. Compose interpolates the WHOLE document,
+# extension fields included, so an unset or empty variable named here aborts
+# every `docker compose` verb before a container starts. It cannot be written
+# inline on the ports entries: an empty EDGE_BIND_IP renders "- :80:80", which
+# publishes on 0.0.0.0 -- precisely what §A forbids -- and the ${VAR:?} form
+# would also hide the bind address from scripts/check-compose-edge.test.mjs.
+# So the ports stay plain and the requirement is asserted once, here. Every key
+# is declared in infra/host/templates/env/state.env.tmpl and in .env.example
+# (test/host/edge-env.bats). Intended consequence: this binds EVERY profile and
+# verb, dev and `make lint-compose` included, so a local .env that predates the
+# edge must gain the Edge block from .env.example (docs/deployment.md).
+x-required-env:
+  stack: "${STACK:?STACK required}"
+  gremion-root: "${GREMION_ROOT:?GREMION_ROOT required}"
+  acme-ca-server: "${ACME_CA_SERVER:?ACME_CA_SERVER required}"
+  edge-v4-subnet: "${EDGE_V4_SUBNET:?EDGE_V4_SUBNET required}"
+  edge-v6-subnet: "${EDGE_V6_SUBNET:?EDGE_V6_SUBNET required}"
+  edge-bind-ip: "${EDGE_BIND_IP:?EDGE_BIND_IP required}"
+  edge-bind-ip6: "${EDGE_BIND_IP6:?EDGE_BIND_IP6 required}"
+  edge-http-port: "${EDGE_HTTP_PORT:?EDGE_HTTP_PORT required}"
+  edge-https-port: "${EDGE_HTTPS_PORT:?EDGE_HTTPS_PORT required}"
+  traefik-api-port: "${TRAEFIK_API_PORT:?TRAEFIK_API_PORT required}"
+  internaltest-port: "${INTERNALTEST_PORT:?INTERNALTEST_PORT required}"
+
 services:
 
   # ============================================================
   # PostgreSQL — database for Keycloak and the governance kernel
   # ============================================================
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     restart: unless-stopped
     logging:
       driver: json-file
@@ -46,14 +101,93 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql
       - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    labels:
+      org.gremion.postgres: "kernel"
     networks:
       - gremion-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      # over TCP: the entrypoint's temporary init server listens on no
+      # address, so "healthy" can never mean that server
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # ============================================================
+  # Per-module PostgreSQL (D14) — one per extraction-source leaf
+  # ============================================================
+  # Profile-gated: a plain `up` starts none of them, `--profile <id>` starts
+  # that module's server. Credentials come from <ID>_PG_USER /
+  # <ID>_PG_PASSWORD; an unset password makes the image refuse to initialise,
+  # loudly. The volumes carry names of their own (gremion_module_<id>_pg_data)
+  # and NEVER the extraction source's gremion_<id>_pg_data: those hold its
+  # live PG16 clusters (the guard refuses them, FORBIDDEN_MODULE_VOLUMES).
+  board-postgres:
+    <<: *module-postgres
+    profiles: [board]
+    labels:
+      org.gremion.postgres: "module:board"
+    environment:
+      POSTGRES_USER:     ${BOARD_PG_USER:-board}
+      POSTGRES_PASSWORD: ${BOARD_PG_PASSWORD}
+    volumes:
+      - board-pg-data:/var/lib/postgresql
+
+  calendar-postgres:
+    <<: *module-postgres
+    profiles: [calendar]
+    labels:
+      org.gremion.postgres: "module:calendar"
+    environment:
+      POSTGRES_USER:     ${CALENDAR_PG_USER:-calendar}
+      POSTGRES_PASSWORD: ${CALENDAR_PG_PASSWORD}
+    volumes:
+      - calendar-pg-data:/var/lib/postgresql
+
+  content-postgres:
+    <<: *module-postgres
+    profiles: [content]
+    labels:
+      org.gremion.postgres: "module:content"
+    environment:
+      POSTGRES_USER:     ${CONTENT_PG_USER:-content}
+      POSTGRES_PASSWORD: ${CONTENT_PG_PASSWORD}
+    volumes:
+      - content-pg-data:/var/lib/postgresql
+
+  finance-postgres:
+    <<: *module-postgres
+    profiles: [finance]
+    labels:
+      org.gremion.postgres: "module:finance"
+    environment:
+      POSTGRES_USER:     ${FINANCE_PG_USER:-finance}
+      POSTGRES_PASSWORD: ${FINANCE_PG_PASSWORD}
+    volumes:
+      - finance-pg-data:/var/lib/postgresql
+
+  newsletter-postgres:
+    <<: *module-postgres
+    profiles: [newsletter]
+    labels:
+      org.gremion.postgres: "module:newsletter"
+    environment:
+      POSTGRES_USER:     ${NEWSLETTER_PG_USER:-newsletter}
+      POSTGRES_PASSWORD: ${NEWSLETTER_PG_PASSWORD}
+    volumes:
+      - newsletter-pg-data:/var/lib/postgresql
+
+  vault-postgres:
+    <<: *module-postgres
+    profiles: [vault]
+    labels:
+      org.gremion.postgres: "module:vault"
+    environment:
+      POSTGRES_USER:     ${VAULT_PG_USER:-vault}
+      POSTGRES_PASSWORD: ${VAULT_PG_PASSWORD}
+    volumes:
+      - vault-pg-data:/var/lib/postgresql
 
   # ============================================================
   # Mailpit — SMTP catcher for staging / local dev (#162)
@@ -293,12 +427,20 @@ services:
       - "traefik.http.middlewares.public-ratelimit.ratelimit.average=100"
       - "traefik.http.middlewares.public-ratelimit.ratelimit.burst=50"
       - "traefik.http.middlewares.public-ratelimit.ratelimit.period=1m"
-      # #251: key the bucket on the real client IP (Cloudflare sets CF-Connecting-IP).
-      # Without an explicit sourceCriterion Traefik falls back to the request's
-      # remote address — which behind the cloudflared tunnel is the tunnel
-      # container's IP, collapsing ALL internet traffic into one shared 100 req/min
-      # bucket. Pairs with forwardedHeaders.trustedIPs in docker/traefik/traefik.yml.
-      - "traefik.http.middlewares.public-ratelimit.ratelimit.sourceCriterion.requestHeaderName=CF-Connecting-IP"
+      # TASK-022 (round-2 HIGH): #251's original comment here said "key the
+      # bucket on the real client IP (Cloudflare sets CF-Connecting-IP)". That
+      # was true when cloudflared sat in front of Traefik and rewrote the
+      # header itself. TASK-022 makes Traefik the first hop (see
+      # docker/traefik/traefik.yml's forwardedHeaders header: "nothing keyed
+      # on security may read a forwarded header"), so a sourceCriterion keyed
+      # on a request header is read verbatim from whatever the client sends --
+      # any client can rotate CF-Connecting-IP itself and mint a fresh 100
+      # req/min bucket per request, voiding the limit. No sourceCriterion is
+      # declared below, so Traefik falls back to the connection's own remote
+      # address, which is the real client now that nothing sits in front of
+      # it. Guarded by scripts/check-compose-edge.test.mjs guard 4, which reads
+      # every service's rendered labels for a ratelimit sourceCriterion keyed
+      # on CF-Connecting-IP / X-Forwarded-For / X-Real-IP.
     healthcheck:
       # Follows PUBLIC_BASE_PATH: under a base path the portal 404s on `/`, the
       # container is marked unhealthy, and Traefik v3 removes its routers.
@@ -400,11 +542,75 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    environment:
+      # Traefik cannot read these itself: with --configFile it ignores CLI
+      # flags and TRAEFIK_* variables, and the static file performs no ${}
+      # expansion (measured, scripts/verify-traefik-acme-wiring.sh). The
+      # command below substitutes them into a rendered COPY at start-up.
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      # Whether this host issues its own certificates, and so whether
+      # ACME_EMAIL is required. Dash, not colon-dash: an explicitly EMPTY value
+      # means "TLS terminates in front of Traefik", the supported staging mode.
+      TRAEFIK_CERT_RESOLVER: ${TRAEFIK_CERT_RESOLVER-le-http}
+      ACME_CA_SERVER: ${ACME_CA_SERVER}
+      EDGE_V4_SUBNET: ${EDGE_V4_SUBNET}
+      EDGE_V6_SUBNET: ${EDGE_V6_SUBNET}
+    # Render-at-start (spec B "Edge" §2): a plain `sed` of the four markers
+    # into /tmp, then the image's OWN entrypoint, so Traefik runs exactly as it
+    # did before. `$$` escapes compose interpolation so the CONTAINER's shell
+    # expands these, against the environment block above. Every refusal names
+    # its reason and stops the container before Traefik starts:
+    #   - a resolver with a blank contact registers an ACME account that can
+    #     never be recovered, so ACME_EMAIL is required while
+    #     TRAEFIK_CERT_RESOLVER is non-empty (and only then);
+    #   - an empty CA or subnet, a value carrying a sed or YAML metacharacter
+    #     (| & backslash or "), or a subnet wider than /8 (v4) or /16 (v6)
+    #     would render a different -- or a wide-open -- file than reviewed;
+    #   - a marker that survives the render means a sed expression is missing.
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --configFile=/etc/traefik/traefik.yml
+      - >-
+        set -eu;
+        if [ -n "$${TRAEFIK_CERT_RESOLVER}" ] && [ -z "$${ACME_EMAIL}" ]; then
+        echo "FATAL: TRAEFIK_CERT_RESOLVER=$${TRAEFIK_CERT_RESOLVER} means this host issues its own certificates, so ACME_EMAIL is required." >&2;
+        exit 1; fi;
+        for v in "$${ACME_CA_SERVER}" "$${EDGE_V4_SUBNET}" "$${EDGE_V6_SUBNET}"; do
+        [ -n "$$v" ] || { echo "FATAL: ACME_CA_SERVER, EDGE_V4_SUBNET and EDGE_V6_SUBNET are required." >&2; exit 1; }; done;
+        case "$${ACME_EMAIL}$${ACME_CA_SERVER}$${EDGE_V4_SUBNET}$${EDGE_V6_SUBNET}" in
+        *'|'*|*'&'*|*'\'*|*'"'*) echo "FATAL: an edge value carries a sed or YAML metacharacter (| & backslash or double quote)." >&2; exit 1;; esac;
+        case "$${EDGE_V4_SUBNET}" in */[0-7]) echo "FATAL: EDGE_V4_SUBNET is wider than /8 and would trust forwarded headers from much of the internet." >&2; exit 1;; esac;
+        case "$${EDGE_V6_SUBNET}" in */[0-9]|*/1[0-5]) echo "FATAL: EDGE_V6_SUBNET is wider than /16 and would trust forwarded headers from much of the internet." >&2; exit 1;; esac;
+        sed -e "s|@ACME_EMAIL@|$${ACME_EMAIL:-acme-unused@invalid}|g"
+        -e "s|@ACME_CA_SERVER@|$${ACME_CA_SERVER}|g"
+        -e "s|@EDGE_V4_SUBNET@|$${EDGE_V4_SUBNET}|g"
+        -e "s|@EDGE_V6_SUBNET@|$${EDGE_V6_SUBNET}|g"
+        /etc/traefik/traefik.yml > /tmp/traefik.yml;
+        if grep -q '@[A-Z][A-Z0-9_]*@' /tmp/traefik.yml; then
+        echo "FATAL: a @MARKER@ survived the render of /tmp/traefik.yml." >&2; exit 1; fi;
+        exec /entrypoint.sh traefik --configFile=/tmp/traefik.yml
+    # TRD-178. The entrypoint above is a shell: if the render produces a file
+    # Traefik rejects, the container could sit "Up" routing nothing. This
+    # probes the ping entrypoint (:8082, unpublished). `traefik healthcheck`
+    # is not used: it re-reads configuration and cannot see the /tmp copy.
+    # busybox wget is present in traefik:v3.7.1.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/ping | grep -q OK || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     ports:
-      - "80:80"
-      - "443:443"
+      # Nothing here binds 0.0.0.0 (spec A §A). web/websecure publish on the
+      # edge IP of each family; :80 carries the ACME HTTP-01 challenge and the
+      # HTTPS redirect. The API (:8080) and internaltest (:8081) are loopback
+      # only: an unauthenticated Traefik API on every interface is the whole
+      # routing graph. ping (:8082) is not published at all.
+      - "${EDGE_BIND_IP}:${EDGE_HTTP_PORT}:80"
+      - "[${EDGE_BIND_IP6}]:${EDGE_HTTP_PORT}:80"
+      - "${EDGE_BIND_IP}:${EDGE_HTTPS_PORT}:443"
+      - "[${EDGE_BIND_IP6}]:${EDGE_HTTPS_PORT}:443"
+      - "127.0.0.1:${TRAEFIK_API_PORT}:8080"
+      - "127.0.0.1:${INTERNALTEST_PORT}:8081"
     # The Docker socket is no longer mounted here (#244): Traefik reaches the
     # Docker API through the read-only docker-socket-proxy over TCP instead, so a
     # compromise of this internet-facing edge proxy can no longer drive the full
@@ -413,9 +619,20 @@ services:
       - docker-socket-proxy
     volumes:
       - ./docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./docker/traefik/dynamic:/etc/traefik/dynamic:ro
-      - ./secrets/cf-origin.pem:/certs/cf-origin.pem:ro
-      - ./secrets/cf-origin.key:/certs/cf-origin.key:ro
+      # The host's router directory (per-tenant files, etc/edge/active.yml):
+      # the ONLY mount of /etc/traefik/dynamic any container holds, and
+      # read-only -- writers work on the host side (spec B "Edge" §2).
+      # Long syntax so a missing host directory is a refusal at `up`, not an
+      # empty directory Docker creates and Traefik watches forever.
+      - type: bind
+        source: ${GREMION_ROOT}/etc/edge
+        target: /etc/traefik/dynamic
+        read_only: true
+        bind:
+          create_host_path: false
+      # ACME account and certificates live only here (TRD-042). The Cloudflare
+      # Origin certificate mounts left with dynamic/tls.yml.
+      - traefik-acme:/letsencrypt
       - traefik-logs:/logs
     networks:
       - gremion-net
@@ -486,6 +703,18 @@ services:
 volumes:
   pg-data:
     name: gremion_pg_data
+  board-pg-data:
+    name: gremion_module_board_pg_data
+  calendar-pg-data:
+    name: gremion_module_calendar_pg_data
+  content-pg-data:
+    name: gremion_module_content_pg_data
+  finance-pg-data:
+    name: gremion_module_finance_pg_data
+  newsletter-pg-data:
+    name: gremion_module_newsletter_pg_data
+  vault-pg-data:
+    name: gremion_module_vault_pg_data
   mailpit-data:
     name: gremion_mailpit_data
   gremion-config-data:
@@ -496,6 +725,12 @@ volumes:
     name: gremion_tenant_config_data
   traefik-logs:
     name: gremion_traefik_logs
+  # Created by infra/host/bootstrap.sh (stage_networks) and never by compose,
+  # so a `down -v` cannot take the ACME account with it. Stack-scoped name
+  # (spec A §E): a hardcoded gremion_traefik_acme is forbidden.
+  traefik-acme:
+    name: ${STACK}_traefik_acme
+    external: true
   vector-processed-logs:
     name: gremion_vector_processed_logs
 

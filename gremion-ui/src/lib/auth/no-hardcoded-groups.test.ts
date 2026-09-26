@@ -20,8 +20,8 @@ const EXCLUDE = (rel: string) => {
     // zero-literal rule as the rest of the authz surface.
     p.includes('member-view') ||
     p.endsWith('no-hardcoded-groups.test.ts') ||
-    /\.test\.ts$/.test(p) ||
-    /\.spec\.ts$/.test(p)
+    p.endsWith('.test.ts') ||
+    p.endsWith('.spec.ts')
   )
 }
 

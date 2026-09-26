@@ -56,7 +56,6 @@ import {
 const TEST_APEX = 'council.example'
 // NOTE: unlike the older suites, the base is handed over RAW — resolving
 // __APEX_DOMAIN__ is now buildTenantRealmDoc's job, not the caller's.
-const rawBase = JSON.parse(RAW)
 const cfgOff = { modules: {} } as never
 const clientSecrets = Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, `secret-${c}`]))
 const smtp: RealmSmtpSettings = {

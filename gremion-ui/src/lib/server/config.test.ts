@@ -584,7 +584,13 @@ describe('#248: deep-merge all nested config blocks (no shallow-replace / NaN po
     )
     let written = ''
     mockFs.writeFileSync.mockImplementation((_p, data) => {
-      written = String(data)
+      // typescript(no-base-to-string): writeFileSync's `data` is typed as
+      // string | NodeJS.ArrayBufferView; writeConfig always passes
+      // JSON.stringify(...) (a string) — assert that instead of a bare
+      // String(data), which would silently stringify any other shape via
+      // Object's default '[object ...]' format.
+      if (typeof data !== 'string') throw new Error('expected string data from writeFileSync')
+      written = data
     })
 
     const { writeConfig } = await import('./config')

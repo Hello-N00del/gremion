@@ -32,8 +32,14 @@ describe('P2.1a acceptance', () => {
     await registerDefaultTenant()
     const ctx = await resolveTenantBySlug('default')
     expect(ctx).not.toBeNull()
-    expect(ctx!.realmName).toBe('gremion-test')
-    expect(ctx!.issuer).toContain('/realms/gremion-test')
+    // 70029f7 dropped the retired 'gremion-test' realm literal from every
+    // non-doc, non-*.test.ts carrier (spec B B-01), deferring the *.test.ts
+    // occurrences to a later ticket (never landed). CI's integration job and
+    // scripts/verify/suites/integration.mjs both set
+    // AUTH_KEYCLOAK_ISSUER=".../realms/gremion" (no suffix); this asserts the
+    // realm registerDefaultTenant actually derives from that env today.
+    expect(ctx!.realmName).toBe('gremion')
+    expect(ctx!.issuer).toContain('/realms/gremion')
     // running inside the default context, the canonical id is the default row's id
     runWithTenant(ctx!, () => { expect(currentTenantId()).toBe(ctx!.id) })
   })

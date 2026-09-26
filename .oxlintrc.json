@@ -1,0 +1,59 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "node", "vitest"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn",
+    "pedantic": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "rules": {
+    "typescript/no-floating-promises": [
+      "error",
+      {
+        "allowForKnownSafeCalls": [
+          {
+            "from": "package",
+            "package": "node:test",
+            "name": ["test", "it", "describe", "suite", "before", "after", "beforeEach", "afterEach"]
+          }
+        ]
+      }
+    ],
+    "vitest/require-mock-type-parameters": "off",
+    "vitest/valid-expect": ["error", { "maxArgs": 2 }]
+  },
+  "globals": {
+    "$state": "readonly",
+    "$derived": "readonly",
+    "$effect": "readonly",
+    "$props": "readonly",
+    "$bindable": "readonly",
+    "$inspect": "readonly",
+    "$host": "readonly"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.mjs", "**/*.spec.ts", "**/test/**/*.ts"],
+      "rules": { "typescript/unbound-method": "off" }
+    }
+  ],
+  "ignorePatterns": [
+    "node_modules/**",
+    "build/**",
+    "dist/**",
+    ".svelte-kit/**",
+    "coverage/**",
+    "packages/generated-clients/src/generated/**",
+    "packages/generated-clients-dart/**",
+    "docs/**",
+    "**/__fixtures__/**",
+    "**/*.min.js"
+  ]
+}
