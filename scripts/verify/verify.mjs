@@ -24,13 +24,30 @@ import { writeRecord } from './lib/record.mjs'
 import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
 import { runCarveLintSuite } from './suites/carve-lint.mjs'
 import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } from './suites/fixtures.mjs'
-import { DEFERRED_BATS_NOTE, runIntegrationSuite } from './suites/integration.mjs'
+import { DEFERRED_BATS_NOTE, INTEGRATION_PARTS, runIntegrationSuite } from './suites/integration.mjs'
 import { runMigrationHashSuite } from './suites/migration-hash.mjs'
 import { runTypecheckSuite } from './suites/typecheck.mjs'
-import { runUnitSuite } from './suites/unit.mjs'
+import { runUnitSuite, UNIT_PARTS } from './suites/unit.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
 export const REQUIRED_SUITES_PATH = path.join(import.meta.dirname, 'required-suites.txt')
+
+// unit:<part> / integration:<part> -- one registry entry per UNIT_PARTS /
+// INTEGRATION_PARTS key, generated from those modules' own key lists so a
+// part added there (or removed) is reachable through `--only` (or reported as
+// dropped by meta.test.mjs) without anyone having to remember a second,
+// hand-kept list here. Each fits a single 4-minute agent tool call even when
+// the whole suite (`unit`, `integration`) does not (brief S7: gremion-ui's
+// vitest alone runs ~185-340s) -- round 2 MEDIUM: these existed as
+// UNIT_PARTS/INTEGRATION_PARTS keys but were reachable from nowhere `--only`
+// could name, so brief S7's own promised command failed with "no such suite
+// in the registry".
+const UNIT_PART_ENTRIES = Object.fromEntries(
+  Object.keys(UNIT_PARTS).map((part) => [`unit:${part}`, () => runUnitSuite({ only: [part] })]),
+)
+const INTEGRATION_PART_ENTRIES = Object.fromEntries(
+  Object.keys(INTEGRATION_PARTS).map((part) => [`integration:${part}`, () => runIntegrationSuite({ only: [part] })]),
+)
 
 // name -> runner. Fixture suites (S6 item 1's TDD harness) are reachable only
 // through `--only`; required-suites.txt never names one, so a bare `verify`
@@ -41,6 +58,8 @@ export const SUITE_REGISTRY = {
   integration: runIntegrationSuite,
   'migration-hash': () => runMigrationHashSuite({ root: REPO_ROOT }),
   'carve-lint': () => runCarveLintSuite({ cwd: REPO_ROOT }),
+  ...UNIT_PART_ENTRIES,
+  ...INTEGRATION_PART_ENTRIES,
   __fixture_node_zero__: runFixtureNodeZero,
   __fixture_vitest_allskip__: runFixtureVitestAllskip,
   __fixture_missing_tool__: runFixtureMissingTool,

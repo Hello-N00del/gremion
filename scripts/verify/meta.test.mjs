@@ -10,6 +10,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
+import { INTEGRATION_PARTS } from './suites/integration.mjs'
+import { UNIT_PARTS } from './suites/unit.mjs'
 import { loadRequiredSuites, SUITE_REGISTRY } from './verify.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
@@ -59,4 +61,23 @@ test('.PHONY still lists verify (a continuation-line drop is silent otherwise)',
 
 test('the root package.json still has "verify": "make verify" (Q1 grant)', () => {
   assert.equal(PKG.scripts?.verify, 'make verify', 'root package.json is missing (or changed) the verify script')
+})
+
+// Round 2 MEDIUM: brief S7 promises `verify --only unit:<part>` /
+// `--only integration:<part>` so a single sub-check fits a 4-minute agent
+// tool call (gremion-ui's vitest alone takes ~185-340s). UNIT_PARTS /
+// INTEGRATION_PARTS existing is not enough on its own -- SUITE_REGISTRY is
+// the only thing runAll() ever looks a name up in, so a part with no
+// matching `unit:<part>` / `integration:<part>` registry entry is reachable
+// from nowhere `--only` can name.
+test('every UNIT_PARTS key has a runnable "unit:<part>" entry in SUITE_REGISTRY', () => {
+  for (const part of Object.keys(UNIT_PARTS)) {
+    assert.ok(typeof SUITE_REGISTRY[`unit:${part}`] === 'function', `SUITE_REGISTRY has no "unit:${part}" entry for UNIT_PARTS.${part}`)
+  }
+})
+
+test('every INTEGRATION_PARTS key has a runnable "integration:<part>" entry in SUITE_REGISTRY', () => {
+  for (const part of Object.keys(INTEGRATION_PARTS)) {
+    assert.ok(typeof SUITE_REGISTRY[`integration:${part}`] === 'function', `SUITE_REGISTRY has no "integration:${part}" entry for INTEGRATION_PARTS.${part}`)
+  }
 })
