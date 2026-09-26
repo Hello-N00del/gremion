@@ -158,7 +158,10 @@ describe('KeycloakAdminClient', () => {
       })
     )
     const client = makeClient()
-    await expect(client.listUsers()).rejects.toThrow()
+    // request() has no try/catch around fetch(), so the underlying
+    // TypeError bubbles up unchanged — this pins the real message instead of
+    // an unconditional toThrow() (vitest(require-to-throw-message)).
+    await expect(client.listUsers()).rejects.toThrow('Failed to fetch')
   })
 
   it('setGroupAttribute — immutable merge', async () => {
