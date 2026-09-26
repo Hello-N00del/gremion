@@ -137,6 +137,17 @@ test('FU-2: precision - ordinary text mentioning "secrets", a non-sensitive secr
   assert.deepEqual(ids('env:\n  S: ${{ github.event.inputs.secrets }}\n'), [])
 })
 
+test('FU review LOW fix: "secrets" appearing only as the CONTENT of a quoted string literal (not the secrets context at all) is not a finding — the exact false-positive the review named', () => {
+  assert.deepEqual(ids("jobs:\n  x:\n    runs-on: ubuntu-latest\n    if: ${{ contains(github.ref, 'secrets') }}\n"), [])
+  assert.deepEqual(ids('env:\n  K: ${{ format("this mentions secrets in prose", 1) }}\n'), [])
+  // The literal's presence must not blind the scanner to a REAL reference
+  // elsewhere in the same expression.
+  assert.deepEqual(ids("env:\n  K: ${{ contains(github.ref, 'secrets') && toJSON(secrets) }}\n"), ['secrets-tojson'])
+  // And a named bracket-access secret right next to an unrelated literal
+  // must still resolve as the named secret, not dynamic-index or context.
+  assert.deepEqual(ids("env:\n  K: ${{ contains(github.ref, 'secrets') }}\n  N: ${{ secrets['NPM_TOKEN'] }}\n"), [])
+})
+
 // --- round-5 HIGH fix: structural runs-on classification, fail closed ------
 // The old text-regex denylist failed OPEN on every one of these — proven in
 // round 4's verifier probe (.scratch/probe-rp.mjs) against the PRE-fix code.

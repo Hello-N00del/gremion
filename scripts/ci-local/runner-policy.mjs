@@ -215,9 +215,39 @@ function collectExpressionBodies(node, key, out = []) {
  * the name `secrets` on another context (`inputs.secrets`) is not the
  * secrets context and is skipped. Case-insensitive throughout.
  */
+// A single- or double-quoted STRING LITERAL inside an expression body, e.g.
+// the `'secrets'` in `contains(github.ref, 'secrets')`. Escaped quotes
+// (`\'`, `\"`) stay inside the literal rather than ending it early.
+const QUOTED_LITERAL_RE = /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g
+
+/** The [start, end) index ranges every quoted string literal in `body` occupies. */
+function quotedLiteralRanges(body) {
+  const ranges = []
+  for (const m of body.matchAll(QUOTED_LITERAL_RE)) ranges.push([m.index, m.index + m[0].length])
+  return ranges
+}
+
+function isWithinAnyRange(index, ranges) {
+  return ranges.some(([start, end]) => index >= start && index < end)
+}
+
+/**
+ * TASK-012-FU review (LOW): `SECRETS_WORD_RE` used to match "secrets" as a
+ * bare substring anywhere in the expression body, including as the CONTENT
+ * of an unrelated string literal — `if: ${{ contains(github.ref, 'secrets')
+ * }}` (a branch-name check, no secrets context involved at all) produced a
+ * false `secrets-context` finding. A quoted-literal's contents are DATA to
+ * whatever function receives them, never a context reference GitHub
+ * evaluates, so a match whose index falls inside one is skipped before any
+ * of the existing property/index/whole-context classification runs (which
+ * still needs the ORIGINAL, unmodified `body` — e.g. `secrets['NAME']`'s own
+ * `'NAME'` literal must stay put for the bracket-access check just below).
+ */
 export function scanExpressionForSecrets(body) {
   const out = []
+  const literalRanges = quotedLiteralRanges(body)
   for (const m of body.matchAll(SECRETS_WORD_RE)) {
+    if (isWithinAnyRange(m.index, literalRanges)) continue // "secrets" as a string LITERAL's content, not the context
     const before = body.slice(0, m.index)
     if (/\.\s*$/.test(before)) continue // `<ctx>.secrets` — a property of something else
     const rest = body.slice(m.index + m[0].length)
