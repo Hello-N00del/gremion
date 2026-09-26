@@ -63,4 +63,12 @@ describe('nav icon map', () => {
     const bad: NavItem = { kind: 'item', href: '/x', label: 'X' }
     expect(bad.kind).toBe('item')
   })
+
+  test('the parser finds the icon map on a CRLF checkout (core.autocrlf=true)', () => {
+    const crlfSource = ICON_SOURCE.includes('\r\n') ? ICON_SOURCE : ICON_SOURCE.replace(/\n/g, '\r\n')
+    const namesFromCrlf = iconNamesFromSource(crlfSource)
+    expect(namesFromCrlf.size).toBeGreaterThan(40)
+    expect(namesFromCrlf.has('home')).toBe(true)
+    expect(namesFromCrlf).toEqual(KNOWN)
+  })
 })

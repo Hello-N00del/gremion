@@ -8,7 +8,12 @@ import type { NavItem } from './nav-schema'
 type Leaf = Extract<NavItem, { kind: 'item' }>
 
 /** Keys of the `icons` record in Icon.svelte, read from its source. */
-export function iconNamesFromSource(src: string): Set<string> {
+export function iconNamesFromSource(rawSrc: string): Set<string> {
+  // Normalize CRLF -> LF first: this machine checks files out with CRLF
+  // (core.autocrlf=true, and Icon.svelte carries no eol=lf .gitattributes
+  // rule), and both the map-end sentinel and the per-key regex below are
+  // anchored on bare \n.
+  const src = rawSrc.replace(/\r\n/g, '\n')
   const start = src.indexOf('const icons')
   const end = src.indexOf('\n  }\n', start)
   if (start < 0 || end < 0) return new Set()
