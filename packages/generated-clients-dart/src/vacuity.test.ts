@@ -30,6 +30,14 @@ describe('test 6 — vacuity', () => {
     expect(v.problems.join('\n')).toMatch(/0 of 0/)
   })
 
+  it('N != M alone fails the verdict, even when no surface reported a problem of its own', () => {
+    // defence in depth: pins the N == M rule in finalizeCheck itself, not only
+    // via the per-surface problems that normally accompany a short count
+    const v = finalizeCheck({ problems: [], checked: 1, expected: 2 }, { requireSurfaces: true })
+    expect(v.ok).toBe(false)
+    expect(v.problems.join('\n')).toContain('only 1 of 2')
+  })
+
   it('fails when fewer surfaces were checked than the registry lists, naming N of M', () => {
     const root = fixture([{ name: 'widgets', type: 'openapi' }, { name: 'gadgets', type: 'openapi' }])
     syncDartPackages(root, fakeGenerate)
