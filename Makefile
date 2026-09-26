@@ -5,7 +5,7 @@
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
-        lint-unshipped-migrations lint-toolchain lint-compliance fresh-init-proof \
+        lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
         verify \
         health validate-env
 
@@ -429,7 +429,14 @@ lint-compliance:
 	 done
 	@node ops/scripts/marketing-copy-check.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance
+# TASK-020 (R25): the tenant-DB access scan -- a direct postgres()/createDb/Pool
+# connection outside @gremion/tenant-store fails unless it is on the dated
+# allow-list naming its adopting task. Line granted to the orchestrator by the brief.
+lint-tenant-db-access:
+	@echo "Checking tenant-DB access..."
+	@node packages/tenant-store/scripts/check-tenant-db-access.mjs
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

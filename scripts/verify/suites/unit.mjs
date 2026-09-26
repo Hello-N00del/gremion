@@ -219,6 +219,10 @@ export const UNIT_PARTS = {
   'generated-clients-dart': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'generated-clients-dart'), testScript: 'test', root, label: '@gremion/generated-clients-dart vitest (test)' }),
   ],
+  // TASK-020 (R25): the tenant-store unit suite (integration needs a scratch stack).
+  'tenant-store': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'tenant-store'), testScript: 'test', root, label: '@gremion/tenant-store vitest (test)' }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }
