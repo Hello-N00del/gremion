@@ -8,5 +8,8 @@
   "engines": {
     "node": ">=26 <27",
     "pnpm": ">=10"
+  },
+  "devDependencies": {
+    "vite-plus": "1.0.0-rc.1"
   }
 }
