@@ -131,6 +131,12 @@ describe('resolveDart', () => {
     expect(() => resolveDart({ env: env({ DART_BIN: join(bin, 'nope') }), spawn })).toThrow(/DART_BIN/)
   })
 
+  it('a $DART_BIN that is a .bat/.cmd wrapper fails closed and names dart.exe', () => {
+    // Flutter's bin/dart.bat cannot be spawned without a shell on win32
+    const d = fakeBin('dart.bat', { '*': { err: 'spawn EINVAL', code: 1 } })
+    expect(() => resolveDart({ env: env({ DART_BIN: d }), spawn })).toThrow(/fail(ing)? closed[\s\S]*dart-sdk[\\/]bin[\\/]dart\.exe|dart-sdk[\\/]bin[\\/]dart\.exe[\s\S]*fail(ing)? closed/i)
+  })
+
   it('takes PATH dart at the pinned SDK, else the pinned image', () => {
     fakeBin('dart', { '*': { out: `Dart SDK version: ${DART_SDK_VERSION} (stable)` } })
     expect(resolveDart({ env: env(), spawn }).describe).toMatch(/PATH/)

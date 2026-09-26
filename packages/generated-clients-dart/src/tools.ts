@@ -35,6 +35,9 @@ export const DOCKER_PUB_CACHE = join(SCRATCH_ROOT, 'pub-cache')
 const DART_PREFIX = ['--suppress-analytics']
 const DOCKER_ENGINE_FAILURE = new Set([125, 126, 127])
 const PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy']
+const BATCH_WRAPPER = /\.(bat|cmd)$/i
+const BATCH_HINT = ' (a .bat/.cmd wrapper such as Flutter\'s bin/dart.bat is not run without a shell;'
+  + ' point $DART_BIN at <flutter>/bin/cache/dart-sdk/bin/dart.exe instead)'
 
 /** How a child process is started. Production uses spawnSync; the unit tests
  *  inject a spawn that runs their fake tools as Node scripts, so the
@@ -219,7 +222,7 @@ export function localDart(opts: ResolveOpts = {}, tried: string[] = []): Tool | 
     const v = existsSync(explicit) ? dartVersionOf(explicit, env, opts.spawn) : null
     if (v === DART_SDK_VERSION) return pathTool(explicit, `${explicit} ($DART_BIN, SDK ${v})`, env, DART_PREFIX, opts.timeoutMs, opts.spawn)
     throw failClosed(`Dart SDK ${DART_SDK_VERSION}`, [
-      v === null ? `$DART_BIN (${explicit}) does not exist or does not run` : `$DART_BIN (${explicit}) is SDK "${v}", pinned is ${DART_SDK_VERSION}`,
+      v === null ? `$DART_BIN (${explicit}) does not exist or does not run${BATCH_WRAPPER.test(explicit) ? BATCH_HINT : ''}` :`$DART_BIN (${explicit}) is SDK "${v}", pinned is ${DART_SDK_VERSION}`,
     ])
   }
   const v = dartVersionOf('dart', env, opts.spawn)
