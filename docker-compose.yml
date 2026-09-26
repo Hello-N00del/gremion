@@ -318,12 +318,20 @@ services:
       - "traefik.http.middlewares.public-ratelimit.ratelimit.average=100"
       - "traefik.http.middlewares.public-ratelimit.ratelimit.burst=50"
       - "traefik.http.middlewares.public-ratelimit.ratelimit.period=1m"
-      # #251: key the bucket on the real client IP (Cloudflare sets CF-Connecting-IP).
-      # Without an explicit sourceCriterion Traefik falls back to the request's
-      # remote address — which behind the cloudflared tunnel is the tunnel
-      # container's IP, collapsing ALL internet traffic into one shared 100 req/min
-      # bucket. Pairs with forwardedHeaders.trustedIPs in docker/traefik/traefik.yml.
-      - "traefik.http.middlewares.public-ratelimit.ratelimit.sourceCriterion.requestHeaderName=CF-Connecting-IP"
+      # TASK-022 (round-2 HIGH): #251's original comment here said "key the
+      # bucket on the real client IP (Cloudflare sets CF-Connecting-IP)". That
+      # was true when cloudflared sat in front of Traefik and rewrote the
+      # header itself. TASK-022 makes Traefik the first hop (see
+      # docker/traefik/traefik.yml's forwardedHeaders header: "nothing keyed
+      # on security may read a forwarded header"), so a sourceCriterion keyed
+      # on a request header is read verbatim from whatever the client sends --
+      # any client can rotate CF-Connecting-IP itself and mint a fresh 100
+      # req/min bucket per request, voiding the limit. No sourceCriterion is
+      # declared below, so Traefik falls back to the connection's own remote
+      # address, which is the real client now that nothing sits in front of
+      # it. Guarded by scripts/check-compose-edge.test.mjs guard 4, which reads
+      # every service's rendered labels for a ratelimit sourceCriterion keyed
+      # on CF-Connecting-IP / X-Forwarded-For / X-Real-IP.
     healthcheck:
       # Follows PUBLIC_BASE_PATH: under a base path the portal 404s on `/`, the
       # container is marked unhealthy, and Traefik v3 removes its routers.
