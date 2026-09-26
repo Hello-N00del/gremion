@@ -856,10 +856,10 @@ exit 0'
     cat > "$tp/docker-compose.pins.yml" <<'PINS'
 services:
   postgres:
-    image: docker.io/library/postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    image: docker.io/library/redis@sha256:4444444444444444444444444444444444444444444444444444444444444444
 PINS
     export FIXTURE_RELEASE="$tp"
-    printf 'docker.io/library/postgres\n' > "${GREMION_ROOT}/etc/third-party-images"
+    printf 'docker.io/library/redis\n' > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 1 ]
     [[ "$output" == *"no first-party image"* ]]
@@ -915,15 +915,15 @@ PINS
     mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
     cat >> "$mix/docker-compose.pins.yml" <<'PINS'
   postgres:
-    image: docker.io/library/postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    image: docker.io/library/redis@sha256:4444444444444444444444444444444444444444444444444444444444444444
 PINS
     export FIXTURE_RELEASE="$mix"
-    printf '# third-party repositories this host may run unsigned (digest-pinned)\ndocker.io/library/postgres\n' \
+    printf '# third-party repositories this host may run unsigned (digest-pinned)\ndocker.io/library/redis\n' \
         > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
     [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 3 ]
-    [ "$(grep -c 'postgres' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*postgres' "$SHIM_LOG"
+    [ "$(grep -c 'redis' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*redis' "$SHIM_LOG"
     [[ "$output" == *"1 third-party image(s) on the host list"* ]]
 }
 
@@ -1006,19 +1006,19 @@ printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"
     mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
     cat >> "$mix/docker-compose.pins.yml" <<'PINS'
   postgres:
-    image: postgres:18-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    image: redis:7-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
 PINS
     export FIXTURE_RELEASE="$mix"
     local listed
     # The host may list the canonical docker.io name or the short one compose prints.
-    for listed in docker.io/library/postgres postgres; do
+    for listed in docker.io/library/redis redis; do
         printf '%s\n' "$listed" > "${GREMION_ROOT}/etc/third-party-images"
         rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
         : > "$SHIM_LOG"
         run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
         [ "$status" -eq 0 ] || { echo "host list '$listed': $output"; return 1; }
         [[ "$output" == *"3 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
-        [ "$(grep -c '^cosign verify.*postgres' "$SHIM_LOG")" -eq 0 ]
+        [ "$(grep -c '^cosign verify.*redis' "$SHIM_LOG")" -eq 0 ]
     done
 }
 
@@ -1028,13 +1028,13 @@ PINS
     mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
     cat >> "$mix/docker-compose.pins.yml" <<'PINS'
   postgres:
-    image: evil/postgres:18-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    image: evil/redis:7-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
 PINS
     export FIXTURE_RELEASE="$mix"
-    printf 'docker.io/library/postgres\n' > "${GREMION_ROOT}/etc/third-party-images"
+    printf 'docker.io/library/redis\n' > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"evil/postgres:18-alpine@sha256:4444"*"is neither first-party"* ]]
+    [[ "$output" == *"evil/redis:7-alpine@sha256:4444"*"is neither first-party"* ]]
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
 
