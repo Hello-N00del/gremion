@@ -54,6 +54,11 @@ export default defineConfig({
       // wrong: a typing preference, not a correctness defect (479 sites).
       // Off rather than churn every mock; tighten per package if wanted.
       'vitest/require-mock-type-parameters': 'off',
+      // Vitest's expect takes an optional second argument, a custom failure
+      // message: expect(actual, message). The rule's Jest-derived default
+      // (maxArgs 1) flagged every such call (58 kernel / 246 StuRaOS
+      // sites, all of them `expect(x, msg)`), none of them a vacuous test.
+      'vitest/valid-expect': ['error', { maxArgs: 2 }]
     },
     // Svelte 5 runes: empirically oxlint 1.85.0 already resolves $state,
     // $derived, $effect, $props, $bindable, $inspect and $host natively (a
@@ -70,6 +75,17 @@ export default defineConfig({
       $inspect: 'readonly',
       $host: 'readonly',
     },
+    overrides: [
+      {
+        // expect(mock.method).toHaveBeenCalled...() passes a vi.fn() spy, which
+        // has no `this` to lose: every one of the 102 unbound-method hits in
+        // test files was this shape. typescript-eslint's own docs point test
+        // files at the test framework's variant of the rule, which oxlint does
+        // not ship, so the rule is off in tests and stays an error in source.
+        files: ['**/*.test.ts', '**/*.test.mjs', '**/*.spec.ts', '**/test/**/*.ts'],
+        rules: { 'typescript/unbound-method': 'off' },
+      },
+    ],
     ignorePatterns: [
       'node_modules/**',
       'build/**',
