@@ -93,3 +93,7 @@ overrides:
   # vitest pins exactly, so both are floored and both stay on the 4.x line.
   vitest: '>=4.1.11 <5'
   '@vitest/mocker': '>=4.1.11 <5'
+  # GHSA-9rgm-9g3h-6x36 — devalue <5.9.1: DoS via malformed input (Dependabot #7, medium;
+  # first patched release 5.9.2). Transitive through @sveltejs/kit, which declares
+  # `devalue: ^5.x`; bounded to 5.x so the floor never drags kit onto devalue 6.
+  devalue: '>=5.9.2 <6'
