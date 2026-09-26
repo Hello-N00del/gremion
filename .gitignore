@@ -259,3 +259,6 @@ docker/keycloak/realm-export.json
 # packages/storage's own tests already write transient mount-point fixtures
 # under a path shaped like this; never committed.
 .scratch/
+
+# Local generator smoke output (TASK-083 brief Q3: dart-dio smoke into .tmp/dart-gov/); never committed
+.tmp/

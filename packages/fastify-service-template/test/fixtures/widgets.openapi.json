@@ -1,0 +1,141 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Template fixture: widgets",
+    "version": "1.0.0",
+    "description": "Test fixture for @gremion/fastify-service-template (TASK-076 T1): 3 paths, 5 operations, 1 multipart operation. Uses OpenAPI 3.1 / JSON Schema 2020-12 constructs on purpose: type arrays for nullability, local $refs, a format."
+  },
+  "paths": {
+    "/widgets": {
+      "get": {
+        "operationId": "listWidgets",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "All widgets",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Widget" } }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWidget",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/WidgetInput" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Widget" } } }
+          },
+          "400": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/widgets/{widgetId}": {
+      "parameters": [
+        { "name": "widgetId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+      ],
+      "get": {
+        "operationId": "getWidget",
+        "responses": {
+          "200": {
+            "description": "One widget",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Widget" } } }
+          },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWidget",
+        "responses": {
+          "204": { "description": "Deleted" },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/uploads": {
+      "post": {
+        "operationId": "uploadFile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": { "file": { "type": "string", "contentMediaType": "application/octet-stream" } },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stored; the server-side checksum of the received bytes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                    "bytes": { "type": "integer" },
+                    "chunks": { "type": "integer" },
+                    "maxChunkBytes": { "type": "integer" }
+                  },
+                  "required": ["sha256", "bytes"]
+                }
+              }
+            }
+          },
+          "413": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Widget": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "note": { "type": ["string", "null"] }
+        },
+        "required": ["id", "name", "note"]
+      },
+      "WidgetInput": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "note": { "type": ["string", "null"] }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      },
+      "Problem": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "integer" },
+          "detail": { "type": "string" }
+        },
+        "required": ["type", "title", "status"]
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "RFC 9457 problem details",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      }
+    }
+  }
+}
