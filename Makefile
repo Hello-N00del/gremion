@@ -5,7 +5,7 @@
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
-        lint-unshipped-migrations lint-toolchain lint-compliance fresh-init-proof \
+        lint-unshipped-migrations lint-toolchain lint-js lint-compliance fresh-init-proof \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -365,6 +365,15 @@ lint-toolchain:
 	 fi; \
 	 echo "[toolchain] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-toolchain.mjs
+
+# R25-2 Stage 1: Oxlint via vite-plus (root vite.config.ts's `lint` block).
+# NOT wired into the `lint` aggregate below -- the baseline is not zero
+# (see plan/p1/r25/vp-lint-kernel.md); the refactor unit that clears the
+# findings wires it in.
+lint-js:
+	@echo "Linting JS/TS/Svelte with vp lint..."
+	@pnpm exec vp lint
+	@echo "  vp lint: OK"
 
 # TASK-005 (TRD-265, TRD-112, TRD-268): the marketing-copy check. Copy that
 # names a licence-register system with a licence other than its register value,

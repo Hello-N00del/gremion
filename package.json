@@ -9,6 +9,10 @@
     "node": ">=26 <27",
     "pnpm": ">=10"
   },
+  "scripts": {
+    "lint:js": "vp lint",
+    "fmt:check": "vp fmt --check"
+  },
   "devDependencies": {
     "vite-plus": "1.0.0-rc.1"
   }
