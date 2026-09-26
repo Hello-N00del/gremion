@@ -28,6 +28,20 @@
       "file": "contracts/content/asyncapi.content.json",
       "status": "active",
       "owner": "pub"
+    },
+    {
+      "name": "governance-http",
+      "type": "openapi",
+      "file": "contracts/governance/openapi.gov.json",
+      "status": "active",
+      "owner": "gov"
+    },
+    {
+      "name": "governance-lifecycle",
+      "type": "asyncapi",
+      "file": "contracts/governance/asyncapi.gov.json",
+      "status": "active",
+      "owner": "gov"
     }
   ]
 }
