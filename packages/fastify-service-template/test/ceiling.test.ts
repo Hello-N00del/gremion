@@ -76,12 +76,14 @@ describe('T7: ceiling config validation', () => {
     ['object', {}],
   ])('%s refuses to boot with a named error', (_label, value) => {
     expect(() => service(value)).toThrow(InvalidUploadCeilingError)
+    let caught: unknown
     try {
       service(value)
     } catch (e) {
-      expect((e as InvalidUploadCeilingError).code).toBe('GREMION_INVALID_UPLOAD_CEILING')
-      expect((e as Error).message).toMatch(/uploadCeilingBytes must be a positive safe integer/)
+      caught = e
     }
+    expect((caught as InvalidUploadCeilingError | undefined)?.code).toBe('GREMION_INVALID_UPLOAD_CEILING')
+    expect((caught as Error | undefined)?.message).toMatch(/uploadCeilingBytes must be a positive safe integer/)
   })
 
   it('never falls back: resolveUploadCeiling returns the default only for undefined', () => {
@@ -156,7 +158,13 @@ describe('no truncation: a file over the ceiling never yields a success', () => 
       reply.code(201)
       return { sha256: '0'.repeat(64), bytes }
     })
-    expectTyped413(await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) }), 1024)
+    // Inlined (not expectTyped413): oxlint's expect-expect only recognises
+    // bare `expect(...)` calls in the test body, not assertions made inside a
+    // helper function.
+    const res = await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) })
+    expect(res.statusCode).toBe(413)
+    expect(String(res.headers['content-type'])).toContain(PROBLEM_CONTENT_TYPE)
+    expect(res.json()).toMatchObject({ type: PROBLEM_TYPES.payloadTooLarge, status: 413, limitBytes: 1024 })
   })
 
   it('a handler may still LOWER the limit per call', async () => {
@@ -183,6 +191,12 @@ describe('no truncation: a file over the ceiling never yields a success', () => 
       reply.code(201)
       return { sha256: '0'.repeat(64), bytes }
     })
-    expectTyped413(await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) }), 1024)
+    // Inlined (not expectTyped413): oxlint's expect-expect only recognises
+    // bare `expect(...)` calls in the test body, not assertions made inside a
+    // helper function.
+    const res = await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) })
+    expect(res.statusCode).toBe(413)
+    expect(String(res.headers['content-type'])).toContain(PROBLEM_CONTENT_TYPE)
+    expect(res.json()).toMatchObject({ type: PROBLEM_TYPES.payloadTooLarge, status: 413, limitBytes: 1024 })
   })
 })
