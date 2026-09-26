@@ -4,6 +4,7 @@
 // identity is an explicit parameter here (the seam calls the limiter with the
 // canonical ctx.id BEFORE entering runWithTenant), so no ALS default applies.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { TenantRateLimitResult } from './rate-limit'
 
 // $env/dynamic/private snapshots process.env at module init — swap it for a
 // mutable mock so each test can toggle the limiter env without re-importing.
@@ -12,6 +13,15 @@ vi.mock('$env/dynamic/private', () => ({ env: envMock }))
 
 const { checkTenantRateLimit, __resetTenantRateLimit, evictTenantRateLimit } =
   await import('./rate-limit')
+
+// Narrows the union so the follow-up `retryAfterSec` expect runs
+// unconditionally (vitest(no-conditional-expect)) instead of inside an
+// `if (!result.allowed)` guard.
+function assertDenied(
+  result: TenantRateLimitResult,
+): asserts result is Extract<TenantRateLimitResult, { allowed: false }> {
+  expect(result.allowed).toBe(false)
+}
 
 beforeEach(() => {
   for (const k of Object.keys(envMock)) delete envMock[k]
@@ -54,8 +64,8 @@ describe('checkTenantRateLimit — enabled token bucket', () => {
     expect(checkTenantRateLimit('tid-a', 0)).toEqual({ allowed: true })
     expect(checkTenantRateLimit('tid-a', 0)).toEqual({ allowed: true })
     const third = checkTenantRateLimit('tid-a', 0)
-    expect(third.allowed).toBe(false)
-    if (!third.allowed) expect(third.retryAfterSec).toBeGreaterThanOrEqual(1)
+    assertDenied(third)
+    expect(third.retryAfterSec).toBeGreaterThanOrEqual(1)
     // tenant B at the SAME instant: its own bucket, full burst available.
     expect(checkTenantRateLimit('tid-b', 0)).toEqual({ allowed: true })
     expect(checkTenantRateLimit('tid-b', 0)).toEqual({ allowed: true })
@@ -98,8 +108,8 @@ describe('checkTenantRateLimit — enabled token bucket', () => {
     envMock.TENANT_RATE_LIMIT_BURST = '1'
     expect(checkTenantRateLimit('tid-a', 0).allowed).toBe(true)
     const denied = checkTenantRateLimit('tid-a', 0)
-    expect(denied.allowed).toBe(false)
-    if (!denied.allowed) expect(denied.retryAfterSec).toBe(2)
+    assertDenied(denied)
+    expect(denied.retryAfterSec).toBe(2)
   })
 
   it('never refills on a clock that moves BACKWARDS (clamped, not thrown)', () => {
