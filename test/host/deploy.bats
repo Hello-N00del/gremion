@@ -78,9 +78,11 @@ fi
 exit "${RESOLVE_STATUS:-0}"
 RESOLVE
     chmod +x "${GREMION_ROOT}/.resolve-images"
+    # Like real cosign, the claim names the repository WITHOUT a tag (a
+    # release is signed by digest), whatever tag the pin carries.
     shim cosign '
 ref="${*: -1}"
-repo="$(printf "%s" "${ref%@*}" | tr "[:upper:]" "[:lower:]")"
+repo="$(printf "%s" "${ref%@*}" | sed -E "s#:[^/:]+\$##" | tr "[:upper:]" "[:lower:]")"
 printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"},\"type\":\"cosign container image signature\"},\"optional\":null}]\n" "$repo" "${ref##*@}"
 exit 0'
 }
@@ -995,8 +997,59 @@ printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"
 }
 
 # ---------------------------------------------------------------------------
-# J2. intake round 1 (TASK-046): profiled services, pins compose does not show
+# J2. intake round 1 (TASK-046): tag@digest pins and profiled services
 # ---------------------------------------------------------------------------
+
+@test "a third-party tag@digest pin (the pin-images.sh form) matches the host list's tagless repository" {
+    stub_all
+    local mix="${BATS_TEST_TMPDIR}/pgtag"
+    mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
+    cat >> "$mix/docker-compose.pins.yml" <<'PINS'
+  postgres:
+    image: postgres:18-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
+PINS
+    export FIXTURE_RELEASE="$mix"
+    local listed
+    # The host may list the canonical docker.io name or the short one compose prints.
+    for listed in docker.io/library/postgres postgres; do
+        printf '%s\n' "$listed" > "${GREMION_ROOT}/etc/third-party-images"
+        rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+        : > "$SHIM_LOG"
+        run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+        [ "$status" -eq 0 ] || { echo "host list '$listed': $output"; return 1; }
+        [[ "$output" == *"3 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
+        [ "$(grep -c '^cosign verify.*postgres' "$SHIM_LOG")" -eq 0 ]
+    done
+}
+
+@test "a tag@digest third-party pin is still refused when the host lists another repository" {
+    stub_all
+    local mix="${BATS_TEST_TMPDIR}/pgother"
+    mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
+    cat >> "$mix/docker-compose.pins.yml" <<'PINS'
+  postgres:
+    image: evil/postgres:18-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
+PINS
+    export FIXTURE_RELEASE="$mix"
+    printf 'docker.io/library/postgres\n' > "${GREMION_ROOT}/etc/third-party-images"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"evil/postgres:18-alpine@sha256:4444"*"is neither first-party"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a first-party tag@digest pin verifies against cosign's tagless docker-reference" {
+    stub_all
+    local tagged="${BATS_TEST_TMPDIR}/fptag"
+    mkdir -p "$tagged"; cp -R "${FIXTURES}/valid"/. "$tagged"/
+    sed -i -E 's#(ghcr\.io/hello-n00del/gremion-ui)@#\1:dist-v1.2.3@#' "$tagged/docker-compose.pins.yml"
+    grep -q 'gremion-ui:dist-v1.2.3@sha256:' "$tagged/docker-compose.pins.yml"
+    export FIXTURE_RELEASE="$tagged"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"3 first-party image(s) verified"* ]]
+    assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/gremion-ui:dist-v1.2.3@sha256:"
+}
 
 @test "an unsigned image under an inactive compose profile (step 7's migrate) is still verified and refused" {
     stub_all

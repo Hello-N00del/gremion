@@ -36,11 +36,16 @@ failure is expected, and nothing here signs with a real key before it.
    Until then `gremion-deploy` refuses at step 2 (`trust anchor absent`).
 3. **Host third-party list.** Step 2 verifies every image that
    `docker compose config --images` resolves for the state project and both
-   colours. An image outside `<registry>/hello-n00del/` is refused unless its
-   repository is listed, one per line with no tag or digest, in
+   colours, with every profile turned on (so the `migrate` service is
+   included), plus every canonical pin in `docker-compose.pins.yml`. An image
+   outside `<registry>/hello-n00del/` is refused unless its repository is
+   listed, one per line with no tag or digest, in
    `$ROOT/etc/third-party-images`. That file lives on the host and is never
    read from the release tree. List exactly the third-party repositories the
-   stack runs (for example the database image).
+   stack runs (for example the database image). A pin's tag is ignored (the
+   digest is what is pulled), and Docker Hub names are compared in canonical
+   form, so the pin `postgres:18-alpine@sha256:…` matches either
+   `docker.io/library/postgres` or `postgres` in the list.
 4. **age recipient.** Generate the age identity (the private half goes to the
    vault and the recovery kit), then replace the
    `<OPERATOR_AGE_PUBLIC_KEY_REPLACE_VIA_BOOTSTRAP_SOPS_SH>` sentinel in

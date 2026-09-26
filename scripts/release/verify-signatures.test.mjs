@@ -239,6 +239,16 @@ test('an unsigned first-party image that only compose resolves (not a canonical 
   assert.match(res.out, /signature verification failed for .*gremion-ui@sha256:/)
 })
 
+test('a first-party tag@digest pin (the pin-images.sh form) verifies live against cosign\'s tagless docker-reference', () => {
+  // cosign records the repository without a tag; the gate must compare the
+  // tagless repository, or every release in the repo's own pin form is refused.
+  const tagged = refs.signedUi.replace('@sha256:', ':dist-v1.2.3@sha256:')
+  assert.notEqual(tagged, refs.signedUi)
+  const res = deploy([tagged, refs.signedPublic])
+  assert.ok(passedStep2(res), `tag@digest first-party pin was refused:\n${res.out}\n${res.log}`)
+  assert.match(res.out, /2 first-party image\(s\) verified/)
+})
+
 test('an unsigned image under an inactive compose profile (step 7 migrate) is refused live', () => {
   const res = deploy([refs.signedUi], { profiledResolved: refs.unsigned })
   assert.ok(refusedAtStep2(res), `profiled unsigned image got through:\n${res.out}\n${res.log}`)
