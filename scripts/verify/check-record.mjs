@@ -36,6 +36,14 @@ export function checkRecord(sha, { readRecordFn = readRecord, requiredSuites = l
   if (record.partial) {
     return { ok: false, reason: `record for ${sha} is partial (--only ${record.only}) -- a partial run never satisfies check-record` }
   }
+  // A record with no "suites" field at all (a truncated write, a hand-edited
+  // file) made `s in record.suites` throw a raw TypeError below -- fail-closed
+  // either way (the process still exits non-zero), but this is the CLI's own
+  // documented contract: "exits non-zero and names the reason" (this file's
+  // own header), not an uncaught exception's stack trace.
+  if (record.suites === null || typeof record.suites !== 'object' || Array.isArray(record.suites)) {
+    return { ok: false, reason: `record for ${sha} is malformed (no "suites" object) at ${recordPath(sha)}` }
+  }
   const missing = requiredSuites.filter((s) => !(s in record.suites))
   if (missing.length > 0) {
     return { ok: false, reason: `record for ${sha} is missing required suite(s): ${missing.join(', ')}` }

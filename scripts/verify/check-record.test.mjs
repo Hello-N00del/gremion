@@ -61,6 +61,25 @@ test('a hand-edited ok:true is never trusted -- pass/fail is recomputed from sui
   assert.equal(r.ok, false)
 })
 
+// Round 2 LOW: main() had no try/catch. A record with no `suites` field (a
+// truncated write, a hand-edited file) made `s in record.suites` throw a raw
+// TypeError instead of a formatted [check-record] FAIL -- fail-closed (the
+// process still exits non-zero), but the CLI's own contract (a formatted
+// reason, per its header comment) was broken.
+test('a record with no "suites" field at all fails with a formatted reason, not a raw TypeError', () => {
+  const record = { sha: 'deadbeef', partial: false }
+  const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /malformed.*"suites"/)
+})
+
+test('a record whose "suites" field is not an object fails the same formatted way', () => {
+  const record = { sha: 'deadbeef', partial: false, suites: 'not-an-object' }
+  const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /malformed.*"suites"/)
+})
+
 test('a complete, all-green, non-partial record passes', () => {
   const record = { sha: 'deadbeef', partial: false, suites: allGreenSuites() }
   const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED })
