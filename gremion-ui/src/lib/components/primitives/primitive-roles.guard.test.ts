@@ -57,12 +57,13 @@ describe('TRD-413 primitive-roles guard', () => {
     const r = checkPrimitiveRoles({ fs: diskFs(APP_ROOT) })
     expect(r.violations).toEqual([])
     expect(['empty-scope', 'scanned']).toContain(r.status)
-    if (r.status === 'empty-scope') {
-      expect(r.reason).toContain('src/routes/sitzungen')
-    } else {
-      expect(r.scanned.length).toBeGreaterThan(0)
-      expect(formatResult(r)).toMatch(/^\[primitive-roles\] scanned \d+ file\(s\) .*: PASS, /)
-    }
+    // Either branch must explain itself: empty-scope names the missing tree,
+    // scanned must have walked at least one file and printed a PASS line.
+    const explained =
+      r.status === 'empty-scope'
+        ? (r.reason ?? '').includes('src/routes/sitzungen')
+        : r.scanned.length > 0 && /^\[primitive-roles\] scanned \d+ file\(s\) .*: PASS, /.test(formatResult(r))
+    expect({ status: r.status, explained }).toEqual({ status: r.status, explained: true })
   })
 
   test('a compliant F2 screen (primitives only) scans clean -- the real-tree test does not fail merely because routes/sitzungen exists', () => {
