@@ -55,11 +55,115 @@
   --shadow-3: var(--sh-3);
 }
 
+/* Token-built custom properties (TASK-082, UX-030..035). The fenced blocks are
+ * emitted by @gremion/tokens from packages/tokens/tokens/gremion.tokens.json
+ * (light) and modes/dark.tokens.json (dark): fonts, the graphite default
+ * accents (the v8 literals, not the instance engine), focus ring, scrim,
+ * shadows, radii, spacing, motion, the touch-target floor, the type scale and
+ * the component tier the Bits UI primitives read. Never hand-edit them:
+ *   pnpm --filter @gremion/tokens build -- --write ../../gremion-ui/src/app.css
+ * and `pnpm --filter @gremion/tokens check` fails when they are stale.
+ * Everything outside the fences stays hand-written. The per-tenant accent
+ * <style> (instance-theme.ts) is still injected after this file, and the
+ * colour-blind overrides below still follow and win on specificity. */
 :root {
-  /* Type */
+  /* tokens:generated:light:begin (do not hand-edit; see the note above) */
   --font-display: "Archivo Narrow", ui-sans-serif, system-ui, sans-serif;
-  --font-body:    "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-7: 32px;
+  --s-8: 48px;
+  --r-xs: 3px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --touch-target-min: 44px;
+  --d-fast: 120ms;
+  --d-med: 220ms;
+  --e-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --accent: oklch(42% 0.0154 265);
+  --accent-ink: oklch(36% 0.0154 265);
+  --accent-soft: oklch(93% 0.0049 265);
+  --accent-faint: oklch(96% 0.0028 265);
+  --focus-ring: var(--accent);
+  --scrim: rgba(22, 21, 19, 0.46);
+  --sh-1: 0 1px 0 rgba(22, 21, 19, 0.04), 0 1px 2px rgba(22, 21, 19, 0.04);
+  --sh-2: 0 1px 0 rgba(22, 21, 19, 0.05), 0 4px 14px -4px rgba(22, 21, 19, 0.08);
+  --sh-3: 0 2px 0 rgba(22, 21, 19, 0.06), 0 14px 40px -14px rgba(22, 21, 19, 0.16);
+  --type-display: 500 32px/1 var(--font-display);
+  --type-display-tracking: -0.64px;
+  --type-title: 500 22px/1.2 var(--font-display);
+  --type-title-tracking: -0.22px;
+  --type-heading: 600 15px/1.3 var(--font-display);
+  --type-heading-tracking: -0.075px;
+  --type-body: 400 14px/1.5 var(--font-body);
+  --type-body-tracking: 0px;
+  --type-label: 500 12px/1.4 var(--font-body);
+  --type-label-tracking: 0px;
+  --type-caption: 400 11.5px/1.45 var(--font-body);
+  --type-caption-tracking: 0px;
+  --type-mono-label: 500 10.5px/1.4 var(--font-mono);
+  --type-mono-label-tracking: 1.47px;
+  --space-section-gap: 64px;
+  --dialog-background: var(--surface);
+  --dialog-text: var(--ink);
+  --dialog-text-muted: var(--ink-muted);
+  --dialog-border: var(--border);
+  --dialog-radius: var(--r-lg);
+  --dialog-shadow: var(--sh-3);
+  --dialog-padding: var(--s-6);
+  --dialog-gap: var(--s-4);
+  --dialog-scrim: var(--scrim);
+  --dialog-title-font: var(--type-heading);
+  --dialog-title-font-tracking: var(--type-heading-tracking);
+  --dialog-description-font: var(--type-caption);
+  --dialog-description-font-tracking: var(--type-caption-tracking);
+  --dialog-close-size: var(--touch-target-min);
+  --dialog-focus-ring: var(--focus-ring);
+  --dialog-duration: var(--d-med);
+  --dialog-easing: var(--e-out);
+  --field-background: var(--surface);
+  --field-text: var(--ink);
+  --field-placeholder: var(--ink-muted);
+  --field-border: var(--border-strong);
+  --field-radius: var(--r-sm);
+  --field-padding-x: var(--s-3);
+  --field-padding-y: var(--s-2);
+  --field-gap: var(--s-2);
+  --field-min-height: var(--touch-target-min);
+  --field-focus-ring: var(--focus-ring);
+  --field-label-font: var(--type-label);
+  --field-label-font-tracking: var(--type-label-tracking);
+  --field-label-text: var(--ink);
+  --popover-background: var(--surface);
+  --popover-text: var(--ink);
+  --popover-text-muted: var(--ink-muted);
+  --popover-border: var(--border);
+  --popover-radius: var(--r-md);
+  --popover-shadow: var(--sh-2);
+  --popover-padding: var(--s-1);
+  --popover-item-padding-x: var(--s-3);
+  --popover-item-padding-y: var(--s-2);
+  --popover-item-radius: var(--r-sm);
+  --popover-item-min-height: var(--touch-target-min);
+  --popover-item-highlight-background: var(--accent-soft);
+  --popover-item-highlight-text: var(--accent-ink);
+  --popover-item-selected-indicator: var(--accent);
+  --popover-empty-font: var(--type-caption);
+  --popover-empty-font-tracking: var(--type-caption-tracking);
+  --popover-duration: var(--d-fast);
+  /* tokens:generated:light:end */
+
+  /* Hand-written, outside the token file (UX-033): the v8 warm neutrals, which
+     the identity step retires (the token file references the ones the
+     primitives read as handWritten), and the status hues ember/pine/rust,
+     which UX-044 replaces. */
 
   /* Neutrals — light */
   --paper:         #fafaf7;
@@ -73,15 +177,7 @@
   --border:        rgba(22, 21, 19, 0.09);
   --border-strong: rgba(22, 21, 19, 0.16);
 
-  /* Accents — light, oklch. Default renders GRAPHITE (the neutral `gremion`
-     instance): hue 265, chroma factor 0.14 — derived from the product's OKLCH
-     instance engine (chroma = base × 0.14; e.g. --accent 0.11 × 0.14 = 0.0154).
-     The kernel has NO per-instance engine (deferred to @gremion/tokens), so
-     graphite is written directly onto the static tokens (handover v10, Part D/K2). */
-  --accent:        oklch(42% 0.0154 265);
-  --accent-ink:    oklch(36% 0.0154 265);
-  --accent-soft:   oklch(93% 0.0049 265);
-  --accent-faint:  oklch(96% 0.0028 265);
+  /* Status hues — light */
   --ember:         oklch(56% 0.14 52);
   --ember-soft:    oklch(94% 0.05 60);
   --ember-ink:     oklch(40% 0.14 56);     /* §16 finding 1: pill text ink */
@@ -96,39 +192,20 @@
      a text-on-soft token and is never a fill. (No --on-pine: nothing fills pine.) */
   --on-rust:       #ffffff;
   --rust-hover:    oklch(46% 0.15 29);
-
-  /* Shadows — light, very subtle */
-  --sh-1: 0 1px 0 rgba(22, 21, 19, 0.04), 0 1px 2px rgba(22, 21, 19, 0.04);
-  --sh-2: 0 1px 0 rgba(22, 21, 19, 0.05), 0 4px 14px -4px rgba(22, 21, 19, 0.08);
-  --sh-3: 0 2px 0 rgba(22, 21, 19, 0.06), 0 14px 40px -14px rgba(22, 21, 19, 0.16);
-
-  /* #160 — overlay scrim. Theme-STABLE: stays a dark veil in both modes so it
-     never inverts to a light wash (the old bg-ink/80 bug). */
-  --scrim: rgba(22, 21, 19, 0.46);
-
-  /* Radii */
-  --r-xs: 3px;
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
-
-  /* Spacing */
-  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
-  --s-5: 20px; --s-6: 24px; --s-7: 32px; --s-8: 48px;
-
-  /* Motion */
-  --e-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --d-fast: 120ms;
-  --d-med:  220ms;
-
-  /* §16 finding 3 — touch-target floor */
-  --touch-target-min: 44px;
-
-  /* §16 implied — focus ring */
-  --focus-ring: var(--accent);
 }
 
 .dark {
+  /* tokens:generated:dark:begin (do not hand-edit; see the note above) */
+  --accent: oklch(72% 0.0182 265);
+  --accent-ink: oklch(78% 0.0154 265);
+  --accent-soft: oklch(28% 0.0084 265);
+  --accent-faint: oklch(22% 0.0056 265);
+  --scrim: rgba(0, 0, 0, 0.66);
+  --sh-1: 0 1px 0 rgba(0, 0, 0, 0.4);
+  --sh-2: 0 1px 0 rgba(0, 0, 0, 0.5), 0 4px 14px -4px rgba(0, 0, 0, 0.4);
+  --sh-3: 0 2px 0 rgba(0, 0, 0, 0.6), 0 14px 40px -14px rgba(0, 0, 0, 0.6);
+  /* tokens:generated:dark:end */
+
   --paper:         #0e0f10;
   --surface:       #161719;
   --surface-2:     #1d1e21;
@@ -140,12 +217,6 @@
   --border:        rgba(237, 236, 231, 0.08);
   --border-strong: rgba(237, 236, 231, 0.16);
 
-  /* Accents — dark. Graphite default (hue 265, chroma factor 0.14): derived
-     from the product's dark instance-engine ramp (handover v10, Part D). */
-  --accent:       oklch(72% 0.0182 265);
-  --accent-ink:   oklch(78% 0.0154 265);
-  --accent-soft:  oklch(28% 0.0084 265);
-  --accent-faint: oklch(22% 0.0056 265);
   --ember:        oklch(74% 0.14 60);   /* v5: dark ember hue 60 (tokens.css:76) */
   --ember-soft:   oklch(28% 0.07 60);
   --ember-ink:    oklch(82% 0.10 60);
@@ -159,13 +230,6 @@
   /* #343 R3/R6 — dark rust fill is light (70%), so text-on-fill inverts to ink. */
   --on-rust:      oklch(18% 0.05 29);
   --rust-hover:   oklch(76% 0.14 29);
-
-  --sh-1: 0 1px 0 rgba(0,0,0,0.4);
-  --sh-2: 0 1px 0 rgba(0,0,0,0.5), 0 4px 14px -4px rgba(0, 0, 0, 0.4);
-  --sh-3: 0 2px 0 rgba(0,0,0,0.6), 0 14px 40px -14px rgba(0, 0, 0, 0.6);
-
-  /* #160 — darker scrim in dark mode so the page reads as backgrounded */
-  --scrim: rgba(0, 0, 0, 0.66);
 }
 
 /* Density / radius toggles (retained from prior repo + bundle convention) */
