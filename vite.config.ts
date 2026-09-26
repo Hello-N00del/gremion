@@ -31,6 +31,30 @@ export default defineConfig({
       // typescript/no-floating-promises, typescript/await-thenable.
       typeAware: true,
     },
+    rules: {
+      // node:test's test()/describe()/hooks return promises that the runner
+      // itself awaits, so a top-level `test(...)` is not a floating promise.
+      // This is the allow-list typescript-eslint documents for exactly this
+      // case (no-floating-promises, allowForKnownSafeCalls). Every other
+      // unawaited promise stays an error. Without it the rule reported 258
+      // false positives in scripts/**/*.test.mjs and ops/**.
+      'typescript/no-floating-promises': [
+        'error',
+        {
+          allowForKnownSafeCalls: [
+            {
+              from: 'package',
+              package: 'node:test',
+              name: ['test', 'it', 'describe', 'suite', 'before', 'after', 'beforeEach', 'afterEach'],
+            },
+          ],
+        },
+      ],
+      // A vi.fn()/vi.spyOn() without type parameters is loosely typed, not
+      // wrong: a typing preference, not a correctness defect (479 sites).
+      // Off rather than churn every mock; tighten per package if wanted.
+      'vitest/require-mock-type-parameters': 'off',
+    },
     // Svelte 5 runes: empirically oxlint 1.85.0 already resolves $state,
     // $derived, $effect, $props, $bindable, $inspect and $host natively (a
     // whole-tree `vp lint gremion-ui/src gremion-public/src -f json` run
