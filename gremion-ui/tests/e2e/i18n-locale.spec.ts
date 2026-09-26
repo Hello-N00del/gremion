@@ -11,7 +11,15 @@
 // the e2e stack has no Keycloak. The session claims mirror what jwtCallback
 // stores after a real Keycloak login (roles, uid, tokenIss, token expiry).
 import { test, expect, type Page } from '@playwright/test'
-import { encode } from '@auth/core/jwt'
+
+// src/lib/auth/auth.d.ts declares '@auth/core/jwt' as an ambient module (to
+// extend JWT), which hides the package's real exports from the type checker.
+// The runtime module is the real one; type the one function used here.
+type EncodeJwt = (params: { token: Record<string, unknown>; secret: string; salt: string; maxAge?: number }) => Promise<string>
+async function encodeJwt(params: Parameters<EncodeJwt>[0]): Promise<string> {
+  const mod = (await import('@auth/core/jwt')) as unknown as { encode: EncodeJwt }
+  return mod.encode(params)
+}
 
 const SESSION_COOKIE = 'authjs.session-token'
 const ISSUER = process.env.AUTH_KEYCLOAK_ISSUER ?? 'http://localhost/realms/gremion'
@@ -20,7 +28,7 @@ async function signInAsMember(page: Page, baseURL: string): Promise<void> {
   const secret = process.env.AUTH_SECRET
   if (!secret) throw new Error('AUTH_SECRET must be set to the app’s value to mint the e2e session')
   const now = Math.floor(Date.now() / 1000)
-  const value = await encode({
+  const value = await encodeJwt({
     salt: SESSION_COOKIE,
     secret,
     maxAge: 3600,
