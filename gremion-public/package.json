@@ -24,6 +24,7 @@
     "postgres": "^3.4.4"
   },
   "devDependencies": {
+    "@inlang/paraglide-js": "^2.25.4",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/dompurify": "^3.0.5",

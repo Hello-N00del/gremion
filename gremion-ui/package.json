@@ -23,6 +23,7 @@
     "provision": "tsx scripts/tenant-provision.mjs"
   },
   "devDependencies": {
+    "@inlang/paraglide-js": "^2.25.4",
     "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-node": "^5.5.7",
     "@sveltejs/kit": "^2.70.2",
