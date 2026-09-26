@@ -82,6 +82,12 @@ function makeDeps(opts: { realmFailsOnce?: boolean } = {}) {
       }),
       configureStepupFlow: vi.fn(async () => {}),
       assignServiceAccountRealmRoles: vi.fn(async () => {}),
+      // gremion#6 (25fee7d): the already-exists branch applies the SMTP
+      // block as an Admin-API delta via deps.kc.updateRealmSmtp. That commit
+      // added this method to the sibling unit mock (pipeline.test.ts) and to
+      // the real client (kc-admin-api.ts) but missed this integration
+      // harness's independent `deps.kc` double — same shape as there.
+      updateRealmSmtp: vi.fn(async () => {}),
     } as never,
     registry: {
       getTenantBySlug,
