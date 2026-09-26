@@ -10,7 +10,6 @@ import { connect, dbUrl, ledgerFiles, resetWithProbe } from '../harness/db.js'
 import { FIXTURE_MIGRATIONS } from '../harness/migrations.js'
 
 const CHILD = fileURLToPath(new URL('../harness/child-runner.ts', import.meta.url))
-const TSX = fileURLToPath(new URL('../../node_modules/.bin/tsx', import.meta.url))
 const HOLD_MS = 1500
 
 interface ChildResult {
@@ -20,7 +19,7 @@ interface ChildResult {
 }
 
 function startChild(name: string, db: string, variant: string) {
-  const child = spawn(TSX, [CHILD], {
+  const child = spawn(process.execPath, ['--import', 'tsx', CHILD], {
     env: {
       ...process.env,
       T020_CHILD_URL: dbUrl(db),
