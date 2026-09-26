@@ -18,6 +18,8 @@ import { sequence } from '@sveltejs/kit/hooks'
 // src/hooks.tenant-wiring.test.ts: sequence() needs the request store.
 import { with_request_store } from '@sveltejs/kit/internal/server'
 import { m } from '../paraglide/messages.js'
+
+const messages: Record<string, () => string> = m
 import { createI18nHandle, LANG_PLACEHOLDER, LOCALE_COOKIE, resolveRequestLocale } from './i18n-handle'
 import { configureLocalePreference, resetLocalePreferenceForTest } from './locale-preference-port'
 import { configurePersonIdMapperForTest, resetPersonIdMapperForTest } from './person-id'
@@ -124,7 +126,7 @@ describe('createI18nHandle (TDD 2: the raw SSR response carries the resolved lan
 
   it('SSR message calls inside resolve() see the request locale (Paraglide AsyncLocalStorage)', async () => {
     const event = fakeEvent({ acceptLanguage: 'en-US' })
-    const resolve = async () => new Response(m['nav.files']())
+    const resolve = async () => new Response(messages['nav.files']!())
     const response = await createI18nHandle(customerIdOf)({ event, resolve } as never)
     expect(await response.text()).toBe('Files')
   })

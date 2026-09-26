@@ -8,6 +8,8 @@ import { join } from 'node:path'
 import { createI18nHandle, LANG_PLACEHOLDER, LOCALE_COOKIE } from './i18n-handle'
 import { m } from '../paraglide/messages.js'
 
+const messages: Record<string, () => string> = m
+
 const APP_HTML = readFileSync(join(__dirname, '..', '..', '..', 'app.html'), 'utf8')
 
 function fakeEvent(cookie: string | null, acceptLanguage: string | null) {
@@ -49,7 +51,7 @@ describe('createI18nHandle (gremion-public)', () => {
   it('message functions called during the render use the request locale', async () => {
     const response = await createI18nHandle()({
       event: fakeEvent(null, 'en-US'),
-      resolve: async () => new Response(m['a11y.skip']())
+      resolve: async () => new Response(messages['a11y.skip']!())
     } as never)
     expect(await response.text()).toBe('Skip to content')
   })

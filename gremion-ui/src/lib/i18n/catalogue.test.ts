@@ -27,7 +27,7 @@ function walk(dir: string, out: string[] = []): string[] {
     const full = join(dir, entry)
     if (entry === 'node_modules' || entry === 'paraglide') continue
     if (statSync(full).isDirectory()) walk(full, out)
-    else if (/\.(svelte|ts)$/.test(entry) && !/\.test\.ts$/.test(entry)) out.push(full)
+    else if ((entry.endsWith('.svelte') || entry.endsWith('.ts')) && !entry.endsWith('.test.ts')) out.push(full)
   }
   return out
 }

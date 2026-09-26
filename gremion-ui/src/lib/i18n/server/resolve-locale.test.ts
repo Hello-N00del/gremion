@@ -152,9 +152,7 @@ describe('resolveLocale — resolution order (TRD-412)', () => {
     }
   ]
 
-  for (const { name, input, want } of cases) {
-    it(name, () => {
-      expect(resolveLocale(input)).toBe(want)
-    })
-  }
+  it.each(cases)('$name', ({ input, want }) => {
+    expect(resolveLocale(input)).toBe(want)
+  })
 })

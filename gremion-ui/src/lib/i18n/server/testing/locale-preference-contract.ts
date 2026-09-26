@@ -61,7 +61,7 @@ export function describeLocalePreferenceContract(backend: string, harness: Contr
     })
 
     it('set() rejects an unsupported locale instead of storing it', async () => {
-      await expect(port.set(customerA, person1, 'fr' as never)).rejects.toThrow()
+      await expect(port.set(customerA, person1, 'fr' as never)).rejects.toThrow(/locale/)
       expect(await port.get(customerA, person1)).toBeNull()
     })
 

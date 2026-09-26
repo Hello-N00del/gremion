@@ -24,9 +24,7 @@ describe('resolveLocale (gremion-public)', () => {
     { name: 'unrecognized language tag is ignored', input: { cookie: null, acceptLanguage: 'fr-FR' }, want: 'de' }
   ]
 
-  for (const { name, input, want } of cases) {
-    it(name, () => {
-      expect(resolveLocale(input)).toBe(want)
-    })
-  }
+  it.each(cases)('$name', ({ input, want }) => {
+    expect(resolveLocale(input)).toBe(want)
+  })
 })

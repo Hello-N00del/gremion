@@ -99,7 +99,7 @@ describe('pg adapter specifics', () => {
     await owner`TRUNCATE idt.preference`
     const port = createLocalePreferencePort({ backend: 'pg', sql: app })
     await port.set(CONTRACT_IDS.customerA, CONTRACT_IDS.person1, 'en')
-    await expect(port.set(CONTRACT_IDS.customerB, CONTRACT_IDS.person1, 'de')).rejects.toThrow()
+    await expect(port.set(CONTRACT_IDS.customerB, CONTRACT_IDS.person1, 'de')).rejects.toThrow(/row-level security/)
     expect(await port.get(CONTRACT_IDS.customerA, CONTRACT_IDS.person1)).toMatchObject({ locale: 'en', rowVersion: 1 })
   })
 })
