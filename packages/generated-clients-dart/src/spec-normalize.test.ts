@@ -83,13 +83,38 @@ describe('normalizeFor31 — const / non-string enum', () => {
     expect(() => normalizeFor31(wrap({ b: { type: 'boolean', enum: [true] } }))).toThrow(/non-string enum/)
     expect(() => normalizeFor31(wrap({ n: { type: 'integer', enum: [1, 2] } }))).toThrow(/non-string enum/)
     expect(() => normalizeFor31(wrap({ s: { type: 'string', enum: ['a', 'b'] } }))).not.toThrow()
-    expect(() => normalizeFor31(wrap({ s: { type: ['string', 'null'], enum: ['a', null] } }))).toThrow(/null/)
   })
 
   it('fails closed on a non-scalar const (null, object, array)', () => {
     expect(() => normalizeFor31(wrap({ c: { const: null } }))).toThrow(/const/)
     expect(() => normalizeFor31(wrap({ c: { const: { a: 1 } } }))).toThrow(/const/)
     expect(() => normalizeFor31(wrap({ c: { const: [1] } }))).toThrow(/const/)
+  })
+})
+
+describe('normalizeFor31 — enum containing null', () => {
+  it('drops null from an enum when the type allows null (type array incl. "null", or type "null"), keeping the type as-is and reporting it in enumNullDropped', () => {
+    const { doc, report } = normalizeFor31(wrap({
+      s: { type: ['string', 'null'], enum: ['a', 'b', null] },
+      t: { type: 'null', enum: [null] },
+    }))
+    expect(props(doc)).toEqual({
+      s: { type: ['string', 'null'], enum: ['a', 'b'] },
+      t: { type: 'null', enum: [] },
+    })
+    expect(report.enumNullDropped).toEqual([
+      '/components/schemas/A/properties/s',
+      '/components/schemas/A/properties/t',
+    ])
+  })
+
+  it('fails closed on an enum containing null whose type does not allow null', () => {
+    expect(() => normalizeFor31(wrap({ s: { type: 'string', enum: ['a', null] } }))).toThrow(/enum containing null/)
+    expect(() => normalizeFor31(wrap({ s: { enum: ['a', null] } }))).toThrow(/enum containing null/)
+  })
+
+  it('still fails on a non-string member once null is dropped', () => {
+    expect(() => normalizeFor31(wrap({ s: { type: ['string', 'integer', 'null'], enum: ['a', 1, null] } }))).toThrow(/non-string enum/)
   })
 })
 
