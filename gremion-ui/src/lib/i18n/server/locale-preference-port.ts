@@ -16,6 +16,8 @@ export interface LocalePreferenceRow {
   locale: PersonLocale
   rowVersion: number
   updatedByKind: 'person' | 'system'
+  /** The idt.person_id that made this write. Null only for a 'system' write with no actor. */
+  updatedBy: string | null
 }
 
 /** The seam every adapter (in-memory test double, and eventually pg) satisfies. */
@@ -57,7 +59,8 @@ class MemoryLocalePreferencePort implements LocalePreferencePort {
     const row: LocalePreferenceRow = {
       locale,
       rowVersion: (existing?.rowVersion ?? 0) + 1,
-      updatedByKind: 'person'
+      updatedByKind: 'person',
+      updatedBy: personId
     }
     this.rows.set(key, row)
     return row

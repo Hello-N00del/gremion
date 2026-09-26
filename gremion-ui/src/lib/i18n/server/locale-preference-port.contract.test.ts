@@ -26,10 +26,10 @@ describe.each(LOCALE_PREFERENCE_BACKENDS)('LocalePreferencePort contract: backen
     expect(await port.get(CUSTOMER_A, PERSON_1)).toBeNull()
   })
 
-  it('set() writes the row: locale, row_version=1, updated_by_kind=person', async () => {
+  it('set() writes the row: locale, row_version=1, updated_by_kind=person, updated_by=personId', async () => {
     const port = getLocalePreferencePort()
     const row = await port.set(CUSTOMER_A, PERSON_1, 'en')
-    expect(row).toEqual({ locale: 'en', rowVersion: 1, updatedByKind: 'person' })
+    expect(row).toEqual({ locale: 'en', rowVersion: 1, updatedByKind: 'person', updatedBy: PERSON_1 })
     expect(await port.get(CUSTOMER_A, PERSON_1)).toEqual(row)
   })
 
@@ -37,7 +37,7 @@ describe.each(LOCALE_PREFERENCE_BACKENDS)('LocalePreferencePort contract: backen
     const port = getLocalePreferencePort()
     await port.set(CUSTOMER_A, PERSON_1, 'en')
     const second = await port.set(CUSTOMER_A, PERSON_1, 'de')
-    expect(second).toEqual({ locale: 'de', rowVersion: 2, updatedByKind: 'person' })
+    expect(second).toEqual({ locale: 'de', rowVersion: 2, updatedByKind: 'person', updatedBy: PERSON_1 })
   })
 
   it('set() accepts follow_customer as an explicit choice', async () => {
