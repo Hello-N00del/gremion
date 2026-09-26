@@ -196,7 +196,7 @@ plant_repo() {  # $1 = directory to create as a throwaway git repo
   # base64. A Subresource Integrity value cannot carry a host name.
   local d="$BATS_TEST_TMPDIR/sri-only"
   plant_repo "$d"
-  printf '    resolution: {integrity: sha512-AAAhJ%s3qFBkbLHA==}\n' "INWx" > "$d/pnpm-lock.yaml"
+  printf '    resolution: {integrity: sha512-AAAhJ%s3qFBkbLHA==}\n' "${HOST_LITERAL_SAMPLES[5]}" > "$d/pnpm-lock.yaml"
   run scan_literals "$d"
   [ "$status" -eq 0 ]
 }
@@ -212,7 +212,7 @@ plant_repo() {  # $1 = directory to create as a throwaway git repo
   local e="$BATS_TEST_TMPDIR/sri-other-file"
   plant_repo "$e"
   mkdir -p "$e/docs"
-  printf 'integrity: sha512-AAAhJ%s3qFBkbLHA==\n' "INWx" > "$e/docs/note.md"
+  printf 'integrity: sha512-AAAhJ%s3qFBkbLHA==\n' "${HOST_LITERAL_SAMPLES[5]}" > "$e/docs/note.md"
   run scan_literals "$e"
   [ "$status" -ne 0 ]
 }
