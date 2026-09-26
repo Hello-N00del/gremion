@@ -209,6 +209,16 @@ export const UNIT_PARTS = {
   'generated-clients': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'generated-clients'), testScript: 'test', root, label: '@gremion/generated-clients vitest (test)' }),
   ],
+  // TASK-076 merged packages/fastify-service-template (94 tests) after this list
+  // was written; unit-packages.test.mjs caught it on main (R25).
+  'fastify-service-template': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'fastify-service-template'), testScript: 'test', root, label: '@gremion/fastify-service-template vitest (test)' }),
+  ],
+  // TASK-124 merged packages/generated-clients-dart (unit tests + one real-toolchain
+  // integration test through Docker) after this list was written (R25).
+  'generated-clients-dart': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'generated-clients-dart'), testScript: 'test', root, label: '@gremion/generated-clients-dart vitest (test)' }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }
