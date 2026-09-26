@@ -88,6 +88,9 @@ beforeEach(() => {
     /* private mode */
   }
   document.documentElement.className = ''
+  // TASK-062: $t follows the server-rendered <html lang>; the harness page is
+  // lang="en", the app's German-first SSR default is de.
+  document.documentElement.lang = 'de'
   document.documentElement.style.removeProperty('--base-font-size')
   pageState.data = {}
   document.addEventListener('click', stopNavigation, true)
