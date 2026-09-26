@@ -37,24 +37,38 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g
 export function parseNodeTest(output) {
   const text = String(output ?? '').replace(ANSI_RE, '').replace(/\r\n?/g, '\n')
   // One reporter per read: when a TAP summary exists, spec lines are never
-  // mixed in (and vice versa), so counts always come from ONE summary block.
+  // mixed in (and vice versa) — but EVERY occurrence of that reporter's
+  // summary block is summed (matchAll), not just the first.
+  //
+  // TASK-012-FU review (MEDIUM, regression + incomplete fix): a chained
+  // pnpm script (`node --test a && node --test b && ...`, e.g.
+  // vertical-root-test-guards' `pnpm run test:guards`, which chains 10
+  // separate `node --test` runs) prints ONE summary block PER run, not one
+  // for the whole chain. Reading only the first block's numbers under-
+  // counted every suite after the first, and snapshot-core.mjs's own
+  // declared-vs-collected check (which compares the FULL file set's
+  // `test(` count against whatever this function returns) then FAILed a
+  // fully green, fully collected chain as "tests may have stopped
+  // registering". Proven live (.scratch/probe-chain.mjs): a real pnpm chain
+  // of 2 passing tests then 3 passing tests, exit 0, used to parse as
+  // collected 3 (the first block only); it now parses as collected 5.
   const tap = /^# tests \d+$/m.test(text)
-  const field = (name) => text.match(tap ? new RegExp(`^# ${name} (\\d+)$`, 'm') : new RegExp(`^\\s*ℹ ${name} (\\d+)\\s*$`, 'm'))
-  const tests = field('tests')
-  const pass = field('pass')
-  const fail = field('fail')
-  const skipped = field('skipped')
-  const todo = field('todo')
-  if (!tests) {
+  const fieldRe = (name) => (tap ? new RegExp(`^# ${name} (\\d+)$`, 'gm') : new RegExp(`^\\s*ℹ ${name} (\\d+)\\s*$`, 'gm'))
+  const sumField = (name) => {
+    const matches = [...text.matchAll(fieldRe(name))]
+    return matches.length === 0 ? undefined : matches.reduce((sum, m) => sum + Number(m[1]), 0)
+  }
+  const tests = sumField('tests')
+  if (tests === undefined) {
     return { collected: 0, passed: 0, failed: 0, reason: 'no test-runner summary ("# tests N" TAP or "ℹ tests N" spec) found in output' }
   }
   return withSkipped(
     {
-      collected: Number(tests[1]),
-      passed: pass ? Number(pass[1]) : 0,
-      failed: fail ? Number(fail[1]) : 0,
+      collected: tests,
+      passed: sumField('pass') ?? 0,
+      failed: sumField('fail') ?? 0,
     },
-    (skipped ? Number(skipped[1]) : 0) + (todo ? Number(todo[1]) : 0),
+    (sumField('skipped') ?? 0) + (sumField('todo') ?? 0),
   )
 }
 

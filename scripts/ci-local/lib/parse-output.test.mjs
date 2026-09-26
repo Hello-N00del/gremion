@@ -188,6 +188,61 @@ test('FU-4: the guard composite also reads a spec summary (its own node --test p
   assert.deepEqual(parseCounts('guard', '\u2139 tests 5\n\u2139 pass 5\n\u2139 fail 0\nGUARD-OK\n', 0), { collected: 6, passed: 6, failed: 0, reason: undefined })
 })
 
+// --- TASK-012-FU review finding 4 (MEDIUM, regression): a CHAINED pnpm ------
+// script prints one summary block PER `node --test` run, not one for the
+// whole chain (e.g. vertical-root-test-guards' `pnpm run test:guards`,
+// which chains 10 separate `node --test` invocations with `&&`).
+
+const CHAINED_TWO_SPEC_BLOCKS = [
+  '',
+  '> pnpmwrap@ test:guards <scratch>/pnpmwrap',
+  '> node --test a.test.mjs && node --test b.test.mjs',
+  '',
+  '✔ a one (0.4ms)',
+  '✔ a two (0.1ms)',
+  'ℹ tests 2',
+  'ℹ pass 2',
+  'ℹ fail 0',
+  'ℹ skipped 0',
+  'ℹ todo 0',
+  '✔ b one (0.3ms)',
+  '✔ b two (0.2ms)',
+  '✔ b three (0.1ms)',
+  'ℹ tests 3',
+  'ℹ pass 3',
+  'ℹ fail 0',
+  'ℹ skipped 0',
+  'ℹ todo 0',
+  '',
+].join('\n')
+
+test('FU-4 regression: parseNodeTest sums EVERY summary block in a chained pnpm script (2 runs, 2 then 3 passing tests) instead of reading only the first', () => {
+  assert.deepEqual(parseNodeTest(CHAINED_TWO_SPEC_BLOCKS), { collected: 5, passed: 5, failed: 0 })
+  assert.deepEqual(parseCounts('node-test', CHAINED_TWO_SPEC_BLOCKS, 0), { collected: 5, passed: 5, failed: 0 })
+})
+
+test('FU-4 regression: the same sum applies to a chained TAP-form output (kind guard, or a manifest suite that forces --test-reporter=tap on every leg)', () => {
+  const chainedTap = '1..2\n# tests 2\n# pass 2\n# fail 0\n1..3\n# tests 3\n# pass 2\n# fail 1\n'
+  assert.deepEqual(parseNodeTest(chainedTap), { collected: 5, passed: 4, failed: 1 })
+})
+
+test('FU-4: a REAL chained pnpm script (`node --test a && node --test b`, 2+3 passing tests), captured through lib/run.mjs exactly as suites.json\'s vertical-root-test-guards is invoked, sums both blocks (live repro for the review finding)', { skip: pnpmMissing() }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-pnpm-chained-'))
+  try {
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'pnpm-chained-fixture', private: true, scripts: { 'test:guards': 'node --test a.test.mjs && node --test b.test.mjs' } }),
+    )
+    writeFileSync(join(dir, 'a.test.mjs'), "import test from 'node:test'\ntest('a one', () => {})\ntest('a two', () => {})\n")
+    writeFileSync(join(dir, 'b.test.mjs'), "import test from 'node:test'\ntest('b one', () => {})\ntest('b two', () => {})\ntest('b three', () => {})\n")
+    const r = run('pnpm run test:guards', dir, { timeoutMs: 120_000 })
+    assert.equal(r.exitCode, 0)
+    assert.deepEqual(parseCounts('node-test', r.output, r.exitCode), { collected: 5, passed: 5, failed: 0 })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('FU-4: REAL pnpm-wrapped node --test output, captured through lib/run.mjs exactly as snapshot.mjs runs a suite, parses to the true counts', { skip: pnpmMissing() }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'ci-local-pnpm-wrapped-'))
   try {
