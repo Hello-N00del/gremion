@@ -25,6 +25,7 @@ import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/
 import { runCarveLintSuite } from './suites/carve-lint.mjs'
 import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } from './suites/fixtures.mjs'
 import { DEFERRED_BATS_NOTE, INTEGRATION_PARTS, runIntegrationSuite } from './suites/integration.mjs'
+import { runIsolationSuite } from './suites/isolation.mjs'
 import { runMigrationHashSuite } from './suites/migration-hash.mjs'
 import { runTypecheckSuite } from './suites/typecheck.mjs'
 import { runUnitSuite, UNIT_PARTS } from './suites/unit.mjs'
@@ -58,6 +59,10 @@ export const SUITE_REGISTRY = {
   integration: runIntegrationSuite,
   'migration-hash': () => runMigrationHashSuite({ root: REPO_ROOT }),
   'carve-lint': () => runCarveLintSuite({ cwd: REPO_ROOT }),
+  // TASK-117 residual (R24-10): the only proof of cross-tenant storage
+  // isolation (TRD-065/067) ran solely as a side effect of gremion-ui's vite
+  // include glob; nothing here named or pinned it. See suites/isolation.mjs.
+  isolation: () => runIsolationSuite({ root: REPO_ROOT }),
   ...UNIT_PART_ENTRIES,
   ...INTEGRATION_PART_ENTRIES,
   __fixture_node_zero__: runFixtureNodeZero,

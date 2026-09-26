@@ -255,6 +255,35 @@ export function skipsByFileFromVitestJson(outputFilePath, { root } = {}) {
 }
 
 /**
+ * Repo-relative (posix separators) names of every test FILE a vitest JSON
+ * report attempted at all, whatever its outcome (pass, fail, or every one of
+ * its assertions skipped) -- unlike skipsByFileFromVitestJson above, which
+ * only names files with a skip to attribute. Used to pin that one SPECIFIC
+ * file (e.g. an isolation/security-critical spec) was actually collected,
+ * not just that some N tests ran somewhere: a vite `include` glob edit that
+ * silently stops matching a file drops it from `testResults` entirely, with
+ * no failure and no skip either -- collected/passed counts alone cannot see
+ * that. Never throws: a missing/malformed file returns `[]` (the caller's own
+ * vacuity checks -- unparseable report, zero collected -- already fail that
+ * case; this is a name-level addition, not a substitute for them).
+ */
+export function collectedFileNamesFromVitestJson(outputFilePath, { root } = {}) {
+  let data
+  try {
+    data = JSON.parse(readFileSync(outputFilePath, 'utf8'))
+  } catch {
+    return []
+  }
+  const names = []
+  for (const tr of data.testResults ?? []) {
+    if (!tr.name) continue
+    const key = root ? path.relative(root, path.resolve(tr.name)).split(path.sep).join('/') : tr.name
+    names.push(key)
+  }
+  return names
+}
+
+/**
  * `svelte-check --output machine`'s final summary line:
  *   <ts> COMPLETED <n> FILES <n> ERRORS <n> WARNINGS <n> FILES_WITH_PROBLEMS
  * The release-1 gate (integration-gate.sh) parsed this with a tail `grep -oE`

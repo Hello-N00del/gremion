@@ -4,7 +4,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { parseVitestJsonFile, skipsByFileFromVitestJson, summarizeVitestFailures } from './parsers.mjs'
+import { collectedFileNamesFromVitestJson, parseVitestJsonFile, skipsByFileFromVitestJson, summarizeVitestFailures } from './parsers.mjs'
 import { run, spawnMissing, tail } from './proc.mjs'
 
 export const REPO_ROOT = path.join(import.meta.dirname, '..', '..', '..')
@@ -50,6 +50,11 @@ export function runVitestJson({ label, cwd, cmd = 'pnpm', args, env, root = REPO
       unparseable: false,
       ...parsed,
       skipsByFile: skipsByFileFromVitestJson(outFile, { root }),
+      // Additive, ignored by combineParts/evaluateSuite (which only read the
+      // named count/skip fields) -- lets a caller pin that ONE specific file
+      // was collected at all, not just that the totals looked healthy (see
+      // suites/isolation.mjs).
+      collectedFiles: collectedFileNamesFromVitestJson(outFile, { root }),
       detail: failures.length > 0 ? failures.join('\n') : '',
     }
   } finally {

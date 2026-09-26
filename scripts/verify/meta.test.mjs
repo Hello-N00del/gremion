@@ -24,9 +24,23 @@ const REQUIRED = loadRequiredSuites()
 // addition, not a drop -- this list only pins the FLOOR, not the ceiling.
 const MUST_BE_PRESENT = ['typecheck', 'unit', 'integration', 'migration-hash', 'carve-lint']
 
+// Joined after the brief's original five, via TASK-117's residual (R24-10):
+// packages/storage's cross-tenant isolation proof (TRD-065/067) had nothing
+// pinning it by name (scripts/verify/suites/isolation.mjs). Tracked
+// separately from MUST_BE_PRESENT so that list still reads as exactly what
+// the brief itself fixed.
+const MUST_ALSO_BE_PRESENT = ['isolation']
+
 test('required-suites.txt still names all five required suites', () => {
   for (const name of MUST_BE_PRESENT) {
     assert.ok(REQUIRED.includes(name), `required-suites.txt dropped "${name}"`)
+  }
+})
+
+test('required-suites.txt still names every suite added after the brief (isolation, TASK-117 R24-10)', () => {
+  for (const name of MUST_ALSO_BE_PRESENT) {
+    assert.ok(REQUIRED.includes(name), `required-suites.txt dropped "${name}"`)
+    assert.ok(typeof SUITE_REGISTRY[name] === 'function', `SUITE_REGISTRY has no runner for "${name}"`)
   }
 })
 
