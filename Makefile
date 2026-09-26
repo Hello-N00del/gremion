@@ -302,6 +302,7 @@ lint-port-back:
 lint-postgres-major:
 	@echo "Checking the Postgres major pin..."
 	@node --test scripts/check-postgres-major.test.mjs
+	@node --test scripts/check-postgres-major-running.test.mjs
 	@node scripts/check-postgres-major.mjs
 
 # The split extracts ten module repositories from ONE commit of the StuRa tree.
