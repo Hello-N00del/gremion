@@ -32,7 +32,7 @@ const SPEC = {
     schemas: {
       Widget: {
         type: 'object',
-        required: ['id', 'note', 'legacy', 'day', 'data', 'ok', 'state'],
+        required: ['id', 'note', 'legacy', 'day', 'data', 'ok', 'state', 'outcome'],
         properties: {
           id: { type: 'string' },
           note: { type: ['string', 'null'] },
@@ -43,6 +43,10 @@ const SPEC = {
           desc: { type: 'string', nullable: true, default: null },
           ok: { const: true },
           state: { type: 'string', enum: ['open', 'closed'] },
+          // 3.1 spelling of a nullable enum (governance F2's cancel_reason/
+          // own_publication_class/outcome shape): null listed INSIDE enum,
+          // required by JSON Schema 2020-12 for a null instance to validate.
+          outcome: { type: ['string', 'null'], enum: ['accepted', 'rejected', null] },
         },
       },
     },
@@ -87,8 +91,10 @@ describe('real pipeline (pinned generator + Dart SDK)', () => {
     expect(model).toMatch(/int\? get count;/) // optional
     expect(model).toMatch(/Date\? get day;/)
     expect(model).toMatch(/JsonObject\? get data;/)
+    expect(model).toMatch(/WidgetOutcomeEnum\? get outcome;/) // 3.1 enum incl. null -> null dropped, type stays nullable
 
     expect(model).not.toMatch(/=\s*r?'null'/) // default: null is not a string default
+    expect(model).not.toMatch(/wireName:\s*r?'null'/) // enum null is not a wire-name member either
     expect(model).toMatch(/bool get ok;/) // untyped const: true
     expect(files.get('lib/src/model/widget.dart')!.toString() + model).toMatch(/unknownDefaultOpenApi/) // enum fallback
     expect(files.get('pubspec.yaml')!.toString()).toMatch(/^publish_to: none$/m)
