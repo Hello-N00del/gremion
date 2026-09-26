@@ -253,3 +253,9 @@ docker-compose.local-testdb.yml
 # at boot and never committed. gremion-ui/scripts/gen-realm-export.ts writes it
 # at this same path — the assembler (B34) invokes the generator there.
 docker/keycloak/realm-export.json
+
+# R25-2: scratch space for local guard-efficacy checks and ad hoc
+# throwaway files (e.g. a planted lint violation, deleted before commit).
+# packages/storage's own tests already write transient mount-point fixtures
+# under a path shaped like this; never committed.
+.scratch/
