@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MigrationManifestError, readVerifiedMigrations } from './manifest.js'
 
@@ -88,6 +89,6 @@ describe('readVerifiedMigrations', () => {
 
   it('reads the manifest format the kernel builder writes (TRD-353): the real control set verifies', () => {
     const real = new URL('../../../gremion-ui/migrations-control/', import.meta.url)
-    expect(readVerifiedMigrations(real.pathname).map((m) => m.file)).toContain('006_boundary_ids_uuidv7.sql')
+    expect(readVerifiedMigrations(fileURLToPath(real)).map((m) => m.file)).toContain('006_boundary_ids_uuidv7.sql')
   })
 })
