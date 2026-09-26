@@ -44,6 +44,8 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-edge-render', kind: 'make', target: 'lint-edge-render', tool: 'docker' },
   // TASK-020 (R25): no direct tenant-DB connection outside @gremion/tenant-store.
   { name: 'lint-tenant-db-access', kind: 'make', target: 'lint-tenant-db-access' },
+  // R25-oxlint: the standalone oxlint ratchet (scripts/check-lint-js.mjs).
+  { name: 'lint-js', kind: 'make', target: 'lint-js' },
   { name: 'lint-hygiene', kind: 'make', target: 'lint-hygiene' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
