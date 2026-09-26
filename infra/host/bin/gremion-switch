@@ -61,17 +61,23 @@ active_template_path() {
 }
 
 render_active() {
-    local colour="$1" next="$2" tmpl
+    local colour="$1" next="$2" tmpl base="${PUBLIC_BASE_PATH:-}"
     # `|| exit $?` and not bare `set -e`: active_template_path's die runs in a
     # SUBSHELL, so its exit code has to be propagated by hand at every hop or the
     # render carries on with an empty template path.
     tmpl="$(active_template_path)" || exit $?
+    # TASK-023: PUBLIC_BASE_PATH (state.env) prefixes the public/public-next
+    # health probes. It is spliced into YAML unquoted, so only the shape a
+    # SvelteKit paths.base can take is accepted: empty, or /segment[/segment...]
+    # with no trailing slash.
+    [[ -z "$base" || "$base" =~ ^(/[A-Za-z0-9._~-]+)+$ ]] \
+        || die "PUBLIC_BASE_PATH must be empty or /segment[/segment...] without a trailing slash, got: ${base}" 2
     # The single quotes are load-bearing: envsubst takes the restriction list
     # as a LITERAL argument. Expanding it here would substitute every variable
-    # in the template instead of exactly these two.
+    # in the template instead of exactly these three.
     # shellcheck disable=SC2016
-    ACTIVE_COLOUR="$colour" INACTIVE_COLOUR="$next" \
-        envsubst '${ACTIVE_COLOUR} ${INACTIVE_COLOUR}' < "$tmpl"
+    ACTIVE_COLOUR="$colour" INACTIVE_COLOUR="$next" PUBLIC_BASE_PATH="$base" \
+        envsubst '${ACTIVE_COLOUR} ${INACTIVE_COLOUR} ${PUBLIC_BASE_PATH}' < "$tmpl"
 }
 
 switch_log() {

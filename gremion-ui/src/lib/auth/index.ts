@@ -57,6 +57,8 @@ export function pageAccessForTenant(ctx: TenantVocabularySource): Record<string,
  *    `canAccess` is consulted, so they don't need a PAGE_ACCESS entry;
  *  - non-page surfaces (api): API routes have their own per-handler auth,
  *    hooks.server.ts skips the page-level `canAccess` check for /api/*.
+ *  - healthz: the public liveness marker (TASK-023); authGuard answers it
+ *    before any `canAccess` check (it is on BOOT_AND_RESOLVE_EXEMPT_PATHS).
  *
  * The build-time coverage test (`page-access-coverage.test.ts`) uses this
  * set to decide which top-level route directories are allowed to lack a
@@ -67,6 +69,7 @@ export const PAGE_ACCESS_PUBLIC_SEGMENTS: ReadonlySet<string> = new Set([
   'legal',
   'setup',
   'api',
+  'healthz',
 ])
 
 /**
