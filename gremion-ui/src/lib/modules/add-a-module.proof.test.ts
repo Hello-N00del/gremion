@@ -100,11 +100,12 @@ describe('WP4 plug-in proof — composeNavSchema (nav fragment at the module anc
     const out = composeNavSchema(base, [demoVerticalManifest])
     const labels = out.map((i) => i.label)
     expect(labels).toContain('Demo-Vertical')
-    const section = out.find((i) => i.kind === 'section' && i.label === 'Demo-Vertical')
+    const section = out.find(
+      (i): i is Extract<NavItem, { kind: 'section' }> =>
+        i.kind === 'section' && i.label === 'Demo-Vertical',
+    )
     expect(section?.kind).toBe('section')
-    if (section?.kind === 'section') {
-      expect(section.children.map((c) => c.label)).toEqual(['Demo-Vertical'])
-    }
+    expect(section?.children.map((c) => c.label)).toEqual(['Demo-Vertical'])
   })
 
   it('WHEN DISABLED (manifest absent from the set): the anchor resolves to nothing — the rail entry vanishes with the module', async () => {

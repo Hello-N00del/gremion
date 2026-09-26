@@ -1,7 +1,7 @@
 # Fixture: the fragment shape D6/D13 ship. Only the postgres block matters here.
 services:
   calendar-postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     x-gremion-tier: state
     volumes:
       # The leaf's data mount sits where the PINNED major's image puts PGDATA.

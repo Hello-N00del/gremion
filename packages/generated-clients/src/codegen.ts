@@ -38,6 +38,14 @@ export const GENERATED_CLIENTS: GeneratedClientSpec[] = [
     outputFile: 'packages/generated-clients/src/generated/kernel-governance-client.ts',
     factoryName: 'createKernelGovernanceClient',
   },
+  {
+    // TASK-083: the governance service's own /api/v1 surface (meetings,
+    // agenda-sections, agenda-items, invitations, motions) — distinct from
+    // the kernel's committee surface above.
+    specFile: 'contracts/governance/openapi.gov.json',
+    outputFile: 'packages/generated-clients/src/generated/governance-client.ts',
+    factoryName: 'createGovernanceClient',
+  },
 ]
 
 function openApiTypescriptBin(): string {

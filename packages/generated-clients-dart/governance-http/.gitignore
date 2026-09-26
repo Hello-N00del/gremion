@@ -1,0 +1,3 @@
+# pub/build_runner caches. pubspec.lock and the *.g.dart files ARE committed.
+.dart_tool/
+build/

@@ -44,9 +44,7 @@ describe('config schema: terms', () => {
   it('gremionConfigSchema parses a config carrying a terms map and preserves it', () => {
     const result = gremionConfigSchema.safeParse({ terms: { 'role.member': 'Ratsmitglied' } })
     expect(result.success).toBe(true)
-    if (result.success) {
-      expect(result.data.terms).toEqual({ 'role.member': 'Ratsmitglied' })
-    }
+    expect(result.success && result.data.terms).toEqual({ 'role.member': 'Ratsmitglied' })
   })
 
   it('rejects a non-string term value', () => {

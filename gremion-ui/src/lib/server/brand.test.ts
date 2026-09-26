@@ -78,7 +78,7 @@ describe('gremion#22: per-tenant curated accent palette via config→brand', () 
     const { gremionConfigSchema } = await import('./config')
     const result = gremionConfigSchema.safeParse({ brand: { palette: 'stadt' } })
     expect(result.success).toBe(true)
-    if (result.success) expect(result.data.brand?.palette).toBe('stadt')
+    expect(result.success && result.data.brand?.palette).toBe('stadt')
   })
 
   it('config schema rejects a non-string brand.palette', async () => {

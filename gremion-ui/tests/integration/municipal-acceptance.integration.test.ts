@@ -153,7 +153,9 @@ describe('P2.3 municipal-vertical acceptance (finance OFF)', () => {
       config: FINANCE_OFF_CONFIG,
       includeDemo: true,
     })
-    expect(seedReport.errors).toEqual([])
+    // vitest(no-standalone-expect): an expect() here would run outside any
+    // it() block. The "(demo) boots green WITH includeDemo" test below
+    // asserts seedReport.errors is empty — that IS the fail-fast check.
   })
 
   // ── (1) boots finance-OFF: severability ───────────────────────────────────
@@ -243,9 +245,9 @@ describe('P2.3 municipal-vertical acceptance (finance OFF)', () => {
   // also prove the StuRa-hardcoded demo seeders did NOT run (they would throw on
   // this blueprint) — the municipal demo path ran instead.
   it('(demo) boots green WITH includeDemo (matching the staging env)', () => {
-    // beforeAll already asserts report.errors empty; this names the regression:
-    // the live seed runs includeDemo=true and MUST NOT throw on the municipal
-    // blueprint (the StuRa seeders' ou('studierendenrat') / user('anna.berger')).
+    // This IS the fail-fast check for the beforeAll seed: the live seed runs
+    // includeDemo=true and MUST NOT throw on the municipal blueprint (the
+    // StuRa seeders' ou('studierendenrat') / user('anna.berger')).
     expect(seedReport.errors).toEqual([])
     expect(seedReport.demo).toBeDefined()
   })

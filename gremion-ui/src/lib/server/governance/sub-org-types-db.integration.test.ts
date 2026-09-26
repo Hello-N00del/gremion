@@ -124,16 +124,21 @@ describe('sub-org-types-db — CRUD round-trip', () => {
   it('insert + delete work inside a caller-supplied transaction', async () => {
     // A rollback must leave the table empty, proving the tx? overload routes
     // SQL through the caller's tx handle rather than the global pool.
+    // vitest(no-conditional-expect): an expect inside a .begin()/.catch()
+    // callback counts as conditional. Capture the in-tx read and assert on
+    // it AFTER the whole begin+catch chain has settled.
+    let insideCount: number | undefined
     await getDb()
       .begin(async (tx) => {
         await subOrgTypesDb.insert(tx, { name: 'InsideTx' })
         const inside = await subOrgTypesDb.list(tx)
-        expect(inside.length).toBe(1)
+        insideCount = inside.length
         throw new Error('rollback-marker')
       })
       .catch((e) => {
         if (e.message !== 'rollback-marker') throw e
       })
+    expect(insideCount).toBe(1)
     expect(await listSubOrgTypes()).toEqual([])
   })
 })

@@ -7,13 +7,9 @@ import { load } from './+page.server'
 
 describe('#189 /members/committees index', () => {
   it('redirects to the canonical /committees page', async () => {
-    try {
-      await load({} as never)
-      expect.fail('expected the loader to redirect')
-    } catch (e) {
-      const r = e as { status?: number; location?: string }
-      expect(r.status).toBe(302)
-      expect(r.location).toBe('/committees')
-    }
+    await expect(load({} as never)).rejects.toMatchObject({
+      status: 302,
+      location: '/committees',
+    })
   })
 })

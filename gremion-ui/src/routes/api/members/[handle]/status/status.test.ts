@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi } from 'vitest'
+import { it, expect, vi } from 'vitest'
 
 const kc = { updateUser: vi.fn(async () => {}) }
 vi.mock('$lib/server/keycloak-admin', () => ({ getKeycloakAdminClient: () => kc }))

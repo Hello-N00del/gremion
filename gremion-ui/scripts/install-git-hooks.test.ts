@@ -1060,7 +1060,11 @@ describe('hooks that are not UTF-8 text', () => {
 })
 
 describe('a symlinked pre-commit', () => {
-  it('is refused, not written through', () => {
+  // Split by platform BEFORE the test body (vitest runIf/skipIf) instead of
+  // branching around the trailing expect (vitest(no-conditional-expect)):
+  // Windows uses a directory junction (no real target file to re-hash);
+  // POSIX uses a real symlink target whose bytes must survive untouched.
+  it.runIf(isWindows)('is refused, not written through (Windows junction)', () => {
     // Writing through a symlink writes to its TARGET — which can be outside the
     // hooks dir entirely. The installer would then report installing a hook at
     // a path whose bytes live somewhere else, and `existsSync` follows links,
@@ -1068,23 +1072,26 @@ describe('a symlinked pre-commit', () => {
     const dir = tempDir('kmirror-symlink-')
     const link = join(dir, 'pre-commit')
     const store = tempDir('kmirror-linktarget-')
-    let targetFile: string | null = null
-    if (isWindows) {
-      // A file symlink needs Developer Mode or elevation on Windows; a
-      // directory JUNCTION does not, and lstat reports it as a symlink too.
-      symlinkSync(store, link, 'junction')
-    } else {
-      targetFile = join(store, 'real-hook')
-      writeFileSync(targetFile, FOREIGN_HOOK)
-      symlinkSync(targetFile, link)
-    }
-    const before = targetFile === null ? null : sha256(targetFile)
+    // A file symlink needs Developer Mode or elevation on Windows; a
+    // directory JUNCTION does not, and lstat reports it as a symlink too.
+    symlinkSync(store, link, 'junction')
 
     expect(() => installHooks({ hooksDir: dir, gremionUiRoot })).toThrow(/symlink/i)
     expect(lstatSync(link).isSymbolicLink(), 'the link itself must survive untouched').toBe(true)
-    if (targetFile !== null) {
-      expect(sha256(targetFile), 'the installer wrote THROUGH the symlink').toBe(before)
-    }
+  })
+
+  it.skipIf(isWindows)('is refused, not written through (POSIX symlink)', () => {
+    const dir = tempDir('kmirror-symlink-')
+    const link = join(dir, 'pre-commit')
+    const store = tempDir('kmirror-linktarget-')
+    const targetFile = join(store, 'real-hook')
+    writeFileSync(targetFile, FOREIGN_HOOK)
+    symlinkSync(targetFile, link)
+    const before = sha256(targetFile)
+
+    expect(() => installHooks({ hooksDir: dir, gremionUiRoot })).toThrow(/symlink/i)
+    expect(lstatSync(link).isSymbolicLink(), 'the link itself must survive untouched').toBe(true)
+    expect(sha256(targetFile), 'the installer wrote THROUGH the symlink').toBe(before)
   })
 })
 
@@ -1127,7 +1134,11 @@ describe('the hook is written atomically', () => {
     ).toEqual(['pre-commit'])
   })
 
-  it('leaves the previous hook intact when the install fails', () => {
+  // A failed chmod is only reachable as a fatal error on POSIX (Windows'
+  // chmod is close to a no-op there); the working-hook-preserved check is
+  // therefore platform-gated. Split via runIf/skipIf (vitest idiom) rather
+  // than branching around the expect (vitest(no-conditional-expect)).
+  function installWithFailingChmod() {
     const dir = tempDir('kmirror-atomic-fail-')
     const hookPath = join(dir, 'pre-commit')
     writeFileSync(hookPath, FOREIGN_HOOK, { mode: 0o755 })
@@ -1147,12 +1158,22 @@ describe('the hook is written atomically', () => {
     } finally {
       spy.mockRestore()
     }
-    if (!isWindows) {
-      expect(
-        readFileSync(hookPath, 'utf8'),
-        'a failed install must not have clobbered the working hook',
-      ).toBe(FOREIGN_HOOK)
-    }
+    return { dir, hookPath }
+  }
+
+  it.skipIf(isWindows)('leaves the previous hook intact when the install fails (POSIX)', () => {
+    const { dir, hookPath } = installWithFailingChmod()
+    expect(
+      readFileSync(hookPath, 'utf8'),
+      'a failed install must not have clobbered the working hook',
+    ).toBe(FOREIGN_HOOK)
+    expect(readdirSync(dir), 'no temp file may be left behind by a failed install').toEqual([
+      'pre-commit',
+    ])
+  })
+
+  it.runIf(isWindows)('leaves no stray temp file when the install fails (Windows)', () => {
+    const { dir } = installWithFailingChmod()
     expect(readdirSync(dir), 'no temp file may be left behind by a failed install').toEqual([
       'pre-commit',
     ])

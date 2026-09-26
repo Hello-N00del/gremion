@@ -305,7 +305,7 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
 
   it('#3: when updateProtocol rejects, the whole op rejects (no published-state write persists)', async () => {
     mockUpdateProtocol.mockRejectedValueOnce(new Error('db write failed'))
-    await expect(POST(makeEvent())).rejects.toThrow()
+    await expect(POST(makeEvent())).rejects.toThrow('db write failed')
     // updateProtocol runs first inside the tx and throws, so setProtocolStatus
     // (the published-state write) must never be reached — the single sql.begin
     // rolls the whole unit back.
@@ -379,7 +379,7 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
     mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 3, presentVotingCount: 2, quorate: true })
     mockRecordResolutionAdoptions.mockRejectedValueOnce(new Error('audit write failed'))
 
-    await expect(POST(makeEvent())).rejects.toThrow()
+    await expect(POST(makeEvent())).rejects.toThrow('audit write failed')
     // recordResolutionAdoptions runs before setProtocolStatus in the tx, so a
     // throw there means the published-state write is never reached.
     expect(mockSetProtocolStatus).not.toHaveBeenCalled()

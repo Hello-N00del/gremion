@@ -6,12 +6,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // port (files module absent in unit tests) and exercises the degradation path
 // when no port is registered.
 
-const { mockCreateProtocol, mockListProtocols, mockGetProtocol, mockUpdateProtocol,
+const { mockCreateProtocol, mockListProtocols, mockGetProtocol,
         mockCreateDraftFile, mockDeleteDraftFile, mockUpdateProtocolDb, mockDeleteProtocol } = vi.hoisted(() => ({
   mockCreateProtocol: vi.fn(),
   mockListProtocols: vi.fn(),
   mockGetProtocol: vi.fn(),
-  mockUpdateProtocol: vi.fn(),
   mockCreateDraftFile: vi.fn(),
   mockDeleteDraftFile: vi.fn(),
   mockUpdateProtocolDb: vi.fn(),

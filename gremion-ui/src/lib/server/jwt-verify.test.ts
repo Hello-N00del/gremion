@@ -32,7 +32,11 @@ describe('verifyBearerJwt(token, tenant)', () => {
     const b = await generateKeyPair('RS256'); privB = b.privateKey
     pubB = { ...(await exportJWK(b.publicKey)), kid: 'b1', use: 'sig', alg: 'RS256' }
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
-      const keys = String(url).includes('tenant-a') ? [pubA] : [pubB]
+      // typescript(no-base-to-string): url's real type is RequestInfo | URL;
+      // a bare String(url) on a Request would yield '[object Request]'
+      // instead of its .url, silently defaulting every case to pubB.
+      const target = url instanceof URL ? url.href : typeof url === 'string' ? url : (url as Request).url
+      const keys = target.includes('tenant-a') ? [pubA] : [pubB]
       return new Response(JSON.stringify({ keys }), { headers: { 'content-type': 'application/json' } })
     }) as unknown as ReturnType<typeof vi.fn>
   })

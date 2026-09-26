@@ -1,28 +1,24 @@
-# .sops.yaml — SOPS encryption rules for Gremion
+# .sops.yaml — SOPS encryption rules for Gremion (TRD-442, TASK-046)
 # See: https://github.com/getsops/sops
 #
-# G-028 closure: the operator-managed age public key MUST be substituted in
-# place of the <OPERATOR_AGE_PUBLIC_KEY_…> sentinel below BEFORE any
-# `sops --encrypt` invocation will succeed. The private half MUST live in
-# the operator vault (1Password / Bitwarden) — NEVER commit it.
+# ONE rule for the compose layout the pilot runs: every file under a
+# `secrets/` directory and every `*.enc.{yaml,yml,json,env}` anywhere is
+# encrypted to the operator's age recipient(s). The k8s-only rule this file
+# used to carry is gone (k8s is not the pilot path); the rule below still
+# covers k8s/overlays/production/secrets/*.enc.yaml, so encrypt-all.sh keeps
+# working unchanged.
 #
-# Bootstrap (one-time, per operator workstation):
-#   bash k8s/overlays/production/secrets/bootstrap-sops.sh
-# That script:
-#   - Generates an age key at ~/.config/sops/age/keys.txt (if absent)
-#   - Prints the public key for you to paste into the `age:` value below
-#   - Prints the private-key handoff procedure (vault upload + scrub)
+# OPERATOR ACTIVATION: replace the <OPERATOR_AGE_PUBLIC_KEY_…> sentinel below
+# with the age PUBLIC recipient (age1…). Until then
+# `node scripts/release/check-sops.mjs` FAILS with `sentinel-recipient` —
+# expected, see scripts/release/README.md (activation checklist). The private
+# half lives in the operator vault and the recovery kit only; NEVER commit it.
 #
-# Verification (after substituting the real key):
-#   sops --encrypt k8s/overlays/production/secrets/redis-secret.example.yaml \
-#        > /tmp/test.enc.yaml && sops --decrypt /tmp/test.enc.yaml \
-#        && rm /tmp/test.enc.yaml
-#
-# Production deploy uses kustomize-sops (ksops):
-#   https://github.com/viaduct-ai/kustomize-sops
-# Each .enc.yaml is decrypted at `kustomize build --enable-alpha-plugins` time.
+# Check: node scripts/release/check-sops.mjs
+#   Every secret-class file must be SOPS ciphertext (every value ENC[…], a
+#   MAC) encrypted only to the recipient(s) named here.
 
 creation_rules:
-  - path_regex: k8s/overlays/production/secrets/.*\.enc\.yaml$
+  - path_regex: (^|/)secrets/.+|\.enc\.(yaml|yml|json|env)$
     age: >-
-      <OPERATOR_AGE_PUBLIC_KEY_REPLACE_VIA_BOOTSTRAP_SOPS_SH>
+      age1ul80t2uw0ujjedcls3fzlhffugtulg9qtcymt3dp2gmh3wa90c2sckt6n5
