@@ -377,7 +377,7 @@ lint-toolchain:
 # this suite registers its tests only when it is the process entry (it is
 # imported by TASK-034), so a runner that stopped making it the entry would
 # collect zero. NOT wired into the `lint` aggregate: TASK-045 owns that.
-.PHONY: lint-edge-render test-edge-static
+.PHONY: lint-edge-render test-edge-static lint-js
 lint-edge-render:
 	@echo "Checking the ACME edge render..."
 	@declared=$$(grep -c '^test(' scripts/check-compose-edge.test.mjs); \
@@ -403,6 +403,17 @@ lint-edge-render:
 test-edge-static:
 	@bash test/host/integration/edge-static.sh
 	@bash scripts/verify-traefik-acme-wiring.sh
+
+# R25-2: standalone Oxlint (root .oxlintrc.json), as a RATCHET: fails when the
+# error count rises above scripts/lint-js-baseline.json and asks for the
+# baseline to be lowered when it falls (scripts/check-lint-js.mjs). Rule-
+# specific reasons live in docs/lint.md (JSON has no comments). The verify
+# gate runs it (TASK-045 carve-lint). NOT in the `lint` aggregate yet; at
+# baseline 0 it becomes a plain zero-error gate and joins it.
+lint-js:
+	@echo "Linting JS/TS/Svelte with oxlint (ratchet)..."
+	@node --test scripts/check-lint-js.test.mjs
+	@node scripts/check-lint-js.mjs
 
 # TASK-005 (TRD-265, TRD-112, TRD-268): the marketing-copy check. Copy that
 # names a licence-register system with a licence other than its register value,
