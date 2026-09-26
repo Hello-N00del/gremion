@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { main } from '../../scripts/check-app-port-binding.mjs'
 import { missingLocalEnvFiles, LOCAL_ENV_FILES, SETUP_FIRST } from '../../../scripts/env/local-setup.mjs'
 
@@ -17,6 +18,27 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
 const PORT_CHECK = path.join(REPO_ROOT, 'gremion-ui', 'scripts', 'check-app-port-binding.mjs')
 const HYGIENE = path.join(REPO_ROOT, 'scripts', 'kernel-hygiene-check.mjs')
 const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.override.yml', 'docker-compose.prod.yml']
+
+// Windows only allows symlinkSync without elevation/Developer Mode; probe once
+// and skip the symlink-dependent tests with a loud reason instead of failing
+// on an environment limitation unrelated to the behaviour under test.
+const symlinksSupported = (() => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'symlink-probe-'))
+  try {
+    symlinkSync(path.join(dir, 'target'), path.join(dir, 'link'))
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})()
+if (!symlinksSupported) {
+  console.warn(
+    '[check-app-port-binding.test] symlinkSync is not permitted on this host ' +
+      '(Windows without admin/Developer Mode) -- skipping the symlink-dependent cases',
+  )
+}
 
 const dockerUp = spawnSync('docker', ['info'], { encoding: 'utf8' }).status === 0
 
@@ -66,7 +88,7 @@ describe('missingLocalEnvFiles (the D1 preflight)', () => {
     expect(missingLocalEnvFiles(tmp)).not.toContain('.env')
   })
 
-  it('treats a dangling symlink as absent', () => {
+  it.skipIf(!symlinksSupported)('treats a dangling symlink as absent', () => {
     symlinkSync(path.join(tmp, 'nowhere'), path.join(tmp, '.env'))
     expect(missingLocalEnvFiles(tmp)).toContain('.env')
   })
@@ -109,7 +131,11 @@ describe('check-app-port-binding on a working copy that is not set up', () => {
   it('importing the script runs nothing (import-safe main), in a fresh process', () => {
     const res = spawnSync(
       process.execPath,
-      ['--input-type=module', '-e', `await import(${JSON.stringify(PORT_CHECK)}); console.log('IMPORTED')`],
+      [
+        '--input-type=module',
+        '-e',
+        `await import(${JSON.stringify(pathToFileURL(PORT_CHECK).href)}); console.log('IMPORTED')`,
+      ],
       { encoding: 'utf8', env: { ...process.env, GREMION_REPO_ROOT: composeCopy() }, timeout: 60_000 },
     )
     expect(res.status).toBe(0)
@@ -117,7 +143,7 @@ describe('check-app-port-binding on a working copy that is not set up', () => {
     expect(res.stderr).not.toContain('port-binding')
   })
 
-  it('the CLI still RUNS when invoked through a symlinked path (review finding HIGH)', () => {
+  it.skipIf(!symlinksSupported)('the CLI still RUNS when invoked through a symlinked path (review finding HIGH)', () => {
     const root = composeCopy()
     const link = path.join(tmp, 'linked-scripts')
     symlinkSync(path.dirname(PORT_CHECK), link)
@@ -169,47 +195,55 @@ describe.skipIf(!dockerUp)('the stderr second net answers setup-first ONLY for t
 const kubectlUp = spawnSync('kubectl', ['version', '--client'], { encoding: 'utf8' }).status === 0
 
 describe.skipIf(!kubectlUp)('kernel-hygiene g2 second net (needs kubectl)', () => {
-  it('a dev overlay naming a DIFFERENT missing env file is "render FAILED", not "run setup first"', () => {
-    const clone = path.join(tmp, 'clone')
-    expect(spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone]).status).toBe(0)
-    writeFileSync(path.join(clone, '.env'), 'A=1\n')
-    mkdirSync(path.join(clone, 'legal'), { recursive: true })
-    writeFileSync(path.join(clone, 'legal', 'legal.env'), '')
-    const k = path.join(clone, 'k8s', 'overlays', 'dev', 'kustomization.yaml')
-    writeFileSync(k, readFileSync(k, 'utf8').replace('../../../legal/legal.env', '../../../legal/legl.env'))
-    const res = spawnSync(process.execPath, [HYGIENE], {
-      encoding: 'utf8',
-      env: { ...process.env, GREMION_REPO_ROOT: clone },
-      timeout: 120_000,
-    })
-    const g2 = `${res.stdout}${res.stderr}`.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
-    expect(g2).toMatch(/dev: render FAILED/)
-    expect(g2).not.toContain(SETUP_FIRST)
-  })
+  it(
+    'a dev overlay naming a DIFFERENT missing env file is "render FAILED", not "run setup first"',
+    () => {
+      const clone = path.join(tmp, 'clone')
+      expect(spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone]).status).toBe(0)
+      writeFileSync(path.join(clone, '.env'), 'A=1\n')
+      mkdirSync(path.join(clone, 'legal'), { recursive: true })
+      writeFileSync(path.join(clone, 'legal', 'legal.env'), '')
+      const k = path.join(clone, 'k8s', 'overlays', 'dev', 'kustomization.yaml')
+      writeFileSync(k, readFileSync(k, 'utf8').replace('../../../legal/legal.env', '../../../legal/legl.env'))
+      const res = spawnSync(process.execPath, [HYGIENE], {
+        encoding: 'utf8',
+        env: { ...process.env, GREMION_REPO_ROOT: clone },
+        timeout: 120_000,
+      })
+      const g2 = `${res.stdout}${res.stderr}`.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
+      expect(g2).toMatch(/dev: render FAILED/)
+      expect(g2).not.toContain(SETUP_FIRST)
+    },
+    120_000,
+  )
 })
 
 describe('kernel-hygiene g2 on a working copy that is not set up', () => {
-  it('reports the dev overlay as NOT CHECKED with the setup-first text, before any render', () => {
-    // A fresh clone of this repository: exactly what a new contributor has.
-    const clone = path.join(tmp, 'clone')
-    const cl = spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone], { encoding: 'utf8' })
-    expect(cl.status, cl.stderr).toBe(0)
-    expect(missingLocalEnvFiles(clone)).toEqual(['.env', 'legal/legal.env'])
-    // PATH without kubectl: the preflight must answer before a render is tried,
-    // so the verdict cannot depend on whether kustomize is installed.
-    const res = spawnSync(process.execPath, [HYGIENE], {
-      encoding: 'utf8',
-      env: { ...process.env, GREMION_REPO_ROOT: clone, PATH: path.dirname(process.execPath) },
-      timeout: 120_000,
-    })
-    const out = `${res.stdout}${res.stderr}`
-    const g2 = out.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
-    expect(res.status).not.toBe(0)
-    expect(g2).toMatch(/dev: NOT CHECKED/)
-    expect(g2).toContain(SETUP_FIRST)
-    expect(g2).toContain('.env')
-    expect(g2).not.toMatch(/dev: render FAILED/)
-    expect(out).not.toContain('non-loopback')
-    expect(out).not.toContain('SAFETY')
-  })
+  it(
+    'reports the dev overlay as NOT CHECKED with the setup-first text, before any render',
+    () => {
+      // A fresh clone of this repository: exactly what a new contributor has.
+      const clone = path.join(tmp, 'clone')
+      const cl = spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone], { encoding: 'utf8' })
+      expect(cl.status, cl.stderr).toBe(0)
+      expect(missingLocalEnvFiles(clone)).toEqual(['.env', 'legal/legal.env'])
+      // PATH without kubectl: the preflight must answer before a render is tried,
+      // so the verdict cannot depend on whether kustomize is installed.
+      const res = spawnSync(process.execPath, [HYGIENE], {
+        encoding: 'utf8',
+        env: { ...process.env, GREMION_REPO_ROOT: clone, PATH: path.dirname(process.execPath) },
+        timeout: 120_000,
+      })
+      const out = `${res.stdout}${res.stderr}`
+      const g2 = out.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
+      expect(res.status).not.toBe(0)
+      expect(g2).toMatch(/dev: NOT CHECKED/)
+      expect(g2).toContain(SETUP_FIRST)
+      expect(g2).toContain('.env')
+      expect(g2).not.toMatch(/dev: render FAILED/)
+      expect(out).not.toContain('non-loopback')
+      expect(out).not.toContain('SAFETY')
+    },
+    120_000,
+  )
 })
