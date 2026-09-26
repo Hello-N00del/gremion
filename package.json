@@ -11,5 +11,8 @@
   },
   "scripts": {
     "verify": "make verify"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
   }
 }
