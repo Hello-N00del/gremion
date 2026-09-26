@@ -28,7 +28,8 @@ export function installDomShims(): void {
     ;(el as { __gpRects?: boolean }).__gpRects = true
     el.getClientRects = function getClientRects(this: Element) {
       if (!this.isConnected) return [] as unknown as DOMRectList
-      for (let n: Element | null = this; n; n = n.parentElement) {
+      if (window.getComputedStyle(this).display === 'none') return [] as unknown as DOMRectList
+      for (let n = this.parentElement; n; n = n.parentElement) {
         if (window.getComputedStyle(n).display === 'none') return [] as unknown as DOMRectList
       }
       return [new DOMRect(0, 0, 0, 0)] as unknown as DOMRectList
