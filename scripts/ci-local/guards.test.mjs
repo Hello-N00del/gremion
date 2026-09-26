@@ -80,38 +80,45 @@ test('runGitleaksArm (diff-scoped) FAILs on a colourised ERR line even though gi
 
 test('runGitleaksArm (diff-scoped), real gitleaks 8.30.1 binary: a committed secret in the scanned range whose git blob object is missing (simulating a partial-fetch/promisor failure) must FAIL, never vacuously PASS — the exact scenario gitleaksCommand\'s header documents', { skip: (() => { try { execFileSync('gitleaks', ['version'], { stdio: 'ignore' }); return false } catch { return 'gitleaks binary not on PATH' } })() }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'ci-local-gitleaks-repro-'))
-  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
-  git('init', '-q')
-  execFileSync('git', ['-C', dir, 'config', 'user.email', 'a@b.c'])
-  execFileSync('git', ['-C', dir, 'config', 'user.name', 'tester'])
-  writeFileSync(join(dir, 'README.md'), 'hello\n')
-  git('add', 'README.md')
-  git('commit', '-q', '-m', 'base')
-  git('tag', 'basetag')
-  // Assembled at runtime, not written as one contiguous literal — same
-  // reason as PEM_FIXTURE below: this file is itself scanned by the real
-  // whole-tree gitleaks arm (guards.mjs's own gate), and a literal
-  // "-----BEGIN EC PRIVATE KEY-----" sitting in THIS source file would trip
-  // that scan on every future run of this very test suite. Still fully
-  // synthetic (a fake base64 body, never a real key).
-  const pemFixture = ['-----BEGIN', ' EC PRIVATE KEY', '-----\n', 'MHcCAQEEIOSynthNotRealNotRealNotRealNotRealNotRealNotReal0123456\n', '-----END', ' EC PRIVATE KEY', '-----\n'].join('')
-  writeFileSync(join(dir, 'secret.pem'), pemFixture)
-  git('add', 'secret.pem')
-  git('commit', '-q', '-m', 'add secret')
-  writeFileSync(join(dir, '.gitleaks.toml'), '[extend]\nuseDefault = true\n')
-  git('add', '.gitleaks.toml')
-  git('commit', '-q', '-m', 'add config')
-  const blob = git('rev-parse', 'HEAD~1:secret.pem').trim()
-  const objPath = join(dir, '.git', 'objects', blob.slice(0, 2), blob.slice(2))
-  rmSync(objPath, { force: true })
+  try {
+    const git = (...args) => execFileSync('git', ['-C', dir, ...args], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+    git('init', '-q')
+    execFileSync('git', ['-C', dir, 'config', 'user.email', 'a@b.c'])
+    execFileSync('git', ['-C', dir, 'config', 'user.name', 'tester'])
+    writeFileSync(join(dir, 'README.md'), 'hello\n')
+    git('add', 'README.md')
+    git('commit', '-q', '-m', 'base')
+    git('tag', 'basetag')
+    // Assembled at runtime, not written as one contiguous literal — same
+    // reason as PEM_FIXTURE below: this file is itself scanned by the real
+    // whole-tree gitleaks arm (guards.mjs's own gate), and a literal
+    // "-----BEGIN EC PRIVATE KEY-----" sitting in THIS source file would trip
+    // that scan on every future run of this very test suite. Still fully
+    // synthetic (a fake base64 body, never a real key).
+    const pemFixture = ['-----BEGIN', ' EC PRIVATE KEY', '-----\n', 'MHcCAQEEIOSynthNotRealNotRealNotRealNotRealNotRealNotReal0123456\n', '-----END', ' EC PRIVATE KEY', '-----\n'].join('')
+    writeFileSync(join(dir, 'secret.pem'), pemFixture)
+    git('add', 'secret.pem')
+    git('commit', '-q', '-m', 'add secret')
+    writeFileSync(join(dir, '.gitleaks.toml'), '[extend]\nuseDefault = true\n')
+    git('add', '.gitleaks.toml')
+    git('commit', '-q', '-m', 'add config')
+    const blob = git('rev-parse', 'HEAD~1:secret.pem').trim()
+    const objPath = join(dir, '.git', 'objects', blob.slice(0, 2), blob.slice(2))
+    rmSync(objPath, { force: true })
 
-  const r = runGitleaksArm('kernel', dir, 'basetag', { runFn: run })
-  // RED first: without --no-color this arm returns PASS (gitleaks logs the
-  // git failure but still exits 0). The assertion below is what makes it
-  // GREEN once gitleaksCommand's --no-color + hasFatalLog's ANSI strip are
-  // both in place.
-  assert.equal(r.status, 'FAIL', `expected FAIL (git failed to read a blob mid-scan), got ${r.status}: ${JSON.stringify(r.reason)}\n${r.output ?? ''}`)
-  assert.match(r.reason, /ERR\/FTL/)
+    const r = runGitleaksArm('kernel', dir, 'basetag', { runFn: run })
+    // RED first: without --no-color this arm returns PASS (gitleaks logs the
+    // git failure but still exits 0). The assertion below is what makes it
+    // GREEN once gitleaksCommand's --no-color + hasFatalLog's ANSI strip are
+    // both in place.
+    assert.equal(r.status, 'FAIL', `expected FAIL (git failed to read a blob mid-scan), got ${r.status}: ${JSON.stringify(r.reason)}\n${r.output ?? ''}`)
+    assert.match(r.reason, /ERR\/FTL/)
+  } finally {
+    // TASK-012-FU review (LOW): this fixture's own .git/objects had one blob
+    // deleted by hand above — rmSync(..., {recursive:true}) removes the rest
+    // of the tree without needing that object back.
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('isSafeRef accepts branch, remote, tag, SHA and rev-suffix refs, and refuses whitespace, a leading "-", ".." and shell metacharacters (CRITICAL fix)', () => {
@@ -557,7 +564,8 @@ test('runRunnerPolicyArm aggregates both repos and FAILs when either has an unwa
 test('runRunnerPolicyArm returns a FAIL arm (never throws) when --waivers names a file that is valid JSON but not an array (LOW fix: this used to crash uncaught inside waivers.find, before guards.mjs ever wrote its dated JSON result — acceptance item 5)', () => {
   const kernel = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
   const vertical = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
-  const waiversPath = join(mkdtempSync(join(tmpdir(), 'ci-local-waivers-')), 'waivers.json')
+  const waiversDir = mkdtempSync(join(tmpdir(), 'ci-local-waivers-'))
+  const waiversPath = join(waiversDir, 'waivers.json')
   writeFileSync(waiversPath, JSON.stringify({ not: 'an array' }))
   try {
     let r
@@ -569,6 +577,7 @@ test('runRunnerPolicyArm returns a FAIL arm (never throws) when --waivers names 
   } finally {
     rmSync(kernel, { recursive: true, force: true })
     rmSync(vertical, { recursive: true, force: true })
+    rmSync(waiversDir, { recursive: true, force: true })
   }
 })
 
@@ -587,7 +596,8 @@ test('runRunnerPolicyArm PASSes when both repos are clean', () => {
 test('runRunnerPolicyArm: a waiver naming ONLY the kernel repo does not waive the vertical repo\'s same-named file, and the waiver use is reported in the result (HIGH fix)', () => {
   const kernel = makeWorkflowRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
   const vertical = makeWorkflowRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
-  const waiversPath = join(mkdtempSync(join(tmpdir(), 'ci-local-waivers-')), 'waivers.json')
+  const waiversDir = mkdtempSync(join(tmpdir(), 'ci-local-waivers-'))
+  const waiversPath = join(waiversDir, 'waivers.json')
   writeFileSync(waiversPath, JSON.stringify([{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2099-01-01', covers: ['secret:DEPLOY_SSH_KEY'] }]))
   try {
     const r = runRunnerPolicyArm(kernel, vertical, waiversPath)
@@ -603,6 +613,7 @@ test('runRunnerPolicyArm: a waiver naming ONLY the kernel repo does not waive th
   } finally {
     rmSync(kernel, { recursive: true, force: true })
     rmSync(vertical, { recursive: true, force: true })
+    rmSync(waiversDir, { recursive: true, force: true })
   }
 })
 

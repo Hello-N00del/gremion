@@ -396,21 +396,28 @@ test('MEDIUM fix: repoRootExists is false for a nonexistent path and for a path 
 })
 
 test('MEDIUM fix: evaluateRepo reports a nonexistent repo root as its own failure, never a vacuous "no workflows" PASS', () => {
-  const missing = join(mkdtempSync(join(tmpdir(), 'ci-local-repo-missing-')), 'does-not-exist')
-  const result = evaluateRepo('kernel', missing, [], '2026-09-25')
-  assert.equal(result.length, 1)
-  assert.equal(result[0].waived, false)
-  assert.equal(result[0].findings[0].rule, 'invalid-repo')
+  const parent = mkdtempSync(join(tmpdir(), 'ci-local-repo-missing-'))
+  try {
+    const missing = join(parent, 'does-not-exist')
+    const result = evaluateRepo('kernel', missing, [], '2026-09-25')
+    assert.equal(result.length, 1)
+    assert.equal(result[0].waived, false)
+    assert.equal(result[0].findings[0].rule, 'invalid-repo')
+  } finally {
+    rmSync(parent, { recursive: true, force: true })
+  }
 })
 
 test('MEDIUM fix: main(), given --repo pointing at a nonexistent path, exits non-zero (regression: it used to print "OK" and exit 0)', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'ci-local-repo-missing-'))
   const before = process.exitCode
   process.exitCode = undefined
   try {
-    main(['--repo', join(mkdtempSync(join(tmpdir(), 'ci-local-repo-missing-')), 'does-not-exist')])
+    main(['--repo', join(parent, 'does-not-exist')])
     assert.equal(process.exitCode, 1)
   } finally {
     process.exitCode = before
+    rmSync(parent, { recursive: true, force: true })
   }
 })
 
