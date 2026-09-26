@@ -4,7 +4,7 @@
 // documented behavior, not as if it were the real rule.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { allowedSkipsForSuite, checkSkipsByFile } from './lib/skips.mjs'
+import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
 
 const DATA = {
   entries: [
@@ -53,4 +53,27 @@ test('checkSkipsByFile fails a skip attributed to the wrong SUITE for an otherwi
 test('checkSkipsByFile ignores files with a zero or absent skip count', () => {
   const v = checkSkipsByFile('unit', { 'gremion-ui/scripts/install-git-hooks.test.ts': 0 }, DATA)
   assert.deepEqual(v, [])
+})
+
+// Round 2 MEDIUM: on Windows, packages/storage/src/local.test.ts's
+// it.skipIf(!canSymlinkFiles) case and gremion-ui's
+// src/lib/server/boundary/contracts-gate-staged.test.ts's
+// it.skipIf(win32) case fail with "unaccounted skip(s)" -- the allow-list was
+// never updated after the ccd5727 sync, so the gate fails closed but can
+// never go green on this host. local.test.ts is collected both via
+// gremion-ui's vite include (suite "unit") AND via the isolation suite's own
+// @gremion/storage `test` run (suite "isolation"), so it needs an entry for
+// EACH suite that can observe it.
+test('the real allowed-skips.json accounts for the Windows-only skips this host actually hits', () => {
+  const data = loadAllowedSkips()
+  const need = [
+    { suite: 'unit', file: 'packages/storage/src/local.test.ts' },
+    { suite: 'isolation', file: 'packages/storage/src/local.test.ts' },
+    { suite: 'unit', file: 'gremion-ui/src/lib/server/boundary/contracts-gate-staged.test.ts' },
+  ]
+  for (const { suite, file } of need) {
+    const entry = data.entries.find((e) => e.suite === suite && e.file === file)
+    assert.ok(entry, `allowed-skips.json has no entry for suite="${suite}" file="${file}"`)
+    assert.ok(entry.maxCount >= 1, `entry for ${file} (suite ${suite}) has maxCount < 1`)
+  }
 })

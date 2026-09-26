@@ -18,6 +18,24 @@
       "file": "gremion-ui/tests/integration/municipal-acceptance.integration.test.ts",
       "reason": "one it.skipIf(!process.env.MUSTERSTADT_RECONCILE_VERIFY) case is an opt-in reconciliation check against a real Musterstadt-shaped tenant, not part of the default acceptance run.",
       "maxCount": 1
+    },
+    {
+      "suite": "unit",
+      "file": "packages/storage/src/local.test.ts",
+      "reason": "one it.skipIf(!canSymlinkFiles) case exercises a symlinked-file refusal; creating a symlink on Windows needs Developer Mode or elevation, so this host cannot prove the case either way. Collected via gremion-ui's vite include ('../packages/storage/src/**/*.test.ts').",
+      "maxCount": 1
+    },
+    {
+      "suite": "isolation",
+      "file": "packages/storage/src/local.test.ts",
+      "reason": "same it.skipIf(!canSymlinkFiles) case as the \"unit\" entry above, additionally collected here because the isolation suite runs @gremion/storage's own `test` script directly.",
+      "maxCount": 1
+    },
+    {
+      "suite": "unit",
+      "file": "gremion-ui/src/lib/server/boundary/contracts-gate-staged.test.ts",
+      "reason": "one it.skipIf(process.platform === 'win32') case asserts the exact docker invocation used to pin the oasdiff image; the assertion is Windows-path-shape-specific and does not apply on this host.",
+      "maxCount": 1
     }
   ]
 }
