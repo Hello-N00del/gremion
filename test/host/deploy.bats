@@ -49,6 +49,42 @@ EOF
     done
     printf '{"ts":"2026-09-09T02:00:00Z","ok":true,"label":"daily","bytes":1000}\n' \
         > "${GREMION_ROOT}/runtime/last-backup.json"
+    seed_trust_anchor
+}
+
+# TASK-046: step 2 verifies every first-party pinned digest against the host
+# key. Every case gets the host key and a cosign that vouches for exactly the
+# digest and repository it was asked about; section J breaks each on purpose.
+# The key body is a placeholder (cosign is shimmed): no key material here.
+seed_trust_anchor() {
+    printf '%s\n' '-----BEGIN PUBLIC KEY-----' 'placeholder-not-a-key' '-----END PUBLIC KEY-----' \
+        > "${GREMION_ROOT}/etc/cosign.pub"
+    # What `docker compose config --images` resolves: the canonical pins plus
+    # anything a test injects through EXTRA_RESOLVED (images compose would
+    # pull although no canonical `image:` line names them). Every docker shim
+    # in this file answers `compose … config --images` through this helper.
+    # Like real compose, it leaves out services under an inactive profile
+    # (PROFILED_RESOLVED) unless COMPOSE_PROFILES='*'; RESOLVE_OMIT drops the
+    # canonical pins matching a pattern (a pin compose does not show).
+    cat > "${GREMION_ROOT}/.resolve-images" <<'RESOLVE'
+#!/usr/bin/env bash
+grep -E '^[[:space:]]*image:' "$FIXTURE_RELEASE/docker-compose.pins.yml" \
+    | sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//' \
+    | { if [ -n "${RESOLVE_OMIT:-}" ]; then grep -v -- "$RESOLVE_OMIT" || true; else cat; fi; }
+[ -z "${EXTRA_RESOLVED:-}" ] || printf '%s\n' "$EXTRA_RESOLVED"
+if [ -n "${PROFILED_RESOLVED:-}" ] && [ "${COMPOSE_PROFILES:-}" = '*' ]; then
+    printf '%s\n' "$PROFILED_RESOLVED"
+fi
+exit "${RESOLVE_STATUS:-0}"
+RESOLVE
+    chmod +x "${GREMION_ROOT}/.resolve-images"
+    # Like real cosign, the claim names the repository WITHOUT a tag (a
+    # release is signed by digest), whatever tag the pin carries.
+    shim cosign '
+ref="${*: -1}"
+repo="$(printf "%s" "${ref%@*}" | sed -E "s#:[^/:]+\$##" | tr "[:upper:]" "[:lower:]")"
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"},\"type\":\"cosign container image signature\"},\"optional\":null}]\n" "$repo" "${ref##*@}"
+exit 0'
 }
 
 stub_git() {
@@ -108,6 +144,7 @@ case "$1" in
       esac
       exit 0 ;;
   compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
       colour=""
       case "$args" in *app-blue.env*) colour=blue ;; *app-green.env*) colour=green ;; esac
       case "$args" in
@@ -375,7 +412,7 @@ case "$1" in
   login) cat >/dev/null; exit 0 ;;
   manifest) printf "{\"config\":{\"size\":1},\"layers\":[{\"size\":1}]}\n"; exit 0 ;;
   image) exit 1 ;;
-  compose) exit 0 ;;
+  compose) case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac; exit 0 ;;
 esac
 exit 0
 '
@@ -440,7 +477,7 @@ case "$1" in
   manifest) printf "{\"config\":{\"size\":1},\"layers\":[{\"size\":1}]}\n"; exit 0 ;;
   image) exit 0 ;;
   ps) printf "leftover-migrate\n"; exit 0 ;;
-  compose) exit 0 ;;
+  compose) case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac; exit 0 ;;
 esac
 exit 0
 '
@@ -482,6 +519,7 @@ case "$1" in
       esac
       exit 0 ;;
   compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
       case "$args" in
         *" up -d"*) : > "$st/up-blue"; exit 0 ;;
         *" down"*)  rm -f "$st/up-blue"; exit 0 ;;
@@ -516,6 +554,7 @@ case "$1" in
       esac
       exit 0 ;;
   compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
       case "$args" in
         *" up -d"*) : > "$st/up-blue"; exit 0 ;;
         *" down"*)  rm -f "$st/up-blue"; exit 0 ;;
@@ -553,6 +592,7 @@ case "$1" in
       esac
       exit 0 ;;
   compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
       case "$args" in
         *" up -d"*) : > "$st/up-blue"; exit 0 ;;
         *" down"*)  rm -f "$st/up-blue"; exit 0 ;;
@@ -710,4 +750,330 @@ exit 0
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3 --soak-minutes"
     [ "$status" -eq 2 ]
     [[ "$output" == *"option --soak-minutes needs a value"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# J. first-party image signatures (TASK-046, TRD-441)
+# ---------------------------------------------------------------------------
+
+@test "every first-party pinned digest is verified with the host key before any manifest read or pull" {
+    stub_all
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    local img
+    for img in gremion-ui@sha256:1111111111111111111111111111111111111111111111111111111111111111 \
+               gremion-public@sha256:2222222222222222222222222222222222222222222222222222222222222222 \
+               gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333; do
+        assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
+    done
+    [[ "$output" == *"3 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    # Order: the last verify precedes the first manifest read and the first pull.
+    local last_verify first_manifest first_pull
+    last_verify="$(grep -n '^cosign verify' "$SHIM_LOG" | tail -1 | cut -d: -f1)"
+    first_manifest="$(grep -n '^docker manifest inspect' "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    first_pull="$(grep -n '^docker compose .* pull' "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    [ -n "$last_verify" ] && [ -n "$first_manifest" ] && [ -n "$first_pull" ]
+    [ "$last_verify" -lt "$first_manifest" ]
+    [ "$last_verify" -lt "$first_pull" ]
+}
+
+@test "a failing signature verification dies at step 2, before any compose pull" {
+    stub_all
+    shim cosign 'printf "Error: no matching signatures\n" >&2; exit 12'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    # The call log proves what did NOT happen: the verifier ran, no manifest
+    # was read and nothing was pulled. Counts, not `! grep`.
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -ge 1 ]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -c '^docker manifest' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -cE ' STEP (3|4|5|6|7|8|9|10|11|12) ' "${GREMION_ROOT}/runtime/deploy.log")" -eq 0 ]
+}
+
+@test "a cosign that exits 0 but vouches for another digest is refused" {
+    stub_all
+    shim cosign '
+ref="${*: -1}"
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"sha256:%064d\"}}}]\n" "${ref%@*}" 0
+exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no claim binds sha256:"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a cosign that vouches for the digest under another repository is refused" {
+    stub_all
+    shim cosign '
+ref="${*: -1}"
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"ghcr.io/someone-else/x\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref##*@}"
+exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no claim binds"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a missing host trust anchor is a refusal at step 2, never a skip" {
+    stub_all
+    rm -f "${GREMION_ROOT}/etc/cosign.pub"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"trust anchor absent: ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c '^cosign' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a symlinked host trust anchor is refused (the anchor is a file the host owns)" {
+    stub_all
+    mv "${GREMION_ROOT}/etc/cosign.pub" "${BATS_TEST_TMPDIR}/elsewhere.pub"
+    ln -s "${BATS_TEST_TMPDIR}/elsewhere.pub" "${GREMION_ROOT}/etc/cosign.pub"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"trust anchor absent"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a cosign.pub shipped in the release tree is never passed to cosign" {
+    stub_all
+    local tree="${BATS_TEST_TMPDIR}/treekey"
+    mkdir -p "$tree"; cp -R "${FIXTURES}/valid"/. "$tree"/
+    printf '%s\n' '-----BEGIN PUBLIC KEY-----' 'tree-placeholder' '-----END PUBLIC KEY-----' > "$tree/cosign.pub"
+    export FIXTURE_RELEASE="$tree"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 3 ]
+    [ "$(grep -c 'releases/dist-v1.2.3/cosign.pub' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a pins layer with no first-party image is refused, not passed vacuously" {
+    stub_all
+    local tp="${BATS_TEST_TMPDIR}/thirdparty"
+    mkdir -p "$tp"; cp -R "${FIXTURES}/valid"/. "$tp"/
+    cat > "$tp/docker-compose.pins.yml" <<'PINS'
+services:
+  postgres:
+    image: docker.io/library/postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
+PINS
+    export FIXTURE_RELEASE="$tp"
+    printf 'docker.io/library/postgres\n' > "${GREMION_ROOT}/etc/third-party-images"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no first-party image"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "cosign missing from the host is a refusal, never a skip" {
+    stub_all
+    rm -f "${SHIM_DIR}/cosign"
+    # A dev box may carry a real cosign; it then fails on the synthetic
+    # digests instead. Either way: refused at step 2, nothing pulled.
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    if command -v cosign >/dev/null 2>&1; then
+        [[ "$output" == *"signature verification failed"* ]]
+    else
+        [[ "$output" == *"cosign not on PATH"* ]]
+    fi
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a pin renamed out of the first-party prefix is refused unless the HOST lists it as third-party" {
+    # The tree picks image names. Were "not first-party" to mean "skip", one
+    # signed image would carry any number of unsigned ones renamed elsewhere.
+    stub_all
+    local mix="${BATS_TEST_TMPDIR}/mixed"
+    mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
+    cat > "$mix/docker-compose.pins.yml" <<'PINS'
+services:
+  gremion-ui:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-ui@sha256:1111111111111111111111111111111111111111111111111111111111111111
+  gremion-public:
+    build: !reset null
+    image: docker.io/evil/gremion-public@sha256:2222222222222222222222222222222222222222222222222222222222222222
+  migrate:
+    build: !reset null
+    image: ghcr.io:443/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333
+PINS
+    export FIXTURE_RELEASE="$mix"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"is neither first-party"*"nor on the host third-party list"* ]]
+    [[ "$output" == *"docker.io/evil/gremion-public@sha256:2222"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a third-party pin listed in the host's etc/third-party-images passes unverified; first-party still verified" {
+    stub_all
+    local mix="${BATS_TEST_TMPDIR}/withpg"
+    mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
+    cat >> "$mix/docker-compose.pins.yml" <<'PINS'
+  postgres:
+    image: docker.io/library/postgres@sha256:4444444444444444444444444444444444444444444444444444444444444444
+PINS
+    export FIXTURE_RELEASE="$mix"
+    printf '# third-party repositories this host may run unsigned (digest-pinned)\ndocker.io/library/postgres\n' \
+        > "${GREMION_ROOT}/etc/third-party-images"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 3 ]
+    [ "$(grep -c 'postgres' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*postgres' "$SHIM_LOG"
+    [[ "$output" == *"1 third-party image(s) on the host list"* ]]
+}
+
+@test "an image declared in any non-canonical form in the pins layer is refused, not skipped" {
+    # The gate reads `image:` lines; a flow mapping or a quoted key would be
+    # pulled by compose but never seen by it. Any such line is a refusal.
+    stub_all
+    local body
+    for body in '  evil: {image: ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555}' \
+                '  evil:
+    "image": ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555' \
+                '  evil:
+    image: ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555 # pinned'; do
+        local tree="${BATS_TEST_TMPDIR}/odd-$RANDOM"
+        mkdir -p "$tree"; cp -R "${FIXTURES}/valid"/. "$tree"/
+        printf '%s\n' "$body" >> "$tree/docker-compose.pins.yml"
+        export FIXTURE_RELEASE="$tree"
+        rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+        : > "$SHIM_LOG"
+        run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+        [ "$status" -eq 1 ] || { echo "accepted: $body"; return 1; }
+        [[ "$output" == *"unrecognised image declaration"* || "$output" == *"pin is not <repo>@sha256"* ]] || { echo "$output"; return 1; }
+        [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    done
+}
+
+
+# The gate verifies what COMPOSE resolves (`config --images` over the state
+# project and both colours), not what a grep of the pins file finds: escaped
+# keys, anchors/merge keys, a second YAML document, `extends:` or a service in
+# docker-compose.app.yml all resolve to images the grep never sees.
+@test "an image compose resolves but no canonical pins line names is refused when unlisted" {
+    stub_all
+    export EXTRA_RESOLVED="docker.io/evil/x@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"docker.io/evil/x@sha256:5555"*"is neither first-party"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -c 'config --images' "$SHIM_LOG")" -ge 3 ]
+}
+
+@test "a first-party image only compose resolves is signature-verified too" {
+    stub_all
+    export EXTRA_RESOLVED="ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    shim cosign '
+ref="${*: -1}"
+case "$ref" in *5555*) echo "Error: no signatures found" >&2; exit 10 ;; esac
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref%@*}" "${ref##*@}"'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/evil@sha256:5555"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a tag-only image resolved by compose is refused" {
+    stub_all
+    export EXTRA_RESOLVED="docker.io/evil/y:latest"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"pin is not <repo>@sha256:<64 hex>: docker.io/evil/y:latest"* ]]
+}
+
+@test "compose failing to resolve the image set is a refusal, never a skip" {
+    stub_all
+    export RESOLVE_STATUS=1
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot resolve the image set"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# J2. intake round 1 (TASK-046): tag@digest pins and profiled services
+# ---------------------------------------------------------------------------
+
+@test "a third-party tag@digest pin (the pin-images.sh form) matches the host list's tagless repository" {
+    stub_all
+    local mix="${BATS_TEST_TMPDIR}/pgtag"
+    mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
+    cat >> "$mix/docker-compose.pins.yml" <<'PINS'
+  postgres:
+    image: postgres:18-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
+PINS
+    export FIXTURE_RELEASE="$mix"
+    local listed
+    # The host may list the canonical docker.io name or the short one compose prints.
+    for listed in docker.io/library/postgres postgres; do
+        printf '%s\n' "$listed" > "${GREMION_ROOT}/etc/third-party-images"
+        rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+        : > "$SHIM_LOG"
+        run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+        [ "$status" -eq 0 ] || { echo "host list '$listed': $output"; return 1; }
+        [[ "$output" == *"3 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
+        [ "$(grep -c '^cosign verify.*postgres' "$SHIM_LOG")" -eq 0 ]
+    done
+}
+
+@test "a tag@digest third-party pin is still refused when the host lists another repository" {
+    stub_all
+    local mix="${BATS_TEST_TMPDIR}/pgother"
+    mkdir -p "$mix"; cp -R "${FIXTURES}/valid"/. "$mix"/
+    cat >> "$mix/docker-compose.pins.yml" <<'PINS'
+  postgres:
+    image: evil/postgres:18-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
+PINS
+    export FIXTURE_RELEASE="$mix"
+    printf 'docker.io/library/postgres\n' > "${GREMION_ROOT}/etc/third-party-images"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"evil/postgres:18-alpine@sha256:4444"*"is neither first-party"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a first-party tag@digest pin verifies against cosign's tagless docker-reference" {
+    stub_all
+    local tagged="${BATS_TEST_TMPDIR}/fptag"
+    mkdir -p "$tagged"; cp -R "${FIXTURES}/valid"/. "$tagged"/
+    sed -i -E 's#(ghcr\.io/hello-n00del/gremion-ui)@#\1:dist-v1.2.3@#' "$tagged/docker-compose.pins.yml"
+    grep -q 'gremion-ui:dist-v1.2.3@sha256:' "$tagged/docker-compose.pins.yml"
+    export FIXTURE_RELEASE="$tagged"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"3 first-party image(s) verified"* ]]
+    assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/gremion-ui:dist-v1.2.3@sha256:"
+}
+
+@test "an unsigned image under an inactive compose profile (step 7's migrate) is still verified and refused" {
+    stub_all
+    export PROFILED_RESOLVED="ghcr.io/hello-n00del/gremion-migrate-x@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    shim cosign '
+ref="${*: -1}"
+case "$ref" in *5555*) echo "Error: no signatures found" >&2; exit 10 ;; esac
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref%@*}" "${ref##*@}"'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-migrate-x@sha256:5555"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a canonical pin that compose does not show is signature-verified anyway" {
+    stub_all
+    export RESOLVE_OMIT="gremion-migrate"
+    shim cosign '
+ref="${*: -1}"
+case "$ref" in *gremion-migrate*) echo "Error: no signatures found" >&2; exit 10 ;; esac
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref%@*}" "${ref##*@}"'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-migrate@sha256:3333"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
