@@ -98,3 +98,6 @@
 .gp-check {
   color: var(--popover-item-selected-indicator);
 }
+.gp-popover-empty:empty {
+  display: none;
+}

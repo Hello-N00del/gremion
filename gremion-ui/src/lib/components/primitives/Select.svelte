@@ -1,19 +1,21 @@
 <script lang="ts">
-  // primitives/Select: a single-select listbox on Bits UI (TRD-413, TASK-082).
-  // Bits UI renders the WAI-ARIA APG collapsible-listbox shape: a button with
-  // aria-haspopup=listbox and aria-expanded that opens a listbox of options,
-  // with arrow / Home / End navigation, Enter/Space selection, Escape,
-  // typeahead and the hidden form input. The wrapper names the button by its
-  // visible label AND the current value (aria-labelledby="label value", as the
-  // APG example does), so a screen reader still hears the selection a native
-  // <select> announces. Styling uses component-tier tokens only
+  // primitives/Select: the WAI-ARIA APG select-only combobox on Bits UI
+  // (TRD-413, TASK-082). Bits UI keeps DOM focus on the trigger and points
+  // aria-activedescendant at the highlighted option, i.e. the select-only
+  // combobox focus model, but renders the trigger as a plain button, and an
+  // activedescendant on a button is invalid ARIA (axe aria-allowed-attr). The
+  // wrapper therefore gives the trigger role=combobox with aria-controls to
+  // the listbox, names the combobox and the listbox by the visible label, and
+  // leaves arrows / Home / End, Enter/Space, Escape, typeahead and the hidden
+  // form input to Bits UI. The combobox's text content is its value, as a
+  // native <select> announces it. Styling uses component-tier tokens only
   // (primitives.css). Every string is a prop.
   import { Select } from 'bits-ui'
   import './primitives.css'
   import type { SelectOption } from './types'
 
   interface Props {
-    /** Visible label; the first part of the button's accessible name. */
+    /** Visible label; the accessible name of the combobox and its listbox. */
     label: string
     /** Shown in the trigger while nothing is selected. */
     placeholder: string
@@ -40,21 +42,21 @@
 
   const uid = $props.id()
   const labelId = `${uid}-label`
-  const valueId = `${uid}-value`
+  const listboxId = `${uid}-listbox`
   const selected = $derived(options.find((o) => o.value === value))
 </script>
 
 <div class="gp-field">
   <span id={labelId} class="gp-field-label">{label}</span>
   <Select.Root type="single" bind:value {onValueChange} items={options} {name} {disabled} {required}>
-    <Select.Trigger class="gp-field-control gp-field-button" aria-labelledby="{labelId} {valueId}">
-      <span id={valueId} class={selected ? undefined : 'gp-placeholder'}>{selected ? selected.label : placeholder}</span>
+    <Select.Trigger class="gp-field-control gp-field-button" role="combobox" aria-controls={listboxId} aria-labelledby={labelId}>
+      <span class={selected ? undefined : 'gp-placeholder'}>{selected ? selected.label : placeholder}</span>
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16">
         <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" />
       </svg>
     </Select.Trigger>
     <Select.Portal>
-      <Select.Content class="gp-popover" sideOffset={4}>
+      <Select.Content id={listboxId} class="gp-popover" sideOffset={4} aria-labelledby={labelId}>
         <Select.Viewport>
           {#each options as option (option.value)}
             <Select.Item class="gp-popover-item" value={option.value} label={option.label} disabled={option.disabled}>
