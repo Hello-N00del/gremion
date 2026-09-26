@@ -116,6 +116,7 @@
   --dialog-text-muted: var(--ink-muted);
   --dialog-border: var(--border);
   --dialog-radius: var(--r-lg);
+  --dialog-width: 512px;
   --dialog-shadow: var(--sh-3);
   --dialog-padding: var(--s-6);
   --dialog-gap: var(--s-4);

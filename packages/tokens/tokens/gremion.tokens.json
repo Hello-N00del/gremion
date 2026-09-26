@@ -670,6 +670,14 @@
             "css": "--touch-target-min"
           }
         }
+      },
+      "panel-md": {
+        "$type": "dimension",
+        "$value": {
+          "value": 512,
+          "unit": "px"
+        },
+        "$description": "v8 dialog width (max-w-lg)."
       }
     },
     "duration": {
@@ -1319,6 +1327,10 @@
       "target-min": {
         "$type": "dimension",
         "$value": "{core.size.touch-target-min}"
+      },
+      "panel-width": {
+        "$type": "dimension",
+        "$value": "{core.size.panel-md}"
       }
     },
     "motion": {
@@ -1381,6 +1393,15 @@
         "$extensions": {
           "org.gremion": {
             "css": "--dialog-radius"
+          }
+        }
+      },
+      "width": {
+        "$type": "dimension",
+        "$value": "{semantic.size.panel-width}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-width"
           }
         }
       },
