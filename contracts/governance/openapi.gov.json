@@ -1,0 +1,3052 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gremion governance — meeting, agenda, invitation and motion surface",
+    "version": "1.0.0",
+    "description": "OpenAPI 3.1 document for GOV's public HTTP surface (TASK-083, DOMAIN DB-GOV; PRD-MTG-001/002a/002b/003; TRD-408, TRD-005). Six resource families under /api/v1: meetings, agenda-sections, agenda-items, invitations (with notice-override and recipients), and motions (with motion-admissions). Routed to the governance service at the edge; the tenant comes from the host and token, never from the path (TRD-409). P3-additive resources (protocol, resolution, register, poll) are out of scope here. Error envelope: application/problem+json (RFC 9457), a named type URI per refusal. Pagination: a cursor (?cursor=&limit=) on list endpoints. Contract-first: edit this spec in the same change as the route. Coverage and breaking-change gates: see contracts/README.md and contracts/governance/README.md."
+  },
+  "servers": [
+    {
+      "url": "https://{host}",
+      "description": "The governance service's own deployment host.",
+      "variables": {
+        "host": {
+          "default": "gov.example"
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "bearerOidc": []
+    }
+  ],
+  "paths": {
+    "/api/v1/meetings": {
+      "get": {
+        "operationId": "listMeetings",
+        "summary": "List meetings for the caller's body",
+        "tags": [
+          "meetings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createMeeting",
+        "summary": "Plan a meeting (Sitzung)",
+        "tags": [
+          "meetings"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meeting"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Missing the meeting-create grant"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetingCreate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/meetings/{meetingId}": {
+      "parameters": [
+        {
+          "name": "meetingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getMeeting",
+        "summary": "Read one meeting",
+        "tags": [
+          "meetings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meeting"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateMeeting",
+        "summary": "Reschedule a planned or invited meeting",
+        "tags": [
+          "meetings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meeting"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation (the chair's grant with resource = meeting; the PDP decides)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          },
+          "409": {
+            "description": "The meeting is no longer in a reschedulable state (planned or invited)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemStateTransitionRefused"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetingUpdate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/meetings/{meetingId}/open": {
+      "parameters": [
+        {
+          "name": "meetingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "openMeeting",
+        "summary": "Chair opens the meeting",
+        "tags": [
+          "meetings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meeting"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          },
+          "409": {
+            "description": "The meeting is not in the invited state",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemStateTransitionRefused"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/meetings/{meetingId}/close": {
+      "parameters": [
+        {
+          "name": "meetingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "closeMeeting",
+        "summary": "Chair closes the meeting",
+        "tags": [
+          "meetings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meeting"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          },
+          "409": {
+            "description": "The meeting is not in session",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemStateTransitionRefused"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/meetings/{meetingId}/cancel": {
+      "parameters": [
+        {
+          "name": "meetingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "cancelMeeting",
+        "summary": "Chair cancels a planned or invited meeting",
+        "tags": [
+          "meetings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meeting"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          },
+          "409": {
+            "description": "The meeting is neither planned nor invited",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemStateTransitionRefused"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/meetings/{meetingId}/agenda-sections": {
+      "parameters": [
+        {
+          "name": "meetingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listAgendaSections",
+        "summary": "List the meeting's agenda sections",
+        "tags": [
+          "agenda"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgendaSectionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createAgendaSection",
+        "summary": "Add an agenda section (chair-only, before the invitation)",
+        "tags": [
+          "agenda"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgendaSection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          },
+          "409": {
+            "description": "The invitation has already been issued",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAgendaFrozen"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgendaSectionCreate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agenda-sections/{sectionId}": {
+      "parameters": [
+        {
+          "name": "sectionId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/BigintId"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateAgendaSection",
+        "summary": "Reorder an agenda section (chair-only, before the invitation)",
+        "tags": [
+          "agenda"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgendaSection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such section"
+          },
+          "409": {
+            "description": "The invitation has already been issued",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAgendaFrozen"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgendaSectionReorder"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/meetings/{meetingId}/agenda-items": {
+      "parameters": [
+        {
+          "name": "meetingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listAgendaItems",
+        "summary": "List the meeting's agenda items",
+        "tags": [
+          "agenda"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgendaItemPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createAgendaItem",
+        "summary": "Propose or place an agenda item",
+        "tags": [
+          "agenda"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgendaItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgendaItemCreate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agenda-items/{agendaItemId}": {
+      "parameters": [
+        {
+          "name": "agendaItemId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAgendaItem",
+        "summary": "Read one agenda item",
+        "tags": [
+          "agenda"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgendaItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such agenda item"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateAgendaItem",
+        "summary": "Amend an agenda item",
+        "tags": [
+          "agenda"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgendaItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation (the chair's grant with resource = meeting; the PDP decides)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such agenda item"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgendaItemUpdate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/meetings/{meetingId}/invitations": {
+      "parameters": [
+        {
+          "name": "meetingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listInvitations",
+        "summary": "List the meeting's invitation versions",
+        "tags": [
+          "invitations"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createInvitation",
+        "summary": "Draft the next invitation version from the current agenda snapshot",
+        "tags": [
+          "invitations"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Only the chair issues an invitation (resource = meeting)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationCreate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/invitations/{invitationId}/notice-override": {
+      "parameters": [
+        {
+          "name": "invitationId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getNoticeOverride",
+        "summary": "Read the one notice-override recorded for this invitation (read-only; the record is append-only)",
+        "tags": [
+          "invitations"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticeOverride"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such invitation, or no override is recorded for it"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createNoticeOverride",
+        "summary": "Record the override of a missed Ladungsfrist, before dispatch (POST only — append-only, no PUT/PATCH/DELETE)",
+        "tags": [
+          "invitations"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticeOverride"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation (the chair's grant with resource = meeting; the PDP decides)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such invitation"
+          },
+          "409": {
+            "description": "An override already exists, notice was met, or the invitation is already dispatched",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemNoticeOverrideConflict"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoticeOverrideCreate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/invitations/{invitationId}/send": {
+      "parameters": [
+        {
+          "name": "invitationId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "sendInvitation",
+        "summary": "Dispatch the invitation through MAIL's send API",
+        "tags": [
+          "invitations"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation (the chair's grant with resource = meeting; the PDP decides)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such invitation"
+          },
+          "409": {
+            "description": "Refused by name: notice missed with no override, no mail connector for the body, or the invitation is not in a sendable state",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSendInvitationRefused"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/invitations/{invitationId}/recipients": {
+      "parameters": [
+        {
+          "name": "invitationId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listInvitationRecipients",
+        "summary": "Per-recipient dispatch state (read-only; no address is ever exposed)",
+        "tags": [
+          "invitations"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationRecipientPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such invitation"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      }
+    },
+    "/api/v1/meetings/{meetingId}/motions": {
+      "parameters": [
+        {
+          "name": "meetingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listMotions",
+        "summary": "List motions targeting this meeting",
+        "tags": [
+          "motions"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MotionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createMotion",
+        "summary": "Submit a motion (Antrag)",
+        "tags": [
+          "motions"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Motion"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such meeting"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MotionCreate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/motions/{motionId}": {
+      "parameters": [
+        {
+          "name": "motionId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getMotion",
+        "summary": "Read one motion",
+        "tags": [
+          "motions"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Motion"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such motion"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    },
+    "/api/v1/motions/{motionId}/admissions": {
+      "parameters": [
+        {
+          "name": "motionId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UuidId"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listMotionAdmissions",
+        "summary": "List the admission decisions recorded for this motion (read-only; the records are append-only)",
+        "tags": [
+          "motions"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MotionAdmissionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "The PDP denied the call (module gate, body isolation or grant)"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such motion"
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createMotionAdmission",
+        "summary": "Chair decides a late motion's admission (append-only; only the chair decides)",
+        "tags": [
+          "motions"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MotionAdmission"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden",
+            "description": "Chair-only operation"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound",
+            "description": "No such motion"
+          },
+          "409": {
+            "description": "The motion is not late, or its admission is already decided",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemMotionAdmissionConflict"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MotionAdmissionCreate"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerOidc": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerOidc": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Keycloak-issued OIDC bearer token (TRD-409 / memo D22)."
+      }
+    },
+    "parameters": {
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque cursor from a previous page's nextCursor; omit for the first page.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Page size; the server default applies when omitted.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
+    "responses": {
+      "Unauthenticated": {
+        "description": "No valid OIDC bearer token (TRD-409).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemUnauthenticated"
+            }
+          }
+        }
+      },
+      "ValidationFailed": {
+        "description": "The request body or a parameter does not match this contract.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemValidationFailed"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The PDP (idt.pdp v1; TASK-081 decides) denied the call. Chair-only operations need the chair's grant with resource = meeting.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemForbidden"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No such resource in the caller's tenant and body.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemNotFound"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "description": "RFC 9457 problem+json error envelope. Every refusal this service answers is one of the named Problem* schemas below, which have this shape and pin `type` (a urn:gremion:problem:<slug> URN, the scheme TASK-076's service template emits; governance refusals take the gov: prefix) and `status`.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>."
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemUnauthenticated": {
+        "type": "object",
+        "description": "No valid OIDC bearer token (TRD-409).",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:unauthenticated"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 401
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemValidationFailed": {
+        "type": "object",
+        "description": "The request body or a parameter does not match this contract.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:validation-failed"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 400
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemForbidden": {
+        "type": "object",
+        "description": "The PDP (idt.pdp v1; TASK-081 decides) denied the call. Chair-only operations need the chair's grant with resource = meeting.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:forbidden"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 403
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemNotFound": {
+        "type": "object",
+        "description": "No such resource in the caller's tenant and body.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:not-found"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 404
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemStateTransitionRefused": {
+        "type": "object",
+        "description": "The aggregate's DOMAIN lifecycle has no edge from its current state for this operation.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:state-transition-refused"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemAgendaFrozen": {
+        "type": "object",
+        "description": "Sections are added or reordered only by the chair and only before the invitation (DB-GOV-AGENDA-SECTION).",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:agenda-frozen"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemNoticeOverrideMissing": {
+        "type": "object",
+        "description": "notice_met is false and no notice-override is recorded for this invitation; record one first (PRD-MTG-002b, DB-GOV-INVITATION). The Sitzung itself is never blocked [D R20-D26-5].",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:notice-override-missing"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemNoMailConnector": {
+        "type": "object",
+        "description": "MAIL reports no connector for the body (neither its own mailbox nor the main body's enabled fallback with a send-as grant); the invitation moves to dispatch_refused. GOV never picks a connector itself (DB-GOV-INVITATION, [D R20-D26-2]).",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:no-mail-connector"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemOverrideExists": {
+        "type": "object",
+        "description": "This invitation already has its notice-override; at most one exists and it is never edited (DB-GOV-NOTICE-OVERRIDE).",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:override-exists"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemOverrideNotRequired": {
+        "type": "object",
+        "description": "notice_met is true for this invitation, so no override is recorded.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:override-not-required"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemInvitationAlreadyDispatched": {
+        "type": "object",
+        "description": "The override must be written before dispatch; this invitation is already dispatching or sent.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:invitation-already-dispatched"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemMotionNotLate": {
+        "type": "object",
+        "description": "Admissions decide late motions only (is_late = true, state withheld); this motion is not late.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:motion-not-late"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemAdmissionExists": {
+        "type": "object",
+        "description": "The chair has already decided this motion's admission; admissions are append-only.",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "The named refusal, as urn:gremion:problem:<slug> or urn:gremion:problem:gov:<slug>.",
+            "const": "urn:gremion:problem:gov:admission-exists"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "const": 409
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProblemNoticeOverrideConflict": {
+        "description": "Why a notice override was refused: one already exists (append-only, at most one per invitation), notice was met so none is needed, or the invitation was already dispatched (PRD-MTG-002b).",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProblemOverrideExists"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemOverrideNotRequired"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemInvitationAlreadyDispatched"
+          }
+        ]
+      },
+      "ProblemSendInvitationRefused": {
+        "description": "Why a dispatch was refused, by name: notice missed with no override recorded, no mail connector for the body (GOV never picks one), or the invitation is not in a sendable state (PRD-MTG-002a/002b).",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProblemNoticeOverrideMissing"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemNoMailConnector"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemStateTransitionRefused"
+          }
+        ]
+      },
+      "ProblemMotionAdmissionConflict": {
+        "description": "Why an admission decision was refused: the motion is not late, or its admission is already decided (append-only, PRD-MTG-003).",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProblemMotionNotLate"
+          },
+          {
+            "$ref": "#/components/schemas/ProblemAdmissionExists"
+          }
+        ]
+      },
+      "UuidId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "BigintId": {
+        "type": "string",
+        "pattern": "^[0-9]+$"
+      },
+      "Meeting": {
+        "type": "object",
+        "required": [
+          "meeting_id",
+          "body_id",
+          "org_unit_id",
+          "meeting_number",
+          "title",
+          "scheduled_start",
+          "scheduled_end",
+          "state",
+          "notice_period_days_snapshot",
+          "notice_due_at"
+        ],
+        "properties": {
+          "meeting_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "DB-GOV-MEETING id (UUIDv7)"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Opaque IDT body reference"
+          },
+          "org_unit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Opaque IDT org-unit reference: the deciding organ. Null where the body itself decides (DOMAIN DB-GOV organisational references; SCHEMA gov.meeting.org_unit_id nullable)."
+          },
+          "wahlperiode_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Opaque IDT Wahlperiode reference (TRD-086). A mismatch with the body's current Wahlperiode warns and never blocks [D R17-14]."
+          },
+          "meeting_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Serves the meeting_number token of the register numbering scheme. Null until numbered (SCHEMA gov.meeting.meeting_number nullable)."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "DB-GOV-MEETING.title. Served here (gov.meeting-read v1) and deliberately never carried in event payloads (DOMAIN GOV events table)."
+          },
+          "scheduled_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduled_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Null when no end is set (SCHEMA gov.meeting.scheduled_end nullable)."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free text; null when no location is set (SCHEMA gov.meeting.location nullable)."
+          },
+          "call_link_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "readOnly": true,
+            "description": "Display-only projection of msg.calllink.set.v1. MSG owns the meeting-to-call association; GOV never writes it except from MSG's event."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "invited",
+              "in_session",
+              "suspended",
+              "closed",
+              "cancelled"
+            ],
+            "description": "DOMAIN Meeting lifecycle. Moves only by that lifecycle (DB-GOV-MEETING invariant)."
+          },
+          "notice_period_days_snapshot": {
+            "type": "integer",
+            "minimum": 0,
+            "readOnly": true,
+            "description": "Ladungsfrist in days, snapshotted from the body's governance settings when the meeting was planned; later settings changes never alter it (DB-GOV-MEETING invariant)."
+          },
+          "notice_due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "motion_deadline_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Snapshotted from the body's motion deadline offset when the meeting was planned. Null when the body sets no motion deadline (SCHEMA gov.meeting.motion_deadline_at nullable)."
+          },
+          "opened_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "cancel_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "chair_cancelled",
+              "body_archived",
+              "org_unit_archived",
+              "customer_offboarding",
+              null
+            ],
+            "description": "Set exactly when state is cancelled, null otherwise (SCHEMA meeting_cancelled_check). Why the meeting was cancelled: the chair cancelled it, the body or the org unit was archived, or the customer is being offboarded. Values are SCHEMA meeting_cancel_reason_check."
+          }
+        }
+      },
+      "MeetingPage": {
+        "type": "object",
+        "description": "One page of Meeting, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Meeting"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
+      "MeetingCreate": {
+        "type": "object",
+        "required": [
+          "body_id",
+          "title",
+          "scheduled_start"
+        ],
+        "properties": {
+          "body_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Opaque IDT body reference. Immutable once the meeting exists (DOMAIN DB-GOV-MEETING invariant). The tenant still comes from the host and token, never from here (TRD-409)."
+          },
+          "org_unit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Opaque IDT org-unit reference of the deciding organ inside body_id. Omit or send null where the body itself decides (DOMAIN DB-GOV organisational references)."
+          },
+          "wahlperiode_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Opaque IDT Wahlperiode reference. Optional: when omitted the server records the body's current Wahlperiode [A]. A mismatch warns and never blocks [D R17-14]."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "DB-GOV-MEETING.title."
+          },
+          "scheduled_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduled_end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional (SCHEMA gov.meeting.scheduled_end nullable). When given it must lie after scheduled_start (meeting_scheduled_end_check)."
+          },
+          "location": {
+            "type": "string"
+          }
+        }
+      },
+      "MeetingUpdate": {
+        "type": "object",
+        "description": "Retitle, relocate or reschedule. body_id is immutable and not accepted here (DOMAIN DB-GOV-MEETING invariant). A change of start or end emits de.gremion.gov.meeting.rescheduled.v1.",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "DB-GOV-MEETING.title (optional on update)."
+          },
+          "scheduled_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduled_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Send null to clear the end (SCHEMA gov.meeting.scheduled_end nullable)."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Send null to clear the location (SCHEMA gov.meeting.location nullable)."
+          }
+        }
+      },
+      "AgendaSection": {
+        "type": "object",
+        "required": [
+          "section_id",
+          "meeting_id",
+          "position",
+          "title",
+          "publication_class"
+        ],
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "DB-GOV-AGENDA-SECTION id (bigint, carried as a string to avoid JS precision loss)"
+          },
+          "meeting_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Owning meeting"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "publication_class": {
+            "type": "string",
+            "enum": [
+              "public",
+              "non_public"
+            ]
+          }
+        }
+      },
+      "AgendaSectionPage": {
+        "type": "object",
+        "description": "One page of AgendaSection, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgendaSection"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
+      "AgendaSectionCreate": {
+        "type": "object",
+        "required": [
+          "position",
+          "title",
+          "publication_class"
+        ],
+        "properties": {
+          "position": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "publication_class": {
+            "type": "string",
+            "enum": [
+              "public",
+              "non_public"
+            ]
+          }
+        }
+      },
+      "AgendaSectionReorder": {
+        "type": "object",
+        "required": [
+          "position"
+        ],
+        "properties": {
+          "position": {
+            "type": "integer"
+          }
+        }
+      },
+      "AgendaItem": {
+        "type": "object",
+        "required": [
+          "agenda_item_id",
+          "meeting_id",
+          "position",
+          "title",
+          "kind",
+          "state"
+        ],
+        "properties": {
+          "agenda_item_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "DB-GOV-AGENDA-ITEM id (UUIDv7)"
+          },
+          "meeting_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Owning meeting"
+          },
+          "section_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BigintId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Order within the section. Null while the item is proposed or declined; set together with section_id (SCHEMA agenda_item_placement_check)."
+          },
+          "item_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The printed TOP number; null until assigned."
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "report",
+              "motion",
+              "previous_protocol_approval",
+              "election",
+              "misc"
+            ]
+          },
+          "own_publication_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "public",
+              "non_public",
+              null
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "placed",
+              "declined",
+              "withdrawn",
+              "called",
+              "dealt",
+              "adjourned"
+            ],
+            "description": "DOMAIN Agenda item lifecycle (PRD-MTG-001/004)."
+          },
+          "proposer_person_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "noted",
+              "resolved",
+              "rejected",
+              "referred",
+              "no_decision",
+              null
+            ],
+            "readOnly": true,
+            "description": "How the item was dealt with (DOMAIN DB-GOV-AGENDA-ITEM); set by the server exactly when state is dealt, null otherwise."
+          }
+        }
+      },
+      "AgendaItemPage": {
+        "type": "object",
+        "description": "One page of AgendaItem, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgendaItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
+      "AgendaItemCreate": {
+        "type": "object",
+        "required": [
+          "title",
+          "kind"
+        ],
+        "properties": {
+          "section_id": {
+            "$ref": "#/components/schemas/BigintId"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "report",
+              "motion",
+              "previous_protocol_approval",
+              "election",
+              "misc"
+            ]
+          },
+          "own_publication_class": {
+            "type": "string",
+            "enum": [
+              "public",
+              "non_public"
+            ]
+          }
+        }
+      },
+      "AgendaItemUpdate": {
+        "type": "object",
+        "description": "Partial update of an agenda item: send only the fields that change. state and outcome move only by the agenda-item lifecycle and are never written here (DOMAIN DB-GOV-AGENDA-ITEM).",
+        "minProperties": 1,
+        "properties": {
+          "section_id": {
+            "$ref": "#/components/schemas/BigintId"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Send null to clear the description (SCHEMA gov.agenda_item.description nullable)."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "report",
+              "motion",
+              "previous_protocol_approval",
+              "election",
+              "misc"
+            ]
+          },
+          "own_publication_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "public",
+              "non_public",
+              null
+            ],
+            "description": "Send null to fall back to the section's class (SCHEMA gov.agenda_item.own_publication_class nullable)."
+          }
+        }
+      },
+      "Invitation": {
+        "type": "object",
+        "required": [
+          "invitation_id",
+          "meeting_id",
+          "version",
+          "state",
+          "notice_met",
+          "recipient_count"
+        ],
+        "properties": {
+          "invitation_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "DB-GOV-INVITATION id (UUIDv7, one per version)"
+          },
+          "meeting_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Owning meeting"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "agenda_snapshot_id": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Frozen agenda snapshot (bigint, carried as a string to avoid JS precision loss)"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "checked",
+              "blocked",
+              "override_logged",
+              "dispatching",
+              "dispatch_refused",
+              "sent",
+              "partly_failed"
+            ],
+            "description": "DOMAIN Invitation lifecycle (PRD-MTG-002a/002b, FLOW-MTG-002). blocked = notice not met and no override yet; override_logged = the one notice-override is recorded; dispatch_refused = MAIL reports no connector for the body; partly_failed = some recipients failed or bounced. A blocked invitation never blocks the Sitzung [D R20-D26-5]."
+          },
+          "notice_met": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Set by the notice check; null while the invitation is draft or checked (SCHEMA invitation_notice_met_check). false is a flag, never a block: dispatch then needs the one notice override (PRD-MTG-002b)."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sender_person_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "readOnly": true,
+            "description": "Opaque person reference of the chair who issued the invitation (DOMAIN DB-GOV-INVITATION); null until sent."
+          },
+          "recipient_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Number of recipients at dispatch; null before dispatch (SCHEMA gov.invitation.recipient_count nullable)."
+          }
+        }
+      },
+      "InvitationPage": {
+        "type": "object",
+        "description": "One page of Invitation, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invitation"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
+      "InvitationCreate": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "description": "No required fields: an invitation draft is created from the meeting's current agenda snapshot server-side."
+          }
+        }
+      },
+      "NoticeOverride": {
+        "type": "object",
+        "required": [
+          "override_id",
+          "invitation_id",
+          "meeting_id",
+          "actor_person_id",
+          "overridden_at",
+          "days_short",
+          "reason"
+        ],
+        "description": "Append-only (PRD-MTG-002b / DOMAIN [D R20-D26-5]). No PUT/PATCH/DELETE exists for this resource — at most one per invitation, and it can never be undone or edited.",
+        "properties": {
+          "override_id": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "DB-GOV-NOTICE-OVERRIDE id (bigint, carried as a string to avoid JS precision loss)"
+          },
+          "invitation_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The invitation this override justifies"
+          },
+          "meeting_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Owning meeting"
+          },
+          "actor_person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "overridden_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "days_short": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "Required at insert (NoticeOverrideCreate). Null only after it was erased in place under a covered redaction (SCHEMA notice_override_erased_check). Never carried in an event payload."
+          },
+          "curing_basis_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "curing_basis_version": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "curing_basis_snapshot": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "readOnly": true,
+            "description": "The curing basis text and citation as they stood when the override was recorded (DOMAIN DB-GOV-NOTICE-OVERRIDE); server-written, so a later change to the body's basis never changes a recorded override. Null when no curing basis was referenced."
+          }
+        }
+      },
+      "NoticeOverrideCreate": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Required (DOMAIN [D R20-D26-5])."
+          },
+          "curing_basis_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "InvitationRecipient": {
+        "type": "object",
+        "description": "No address or email property is ever exposed — the evidence itself lives only in MAIL's DB-MAIL-DELIVERYEVIDENCE (DOMAIN DB-GOV-INVITATION-RECIPIENT invariant, D-nc memo D26).",
+        "required": [
+          "recipient_id",
+          "invitation_id",
+          "person_id",
+          "delivery_state"
+        ],
+        "properties": {
+          "recipient_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "DB-GOV-INVITATION-RECIPIENT id (UUIDv7; crosses to MAIL as recipient_reference)"
+          },
+          "invitation_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Owning invitation"
+          },
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "delivery_state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "submitted",
+              "failed",
+              "bounced",
+              "no_connector"
+            ]
+          },
+          "bounce_class": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "submitted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "in_app_delivered": {
+            "type": "boolean"
+          }
+        }
+      },
+      "InvitationRecipientPage": {
+        "type": "object",
+        "description": "One page of InvitationRecipient, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvitationRecipient"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
+      "Motion": {
+        "type": "object",
+        "required": [
+          "motion_id",
+          "target_meeting_id",
+          "title",
+          "motion_text",
+          "submitter_kind",
+          "submitted_at",
+          "is_late",
+          "state"
+        ],
+        "properties": {
+          "motion_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "DB-GOV-MOTION id (UUIDv7)"
+          },
+          "target_meeting_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The meeting this motion targets. Null while in draft, or after a deferral to the next meeting until one is chosen (SCHEMA gov.motion.target_meeting_id)."
+          },
+          "agenda_item_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "reference_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "motion_text": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "submitter_kind": {
+            "type": "string",
+            "enum": [
+              "member",
+              "helper",
+              "public"
+            ]
+          },
+          "submitter_person_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "submitted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set by the server at submission or on verification. Null in draft, pending_verification and expired (SCHEMA motion_submitted_check)."
+          },
+          "deadline_snapshot": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "readOnly": true,
+            "description": "The meeting's motion deadline as it stood when the motion was submitted (DOMAIN DB-GOV-MOTION); is_late is computed from it on the server. Null while the motion is a draft."
+          },
+          "is_late": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "readOnly": true,
+            "description": "Computed on the server (submitted_at after deadline_snapshot). Never accepted from the client (PRD-MTG-003, FLOW-MTG-003 B1). Null while either side is null: before submission, or when the target meeting sets no motion deadline (SCHEMA generated column)."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "pending_verification",
+              "submitted",
+              "on_agenda",
+              "withheld",
+              "deferred",
+              "decided",
+              "adjourned",
+              "withdrawn",
+              "expired"
+            ],
+            "description": "DOMAIN Motion lifecycle (PRD-MTG-003, FLOW-MTG-003). withheld = submitted after the deadline and marked late, off the agenda until an admission; pending_verification and expired belong to public intake, which stays off per body (DOMAIN GOV question 1)."
+          },
+          "publication_class": {
+            "type": "string",
+            "enum": [
+              "public",
+              "non_public"
+            ]
+          }
+        }
+      },
+      "MotionPage": {
+        "type": "object",
+        "description": "One page of Motion, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Motion"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
+      "MotionCreate": {
+        "type": "object",
+        "required": [
+          "title",
+          "motion_text"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "motion_text": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "agenda_item_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "MotionAdmission": {
+        "type": "object",
+        "required": [
+          "admission_id",
+          "motion_id",
+          "outcome",
+          "actor_person_id",
+          "decided_at",
+          "defer_to_next_meeting"
+        ],
+        "description": "Append-only (DOMAIN DB-GOV-MOTION-ADMISSION). Only the chair decides (FLOW-MTG-003 C1).",
+        "properties": {
+          "admission_id": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "DB-GOV-MOTION-ADMISSION id (bigint, carried as a string to avoid JS precision loss)"
+          },
+          "motion_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The late motion this admission decides"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "admit",
+              "defer"
+            ]
+          },
+          "deferred_to_meeting_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The target meeting of a defer (PRD-MTG-003). Null for admit, and for a defer to the next meeting."
+          },
+          "defer_to_next_meeting": {
+            "type": "boolean",
+            "description": "True when the chair deferred the motion to \"the next meeting\" instead of naming one (DOMAIN DB-GOV-MOTION-ADMISSION). Always false for admit."
+          },
+          "actor_person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MotionAdmissionPage": {
+        "type": "object",
+        "description": "One page of MotionAdmission, in the list's stable server order.",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MotionAdmission"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or null at the end."
+          }
+        }
+      },
+      "MotionAdmissionCreate": {
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "admit",
+              "defer"
+            ]
+          },
+          "deferred_to_meeting_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The target meeting of a defer. Exactly one of this and defer_to_next_meeting is sent for a defer; neither for admit."
+          },
+          "defer_to_next_meeting": {
+            "type": "boolean",
+            "description": "Send true to defer the motion to \"the next meeting\" instead of naming one. Exactly one of this and deferred_to_meeting_id is sent for a defer; neither for admit."
+          }
+        },
+        "description": "A defer names exactly one target: deferred_to_meeting_id, or defer_to_next_meeting: true. An admit names neither (DOMAIN DB-GOV-MOTION-ADMISSION).",
+        "if": {
+          "required": [
+            "outcome"
+          ],
+          "properties": {
+            "outcome": {
+              "const": "defer"
+            }
+          }
+        },
+        "then": {
+          "oneOf": [
+            {
+              "required": [
+                "deferred_to_meeting_id"
+              ],
+              "not": {
+                "required": [
+                  "defer_to_next_meeting"
+                ]
+              }
+            },
+            {
+              "required": [
+                "defer_to_next_meeting"
+              ],
+              "properties": {
+                "defer_to_next_meeting": {
+                  "const": true
+                }
+              },
+              "not": {
+                "required": [
+                  "deferred_to_meeting_id"
+                ]
+              }
+            }
+          ]
+        },
+        "else": {
+          "properties": {
+            "deferred_to_meeting_id": false,
+            "defer_to_next_meeting": false
+          }
+        }
+      }
+    }
+  }
+}

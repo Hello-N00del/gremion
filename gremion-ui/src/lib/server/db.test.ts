@@ -102,12 +102,9 @@ describe('applyMigrationFile transaction wrapping (G-078)', () => {
           }
           return Promise.resolve([])
         }
-        try {
-          await cb(tx)
-        } catch (err) {
-          // Discard buffered effects — equivalent to ROLLBACK.
-          throw err
-        }
+        // A throw here propagates straight out, skipping the commit block
+        // below — buffered effects are discarded, equivalent to ROLLBACK.
+        await cb(tx)
         // Commit: only INSERT calls land in the persistent applied[] list,
         // mirroring the only side-effect schema_migrations cares about.
         for (const call of buffer) {

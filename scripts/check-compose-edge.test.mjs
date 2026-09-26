@@ -297,3 +297,30 @@ test('guard 3: Traefik runs from the rendered /tmp copy of the read-only committ
   assert.equal(stat.length, 1)
   assert.equal(stat[0].read_only, true)
 })
+
+// ── 4. no middleware keys security on a client-supplied header ────────────
+//
+// TASK-022 round-1/round-2 HIGH: Traefik is now the first hop (guard 2's own
+// header says so -- "nothing keyed on security may read a forwarded header").
+// A ratelimit middleware's sourceCriterion.requestHeaderName reads ANY header
+// verbatim, regardless of forwardedHeaders.trustedIPs, so a label still
+// keying on CF-Connecting-IP (a Cloudflare-edge holdover) lets any client mint
+// a fresh bucket per request by rotating the header value it sends itself.
+// Same failure mode for X-Forwarded-For / X-Real-IP. This guard reads every
+// service's rendered labels -- not just gremion-public's -- so it catches the
+// same mistake wherever it is made, not only at today's one call site.
+
+const SPOOFABLE_HEADERS = new Set(['cf-connecting-ip', 'x-forwarded-for', 'x-real-ip'])
+
+test('guard 4: no ratelimit middleware in the production render keys its bucket on a client-supplied header', () => {
+  const services = state().services ?? {}
+  const offenders = []
+  for (const [name, svc] of Object.entries(services)) {
+    for (const [key, value] of Object.entries(svc.labels ?? {})) {
+      if (/^traefik\.http\.middlewares\.[^.]+\.ratelimit\.sourceCriterion\.requestHeaderName$/.test(key) && SPOOFABLE_HEADERS.has(String(value).toLowerCase())) {
+        offenders.push(`${name}: ${key}=${value}`)
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `a ratelimit bucket keys on a spoofable client header (Traefik is the first hop, so remote-address keying is what makes the bucket real): ${offenders.join(', ')}`)
+})

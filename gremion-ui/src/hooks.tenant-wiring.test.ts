@@ -22,6 +22,12 @@ function withRequestStore<T>(event: unknown, fn: () => T): T {
 }
 
 const callOrder: string[] = []
+// vitest(no-standalone-expect): an expect() inside a vi.mock() factory
+// callback runs outside any it() block from the linter's static view (even
+// though it in fact only fires when the mocked handler is invoked during the
+// test below). Capture the observed value instead and assert on it inside
+// the it() block.
+let observedTenantInAuthHandle: unknown
 vi.mock('$lib/server/tenant/resolve', () => ({
   tenantResolveHandle: async ({ event, resolve }: any) => {
     callOrder.push('tenant')
@@ -37,7 +43,7 @@ vi.mock('$lib/server/tenant/resolve', () => ({
 vi.mock('./auth', () => ({
   handle: async ({ event, resolve }: any) => {
     callOrder.push('auth')
-    expect(event.locals.tenant).toEqual({ id: 'tid-1', slug: 'stura', issuer: 'https://kc/realms/gremion-test' })
+    observedTenantInAuthHandle = event.locals.tenant
     return resolve(event)
   },
 }))
@@ -78,5 +84,10 @@ describe('hooks.server tenant wiring', () => {
     )
     expect(callOrder[0]).toBe('tenant')
     expect(callOrder.indexOf('tenant')).toBeLessThan(callOrder.indexOf('auth'))
+    expect(observedTenantInAuthHandle).toEqual({
+      id: 'tid-1',
+      slug: 'stura',
+      issuer: 'https://kc/realms/gremion-test',
+    })
   })
 })

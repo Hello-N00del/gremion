@@ -1,6 +1,6 @@
 // gremion-ui/src/lib/server/boundary/install-git-hooks.test.ts
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'

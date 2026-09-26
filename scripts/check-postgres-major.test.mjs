@@ -22,13 +22,17 @@ import { fileURLToPath } from 'node:url'
 import {
   POSTGRES_MAJOR,
   POSTGRES_IMAGE_TAG,
+  POSTGRES_IMAGE_REF,
   S14_CONSUMERS,
   EVIDENCE_PATH,
   checkEvidence,
 } from './check-postgres-major.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const EVIDENCE = readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')
+// Normalised to LF: .gitattributes pins no eol for *.md, so a core.autocrlf=true
+// checkout (Windows) carries CRLF, and the line-anchored assertions below must
+// test the record's content, not the platform's line endings.
+const EVIDENCE = readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8').replace(/\r\n/g, '\n')
 
 test('the pin is an integer major and a concrete alpine tag', () => {
   assert.ok(Number.isInteger(POSTGRES_MAJOR), 'POSTGRES_MAJOR must be an integer')
@@ -128,9 +132,9 @@ test('scanText reads a shell parameter-expansion default — the tag that actual
 })
 
 test('a shell default on the pinned tag passes, and is counted exactly once', () => {
-  const hits = scanText('x.sh', `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"`)
+  const hits = scanText('x.sh', `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_REF}}"`)
   assert.equal(hits.length, 1, `expected exactly one hit, got ${JSON.stringify(hits)}`)
-  assert.deepEqual(checkFiles([{ path: 'x.sh', text: `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"` }]), [])
+  assert.deepEqual(checkFiles([{ path: 'x.sh', text: `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_REF}}"` }]), [])
 })
 
 test('a shell default naming the bare port is still not an image reference', () => {
@@ -154,7 +158,7 @@ test('checkFiles refuses to pass on an empty match set', () => {
 
 test('checkFiles goes RED on a stale major and on a floating tag', () => {
   const problems = checkFiles([
-    { path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
     { path: 'b.yml', text: `    image: ${STALE_TAG}\n` },
     { path: 'c.yml', text: `    image: ${FLOATING_TAG}\n` },
   ])
@@ -170,7 +174,7 @@ test('checkFiles excludes the frozen spec copies by rule, not by accident', () =
       path: 'docs/superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md',
       text: `\`${STALE_TAG}\` today\n`,
     },
-    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
   ])
   assert.deepEqual(problems, [])
 })
@@ -178,7 +182,7 @@ test('checkFiles excludes the frozen spec copies by rule, not by accident', () =
 test('the exclusion list is narrow: a stale tag anywhere else is still a finding', () => {
   // Proves the rule above is an exclusion of two NAMED paths and not a hole a
   // stale tag can wander into.
-  for (const path of ['docs/deployment.md', 'k8s/base/postgres/statefulset.yaml',
+  for (const path of ['docs/deployment.md', 'docs/k8s/postgres.yaml', 'infra/k8s/x.yaml',
                       'test/host/fixtures/postgres-major/tree-clean/compose/calendar.yml']) {
     const problems = checkFiles([{ path, text: `    image: ${STALE_TAG}\n` }])
     assert.ok(problems.join('\n').includes(`mismatched: ${path}:1`), `${path} must not be excluded`)
@@ -300,7 +304,7 @@ test('checkDataMounts goes RED on a mount that hardcodes the current major', () 
   // finding.
   const pinned = `/var/lib/postgresql/${POSTGRES_MAJOR}/docker`
   const problems = checkDataMounts([
-    { path: 'k8s/base/postgres/statefulset.yaml', text: `              mountPath: ${pinned}\n` },
+    { path: 'compose/calendar.yml', text: `              target: ${pinned}\n` },
   ])
   assert.equal(problems.length, 1, problems.join('\n'))
   assert.ok(problems[0].includes(`mounts ${pinned}`), problems[0])
@@ -380,7 +384,7 @@ test('scanText reads every untagged spelling, and never the same line twice', ()
     assert.equal(classify(hits[0]), 'unpinned', `${line} must classify as unpinned`)
   }
   // a TAGGED line is matched once, by the tag scanner, not twice
-  const tagged = scanText('a.yml', `    image: ${POSTGRES_IMAGE_TAG}`)
+  const tagged = scanText('a.yml', `    image: ${POSTGRES_IMAGE_REF}`)
   assert.equal(tagged.length, 1, JSON.stringify(tagged))
   assert.equal(classify(tagged[0]), 'ok')
 })
@@ -404,7 +408,7 @@ test('checkFiles goes RED when one fragment of a good set is untagged', () => {
   // guard cannot see this — the set is far from empty — so without its own net
   // the whole run stays green.
   const problems = checkFiles([
-    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
     { path: 'compose/calendar.yml', text: `${UNTAGGED}\n` },
   ])
   assert.equal(problems.length, 1, problems.join('\n'))
@@ -446,4 +450,480 @@ test('trackedTextFiles reads the extensionless host scripts too', () => {
   assert.ok(paths.includes('infra/host/bin/gremion-restore-into'),
     'infra/host/bin/gremion-restore-into must be scanned')
   assert.ok(paths.includes('.env.example'), '.env.example must be scanned')
+})
+
+// ── TASK-019: the digest net (TRD-350) ─────────────────────────────────────
+//
+// A tag is a pointer the registry may move; a digest is the content. Every
+// DECLARATION (compose/workflow `image:`, a shell assignment or default, a
+// `docker run`, a Dockerfile FROM) must carry the ONE pinned index digest.
+// Prose (.md) and comment lines stay major-only. Built at runtime like the
+// stale tags above, so this file never spells a declaration of its own.
+
+import {
+  POSTGRES_IMAGE_DIGEST,
+  checkDigests,
+} from './check-postgres-major.mjs'
+
+// A well-formed digest that is NOT the pin: the pin's own hex, rotated.
+const OTHER_DIGEST = `sha256:${POSTGRES_IMAGE_DIGEST.slice(7).split('').reverse().join('')}`
+
+test('the pinned reference is <tag>@<one sha256 index digest>', () => {
+  assert.match(POSTGRES_IMAGE_DIGEST, /^sha256:[0-9a-f]{64}$/)
+  assert.equal(POSTGRES_IMAGE_REF, `${POSTGRES_IMAGE_TAG}@${POSTGRES_IMAGE_DIGEST}`)
+  assert.match(OTHER_DIGEST, /^sha256:[0-9a-f]{64}$/)
+  assert.notEqual(OTHER_DIGEST, POSTGRES_IMAGE_DIGEST)
+})
+
+test('the record carries a "Pinned digest" line equal to the exported constant', () => {
+  assert.ok(EVIDENCE.includes(`- **Pinned digest**: ${POSTGRES_IMAGE_DIGEST}\n`),
+    'docs/ops/postgres-major.md must carry the pinned digest line')
+  const drifted = EVIDENCE.replace(POSTGRES_IMAGE_DIGEST, OTHER_DIGEST)
+  assert.notEqual(drifted, EVIDENCE, 'fixture did not apply')
+  assert.match(checkEvidence(drifted).join('\n'), /postgres-major\.md pins digest sha256:[0-9a-f]{64}, check-postgres-major\.mjs exports/)
+  const missing = EVIDENCE.split('\n').filter((l) => !l.startsWith('- **Pinned digest**')).join('\n')
+  assert.match(checkEvidence(missing).join('\n'), /no "- \*\*Pinned digest\*\*: sha256:<64 hex>" line/)
+})
+
+test('scanText records the digest a reference carries', () => {
+  const hits = scanText('docker-compose.yml', `    image: ${POSTGRES_IMAGE_REF}`)
+  assert.equal(hits.length, 1, JSON.stringify(hits))
+  assert.equal(hits[0].digest, POSTGRES_IMAGE_DIGEST)
+  assert.equal(classify(hits[0]), 'ok')
+  assert.equal(scanText('a.yml', `    image: ${POSTGRES_IMAGE_TAG}`)[0].digest, null)
+})
+
+test('TDD-1: an undigested declaration is reported (compose, workflow, shell, Dockerfile, docker run)', () => {
+  for (const [path, line] of [
+    ['docker-compose.yml', `    image: ${POSTGRES_IMAGE_TAG}`],
+    ['.github/workflows/gremion-ui.yml', `        image: ${POSTGRES_IMAGE_TAG}`],
+    ['gremion-ui/scripts/fresh-init-proof.sh', `DEFAULT_IMAGE="${POSTGRES_IMAGE_TAG}"`],
+    ['x.sh', `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"`],
+    ['x.bats', `  run docker run --rm ${POSTGRES_IMAGE_TAG} postgres --version`],
+    ['docker/pg/Dockerfile', `FROM ${POSTGRES_IMAGE_TAG}`],
+    ['infra/host/bin/gremion-x', `docker run --rm ${POSTGRES_IMAGE_TAG} pg_dump --version`],
+    ['compose/x.yaml.tmpl', `    image: ${POSTGRES_IMAGE_TAG}`],
+  ]) {
+    const problems = checkFiles([{ path, text: `${line}\n` }])
+    assert.equal(problems.length, 1, `${path}: ${problems.join('\n')}`)
+    assert.ok(problems[0].startsWith(`undigested: ${path}:1 ${POSTGRES_IMAGE_TAG}`), problems[0])
+    assert.ok(problems[0].includes(`expected ${POSTGRES_IMAGE_REF}`), problems[0])
+  }
+})
+
+test('prose and comment lines stay major-only: no digest demanded there', () => {
+  const problems = checkFiles([
+    { path: 'docs/ops/x.md', text: `runs \`${POSTGRES_IMAGE_TAG}\` today\n` },
+    { path: 'docker-compose.prod.yml', text: `  # (${POSTGRES_IMAGE_TAG} also defaults to 100\n` },
+    { path: 'x.sh', text: `# Re-measured on ${POSTGRES_IMAGE_TAG}\n` },
+    { path: 'gremion-ui/src/lib/x.ts', text: ` * relying on ${POSTGRES_IMAGE_TAG}'s default\n` },
+    { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
+  ])
+  assert.deepEqual(problems, [])
+})
+
+test('TDD-2: a digest that is not the pinned one is drift, in any file kind', () => {
+  for (const path of ['docker-compose.yml', 'docs/ops/x.md', 'x.sh']) {
+    const problems = checkFiles([{ path, text: `    image: ${POSTGRES_IMAGE_TAG}@${OTHER_DIGEST}\n` }])
+    assert.equal(problems.length, 1, `${path}: ${problems.join('\n')}`)
+    assert.ok(problems[0].startsWith(`digest-drift: ${path}:1`), problems[0])
+  }
+})
+
+test('TDD-2: a truncated or malformed digest is drift, never a pass', () => {
+  const short = POSTGRES_IMAGE_DIGEST.slice(0, 20)
+  const problems = checkFiles([{ path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_TAG}@${short}\n` }])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.match(problems[0], /^digest-drift: a\.yml:1/)
+})
+
+test('TDD-2: two different digests in one tree are reported as a split pin', () => {
+  const hits = [
+    ...scanText('a.yml', `    image: ${POSTGRES_IMAGE_REF}`),
+    ...scanText('b.yml', `    image: ${POSTGRES_IMAGE_TAG}@${OTHER_DIGEST}`),
+  ]
+  const problems = checkDigests(hits)
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.match(problems[0], /^split pin: 2 distinct postgres digests in one tree/)
+  assert.deepEqual(checkDigests(hits.slice(0, 1)), [])
+})
+
+// ── TASK-019: k8s/** is frozen (D16) and leaves the scan set ───────────────
+
+import { EXCLUDED } from './check-postgres-major.mjs'
+
+test('TDD-6: EXCLUDED holds exactly three NAMED rules: specs, the stale fixtures, k8s', () => {
+  assert.equal(EXCLUDED.length, 3, EXCLUDED.map(String).join(' '))
+  const hit = (p) => EXCLUDED.filter((re) => re.test(p)).length
+  assert.equal(hit('docs/superpowers/specs/spec-b-x.md'), 1)
+  assert.equal(hit('test/host/fixtures/postgres-major/tree-stale/compose/calendar.yml'), 1)
+  assert.equal(hit('k8s/base/postgres/statefulset.yaml'), 1)
+  // the rule is anchored: a path that merely CONTAINS k8s is still scanned
+  for (const p of ['docs/k8s.md', 'infra/k8s/x.yaml', 'k8sx/a.yaml', 'docker-compose.yml']) {
+    assert.equal(hit(p), 0, `${p} must not be excluded`)
+  }
+})
+
+test('TDD-6: a stale tag or an old data mount under k8s/ is not reported', () => {
+  const k8s = { path: 'k8s/base/postgres/statefulset.yaml',
+                text: `          image: ${STALE_TAG}\n              mountPath: ${LEGACY_MOUNT}\n` }
+  const good = { path: 'docker-compose.yml',
+                 text: `    image: ${POSTGRES_IMAGE_REF}\n      - pg-data:${POSTGRES_DATA_MOUNT}\n` }
+  assert.deepEqual(checkFiles([k8s, good]), [])
+  assert.deepEqual(checkDataMounts([k8s, good]), [])
+  // ...and k8s alone is an EMPTY scan, which still fails loudly
+  assert.match(checkFiles([k8s]).join('\n'), /zero postgres: image references/)
+})
+
+// ── TASK-019: the registry-prefix net ──────────────────────────────────────
+//
+// `image: docker.io/library/postgres:<stale>-alpine` was INVISIBLE: TAG_RE's
+// lookbehind drops the `/` in front of `postgres`, and UNTAGGED_IMAGE_RE only
+// reads a reference with no tag. Docker resolves that spelling to exactly the
+// image the short form names, so it has to be held to exactly the same pin.
+
+const PREFIXED_STALE = `docker.io/library/${STALE_TAG}`
+
+test('TDD-3: a registry-prefixed stale tag is reported as mismatched', () => {
+  for (const [path, line] of [
+    ['docker-compose.yml', `    image: ${PREFIXED_STALE}`],
+    ['compose/calendar.yml', `    image: "${PREFIXED_STALE}@${POSTGRES_IMAGE_DIGEST}"`],
+    ['x.sh', `docker run --rm ${PREFIXED_STALE} psql --version`],
+    ['x.sh', `IMAGE="\${PG_IMAGE:-${PREFIXED_STALE}}"`],
+    ['a.yml', `    image: registry.example:5000/mirror/${STALE_TAG}`],
+    ['docs/x.md', `we used to run \`${PREFIXED_STALE}\``],
+  ]) {
+    const hits = scanText(path, line)
+    assert.equal(hits.length, 1, `${line} -> ${JSON.stringify(hits)}`)
+    const problems = checkFiles([{ path, text: `${line}\n` }])
+    assert.equal(problems.length, 1, `${line}: ${problems.join('\n')}`)
+    assert.ok(problems[0].startsWith(`mismatched: ${path}:1`), problems[0])
+    assert.ok(problems[0].includes(STALE_TAG), problems[0])
+  }
+})
+
+test('a registry-prefixed reference is held to the digest pin like the short form', () => {
+  const pinned = `    image: docker.io/library/${POSTGRES_IMAGE_REF}`
+  assert.equal(scanText('a.yml', pinned).length, 1, 'counted exactly once')
+  assert.deepEqual(checkFiles([{ path: 'a.yml', text: `${pinned}\n` }]), [])
+  const bare = checkFiles([{ path: 'a.yml', text: `    image: docker.io/library/${POSTGRES_IMAGE_TAG}\n` }])
+  assert.equal(bare.length, 1, bare.join('\n'))
+  assert.match(bare[0], /^undigested: a\.yml:1/)
+})
+
+test('the registry-prefix net does not read URLs, paths or host:ports as images', () => {
+  for (const line of [
+    'https://hub.docker.com/_/postgres',
+    'see https://github.com/docker-library/postgres/pull/1259',
+    'wget -qO- http://postgres:5432',
+    'DATABASE_URL=postgresql://u:pw@db.internal/postgres:5432',
+    '      - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init.sh:ro',
+    '    image: timescale/timescaledb-postgis:2.19.0-pg17',
+  ]) {
+    assert.deepEqual(scanText('a.yml', line), [], `${line} must not be read as a postgres image`)
+  }
+})
+
+// ── TASK-019: the module service set (Q1, D14) ─────────────────────────────
+//
+// Per-module Postgres: `<id>-postgres` for the six extraction-source leaves,
+// each profile-gated under its id and labelled org.gremion.postgres=module:<id>;
+// the kernel server is labelled `kernel`. The label is what the RUNNING check
+// finds containers by, so a service without it is a server nobody verifies.
+
+import {
+  MODULE_POSTGRES_IDS,
+  composeServices,
+  checkComposeServices,
+  checkModuleSet,
+} from './check-postgres-major.mjs'
+
+const VAR_IMAGE = '    image: ${CALENDAR_PG_IMAGE}'
+
+test('the module set is the six extraction-source leaves', () => {
+  assert.deepEqual([...MODULE_POSTGRES_IDS].sort(),
+    ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault'])
+})
+
+test('composeServices reads name, image, label, profiles and merge key off a compose file', () => {
+  const text = [
+    'x-module-postgres: &module-postgres',
+    `  image: ${POSTGRES_IMAGE_REF}`,
+    'services:',
+    '  postgres:',
+    `    image: ${POSTGRES_IMAGE_REF}`,
+    '    labels:',
+    '      org.gremion.postgres: "kernel"',
+    '  calendar-postgres:',
+    '    <<: *module-postgres',
+    '    profiles: [calendar]',
+    '    labels:',
+    '      - "org.gremion.postgres=module:calendar"',
+    '    healthcheck:',
+    '      test: ["CMD-SHELL", "pg_isready"]',
+    '  web:',
+    '    image: nginx:1.29',
+    'volumes:',
+    '  calendar-pg-data:',
+    '    name: gremion_module_calendar_pg_data',
+  ].join('\n')
+  const s = composeServices(text)
+  assert.deepEqual(s.map((x) => x.name), ['postgres', 'calendar-postgres', 'web'])
+  assert.equal(s[0].image, POSTGRES_IMAGE_REF)
+  assert.equal(s[0].label, 'kernel')
+  assert.equal(s[1].image, null)
+  assert.equal(s[1].merge, true)
+  assert.equal(s[1].label, 'module:calendar')
+  assert.deepEqual(s[1].profiles, ['calendar'])
+  assert.equal(s[2].label, null)
+})
+
+test('TDD-4: a variable-only image on a *-postgres service is a problem', () => {
+  const text = `services:\n  calendar-postgres:\n${VAR_IMAGE}\n`
+  const problems = checkComposeServices([{ path: 'compose/calendar.yml', text }])
+  assert.equal(problems.length, 1, problems.join('\n'))
+  assert.match(problems[0], /^variable image: compose\/calendar\.yml:3 service calendar-postgres/)
+})
+
+test('TDD-4: a variable image with a pinned default is still a problem on a postgres service', () => {
+  const text = `services:\n  calendar-postgres:\n    image: \${CALENDAR_PG_IMAGE:-${POSTGRES_IMAGE_REF}}\n`
+  assert.match(checkComposeServices([{ path: 'a.yml', text }]).join('\n'), /^variable image: a\.yml:3/)
+})
+
+test('TDD-4: a variable-only image on a LABELLED service of any name is a problem', () => {
+  const text = `services:\n  db:\n${VAR_IMAGE}\n    labels:\n      org.gremion.postgres: "module:calendar"\n`
+  assert.match(checkComposeServices([{ path: 'a.yml', text }]).join('\n'), /^variable image: a\.yml:3 service db/)
+})
+
+test('TDD-4: a postgres service with no image and no merge key is a problem', () => {
+  const text = 'services:\n  calendar-postgres:\n    build: ./pg\n'
+  assert.match(checkComposeServices([{ path: 'compose/calendar.yml', text }]).join('\n'),
+    /^no image: compose\/calendar\.yml:2 service calendar-postgres/)
+  // an OVERRIDE file's postgres entry overlays the base and carries no image
+  assert.deepEqual(checkComposeServices([{ path: 'docker-compose.override.yml', text }]), [])
+})
+
+test('a variable image on a service that is not Postgres is none of this guard\'s business', () => {
+  const text = 'services:\n  web:\n    image: ${WEB_IMAGE}\n'
+  assert.deepEqual(checkComposeServices([{ path: 'a.yml', text }]), [])
+})
+
+/** A docker-compose.yml body carrying the full, correct module set. */
+function moduleCompose({ skip = null, override = {} } = {}) {
+  const lines = [
+    'x-module-postgres: &module-postgres',
+    `  image: ${POSTGRES_IMAGE_REF}`,
+    'services:',
+    '  postgres:',
+    `    image: ${POSTGRES_IMAGE_REF}`,
+    '    labels:',
+    '      org.gremion.postgres: "kernel"',
+  ]
+  const vols = ['volumes:', '  pg-data:', '    name: gremion_pg_data']
+  for (const id of MODULE_POSTGRES_IDS) {
+    if (id === skip) continue
+    const o = override[id] ?? {}
+    lines.push(`  ${o.name ?? `${id}-postgres`}:`, '    <<: *module-postgres',
+      `    profiles: [${o.profile ?? id}]`, '    labels:',
+      `      org.gremion.postgres: "${o.label ?? `module:${id}`}"`,
+      '    volumes:', `      - ${id}-pg-data:${POSTGRES_DATA_MOUNT}`)
+    vols.push(`  ${id}-pg-data:`, `    name: ${o.volume ?? `gremion_module_${id}_pg_data`}`)
+  }
+  return [...lines, ...vols].join('\n') + '\n'
+}
+
+test('checkModuleSet passes on the full set', () => {
+  assert.deepEqual(checkModuleSet(moduleCompose()), [])
+})
+
+test('checkModuleSet goes RED on a missing module server', () => {
+  assert.match(checkModuleSet(moduleCompose({ skip: 'vault' })).join('\n'), /no vault-postgres service/)
+})
+
+test('checkModuleSet goes RED on a wrong label, a wrong profile and an unlabelled kernel', () => {
+  assert.match(checkModuleSet(moduleCompose({ override: { board: { label: 'module:vault' } } })).join('\n'),
+    /board-postgres is labelled org\.gremion\.postgres=module:vault, expected module:board/)
+  assert.match(checkModuleSet(moduleCompose({ override: { board: { profile: 'content' } } })).join('\n'),
+    /board-postgres is not gated under profiles: \[board\]/)
+  const noKernel = moduleCompose().replace('      org.gremion.postgres: "kernel"\n', '')
+  assert.match(checkModuleSet(noKernel).join('\n'), /the kernel postgres service is not labelled org\.gremion\.postgres=kernel/)
+})
+
+test('checkModuleSet goes RED on a stray labelled or *-postgres service outside the set', () => {
+  const stray = moduleCompose().replace('\nvolumes:\n', '\n  files-postgres:\n    <<: *module-postgres\nvolumes:\n')
+  assert.match(checkModuleSet(stray).join('\n'), /files-postgres is a Postgres service outside the module set/)
+})
+
+test('checkModuleSet refuses a module volume that reuses a live extraction-source name', () => {
+  // The extraction source's own stack names its PG16 leaf volumes
+  // gremion_<id>_pg_data. A PG18 server mounted on one of those is mounted on
+  // somebody's live data.
+  const problems = checkModuleSet(moduleCompose({ override: { calendar: { volume: 'gremion_calendar_pg_data' } } }))
+  assert.match(problems.join('\n'), /calendar-postgres mounts volume gremion_calendar_pg_data/)
+  const shared = checkModuleSet(moduleCompose({ override: { calendar: { volume: 'gremion_pg_data' } } }))
+  assert.match(shared.join('\n'), /calendar-postgres mounts volume gremion_pg_data/)
+})
+
+test('the committed docker-compose.yml carries the full, correct module set', () => {
+  const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
+  assert.deepEqual(checkModuleSet(text), [])
+  assert.deepEqual(checkComposeServices([{ path: 'docker-compose.yml', text }]), [])
+  const labelled = composeServices(text).filter((s) => s.label)
+  assert.equal(labelled.length, 1 + MODULE_POSTGRES_IDS.length)
+})
+
+// ── TASK-019: a per-module server left on an older major, digest and all ────
+
+test('TDD-5: --tree goes RED on tree-stale-module, a digested leaf on an older major', () => {
+  const files = fragmentFiles(join(FIX, 'tree-stale-module'))
+  assert.equal(files.length, 1, 'fixture precondition: one fragment')
+  const hits = scanText(files[0].path, files[0].text)
+  assert.equal(hits.length, 1, JSON.stringify(hits))
+  // read OFF the fixture, so a fixture that rotted to the pin fails here
+  assert.match(hits[0].digest ?? '', /^sha256:[0-9a-f]{64}$/, 'fixture precondition: it carries a digest')
+  assert.notEqual(hits[0].tag.split('-')[0], String(POSTGRES_MAJOR), 'fixture precondition: it is stale')
+  const problems = checkFiles(files)
+  assert.ok(problems.some((p) => p.startsWith(`mismatched: compose/calendar.yml:${hits[0].line} ${hits[0].ref}@`)),
+    problems.join('\n'))
+})
+
+test('TDD-5: tree-clean carries the digest pin and passes every --tree check', () => {
+  const files = fragmentFiles(join(FIX, 'tree-clean'))
+  const hits = scanText(files[0].path, files[0].text)
+  assert.equal(hits[0].digest, POSTGRES_IMAGE_DIGEST)
+  assert.deepEqual([...checkFiles(files), ...checkDataMounts(files), ...checkComposeServices(files)], [])
+})
+
+test('the stale-fixture rule names exactly the two stale fixtures, not tree-clean', () => {
+  const hit = (p) => EXCLUDED.filter((re) => re.test(p)).length
+  assert.equal(hit('test/host/fixtures/postgres-major/tree-stale-module/compose/calendar.yml'), 1)
+  assert.equal(hit('test/host/fixtures/postgres-major/tree-clean/compose/calendar.yml'), 0)
+  assert.equal(hit('test/host/fixtures/postgres-major/tree-stale-other/compose/calendar.yml'), 0)
+})
+
+// ── TDD-9: the suites cannot shrink silently ───────────────────────────────
+//
+// B37 shipped 38 tests here; TASK-019 added 40 (this one included: 41) and a
+// 15-test suite for the running check. A test deleted to get a red run green
+// would otherwise leave every remaining test passing and nothing to notice.
+const B37_TESTS = 38
+const TASK019_TESTS = 41
+const RUNNING_TESTS = 15
+
+const countTests = (text) => (text.match(/^test\(/gm) ?? []).length
+
+test('TDD-9: the suites hold at least 38 + the TASK-019 tests', () => {
+  const own = countTests(readFileSync(fileURLToPath(import.meta.url), 'utf8'))
+  assert.ok(own >= B37_TESTS + TASK019_TESTS,
+    `check-postgres-major.test.mjs has ${own} tests, expected >= ${B37_TESTS} + ${TASK019_TESTS}`)
+  const running = countTests(readFileSync(join(ROOT, 'scripts/check-postgres-major-running.test.mjs'), 'utf8'))
+  assert.ok(running >= RUNNING_TESTS,
+    `check-postgres-major-running.test.mjs has ${running} tests, expected >= ${RUNNING_TESTS}`)
+})
+
+// ── review round 1 (TASK-019): the evasions the silent-failure lens built ───
+
+test('R1: floating codename tags are unpinned, bare or registry-prefixed', () => {
+  for (const tag of ['bookworm', 'trixie', 'bullseye', 'alpine3.22']) {
+    for (const line of [`    image: postgres:${tag}`, `FROM docker.io/library/postgres:${tag}`]) {
+      const path = line.startsWith('FROM') ? 'Dockerfile' : 'a.yml'
+      const problems = checkFiles([{ path, text: `${line}\n` }])
+      assert.equal(problems.length, 1, `${line}: ${problems.join('\n')}`)
+      assert.match(problems[0], /^unpinned: /, `${line}: ${problems[0]}`)
+    }
+  }
+})
+
+test('R1: on a declaration the tag must be exactly <major>-alpine, digest or not', () => {
+  for (const tag of [`${POSTGRES_MAJOR}-bookworm`, `${POSTGRES_MAJOR}.6-alpine3.24`, `${POSTGRES_MAJOR}`]) {
+    const problems = checkFiles([{ path: 'a.yml', text: `    image: postgres:${tag}@${POSTGRES_IMAGE_DIGEST}\n` }])
+    assert.equal(problems.length, 1, `${tag}: ${problems.join('\n')}`)
+    assert.match(problems[0], /^tag-drift: a\.yml:1/, problems[0])
+  }
+  // prose may still name the major any way it likes
+  assert.deepEqual(checkFiles([
+    { path: 'docs/x.md', text: `PostgreSQL \`postgres:${POSTGRES_MAJOR}\` family\n` },
+    { path: 'a.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
+  ]), [])
+})
+
+test('R1: a # inside quotes does not start a comment', () => {
+  const hits = scanText('x.yml', `    command: echo "a #b" && docker run ${POSTGRES_IMAGE_TAG}`)
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0].decl, true)
+  assert.equal(classify(hits[0]), 'undigested')
+  // a real trailing comment still is one
+  assert.equal(scanText('x.yml', `    image: nginx  # was ${POSTGRES_IMAGE_TAG}`)[0].decl, false)
+})
+
+test('R1: Containerfile, *.Dockerfile and *.env files declare', () => {
+  for (const path of ['Containerfile', 'docker/pg.Dockerfile', 'deploy/prod.env']) {
+    const line = path.endsWith('.env') ? `PG_IMAGE=${POSTGRES_IMAGE_TAG}` : `FROM ${POSTGRES_IMAGE_TAG}`
+    assert.match(checkFiles([{ path, text: `${line}\n` }]).join('\n'), /^undigested: /, path)
+  }
+})
+
+test('R1: a module service or the anchor carrying a non-pinned image is refused', () => {
+  const own = moduleCompose().replace('  board-postgres:\n    <<: *module-postgres\n',
+    '  board-postgres:\n    <<: *module-postgres\n    image: pgvector/pgvector:pg16\n')
+  assert.match(checkModuleSet(own).join('\n'), /board-postgres runs image pgvector\/pgvector:pg16, expected postgres:/)
+  const anchor = moduleCompose().replace(`  image: ${POSTGRES_IMAGE_REF}\nservices:`, '  image: bitnami/postgresql:16\nservices:')
+  assert.notEqual(anchor, moduleCompose(), 'fixture did not apply')
+  assert.match(checkModuleSet(anchor).join('\n'), /x-module-postgres anchor runs image bitnami\/postgresql:16/)
+  const kernel = moduleCompose().replace(`    image: ${POSTGRES_IMAGE_REF}\n    labels:\n      org.gremion.postgres: "kernel"`,
+    `    image: pgvector/pgvector:pg18\n    labels:\n      org.gremion.postgres: "kernel"`)
+  assert.match(checkModuleSet(kernel).join('\n'), /the kernel postgres service runs image pgvector\/pgvector:pg18/)
+})
+
+test('R1: anchored and quoted service keys are parsed; a prefixed label key is not the label', () => {
+  const text = [
+    'services:',
+    '  extra-postgres: &ex',
+    '    image: ${X}',
+    '  "other-postgres":',
+    '    image: ${Y}',
+    '  db:',
+    `    image: ${POSTGRES_IMAGE_REF}`,
+    '    labels:',
+    '      x.org.gremion.postgres: "module:board"',
+  ].join('\n')
+  const s = composeServices(text)
+  assert.deepEqual(s.map((x) => x.name), ['extra-postgres', 'other-postgres', 'db'])
+  assert.equal(s[2].label, null)
+  assert.equal(checkComposeServices([{ path: 'docker-compose.yml', text }]).length, 2)
+})
+
+// ── review round 2 (TASK-019) ──────────────────────────────────────────────
+
+test('R2: a module service must merge exactly *module-postgres, not another anchor', () => {
+  for (const merge of ['<<: *evil', '<<: [*evil, *module-postgres]']) {
+    const text = moduleCompose().replace('  board-postgres:\n    <<: *module-postgres\n', `  board-postgres:\n    ${merge}\n`)
+    assert.match(checkModuleSet(text).join('\n'), /board-postgres merges \[.*evil.*\], expected exactly \[module-postgres\]/, merge)
+  }
+})
+
+test('R2: an unmatched apostrophe does not swallow a real comment; an escaped quote does not end a string', () => {
+  assert.equal(scanText('x.sh', `echo don't  # was ${POSTGRES_IMAGE_TAG}`)[0].decl, false)
+  assert.equal(scanText('a.yml', `description: Bob's db  # formerly ${POSTGRES_IMAGE_TAG}`)[0].decl, false)
+  assert.equal(scanText('x.sh', `echo "a\\" # " docker run ${POSTGRES_IMAGE_TAG}`)[0].decl, true)
+})
+
+test('R2: a label key glued to a hyphen is not the org.gremion.postgres label', () => {
+  const text = `services:\n  db:\n    image: ${POSTGRES_IMAGE_REF}\n    labels:\n      - x-org.gremion.postgres=module:board\n      com.acme-org.gremion.postgres: kernel\n`
+  assert.equal(composeServices(text)[0].label, null)
+  const ok = `services:\n  db:\n    labels:\n      - org.gremion.postgres=module:board\n`
+  assert.equal(composeServices(ok)[0].label, 'module:board')
+})
+
+test('R2: pre-release and suffixed codename tags are read and unpinned', () => {
+  for (const tag of [`${POSTGRES_MAJOR}beta3-alpine`, `${POSTGRES_MAJOR}rc1`, 'trixie-slim', 'bookworm-slim']) {
+    const problems = checkFiles([{ path: 'a.yml', text: `    image: postgres:${tag}\n` }])
+    assert.equal(problems.length, 1, `${tag}: ${problems.join('\n')}`)
+    assert.match(problems[0], /^unpinned: /, `${tag}: ${problems[0]}`)
+  }
+})
+
+test('R2: an inline profiles list with a trailing comment parses to its ids', () => {
+  const s = composeServices('services:\n  board-postgres:\n    profiles: [board] # note\n')
+  assert.deepEqual(s[0].profiles, ['board'])
 })

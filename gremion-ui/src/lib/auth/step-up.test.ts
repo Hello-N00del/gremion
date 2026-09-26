@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest'
-import { LOA, acrToLoa, evaluateStepUp } from './step-up'
+import { acrToLoa, evaluateStepUp } from './step-up'
 
 describe('acrToLoa', () => {
   test.each([['loa2', 2], ['loa1', 1], ['2', 2], ['1', 1], [null, 0], [undefined, 0], ['nope', 0]] as const)(

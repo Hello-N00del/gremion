@@ -3,15 +3,16 @@ import { render } from '@testing-library/svelte'
 import Sidebar from './Sidebar.svelte'
 import type { NavItem } from './nav-schema'
 
+
 const minimalNav: NavItem[] = [
-  { kind: 'item', href: '/', label: 'Home' },
-  { kind: 'item', href: '/calendar', label: 'Kalender' },
+  { kind: 'item', href: '/', label: 'Home', icon: 'home' },
+  { kind: 'item', href: '/calendar', label: 'Kalender', icon: 'calendar' },
   {
     kind: 'section',
     label: 'Finanzen',
     children: [
-      { kind: 'item', href: '/finance', label: 'Übersicht' },
-      { kind: 'item', href: '/finance/approvals', label: 'Freigaben', badge: 'count' }
+      { kind: 'item', href: '/finance', label: 'Übersicht', icon: 'euro' },
+      { kind: 'item', href: '/finance/approvals', label: 'Freigaben', icon: 'check', badge: 'count' }
     ]
   }
 ]
@@ -52,7 +53,7 @@ describe('Sidebar', () => {
 
   test('renders live badge from counts.liveVotes', () => {
     const navWithVotes: NavItem[] = [
-      { kind: 'item', href: '/votes', label: 'Abstimmungen', badge: 'live' }
+      { kind: 'item', href: '/votes', label: 'Abstimmungen', icon: 'vote', badge: 'live' }
     ]
     const { getByText } = render(Sidebar, {
       props: { nav: navWithVotes, activeHref: '/', counts: { approvals: 0, liveVotes: 2, unread: 0 } }
@@ -62,7 +63,7 @@ describe('Sidebar', () => {
 
   test('renders the neutral unread badge from counts.unread, distinct from .live', () => {
     const navWithMessages: NavItem[] = [
-      { kind: 'item', href: '/messages', label: 'Matrix · Chat', badge: 'unread' }
+      { kind: 'item', href: '/messages', label: 'Matrix · Chat', icon: 'chat', badge: 'unread' }
     ]
     const { getByText } = render(Sidebar, {
       props: { nav: navWithMessages, activeHref: '/', counts: { approvals: 0, liveVotes: 0, unread: 7 } }
@@ -76,7 +77,7 @@ describe('Sidebar', () => {
 
   test('omits the unread badge when counts.unread is 0', () => {
     const navWithMessages: NavItem[] = [
-      { kind: 'item', href: '/messages', label: 'Matrix · Chat', badge: 'unread' }
+      { kind: 'item', href: '/messages', label: 'Matrix · Chat', icon: 'chat', badge: 'unread' }
     ]
     const { container } = render(Sidebar, {
       props: { nav: navWithMessages, activeHref: '/', counts: { approvals: 0, liveVotes: 0, unread: 0 } }

@@ -1,0 +1,5 @@
+# Generator staging dirs and the Docker-side pub cache (brief §9: never
+# os.tmpdir()). Everything under a surface directory is generated output and
+# IS committed, pubspec.lock and the build_runner *.g.dart files included.
+.gen-work/
+node_modules/
