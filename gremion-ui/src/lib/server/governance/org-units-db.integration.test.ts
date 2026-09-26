@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { getDb } from '../db'
 import {
-  createOrgUnit, getOrgUnit, listOrgUnits, getChildOrgUnits,
+  createOrgUnit, getOrgUnit, getChildOrgUnits,
   updateOrgUnit, deleteOrgUnit,
   addOrgUnitMember, listOrgUnitMembers, removeOrgUnitMember,
-  isMemberOf, getOrgUnitIdsForUser, buildOrgTree
+  isMemberOf, getOrgUnitIdsForUser
 } from './org-units-db'
 
 describe('org-units-db', () => {
