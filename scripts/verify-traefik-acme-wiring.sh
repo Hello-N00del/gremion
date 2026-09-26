@@ -367,8 +367,11 @@ trap cleanup_all EXIT
 
 # A scrubbed environment, as in the render guard: a shell variable outranks
 # --env-file, and this proof must measure the repository, not the caller.
+# PROGRAMFILES and USERPROFILE are unset on Linux; on Windows (Git Bash) the
+# docker CLI finds its cli-plugins, compose among them, only through them.
 TRAEFIK_CMD=""
 if env -i PATH="$PATH" HOME="${HOME:-/root}" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+        ${PROGRAMFILES:+PROGRAMFILES="$PROGRAMFILES"} ${USERPROFILE:+USERPROFILE="$USERPROFILE"} \
         ${DOCKER_CONFIG:+DOCKER_CONFIG="$DOCKER_CONFIG"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
         ${DOCKER_CERT_PATH:+DOCKER_CERT_PATH="$DOCKER_CERT_PATH"} ${DOCKER_TLS_VERIFY:+DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY"} \
         docker compose --env-file "$FIXTURE_ENV" config --format json \
