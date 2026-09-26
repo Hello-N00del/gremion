@@ -8,5 +8,8 @@
   "engines": {
     "node": ">=26 <27",
     "pnpm": ">=10"
+  },
+  "scripts": {
+    "verify": "make verify"
   }
 }
