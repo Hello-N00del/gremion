@@ -185,8 +185,10 @@ It terminates TLS with certificates it obtains itself from an ACME CA (Let's
 Encrypt) over **HTTP-01** through the `le-http` resolver; the host publishes
 `:80` and `:443` on its edge address and requests arrive there directly. There
 is no Cloudflare Origin Certificate and no default-certificate store any more:
-a router that names no resolver is served Traefik's own self-signed default,
-which fails loudly instead of looking healthy.
+a router that names no resolver is served Traefik's own self-signed default.
+Every client sees that certificate, but neither the container healthcheck nor
+the Traefik log does; `gremion-verify`'s certificate check is what turns it
+red.
 
 - **Bind addresses.** Every publish names its host address; nothing binds
   `0.0.0.0` or `::`. `web` (:80) and `websecure` (:443) publish on
