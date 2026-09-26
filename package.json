@@ -10,7 +10,8 @@
     "pnpm": ">=10"
   },
   "scripts": {
-    "verify": "make verify"
+    "verify": "make verify",
+    "lint:js": "oxlint --type-aware"
   },
   "dependencies": {
     "yaml": "2.9.0"
