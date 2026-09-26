@@ -368,6 +368,42 @@ lint-toolchain:
 	 echo "[toolchain] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-toolchain.mjs
 
+# TASK-022: the ACME edge render guard (scripts/check-compose-edge.test.mjs).
+# Renders the production composition with the fixed fixture
+# test/host/fixtures/edge-render/state.env and asserts the bind addresses,
+# the static file and the service shape. Needs docker (compose config only,
+# never `up`). The suite's collected count is asserted against its declared
+# `test(` count, for the reason lint-extraction-source gives -- and because
+# this suite registers its tests only when it is the process entry (it is
+# imported by TASK-034), so a runner that stopped making it the entry would
+# collect zero. NOT wired into the `lint` aggregate: TASK-045 owns that.
+.PHONY: lint-edge-render test-edge-static
+lint-edge-render:
+	@echo "Checking the ACME edge render..."
+	@declared=$$(grep -c '^test(' scripts/check-compose-edge.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-compose-edge.test.mjs 2>&1); \
+	 status=$$?; \
+	 printf '%s\n' "$$out" >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ]; then \
+	   echo "lint-edge-render: scripts/check-compose-edge.test.mjs declares no top-level test() -- the suite collects nothing and would still exit 0." >&2; \
+	   exit 1; \
+	 fi; \
+	 if [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-edge-render: the suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[edge-render] suite: $$collected of $$declared declared test(s) ran"
+
+# TASK-022: the scratch-stack proof of the ACME edge (Docker; minutes, not
+# seconds -- it waits for a real certificate renewal). Brings up only traefik,
+# docker-socket-proxy and a scratch ACME CA under a t022-<sha8> project and
+# removes them by name; never `docker compose down`. Then the mechanism proof.
+test-edge-static:
+	@bash test/host/integration/edge-static.sh
+	@bash scripts/verify-traefik-acme-wiring.sh
+
 # TASK-005 (TRD-265, TRD-112, TRD-268): the marketing-copy check. Copy that
 # names a licence-register system with a licence other than its register value,
 # or that asserts online student-body elections are lawful / the module fit for
