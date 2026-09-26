@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import { test } from 'node:test'
 import { combineParts, evaluateSuite } from './lib/guard.mjs'
-import { nodeTestParts, vitestSubcheck } from './suites/unit.mjs'
+import { batsWindowsTags, nodeTestParts, vitestSubcheck } from './suites/unit.mjs'
 
 const WIRING = path.join(import.meta.dirname, '__fixtures__', 'vitest-script-wiring')
 const FIXTURES = path.join(import.meta.dirname, '__fixtures__')
@@ -31,4 +31,19 @@ test('nodeTestParts reports a file with zero declared tests as an EMPTY part, wh
 test('nodeTestParts with no files at all is one empty part, never nothing', () => {
   const parts = nodeTestParts({ cwd: FIXTURES, files: [] })
   assert.equal(evaluateSuite(combineParts(parts)).status, 'fail')
+})
+
+// Round 2 LOW: batsPartWindows used to build fixed ":local" tags a second
+// worktree, or a second concurrent verify run, could clobber mid-build.
+const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
+
+test('batsWindowsTags is unique per run (pid), never the old shared ":local" tag', () => {
+  const a = batsWindowsTags(REPO_ROOT, 11111)
+  const b = batsWindowsTags(REPO_ROOT, 22222)
+  assert.notEqual(a.runnerTag, b.runnerTag)
+  assert.notEqual(a.pyTag, b.pyTag)
+  assert.doesNotMatch(a.runnerTag, /^gremion-bats:local$/)
+  assert.doesNotMatch(a.pyTag, /^gremion-bats-py:local$/)
+  assert.match(a.runnerTag, /^gremion-bats:verify-[0-9a-f]{8}-11111$/)
+  assert.match(a.pyTag, /^gremion-bats-py:verify-[0-9a-f]{8}-11111$/)
 })

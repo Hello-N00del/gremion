@@ -16,9 +16,9 @@
 // about three minutes, so the whole suite does not fit a single 4-minute
 // agent tool call. A part run is always a partial record; only a full
 // `verify` (every required suite, `unit` whole) satisfies check-record.
-import { existsSync, globSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
+import { headSha } from '../lib/git.mjs'
 import { combineParts } from '../lib/guard.mjs'
 import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary } from '../lib/parsers.mjs'
 import { run, tail, toolAvailable } from '../lib/proc.mjs'
@@ -83,6 +83,23 @@ export function nodeTestParts({ cwd, files }) {
   })
 }
 
+// TASK-045 (round 2 LOW): worktree/run-unique image tags and clone
+// directory, computed as a pure function so it is testable without invoking
+// docker. The old shared ":local" tags and os.tmpdir() clone meant two
+// worktrees (or two verify runs on the same worktree) building/cloning at
+// once could clobber each other's image or race each other's cleanup -- this
+// repo's own docker rules (brief S9) already require worktree-unique names
+// for the exact same reason the test DB container is named
+// verify-<sha8>-<pid>-db.
+export function batsWindowsRunId(cwd, pid = process.pid) {
+  return `${headSha(cwd).slice(0, 8)}-${pid}`
+}
+
+export function batsWindowsTags(cwd, pid = process.pid) {
+  const runId = batsWindowsRunId(cwd, pid)
+  return { runnerTag: `gremion-bats:verify-${runId}`, pyTag: `gremion-bats-py:verify-${runId}` }
+}
+
 // On win32 the npm bats shim rejects the C:/ path the recipe's own shell
 // reports as its cwd (Makefile test-host-docker comment), and native bats
 // runs ~200x slower even when it does start. Route through the same
@@ -97,31 +114,45 @@ function batsPartWindows({ label, cwd, patterns }) {
   }
   const runnerDir = path.join(cwd, 'test', 'host', 'runner')
   const batsRunnerDockerfile = path.join(cwd, 'scripts', 'verify', 'bats-runner')
-  const baseBuild = run('docker', ['build', '-q', '-t', 'gremion-bats:local', runnerDir])
-  if (baseBuild.code !== 0) {
-    return { label, unparseable: true, detail: `docker build gremion-bats:local failed:\n${tail(baseBuild.stdout + baseBuild.stderr)}` }
-  }
-  const pyBuild = run('docker', ['build', '-q', '-t', 'gremion-bats-py:local', batsRunnerDockerfile])
-  if (pyBuild.code !== 0) {
-    return { label, unparseable: true, detail: `docker build gremion-bats-py:local failed:\n${tail(pyBuild.stdout + pyBuild.stderr)}` }
-  }
-
-  const cloneDir = mkdtempSync(path.join(tmpdir(), 'verify-bats-clone-'))
+  const { runnerTag, pyTag } = batsWindowsTags(cwd)
   try {
-    const clone = run('git', ['clone', '--no-hardlinks', cwd, cloneDir])
-    if (clone.code !== 0) {
-      return { label, unparseable: true, detail: `git clone into scratch failed:\n${tail(clone.stdout + clone.stderr)}` }
+    const baseBuild = run('docker', ['build', '-q', '-t', runnerTag, runnerDir])
+    if (baseBuild.code !== 0) {
+      return { label, unparseable: true, detail: `docker build ${runnerTag} failed:\n${tail(baseBuild.stdout + baseBuild.stderr)}` }
     }
-    const files = patterns.flatMap((p) => globSync(p, { cwd: cloneDir })).map((f) => f.split(path.sep).join('/')).sort()
-    if (files.length === 0) {
-      return { label, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
+    const pyBuild = run('docker', ['build', '-q', '-t', pyTag, batsRunnerDockerfile])
+    if (pyBuild.code !== 0) {
+      return { label, unparseable: true, detail: `docker build ${pyTag} failed:\n${tail(pyBuild.stdout + pyBuild.stderr)}` }
     }
-    const res = run('docker', ['run', '--rm', '-v', `${cloneDir}:/wt`, '-w', '/wt', 'gremion-bats-py:local', '--tap', ...files], {
-      env: { ...process.env, MSYS_NO_PATHCONV: '1' },
-    })
-    return judgeBats(label, res, 'bats (container)')
+
+    // Under scripts/verify/out/ (gitignored), never the shared OS tmpdir,
+    // which every worktree and every verify run on the machine shares with
+    // nothing to stop two runs' clone directories or cleanups colliding.
+    const cloneParent = path.join(cwd, 'scripts', 'verify', 'out', `bats-clone-${batsWindowsRunId(cwd)}`)
+    mkdirSync(cloneParent, { recursive: true })
+    const cloneDir = mkdtempSync(path.join(cloneParent, 'clone-'))
+    try {
+      const clone = run('git', ['clone', '--no-hardlinks', cwd, cloneDir])
+      if (clone.code !== 0) {
+        return { label, unparseable: true, detail: `git clone into scratch failed:\n${tail(clone.stdout + clone.stderr)}` }
+      }
+      const files = patterns.flatMap((p) => globSync(p, { cwd: cloneDir })).map((f) => f.split(path.sep).join('/')).sort()
+      if (files.length === 0) {
+        return { label, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
+      }
+      const res = run('docker', ['run', '--rm', '-v', `${cloneDir}:/wt`, '-w', '/wt', pyTag, '--tap', ...files], {
+        env: { ...process.env, MSYS_NO_PATHCONV: '1' },
+      })
+      return judgeBats(label, res, 'bats (container)')
+    } finally {
+      rmSync(cloneDir, { recursive: true, force: true })
+    }
   } finally {
-    rmSync(cloneDir, { recursive: true, force: true })
+    // Tolerant, same pattern as suites/integration.mjs#stopTestDb: never
+    // masks the real result, and must run even when the caller above is
+    // already unwinding from a build/run failure.
+    run('docker', ['rmi', '-f', runnerTag])
+    run('docker', ['rmi', '-f', pyTag])
   }
 }
 
