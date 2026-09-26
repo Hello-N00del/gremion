@@ -21,6 +21,7 @@ import {
   readInternalPushSecret,
   readProxyTrustSecret,
 } from '$lib/server/internal-fetch'
+import { isResolveExemptRequest } from '$lib/server/boot-exempt'
 
 /**
  * Extract the tenant slug = the leftmost DNS label of the trusted edge-forwarded
@@ -179,6 +180,12 @@ export const tenantForwardFetch: HandleFetch = async ({ event, request, fetch })
 }
 
 export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
+  // TASK-023 (B-05): the closed BOOT_AND_RESOLVE_EXEMPT_PATHS list skips
+  // resolution -- no proxy-trust gate, no lookup, no tenant context: /healthz
+  // always, an /api/internal/ request only when it names no tenant (see
+  // boot-exempt.ts). This must stay the first statement.
+  if (isResolveExemptRequest(event.url.pathname, event.request.headers)) return resolve(event)
+
   // P2.1c (T5): executable proxy-trust. When TENANT_PROXY_SHARED_SECRET is set,
   // an edge request that does not prove proxy-trust (the Traefik-injected
   // x-proxy-trust header, OR a valid T4 internal-fetch hop) is rejected with

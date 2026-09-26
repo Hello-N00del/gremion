@@ -1,6 +1,7 @@
 import { handle as authHandle } from './auth'
 import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
+import { building } from '$app/environment'
 import { readOrMintCorrelationId, CORRELATION_HEADER } from '$lib/server/ports/tracer'
 import { canAccess, pageAccessForTenant, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
@@ -9,7 +10,8 @@ import { readConfig } from '$lib/server/config'
 import { moduleGateResponse } from '$lib/server/module-gate'
 import { requireBrand } from '$lib/server/brand'
 import { instanceThemeStyleTag } from '$lib/theme/instance-theme'
-import { waitForDbReady } from '$lib/server/db'
+import { waitForDbReady, isTransientDbStartupError } from '$lib/server/db'
+import { isBootAndResolveExempt } from '$lib/server/boot-exempt'
 import { startProvisioningWorker } from '$lib/server/governance/provisioning/worker'
 import { verifyBearerJwt } from '$lib/server/jwt-verify'
 import { purgeAuditLogsOlderThan, verifyAuditChain } from '$lib/server/audit-db'
@@ -45,16 +47,64 @@ import { runServerInitHooks } from '$lib/server/modules/runtime-registry'
 // Contract (P2.1b T3 / D-READY scopes it):
 //   - `_bootComplete` is set to true ONLY after the boot steps return.
 //   - A CONTROL-plane/boot failure populates `_bootError` and `_bootComplete`
-//     stays false; the authGuard returns a PROCESS-wide 503 until ops restarts
-//     the process. process.exitCode is set so an orchestrator's healthcheck
-//     loop can recycle the container.
+//     stays false; the authGuard returns a PROCESS-wide 503 meanwhile.
+//     TASK-023 splits the failure by isTransientDbStartupError:
+//       * TRANSIENT (Postgres went away mid-boot): the memo is dropped, so the
+//         next boot() call re-attempts, and ONE re-attempt is scheduled on an
+//         unref()'d timer (BOOT_RETRY_DELAY_MS, Q2). process.exitCode is NOT
+//         touched (Q3): the process is healing, not failing. The healing has a
+//         ceiling: the BOOT_MAX_TRANSIENT_FAILURES-th consecutive transient
+//         failure is treated as non-transient.
+//       * NON-TRANSIENT (bad credentials, a schema fault, an exhausted startup
+//         budget -- Q1): process.exitCode = 1 and bootRuntime.exit(1), so the
+//         container's restart policy recycles it instead of it latching a
+//         permanent 503.
+//     The waiting itself (500 ms doubling to a 30 s ceiling) is
+//     waitForDbReady's; this layer only decides between re-attempt and exit.
 //   - A per-TENANT data-plane migration failure no longer fails boot: it lands
 //     in the readiness map (lib/server/tenant/readiness.ts) and that tenant is
 //     503-gated at the resolution seam with a lazy re-migration retry, so
 //     G-014's "no traffic against a half-migrated DB" holds per tenant.
 let _bootComplete = false
 let _bootError: Error | null = null
+let _bootErrorRetryable = false
 let _bootPromise: Promise<void> | null = null
+let _bootAttemptId = 0
+let _bootRetryPending = false
+
+/** Q2: delay before the one scheduled re-attempt after a transient boot failure. */
+export const BOOT_RETRY_DELAY_MS = 5_000
+/**
+ * The re-attempt ceiling. Each attempt starts waitForDbReady's budget afresh, so
+ * a database that answers the readiness ping but keeps cutting a later boot step
+ * off with a transient-looking error would otherwise re-attempt forever while
+ * /healthz stays green. This many consecutive transient failures exit 1.
+ */
+export const BOOT_MAX_TRANSIENT_FAILURES = 10
+let _bootTransientFailures = 0
+
+/**
+ * The two process-level side effects of boot, behind a seam so tests can observe
+ * them. `schedule` unrefs its timer: a pending re-attempt must never keep a
+ * shutting-down process alive.
+ */
+export const bootRuntime = {
+  exit(code: number): void {
+    process.exit(code)
+  },
+  schedule(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+    return setTimeout(fn, ms).unref()
+  },
+}
+
+function scheduleBootRetry(): void {
+  if (_bootRetryPending) return
+  _bootRetryPending = true
+  bootRuntime.schedule(() => {
+    _bootRetryPending = false
+    void boot()
+  }, BOOT_RETRY_DELAY_MS)
+}
 
 /**
  * Test/observability hook: read-only view of boot state. Exported so unit
@@ -66,7 +116,11 @@ export function getBootStatus(): { complete: boolean; error: Error | null } {
 
 export function boot(): Promise<void> {
   if (_bootPromise) return _bootPromise
+  const attemptId = ++_bootAttemptId
   _bootPromise = (async () => {
+    // Yield once, so _bootPromise holds this attempt before any failure below
+    // can drop it.
+    await Promise.resolve()
     try {
       // Survive a reboot race: if the Docker daemon starts gremion-ui before
       // Postgres is accepting connections, wait (retrying transient startup
@@ -216,19 +270,46 @@ export function boot(): Promise<void> {
       // and ran above via runServerInitHooks().)
 
       _bootComplete = true
+      _bootError = null
+      _bootErrorRetryable = false
+      _bootTransientFailures = 0
     } catch (err) {
       _bootError = err instanceof Error ? err : new Error(String(err))
-      console.error('[boot] failed:', err)
-      // Signal to orchestrator that this process is unhealthy; the authGuard
-      // below will serve 503 in the meantime so we don't accept traffic against
-      // a half-migrated DB.
-      process.exitCode = 1
+      const transient = isTransientDbStartupError(err)
+      if (transient) _bootTransientFailures++
+      _bootErrorRetryable = transient && _bootTransientFailures < BOOT_MAX_TRANSIENT_FAILURES
+      if (_bootErrorRetryable) {
+        // Self-heal: drop the memo so the next boot() re-attempts, and make sure
+        // one re-attempt happens even if nothing else calls boot(). The authGuard
+        // serves 503 booting (Retry-After: 5) in the meantime.
+        console.error(
+          `[boot] failed (transient ${_bootTransientFailures}/${BOOT_MAX_TRANSIENT_FAILURES}), re-attempting in ${BOOT_RETRY_DELAY_MS} ms:`,
+          err,
+        )
+        if (_bootAttemptId === attemptId) _bootPromise = null
+        scheduleBootRetry()
+      } else {
+        // Not something waiting fixes (or waiting has not fixed it): exit, so the
+        // restart policy recycles the container. exitCode first, in case exit is
+        // intercepted.
+        console.error(
+          transient
+            ? `[boot] failed (transient ${_bootTransientFailures}/${BOOT_MAX_TRANSIENT_FAILURES}: re-attempt ceiling reached), exiting 1:`
+            : '[boot] failed (non-transient), exiting 1:',
+          err,
+        )
+        process.exitCode = 1
+        bootRuntime.exit(1)
+      }
     }
   })()
   return _bootPromise
 }
 
-boot()
+// Not while SvelteKit builds: its analyse step imports this module, and a
+// non-transient boot failure (no database configured at build time) exits 1,
+// which would kill `vite build`.
+if (!building) void boot()
 
 /**
  * Build a SessionUser from a raw Keycloak JWT payload. `vocabulary` is the
@@ -279,20 +360,6 @@ function tenantMismatchResponse(path: string): Response {
 }
 
 export const authGuard: Handle = async ({ event, resolve }) => {
-  // T4.1 (G-014): refuse traffic until boot has completed. If boot threw,
-  // there's no point serving anything until the operator restarts — return
-  // a permanent 503. If boot is merely still running (cold start, first
-  // request beats the migration), hint the client to retry in 5 s.
-  if (!_bootComplete) {
-    if (_bootError) {
-      return new Response('Service Unavailable: boot failed', { status: 503 })
-    }
-    return new Response('Service Unavailable: booting', {
-      status: 503,
-      headers: { 'Retry-After': '5' }
-    })
-  }
-
   const path = event.url.pathname
 
   // Default locals to a known shape before any branching. authGuard is the
@@ -302,6 +369,42 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   event.locals.user = null
   event.locals.accessToken = null
   event.locals.accessTokenExpires = null
+
+  // TASK-023: a request on the closed BOOT_AND_RESOLVE_EXEMPT_PATHS list that
+  // the resolver handed on WITHOUT a tenant (/healthz; an /api/internal/ call
+  // naming no tenant, which only the container network can make).
+  const unresolvedExempt = isBootAndResolveExempt(path) && !event.locals.tenant
+  // Such a request with no matching route would have SvelteKit render its 404
+  // through the root layout, whose load needs locals.auth and a tenant — neither
+  // exists here (Auth.js was skipped), so it would surface as a 500. Answer the
+  // 404 without rendering anything.
+  if (unresolvedExempt && !event.route?.id) return new Response('Not Found', { status: 404 })
+
+  // T4.1 (G-014): refuse traffic until boot has completed. If boot failed for
+  // good, the process is exiting — return 'boot failed'. If boot is still
+  // running or re-attempting after a transient failure, hint the client to
+  // retry in 5 s.
+  // TASK-023: an unresolved exempt request is answered during boot too. A
+  // tenant-resolved request is gated like any other: the per-tenant readiness
+  // gate is inert until the boot fleet runs, so this 503 is what keeps it off a
+  // half-migrated database.
+  if (!_bootComplete) {
+    if (unresolvedExempt) return resolve(event)
+    if (_bootError && !_bootErrorRetryable) {
+      return new Response('Service Unavailable: boot failed', { status: 503 })
+    }
+    return new Response('Service Unavailable: booting', {
+      status: 503,
+      headers: { 'Retry-After': '5' }
+    })
+  }
+
+  // TASK-023: an unresolved exempt request is not session-authenticated either —
+  // /healthz is public by design, and an /api/internal/ handler authenticates
+  // its caller itself (a static guard in boot-exempt.test.ts enforces that). A
+  // tenant-resolved /api/internal/ request — anything through the edge — takes
+  // the session, Bearer, iss-match and module gates below exactly as before.
+  if (unresolvedExempt) return resolve(event)
 
   // Public routes — no auth required
   // /api/setup/seed self-guards with the X-Seed-Token header + an empty-DB check,
@@ -578,6 +681,16 @@ export const correlationHandle: Handle = ({ event, resolve }) => {
   return resolve(event)
 }
 
+// TASK-023: Auth.js builds its config from the resolved tenant and throws
+// without one, so a request the resolver handed on unresolved (/healthz, an
+// /api/internal/ call naming no tenant — see boot-exempt.ts) skips it; the
+// authGuard below is what answers such a request. A tenant-resolved request
+// goes through Auth.js exactly as before.
+export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
+  isBootAndResolveExempt(event.url.pathname) && !event.locals.tenant
+    ? resolve(event)
+    : authHandle({ event, resolve })
+
 // correlationHandle is element 0: it mints/validates the correlation id BEFORE
 // tenant resolution, auth, or any data-plane query so every downstream handle
 // (including tenantResolveHandle's ALS scope) can read event.locals.correlationId.
@@ -586,7 +699,7 @@ export const handle = sequence(
   correlationHandle,
   tenantResolveHandle,
   tenantBrandStyleHandle,
-  authHandle,
+  authHandleUnlessExempt,
   authGuard,
   i18nHandle,
   cspGuard,

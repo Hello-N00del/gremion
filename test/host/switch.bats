@@ -87,6 +87,54 @@ EOF
     ! grep -q 'middlewares' "${GREMION_ROOT}/etc/edge/active.yml"
 }
 
+# probe_path <service> — the healthCheck.path rendered for one file-provider
+# service of active.yml (the 4-space-indented key under http.services).
+probe_path() {
+    awk -v svc="    $1:" '
+        $0 == svc { on = 1; next }
+        on && /^    [A-Za-z-]+:/ { on = 0 }
+        on && /^ *path:/ { sub(/^ *path: */, ""); print; exit }
+    ' "${GREMION_ROOT}/etc/edge/active.yml"
+}
+
+@test "TASK-023: PUBLIC_BASE_PATH=/portal moves the public and public-next probes to /portal/healthz" {
+    shim_edge blue
+    printf 'PUBLIC_BASE_PATH=/portal\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    run "$SWITCH" blue
+    [ "$status" -eq 0 ]
+    [ "$(probe_path public)" = "/portal/healthz" ]
+    [ "$(probe_path public-next)" = "/portal/healthz" ]
+    # the app is not mounted under the portal's base path
+    [ "$(probe_path app)" = "/healthz" ]
+    [ "$(probe_path app-next)" = "/healthz" ]
+}
+
+@test "TASK-023: an empty or absent PUBLIC_BASE_PATH probes /healthz on all four services" {
+    shim_edge blue
+    run "$SWITCH" blue
+    [ "$status" -eq 0 ]
+    for svc in app public app-next public-next; do
+        [ "$(probe_path "$svc")" = "/healthz" ] || { echo "${svc}: $(probe_path "$svc")"; return 1; }
+    done
+    printf 'PUBLIC_BASE_PATH=\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    run "$SWITCH" blue
+    [ "$status" -eq 0 ]
+    [ "$(probe_path public)" = "/healthz" ]
+    [ "$(probe_path public-next)" = "/healthz" ]
+}
+
+@test "TASK-023: a malformed PUBLIC_BASE_PATH is a precondition failure that writes no switch file" {
+    shim_edge blue
+    local bad
+    for bad in 'portal' '/portal/' '/a b' '/x"y' '/p:q' '//portal'; do
+        rm -f "${GREMION_ROOT}/etc/edge/active.yml"
+        run env PUBLIC_BASE_PATH="$bad" "$SWITCH" blue --no-evict
+        [ "$status" -eq 2 ] || { echo "accepted: ${bad}"; return 1; }
+        [[ "$output" == *"PUBLIC_BASE_PATH"* ]]
+        [ ! -f "${GREMION_ROOT}/etc/edge/active.yml" ]
+    done
+}
+
 @test "gremion-switch records the active colour" {
     shim_edge green
     run "$SWITCH" green
