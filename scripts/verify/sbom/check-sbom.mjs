@@ -18,7 +18,7 @@
 // A missing grype vulnerability DB is a FAIL (never "no findings").
 //
 // Run:  node scripts/verify/sbom/check-sbom.mjs [--pins FILE --key PUB] [--first-party PREFIX] [--grype-db-volume NAME] [--no-db-update]
-// Test: node --test scripts/verify/sbom/
+// Test: node --test 'scripts/verify/sbom/*.test.mjs'
 
 import { spawnSync } from 'node:child_process'
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'

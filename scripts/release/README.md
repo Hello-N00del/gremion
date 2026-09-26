@@ -61,7 +61,9 @@ failure is expected, and nothing here signs with a real key before it.
 
 ## Tests
 
-`node --test scripts/release/ scripts/verify/sbom/` (or `scripts/release/lint-release.sh`).
+`node --test 'scripts/release/*.test.mjs' 'scripts/verify/sbom/*.test.mjs'` (or
+`scripts/release/lint-release.sh`). Pass files or quoted globs, never the
+directories: on Node 26 a directory argument collects no test and fails.
 The tests need docker, the pinned cosign on PATH, `sops`, `age-keygen` and
 `openssl`. Anything missing is a failure, not a skip. They start digest-pinned
 containers named `t046-<8 hex>-<role>` on `127.0.0.1:<free port>` and remove

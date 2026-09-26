@@ -6,7 +6,9 @@
 #
 #   1. count the top-level `test(` declarations in scripts/release/*.test.mjs
 #      and scripts/verify/sbom/*.test.mjs (must be > 0);
-#   2. run `node --test` over both directories (live docker, pinned cosign);
+#   2. run `node --test` over exactly those files (live docker, pinned cosign).
+#      Files, never directories: on the pinned Node 26 a directory argument is
+#      run as if it were a test file, collects nothing and fails;
 #   3. require exit 0, zero failures, and collected == declared;
 #   4. shellcheck every scripts/release/*.sh (shellcheck missing = FAIL).
 #
@@ -17,10 +19,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-files=(scripts/release/*.test.mjs scripts/verify/sbom/*.test.mjs)
+files=()
 declared=0
-for f in "${files[@]}"; do
+for f in scripts/release/*.test.mjs scripts/verify/sbom/*.test.mjs; do
     [[ -f "$f" ]] || continue
+    files+=("$f")
     c="$(grep -c '^test(' "$f" || true)"
     declared=$(( declared + c ))
 done
@@ -30,7 +33,7 @@ if [[ "$declared" -eq 0 ]]; then
 fi
 
 status=0
-out="$(node --test --test-reporter=tap scripts/release/ scripts/verify/sbom/ 2>&1)" || status=$?
+out="$(node --test --test-reporter=tap "${files[@]}" 2>&1)" || status=$?
 printf '%s\n' "$out" | grep -E '^(not ok|# (tests|pass|fail|cancelled|skipped|todo))' >&2 || true
 collected="$(printf '%s\n' "$out" | sed -n 's/^# tests \([0-9][0-9]*\)$/\1/p' | tail -1)"
 failed="$(printf '%s\n' "$out" | sed -n 's/^# fail \([0-9][0-9]*\)$/\1/p' | tail -1)"
