@@ -130,7 +130,9 @@ describe('D3 - every event payload equals its DOMAIN field list, closed against 
     it(`${eventType}: payload keys = DOMAIN fields, all required, no additional properties`, () => {
       const p = payloadSchema(loadAsyncApi(), schema)
       expect(Object.keys(p.properties).sort()).toEqual([...fields].sort())
-      expect([...p.required].sort()).toEqual([...fields].sort())
+      expect([...p.required].sort((a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0))).toEqual(
+        [...fields].sort(),
+      )
       // minimisation made structural: a producer cannot slip a title,
       // location, reason or address in beside the listed fields
       expect(p.additionalProperties).toBe(false)
@@ -179,7 +181,10 @@ describe('D4 - server-recorded DOMAIN fields are readable; append-only records h
     const s = loadOpenApi().components.schemas
     const outcome = s.AgendaItem.properties.outcome
     expect(outcome?.readOnly).toBe(true)
-    expect([...outcome.enum].sort()).toEqual(['no_decision', 'noted', 'referred', 'rejected', 'resolved', null].sort())
+    const byStringOrder = (a: unknown, b: unknown) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
+    expect([...outcome.enum].sort(byStringOrder)).toEqual(
+      ['no_decision', 'noted', 'referred', 'rejected', 'resolved', null].sort(byStringOrder),
+    )
     expect(s.AgendaItemCreate.properties.outcome).toBeUndefined()
   })
 
@@ -250,12 +255,15 @@ describe('D7 - cancel_reason carries exactly SCHEMA meeting_cancel_reason_check'
 
   it('Meeting.cancel_reason = SCHEMA values plus null (null outside cancelled)', () => {
     const prop = loadOpenApi().components.schemas.Meeting.properties.cancel_reason
-    expect([...prop.enum].sort()).toEqual([...SCHEMA_CANCEL_REASONS, null].sort())
+    const byStringOrder = (a: unknown, b: unknown) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0)
+    expect([...prop.enum].sort(byStringOrder)).toEqual([...SCHEMA_CANCEL_REASONS, null].sort(byStringOrder))
   })
 
   it('meeting.cancelled payload cancel_reason = SCHEMA values (the event is only sent when cancelled)', () => {
     const p = payloadSchema(loadAsyncApi(), 'EnvelopeMeetingCancelled')
-    expect([...p.properties.cancel_reason.enum].sort()).toEqual([...SCHEMA_CANCEL_REASONS].sort())
+    expect([...p.properties.cancel_reason.enum].sort((a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0))).toEqual(
+      [...SCHEMA_CANCEL_REASONS].sort(),
+    )
     expect(p.properties.cancel_reason.type).toBe('string')
   })
 })
@@ -264,7 +272,9 @@ describe('D2 - every state enum equals its DOMAIN lifecycle diagram', () => {
   for (const [schema, states] of Object.entries(DOMAIN_LIFECYCLES)) {
     it(`${schema}.state enum = DOMAIN ${schema} lifecycle`, () => {
       const prop = loadOpenApi().components.schemas[schema].properties.state
-      expect([...prop.enum].sort()).toEqual([...states].sort())
+      expect([...prop.enum].sort((a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0))).toEqual(
+        [...states].sort(),
+      )
     })
   }
 })

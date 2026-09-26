@@ -101,12 +101,8 @@ describe('runContractsCheck — the real tree (T9)', () => {
     delete env.CONTRACTS_BASE_REF
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim()
     const { ref, baseIsHead } = discoverBaseRef(REPO_ROOT, env)
-    if (ref === null) {
-      expect(baseIsHead).toBe(true)
-    } else {
-      expect(ref).toMatch(/^[0-9a-f]{40}$/)
-      expect(ref).not.toBe(head)
-    }
+    const resolvedCorrectly = ref === null ? baseIsHead : /^[0-9a-f]{40}$/.test(ref) && ref !== head
+    expect(resolvedCorrectly, `ref=${String(ref)} baseIsHead=${String(baseIsHead)}`).toBe(true)
     expect(resolveBaseRef(REPO_ROOT, env)).toBe(ref)
   })
 

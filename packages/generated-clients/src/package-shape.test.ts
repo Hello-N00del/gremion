@@ -62,7 +62,8 @@ describe('package shape mirrors @gremion/ports', () => {
   it('any @gremion/* dependency uses "workspace:*" as the only specifier', () => {
     const deps = { ...manifest.dependencies, ...manifest.devDependencies }
     for (const [name, spec] of Object.entries(deps)) {
-      if (name.startsWith('@gremion/')) expect(spec).toBe('workspace:*')
+      if (!name.startsWith('@gremion/')) continue
+      expect(spec).toBe('workspace:*')
     }
   })
 
