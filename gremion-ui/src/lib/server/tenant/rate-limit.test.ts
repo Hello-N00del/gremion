@@ -10,7 +10,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const envMock = vi.hoisted(() => ({}) as Record<string, string | undefined>)
 vi.mock('$env/dynamic/private', () => ({ env: envMock }))
 
-const { checkTenantRateLimit, __resetTenantRateLimit } = await import('./rate-limit')
+const { checkTenantRateLimit, __resetTenantRateLimit, evictTenantRateLimit } =
+  await import('./rate-limit')
 
 beforeEach(() => {
   for (const k of Object.keys(envMock)) delete envMock[k]
@@ -120,5 +121,48 @@ describe('checkTenantRateLimit — enabled token bucket', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+
+// Spec B §T.1 — the per-tenant bucket is per-tenant keyed runtime state, so it
+// hangs off registry.evictTenantRuntime like every other per-tenant handle.
+// The point of a PER-TENANT evictor is that it is not the blanket reset: a
+// lifecycle transition for one tenant must not hand every other tenant a free
+// full burst, which is the exact cross-tenant effect the limiter exists to stop.
+describe('evictTenantRateLimit — the per-tenant lifecycle arm', () => {
+  it('drops ONE tenant’s consumed budget', () => {
+    envMock.TENANT_RATE_LIMIT_RPS = '1'
+    envMock.TENANT_RATE_LIMIT_BURST = '2'
+    expect(checkTenantRateLimit('tid-a', 0).allowed).toBe(true)
+    expect(checkTenantRateLimit('tid-a', 0).allowed).toBe(true)
+    expect(checkTenantRateLimit('tid-a', 0).allowed).toBe(false)
+
+    evictTenantRateLimit('tid-a')
+
+    expect(checkTenantRateLimit('tid-a', 0).allowed).toBe(true)
+  })
+
+  it('leaves every OTHER tenant’s bucket exactly where it was', () => {
+    envMock.TENANT_RATE_LIMIT_RPS = '1'
+    envMock.TENANT_RATE_LIMIT_BURST = '2'
+    for (const id of ['tid-a', 'tid-b']) {
+      expect(checkTenantRateLimit(id, 0).allowed).toBe(true)
+      expect(checkTenantRateLimit(id, 0).allowed).toBe(true)
+      expect(checkTenantRateLimit(id, 0).allowed).toBe(false)
+    }
+
+    evictTenantRateLimit('tid-a')
+
+    // tid-b is still out of budget — NOT reset, which __resetTenantRateLimit
+    // would have done.
+    expect(checkTenantRateLimit('tid-b', 0).allowed).toBe(false)
+    expect(checkTenantRateLimit('tid-a', 0).allowed).toBe(true)
+  })
+
+  it('is a no-op for an unknown id (eviction is idempotent and runs on every hop)', () => {
+    envMock.TENANT_RATE_LIMIT_RPS = '1'
+    expect(() => evictTenantRateLimit('tid-never-seen')).not.toThrow()
+    expect(() => evictTenantRateLimit('tid-never-seen')).not.toThrow()
   })
 })

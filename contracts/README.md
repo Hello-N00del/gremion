@@ -10,6 +10,11 @@ subject grammar is derived from, and oasdiff test fixtures:
 - `calendar/asyncapi.calendar.json` — AsyncAPI 3.0, calendar event lifecycle
 - `content/asyncapi.content.json` — AsyncAPI 3.0, content publish lifecycle
 - `fixtures/oasdiff/` — base/breaking/compatible fixtures for the self-test gate
+- `registry.json` — DB-PLT-API-CONTRACT / DB-PLT-EVENT-TYPE registry: every
+  first-party spec, one entry each (see §6)
+- `fixtures/compat/{openapi,asyncapi}/` — version-bump-rule fixtures (§6)
+- `schema/module-contracts.schema.json` — a module's provides/requires
+  declaration shape (§6, TASK-077's input)
 
 **JSON not YAML:** no YAML parser dependency exists in the repo, and NEW-FILES-ONLY
 forbids adding one. oasdiff and all OpenAPI/AsyncAPI tooling fully support JSON.
@@ -41,7 +46,10 @@ Route-directory coverage:
 `api/auth`, `api/committees/[id]/beschluesse*` (protocols domain), `api/internal`,
 `api/members`, `api/protocols`, `api/public`, `api/settings`, `api/setup` — satellite glue.
 (`api/users*` is not excluded, it is ABSENT: the users-admin surface left the kernel
-with its module in the carve, which is what `info.version` 0.2.0 records.)
+with its module in the carve. That break is what the spec's own `info.description`
+still narrates ("v0.2.0 (breaking)"); `info.version` itself is `1.0.0` — TASK-030
+decision 3 bumped every spec to 1.0.0 since the re-init has no consumers yet, so the
+plain major/minor rule applies going forward, and the carve break predates that reset.)
 
 ## 3. Contract-first protocol
 
@@ -55,7 +63,7 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
    check `$ref` resolution — the staged-file collector only picks up
    `gremion-ui/**/*.{ts,sql}`, so a staged contract never reaches the lint engine at
    all. Structural validation is step 2's job, and the unit suite's. An intentional
-   break re-commits with `CONTRACTS_ALLOW_BREAKING=1`, bumps `info.version` and is
+   break re-commits with `CONTRACTS_ALLOW_BREAKING=1`, bumps `info.version`'s MAJOR (still enforced under the bypass) and is
    recorded in the PR description. `--gate-self-test` proves the oasdiff gate still
    works by running it over the fixtures in `contracts/fixtures/oasdiff/`; with
    neither an `oasdiff` binary nor a reachable docker daemon it fails closed and says
@@ -66,15 +74,21 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
    problem. It does NOT run oasdiff — breaking-change detection needs a staged diff, so
    it lives in `--staged`. Both document lists are DISCOVERED from `contracts/kernel/`,
    not hardcoded, and each refuses to report OK when it finds no document to validate.
-   Its scope is `contracts/kernel/` only: `contracts/calendar/` and `contracts/content/`
-   describe module leaves that ship in their own repositories and are validated by no
-   mode here — an open gap recorded in [`../KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
+   Its scope is `contracts/kernel/` only. `contracts/calendar/` and `contracts/content/`
+   describe module leaves that ship in their own repositories; they are **not**
+   validated by this mode, but they ARE validated — TASK-030 (§6 below) closed
+   the gap `../KNOWN_ISSUES.md`'s "Two contract documents are validated by no
+   mode" entry describes: `@gremion/generated-clients`'s `registry.ts`/`schema.ts`
+   structurally validate and `$ref`-close all four registered specs, including
+   calendar and content, on every `pnpm --filter @gremion/generated-clients
+   test` and `contracts:check` run. That entry is stale and pending an
+   operator edit to `KNOWN_ISSUES.md` (out of this package's ownership).
 3. The `contracts-real-specs.test.ts` test enforces route/spec coverage equivalence
    (every kernel route operation appears in spec; no phantom spec operations).
 
 **Introducing a breaking change** (e.g. P0.3b's committees POST 201->202 flip) requires:
 - `CONTRACTS_ALLOW_BREAKING=1` set on the commit
-- A version bump of the affected spec's `info.version`
+- A MAJOR version bump of the affected spec's `info.version` (the gate refuses the bypass without one)
 - A PR-description note explaining the break
 
 ## 4. Gates
@@ -109,3 +123,66 @@ workstation; it was operator-local glue, not kernel surface, and has been remove
   is enforced by the boundary backstop (`lib/server/boundary/kernel-clean.test.ts`).
   `$lib/server/governance/org-units-db` is consumed repo-wide. Rules R-FK + R-IMP-1..5 implement
   the two rules the design §7 explicitly names. (See plan §3 for the complete allowlist rationale.)
+
+## 6. Spec-first pipeline (`@gremion/generated-clients`)
+
+TASK-030 (PRD-PLAT-002b/008, TRD-403/404/405). `packages/generated-clients/` owns:
+
+- `registry.json` (this directory) — every first-party spec, one entry each; the check
+  fails on an unregistered spec, a missing file, or an empty registry.
+- Structural validation + `$ref` closure (percent-decoded) on all four registered specs,
+  including calendar and content (closes the `../KNOWN_ISSUES.md` gap referenced in §3.2).
+- The OpenAPI compat gate (`oasdiff-gate.ts`, ported from `gremion-ui/scripts/contracts-gate.ts`
+  `ab45a0e` — PATH `oasdiff`, then the Docker fallback only if the daemon answers, never a
+  bare docker exit code as a verdict) plus the version-bump rule: remove/narrow without a
+  MAJOR bump fails, add without a MINOR bump fails, description-only passes regardless of
+  version. No `CONTRACTS_ALLOW_BREAKING` bypass — a bump is the only way through.
+  **Tool pin:** PATH install is `go install github.com/oasdiff/oasdiff@v1.32.1` (match the
+  Docker fallback's pinned tag below so both routes give the same verdict for the same spec
+  pair). The Docker fallback image is pinned by tag AND digest in `oasdiff-gate.ts`
+  (`OASDIFF_DOCKER_IMAGE`) — bump both together, never drift to `latest`. Whichever tool
+  actually answered is recorded in the gate's own output as `<tool> (PATH|docker, version
+  <version>)`, per spec, on every run.
+- The same rule for AsyncAPI 3.0 payloads (`asyncapi-compat.ts`), via a purpose-built
+  `components.messages.*.payload` comparator (no mature `@asyncapi/diff` 3.0 support in this
+  lockfile) scoped to: removed/newly-required property, narrowed/changed type, removed enum
+  value (major), new optional property (minor). It resolves local `$ref`s and flattens `allOf`
+  first (every real message payload here is `$ref` to an `allOf[Envelope, {...}]` schema), then
+  recurses into nested `object` properties at any depth.
+  **Scope limitation:** this comparator only looks at message *payloads*. Removing a **channel**
+  or an **operation** entirely (not a message) is not classified as breaking today, so it passes
+  with only a minor bump even though a subscriber wired to that channel/operation would lose it.
+  Out of the brief's decision-6 payload scope; treat a channel/operation removal as a manual
+  major-bump discipline item until this is extended.
+- The codegen drift check (`codegen-drift.ts`): the committed TypeScript client under
+  `packages/generated-clients/src/generated/` must equal what regenerating from the current
+  spec produces — catches a hand edit, a spec changed without regeneration, or a missing
+  output, naming the file.
+- `validateModuleContracts` (`module-contracts.ts`, `schema/module-contracts.schema.json`) —
+  a module's provides/requires declaration against this registry (D2 adapted; the
+  migration-range and nav/realm checks are TASK-021's, per the brief's decision 5).
+
+Run: `pnpm --filter @gremion/generated-clients contracts:check` (Q2 default — `verify`,
+TASK-045, wires this in once it lands). The base ref is the merge-base with `origin/main`, then
+`main`; on trunk itself that merge-base is HEAD and the check fails closed, so there pass it
+explicitly: `CONTRACTS_BASE_REF=HEAD~1 pnpm --filter @gremion/generated-clients contracts:check`.
+
+**Acceptance demo, run against the real tree** (`contracts/kernel/openapi.governance.json`,
+`CONTRACTS_BASE_REF=HEAD` to isolate a single seeded edit from the committed 0.2.0->1.0.0
+bump already in this spec's history):
+
+- Removed `OrgUnit.properties.description` (a real response field), no bump:
+  `contracts:check` FAILS — `breaking change (oasdiff (PATH)) requires a MAJOR bump; got
+  1.0.0 -> 1.0.0 (none)`, reason `response-optional-property-removed` (oasdiff WARN level).
+  Re-run with the field re-added: OK.
+- Added a field to the same schema, no bump: `contracts:check` FAILS — `non-breaking
+  structural change (an addition) requires at least a MINOR bump; got 1.0.0 -> 1.0.0
+  (none)`. Bumped to 1.1.0: OK.
+
+Both seeded edits were scratch-only (never committed); see `ecc1168` for the two real bugs
+this demo caught before the gate could be trusted to enforce either rule: `oasdiff`'s default
+`--fail-on ERR` does not flag an optional-property removal (WARN level, not ERR — fixed to
+`--fail-on WARN`), and `stripCompatNoise` matched the OpenAPI/AsyncAPI narrative `description`
+key by name alone, so a data field literally named `description` (as above) was stripped
+before comparison and the two documents looked identical — fixed to only strip a
+`description` key whose value is a plain string.

@@ -6,6 +6,20 @@
 import { env } from '$env/dynamic/private'
 import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
+import { normaliseHost } from './host'
+import {
+  TENANT_EVICT_CHANNEL,
+  type TenantDomain,
+  type AddTenantDomainOptions,
+  listAllTenantDomains as tdListAll,
+  listTenantDomains as tdList,
+  primaryHostForTenant as tdPrimaryHostForTenant,
+  readPrimaryHost as tdReadPrimaryHost,
+  addTenantDomain as tdAdd,
+  removeTenantDomain as tdRemove,
+  setPrimaryDomain as tdSetPrimary,
+} from './tenant-domain'
+import { evictTenantRateLimit } from './rate-limit'
 import { clampConnProfile } from './conn-profile'
 import { resolveSecret } from './secrets'
 import { getPoolForTenant, evictTenantPool } from '$lib/server/db/pool-registry'
@@ -242,26 +256,74 @@ export async function finishTenantMigrationRun(
 // so a cached context's pool is never capacity-drained underneath it.
 export const RESOLUTION_CACHE_TTL_MS = 30_000
 
-/**
- * G-XPROC: the control-DB LISTEN/NOTIFY channel name for cross-process tenant
- * eviction. updateTenantStatus issues `pg_notify(tenant_evict, '<tenantId>')`
- * same-transaction with the status flip, and evict-listener.ts subscribes every
- * app process to it. Shared here so the notifier and the listener never drift.
- */
-export const TENANT_EVICT_CHANNEL = 'tenant_evict'
+// G-XPROC: the control-DB LISTEN/NOTIFY channel name for cross-process tenant
+// eviction. updateTenantStatus issues `pg_notify(TENANT_EVICT_CHANNEL, '<tenantId>')`
+// same-transaction with the status flip, and evict-listener.ts subscribes every
+// app process to it. TASK-025: the constant itself now lives in tenant-domain.ts
+// (imported above, re-exported below) — every tenant_domain write uses the SAME
+// channel, so there is exactly one definition for the notifier and the listener
+// to ever drift from.
 
 interface ResolvedEntry { ctx: TenantContext; expiresAt: number }
 const _resolutionCache = new Map<string, ResolvedEntry>()
 
+/**
+ * Spec B §T.1 — the HOST-keyed twin of `_resolutionCache`. A tenant has N hosts
+ * and one slug, so this cannot be folded into the slug map; both hold the SAME
+ * TenantContext object and the SAME RESOLUTION_CACHE_TTL_MS. Every invalidation
+ * seam below drives BOTH maps. A host entry that outlived a tenant_domain
+ * change is a CROSS-TENANT hazard — the host may have been re-registered to
+ * another tenant — which is why every tenant_domain write issues the
+ * same-transaction pg_notify(tenant_evict) and the TTL is only the backstop.
+ */
+const _hostResolutionCache = new Map<string, ResolvedEntry>()
+
+/**
+ * HARDENING-1 — the write-after-evict guard for both caches.
+ *
+ * A monotonic generation counter, bumped by EVERY eviction seam. A resolution
+ * captures it before its first read and DISCARDS its cache write when it has
+ * moved. Deliberately GLOBAL, not per-tenant: an eviction can arrive for a
+ * tenant whose id an in-flight resolution has not established yet (a host whose
+ * row it is still reading). The cost is one extra resolution on the next
+ * request; the DISCARD path is the fail-closed one.
+ */
+let _evictionEpoch = 0
+function bumpEvictionEpoch(): void { _evictionEpoch++ }
+
 /** Explicitly drop one slug's cached resolution (registry-row change). */
 export function invalidateResolvedTenant(slug: string): void {
+  bumpEvictionEpoch()
   _resolutionCache.delete(slug)
+  for (const [host, entry] of _hostResolutionCache) {
+    if (entry.ctx.slug === slug) _hostResolutionCache.delete(host)
+  }
+}
+
+/**
+ * Clear EVERY host-keyed entry. This is the "*" arm of eviction, consumed by
+ * B19-internal-api-evict-and-modules' evictAllTenants() (spec B l.385):
+ * evictTenantRuntime(id) can only reach entries whose ctx still names a tenant
+ * this process has cached, so a blanket evict needs a seam that does not take
+ * an id at all.
+ */
+export function clearHostResolutionCache(): void {
+  bumpEvictionEpoch()
+  _hostResolutionCache.clear()
+}
+
+/** Test-only: the host-keyed map's size, so guards assert the MAP, never a
+ *  return value (an evictor that returns void can still evict nothing). */
+export function _hostCacheSizeForTests(): number {
+  return _hostResolutionCache.size
 }
 
 /** Test-only: clear the resolution cache (integration tests re-register rows
  *  with NEW tenant ids between cases — a cached context would go stale). */
 export function _resetResolutionCacheForTests(): void {
+  bumpEvictionEpoch()
   _resolutionCache.clear()
+  _hostResolutionCache.clear()
 }
 
 /**
@@ -275,13 +337,14 @@ export async function resolveTenantBySlug(slug: string): Promise<TenantContext |
   if (!v.ok) return null
   const cached = _resolutionCache.get(slug)
   if (cached && cached.expiresAt > Date.now()) return cached.ctx
+  const epoch = _evictionEpoch      // captured BEFORE the registry read
   const row = await getTenantBySlug(slug)
   if (!row || row.status !== 'active') {
     // An expired-but-present entry must not outlive a status flip seen here.
     _resolutionCache.delete(slug)
     return null
   }
-  return buildAndCacheTenantContext(row)
+  return buildAndCacheTenantContext(row, epoch)
 }
 
 /**
@@ -308,6 +371,7 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
   for (const entry of _resolutionCache.values()) {
     if (entry.ctx.id === id && entry.expiresAt > now) return entry.ctx
   }
+  const epoch = _evictionEpoch      // captured BEFORE the registry read
   const row = await getTenantById(id)
   if (!row || row.status !== 'active') {
     // Drop any expired-but-present entry for this id so a status flip seen here
@@ -317,7 +381,7 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
     }
     return null
   }
-  return buildAndCacheTenantContext(row)
+  return buildAndCacheTenantContext(row, epoch)
 }
 
 /**
@@ -326,7 +390,7 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
  * and resolveTenantById so both produce a byte-identical context + cache entry.
  * Callers MUST have already confirmed row.status === 'active'.
  */
-function buildAndCacheTenantContext(row: Tenant): TenantContext {
+async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<TenantContext> {
   const slug = row.slug
   const dbUrl = resolveSecret(row.dbConnRef)
   const conn = row.connProfile as { perTenantMax?: number; prepare?: boolean }
@@ -358,6 +422,11 @@ function buildAndCacheTenantContext(row: Tenant): TenantContext {
     smtp?: { host?: string; port?: number; from?: string; user?: string; passwordRef?: string }
   }
   const configPath = configPathForTenant(row.slug)
+  // Spec B §T.1 — the ONE place ctx.primaryHost is populated, so a context is
+  // identical however it was resolved. Deliberately NOT swallowed: a control-DB
+  // failure surfaces as the resolver's existing 503, never as a context that
+  // silently carries no host.
+  const primaryHost = await readPrimaryHost(row.id)
 
   const poolTenant = { id: row.id, dbUrl, dbMax, dbPrepare }
   const cfg = readConfig({ id: row.id, configPath })
@@ -366,6 +435,7 @@ function buildAndCacheTenantContext(row: Tenant): TenantContext {
   const ctx: TenantContext = {
     id: row.id,
     slug: row.slug,
+    primaryHost,
     db: getPoolForTenant(poolTenant),
     issuer,
     kcInternal,
@@ -423,7 +493,11 @@ function buildAndCacheTenantContext(row: Tenant): TenantContext {
       smtp: domainProfile.smtp,
     },
   }
-  _resolutionCache.set(slug, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  // HARDENING-1: an eviction that landed while this resolution was in flight
+  // must not be undone by its cache write.
+  if (_evictionEpoch === epoch) {
+    _resolutionCache.set(slug, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  }
   return ctx
 }
 
@@ -443,8 +517,20 @@ function buildAndCacheTenantContext(row: Tenant): TenantContext {
  * modules register their evictor into the runtime-registry seam instead.
  */
 export function evictTenantRuntime(tenantId: string): void {
+  // HARDENING-1: bump FIRST. The deletes below only reach entries that already
+  // exist; a resolution in flight has nothing to delete yet, and this is what
+  // stops its later write from re-installing what we are evicting.
+  bumpEvictionEpoch()
   for (const [slug, entry] of _resolutionCache) {
     if (entry.ctx.id === tenantId) _resolutionCache.delete(slug)
+  }
+  // Spec B §T.1: the HOST-keyed cache is evicted on the SAME seam, so the
+  // cross-process tenant_evict NOTIFY covers it too. A stale host entry is
+  // strictly worse than a stale slug entry — a host can be re-registered to a
+  // DIFFERENT tenant, so an un-evicted entry is a cross-tenant selection.
+  // (The blanket form, for B19's evictAllTenants, is clearHostResolutionCache.)
+  for (const [host, entry] of _hostResolutionCache) {
+    if (entry.ctx.id === tenantId) _hostResolutionCache.delete(host)
   }
   evictTenantPool(tenantId)
   evictKeycloakAdminClient(tenantId)
@@ -454,6 +540,10 @@ export function evictTenantRuntime(tenantId: string): void {
   // newsletter leaf service owns per-tenant state now, so there is no
   // monolith-side newsletter handle to evict here.
   evictTenantMail(tenantId) // SP-2: drop the per-tenant SMTP transport + close its sockets
+  // Spec B §T.1: the per-tenant token bucket is per-tenant keyed runtime state
+  // like every handle above — a suspended or re-registered id must not inherit
+  // the previous occupant's consumed budget.
+  evictTenantRateLimit(tenantId)
   // Module-owned per-tenant handles (Matrix/Synapse/Helios/LiveKit): each module
   // registered its evictor via runtime-registry (register.server.ts). Run them on
   // the SAME lifecycle seam as the kernel evictors above.
@@ -682,4 +772,156 @@ function authExternalBaseForTenant(slug: string, issuer: string): string {
 function kcAdminUrlFromInternal(kcInternal: string): string {
   // kcInternal e.g. http://keycloak:8080/auth/realms/<realm> -> http://keycloak:8080/auth
   return kcInternal.replace(/\/realms\/.*$/, '')
+}
+
+// ── Spec B §T.1 — tenant_domain (control migration 004, owned by B4) ─────────
+//
+// The table, its CHECK and its indexes come from
+// B4-migrations-portback-nine's migrations-control/004_tenant_domain.sql.
+//
+// TASK-025 (L3-17): the accessor implementations now live in tenant-domain.ts,
+// which is kernel-portable (no SvelteKit import, see kernel-portable.guard.
+// test.ts) — every function below is a THIN WRAPPER that supplies the three
+// things only registry.ts is allowed to know about: getControlDb() (the
+// control pool), env.PLATFORM_DOMAIN, and evictTenantRuntime (the runtime
+// eviction callback). No behaviour change: same exports, same signatures,
+// same errors — the extraction moved code, not semantics.
+export type { TenantDomain }
+
+/** Re-exported so registry.ts's own updateTenantStatus and every existing
+ *  caller/test keep importing ONE channel name from ONE place. */
+export { TENANT_EVICT_CHANNEL }
+
+/** Every `tenant_domain` row in the deployment, in ONE statement — one snapshot,
+ *  never `listTenants().map(listTenantDomains)` (an N+1 that can also observe a
+ *  claim set that never existed if a write lands between two of its reads). */
+export async function listAllTenantDomains(): Promise<readonly TenantDomain[]> {
+  return tdListAll(getControlDb())
+}
+
+/** Every host registered to a tenant, primary first then alphabetical. */
+export async function listTenantDomains(tenantId: string): Promise<readonly TenantDomain[]> {
+  return tdList(getControlDb(), tenantId)
+}
+
+/**
+ * The tenant's canonical host — the one that mints `issuerForTenant` and every
+ * self-referential URL. Null when the tenant has no primary host: callers MUST
+ * fail closed on that, and must NEVER synthesise `<slug>.<apex>` as a
+ * substitute — that construction is exactly what spec B deletes.
+ */
+export async function primaryHostForTenant(tenantId: string): Promise<string | null> {
+  return tdPrimaryHostForTenant(getControlDb(), tenantId)
+}
+
+/**
+ * The un-guarded read behind primaryHostForTenant. buildAndCacheTenantContext
+ * calls THIS, not the exported accessor: the id it holds came out of the
+ * control-DB row it is hydrating, so it is a uuid by construction, and running
+ * assertTenantId over it would turn the public API's argument guard into a
+ * constraint on registry ROWS. One statement, one shape, one place.
+ */
+async function readPrimaryHost(tenantId: string): Promise<string | null> {
+  return tdReadPrimaryHost(getControlDb(), tenantId)
+}
+
+/**
+ * Register `host` for `tenantId`. Idempotent for the SAME tenant, and REFUSED
+ * with a named error when another tenant already owns the host — the host PK
+ * makes takeover impossible, this just makes the refusal readable. See
+ * tenant-domain.ts:addTenantDomain for the full transaction (owner pre-read,
+ * clear-then-set primary, same-tx pg_notify).
+ */
+export async function addTenantDomain(
+  tenantId: string,
+  rawHost: string,
+  opts: AddTenantDomainOptions = {},
+): Promise<TenantDomain> {
+  return tdAdd(getControlDb(), tenantId, rawHost, opts, {
+    platformDomain: env.PLATFORM_DOMAIN ?? '',
+    onEvict: evictTenantRuntime,
+  })
+}
+
+/**
+ * Un-register a host from a tenant, scoped by tenantId so one tenant's operator
+ * surface can never delete another tenant's row. The PRIMARY host cannot be
+ * removed while the tenant still has OTHER hosts — enforced in the DELETE's own
+ * WHERE, not in JS. Removing the LAST host IS allowed: that is the deliberate
+ * "this tenant goes dark" operation.
+ */
+export async function removeTenantDomain(tenantId: string, rawHost: string): Promise<boolean> {
+  return tdRemove(getControlDb(), tenantId, rawHost, evictTenantRuntime)
+}
+
+/**
+ * Promote one of the tenant's existing hosts to primary. CLEAR-then-SET in ONE
+ * transaction, not a single `SET is_primary = (host = $2)`:
+ * `tenant_domain_one_primary` is a plain (non-deferrable) partial unique index
+ * and Postgres checks it per ROW, so one statement can spuriously trip on a
+ * transient two-primaries state depending on row order.
+ */
+export async function setPrimaryDomain(tenantId: string, rawHost: string): Promise<TenantDomain> {
+  return tdSetPrimary(getControlDb(), tenantId, rawHost, evictTenantRuntime)
+}
+
+
+/**
+ * Resolve an ACTIVE tenant by the FULL edge-forwarded host, or null. There is
+ * NO fallback, NO leftmost-label path and NO apex special case: a null return
+ * means REJECT and must never be read as "use the default tenant".
+ *
+ * The lookup joins tenant_domain -> tenant. Because `host` is tenant_domain's
+ * PK the join yields at most one row, so an ambiguous host is not merely
+ * improbable — it is unrepresentable.
+ *
+ * TASK-025 Q1 (ledger): on this base, resolve.ts's request path still selects
+ * the tenant by the leftmost DNS label (extractLeftmostLabel) — this function
+ * has NO production caller yet. TASK-025 proves the request clause HERE,
+ * against this function directly, via registry.domain.integration.test.ts's
+ * two-tenant-isolation and B8-post-condition blocks (real Postgres, real
+ * tenant_domain rows, a raw-host lookup). The request-path cut-over — wiring
+ * resolve.ts's Handle to call resolveTenantByHost instead of extractLeftmostLabel
+ * — is TASK-041 (B10-resolver-fullhost), not this task.
+ */
+export async function resolveTenantByHost(
+  host: string | undefined | null,
+): Promise<TenantContext | null> {
+  const h = normaliseHost(host)
+  if (!h) return null
+  const cached = _hostResolutionCache.get(h)
+  if (cached && cached.expiresAt > Date.now()) return cached.ctx
+  const epoch = _evictionEpoch      // captured BEFORE the host->tenant read
+  const rows = await getControlDb()<TenantRow[]>`
+    SELECT t.* FROM tenant t
+    JOIN tenant_domain d ON d.tenant_id = t.id
+    WHERE d.host = ${h}`
+  const row = rows[0]
+  if (!row || row.status !== 'active') {
+    // An expired-but-present entry must not outlive a status flip seen here.
+    _hostResolutionCache.delete(h)
+    return null
+  }
+  const ctx = await buildAndCacheTenantContext(hydrate(row), epoch)
+  if (_evictionEpoch === epoch) {
+    _hostResolutionCache.set(h, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  }
+  return ctx
+}
+
+/**
+ * The host-keyed twin of getTenantStatusBySlug. Deliberately a CONTROL-DB ROW
+ * READ ONLY (the `status` column) — no pool, no config, no brand — so a
+ * suspended tenant whose data plane is gone or quarantined is never touched.
+ */
+export async function getTenantStatusByHost(
+  host: string | undefined | null,
+): Promise<TenantStatus | null> {
+  const h = normaliseHost(host)
+  if (!h) return null
+  const rows = await getControlDb()<{ status: TenantStatus }[]>`
+    SELECT t.status FROM tenant t
+    JOIN tenant_domain d ON d.tenant_id = t.id
+    WHERE d.host = ${h}`
+  return rows[0]?.status ?? null
 }

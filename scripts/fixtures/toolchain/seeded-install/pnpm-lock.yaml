@@ -1,0 +1,23 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      toolchain-fixture-dep:
+        specifier: file:./toolchain-fixture-dep-1.0.0.tgz
+        version: file:toolchain-fixture-dep-1.0.0.tgz
+
+packages:
+
+  toolchain-fixture-dep@file:toolchain-fixture-dep-1.0.0.tgz:
+    resolution: {integrity: sha512-Eq36ETOuJZMjbi49JNmiI30q88Tenbyz/0YRsTUsclFVQLJNMrfJXPjKGmSczb5mvST9hyj5/ESKgwIvnabHSg==, tarball: file:toolchain-fixture-dep-1.0.0.tgz}
+    version: 1.0.0
+
+snapshots:
+
+  toolchain-fixture-dep@file:toolchain-fixture-dep-1.0.0.tgz: {}

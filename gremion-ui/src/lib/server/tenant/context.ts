@@ -71,6 +71,10 @@ export interface TenantContext {
   readonly dbUrl: string
   readonly dbMax: number
   readonly dbPrepare: boolean
+  /** Spec B §T.1 — the tenant's canonical host from `tenant_domain`, or null
+   *  when it has none. Null is a REJECT signal for every consumer, never a cue
+   *  to synthesise `<slug>.<apex>`. */
+  readonly primaryHost: string | null
   /** P2.1b T7 — optional per-tenant service endpoints (see TenantServices). */
   readonly services?: TenantServices
 }

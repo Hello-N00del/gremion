@@ -1,0 +1,9 @@
+{
+  "name": "toolchain-seeded-install-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TASK-017 fixture: a workspace with one local-tarball dependency whose postinstall must be blocked unless explicitly allow-listed.",
+  "dependencies": {
+    "toolchain-fixture-dep": "file:./toolchain-fixture-dep-1.0.0.tgz"
+  }
+}

@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { getControlDb } from './control-db'
 import { runControlMigrations } from './control-migrations'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { verifyMigrationIntegrity } from '$lib/server/db'
 
 describe('runControlMigrations', () => {
   beforeAll(async () => { await runControlMigrations() })
@@ -63,5 +66,55 @@ describe('runControlMigrations', () => {
            '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'r', 'r', '{}'::jsonb, 'r',
            ARRAY['a'])`,
     ).rejects.toThrow(/violates check constraint/i)
+  })
+})
+
+// §T.1 — control migration 004 is a TWO-FILE change OWNED BY B4: the DDL and
+// the SHA-256 entry in migrations-control/manifest.json, which
+// control-migrations.ts:21,26 loads and verifies before applying anything.
+// B8 does not create either file; this block verifies B4's bytes are the shape
+// B8's tenant_domain accessors and host-keyed cache depend on.
+describe('004_tenant_domain', () => {
+  beforeAll(async () => { await runControlMigrations() })
+
+  it('creates tenant_domain with the lower(host) + no-whitespace-no-comma CHECK', async () => {
+    const cols = await getControlDb()<Array<{ column_name: string }>>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'tenant_domain'
+      ORDER BY column_name`
+    expect(cols.map((c) => c.column_name)).toEqual([
+      'created_at', 'host', 'is_primary', 'tenant_id', 'verified_at',
+    ])
+    const check = await getControlDb()<Array<{ def: string }>>`
+      SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conrelid = 'tenant_domain'::regclass AND contype = 'c'`
+    expect(check.map((r) => r.def).join(' ')).toMatch(/lower\(host\)/)
+    expect(check.map((r) => r.def).join(' ')).toMatch(/\[\[:space:\],\]/)
+  })
+
+  it('creates the one-primary partial unique index and the tenant index', async () => {
+    const idx = await getControlDb()<Array<{ indexname: string; indexdef: string }>>`
+      SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'tenant_domain'
+      ORDER BY indexname`
+    const byName = Object.fromEntries(idx.map((r) => [r.indexname, r.indexdef]))
+    expect(byName['tenant_domain_one_primary']).toMatch(/UNIQUE.*\(tenant_id\).*WHERE is_primary/)
+    expect(byName['tenant_domain_tenant']).toMatch(/\(tenant_id\)/)
+  })
+
+  it('records 004 in schema_migrations', async () => {
+    const rows = await getControlDb()<Array<{ filename: string }>>`
+      SELECT filename FROM schema_migrations WHERE filename = '004_tenant_domain.sql'`
+    expect(rows).toHaveLength(1)
+  })
+
+  it('fails the run when the manifest has no 004 entry', () => {
+    const text = readFileSync(
+      join(process.cwd(), 'migrations-control', '004_tenant_domain.sql'), 'utf-8')
+    expect(() =>
+      verifyMigrationIntegrity('004_tenant_domain.sql', text, {
+        '001_tenant_registry.sql': 'c0faf73b5256839986a839bc68a9a81385b6b07da6cbe93aa4993363ac076b43',
+      }),
+    ).toThrow('Migration 004_tenant_domain.sql missing from manifest')
   })
 })

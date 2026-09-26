@@ -28,8 +28,10 @@ export const SLUG_PATTERN = /^[a-z0-9-]{1,30}$/
 // or a tenant could be provisioned onto a host shadowed by another router.
 export const RESERVED_SLUGS: readonly string[] = [
   // `gremion` is the shared-infra app DB (#396 renamed it from `stura`); `stura`
-  // stays reserved because it is the default tenant's own slug and because
-  // un-reserving a label would let a new tenant claim it.
+  // stays reserved because un-reserving a label would let a new tenant claim a
+  // name the StuRa vertical still uses. It is NOT "the default tenant's own
+  // slug" — spec B §T.2 deletes the default tenant entirely. Host-level
+  // reservations are a separate list: tenant/reserved-hosts.ts (spec A §C).
   'gremion', 'stura', 'keycloak', 'nextcloud', 'helios',
   'postgres', 'control', 'template0', 'template1',
   // edge-owned satellite subdomain labels (see the comment block above):

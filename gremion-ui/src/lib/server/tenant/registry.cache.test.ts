@@ -43,6 +43,8 @@ import {
   getTenantStatusBySlug,
   RESOLUTION_CACHE_TTL_MS,
   _resetResolutionCacheForTests,
+  resolveTenantByHost,
+  _hostCacheSizeForTests,
 } from './registry'
 import { readConfig } from '$lib/server/config'
 import { evictTenantPool, getPoolForTenant } from '$lib/server/db/pool-registry'
@@ -267,5 +269,57 @@ describe('T6 — getTenantStatusBySlug: status-only control-DB read (no data-pla
     const q = lastSelect.join('?')
     expect(q).toContain('SELECT status FROM tenant')
     expect(q).not.toContain('SELECT *')
+  })
+})
+
+
+// Spec B §T.1 HARDENING-1 — an eviction that lands INSIDE a resolution's window
+// must discard that resolution's cache write, not be undone by it. The window
+// is real: resolveTenantByHost reads the host->tenant row, THEN hydrates the
+// context (which reads tenant_domain again for the primary host). An evict that
+// arrives between those two reads finds nothing to delete, so without an epoch
+// the later cache write silently re-installs the mapping being evicted — and
+// for a HOST that is a cross-tenant selection, because the host may already
+// have been re-registered to another tenant.
+describe('the eviction epoch discards a write-after-evict', () => {
+  it('does not re-install a host mapping that was evicted mid-resolution', async () => {
+    _resetResolutionCacheForTests()
+    sqlSpy.mockImplementation(async (strings: readonly string[]) => {
+      const q = strings.join('?')
+      if (q.includes('SELECT host FROM tenant_domain')) {
+        // The operator's domain move commits HERE — between the host->tenant
+        // read and this resolution's cache write.
+        evictTenantRuntime('tid-alpha')
+        return [{ host: 'moved.example' }]
+      }
+      if (q.includes('UPDATE tenant')) return updateRows
+      return selectRows
+    })
+
+    const ctx = await resolveTenantByHost('moved.example')
+
+    // The context is still returned (the row WAS current when it was read) but
+    // it must not be cached: the next resolution has to go back to the registry.
+    expect(ctx).not.toBeNull()
+    expect(_hostCacheSizeForTests()).toBe(0)
+  })
+
+  it('does not re-install a SLUG mapping that was evicted mid-resolution', async () => {
+    _resetResolutionCacheForTests()
+    sqlSpy.mockImplementation(async (strings: readonly string[]) => {
+      const q = strings.join('?')
+      if (q.includes('SELECT host FROM tenant_domain')) {
+        evictTenantRuntime('tid-alpha')
+        return []
+      }
+      if (q.includes('UPDATE tenant')) return updateRows
+      return selectRows
+    })
+
+    const first = await resolveTenantBySlug('alpha')
+    expect(first).not.toBeNull()
+    // A cached entry would make this a HIT (one SELECT ... WHERE slug in total).
+    await resolveTenantBySlug('alpha')
+    expect(slugSelects()).toBe(2)
   })
 })

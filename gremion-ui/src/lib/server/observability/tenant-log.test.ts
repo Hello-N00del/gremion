@@ -27,6 +27,9 @@ function fakeCtx(id: string): TenantContext {
     brand: {} as TenantContext['brand'],
     config: {} as TenantContext['config'],
     aliasNamespace: `${id}-`,
+    // Spec B §T.1: a context with no tenant_domain row carries a NULL primary
+    // host. Never a synthesised `<slug>.<apex>` — that is what spec B deletes.
+    primaryHost: null,
     accent: null,
     logoUrl: null,
     configPath: `/data/${id}/config.json`,

@@ -177,3 +177,13 @@ changes. Summary:
 - **Apex DNS** stays waived — unchanged, no operator decision yet.
 - Legal documents and pilot inputs are untouched by this amendment; PRD §17.1 P4 un-waives them at
   §6.5's first invoice from the business, not today.
+
+## 6. Superseded repositories — dated records
+
+- **2026-09-25 — `gremion-modules` (local folder `civitas-modules`) archived, read-only [D R23-17].** The
+  drift map of 2026-09-24 found the StuRaOS product repository ahead of this snapshot on every module,
+  with one change unique to it: `1295a40` (governance notification-failure logging). That change was
+  ported to StuRaOS (only the scheduler half; the room-listing half does not apply there, as its own
+  commit message records), reviewed, and merged on 2026-09-25. The repository README now carries a
+  "superseded" banner, and the repository is archived. The module sources move into this repository's
+  `modules/` directory under TASK-205; nothing is taken from the archived snapshot.

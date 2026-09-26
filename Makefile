@@ -5,7 +5,7 @@
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
-        lint-unshipped-migrations fresh-init-proof \
+        lint-unshipped-migrations lint-toolchain lint-compliance fresh-init-proof \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -204,7 +204,7 @@ test-ports-nats:
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck -x scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
+	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
 		[ -e "$$f" ] || continue; \
@@ -340,7 +340,58 @@ lint-extraction-source:
 	 echo "[extraction-source] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-extraction-source.mjs --modules-root test/fixtures/extraction-source/agree
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations
+# TASK-017 (TRD-400/401/402): Node major, the pnpm build-script allow-list,
+# first-party lifecycle scripts and strict TS, all in one guard. NOT wired
+# into the `lint` aggregate below — TASK-045 (scripts/verify/**) owns that
+# wiring per post-condition "Guard callable by verify; its suite runs first".
+# The suite's own test count is asserted the same way lint-extraction-source
+# does: `node --test` exits 0 on a file that collects zero tests, so the
+# collector's own TAP plan is checked against its declared `test(` count.
+lint-toolchain:
+	@echo "Checking the pinned toolchain (Node major, build allow-list, TS strictness)..."
+	@declared=$$(grep -c '^test(' scripts/check-toolchain.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-toolchain.test.mjs 2>&1); \
+	 status=$$?; \
+	 printf '%s\n' "$$out" >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ]; then \
+	   echo "lint-toolchain: scripts/check-toolchain.test.mjs declares no top-level test() -- the suite collects nothing and would still exit 0." >&2; \
+	   exit 1; \
+	 fi; \
+	 if [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-toolchain: the suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[toolchain] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-toolchain.mjs
+
+# TASK-005 (TRD-265, TRD-112, TRD-268): the marketing-copy check. Copy that
+# names a licence-register system with a licence other than its register value,
+# or that asserts online student-body elections are lawful / the module fit for
+# statutory use, fails. Both rule sets are read from docs/compliance/, and the
+# check refuses an empty scope. The two suites run first and their collected
+# count is asserted against the declared `test(` count, the same way
+# lint-toolchain does: `node --test` exits 0 on a file that collects nothing.
+# The Helios bump script's own suite rides here so it runs on every lint even
+# though the submodule it guards lives in a consuming repository.
+lint-compliance:
+	@echo "Checking marketing copy against the licence register and elections scope..."
+	@for suite in ops/scripts/marketing-copy-check.test.mjs ops/scripts/helios-submodule-check.test.mjs; do \
+	   declared=$$(grep -c '^test(' "$$suite"); \
+	   out=$$(node --test --test-reporter=tap "$$suite" 2>&1); \
+	   status=$$?; \
+	   [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	   collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	   if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	     echo "lint-compliance: $$suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	     exit 1; \
+	   fi; \
+	   echo "[compliance] $$suite: $$collected of $$declared declared test(s) ran"; \
+	 done
+	@node ops/scripts/marketing-copy-check.mjs
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance
 	@echo "All linters passed."
 
 # ── Repository labels ────────────────────────────────────────────────────

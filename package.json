@@ -6,13 +6,8 @@
   "description": "Gremion kernel monorepo root — workspace coordinator only",
   "packageManager": "pnpm@10.33.0",
   "engines": {
-    "node": ">=22",
+    "node": ">=26 <27",
     "pnpm": ">=10"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3"
-    ]
   },
   "dependencies": {
     "yaml": "2.9.0"
