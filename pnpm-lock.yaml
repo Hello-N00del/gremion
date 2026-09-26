@@ -54,9 +54,6 @@ importers:
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
-      '@types/dompurify':
-        specifier: ^3.0.5
-        version: 3.2.0
       '@types/node':
         specifier: ^26.6.0
         version: 26.6.0
@@ -157,9 +154,6 @@ importers:
       '@types/node':
         specifier: ^26.6.0
         version: 26.6.0
-      '@types/node-cron':
-        specifier: ^3.0.11
-        version: 3.0.11
       '@vitest/coverage-v8':
         specifier: ^4.1.11
         version: 4.1.11(vitest@4.1.11)
@@ -1482,18 +1476,11 @@ packages:
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
-  '@types/dompurify@3.2.0':
-    resolution: {integrity: sha512-Fgg31wv9QbLDA0SpTOXO3MaxySc4DKGLi8sna4/Utjo4r3ZRPdCt4UQee8BWr+Q5z21yifghREPJGYaEOEIACg==}
-    deprecated: This is a stub types definition. dompurify provides its own type definitions, so you do not need this installed.
-
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
-
-  '@types/node-cron@3.0.11':
-    resolution: {integrity: sha512-0ikrnug3/IyneSHqCBeslAhlK2aBfYek1fGo4bP4QnZPmiqSGRK+Oy7ZMisLWkesffJvQ1cqAcBnJC+8+nxIAg==}
 
   '@types/node@26.6.0':
     resolution: {integrity: sha512-FWWQhDlKSnEJVe+CTJCQL8Fol7s1MKo3Ud0fjryxoOoH+hwMIPxol0MguYrLi2I0VvIFwOU2DwdWET2+px15qg==}
@@ -3841,15 +3828,9 @@ snapshots:
 
   '@types/deep-eql@4.0.2': {}
 
-  '@types/dompurify@3.2.0':
-    dependencies:
-      dompurify: 3.4.13
-
   '@types/estree@1.0.8': {}
 
   '@types/estree@1.0.9': {}
-
-  '@types/node-cron@3.0.11': {}
 
   '@types/node@26.6.0':
     dependencies:
