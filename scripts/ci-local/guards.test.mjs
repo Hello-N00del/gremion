@@ -92,7 +92,8 @@ test('runGitleaksArm (diff-scoped), real gitleaks 8.30.1 binary: a committed sec
     // Assembled at runtime, not written as one contiguous literal — same
     // reason as PEM_FIXTURE below: this file is itself scanned by the real
     // whole-tree gitleaks arm (guards.mjs's own gate), and a literal
-    // "-----BEGIN EC PRIVATE KEY-----" sitting in THIS source file would trip
+    // PEM header for an EC private key (five dashes, BEGIN, the key type, five
+    // dashes) sitting in THIS source file would trip
     // that scan on every future run of this very test suite. Still fully
     // synthetic (a fake base64 body, never a real key).
     const pemFixture = ['-----BEGIN', ' EC PRIVATE KEY', '-----\n', 'MHcCAQEEIOSynthNotRealNotRealNotRealNotRealNotRealNotReal0123456\n', '-----END', ' EC PRIVATE KEY', '-----\n'].join('')
@@ -200,7 +201,8 @@ test('baseRefResolves: true for HEAD in a real repo, false for a ref that does n
 
 // Assembled at runtime, not written as one contiguous literal: this file is
 // itself scanned by the real whole-tree gitleaks arm (guards.mjs's own
-// gate), and a literal "-----BEGIN PRIVATE KEY-----" sitting in THIS source
+// gate), and a literal PEM private-key header (five dashes, BEGIN PRIVATE KEY,
+// five dashes) sitting in THIS source
 // file would trip that scan on every future run of this very test suite.
 // The fixture it builds is still fully synthetic (a fake base64 body, never
 // a real key) — only the marker text is split so it never appears
