@@ -1,0 +1,1735 @@
+{
+  "$description": "Gremion design tokens, DTCG 2025.10 (UX-030/UX-031). Three tiers: core -> semantic -> component; aliases point downward only. Values are the v8 system ported unchanged (UX-033); the identity step replaces values here, never code. Light is the base set; modes/dark.tokens.json overrides the semantic tier for dark (gremion.resolver.json).",
+  "core": {
+    "$description": "Raw, context-free values. The only tier that holds literal values.",
+    "color": {
+      "graphite": {
+        "22": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.22,
+              0.0056,
+              265
+            ]
+          }
+        },
+        "28": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.28,
+              0.0084,
+              265
+            ]
+          }
+        },
+        "36": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.36,
+              0.0154,
+              265
+            ]
+          }
+        },
+        "42": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.42,
+              0.0154,
+              265
+            ]
+          }
+        },
+        "72": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.72,
+              0.0182,
+              265
+            ]
+          }
+        },
+        "78": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.78,
+              0.0154,
+              265
+            ]
+          }
+        },
+        "93": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.93,
+              0.0049,
+              265
+            ]
+          }
+        },
+        "96": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "oklch",
+            "components": [
+              0.96,
+              0.0028,
+              265
+            ]
+          }
+        },
+        "$description": "The kernel default accent ramp (graphite, hue 265, chroma factor 0.14 of the instance engine; design handover v10 Part D). Written as literals, NOT instanceAccentVars(265): the default tenant renders the v8 app.css values unchanged."
+      },
+      "v8-light": {
+        "$description": "v8 warm neutrals (light). Hand-written in app.css and retired by UX-033/UX-046; carried here only so component tokens resolve for non-CSS targets. Never emitted.",
+        "surface": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "surface-2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.9569,
+              0.9529,
+              0.9333
+            ]
+          }
+        },
+        "ink": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.0863,
+              0.0824,
+              0.0745
+            ]
+          }
+        },
+        "ink-muted": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.4196,
+              0.4078,
+              0.3725
+            ]
+          }
+        },
+        "border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.0863,
+              0.0824,
+              0.0745
+            ],
+            "alpha": 0.09
+          }
+        },
+        "border-strong": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.0863,
+              0.0824,
+              0.0745
+            ],
+            "alpha": 0.16
+          }
+        }
+      },
+      "v8-dark": {
+        "$description": "v8 warm neutrals (dark). Hand-written in app.css; see v8-light.",
+        "surface": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.0863,
+              0.0902,
+              0.098
+            ]
+          }
+        },
+        "surface-2": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.1137,
+              0.1176,
+              0.1294
+            ]
+          }
+        },
+        "ink": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.9294,
+              0.9255,
+              0.9059
+            ]
+          }
+        },
+        "ink-muted": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.549,
+              0.5412,
+              0.5098
+            ]
+          }
+        },
+        "border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.9294,
+              0.9255,
+              0.9059
+            ],
+            "alpha": 0.08
+          }
+        },
+        "border-strong": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.9294,
+              0.9255,
+              0.9059
+            ],
+            "alpha": 0.16
+          }
+        }
+      },
+      "scrim": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.0863,
+              0.0824,
+              0.0745
+            ],
+            "alpha": 0.46
+          },
+          "$description": "Overlay scrim (#160). Theme-stable: a dark veil in both modes, never a light wash."
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.66
+          },
+          "$description": "Darker scrim in dark mode so the page reads as backgrounded (#160)."
+        }
+      }
+    },
+    "hue": {
+      "$description": "The curated hue registry (TENANT_PALETTES, HANDOVER-v8 Part E) plus the kernel default. A palette hue derives its whole accent ramp through instanceAccentVars(H) (src/engine/accent.js); free input is TASK-169.",
+      "graphite": {
+        "$type": "number",
+        "$value": 265,
+        "$description": "Kernel default hue (DEFAULT_ACCENT_HUE). Rendered by the graphite literals, not by the engine.",
+        "$extensions": {
+          "org.gremion": {
+            "defaultHue": true
+          }
+        }
+      },
+      "navy": {
+        "$type": "number",
+        "$value": 252,
+        "$extensions": {
+          "org.gremion": {
+            "palette": true,
+            "hue": "Navy"
+          }
+        }
+      },
+      "aubergine": {
+        "$type": "number",
+        "$value": 300,
+        "$extensions": {
+          "org.gremion": {
+            "palette": true,
+            "hue": "Aubergine"
+          }
+        }
+      },
+      "raspberry": {
+        "$type": "number",
+        "$value": 355,
+        "$extensions": {
+          "org.gremion": {
+            "palette": true,
+            "hue": "Raspberry"
+          }
+        }
+      },
+      "teal": {
+        "$type": "number",
+        "$value": 200,
+        "$extensions": {
+          "org.gremion": {
+            "palette": true,
+            "hue": "Teal"
+          }
+        }
+      }
+    },
+    "font": {
+      "$description": "Self-hosted open-source families (UX-034, @fontsource). Generic fallbacks follow each family.",
+      "display": {
+        "$type": "fontFamily",
+        "$value": [
+          "Archivo Narrow",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif"
+        ],
+        "$extensions": {
+          "org.gremion": {
+            "css": "--font-display"
+          }
+        }
+      },
+      "body": {
+        "$type": "fontFamily",
+        "$value": [
+          "Inter",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif"
+        ],
+        "$extensions": {
+          "org.gremion": {
+            "css": "--font-body"
+          }
+        }
+      },
+      "mono": {
+        "$type": "fontFamily",
+        "$value": [
+          "JetBrains Mono",
+          "ui-monospace",
+          "SF Mono",
+          "Menlo",
+          "monospace"
+        ],
+        "$extensions": {
+          "org.gremion": {
+            "css": "--font-mono"
+          }
+        }
+      }
+    },
+    "font-weight": {
+      "regular": {
+        "$type": "fontWeight",
+        "$value": 400
+      },
+      "medium": {
+        "$type": "fontWeight",
+        "$value": 500
+      },
+      "semibold": {
+        "$type": "fontWeight",
+        "$value": 600
+      }
+    },
+    "typography": {
+      "$description": "Type scale (UX-034, Q5 [D-nc]): the nearest v8 sizes. Tracking is in px because DTCG 2025.10 dimensions are px or rem (v8 em values converted at the step size).",
+      "display": {
+        "$type": "typography",
+        "$description": "v8 .kpi .value: 32px/1, -0.02em.",
+        "$value": {
+          "fontFamily": "{core.font.display}",
+          "fontSize": {
+            "value": 32,
+            "unit": "px"
+          },
+          "fontWeight": "{core.font-weight.medium}",
+          "letterSpacing": {
+            "value": -0.64,
+            "unit": "px"
+          },
+          "lineHeight": 1
+        }
+      },
+      "title": {
+        "$type": "typography",
+        "$description": "v8 .set-panel-head h2: 22px, -0.01em.",
+        "$value": {
+          "fontFamily": "{core.font.display}",
+          "fontSize": {
+            "value": 22,
+            "unit": "px"
+          },
+          "fontWeight": "{core.font-weight.medium}",
+          "letterSpacing": {
+            "value": -0.22,
+            "unit": "px"
+          },
+          "lineHeight": 1.2
+        }
+      },
+      "heading": {
+        "$type": "typography",
+        "$description": "v8 section and panel headings: 15px, 600, -0.005em.",
+        "$value": {
+          "fontFamily": "{core.font.display}",
+          "fontSize": {
+            "value": 15,
+            "unit": "px"
+          },
+          "fontWeight": "{core.font-weight.semibold}",
+          "letterSpacing": {
+            "value": -0.075,
+            "unit": "px"
+          },
+          "lineHeight": 1.3
+        }
+      },
+      "body": {
+        "$type": "typography",
+        "$description": "v8 body baseline: 14px/1.5. The accessibility font-size control scales body text through --base-font-size, so primitives inherit body text instead of setting it.",
+        "$value": {
+          "fontFamily": "{core.font.body}",
+          "fontSize": {
+            "value": 14,
+            "unit": "px"
+          },
+          "fontWeight": "{core.font-weight.regular}",
+          "letterSpacing": {
+            "value": 0,
+            "unit": "px"
+          },
+          "lineHeight": 1.5
+        }
+      },
+      "label": {
+        "$type": "typography",
+        "$description": "v8 .set-field > label: 12px, 500.",
+        "$value": {
+          "fontFamily": "{core.font.body}",
+          "fontSize": {
+            "value": 12,
+            "unit": "px"
+          },
+          "fontWeight": "{core.font-weight.medium}",
+          "letterSpacing": {
+            "value": 0,
+            "unit": "px"
+          },
+          "lineHeight": 1.4
+        }
+      },
+      "caption": {
+        "$type": "typography",
+        "$description": "v8 secondary text: 11.5px/1.45.",
+        "$value": {
+          "fontFamily": "{core.font.body}",
+          "fontSize": {
+            "value": 11.5,
+            "unit": "px"
+          },
+          "fontWeight": "{core.font-weight.regular}",
+          "letterSpacing": {
+            "value": 0,
+            "unit": "px"
+          },
+          "lineHeight": 1.45
+        }
+      },
+      "mono-label": {
+        "$type": "typography",
+        "$description": "v8 mono labels: 10.5px, 0.14em. Functional use only (UX-034: no decorative eyebrow).",
+        "$value": {
+          "fontFamily": "{core.font.mono}",
+          "fontSize": {
+            "value": 10.5,
+            "unit": "px"
+          },
+          "fontWeight": "{core.font-weight.medium}",
+          "letterSpacing": {
+            "value": 1.47,
+            "unit": "px"
+          },
+          "lineHeight": 1.4
+        }
+      }
+    },
+    "space": {
+      "$description": "The v8 eight-step scale (UX-035), 4-8-12-16-20-24-32-48.",
+      "s-1": {
+        "$type": "dimension",
+        "$value": {
+          "value": 4,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--s-1"
+          }
+        }
+      },
+      "s-2": {
+        "$type": "dimension",
+        "$value": {
+          "value": 8,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--s-2"
+          }
+        }
+      },
+      "s-3": {
+        "$type": "dimension",
+        "$value": {
+          "value": 12,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--s-3"
+          }
+        }
+      },
+      "s-4": {
+        "$type": "dimension",
+        "$value": {
+          "value": 16,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--s-4"
+          }
+        }
+      },
+      "s-5": {
+        "$type": "dimension",
+        "$value": {
+          "value": 20,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--s-5"
+          }
+        }
+      },
+      "s-6": {
+        "$type": "dimension",
+        "$value": {
+          "value": 24,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--s-6"
+          }
+        }
+      },
+      "s-7": {
+        "$type": "dimension",
+        "$value": {
+          "value": 32,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--s-7"
+          }
+        }
+      },
+      "s-8": {
+        "$type": "dimension",
+        "$value": {
+          "value": 48,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--s-8"
+          }
+        }
+      },
+      "rhythm-break": {
+        "$type": "dimension",
+        "$value": {
+          "value": 64,
+          "unit": "px"
+        },
+        "$description": "UX-035 section-level rhythm break: 2 x s-7 [D-nc]."
+      }
+    },
+    "radius": {
+      "xs": {
+        "$type": "dimension",
+        "$value": {
+          "value": 3,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--r-xs"
+          }
+        }
+      },
+      "sm": {
+        "$type": "dimension",
+        "$value": {
+          "value": 6,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--r-sm"
+          }
+        }
+      },
+      "md": {
+        "$type": "dimension",
+        "$value": {
+          "value": 10,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--r-md"
+          }
+        }
+      },
+      "lg": {
+        "$type": "dimension",
+        "$value": {
+          "value": 14,
+          "unit": "px"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--r-lg"
+          }
+        }
+      }
+    },
+    "size": {
+      "touch-target-min": {
+        "$type": "dimension",
+        "$value": {
+          "value": 44,
+          "unit": "px"
+        },
+        "$description": "v8 section 16 finding 3: the touch-target floor.",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--touch-target-min"
+          }
+        }
+      }
+    },
+    "duration": {
+      "fast": {
+        "$type": "duration",
+        "$value": {
+          "value": 120,
+          "unit": "ms"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--d-fast"
+          }
+        }
+      },
+      "med": {
+        "$type": "duration",
+        "$value": {
+          "value": 220,
+          "unit": "ms"
+        },
+        "$extensions": {
+          "org.gremion": {
+            "css": "--d-med"
+          }
+        }
+      }
+    },
+    "easing": {
+      "out": {
+        "$type": "cubicBezier",
+        "$value": [
+          0.2,
+          0.8,
+          0.2,
+          1
+        ],
+        "$extensions": {
+          "org.gremion": {
+            "css": "--e-out"
+          }
+        }
+      }
+    },
+    "shadow": {
+      "light-1": {
+        "$type": "shadow",
+        "$value": [
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0.0863,
+                0.0824,
+                0.0745
+              ],
+              "alpha": 0.04
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 1,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 0,
+              "unit": "px"
+            },
+            "spread": {
+              "value": 0,
+              "unit": "px"
+            }
+          },
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0.0863,
+                0.0824,
+                0.0745
+              ],
+              "alpha": 0.04
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 1,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 2,
+              "unit": "px"
+            },
+            "spread": {
+              "value": 0,
+              "unit": "px"
+            }
+          }
+        ]
+      },
+      "light-2": {
+        "$type": "shadow",
+        "$value": [
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0.0863,
+                0.0824,
+                0.0745
+              ],
+              "alpha": 0.05
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 1,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 0,
+              "unit": "px"
+            },
+            "spread": {
+              "value": 0,
+              "unit": "px"
+            }
+          },
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0.0863,
+                0.0824,
+                0.0745
+              ],
+              "alpha": 0.08
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 4,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 14,
+              "unit": "px"
+            },
+            "spread": {
+              "value": -4,
+              "unit": "px"
+            }
+          }
+        ]
+      },
+      "light-3": {
+        "$type": "shadow",
+        "$value": [
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0.0863,
+                0.0824,
+                0.0745
+              ],
+              "alpha": 0.06
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 2,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 0,
+              "unit": "px"
+            },
+            "spread": {
+              "value": 0,
+              "unit": "px"
+            }
+          },
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0.0863,
+                0.0824,
+                0.0745
+              ],
+              "alpha": 0.16
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 14,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 40,
+              "unit": "px"
+            },
+            "spread": {
+              "value": -14,
+              "unit": "px"
+            }
+          }
+        ]
+      },
+      "dark-1": {
+        "$type": "shadow",
+        "$value": [
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0,
+                0,
+                0
+              ],
+              "alpha": 0.4
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 1,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 0,
+              "unit": "px"
+            },
+            "spread": {
+              "value": 0,
+              "unit": "px"
+            }
+          }
+        ]
+      },
+      "dark-2": {
+        "$type": "shadow",
+        "$value": [
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0,
+                0,
+                0
+              ],
+              "alpha": 0.5
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 1,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 0,
+              "unit": "px"
+            },
+            "spread": {
+              "value": 0,
+              "unit": "px"
+            }
+          },
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0,
+                0,
+                0
+              ],
+              "alpha": 0.4
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 4,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 14,
+              "unit": "px"
+            },
+            "spread": {
+              "value": -4,
+              "unit": "px"
+            }
+          }
+        ]
+      },
+      "dark-3": {
+        "$type": "shadow",
+        "$value": [
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0,
+                0,
+                0
+              ],
+              "alpha": 0.6
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 2,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 0,
+              "unit": "px"
+            },
+            "spread": {
+              "value": 0,
+              "unit": "px"
+            }
+          },
+          {
+            "color": {
+              "colorSpace": "srgb",
+              "components": [
+                0,
+                0,
+                0
+              ],
+              "alpha": 0.6
+            },
+            "offsetX": {
+              "value": 0,
+              "unit": "px"
+            },
+            "offsetY": {
+              "value": 14,
+              "unit": "px"
+            },
+            "blur": {
+              "value": 40,
+              "unit": "px"
+            },
+            "spread": {
+              "value": -14,
+              "unit": "px"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "semantic": {
+    "$description": "Role tokens: what a value is for. Council-colour overrides (UX-042) rewrite this tier, never core.",
+    "color": {
+      "accent": {
+        "default": {
+          "$type": "color",
+          "$value": "{core.color.graphite.42}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--accent"
+            }
+          }
+        },
+        "ink": {
+          "$type": "color",
+          "$value": "{core.color.graphite.36}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--accent-ink"
+            }
+          }
+        },
+        "soft": {
+          "$type": "color",
+          "$value": "{core.color.graphite.93}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--accent-soft"
+            }
+          }
+        },
+        "faint": {
+          "$type": "color",
+          "$value": "{core.color.graphite.96}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--accent-faint"
+            }
+          }
+        }
+      },
+      "focus-ring": {
+        "$type": "color",
+        "$value": "{semantic.color.accent.default}",
+        "$description": "Focus indicator (v8 section 16).",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--focus-ring"
+          }
+        }
+      },
+      "scrim": {
+        "$type": "color",
+        "$value": "{core.color.scrim.light}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--scrim"
+          }
+        }
+      },
+      "surface": {
+        "raised": {
+          "$type": "color",
+          "$value": "{core.color.v8-light.surface}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--surface",
+              "handWritten": true
+            }
+          }
+        },
+        "sunken": {
+          "$type": "color",
+          "$value": "{core.color.v8-light.surface-2}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--surface-2",
+              "handWritten": true
+            }
+          }
+        }
+      },
+      "text": {
+        "default": {
+          "$type": "color",
+          "$value": "{core.color.v8-light.ink}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--ink",
+              "handWritten": true
+            }
+          }
+        },
+        "muted": {
+          "$type": "color",
+          "$value": "{core.color.v8-light.ink-muted}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--ink-muted",
+              "handWritten": true
+            }
+          }
+        }
+      },
+      "border": {
+        "default": {
+          "$type": "color",
+          "$value": "{core.color.v8-light.border}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--border",
+              "handWritten": true
+            }
+          }
+        },
+        "strong": {
+          "$type": "color",
+          "$value": "{core.color.v8-light.border-strong}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--border-strong",
+              "handWritten": true
+            }
+          }
+        }
+      }
+    },
+    "elevation": {
+      "1": {
+        "$type": "shadow",
+        "$value": "{core.shadow.light-1}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--sh-1"
+          }
+        }
+      },
+      "2": {
+        "$type": "shadow",
+        "$value": "{core.shadow.light-2}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--sh-2"
+          }
+        }
+      },
+      "3": {
+        "$type": "shadow",
+        "$value": "{core.shadow.light-3}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--sh-3"
+          }
+        }
+      }
+    },
+    "type": {
+      "display": {
+        "$type": "typography",
+        "$value": "{core.typography.display}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--type-display"
+          }
+        }
+      },
+      "title": {
+        "$type": "typography",
+        "$value": "{core.typography.title}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--type-title"
+          }
+        }
+      },
+      "heading": {
+        "$type": "typography",
+        "$value": "{core.typography.heading}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--type-heading"
+          }
+        }
+      },
+      "body": {
+        "$type": "typography",
+        "$value": "{core.typography.body}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--type-body"
+          }
+        }
+      },
+      "label": {
+        "$type": "typography",
+        "$value": "{core.typography.label}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--type-label"
+          }
+        }
+      },
+      "caption": {
+        "$type": "typography",
+        "$value": "{core.typography.caption}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--type-caption"
+          }
+        }
+      },
+      "mono-label": {
+        "$type": "typography",
+        "$value": "{core.typography.mono-label}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--type-mono-label"
+          }
+        }
+      }
+    },
+    "space": {
+      "section-gap": {
+        "$type": "dimension",
+        "$value": "{core.space.rhythm-break}",
+        "$description": "UX-035: the only gap between structurally distinct page sections; the same in every display setting (D R18-3).",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--space-section-gap"
+          }
+        }
+      },
+      "inset-panel": {
+        "$type": "dimension",
+        "$value": "{core.space.s-6}"
+      },
+      "inset-popover": {
+        "$type": "dimension",
+        "$value": "{core.space.s-1}"
+      },
+      "inset-control-x": {
+        "$type": "dimension",
+        "$value": "{core.space.s-3}"
+      },
+      "inset-control-y": {
+        "$type": "dimension",
+        "$value": "{core.space.s-2}"
+      },
+      "gap-stack": {
+        "$type": "dimension",
+        "$value": "{core.space.s-4}"
+      },
+      "gap-inline": {
+        "$type": "dimension",
+        "$value": "{core.space.s-2}"
+      }
+    },
+    "radius": {
+      "control": {
+        "$type": "dimension",
+        "$value": "{core.radius.sm}"
+      },
+      "popover": {
+        "$type": "dimension",
+        "$value": "{core.radius.md}"
+      },
+      "panel": {
+        "$type": "dimension",
+        "$value": "{core.radius.lg}"
+      }
+    },
+    "size": {
+      "target-min": {
+        "$type": "dimension",
+        "$value": "{core.size.touch-target-min}"
+      }
+    },
+    "motion": {
+      "duration-fast": {
+        "$type": "duration",
+        "$value": "{core.duration.fast}"
+      },
+      "duration-med": {
+        "$type": "duration",
+        "$value": "{core.duration.med}"
+      },
+      "easing-out": {
+        "$type": "cubicBezier",
+        "$value": "{core.easing.out}"
+      }
+    }
+  },
+  "component": {
+    "$description": "Aliases read directly by the Bits UI primitives (gremion-ui/src/lib/components/primitives). Web-only tier: Flutter forks here (UX-031).",
+    "dialog": {
+      "background": {
+        "$type": "color",
+        "$value": "{semantic.color.surface.raised}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-background"
+          }
+        }
+      },
+      "text": {
+        "$type": "color",
+        "$value": "{semantic.color.text.default}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-text"
+          }
+        }
+      },
+      "text-muted": {
+        "$type": "color",
+        "$value": "{semantic.color.text.muted}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-text-muted"
+          }
+        }
+      },
+      "border": {
+        "$type": "color",
+        "$value": "{semantic.color.border.default}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-border"
+          }
+        }
+      },
+      "radius": {
+        "$type": "dimension",
+        "$value": "{semantic.radius.panel}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-radius"
+          }
+        }
+      },
+      "shadow": {
+        "$type": "shadow",
+        "$value": "{semantic.elevation.3}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-shadow"
+          }
+        }
+      },
+      "padding": {
+        "$type": "dimension",
+        "$value": "{semantic.space.inset-panel}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-padding"
+          }
+        }
+      },
+      "gap": {
+        "$type": "dimension",
+        "$value": "{semantic.space.gap-stack}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-gap"
+          }
+        }
+      },
+      "scrim": {
+        "$type": "color",
+        "$value": "{semantic.color.scrim}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-scrim"
+          }
+        }
+      },
+      "title-font": {
+        "$type": "typography",
+        "$value": "{semantic.type.heading}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-title-font"
+          }
+        }
+      },
+      "description-font": {
+        "$type": "typography",
+        "$value": "{semantic.type.caption}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-description-font"
+          }
+        }
+      },
+      "close-size": {
+        "$type": "dimension",
+        "$value": "{semantic.size.target-min}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-close-size"
+          }
+        }
+      },
+      "focus-ring": {
+        "$type": "color",
+        "$value": "{semantic.color.focus-ring}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-focus-ring"
+          }
+        }
+      },
+      "duration": {
+        "$type": "duration",
+        "$value": "{semantic.motion.duration-med}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-duration"
+          }
+        }
+      },
+      "easing": {
+        "$type": "cubicBezier",
+        "$value": "{semantic.motion.easing-out}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--dialog-easing"
+          }
+        }
+      }
+    },
+    "field": {
+      "background": {
+        "$type": "color",
+        "$value": "{semantic.color.surface.raised}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-background"
+          }
+        }
+      },
+      "text": {
+        "$type": "color",
+        "$value": "{semantic.color.text.default}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-text"
+          }
+        }
+      },
+      "placeholder": {
+        "$type": "color",
+        "$value": "{semantic.color.text.muted}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-placeholder"
+          }
+        }
+      },
+      "border": {
+        "$type": "color",
+        "$value": "{semantic.color.border.strong}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-border"
+          }
+        }
+      },
+      "radius": {
+        "$type": "dimension",
+        "$value": "{semantic.radius.control}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-radius"
+          }
+        }
+      },
+      "padding-x": {
+        "$type": "dimension",
+        "$value": "{semantic.space.inset-control-x}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-padding-x"
+          }
+        }
+      },
+      "padding-y": {
+        "$type": "dimension",
+        "$value": "{semantic.space.inset-control-y}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-padding-y"
+          }
+        }
+      },
+      "gap": {
+        "$type": "dimension",
+        "$value": "{semantic.space.gap-inline}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-gap"
+          }
+        }
+      },
+      "min-height": {
+        "$type": "dimension",
+        "$value": "{semantic.size.target-min}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-min-height"
+          }
+        }
+      },
+      "focus-ring": {
+        "$type": "color",
+        "$value": "{semantic.color.focus-ring}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-focus-ring"
+          }
+        }
+      },
+      "label-font": {
+        "$type": "typography",
+        "$value": "{semantic.type.label}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-label-font"
+          }
+        }
+      },
+      "label-text": {
+        "$type": "color",
+        "$value": "{semantic.color.text.default}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--field-label-text"
+          }
+        }
+      }
+    },
+    "popover": {
+      "background": {
+        "$type": "color",
+        "$value": "{semantic.color.surface.raised}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-background"
+          }
+        }
+      },
+      "text": {
+        "$type": "color",
+        "$value": "{semantic.color.text.default}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-text"
+          }
+        }
+      },
+      "text-muted": {
+        "$type": "color",
+        "$value": "{semantic.color.text.muted}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-text-muted"
+          }
+        }
+      },
+      "border": {
+        "$type": "color",
+        "$value": "{semantic.color.border.default}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-border"
+          }
+        }
+      },
+      "radius": {
+        "$type": "dimension",
+        "$value": "{semantic.radius.popover}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-radius"
+          }
+        }
+      },
+      "shadow": {
+        "$type": "shadow",
+        "$value": "{semantic.elevation.2}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-shadow"
+          }
+        }
+      },
+      "padding": {
+        "$type": "dimension",
+        "$value": "{semantic.space.inset-popover}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-padding"
+          }
+        }
+      },
+      "item-padding-x": {
+        "$type": "dimension",
+        "$value": "{semantic.space.inset-control-x}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-item-padding-x"
+          }
+        }
+      },
+      "item-padding-y": {
+        "$type": "dimension",
+        "$value": "{semantic.space.inset-control-y}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-item-padding-y"
+          }
+        }
+      },
+      "item-radius": {
+        "$type": "dimension",
+        "$value": "{semantic.radius.control}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-item-radius"
+          }
+        }
+      },
+      "item-min-height": {
+        "$type": "dimension",
+        "$value": "{semantic.size.target-min}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-item-min-height"
+          }
+        }
+      },
+      "item-highlight-background": {
+        "$type": "color",
+        "$value": "{semantic.color.accent.soft}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-item-highlight-background"
+          }
+        }
+      },
+      "item-highlight-text": {
+        "$type": "color",
+        "$value": "{semantic.color.accent.ink}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-item-highlight-text"
+          }
+        }
+      },
+      "item-selected-indicator": {
+        "$type": "color",
+        "$value": "{semantic.color.accent.default}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-item-selected-indicator"
+          }
+        }
+      },
+      "empty-font": {
+        "$type": "typography",
+        "$value": "{semantic.type.caption}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-empty-font"
+          }
+        }
+      },
+      "duration": {
+        "$type": "duration",
+        "$value": "{semantic.motion.duration-fast}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--popover-duration"
+          }
+        }
+      }
+    }
+  }
+}

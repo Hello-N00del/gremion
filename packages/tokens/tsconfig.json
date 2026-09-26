@@ -1,0 +1,21 @@
+{
+  // Typecheck gate for @gremion/tokens (`pnpm --filter @gremion/tokens
+  // typecheck`). The package is plain ESM JavaScript with JSDoc types (so the
+  // build script and the engine run under node without a transform, also from
+  // a deployed node_modules); checkJs makes tsc hold it to strict TS rules.
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["esnext"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.js", "src/**/*.d.ts", "scripts/**/*.mjs", "test/**/*.mjs"]
+}
