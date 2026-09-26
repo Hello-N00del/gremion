@@ -39,13 +39,40 @@ describe('TRD-413 primitive-roles guard', () => {
     expect(Object.isFrozen(PRIMITIVE_GUARD_SCOPE)).toBe(true)
   })
 
-  test('named case: on the real tree today the scope is empty (no routes/sitzungen yet) and that is reported, not a silent zero', () => {
-    const r = checkPrimitiveRoles({ fs: diskFs(APP_ROOT) })
+  test('named case: a tree with no routes/sitzungen is reported as empty-scope, not a silent zero', () => {
+    const fs = memFs({ 'src/routes/members/+page.svelte': '<select></select>\n' })
+    const r = checkPrimitiveRoles({ fs })
     expect(r.status).toBe('empty-scope')
     expect(r.reason).toContain('src/routes/sitzungen')
     expect(r.reason).toContain('TASK-095/096/097')
     expect(r.violations).toEqual([])
     expect(formatResult(r)).toMatch(/^\[primitive-roles\] PASS \(empty-scope\)/)
+  })
+
+  // The real tree is empty-scope today (no routes/sitzungen on main); once
+  // TASK-095/096/097 create it, the same test must keep passing for compliant
+  // screens and turn RED only on a real violation -- so it asserts the
+  // violations, never the status alone.
+  test('on the real tree the F2 governance scope has no violations (empty-scope today, scanned once the screens land)', () => {
+    const r = checkPrimitiveRoles({ fs: diskFs(APP_ROOT) })
+    expect(r.violations).toEqual([])
+    expect(['empty-scope', 'scanned']).toContain(r.status)
+    if (r.status === 'empty-scope') {
+      expect(r.reason).toContain('src/routes/sitzungen')
+    } else {
+      expect(r.scanned.length).toBeGreaterThan(0)
+      expect(formatResult(r)).toMatch(/^\[primitive-roles\] scanned \d+ file\(s\) .*: PASS, /)
+    }
+  })
+
+  test('a compliant F2 screen (primitives only) scans clean -- the real-tree test does not fail merely because routes/sitzungen exists', () => {
+    const fs = memFs({
+      [ROUTE]: "<script lang=\"ts\">\n  import Dialog from '$lib/components/primitives/Dialog.svelte'\n</script>\n<Dialog title=\"t\" closeLabel=\"c\" />\n",
+      'src/lib/components/primitives/Dialog.svelte': '<div role="dialog"></div>',
+    })
+    const r = checkPrimitiveRoles({ fs })
+    expect(r.status).toBe('scanned')
+    expect(r.violations).toEqual([])
   })
 
   test('a fixture route with a raw <select> is RED, naming the file and line', () => {
