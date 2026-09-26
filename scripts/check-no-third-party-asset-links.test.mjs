@@ -10,13 +10,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 
 import { findThirdPartyAssetLinks, checkFile } from './check-no-third-party-asset-links.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const CLI = join(ROOT, 'scripts', 'check-no-third-party-asset-links.mjs')
 
 test('a planted third-party <link href> (jsdelivr icon CDN) is flagged — the guard bites', () => {
   const planted =
@@ -50,3 +53,46 @@ for (const app of ['gremion-ui', 'gremion-public']) {
     assert.deepEqual(checkFile(file), [], `expected no problems in ${file}`)
   })
 }
+
+// ── CLI entry-point (isMain) proof ──────────────────────────────────────────
+// review finding (TASK-007 r1, MEDIUM): the old guard compared
+// `import.meta.url === file://${process.argv[1]}` — a raw string concat that
+// never matches on Windows (drive-letter + backslash paths never round-trip
+// through a bare `file://` prefix) nor on POSIX when the path needs
+// percent-encoding, so the CLI silently exited 0 with no output no matter
+// what was fed to it. These tests actually SPAWN the CLI as a subprocess
+// (not just import its exports) so the isMain branch itself is exercised,
+// which is exactly the code path the bug lived in.
+test('CLI: a planted third-party <link> in a real file exits 1 and prints the problem', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tp-asset-link-'))
+  try {
+    const fixture = join(dir, 'planted.html')
+    writeFileSync(
+      fixture,
+      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lucide-static/font/lucide.css" />'
+    )
+    const result = spawnSync(process.execPath, [CLI, fixture], { encoding: 'utf8' })
+    assert.equal(result.status, 1, `expected exit 1, got ${result.status}; stderr=${result.stderr}`)
+    assert.match(result.stderr, /cdn\.jsdelivr\.net/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('CLI: a clean real file exits 0', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tp-asset-link-'))
+  try {
+    const fixture = join(dir, 'clean.html')
+    writeFileSync(fixture, '<link rel="stylesheet" href="/static/app.css" />')
+    const result = spawnSync(process.execPath, [CLI, fixture], { encoding: 'utf8' })
+    assert.equal(result.status, 0, `expected exit 0, got ${result.status}; stderr=${result.stderr}`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('CLI: no file arguments exits 2 with a usage message', () => {
+  const result = spawnSync(process.execPath, [CLI], { encoding: 'utf8' })
+  assert.equal(result.status, 2, `expected exit 2, got ${result.status}; stderr=${result.stderr}`)
+  assert.match(result.stderr, /usage/i)
+})

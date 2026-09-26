@@ -18,6 +18,7 @@
 // Test: node --test scripts/check-no-third-party-asset-links.test.mjs
 
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const LINK_RE = /<link\b[^>]*\bhref\s*=\s*"([^"]+)"[^>]*>/gi
 
@@ -47,7 +48,14 @@ export function checkFile(filePath) {
   return findThirdPartyAssetLinks(readFileSync(filePath, 'utf8'), filePath)
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// House idiom (check-postgres-major.mjs) — a raw `file://${process.argv[1]}`
+// string concat never round-trips on Windows (drive-letter + backslash paths)
+// nor on POSIX when the path needs percent-encoding, so it silently never
+// matched and the CLI exited 0 with no output regardless of input (TASK-007
+// review r1, MEDIUM — proven by scripts/check-no-third-party-asset-links.test.mjs's
+// spawned-CLI cases).
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
+if (isMain) {
   const files = process.argv.slice(2)
   if (files.length === 0) {
     console.error('usage: check-no-third-party-asset-links.mjs <file> [<file> ...]')
