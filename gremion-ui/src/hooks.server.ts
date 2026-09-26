@@ -227,7 +227,10 @@ export function boot(): Promise<void> {
   return _bootPromise
 }
 
-boot()
+// boot() catches every error internally (sets _bootError, logs, sets
+// process.exitCode) and its returned promise never rejects; `void` marks the
+// intentional fire-and-forget (module init cannot top-level-await here).
+void boot()
 
 /**
  * Build a SessionUser from a raw Keycloak JWT payload. `vocabulary` is the
