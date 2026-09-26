@@ -165,13 +165,13 @@ describe('filterNavForSession — it-admin with admin group sees everything', ()
 
 describe('filterNavForSession — empty sections collapse entirely', () => {
   const syntheticSchema: NavItem[] = [
-    { kind: 'item', href: '/always', label: 'Always' },
+    { kind: 'item', href: '/always', label: 'Always', icon: 'home' },
     {
       kind: 'section',
       label: 'NurAdmin',
       children: [
-        { kind: 'item', href: '/y', label: 'Y', needs: ['admin'] },
-        { kind: 'item', href: '/z', label: 'Z', needs: ['it-admin'] },
+        { kind: 'item', href: '/y', label: 'Y', icon: 'key', needs: ['admin'] },
+        { kind: 'item', href: '/z', label: 'Z', icon: 'lock', needs: ['it-admin'] },
       ],
     },
   ];
@@ -213,7 +213,7 @@ describe('filterNavForSession module gating (P0.2)', () => {
 
   const moduleSchema: NavItem[] = [
     { kind: 'section', label: 'Demo', moduleId: 'demo_widget', children: [
-      { kind: 'item', href: '/demo', label: 'Demo-Eintrag', role: Role.Member, moduleId: 'demo_widget' },
+      { kind: 'item', href: '/demo', label: 'Demo-Eintrag', icon: 'package', role: Role.Member, moduleId: 'demo_widget' },
     ] },
   ];
 

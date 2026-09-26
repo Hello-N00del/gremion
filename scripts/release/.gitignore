@@ -1,0 +1,4 @@
+# Throwaway keys and scratch trees the supply-chain tests generate at run time.
+# Nothing under here is ever committed: the tests delete it in a finally, and
+# this line is the second fence if a run is killed half-way.
+.t046-tmp/

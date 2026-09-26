@@ -1,0 +1,20 @@
+{
+  // Emit config for `npm publish` (tsconfig.json is the no-emit gate). Same
+  // three rules as @gremion/ports: explicit include, rootDir = src so
+  // src/index.ts emits as dist/index.js (the publishConfig.exports path), and
+  // tests excluded. rewriteRelativeImportExtensions (inherited) turns the
+  // `.ts` relative specifiers into `.js` in the emitted files.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

@@ -9,7 +9,8 @@ export type NavItem =
       kind: 'item';
       href: string;
       label: string;
-      icon?: string;
+      /** Required: the icon rail shows only the glyph (TASK-208). */
+      icon: string;
       needs?: string[];
       badge?: 'count' | 'live' | 'unread';
       role?: Role;

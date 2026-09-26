@@ -29,7 +29,10 @@ import {
 } from './check-postgres-major.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const EVIDENCE = readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')
+// Normalised to LF: .gitattributes pins no eol for *.md, so a core.autocrlf=true
+// checkout (Windows) carries CRLF, and the line-anchored assertions below must
+// test the record's content, not the platform's line endings.
+const EVIDENCE = readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8').replace(/\r\n/g, '\n')
 
 test('the pin is an integer major and a concrete alpine tag', () => {
   assert.ok(Number.isInteger(POSTGRES_MAJOR), 'POSTGRES_MAJOR must be an integer')

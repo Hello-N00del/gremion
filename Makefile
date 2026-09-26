@@ -5,7 +5,8 @@
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
-        lint-unshipped-migrations lint-toolchain fresh-init-proof \
+        lint-unshipped-migrations lint-toolchain lint-compliance fresh-init-proof \
+        verify \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -204,7 +205,7 @@ test-ports-nats:
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck -x scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
+	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
 		[ -e "$$f" ] || continue; \
@@ -367,8 +368,83 @@ lint-toolchain:
 	 echo "[toolchain] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-toolchain.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations
+# TASK-022: the ACME edge render guard (scripts/check-compose-edge.test.mjs).
+# Renders the production composition with the fixed fixture
+# test/host/fixtures/edge-render/state.env and asserts the bind addresses,
+# the static file and the service shape. Needs docker (compose config only,
+# never `up`). The suite's collected count is asserted against its declared
+# `test(` count, for the reason lint-extraction-source gives -- and because
+# this suite registers its tests only when it is the process entry (it is
+# imported by TASK-034), so a runner that stopped making it the entry would
+# collect zero. NOT wired into the `lint` aggregate: TASK-045 owns that.
+.PHONY: lint-edge-render test-edge-static
+lint-edge-render:
+	@echo "Checking the ACME edge render..."
+	@declared=$$(grep -c '^test(' scripts/check-compose-edge.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-compose-edge.test.mjs 2>&1); \
+	 status=$$?; \
+	 printf '%s\n' "$$out" >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ]; then \
+	   echo "lint-edge-render: scripts/check-compose-edge.test.mjs declares no top-level test() -- the suite collects nothing and would still exit 0." >&2; \
+	   exit 1; \
+	 fi; \
+	 if [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-edge-render: the suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[edge-render] suite: $$collected of $$declared declared test(s) ran"
+
+# TASK-022: the scratch-stack proof of the ACME edge (Docker; minutes, not
+# seconds -- it waits for a real certificate renewal). Brings up only traefik,
+# docker-socket-proxy and a scratch ACME CA under a t022-<sha8> project and
+# removes them by name; never `docker compose down`. Then the mechanism proof.
+test-edge-static:
+	@bash test/host/integration/edge-static.sh
+	@bash scripts/verify-traefik-acme-wiring.sh
+
+# TASK-005 (TRD-265, TRD-112, TRD-268): the marketing-copy check. Copy that
+# names a licence-register system with a licence other than its register value,
+# or that asserts online student-body elections are lawful / the module fit for
+# statutory use, fails. Both rule sets are read from docs/compliance/, and the
+# check refuses an empty scope. The two suites run first and their collected
+# count is asserted against the declared `test(` count, the same way
+# lint-toolchain does: `node --test` exits 0 on a file that collects nothing.
+# The Helios bump script's own suite rides here so it runs on every lint even
+# though the submodule it guards lives in a consuming repository.
+lint-compliance:
+	@echo "Checking marketing copy against the licence register and elections scope..."
+	@for suite in ops/scripts/marketing-copy-check.test.mjs ops/scripts/helios-submodule-check.test.mjs; do \
+	   declared=$$(grep -c '^test(' "$$suite"); \
+	   out=$$(node --test --test-reporter=tap "$$suite" 2>&1); \
+	   status=$$?; \
+	   [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	   collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	   if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	     echo "lint-compliance: $$suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	     exit 1; \
+	   fi; \
+	   echo "[compliance] $$suite: $$collected of $$declared declared test(s) ran"; \
+	 done
+	@node ops/scripts/marketing-copy-check.mjs
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance
 	@echo "All linters passed."
+
+# ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
+
+# The one fail-closed local gate: typecheck, unit, integration, migration-hash
+# and carve-lint (scripts/verify/required-suites.txt is the actual list this
+# target must not drift from -- scripts/verify/meta.test.mjs asserts the two
+# stay in step). Every suite is judged by scripts/verify/lib/guard.mjs, which
+# never trusts a tool's exit code alone: a suite that collects zero tests, is
+# skipped, or needs a missing tool FAILS here, it does not pass silently the
+# way an un-gated `pnpm test` would. Writes scripts/verify/out/<HEAD-sha>.json
+# (gitignored); `node scripts/verify/check-record.mjs` reads that record
+# without re-running anything and is the actual merge block.
+verify:
+	@node scripts/verify/verify.mjs
 
 # ── Repository labels ────────────────────────────────────────────────────
 

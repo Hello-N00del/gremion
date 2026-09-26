@@ -1,0 +1,54 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gremion governance \u2014 breaking-demo fixture (Meeting.state)",
+    "version": "1.0.0",
+    "description": "Acceptance \u00a71 breaking demo: removing Meeting.state from the 200 response."
+  },
+  "paths": {
+    "/api/v1/meetings/{meetingId}": {
+      "get": {
+        "operationId": "getMeeting",
+        "summary": "Read one meeting",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "meeting_id",
+                    "scheduled_start",
+                    "state"
+                  ],
+                  "properties": {
+                    "meeting_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "scheduled_start": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "planned",
+                        "invited",
+                        "in_session",
+                        "suspended",
+                        "closed",
+                        "cancelled"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

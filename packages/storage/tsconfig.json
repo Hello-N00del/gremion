@@ -1,0 +1,21 @@
+{
+  // Typecheck gate for @gremion/storage (`pnpm --filter @gremion/storage
+  // typecheck`); tsconfig.build.json extends it to emit dist/. Same shape as
+  // packages/ports: the specs import vitest, which IS a devDependency here, so
+  // they are type-checked too (unlike packages/db).
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
