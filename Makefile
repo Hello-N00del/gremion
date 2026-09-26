@@ -404,14 +404,15 @@ test-edge-static:
 	@bash test/host/integration/edge-static.sh
 	@bash scripts/verify-traefik-acme-wiring.sh
 
-# R25-2 Stage 1: Oxlint via vite-plus (root vite.config.ts's `lint` block).
-# NOT wired into the `lint` aggregate below -- the baseline is not zero
-# (see plan/p1/r25/vp-lint-kernel.md); the refactor unit that clears the
-# findings wires it in.
+# R25-2 Stage 1: Oxlint via vite-plus (root vite.config.ts's `lint` block), as a
+# RATCHET: fails when the error count rises above scripts/lint-js-baseline.json
+# and asks for the baseline to be lowered when it falls (scripts/check-lint-js.mjs).
+# The verify gate runs it (TASK-045 carve-lint). NOT in the `lint` aggregate
+# yet; at baseline 0 it becomes a plain zero-error gate and joins it.
 lint-js:
-	@echo "Linting JS/TS/Svelte with vp lint..."
-	@pnpm exec vp lint
-	@echo "  vp lint: OK"
+	@echo "Linting JS/TS/Svelte with vp lint (ratchet)..."
+	@node --test scripts/check-lint-js.test.mjs
+	@node scripts/check-lint-js.mjs
 
 # TASK-005 (TRD-265, TRD-112, TRD-268): the marketing-copy check. Copy that
 # names a licence-register system with a licence other than its register value,

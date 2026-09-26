@@ -1,0 +1,4 @@
+{
+  "baseline": 244,
+  "note": "R25-2: vp lint error count on the merged tree 2026-09-26; only ever lowered (the refactor lanes R25-4 bring it toward 0)"
+}

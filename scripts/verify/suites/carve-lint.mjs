@@ -39,6 +39,11 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-yaml', kind: 'make', target: 'lint-yaml', tool: 'yamllint' },
   { name: 'lint-json', kind: 'make', target: 'lint-json', tool: 'python3' },
   { name: 'lint-compose', kind: 'make', target: 'lint-compose', tool: 'docker' },
+  // TASK-022 merged lint-edge-render after this list was written (the meta-test
+  // caught it on main, R25). It renders the production composition: docker.
+  { name: 'lint-edge-render', kind: 'make', target: 'lint-edge-render', tool: 'docker' },
+  // R25-2: the vp lint ratchet (scripts/check-lint-js.mjs).
+  { name: 'lint-js', kind: 'make', target: 'lint-js' },
   { name: 'lint-hygiene', kind: 'make', target: 'lint-hygiene' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
