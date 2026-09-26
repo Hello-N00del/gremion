@@ -63,11 +63,18 @@ seed_trust_anchor() {
     # anything a test injects through EXTRA_RESOLVED (images compose would
     # pull although no canonical `image:` line names them). Every docker shim
     # in this file answers `compose … config --images` through this helper.
+    # Like real compose, it leaves out services under an inactive profile
+    # (PROFILED_RESOLVED) unless COMPOSE_PROFILES='*'; RESOLVE_OMIT drops the
+    # canonical pins matching a pattern (a pin compose does not show).
     cat > "${GREMION_ROOT}/.resolve-images" <<'RESOLVE'
 #!/usr/bin/env bash
 grep -E '^[[:space:]]*image:' "$FIXTURE_RELEASE/docker-compose.pins.yml" \
-    | sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//'
+    | sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//' \
+    | { if [ -n "${RESOLVE_OMIT:-}" ]; then grep -v -- "$RESOLVE_OMIT" || true; else cat; fi; }
 [ -z "${EXTRA_RESOLVED:-}" ] || printf '%s\n' "$EXTRA_RESOLVED"
+if [ -n "${PROFILED_RESOLVED:-}" ] && [ "${COMPOSE_PROFILES:-}" = '*' ]; then
+    printf '%s\n' "$PROFILED_RESOLVED"
+fi
 exit "${RESOLVE_STATUS:-0}"
 RESOLVE
     chmod +x "${GREMION_ROOT}/.resolve-images"
@@ -984,5 +991,36 @@ printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"
     [ "$status" -eq 1 ]
     [[ "$output" == *"cannot resolve the image set"* ]]
     grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# J2. intake round 1 (TASK-046): profiled services, pins compose does not show
+# ---------------------------------------------------------------------------
+
+@test "an unsigned image under an inactive compose profile (step 7's migrate) is still verified and refused" {
+    stub_all
+    export PROFILED_RESOLVED="ghcr.io/hello-n00del/gremion-migrate-x@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    shim cosign '
+ref="${*: -1}"
+case "$ref" in *5555*) echo "Error: no signatures found" >&2; exit 10 ;; esac
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref%@*}" "${ref##*@}"'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-migrate-x@sha256:5555"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a canonical pin that compose does not show is signature-verified anyway" {
+    stub_all
+    export RESOLVE_OMIT="gremion-migrate"
+    shim cosign '
+ref="${*: -1}"
+case "$ref" in *gremion-migrate*) echo "Error: no signatures found" >&2; exit 10 ;; esac
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref%@*}" "${ref##*@}"'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-migrate@sha256:3333"* ]]
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }

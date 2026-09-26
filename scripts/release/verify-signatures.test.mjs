@@ -78,6 +78,8 @@ let caseNo = 0
  *   registry  — REGISTRY_HOST override
  *   thirdParty — repositories written to the host's etc/third-party-images
  *   extraResolved — an image compose resolves that no canonical pins line names
+ *   profiledResolved — an image compose resolves only with every profile on
+ *                      (COMPOSE_PROFILES=*), like a service under profiles: [migrate]
  */
 function deploy(images, opts = {}) {
   caseNo += 1
@@ -117,6 +119,7 @@ exit 0`)
 case "$*" in *"config --images"*)
   grep -E '^[[:space:]]*image:' "${tree}/docker-compose.pins.yml" | sed -E 's/^[[:space:]]*image:[[:space:]]*//'
   ${opts.extraResolved ? `printf '%s\\n' '${opts.extraResolved}'` : ':'}
+  ${opts.profiledResolved ? `[ "\${COMPOSE_PROFILES:-}" = '*' ] && printf '%s\\n' '${opts.profiledResolved}'` : ':'}
   exit 0 ;;
 esac
 exit 0`)
@@ -233,5 +236,11 @@ test('an unsigned image renamed OUT of the first-party prefix is refused, even b
 test('an unsigned first-party image that only compose resolves (not a canonical pin) is refused live', () => {
   const res = deploy([refs.signedUi], { extraResolved: refs.unsigned })
   assert.ok(refusedAtStep2(res), `compose-only unsigned image got through:\n${res.out}\n${res.log}`)
+  assert.match(res.out, /signature verification failed for .*gremion-ui@sha256:/)
+})
+
+test('an unsigned image under an inactive compose profile (step 7 migrate) is refused live', () => {
+  const res = deploy([refs.signedUi], { profiledResolved: refs.unsigned })
+  assert.ok(refusedAtStep2(res), `profiled unsigned image got through:\n${res.out}\n${res.log}`)
   assert.match(res.out, /signature verification failed for .*gremion-ui@sha256:/)
 })

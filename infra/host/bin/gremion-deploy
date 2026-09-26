@@ -290,12 +290,20 @@ verify_first_party_signatures() {
     # document, `extends:` or a service only in docker-compose.app.yml all
     # resolve to images no grep sees. A project that cannot be resolved, or
     # an empty set, is a refusal.
+    #
+    # Every profile is turned on for this call only (COMPOSE_PROFILES='*'):
+    # compose leaves services under an inactive profile out of `config
+    # --images`, yet step 7's `compose run --rm migrate` enables the migrate
+    # profile and pulls and runs that image. The canonical pins
+    # ($PINNED_IMAGES, from validate_release_tree) are added to the set too,
+    # so every pin is verified whether or not compose shows it.
     local resolved="" project imgs
     for project in state app-blue app-green; do
-        imgs="$(compose "$project" config --images)" \
+        imgs="$(export COMPOSE_PROFILES='*'; compose "$project" config --images)" \
             || die "compose ${project} config --images failed — cannot resolve the image set (refusing)" 1
         resolved+="${imgs}"$'\n'
     done
+    resolved+="${PINNED_IMAGES:-}"$'\n'
     resolved="$(printf '%s' "$resolved" | sed -e 's/\r$//' -e '/^[[:space:]]*$/d' | sort -u)"
     [[ -n "$resolved" ]] || die "compose resolves no image for this release — cannot resolve the image set (refusing)" 1
 
