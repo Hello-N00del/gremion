@@ -47,15 +47,27 @@ describe('storage config adapter', () => {
     expect(() => adapter.getStorageFor(A)).toThrow(/in-memory test double; it is refused unless allowTestDouble/)
   })
 
-  it('STORAGE_BACKEND=local reads RECEIPT_STORAGE_DIR and refuses it when it is not a mount point', () => {
-    process.env.STORAGE_BACKEND = 'local'
-    const root = resolve(join(__dirname, '..', '..', '..', '..', '..', '.scratch', 't117', 'adapter-unmounted'))
-    process.env.RECEIPT_STORAGE_DIR = root
-    if (existsSync('/proc/self/mountinfo')) {
+  // Host-dependent behaviour: whether /proc/self/mountinfo exists decides
+  // which of the two outcomes is correct, so it is expressed as two
+  // runIf/skipIf-guarded tests (vitest idiom) rather than an in-test
+  // if/else around the expect calls.
+  it.runIf(existsSync('/proc/self/mountinfo'))(
+    'STORAGE_BACKEND=local reads RECEIPT_STORAGE_DIR and refuses it when it is not a mount point',
+    () => {
+      process.env.STORAGE_BACKEND = 'local'
+      const root = resolve(join(__dirname, '..', '..', '..', '..', '..', '.scratch', 't117', 'adapter-unmounted'))
+      process.env.RECEIPT_STORAGE_DIR = root
       expect(() => adapter.getStorageFor(A)).toThrow(`storage(local): ${root} is not a mount point`)
-    } else {
-      // no mount table on this host: the check is skipped and says so
+    },
+  )
+
+  it.skipIf(existsSync('/proc/self/mountinfo'))(
+    'STORAGE_BACKEND=local with no mount table on this host: the check is skipped and says so',
+    () => {
+      process.env.STORAGE_BACKEND = 'local'
+      const root = resolve(join(__dirname, '..', '..', '..', '..', '..', '.scratch', 't117', 'adapter-unmounted'))
+      process.env.RECEIPT_STORAGE_DIR = root
       expect(adapter.getStorageFor(A)).toMatchObject({ mountCheck: { checked: false } })
-    }
-  })
+    },
+  )
 })
