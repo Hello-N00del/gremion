@@ -39,12 +39,18 @@
         };
         var t = read('gremion.theme', 'stura-theme', 'light');
         var cb = read('gremion.colorblind', 'stura-colorblind', 'none');
-        var l = read('gremion.lang', 'stura-lang', 'de');
         var h = document.documentElement;
         if (t === 'dark') h.classList.add('dark');
         if (cb === 'rg') h.classList.add('cb-rg');
         else if (cb === 'by') h.classList.add('cb-by');
-        h.lang = l;
+        // TASK-062 item 6: `lang` is deliberately NOT touched here anymore.
+        // i18nHandle (hooks.server.ts) already set the correct value above
+        // from resolveLocale's cascade before this script ran; overwriting
+        // it from a stale/foreign localStorage `gremion.lang` value here was
+        // exactly the SSR/client mismatch ("flash") item 6 is about. The
+        // $lib/i18n store's own getInitialLang() still reads/migrates that
+        // key for the reactive $t store's initial value, but only when the
+        // server hasn't already set a recognized <html lang> (see there).
       } catch (e) {}
     </script>
     %sveltekit.head%

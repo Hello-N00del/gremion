@@ -15,6 +15,14 @@ const translations: Record<Language, Record<string, string>> = { de, en }
 
 function getInitialLang(): Language {
   if (!browser) return 'de'
+  // TASK-062 item 6: i18nHandle (hooks.server.ts) already set the correct
+  // <html lang> server-side from resolveLocale's cascade, before this script
+  // runs — honor it over localStorage so the reactive $t store agrees with
+  // what the server just rendered instead of a stale/foreign per-device
+  // value flashing over it. An empty/invalid attribute (not yet wired, or a
+  // test harness) falls through to the pre-existing logic unchanged.
+  const ssrLang = document.documentElement.lang
+  if (ssrLang === 'en' || ssrLang === 'de') return ssrLang
   let raw = localStorage.getItem(LANG_KEY)
   if (raw === null) {
     raw = localStorage.getItem(LEGACY_LANG_KEY)

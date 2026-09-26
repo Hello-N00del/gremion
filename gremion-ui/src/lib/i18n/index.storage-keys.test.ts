@@ -74,6 +74,25 @@ describe('i18n lang store — namespaced gremion.lang key with one-time stura-la
     expect(localStorage.getItem('stura-lang')).toBe('en')
   })
 
+  test('TASK-062 item 6: a server-resolved <html lang> outranks a conflicting localStorage value (the flash fix)', async () => {
+    // i18nHandle (hooks.server.ts) sets this attribute server-side from
+    // resolveLocale's cascade before any client script runs; a stale/foreign
+    // localStorage value from a different device or a pre-TASK-062 session
+    // must not override what the server already committed to.
+    document.documentElement.lang = 'en'
+    localStorage.setItem('gremion.lang', 'de')
+    const m = await freshI18n()
+    expect(get(m.lang)).toBe('en')
+    document.documentElement.lang = ''
+  })
+
+  test('TASK-062 item 6: an unset/invalid <html lang> falls through to the existing localStorage logic unchanged', async () => {
+    document.documentElement.lang = ''
+    localStorage.setItem('gremion.lang', 'de')
+    const m = await freshI18n()
+    expect(get(m.lang)).toBe('de')
+  })
+
   test('lang.set() writes ONLY gremion.lang — never stura-lang (acceptance)', async () => {
     localStorage.setItem('stura-lang', 'en')
     const m = await freshI18n()
