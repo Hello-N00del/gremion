@@ -50,6 +50,10 @@ function parseAcceptLanguage(header: string | null | undefined): Locale | null {
         if (Number.isFinite(parsed)) q = parsed
       }
     }
+    // RFC 9110 §12.4.2: q=0 (or negative/garbage-parsed-as-<=0) means "not
+    // acceptable", not merely "least preferred" — skip it entirely rather
+    // than letting it win as the first/only candidate seen.
+    if (q <= 0) continue
     if (!best || q > best.q) best = { locale, q }
   }
   return best?.locale ?? null

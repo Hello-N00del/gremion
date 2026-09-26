@@ -108,6 +108,47 @@ describe('resolveLocale — resolution order (TRD-412)', () => {
         customerDefaultLocale: 'en'
       },
       want: 'en'
+    },
+    {
+      name: 'weight wins over listed order: a lower-q tag listed FIRST still loses to a higher-q tag listed later',
+      input: {
+        personPreference: null,
+        cookie: null,
+        acceptLanguage: 'de;q=0.1,en;q=0.9',
+        customerDefaultLocale: 'de'
+      },
+      want: 'en'
+    },
+    {
+      name: 'RFC 9110 12.4.2: q=0 means not acceptable, so it is skipped rather than treated as a match',
+      input: {
+        personPreference: null,
+        cookie: null,
+        acceptLanguage: 'en;q=0',
+        customerDefaultLocale: 'de'
+      },
+      want: 'de'
+    },
+    {
+      // Q4 (brief §5, logged for TASK-004): a person who explicitly picked
+      // follow_customer has, by definition, deferred to the customer default
+      // — but the brief's own resolution order still runs Accept-Language
+      // BEFORE "customer default_locale (this is where follow_customer
+      // resolves too)". Applying the brief's written default literally:
+      // Accept-Language outranks the customer default even under
+      // follow_customer, with no cookie in play. This is the recommended
+      // default from the brief, applied as-is; it is not this unit's
+      // decision to change, and is named here per the review's LOW finding
+      // so a future reader sees it was a deliberate application of the
+      // written order, not an oversight.
+      name: 'follow_customer, no cookie: Accept-Language still outranks the customer default (brief §5 order, applied literally — Q4/TASK-004)',
+      input: {
+        personPreference: 'follow_customer',
+        cookie: null,
+        acceptLanguage: 'en-US',
+        customerDefaultLocale: 'de'
+      },
+      want: 'en'
     }
   ]
 
