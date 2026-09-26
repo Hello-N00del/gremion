@@ -169,6 +169,50 @@
       "command": "node --test --test-reporter=tap scripts/ci-local/runner-policy.test.mjs && node scripts/ci-local/runner-policy.mjs --kernel . --waivers scripts/ci-local/waivers.json",
       "requiresStack": false,
       "testGlobs": ["scripts/ci-local/runner-policy.test.mjs"]
+    },
+    {
+      "//": "TASK-012-FU review finding 3 (MEDIUM): the main sync (a0280fc) brought in packages/storage (TASK-117), packages/generated-clients, ops/scripts (TASK-005) and test/f1-defect/guards (TASK-009), none of which any suite claimed — every reading of the merged kernel tip was RED for unclaimed files, not for suite health. The 4 entries below close that gap.",
+      "id": "kernel-storage-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/storage",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/storage/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-generated-clients-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/generated-clients",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/generated-clients/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-compliance-guard",
+      "repo": "kernel",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "node --test --test-reporter=tap ops/scripts/marketing-copy-check.test.mjs ops/scripts/helios-submodule-check.test.mjs && node ops/scripts/marketing-copy-check.mjs",
+      "requiresStack": false,
+      "testGlobs": ["ops/scripts/marketing-copy-check.test.mjs", "ops/scripts/helios-submodule-check.test.mjs"]
+    },
+    {
+      "id": "kernel-f1-defect-guards",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "vitest",
+      "command": "pnpm --dir gremion-ui exec vitest run --config ../test/f1-defect/vitest.config.ts",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["test/f1-defect/guards/**/*.test.ts"]
     }
   ],
   "vertical": [

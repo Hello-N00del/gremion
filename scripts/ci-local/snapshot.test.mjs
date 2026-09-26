@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { countDeclaredTests, evaluateRepo, main } from './snapshot.mjs'
+import { discoverTestFiles } from './lib/discover.mjs'
+import { findUnclaimed } from './lib/snapshot-core.mjs'
+import { loadManifest } from './lib/manifest.mjs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 
 /** Calls fn(), then reports and restores process.exitCode (main() sets it as a side effect; never let a test leak it into this test file's own exit status). */
 function withCleanExitCode(fn) {
@@ -341,4 +346,24 @@ test('main(): a --only subset reading never writes the same filename as a full r
     rmSync(manifestDir, { recursive: true, force: true })
     rmSync(outDir, { recursive: true, force: true })
   }
+})
+
+// --- TASK-012-FU review finding 3 (MEDIUM) ----------------------------------
+// The main sync (a0280fc) brought in packages/storage (TASK-117),
+// packages/generated-clients, ops/scripts's compliance guard (TASK-005) and
+// test/f1-defect/guards (TASK-009), none of which any kernel suite in the
+// COMMITTED suites.json claimed. Every reading of the merged kernel tip was
+// therefore RED on 18 "unclaimed" rows regardless of any suite's own health.
+// This runs the real committed manifest against the real tree (no fixture,
+// no injected manifest — the exact thing snapshot.mjs's own run does), so a
+// future merge that lands a new package/service without a matching suite
+// entry is caught here rather than only on the next live snapshot.
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+
+test('TASK-012-FU review finding 3: every real kernel test file on this tree is claimed by some suite in the committed scripts/ci-local/suites.json', () => {
+  const manifest = loadManifest(join(REPO_ROOT, 'scripts', 'ci-local', 'suites.json'))
+  const discovered = discoverTestFiles(REPO_ROOT)
+  const unclaimed = findUnclaimed(discovered, manifest.kernel)
+  assert.deepEqual(unclaimed, [], `unclaimed kernel test file(s) — add or extend a suites.json entry to claim them:\n${unclaimed.join('\n')}`)
 })
