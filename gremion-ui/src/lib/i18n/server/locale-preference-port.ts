@@ -2,15 +2,25 @@
 //
 // Every DB write for the signed-in person's language preference goes through
 // this port, never through ad-hoc SQL at the call site (same shape as
-// packages/storage's StorageBackend seam). `idt.preference` does not exist on
-// `main` yet (no P1 unit owns the DB-IDT-PREFERENCE DDL before the kernel API,
-// TASK-080/W10) — see the brief's Q1. This file ships the interface and the
-// in-memory test double; the reference pg adapter + a test-only fixture that
-// applies the idt.preference DDL verbatim are NOT in this commit (residual,
-// tracked in the TASK-062 report).
+// packages/storage's StorageBackend seam). Two adapters:
+//   - 'memory': the in-process test double;
+//   - 'pg': the reference adapter (locale-preference-pg.ts) issuing the SCHEMA
+//     SQL against idt.preference / idt.customer_setting.
+// Both pass one contract suite (locale-preference-contract.ts).
 //
+// Production binding is NOT done here: `idt.preference` does not exist on
+// `main` (no P1 unit owns the DB-IDT-PREFERENCE DDL before the kernel API,
+// TASK-080/W10). "Bind the port to the kernel API; the idt.preference DDL
+// ships with the idt schema" is TASK-080/038's line (brief Q1). Until then
+// nothing configures a port in the running app, personIdOf() returns null
+// (Q2) and the cookie decides.
+import type postgres from 'postgres'
+import { PgLocalePreferencePort } from './locale-preference-pg'
+
 export type PersonLocale = 'de' | 'en' | 'follow_customer'
 export type CustomerDefaultLocale = 'de' | 'en'
+
+const PERSON_LOCALES: readonly PersonLocale[] = ['de', 'en', 'follow_customer']
 
 export interface LocalePreferenceRow {
   locale: PersonLocale
@@ -20,23 +30,25 @@ export interface LocalePreferenceRow {
   updatedBy: string | null
 }
 
-/** The seam every adapter (in-memory test double, and eventually pg) satisfies. */
+/** The seam every adapter (in-memory test double, pg) satisfies. */
 export interface LocalePreferencePort {
   /** Null when the person has no preference row yet (never switched). */
   get(customerId: string, personId: string): Promise<LocalePreferenceRow | null>
-  /** Upserts; row_version starts at 1 and increments by 1 on every call. */
+  /** Upserts; row_version starts at 1 and increments by 1 on every call. Rejects an unknown locale. */
   set(customerId: string, personId: string, locale: PersonLocale): Promise<LocalePreferenceRow>
   getCustomerDefault(customerId: string): Promise<CustomerDefaultLocale>
 }
 
-export const LOCALE_PREFERENCE_BACKENDS = ['memory'] as const
+export const LOCALE_PREFERENCE_BACKENDS = ['memory', 'pg'] as const
 export type LocalePreferenceBackendName = (typeof LOCALE_PREFERENCE_BACKENDS)[number]
 
-export interface LocalePreferenceConfig {
-  backend: LocalePreferenceBackendName
-  /** Per-customer default when the test fixture does not set one; 'de' otherwise. */
-  customerDefaults?: Record<string, CustomerDefaultLocale>
-}
+export type LocalePreferenceConfig =
+  | {
+      backend: 'memory'
+      /** Per-customer default when the test fixture does not set one; 'de' otherwise. */
+      customerDefaults?: Record<string, CustomerDefaultLocale>
+    }
+  | { backend: 'pg'; sql: postgres.Sql }
 
 /** Keyed by `${customerId}::${personId}` — never by personId alone, so a
  *  lookup under the wrong customerId cannot see another customer's row
@@ -54,6 +66,8 @@ class MemoryLocalePreferencePort implements LocalePreferencePort {
   }
 
   async set(customerId: string, personId: string, locale: PersonLocale): Promise<LocalePreferenceRow> {
+    // Mirrors preference_locale_check: an unknown value is refused, not stored.
+    if (!PERSON_LOCALES.includes(locale)) throw new Error(`unsupported locale preference '${String(locale)}'`)
     const key = this.key(customerId, personId)
     const existing = this.rows.get(key)
     const row: LocalePreferenceRow = {
@@ -73,11 +87,21 @@ class MemoryLocalePreferencePort implements LocalePreferencePort {
 
 let activePort: LocalePreferencePort | null = null
 
-export function configureLocalePreference(config: LocalePreferenceConfig): void {
-  if (config.backend !== 'memory') {
-    throw new Error(`LocalePreferencePort backend '${config.backend}' has no adapter yet (residual: pg)`)
+export function createLocalePreferencePort(config: LocalePreferenceConfig): LocalePreferencePort {
+  switch (config.backend) {
+    case 'memory':
+      return new MemoryLocalePreferencePort(config.customerDefaults ?? {})
+    case 'pg':
+      return new PgLocalePreferencePort(config.sql)
+    default: {
+      const unknown: never = config
+      throw new Error(`unknown LocalePreferencePort backend ${JSON.stringify(unknown)}`)
+    }
   }
-  activePort = new MemoryLocalePreferencePort(config.customerDefaults ?? {})
+}
+
+export function configureLocalePreference(config: LocalePreferenceConfig): void {
+  activePort = createLocalePreferencePort(config)
 }
 
 export function getLocalePreferencePort(): LocalePreferencePort {
