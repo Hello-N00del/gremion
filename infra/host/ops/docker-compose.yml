@@ -74,6 +74,15 @@ services:
       - "${GREMION_ROOT_DIR}/runtime/textfile:/textfile:ro"
     networks:
       - ops
+    healthcheck:
+      # TASK-036 (TRD-178): the image carries no HEALTHCHECK (image arm: null).
+      # BusyBox wget is in the pinned image; the probe requires the exporter's
+      # own build-info series, i.e. /metrics actually rendered, not a bare 200.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9100/metrics | grep -q '^node_exporter_build_info'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.52.1@sha256:f40e65878e25c2e78ea037f73a449527a0fb994e303dc3e34cb6b187b4b91435
@@ -104,6 +113,15 @@ services:
       - "${GREMION_ROOT_DIR}/current/infra/host/ops/blackbox.yml:/etc/blackbox/blackbox.yml:ro"
     networks:
       - ops
+    healthcheck:
+      # TASK-036 (TRD-178): the image carries no HEALTHCHECK (image arm: null).
+      # BusyBox wget; the exporter's own /-/healthy, measured answering "Healthy"
+      # with this directory's blackbox.yml loaded.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9115/-/healthy | grep -q Healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 networks:
   ops:

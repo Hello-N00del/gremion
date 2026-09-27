@@ -93,7 +93,7 @@ list of keys still to fill. The non-secret set, with generic examples:
 | `BACKUP_RETENTION_DAILY/WEEKLY/MONTHLY` | `14` / `8` / `6` | restic retention classes |
 | `ALERT_WEBHOOK_URL` / `ALERT_EMAIL_TO` | — | the two alert sinks |
 | `SOAK_MINUTES` | `30` | how long both colours run after a switch |
-| `HEALTH_EXEMPT_SERVICES` | `minio-mc` | one-shot containers asserted `exited 0`, not healthy |
+| `HEALTH_EXEMPT_SERVICES` | (empty) | one-shot containers asserted `exited 0`, not healthy; each project's list must name services of its own render (TASK-036 census), and a new entry is a reviewed change |
 | `RESERVED_HOSTS` | `www control rs1 mail mta-sts autoconfig autodiscover _dmarc` | names no tenant may claim |
 
 Secret keys are every `CHANGE_ME_` key of `.env.example` plus

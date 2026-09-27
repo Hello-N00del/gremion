@@ -2,6 +2,13 @@
 # Vector handles retention enforcement only.
 # IP pseudonymisation is handled upstream by process-logs.sh.
 
+# TASK-036 (TRD-178): loopback-only API, enabled solely so the container has an
+# honest healthcheck -- /health answers once Vector's topology is built, not when
+# the process merely exists. Nothing outside the container can reach it.
+[api]
+enabled = true
+address = "127.0.0.1:8686"
+
 [sources.processed_logs]
 type = "file"
 include = ["/logs/processed/security.log"]

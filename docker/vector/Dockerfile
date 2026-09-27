@@ -23,8 +23,10 @@ FROM timberio/vector:0.58.0-debian
 # ship it; without it every jq call fails, each one is swallowed by its
 # `|| continue`, and the pseudonymisation pipeline silently drops 100% of lines
 # (security.log is never even created). It is load-bearing, not a convenience.
+# curl is the healthcheck client (TASK-036): the compose probe asks Vector's own
+# loopback API (vector.toml [api]) whether its topology is up.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    logrotate jq \
+    logrotate jq curl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=ipcrypt-build /usr/local/bin/ipcrypt /usr/local/bin/ipcrypt
 # libipcrypt2.a is STATICALLY linked into that binary, so this image
