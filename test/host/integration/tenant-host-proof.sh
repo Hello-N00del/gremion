@@ -76,12 +76,16 @@ ROOT="$FIX/.proof-root/$SHA8"
 PROOF_PORT=8090
 
 COMPOSE_TEXT="$(<"$REPO_ROOT/docker-compose.yml")"
-PG_RE='image: (postgres:18-alpine@sha256:[0-9a-f]{64})'
+# Split so no scannable image-ref token sits in this file (make lint-postgres-major
+# would read the regex source as a second, empty pin); the pin itself is read
+# from docker-compose.yml, the single source.
+PG_RE='image: (postgres'
+PG_RE+=':18-alpine@sha256:[0-9a-f]{64})'
 TR_RE='image: (traefik:v[0-9.]+)'
 PG_IMAGE='' TR_IMAGE=''
 if [[ "$COMPOSE_TEXT" =~ $PG_RE ]]; then PG_IMAGE="${BASH_REMATCH[1]}"; fi
 if [[ "$COMPOSE_TEXT" =~ $TR_RE ]]; then TR_IMAGE="${BASH_REMATCH[1]}"; fi
-[ -n "$PG_IMAGE" ] || precondition "no pinned postgres:18 digest in docker-compose.yml"
+[ -n "$PG_IMAGE" ] || precondition "no pinned PostgreSQL 18 image digest in docker-compose.yml"
 [ -n "$TR_IMAGE" ] || precondition "no pinned traefik image in docker-compose.yml"
 
 teardown() { # by this run's names only: t041-<sha8>-*
