@@ -133,6 +133,21 @@ export const ALLOWLIST = [
       'the write side of the Dart client generator (tools/generate.mjs is its CLI): syncs each generated package in the repo to exactly what the pipeline emits and deletes files it no longer emits — build-time codegen output, never tenant data',
     residual: 'none at runtime; build/CI tooling only',
   },
+  {
+    path: 'packages/edge-routers/src/emit.ts',
+    sites: 11,
+    reason:
+      "TASK-034 (TRD-189/TRD-074): the single per-tenant router emitter writes Traefik file-provider routers into the host's etc/edge directory (atomic tmp + rename + fsync, idempotent) — platform edge configuration Traefik reads, not a tenant file/draft/media object; the seam's backends are not a directory Traefik can watch",
+    residual:
+      "the caller (TASK-043's provisioner) must run where etc/edge is writable, and hygiene j4 lets no compose service but traefik mount etc/edge, read-only, so the app process cannot be that place; revisit if the edge moves to a Traefik HTTP/KV provider",
+  },
+  {
+    path: 'packages/edge-routers/src/sync.ts',
+    sites: 1,
+    reason:
+      "TASK-034: the fleet sync removes an orphaned router file of the emitter's own name shape from the host's etc/edge directory — platform edge configuration, not tenant content",
+    residual: 'same as packages/edge-routers/src/emit.ts: its caller must run where etc/edge is writable, which hygiene j4 keeps out of the app process',
+  },
 ]
 
 const CODE_EXT = /\.(ts|js|mjs|cjs|mts|cts|svelte)$/
