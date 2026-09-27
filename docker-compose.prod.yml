@@ -48,6 +48,18 @@ services:
     # G-037: externally-pulled image digest-pinned (PgBouncer 1.25.2).
     image: edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340
     restart: unless-stopped
+    healthcheck:
+      # TASK-036 (TRD-178): BusyBox nc (measured present at the pinned digest)
+      # sends the PostgreSQL SSLRequest packet (length 8, code 80877103) to the
+      # pooler's own listen_port (6432, docker/pgbouncer/pgbouncer.ini) and
+      # requires a protocol answer, 'S' or 'N' (measured: 'N'). A bare TCP
+      # connect cannot tell "port bound" from "pooler speaking Postgres". Octal
+      # escapes, because BusyBox printf does not guarantee \xHH.
+      test: ["CMD-SHELL", "printf '\\000\\000\\000\\010\\004\\322\\026\\057' | nc -w 3 127.0.0.1 6432 | head -c 1 | grep -q '[SN]'"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     logging:
       driver: json-file
       options:

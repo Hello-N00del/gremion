@@ -654,6 +654,16 @@ services:
     profiles: [production]
     image: tecnativa/docker-socket-proxy:0.1.1@sha256:6c22b9545adc95258af9deffdde6c0ce0a0a70716771e5a4e02d24d1b6e0dda1
     restart: unless-stopped
+    healthcheck:
+      # TASK-036 (TRD-178): /_ping is in the proxy's default-allowed set, measured
+      # at the pinned digest (wget present, body "OK"). An OK proves HAProxy is
+      # listening AND can still reach the Docker socket -- the failure Traefik's
+      # docker provider actually sees.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2375/_ping | grep -q OK"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     environment:
       # Read scopes Traefik's docker provider consults. POST defaults to 0 — the
       # load-bearing denial that blocks container create / exec / image run.
