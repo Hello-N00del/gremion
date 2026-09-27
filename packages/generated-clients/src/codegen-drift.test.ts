@@ -127,6 +127,21 @@ describe('checkCodegenDrift — scratch fixtures', () => {
     const problems = checkCodegenDrift(dir, [SPEC])
     expect(problems.some((p) => p.includes(SPEC.outputFile))).toBe(true)
   }, ONE_SPAWN_MS)
+
+  // R27 residual: a tool that exits non-zero or is killed used to be reported
+  // with the exec error's message alone ("Command failed: ..."), so a crash and
+  // a kill read the same. The child's exit status and signal are now named. A
+  // malformed spec makes openapi-typescript exit 1 (measured: YamlParseError,
+  // rc=1), which is the real non-zero path, no stub.
+  it('names the child exit status and signal when the codegen tool fails', () => {
+    writeFileSync(join(dir, SPEC.outputFile), miniSource, 'utf8')
+    writeFileSync(join(dir, SPEC.specFile), '{ not json')
+    const problems = checkCodegenDrift(dir, [SPEC])
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain(SPEC.outputFile)
+    expect(problems[0]).toMatch(/codegen tool errored/)
+    expect(problems[0]).toMatch(/exit status 1, signal none/)
+  }, ONE_SPAWN_MS)
 })
 
 describe('checkCodegenDrift — the real tree', () => {
