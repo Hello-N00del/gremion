@@ -59,7 +59,7 @@ OUT="${POOLED_OUT:-${ROOT}/${OUT_REL}}"
 ENV_DIR="${POOLED_ENV_DIR:-${OUT}/env}"
 SROOT="${OUT}/root"              # the scratch GREMION_ROOT
 PROBE_IMAGE="postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873"
-TENANT_SLUG="t040-b"
+TENANT_SLUG="${POOLED_TENANT_SLUG:-t040-b}"   # its config is always the t040-b fixture
 
 RED=0
 ok()   { printf '  ok   %s\n' "$*"; }
@@ -594,7 +594,9 @@ counts() {
             "$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-$p" | grep -c .)"
     done
     printf 'compose-ls %s\n' "$(docker compose ls -a --format json | jq -r --arg p "${STACK}-" '[.[] | select(.Name | startswith($p)) | .Name] | sort | join(",")')"
-    printf 'all-running %s\n' "$(docker ps -q | grep -c .)"
+    # Stack-scoped: every container whose compose project or name carries the
+    # ${STACK} prefix (the whole engine's count moves with unrelated work).
+    printf 'stack-containers %s\n' "$(docker ps -a --format '{{.Names}} {{.Label "com.docker.compose.project"}}' | tr -d '\r' | awk -v p="${STACK}" 'index($1, p) == 1 || index($2, p) == 1' | grep -c .)"
 }
 phase_tenant() {
     require_scratch tenant
@@ -614,7 +616,7 @@ phase_tenant() {
         tenant-create)
     compose app-blue "${run[@]}" bootstrap-provisioner > "$OUT/ledger/trd440-bootstrap.log" 2>&1 \
         || { tail -15 "$OUT/ledger/trd440-bootstrap.log" >&2; bad "bootstrap-provisioner failed"; return; }
-    compose app-blue "${run[@]}" provision "$TENANT_SLUG" --config "/fixture/tenant-${TENANT_SLUG}.json" \
+    compose app-blue "${run[@]}" provision "$TENANT_SLUG" --config "/fixture/tenant-t040-b.json" \
         > "$OUT/ledger/trd440-provision.log" 2>&1 \
         || { tail -25 "$OUT/ledger/trd440-provision.log" >&2; bad "provision $TENANT_SLUG failed"; return; }
     ok "tenant: bootstrap-provisioner and provision $TENANT_SLUG ran (ledger/trd440-*.log)"
