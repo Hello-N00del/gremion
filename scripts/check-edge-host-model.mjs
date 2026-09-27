@@ -205,7 +205,7 @@ export function listDirFiles(dir) {
     }
   }
   walk(dir, '')
-  return out.sort()
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
 // ── R1: router rules ─────────────────────────────────────────────────────────
