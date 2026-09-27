@@ -223,6 +223,11 @@ export const UNIT_PARTS = {
   'tenant-store': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'tenant-store'), testScript: 'test', root, label: '@gremion/tenant-store vitest (test)' }),
   ],
+  // TASK-034 (R26): the edge-router emitter, fleet sync, DNS pre-flight and the
+  // hygiene (j) plants; unit-packages.test.mjs caught it missing (intake r1/r2).
+  'edge-routers': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'edge-routers'), testScript: 'test', root, label: '@gremion/edge-routers vitest (test)' }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }
