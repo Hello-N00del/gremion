@@ -22,6 +22,7 @@ import { headSha, isDirty } from './lib/git.mjs'
 import { parseSvelteCheckMachine } from './lib/parsers.mjs'
 import { writeRecord } from './lib/record.mjs'
 import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
+import { runCensusSuite } from './census/suite.mjs'
 import { runCarveLintSuite } from './suites/carve-lint.mjs'
 import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } from './suites/fixtures.mjs'
 import { DEFERRED_BATS_NOTE, INTEGRATION_PARTS, runIntegrationSuite } from './suites/integration.mjs'
@@ -63,6 +64,8 @@ export const SUITE_REGISTRY = {
   // isolation (TRD-065/067) ran solely as a side effect of gremion-ui's vite
   // include glob; nothing here named or pinned it. See suites/isolation.mjs.
   isolation: () => runIsolationSuite({ root: REPO_ROOT }),
+  // TASK-036 (L1-17, TRD-178): declared health census of the production renders.
+  census: () => runCensusSuite(),
   ...UNIT_PART_ENTRIES,
   ...INTEGRATION_PART_ENTRIES,
   __fixture_node_zero__: runFixtureNodeZero,

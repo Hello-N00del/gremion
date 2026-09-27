@@ -10,7 +10,7 @@ domain model, and governance charter, see [about-gremion.md](about-gremion.md).
 > **Scope.** Gremion is the governance-only kernel. It ships exactly seven
 > default services — `postgres`, `keycloak`, `gremion-ui`, `gremion-public`,
 > `legal`, `vector`, `mailpit` — plus `traefik` + `docker-socket-proxy` (and,
-> from `docker-compose.prod.yml`, `pgbouncer` + `cloudflared` + `fallback`) in
+> from `docker-compose.prod.yml`, `pgbouncer` + `fallback`) in
 > the production profile. Feature modules (elections, newsletter, calendar,
 > files, messages, board, users, finance, content, vault,
 > handover) live in their own repositories — one per module — and are **not**
@@ -421,8 +421,8 @@ The production overlay is **not** auto-loaded. Bring it up explicitly:
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-It adds `pgbouncer`, `cloudflared`, and a static `fallback` service, wires
-Traefik routing, and reads two extra variables:
+It adds `pgbouncer` and a static `fallback` service, wires Traefik routing,
+and reads one extra variable:
 
 ### PGBOUNCER_AUTH_PASSWORD
 
