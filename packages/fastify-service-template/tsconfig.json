@@ -1,0 +1,27 @@
+{
+  // NO-EMIT typecheck gate (`pnpm typecheck`). Mirrors @gremion/ports, with
+  // two additions that let the same sources run unbuilt on Node >= 22's type
+  // stripping (the scaffold and routes:check CLIs are `node src/cli/*.ts`):
+  //   - rewriteRelativeImportExtensions: relative imports name the real
+  //     `.ts` file (what Node resolves), and tsc rewrites them to `.js` on emit.
+  //   - erasableSyntaxOnly: no enums/namespaces/parameter properties, i.e.
+  //     nothing Node's stripper cannot erase.
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
+    "resolveJsonModule": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

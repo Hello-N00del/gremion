@@ -1,60 +1,34 @@
 // src/lib/server/storage/index.ts
-// Singleton storage adapter — selected at module-load time from env.
+// gremion-ui's CONFIG ADAPTER over @gremion/storage (TASK-117). The seam itself
+// — tenant-bound backends, key composition, the mount-point check — lives in
+// packages/storage; this file only turns env into its configuration:
 //
-// STORAGE_BACKEND=local      -> LocalStorageBackend (default, dev-friendly)
-//   RECEIPT_STORAGE_DIR      -> root dir (default ./var/storage)
+//   STORAGE_BACKEND      'local' (default) | 'memory' (test double, vitest only)
+//   RECEIPT_STORAGE_DIR  local root (default ./var/storage); must be a mount point
 //
-// The governance-only kernel ships only the local backend; the Nextcloud
-// backend rides with the (carved-out) files feature module.
-//
-// Construction is lazy via getStorage() so module-import order and
-// SvelteKit's $env/dynamic/private timing don't matter; the `storage`
-// proxy below keeps the ergonomic `import { storage } from ...` shape
-// the plan asks for.
+// The one export is getStorageFor(tenantId): request handlers pass the tenant
+// explicitly (e.g. requireTenant().id at the call site). No zero-arg accessor,
+// no ambient tenant read here — scripts/check-storage-seam.mjs guards both.
 
 import { env } from '$env/dynamic/private'
-import type { StorageBackend } from './types'
-import { LocalStorageBackend } from './local'
+import { assertTenantId, configureStorage, getStorageFor as seamFor, isStorageConfigured } from '@gremion/storage'
+import type { StorageBackend } from '@gremion/storage'
 
-export type { StorageBackend } from './types'
-
-let cached: StorageBackend | null = null
-
-/** Read a value from SvelteKit's dynamic env first, then process.env. The
- *  dynamic env is populated by the SvelteKit server at boot — in vitest it
- *  stays empty (`set_private_env` is never called), so the process.env
- *  fallback is what makes the integration tests actually see test-only
- *  overrides set via `process.env.X = ...` in test setup. */
+/** SvelteKit's dynamic env first, then process.env: the dynamic env stays empty
+ *  under vitest, so the fallback is what lets tests set process.env.X. */
 function readEnv(name: string): string | undefined {
   return env[name] ?? process.env[name]
 }
 
-function build(): StorageBackend {
-  const backend = (readEnv('STORAGE_BACKEND') ?? 'local').toLowerCase()
-  if (backend !== 'local') {
-    throw new Error(
-      `storage: unknown STORAGE_BACKEND='${backend}' (expected 'local')`
-    )
+export function getStorageFor(tenantId: string): StorageBackend {
+  assertTenantId(tenantId) // fail closed before any configuration or I/O
+  if (!isStorageConfigured()) {
+    configureStorage({
+      backend: readEnv('STORAGE_BACKEND') ?? 'local',
+      root: readEnv('RECEIPT_STORAGE_DIR'),
+      // the in-memory double loses every object on restart: vitest only
+      allowTestDouble: Boolean(process.env.VITEST),
+    })
   }
-  return new LocalStorageBackend(readEnv('RECEIPT_STORAGE_DIR'))
-}
-
-/** Lazily build & cache the storage backend. Exposed for tests that need
- *  to reset between cases (use `resetStorageForTest()`). */
-export function getStorage(): StorageBackend {
-  if (cached === null) cached = build()
-  return cached
-}
-
-/** Test-only: drop the cached singleton so the next access reads env afresh. */
-export function resetStorageForTest(): void {
-  cached = null
-}
-
-/** Ergonomic proxy: `storage.put(...)` forwards to the cached singleton.
- *  Matches the plan's `import { storage } from '$lib/server/storage'`. */
-export const storage: StorageBackend = {
-  put: (relPath, bytes) => getStorage().put(relPath, bytes),
-  read: (handle) => getStorage().read(handle),
-  delete: (handle) => getStorage().delete(handle)
+  return seamFor(tenantId)
 }

@@ -1,0 +1,579 @@
+{
+  "//": "TASK-012 (L1-28) suite manifest. Every entry is one command snapshot.mjs can run against a repo tip. `category` must be one of unit|integration|e2e|shell|tree-guard (lib/manifest.mjs enforces >=1 suite per category per repo). `requiresStack: true` suites never run without --stack-env (Q4 default) and record FAIL \"no stack\" instead. `testGlobs` are repo-relative and are what proves a suite's files exist (post-condition a) and what claims a test file so it is not reported unclaimed (post-condition b). `kind` selects the output parser in lib/parse-output.mjs; `guard` additionally composes the suite's own node --test TAP summary with the trailing guard script's exit code (see lib/snapshot-core.mjs). Seed sources: TASK-012.md §4 (reuse) and §4 seed list.",
+  "kernel": [
+    {
+      "id": "kernel-ui-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:unit",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": [
+        "gremion-ui/tests/unit/**/*.test.ts",
+        "gremion-ui/src/**/*.test.ts",
+        "gremion-ui/scripts/install-git-hooks.test.ts",
+        "packages/db/src/**/*.test.ts",
+        "packages/ports/src/**/*.test.ts"
+      ]
+    },
+    {
+      "id": "kernel-ui-vitest-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-ui-vitest-deselection",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:deselection",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-ui-playwright",
+      "repo": "kernel",
+      "category": "e2e",
+      "cwd": "gremion-ui",
+      "kind": "playwright",
+      "command": "pnpm run test:e2e",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "kernel-public-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "gremion-public",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["gremion-public/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-public-playwright",
+      "repo": "kernel",
+      "category": "e2e",
+      "cwd": "gremion-public",
+      "kind": "playwright",
+      "command": "pnpm run test:e2e",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-public/tests/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "kernel-ports-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/ports",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/ports/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-ports-nats",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": ".",
+      "kind": "vitest",
+      "command": "bash packages/ports/scripts/nats-test.sh",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["packages/ports/src/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-bats-unit",
+      "repo": "kernel",
+      "category": "shell",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats test/*.bats test/host/*.bats",
+      "requiresStack": false,
+      "testGlobs": ["test/*.bats", "test/host/*.bats"]
+    },
+    {
+      "id": "kernel-bats-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats test/integration/health.bats test/integration/oidc.bats test/integration/legal.bats test/integration/login-theme.bats",
+      "requiresStack": true,
+      "testGlobs": [
+        "test/integration/health.bats",
+        "test/integration/oidc.bats",
+        "test/integration/legal.bats",
+        "test/integration/login-theme.bats"
+      ]
+    },
+    {
+      "id": "kernel-ui-bats",
+      "repo": "kernel",
+      "category": "shell",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats gremion-ui/test/*.bats",
+      "requiresStack": false,
+      "testGlobs": ["gremion-ui/test/*.bats"]
+    },
+    {
+      "id": "kernel-scripts-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"scripts/*.test.mjs\" \"scripts/port-back/*.test.mjs\" \"scripts/ci-local/**/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["scripts/*.test.mjs", "scripts/port-back/*.test.mjs", "scripts/ci-local/**/*.test.mjs"]
+    },
+    {
+      "id": "kernel-cve-floor-guard",
+      "repo": "kernel",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "node --test --test-reporter=tap scripts/check-cve-floors.test.mjs && node scripts/check-cve-floors.mjs",
+      "requiresStack": false,
+      "testGlobs": ["scripts/check-cve-floors.test.mjs"]
+    },
+    {
+      "id": "kernel-known-secrets-guard",
+      "repo": "kernel",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "node --test --test-reporter=tap scripts/ci-local/known-secrets.test.mjs && node scripts/ci-local/known-secrets.mjs --repo .",
+      "requiresStack": false,
+      "testGlobs": ["scripts/ci-local/known-secrets.test.mjs"]
+    },
+    {
+      "id": "kernel-runner-policy-guard",
+      "repo": "kernel",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "node --test --test-reporter=tap scripts/ci-local/runner-policy.test.mjs && node scripts/ci-local/runner-policy.mjs --kernel . --waivers scripts/ci-local/waivers.json",
+      "requiresStack": false,
+      "testGlobs": ["scripts/ci-local/runner-policy.test.mjs"]
+    },
+    {
+      "//": "TASK-012-FU review finding 3 (MEDIUM): the main sync (a0280fc) brought in packages/storage (TASK-117), packages/generated-clients, ops/scripts (TASK-005) and test/f1-defect/guards (TASK-009), none of which any suite claimed — every reading of the merged kernel tip was RED for unclaimed files, not for suite health. The 4 entries below close that gap.",
+      "id": "kernel-storage-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/storage",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/storage/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-generated-clients-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/generated-clients",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/generated-clients/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-compliance-guard",
+      "repo": "kernel",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "node --test --test-reporter=tap ops/scripts/marketing-copy-check.test.mjs ops/scripts/helios-submodule-check.test.mjs && node ops/scripts/marketing-copy-check.mjs",
+      "requiresStack": false,
+      "testGlobs": ["ops/scripts/marketing-copy-check.test.mjs", "ops/scripts/helios-submodule-check.test.mjs"]
+    },
+    {
+      "id": "kernel-f1-defect-guards",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "vitest",
+      "command": "pnpm --dir gremion-ui exec vitest run --config ../test/f1-defect/vitest.config.ts",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["test/f1-defect/guards/**/*.test.ts"]
+    }
+  ],
+  "vertical": [
+    {
+      "id": "vertical-ui-vitest-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:unit",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": [
+        "gremion-ui/tests/unit/**/*.test.ts",
+        "gremion-ui/src/**/*.test.ts",
+        "gremion-ui/scripts/install-git-hooks.test.ts"
+      ]
+    },
+    {
+      "id": "vertical-ui-vitest-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
+    },
+    {
+      "id": "vertical-ui-vitest-deselection",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm run test:deselection",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
+    },
+    {
+      "id": "vertical-ui-playwright",
+      "repo": "vertical",
+      "category": "e2e",
+      "cwd": "gremion-ui",
+      "kind": "playwright",
+      "command": "pnpm run test:e2e",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "vertical-public-vitest-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "gremion-public",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["gremion-public/src/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-public-playwright",
+      "repo": "vertical",
+      "category": "e2e",
+      "cwd": "gremion-public",
+      "kind": "playwright",
+      "command": "pnpm run test:e2e",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-public/tests/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "vertical-service-board-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/board",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/board/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-board-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/board",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/board/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "vertical-service-calendar-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/calendar",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/calendar/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-calendar-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/calendar",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/calendar/test/**/*.integration.test.ts", "services/calendar/test/relay.test.ts"]
+    },
+    {
+      "id": "vertical-service-content-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/content",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/content/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-content-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/content",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/content/test/**/*.integration.test.ts", "services/content/test/relay.test.ts"]
+    },
+    {
+      "id": "vertical-service-files-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/files",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/files/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-files-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/files",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/files/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "vertical-service-finance-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/finance",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/finance/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-finance-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/finance",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/finance/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "vertical-service-messages-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/messages",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/messages/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-messages-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/messages",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/messages/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "vertical-service-newsletter-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/newsletter",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/newsletter/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-newsletter-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/newsletter",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/newsletter/test/**/*.integration.test.ts", "services/newsletter/test/relay.test.ts"]
+    },
+    {
+      "id": "vertical-service-vault-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/vault",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/vault/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-vault-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/vault",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/vault/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "vertical-service-votes-unit",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "services/votes",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/votes/test/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-service-votes-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "services/votes",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/votes/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "vertical-bats-unit",
+      "repo": "vertical",
+      "category": "shell",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats test/*.bats",
+      "requiresStack": false,
+      "testGlobs": ["test/*.bats"]
+    },
+    {
+      "id": "vertical-bats-integration",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats test/integration/health.bats test/integration/oidc.bats test/integration/legal.bats",
+      "requiresStack": true,
+      "testGlobs": ["test/integration/health.bats", "test/integration/oidc.bats", "test/integration/legal.bats"]
+    },
+    {
+      "id": "vertical-ui-bats",
+      "repo": "vertical",
+      "category": "shell",
+      "cwd": ".",
+      "kind": "bats",
+      "command": "bats gremion-ui/test/*.bats",
+      "requiresStack": false,
+      "testGlobs": ["gremion-ui/test/*.bats"]
+    },
+    {
+      "id": "vertical-root-test-guards",
+      "repo": "vertical",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "guard",
+      "command": "pnpm run test:guards",
+      "requiresStack": false,
+      "testGlobs": [
+        "scripts/check-no-known-secrets.test.mjs",
+        "scripts/check-overrides-drift.test.mjs",
+        "scripts/check-k8s-postgres-secret-keys.test.mjs",
+        "scripts/check-no-retired-wire-root.test.mjs",
+        "scripts/nats-migrate-streams.test.mjs",
+        "scripts/check-no-hardcoded-compose-files.test.mjs",
+        "scripts/check-compose-edge.test.mjs"
+      ]
+    },
+    {
+      "id": "vertical-root-test-carve",
+      "repo": "vertical",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "pnpm run test:carve",
+      "requiresStack": false,
+      "testGlobs": ["scripts/carve/carve.test.mjs", "scripts/carve/pnpm-deps.test.mjs"]
+    },
+    {
+      "id": "vertical-f1-defect-guards",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "vitest",
+      "command": "pnpm --dir gremion-ui exec vitest run --config ../test/f1-defect/vitest.config.ts",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["test/f1-defect/guards/**/*.test.ts"]
+    },
+    {
+      "id": "vertical-f1-defect-e2e",
+      "repo": "vertical",
+      "category": "e2e",
+      "cwd": "gremion-ui",
+      "kind": "playwright",
+      "command": "pnpm exec playwright test --config=../test/f1-defect/e2e/playwright.config.ts",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["test/f1-defect/e2e/**/*.spec.ts"]
+    },
+    {
+      "id": "vertical-mobile-flutter",
+      "repo": "vertical",
+      "category": "unit",
+      "cwd": "mobile",
+      "kind": "flutter",
+      "command": "flutter test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["mobile/**/*_test.dart"]
+    }
+  ]
+}

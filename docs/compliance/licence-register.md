@@ -61,6 +61,32 @@ appendix placeholders (`{}` in place of `[]`, the older template); its terms sec
 identical to LiveKit's and Keycloak's, and the bump script checks exactly that. Hashes are
 of the blob at the commit (LF line endings), not of a checked-out working copy.
 
+## 2a. Development tooling (dev-only, not shipped in any image)
+
+Not one of TRD-265's seven systems and out of the marketing-copy check's scope (section 5
+names the systems it cross-checks; these are not among them) — recorded here anyway, in the
+same format, because R25-oxlint (2026-09-26) introduced them as root `devDependencies`. Read
+directly from the installed npm package's own `LICENSE` file and `package.json`, the same as
+section 2's rule 1, except the "Commit read" link points at the npm-published package tree
+(no upstream git commit was individually resolved for these dev-only rows). Standalone
+`oxlint`/`oxlint-tsgolint`, pinned directly (`--save-exact`), replace the earlier
+`vite-plus`-mediated pin: `vite-plus` as a workspace devDependency made pnpm resolve peers
+against its bundled vite core + Vitest 5, which broke gremion-ui svelte-check, so it is not a
+root dependency here and carries no row.
+
+| System | Upstream repository | Version read | Deployed as | Package artefact read | Licence file | What the file states | SPDX expression | Plain wording for copy |
+|---|---|---|---|---|---|---|---|---|
+| oxlint | oxc-project/oxc, `npm/oxlint` directory (npm `oxlint`) | `1.85.0` (exact pin, root `devDependency`) | dev-only tooling (the linter `pnpm run lint:js` / `make lint-js` runs); never shipped in any built image | `node_modules/oxlint/LICENSE` as installed from the pinned npm release | `LICENSE` (full MIT text) | "MIT License / Copyright (c) 2024-present VoidZero Inc. & Contributors"; the same release's `package.json` declares `"license": "MIT"` | `MIT` | "MIT License" |
+| oxlint-tsgolint | oxc-project/tsgolint (npm `oxlint-tsgolint`) | `7.0.2003` (exact pin, root `devDependency`) | dev-only tooling (type-aware lint rules `options.typeAware` / `--type-aware` runs on top of); never shipped in any built image | `node_modules/oxlint-tsgolint/LICENSE` as installed from the pinned npm release | `LICENSE` (full MIT text) | "MIT License / Copyright (c) 2025 July-present VoidZero Inc. & Contributors"; the same release's `package.json` declares `"license": "MIT"` | `MIT` | "MIT License" |
+
+SHA-256 of each licence file as installed (hash of the file on disk in `node_modules`, not a
+checked-out git blob — no upstream commit was individually resolved for these rows):
+
+| System | Version | File | SHA-256 of the file as read |
+|---|---|---|---|
+| oxlint | `1.85.0` | `LICENSE` | `95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3` |
+| oxlint-tsgolint | `7.0.2003` | `LICENSE` | `c211cc5336d2d47f21322aca35c8149699de621edc447294b617048d05a745ce` |
+
 ## 3. Known gaps, stated openly
 
 - **Element Call:** this repository pins no Element Call image and the 2026-09-24 census

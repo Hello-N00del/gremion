@@ -396,10 +396,13 @@ order:
 | `057_fk_hot_filter_indexes.sql` | Read-path indexes on five FK columns used as hot WHERE predicates. |
 | `058_public_reader_grants.sql` | Closes the fresh-install grant hole for the anonymous portal: grants `gremion_public_reader` on the portal tables, and aborts rather than granting nothing. |
 
-Plus **4 control-plane migrations** in
+Plus **5 control-plane migrations** in
 [`../migrations-control/`](../migrations-control/): `001_tenant_registry.sql`,
-`002_tenant_migration_runs.sql`, `003_tenant_uniques.sql` and
-`004_tenant_domain.sql` (the per-tenant custom-domain registry).
+`002_tenant_migration_runs.sql`, `003_tenant_uniques.sql`,
+`004_tenant_domain.sql` (the per-tenant custom-domain registry) and
+`006_boundary_ids_uuidv7.sql` (TASK-019: `tenant.id` and
+`tenant_migration_run.id` default to `uuidv7()`, RFC 9562 version 7 — needs
+PostgreSQL 18; `005` is reserved for `005_tenant_evict_ack.sql`, spec B §T.5).
 
 Nine of the data-plane files above — `003`, `034`, `049`, `053`–`058` — and
 control `004` entered this repository on 2026-09-15 from the reference product

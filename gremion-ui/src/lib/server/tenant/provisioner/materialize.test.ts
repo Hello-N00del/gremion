@@ -32,7 +32,9 @@ describe('materializeConfig (defaults + stored -> fully-merged effective config)
   })
 
   it('THROWS (loud) on a structurally-invalid stored config rather than silently defaulting', () => {
-    expect(() => materializeConfig({ setup_complete: 'yes' })).toThrow()
+    // The real throw is zod's ZodError (from gremionConfigSchema.parse); its
+    // message names the offending path (setup_complete expects boolean).
+    expect(() => materializeConfig({ setup_complete: 'yes' })).toThrow(/setup_complete/)
   })
 })
 

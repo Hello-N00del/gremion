@@ -42,11 +42,32 @@ const TRANSIENT_DB_STARTUP_CODES = new Set([
 ])
 
 /**
+ * TASK-023 (Q1): thrown by waitForDbReady when its attempt budget runs out.
+ *
+ * A DISTINCT class, classed NON-transient by isTransientDbStartupError, so boot
+ * exits(1) and the orchestrator's restart policy takes over. Before this the
+ * exhaustion was a plain Error whose message embedded the last cause
+ * ('database not ready after N attempts: connect ECONNREFUSED ...') -- text the
+ * transient regex below matches, so an exhausted budget was retried forever.
+ * The message deliberately does NOT embed the cause; it rides on `cause`.
+ */
+export class DbStartupBudgetExhaustedError extends Error {
+  readonly attempts: number
+  constructor(attempts: number, lastError: unknown) {
+    super(`database not ready after ${attempts} attempts (startup budget exhausted)`, { cause: lastError })
+    this.name = 'DbStartupBudgetExhaustedError'
+    this.attempts = attempts
+  }
+}
+
+/**
  * True when an error means Postgres is not ready yet (booting / not accepting
  * connections) rather than a real fault. Lets boot retry a transient startup
- * race while still failing fast on a genuine migration or schema bug.
+ * race while still failing fast on a genuine migration or schema bug. An
+ * exhausted startup budget is never transient (Q1).
  */
 export function isTransientDbStartupError(err: unknown): boolean {
+  if (err instanceof DbStartupBudgetExhaustedError) return false
   const code = (err as { code?: unknown } | null | undefined)?.code
   if (typeof code === 'string' && TRANSIENT_DB_STARTUP_CODES.has(code)) return true
   const message =
@@ -60,32 +81,69 @@ export function isTransientDbStartupError(err: unknown): boolean {
   )
 }
 
+/** First wait of the startup ladder (ms); each further wait doubles it. */
+export const DB_STARTUP_INITIAL_DELAY_MS = 500
+/** The ladder's ceiling (ms): no single wait is ever longer. */
+export const DB_STARTUP_MAX_DELAY_MS = 30_000
+/** Default attempt budget: the first 7 waits take 31-62 s, the other 52 are capped
+ *  (15-30 s each), so boot gives up and exits after ~14-27 min. */
+export const DB_STARTUP_ATTEMPTS = 60
+
+/**
+ * The ladder step before jitter for 1-based `attempt`:
+ * min(maxDelayMs, initialDelayMs * 2^(attempt-1)) -> 500, 1000, 2000, ... 30000.
+ */
+export function dbStartupBackoffMs(
+  attempt: number,
+  opts: { initialDelayMs?: number; maxDelayMs?: number } = {},
+): number {
+  const initial = opts.initialDelayMs ?? DB_STARTUP_INITIAL_DELAY_MS
+  const max = opts.maxDelayMs ?? DB_STARTUP_MAX_DELAY_MS
+  return Math.min(max, initial * 2 ** Math.max(0, attempt - 1))
+}
+
+/** Jitter a ladder step into the window [50%, 100%] of it (`random` in [0, 1)). */
+export function jitterDelayMs(stepMs: number, random: () => number = Math.random): number {
+  const r = Math.min(Math.max(random(), 0), 1)
+  return Math.round(stepMs / 2 + (stepMs / 2) * r)
+}
+
 export interface WaitForDbReadyOptions {
-  /** Max ping attempts before giving up (default 60 ≈ 120s at 2s/attempt). */
+  /** Max ping attempts before giving up (default DB_STARTUP_ATTEMPTS). */
   attempts?: number
-  /** Delay between attempts in ms (default 2000). */
-  delayMs?: number
+  /** First ladder step in ms (default DB_STARTUP_INITIAL_DELAY_MS). */
+  initialDelayMs?: number
+  /** Ladder ceiling in ms (default DB_STARTUP_MAX_DELAY_MS). */
+  maxDelayMs?: number
   /** Injectable readiness probe — defaults to `SELECT 1` on the pool. */
   ping?: () => Promise<unknown>
   /** Injectable sleep — defaults to setTimeout. */
   sleep?: (ms: number) => Promise<void>
+  /** Injectable jitter source in [0, 1) — defaults to Math.random. */
+  random?: () => number
 }
 
 /**
  * Block until Postgres accepts a trivial query, retrying transient startup
- * errors (see isTransientDbStartupError) within a bounded budget. A non-transient
- * error (bad credentials, a real schema fault) is rethrown immediately so genuine
- * misconfiguration still fails fast; the budget being exhausted also throws.
+ * errors (see isTransientDbStartupError) on an exponential ladder with jitter:
+ * the n-th wait is jitterDelayMs(dbStartupBackoffMs(n)), i.e. 500 ms doubling,
+ * never above maxDelayMs (30 s), each jittered into [50%, 100%]. Every wait is
+ * logged with its attempt, ladder step and whether the cap applied. A
+ * non-transient error (bad credentials, a real schema fault) is rethrown
+ * immediately; an exhausted budget throws DbStartupBudgetExhaustedError, which
+ * is itself non-transient (Q1).
  *
  * Makes boot survive a reboot race where the Docker daemon starts gremion-ui
  * before Postgres is ready (depends_on only orders `compose up`, not a daemon
  * restart) instead of latching a permanent unhealthy state.
  */
 export async function waitForDbReady(options: WaitForDbReadyOptions = {}): Promise<void> {
-  const attempts = options.attempts ?? 60
-  const delayMs = options.delayMs ?? 2000
+  const attempts = options.attempts ?? DB_STARTUP_ATTEMPTS
+  const ladder = { initialDelayMs: options.initialDelayMs, maxDelayMs: options.maxDelayMs }
+  const maxDelayMs = options.maxDelayMs ?? DB_STARTUP_MAX_DELAY_MS
   const ping = options.ping ?? (() => getDb()`SELECT 1`)
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const random = options.random ?? Math.random
 
   let lastError: unknown
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -96,16 +154,17 @@ export async function waitForDbReady(options: WaitForDbReadyOptions = {}): Promi
       if (!isTransientDbStartupError(err)) throw err
       lastError = err
       if (attempt < attempts) {
+        const step = dbStartupBackoffMs(attempt, ladder)
+        const wait = jitterDelayMs(step, random)
         console.warn(
-          `[boot] database not ready (attempt ${attempt}/${attempts}): ${(err as Error)?.message ?? String(err)}`,
+          `[boot] database not ready (attempt ${attempt}/${attempts}): ${(err as Error)?.message ?? String(err)}; ` +
+            `backoff=${step}ms${step >= maxDelayMs ? ' (capped)' : ''} wait=${wait}ms`,
         )
-        await sleep(delayMs)
+        await sleep(wait)
       }
     }
   }
-  throw new Error(
-    `database not ready after ${attempts} attempts: ${(lastError as Error)?.message ?? String(lastError)}`,
-  )
+  throw new DbStartupBudgetExhaustedError(attempts, lastError)
 }
 
 /**

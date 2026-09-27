@@ -1,0 +1,21 @@
+# TASK-045 (TRD-343): the suites `verify` must run on every non---only call.
+#
+# One name per line. verify.mjs's runAll() reports a name here with no entry
+# in SUITE_REGISTRY as its own FAIL ("no such suite in the registry"), so
+# dropping a line here or dropping the matching registry entry both surface
+# as a failing suite, never a silently shorter run. scripts/verify/meta.test.mjs
+# fails if either drifts from the other, or from the Makefile `verify` target
+# / the root package.json `verify` script.
+#
+# Isolation joined via TASK-117's residual (R24-10): packages/storage's
+# cross-tenant proof (TRD-065/067) ran only as a side effect of gremion-ui's
+# vite include glob, with nothing pinning it by name -- see
+# scripts/verify/suites/isolation.mjs. i18n and a11y still join later through
+# their own tasks, each adding a line here (brief S5). Until PRD-UXQ-001a
+# names its scope, i18n is not listed and does not block.
+typecheck
+unit
+integration
+migration-hash
+carve-lint
+isolation

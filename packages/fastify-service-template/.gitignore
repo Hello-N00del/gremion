@@ -1,0 +1,3 @@
+# Scaffold scratch output (tests and demos write services here).
+.tmp/
+dist/

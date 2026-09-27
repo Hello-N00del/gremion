@@ -34,7 +34,11 @@ import { startTenantEvictListener } from '$lib/server/tenant/evict-listener'
 let migrationsImpl: () => Promise<void> = async () => {}
 let controlMigrationsImpl: () => Promise<void> = async () => {}
 
-vi.mock('$app/environment', () => ({ building: true }))
+// TASK-023: steerable, so one test can load the module as a running server
+// (building=false, boot starts at load) while every other test drives boot()
+// by hand (building=true: the module-load boot is skipped, as in `vite build`).
+const appEnv = vi.hoisted(() => ({ building: true }))
+vi.mock('$app/environment', () => appEnv)
 
 vi.mock('$env/dynamic/private', () => ({
   env: {
@@ -49,6 +53,11 @@ vi.mock('$lib/server/db', () => ({
   waitForDbReady: vi.fn(async () => {}),
   runMigrations: () => migrationsImpl(),
   getDb: () => ({}),
+  // TASK-023: boot classifies its failure with the db module's classifier. The
+  // real one is pinned in db-startup.test.ts; this stand-in knows the two codes
+  // the tests below throw.
+  isTransientDbStartupError: (err: unknown) =>
+    ['ECONNREFUSED', '57P03'].includes(String((err as { code?: unknown } | null)?.code)),
 }))
 
 vi.mock('$lib/server/config', () => ({
@@ -122,17 +131,36 @@ vi.mock('$lib/server/tenant/default-tenant', () => ({
   DEFAULT_TENANT: { id: 'default', configPath: '/tmp/config.json' },
 }))
 
-// ./auth re-exports a SvelteKit `handle` — we just need a passthrough so the
-// `sequence(authHandle, …)` at the bottom of hooks.server.ts doesn't blow up.
+// ./auth re-exports a SvelteKit `handle`. TASK-023: faithful to the real one in
+// the one way that matters here — buildAuthConfig THROWS without a resolved
+// tenant — so a sequence test proves an exempt request never reaches it.
+const authHandleCalls: string[] = []
 vi.mock('./auth', () => ({
-  handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) =>
-    resolve(event),
+  handle: async ({ event, resolve }: { event: { url: URL; locals: Record<string, unknown> }; resolve: (e: unknown) => unknown }) => {
+    authHandleCalls.push(event.url.pathname)
+    if (!event.locals.tenant) throw new Error('buildAuthConfig: no tenant resolved (tenantResolveHandle must run first)')
+    return resolve(event)
+  },
 }))
+
+// @ts-expect-error — runtime-only internal entry; see hooks.tenant-wiring.test.ts.
+import { with_request_store } from '@sveltejs/kit/internal/server'
+
+/** sequence() needs SvelteKit's request store; the runtime (respond.js) provides it. */
+function withRequestStore<T>(event: unknown, fn: () => T): T {
+  const state = { tracing: { record_span: <R>({ fn }: { fn: (span: unknown) => Promise<R> }) => fn({}) } }
+  return with_request_store({ event, state } as never, fn)
+}
 
 // nodemailer is referenced but only invoked when smtp.configured === true,
 // which our config stub leaves false. A bare stub is still required so the
 // `import nodemailer from 'nodemailer'` statement resolves.
 vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }))
+
+// TASK-023: a non-transient boot failure calls process.exit(1) through
+// bootRuntime.exit. boot() starts at module load, before a test could reach the
+// module's own seam, so process.exit itself is stubbed for every test.
+let exitSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   // Each test gets a clean module registry so the module-scoped boot state
@@ -142,11 +170,42 @@ beforeEach(() => {
   process.exitCode = 0
   migrationsImpl = async () => {}
   controlMigrationsImpl = async () => {}
+  exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+  appEnv.building = true
 })
 
 afterEach(() => {
   process.exitCode = 0
+  exitSpy.mockRestore()
+  vi.useRealTimers()
 })
+
+/**
+ * Wait for the boot() that hooks.server.ts starts at module load to settle,
+ * WITHOUT calling boot() — after a transient failure that call would start the
+ * next attempt. Microtasks only, so it is safe under fake timers.
+ */
+async function settleModuleLoadBoot(mod: typeof import('./hooks.server')): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    const s = mod.getBootStatus()
+    if (s.complete || s.error) return
+    await Promise.resolve()
+  }
+  throw new Error('module-load boot did not settle')
+}
+
+/**
+ * Let every queued microtask run (a boot attempt is a chain of awaits). Timers
+ * are untouched, so this is safe under fake timers.
+ */
+async function drainMicrotasks(): Promise<void> {
+  for (let i = 0; i < 200; i++) await Promise.resolve()
+}
+
+/** An error the db classifier calls transient (Postgres went away mid-boot). */
+function refused(): Error {
+  return Object.assign(new Error('connect ECONNREFUSED 10.0.0.2:5432'), { code: 'ECONNREFUSED' })
+}
 
 describe('hooks.server boot sequencing (T4.1 / G-014 + P2.1b T3 / D-READY)', () => {
   it('a CONTROL-plane boot failure leaves _bootComplete=false and populates _bootError (process-wide 503)', async () => {
@@ -166,6 +225,9 @@ describe('hooks.server boot sequencing (T4.1 / G-014 + P2.1b T3 / D-READY)', () 
     // The unhealthy-exit signal is how an orchestrator notices and recycles
     // the container; without it the pod would just sit there serving 503s.
     expect(process.exitCode).toBe(1)
+    // TASK-023: a non-transient failure exits, so `restart: unless-stopped`
+    // recycles the container instead of it latching a permanent 503.
+    expect(exitSpy).toHaveBeenCalledWith(1)
   })
 
   it('a default-tenant DATA-plane migration failure no longer fails boot — readiness is tenant-scoped (D-READY)', async () => {
@@ -253,7 +315,8 @@ describe('hooks.server authGuard 503 while booting (T4.1 / G-014)', () => {
       })
 
     const mod = await import('./hooks.server')
-    // Don't await mod.boot() — we WANT it pending here.
+    // Start boot but don't await it — we WANT it pending here.
+    const inflight = mod.boot()
 
     const event = makeFakeEvent('/dashboard')
     const res = await mod.authGuard({
@@ -268,8 +331,9 @@ describe('hooks.server authGuard 503 while booting (T4.1 / G-014)', () => {
     expect(await response.text()).toBe('Service Unavailable: booting')
 
     // Release the migration so vitest doesn't hold the promise forever.
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
     pending.resolve?.()
-    await mod.boot()
+    await inflight
   })
 
   it('returns 503 with no Retry-After once boot has definitively failed (control plane)', async () => {
@@ -292,6 +356,391 @@ describe('hooks.server authGuard 503 while booting (T4.1 / G-014)', () => {
     expect(response.status).toBe(503)
     expect(response.headers.get('Retry-After')).toBeNull()
     expect(await response.text()).toBe('Service Unavailable: boot failed')
+  })
+})
+
+describe('boot self-heal (TASK-023 items 3 and 6, Q2, Q3)', () => {
+  it('a transient failure drops the memo: no exit, exitCode untouched (Q3), and the 2nd call re-attempts', async () => {
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      if (calls === 1) throw refused()
+    }
+    const mod = await import('./hooks.server')
+    await mod.boot()
+
+    expect(mod.getBootStatus().complete).toBe(false)
+    expect(mod.getBootStatus().error?.message).toContain('ECONNREFUSED')
+    expect(process.exitCode).toBe(0)
+    expect(exitSpy).not.toHaveBeenCalled()
+
+    await mod.boot()
+    expect(calls).toBe(2)
+    expect(mod.getBootStatus()).toEqual({ complete: true, error: null })
+  })
+
+  it('concurrent callers share one attempt', async () => {
+    const pending: { resolve?: () => void } = {}
+    let calls = 0
+    controlMigrationsImpl = () => {
+      calls++
+      return new Promise<void>((r) => {
+        pending.resolve = r
+      })
+    }
+    const mod = await import('./hooks.server')
+    const a = mod.boot()
+    const b = mod.boot()
+    expect(a).toBe(b)
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+    pending.resolve?.()
+    await Promise.all([a, b])
+    expect(calls).toBe(1)
+    expect(mod.getBootStatus().complete).toBe(true)
+  })
+
+  it('a non-transient failure calls bootRuntime.exit(1) and sets exitCode = 1 (Q3)', async () => {
+    controlMigrationsImpl = async () => {
+      throw Object.assign(new Error('password authentication failed for user "gremion"'), { code: '28P01' })
+    }
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    expect(exitSpy).toHaveBeenCalledTimes(1)
+    expect(exitSpy).toHaveBeenCalledWith(1)
+    expect(process.exitCode).toBe(1)
+    // The memo is kept: nothing re-attempts a non-transient failure.
+    expect(mod.boot()).toBe(mod.boot())
+  })
+
+  it('bootRuntime.exit delegates to process.exit; bootRuntime.schedule unrefs its timer', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    mod.bootRuntime.exit(7)
+    expect(exitSpy).toHaveBeenCalledWith(7)
+    const t = mod.bootRuntime.schedule(() => {}, 60_000)
+    expect(t.hasRef()).toBe(false)
+    clearTimeout(t)
+  })
+
+  it('Q2: one re-attempt is scheduled on a timer of at most 30 s, and it completes boot', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      if (calls === 1) throw refused()
+    }
+    const mod = await import('./hooks.server')
+    expect(mod.BOOT_RETRY_DELAY_MS).toBeGreaterThan(0)
+    expect(mod.BOOT_RETRY_DELAY_MS).toBeLessThanOrEqual(30_000)
+    await mod.boot()
+    expect(mod.getBootStatus().complete).toBe(false)
+    expect(vi.getTimerCount()).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(mod.BOOT_RETRY_DELAY_MS - 1)
+    await drainMicrotasks()
+    expect(calls).toBe(1)
+    // Nothing but the timer calls boot() here: the re-attempt is the timer's.
+    await vi.advanceTimersByTimeAsync(1)
+    await drainMicrotasks()
+    expect(calls).toBe(2)
+    expect(mod.getBootStatus().complete).toBe(true)
+    // Nothing re-attempts a completed boot.
+    await vi.advanceTimersByTimeAsync(mod.BOOT_RETRY_DELAY_MS * 2)
+    expect(calls).toBe(2)
+  })
+
+  it('Q2: repeated transient failures never stack more than one pending re-attempt', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      throw refused()
+    }
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    await mod.boot()
+    await mod.boot()
+    expect(calls).toBe(3)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('/healthz never triggers a re-attempt', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      throw refused()
+    }
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    expect(calls).toBe(1)
+    for (let i = 0; i < 5; i++) {
+      const res = (await mod.authGuard({
+        event: makeFakeEvent('/healthz') as never,
+        resolve: async () => new Response('{"ok":true}', { status: 200 }),
+      } as never)) as Response
+      expect(res.status).toBe(200)
+    }
+    // A re-attempt would take a few awaits to reach controlMigrations; give it
+    // every chance to, without advancing the (fake) re-attempt timer.
+    await drainMicrotasks()
+    expect(calls).toBe(1)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('the re-attempts have a ceiling: the BOOT_MAX_TRANSIENT_FAILURES-th consecutive transient failure exits 1', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      throw refused()
+    }
+    const mod = await import('./hooks.server')
+    expect(mod.BOOT_MAX_TRANSIENT_FAILURES).toBeGreaterThan(1)
+    await mod.boot()
+    for (let i = 1; i < mod.BOOT_MAX_TRANSIENT_FAILURES; i++) {
+      expect(exitSpy).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(mod.BOOT_RETRY_DELAY_MS)
+      await drainMicrotasks()
+    }
+    expect(calls).toBe(mod.BOOT_MAX_TRANSIENT_FAILURES)
+    expect(exitSpy).toHaveBeenCalledTimes(1)
+    expect(exitSpy).toHaveBeenCalledWith(1)
+    expect(process.exitCode).toBe(1)
+    // Nothing further is scheduled once the ceiling is reached.
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('an unresolved exempt request with no route (TASK-023)', () => {
+  // SvelteKit would render its 404 through the root layout, whose load needs
+  // locals.auth and a tenant — neither exists for such a request (Auth.js was
+  // skipped). Found on the running system as a 500 for /api/internal/<unknown>.
+  for (const booted of [false, true]) {
+    it(`is a plain 404 without rendering anything (${booted ? 'after boot' : 'while booting'})`, async () => {
+      const pending: { resolve?: () => void } = {}
+      if (!booted) {
+        controlMigrationsImpl = () =>
+          new Promise<void>((r) => {
+            pending.resolve = r
+          })
+      }
+      const mod = await import('./hooks.server')
+      const inflight = mod.boot()
+      if (booted) await inflight
+      let reached = false
+      const res = (await mod.authGuard({
+        event: makeFakeEvent('/api/internal/nope', null) as never,
+        resolve: async () => {
+          reached = true
+          return new Response('rendered', { status: 404 })
+        },
+      } as never)) as Response
+      expect(reached).toBe(false)
+      expect(res.status).toBe(404)
+      expect(await res.text()).toBe('Not Found')
+      if (!booted) {
+        await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+        pending.resolve?.()
+        await inflight
+      }
+    })
+  }
+})
+
+describe('the full handle sequence (TASK-023)', () => {
+  async function throughHandle(mod: typeof import('./hooks.server'), path: string, tenant?: unknown) {
+    const event = makeFakeEvent(path)
+    if (tenant) event.locals.tenant = tenant
+    event.locals.auth = async () => null
+    return (await withRequestStore(event, () =>
+      mod.handle({ event: event as never, resolve: async () => new Response('{"ok":true}', { status: 200 }) }),
+    )) as Response
+  }
+
+  beforeEach(() => {
+    authHandleCalls.length = 0
+  })
+
+  it('an unresolved /healthz never reaches Auth.js (which throws without a tenant), during and after boot', async () => {
+    const pending: { resolve?: () => void } = {}
+    controlMigrationsImpl = () =>
+      new Promise<void>((r) => {
+        pending.resolve = r
+      })
+    const mod = await import('./hooks.server')
+    const inflight = mod.boot()
+    expect((await throughHandle(mod, '/healthz')).status).toBe(200)
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+    pending.resolve?.()
+    await inflight
+    expect((await throughHandle(mod, '/healthz')).status).toBe(200)
+    expect((await throughHandle(mod, '/api/internal/evict')).status).toBe(200)
+    expect(authHandleCalls).toEqual([])
+  })
+
+  it('a tenant-resolved request still goes through Auth.js', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
+    const res = await throughHandle(mod, '/api/internal/newsletter/render', tenant)
+    expect(authHandleCalls).toEqual(['/api/internal/newsletter/render'])
+    // ...and then the session guard: no session, so a machine-readable 401.
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('boot at module load (TASK-023)', () => {
+  it('is skipped while SvelteKit builds: an exit(1) there would kill `vite build`', async () => {
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+      throw new Error('CONTROL_DATABASE_URL not configured')
+    }
+    const mod = await import('./hooks.server')
+    for (let i = 0; i < 50; i++) await Promise.resolve()
+    expect(calls).toBe(0)
+    expect(exitSpy).not.toHaveBeenCalled()
+    expect(mod.getBootStatus()).toEqual({ complete: false, error: null })
+  })
+
+  it('starts on import in a running server', async () => {
+    appEnv.building = false
+    let calls = 0
+    controlMigrationsImpl = async () => {
+      calls++
+    }
+    const mod = await import('./hooks.server')
+    await settleModuleLoadBoot(mod)
+    expect(calls).toBe(1)
+    expect(mod.getBootStatus().complete).toBe(true)
+  })
+})
+
+describe('authGuard boot gate (TASK-023 item 3)', () => {
+  async function guard(mod: typeof import('./hooks.server'), path: string, tenant?: unknown) {
+    const event = makeFakeEvent(path)
+    if (tenant) event.locals.tenant = tenant
+    let reached = false
+    const res = (await mod.authGuard({
+      event: event as never,
+      resolve: async () => {
+        reached = true
+        return new Response('handler', { status: 200 })
+      },
+    } as never)) as Response
+    return { res, reached }
+  }
+
+  it('while booting: /healthz answers, every other path is 503 booting with Retry-After: 5', async () => {
+    const pending: { resolve?: () => void } = {}
+    controlMigrationsImpl = () =>
+      new Promise<void>((r) => {
+        pending.resolve = r
+      })
+    const mod = await import('./hooks.server')
+    const inflight = mod.boot()
+
+    const h = await guard(mod, '/healthz')
+    expect(h.reached).toBe(true)
+    expect(h.res.status).toBe(200)
+
+    for (const path of ['/dashboard', '/api/health', '/healthzx', '/api/members']) {
+      const o = await guard(mod, path)
+      expect(o.reached, path).toBe(false)
+      expect(o.res.status).toBe(503)
+      expect(o.res.headers.get('Retry-After')).toBe('5')
+      expect(await o.res.text()).toBe('Service Unavailable: booting')
+    }
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+    pending.resolve?.()
+    await inflight
+  })
+
+  it('while booting: an unresolved /api/internal/ request passes, a tenant-resolved one is gated', async () => {
+    const pending: { resolve?: () => void } = {}
+    controlMigrationsImpl = () =>
+      new Promise<void>((r) => {
+        pending.resolve = r
+      })
+    const mod = await import('./hooks.server')
+    const inflight = mod.boot()
+
+    expect((await guard(mod, '/api/internal/evict')).reached).toBe(true)
+    const resolved = await guard(mod, '/api/internal/newsletter/render', { id: 't1', slug: 't1' })
+    expect(resolved.reached).toBe(false)
+    expect(resolved.res.status).toBe(503)
+
+    await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
+    pending.resolve?.()
+    await inflight
+  })
+
+  it('after a transient failure (re-attempt pending) other paths stay 503 booting with Retry-After: 5', async () => {
+    vi.useFakeTimers()
+    controlMigrationsImpl = async () => {
+      throw refused()
+    }
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const o = await guard(mod, '/dashboard')
+    expect(o.res.status).toBe(503)
+    expect(o.res.headers.get('Retry-After')).toBe('5')
+    expect(await o.res.text()).toBe('Service Unavailable: booting')
+  })
+
+  it("after a non-retryable failure other paths are 503 'boot failed'; /healthz still answers 200 (Q5)", async () => {
+    controlMigrationsImpl = async () => {
+      throw new Error('control migration 002 failed')
+    }
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const o = await guard(mod, '/dashboard')
+    expect(o.res.status).toBe(503)
+    expect(await o.res.text()).toBe('Service Unavailable: boot failed')
+    // Q5 (accepted, handed off to TASK-040/086): /healthz is liveness, not
+    // readiness. A switch gate must read /api/health as well.
+    expect((await guard(mod, '/healthz')).res.status).toBe(200)
+  })
+
+  it('after boot: an unresolved /healthz or /api/internal/ request skips the session guard, with locals defaulted', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    for (const path of ['/healthz', '/api/internal/evict']) {
+      const event = makeFakeEvent(path)
+      event.locals.auth = async () => {
+        throw new Error(`auth must not run for ${path}`)
+      }
+      const res = (await mod.authGuard({
+        event: event as never,
+        resolve: async () => new Response('ok', { status: 200 }),
+      } as never)) as Response
+      expect(res.status, path).toBe(200)
+      expect(event.locals.user).toBeNull()
+      expect(event.locals.accessToken).toBeNull()
+    }
+  })
+
+  it('after boot: a tenant-resolved /api/internal/ request (anything through the edge) still needs a session', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const o = await (async () => {
+      const event = makeFakeEvent('/api/internal/newsletter/render')
+      event.locals.tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
+      event.locals.auth = async () => null
+      let reached = false
+      const res = (await mod.authGuard({
+        event: event as never,
+        resolve: async () => {
+          reached = true
+          return new Response('handler', { status: 200 })
+        },
+      } as never)) as Response
+      return { res, reached }
+    })()
+    expect(o.reached).toBe(false)
+    expect(o.res.status).toBe(401)
+    expect(await o.res.json()).toEqual({ error: 'Unauthenticated', reason: 'no_session' })
   })
 })
 
@@ -476,11 +925,13 @@ describe('cspGuard (G-011b)', () => {
 //    *after* the 503 check (in the success branch). The 503 short-circuit
 //    means the rest of the event object is never read, so a bare URL is
 //    enough.
-function makeFakeEvent(path: string) {
+function makeFakeEvent(path: string, routeId: string | null = path) {
   return {
     url: new URL(`http://localhost${path}`),
     request: new Request(`http://localhost${path}`),
     locals: {} as Record<string, unknown>,
     params: {},
+    // SvelteKit matches the route before `handle` runs; null = no route.
+    route: { id: routeId },
   }
 }
