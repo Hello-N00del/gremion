@@ -1,5 +1,5 @@
 // FIX4 (P2.1c) — INTERNAL_BASE_URL keeps the inner hop off the edge.
-// Ported from StuRaOS (Tenancy D1 stage §1.5) by TASK-041 (L3-08).
+// Ported from the extraction source (Tenancy D1 stage §1.5) by TASK-041 (L3-08).
 //
 // Original premise: the apex router (docker-compose.prod.yml gremion-ui-apex)
 // prepended the gremion-ui-apexhost middleware, which UNCONDITIONALLY set

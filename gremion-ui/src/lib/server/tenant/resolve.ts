@@ -259,7 +259,7 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
 }
 
 /**
- * TASK-041 (L3-08; B10-resolver-fullhost Task 1, ported from StuRaOS
+ * TASK-041 (L3-08; B10-resolver-fullhost Task 1, ported from the extraction source's
  * resolve.ts `resolveByForwardedHost`): the host path. Returns the resolved
  * ACTIVE context, or the Response the resolver must return.
  *

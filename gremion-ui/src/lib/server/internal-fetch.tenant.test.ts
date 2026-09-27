@@ -18,7 +18,7 @@
 // half; the receiving half (the real normaliser on the received value) is
 // pinned in internal-fetch.tenant-base.test.ts.
 //
-// Ported from StuRaOS (Tenancy D1 stage §1.5) by TASK-041 (L3-08).
+// Ported from the extraction source (Tenancy D1 stage §1.5) by TASK-041 (L3-08).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('$env/dynamic/private', () => ({

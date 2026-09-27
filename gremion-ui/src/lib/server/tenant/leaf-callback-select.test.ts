@@ -285,7 +285,7 @@ describe('fail closed', () => {
   })
 })
 
-// Ported from StuRaOS f276af59 (leaf-callback-select.test.ts:277-295) with the
+// Ported from the extraction source (f276af59, leaf-callback-select.test.ts:277-295) with the
 // Host header the edge forwards: under the enforced gate an edge request is
 // also held to the TASK-041 Q2 cross-check (Host == X-Forwarded-Host).
 describe('the host path is untouched', () => {

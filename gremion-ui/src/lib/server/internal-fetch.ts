@@ -89,7 +89,7 @@ function resolveInternalBaseUrl(): string {
 }
 
 /**
- * Tenancy D1 (§1.5; TASK-041, ported from StuRaOS internal-fetch.ts) — the
+ * Tenancy D1 (§1.5; TASK-041, ported from the extraction source's internal-fetch.ts) — the
  * forwarded host for a server-to-server hop.
  *
  * This REPLACES the old apex synthesis, which took the host of PUBLIC_BASE_URL
