@@ -251,6 +251,19 @@ services:
       # Migrations run DIRECT on postgres, never through the transaction pooler.
       DATABASE_URL: postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${GREMION_DB_NAME:-gremion}
       CONTROL_DATABASE_URL: postgresql://${CONTROL_DB_USER:-control}:${CONTROL_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
+      # run-migrations-verified mirrors boot(): control migrations, then
+      # registerDefaultTenant, then the fleet. The default tenant's row is
+      # derived from the same OIDC settings gremion-ui reads, so the one-shot
+      # needs them too (measured on the scratch proof: without the issuer the
+      # job dies "registerDefaultTenant: AUTH_KEYCLOAK_ISSUER is not set").
+      AUTH_KEYCLOAK_ISSUER:     ${AUTH_KEYCLOAK_ISSUER:-}
+      AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/gremion
+      AUTH_KEYCLOAK_ID:         ${AUTH_KEYCLOAK_ID:-gremion-ui}
+      AUTH_KEYCLOAK_SECRET:     ${AUTH_KEYCLOAK_SECRET}
+      CONFIG_PATH:              /app/config/config.json
+      GREMION_DISABLE_SEEDS:    "true"
+    volumes:
+      - config-data:/app/config
     networks:
       state:
         aliases: ["migrate-${COLOUR:?COLOUR required}"]

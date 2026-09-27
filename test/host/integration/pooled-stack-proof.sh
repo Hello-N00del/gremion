@@ -198,6 +198,8 @@ KEYCLOAK_ADMIN_CLIENT_SECRET=$(gen)
 INTERNAL_PUSH_SECRET=${sec_push}
 TENANT_PROXY_SHARED_SECRET=${sec_proxy}
 TENANT_SECRETS_DIR=${SROOT_H}/secrets/tenants
+# not yet in app.env.tmpl (TASK-028 wait): migrate and gremion-ui need it
+AUTH_KEYCLOAK_ISSUER=https://proof.example.org/auth/realms/gremion
 EOF
     done
     cat > "$ENV_DIR/ops.env" <<EOF
