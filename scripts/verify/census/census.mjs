@@ -10,6 +10,13 @@
 // pulled or inspected is unparseable, even when the service carries a compose
 // healthcheck (brief S1: every service's image is inspected).
 
+import { pathToFileURL } from 'node:url'
+import { headSha } from '../lib/git.mjs'
+import { evaluateSuite } from '../lib/guard.mjs'
+import { buildImages, planImages, removeTags } from './inspect.mjs'
+import { REPO_ROOT } from './render.mjs'
+import { renderAll, runCensusSuite } from './suite.mjs'
+
 /** A compose healthcheck's state: 'probe' (a test that runs), 'disabled'
  * (`disable: true` or `test: ["NONE"]`), 'inherit' (timing only, the image's
  * own test runs) or 'absent'. */
@@ -166,4 +173,63 @@ export function runCensus({ projects, images, blastRadius }) {
   out.failed += blast.failures.length
   out.problems.push(...blast.failures)
   return out
+}
+
+// ---------------------------------------------------------------------------
+// CLI.
+//   node scripts/verify/census/census.mjs              -- the census, printed
+//   node scripts/verify/census/census.mjs --build-only <svc>
+//        builds ONE first-party service exactly as the census does (same
+//        argv, BUILD_SHA included) to warm the Docker cache, one service per
+//        agent tool call, before `verify --only census` (brief Q6). Prints the
+//        build time; the census tag is removed afterwards, the cache stays.
+// ---------------------------------------------------------------------------
+
+export function buildOnly(service, { root = REPO_ROOT, log = console.log } = {}) {
+  const sha = headSha(root)
+  const rendered = renderAll({ root })
+  const broken = rendered.filter((p) => !p.render.ok)
+  if (broken.length > 0) {
+    log(`[census] render failed: ${broken.map((p) => `${p.project}: ${p.render.detail}`).join('; ')}`)
+    return 1
+  }
+  const { entries } = planImages(rendered, { sha8: sha.slice(0, 8) })
+  const mine = entries.filter((e) => e.service === service && e.kind === 'build')
+  if (mine.length === 0) {
+    log(`[census] ${service} is not a first-party (build:) service of any production render`)
+    return 1
+  }
+  const builds = buildImages(mine, { buildSha: sha.slice(0, 7), log: (l) => log(`[census] ${l}`) })
+  removeTags([...builds.entries()].filter(([, b]) => b.ok).map(([ref]) => ref))
+  const failed = [...builds.values()].filter((b) => !b.ok)
+  for (const b of failed) log(`[census] ${b.detail}`)
+  return failed.length === 0 ? 0 : 1
+}
+
+function main(argv) {
+  if (argv[0] === '--build-only') {
+    if (!argv[1] || argv.length !== 2) {
+      console.error('usage: census.mjs [--build-only <service>]')
+      return 1
+    }
+    return buildOnly(argv[1])
+  }
+  if (argv.length > 0) {
+    console.error('usage: census.mjs [--build-only <service>]')
+    return 1
+  }
+  const r = runCensusSuite()
+  const verdict = evaluateSuite(r)
+  if (r.detail) console.log(r.detail)
+  console.log(`[census] ${verdict.status.toUpperCase()} collected=${r.collected} passed=${r.passed} failed=${r.failed}${verdict.reason ? ` -- ${verdict.reason}` : ''}`)
+  return verdict.status === 'pass' ? 0 : 1
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    process.exitCode = main(process.argv.slice(2))
+  } catch (err) {
+    console.error(`[census] FAILED -- internal error: ${err?.stack || err}`)
+    process.exitCode = 1
+  }
 }
