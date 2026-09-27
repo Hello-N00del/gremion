@@ -93,4 +93,54 @@ describe('primitives/Combobox', () => {
     await waitFor(() => expect(screen.getByText('Keine Treffer')).toBeTruthy())
     expect(screen.queryAllByRole('option')).toHaveLength(0)
   })
+
+  // Round-3 regressions (house HIGH, verifier STALE-1/STALE-2): the input text
+  // must be a function of `value`, never a one-shot copy taken at mount.
+  const hidden = () => document.querySelector('input[name="referat"]') as HTMLInputElement | null
+
+  test('STALE-1: clicking the selected option deselects it and clears the input text with the posted value', async () => {
+    const user = userEvent.setup()
+    render(Combobox, { props: { ...props, name: 'referat' } })
+    await user.click(input())
+    await user.keyboard('finanz')
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Finanzreferat' })).toBeTruthy())
+    await user.click(screen.getByRole('option', { name: 'Finanzreferat' }))
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    expect((input() as HTMLInputElement).value).toBe('Finanzreferat')
+    expect(hidden()?.value).toBe('fin')
+    await user.click(screen.getByRole('button', { name: 'Vorschläge anzeigen' }))
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Finanzreferat' })).toBeTruthy())
+    await user.click(screen.getByRole('option', { name: 'Finanzreferat' }))
+    await waitFor(() => expect(hidden()?.value).toBe(''))
+    expect((input() as HTMLInputElement).value).toBe('')
+  })
+
+  test('STALE-2: a value set by the parent after mount shows its label in the input', async () => {
+    const { rerender } = render(Combobox, { props: { ...props, name: 'referat' } })
+    expect((input() as HTMLInputElement).value).toBe('')
+    await rerender({ ...props, name: 'referat', value: 'hopo' })
+    await waitFor(() => expect((input() as HTMLInputElement).value).toBe('Hochschulpolitik'))
+    expect(hidden()?.value).toBe('hopo')
+    await rerender({ ...props, name: 'referat', value: '' })
+    await waitFor(() => expect((input() as HTMLInputElement).value).toBe(''))
+  })
+
+  test('options that arrive after mount label the already-set value', async () => {
+    const { rerender } = render(Combobox, { props: { ...props, options: [], value: 'kultur' } })
+    expect((input() as HTMLInputElement).value).toBe('')
+    await rerender({ ...props, options, value: 'kultur' })
+    await waitFor(() => expect((input() as HTMLInputElement).value).toBe('Kulturreferat'))
+  })
+
+  test('closing without a new selection restores the selected label over the typed text', async () => {
+    const user = userEvent.setup()
+    render(Combobox, { props: { ...props, value: 'fin' } })
+    expect((input() as HTMLInputElement).value).toBe('Finanzreferat')
+    await user.clear(input())
+    await user.keyboard('hoch')
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy())
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    expect((input() as HTMLInputElement).value).toBe('Finanzreferat')
+  })
 })

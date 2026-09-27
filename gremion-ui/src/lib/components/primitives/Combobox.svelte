@@ -10,6 +10,14 @@
   // the typed text (Bits UI leaves filtering to the consumer), names the input
   // with a real <label>, and styles with component-tier tokens only
   // (primitives.css). Every string is a prop.
+  //
+  // The input text is a function of `value`: Bits UI's Input `defaultValue` is
+  // read once at mount, and its Root only writes the text when an item is
+  // selected (never on deselect or on a value set from outside). The wrapper
+  // therefore owns the text as a writable $derived of the selected label, fed
+  // to Root's `inputValue` prop: typing overrides it while the list is open,
+  // a value/options change re-derives it, and closing restores it, so the
+  // visible text never disagrees with the value the form posts.
   import { Combobox } from 'bits-ui'
   import './primitives.css'
   import type { SelectOption } from './types'
@@ -56,13 +64,18 @@
     return q === '' ? options : options.filter((o) => o.label.toLocaleLowerCase().includes(q))
   })
   const selectedLabel = $derived(options.find((o) => o.value === value)?.label)
+  // Writable derived: recomputed from value/options, overridden by typing.
+  let text = $derived(selectedLabel ?? '')
 
   function handleInput(e: Event & { currentTarget: HTMLInputElement }) {
     search = e.currentTarget.value
+    text = e.currentTarget.value
   }
 
   function handleOpenChange(next: boolean) {
-    if (!next) search = ''
+    if (next) return
+    search = ''
+    text = selectedLabel ?? ''
   }
 </script>
 
@@ -75,6 +88,7 @@
     {onValueChange}
     onOpenChange={handleOpenChange}
     items={options}
+    inputValue={text}
     {name}
     {disabled}
     {required}
@@ -83,7 +97,6 @@
       <Combobox.Input
         id={inputId}
         {placeholder}
-        defaultValue={selectedLabel}
         aria-controls={listboxId}
         oninput={handleInput}
       />
