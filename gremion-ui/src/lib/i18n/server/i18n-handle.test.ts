@@ -131,15 +131,24 @@ describe('createI18nHandle (TDD 2: the raw SSR response carries the resolved lan
     expect(await response.text()).toBe('Files')
   })
 
-  // R26-TRAIN4-FIX r3 (WCAG 3.1.1): a German-only page is declared German.
+  // R26-TRAIN4-FIX (WCAG 3.1.1): a page is declared in the language it is
+  // written in, decided by its route (SvelteKit sets event.route before handle
+  // runs). Shell routes with German-only pages are German too (round 4).
   it.each([
-    ['/legal/impressum', 'en-US', '<html lang="de" data-ui-locale="en">'],
-    ['/setup', 'en-US', '<html lang="de" data-ui-locale="en">'],
-    ['/legal/impressum', 'de-DE', '<html lang="de">'],
-    ['/auth/login', 'en-US', '<html lang="en">'],
-    ['/settings/darstellung', 'en-US', '<html lang="en">']
-  ])('%s with Accept-Language %j -> %s', async (path, header, expected) => {
-    const event = { ...fakeEvent({ acceptLanguage: header }), url: new URL(path, 'https://pilot.test') }
+    ['/legal/impressum', '/legal/impressum', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/setup', '/setup', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/legal/impressum', '/legal/impressum', 'de-DE', '<html lang="de">'],
+    ['/beschluesse', '/beschluesse', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/systemstatus', '/systemstatus', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/members/committees/c1/protokolle', '/members/committees/[id]/protokolle', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/settings/compliance/print', '/settings/compliance/print', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/auth/login', '/auth/login', 'en-US', '<html lang="en">'],
+    ['/settings/darstellung', '/settings/[section]', 'en-US', '<html lang="en">'],
+    ['/members/committees/c1', '/members/committees/[id]', 'en-US', '<html lang="en">'],
+    // No route matched: SvelteKit renders +error, which renders from the catalogue.
+    ['/legal/no-such-page', null, 'en-US', '<html lang="en">']
+  ])('%s (route %s) with Accept-Language %j -> %s', async (path, routeId, header, expected) => {
+    const event = { ...fakeEvent({ acceptLanguage: header }), url: new URL(path, 'https://pilot.test'), route: { id: routeId } }
     const response = await createI18nHandle(customerIdOf)({ event, resolve: renderAppHtml } as never)
     const body = await response.text()
     expect(body).toContain(expected)
@@ -148,11 +157,15 @@ describe('createI18nHandle (TDD 2: the raw SSR response carries the resolved lan
     expect((event.locals as { locale?: string }).locale).toBe(header === 'en-US' ? 'en' : 'de')
   })
 
-  it('a German-only page renders its catalogue strings (e.g. +error) in German too', async () => {
-    const event = { ...fakeEvent({ acceptLanguage: 'en-US' }), url: new URL('/legal/impressum', 'https://pilot.test') }
+  it.each([
+    ['/legal/impressum', 'Dateien'],
+    ['/beschluesse', 'Dateien'],
+    ['/', 'Files']
+  ])('page %s renders its catalogue strings (shell chrome, +error) in its own language: %s', async (routeId, expected) => {
+    const event = { ...fakeEvent({ acceptLanguage: 'en-US' }), url: new URL(routeId, 'https://pilot.test'), route: { id: routeId } }
     const resolve = async () => new Response(messages['nav.files']!())
     const response = await createI18nHandle(customerIdOf)({ event, resolve } as never)
-    expect(await response.text()).toBe('Dateien')
+    expect(await response.text()).toBe(expected)
   })
 
   it('never hands the request body to Paraglide (uploads are not cloned/teed)', async () => {

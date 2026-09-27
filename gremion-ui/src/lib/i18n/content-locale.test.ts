@@ -1,44 +1,57 @@
-// R26-TRAIN4-FIX r3 (WCAG 3.1.1, operator ruling 2026-09-27): `<html lang>`
-// names the language the page is written in. Routes outside the app shell
-// whose pages render no catalogue string (legal pages, the setup wizard, the
-// step-up interstitial) are German whatever the person's locale, so they are
-// declared German; every other route keeps the person's locale, because the
-// shell (AppShell/NavDrawer/TopBar) and +error render from the catalogue.
+// R26-TRAIN4-FIX (WCAG 3.1.1, operator ruling 2026-09-27): `<html lang>`
+// names the language the page is written in. The language is decided per
+// page, not per shell: a route keeps the person's locale only when its page
+// renders from the catalogue; every other route is declared German, shell
+// routes (/beschluesse, /protokolle, /systemstatus, ...) included, and the
+// catalogue strings around it (shell chrome, +error) render German with it.
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { dirname, join, relative, sep } from 'node:path'
 import {
-  GERMAN_ONLY_ROUTE_PREFIXES,
   UI_LOCALE_ATTRIBUTE,
   contentLocaleFor,
   htmlLangAttributes,
-  isGermanOnlyPath,
-  syncDocumentLang
+  syncDocumentLang,
+  uiLocaleOf
 } from './content-locale'
 
 const ROUTES = join(__dirname, '..', '..', 'routes')
+const SRC = join(ROUTES, '..')
 
-describe('isGermanOnlyPath / contentLocaleFor', () => {
+describe('contentLocaleFor (route id)', () => {
   it.each([
-    ['/legal/impressum', true],
-    ['/legal/datenschutz', true],
-    ['/legal', true],
-    ['/setup', true],
-    ['/auth/step-up', true],
-    ['/', false],
-    ['/auth/login', false],
-    ['/settings/darstellung', false],
-    ['/legalese', false],
-    ['/setupx', false]
-  ])('%s -> %s (segment boundary, not a bare prefix)', (path, expected) => {
-    expect(isGermanOnlyPath(path)).toBe(expected)
+    // Shell routes whose pages are hard-coded German (the round-3 verifier's list).
+    ['/beschluesse', 'de'],
+    ['/protokolle', 'de'],
+    ['/systemstatus', 'de'],
+    ['/committees', 'de'],
+    ['/portal', 'de'],
+    ['/members/committees/[id]/beschluesse', 'de'],
+    ['/members/committees/[id]/protokolle', 'de'],
+    ['/members/committees/[id]/protokolle/[protocolId]', 'de'],
+    ['/members/committees/[id]/protokolle/new', 'de'],
+    ['/settings/compliance/print', 'de'],
+    // Routes outside the shell with German-only pages.
+    ['/legal/impressum', 'de'],
+    ['/setup', 'de'],
+    ['/auth/step-up', 'de'],
+    ['/auth/logout', 'de'],
+    // Pages that render from the catalogue follow the person.
+    ['/', 'en'],
+    ['/settings', 'en'],
+    ['/settings/[section]', 'en'],
+    ['/members', 'en'],
+    ['/members/committees/new', 'en'],
+    ['/members/committees/[id]', 'en'],
+    ['/auth/login', 'en'],
+    // No matching route: SvelteKit renders +error, which renders from the catalogue.
+    [null, 'en']
+  ] as const)('%s -> %s for an English person', (routeId, expected) => {
+    expect(contentLocaleFor(routeId, 'en')).toBe(expected)
   })
 
-  it('a German-only page is German for an English person; every other page follows the person', () => {
-    expect(contentLocaleFor('/legal/impressum', 'en')).toBe('de')
-    expect(contentLocaleFor('/legal/impressum', 'de')).toBe('de')
-    expect(contentLocaleFor('/auth/login', 'en')).toBe('en')
-    expect(contentLocaleFor('/', 'en')).toBe('en')
+  it('a German person gets German everywhere', () => {
+    for (const id of ['/', '/beschluesse', '/legal/impressum', null]) expect(contentLocaleFor(id, 'de')).toBe('de')
   })
 })
 
@@ -75,7 +88,23 @@ function fakeRoot(lang: string, attrs: Record<string, string> = {}) {
   }
 }
 
-describe('syncDocumentLang (client-side navigation, root +layout.svelte onNavigate)', () => {
+describe('uiLocaleOf', () => {
+  it('the person locale: data-ui-locale when the page is declared in another language, else lang', () => {
+    expect(uiLocaleOf(fakeRoot('de', { [UI_LOCALE_ATTRIBUTE]: 'en' }))).toBe('en')
+    expect(uiLocaleOf(fakeRoot('en'))).toBe('en')
+    expect(uiLocaleOf(fakeRoot('de'))).toBe('de')
+    expect(uiLocaleOf(fakeRoot('xx'))).toBe('de')
+  })
+})
+
+describe('syncDocumentLang (client-side navigation, root +layout.svelte)', () => {
+  it('translated page -> German shell page: lang becomes de and the person locale is kept aside', () => {
+    const root = fakeRoot('en')
+    syncDocumentLang(root, '/beschluesse')
+    expect(root.lang).toBe('de')
+    expect(root.getAttribute(UI_LOCALE_ATTRIBUTE)).toBe('en')
+  })
+
   it('shell -> legal page: lang becomes de and the person locale is kept aside', () => {
     const root = fakeRoot('en')
     syncDocumentLang(root, '/legal/impressum')
@@ -83,7 +112,7 @@ describe('syncDocumentLang (client-side navigation, root +layout.svelte onNaviga
     expect(root.getAttribute(UI_LOCALE_ATTRIBUTE)).toBe('en')
   })
 
-  it('legal page (served lang="de" data-ui-locale="en") -> shell: lang returns to en', () => {
+  it('German page (served lang="de" data-ui-locale="en") -> translated page: lang returns to en', () => {
     const root = fakeRoot('de', { [UI_LOCALE_ATTRIBUTE]: 'en' })
     syncDocumentLang(root, '/')
     expect(root.lang).toBe('en')
@@ -91,18 +120,19 @@ describe('syncDocumentLang (client-side navigation, root +layout.svelte onNaviga
   })
 
   it('a navigation that keeps the language writes nothing (no lang mutation)', () => {
-    for (const [lang, path] of [
-      ['en', '/settings'],
+    for (const [lang, id] of [
+      ['en', '/settings/[section]'],
       ['de', '/'],
-      ['de', '/legal/datenschutz']
+      ['de', '/legal/datenschutz'],
+      ['de', '/beschluesse']
     ] as const) {
       const root = fakeRoot(lang)
-      syncDocumentLang(root, path)
+      syncDocumentLang(root, id)
       expect(root.writes).toEqual([])
     }
-    const onLegal = fakeRoot('de', { [UI_LOCALE_ATTRIBUTE]: 'en' })
-    syncDocumentLang(onLegal, '/legal/datenschutz')
-    expect(onLegal.writes).toEqual([])
+    const onGerman = fakeRoot('de', { [UI_LOCALE_ATTRIBUTE]: 'en' })
+    syncDocumentLang(onGerman, '/protokolle')
+    expect(onGerman.writes).toEqual([])
   })
 })
 
@@ -114,41 +144,55 @@ function filesUnder(dir: string): string[] {
   })
 }
 
-const usesCatalogue = (file: string) => /\$lib\/i18n|paraglide\/messages/.test(readFileSync(file, 'utf8'))
+const CATALOGUE = /\$lib\/i18n['/]|paraglide\/messages/
 
-describe('the German-only list matches the routes (guard)', () => {
+/** The .svelte files a component imports ($lib/... or relative). */
+function svelteImports(file: string): string[] {
+  const source = readFileSync(file, 'utf8')
+  return [...source.matchAll(/from\s+['"]([^'"]+\.svelte)['"]/g)]
+    .map((m) => m[1]!)
+    .map((spec) =>
+      spec.startsWith('$lib/') ? join(SRC, 'lib', spec.slice(5)) : spec.startsWith('.') ? join(dirname(file), spec) : null
+    )
+    .filter((p): p is string => p !== null && existsSync(p))
+}
+
+/** True when the component, or any .svelte component it imports, renders from the catalogue. */
+function rendersFromCatalogue(file: string, seen = new Set<string>()): boolean {
+  if (seen.has(file)) return false
+  seen.add(file)
+  if (CATALOGUE.test(readFileSync(file, 'utf8'))) return true
+  return svelteImports(file).some((f) => rendersFromCatalogue(f, seen))
+}
+
+describe('every page is declared in the language it renders in (guard)', () => {
+  // Every +page.svelte under routes/, shell routes included: the round-3 scan
+  // looked only at the routes outside the shell and so missed /beschluesse.
+  const pages = filesUnder(ROUTES)
+    .filter((f) => f.endsWith(`${sep}+page.svelte`))
+    .map((file) => {
+      const dir = relative(ROUTES, dirname(file)).split(sep).filter(Boolean).join('/')
+      return { file, id: '/' + dir }
+    })
+
+  it('finds the pages', () => {
+    expect(pages.length).toBeGreaterThanOrEqual(20)
+    expect(pages.map((p) => p.id)).toContain('/beschluesse')
+  })
+
+  it.each(pages)('$id', ({ file, id }) => {
+    const translated = rendersFromCatalogue(file)
+    expect(contentLocaleFor(id, 'en'), `${id}: renders from the catalogue = ${translated}`).toBe(translated ? 'en' : 'de')
+  })
+
   const layout = readFileSync(join(ROUTES, '+layout.svelte'), 'utf8')
-  // Routes outside the shell render no catalogue chrome of their own; the
-  // root layout decides which those are.
-  const nonShellPrefixes = [...layout.matchAll(/!\$page\.url\.pathname\.startsWith\('(\/[a-z-]+)'\)/g)].map((m) => m[1]!)
 
-  it('reads the non-shell prefixes from the root layout', () => {
-    expect(nonShellPrefixes).toEqual(['/auth', '/legal', '/setup'])
+  it('the root layout keeps <html lang> in step on client-side navigation, and again once it has landed', () => {
+    expect(layout).toMatch(/onNavigate\(\(\{ to \}\) => \{\s*if \(to\) syncDocumentLang\(document\.documentElement, to\.route\.id\)/)
+    expect(layout).toMatch(/afterNavigate\(\(\{ to \}\) => \{\s*if \(to\) syncDocumentLang\(document\.documentElement, to\.route\.id\)/)
   })
 
-  // Each rendered page outside the shell: German-only exactly when none of
-  // its files render from the catalogue.
-  const pages = nonShellPrefixes.flatMap((prefix) =>
-    filesUnder(join(ROUTES, prefix.slice(1)))
-      .filter((f) => f.endsWith(`${sep}+page.svelte`))
-      .map((f) => ({ file: f, path: '/' + relative(ROUTES, f).split(sep).slice(0, -1).join('/') }))
-  )
-
-  it.each(pages)('$path', ({ file, path }) => {
-    const dir = join(file, '..')
-    const translated = filesUnder(dir).some((f) => f.endsWith('.svelte') && usesCatalogue(f))
-    expect(isGermanOnlyPath(path), `${path}: renders from the catalogue = ${translated}`).toBe(!translated)
-  })
-
-  it('every listed prefix is a real non-shell route', () => {
-    for (const prefix of GERMAN_ONLY_ROUTE_PREFIXES) {
-      expect(nonShellPrefixes.some((p) => prefix === p || prefix.startsWith(p + '/'))).toBe(true)
-      expect(pages.some((p) => p.path === prefix || p.path.startsWith(prefix + '/'))).toBe(true)
-    }
-  })
-
-  it('the root layout keeps <html lang> in step on client-side navigation', () => {
-    expect(layout).toMatch(/onNavigate\(/)
-    expect(layout).toMatch(/syncDocumentLang\(document\.documentElement,/)
+  it('the root layout renders the shell chrome in the page language', () => {
+    expect(layout).toMatch(/<AppShell[^>]*\blocale=\{pageLocale\}/)
   })
 })
