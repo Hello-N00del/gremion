@@ -16,6 +16,23 @@ import { validateRegistry } from './registry.js'
 
 const PKG_DIR = join(REPO_ROOT, 'packages', 'generated-clients')
 
+// Time budget (R26-FLAKES, R27 scope). These tests spawn git (several times) and
+// oasdiff (once per compat-checked spec). Measured 2026-09-28 on the 16-CPU dev
+// box, "loaded" = 32 CPU-spinning + 4 file-I/O node processes on top of the
+// other agents on the box (idle = 5 isolated whole-package runs, loaded =
+// pooled over 6 loaded runs):
+//
+//   runContractsCheck on the real tree       idle p95 3.4 s (n=10)   loaded p95 22.1 s (n=12, max 22.1 s)
+//   resolveBaseRef/discoverBaseRef (git)     idle p95 0.3 s (n=5)    loaded p95  2.7 s (n=6)
+//   a scratch git repo + runContractsCheck   idle p95 2.0 s (n=50)   loaded p95 53.0 s (n=49, p50 8.9 s, max 94.0 s)
+//
+// The loaded tail is CPU-scheduling starvation of the spawned processes (see
+// oasdiff-gate.test.ts). Each budget is 3x its loaded p95, rounded up; the
+// beforeAll build keeps its 60 s (loaded `pnpm build` max 6.3 s, n=6). No global raise.
+const REAL_TREE_MS = 70_000
+const DISCOVERY_MS = 10_000
+const SCRATCH_REPO_MS = 160_000
+
 /** True when `file` exists at `ref` in the real repo — used only to compute
  *  the expected non-vacuity count in the T9 real-tree test (a spec new since
  *  the base ref is correctly NOT compat-checked, so entryCount is the wrong
@@ -94,7 +111,7 @@ describe('runContractsCheck — the real tree (T9)', () => {
     const presentAtBase = entries.filter((e) => existsAtRef(REPO_ROOT, baseRef as string, e.file)).length
     expect(presentAtBase).toBeGreaterThan(0)
     expect(result.compatChecked).toBe(presentAtBase)
-  })
+  }, REAL_TREE_MS)
 
   it('resolveBaseRef finds a real, resolvable commit other than HEAD — or, on trunk itself, reports base === HEAD', () => {
     const env = { ...process.env }
@@ -104,7 +121,7 @@ describe('runContractsCheck — the real tree (T9)', () => {
     const resolvedCorrectly = ref === null ? baseIsHead : /^[0-9a-f]{40}$/.test(ref) && ref !== head
     expect(resolvedCorrectly, `ref=${String(ref)} baseIsHead=${String(baseIsHead)}`).toBe(true)
     expect(resolveBaseRef(REPO_ROOT, env)).toBe(ref)
-  })
+  }, DISCOVERY_MS)
 
   it('CONTRACTS_BASE_REF overrides discovery (resolveBaseRef itself does not validate — runContractsCheck does, see below)', () => {
     const ref = resolveBaseRef(REPO_ROOT, { CONTRACTS_BASE_REF: 'deadbeef' })
@@ -122,7 +139,7 @@ describe('runContractsCheck — the real tree (T9)', () => {
     expect(result.ok).toBe(false)
     expect(result.compatChecked).toBe(0)
     expect(result.problems.some((p) => /does not resolve to a real commit/.test(p))).toBe(true)
-  })
+  }, REAL_TREE_MS)
 })
 
 describe('runContractsCheck — vacuity guard on a scratch tree', () => {
@@ -148,7 +165,7 @@ describe('runContractsCheck — vacuity guard on a scratch tree', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 
   it('an unresolvable base ref (no candidate branch exists, no override) fails CLOSED — named, not silently skipped', () => {
     dir = scratchTree()
@@ -177,7 +194,7 @@ describe('runContractsCheck — vacuity guard on a scratch tree', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 })
 
 // TASK-018-FU finding 1 (CAP-BASE whole-branch audit, MEDIUM): with HEAD ON a
@@ -240,7 +257,7 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 
   it('HEAD on main with an explicit CONTRACTS_BASE_REF: honoured, and the removed endpoint is caught', () => {
     const d = trunkTree()
@@ -254,7 +271,7 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 
   // Round-1 review MEDIUM: an explicit ref that RESOLVES to HEAD (`HEAD`,
   // `main`, `origin/main` on a trunk push) with no spec edits in the working
@@ -273,7 +290,7 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 
   it('an explicit CONTRACTS_BASE_REF=HEAD with an UNCOMMITTED spec edit is honoured (acceptance-demo invocation)', () => {
     const d = trunkTree()
@@ -287,7 +304,7 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 
   // Round-1 verifier HIGH (pre-existing): `git mv` of a spec plus a break made
   // the new path "new since base", so it was never diffed and the check said
@@ -309,7 +326,7 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 
   // Round-2 verifier HIGH: a rename that also rewrites most of the spec is
   // below git's 50% similarity, so it shows as D + A and rename detection
@@ -337,7 +354,7 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 
   it('HEAD on main with unpushed commits: origin/main (behind HEAD) is the base, not HEAD', () => {
     const d = trunkTree()
@@ -352,7 +369,7 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 
   it('HEAD on a feature branch off main: the merge-base with main is the base', () => {
     const d = trunkTree()
@@ -365,5 +382,5 @@ describe('runContractsCheck — a discovered base equal to HEAD fails closed (TA
     } finally {
       rmSync(d, { recursive: true, force: true })
     }
-  })
+  }, SCRATCH_REPO_MS)
 })
