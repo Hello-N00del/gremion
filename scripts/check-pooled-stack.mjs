@@ -40,7 +40,7 @@
  * probes) is test/host/integration/pooled-stack-proof.sh.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { REPO_ROOT, readEnvFile, renderState } from './compose-edge.mjs'
@@ -319,7 +319,16 @@ export function isolationViolations(renders, stack) {
 
 /** Renders one project with every profile on, from its fixed env file. */
 export function renderProject(p, { env = {} } = {}) {
-  return renderState({ envFile: p.envFile, cwd: path.join(REPO_ROOT, p.cwd), env: { COMPOSE_PROFILES: '*', ...env } })
+  const cwd = path.join(REPO_ROOT, p.cwd)
+  // renderState seeds <cwd>/legal/legal.env for the root file's legal service;
+  // ops and mail render from their own directories, where it is only litter.
+  const legalDir = path.join(cwd, 'legal')
+  const litter = p.cwd !== '.' && !existsSync(legalDir)
+  try {
+    return renderState({ envFile: p.envFile, cwd, env: { COMPOSE_PROFILES: '*', ...env } })
+  } finally {
+    if (litter) rmSync(legalDir, { recursive: true, force: true })
+  }
 }
 
 export function runAll({ render = renderProject } = {}) {
