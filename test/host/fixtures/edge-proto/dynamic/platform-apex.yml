@@ -1,0 +1,21 @@
+# The PLATFORM apex router for the apexpin drill (edge-proto.sh red_apexpin).
+# In production the apex routers are 34b's (Traefik labels); here one hand-
+# written file stands in for them so the forged-X-Forwarded-Host universal can
+# be watched RED on the apex and green again against a real Traefik.
+#
+# It chains the PLATFORM pin edge-hostpin-apex@docker (declared on the traefik
+# container's labels) first, then the platform HSTS (includeSubDomains is
+# correct for the apex) and the app rate-limit tier.
+http:
+  routers:
+    apex:
+      entryPoints: ["websecure"]
+      rule: "Host(`example.org`)"
+      service: "app@file"
+      priority: 20
+      middlewares:
+        - "edge-hostpin-apex@docker"
+        - "edge-hsts-platform@docker"
+        - "edge-ratelimit-app@docker"
+      tls:
+        certResolver: "le-http"
