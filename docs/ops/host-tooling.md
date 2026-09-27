@@ -125,6 +125,7 @@ than exit codes.
 | Command | Purpose |
 |---|---|
 | `gremion-init-secrets [--root DIR] [--stack NAME] [--force]` | render `etc/env/*.env` from the templates, generate every secret, chmod 600, refuse to overwrite; prints the keys the operator must still fill |
+| `gremion-validate-env --env-file FILE [--release DIR] [--template FILE]` | is a rendered env file fit to run its project: an absent file exits 2 with "run setup first"; `load_env`'s refusals (duplicates, sentinels, an empty template-marked secret) exit 2; a `COMPOSE_FILE` entry missing from the release tree or drift between keys sharing one generated secret exits 1. Never prints a value |
 | `gremion-render [--release DIR] [--staging]` | produce the host-rendered files (pgbouncer userlist, Keycloak internal CA and cert, ipcrypt key, LiveKit and Element Call config; with `--staging` the `extra_hosts` fragment) and assert each output exists, is a file and is non-empty |
 | `gremion-fw-proof` | the firewall drill: egress TCP/25 refused off the mail subnet, allowed on it, the observed source address after SNAT, and Docker's own NAT table still present |
 | `gremion-hostd --socket \| --ssh` | the restricted agent of section 5 |

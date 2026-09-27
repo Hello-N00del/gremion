@@ -16,7 +16,7 @@
 
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, chmodSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { Harness, REPO_ROOT, sh } from './lib/harness.mjs'

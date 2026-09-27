@@ -163,6 +163,15 @@ services:
 
   gremion-ui:
     environment:
+      # TASK-028 (spec B section 6, TRD-039): the app's DOMAIN is bound ONCE,
+      # here, from the one key the host env files carry. `:?` aborts the whole
+      # render -- every `docker compose` verb, before any container is created
+      # -- when PLATFORM_DOMAIN is unset or empty. The app key stays DOMAIN (no
+      # `?? DOMAIN` fallback). NOT yet covered: the Traefik rules and
+      # gremion-public's ORIGIN below still interpolate the host variable
+      # ${DOMAIN}, which the host templates do not carry; rewriting those
+      # default-less uses to this expression is TASK-040's (B15 Tasks 5-10).
+      DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
       # Keep dev *_seed.sql migrations out of production — they insert test
       # committees/members keyed by dev-only Keycloak UUIDs.
       GREMION_DISABLE_SEEDS: "true"

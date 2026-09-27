@@ -20,7 +20,6 @@ import { runSopsCheck, isSopsEncrypted, parseSopsConfig, SENTINEL_RE } from './c
 const h = new Harness('sops')
 after(() => h.teardown())
 
-const AGE_SK = ['AGE', 'SECRET', 'KEY', '1'].join('-')
 const COSIGN_PK = ['COSIGN', 'PRIVATE', 'KEY'].join('_')
 
 function ageKey() {
