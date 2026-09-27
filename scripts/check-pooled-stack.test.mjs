@@ -311,6 +311,22 @@ test('isolation: the socket proxy on _edge or _state fails', () => {
   }
 })
 
+// Measured on the scratch proof (Docker 29, Docker Desktop): publishing
+// postgres on 127.0.0.1 made 10.231.1.2:5432 answer pg_isready from the ops
+// network; without the publish it did not. A host port on a _state service is
+// a route from every other bridge network.
+test('isolation: a service on ${STACK}_state that publishes a host port fails, in any project', () => {
+  const rs = allRenders()
+  rs[0].render.services.postgres.ports = [{ host_ip: '127.0.0.1', target: 5432, published: '5433', protocol: 'tcp' }]
+  assert.match(isolationViolations(rs, STACK).join('\n'), /state\/postgres: on teststack_state and publishes host port\(s\) 127\.0\.0\.1:5433->5432/)
+  const rs2 = allRenders()
+  rs2[1].render.services['gremion-ui'].ports = [{ host_ip: '127.0.0.1', target: 3000, published: '3001', protocol: 'tcp' }]
+  assert.match(isolationViolations(rs2, STACK).join('\n'), /app-blue\/gremion-ui: on teststack_state and publishes/)
+  const rs3 = allRenders()
+  rs3[0].render.services.legal.ports = [{ host_ip: '127.0.0.1', target: 8080, published: '8083', protocol: 'tcp' }]
+  assert.doesNotMatch(isolationViolations(rs3, STACK).join('\n'), /publishes/, 'legal is on _edge only')
+})
+
 test('isolation: traefik on _state fails', () => {
   const rs = allRenders()
   rs[0].render.services.traefik.networks.state = null

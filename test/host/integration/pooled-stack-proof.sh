@@ -141,8 +141,8 @@ phase_prepare() {
     local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push
     pw_pg="$(gen)"; pw_kcdb="$(gen)"; pw_kc="$(gen)"; pw_gr="$(gen)"; pw_ctl="$(gen)"; pw_pub="$(gen)"
     pw_bnc="$(gen)"; sec_proxy="$(gen)"; sec_auth="$(gen)"; sec_push="$(gen)"
-    local p_http p_https p_api p_it p_pg p_kc
-    p_http="$(free_port)"; p_https="$(free_port)"; p_api="$(free_port)"; p_it="$(free_port)"; p_pg="$(free_port)"; p_kc="$(free_port)"
+    local p_http p_https p_api p_it
+    p_http="$(free_port)"; p_https="$(free_port)"; p_api="$(free_port)"; p_it="$(free_port)"
 
     cat > "$ENV_DIR/state.env" <<EOF
 COMPOSE_PROJECT_NAME=${STACK}-state
@@ -177,8 +177,6 @@ CONTROL_DB_PASSWORD=${pw_ctl}
 PUBLIC_DB_PASSWORD=${pw_pub}
 PGBOUNCER_AUTH_PASSWORD=${pw_bnc}
 TENANT_PROXY_SHARED_SECRET=${sec_proxy}
-PROOF_PG_PORT=${p_pg}
-PROOF_KC_PORT=${p_kc}
 EOF
     local c v4 v6 n=2
     for c in blue green; do
@@ -238,9 +236,10 @@ STALWART_IMAGE=stalwartlabs/stalwart:v0.16.21
 EOF
 
     # The proof overlays: loopback-only, freshly allocated host ports (the
-    # host's edge/mail binds and ops' fixed ports would collide on a dev box),
-    # and host ports for the operator-side provisioner (TRD-440). They change
-    # ports only -- never a network, a volume, a limit or a service.
+    # host's edge/mail binds and ops' fixed ports would collide on a dev box).
+    # They change ports only -- never a network, a volume, a limit or a
+    # service -- and publish NOTHING on a ${STACK}_state service: measured on
+    # Docker 29, a published postgres answered from the ops network.
     cat > "$OUT/state.proof.yml" <<'EOF'
 services:
   traefik:
@@ -249,10 +248,6 @@ services:
       - "127.0.0.1:${EDGE_HTTPS_PORT}:443"
       - "127.0.0.1:${TRAEFIK_API_PORT}:8080"
       - "127.0.0.1:${INTERNALTEST_PORT}:8081"
-  postgres:
-    ports: ["127.0.0.1:${PROOF_PG_PORT}:5432"]
-  keycloak:
-    ports: ["127.0.0.1:${PROOF_KC_PORT}:8080"]
   legal:
     ports: !reset []
 EOF
@@ -510,14 +505,20 @@ state_port() {
     esac
 }
 is_ipv4() { [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; }
-# probe <network> <ip> <port> -> 0 when a TCP connect succeeds. The target MUST
-# be an IP literal: a service name would not resolve from a foreign network and
-# the negative probe would pass for the wrong reason.
-probe() {
-    local net="$1" ip="$2" port="$3"
-    is_ipv4 "$ip" || { bad "probe target '$ip' is not an IP literal (a name-based probe proves nothing)"; return 2; }
-    docker run --rm --name "${STACK}-probe-$RANDOM" --network "$net" --entrypoint sh "$PROBE_IMAGE" \
-        -c "nc -w 3 $ip $port </dev/null >/dev/null 2>&1" >/dev/null 2>&1
+# probe_all <network> <targets file> -- ONE probe container on <network>
+# connects to every "svc ip port" line and prints "svc ip:port OPEN|CLOSED".
+# A target MUST be an IP literal: a service name would not resolve from a
+# foreign network, and the negative probe would pass for the wrong reason.
+probe_all() {
+    local net="$1" file="$2" svc ip port script=""
+    while read -r svc ip port; do
+        [[ -n "$svc" ]] || continue
+        is_ipv4 "$ip" || { bad "probe target '$ip' ($svc) is not an IP literal (a name-based probe proves nothing)"; return 2; }
+        [[ "$port" =~ ^[0-9]+$ ]] || { bad "probe target $svc has no numeric port"; return 2; }
+        script+="if nc -w 3 $ip $port </dev/null >/dev/null 2>&1; then echo '$svc $ip:$port OPEN'; else echo '$svc $ip:$port CLOSED'; fi; "
+    done < "$file"
+    [[ -n "$script" ]] || { bad "probe: empty target list"; return 2; }
+    docker run --rm --name "${STACK}-probe-$RANDOM" --network "$net" --entrypoint sh "$PROBE_IMAGE" -c "$script" | tr -d '\r'
 }
 phase_isolation() {
     local stamp; stamp="$(now)"
@@ -560,24 +561,24 @@ phase_isolation() {
         targets+=("$svc $ip $port")
     done
     (( ${#targets[@]} > 0 )) || { bad "isolation: the target list is empty"; return; }
+    local pubs
+    for cid in $(docker network inspect "${STACK}_state" -f '{{range $id, $c := .Containers}}{{$id}} {{end}}'); do
+        pubs="$(docker inspect -f '{{range $p, $b := .NetworkSettings.Ports}}{{range $b}}{{.HostIp}}:{{.HostPort}}->{{$p}} {{end}}{{end}}' "$cid" 2>/dev/null || true)"
+        [[ -z "${pubs// /}" ]] || bad "state-network container ${cid:0:12} publishes host port(s) $pubs -- a route from every other bridge network"
+    done
     printf '%s\n' "${targets[@]}" > "$OUT/ledger/probe-targets.txt"
-    local t
-    for t in "${targets[@]}"; do
-        read -r svc ip port <<< "$t"
-        if probe "${STACK}_state" "$ip" "$port"; then
-            printf 'positive %s_state -> %s %s:%s CONNECTED\n' "$STACK" "$svc" "$ip" "$port" >> "$OUT/ledger/isolation.txt"
-        else
-            bad "positive control failed: ${STACK}_state -> $svc $ip:$port did not connect (the probe cannot tell open from closed)"
-            continue
-        fi
-        for net in "${nets[@]}"; do
-            if probe "$net" "$ip" "$port"; then
-                bad "non-council network $net REACHES $svc at $ip:$port"
-                printf 'negative %s -> %s %s:%s CONNECTED (VIOLATION)\n' "$net" "$svc" "$ip" "$port" >> "$OUT/ledger/isolation.txt"
-            else
-                printf 'negative %s -> %s %s:%s refused/unroutable\n' "$net" "$svc" "$ip" "$port" >> "$OUT/ledger/isolation.txt"
-            fi
-        done
+    local res line open closed
+    # positive control: every target answers from ${STACK}_state
+    res="$(probe_all "${STACK}_state" "$OUT/ledger/probe-targets.txt")" || { bad "positive control could not run"; return; }
+    printf '%s\n' "$res" | sed "s/^/positive ${STACK}_state -> /" >> "$OUT/ledger/isolation.txt"
+    open="$(printf '%s\n' "$res" | grep -c ' OPEN$' || true)"
+    [[ "$open" == "${#targets[@]}" ]] || bad "positive control: only $open of ${#targets[@]} target(s) connected from ${STACK}_state (the probe cannot tell open from closed): $(printf '%s' "$res" | grep ' CLOSED$' | tr '\n' ';')"
+    # negative: no target answers from any non-council network
+    for net in "${nets[@]}"; do
+        res="$(probe_all "$net" "$OUT/ledger/probe-targets.txt")" || { bad "negative probe on $net could not run"; continue; }
+        printf '%s\n' "$res" | sed "s/^/negative $net -> /" >> "$OUT/ledger/isolation.txt"
+        closed="$(printf '%s\n' "$res" | grep -c ' CLOSED$' || true)"
+        [[ "$closed" == "${#targets[@]}" ]] || bad "non-council network $net REACHES: $(printf '%s' "$res" | grep ' OPEN$' | tr '\n' ';')"
     done
     [[ -s "$OUT/ledger/isolation.txt" ]] || bad "isolation: empty ledger"
     ok "isolation: ${#nonc[@]} non-council project(s), ${#nets[@]} network(s), ${#targets[@]} target(s) (ledger/isolation.txt)"
@@ -601,29 +602,29 @@ phase_tenant() {
     local before after
     before="$(counts)"
     printf '%s\n' "$before" > "$OUT/ledger/trd440-before.txt"
-    local secrets_h; secrets_h="$(host_path "$SROOT/secrets/tenants")"
-    local -a envs=(
-        "DOMAIN=proof.example.org" "PLATFORM_DOMAIN=proof.example.org" "PLATFORM_SMTP_PASSWORD=$(gen)"
-        "DATABASE_URL=postgresql://gremion:${GREMION_DB_PASSWORD}@127.0.0.1:${PROOF_PG_PORT}/gremion"
-        "ADMIN_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PROOF_PG_PORT}/postgres"
-        "CONTROL_DATABASE_URL=postgresql://control:${CONTROL_DB_PASSWORD}@127.0.0.1:${PROOF_PG_PORT}/control"
-        "KC_ADMIN_URL=http://127.0.0.1:${PROOF_KC_PORT}/auth"
-        "KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN}" "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}"
-        "TENANT_SECRETS_DIR=${secrets_h}"
-        "TENANT_PROVISIONER_SECRET_FILE=$(host_path "$SROOT/secrets/tenant_provisioner")"
-    )
-    ( cd "$ROOT" && env "${envs[@]}" pnpm -s -C gremion-ui exec node scripts/tenant-provision.mjs bootstrap-provisioner ) \
-        > "$OUT/ledger/trd440-bootstrap.log" 2>&1 || { tail -15 "$OUT/ledger/trd440-bootstrap.log" >&2; bad "bootstrap-provisioner failed"; return; }
-    ( cd "$ROOT" && env "${envs[@]}" pnpm -s -C gremion-ui exec node scripts/tenant-provision.mjs provision "$TENANT_SLUG" \
-        --config "$ROOT_H/test/host/fixtures/pooled-stack/tenant-${TENANT_SLUG}.json" ) \
-        > "$OUT/ledger/trd440-provision.log" 2>&1 || { tail -25 "$OUT/ledger/trd440-provision.log" >&2; bad "provision $TENANT_SLUG failed"; }
+    # The provisioner runs as the product's own tenant-create one-shot (app
+    # project, run --rm) on ${STACK}_state/_edge -- not from the host, because
+    # reaching postgres from the host needs a published port, and a published
+    # port on a _state service is itself an isolation breach (see isolation).
+    local -a run=(run --rm --pull never
+        -e "KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN}" -e "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}"
+        -e "ADMIN_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres-${STACK}:5432/postgres"
+        -e "PLATFORM_DOMAIN=proof.example.org" -e "PLATFORM_SMTP_PASSWORD=$(gen)"
+        -e "TENANT_PROVISIONER_SECRET_FILE=/run/secrets/tenants/.proof-provisioner"
+        -v "$(host_path "$ROOT/test/host/fixtures/pooled-stack"):/fixture:ro"
+        tenant-create)
+    compose app-blue "${run[@]}" bootstrap-provisioner > "$OUT/ledger/trd440-bootstrap.log" 2>&1 \
+        || { tail -15 "$OUT/ledger/trd440-bootstrap.log" >&2; bad "bootstrap-provisioner failed"; return; }
+    compose app-blue "${run[@]}" provision "$TENANT_SLUG" --config "/fixture/tenant-${TENANT_SLUG}.json" \
+        > "$OUT/ledger/trd440-provision.log" 2>&1 \
+        || { tail -25 "$OUT/ledger/trd440-provision.log" >&2; bad "provision $TENANT_SLUG failed"; }
     after="$(counts)"
     printf '%s\n' "$after" > "$OUT/ledger/trd440-after.txt"
     [[ "$before" == "$after" ]] && ok "TRD-440: services, running containers and compose projects unchanged by the tenant-add" \
         || bad "TRD-440: the tenant-add changed the stack: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')"
     local cid db realm
     cid="$(svc_cid state postgres)"
-    db="$(docker exec "$cid" psql -tAqU postgres -c "SELECT datname FROM pg_database WHERE datname = 't_${TENANT_SLUG//-/_}' OR datname = 't_${TENANT_SLUG}'" | tr -d '\r')"
+    db="$(docker exec "$cid" psql -tAqU postgres -c "SELECT datname FROM pg_database WHERE datname IN ('t_${TENANT_SLUG//-/_}', 't_${TENANT_SLUG}')" | tr -d '\r')"
     [[ -n "$db" ]] && ok "TRD-440: tenant database $db exists" || bad "TRD-440: no tenant database for $TENANT_SLUG"
     realm="$(docker exec "$(svc_cid state keycloak)" sh -c "/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user '${KEYCLOAK_ADMIN}' --password '${KEYCLOAK_ADMIN_PASSWORD}' >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${TENANT_SLUG} --fields realm" 2>/dev/null | tr -d '\r' || true)"
     [[ "$realm" == *"\"${TENANT_SLUG}\""* ]] && ok "TRD-440: realm $TENANT_SLUG exists" || bad "TRD-440: realm $TENANT_SLUG absent"

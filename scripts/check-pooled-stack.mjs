@@ -292,6 +292,14 @@ export function isolationViolations(renders, stack) {
       const want = row.networks.map((n) => resolveNet(n, stack, id)).sort()
       if (JSON.stringify(nets) !== JSON.stringify(want)) out.push(`${id}/${name}: networks [${nets.join(', ')}], placement table says [${want.join(', ')}]`)
       if (nets.includes(stateNet)) for (const n of nets) onState.add(n)
+      // A host port on a _state service is a route to it from every other
+      // bridge network (measured on the scratch proof, Docker 29: a published
+      // postgres answered pg_isready from the ops network; unpublished, it
+      // did not). Dev publishes through the override, which no host renders.
+      if (nets.includes(stateNet) && (svc.ports ?? []).length) {
+        const pub = svc.ports.map((p) => `${p.host_ip ?? '*'}:${p.published ?? '?'}->${p.target}`).join(', ')
+        out.push(`${id}/${name}: on ${stateNet} and publishes host port(s) ${pub} -- reachable from every non-council network`)
+      }
       if (row.class === 'non-council') nonCouncil.push({ id, name, nets })
       const labels = labelsOf(svc)
       if (String(labels['traefik.enable']) === 'true') {
