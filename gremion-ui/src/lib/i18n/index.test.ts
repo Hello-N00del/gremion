@@ -31,14 +31,7 @@ describe('legacy $t shim in the browser (TASK-062 item 6)', () => {
     expect(get(t)('nav.files')).toBe('Dateien')
   })
 
-  test('a stale per-device localStorage value no longer overrides the server (deletion ledger)', async () => {
-    const getItem = vi.fn(() => 'de')
-    vi.stubGlobal('localStorage', { getItem, setItem: vi.fn(), removeItem: vi.fn() })
-    document.documentElement.lang = 'en'
-    const { t } = await freshI18n()
-    expect(get(t)('nav.files')).toBe('Files')
-    expect(getItem).not.toHaveBeenCalled()
-  })
+  // The retired gremion.lang / stura-lang keys are pinned in index.storage-keys.test.ts.
 
   test('an unknown key falls back to the key itself (legacy contract)', async () => {
     document.documentElement.lang = 'en'
