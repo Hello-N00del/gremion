@@ -1,0 +1,5 @@
+expect(config.deployment.mode).toBe('single')
+<Step2Org deploymentMode={data.deploymentMode} />
+assertMultiTenantEnabled(deps.loadDefaultConfig())
+loadDefaultConfig: () => ({}),
+import { assertMultiTenantEnabled } from './wizard-gate'
