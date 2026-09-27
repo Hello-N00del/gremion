@@ -124,3 +124,35 @@ the layout's contribution and makes no cost claim.
 The gremion-ui routers left `docker-compose.prod.yml` with the split. The apex
 has no websecure router until TASK-034's 34b labels block lands. **No deploy
 may be scheduled between TASK-040 and 34b.** TASK-038's waits carry this.
+
+## Scratch proof record (2026-09-27, [A] numbers)
+
+`test/host/integration/pooled-stack-proof.sh` ran phase by phase on a scratch
+stack (`STACK=t040-fa154764`, Docker 29 on Docker Desktop) and then tore it
+down. The full ledger is kept outside the repository with the unit's review
+material.
+
+- **TRD-177:** 16 running containers were inspected (state, app-blue, ops,
+  mail). Every one had `HostConfig.Memory` > 0 and `NanoCpus` > 0. Idle RSS
+  was at most 31 % of the limit (keycloak, 487 MiB of 1.5 GiB). Every other
+  container was at or below 6 %.
+- **TRD-045:** 2 non-council projects (ops, mail) were found on 2 networks,
+  and neither network shares a member with `_state`. Each of the 5
+  state-network targets (postgres, pgbouncer, keycloak, and the colour's
+  gremion-ui and gremion-public) answered from `_state` (positive control).
+  Every target was CLOSED from both non-council networks.
+- **Finding:** a *published* host port on a `_state` service made that service
+  reachable from the non-council networks. Postgres answered `pg_isready` from
+  the ops network while its port was published and stopped answering once the
+  port was removed. The guard therefore refuses any `_state` service that
+  publishes a port. The dev override still publishes postgres and mailpit, and
+  no host renders that override.
+- **TRD-440:** tenants `t040-b` and `t040-c` were added through the
+  `tenant-create` one-shot. The per-project service counts, the running
+  containers, `docker compose ls` and the stack's container count were
+  identical before and after each add. The database `t_t040-c` and the realm
+  `t040-c` exist.
+- **TRD-038:** the switch from blue to green (migrate, then up, green healthy,
+  then blue removed) left all 16 state container IDs and volume `CreatedAt`
+  lines unchanged. After a cold restart of the state tier, the green
+  gremion-ui answered `{"ok":true,"tenant":null,"colour":"green"}`.
