@@ -167,6 +167,8 @@ const WRITE_BASE = [
 const WRITE_NAME = String.raw`(?:${WRITE_BASE.join('|')})(?:Sync)?`
 /** `.writeFile(`, `fs.promises.rm (` … */
 const MEMBER_WRITE = new RegExp(String.raw`\.\s*(${WRITE_NAME})\s*\(`)
+/** `{ writeFileSync, rm as nuke }` — names inside an import/require/destructure brace. */
+const BRACE_SPEC = /\{([^{}]*)\}/g
 
 function isTest(rel) {
   return TEST_FILE.test(rel)

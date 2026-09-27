@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types'
 import { readConfig } from '$lib/server/config'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
 import { z } from 'zod'
+import type { ApiResponse } from '$lib/api-response'
 import { validateSetupToken } from '$lib/server/setup-token'
 import { requireSetupRateLimit } from '$lib/server/rate-limit'
 

@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { readConfig, writeConfig, configUpdateSchema } from '$lib/server/config'
+import type { ApiResponse } from '$lib/api-response'
 import { validateSetupToken, clearSetupToken } from '$lib/server/setup-token'
 import { requireSetupRateLimit } from '$lib/server/rate-limit'
 
