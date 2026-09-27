@@ -19,8 +19,11 @@ import { CONTRACT_IDS, describeLocalePreferenceContract } from './testing/locale
 const ADMIN_URL = process.env.DATABASE_URL
 if (!ADMIN_URL) throw new Error('DATABASE_URL is required for the locale-preference pg contract suite')
 
-const DB_NAME = `locale_pref_test_${randomUUID().replace(/-/g, '').slice(0, 12)}`
-const APP_ROLE = 'gremion_locale_pref_test'
+const RUN_ID = randomUUID().replace(/-/g, '').slice(0, 12)
+const DB_NAME = `locale_pref_test_${RUN_ID}`
+// Roles are cluster-global: one per run, dropped in afterAll, so concurrent
+// runs never share one and nothing outlives the throwaway database.
+const APP_ROLE = `gremion_locale_pref_test_${RUN_ID}`
 const FIXTURE = readFileSync(join(__dirname, 'testing', 'idt-preference.fixture.sql'), 'utf8')
 
 function urlFor(database: string): string {
@@ -56,6 +59,8 @@ afterAll(async () => {
   await app?.end()
   await owner?.end()
   await admin.unsafe(`DROP DATABASE IF EXISTS ${DB_NAME} WITH (FORCE)`)
+  // The grants lived in the dropped database, so the role owns nothing now.
+  await admin.unsafe(`DROP ROLE IF EXISTS ${APP_ROLE}`)
   await admin.end()
 }, 60_000)
 
