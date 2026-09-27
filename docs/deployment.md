@@ -152,15 +152,10 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 Before bringing the stack up, set the production values in `.env`:
 
 - **`DOMAIN`** — your real domain (e.g. `gov.example.org`).
-- **`DOMAIN_REGEX`** — the regexp-escaped `DOMAIN` (e.g. `gov\.example\.org`).
-  **Required whenever `DOMAIN` is a real domain.** The Traefik wildcard routers
-  match tenant subdomains via `HostRegexp`; if `DOMAIN_REGEX` is left empty the
-  wildcard leg renders the dead pattern `^[a-z0-9-]+\.$`, which matches **no**
-  tenant host — every tenant subdomain then 404s at Traefik while the apex host
-  still works and masks the misconfiguration. This is a silent misconfig, not a
-  safe fail-closed. `pnpm -C gremion-ui check`
-  (`scripts/check-domain-regex.mjs`) fails the build if a real `DOMAIN` is set
-  with an empty `DOMAIN_REGEX`.
+- **Tenant hosts** — there is no wildcard router. Each tenant host is a
+  `tenant_domain` row plus its own `Host(...)`-literal router; the apex binds no
+  tenant and 404s by design (TASK-041, TRD-075). See
+  [runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a.
 - **`KC_ADMIN_ALLOWLIST_CIDRS`** — CIDRs allowed to reach the Keycloak admin
   console at `https://${DOMAIN}/auth/admin`. Defaults to `127.0.0.1/32`, so by
   default no external request matches; operators reach the console via
@@ -518,7 +513,7 @@ image-staleness incident and analogous cases.
 |-------|---------|
 | Pod won't start (K8s) | `kubectl describe pod -n gremion-system <pod-name>` |
 | App returns 503 on every request | Check `gremion-ui` logs — the tenancy control-plane DB (`CONTROL_DATABASE_URL`) must be reachable for boot's `runControlMigrations()` to succeed |
-| Tenant subdomains 404 (prod) | Verify `DOMAIN_REGEX` is set to the escaped `DOMAIN` |
+| A tenant host 404s (prod) | Check its `Host(...)` router exists and the `tenant.host.rejected` log line's `reason` |
 | Keycloak DB connection | `docker compose logs keycloak` / `kubectl logs -n gremion-system <kc-pod>` |
 | OIDC `iss` mismatch behind a proxy | Confirm Traefik forwards `X-Forwarded-*` and `KC_PROXY_HEADERS=xforwarded` is set |
 | TLS cert pending (K8s) | `kubectl describe challenge -n gremion-system` |

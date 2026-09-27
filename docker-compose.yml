@@ -306,15 +306,13 @@ services:
       # hop targets — so resolveInternalBaseUrl() (internal-fetch.ts) returns
       # THIS instead of falling through to PUBLIC_BASE_URL = the public apex.
       # LOAD-BEARING for tenant isolation: the inner hop must NOT traverse the
-      # apex router (docker-compose.prod.yml gremion-ui-apex, priority 20), whose
-      # gremion-ui-apexhost middleware UNCONDITIONALLY sets
-      # X-Forwarded-Host=default.${DOMAIN} and would OVERWRITE the <slug>.<apex>
-      # value T4 stamps -> a 2nd tenant's self-call would resolve `default` and
-      # hit the DEFAULT tenant's data plane (cross-tenant read+write). Hitting
-      # gremion-ui:3000 directly (adapter-node's in-container port; the compose
-      # service name resolves on gremion_net) bypasses Traefik entirely, so the
-      # stamped forwarded host survives and the resolver re-selects the right
-      # tenant. Set in the BASE file so dev + prod inherit. Do NOT point this at
+      # edge. The X-Forwarded-Host T4 stamps (the tenant's registered primary
+      # host, TASK-041) is the ENTIRE tenant selector; an edge that restated it
+      # would aim a tenant's self-call at another tenant's data plane
+      # (cross-tenant read+write). Hitting gremion-ui:3000 directly
+      # (adapter-node's in-container port; the compose service name resolves on
+      # gremion_net) bypasses Traefik entirely, so the stamped forwarded host
+      # survives and the resolver re-selects the right tenant. Set in the BASE file so dev + prod inherit. Do NOT point this at
       # the public apex.
       INTERNAL_BASE_URL:        http://gremion-ui:3000
       # /api/setup/test-smtp refuses any target that is not a demonstrably
