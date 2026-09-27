@@ -1,0 +1,10 @@
+# Fixture for render.test.mjs (TASK-036): a render must take LEAK_TAG from the
+# census render env only, and must not pick up the `dev` profile from a
+# parent COMPOSE_PROFILES or a project-level .env.
+services:
+  always:
+    profiles: [prod]
+    image: busybox:${LEAK_TAG:-unset}
+  devonly:
+    profiles: [dev]
+    image: busybox:dev

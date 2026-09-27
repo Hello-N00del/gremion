@@ -476,12 +476,38 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 2>/dev/null && echo healthy || exit 1"]
+      # TASK-036 (brief Q3, TRD-178): Keycloak's own readiness check on the
+      # management port (9000; KC_HEALTH_ENABLED + KC_HTTP_MANAGEMENT_RELATIVE_PATH
+      # below put it at /health/ready). A bare socket connect on :8080 passed as
+      # soon as the JVM bound the port, before the database or anything else was
+      # ready. The image ships neither curl nor wget, so bash's /dev/tcp speaks
+      # HTTP/1.0 itself; the probe needs a 200 status line AND "status": "UP".
+      # scripts/verify/census/keycloak-probe.test.mjs runs this script against
+      # 503/DOWN stubs. `$$` is compose's escape for a literal `$`.
+      test:
+        - CMD
+        - bash
+        - -c
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/9000 || exit 1
+          printf 'GET /health/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+          r=''
+          while IFS= read -r -t 5 l <&3; do r+="$$l"$$'\n'; done
+          r+="$$l"
+          case "$$r" in 'HTTP/1.'?' 200 '*'"status": "UP"'*) exit 0 ;; esac
+          exit 1
       interval: 20s
       timeout: 10s
       retries: 5
       start_period: 60s
     environment:
+      # TASK-036 (Q3): health endpoints on the management port, at its root.
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_MANAGEMENT_RELATIVE_PATH: /
+      # The management interface inherits HTTPS once a TLS certificate is set
+      # (docker-compose.prod.yml, G-080), and the probe above speaks plain HTTP.
+      # Port 9000 is never published, so keep it on HTTP inside the container.
+      KC_HTTP_MANAGEMENT_SCHEME: http
       # Admin credentials (KC_BOOTSTRAP_* replaces KEYCLOAK_ADMIN_* in KC 26+)
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
@@ -654,6 +680,16 @@ services:
     profiles: [production]
     image: tecnativa/docker-socket-proxy:0.1.1@sha256:6c22b9545adc95258af9deffdde6c0ce0a0a70716771e5a4e02d24d1b6e0dda1
     restart: unless-stopped
+    healthcheck:
+      # TASK-036 (TRD-178): /_ping is in the proxy's default-allowed set, measured
+      # at the pinned digest (wget present, body "OK"). An OK proves HAProxy is
+      # listening AND can still reach the Docker socket -- the failure Traefik's
+      # docker provider actually sees.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2375/_ping | grep -q OK"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     environment:
       # Read scopes Traefik's docker provider consults. POST defaults to 0 — the
       # load-bearing denial that blocks container create / exec / image run.
@@ -677,6 +713,17 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/hello-n00del/gremion-vector:latest
     restart: unless-stopped
+    healthcheck:
+      # TASK-036 (TRD-178): Vector's own loopback API (docker/vector/vector.toml
+      # [api]), measured answering {"ok":true} in the built image. entrypoint.sh
+      # supervises process-logs.sh and the logrotate loop and exits the
+      # container via `wait -n` when either dies, so container liveness covers
+      # those two and this probe covers Vector actually serving.
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8686/health | grep -q '\"ok\":true'"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     environment:
       IPCRYPT_KEY_FILE: /run/secrets/ipcrypt_key
       IPCRYPT_KEY_EPOCH: "0"

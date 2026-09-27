@@ -19,3 +19,4 @@ integration
 migration-hash
 carve-lint
 isolation
+census
