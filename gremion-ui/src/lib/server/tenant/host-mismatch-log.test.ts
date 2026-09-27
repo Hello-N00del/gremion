@@ -47,7 +47,7 @@ function runDueTimers() {
 }
 /** Every console.warn line, parsed. */
 function lines(): Array<Record<string, unknown>> {
-  return warn.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>)
+  return warn.mock.calls.map((c: unknown[]) => JSON.parse(String(c[0])) as Record<string, unknown>)
 }
 const events = () => lines().filter((l) => l.msg === HOST_REJECTED_EVENT)
 const floods = () => lines().filter((l) => l.msg === HOST_REJECTED_FLOOD_EVENT)
