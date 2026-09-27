@@ -1,0 +1,9 @@
+{
+  "$schema": "https://inlang.com/schema/project-settings",
+  "baseLocale": "de",
+  "locales": ["de", "en"],
+  "modules": ["./inlang-flat-json-plugin.js"],
+  "plugin.gremion.flatJson": {
+    "pathPattern": "./messages/{locale}.json"
+  }
+}

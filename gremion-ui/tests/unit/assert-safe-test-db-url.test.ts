@@ -177,6 +177,30 @@ describe('the harnesses call it and give it no default (D2)', () => {
     expect(offenders).toEqual([])
   })
 
+  // train4 (TASK-028 x TASK-062): an integration test that CREATEs or DROPs a
+  // database is a dropping harness of its own. Like the portal-grant proof, it
+  // runs the guard itself at import -- before any connection, not relying on
+  // setupFiles -- so it refuses even when run under another config.
+  it('every integration test that creates or drops a database guards DATABASE_URL itself at import', () => {
+    const offenders: string[] = []
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === 'node_modules' || e.name.startsWith('.')) continue
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (e.name.endsWith('.integration.test.ts')) {
+          const src = readFileSync(p, 'utf8')
+          if (!/\b(CREATE|DROP)\s+DATABASE\b/.test(src)) continue
+          const imports = /import\s*\{[^}]*\bassertNonProductionDbUrl\b[^}]*\}\s*from\s*'[^']*tests\/integration\/assert-safe-test-db-url'/.test(src)
+          const guardsAtImport = /^assertNonProductionDbUrl\(process\.env\.DATABASE_URL \?\? '', 'DATABASE_URL'\)$/m.test(src)
+          if (!imports || !guardsAtImport) offenders.push(path.relative(UI_ROOT, p).split(path.sep).join('/'))
+        }
+      }
+    }
+    walk(path.join(UI_ROOT, 'src'))
+    expect(offenders).toEqual([])
+  })
+
   it('the integration config refuses to LOAD while GREMION_PRODUCTION_STACK is unset', () => {
     const env: NodeJS.ProcessEnv = { ...process.env }
     delete env[KEY]
