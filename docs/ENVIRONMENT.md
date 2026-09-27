@@ -10,7 +10,7 @@ domain model, and governance charter, see [about-gremion.md](about-gremion.md).
 > **Scope.** Gremion is the governance-only kernel. It ships exactly seven
 > default services — `postgres`, `keycloak`, `gremion-ui`, `gremion-public`,
 > `legal`, `vector`, `mailpit` — plus `traefik` + `docker-socket-proxy` (and,
-> from `docker-compose.prod.yml`, `pgbouncer` + `cloudflared` + `fallback`) in
+> from `docker-compose.prod.yml`, `pgbouncer` + `fallback`) in
 > the production profile. Feature modules (elections, newsletter, calendar,
 > files, messages, board, users, finance, content, vault,
 > handover) live in their own repositories — one per module — and are **not**
@@ -421,8 +421,8 @@ The production overlay is **not** auto-loaded. Bring it up explicitly:
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-It adds `pgbouncer`, `cloudflared`, and a static `fallback` service, wires
-Traefik routing, and reads two extra variables:
+It adds `pgbouncer` and a static `fallback` service, wires Traefik routing,
+and reads one extra variable:
 
 ### PGBOUNCER_AUTH_PASSWORD
 
@@ -432,14 +432,6 @@ Traefik routing, and reads two extra variables:
   lookup user). **Not** read by compose — it is used at deploy to render
   `docker/pgbouncer/userlist.txt` from `userlist.txt.example` and to create the
   role.
-
-### CF_TUNNEL_TOKEN
-
-- **Type:** String (secret)
-- **Required:** Yes (production cutover, gitignored)
-- **Used by:** the `cloudflared` connector, which establishes outbound-only
-  connections to Cloudflare's edge (no inbound host ports). Passed as
-  `TUNNEL_TOKEN` to the container via the environment, not on the command line.
 
 ---
 
