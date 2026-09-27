@@ -91,6 +91,7 @@ if [[ "$COMPOSE_TEXT" =~ $TR_RE ]]; then TR_IMAGE="${BASH_REMATCH[1]}"; fi
 teardown() { # by this run's names only: t041-<sha8>-*
     local ids
     ids="$(docker ps -aq --filter "name=^$N-" 2>/dev/null || true)"
+    # shellcheck disable=SC2086 # intentional: $ids is a whitespace-separated list of container ids
     if [ -n "$ids" ]; then docker rm -f $ids >/dev/null 2>&1 || true; fi
     if docker network ls -q --filter "name=^$NET\$" | grep -q .; then docker network rm "$NET" >/dev/null 2>&1 || true; fi
     rm -rf "$ROOT"
@@ -224,6 +225,7 @@ const y = parse(readFileSync(process.argv[1], 'utf8'), { logLevel: 'error' })
 const l = (y.services.keycloak.labels || []).find((s) => s.startsWith('traefik.http.routers.keycloak.rule='))
 console.log(l ? l.slice(l.indexOf('=') + 1) : '')
 " "$(hostpath "$REPO_ROOT/docker-compose.prod.yml")")"
+# shellcheck disable=SC2016 # literal: KC_RULE is read from the UNRENDERED compose file, so ${DOMAIN} must not expand
 case "$KC_RULE" in
     'Host(`${DOMAIN}`) && '*) case "$KC_RULE" in *HostRegexp*) die "keycloak rule has a HostRegexp leg: $KC_RULE" ;; esac ;;
     *) die "keycloak rule is not Host-literal on the apex: $KC_RULE" ;;
