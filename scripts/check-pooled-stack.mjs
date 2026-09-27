@@ -246,9 +246,15 @@ export function colourSuffixViolations(render, colour, label = `app-${colour}`) 
   for (const [svcName, svc] of services(render)) {
     for (const [key, raw] of Object.entries(svc.environment ?? {})) {
       const value = String(raw ?? '')
+      // A HOST token only: a URL authority (after // or user@), or the whole
+      // value of a *_HOST key. A bare value elsewhere is a name, not a host --
+      // AUTH_KEYCLOAK_ID=gremion-ui is the OIDC client id, which no colour owns.
+      const hostKey = /HOST$/.test(key)
       for (const name of firstParty) {
-        // a host token: preceded by start, / or @, not followed by a name char
-        for (const m of value.matchAll(new RegExp(`(?:^|[/@])${name}(-[a-z0-9-]+)?(?=$|[^a-z0-9-])`, 'g'))) {
+        const re = hostKey
+          ? new RegExp(`(?:^|//|@)${name}(-[a-z0-9-]+)?(?=$|[^a-z0-9-])`, 'g')
+          : new RegExp(`(?://|@)${name}(-[a-z0-9-]+)?(?=$|[^a-z0-9-])`, 'g')
+        for (const m of value.matchAll(re)) {
           if (m[1] !== `-${colour}`) out.push(`${label}/${svcName}: environment.${key} names ${name} without the -${colour} suffix: ${value}`)
         }
       }

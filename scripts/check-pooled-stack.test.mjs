@@ -261,6 +261,17 @@ test('colour suffix: KERNEL_BASE_URL=http://gremion-ui:3000 fails; the suffixed 
   assert.deepEqual(colourSuffixViolations(r, 'blue'), [])
 })
 
+test('colour suffix: only HOST tokens count -- a client id passes, a bare *_HOST value and a user@host fail', () => {
+  const r = appRender('blue')
+  r.services['gremion-ui'].environment.AUTH_KEYCLOAK_ID = 'gremion-ui'
+  assert.deepEqual(colourSuffixViolations(r, 'blue'), [], 'the OIDC client id is a name, not a host')
+  r.services['gremion-ui'].environment.SMTP_HOST = 'gremion-ui'
+  assert.match(colourSuffixViolations(r, 'blue').join('\n'), /environment\.SMTP_HOST names gremion-ui without the -blue suffix/)
+  delete r.services['gremion-ui'].environment.SMTP_HOST
+  r.services['gremion-ui'].environment.PUSH_URL = 'amqp://u:p@gremion-ui:5672'
+  assert.match(colourSuffixViolations(r, 'blue').join('\n'), /environment\.PUSH_URL names gremion-ui/)
+})
+
 // ── 5. static isolation (TRD-045) ──────────────────────────────────────────
 
 test('isolation: a non-council service on ${STACK}_state fails, both as a placement drift and as shared membership', () => {
