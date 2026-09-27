@@ -1,6 +1,6 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f1 -> 0c9d342e9a1f9785b6f976719008134237198d0d; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: 99ceffd39227713dc93303d1f64901ccb6c2096d
+kernel: 31cbdb0a5d19ae61682b595c3830cadd27aa8f67
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f1: 21 files, 0 differ (0 listed, 0 unlisted)
@@ -35,7 +35,7 @@ set C — content UI half (gremion-ui/src -> modules/content/app): 95 files, 3 d
 extras — kernel files in a mapped module directory that no tag path maps to: 5 (5 listed)
   listed   modules/content/app/lib/server/content/jsdom-shim.d.ts
   listed   modules/content/app/migrations/1200_content_news_posts.sql
-  listed   modules/content/app/migrations/1205_news_posts_public_reader_columns.sql
+  listed   modules/content/app/migrations/1201_news_posts_public_reader_columns.sql
   listed   modules/content/app/scripts/news-posts-public-grant-proof.sh
   listed   modules/content/app/scripts/news-posts-public-grant-proof.test.mjs
 delta entries: 31
