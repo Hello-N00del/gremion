@@ -41,13 +41,6 @@ that had been fixed have been struck from the list rather than left standing.
   is worse), but it means the very first request against a brand-new install is
   a 503 and the message has to be read as "run the Setup wizard", not as a
   fault.
-- **`make lint` and `pnpm -C gremion-ui check` are red on a fresh clone.**
-  The hygiene check renders the compose overlays, and the dev overlay reads
-  `.env` and `legal/legal.env`, both git-ignored. Without them `docker compose
-  config` degrades rather than failing, and the port-binding guard reports
-  "non-loopback gremion-ui binding(s)" — a misleading security-invariant
-  failure whose real cause is "run `scripts/setup.sh` first". Both gates should
-  distinguish a missing local env file from a genuine violation.
 
 Closed since this list was last written, checked at HEAD and removed rather
 than carried: the finance/elections toggles in `TabServices.svelte` (gone, only

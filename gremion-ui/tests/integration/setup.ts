@@ -1,13 +1,12 @@
-import { assertSafeTestDbUrl } from './assert-safe-test-db-url'
+import { assertNonProductionDbUrl } from './assert-safe-test-db-url'
 import { beforeAll, beforeEach } from 'vitest'
 import { _getAls, type TenantContext } from '$lib/server/tenant/context'
 
-// Fail-closed: refuse to run the destructive integration suite against any
-// database URL that does not look like a local test fixture. This catches the
-// case where a shell DATABASE_URL / CONTROL_DATABASE_URL is set to the live
-// staging database (localhost:5433, user/db=stura — no "test" convention).
-assertSafeTestDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
-assertSafeTestDbUrl(process.env.CONTROL_DATABASE_URL ?? '', 'CONTROL_DATABASE_URL')
+// Fail-closed (spec B section 6 no-truncate guard): refuse to run the
+// destructive integration suite unless every URL it uses names a database that
+// cannot be this host's production one (GREMION_PRODUCTION_STACK, no default).
+assertNonProductionDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
+assertNonProductionDbUrl(process.env.CONTROL_DATABASE_URL ?? '', 'CONTROL_DATABASE_URL')
 
 // Legacy single-tenant integration tests run against the default tenant's
 // data plane. getDb()/getFinanceDb() are now fail-closed, so establish a

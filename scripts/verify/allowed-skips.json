@@ -36,6 +36,18 @@
       "file": "gremion-ui/src/lib/server/boundary/contracts-gate-staged.test.ts",
       "reason": "one it.skipIf(process.platform === 'win32') case asserts the exact docker invocation used to pin the oasdiff image; the assertion is Windows-path-shape-specific and does not apply on this host.",
       "maxCount": 1
+    },
+    {
+      "suite": "unit",
+      "file": "packages/edge-routers/test/emit.test.ts",
+      "reason": "TASK-034: two it.skipIf(!POSIX_MODE_BITS) cases assert the emitted router file's exact 0644 mode (NTFS reports no POSIX mode bits, so 'unchanged' vs 'mode repaired' cannot be told apart on win32), and one it.skipIf(!CAN_SYMLINK) case plants a symlink at the target name (needs Developer Mode or elevation on Windows). All three run on a POSIX host.",
+      "maxCount": 3
+    },
+    {
+      "suite": "unit",
+      "file": "packages/edge-routers/test/sync.test.ts",
+      "reason": "TASK-034: one it.skipIf(!POSIX_MODE_BITS) case asserts the second sync run is a no-op including file modes, which NTFS cannot report; it runs on a POSIX host.",
+      "maxCount": 1
     }
   ]
 }

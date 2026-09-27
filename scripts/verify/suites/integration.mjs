@@ -100,6 +100,37 @@ function psqlAsTestUser(db, database, args, opts = {}) {
   })
 }
 
+/**
+ * The environment gremion-ui's `migrate` and `test:integration` run with.
+ * Exported for the unit test (scripts/verify/integration.test.mjs).
+ *
+ * GREMION_PRODUCTION_STACK is `none`, set HERE and over any ambient value
+ * (TASK-028, D2): the integration config gives it no default and refuses to
+ * load while it is unset, and every truncating harness refuses a loopback URL
+ * on a host that declares a production stack. Both URLs below are built in
+ * this file and name only the throwaway container this run started on an
+ * ephemeral loopback port -- no production database can answer there, so
+ * `none` is a statement about this run's database, not a guess about the
+ * host. It is never a default for a URL that came from the ambient env.
+ */
+export function integrationVitestEnv({ baseEnv, db, uiDir }) {
+  const env = {
+    ...baseEnv,
+    DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion`,
+    CONTROL_DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/control`,
+    GREMION_PRODUCTION_STACK: 'none',
+    CONFIG_PATH: path.join(uiDir, 'tests', 'integration', 'fixtures', 'default-config.json'),
+    GREMION_DISABLE_SEEDS: 'true',
+    KEYCLOAK_ADMIN_CLIENT_SECRET: 'test-kc-admin-secret',
+    AUTH_KEYCLOAK_SECRET: 'test-ui-client-secret',
+    AUTH_KEYCLOAK_ISSUER: 'https://council.example/auth/realms/gremion',
+    AUTH_KEYCLOAK_BASE: 'https://council.example/auth/realms/gremion',
+  }
+  delete env.POSTGRES_PASSWORD
+  delete env.PGPASSWORD
+  return env
+}
+
 function vitestPart({ root }) {
   const label = 'gremion-ui vitest (test:integration)'
   if (!toolAvailable('docker')) return { label, toolMissing: 'docker' }
@@ -128,19 +159,7 @@ function vitestPart({ root }) {
       return { label, unparseable: true, detail: `provisioning gremion_public_reader failed: ${createPublicReader.stderr || createPublicReader.stdout}` }
     }
 
-    const env = {
-      ...process.env,
-      DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion`,
-      CONTROL_DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/control`,
-      CONFIG_PATH: path.join(uiDir, 'tests', 'integration', 'fixtures', 'default-config.json'),
-      GREMION_DISABLE_SEEDS: 'true',
-      KEYCLOAK_ADMIN_CLIENT_SECRET: 'test-kc-admin-secret',
-      AUTH_KEYCLOAK_SECRET: 'test-ui-client-secret',
-      AUTH_KEYCLOAK_ISSUER: 'https://council.example/auth/realms/gremion',
-      AUTH_KEYCLOAK_BASE: 'https://council.example/auth/realms/gremion',
-    }
-    delete env.POSTGRES_PASSWORD
-    delete env.PGPASSWORD
+    const env = integrationVitestEnv({ baseEnv: process.env, db, uiDir })
 
     const migrate = run('pnpm', ['run', 'migrate'], { cwd: uiDir, env })
     if (spawnMissing(migrate)) return { label, toolMissing: 'pnpm' }

@@ -1,0 +1,4 @@
+# edge-proto.sh writes both and removes .proto-root/ on exit; .env.local
+# persists the checkout-unique compose project name (edgeproto-<sha8>).
+.proto-root/
+.env.local
