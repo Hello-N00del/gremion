@@ -11,7 +11,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { promisify } from 'node:util'
 import { parse } from 'yaml'
-import { REPO_ROOT } from './render.mjs'
+import { PROJECTS, REPO_ROOT, planRender, renderProject } from './render.mjs'
 
 const execFileP = promisify(execFile)
 const compose = parse(readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8'))
@@ -66,4 +66,26 @@ test('the probe asks /health/ready and passes only on 200 + "status": "UP"', asy
   const r = await runAgainst(200, UP)
   assert.equal(r.code, 0)
   assert.deepEqual(r.seen, ['/health/ready'])
+})
+
+// Review round 2 (CRITICAL): the probe above speaks plain HTTP. Keycloak's
+// management interface inherits the HTTPS scheme as soon as a TLS certificate
+// is configured, and the production layer (docker-compose.prod.yml, G-080)
+// configures one -- so the probe would never pass in production and every
+// `depends_on: keycloak: service_healthy` consumer would never start. The
+// guard reads the RENDERED production state project (the same render the
+// census uses), not the base file alone.
+test('the rendered production keycloak serves its management port over plain HTTP when TLS is on', () => {
+  const state = PROJECTS.find((p) => p.name === 'state')
+  const rendered = renderProject(planRender(state))
+  assert.equal(rendered.ok, true, `production render failed: ${rendered.detail}`)
+  const env = rendered.services.keycloak?.environment
+  assert.ok(env, 'the rendered production state project has no keycloak service environment')
+  const tls = env.KC_HTTPS_CERTIFICATE_FILE || env.KC_HTTPS_KEY_STORE_FILE
+  assert.ok(tls, 'expected the production render to configure Keycloak TLS (G-080); if it no longer does, revisit this guard')
+  assert.equal(
+    env.KC_HTTP_MANAGEMENT_SCHEME,
+    'http',
+    'Keycloak has TLS configured, so its management interface (port 9000) serves HTTPS unless KC_HTTP_MANAGEMENT_SCHEME=http; the plain-HTTP /dev/tcp probe can then never pass',
+  )
 })
