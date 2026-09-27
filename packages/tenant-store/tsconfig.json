@@ -1,0 +1,22 @@
+{
+  // Typecheck gate for @gremion/tenant-store: `tsc --noEmit -p packages/tenant-store`.
+  // Unlike packages/db, the specs ARE type-checked here: vitest is a
+  // devDependency of this package, so they resolve.
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["esnext"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "vitest*.config.ts"],
+  "exclude": ["test/fixtures/scan/**"]
+}

@@ -45,6 +45,16 @@ function tenant(slug: string): TenantContext {
   return { slug } as unknown as TenantContext
 }
 
+// typescript(no-base-to-string): RequestInfo includes Request, whose
+// String() coercion falls back to Object.prototype.toString ('[object
+// Request]'), not its .url. internalFetch never passes a Request today, but
+// this keeps the recorded lastCall.url meaningful if it ever does.
+function urlOf(input: RequestInfo | URL): string {
+  if (input instanceof URL) return input.href
+  if (typeof input === 'string') return input
+  return input.url
+}
+
 describe('internalFetch + INTERNAL_BASE_URL — bypasses the apex forwarded-host middleware (FIX4)', () => {
   const originalFetch = globalThis.fetch
   let lastCall: { url: string; init: RequestInit } | null = null
@@ -52,7 +62,7 @@ describe('internalFetch + INTERNAL_BASE_URL — bypasses the apex forwarded-host
   beforeEach(() => {
     lastCall = null
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      lastCall = { url: String(input), init: init ?? {} }
+      lastCall = { url: urlOf(input), init: init ?? {} }
       return new Response('ok', { status: 200 })
     }) as typeof fetch
   })

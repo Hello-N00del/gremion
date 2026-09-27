@@ -73,18 +73,19 @@ describe('assertTenantStatusTransition — suspend (-> suspended)', () => {
 
 describe('TenantStatusTransitionError — loud + named', () => {
   it('carries the slug, current, target and a named error', () => {
+    let caught: unknown
     try {
       assertTenantStatusTransition('verein', 'deleted', 'active')
-      throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(TenantStatusTransitionError)
-      const e = err as TenantStatusTransitionError
-      expect(e.name).toBe('TenantStatusTransitionError')
-      expect(e.slug).toBe('verein')
-      expect(e.current).toBe('deleted')
-      expect(e.target).toBe('active')
-      expect(e.message).toMatch(/verein/)
-      expect(e.message).toMatch(/deleted -> active/)
+      caught = err
     }
+    expect(caught).toBeInstanceOf(TenantStatusTransitionError)
+    const e = caught as TenantStatusTransitionError
+    expect(e.name).toBe('TenantStatusTransitionError')
+    expect(e.slug).toBe('verein')
+    expect(e.current).toBe('deleted')
+    expect(e.target).toBe('active')
+    expect(e.message).toMatch(/verein/)
+    expect(e.message).toMatch(/deleted -> active/)
   })
 })

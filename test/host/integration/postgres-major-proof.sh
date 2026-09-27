@@ -55,7 +55,10 @@ MAJOR="$(read_const POSTGRES_MAJOR)"
 MOUNT="$(read_const POSTGRES_DATA_MOUNT)"
 [ -n "$MAJOR" ] || { echo "precondition: could not read POSTGRES_MAJOR"; exit 2; }
 [ -n "$MOUNT" ] || { echo "precondition: could not read POSTGRES_DATA_MOUNT"; exit 2; }
-WANT="postgres:${MAJOR}-alpine"
+# TASK-019 (TRD-350): the proof pulls and runs the pinned REFERENCE — tag and
+# index digest — and every rendered image must equal it byte for byte.
+WANT="$(read_const POSTGRES_IMAGE_REF)"
+[ -n "$WANT" ] || { echo "precondition: could not read POSTGRES_IMAGE_REF"; exit 2; }
 
 # A project name of our own, and proof-scoped names for EVERY named resource the
 # kernel compose fixes project-independently, so nothing here can touch — or be
@@ -163,6 +166,29 @@ while IFS= read -r img; do
         || { echo "FAIL: rendered compose image is '${img}', expected ${WANT}"; exit 1; }
 done <<<"$IMGS"
 echo "  ok  rendered compose: $(printf '%s' "$IMGS" | tr '\n' ' ')"
+
+# 1b. the six profile-gated module servers (TASK-019, D14) are not rendered
+# without their profiles, so they are rendered WITH them, and every service
+# carrying the org.gremion.postgres label is read by its label — not by an
+# image that happens to start with `postgres:`, which a `pgvector/...`
+# override would not.
+MODULE_IDS="$(cd "$ROOT" && node -e \
+    "import('./scripts/check-postgres-major.mjs').then((m) => console.log(m.MODULE_POSTGRES_IDS.join(' ')))")"
+[ -n "$MODULE_IDS" ] || { echo "precondition: could not read MODULE_POSTGRES_IDS"; exit 2; }
+PROFILE_ARGS=()
+for id in $MODULE_IDS; do PROFILE_ARGS+=(--profile "$id"); done
+ALL_JSON="$(cd "$ROOT" && docker compose -f docker-compose.yml "${PROFILE_ARGS[@]}" config --format json 2>/dev/null)" \
+    || { echo "precondition: docker compose config with the module profiles did not render"; exit 2; }
+LABELLED="$(json_of "$ALL_JSON" \
+    'Object.entries(cfg.services).filter(([, s]) => (s.labels || {})["org.gremion.postgres"]).map(([n, s]) => n + "=" + s.image).join("\n")')"
+EXPECTED_N=$(( $(wc -w <<<"$MODULE_IDS") + 1 ))
+[ "$(printf '%s\n' "$LABELLED" | sed '/^$/d' | wc -l)" -eq "$EXPECTED_N" ] \
+    || { echo "FAIL: expected ${EXPECTED_N} labelled Postgres services with all module profiles, got: $(printf '%s' "$LABELLED" | tr '\n' ' ')"; exit 1; }
+while IFS= read -r row; do
+    [ "${row#*=}" = "$WANT" ] \
+        || { echo "FAIL: rendered ${row%%=*} runs '${row#*=}', expected ${WANT}"; exit 1; }
+done <<<"$LABELLED"
+echo "  ok  rendered labelled Postgres services (${EXPECTED_N}, all module profiles): every one is ${WANT}"
 
 # ── 2. the MOUNT the rendered compose declares for the data volume ─────────
 # The tag and the mount are one contract: the 18+ entrypoint refuses to start
@@ -276,9 +302,14 @@ MOUNTS="$(docker inspect "$CID" \
     || { echo "FAIL: the running container's Postgres mounts are '${MOUNTS}', expected exactly '${MOUNT}'"; exit 1; }
 echo "  ok  running container mounts: ${MOUNTS}"
 
+# Ready means the FINAL server, reached over TCP. The image's entrypoint runs
+# the init scripts on a temporary server started with listen_addresses='' and
+# then shuts it down; a socket-only pg_isready passes against that temporary
+# server, and the next query meets "the database system is shutting down"
+# (measured 2026-09-25, TASK-019). -h 127.0.0.1 cannot be answered by it.
 READY=false
 for _ in $(seq 1 60); do
-    if dc exec -T postgres pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1; then READY=true; break; fi
+    if dc exec -T postgres pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" >/dev/null 2>&1; then READY=true; break; fi
     sleep 1
 done
 if [ "$READY" != true ]; then
@@ -327,11 +358,21 @@ for bin in pg_dump psql; do
     echo "  ok  ${bin} inside the running service: ${V}"
 done
 
+# 5e. the RUNNING check (scripts/check-postgres-major-running.mjs, TASK-019)
+#     against this very container, by its org.gremion.postgres label: the
+#     proof starts the kernel server only, so no module profile is expected.
+RUNNING="$(cd "$ROOT" && node scripts/check-postgres-major-running.mjs --project "$PROJECT" --no-profiles 2>&1)" \
+    || { echo "FAIL: check-postgres-major-running.mjs on project ${PROJECT}:"; printf '%s\n' "$RUNNING"; exit 1; }
+echo "  ok  running check: $(printf '%s\n' "$RUNNING" | tail -1)"
+
 # ── 6. the ONE standalone backup-client image in the tree (k8s overlay) ────
+# k8s/** is frozen (D16) and out of the digest scan, so this reads the MAJOR
+# only: the frozen manifest must not have drifted off the pinned tag.
+WANT_TAG="$(read_const POSTGRES_IMAGE_TAG)"
 K8S="$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(postgres:[^[:space:]]*\).*$/\1/p' \
     "${ROOT}/k8s/overlays/production/patches/backup-cronjob.yaml" | head -1)"
-[ "$K8S" = "$WANT" ] \
-    || { echo "FAIL: backup cronjob client image is '${K8S}', expected ${WANT}"; exit 1; }
+[ -n "$WANT_TAG" ] && [ "$K8S" = "$WANT_TAG" ] \
+    || { echo "FAIL: backup cronjob client image is '${K8S}', expected ${WANT_TAG} (k8s is frozen at the tag, D16)"; exit 1; }
 echo "  ok  k8s backup cronjob client: ${K8S}"
 
 # ── 7. the host backup and restore paths take their client from the SERVER ─

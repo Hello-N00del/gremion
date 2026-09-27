@@ -1,45 +1,137 @@
 # docker/traefik/traefik.yml
-# Traefik static configuration for Gremion production.
-# TLS is terminated with the Cloudflare Origin Certificate (15-yr, loaded
-# via the file provider — see docker/traefik/dynamic/tls.yml). Let's Encrypt
-# is intentionally removed: the public edge is Cloudflare (Full strict),
-# Traefik only needs to present the origin cert to the cloudflared tunnel.
+# Traefik static configuration for production (TASK-022, spec B "Edge" §2).
+#
+# Traefik is the public edge. It obtains its own certificates from an ACME CA
+# over HTTP-01 (`le-http` below); the host publishes :80 and :443 on its edge
+# address and requests arrive there directly. Replaced wholesale from the
+# StuRa-tree production file; the Cloudflare Origin default-certificate store
+# that used to sit in the dynamic directory is gone, so a router that names no
+# resolver now serves Traefik's self-signed default instead of a CA-issued
+# certificate for the wrong host. That is visible to every client but NOT to
+# the healthcheck or the Traefik log (mechanism 1): gremion-verify's
+# certificate check is what turns it red.
+#
+# THREE MECHANISMS THIS FILE DEPENDS ON, each MEASURED against the pinned image
+# by `bash scripts/verify-traefik-acme-wiring.sh` (traefik:v3.7.1), none of
+# them inferred from documentation:
+#
+#   1. A router that terminates TLS does NOT inherit an entrypoint's
+#      `http.tls.certResolver`: `tls=true` (docker label) and `tls: {}` (file
+#      provider) both allocate a non-nil TLS struct, which opts the router out.
+#      It still serves -- the default certificate, silently. So every router
+#      names its resolver itself.
+#
+#   2. The `web` -> `websecure` redirection below does NOT capture the ACME
+#      challenge: Traefik's own `acme-http@internal` router wins against
+#      `web-to-websecure@internal` (`/anything` -> 301,
+#      `/.well-known/acme-challenge/<tok>` -> 404 from the challenge handler).
+#      A HAND-WRITTEN redirect router on `web` is a different thing and does
+#      shadow the challenge; none may exist.
+#
+#   3. This file performs NO `${VAR}` expansion, and with `--configFile`
+#      Traefik IGNORES CLI flags and TRAEFIK_* environment variables. Every
+#      host-specific value is therefore a marker -- @ACME_EMAIL@,
+#      @ACME_CA_SERVER@, @EDGE_V4_SUBNET@, @EDGE_V6_SUBNET@ -- substituted from
+#      the container's environment into /tmp/traefik.yml at start-up by the
+#      `traefik` service's command in docker-compose.yml. That is also what
+#      keeps an operator's mailbox and address plan out of this public repo
+#      (TRD-039): the file holds no host literal.
+#
 # Access logs are written as JSON to the traefik-logs volume so the Vector
 # container can tail and process them.
 
+# The read-only API, served on Traefik's own `traefik` entrypoint (:8080).
+# `insecure` means "no router in front of it", NOT "published": compose
+# publishes :8080 on the host's loopback only, and gremion-switch and
+# gremion-verify read it there. No dashboard.
 api:
   dashboard: false
+  insecure: true
 
 entryPoints:
+  web:
+    address: ":80"
+    http:
+      # Everything except the ACME challenge is redirected to HTTPS (mechanism
+      # 2). This entrypoint exists ONLY for the redirect and the challenge; no
+      # application router is attached to it.
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
   websecure:
     address: ":443"
-    # #251: the sole ingress is the cloudflared tunnel, which connects from the
-    # internal docker network — so trust the private RFC1918 ranges to read the
-    # real client IP from the forwarded headers (X-Forwarded-For / CF-Connecting-IP)
-    # instead of the tunnel container's IP. Without this, access logs and the
-    # default rate-limit key both collapse onto one tunnel IP. No public client can
-    # reach Traefik directly (cloudflared is the only ingress), so trusting the
-    # internal ranges is safe.
+    # The ONLY default entrypoint. Without any asDefault, Traefik attaches a
+    # router that names no entryPoints to EVERY entrypoint -- internaltest
+    # included, where it could outrank active.yml's priority-1 test router and
+    # make gremion-verify probe the wrong colour.
+    asDefault: true
+    # Traefik is the FIRST hop: a public client's connection terminates here,
+    # so the connection's own remote address is the real client address, and
+    # nothing keyed on security may read a forwarded header. The list is the
+    # spec B contract: the container's own loopback and the pinned
+    # ${STACK}_edge subnets. Every range here is an X-Forwarded-For forgery
+    # away for any peer inside it -- including the subnet's gateway, which is
+    # where Docker's userland proxy re-originates IPv6 clients from.
+    # NOTE (TASK-022 residual): this composition still attaches traefik to
+    # gremion_net only, which is not ${STACK}_edge, so today these two entries
+    # match no peer (fail-closed: forwarded headers from the network are
+    # dropped, IPv6 clients all appear as the gremion_net gateway). Moving the
+    # service onto ${STACK}_edge is TASK-040's, and re-weighs this list.
     forwardedHeaders:
       trustedIPs:
         - "127.0.0.1/32"
-        - "10.0.0.0/8"
-        - "172.16.0.0/12"
-        - "192.168.0.0/16"
+        - "@EDGE_V4_SUBNET@"
+        - "@EDGE_V6_SUBNET@"
+  # The container healthcheck's probe entrypoint. NOT published: kept off
+  # web/websecure because `web` redirects everything, which would turn a
+  # health probe into a 301 and make an unhealthy Traefik look healthy.
+  ping:
+    address: ":8082"
+  # gremion-verify's route into the INACTIVE colour (active.yml's test
+  # routers). Compose publishes it on the host's loopback only.
+  internaltest:
+    address: ":8081"
+
+# Serves 200 "OK" on the ping entrypoint above.
+ping:
+  entryPoint: ping
+
+certificatesResolvers:
+  # HTTP-01 for every host: one certificate per host, no standing DNS
+  # credential. Wildcards are DNS-01-only and deliberately out of reach.
+  le-http:
+    acme:
+      email: "@ACME_EMAIL@"
+      # On the external ${STACK}_traefik_acme volume, and nowhere else
+      # (TRD-042): a from-zero rebuild issues certificates fresh. Losing it
+      # re-issues everything and spends the CA's rate limit.
+      storage: /letsencrypt/acme.json
+      # The production directory by default; point ACME_CA_SERVER at the
+      # staging directory while rehearsing -- the duplicate-certificate limit
+      # cannot be un-spent.
+      caServer: "@ACME_CA_SERVER@"
+      httpChallenge:
+        entryPoint: web
 
 providers:
   docker:
-    # Reach the Docker API through the read-only docker-socket-proxy (#244) — the
-    # raw /var/run/docker.sock is no longer mounted into this internet-facing
+    # Reach the Docker API through the read-only docker-socket-proxy (#244) --
+    # the raw /var/run/docker.sock is never mounted into this internet-facing
     # proxy. The proxy exposes only the GET endpoints this provider needs.
     endpoint: "tcp://docker-socket-proxy:2375"
     exposedByDefault: false
     network: gremion_net
   file:
-    filename: /etc/traefik/dynamic/tls.yml
+    # The WHOLE directory, watched: per-tenant router files and
+    # etc/edge/active.yml reach Traefik through the single read-only bind
+    # mount ${GREMION_ROOT}/etc/edge -> /etc/traefik/dynamic, and a file
+    # dropped there registers without a restart.
+    directory: /etc/traefik/dynamic
     watch: true
 
-# JSON access log to shared volume — Vector tails this file.
+# JSON access log to shared volume -- Vector tails this file.
 # Drop ClientUsername (never useful, reduces PII surface).
 accessLog:
   filePath: "/logs/access.log"

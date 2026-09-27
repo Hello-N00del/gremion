@@ -19,6 +19,14 @@ import { fileURLToPath } from 'node:url'
 /** The major S14 settled on. Change this ONLY together with the record. */
 export const POSTGRES_MAJOR = 18
 export const POSTGRES_IMAGE_TAG = `postgres:${POSTGRES_MAJOR}-alpine`
+// TRD-350: the tag is a pointer the registry may move; the digest is the
+// content. This is the multi-arch INDEX digest (`docker buildx imagetools
+// inspect postgres:<major>-alpine`, the top `Digest:`), never a per-platform
+// manifest: an index digest resolves to the right image on amd64 and arm64
+// alike, a platform digest pins one architecture and breaks the other. ONE
+// digest everywhere, recorded as "- **Pinned digest**:" in the evidence file.
+export const POSTGRES_IMAGE_DIGEST = 'sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873'
+export const POSTGRES_IMAGE_REF = `${POSTGRES_IMAGE_TAG}@${POSTGRES_IMAGE_DIGEST}`
 export const EVIDENCE_PATH = 'docs/ops/postgres-major.md'
 
 // The consumers P3 names. A consumer with no evidence row is a consumer nobody
@@ -31,6 +39,12 @@ export function checkEvidence(text) {
   if (!m) return [`${EVIDENCE_PATH} carries no "- **Pinned major**: <n>" line`]
   if (Number(m[1]) !== POSTGRES_MAJOR) {
     problems.push(`${EVIDENCE_PATH} pins ${m[1]}, check-postgres-major.mjs exports ${POSTGRES_MAJOR}`)
+  }
+  const d = text.match(/^- \*\*Pinned digest\*\*: (sha256:[0-9a-f]{64})$/m)
+  if (!d) {
+    problems.push(`${EVIDENCE_PATH} carries no "- **Pinned digest**: sha256:<64 hex>" line`)
+  } else if (d[1] !== POSTGRES_IMAGE_DIGEST) {
+    problems.push(`${EVIDENCE_PATH} pins digest ${d[1]}, check-postgres-major.mjs exports ${POSTGRES_IMAGE_DIGEST}`)
   }
   const rows = text.split('\n').filter((l) => l.trim().startsWith('|'))
   for (const c of S14_CONSUMERS) {
@@ -52,20 +66,28 @@ export function checkEvidence(text) {
 
 // ── the scanner ────────────────────────────────────────────────────────────
 
-// Two NAMED exclusions, and only two. Anything not on this list is scanned.
+// Three NAMED exclusions, and only three. Anything not on this list is scanned.
 //
 //  1. Frozen copies of the APPROVED specs quote the pre-pin tag verbatim. They
 //     are a record of what was decided, not a place a tag is configured;
 //     rewriting them would falsify the record. It is also the only tracked path
 //     under docs/superpowers — B0 un-ignores exactly
 //     docs/superpowers/specs/spec-{b,d}-*.md and nothing else.
-//  2. The `tree-stale` fixture EXISTS to carry a stale tag: it is what proves
-//     `--tree` goes RED. Excluding the whole `postgres-major` fixture directory
-//     would also excuse `tree-clean`, so the rule names `tree-stale` alone and
-//     `tree-clean` stays scanned like any other file (and is pinned).
+//  2. The `tree-stale` and `tree-stale-module` fixtures EXIST to carry a stale
+//     tag: they are what prove `--tree` goes RED (the second one digest-pinned
+//     on an older major, TASK-019). Excluding the whole `postgres-major` fixture
+//     directory would also excuse `tree-clean`, so the rule names the two stale
+//     trees alone and `tree-clean` stays scanned like any other file (and is
+//     pinned).
+//  3. `k8s/**` is FROZEN (decision D16): the Kubernetes manifests are not a
+//     release-1 deployment target, nobody edits them, and a pin nobody may
+//     write cannot be demanded of them. They keep the major-only tag they
+//     carry; TASK-126 owns them. Anchored at the repo root, so `docs/k8s.md` or
+//     `infra/k8s/` would still be scanned.
 export const EXCLUDED = [
   /^docs\/superpowers\/specs\//,
-  /^test\/host\/fixtures\/postgres-major\/tree-stale\//,
+  /^test\/host\/fixtures\/postgres-major\/tree-stale(-module)?\//,
+  /^k8s\//,
 ]
 
 // `postgresql://user:pw@postgres:5432/db` is a HOST:PORT, not an image tag. The
@@ -74,7 +96,20 @@ export const EXCLUDED = [
 // refused a second time below, because one net is one forgotten char from
 // silently excusing a real tag — and the kernel prose writes bare `postgres:5432`
 // in a dozen places with nothing in front of it.
-const TAG_RE = /(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])/g
+//
+// A trailing `@<algo>:<hex>` is captured as the reference's digest (group 2).
+// It is captured loosely on purpose — `@sha256:abc` is read, not skipped — so a
+// truncated or malformed digest is compared against the pin and reported as
+// drift instead of disappearing from the scan.
+//
+// The tag set includes the FLOATING distro codenames (`bookworm`, `trixie`,
+// `alpine3.22`, `trixie-slim`, ...): each is a real registry tag that silently
+// moves to the newest major, so each is read and classified `unpinned` rather
+// than missed. A pre-release (`18beta3-alpine`, `18rc1`) is read too; its
+// major token is not a bare number, so it is `unpinned` as well.
+const DIGEST_TAIL = String.raw`(?:@([A-Za-z0-9]+:[A-Za-z0-9]*))?`
+const TAG_RE = new RegExp(
+  String.raw`(?<![\w./@-])postgres:(latest|alpine[\d.]*|(?:bookworm|bullseye|buster|trixie|forky)(?:-[A-Za-z0-9.]+)*|\d{1,4}(?:[A-Za-z]+\d*)?(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
 
 // The SECOND net, for the reference that has no tag at all for TAG_RE to match:
 // `image: postgres`, `image: "postgres"`, `image: postgres:` with nothing after
@@ -90,8 +125,12 @@ const TAG_RE = /(?<![\w./@-])postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+
 // The optional registry/namespace prefix accepts `docker.io/library/postgres`
 // while refusing `mypostgres` and `timescale/timescaledb-postgis`: the reference
 // must END at `postgres`, and any prefix must end in a slash.
+//
+// TASK-019: a DIGEST without a tag (`image: postgres@sha256:...`) is read here
+// too. It may even be the right content, but no reader and no scanner can tell
+// its major from the text, and the pin is written `<tag>@<digest>` everywhere.
 const UNTAGGED_IMAGE_RE =
-  /^\s*(?:-\s*)?image:\s*(["']?)((?:[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]+)?\/)*postgres):?\1\s*(?:#.*)?$/
+  /^\s*(?:-\s*)?image:\s*(["']?)((?:[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]+)?\/)*postgres):?(?:@\S*?)?\1\s*(?:#.*)?$/
 
 // The THIRD net: a shell parameter-expansion DEFAULT, `${VAR:-postgres:18-alpine}`.
 // TAG_RE structurally CANNOT see one. The lookbehind that keeps
@@ -106,27 +145,92 @@ const UNTAGGED_IMAGE_RE =
 // before the reference is `=`, which the lookbehind does not drop, so TAG_RE
 // already reads those. Matching them twice would report one stale default as two
 // findings — the narrower net is what keeps each occurrence counted exactly once.
-const SHELL_DEFAULT_RE =
-  /\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine|\d{1,4}(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])/g
+const SHELL_DEFAULT_RE = new RegExp(
+  String.raw`\$\{[A-Za-z_][A-Za-z0-9_]*:?-postgres:(latest|alpine[\d.]*|(?:bookworm|bullseye|buster|trixie|forky)(?:-[A-Za-z0-9.]+)*|\d{1,4}(?:[A-Za-z]+\d*)?(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` + DIGEST_TAIL, 'g')
+
+// The FOURTH net (TASK-019): a REGISTRY-PREFIXED reference,
+// `docker.io/library/postgres:<tag>` or `registry:5000/mirror/postgres:<tag>`.
+// Docker resolves the first to exactly the image the short form names, and
+// TAG_RE cannot see either: its lookbehind drops the `/` in front of
+// `postgres`. The prefix is one or more `<segment>/`, and the FIRST segment
+// must not be glued to a word char, `.`, `/`, `@`, `:` or `-` — which keeps
+// URLs (`https://hub.docker.com/_/postgres`, `http://db/postgres:5432`) and
+// `timescale-postgres` out — EXCEPT the `-` of a shell default `${V:-...}`,
+// which is read on purpose for the same reason SHELL_DEFAULT_RE exists.
+// Disjoint from TAG_RE (which needs no `/` before `postgres`) and from
+// SHELL_DEFAULT_RE (which needs `-` directly before it), so no occurrence is
+// counted twice.
+const REGISTRY_RE = new RegExp(
+  String.raw`(?:(?<![\w./@:-])|(?<=\$\{[A-Za-z_][A-Za-z0-9_]*:?-))` +
+  String.raw`((?:[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?\/)+)postgres:(latest|alpine[\d.]*|(?:bookworm|bullseye|buster|trixie|forky)(?:-[A-Za-z0-9.]+)*|\d{1,4}(?:[A-Za-z]+\d*)?(?:[.-][A-Za-z0-9.]+)*)(?![\w.-])` +
+  DIGEST_TAIL, 'g')
+
+// Q3 (TASK-019): the file kinds in which a reference is a DECLARATION — the
+// thing that is pulled and run — and so must carry the digest: compose and
+// workflow YAML, shell (.sh/.bats), templates, Dockerfiles, the extensionless
+// host CLI and the dotted env files (a shell assignment). Prose (.md) and code
+// comments (.mjs/.ts) stay major-only: they NAME the image, they do not pull it.
+const DECLARING = /\.(ya?ml|sh|bats|tmpl|Dockerfile|env)$|(^|\/)(Dockerfile|Containerfile)[^/]*$|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
+
+// Where the comment part of a line starts in a #-comment file kind, or
+// Infinity. `#` only opens a comment at the start or after whitespace, and
+// never inside a single- or double-quoted string, so a shell `${VAR#prefix}`,
+// a URL fragment or `echo "a #b" && docker run ...` is not taken for one.
+//
+// A quote opens a string only if it is CLOSED later on the line: an apostrophe
+// in `echo don't  # was ...` or `Bob's db  # ...` is a literal, and the `#`
+// after it still opens the comment. Inside double quotes a backslash escapes
+// the next character, as in the shell.
+function closingQuote(line, i) {
+  const q = line[i]
+  for (let j = i + 1; j < line.length; j++) {
+    if (q === '"' && line[j] === '\\') { j++; continue }
+    if (line[j] === q) return j
+  }
+  return -1
+}
+function commentStart(line) {
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"' || ch === "'") {
+      const j = closingQuote(line, i)
+      if (j > i) { i = j; continue }
+    }
+    if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) return i
+  }
+  return Infinity
+}
 
 export function scanText(path, text) {
   const hits = []
+  const declaring = DECLARING.test(path)
   text.split('\n').forEach((line, i) => {
+    // A hit is a declaration when its file kind declares images and it sits
+    // before any comment on the line.
+    const cut = declaring ? commentStart(line) : -1
+    const hit = (m, prefix, tag, digest) => ({
+      path, line: i + 1, tag, ref: `${prefix}postgres:${tag}`,
+      digest: digest ?? null, decl: m.index < cut,
+    })
     for (const m of line.matchAll(TAG_RE)) {
       if (m[1] === '5432') continue
-      hits.push({ path, line: i + 1, tag: m[1], ref: `postgres:${m[1]}` })
+      hits.push(hit(m, '', m[1], m[2]))
+    }
+    for (const m of line.matchAll(REGISTRY_RE)) {
+      if (m[2] === '5432') continue
+      hits.push(hit(m, m[1], m[2], m[3]))
     }
     // Read on the SAME line pass, after TAG_RE: the two nets cannot both match one
     // occurrence (TAG_RE's lookbehind is precisely what blinds it here), so no
     // line is ever counted twice.
     for (const m of line.matchAll(SHELL_DEFAULT_RE)) {
       if (m[1] === '5432') continue
-      hits.push({ path, line: i + 1, tag: m[1], ref: `postgres:${m[1]}` })
+      hits.push(hit(m, '', m[1], m[2]))
     }
     // A line carrying a real tag has already been read above; this fires only
     // where there is no tag at all, so no line is ever counted twice.
     const u = line.replace(/\r$/, '').match(UNTAGGED_IMAGE_RE)
-    if (u) hits.push({ path, line: i + 1, tag: null, ref: u[2] })
+    if (u) hits.push({ path, line: i + 1, tag: null, ref: u[2], digest: null, decl: true })
   })
   return hits
 }
@@ -139,7 +243,29 @@ export function classify(hit) {
   if (!hit.tag || hit.tag === 'latest' || hit.tag === 'alpine') return 'unpinned'
   const major = hit.tag.split(/[.-]/)[0]
   if (!/^\d+$/.test(major)) return 'unpinned'
-  return Number(major) === POSTGRES_MAJOR ? 'ok' : 'mismatched'
+  if (Number(major) !== POSTGRES_MAJOR) return 'mismatched'
+  // On a declaration the tag is exactly `<major>-alpine`: `18-bookworm` or
+  // `18.6-alpine3.24` is the right major on a different image line, and with a
+  // digest it would even pass a digest-only check.
+  if (hit.decl && hit.tag !== `${POSTGRES_MAJOR}-alpine`) return 'tag-drift'
+  // The major is right; now the content. A digest that is present and not the
+  // pin is drift wherever it is written — prose included, because a record
+  // naming another digest is a record of a different image. A missing digest
+  // is a finding only on a declaration (Q3).
+  if (hit.digest != null && hit.digest !== POSTGRES_IMAGE_DIGEST) return 'digest-drift'
+  if (hit.decl && hit.digest == null) return 'undigested'
+  return 'ok'
+}
+
+/**
+ * ONE digest everywhere. Each drifted reference is already a per-line finding;
+ * this names the tree-level state as well, so a split pin reads as one problem
+ * with every digest listed rather than as a scatter of unrelated lines.
+ */
+export function checkDigests(hits) {
+  const seen = [...new Set(hits.map((h) => h.digest).filter((d) => d != null))]
+  if (seen.length <= 1) return []
+  return [`split pin: ${seen.length} distinct postgres digests in one tree (${seen.join(', ')}); expected only ${POSTGRES_IMAGE_DIGEST}`]
 }
 
 /** @param files [{path, text}] */
@@ -150,9 +276,232 @@ export function checkFiles(files) {
   if (hits.length === 0) {
     return ['found zero postgres: image references — the guard would pass vacuously']
   }
-  return hits
-    .filter((h) => classify(h) !== 'ok')
-    .map((h) => `${classify(h)}: ${h.path}:${h.line} ${h.ref} (expected ${POSTGRES_IMAGE_TAG})`)
+  return [
+    ...hits
+      .filter((h) => classify(h) !== 'ok')
+      .map((h) => `${classify(h)}: ${h.path}:${h.line} ${h.ref}${h.digest != null ? `@${h.digest}` : ''} (expected ${POSTGRES_IMAGE_REF})`),
+    ...checkDigests(hits),
+  ]
+}
+
+// ── the Postgres service set (TASK-019, Q1, D14) ──────────────────────────
+//
+// D14: per-module Postgres. The kernel base compose declares, besides its own
+// `postgres`, one `<id>-postgres` for each of the six extraction-source leaves,
+// profile-gated under `profiles: [<id>]` and labelled
+// org.gremion.postgres=module:<id>; the kernel server is labelled `kernel`.
+// The label is how the RUNNING check (check-postgres-major-running.mjs) finds
+// containers, so an unlabelled Postgres is a server nobody verifies.
+export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault']
+export const POSTGRES_LABEL = 'org.gremion.postgres'
+
+// Volume names a module server must never mount: the kernel's own cluster and
+// the fixed names the extraction source's running stack gives its PG16 leaf
+// volumes (`gremion_<id>_pg_data`, measured in its docker-compose.yml on
+// 2026-09-25). On a box that still carries that stack, a PG18 server declared
+// on one of those names would be mounted on live PG16 data.
+export const FORBIDDEN_MODULE_VOLUMES = new Set([
+  'gremion_pg_data',
+  ...MODULE_POSTGRES_IDS.map((id) => `gremion_${id}_pg_data`),
+])
+
+const isPostgresService = (s) => s.name === 'postgres' || /-postgres$/.test(s.name) || s.label != null
+
+const unquote = (v) => v.replace(/\s+#.*$/, '').trim().replace(/^(["'])(.*)\1$/, '$2')
+
+/** The lines under a column-0 `<key>:` — [start, end) indices, or null. */
+function topBlock(lines, key) {
+  const start = lines.findIndex((l) => new RegExp(`^${key}:\\s*(#.*)?$`).test(l))
+  if (start < 0) return null
+  let end = start + 1
+  while (end < lines.length && !/^[^\s#]/.test(lines[end])) end++
+  return [start + 1, end]
+}
+
+/**
+ * The services of ONE compose file, read line by line (the guard stays
+ * dependency-free). Per service: its name and line, its OWN `image:` (null when
+ * it has none, e.g. it takes one from a `<<: *anchor` merge), the
+ * org.gremion.postgres label in map or list form, its profiles and its volume
+ * mounts. Top-level volume names are returned alongside.
+ */
+export function composeServices(text) {
+  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''))
+  const block = topBlock(lines, 'services')
+  if (!block) return []
+  const out = []
+  let svcIndent = null
+  let cur = null
+  let section = null
+  for (let i = block[0]; i < block[1]; i++) {
+    const l = lines[i]
+    if (/^\s*(#.*)?$/.test(l)) continue
+    const ind = l.match(/^ */)[0].length
+    if (svcIndent === null) svcIndent = ind
+    if (ind <= svcIndent) {
+      const m = l.match(/^\s*["']?([A-Za-z0-9._-]+)["']?:\s*(&\S+\s*)?(#.*)?$/)
+      cur = m && ind === svcIndent
+        ? { name: m[1], line: i + 1, image: null, imageLine: null, label: null,
+            profiles: [], merge: false, merges: [], mounts: [], propIndent: null }
+        : null
+      if (cur) out.push(cur)
+      section = null
+      continue
+    }
+    if (!cur) continue
+    if (cur.propIndent === null) cur.propIndent = ind
+    if (ind === cur.propIndent) {
+      const kv = l.match(/^\s*([A-Za-z0-9_<.-]+):\s*(.*)$/)
+      section = kv ? kv[1] : null
+      const val = kv ? kv[2] : ''
+      if (section === 'image') { cur.image = unquote(val); cur.imageLine = i + 1 }
+      if (section === '<<') {
+        cur.merge = true
+        cur.merges = [...val.matchAll(/\*([A-Za-z0-9_.-]+)/g)].map((m) => m[1])
+      }
+      if (section === 'profiles' && val.startsWith('[')) {
+        cur.profiles = val.replace(/\].*$/, '').replace(/[[\s"']/g, '').split(',').filter(Boolean)
+      }
+      if (section === 'labels' && val) readLabel(cur, val)
+      continue
+    }
+    // a line deeper than the service's own keys belongs to the current section
+    if (section === 'profiles') {
+      const m = l.match(/^\s*-\s*["']?([^"'\s#]+)/)
+      if (m) cur.profiles.push(m[1])
+    }
+    if (section === 'labels') readLabel(cur, l)
+    if (section === 'volumes') {
+      const m = l.match(/^\s*-\s*["']?([^:"'\s]+):([^:"'\s]+)/)
+      if (m) cur.mounts.push({ source: m[1], target: m[2] })
+    }
+  }
+  return out
+}
+
+function readLabel(svc, text) {
+  const m = text.match(/(?:^|[\s"'{,])org\.gremion\.postgres["']?\s*[:=]\s*["']?([^"'\s,}\]]+)/)
+  if (m) svc.label = m[1]
+}
+
+/** The `image:` of the top-level `x-module-postgres` anchor, or null. */
+export function moduleAnchorImage(text) {
+  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''))
+  const start = lines.findIndex((l) => /^x-module-postgres:/.test(l))
+  if (start < 0) return null
+  for (let i = start + 1; i < lines.length && !/^[^\s#]/.test(lines[i]); i++) {
+    const m = lines[i].match(/^ {2}image:\s*(.*)$/)
+    if (m) return unquote(m[1])
+  }
+  return null
+}
+
+/** Top-level `volumes:` of one compose file: key -> fixed `name:` (or null). */
+export function composeVolumeNames(text) {
+  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''))
+  const block = topBlock(lines, 'volumes')
+  const names = new Map()
+  if (!block) return names
+  let key = null
+  for (let i = block[0]; i < block[1]; i++) {
+    const k = lines[i].match(/^ {2}([A-Za-z0-9._-]+):\s*(\{.*\})?\s*(#.*)?$/)
+    if (k) {
+      key = k[1]
+      const inline = (k[2] ?? '').match(/name:\s*["']?([^"'\s,}]+)/)
+      names.set(key, inline ? inline[1] : null)
+      continue
+    }
+    const n = lines[i].match(/^ {4}name:\s*["']?([^"'\s#]+)/)
+    if (n && key) names.set(key, n[1])
+  }
+  return names
+}
+
+// A file whose services DECLARE rather than overlay: the base compose and a
+// module fragment. An override file's `postgres:` entry legitimately carries no
+// image of its own, so the no-image rule does not apply there.
+const BASE_COMPOSE = /(^|\/)docker-compose\.ya?ml$|(^|\/)compose\/[^/]+\.ya?ml$/
+
+/**
+ * Every Postgres service (named `postgres` / `*-postgres`, or labelled) pins
+ * its image LITERALLY. `image: ${CALENDAR_PG_IMAGE}` runs whatever major the
+ * environment says, and no text scan can read it; a pinned DEFAULT does not
+ * help, because the variable is exactly how the default gets overridden.
+ */
+export function checkComposeServices(files) {
+  const problems = []
+  for (const f of files.filter((f) => /\.ya?ml$/.test(f.path))) {
+    for (const s of composeServices(f.text).filter(isPostgresService)) {
+      if (s.image != null && s.image.includes('${')) {
+        problems.push(`variable image: ${f.path}:${s.imageLine} service ${s.name} image ${s.image} — a Postgres service pins its image literally (${POSTGRES_IMAGE_REF}); a variable runs whatever major the environment names`)
+      } else if (s.image == null && !s.merge && BASE_COMPOSE.test(f.path)) {
+        problems.push(`no image: ${f.path}:${s.line} service ${s.name} declares no image and merges none from an anchor`)
+      }
+    }
+  }
+  return problems
+}
+
+/**
+ * The kernel base compose declares exactly the Postgres set D14 names: the
+ * kernel server labelled `kernel`, one `<id>-postgres` per module labelled
+ * `module:<id>` under `profiles: [<id>]`, on a volume that is not a live one,
+ * and no Postgres service outside that set.
+ */
+export function checkModuleSet(text) {
+  const problems = []
+  const svcs = composeServices(text)
+  const byName = new Map(svcs.map((s) => [s.name, s]))
+  const volumeNames = composeVolumeNames(text)
+  const kernel = byName.get('postgres')
+  if (kernel?.label !== 'kernel') {
+    problems.push(`the kernel postgres service is not labelled ${POSTGRES_LABEL}=kernel`)
+  }
+  // The IMAGE, not just its text: a module server that overrides the anchor
+  // with `pgvector/pgvector:pg16` carries no `postgres:` reference for the tag
+  // nets to read, so the set itself is held to the exact pinned reference.
+  if (kernel && kernel.image !== POSTGRES_IMAGE_REF) {
+    problems.push(`the kernel postgres service runs image ${kernel.image}, expected ${POSTGRES_IMAGE_REF}`)
+  }
+  const anchorImage = moduleAnchorImage(text)
+  if (anchorImage !== POSTGRES_IMAGE_REF) {
+    problems.push(`the x-module-postgres anchor runs image ${anchorImage}, expected ${POSTGRES_IMAGE_REF}`)
+  }
+  const seenVolumes = new Map()
+  for (const id of MODULE_POSTGRES_IDS) {
+    const name = `${id}-postgres`
+    const s = byName.get(name)
+    if (!s) { problems.push(`no ${name} service: the module set (D14) is ${MODULE_POSTGRES_IDS.join(', ')}`); continue }
+    if (s.image != null && s.image !== POSTGRES_IMAGE_REF) {
+      problems.push(`${name} runs image ${s.image}, expected ${POSTGRES_IMAGE_REF} (or none, taken from the anchor)`)
+    } else if (s.image == null && !s.merge) {
+      problems.push(`${name} declares no image and merges no anchor`)
+    }
+    // The image it runs is the anchor's only if the anchor is the ONLY merge:
+    // `<<: [*other, *module-postgres]` takes `other`'s image first.
+    if (s.merge && (s.merges.length !== 1 || s.merges[0] !== 'module-postgres')) {
+      problems.push(`${name} merges [${s.merges.join(', ')}], expected exactly [module-postgres]`)
+    }
+    if (s.label !== `module:${id}`) {
+      problems.push(`${name} is labelled ${POSTGRES_LABEL}=${s.label}, expected module:${id}`)
+    }
+    if (s.profiles.length !== 1 || s.profiles[0] !== id) {
+      problems.push(`${name} is not gated under profiles: [${id}] (has [${s.profiles.join(', ')}])`)
+    }
+    const data = s.mounts.find((m) => m.target === POSTGRES_DATA_MOUNT)
+    if (!data) { problems.push(`${name} mounts no volume at ${POSTGRES_DATA_MOUNT}`); continue }
+    const vol = volumeNames.get(data.source) ?? data.source
+    if (FORBIDDEN_MODULE_VOLUMES.has(vol)) {
+      problems.push(`${name} mounts volume ${vol}, which is the kernel's cluster or a live extraction-source PG16 volume`)
+    }
+    if (seenVolumes.has(vol)) problems.push(`${name} shares volume ${vol} with ${seenVolumes.get(vol)}`)
+    seenVolumes.set(vol, name)
+  }
+  const known = new Set(['postgres', ...MODULE_POSTGRES_IDS.map((id) => `${id}-postgres`)])
+  for (const s of svcs.filter(isPostgresService)) {
+    if (!known.has(s.name)) problems.push(`${s.name} is a Postgres service outside the module set (${[...known].join(', ')})`)
+  }
+  return problems
 }
 
 // ── the data-directory contract ────────────────────────────────────────────
@@ -240,7 +589,7 @@ export function checkDataMounts(files) {
 // and the dotted env templates (`.env.example`). A `postgres:<tag>` written into
 // one of those would be pinned by nobody.
 const TEXTUAL =
-  /\.(ya?ml|md|ts|mjs|js|sh|bats|json|tmpl)$|(^|\/)(Dockerfile|Makefile)|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
+  /\.(ya?ml|md|ts|mjs|js|sh|bats|json|tmpl|Dockerfile|env)$|(^|\/)(Dockerfile|Containerfile|Makefile)|^infra\/host\/bin\/[^/]+$|(^|\/)\.env(\.[\w-]+)?$/
 
 export function trackedTextFiles(root) {
   const out = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
@@ -288,16 +637,18 @@ if (isMain) {
   if (i >= 0 && !tree) { console.error('[postgres-major] --tree needs a directory'); process.exit(2) }
   const files = tree ? fragmentFiles(tree) : trackedTextFiles(ROOT)
   const problems = tree
-    ? [...checkFiles(files), ...checkDataMounts(files)]
+    ? [...checkFiles(files), ...checkDataMounts(files), ...checkComposeServices(files)]
     : [
         ...checkEvidence(readFileSync(join(ROOT, EVIDENCE_PATH), 'utf8')),
         ...checkFiles(files),
         ...checkDataMounts(files),
+        ...checkComposeServices(files.filter((f) => !EXCLUDED.some((re) => re.test(f.path)))),
+        ...checkModuleSet(readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')),
       ]
   if (problems.length > 0) {
     console.error(`[postgres-major] ${problems.length} problem(s) in ${tree ?? 'the kernel tree'}:`)
     for (const p of problems) console.error(`  x ${p}`)
     process.exit(1)
   }
-  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: reference is ${POSTGRES_IMAGE_TAG} and every data mount is ${POSTGRES_DATA_MOUNT}`)
+  console.log(`[postgres-major] OK — ${files.length} files scanned in ${tree ?? 'the kernel tree'}, every postgres: declaration is ${POSTGRES_IMAGE_REF} and every data mount is ${POSTGRES_DATA_MOUNT}`)
 }

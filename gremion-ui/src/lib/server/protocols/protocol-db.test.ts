@@ -20,20 +20,10 @@ vi.mock('../db', () => ({ getDb: () => mockSql }))
 
 import {
   createProtocol,
-  getProtocol,
-  listProtocols,
   updateProtocol,
   setProtocolStatus,
-  upsertAttendance,
-  addResolution,
-  updateResolution,
-  deleteResolution,
-  addActionItem,
-  updateActionItem,
   nextGlobalNr,
   assignGlobalNrs,
-  getBeschlussregisterSettings,
-  upsertBeschlussregisterSettings,
 } from './protocol-db'
 
 describe('createProtocol', () => {

@@ -24,7 +24,10 @@
 # specifying. This comment exists so the difference reads as a decision, not as
 # drift.
 #
-# Tokens: ${ACTIVE_COLOUR}, ${INACTIVE_COLOUR}. Nothing else is substituted.
+# Tokens: ${ACTIVE_COLOUR}, ${INACTIVE_COLOUR}, ${PUBLIC_BASE_PATH}. Nothing else
+# is substituted. PUBLIC_BASE_PATH (TASK-023) is gremion-public's build-time
+# kit.paths.base: its /healthz lives under it, so the public and public-next
+# probes follow it; empty renders /healthz. The app probes never take it.
 http:
   services:
     app:
@@ -38,7 +41,7 @@ http:
     public:
       loadBalancer:
         healthCheck:
-          path: /healthz
+          path: ${PUBLIC_BASE_PATH}/healthz
           interval: "10s"
           timeout: "3s"
         servers:
@@ -54,7 +57,7 @@ http:
     public-next:
       loadBalancer:
         healthCheck:
-          path: /healthz
+          path: ${PUBLIC_BASE_PATH}/healthz
           interval: "10s"
           timeout: "3s"
         servers:

@@ -169,7 +169,7 @@ describe('reserved platform hosts are refused by addTenantDomain', () => {
   it('refuses each of the nine names under PLATFORM_DOMAIN, with ONE error shape', async () => {
     for (const host of reservedPlatformHosts(process.env.PLATFORM_DOMAIN!)) {
       await expect(addTenantDomain(tenantId, host)).rejects.toThrow(
-        new RegExp(`reserved platform host: ${host.replace(/\./g, '\.')}`),
+        new RegExp(`reserved platform host: ${host.replace(/\./g, '\\.')}`),
       )
     }
     expect(await listTenantDomains(tenantId)).toEqual([])
@@ -181,7 +181,7 @@ describe('reserved platform hosts are refused by addTenantDomain', () => {
   it('reports _dmarc.<apex> as RESERVED, never as malformed', async () => {
     const dmarc = `_dmarc.${process.env.PLATFORM_DOMAIN}`
     await expect(addTenantDomain(tenantId, dmarc)).rejects.toThrow(
-      new RegExp(`reserved platform host: ${dmarc.replace(/\./g, '\.')}`),
+      new RegExp(`reserved platform host: ${dmarc.replace(/\./g, '\\.')}`),
     )
     await expect(addTenantDomain(tenantId, dmarc)).rejects.not.toThrow(/is not a valid host/)
   })
