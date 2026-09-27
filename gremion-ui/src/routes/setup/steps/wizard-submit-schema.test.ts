@@ -35,10 +35,20 @@ function jsonResponse(body: unknown, ok = true): Response {
  * during their submit flow, and records every body PATCHed to
  * /api/setup/config for the caller to assert on.
  */
+// typescript(no-base-to-string): RequestInfo includes Request, whose
+// String() coercion falls back to Object.prototype.toString ('[object
+// Request]'), not its .url. The wizard steps only ever pass string paths
+// today, but this keeps the routing meaningful if that ever changes.
+function urlOf(input: RequestInfo | URL): string {
+  if (input instanceof URL) return input.href
+  if (typeof input === 'string') return input
+  return input.url
+}
+
 function mockSetupFetch(): unknown[] {
   const patchBodies: unknown[] = []
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
+    const url = urlOf(input)
     const method = init?.method ?? 'GET'
     if (url === '/api/setup/health') {
       return jsonResponse({

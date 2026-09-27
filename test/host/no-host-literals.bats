@@ -130,6 +130,23 @@ literal_exempt() {  # $1 = pattern name, $2 = repo-relative path
   return 1
 }
 
+# A pnpm-lock.yaml Subresource Integrity value (integrity: sha512-<base64>) is
+# random by construction and cannot carry a host name, but a 4-letter pattern
+# can occur inside it by chance (measured 2026-09-26: the registrar pattern
+# inside a new dependency's sha512). Only for pnpm-lock.yaml: strip the SRI
+# values from the line and re-test the rest; the hit is dropped only when the
+# pattern no longer matches, so a literal anywhere else on the line (a tarball
+# URL, a registry host) and any integrity-shaped text in other files still fail.
+sri_only_hit() {  # $1 = repo-relative path, $2 = git grep hit "path:line:text", $3 = pattern
+  case "$1" in pnpm-lock.yaml|*/pnpm-lock.yaml) ;; *) return 1 ;; esac
+  local text="${2#*:}" stripped
+  text="${text#*:}"
+  stripped="$(printf '%s' "$text" | sed -E 's#(integrity: )sha(256|384|512)-[A-Za-z0-9+/]+=*#\1<sri>#g')"
+  [ "$stripped" != "$text" ] || return 1
+  if printf '%s' "$stripped" | grep -qiE -e "$3"; then return 1; fi
+  return 0
+}
+
 # Prints "<name> <path>:<line>:<text>" for every un-exempted hit; 1 if any.
 # git grep, not a recursive grep: it honours .gitignore (so node_modules,
 # .superpowers and the rest of the ignored tree can neither slow it down nor
@@ -145,6 +162,7 @@ scan_literals() {  # $1 = repository directory
       [ -n "$hit" ] || continue
       path="${hit%%:*}"
       if literal_exempt "$name" "$path"; then continue; fi
+      if sri_only_hit "$path" "$hit" "$pattern"; then continue; fi
       printf '%s %s\n' "$name" "$hit"
       rc=1
     done < <(git -C "$repo" grep -nIiE --untracked --exclude-standard -e "$pattern" -- . || true)
@@ -170,6 +188,33 @@ plant_repo() {  # $1 = directory to create as a throwaway git repo
     printf 'host literal(s) found in the public kernel:\n%s\n' "$output" >&2
   fi
   [ "$status" -eq 0 ]
+}
+
+@test "an SRI integrity hash in pnpm-lock.yaml that happens to contain a pattern is not a leak" {
+  # Measured 2026-09-26 on the TASK-076 merge: a new dependency's sha512 value
+  # contained the registrar token (sample 6) and the pattern matched inside random
+  # base64. A Subresource Integrity value cannot carry a host name.
+  local d="$BATS_TEST_TMPDIR/sri-only"
+  plant_repo "$d"
+  printf '    resolution: {integrity: sha512-AAAhJ%s3qFBkbLHA==}\n' "${HOST_LITERAL_SAMPLES[5]}" > "$d/pnpm-lock.yaml"
+  run scan_literals "$d"
+  [ "$status" -eq 0 ]
+}
+
+@test "a pattern elsewhere in pnpm-lock.yaml, or in an integrity-shaped string outside it, is still caught" {
+  local d="$BATS_TEST_TMPDIR/sri-elsewhere"
+  plant_repo "$d"
+  # same line, outside the integrity value
+  printf '    resolution: {tarball: https://%s.example/x.tgz, integrity: sha512-AAAA==}\n' "${HOST_LITERAL_SAMPLES[5]}" > "$d/pnpm-lock.yaml"
+  run scan_literals "$d"
+  [ "$status" -ne 0 ]
+  # integrity-shaped text in any other file is not exempt
+  local e="$BATS_TEST_TMPDIR/sri-other-file"
+  plant_repo "$e"
+  mkdir -p "$e/docs"
+  printf 'integrity: sha512-AAAhJ%s3qFBkbLHA==\n' "${HOST_LITERAL_SAMPLES[5]}" > "$e/docs/note.md"
+  run scan_literals "$e"
+  [ "$status" -ne 0 ]
 }
 
 @test "the scan actually reaches this tree (vacuity canary)" {

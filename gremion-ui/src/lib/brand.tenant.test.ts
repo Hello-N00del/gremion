@@ -13,11 +13,11 @@ describe('brand.ts — neutral client fallback (no institution identity)', () =>
     // default rendering (app.css tokens + letter mark). Pin them to exactly
     // null; every other field stays a non-empty string.
     const NULLABLE = new Set(['palette', 'logoUrl'])
-    for (const [k, v] of Object.entries(DEFAULT_BRAND)) {
-      if (NULLABLE.has(k)) {
-        expect(v, k).toBeNull()
-        continue
-      }
+    const entries = Object.entries(DEFAULT_BRAND)
+    for (const [k, v] of entries.filter(([k]) => NULLABLE.has(k))) {
+      expect(v, k).toBeNull()
+    }
+    for (const [k, v] of entries.filter(([k]) => !NULLABLE.has(k))) {
       expect(typeof v, k).toBe('string')
       expect((v as string).length, k).toBeGreaterThan(0)
     }

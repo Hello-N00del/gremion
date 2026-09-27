@@ -253,3 +253,6 @@ docker-compose.local-testdb.yml
 # at boot and never committed. gremion-ui/scripts/gen-realm-export.ts writes it
 # at this same path — the assembler (B34) invokes the generator there.
 docker/keycloak/realm-export.json
+
+# Local generator smoke output (TASK-083 brief Q3: dart-dio smoke into .tmp/dart-gov/); never committed
+.tmp/

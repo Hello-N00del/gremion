@@ -1,0 +1,33 @@
+{
+  "$comment": "HAND-BUILT in the shape of `grype sbom:<file> -o json` (grype 0.100.0): matches[].vulnerability{id,severity}, relatedVulnerabilities[], artifact{name,version,type,purl}. The grype DB host was unreachable from the build sandbox on 2026-09-25, so this is NOT a recorded grype run. The advisory values were confirmed live on 2026-09-25 from the npm registry advisory endpoint (POST /-/npm/v1/security/advisories/bulk {minimist:[1.2.5]}): GHSA-xvch-5gv4-984h, severity critical, CVSS 9.8, vulnerable >=1.0.0 <1.2.6; CVE-2021-44906.",
+  "matches": [
+    {
+      "vulnerability": {
+        "id": "GHSA-xvch-5gv4-984h",
+        "dataSource": "https://github.com/advisories/GHSA-xvch-5gv4-984h",
+        "namespace": "github:language:javascript",
+        "severity": "Critical",
+        "fix": { "versions": ["1.2.6"], "state": "fixed" }
+      },
+      "relatedVulnerabilities": [
+        { "id": "CVE-2021-44906", "namespace": "nvd:cpe", "severity": "Critical" }
+      ],
+      "artifact": {
+        "name": "minimist",
+        "version": "1.2.5",
+        "type": "npm",
+        "purl": "pkg:npm/minimist@1.2.5"
+      }
+    },
+    {
+      "vulnerability": {
+        "id": "GHSA-0000-0000-high",
+        "namespace": "github:language:javascript",
+        "severity": "High"
+      },
+      "relatedVulnerabilities": [],
+      "artifact": { "name": "example-high", "version": "1.0.0", "type": "npm", "purl": "pkg:npm/example-high@1.0.0" }
+    }
+  ],
+  "descriptor": { "name": "grype", "version": "0.100.0" }
+}

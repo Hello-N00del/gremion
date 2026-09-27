@@ -1,0 +1,19 @@
+{
+  // Emit config for `npm publish` — see packages/ports/tsconfig.build.json for
+  // why `include`, `rootDir` and the test exclusion are all spelled out rather
+  // than left to tsc's defaults. The relative imports in src/ carry `.js`
+  // suffixes so the emitted ESM resolves under plain `node` (nodenext).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

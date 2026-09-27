@@ -12,6 +12,15 @@ const de: Record<string, string> = {
   'nav.settings':   'Einstellungen',
   'nav.groups':     'Gruppen',
 
+  // ── Responsive navigation shell (TASK-208) ────────────────────────────────
+  'nav.main':           'Hauptnavigation',
+  'nav.menu':           'Menü',
+  'nav.drawer':         'Navigation',
+  'nav.drawer.close':   'Navigation schließen',
+  'nav.sidebar':        'Seitenleiste',
+  'nav.sidebar.saved':  'Wird auf diesem Gerät gespeichert',
+  'nav.legal':          'Rechtliches',
+
   // ── Gremien (Committees / Governance) ────────────────────────────────────
   'members.title':              'Gremien',
   'members.select':             'Wählen Sie ein Gremium aus.',

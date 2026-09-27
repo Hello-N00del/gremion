@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { parseBlueprintDocument } from './blueprint-schema'
+import { parseBlueprintDocument, type ParseBlueprintResult } from './blueprint-schema'
 import { STURA_BLUEPRINT } from './org-blueprint'
+
+// Narrows the union so the follow-up `errors` expect runs unconditionally
+// (vitest(no-conditional-expect)) instead of inside an `if (!r.ok)` guard.
+function assertRejected(
+  r: ParseBlueprintResult,
+): asserts r is Extract<ParseBlueprintResult, { ok: false }> {
+  expect(r.ok).toBe(false)
+}
 
 /** A minimal blueprint document that passes BOTH validation layers. */
 function minimalDoc(): Record<string, unknown> {
@@ -30,30 +38,30 @@ describe('parseBlueprintDocument — layer 1 (zod strict shape)', () => {
 
   it('rejects an unknown top-level property (strict)', () => {
     const r = parseBlueprintDocument({ ...minimalDoc(), bogusSection: true })
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join(' ')).toMatch(/bogusSection/)
+    assertRejected(r)
+    expect(r.errors.join(' ')).toMatch(/bogusSection/)
   })
 
   it('rejects an unknown org-unit property (strict)', () => {
     const doc = minimalDoc()
     ;(doc.orgUnits as Record<string, unknown>[])[0]!.sniffMe = 'x'
     const r = parseBlueprintDocument(doc)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join(' ')).toMatch(/sniffMe/)
+    assertRejected(r)
+    expect(r.errors.join(' ')).toMatch(/sniffMe/)
   })
 
   it('rejects a document missing schema_version', () => {
     const doc = minimalDoc()
     delete doc.schema_version
     const r = parseBlueprintDocument(doc)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join(' ')).toMatch(/schema_version/)
+    assertRejected(r)
+    expect(r.errors.join(' ')).toMatch(/schema_version/)
   })
 
   it('rejects schema_version 2 (only version 1 is understood)', () => {
     const r = parseBlueprintDocument({ ...minimalDoc(), schema_version: 2 })
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join(' ')).toMatch(/schema_version/)
+    assertRejected(r)
+    expect(r.errors.join(' ')).toMatch(/schema_version/)
   })
 
   it('parses STURA_BLUEPRINT itself clean (both layers)', () => {
@@ -85,8 +93,8 @@ describe('parseBlueprintDocument — layer 2 composition (validateBlueprint)', (
       visibility: 'all_members', wantsMatrixRoom: true, wantsNextcloudFolder: true
     })
     const r = parseBlueprintDocument(doc)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors.join(' ')).toMatch(/at most 1 root .* 'council'/)
+    assertRejected(r)
+    expect(r.errors.join(' ')).toMatch(/at most 1 root .* 'council'/)
   })
 
   it('uses the document orgSchema for layer 2 when present (non-StuRa vocabulary validates)', () => {

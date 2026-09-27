@@ -320,19 +320,31 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
     ['the public address immediately above CGNAT', '100.128.0.0', false, 200],
   ]
 
-  for (const [label, host, allowPrivate, status] of cgnatEdges) {
+  // Split by expected outcome BEFORE the loop (plain array filtering, not a
+  // conditional wrapped around `it()` or its expects) so every generated test
+  // body has an unconditional set of expect calls (vitest(no-conditional-expect),
+  // vitest(no-conditional-tests)).
+  const cgnatAllowed = cgnatEdges.filter(([, , , status]) => status === 200)
+  const cgnatRefused = cgnatEdges.filter(([, , , status]) => status !== 200)
+
+  for (const [label, host, allowPrivate] of cgnatAllowed) {
     const flag = allowPrivate ? 'SMTP_TEST_ALLOW_PRIVATE=1' : 'no flag'
-    const verb = status === 200 ? 'allows' : 'refuses'
-    it(`${verb} ${label} (${host}) with ${flag}`, async () => {
+    it(`allows ${label} (${host}) with ${flag}`, async () => {
+      if (allowPrivate) hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+      const res = await call(host, 1025)
+      expect(res.status).toBe(200)
+      expect(hoisted.createTransport).toHaveBeenCalledTimes(1)
+      expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({ host })
+    })
+  }
+
+  for (const [label, host, allowPrivate, status] of cgnatRefused) {
+    const flag = allowPrivate ? 'SMTP_TEST_ALLOW_PRIVATE=1' : 'no flag'
+    it(`refuses ${label} (${host}) with ${flag}`, async () => {
       if (allowPrivate) hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
       const res = await call(host, 1025)
       expect(res.status).toBe(status)
-      if (status === 200) {
-        expect(hoisted.createTransport).toHaveBeenCalledTimes(1)
-        expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({ host })
-      } else {
-        expect(hoisted.createTransport).not.toHaveBeenCalled()
-      }
+      expect(hoisted.createTransport).not.toHaveBeenCalled()
     })
   }
 

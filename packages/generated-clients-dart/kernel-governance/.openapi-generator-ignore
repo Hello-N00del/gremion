@@ -1,0 +1,6 @@
+# Owned by packages/generated-clients-dart/src/pipeline.ts (GENERATOR_IGNORE).
+# Keeps tests and docs out of the generated package, and keeps the
+# generator .gitignore (which ignores pubspec.lock) out: the lock is committed.
+test/**
+doc/**
+.gitignore

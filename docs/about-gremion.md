@@ -130,7 +130,7 @@ Gremion is the open core of a product family. Modules and verticals live in **se
 | module repositories | mixed — see below | One repository per module. |
 | verticals and the hosting control plane | private | Deployment-specific config, seed data and theming; hosting / provisioning / billing. |
 
-**Modules are one repository per module, and they are not uniformly closed.** Public, AGPL-3.0-only: elections (Helios), newsletter, calendar, files (Nextcloud), messages (Matrix + LiveKit), board, users. Closed: finance, content, vault, handover. Do not read "module layer" as "proprietary layer" — most of it is AGPL. The split out of the single holding repository is in progress, so today the modules are carried in a private holding repository and consumed over git rather than as published packages; `@gremion/db` and `@gremion/ports` begin publishing to npm at 0.1.0.
+**Modules are one repository per module, and they are not uniformly closed.** Public, AGPL-3.0-only: the elections, newsletter, calendar, files, messages, board and users modules. That licence covers the module code only; the upstream systems those modules wrap (the Helios overlay, Nextcloud, the Matrix homeserver, LiveKit) keep their own licences, which are recorded in [the licence register](compliance/licence-register.md). Closed: finance, content, vault, handover. Do not read "module layer" as "proprietary layer" — most of it is AGPL. The split out of the single holding repository is in progress, so today the modules are carried in a private holding repository and consumed over git rather than as published packages; `@gremion/db` and `@gremion/ports` begin publishing to npm at 0.1.0.
 
 **History.** This repository starts from a single root commit. It is a **fresh extraction** — only the ratified core subset, with a secret/PII sweep of that subset — not a re-publish of the private product repository, whose history stays private.
 
@@ -155,7 +155,7 @@ The architecture is a **modular monolith — extract on demand**, on the proven 
 
 **Carve-time residuals** are tracked, one by one, in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) — leftovers of the extraction, listed there until they are removed or generalised rather than promised against a date.
 
-**Boot smoke confirmed:** the kernel boots standalone — the chain applies clean against a real `postgres:18-alpine` (with seeds disabled, 28 of the 31 governance migrations, plus 4 control migrations; `make fresh-init-proof` re-measures it), registry seams active, no module errors; the only non-green is the expected fresh-kernel "incomplete brand identity" 503 that the Setup wizard resolves.
+**Boot smoke confirmed:** the kernel boots standalone — the chain applies clean against a real `postgres:18-alpine` (with seeds disabled, 28 of the 31 governance migrations, plus 5 control migrations; `make fresh-init-proof` re-measures it), registry seams active, no module errors; the only non-green is the expected fresh-kernel "incomplete brand identity" 503 that the Setup wizard resolves.
 
 ## What this repository does not contain
 
