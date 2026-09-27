@@ -13,6 +13,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/ports/package.json ./packages/ports/
 COPY packages/storage/package.json ./packages/storage/
+COPY packages/tokens/package.json ./packages/tokens/
 COPY gremion-ui/package.json ./gremion-ui/
 RUN pnpm install --frozen-lockfile
 
@@ -20,6 +21,7 @@ RUN pnpm install --frozen-lockfile
 COPY packages/db ./packages/db/
 COPY packages/ports ./packages/ports/
 COPY packages/storage ./packages/storage/
+COPY packages/tokens ./packages/tokens/
 COPY gremion-ui ./gremion-ui/
 
 # Build the SvelteKit app (@gremion/db + @gremion/ports bundled via ssr.noExternal)

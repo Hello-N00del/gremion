@@ -325,6 +325,175 @@ PROBE
     [[ "$output" == *"not KEY=VALUE"* ]]
 }
 
+# -- load_env against a REAL gremion-init-secrets render (TASK-028, B15 1-2) --
+#
+# The fixtures above are hand-written; these run the actual renderer into the
+# throwaway root and then damage one line, so the gate is measured against the
+# files a host really loads. ALLOW_SENTINELS=1 because a fresh render still
+# carries the operator's CHANGE_ME_OPERATOR_ keys; the refusals under test are
+# the ones that flag does NOT waive.
+
+render_real_env() {
+    "${HOST_SRC}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack teststack >/dev/null
+}
+
+# set_key <file> <KEY> <value> -- replace the single KEY= line in place.
+set_key() {
+    sed -i "s|^$2=.*|$2=$3|" "$1"
+    grep -q "^$2=$3\$" "$1" || { echo "set_key: $2 not rewritten in $1"; return 1; }
+}
+
+@test "load_env loads an untouched real render (sentinels allowed)" {
+    render_real_env
+    local f
+    for f in state app-blue app-green mail ops; do
+        run_with 'ALLOW_SENTINELS=1 load_env "$1"' "${GREMION_ROOT}/etc/env/${f}.env"
+        [ "$status" -eq 0 ] || { echo "${f}.env: $output"; return 1; }
+    done
+}
+
+@test "load_env refuses a duplicate key in a real rendered app-blue.env, naming the key" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'COLOUR=green\n' >> "$f"
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"' "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"duplicate key"* ]]
+    [[ "$output" == *"COLOUR"* ]]
+}
+
+@test "load_env refuses an EMPTY value for a key app.env.tmpl marks CHANGE_ME_GEN_" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/app-blue.env"
+    set_key "$f" AUTH_SECRET ''
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"' "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"AUTH_SECRET"* ]]
+    [[ "$output" == *"empty"* ]]
+}
+
+@test "load_env refuses an EMPTY value for a key state.env.tmpl marks CHANGE_ME_GEN_ (embedded in a URL)" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/state.env"
+    set_key "$f" GREMION_PUBLIC_DB_URL ''
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"' "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"GREMION_PUBLIC_DB_URL"* ]]
+}
+
+@test "load_env keeps accepting an empty key the template does NOT mark secret (SEED_TOKEN)" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/state.env"
+    grep -q '^SEED_TOKEN=$' "$f"
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"; echo "[${SEED_TOKEN}]"' "$f"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[]"* ]]
+}
+
+@test "load_env takes the template as an explicit second argument" {
+    printf 'SECRET_A=\nPLAIN=\n' > "${GREMION_ROOT}/t.env"
+    printf 'SECRET_A=CHANGE_ME_GEN_hex32_a\nPLAIN=\n' > "${GREMION_ROOT}/t.env.tmpl"
+    run_with 'load_env "$1" "$2"' "${GREMION_ROOT}/t.env" "${GREMION_ROOT}/t.env.tmpl"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"SECRET_A"* ]]
+    [[ "$output" != *"PLAIN"* ]]
+}
+
+@test "load_env fails closed when a host env file's template cannot be found" {
+    render_real_env
+    run_with 'GREMION_ENV_TEMPLATE_DIR="$2" ALLOW_SENTINELS=1 load_env "$1"' \
+        "${GREMION_ROOT}/etc/env/state.env" "${GREMION_ROOT}/no-such-dir"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"template"* ]]
+}
+
+# The INSTALLED layout: bootstrap puts only bin/ and lib/ under the root, so no
+# template sits beside lib/. The active release's copy is used when present...
+install_lib_only() {
+    mkdir -p "${GREMION_ROOT}/lib"
+    cp "$COMMON_SH" "${GREMION_ROOT}/lib/common.sh"
+    printf '%s' "${GREMION_ROOT}/lib/common.sh"
+}
+
+@test "installed layout: the template under <root>/current is used, so an empty secret is still refused" {
+    render_real_env
+    local lib; lib="$(install_lib_only)"
+    mkdir -p "${GREMION_ROOT}/current/infra/host/templates"
+    cp -r "${HOST_SRC}/templates/env" "${GREMION_ROOT}/current/infra/host/templates/env"
+    set_key "${GREMION_ROOT}/etc/env/state.env" AUTH_SECRET ''
+    run bash -c 'set -euo pipefail; . "$0"; ALLOW_SENTINELS=1 load_env "$1"' \
+        "$lib" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"AUTH_SECRET"* ]]
+}
+
+# ...and with no release at all it says LOUDLY that the one check did not run,
+# while every other refusal still holds.
+@test "installed layout, no release: a loud WARN, the other refusals still run" {
+    render_real_env
+    local lib; lib="$(install_lib_only)"
+    run bash -c 'set -euo pipefail; . "$0"; ALLOW_SENTINELS=1 load_env "$1"; echo LOADED' \
+        "$lib" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WARN"* ]]
+    [[ "$output" == *"empty-secret check did NOT run"* ]]
+    [[ "$output" == *"LOADED"* ]]
+    printf 'STACK=dup\n' >> "${GREMION_ROOT}/etc/env/state.env"
+    run bash -c 'set -euo pipefail; . "$0"; ALLOW_SENTINELS=1 load_env "$1"' \
+        "$lib" "${GREMION_ROOT}/etc/env/state.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"duplicate key"* ]]
+}
+
+@test "an explicit template argument that does not exist is a refusal, never a skip" {
+    printf 'A=1\n' > "${GREMION_ROOT}/t.env"
+    run_with 'load_env "$1" "$2"' "${GREMION_ROOT}/t.env" "${GREMION_ROOT}/absent.tmpl"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"absent.tmpl"* ]]
+}
+
+@test "an ALLOW_SENTINELS=1 line inside the file does not waive the sentinel refusal (review finding)" {
+    printf 'ALLOW_SENTINELS=1\nACME_EMAIL=CHANGE_ME_OPERATOR_acme_email\n' > "${GREMION_ROOT}/t.env"
+    run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"ALLOW_SENTINELS"* ]]
+}
+
+@test "load_env refuses keys that steer the shell or the loader itself" {
+    local k
+    for k in ALLOW_SENTINELS GREMION_ENV_TEMPLATE_DIR PATH IFS BASH_ENV LD_PRELOAD GREMION_EXIT_ASSERT GREMION_EXIT_USAGE GREMION_LIB_DIR C_BAD; do
+        printf 'A=1\n%s=x\n' "$k" > "${GREMION_ROOT}/t.env"
+        run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
+        [ "$status" -eq 2 ] || { echo "$k was accepted"; return 1; }
+        [[ "$output" == *"$k"* ]]
+    done
+}
+
+@test "a whitespace-only value counts as empty for a template-marked secret" {
+    render_real_env
+    local f="${GREMION_ROOT}/etc/env/app-blue.env"
+    set_key "$f" AUTH_SECRET '"  "'
+    run_with 'ALLOW_SENTINELS=1 load_env "$1"' "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"AUTH_SECRET"* ]]
+}
+
+@test "load_env never echoes a malformed line (it may hold a secret)" {
+    printf 'A=1\nexport LEAKY=fake-secret-value-0000\n' > "${GREMION_ROOT}/t.env"
+    run_with 'load_env "$1"' "${GREMION_ROOT}/t.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"not KEY=VALUE"* ]]
+    [[ "$output" == *"line 2"* ]]
+    [[ "$output" != *"fake-secret-value-0000"* ]]
+}
+
+@test "the load_env header states the #476 defect the right way round (first occurrence read)" {
+    run grep -c 'read the FIRST occurrence' "$COMMON_SH"
+    [ "$output" -ge 1 ]
+    run grep -c 'silently read the LAST occurrence' "$COMMON_SH"
+    [ "$output" -eq 0 ]
+}
+
 # ---------------------------------------------------------------------------
 # common.sh — atomic_write
 # ---------------------------------------------------------------------------

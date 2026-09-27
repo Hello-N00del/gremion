@@ -133,6 +133,21 @@ export const ALLOWLIST = [
       'the write side of the Dart client generator (tools/generate.mjs is its CLI): syncs each generated package in the repo to exactly what the pipeline emits and deletes files it no longer emits — build-time codegen output, never tenant data',
     residual: 'none at runtime; build/CI tooling only',
   },
+  {
+    path: 'packages/edge-routers/src/emit.ts',
+    sites: 11,
+    reason:
+      "TASK-034 (TRD-189/TRD-074): the single per-tenant router emitter writes Traefik file-provider routers into the host's etc/edge directory (atomic tmp + rename + fsync, idempotent) — platform edge configuration Traefik reads, not a tenant file/draft/media object; the seam's backends are not a directory Traefik can watch",
+    residual:
+      "the caller (TASK-043's provisioner) must run where etc/edge is writable, and hygiene j4 lets no compose service but traefik mount etc/edge, read-only, so the app process cannot be that place; revisit if the edge moves to a Traefik HTTP/KV provider",
+  },
+  {
+    path: 'packages/edge-routers/src/sync.ts',
+    sites: 1,
+    reason:
+      "TASK-034: the fleet sync removes an orphaned router file of the emitter's own name shape from the host's etc/edge directory — platform edge configuration, not tenant content",
+    residual: 'same as packages/edge-routers/src/emit.ts: its caller must run where etc/edge is writable, which hygiene j4 keeps out of the app process',
+  },
 ]
 
 const CODE_EXT = /\.(ts|js|mjs|cjs|mts|cts|svelte)$/
@@ -167,8 +182,6 @@ const WRITE_BASE = [
 const WRITE_NAME = String.raw`(?:${WRITE_BASE.join('|')})(?:Sync)?`
 /** `.writeFile(`, `fs.promises.rm (` … */
 const MEMBER_WRITE = new RegExp(String.raw`\.\s*(${WRITE_NAME})\s*\(`)
-/** `{ writeFileSync, rm as nuke }` — names inside an import/require/destructure brace. */
-const BRACE_SPEC = /\{([^{}]*)\}/g
 
 function isTest(rel) {
   return TEST_FILE.test(rel)
@@ -235,9 +248,17 @@ function fsBindings(text) {
   // derived namespaces: const fsp = fs.promises (to a fixed point)
   for (let grew = true; grew; ) {
     grew = false
-    for (const b of [...out]) {
+    // Snapshot before iterating: the inner loop adds to `out`, and this pass
+    // must run against the set as it stood when the pass started; the outer
+    // `while (grew)` re-runs once more to pick up anything just added.
+    for (const b of Array.from(out)) {
       const re = new RegExp(String.raw`\b(?:const|let|var)\s+([\w$]+)\s*=\s*${escapeRe(b)}\s*\.\s*promises\b`, 'g')
-      for (const m of text.matchAll(re)) if (!out.has(m[1])) (out.add(m[1]), (grew = true))
+      for (const m of text.matchAll(re)) {
+        if (!out.has(m[1])) {
+          out.add(m[1])
+          grew = true
+        }
+      }
     }
   }
   return out

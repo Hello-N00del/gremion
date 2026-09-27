@@ -19,14 +19,15 @@
  * remaining consumer of this lane — see tests/integration/README.md) calls
  * both in its own beforeAll.
  */
-import { assertSafeTestDbUrl } from './assert-safe-test-db-url'
+import { assertNonProductionDbUrl } from './assert-safe-test-db-url'
 import { beforeAll } from 'vitest'
 import { _getAls, type TenantContext } from '$lib/server/tenant/context'
 
 // Guard this lane too — it runs migrations against whatever DATABASE_URL is
-// set; protecting it prevents accidental runs against staging. We do NOT guard
-// CONTROL_DATABASE_URL: the deselection test only touches the data-plane DB.
-assertSafeTestDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
+// set; the no-truncate guard keeps it off this host's production database. We
+// do NOT guard CONTROL_DATABASE_URL: the deselection test only touches the
+// data-plane DB.
+assertNonProductionDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
 
 // The pool-registry keys on tenant.id and connects via tenant.dbUrl.
 // Snapshot process.env.DATABASE_URL here (module-import time) so the context

@@ -45,14 +45,14 @@ function paramNames(doc: any, op: any, pathParams: any[]): string[] {
 
 describe('H1 - every list operation is cursor-paginated (brief §5 Q7)', () => {
   it('there are list operations to check (non-vacuity)', () => {
-    const lists = allOperations(loadOpenApi()).filter(({ op }) => /^list/.test(op.operationId))
+    const lists = allOperations(loadOpenApi()).filter(({ op }) => op.operationId.startsWith('list'))
     expect(lists.length).toBeGreaterThanOrEqual(6)
   })
 
   it('each list takes ?cursor= and ?limit= and returns a named *Page {items, nextCursor}', () => {
     const doc = loadOpenApi()
     for (const { path, method, op, pathParams } of allOperations(doc)) {
-      if (!/^list/.test(op.operationId)) continue
+      if (!op.operationId.startsWith('list')) continue
       const where = `${method} ${path}`
       const names = paramNames(doc, op, pathParams)
       expect(names, where).toContain('cursor')
@@ -67,10 +67,15 @@ describe('H1 - every list operation is cursor-paginated (brief §5 Q7)', () => {
 
   it('no GET returns a bare array (a later move to a page object would be breaking)', () => {
     const doc = loadOpenApi()
+    let checked = 0
     for (const { path, op } of allOperations(doc)) {
       const schema = op.responses['200']?.content?.['application/json']?.schema
-      if (schema) expect(schema.type, `${path}`).not.toBe('array')
+      if (!schema) continue
+      expect(schema.type, `${path}`).not.toBe('array')
+      checked++
     }
+    // A guard that checked zero responses "passes" without checking anything.
+    expect(checked).toBeGreaterThan(0)
   })
 })
 
@@ -196,8 +201,13 @@ describe('H3 - 401, 403, 404 and 400 are documented where they can occur', () =>
 
   it('every operation with a request body documents 400', () => {
     const doc = loadOpenApi()
+    let checked = 0
     for (const { path, method, op } of allOperations(doc)) {
-      if (op.requestBody) expect(op.responses['400'], `${method} ${path} 400`).toBeDefined()
+      if (!op.requestBody) continue
+      expect(op.responses['400'], `${method} ${path} 400`).toBeDefined()
+      checked++
     }
+    // A guard that checked zero operations "passes" without checking anything.
+    expect(checked).toBeGreaterThan(0)
   })
 })

@@ -89,10 +89,15 @@ DB-backed `src/**/*.integration.test.ts` files (real boot, fleet migrations,
 control-plane registry). Configured in `vitest.integration.config.ts`. These
 require a real Postgres reachable via `DATABASE_URL` (default
 `postgres://gremion:gremion_test@localhost:5432/gremion`) and `CONTROL_DATABASE_URL`
-(default `…/control`) with migrations applied. The config defaults safe
+(default `…/control`) with migrations applied, and **`GREMION_PRODUCTION_STACK`**
+in the environment: the production `${STACK}` on this host, or `none` when the
+host runs no production unit. It has no default. The config defaults safe
 build-test placeholder secrets and **fail-closed-guards every DB URL** at
-config-load time (`assertSafeTestDbUrl`), so Vitest refuses to boot against a
-dangerous URL. `fileParallelism` is off — the suites share one Postgres and
+config-load time (`assertNonProductionDbUrl`, the spec B §6 no-truncate guard):
+Vitest refuses to boot while `GREMION_PRODUCTION_STACK` is unset, against a
+`postgres-<production stack>` host, against loopback while a production stack
+exists, and against any host that is not stack-qualified (`postgres-<stack>`).
+On a development box: `GREMION_PRODUCTION_STACK=none pnpm test:integration`. `fileParallelism` is off — the suites share one Postgres and
 truncate shared tables in `beforeEach`.
 
 ```bash
@@ -404,6 +409,8 @@ yamllint -c .yamllint.yml docker-compose.yml
 ### Vitest: integration suite refuses to boot
 
 The integration config fail-closed-guards `DATABASE_URL` /
-`CONTROL_DATABASE_URL`. If Vitest exits before any test runs, check the URL is a
-safe test database (the guard rejects anything that looks production-like) and
-that Postgres is reachable.
+`CONTROL_DATABASE_URL`. If Vitest exits before any test runs, read the
+`[no-truncate-guard]` line: it names the variable and the fix. Most often
+`GREMION_PRODUCTION_STACK` is unset (`none` on a host without a production
+unit), or the URL is not a test database on loopback / not a `postgres-<stack>`
+host of a non-production stack. Then check that Postgres is reachable.

@@ -47,6 +47,14 @@
       "adoptedBy": "TASK-084",
       "since": "2026-09-25",
       "reason": "gremion-public's read-only pool; replaced by openTenantDb when gremion-public adopts the package"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/portal-reader-grants.integration.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-028",
+      "since": "2026-09-27",
+      "reason": "a destructive integration proof, not a tenant connection: it CREATEs and DROPs its own scratch databases through the maintenance database of the guarded DATABASE_URL and runs the raw migration chain in each, which openTenantDb (a (tenant, module) pool resolved from GREMION_<MODULE>_PG_URL) cannot address; train4 decision, stays allow-listed while the test exists"
     }
   ]
 }

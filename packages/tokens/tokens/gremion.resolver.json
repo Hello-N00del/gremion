@@ -1,0 +1,37 @@
+{
+  "$schema": "https://www.designtokens.org/schemas/2025.10/resolver.json",
+  "version": "2025.10",
+  "name": "Gremion",
+  "description": "Light is the base set; the theme modifier layers the dark set over it (UX-030). Density (TASK-170) and derived council colours (TASK-169) join as further modifiers.",
+  "sets": {
+    "foundation": {
+      "sources": [
+        {
+          "$ref": "gremion.tokens.json"
+        }
+      ]
+    }
+  },
+  "modifiers": {
+    "theme": {
+      "description": "Colour scheme",
+      "contexts": {
+        "light": [],
+        "dark": [
+          {
+            "$ref": "modes/dark.tokens.json"
+          }
+        ]
+      },
+      "default": "light"
+    }
+  },
+  "resolutionOrder": [
+    {
+      "$ref": "#/sets/foundation"
+    },
+    {
+      "$ref": "#/modifiers/theme"
+    }
+  ]
+}

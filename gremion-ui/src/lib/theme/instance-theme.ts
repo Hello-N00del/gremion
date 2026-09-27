@@ -79,29 +79,17 @@ export function isPaletteId(v: string): v is PaletteId {
 export const DEFAULT_ACCENT_HUE = 265
 
 /**
- * Accent ramp for a given hue — mirrors the `--accent*` block of app.css
- * (and prototype web/tenancy.jsx `instanceAccentVars`) EXACTLY. Only H varies;
- * lightness/chroma per step are fixed so every hue derives an AA-coherent ramp.
+ * Accent ramp for a given hue (prototype web/tenancy.jsx `instanceAccentVars`).
+ * Only H varies; lightness/chroma per step are fixed so every hue derives an
+ * AA-coherent ramp.
+ *
+ * TASK-082 (UX-033 "kept"): the engine now lives in @gremion/tokens, whose
+ * build calls it for every palette hue of the DTCG token set, so the build's
+ * per-palette override set and this runtime injection are one function, not
+ * two copies. Re-exported here unchanged for every existing caller.
  */
-export function instanceAccentVars(H: number): {
-  light: Record<string, string>
-  dark: Record<string, string>
-} {
-  return {
-    light: {
-      '--accent': `oklch(42% 0.11 ${H})`,
-      '--accent-ink': `oklch(36% 0.11 ${H})`,
-      '--accent-soft': `oklch(93% 0.035 ${H})`,
-      '--accent-faint': `oklch(96% 0.02 ${H})`,
-    },
-    dark: {
-      '--accent': `oklch(72% 0.13 ${H})`,
-      '--accent-ink': `oklch(78% 0.11 ${H})`,
-      '--accent-soft': `oklch(28% 0.06 ${H})`,
-      '--accent-faint': `oklch(22% 0.04 ${H})`,
-    },
-  }
-}
+import { instanceAccentVars } from '@gremion/tokens/engine'
+export { instanceAccentVars }
 
 /**
  * Resolve a `brand.palette`/legacy `brand.accent` value to a curated hue
