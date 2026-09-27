@@ -8,8 +8,8 @@
 #
 # Phases, in order (each is its own call so no single step outlives a
 # supervisor's time box; state lives in the ledger directory):
-#   prepare      env files, scratch root, externals, the proof overlays;
-#                asserts every rendered name is under ${STACK} BEFORE any up
+#   prepare      env files, scratch root, externals, the proof overlays
+#   names        every rendered name is under ${STACK}; state-up refuses without it
 #   state-up     the state project (production profile)
 #   state-wait   postgres + keycloak healthy, pgbouncer auth staged; records
 #                the state snapshot (container IDs, volume CreatedAt)
@@ -49,7 +49,7 @@ export MSYS_NO_PATHCONV=1
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 host_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 ROOT_H="$(host_path "$ROOT")"
-SHA8="$(git -C "$ROOT" rev-parse --short=8 HEAD)"
+SHA8="$(git -C "$ROOT_H" rev-parse --short=8 HEAD)"
 STACK="${POOLED_STACK:-t040-${SHA8}}"
 SCOPE="${POOLED_SCOPE:-stack}"
 IMAGE_TAG_PROOF="${POOLED_IMAGE_TAG:-t040-proof}"
@@ -83,7 +83,7 @@ compose() {
     local p="$1"; shift
     local dir="$ROOT"
     case "$p" in ops) dir="$ROOT/infra/host/ops" ;; mail) dir="$ROOT/infra/host/mail" ;; esac
-    ( cd "$dir" && docker compose --env-file "$ENV_DIR/${p}.env" "$@" )
+    ( cd "$dir" && docker compose --env-file "$(host_path "$ENV_DIR/${p}.env")" "$@" )
 }
 
 # Every container of this stack's five projects, by the compose label.
@@ -130,7 +130,7 @@ phase_prepare() {
     # Subnets: a dedicated 10.231.0.0/16 and fd5a:231::/48, refused if taken.
     local taken
     # shellcheck disable=SC2046  # one argument per network id, on purpose
-    taken="$(docker network inspect $(docker network ls -q) --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null | tr ' ' '\n' | grep -E '^10\.231\.' || true)"
+    taken="$(docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null | grep -E ' 10\.231\.' | grep -v "^${STACK}" || true)"
     [[ -z "$taken" ]] || die "10.231.0.0/16 already in use on this engine: $taken"
 
     local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push
@@ -291,15 +291,24 @@ EOF
         envsubst < "$ROOT/infra/host/mail/config.toml.tmpl" | tr -d '\r' > "$SROOT/etc/mail/config.toml"
 
     # The stack-scoped externals (bootstrap.sh stage_networks' set).
-    docker network create --ipv6 --subnet 10.231.0.0/24 --subnet fd5a:231:0::/64 "${STACK}_edge" >/dev/null
-    docker network create --ipv6 --subnet 10.231.1.0/24 --subnet fd5a:231:1::/64 "${STACK}_state" >/dev/null
+    docker network inspect "${STACK}_edge" >/dev/null 2>&1 \
+        || docker network create --ipv6 --subnet 10.231.0.0/24 --subnet fd5a:231:0::/64 "${STACK}_edge" >/dev/null
+    docker network inspect "${STACK}_state" >/dev/null 2>&1 \
+        || docker network create --ipv6 --subnet 10.231.1.0/24 --subnet fd5a:231:1::/64 "${STACK}_state" >/dev/null
+    info "externals: networks ready"
     local vol
     for vol in traefik_acme config_data tenant_config_data tenant_secrets mail_data; do
-        docker volume create "${STACK}_${vol}" >/dev/null
+        docker volume inspect "${STACK}_${vol}" >/dev/null 2>&1 || docker volume create "${STACK}_${vol}" >/dev/null
     done
+    info "externals: volumes ready"
 
-    # Names on `config` BEFORE any `up`: every rendered network and volume is
-    # under ${STACK}, and every project is ${STACK}-<suffix>.
+    ok "prepared ${STACK}: env files, externals, overlays (run the names phase before any up)"
+    printf '%s prepared %s\n' "$(now)" "$STACK" | ledger run.log
+}
+
+# Names on `config` BEFORE any `up`: every rendered network and volume is
+# under ${STACK}, and every project is ${STACK}-<suffix>.
+phase_names() {
     local p names
     for p in state app-blue app-green ops mail; do
         names="$(COMPOSE_PROFILES='*' compose "$p" config --format json 2>/dev/null \
@@ -309,13 +318,14 @@ EOF
             [[ "$n" == "${STACK}"* || "$n" == "default" ]] || die "$p renders a name outside ${STACK}: $n"
         done <<< "$names"
     done
-    ok "prepared ${STACK}: env files, externals, overlays; every rendered name is under ${STACK}"
-    printf '%s prepared %s\n' "$(now)" "$STACK" | ledger run.log
+    ok "names: every rendered project, network and volume of the five projects is under ${STACK}"
+    : > "$OUT/.names-ok"
 }
 
 # ── state ──────────────────────────────────────────────────────────────────
 phase_state_up() {
     require_scratch state-up
+    [[ -f "$OUT/.names-ok" ]] || die "run the names phase first: no up before every rendered name is asserted"
     compose state up -d --pull never >/dev/null
     ok "state project up ($(docker ps -q --filter "label=com.docker.compose.project=${STACK}-state" | grep -c .) container(s))"
 }
@@ -657,6 +667,7 @@ phase_teardown() {
 run_phase() {
     case "$1" in
         prepare) phase_prepare ;;
+        names) phase_names ;;
         state-up) phase_state_up ;;
         state-wait) phase_state_wait ;;
         app-up) phase_app_up "$2" ;;
@@ -678,7 +689,7 @@ info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
 if [[ "$1" == all ]]; then
     require_scratch all
     trap 'phase_teardown || true' EXIT
-    for ph in prepare state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation tenant switch cold-state limits; do
+    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation tenant switch cold-state limits; do
         # shellcheck disable=SC2086
         run_phase $ph
     done
