@@ -17,7 +17,7 @@ const _gatewayUrl = String.fromEnvironment(
 );
 const _issuerUrl = String.fromEnvironment(
   'KEYCLOAK_ISSUER',
-  defaultValue: 'http://localhost:8082/auth/realms/sturaos',
+  defaultValue: 'http://localhost:8082/auth/realms/gremion',
 );
 const _clientId = String.fromEnvironment(
   'KEYCLOAK_CLIENT_ID',

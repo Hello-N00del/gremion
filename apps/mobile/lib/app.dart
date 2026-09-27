@@ -25,7 +25,7 @@ const sygnalUrl = String.fromEnvironment('SYGNAL_URL',
 const homeserverUrl = String.fromEnvironment('HOMESERVER_URL',
     defaultValue: 'http://localhost:8009');
 const issuerUrl = String.fromEnvironment('KEYCLOAK_ISSUER',
-    defaultValue: 'http://localhost:8082/auth/realms/sturaos');
+    defaultValue: 'http://localhost:8082/auth/realms/gremion');
 // #261: optional transport override for the OIDC endpoints (see
 // auth_service.dart). When set it steers the auth/token/end-session/JWKS URLs,
 // so it MUST also pass the boot-time release-HTTPS gate — main.dart adds it to

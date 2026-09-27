@@ -17,7 +17,7 @@ import 'matrix_store.dart';
 /// every invite surfaces as pending in the rooms list for manual review.
 ///
 /// Injected at build time via:
-///   --dart-define=MATRIX_ADMIN_ROOM_ID=!stura-admin:matrix.sturaos.com
+///   --dart-define=MATRIX_ADMIN_ROOM_ID=!stura-admin:matrix.example.org
 const _matrixAdminRoomId = String.fromEnvironment(
   'MATRIX_ADMIN_ROOM_ID',
   defaultValue: '',
