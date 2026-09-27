@@ -305,7 +305,10 @@ production a missing edge-injected `x-proxy-trust` (once
 ### Every request 404s locally
 
 A request must carry a host that is BOUND to a tenant (`addTenantDomain`); the
-default tenant binds none (TRD-075). The `gremion-ui` healthcheck probes
+default tenant binds none (TRD-075), and no shipped tool binds one yet (the
+customer-create CLI of TASK-043 is the first; see
+[runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a), so on a stack
+built from this tree every tenant route 404s. The `gremion-ui` healthcheck probes
 `/healthz`, which is exempt from resolution. To test by hand, stamp a bound
 host:
 

@@ -154,7 +154,10 @@ Before bringing the stack up, set the production values in `.env`:
 - **`DOMAIN`** — your real domain (e.g. `gov.example.org`).
 - **Tenant hosts** — there is no wildcard router. Each tenant host is a
   `tenant_domain` row plus its own `Host(...)`-literal router; the apex binds no
-  tenant and 404s by design (TASK-041, TRD-075). See
+  tenant and 404s by design (TASK-041, TRD-075). **No shipped tool writes a
+  `tenant_domain` row yet** (the customer-create CLI of TASK-043 is the first),
+  so until it lands a stack built from this tree serves no tenant on any host:
+  do not deploy it where a tenant must be served. See
   [runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a.
 - **`KC_ADMIN_ALLOWLIST_CIDRS`** — CIDRs allowed to reach the Keycloak admin
   console at `https://${DOMAIN}/auth/admin`. Defaults to `127.0.0.1/32`, so by

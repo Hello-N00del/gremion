@@ -90,12 +90,27 @@ host cross-check make this enforceable rather than topology-only.
 
 A host reaches a tenant only when BOTH exist:
 
-- a `tenant_domain` row binding it to the tenant (`addTenantDomain` in the
-  registry, via the tenant-provisioning tooling), and
+- a `tenant_domain` row binding it to the tenant (written only by the registry
+  call `addTenantDomain`), and
 - a `Host(...)`-literal Traefik router for exactly that host, chaining
   `gremion-ui-proxytrust` and `gremion-ui-starting` and pinning
   `X-Forwarded-Host` to that host (rendered per customer host by the edge
   router emitter, TASK-034).
+
+> **⛔ No shipped tool writes a `tenant_domain` row yet, so a kernel stack
+> built from this tree serves NO tenant on ANY host.** The resolver selects
+> by the whole bound host only (TASK-041); the apex binds no tenant (TRD-075)
+> and the old wildcard and apex default-tenant routes are gone. Nothing that
+> ships calls `addTenantDomain`: `gremion-ui/scripts/tenant-provision.ts`
+> creates a tenant but binds no host, the default tenant binds none, and
+> migration `004_tenant_domain.sql` creates the table empty. The binding
+> arrives with the customer-create CLI (TASK-043: its provisioning run writes
+> the `tenant_domain` row for the customer's domain) on top of the zero-tenant
+> boot (TASK-042). Until TASK-043 lands, **do not deploy this kernel to a
+> stack that must serve a tenant**, and do not hand-insert `tenant_domain`
+> rows: `addTenantDomain` carries the reserved-host refusal, the owner
+> pre-read and the cache-eviction notice in one transaction, and a raw
+> `INSERT` skips all three.
 
 The compose files carry only the apex routers (`gremion-ui`, `keycloak`,
 `keycloak-admin`, `fallback`), each literal on `${DOMAIN}`. A request for any
