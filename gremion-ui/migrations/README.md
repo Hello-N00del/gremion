@@ -298,7 +298,7 @@ recorded before re-checking its hash — but no such database exists: kernel
 `1200_content_news_posts.sql`, staged outside this directory in the content
 module's app chain (`modules/content/app/migrations/`). That grant covers
 the whole row, drafts and `author_id` included; the forward migration
-`1205_news_posts_public_reader_columns.sql` in the same chain narrows it to the
+`1201_news_posts_public_reader_columns.sql` in the same chain narrows it to the
 seven columns the portal reads, on published rows only (row-level security).
 The consequence is the rule: a
 **content-OFF** kernel-only fresh init completes green and serves the

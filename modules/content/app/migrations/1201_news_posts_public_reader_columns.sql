@@ -1,4 +1,4 @@
--- 1205_news_posts_public_reader_columns.sql
+-- 1201_news_posts_public_reader_columns.sql
 -- Content module, block 1200-1299. Owner: gremion-module-content.
 -- A FORWARD migration (TASK-200, Q9): 1200_content_news_posts.sql is never
 -- edited — its bytes are pinned, and a database that applied it never re-runs
@@ -10,8 +10,8 @@
 -- connection; only the portal's WHERE clauses kept them out of its responses.
 --
 -- WHAT THE PORTAL READS. The StuRa tree's gremion-public public-db.ts (at the
--- extraction tag extraction-source-f1; the kernel's portal has no news query
--- yet) selects exactly
+-- extraction tags extraction-source-f1 and -f2, unchanged between them; the
+-- kernel's portal has no news query yet) selects exactly
 -- id, title, slug, body_html, published_at, created_at, updated_at, and only
 -- rows WHERE published_at IS NOT NULL AND published_at <= now() (plus a
 -- COUNT(*) over the same predicate). This file grants exactly that:
@@ -24,13 +24,14 @@
 -- migrations and serves the app keeps seeing every row. Any OTHER non-owner
 -- role now sees no rows until a policy names it — fail closed, on purpose.
 --
--- NUMBER. The next free number in the content app chain: 1200 is taken and
--- 1201-1204 are allocated to the renumbered StuRa 044-047 (spec B section 4's
--- renumber table; spec D's ranges.json sets content's highWater to 1204). Those
--- four land with the content app half (TASK-205) and must be in place before any
--- database applies this chain, or they apply below its high-water mark. Checked against the kernel chain
--- (gremion-ui/migrations, 0xx) and every modules/**/migrations directory:
--- no collision (scripts/check-module-migration-names.mjs guards basenames).
+-- NUMBER. 1201, the content app chain's next free number after 1200 (R24-6),
+-- decided by the operator (R26-25) over the earlier draft number 1205. Any
+-- StuRa migration the content app half (TASK-205) brings into this chain takes
+-- a number after it. Checked against the kernel chain (gremion-ui/migrations,
+-- 0xx) and every modules/**/migrations directory: no collision
+-- (scripts/check-module-migration-names.mjs refuses a shared basename, a number
+-- used twice in one chain, and an app-chain number the kernel or another app
+-- chain already uses).
 --
 -- PROOF. modules/content/app/scripts/news-posts-public-grant-proof.sh runs this
 -- chain on a throwaway postgres:18-alpine and asserts the grant as the reader.

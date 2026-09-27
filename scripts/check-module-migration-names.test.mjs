@@ -92,9 +92,9 @@ test('RED: zero kernel migrations or zero module migrations refuse instead of pa
 })
 
 test('RED: an app chain number equal to a kernel number, or a number used twice in one chain, fails', () => {
-  const a = tree([...BASE, 'modules/content/app/migrations/1205_x.sql', 'modules/content/app/migrations/1205_y.sql'])
+  const a = tree([...BASE, 'modules/content/app/migrations/1201_x.sql', 'modules/content/app/migrations/1201_y.sql'])
   try {
-    assert.ok(checkMigrationNames(a.root).problems.some((p) => /1205/.test(p) && /twice|same number/.test(p)))
+    assert.ok(checkMigrationNames(a.root).problems.some((p) => /1201/.test(p) && /twice|same number/.test(p)))
   } finally {
     a.cleanup()
   }
