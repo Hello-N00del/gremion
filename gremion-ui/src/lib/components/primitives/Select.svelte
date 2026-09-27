@@ -7,7 +7,9 @@
   // wrapper therefore gives the trigger role=combobox with aria-controls to
   // the listbox, names the combobox and the listbox by the visible label, and
   // leaves arrows / Home / End, Enter/Space, Escape, typeahead and the hidden
-  // form input to Bits UI. The combobox's text content is its value, as a
+  // form input to Bits UI. Bits UI puts `required` only on the hidden form
+  // input, so the wrapper also sets aria-required on the combobox, as a
+  // native <select required> exposes it. The combobox's text content is its value, as a
   // native <select> announces it. Styling uses component-tier tokens only
   // (primitives.css). Every string is a prop.
   import { Select } from 'bits-ui'
@@ -49,7 +51,7 @@
 <div class="gp-field">
   <span id={labelId} class="gp-field-label">{label}</span>
   <Select.Root type="single" bind:value {onValueChange} items={options} {name} {disabled} {required}>
-    <Select.Trigger class="gp-field-control gp-field-button" role="combobox" aria-controls={listboxId} aria-labelledby={labelId}>
+    <Select.Trigger class="gp-field-control gp-field-button" role="combobox" aria-controls={listboxId} aria-labelledby={labelId} aria-required={required || undefined}>
       <span class={selected ? undefined : 'gp-placeholder'}>{selected ? selected.label : placeholder}</span>
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16">
         <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" />

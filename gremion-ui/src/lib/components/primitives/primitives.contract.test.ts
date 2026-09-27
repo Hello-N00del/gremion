@@ -103,6 +103,35 @@ describe('axe-core: 0 violations on every primitive, closed and open', () => {
   })
 })
 
+describe('ARIA state a native control gives for free survives the wrapper', () => {
+  // A native <select required> / <input required> exposes the required state;
+  // Bits UI puts `required` only on its hidden form input, so the wrapper
+  // must carry it to the focusable combobox (brief section 8 watch item).
+  test('Select: required reaches the combobox as aria-required, and only when set', () => {
+    render(Select, { props: { ...DE.select, options: DE.options, required: true } })
+    expect(screen.getByRole('combobox', { name: DE.select.label })).toHaveAttribute('aria-required', 'true')
+    cleanup()
+    render(Select, { props: { ...DE.select, options: DE.options } })
+    expect(screen.getByRole('combobox', { name: DE.select.label })).not.toHaveAttribute('aria-required')
+  })
+
+  test('Combobox: required reaches the input as aria-required, and only when set', () => {
+    render(Combobox, { props: { ...DE.combobox, options: DE.options, required: true } })
+    expect(screen.getByRole('combobox', { name: DE.combobox.label })).toHaveAttribute('aria-required', 'true')
+    cleanup()
+    render(Combobox, { props: { ...DE.combobox, options: DE.options } })
+    expect(screen.getByRole('combobox', { name: DE.combobox.label })).not.toHaveAttribute('aria-required')
+  })
+
+  test('disabled: the focusable control is disabled like the native element', () => {
+    render(Select, { props: { ...DE.select, options: DE.options, disabled: true } })
+    expect(screen.getByRole('combobox', { name: DE.select.label })).toBeDisabled()
+    cleanup()
+    render(Combobox, { props: { ...DE.combobox, options: DE.options, disabled: true } })
+    expect(screen.getByRole('combobox', { name: DE.combobox.label })).toBeDisabled()
+  })
+})
+
 /** The accessible names each primitive exposes, rendered open, for one language. */
 async function names(s: Strings): Promise<string[]> {
   const user = userEvent.setup()

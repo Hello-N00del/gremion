@@ -5,7 +5,8 @@
   // listbox, arrow navigation with DOM focus kept in the input, Enter
   // selection, Escape and the hidden form input. Bits UI leaves aria-controls
   // off the input (required on an expanded combobox, axe aria-required-attr)
-  // and the listbox unnamed (aria-input-field-name); the wrapper adds both.
+  // and the listbox unnamed (aria-input-field-name); the wrapper adds both,
+  // plus aria-required (Bits UI puts `required` on the hidden input only).
   // It also filters options by
   // the typed text (Bits UI leaves filtering to the consumer), names the input
   // with a real <label>, and styles with component-tier tokens only
@@ -98,6 +99,7 @@
         id={inputId}
         {placeholder}
         aria-controls={listboxId}
+        aria-required={required || undefined}
         oninput={handleInput}
       />
       <Combobox.Trigger class="gp-icon-button" aria-label={toggleLabel}>
