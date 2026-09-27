@@ -247,7 +247,9 @@ export function routersIn(text, rel) {
   }
   let doc
   try {
-    doc = parseYaml(text, { merge: true, uniqueKeys: false })
+    // logLevel 'error': compose's own tags (!reset, !override) are not errors
+    // here and must not flood the lint output; a real syntax error still throws.
+    doc = parseYaml(text, { merge: true, uniqueKeys: false, logLevel: 'error' })
   } catch (err) {
     return { routers, error: `unparseable YAML: ${err.message.split('\n')[0]}` }
   }
