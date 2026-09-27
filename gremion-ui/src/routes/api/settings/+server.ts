@@ -5,7 +5,6 @@ import { writeAuditEntry } from '$lib/server/audit-db'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { z } from 'zod'
-import type { ApiResponse } from '$lib/api-response'
 
 // G-098: `.strict()` rejects unknown top-level keys (e.g. typos). Per-field
 // constraints below remain tighter than the baseline `configUpdateSchema`

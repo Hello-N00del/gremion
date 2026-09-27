@@ -174,7 +174,7 @@ export async function internalFetch(path: string, init: InternalFetchOptions = {
   }
   const baseUrl = resolveInternalBaseUrl()
   const headers: Record<string, string> = {
-    ...(init.headers ?? {}),
+    ...init.headers,
     Authorization: `Bearer ${secret}`,
   }
   if (init.body && !headers['Content-Type']) {
