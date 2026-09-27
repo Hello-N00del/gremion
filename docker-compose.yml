@@ -504,6 +504,10 @@ services:
       # TASK-036 (Q3): health endpoints on the management port, at its root.
       KC_HEALTH_ENABLED: "true"
       KC_HTTP_MANAGEMENT_RELATIVE_PATH: /
+      # The management interface inherits HTTPS once a TLS certificate is set
+      # (docker-compose.prod.yml, G-080), and the probe above speaks plain HTTP.
+      # Port 9000 is never published, so keep it on HTTP inside the container.
+      KC_HTTP_MANAGEMENT_SCHEME: http
       # Admin credentials (KC_BOOTSTRAP_* replaces KEYCLOAK_ADMIN_* in KC 26+)
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
