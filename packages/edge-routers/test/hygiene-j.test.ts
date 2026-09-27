@@ -32,7 +32,7 @@
 //     `git add` at the real repository's index).
 //   - The scratch directory is unique to this run; teardown removes only it.
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { REPO_ROOT } from './helpers.js'
@@ -242,6 +242,11 @@ afterAll(() => {
   // retries: on Windows a just-closed git/node child or a file scanner can
   // hold a handle for a moment after exit (transient EBUSY/EPERM)
   if (runDir) rmSync(runDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  try {
+    rmdirSync(SCRATCH_ROOT) // only when empty: a concurrent run's directory keeps it
+  } catch {
+    // not empty (another run is live) or already gone: either way not ours to remove
+  }
 }, SETUP_TIMEOUT_MS)
 
 /** The `✗ jN` lines of a case; rethrows the case's own failure. */
