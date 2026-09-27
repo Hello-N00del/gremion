@@ -237,6 +237,9 @@ services:
       context: .
       dockerfile: gremion-ui/Dockerfile
       target: builder
+    # `pnpm migrate` is gremion-ui's script (run-migrations-verified); the
+    # builder stage's last WORKDIR is the workspace root, which has none.
+    working_dir: /repo/gremion-ui
     command: ["pnpm", "migrate"]
     restart: "no"
     logging: *logging
