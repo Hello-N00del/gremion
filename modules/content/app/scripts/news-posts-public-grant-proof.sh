@@ -65,7 +65,7 @@ READER_PW="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 cleanup() { timeout -k 5 60 docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-bounded_s "$RUN_TIMEOUT" 'docker run (postgres:18-alpine)'   docker run -d --name "$NAME" -p "127.0.0.1:$PORT:5432" -e POSTGRES_PASSWORD="$PW" postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873 </dev/null >/dev/null
+bounded_s "$RUN_TIMEOUT" 'docker run of the pinned postgres image'   docker run -d --name "$NAME" -p "127.0.0.1:$PORT:5432" -e POSTGRES_PASSWORD="$PW" postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873 </dev/null >/dev/null
 ready=0
 for _ in $(seq 1 60); do
   if bounded 'pg_isready probe' docker exec "$NAME" pg_isready -U postgres -q </dev/null 2>/dev/null; then ready=1; break; fi

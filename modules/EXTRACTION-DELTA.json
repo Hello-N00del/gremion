@@ -81,7 +81,7 @@
       "path": "modules/content/app/scripts/news-posts-public-grant-proof.sh",
       "reason": "added: plain-docker-run postgres:18-alpine proof of the Q9 grant (RED with --through 1200_content_news_posts.sql, GREEN on the chain); not a StuRa file",
       "owner": "TASK-200",
-      "blob": "d5cb9c142c94717774e23ddbe2970d4358bf6cc7"
+      "blob": "90560c9ce518e57661a24f06ecf374ed92cfc250"
     },
     {
       "path": "modules/content/app/scripts/news-posts-public-grant-proof.test.mjs",
