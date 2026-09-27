@@ -42,6 +42,9 @@ export const CARVE_LINT_TARGETS = [
   // TASK-022 merged lint-edge-render after this list was written (the meta-test
   // caught it on main, R25). It renders the production composition: docker.
   { name: 'lint-edge-render', kind: 'make', target: 'lint-edge-render', tool: 'docker' },
+  // TASK-041 (L3-08): the edge host-model guard (no HostRegexp leg, no
+  // wildcard env key, no apex host injection, no leftmost-label resolver).
+  { name: 'lint-edge-host', kind: 'make', target: 'lint-edge-host' },
   // TASK-020 (R25): no direct tenant-DB connection outside @gremion/tenant-store.
   { name: 'lint-tenant-db-access', kind: 'make', target: 'lint-tenant-db-access' },
   // R25-oxlint: the standalone oxlint ratchet (scripts/check-lint-js.mjs).
