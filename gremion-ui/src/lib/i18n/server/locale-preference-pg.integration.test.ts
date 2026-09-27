@@ -2,22 +2,30 @@
 // reference adapter on the verbatim DB-IDT-PREFERENCE / DB-IDT-CUSTOMERSETTING
 // DDL (testing/idt-preference.fixture.sql), with RLS enforced.
 //
-// Runs under `pnpm test:integration` (DATABASE_URL, a local test server; the
-// config's assertSafeTestDbUrl guard applies). The suite never touches that
-// database's tables: it creates its own throwaway database next to it, applies
-// the fixture there, and drops it afterwards. The adapter connects as a
-// NOLOGIN, non-superuser role (a superuser would bypass RLS), selected with
-// the `role` startup parameter, so the RLS assertion is real.
+// Runs under `pnpm test:integration` (DATABASE_URL, a local test server). The
+// suite never touches that database's tables: it creates its own throwaway
+// database next to it, applies the fixture there, and drops it afterwards. The
+// adapter connects as a NOLOGIN, non-superuser role (a superuser would bypass
+// RLS), selected with the `role` startup parameter, so the RLS assertion is real.
+//
+// DESTRUCTIVE: it CREATEs and DROPs a database (and a role) on the server
+// DATABASE_URL names. So, like every truncating or dropping harness (TASK-028,
+// spec B section 6), it runs the no-truncate guard itself at import -- before
+// any connection, not relying on setupFiles -- and again on the URL it derives.
+// Run it with:
+//   GREMION_PRODUCTION_STACK=none pnpm vitest run --config vitest.integration.config.ts //     src/lib/i18n/server/locale-preference-pg.integration.test.ts
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import postgres from 'postgres'
+import { assertNonProductionDbUrl } from '../../../../tests/integration/assert-safe-test-db-url'
 import { createLocalePreferencePort } from './locale-preference-port'
 import { CONTRACT_IDS, describeLocalePreferenceContract } from './testing/locale-preference-contract'
 
-const ADMIN_URL = process.env.DATABASE_URL
-if (!ADMIN_URL) throw new Error('DATABASE_URL is required for the locale-preference pg contract suite')
+assertNonProductionDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
+
+const ADMIN_URL = process.env.DATABASE_URL as string
 
 const RUN_ID = randomUUID().replace(/-/g, '').slice(0, 12)
 const DB_NAME = `locale_pref_test_${RUN_ID}`
@@ -26,10 +34,13 @@ const DB_NAME = `locale_pref_test_${RUN_ID}`
 const APP_ROLE = `gremion_locale_pref_test_${RUN_ID}`
 const FIXTURE = readFileSync(join(__dirname, 'testing', 'idt-preference.fixture.sql'), 'utf8')
 
+/** The throwaway database's URL -- guarded again, and its name carries "test". */
 function urlFor(database: string): string {
-  const url = new URL(ADMIN_URL!)
+  const url = new URL(ADMIN_URL)
   url.pathname = `/${database}`
-  return url.toString()
+  const derived = url.toString()
+  assertNonProductionDbUrl(derived, `DATABASE_URL (database ${database})`)
+  return derived
 }
 
 const admin = postgres(ADMIN_URL, { max: 1, onnotice: () => {} })
