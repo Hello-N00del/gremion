@@ -34,4 +34,17 @@ describe('A1 codegen — generated server-init barrel is the single registration
     const committed = readFileSync(BARREL, 'utf-8')
     expect(norm(committed)).toBe(norm(fresh))
   })
+
+  // With no register.server.ts in the tree (the bare kernel) the barrel is
+  // comment-only, which unicorn(no-empty-file) reports as an error. The codegen
+  // then emits an oxlint-disable directive for that rule, so the barrel is either
+  // a list of side-effect imports or a file that declares itself empty.
+  it('the barrel carries imports, or declares itself empty when there are none', () => {
+    const fresh = execFileSync('node', [CODEGEN, '--stdout'], { cwd: PKG_ROOT, encoding: 'utf-8' })
+    const lines = fresh.split(/\r?\n/).map((l) => l.trim())
+    const imports = lines.filter((l) => l.startsWith('import '))
+    const declaredEmpty = lines.some((l) => l.startsWith('// oxlint-disable unicorn/no-empty-file'))
+    expect(imports.length > 0 || declaredEmpty).toBe(true)
+    expect(lines.filter((l) => l !== '' && !l.startsWith('//') && !l.startsWith('import '))).toEqual([])
+  })
 })
