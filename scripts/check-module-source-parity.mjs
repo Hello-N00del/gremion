@@ -315,7 +315,7 @@ export function runParity(opts) {
       problems.push(`set A: ${r.kernelPath} ${why(r)} from ${tag}:${path} (${status}) — set A is never scrubbed, listed or not`)
     }
   }
-  for (const [key, blobs] of [['B', b.blobs], ['C', c.blobs]]) {
+  for (const { key, blobs } of [{ key: 'B', blobs: b.blobs }, { key: 'C', blobs: c.blobs }]) {
     for (const [path, entry] of blobs) {
       const r = compare(path, entry)
       if (!differs(r)) continue
@@ -366,7 +366,7 @@ export function formatReport(r, { kernelHead = null } = {}) {
   const lines = []
   lines.push(`module-source parity (TASK-200) — scripts/check-module-source-parity.mjs`)
   lines.push(`source: annotated tag ${r.tag} -> ${r.tagCommit}; set-A base (frozen extraction source) ${r.base}`)
-  if (kernelHead) lines.push(`kernel: ${kernelHead}`)
+  if (kernelHead) lines.push(`kernel: ${String(kernelHead)}`)
   lines.push(`mode: ${r.copy ? '--copy (every difference fails, listed or not)' : 'tip (only EXTRACTION-DELTA.json paths may differ; set A never)'}`)
   lines.push('')
   for (const [key, s] of Object.entries(r.sets)) {

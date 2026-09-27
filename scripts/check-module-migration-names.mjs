@@ -80,7 +80,7 @@ export function checkMigrationNames(root) {
     const seen = byDir.get(dir)
     if (seen.has(n)) problems.push(`${m.path} uses number ${n} twice in ${dir}/ (also ${seen.get(n)}) — the same number in one chain orders by the rest of the name, silently`)
     else seen.set(n, m.base)
-    if (/\/app\/migrations$/.test(dir)) {
+    if (dir.endsWith('/app/migrations')) {
       if (kernelNums.has(n))
         problems.push(`${m.path} is an app chain (kernel database) file numbered ${n}, like kernel ${KERNEL_MIGRATIONS}/${kernelNums.get(n)} — take the next free number in the module's own block`)
       // every app chain lands in the same kernel database: numbers are shared across them
