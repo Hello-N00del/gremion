@@ -22,9 +22,9 @@
 // Not a timeout: one earlier loaded run failed 4.1 s into the real-tree test
 // with "codegen tool errored ... Command failed: node openapi-typescript ..."
 // and no stderr (the child exited non-zero or was killed, and codegen-drift.ts
-// reports only the message). 102 back-to-back loaded spawns of both real specs
-// did not reproduce it (0 failures, p95 2.9 s, max 22.2 s). If it recurs, the
-// drift check's message needs the child's status/signal to say which.
+// then reported only the message). 102 back-to-back loaded spawns of both real
+// specs did not reproduce it (0 failures, p95 2.9 s, max 22.2 s). The message
+// now names the child's exit status and signal (R27), so a recurrence says which.
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

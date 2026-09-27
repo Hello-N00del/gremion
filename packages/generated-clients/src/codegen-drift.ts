@@ -30,7 +30,15 @@ export function checkCodegenDrift(repoRoot: string, specs: GeneratedClientSpec[]
     try {
       expected = generateClientSource(repoRoot, spec)
     } catch (e) {
-      problems.push(`${spec.outputFile}: codegen tool errored generating from ${spec.specFile}: ${(e as Error).message}`)
+      // execFileSync's error carries the child's exit status and signal; its
+      // message ("Command failed: ...") does not say which, so a crash, a
+      // non-zero exit and a kill (e.g. under machine load) all read the same
+      // without them (R26-FLAKES, R27 residual).
+      const { status, signal, message } = e as Error & { status?: number | null, signal?: string | null }
+      problems.push(
+        `${spec.outputFile}: codegen tool errored generating from ${spec.specFile} `
+        + `(exit status ${status ?? 'none'}, signal ${signal ?? 'none'}): ${message}`,
+      )
       continue
     }
     const actual = readFileSync(outPath, 'utf8')
