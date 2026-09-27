@@ -11,8 +11,7 @@
   },
   "scripts": {
     "lint:js": "vp lint",
-    "fmt:check": "vp fmt --check",
-    "knip": "pnpm dlx knip@latest"
+    "fmt:check": "vp fmt --check"
   },
   "devDependencies": {
     "vite-plus": "1.0.0-rc.1"
