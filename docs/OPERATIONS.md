@@ -69,7 +69,7 @@ Task-specific operator runbooks live under [`docs/runbooks/`](runbooks/) and
 | [runbooks/tenant-edge.md](runbooks/tenant-edge.md) | Tenant edge routing (`DOMAIN_REGEX`, wildcard Traefik routers, control-DB bootstrap) |
 | [runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md) | Provisioning, suspending, and deleting tenants |
 | [runbooks/pgbouncer.md](runbooks/pgbouncer.md) | PgBouncer transaction-pooling front (production overlay) — deploy / verify / rollback |
-| [ops/restore-runbook.md](ops/restore-runbook.md) | Step-by-step disaster restore from a restic snapshot |
+| [ops/runbook/README.md](ops/runbook/README.md) | The four-procedure operations runbook: install, upgrade, backup and restore (supersedes ops/restore-runbook.md) |
 | [ops/setup.md](ops/setup.md) | First-time setup |
 
 ---
