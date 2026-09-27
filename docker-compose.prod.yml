@@ -273,6 +273,15 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/hello-n00del/gremion-fallback:latest
     restart: unless-stopped
+    healthcheck:
+      # TASK-036 (TRD-178): nginx:alpine ships BusyBox wget. The probe asserts
+      # the marker in the served page (docker/fallback/index.html line 2), not
+      # just a 200 -- the try_files rule answers 200 even for an empty root.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ | grep -q gremion-fallback"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - gremion-net
     labels:
