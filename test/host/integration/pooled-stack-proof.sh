@@ -458,40 +458,43 @@ phase_limits() {
         [[ "$mem" =~ ^[0-9]+$ && "$mem" -gt 0 ]] || bad "${name#/}: HostConfig.Memory=$mem (no memory limit)"
         [[ "$cpu" =~ ^[0-9]+$ && "$cpu" -gt 0 ]] || bad "${name#/}: HostConfig.NanoCpus=$cpu (no CPU limit)"
     done < <(limit_scope_containers)
-    (( n > 0 )) || bad "limits: zero containers inspected -- refusing a vacuous pass"
+    (( n > 0 )) || { bad "limits: zero containers inspected -- refusing a vacuous pass"; return; }
     ok "limits: $n container(s) inspected (ledger/limits.tsv)"
 }
 # Scratch: every container whose compose project starts with ${STACK}- (so a
 # stray ${STACK}-unlimited project is caught too). Host: every container.
 limit_scope_containers() {
     if [[ "$SCOPE" == host ]]; then docker ps -q
-    else docker ps -q --format '{{.ID}} {{index .Labels "com.docker.compose.project"}}' | awk -v p="${STACK}-" 'index($2, p) == 1 {print $1}'
+    else docker ps --format '{{.ID}} {{.Label "com.docker.compose.project"}}' | awk -v p="${STACK}-" 'index($2, p) == 1 {print $1}'
     fi
 }
 
-to_bytes() { # "123.4MiB" -> bytes
-    awk -v s="$1" 'BEGIN{ n=s; sub(/[A-Za-z]+$/,"",n); u=s; sub(/^[0-9.]+/,"",u);
-        m=1; if(u=="KiB")m=1024; else if(u=="MiB")m=1048576; else if(u=="GiB")m=1073741824;
-        else if(u=="kB")m=1000; else if(u=="MB")m=1000000; else if(u=="GB")m=1000000000;
-        printf "%d", n*m }'
-}
 phase_rss() {
-    local n=0 name use lim ub lb pct
-    : > "$OUT/ledger/rss.tsv"
-    printf 'container\tusage\tlimit\tpercent_of_limit\n' >> "$OUT/ledger/rss.tsv"
-    local ids; ids="$(limit_scope_containers | tr '\n' ' ')"
-    [[ -n "${ids// /}" ]] || { bad "rss: zero containers"; return; }
-    # shellcheck disable=SC2086
-    while IFS='|' read -r name use lim; do
-        n=$(( n + 1 ))
-        ub="$(to_bytes "$(echo "$use" | tr -d ' ')")"; lb="$(to_bytes "$(echo "$lim" | tr -d ' ')")"
-        [[ "$lb" -gt 0 ]] || { bad "$name: no memory limit in docker stats ($lim)"; continue; }
-        pct=$(( ub * 100 / lb ))
-        printf '%s\t%s\t%s\t%s\n' "$name" "$use" "$lim" "$pct" >> "$OUT/ledger/rss.tsv"
-        (( pct < 80 )) || bad "$name: idle RSS $use is ${pct}% of its $lim limit (>= 80 %)"
-    done < <(docker stats --no-stream --format '{{.Name}}|{{.MemUsage}}' $ids | sed 's#|\(.*\) / \(.*\)$#|\1|\2#')
-    (( n > 0 )) || bad "rss: docker stats returned nothing"
-    ok "rss: $n container(s) below 80 % of their limit (ledger/rss.tsv)"
+    local want names stats rows n over
+    # One `docker stats` over every running container, filtered by name, and
+    # ONE awk for the arithmetic: measured on a loaded Docker Desktop host, a
+    # stats call naming 16 containers stalls, and a per-row subshell pipeline
+    # costs seconds per row.
+    names="$(limit_scope_containers | xargs -r docker inspect -f '{{.Name}}' | sed 's#^/##' | tr -d '\r')"
+    want="$(printf '%s\n' "$names" | grep -c . || true)"
+    (( want > 0 )) || { bad "rss: zero containers"; return; }
+    stats="$(docker stats --no-stream --format '{{.Name}}|{{.MemUsage}}' | tr -d '\r')"
+    rows="$(awk -F'|' -v names="$names" '
+        function bytes(s,   n, u, m) { gsub(/ /, "", s); n = s; sub(/[A-Za-z]+$/, "", n); u = s; sub(/^[0-9.]+/, "", u)
+            m = 1; if (u == "KiB") m = 1024; else if (u == "MiB") m = 1048576; else if (u == "GiB") m = 1073741824
+            else if (u == "kB") m = 1000; else if (u == "MB") m = 1000000; else if (u == "GB") m = 1000000000
+            return n * m }
+        BEGIN { k = split(names, a, "\n"); for (i = 1; i <= k; i++) if (a[i] != "") want[a[i]] = 1 }
+        ($1 in want) { split($2, p, " / "); u = bytes(p[1]); l = bytes(p[2])
+            pct = (l > 0) ? int(u * 100 / l) : -1
+            printf "%s\t%s\t%s\t%d\n", $1, p[1], p[2], pct }' <<< "$stats")"
+    { printf 'container\tusage\tlimit\tpercent_of_limit\n'; printf '%s\n' "$rows"; } > "$OUT/ledger/rss.tsv"
+    n="$(printf '%s\n' "$rows" | grep -c . || true)"
+    over="$(printf '%s\n' "$rows" | awk -F'\t' 'NF == 4 && ($4 < 0 || $4 >= 80) {print $1 " at " $4 "% of " $3}')"
+    [[ -z "$over" ]] || bad "rss: idle RSS at or above 80 % of the limit (or no limit): $(printf '%s' "$over" | tr '\n' ';')"
+    (( n == want )) || bad "rss: measured $n of $want container(s)"
+    (( n > 0 )) || { bad "rss: docker stats returned nothing"; return; }
+    ok "rss: $n of $want container(s) measured (ledger/rss.tsv)"
 }
 
 # ── TRD-045 ────────────────────────────────────────────────────────────────
@@ -522,7 +525,7 @@ phase_isolation() {
     printf '# TRD-045 isolation proof, %s, STACK=%s, scope=%s\n' "$stamp" "$STACK" "$SCOPE" >> "$OUT/ledger/isolation.txt"
     # 1. every compose project, enumerated by label, is classified
     local projects p nonc=() council=" ${STACK}-state ${STACK}-app-blue ${STACK}-app-green "
-    projects="$(docker ps -a --format '{{index .Labels "com.docker.compose.project"}}' | sed '/^$/d' | sort -u)"
+    projects="$(docker ps -a --format '{{.Label "com.docker.compose.project"}}' | tr -d '\r' | sed '/^$/d' | sort -u)"
     [[ "$SCOPE" == host ]] || projects="$(printf '%s\n' "$projects" | awk -v p="${STACK}-" 'index($0, p) == 1')"
     [[ -n "$projects" ]] || { bad "isolation: no compose project found"; return; }
     while IFS= read -r p; do
