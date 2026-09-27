@@ -1,6 +1,6 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f1 -> 0c9d342e9a1f9785b6f976719008134237198d0d; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: 3a2a89aa2b854b7b9feb83bb58a240473126e596
+kernel: 72cdf194bf3a73b02a63ee460a1fc17591df180d
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f1: 21 files, 0 differ (0 listed, 0 unlisted)
@@ -32,11 +32,12 @@ set C — content UI half (gremion-ui/src -> modules/content/app): 95 files, 3 d
   listed   modules/content/app/lib/server/content/caption.ts  tag=76a72f5ab0b838a70b48dc916f188907eb451e57 kernel=5cd14c9d2f865e0169842b029de6bf9c6e1b1c0c
   listed   modules/content/app/lib/server/content/channels/instagram-renderer.ts  tag=d089942af62aba7786b623892646228835a6f15a kernel=fd9d2cbb6c5722b0e5c620ccc41eabb456852989
   listed   modules/content/app/lib/server/content/segment.ts  tag=1401366d3c1bf026fc8da487d42ccd9c1112c45d kernel=b9b048a3e3d1fda70970fb3629d01dbcefb26505
-extras — kernel files in a mapped module directory that no tag path maps to: 4 (4 listed)
+extras — kernel files in a mapped module directory that no tag path maps to: 5 (5 listed)
   listed   modules/content/app/lib/server/content/jsdom-shim.d.ts
   listed   modules/content/app/migrations/1200_content_news_posts.sql
   listed   modules/content/app/migrations/1205_news_posts_public_reader_columns.sql
   listed   modules/content/app/scripts/news-posts-public-grant-proof.sh
-delta entries: 30
+  listed   modules/content/app/scripts/news-posts-public-grant-proof.test.mjs
+delta entries: 31
 
 RESULT: OK
