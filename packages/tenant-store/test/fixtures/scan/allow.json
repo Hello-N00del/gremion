@@ -1,0 +1,5 @@
+{
+  "rows": [
+    { "path": "allowed/y.ts", "calls": 1, "imports": 1, "adoptedBy": "TASK-077", "since": "2026-09-25", "reason": "fixture: an allow-listed control-plane connection" }
+  ]
+}

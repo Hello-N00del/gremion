@@ -32,16 +32,14 @@
 #   - object-src stays 'none' (no plugin elements ever, even in dev).
 #
 # Loading:
-#   This file lives in /etc/traefik/dynamic (mounted from
-#   docker/traefik/dynamic via docker-compose.yml). The Traefik file
-#   provider in docker/traefik/traefik.yml currently points at the
-#   single file tls.yml; to also load this middleware in dev, switch
-#   the file provider to `directory: /etc/traefik/dynamic` in dev or
-#   add a second `file:` entry. Doing that switch is intentionally
-#   left as an operator step so this artifact is a no-op in any
-#   environment where Traefik isn't actively routing the keycloak
-#   service (e.g. local dev today, where keycloak is reached directly
-#   on port 8082 without going through Traefik at all).
+#   NOT loaded by any composition in this repository today (TASK-022). The
+#   production file provider reads the WHOLE directory /etc/traefik/dynamic,
+#   but that directory is now the single read-only bind mount of
+#   ${GREMION_ROOT}/etc/edge -- the host's router directory -- and no longer
+#   this repo directory. The file is kept (not deleted) because the next unit
+#   to own docker/traefik/dynamic (TASK-041) decides where dev middlewares
+#   live; until then it is an inert definition. Local dev reaches Keycloak
+#   directly, without Traefik, so nothing depends on it being loaded.
 
 http:
   middlewares:

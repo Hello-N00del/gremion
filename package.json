@@ -10,10 +10,14 @@
     "pnpm": ">=10"
   },
   "scripts": {
-    "lint:js": "vp lint",
-    "fmt:check": "vp fmt --check"
+    "verify": "make verify",
+    "lint:js": "oxlint --type-aware"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
   },
   "devDependencies": {
-    "vite-plus": "1.0.0-rc.1"
+    "oxlint": "1.85.0",
+    "oxlint-tsgolint": "7.0.2003"
   }
 }

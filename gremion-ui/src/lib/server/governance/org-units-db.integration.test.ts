@@ -85,6 +85,11 @@ describe('org-units-db', () => {
     // The tx? overload must route the INSERT through the caller's tx handle
     // — throwing from the begin() callback must leave org_units empty.
     let createdId: string | undefined
+    // vitest(no-conditional-expect): an expect inside a .begin()/.catch()
+    // callback counts as conditional (the callback may not run). Capture the
+    // in-transaction read into a plain variable and assert on it AFTER the
+    // whole begin+catch chain has settled.
+    let insideTx: unknown
     await getDb()
       .begin(async (tx) => {
         const inside = await createOrgUnit(tx, {
@@ -92,12 +97,13 @@ describe('org-units-db', () => {
           visibility: 'all_members', wantsMatrixRoom: false, wantsNextcloudFolder: false, childTerm: null
         })
         createdId = inside.id
-        expect(await getOrgUnit(tx, inside.id)).not.toBeNull()
+        insideTx = await getOrgUnit(tx, inside.id)
         throw new Error('rollback-marker')
       })
       .catch((e) => {
         if (e.message !== 'rollback-marker') throw e
       })
+    expect(insideTx).not.toBeNull()
     expect(createdId).toBeDefined()
     // After rollback the row must not exist outside the tx (global pool).
     expect(await getOrgUnit(createdId!)).toBeNull()

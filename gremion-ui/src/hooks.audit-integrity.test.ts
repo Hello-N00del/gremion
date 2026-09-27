@@ -106,6 +106,11 @@ const HOUR_MS = 60 * 60 * 1000
 const AUDIT_INTEGRITY_INTERVAL_MS = 6 * HOUR_MS
 
 let tick: () => unknown
+// vitest(no-standalone-expect): expect() inside beforeAll is flagged (may
+// run outside any it()). Capture the preconditions and assert on them in a
+// dedicated first test instead.
+let bootComplete: boolean | undefined
+let intervalCallFound: boolean
 
 beforeAll(async () => {
   // Boot needs the default tenant resolvable (control-plane sanity check).
@@ -113,10 +118,10 @@ beforeAll(async () => {
   const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
   const mod = await import('./hooks.server')
   await mod.boot()
-  expect(mod.getBootStatus().complete).toBe(true)
+  bootComplete = mod.getBootStatus().complete
   const call = setIntervalSpy.mock.calls.find((c) => c[1] === AUDIT_INTEGRITY_INTERVAL_MS)
-  expect(call).toBeDefined()
-  tick = call![0] as () => unknown
+  intervalCallFound = call !== undefined
+  tick = call?.[0] as () => unknown
   setIntervalSpy.mockRestore()
 })
 
@@ -141,6 +146,11 @@ afterEach(() => {
 })
 
 describe('hooks.server audit-integrity interval (gremion#22 finding 1)', () => {
+  it('boot completes and schedules the 6h audit-integrity interval', () => {
+    expect(bootComplete).toBe(true)
+    expect(intervalCallFound).toBe(true)
+  })
+
   it('verifies the audit chain for EVERY ACTIVE tenant under its explicit context', async () => {
     activeTenants.push(
       { id: 'tid-default', slug: 'default', status: 'active' },

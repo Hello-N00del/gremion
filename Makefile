@@ -5,7 +5,8 @@
         test test-unit test-host-docker test-integration test-all test-ports-nats \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
-        lint-unshipped-migrations lint-toolchain lint-js lint-compliance fresh-init-proof \
+        lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
+        verify \
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
@@ -301,6 +302,7 @@ lint-port-back:
 lint-postgres-major:
 	@echo "Checking the Postgres major pin..."
 	@node --test scripts/check-postgres-major.test.mjs
+	@node --test scripts/check-postgres-major-running.test.mjs
 	@node scripts/check-postgres-major.mjs
 
 # The split extracts ten module repositories from ONE commit of the StuRa tree.
@@ -366,14 +368,52 @@ lint-toolchain:
 	 echo "[toolchain] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-toolchain.mjs
 
-# R25-2 Stage 1: Oxlint via vite-plus (root vite.config.ts's `lint` block).
-# NOT wired into the `lint` aggregate below -- the baseline is not zero
-# (see plan/p1/r25/vp-lint-kernel.md); the refactor unit that clears the
-# findings wires it in.
+# TASK-022: the ACME edge render guard (scripts/check-compose-edge.test.mjs).
+# Renders the production composition with the fixed fixture
+# test/host/fixtures/edge-render/state.env and asserts the bind addresses,
+# the static file and the service shape. Needs docker (compose config only,
+# never `up`). The suite's collected count is asserted against its declared
+# `test(` count, for the reason lint-extraction-source gives -- and because
+# this suite registers its tests only when it is the process entry (it is
+# imported by TASK-034), so a runner that stopped making it the entry would
+# collect zero. NOT wired into the `lint` aggregate: TASK-045 owns that.
+.PHONY: lint-edge-render test-edge-static lint-js
+lint-edge-render:
+	@echo "Checking the ACME edge render..."
+	@declared=$$(grep -c '^test(' scripts/check-compose-edge.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-compose-edge.test.mjs 2>&1); \
+	 status=$$?; \
+	 printf '%s\n' "$$out" >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ]; then \
+	   echo "lint-edge-render: scripts/check-compose-edge.test.mjs declares no top-level test() -- the suite collects nothing and would still exit 0." >&2; \
+	   exit 1; \
+	 fi; \
+	 if [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-edge-render: the suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[edge-render] suite: $$collected of $$declared declared test(s) ran"
+
+# TASK-022: the scratch-stack proof of the ACME edge (Docker; minutes, not
+# seconds -- it waits for a real certificate renewal). Brings up only traefik,
+# docker-socket-proxy and a scratch ACME CA under a t022-<sha8> project and
+# removes them by name; never `docker compose down`. Then the mechanism proof.
+test-edge-static:
+	@bash test/host/integration/edge-static.sh
+	@bash scripts/verify-traefik-acme-wiring.sh
+
+# R25-2: standalone Oxlint (root .oxlintrc.json), as a RATCHET: fails when the
+# error count rises above scripts/lint-js-baseline.json and asks for the
+# baseline to be lowered when it falls (scripts/check-lint-js.mjs). Rule-
+# specific reasons live in docs/lint.md (JSON has no comments). The verify
+# gate runs it (TASK-045 carve-lint). NOT in the `lint` aggregate yet; at
+# baseline 0 it becomes a plain zero-error gate and joins it.
 lint-js:
-	@echo "Linting JS/TS/Svelte with vp lint..."
-	@pnpm exec vp lint
-	@echo "  vp lint: OK"
+	@echo "Linting JS/TS/Svelte with oxlint (ratchet)..."
+	@node --test scripts/check-lint-js.test.mjs
+	@node scripts/check-lint-js.mjs
 
 # TASK-005 (TRD-265, TRD-112, TRD-268): the marketing-copy check. Copy that
 # names a licence-register system with a licence other than its register value,
@@ -400,8 +440,29 @@ lint-compliance:
 	 done
 	@node ops/scripts/marketing-copy-check.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance
+# TASK-020 (R25): the tenant-DB access scan -- a direct postgres()/createDb/Pool
+# connection outside @gremion/tenant-store fails unless it is on the dated
+# allow-list naming its adopting task. Line granted to the orchestrator by the brief.
+lint-tenant-db-access:
+	@echo "Checking tenant-DB access..."
+	@node packages/tenant-store/scripts/check-tenant-db-access.mjs
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access
 	@echo "All linters passed."
+
+# ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
+
+# The one fail-closed local gate: typecheck, unit, integration, migration-hash
+# and carve-lint (scripts/verify/required-suites.txt is the actual list this
+# target must not drift from -- scripts/verify/meta.test.mjs asserts the two
+# stay in step). Every suite is judged by scripts/verify/lib/guard.mjs, which
+# never trusts a tool's exit code alone: a suite that collects zero tests, is
+# skipped, or needs a missing tool FAILS here, it does not pass silently the
+# way an un-gated `pnpm test` would. Writes scripts/verify/out/<HEAD-sha>.json
+# (gitignored); `node scripts/verify/check-record.mjs` reads that record
+# without re-running anything and is the actual merge block.
+verify:
+	@node scripts/verify/verify.mjs
 
 # ── Repository labels ────────────────────────────────────────────────────
 

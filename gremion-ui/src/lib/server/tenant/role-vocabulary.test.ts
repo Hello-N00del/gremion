@@ -47,7 +47,7 @@ describe('config.roles — optional zod array (absent everywhere today)', () => 
   it('gremionConfigSchema accepts an optional string array', () => {
     const parsed = gremionConfigSchema.safeParse({ roles: ['guest', 'mayor'] })
     expect(parsed.success).toBe(true)
-    if (parsed.success) expect(parsed.data.roles).toEqual(['guest', 'mayor'])
+    expect(parsed.success && parsed.data.roles).toEqual(['guest', 'mayor'])
   })
 
   it('gremionConfigSchema rejects non-string vocabularies', () => {

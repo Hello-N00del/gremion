@@ -1,0 +1,4 @@
+{
+  "baseline": 172,
+  "note": "R25-oxlint: standalone oxlint --type-aware error count on the merged tree 2026-09-26 (main d8954e9, after the R25-ka test refactor); only ever lowered"
+}

@@ -97,6 +97,42 @@ export const ALLOWLIST = [
     reason: 'code generator: writes generated client source into the repository at build time — never tenant data',
     residual: 'none at runtime; build tooling only',
   },
+  {
+    path: 'packages/fastify-service-template/src/scaffold.ts',
+    sites: 3,
+    reason:
+      "scaffold CLI (TASK-076): emits a brand-new service's boilerplate (package.json, tsconfig.json, src/*.ts) into a caller-chosen out directory at dev time — code generation, never tenant object storage",
+    residual: 'none at runtime; the scaffold is a one-shot dev-time CLI, never on an app request path',
+  },
+  {
+    path: 'packages/generated-clients-dart/src/fixture.ts',
+    sites: 6,
+    reason:
+      "test-only fixture helper, never imported by the check or the writer: builds a throwaway OpenAPI/AsyncAPI spec tree under a mkdtemp scratch dir so the drift/codegen pipeline can be exercised without Docker, Java or a Dart SDK — never tenant data",
+    residual:
+      "none at runtime; consider naming it *.fixture.test.ts so the guard's own test-file skip covers it directly instead of an allowlist entry",
+  },
+  {
+    path: 'packages/generated-clients-dart/src/pipeline.ts',
+    sites: 11,
+    reason:
+      'the one GenerateFn shared by the writer and the drift check: stages openapi-generator/dart output under a mkdtemp scratch dir, runs dart pub get / build_runner / analyze there, and copies the resulting pubspec.lock — build-time client generation, never tenant data',
+    residual: 'none at runtime; build/CI tooling only, never on an app request path',
+  },
+  {
+    path: 'packages/generated-clients-dart/src/tools.ts',
+    sites: 2,
+    reason:
+      'resolves the pinned openapi-generator/Dart SDK binaries (PATH, else a digest-pinned Docker image) and creates the Docker pub-cache directory so it is not left root-owned — build tooling, never tenant data',
+    residual: 'none at runtime; build/CI tooling only',
+  },
+  {
+    path: 'packages/generated-clients-dart/src/writer.ts',
+    sites: 6,
+    reason:
+      'the write side of the Dart client generator (tools/generate.mjs is its CLI): syncs each generated package in the repo to exactly what the pipeline emits and deletes files it no longer emits — build-time codegen output, never tenant data',
+    residual: 'none at runtime; build/CI tooling only',
+  },
 ]
 
 const CODE_EXT = /\.(ts|js|mjs|cjs|mts|cts|svelte)$/
@@ -131,6 +167,7 @@ const WRITE_BASE = [
 const WRITE_NAME = String.raw`(?:${WRITE_BASE.join('|')})(?:Sync)?`
 /** `.writeFile(`, `fs.promises.rm (` … */
 const MEMBER_WRITE = new RegExp(String.raw`\.\s*(${WRITE_NAME})\s*\(`)
+
 function isTest(rel) {
   return TEST_FILE.test(rel)
 }

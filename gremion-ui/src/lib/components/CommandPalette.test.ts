@@ -37,12 +37,15 @@ beforeEach(() => {
 })
 
 describe('CommandPalette', () => {
-  test('renders nothing while closed and the dialog once open', () => {
+  test('renders nothing while closed and the dialog once open', async () => {
     const { queryByRole, rerender, getByRole } = render(CommandPalette, {
       props: { open: false, nav }
     })
     expect(queryByRole('dialog')).toBeNull()
-    rerender({ open: true, nav })
+    // rerender() is async (awaits Svelte.tick() internally) — awaiting it
+    // here (typescript(no-floating-promises)) also guards against reading
+    // the DOM before the update has actually flushed.
+    await rerender({ open: true, nav })
     expect(getByRole('dialog')).toBeTruthy()
   })
 

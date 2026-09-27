@@ -1,0 +1,52 @@
+{
+  "rows": [
+    {
+      "path": "gremion-ui/src/lib/server/db/pool-registry.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-25",
+      "reason": "gremion-ui's per-tenant pool registry (createDb); replaced by openTenantDb when gremion-ui adopts the package"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/db.ts",
+      "calls": 0,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-25",
+      "reason": "gremion-ui's kernel runner imports the driver as a value (used only for a type today); its runner is replaced by runMigrations on adoption"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/tenant/control-db.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-25",
+      "reason": "the control-plane pool (the tenant registry database, not a tenant database); Q5: allow-listed, not refactored here"
+    },
+    {
+      "path": "gremion-ui/scripts/tenant-provision.ts",
+      "calls": 3,
+      "imports": 1,
+      "adoptedBy": "TASK-021",
+      "since": "2026-09-25",
+      "reason": "the provisioner's admin, new-tenant and leaf connections; Q5: allow-listed until the lifecycle provisioner (TASK-021) owns database create/drop"
+    },
+    {
+      "path": "gremion-ui/scripts/tenant-health.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-25",
+      "reason": "the control-plane health probe; Q5: allow-listed, not refactored here"
+    },
+    {
+      "path": "gremion-public/src/lib/server/public-db.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-084",
+      "since": "2026-09-25",
+      "reason": "gremion-public's read-only pool; replaced by openTenantDb when gremion-public adopts the package"
+    }
+  ]
+}

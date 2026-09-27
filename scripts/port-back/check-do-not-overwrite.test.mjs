@@ -2,7 +2,9 @@
 // kernel-wins direction rests on: 43 paths the kernel holds and the StuRa tree
 // does not, plus 2 kernel-ahead theme files whose StuRa-tree bytes must never
 // land here. Measured from `verify-manifest --json` at kernel f7ac8260 and
-// StuRaOS f276af59.
+// StuRaOS f276af59. TASK-022 amended it to 42 + 2: it deletes
+// docker/traefik/dynamic/tls.yml (the Cloudflare Origin default-certificate
+// store) on purpose, so that row and its assertion left in the same commit.
 //
 //   node --test scripts/port-back/check-do-not-overwrite.test.mjs
 
@@ -16,12 +18,12 @@ const set = JSON.parse(readFileSync(SET_FILE, 'utf8'))
 
 describe('do-not-overwrite.json — shape', () => {
   test('declares its own entry count and carries exactly that many', () => {
-    assert.equal(set.expectedEntries, 45)
+    assert.equal(set.expectedEntries, 44)
     assert.equal(set.doNotDelete.length + set.kernelAhead.length, set.expectedEntries)
   })
 
-  test('doNotDelete carries the 43 measured paths, sorted and unique', () => {
-    assert.equal(set.doNotDelete.length, 43)
+  test('doNotDelete carries the 42 remaining measured paths, sorted and unique', () => {
+    assert.equal(set.doNotDelete.length, 42)
     assert.deepEqual(set.doNotDelete, [...new Set(set.doNotDelete)].sort())
   })
 
@@ -37,7 +39,10 @@ describe('do-not-overwrite.json — shape', () => {
     assert.ok(has('gremion-ui/src/lib/source-offer.wiring.test.ts'))
     assert.ok(has('gremion-ui/src/lib/components/layout/ThemeToggle.svelte'))
     assert.ok(has('gremion-ui/scripts/check-domain-regex.mjs'))
-    assert.ok(has('docker/traefik/dynamic/tls.yml'))
+    // TASK-022 deleted the Cloudflare Origin certificate store (spec B "Edge"
+    // §2, TRD-042). A protected row for a path that must NOT come back would
+    // make the guard demand the very file the edge removed.
+    assert.ok(!has('docker/traefik/dynamic/tls.yml'))
     // 12, not the 13 the plan's prose says: the measured set at f7ac8260 carries
     // k8s/base/keycloak/pdb.yaml plus 5 dev and 6 production ingressroute patches.
     // The plan's own frozen JSON lists the same 12; only its prose miscounted.
