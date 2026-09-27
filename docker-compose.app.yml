@@ -273,6 +273,10 @@ services:
       # tenant. Measured once a second tenant existed: "FAILED: ENOENT ...
       # /run/secrets/tenants/tenant_t040-c_db". Read-only, like gremion-ui's.
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
+      # ... and each tenant's config (/data/<slug>/config.json), whose brand
+      # identity the fleet asserts (measured: "tenant t040-b config has an
+      # INCOMPLETE brand identity" without it).
+      - tenant-config-data:/data:ro
     networks:
       state:
         aliases: ["migrate-${COLOUR:?COLOUR required}"]
