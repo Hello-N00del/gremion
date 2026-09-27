@@ -3,18 +3,20 @@
 //
 // Time budget (R26-FLAKES). Every generateClientSource() / checkCodegenDrift()
 // call spawns a fresh `node openapi-typescript` process, and that cold start is
-// the whole cost of this file. Measured 2026-09-27 on the 16-CPU dev box, "loaded"
-// = 32 busy + 4 I/O node workers on top of the 14-23 agents running that night:
+// the whole cost of this file. Measured 2026-09-27 on the 16-CPU dev box; "loaded"
+// = 32 CPU-spinning + 4 file-I/O node processes on top of the other agents
+// already running on the box (baseline CPU ~50 %):
 //
-//   one spawn over MINI_SPEC            idle 0.40-0.89 s   loaded 4.3-6.3 s
-//   the real tree (2 spawns, real specs) idle 0.93-2.25 s   loaded 7.9-10.0 s
+//   one spawn (MINI_SPEC or a real spec)  idle 0.43-1.1 s   loaded p95 10.5 s (n=48, max 23.7 s)
+//   the real tree (2 spawns, real specs)  idle 1.1-1.9 s    loaded p95 17.0 s (n=16)
 //
 // The scratch tests used to spawn TWICE each (once to build the expected output,
-// once inside checkCodegenDrift), so under load they took 5.2-7.7 s against the
-// 5 s default timeout and failed in kernel gates 50a3c78 and c2810a8. MINI_SPEC
-// is a constant, so its generated source is computed ONCE (beforeAll) and every
-// scratch test now spawns only inside the function under test. Each spawning
-// test carries an explicit budget of >= 3x the loaded p95 — no global raise.
+// once inside checkCodegenDrift), so under load they took 5.8-9.7 s against the
+// 5 s default timeout (4 of 6 RED in one loaded run here) and failed in kernel
+// gates 50a3c78 and c2810a8. MINI_SPEC is a constant, so its generated source is
+// computed ONCE (beforeAll) and every scratch test now spawns only inside the
+// function under test. Each spawning test carries an explicit budget of >= 3x
+// the loaded p95 — no global raise.
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,10 +25,10 @@ import { checkCodegenDrift } from './codegen-drift.js'
 import { generateClientSource, type GeneratedClientSpec } from './codegen.js'
 import { REPO_ROOT } from './repo-root.js'
 
-/** One openapi-typescript spawn: 3x the loaded p95 (6.3 s), rounded up. */
-const ONE_SPAWN_MS = 20_000
-/** checkCodegenDrift over the real registry (2 spawns, larger specs): 3x 10.0 s. */
-const REAL_TREE_MS = 30_000
+/** One openapi-typescript spawn: 3x the loaded p95 (10.5 s), rounded up. */
+const ONE_SPAWN_MS = 35_000
+/** checkCodegenDrift over the real registry (2 spawns, larger specs): 3x the loaded p95 (17.0 s), rounded up. */
+const REAL_TREE_MS = 55_000
 
 const MINI_SPEC = {
   openapi: '3.1.0',
