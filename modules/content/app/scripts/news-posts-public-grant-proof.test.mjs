@@ -11,13 +11,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PROOF = join(HERE, 'news-posts-public-grant-proof.sh')
-const REPO_ROOT = join(HERE, '..', '..', '..', '..')
 
 // The fake answers the lifecycle and readiness calls and hangs on the rest.
 // `exec sleep` so the process the proof's timeout kills IS the sleeper.
@@ -34,10 +34,10 @@ esac
 exit 0
 `
 
+// The fake lives in the OS temp dir (TMPDIR/TEMP), never in the repo: shipped
+// module code must stay inside modules/content/ (TDD 2 source scan).
 function fakeDockerDir() {
-  const base = join(REPO_ROOT, '.scratch')
-  mkdirSync(base, { recursive: true })
-  const dir = mkdtempSync(join(base, 'proof-test-'))
+  const dir = mkdtempSync(join(tmpdir(), 'news-proof-docker-'))
   const docker = join(dir, 'docker')
   writeFileSync(docker, FAKE_DOCKER)
   chmodSync(docker, 0o755)

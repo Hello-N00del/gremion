@@ -506,3 +506,17 @@ test('RED (round 2): a symlink leaving the module', { skip: canSymlink() ? false
     t.cleanup()
   }
 })
+
+// TASK-200 r4: the fixtures above prove the scan can see a coupling; this one
+// proves the COMMITTED tree has none. r3 added a module test whose fake-docker
+// dir climbed to the repo root, and nothing ran the real-tree scan, so the
+// regression shipped (no CI gate runs it yet: TASK-045). Keep the tree clean.
+test('the committed kernel tree scans clean (CLI exits 0 with 0 unallowlisted findings)', async () => {
+  const { spawnSync } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  const cli = join(dirname(fileURLToPath(import.meta.url)), 'check-module-source-scan.mjs')
+  const res = spawnSync(process.execPath, [cli], { encoding: 'utf8', timeout: 120_000 })
+  assert.equal(res.error, undefined, `the scan did not finish: ${res.error?.message}`)
+  assert.equal(res.status, 0, `the real-tree scan failed:\n${res.stderr}${res.stdout}`)
+  assert.match(res.stdout, /0 unallowlisted findings/)
+})
