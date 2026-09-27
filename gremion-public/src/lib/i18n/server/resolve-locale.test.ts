@@ -27,4 +27,15 @@ describe('resolveLocale (gremion-public)', () => {
   it.each(cases)('$name', ({ input, want }) => {
     expect(resolveLocale(input)).toBe(want)
   })
+
+  // R26-TRAIN4-FIX r3: a locale the pages are not written in is never chosen.
+  const germanOnly: Array<{ name: string; input: ResolveLocaleInput }> = [
+    { name: 'an en cookie is not applied', input: { cookie: 'en', acceptLanguage: 'de-DE' } },
+    { name: 'Accept-Language en-US is not applied', input: { cookie: null, acceptLanguage: 'en-US' } },
+    { name: 'a preferred en falls to the acceptable de', input: { cookie: null, acceptLanguage: 'en;q=0.9,de;q=0.1' } }
+  ]
+
+  it.each(germanOnly)("content locales ['de']: $name -> de", ({ input }) => {
+    expect(resolveLocale(input, ['de'])).toBe('de')
+  })
 })

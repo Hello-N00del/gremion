@@ -5,8 +5,12 @@
 // gremion-ui's: cookie -> Accept-Language -> 'de'. Kept as its own small
 // copy rather than a cross-app import — the two apps are separate
 // SvelteKit projects with no shared package between them.
+//
+// R26-TRAIN4-FIX r3: `available` narrows the cascade to the locales the pages
+// are written in (locale.ts CONTENT_LOCALES), so a request never resolves to a
+// language the page would only be labelled with (WCAG 3.1.1).
 
-import { asSupportedLocale, type Locale } from '../locale'
+import { SUPPORTED_LOCALES, asSupportedLocale, type Locale } from '../locale'
 
 export type { Locale }
 
@@ -15,14 +19,12 @@ export interface ResolveLocaleInput {
   acceptLanguage?: string | null
 }
 
-const asLocale = (value: string | null | undefined): Locale | null => asSupportedLocale(value)
-
 /**
- * Parses an Accept-Language header and returns the highest-quality
- * SUPPORTED_LOCALES match by primary language subtag, or null if nothing
- * recognized is present. q=0 (RFC 9110 §12.4.2 "not acceptable") is skipped.
+ * Parses an Accept-Language header and returns the highest-quality match among
+ * `available` by primary language subtag, or null if nothing recognized is
+ * present. q=0 (RFC 9110 §12.4.2 "not acceptable") is skipped.
  */
-function parseAcceptLanguage(header: string | null | undefined): Locale | null {
+function parseAcceptLanguage(header: string | null | undefined, asLocale: (value: string | undefined) => Locale | null): Locale | null {
   if (!header) return null
   let best: { locale: Locale; q: number } | null = null
   for (const part of header.split(',')) {
@@ -46,11 +48,20 @@ function parseAcceptLanguage(header: string | null | undefined): Locale | null {
   return best?.locale ?? null
 }
 
-export function resolveLocale(input: ResolveLocaleInput): Locale {
+/**
+ * @param available the locales a request may resolve to; defaults to every
+ * catalogue locale. 'de' is the terminal fallback either way.
+ */
+export function resolveLocale(input: ResolveLocaleInput, available: readonly Locale[] = SUPPORTED_LOCALES): Locale {
+  const asLocale = (value: string | null | undefined): Locale | null => {
+    const locale = asSupportedLocale(value)
+    return locale && available.includes(locale) ? locale : null
+  }
+
   const cookieLocale = asLocale(input.cookie ?? null)
   if (cookieLocale) return cookieLocale
 
-  const acceptLanguageLocale = parseAcceptLanguage(input.acceptLanguage)
+  const acceptLanguageLocale = parseAcceptLanguage(input.acceptLanguage, asLocale)
   if (acceptLanguageLocale) return acceptLanguageLocale
 
   return 'de'
