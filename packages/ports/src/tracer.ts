@@ -110,9 +110,10 @@ export function makeLogTracer(correlationId: string): TracerPort {
             ...attrs,
           }
           if (error !== undefined) {
-            // `error` is `unknown` (end()'s public contract); a non-Error throw falls back to
-            // Object's default stringification. Pre-existing, unpinned by any test — left
-            // unchanged (R25 refactor lane is behaviour-preserving); see realBugsFound.
+            // `error` is `unknown` (end()'s public contract). Known pre-existing gap: a thrown
+            // non-Error object is recorded as "[object Object]" (String()'s default), which
+            // loses its content. No test pins this; left unchanged because the R25 refactor
+            // lane is behaviour-preserving.
             // eslint-disable-next-line @typescript-eslint/no-base-to-string
             record['error'] = error instanceof Error ? error.message : String(error)
           }
