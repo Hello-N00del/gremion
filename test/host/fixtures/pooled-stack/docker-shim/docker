@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# test/host/fixtures/pooled-stack/docker-shim/docker
+#
+# A docker CLI stand-in for test/host/pooled-stack-proof.bats (TASK-040). It
+# answers ONLY the calls the proof's app-wait and cold-state phases make, for
+# one app-blue colour (gremion-ui + gremion-public) and a three-container
+# state tier, and records every stop/start/restart in $SHIM_DIR/calls.log.
+# It never reaches a real engine.
+#
+#   SHIM_STACK        the STACK the proof runs under (required)
+#   SHIM_DIR          scratch directory for the shim's own state (required)
+#   SHIM_ALIAS_STATE  the alias gremion-ui carries on ${SHIM_STACK}_state
+#                     (the correct one is gremion-ui-blue)
+#   SHIM_READY        ok: /api/health answers {"status":"ok"} while the state
+#                     tier is up; anything else: it answers 503 booting always
+#   SHIM_READY_DOWN   ok: /api/health answers ok even with the state tier DOWN
+#                     (a probe that cannot tell ready from not ready)
+set -u
+S="${SHIM_STACK:?SHIM_STACK required}"
+D="${SHIM_DIR:?SHIM_DIR required}"
+mkdir -p "$D"
+[[ -f "$D/state" ]] || echo up > "$D/state"
+state_up() { [[ "$(cat "$D/state")" == up ]]; }
+printf '%s\n' "$*" >> "$D/calls.log"
+
+args=" $* "
+case "$1" in
+    ps)
+        case "$args" in
+            *"project=${S}-app-blue "*)
+                case "$args" in
+                    *"service=gremion-public "*) echo cid-public ;;
+                    *"service=gremion-ui "*) echo cid-ui ;;
+                    *"service="*) : ;;
+                    *) echo cid-ui; echo cid-public ;;
+                esac ;;
+            *"project=${S}-state "*)
+                if [[ "$args" != *" -aq "* && "$args" != *" -a "* ]] && ! state_up; then exit 0; fi
+                case "$args" in
+                    *"service=postgres "*) echo cid-postgres ;;
+                    *"service=keycloak "*) echo cid-keycloak ;;
+                    *"service=pgbouncer "*) echo cid-pgbouncer ;;
+                    *"service="*) : ;;
+                    *) echo cid-postgres; echo cid-keycloak; echo cid-pgbouncer ;;
+                esac ;;
+            *) : ;;
+        esac ;;
+    inspect)
+        shift
+        fmt="" cid=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in -f) fmt="$2"; shift 2 ;; *) cid="$1"; shift ;; esac
+        done
+        case "$fmt" in
+            *State.Health*) echo healthy ;;
+            '{{.Name}}') echo "/${cid}" ;;
+            *.Mounts*) echo "${S}_config_data ${S}_tenant_config_data " ;;
+            *com.docker.compose.service*)
+                case "$cid" in cid-public) echo gremion-public ;; *) echo gremion-ui ;; esac ;;
+            *Aliases*)
+                svc=gremion-ui; [[ "$cid" == cid-public ]] && svc=gremion-public
+                sa="${svc}-blue"; [[ "$svc" == gremion-ui ]] && sa="${SHIM_ALIAS_STATE:-gremion-ui-blue}"
+                echo "${S}_edge=${svc}-blue,abc123, ${S}_state=${sa},abc123, ${S}-app-blue_app=abc123, " ;;
+            *NetworkSettings.Networks*) echo "${S}_edge ${S}_state ${S}-app-blue_app " ;;
+            *) echo "shim: unhandled inspect format: $fmt" >&2; exit 1 ;;
+        esac ;;
+    exec)
+        case "$args" in
+            */api/health*)
+                if [[ "${SHIM_READY_DOWN:-}" == ok ]] || { [[ "${SHIM_READY:-}" == ok ]] && state_up; }; then
+                    echo '{"status":"ok"}'
+                else
+                    echo 'wget: server returned error: HTTP/1.1 503 Service Unavailable'; exit 1
+                fi ;;
+            */healthz*) echo '{"ok":true,"colour":"blue"}' ;;
+            *) echo "shim: unhandled exec: $*" >&2; exit 1 ;;
+        esac ;;
+    stop) echo down > "$D/state" ;;
+    start) echo up > "$D/state" ;;
+    restart) : ;;
+    logs) echo "shim: no logs" ;;
+    *) echo "shim: unhandled docker call: $*" >&2; exit 1 ;;
+esac
