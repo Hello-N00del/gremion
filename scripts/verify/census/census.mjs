@@ -54,14 +54,51 @@ export function classifyService({ name, service, image, exempt }) {
 }
 
 /**
+ * Brief Q4: scripts/verify/census/leaf-blast-radius.json,
+ * `{schemaVersion: 1, rows: {"<service>": {"probePath": "/healthz"}}}`.
+ * Shipped empty. A row fails when it names no rendered service, or when that
+ * service's image HEALTHCHECK does not carry the row's probe path -- the row
+ * declares what a leaf's own image probes, so it is read off the image.
+ * @returns {{unparseable: string|null, failures: string[]}}
+ */
+export function checkBlastRadius(doc, projects, images) {
+  if (doc === undefined) return { unparseable: null, failures: [] }
+  if (!doc || typeof doc !== 'object' || doc.schemaVersion !== 1 || !doc.rows || typeof doc.rows !== 'object' || Array.isArray(doc.rows)) {
+    return { unparseable: 'leaf-blast-radius.json is not {schemaVersion: 1, rows: {...}}', failures: [] }
+  }
+  const failures = []
+  for (const [service, row] of Object.entries(doc.rows)) {
+    const probePath = row?.probePath
+    if (typeof probePath !== 'string' || probePath === '') {
+      failures.push(`leaf-blast-radius row ${service} has no probePath`)
+      continue
+    }
+    const owners = projects.filter((p) => p.render.ok && Object.hasOwn(p.render.services ?? {}, service))
+    if (owners.length === 0) {
+      failures.push(`leaf-blast-radius row ${service} names no rendered service`)
+      continue
+    }
+    for (const p of owners) {
+      const img = images.get(`${p.project}/${service}`)
+      const testText = img?.ok && imageProbed(img.healthcheck) ? img.healthcheck.Test.join(' ') : ''
+      if (!testText.includes(probePath)) {
+        failures.push(`leaf-blast-radius row ${service} [${p.project}]: the image HEALTHCHECK does not probe ${probePath}`)
+      }
+    }
+  }
+  return { unparseable: null, failures }
+}
+
+/**
  * The census over rendered projects.
  *
  * @param {object} input
  * @param {Array<{project: string, render: {ok: boolean, allowed?: boolean, services?: object, detail?: string}, exempt: string[], notes: string[]}>} input.projects
  * @param {Map<string, {ok: boolean, healthcheck?: object|null, detail?: string}>} input.images keyed `<project>/<service>`
+ * @param {object} [input.blastRadius] parsed leaf-blast-radius.json (Q4); undefined = not checked
  * @returns {{collected: number, passed: number, failed: number, unparseable: boolean, lines: string[], problems: string[]}}
  */
-export function runCensus({ projects, images }) {
+export function runCensus({ projects, images, blastRadius }) {
   const out = { collected: 0, passed: 0, failed: 0, unparseable: false, lines: [], problems: [] }
   // Vacuity guard (brief S1, TDD 4). A census that read nothing passes in
   // silence -- recorded against the commit before this guard existed: a
@@ -121,5 +158,12 @@ export function runCensus({ projects, images }) {
       }
     }
   }
+  const blast = checkBlastRadius(blastRadius, projects, images)
+  if (blast.unparseable) {
+    out.unparseable = true
+    out.problems.push(blast.unparseable)
+  }
+  out.failed += blast.failures.length
+  out.problems.push(...blast.failures)
   return out
 }
