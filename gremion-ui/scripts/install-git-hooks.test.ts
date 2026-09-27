@@ -759,7 +759,15 @@ describe('installer CLI hooks-dir resolution', () => {
  *
  *   idle                          2.2-3.5 s
  *   loaded (32 CPU-spinning + 4 file-I/O node processes on top of the other
- *   agents on the box, baseline CPU ~50 %)   n=18, median 26 s, p95 ~130 s
+ *   agents on the box), three series:
+ *     a) n=18, per-probe cutoff (censored), baseline CPU ~50 %:
+ *        median 26 s, p95 ~130 s
+ *     b) n=20, NO per-probe cutoff (uncensored), one load for the series:
+ *        9.3-26.6 s, median 15.3 s, p95 22.0 s
+ *     c) the lint-reaching tests of this file inside a loaded whole-file
+ *        vitest run (2 runs): 20-36 s each
+ *   The budget below is taken from the WORST series (a), the heaviest box
+ *   state seen: 400 s >= 3 x 130 s. Against (b) and (c) it is >= 11x.
  *
  * The tail is not in this harness: tracing every process in the chain put
  * 26-96 s of a slow commit inside the tsx child between its start and its
