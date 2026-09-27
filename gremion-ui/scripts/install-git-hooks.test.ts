@@ -750,6 +750,29 @@ describe('installer CLI hooks-dir resolution', () => {
   }, 60_000)
 })
 
+/**
+ * Budget for an e2e test whose commit reaches the boundary lint (R26-FLAKES).
+ * Such a commit is a six-process chain: git -> sh -> pnpm -> node (tsx cli) ->
+ * node (tsx child, esbuild) -> six `git` calls from boundary-lint.ts. Measured
+ * 2026-09-27 on the 16-CPU dev box, one lint-reaching `git commit` in a
+ * throwaway repo exactly like throwawayRepo():
+ *
+ *   idle                          2.2-3.5 s
+ *   loaded (32 CPU-spinning + 4 file-I/O node processes on top of the other
+ *   agents on the box, baseline CPU ~50 %)   n=18, median 26 s, p95 ~130 s
+ *
+ * The tail is not in this harness: tracing every process in the chain put
+ * 26-96 s of a slow commit inside the tsx child between its start and its
+ * first statement (module loading through tsx's loader thread and esbuild),
+ * and warming tsx's transform cache did not shorten it (12.5 / 12.8 / 26.3 s
+ * for three warm runs under load). The lint itself checks ONE staged file.
+ * So the fix is a budget derived from the measurement — >= 3x the loaded p95,
+ * on the tests that run the lint only (the fail-closed tests below stop in
+ * the hook before pnpm and keep 180 s) — not a global timeout raise. It was a
+ * flat 180 s, which a loaded gate exceeded (kernel c2810a8, StuRaOS train 1).
+ */
+const LINT_COMMIT_MS = 400_000
+
 describe('end-to-end rejection (throwaway repo, core.hooksPath)', () => {
   it('blocks a staged boundary-violating import and leaves no commit', () => {
     const repo = throwawayRepo()
@@ -757,7 +780,7 @@ describe('end-to-end rejection (throwaway repo, core.hooksPath)', () => {
     expect(commit.status, `expected a blocked commit, got:\n${output}`).not.toBe(0)
     expect(output).toContain('no-deep-import-into-newsletter')
     expect(logOut).toBe('') // post-condition: the commit is absent from git log
-  }, 180_000)
+  }, LINT_COMMIT_MS)
 
   it('POSITIVE PATH: a clean commit passes AND the lint inspected N >= 1 files', () => {
     // Without this, "block everything" would score as a pass. And without the
@@ -773,7 +796,7 @@ describe('end-to-end rejection (throwaway repo, core.hooksPath)', () => {
       checked,
       `boundary-lint reported ${checked} file(s) checked — a zero-file lint passes vacuously`,
     ).toBeGreaterThanOrEqual(1)
-  }, 180_000)
+  }, LINT_COMMIT_MS)
 
   it('the WRAPPER fails closed when the versioned hook is absent', () => {
     // The wrapper's own fall-through is the kernel base's shape: it can harden
@@ -818,7 +841,7 @@ describe('end-to-end rejection (throwaway repo, core.hooksPath)', () => {
     expect(commit.status, `expected the clean commit to be ACCEPTED, got:\n${output}`).toBe(0)
     expect(output, 'the preserved foreign hook must still execute').toContain('[foreign] ok')
     expect(logOut).toContain('kmirror clean probe')
-  }, 180_000)
+  }, LINT_COMMIT_MS)
 
   it('fails the commit with an instruction when gremion-ui/node_modules is missing', () => {
     // The kernel base delegate `exit 0`s here — which is every fresh agent
@@ -972,7 +995,7 @@ describe('a managed block APPENDED behind the foreign body', () => {
     expect(commit.status, `expected a blocked commit, got:\n${output}`).not.toBe(0)
     expect(output).toContain('no-deep-import-into-newsletter')
     expect(logOut).toBe('')
-  }, 180_000)
+  }, LINT_COMMIT_MS)
 })
 
 describe('chmod failures are visible', () => {
@@ -1234,7 +1257,7 @@ describe('upgrading the hook an EXISTING clone actually carries', () => {
     expect(commit.status, `expected a blocked commit, got:\n${output}`).not.toBe(0)
     expect(output).toContain('no-deep-import-into-newsletter')
     expect(logOut).toBe('')
-  }, 180_000)
+  }, LINT_COMMIT_MS)
 })
 
 describe('CONTRIBUTING.md documents the post-condition', () => {
