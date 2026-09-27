@@ -48,7 +48,10 @@ function authHeader(): string {
   return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
 }
 
-async function ncFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
+async function ncFetch<T>(
+  path: string,
+  opts: Omit<RequestInit, 'headers'> & { headers?: Record<string, string> } = {},
+): Promise<T> {
   const res = await fetch(`${ncBase()}${POLLS_BASE}${path}`, {
     ...opts,
     headers: {

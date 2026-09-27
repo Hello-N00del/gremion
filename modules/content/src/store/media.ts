@@ -25,7 +25,7 @@ function toMedia(row: Record<string, unknown>): PostMedia {
     url: row['url'] as string,
     role: row['role'] as PostMedia['role'],
     position: Number(row['position']),
-    alt: row['alt'] != null ? String(row['alt']) : null,
+    alt: row['alt'] != null ? (row['alt'] as string) : null,
   }
 }
 

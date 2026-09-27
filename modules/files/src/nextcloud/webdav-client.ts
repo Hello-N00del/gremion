@@ -79,7 +79,7 @@ export class WebdavClient {
       headers: {
         Authorization: this.auth(bearer),
         'OCS-APIRequest': 'true',
-        ...(opts.headers ?? {}),
+        ...opts.headers,
       },
       body: opts.body,
     })

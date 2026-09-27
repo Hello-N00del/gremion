@@ -154,7 +154,7 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
   async function sync(userToken: string, since?: string): Promise<SyncResponse> {
     const params = new URLSearchParams({ timeout: '30000' })
     if (since) params.set('since', since)
-    const raw = (await cs('GET', `/_matrix/client/v3/sync?${params}`, userToken)) as {
+    const raw = (await cs('GET', `/_matrix/client/v3/sync?${params.toString()}`, userToken)) as {
       next_batch: string
       rooms?: {
         join?: Record<
@@ -197,7 +197,7 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
   async function getMessages(userToken: string, roomId: string, from?: string): Promise<{ messages: MatrixMessage[]; end: string }> {
     const params = new URLSearchParams({ dir: 'b', limit: '50' })
     if (from) params.set('from', from)
-    const raw = (await cs('GET', `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/messages?${params}`, userToken)) as {
+    const raw = (await cs('GET', `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/messages?${params.toString()}`, userToken)) as {
       chunk: Array<{ event_id: string; sender: string; type: string; content: { body?: string; msgtype?: string; url?: string }; origin_server_ts: number }>
       end: string
     }
@@ -239,7 +239,7 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
 
   async function uploadMedia(userToken: string, data: ArrayBuffer, mimeType: string, filename: string): Promise<string> {
     const params = new URLSearchParams({ filename })
-    const res = await fetch(`${baseUrl}/_matrix/media/v3/upload?${params}`, {
+    const res = await fetch(`${baseUrl}/_matrix/media/v3/upload?${params.toString()}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${userToken}`, 'Content-Type': mimeType },
       body: data,

@@ -29,7 +29,7 @@ export interface PublishOp {
 function toNullableDate(v: unknown): string | null {
   if (v == null) return null
   if (v instanceof Date) return v.toISOString()
-  return String(v)
+  return String(v as string | number)
 }
 
 function toPublishOp(row: Record<string, unknown>): PublishOp {
@@ -42,8 +42,8 @@ function toPublishOp(row: Record<string, unknown>): PublishOp {
     attempts: Number(row['attempts']),
     next_attempt_at: toNullableDate(row['next_attempt_at']),
     first_failed_at: toNullableDate(row['first_failed_at']),
-    last_error: row['last_error'] != null ? String(row['last_error']) : null,
-    external_ref: row['external_ref'] != null ? String(row['external_ref']) : null,
+    last_error: row['last_error'] != null ? (row['last_error'] as string) : null,
+    external_ref: row['external_ref'] != null ? (row['external_ref'] as string) : null,
     created_at: row['created_at'] instanceof Date
       ? row['created_at'].toISOString()
       : String(row['created_at']),

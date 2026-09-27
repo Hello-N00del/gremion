@@ -20,7 +20,12 @@ export const actions: Actions = {
     const user = requireContentAuthor(locals.user)
 
     const form = await request.formData()
-    const title = String(form.get('title') ?? '').trim()
+    const rawTitle = form.get('title')
+    // FormData.get() types as `string | File | null`; a client posting a
+    // File under 'title' must be refused, never coerced to '[object File]'
+    // and persisted as the post title.
+    if (typeof rawTitle !== 'string') return fail(400, { error: 'Titel ist erforderlich.', title: '' })
+    const title = rawTitle.trim()
     if (!title) return fail(400, { error: 'Titel ist erforderlich.', title })
 
     const backend = resolveContentBackendForPage()

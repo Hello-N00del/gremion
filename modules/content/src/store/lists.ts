@@ -40,7 +40,7 @@ function toMember(row: Record<string, unknown>): MailingListMember {
     id: String(row['id']),
     mailing_list_id: String(row['mailing_list_id']),
     email: row['email'] as string,
-    name: row['name'] != null ? String(row['name']) : null,
+    name: row['name'] != null ? (row['name'] as string) : null,
     source: row['source'] as 'csv' | 'manual',
     created_at: row['created_at'] instanceof Date
       ? row['created_at'].toISOString()

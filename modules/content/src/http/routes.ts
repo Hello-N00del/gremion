@@ -301,7 +301,7 @@ function toChannel(row: Record<string, unknown>): PostChannelRow {
       row['scheduled_at'] instanceof Date
         ? row['scheduled_at'].toISOString()
         : row['scheduled_at'] != null
-          ? String(row['scheduled_at'])
+          ? (row['scheduled_at'] as string)
           : null,
     overrides:
       row['overrides'] != null && typeof row['overrides'] === 'object'

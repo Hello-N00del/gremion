@@ -186,7 +186,7 @@ async function widgetAction(body: Record<string, unknown>, deps: LeafDeps): Prom
   } else {
     path = `/_matrix/client/v3/rooms/${encodedRoom}/send/${encodeURIComponent(type)}/${randomUUID()}`
   }
-  if (delay !== undefined) path += `?${new URLSearchParams({ 'org.matrix.msc4140.delay': String(delay) })}`
+  if (delay !== undefined) path += `?${new URLSearchParams({ 'org.matrix.msc4140.delay': String(delay) }).toString()}`
   const res = (await matrix.cs('PUT', path, userToken, content)) as { event_id?: string; delay_id?: string }
   return delay !== undefined ? { delay_id: res.delay_id } : { eventId: res.event_id }
 }

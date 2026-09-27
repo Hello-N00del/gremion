@@ -267,15 +267,9 @@ importers:
         specifier: ^4.4.3
         version: 4.6.5
     devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
       '@types/node':
         specifier: ^26.1.0
         version: 26.6.0
-      better-sqlite3:
-        specifier: ^12.10.0
-        version: 12.11.1
       esbuild:
         specifier: ^0.28.1
         version: 0.28.2
@@ -288,9 +282,6 @@ importers:
       vitest:
         specifier: '>=4.1.11 <5'
         version: 4.1.11(@types/node@26.6.0)(@vitest/browser-playwright@4.1.11)(@vitest/coverage-v8@4.1.11)(jsdom@29.1.1)(msw@2.15.0(@types/node@26.6.0)(typescript@5.9.3))(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
-      yaml:
-        specifier: ^2.5.0
-        version: 2.9.0
 
   modules/content:
     dependencies:
@@ -313,15 +304,9 @@ importers:
         specifier: ^4.4.3
         version: 4.6.5
     devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
       '@types/node':
         specifier: ^26.1.0
         version: 26.6.0
-      better-sqlite3:
-        specifier: ^12.10.0
-        version: 12.11.1
       esbuild:
         specifier: ^0.28.1
         version: 0.28.2
@@ -334,9 +319,6 @@ importers:
       vitest:
         specifier: '>=4.1.11 <5'
         version: 4.1.11(@types/node@26.6.0)(@vitest/browser-playwright@4.1.11)(@vitest/coverage-v8@4.1.11)(jsdom@29.1.1)(msw@2.15.0(@types/node@26.6.0)(typescript@5.9.3))(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
-      yaml:
-        specifier: ^2.5.0
-        version: 2.9.0
 
   modules/files:
     dependencies:

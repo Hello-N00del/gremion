@@ -103,8 +103,8 @@ export const EXCLUDED = [
 // prefix: this file is scanned too, and a literal stale tag here is a finding.
 const PRE_PIN_16 = ['postgres', '16-alpine'].join(':')
 export const PATH_EXEMPTIONS = [
-  { path: 'modules/finance/test/backfill.integration.test.ts', line: 38, ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f1; guidance string in the fail-closed test-DB guard' },
-  { path: 'modules/finance/test/bank-money.integration.test.ts', line: 38, ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f1; guidance string in the fail-closed test-DB guard' },
+  { path: 'modules/finance/test/backfill.integration.test.ts', line: 38, ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f2; guidance string in the fail-closed test-DB guard' },
+  { path: 'modules/finance/test/bank-money.integration.test.ts', line: 38, ref: PRE_PIN_16, reason: 'TASK-200 Q6: set-A file kept byte-equal to extraction-source-f2; guidance string in the fail-closed test-DB guard' },
 ]
 
 const isExempt = (h) => PATH_EXEMPTIONS.some((e) => e.path === h.path && e.line === h.line && e.ref === h.ref)

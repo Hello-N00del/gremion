@@ -51,7 +51,7 @@ function h(
 	const flat = children
 		.flat()
 		.filter((c): c is SatoriElement | string | number => c !== null && c !== undefined && c !== false)
-	const merged: Record<string, unknown> = { ...(props ?? {}) }
+	const merged: Record<string, unknown> = { ...props }
 	if (flat.length === 1) merged.children = flat[0]
 	else if (flat.length > 1) merged.children = flat
 	return { type, props: merged }

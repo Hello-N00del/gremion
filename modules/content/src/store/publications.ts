@@ -21,10 +21,10 @@ function toPublication(row: Record<string, unknown>): Publication {
   return {
     post_id: String(row['post_id']),
     channel: row['channel'] as Publication['channel'],
-    external_ref: row['external_ref'] != null ? String(row['external_ref']) : null,
+    external_ref: row['external_ref'] != null ? (row['external_ref'] as string) : null,
     published_at: row['published_at'] instanceof Date
       ? row['published_at'].toISOString()
-      : row['published_at'] != null ? String(row['published_at']) : null,
+      : row['published_at'] != null ? (row['published_at'] as string) : null,
   }
 }
 

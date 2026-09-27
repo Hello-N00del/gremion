@@ -34,13 +34,13 @@ export interface NewsletterRecipient {
 function toDate(v: unknown): string {
   if (v instanceof Date) return v.toISOString()
   if (v == null) return String(v)
-  return String(v)
+  return String(v as string | number)
 }
 
 function toNullableDate(v: unknown): string | null {
   if (v == null) return null
   if (v instanceof Date) return v.toISOString()
-  return String(v)
+  return String(v as string | number)
 }
 
 function toNewsletter(row: Record<string, unknown>): Newsletter {
@@ -52,7 +52,7 @@ function toNewsletter(row: Record<string, unknown>): Newsletter {
     status: row['status'] as Newsletter['status'],
     scheduled_at: toNullableDate(row['scheduled_at']),
     sent_at: toNullableDate(row['sent_at']),
-    error: row['error'] != null ? String(row['error']) : null,
+    error: row['error'] != null ? (row['error'] as string) : null,
     created_by: row['created_by'] as string,
     created_at: toDate(row['created_at']),
     updated_at: toDate(row['updated_at']),
@@ -63,7 +63,7 @@ function toRecipient(row: Record<string, unknown>): NewsletterRecipient {
   return {
     newsletter_id: Number(row['newsletter_id']),
     mailing_list_id: row['mailing_list_id'] != null ? Number(row['mailing_list_id']) : null,
-    keycloak_group_id: row['keycloak_group_id'] != null ? String(row['keycloak_group_id']) : null,
+    keycloak_group_id: row['keycloak_group_id'] != null ? (row['keycloak_group_id'] as string) : null,
   }
 }
 

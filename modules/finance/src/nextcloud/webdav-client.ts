@@ -78,7 +78,7 @@ export class FinanceWebdavClient {
         Authorization: this.adminAuth(),
         'OCS-APIRequest': 'true',
         'X-Nextcloud-User': impersonateUser,
-        ...(opts.headers ?? {}),
+        ...opts.headers,
       },
       body: opts.body,
     })

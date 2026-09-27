@@ -21,8 +21,8 @@ function toRecipient(row: Record<string, unknown>): PostRecipient {
   return {
     id: String(row['id']),
     post_id: String(row['post_id']),
-    mailing_list_id: row['mailing_list_id'] != null ? String(row['mailing_list_id']) : null,
-    keycloak_group_id: row['keycloak_group_id'] != null ? String(row['keycloak_group_id']) : null,
+    mailing_list_id: row['mailing_list_id'] != null ? (row['mailing_list_id'] as string) : null,
+    keycloak_group_id: row['keycloak_group_id'] != null ? (row['keycloak_group_id'] as string) : null,
   }
 }
 

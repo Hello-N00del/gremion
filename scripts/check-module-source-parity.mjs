@@ -29,7 +29,7 @@
 // NOT part of `make lint`: it needs a checkout of the StuRa tree, which the
 // kernel does not own. Its output is committed under docs/ops/.
 //
-// Run:  node scripts/check-module-source-parity.mjs <path-to-StuRa-tree> extraction-source-f1 \
+// Run:  node scripts/check-module-source-parity.mjs <path-to-StuRa-tree> extraction-source-f2 \
 //         [--copy] [--write docs/ops/module-source-parity.txt]
 // Test: node --test scripts/check-module-source-parity.test.mjs
 
@@ -43,8 +43,12 @@ import { readFrozenExtractionSource } from './lib/extraction-source.mjs'
 
 export const KERNEL_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** The annotated tag's commit, decided by the orchestrator (R24-6 Q1). Moving the tag is a new decision. */
-export const EXPECTED_TAG_COMMIT = '0c9d342e9a1f9785b6f976719008134237198d0d'
+/**
+ * The annotated tag's commit, decided by the orchestrator (R24-6 Q1). Moving the tag is a new decision:
+ * extraction-source-f1 (0c9d342e) was superseded by extraction-source-f2 (StuRa master after R25-4 S-C,
+ * verify-r4 finding b), created and pushed by the orchestrator on 2026-09-27.
+ */
+export const EXPECTED_TAG_COMMIT = 'd0c656d0b266f3a1741f34454e0061bc5078c3f4'
 
 export const DELTA_PATH = 'modules/EXTRACTION-DELTA.json'
 

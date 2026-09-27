@@ -39,8 +39,8 @@ export interface HeliosElection {
   frozen_at: string | null
   archived_at: string | null
   num_cast_votes: number
-  result: unknown | null
-  result_proof: unknown | null
+  result: unknown
+  result_proof: unknown
 }
 
 export type ElectionLifecycle = 'draft' | 'open' | 'closed'

@@ -4085,7 +4085,7 @@ export async function allocateSplit(
       .sort((a, b) =>
         a.part.ledgerAccountId - b.part.ledgerAccountId || a.part.fiscalYearId - b.part.fiscalYearId)
 
-    const bookings: MoneyBookingDto[] = new Array(input.parts.length)
+    const bookings: MoneyBookingDto[] = Array.from({ length: input.parts.length })
     for (const { part, originalIndex } of orderedParts) {
       const runningNo = await allocateMoneyRunningNo(tx, part.ledgerAccountId, part.fiscalYearId)
       const insertedRows = await tx<RawMoneyBookingRow[]>`
@@ -4153,8 +4153,8 @@ function moneyLevenshtein(a: string, b: string): number {
   const n = b.length
   if (m === 0) return n
   if (n === 0) return m
-  let prev = new Array<number>(n + 1)
-  let cur = new Array<number>(n + 1)
+  let prev = Array.from<number>({ length: n + 1 })
+  let cur = Array.from<number>({ length: n + 1 })
   for (let j = 0; j <= n; j++) prev[j] = j
   for (let i = 1; i <= m; i++) {
     cur[0] = i

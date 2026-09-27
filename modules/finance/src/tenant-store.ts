@@ -323,19 +323,13 @@ async function drainPendingNow(): Promise<{ ended: number; failed: number }> {
 }
 
 /**
- * PUBLIC shutdown seam: end every pool that was evicted on capacity and is
- * still inside its grace window. The drain timer is unref-d and an explicit
- * `process.exit()` never emits `beforeExit`, so a leaf that shuts down on
- * SIGTERM must call this or those sockets die by TCP reset.
- */
-export async function drainEvictedPools(): Promise<void> {
-  await drainPendingNow()
-}
-
-/**
  * PUBLIC shutdown seam: end EVERY pool this process holds - the ones awaiting a
  * deferred drain AND the up-to-POOL_REGISTRY_MAX pools still LIVE in the
  * registry.
+ *
+ * Supersedes the old drainEvictedPools()-only seam (removed — unused, no
+ * caller left after closeAllPools() was wired into every leaf's shutdown
+ * handler; see the note on that call below).
  *
  * drainEvictedPools() alone left the larger half of the hole open: SIGTERM tore
  * down as many as POOL_REGISTRY_MAX x pool-size live connections by TCP reset

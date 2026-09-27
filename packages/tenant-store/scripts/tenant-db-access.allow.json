@@ -62,7 +62,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the board module's one-shot StuRa kernel-to-leaf backfill (source and module connections); dead under the from-zero re-init, retired when TASK-021 owns the per-(tenant, module) database; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the board module's one-shot StuRa kernel-to-leaf backfill (source and module connections); dead under the from-zero re-init, retired when TASK-021 owns the per-(tenant, module) database; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/board/src/migrations.ts",
@@ -70,7 +70,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the board module's hand-written migration ledger/runner; replaced by the one tenant-store runner (TASK-020 B22 note) when TASK-021 migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the board module's hand-written migration ledger/runner; replaced by the one tenant-store runner (TASK-020 B22 note) when TASK-021 migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/board/src/store/index.ts",
@@ -78,7 +78,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the board module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the board module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/board/test/api.integration.test.ts",
@@ -86,7 +86,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the board module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the board module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/board/test/backfill.integration.test.ts",
@@ -94,7 +94,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the board module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the board module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/scripts/backfill.ts",
@@ -102,7 +102,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the calendar module's one-shot StuRa kernel-to-leaf backfill (source and module connections); dead under the from-zero re-init, retired when TASK-021 owns the per-(tenant, module) database; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the calendar module's one-shot StuRa kernel-to-leaf backfill (source and module connections); dead under the from-zero re-init, retired when TASK-021 owns the per-(tenant, module) database; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/src/tenant-store.ts",
@@ -110,7 +110,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the calendar module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the calendar module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/test/api.integration.test.ts",
@@ -118,7 +118,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/test/backfill.integration.test.ts",
@@ -126,7 +126,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/test/holiday-dedup.integration.test.ts",
@@ -134,7 +134,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/test/outbox.integration.test.ts",
@@ -142,7 +142,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/test/relay.test.ts",
@@ -150,7 +150,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/test/store.integration.test.ts",
@@ -158,7 +158,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/calendar/test/tenant-store.integration.test.ts",
@@ -166,7 +166,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the calendar module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/scripts/backfill.ts",
@@ -174,7 +174,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the content module's one-shot StuRa kernel-to-leaf backfill (source and module connections); dead under the from-zero re-init, retired when TASK-021 owns the per-(tenant, module) database; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the content module's one-shot StuRa kernel-to-leaf backfill (source and module connections); dead under the from-zero re-init, retired when TASK-021 owns the per-(tenant, module) database; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/src/http/admin-routes.ts",
@@ -182,7 +182,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the content module's admin tenant drop/deprovision route (DROP DATABASE on an admin connection, control-DB cleanup); database create/drop moves to the TASK-021 lifecycle; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the content module's admin tenant drop/deprovision route (DROP DATABASE on an admin connection, control-DB cleanup); database create/drop moves to the TASK-021 lifecycle; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/src/tenant-store.ts",
@@ -190,7 +190,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the content module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the content module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/api.integration.test.ts",
@@ -198,7 +198,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/backfill.integration.test.ts",
@@ -206,7 +206,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/correlation-id.integration.test.ts",
@@ -214,7 +214,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/dispatch.integration.test.ts",
@@ -222,7 +222,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/outbox.integration.test.ts",
@@ -230,7 +230,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/publish-channel.integration.test.ts",
@@ -238,7 +238,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/relay.test.ts",
@@ -246,7 +246,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/scheduler.integration.test.ts",
@@ -254,7 +254,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/store.integration.test.ts",
@@ -262,7 +262,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/content/test/tenant-store.integration.test.ts",
@@ -270,7 +270,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the content module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/finance/scripts/backfill.ts",
@@ -278,7 +278,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the finance module's one-shot StuRa kernel-to-leaf backfill (source and module connections); dead under the from-zero re-init, retired when TASK-021 owns the per-(tenant, module) database; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the finance module's one-shot StuRa kernel-to-leaf backfill (source and module connections); dead under the from-zero re-init, retired when TASK-021 owns the per-(tenant, module) database; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/finance/src/tenant-store.ts",
@@ -286,7 +286,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the finance module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the finance module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/finance/test/backfill.integration.test.ts",
@@ -294,7 +294,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the finance module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the finance module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/finance/test/bank-money.integration.test.ts",
@@ -302,7 +302,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the finance module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the finance module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/finance/test/org-unit-mirror.integration.test.ts",
@@ -310,7 +310,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the finance module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the finance module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/src/tenant-store.ts",
@@ -318,7 +318,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the publishing module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the publishing module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/api.integration.test.ts",
@@ -326,7 +326,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/backfill.integration.test.ts",
@@ -334,7 +334,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/correlation-id.integration.test.ts",
@@ -342,7 +342,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/deliveries.integration.test.ts",
@@ -350,7 +350,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/deploy-drift.test.ts",
@@ -358,7 +358,7 @@
       "imports": 0,
       "adoptedBy": "TASK-038",
       "since": "2026-09-27",
-      "reason": "not a connection: an assertion message naming the newsletter-postgres container ('... postgres (pg_isready)') matches the call pattern; coupled test in modules/COUPLED-TESTS.json, retires with the compose/k8s drift check it reads (TASK-038); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "not a connection: an assertion message naming the newsletter-postgres container ('... postgres (pg_isready)') matches the call pattern; coupled test in modules/COUPLED-TESTS.json, retires with the compose/k8s drift check it reads (TASK-038); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/dispatch.integration.test.ts",
@@ -366,7 +366,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/outbox.integration.test.ts",
@@ -374,7 +374,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/relay.test.ts",
@@ -382,7 +382,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/store.integration.test.ts",
@@ -390,7 +390,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/publishing/test/tenant-store.integration.test.ts",
@@ -398,7 +398,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/vault/src/migrations.ts",
@@ -406,7 +406,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the vault module's hand-written migration ledger/runner; replaced by the one tenant-store runner (TASK-020 B22 note) when TASK-021 migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the vault module's hand-written migration ledger/runner; replaced by the one tenant-store runner (TASK-020 B22 note) when TASK-021 migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/vault/src/store/index.ts",
@@ -414,7 +414,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "the vault module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "the vault module's own per-tenant pool (one database per tenant, opened with postgres()); replaced by openTenantDb when TASK-021 creates and migrates one database per (tenant, module); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
       "path": "modules/vault/test/api.integration.test.ts",
@@ -422,7 +422,7 @@
       "imports": 1,
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
-      "reason": "test of the vault module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f1 or listed in modules/EXTRACTION-DELTA.json)"
+      "reason": "test of the vault module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     }
   ]
 }

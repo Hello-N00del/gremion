@@ -27,13 +27,13 @@ export interface ContentPost {
 function toDate(v: unknown): string {
   if (v instanceof Date) return v.toISOString()
   if (v == null) return String(v)
-  return String(v)
+  return String(v as string | number)
 }
 
 function toNullableDate(v: unknown): string | null {
   if (v == null) return null
   if (v instanceof Date) return v.toISOString()
-  return String(v)
+  return String(v as string | number)
 }
 
 function toPost(row: Record<string, unknown>): ContentPost {
@@ -45,7 +45,7 @@ function toPost(row: Record<string, unknown>): ContentPost {
     status: (row['status'] as ContentPost['status']) ?? 'draft',
     scheduled_at: toNullableDate(row['scheduled_at']),
     sent_at: toNullableDate(row['sent_at']),
-    error: row['error'] != null ? String(row['error']) : null,
+    error: row['error'] != null ? (row['error'] as string) : null,
     created_by: row['created_by'] as string,
     created_at: toDate(row['created_at']),
     updated_at: toDate(row['updated_at']),

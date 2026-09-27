@@ -1,8 +1,8 @@
 {
-  "comment": "Every path under a mapped module directory that differs from, or is absent at, the StuRa tag extraction-source-f1 (services/** and the content UI half). scripts/check-module-source-parity.mjs refuses any unlisted difference, any listed path that does not differ (stale), any set-A path, and any entry whose pinned kernel blob no longer matches (a further edit updates its entry).",
+  "comment": "Every path under a mapped module directory that differs from, or is absent at, the StuRa tag extraction-source-f2 (services/** and the content UI half). scripts/check-module-source-parity.mjs refuses any unlisted difference, any listed path that does not differ (stale), any set-A path, and any entry whose pinned kernel blob no longer matches (a further edit updates its entry).",
   "source": {
-    "tag": "extraction-source-f1",
-    "commit": "0c9d342e9a1f9785b6f976719008134237198d0d"
+    "tag": "extraction-source-f2",
+    "commit": "d0c656d0b266f3a1741f34454e0061bc5078c3f4"
   },
   "entries": [
     {

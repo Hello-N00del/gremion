@@ -41,7 +41,7 @@ function toMember(row: Record<string, unknown>): MailingListMember {
     id: Number(row['id']),
     list_id: Number(row['list_id']),
     email: row['email'] as string,
-    name: row['name'] != null ? String(row['name']) : null,
+    name: row['name'] != null ? (row['name'] as string) : null,
     source: row['source'] as 'csv' | 'manual',
     created_at: row['created_at'] instanceof Date
       ? row['created_at'].toISOString()
