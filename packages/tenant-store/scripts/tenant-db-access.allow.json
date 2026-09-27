@@ -55,6 +55,14 @@
       "adoptedBy": "TASK-028",
       "since": "2026-09-27",
       "reason": "a destructive integration proof, not a tenant connection: it CREATEs and DROPs its own scratch databases through the maintenance database of the guarded DATABASE_URL and runs the raw migration chain in each, which openTenantDb (a (tenant, module) pool resolved from GREMION_<MODULE>_PG_URL) cannot address; train4 decision, stays allow-listed while the test exists"
+    },
+    {
+      "path": "gremion-ui/src/lib/i18n/server/locale-preference-pg.integration.test.ts",
+      "calls": 3,
+      "imports": 1,
+      "adoptedBy": "TASK-062",
+      "since": "2026-09-27",
+      "reason": "a destructive integration proof of the LocalePreferencePort pg adapter, not a tenant connection: through the guarded DATABASE_URL it CREATEs and DROPs its own throwaway database and a NOLOGIN role, applies the IDT fixture as owner, and connects the adapter with the role startup parameter so RLS is real; openTenantDb (a (tenant, module) pool resolved from GREMION_<MODULE>_PG_URL) can address neither the throwaway database nor the role; train4 decision (same as TASK-028's portal-grants proof), stays allow-listed while the test exists"
     }
   ]
 }
