@@ -36,16 +36,6 @@ import { fileURLToPath } from 'node:url'
 // Established pattern: a test imports a scripts/*.mjs module directly
 // (precedent: src/lib/server/boundary/install-git-hooks.test.ts).
 import { installHooks, MARKER_BEGIN, MARKER_END } from './install-git-hooks.mjs'
-// R26TMP-EXITLOG
-import { appendFileSync as __r26append } from 'node:fs'
-if (process.env.R26_EXITLOG) {
-  const __log = (m: string) => __r26append(process.env.R26_EXITLOG!, `${new Date().toISOString()} pid=${process.pid} ${m}\n`)
-  __log('worker loaded')
-  process.on('exit', (c) => __log(`exit code=${c}`))
-  for (const s of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const) process.on(s, () => { __log(`signal ${s}`); process.exit(99) })
-  process.on('uncaughtException', (e) => __log(`uncaught ${e?.stack}`))
-  process.on('disconnect', () => __log('ipc disconnect'))
-}
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url))
 const gremionUiRoot = join(scriptsDir, '..')
