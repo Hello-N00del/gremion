@@ -83,6 +83,26 @@ export function isProductionDomain(domain) {
   return d.includes('.') && d.split('.').filter(Boolean).length >= 2
 }
 
+// The WIRING and CANARY probes are controlled, env-independent renders: they
+// set every key they depend on. docker-compose.prod.yml binds the app's DOMAIN
+// once, from PLATFORM_DOMAIN, with `:?` (TASK-028), so a probe that left it to
+// the ambient env aborted on `PLATFORM_DOMAIN required` on every working copy
+// whose .env predates the key -- `pnpm check` went red with nothing wrong in
+// DOMAIN_REGEX. The probes bind it to their own probe domain. The DEPLOY GUARD
+// (3) renders the ambient env as it is, on purpose: a real production .env
+// without PLATFORM_DOMAIN fails there exactly as its deploy would.
+const PROBE_DOMAIN = 'wildcard-probe.example'
+export const WIRING_PROBE_ENV = Object.freeze({
+  DOMAIN: PROBE_DOMAIN,
+  PLATFORM_DOMAIN: PROBE_DOMAIN,
+  DOMAIN_REGEX: 'wildcard-probe\\.example',
+})
+export const CANARY_PROBE_ENV = Object.freeze({
+  DOMAIN: PROBE_DOMAIN,
+  PLATFORM_DOMAIN: PROBE_DOMAIN,
+  DOMAIN_REGEX: '',
+})
+
 /** Renders the prod overlay with the given extra env merged over process.env.
  *  Returns { skip } when docker is unavailable, { ok:false } on a render/parse
  *  error, else { labelsByService } mapping service -> {label: value}. */
@@ -130,7 +150,7 @@ function collectWildcardRules(labelsByService) {
 
 function main() {
   // (1) WIRING probe: a real domain + non-empty DOMAIN_REGEX => no leg collapses.
-  const wiring = renderProd({ DOMAIN: 'wildcard-probe.example', DOMAIN_REGEX: 'wildcard-probe\\.example' })
+  const wiring = renderProd(WIRING_PROBE_ENV)
   if (wiring.skip) {
     console.warn(`[domain-regex] SKIP: ${wiring.reason} — cannot verify the wildcard router wiring.`)
     console.warn('[domain-regex] SKIPPED — docker unavailable; DOMAIN_REGEX wiring NOT verified (re-run with docker up).')
@@ -159,7 +179,7 @@ function main() {
 
   // (2) CANARY probe: empty DOMAIN_REGEX => EVERY wildcard leg must collapse.
   // This pins the exact failure signature documented in the runbook.
-  const canary = renderProd({ DOMAIN: 'wildcard-probe.example', DOMAIN_REGEX: '' })
+  const canary = renderProd(CANARY_PROBE_ENV)
   if (canary.ok === false) {
     failures.push(`canary render failed: ${canary.reason}`)
   } else if (canary.labelsByService) {
