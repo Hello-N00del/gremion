@@ -19,7 +19,8 @@
 #   limits       HostConfig.Memory and NanoCpus > 0 on every container
 #   rss          idle RSS below 80 % of the limit on every container
 #   isolation    project classification, network membership, TCP probes
-#   tenant       TRD-440: a second tenant adds no container and no project
+#   tenant-before / tenant / tenant-after
+#                TRD-440: a second tenant adds no container and no project
 #   switch       blue -> green: state IDs and volume CreatedAt unchanged
 #   cold-state   restart the state tier; the app colour is healthy after it
 #   teardown     docker rm -f / network rm / volume rm, by the ${STACK} prefix
@@ -306,7 +307,7 @@ EOF
     # The default tenant's config (CONFIG_PATH on the external config volume).
     # A real host carries the operator's; migrate's fleet refuses a config
     # without a brand identity (assertBrandIdentityComplete).
-    printf '%s' '{"brand":{"product":"Gremion","org_short":"T040"}}'         | docker run --rm -i --name "${STACK}-seed-config" -v "${STACK}_config_data:/c" --entrypoint sh "$PROBE_IMAGE"             -c 'cat > /c/config.json && chmod 666 /c/config.json'
+    printf '%s' '{"brand":{"product":"Gremion","org_short":"T040"},"deployment":{"mode":"multi"}}'         | docker run --rm -i --name "${STACK}-seed-config" -v "${STACK}_config_data:/c" --entrypoint sh "$PROBE_IMAGE"             -c 'cat > /c/config.json && chmod 666 /c/config.json'
     chmod_app_volumes
 
     ok "prepared ${STACK}: env files, externals, overlays (run the names phase before any up)"
@@ -599,9 +600,7 @@ phase_tenant() {
     require_scratch tenant
     # shellcheck disable=SC1090
     . "$ENV_DIR/state.env"
-    local before after
-    before="$(counts)"
-    printf '%s\n' "$before" > "$OUT/ledger/trd440-before.txt"
+    [[ -s "$OUT/ledger/trd440-before.txt" ]] || die "run tenant-before first"
     # The provisioner runs as the product's own tenant-create one-shot (app
     # project, run --rm) on ${STACK}_state/_edge -- not from the host, because
     # reaching postgres from the host needs a published port, and a published
@@ -618,6 +617,20 @@ phase_tenant() {
     compose app-blue "${run[@]}" provision "$TENANT_SLUG" --config "/fixture/tenant-${TENANT_SLUG}.json" \
         > "$OUT/ledger/trd440-provision.log" 2>&1 \
         || { tail -25 "$OUT/ledger/trd440-provision.log" >&2; bad "provision $TENANT_SLUG failed"; }
+    ok "tenant: bootstrap-provisioner and provision $TENANT_SLUG ran (ledger/trd440-*.log)"
+}
+
+# Split so no call outlives a time box: each compose render is ~10 s here.
+phase_tenant_before() {
+    counts > "$OUT/ledger/trd440-before.txt"
+    [[ -s "$OUT/ledger/trd440-before.txt" ]] || die "empty TRD-440 baseline"
+    ok "tenant-before: baseline recorded"
+}
+phase_tenant_after() {
+    # shellcheck disable=SC1090
+    . "$ENV_DIR/state.env"
+    local before after
+    before="$(cat "$OUT/ledger/trd440-before.txt")"
     after="$(counts)"
     printf '%s\n' "$after" > "$OUT/ledger/trd440-after.txt"
     [[ "$before" == "$after" ]] && ok "TRD-440: services, running containers and compose projects unchanged by the tenant-add" \
@@ -692,7 +705,9 @@ run_phase() {
         limits) phase_limits ;;
         rss) phase_rss ;;
         isolation) phase_isolation ;;
+        tenant-before) phase_tenant_before ;;
         tenant) phase_tenant ;;
+        tenant-after) phase_tenant_after ;;
         switch) phase_switch ;;
         cold-state) phase_cold_state ;;
         teardown) phase_teardown ;;
@@ -705,7 +720,7 @@ info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
 if [[ "$1" == all ]]; then
     require_scratch all
     trap 'phase_teardown || true' EXIT
-    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation tenant switch cold-state limits; do
+    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation tenant-before tenant tenant-after switch cold-state limits; do
         # shellcheck disable=SC2086
         run_phase $ph
     done
