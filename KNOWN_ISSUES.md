@@ -330,7 +330,7 @@ and their regexp-escaped domain key are gone since TASK-041 (whole-host
 resolution), so that half of the set no longer exists. `.github/workflows/gremion-ui.yml` and
 `gremion-ui/vitest.integration.config.ts` already use `council.example`, so the
 tree is not internally consistent either — a normalisation pass should do all
-of it at once, with the domain-regex guard watched.
+of it at once, with hygiene check `j1` and `make lint-edge-host` watched.
 
 ### The retired staging host
 

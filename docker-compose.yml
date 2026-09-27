@@ -272,14 +272,16 @@ services:
       # to upstream, which is correct for an unmodified deployment.
       PUBLIC_SOURCE_URL:        ${PUBLIC_SOURCE_URL:-}
       # NOTE: ORIGIN is deliberately NOT pinned here. In the multi-tenant
-      # deployment every tenant is served on its OWN host (<slug>.${DOMAIN} +
-      # the apex = default), so a single fixed ORIGIN would make SvelteKit's
-      # adapter-node derive the same origin for every tenant — which then makes
-      # the CSRF origin check 403 every non-default tenant's SSO/form POST
-      # (the browser's Origin is the tenant host, the pinned origin is the apex).
+      # deployment every tenant is served on its OWN bound host (its
+      # tenant_domain rows; the apex serves no tenant), so a single fixed ORIGIN
+      # would make SvelteKit's adapter-node derive the same origin for every
+      # tenant — which then makes the CSRF origin check 403 every tenant's
+      # SSO/form POST (the browser's Origin is the tenant host, the pinned
+      # origin would not be).
       # With ORIGIN unset, adapter-node derives the origin from the real inbound
       # Host header (Traefik passHostHeader=true preserves it per tenant), while
-      # the tenant resolver independently reads the rewritten x-forwarded-host.
+      # the tenant resolver selects on the whole x-forwarded-host its router
+      # pins, cross-checked against that same Host.
       # Protocol is forced to https in the prod overlay (PROTOCOL_HEADER).
       # Dev/local: docker-compose.override.yml sets ORIGIN=http://localhost:<port>.
       # G-080: Admin REST over internal TLS (governance committee provisioning,
