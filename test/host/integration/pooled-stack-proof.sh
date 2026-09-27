@@ -121,6 +121,11 @@ svc_cid() { # <project suffix> <service>
     docker ps -q --filter "label=com.docker.compose.project=${STACK}-$1" --filter "label=com.docker.compose.service=$2" | head -n1
 }
 
+# The app images run as uid 1000 (node); a fresh external volume is root-owned.
+chmod_app_volumes() {
+    docker run --rm --name "${STACK}-chown" -v "${STACK}_config_data:/c" -v "${STACK}_tenant_config_data:/d"         --entrypoint sh "$PROBE_IMAGE" -c 'chown -R 1000:1000 /c /d'
+}
+
 # ── prepare ────────────────────────────────────────────────────────────────
 phase_prepare() {
     require_scratch prepare
@@ -303,6 +308,11 @@ EOF
         docker volume inspect "${STACK}_${vol}" >/dev/null 2>&1 || docker volume create "${STACK}_${vol}" >/dev/null
     done
     info "externals: volumes ready"
+    # The default tenant's config (CONFIG_PATH on the external config volume).
+    # A real host carries the operator's; migrate's fleet refuses a config
+    # without a brand identity (assertBrandIdentityComplete).
+    printf '%s' '{"brand":{"product":"Gremion","org_short":"T040"}}'         | docker run --rm -i --name "${STACK}-seed-config" -v "${STACK}_config_data:/c" --entrypoint sh "$PROBE_IMAGE"             -c 'cat > /c/config.json && chmod 666 /c/config.json'
+    chmod_app_volumes
 
     ok "prepared ${STACK}: env files, externals, overlays (run the names phase before any up)"
     printf '%s prepared %s\n' "$(now)" "$STACK" | ledger run.log
