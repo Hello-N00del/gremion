@@ -1,6 +1,8 @@
 // TASK-062 TDD 8 (gremion-ui): the locale is decided by the server and the
 // browser never rewrites it.
-//   (a) no cookie + Accept-Language en-US -> the RAW response has lang="en";
+//   (a) no cookie + Accept-Language en-US -> the RAW response has lang="en"
+//       on a page that renders from the catalogue (the login interstitial),
+//       and lang="de" on a German-only page (R26-TRAIN4-FIX r3, WCAG 3.1.1);
 //   (b) signed in, switch to English through the settings form (POST + 303),
 //       reload, open a second route: every document is English, and a
 //       MutationObserver on <html lang> records zero changes on each of them.
@@ -71,17 +73,20 @@ test.describe('server-decided locale (TASK-062)', () => {
   test.describe('(a) Accept-Language en-US, no cookie', () => {
     test.use({ locale: 'en-US' })
 
-    test('the raw server response carries <html lang="en"> and the browser never changes it', async ({ page }) => {
+    // R26-TRAIN4-FIX r3 (WCAG 3.1.1): the legal pages are written in German
+    // only (src/lib/i18n/content-locale.ts), so an en-US visitor gets them
+    // declared German, with the person's locale aside in data-ui-locale. A
+    // public page (no session, no sign-in bounce); the browser context's
+    // locale makes Chromium send Accept-Language: en-US.
+    test('a German-only page is declared German, and the browser never changes it', async ({ page }) => {
       await watchLang(page)
-      // A public page (no session, no sign-in bounce); the browser context's
-      // locale makes Chromium send Accept-Language: en-US.
       const response = await page.goto('/legal/impressum')
       expect(response!.status()).toBe(200)
       expect(await response!.request().headerValue('accept-language')).toMatch(/^en-US/)
-      expect(await response!.text()).toContain('<html lang="en">')
+      expect(await response!.text()).toContain('<html lang="de" data-ui-locale="en">')
       await page.waitForLoadState('networkidle')
       expect(await langMutations(page)).toEqual([])
-      await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+      await expect(page.locator('html')).toHaveAttribute('lang', 'de')
     })
 
     test('an English login interstitial renders its text, not its key', async ({ page }) => {

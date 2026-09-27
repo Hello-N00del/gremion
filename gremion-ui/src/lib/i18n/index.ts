@@ -30,6 +30,10 @@ const messages = compiled as unknown as Record<string, MessageFn | undefined>
 
 if (browser) {
   defineCustomClientStrategy(GREMION_STRATEGY, {
+    // `<html lang>` is the language the current page renders in: the person's
+    // locale, or 'de' on a German-only route (content-locale.ts), where the
+    // person's locale waits in data-ui-locale until the root layout's
+    // onNavigate restores it for the next page.
     getLocale: () => asSupportedLocale(document.documentElement.lang) ?? undefined,
     // Switching is a form POST + 303 (routes/settings/+page.server.ts), so the
     // next document arrives already rendered in the new locale. Nothing to do.

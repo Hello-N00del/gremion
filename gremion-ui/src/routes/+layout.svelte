@@ -21,12 +21,22 @@
   import type { SessionUser } from '$lib/auth/types'
   import type { Snippet } from 'svelte'
   import { page } from '$app/stores'
+  import { onNavigate } from '$app/navigation'
   import { onMount } from 'svelte'
   import { initTheme } from '$lib/stores/theme'
+  import { syncDocumentLang } from '$lib/i18n/content-locale'
 
   // Apply persisted appearance/accessibility prefs (theme, colorblind,
   // font size, reduced motion) on load so they take effect app-wide.
   onMount(initTheme)
+
+  // R26-TRAIN4-FIX r3 (WCAG 3.1.1): a client-side navigation gets no new
+  // <html> from the server, so set its lang to the next page's content
+  // language here, before that page renders (German-only routes are German;
+  // every other route follows the person's locale). See content-locale.ts.
+  onNavigate(({ to }) => {
+    if (to) syncDocumentLang(document.documentElement, to.url.pathname)
+  })
 
   let {
     data,
@@ -56,7 +66,9 @@
 <!-- #287: the skip-link is a focusable accent affordance. bg-primary/
      text-primary-foreground were dangling shadcn aliases (undefined @theme vars →
      transparent); mapped to the prototype accent tokens. -->
+<!-- R26-TRAIN4-FIX r3: German text, so marked German on an English page too (WCAG 3.1.2). -->
 <a
+  lang="de"
   href="#main-content"
   class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50
          focus:rounded-md focus:bg-accent focus:px-4 focus:py-2 focus:text-paper"

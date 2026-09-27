@@ -131,6 +131,30 @@ describe('createI18nHandle (TDD 2: the raw SSR response carries the resolved lan
     expect(await response.text()).toBe('Files')
   })
 
+  // R26-TRAIN4-FIX r3 (WCAG 3.1.1): a German-only page is declared German.
+  it.each([
+    ['/legal/impressum', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/setup', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/legal/impressum', 'de-DE', '<html lang="de">'],
+    ['/auth/login', 'en-US', '<html lang="en">'],
+    ['/settings/darstellung', 'en-US', '<html lang="en">']
+  ])('%s with Accept-Language %j -> %s', async (path, header, expected) => {
+    const event = { ...fakeEvent({ acceptLanguage: header }), url: new URL(path, 'https://pilot.test') }
+    const response = await createI18nHandle(customerIdOf)({ event, resolve: renderAppHtml } as never)
+    const body = await response.text()
+    expect(body).toContain(expected)
+    expect(body).not.toContain(LANG_PLACEHOLDER)
+    // locals.locale stays the person's locale (the settings switch reads it).
+    expect((event.locals as { locale?: string }).locale).toBe(header === 'en-US' ? 'en' : 'de')
+  })
+
+  it('a German-only page renders its catalogue strings (e.g. +error) in German too', async () => {
+    const event = { ...fakeEvent({ acceptLanguage: 'en-US' }), url: new URL('/legal/impressum', 'https://pilot.test') }
+    const resolve = async () => new Response(messages['nav.files']!())
+    const response = await createI18nHandle(customerIdOf)({ event, resolve } as never)
+    expect(await response.text()).toBe('Dateien')
+  })
+
   it('never hands the request body to Paraglide (uploads are not cloned/teed)', async () => {
     const event = fakeEvent({ acceptLanguage: 'en-US' })
     let seen: unknown

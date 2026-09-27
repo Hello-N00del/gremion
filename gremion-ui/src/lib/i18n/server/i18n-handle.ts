@@ -22,6 +22,7 @@ import { resolveLocale, type Locale, type PersonLocalePreference } from './resol
 import { personIdOf } from './person-id'
 import { getLocalePreferencePort, isLocalePreferenceConfigured } from './locale-preference-port'
 import { GREMION_STRATEGY, LOCALE_COOKIE } from '../locale'
+import { contentLocaleFor, htmlLangAttributes } from '../content-locale'
 import { paraglideMiddleware } from '../paraglide/server.js'
 import { defineCustomServerStrategy } from '../paraglide/runtime.js'
 
@@ -102,15 +103,22 @@ export function createI18nHandle(customerIdOf: (locals: LocalsLike) => string | 
     const locale = await resolveRequestLocale(event as unknown as MinimalRequestEvent, customerIdOf)
     ;(event.locals as App.Locals & { locale?: Locale }).locale = locale
 
+    // R26-TRAIN4-FIX r3 (WCAG 3.1.1): the page is rendered and declared in the
+    // language it is written in. A German-only route (content-locale.ts) is
+    // German for everyone; `locals.locale` stays the person's locale, and
+    // app.html carries it aside in data-ui-locale for the client.
+    const contentLocale = contentLocaleFor(event.url.pathname, locale)
+
     // A body-less stand-in: Paraglide clones the Request it is given, and
     // cloning an upload would tee (and buffer) its body. The stand-in carries
     // only the URL, which is all a non-URL strategy needs.
     const probe = new Request(event.url)
-    resolvedLocales.set(probe, locale)
+    resolvedLocales.set(probe, contentLocale)
 
     return paraglideMiddleware(probe, ({ locale: requestLocale }) =>
       resolve(event, {
-        transformPageChunk: ({ html }) => html.replace(LANG_PLACEHOLDER, requestLocale)
+        transformPageChunk: ({ html }) =>
+          html.replace(`lang="${LANG_PLACEHOLDER}"`, htmlLangAttributes(requestLocale, locale))
       })
     )
   }
