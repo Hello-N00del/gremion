@@ -29,7 +29,7 @@
  *   0 — barrel written / printed
  *   1 — failed to read the server tree
  */
-import { readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs'
+import { readdirSync, writeFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
