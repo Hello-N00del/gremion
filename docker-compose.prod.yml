@@ -48,6 +48,18 @@ services:
     # G-037: externally-pulled image digest-pinned (PgBouncer 1.25.2).
     image: edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340
     restart: unless-stopped
+    healthcheck:
+      # TASK-036 (TRD-178): BusyBox nc (measured present at the pinned digest)
+      # sends the PostgreSQL SSLRequest packet (length 8, code 80877103) to the
+      # pooler's own listen_port (6432, docker/pgbouncer/pgbouncer.ini) and
+      # requires a protocol answer, 'S' or 'N' (measured: 'N'). A bare TCP
+      # connect cannot tell "port bound" from "pooler speaking Postgres". Octal
+      # escapes, because BusyBox printf does not guarantee \xHH.
+      test: ["CMD-SHELL", "printf '\\000\\000\\000\\010\\004\\322\\026\\057' | nc -w 3 127.0.0.1 6432 | head -c 1 | grep -q '[SN]'"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     logging:
       driver: json-file
       options:
@@ -270,6 +282,15 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/hello-n00del/gremion-fallback:latest
     restart: unless-stopped
+    healthcheck:
+      # TASK-036 (TRD-178): nginx:alpine ships BusyBox wget. The probe asserts
+      # the marker in the served page (docker/fallback/index.html line 2), not
+      # just a 200 -- the try_files rule answers 200 even for an empty root.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ | grep -q gremion-fallback"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - gremion-net
     labels:
@@ -282,43 +303,3 @@ services:
       - "traefik.http.routers.fallback.priority=1"
       - "traefik.http.routers.fallback.service=fallback"
       - "traefik.http.services.fallback.loadbalancer.server.port=80"
-
-  # ----------------------------------------------------------
-  # Cloudflare Tunnel connector (Phase: production cutover).
-  # Establishes outbound-only connections to Cloudflare's edge —
-  # no inbound ports opened on the host. Public hostnames
-  # (the apex and the public-portal host) are configured on the
-  # tunnel in the Zero Trust dashboard, both -> https://traefik:443.
-  # Requires CF_TUNNEL_TOKEN in .env (gitignored).
-  # ----------------------------------------------------------
-  cloudflared:
-    # G-037 (Wave 3b T5.1): externally-pulled image MUST be digest-pinned.
-    # Version: 2024.10.0 (Cloudflare Tunnel daemon).
-    # Bump policy: Dependabot opens a PR on new cloudflared releases;
-    # verify the tunnel still authenticates against the configured token
-    # before merging.
-    image: cloudflare/cloudflared:2024.10.0@sha256:060f16531b1ed6dcb382cd2b35d1a845f8dbcb445003b9ec48eef0078cb08bf4
-    restart: unless-stopped
-    # #258-F4: pass the tunnel token via env, not --token on the command line.
-    # compose used to substitute the real token into the container's argv, where
-    # it was readable for the connector's whole lifetime via `docker inspect`
-    # and the host `/proc/<pid>/cmdline`. cloudflared reads TUNNEL_TOKEN from the
-    # environment natively, so dropping the flag is behaviourally identical.
-    environment:
-      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN}
-    command: tunnel --no-autoupdate run
-    volumes:
-      # Public Cloudflare Origin CA root — lets cloudflared verify the
-      # origin certificate Traefik serves. The tunnel's per-hostname TLS
-      # "CA Pool" field (Zero Trust dashboard) must be set to this exact
-      # container path: /etc/cloudflared/origin-ca.pem
-      - ./docker/cloudflared/origin-ca-root.pem:/etc/cloudflared/origin-ca.pem:ro
-    depends_on:
-      - traefik
-    networks:
-      - gremion-net
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"

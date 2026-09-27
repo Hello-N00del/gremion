@@ -1,0 +1,2 @@
+# Fixture for suite.test.mjs (TASK-036): only its existence is read; docker is faked.
+services: {}
