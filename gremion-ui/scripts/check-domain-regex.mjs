@@ -8,8 +8,11 @@
  *
  * THE BUG THIS CATCHES. The prod-overlay wildcard routers carry a wildcard leg
  *   HostRegexp(`^[a-z0-9-]+\.${DOMAIN_REGEX:-}$`)
- * (gremion-ui, keycloak, keycloak-admin, fallback — the governance-only carve
- *  removed the `wellknown` matrix-legal router with the messages module).
+ * (keycloak, keycloak-admin, fallback — the governance-only carve removed the
+ *  `wellknown` matrix-legal router with the messages module, and TASK-040 moved
+ *  gremion-ui into the per-colour app tier, whose file carries no router labels;
+ *  its apex/tenant routers return with TASK-034 34b, and TASK-041 deletes the
+ *  three legs left here).
  * `DOMAIN_REGEX`
  * is LOAD-BEARING but defaults EMPTY (`:-`). When it is unset/empty the leg
  * renders the DEAD pattern `^[a-z0-9-]+\.$`, which matches NO real tenant host
@@ -49,10 +52,11 @@ const PROD_ARGS = [
 
 // The wildcard edge routers (docker-compose.prod.yml). Each rule carries a
 // `HostRegexp(\`^[a-z0-9-]+\.${DOMAIN_REGEX:-}$\`)` leg. The governance-only carve
-// removed the `wellknown` (matrix legal) router with the messages module, so the
-// kernel edge has four wildcard routers.
+// removed the `wellknown` (matrix legal) router with the messages module, and
+// TASK-040 (pooled stack) moved gremion-ui and its router out of the prod overlay
+// into docker-compose.app.yml, which carries no router labels. Three wildcard
+// routers remain until TASK-041 deletes them (Q5).
 const WILDCARD_RULE_LABELS = [
-  'traefik.http.routers.gremion-ui.rule',
   'traefik.http.routers.keycloak.rule',
   'traefik.http.routers.keycloak-admin.rule',
   'traefik.http.routers.fallback.rule',
