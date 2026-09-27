@@ -43,7 +43,7 @@ export function moduleHref(segment: string, subPath = ''): string | null {
  * through this ONE composition path. Absent = today's golden composition,
  * byte-identical (pinned by registry.test.ts, untouched).
  */
-export function composePageAccess(vocabulary?: readonly string[]): Record<string, Role> {
+export function composePageAccess(_vocabulary?: readonly string[]): Record<string, Role> {
   const access: Record<string, Role> = {}
   for (const m of MODULE_MANIFESTS) {
     for (const p of m.pages) {
@@ -72,7 +72,7 @@ export function moduleRoutePrefixes(): { prefix: string; moduleId: string }[] {
  * threading-only today (pinned by registry.vocabulary.test.ts); absent =
  * golden composition, byte-identical.
  */
-export function composeCapabilities(vocabulary?: readonly string[]): Record<string, readonly string[]> {
+export function composeCapabilities(_vocabulary?: readonly string[]): Record<string, readonly string[]> {
   const caps: Record<string, readonly string[]> = {}
   for (const m of MODULE_MANIFESTS) {
     if (m.capabilities) Object.assign(caps, m.capabilities)

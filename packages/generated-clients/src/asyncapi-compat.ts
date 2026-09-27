@@ -106,7 +106,7 @@ function flattenSchema(doc: unknown, schema: unknown, seenRefs: ReadonlySet<stri
       const flat = flattenSchema(doc, member, seenRefs)
       if (flat.type !== undefined) merged.type = flat.type
       if (flat.required) merged.required = [...(merged.required ?? []), ...flat.required]
-      if (flat.properties) merged.properties = { ...(merged.properties ?? {}), ...flat.properties }
+      if (flat.properties) merged.properties = { ...merged.properties, ...flat.properties }
       if (flat.enum) merged.enum = flat.enum
     }
   }

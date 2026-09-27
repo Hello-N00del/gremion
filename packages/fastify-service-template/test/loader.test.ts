@@ -186,13 +186,15 @@ describe('T4: the handler table must match the spec exactly, or the service does
     const handlers: Record<string, OperationHandler> = { ...fixtureHandlers(), extra1: async () => null }
     delete handlers.listWidgets
     delete handlers.uploadFile
+    let caught: unknown
     try {
       createService({ spec: fixtureSpec(), handlers })
       expect.unreachable('createService should have thrown')
     } catch (e) {
-      expect(e).toBeInstanceOf(ServiceBootError)
-      expect((e as ServiceBootError).problems).toHaveLength(3)
+      caught = e
     }
+    expect(caught).toBeInstanceOf(ServiceBootError)
+    expect((caught as ServiceBootError | undefined)?.problems).toHaveLength(3)
   })
 })
 
@@ -265,13 +267,15 @@ describe('T8: the committed kernel spec (contracts/kernel/openapi.governance.jso
       opCount += Object.keys(item).filter((k) => ['get', 'post', 'put', 'patch', 'delete'].includes(k)).length
     }
     expect(opCount).toBeGreaterThan(0)
+    let caught: unknown
     try {
       createService({ spec, handlers: {} })
       expect.unreachable('createService should have thrown')
     } catch (e) {
-      const problems = (e as ServiceBootError).problems.filter((p) => p.includes('operationId'))
-      expect(problems).toHaveLength(opCount)
+      caught = e
     }
+    const problems = (caught as ServiceBootError).problems.filter((p) => p.includes('operationId'))
+    expect(problems).toHaveLength(opCount)
   })
 
   it('loads (Ajv 2020 + its $refs, nullable, formats) once operationIds are present, and the route table matches it', async () => {

@@ -141,7 +141,7 @@ function parseIpv6Bytes(input: string): number[] | null {
     if (!head || !tail) return null
     const fill = 16 - head.length - tail.length
     if (fill < 0) return null
-    return [...head, ...new Array<number>(fill).fill(0), ...tail]
+    return [...head, ...Array.from({ length: fill }, () => 0), ...tail]
   }
   const all = groups(s)
   return all && all.length === 16 ? all : null

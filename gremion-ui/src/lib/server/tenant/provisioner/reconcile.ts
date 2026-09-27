@@ -288,26 +288,34 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
 
   // ── realm rep: ssl / browserFlow / otpPolicy / acr.loa.map ──────────────────
   const realmRep = await get<RealmRep>('')
-  realmRep.sslRequired === 'all'
-    ? pass('ssl-required')
-    : fail('ssl-required', `sslRequired is "${realmRep.sslRequired}" (expected "all" — #139/G-080)`)
-  realmRep.browserFlow === 'browser-stepup'
-    ? pass('browser-flow')
-    : fail('browser-flow', `browserFlow is "${realmRep.browserFlow}" (expected "browser-stepup")`)
+  if (realmRep.sslRequired === 'all') {
+    pass('ssl-required')
+  } else {
+    fail('ssl-required', `sslRequired is "${realmRep.sslRequired}" (expected "all" — #139/G-080)`)
+  }
+  if (realmRep.browserFlow === 'browser-stepup') {
+    pass('browser-flow')
+  } else {
+    fail('browser-flow', `browserFlow is "${realmRep.browserFlow}" (expected "browser-stepup")`)
+  }
   const otpOk =
     realmRep.otpPolicyType === 'totp' &&
     realmRep.otpPolicyAlgorithm === 'HmacSHA1' &&
     realmRep.otpPolicyDigits === 6 &&
     realmRep.otpPolicyPeriod === 30
-  otpOk
-    ? pass('otp-policy')
-    : fail(
-        'otp-policy',
-        `otpPolicy drifted (type=${realmRep.otpPolicyType} alg=${realmRep.otpPolicyAlgorithm} digits=${realmRep.otpPolicyDigits} period=${realmRep.otpPolicyPeriod}; expected totp/HmacSHA1/6/30)`,
-      )
-  realmRep.attributes?.['acr.loa.map'] === ACR_LOA_MAP
-    ? pass('acr-loa-map')
-    : fail('acr-loa-map', `acr.loa.map is ${JSON.stringify(realmRep.attributes?.['acr.loa.map'])} (expected ${ACR_LOA_MAP})`)
+  if (otpOk) {
+    pass('otp-policy')
+  } else {
+    fail(
+      'otp-policy',
+      `otpPolicy drifted (type=${realmRep.otpPolicyType} alg=${realmRep.otpPolicyAlgorithm} digits=${realmRep.otpPolicyDigits} period=${realmRep.otpPolicyPeriod}; expected totp/HmacSHA1/6/30)`,
+    )
+  }
+  if (realmRep.attributes?.['acr.loa.map'] === ACR_LOA_MAP) {
+    pass('acr-loa-map')
+  } else {
+    fail('acr-loa-map', `acr.loa.map is ${JSON.stringify(realmRep.attributes?.['acr.loa.map'])} (expected ${ACR_LOA_MAP})`)
+  }
 
   // ── step-up flow existence + subflows ───────────────────────────────────────
   const flows = (await get<FlowRep[]>('/authentication/flows')) ?? []
@@ -318,14 +326,16 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   const e2 = stepupExists ? (await get<ExecRep[]>('/authentication/flows/stepup-2fa/executions')) ?? [] : []
   const sub1Ok = e1.some((e) => e.providerId === 'auth-username-password-form')
   const sub2Ok = e2.some((e) => e.providerId === 'auth-otp-form')
-  stepupExists && sub1Ok && sub2Ok
-    ? pass('stepup-flow')
-    : fail(
-        'stepup-flow',
-        !stepupExists
-          ? 'browser-stepup flow is absent'
-          : `stepup subflows incomplete (1fa-password=${sub1Ok}, 2fa-otp=${sub2Ok})`,
-      )
+  if (stepupExists && sub1Ok && sub2Ok) {
+    pass('stepup-flow')
+  } else {
+    fail(
+      'stepup-flow',
+      !stepupExists
+        ? 'browser-stepup flow is absent'
+        : `stepup subflows incomplete (1fa-password=${sub1Ok}, 2fa-otp=${sub2Ok})`,
+    )
+  }
 
   // ── Condition-LoA configs (loa1 / 36000, loa2 / 300) ────────────────────────
   async function loaConfig(execs: ExecRep[]): Promise<ConfigRep | undefined> {
@@ -340,12 +350,14 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     const cfg2 = await loaConfig(e2)
     const c1Ok = cfg1?.config?.['loa-condition-level'] === '1' && cfg1?.config?.['loa-max-age'] === '36000'
     const c2Ok = cfg2?.config?.['loa-condition-level'] === '2' && cfg2?.config?.['loa-max-age'] === '300'
-    c1Ok && c2Ok
-      ? pass('stepup-loa-config')
-      : fail(
-          'stepup-loa-config',
-          `Condition-LoA configs drifted (loa1: ${JSON.stringify(cfg1?.config)}; loa2: ${JSON.stringify(cfg2?.config)}; expected level1/36000 + level2/300)`,
-        )
+    if (c1Ok && c2Ok) {
+      pass('stepup-loa-config')
+    } else {
+      fail(
+        'stepup-loa-config',
+        `Condition-LoA configs drifted (loa1: ${JSON.stringify(cfg1?.config)}; loa2: ${JSON.stringify(cfg2?.config)}; expected level1/36000 + level2/300)`,
+      )
+    }
   }
 
   // ── gremion-ui client: existence, mappers, exact URIs, fullScopeAllowed ────────
@@ -363,28 +375,38 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   } else {
     pass('gremion-ui-client')
     const mappers = (await get<MapperRep[]>(`/clients/${ui.id}/protocol-mappers/models`)) ?? []
-    mappers.some((m) => m.protocolMapper === 'oidc-acr-mapper')
-      ? pass('gremion-ui-acr-mapper')
-      : fail('gremion-ui-acr-mapper', 'gremion-ui has no oidc-acr-mapper (#164 acr claim)')
-    mappers.some(
-      (m) => m.protocolMapper === 'oidc-usermodel-property-mapper' && m.config?.['claim.name'] === 'sub',
-    )
-      ? pass('gremion-ui-sub-mapper')
-      : fail('gremion-ui-sub-mapper', 'gremion-ui has no uid sub-mapper (oidc-usermodel-property-mapper -> sub)')
+    if (mappers.some((m) => m.protocolMapper === 'oidc-acr-mapper')) {
+      pass('gremion-ui-acr-mapper')
+    } else {
+      fail('gremion-ui-acr-mapper', 'gremion-ui has no oidc-acr-mapper (#164 acr claim)')
+    }
+    if (
+      mappers.some(
+        (m) => m.protocolMapper === 'oidc-usermodel-property-mapper' && m.config?.['claim.name'] === 'sub',
+      )
+    ) {
+      pass('gremion-ui-sub-mapper')
+    } else {
+      fail('gremion-ui-sub-mapper', 'gremion-ui has no uid sub-mapper (oidc-usermodel-property-mapper -> sub)')
+    }
 
     const expected = expectedUiUris(base, apexDomain, tenantHost, isDefault)
-    arraysEqualAsSet(ui.redirectUris, expected.redirectUris)
-      ? pass('gremion-ui-redirect-uris')
-      : fail(
-          'gremion-ui-redirect-uris',
-          `redirect URIs not the exact per-tenant set (#240). got=${JSON.stringify(ui.redirectUris)} expected=${JSON.stringify(expected.redirectUris)}`,
-        )
-    arraysEqualAsSet(ui.webOrigins, expected.webOrigins)
-      ? pass('gremion-ui-web-origins')
-      : fail(
-          'gremion-ui-web-origins',
-          `web-origins not the exact per-tenant set (#240). got=${JSON.stringify(ui.webOrigins)} expected=${JSON.stringify(expected.webOrigins)}`,
-        )
+    if (arraysEqualAsSet(ui.redirectUris, expected.redirectUris)) {
+      pass('gremion-ui-redirect-uris')
+    } else {
+      fail(
+        'gremion-ui-redirect-uris',
+        `redirect URIs not the exact per-tenant set (#240). got=${JSON.stringify(ui.redirectUris)} expected=${JSON.stringify(expected.redirectUris)}`,
+      )
+    }
+    if (arraysEqualAsSet(ui.webOrigins, expected.webOrigins)) {
+      pass('gremion-ui-web-origins')
+    } else {
+      fail(
+        'gremion-ui-web-origins',
+        `web-origins not the exact per-tenant set (#240). got=${JSON.stringify(ui.webOrigins)} expected=${JSON.stringify(expected.webOrigins)}`,
+      )
+    }
     // #254 — fullScopeAllowed:false alone is NOT enough: WITHOUT explicit realm-role
     // scope-mappings the gremion-ui client silently emits NO realm_access.roles, which
     // is the exact #254 silent role-filtering break. So the check ALSO asserts the
@@ -397,12 +419,14 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
       const mapped = (await get<Array<{ name?: string }>>(`/clients/${ui.id}/scope-mappings/realm`)) ?? []
       const mappedNames = new Set(mapped.map((r) => r.name).filter((n): n is string => typeof n === 'string'))
       const missing = expectedRoles.filter((r) => !mappedNames.has(r))
-      missing.length === 0
-        ? pass('full-scope-allowed')
-        : fail(
-            'full-scope-allowed',
-            `fullScopeAllowed is false but the expected gremion-ui realm-role scopeMappings are missing (#254 silent role-filtering break): missing=[${missing.join(', ')}] got=[${[...mappedNames].join(', ')}]`,
-          )
+      if (missing.length === 0) {
+        pass('full-scope-allowed')
+      } else {
+        fail(
+          'full-scope-allowed',
+          `fullScopeAllowed is false but the expected gremion-ui realm-role scopeMappings are missing (#254 silent role-filtering break): missing=[${missing.join(', ')}] got=[${[...mappedNames].join(', ')}]`,
+        )
+      }
     }
   }
 
@@ -413,12 +437,14 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
       typeof u.serviceAccountClientId !== 'string' &&
       !(typeof u.username === 'string' && u.username.startsWith('service-account-')),
   )
-  offenders.length === 0
-    ? pass('no-fixture-users')
-    : fail(
-        'no-fixture-users',
-        `non-service-account user(s) present (#239): ${offenders.map((u) => u.username ?? '<no username>').join(', ')}`,
-      )
+  if (offenders.length === 0) {
+    pass('no-fixture-users')
+  } else {
+    fail(
+      'no-fixture-users',
+      `non-service-account user(s) present (#239): ${offenders.map((u) => u.username ?? '<no username>').join(', ')}`,
+    )
+  }
 
   // ── (A) gremion-admin SA realm-management roles ───────────────────────────────
   // KC 26's import does NOT carry service-account role mappings reliably, so a
@@ -430,12 +456,14 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   const saRoles = await new KcProvisionApi(transport).getServiceAccountRealmRoleNames(realm, ADMIN_CLIENT_ID)
   const saRoleSet = new Set(saRoles)
   const missingSaRoles = GREMION_ADMIN_SA_REALM_ROLES.filter((r) => !saRoleSet.has(r))
-  missingSaRoles.length === 0
-    ? pass('gremion-admin-sa-roles')
-    : fail(
-        'gremion-admin-sa-roles',
-        `the ${ADMIN_CLIENT_ID} service account is missing realm-management role(s) (A — KC 26 import drops SA mappings -> every Admin REST op 403s): missing=[${missingSaRoles.join(', ')}] got=[${saRoles.join(', ')}]`,
-      )
+  if (missingSaRoles.length === 0) {
+    pass('gremion-admin-sa-roles')
+  } else {
+    fail(
+      'gremion-admin-sa-roles',
+      `the ${ADMIN_CLIENT_ID} service account is missing realm-management role(s) (A — KC 26 import drops SA mappings -> every Admin REST op 403s): missing=[${missingSaRoles.join(', ')}] got=[${saRoles.join(', ')}]`,
+    )
+  }
 
   // ── verdict ─────────────────────────────────────────────────────────────────
   const ok = checks.every((c) => c.ok)
@@ -465,7 +493,7 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     await transport('PUT', `/admin/realms/${realmSeg(realm)}`, {
       realm,
       sslRequired: 'all',
-      attributes: { ...(fresh.attributes ?? {}), 'acr.loa.map': ACR_LOA_MAP },
+      attributes: { ...fresh.attributes, 'acr.loa.map': ACR_LOA_MAP },
     })
     applied.push('ssl-required')
   }
