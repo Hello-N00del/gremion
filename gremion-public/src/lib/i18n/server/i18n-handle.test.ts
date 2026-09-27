@@ -10,8 +10,9 @@
 // to CONTENT_LOCALES. The cookie/Accept-Language plumbing itself stays proven
 // below with both locales enabled, the configuration TASK-161 switches on.
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { dirname, join, relative, sep } from 'node:path'
+import { parse } from 'svelte/compiler'
 import { createI18nHandle, LANG_PLACEHOLDER, LOCALE_COOKIE } from './i18n-handle'
 import { CONTENT_LOCALES, SUPPORTED_LOCALES } from '../locale'
 import { m } from '../paraglide/messages.js'
@@ -46,6 +47,60 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
+// The page-language proof, the same rule as gremion-ui content-locale.test.ts.
+const CATALOGUE = /paraglide\/messages|\$lib\/i18n['/]/
+const USER_FACING = new Set(['title', 'label', 'placeholder', 'alt', 'aria-label', 'aria-description', 'heading', 'subtitle', 'description', 'eyebrow', 'hint', 'text'])
+const MARKUP_KEYS = ['fragment', 'nodes', 'attributes', 'consequent', 'alternate', 'body', 'fallback', 'pending', 'then', 'catch']
+type AstNode = { type?: string; [key: string]: unknown }
+
+function staticLang(node: AstNode): string | null {
+  const attr = (node.attributes as AstNode[] | undefined)?.find((a) => a.type === 'Attribute' && a.name === 'lang')
+  const value = attr?.value
+  return Array.isArray(value) && value.length === 1 && (value[0] as AstNode).type === 'Text' ? String((value[0] as AstNode).data) : null
+}
+
+/** Hard-coded, human-readable text in a component's markup. */
+function literalTexts(node: unknown, out: string[]): string[] {
+  if (Array.isArray(node)) {
+    for (const n of node) literalTexts(n, out)
+    return out
+  }
+  if (!node || typeof node !== 'object') return out
+  const n = node as AstNode
+  if (n.type === 'Text') {
+    const text = String(n.data).trim()
+    if (/\p{L}{2,}/u.test(text)) out.push(text)
+    return out
+  }
+  if (n.type === 'Attribute') {
+    if (USER_FACING.has(String(n.name)) && Array.isArray(n.value)) literalTexts(n.value, out)
+    return out
+  }
+  if (n.type === 'RegularElement' && (n.name === 'script' || n.name === 'style' || staticLang(n) === 'de')) return out
+  for (const key of MARKUP_KEYS) literalTexts(n[key], out)
+  return out
+}
+
+/** Catalogue use and hard-coded text over components and every .svelte component they import. */
+function evidenceFor(files: string[]): { catalogue: boolean; literals: string[] } {
+  const seen = new Set<string>()
+  const evidence = { catalogue: false, literals: [] as string[] }
+  const visit = (file: string) => {
+    if (seen.has(file)) return
+    seen.add(file)
+    const source = readFileSync(file, 'utf8')
+    if (CATALOGUE.test(source)) evidence.catalogue = true
+    const ast = parse(source, { modern: true }) as unknown as { fragment: unknown }
+    for (const text of literalTexts(ast.fragment, [])) evidence.literals.push(`${relative(SRC, file)}: ${text}`)
+    for (const [, spec] of source.matchAll(/from\s+['"]([^'"]+\.svelte)['"]/g)) {
+      const path = spec!.startsWith('$lib/') ? join(SRC, 'lib', spec!.slice(5)) : spec!.startsWith('.') ? join(dirname(file), spec!) : null
+      if (path && existsSync(path)) visit(path)
+    }
+  }
+  for (const f of files) visit(f)
+  return evidence
+}
+
 describe('createI18nHandle (gremion-public)', () => {
   it('app.html declares the Paraglide lang placeholder, not a hardcoded lang', () => {
     expect(APP_HTML).toMatch(/<html lang="%paraglide\.lang%">/)
@@ -77,15 +132,34 @@ describe('createI18nHandle (gremion-public)', () => {
       expect(await response.text()).toBe('Zum Inhalt springen')
     })
 
-    it("does not offer 'en' while no portal page or component renders from the catalogue", () => {
-      const consumers = [...sourceFiles(join(SRC, 'routes')), ...sourceFiles(join(SRC, 'lib', 'components'))].filter((f) =>
-        /paraglide\/messages|\$lib\/i18n/.test(readFileSync(f, 'utf8'))
-      )
-      // The day a page renders from the catalogue, this list is non-empty and
-      // CONTENT_LOCALES may grow with it (TASK-161). Until then the portal
-      // must not declare a language its pages are not written in.
-      const germanOnly = CONTENT_LOCALES.length === 1 && CONTENT_LOCALES[0] === 'de'
-      expect(consumers.length > 0 || germanOnly, `CONTENT_LOCALES ${JSON.stringify(CONTENT_LOCALES)} with no catalogue consumer`).toBe(true)
+    // R26-TRAIN4-FIX r5 (verify-r3 LOW): one catalogue consumer (a footer with
+    // one message) is not enough. The portal may offer a locale other than
+    // German only when EVERY page is proven translated: its whole component
+    // tree (the page, all layouts, +error, every imported .svelte component)
+    // renders from the catalogue and carries no hard-coded text node or
+    // user-facing attribute. Parts marked lang="de" do not count.
+    it("does not offer a non-German locale unless every portal page is proven translated", () => {
+      const routes = sourceFiles(join(SRC, 'routes')).filter((f) => f.endsWith('.svelte'))
+      const pages = routes.filter((f) => f.endsWith(`${sep}+page.svelte`))
+      expect(pages.length).toBeGreaterThan(0)
+      const shared = routes.filter((f) => f.endsWith(`${sep}+layout.svelte`) || f.endsWith(`${sep}+error.svelte`))
+      const untranslated = pages
+        .map((page) => ({ page: relative(SRC, page), e: evidenceFor([page, ...shared]) }))
+        .filter(({ e }) => !e.catalogue || e.literals.length > 0)
+      const germanOnly = CONTENT_LOCALES.every((l) => l === 'de')
+      expect(
+        germanOnly || untranslated.length === 0,
+        `CONTENT_LOCALES ${JSON.stringify(CONTENT_LOCALES)} while ${untranslated.length} page(s) are not translated, e.g. ` +
+          JSON.stringify(untranslated.slice(0, 3).map(({ page, e }) => ({ page, catalogue: e.catalogue, text: e.literals.slice(0, 3) })))
+      ).toBe(true)
+    })
+
+    it('the proof finds hard-coded text and ignores code, classes and marked German parts', () => {
+      const probe = (markup: string) => literalTexts(parse(markup, { modern: true }).fragment, [])
+      expect(probe('<h1>Beschlüsse</h1>')).toEqual(['Beschlüsse'])
+      expect(probe('<a aria-label="Startseite" href="/">{m.x()}</a>')).toEqual(['Startseite'])
+      expect(probe('<p class="text-sm">{m.x()} · {n}</p>')).toEqual([])
+      expect(probe('<p lang="de">Nur auf Deutsch</p>')).toEqual([])
     })
   })
 
