@@ -58,6 +58,41 @@ function runCli(script: string, root: string) {
   })
 }
 
+/**
+ * An env for the hygiene script whose PATH provably holds no tool at all: one
+ * empty scratch directory, and every case-variant of PATH (Windows' `Path`)
+ * dropped so none can leak the parent's search path back in. The script needs
+ * nothing from PATH to start -- it is launched by absolute process.execPath and
+ * never spawns `node` by name -- so every tool it does spawn (git, kubectl,
+ * bats) is absent. The old PATH, `path.dirname(process.execPath)`, only lacked
+ * git by accident of this box's layout: where node and git share a directory
+ * (/usr/bin), git was found and the "no git" tests ran with git.
+ */
+function emptyPathEnv(root: string): NodeJS.ProcessEnv {
+  const bin = path.join(tmp, 'empty-path-bin')
+  mkdirSync(bin)
+  const env: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(process.env)) if (k.toUpperCase() !== 'PATH') env[k] = v
+  env.PATH = bin
+  env.GREMION_REPO_ROOT = root
+  return env
+}
+
+/**
+ * The precondition the PATH-stripped tests rest on: `tool` cannot be resolved
+ * from `env` in `cwd` (the hygiene script's own cwd for its git calls). Asserted
+ * before the verdicts, so a host where the tool is still reachable fails here,
+ * by name, instead of passing or failing for the wrong reason.
+ */
+function expectUnresolvable(tool: string, env: NodeJS.ProcessEnv, cwd: string): void {
+  const probe = spawnSync(tool, ['--version'], { env, cwd, encoding: 'utf8' })
+  const code = probe.error && 'code' in probe.error ? probe.error.code : undefined
+  expect(
+    code,
+    `${tool} must NOT be resolvable on the test's PATH (${env.PATH}); it ran: ${probe.stdout}`,
+  ).toBe('ENOENT')
+}
+
 beforeEach(() => {
   tmp = mkdtempSync(path.join(tmpdir(), 'task028-setup-'))
 })
@@ -229,9 +264,11 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
       expect(missingLocalEnvFiles(clone)).toEqual(['.env', 'legal/legal.env'])
       // PATH without kubectl: the preflight must answer before a render is tried,
       // so the verdict cannot depend on whether kustomize is installed.
+      const env = emptyPathEnv(clone)
+      expectUnresolvable('kubectl', env, clone)
       const res = spawnSync(process.execPath, [HYGIENE], {
         encoding: 'utf8',
-        env: { ...process.env, GREMION_REPO_ROOT: clone, PATH: path.dirname(process.execPath) },
+        env,
         timeout: 120_000,
       })
       const out = `${res.stdout}${res.stderr}`
@@ -248,7 +285,7 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
   )
 
   // Merge train 4 (TASK-034 x TASK-028): section (j) read `git ls-files` at
-  // module load, outside check(). On the PATH above (no git) that threw before
+  // module load, outside check(). On a PATH without git that threw before
   // the report, so g2's setup-first line never printed. A check may FAIL on a
   // missing tool; it must never abort the run and take every other verdict
   // with it.
@@ -258,9 +295,11 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
       const clone = path.join(tmp, 'clone')
       const cl = spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone], { encoding: 'utf8' })
       expect(cl.status, cl.stderr).toBe(0)
+      const env = emptyPathEnv(clone)
+      expectUnresolvable('git', env, clone)
       const res = spawnSync(process.execPath, [HYGIENE], {
         encoding: 'utf8',
-        env: { ...process.env, GREMION_REPO_ROOT: clone, PATH: path.dirname(process.execPath) },
+        env,
         timeout: 120_000,
       })
       const out = `${res.stdout}${res.stderr}`
