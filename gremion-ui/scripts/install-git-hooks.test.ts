@@ -764,8 +764,8 @@ describe('installer CLI hooks-dir resolution', () => {
  * The tail is not in this harness: tracing every process in the chain put
  * 26-96 s of a slow commit inside the tsx child between its start and its
  * first statement (module loading through tsx's loader thread and esbuild),
- * and warming tsx's transform cache did not shorten it (12.5 / 12.8 / 26.3 s
- * for three warm runs under load). The lint itself checks ONE staged file.
+ * and warming tsx's transform cache did not shorten it (same path under load:
+ * cold 12.5 s, then warm 12.8 s and 26.3 s). The lint itself checks ONE staged file.
  * So the fix is a budget derived from the measurement — >= 3x the loaded p95,
  * on the tests that run the lint only (the fail-closed tests below stop in
  * the hook before pnpm and keep 180 s) — not a global timeout raise. It was a
