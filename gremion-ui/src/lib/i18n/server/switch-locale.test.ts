@@ -149,6 +149,47 @@ describe('switchLocale form action (TASK-062 TDD 5)', () => {
     expect(outcome).toMatchObject({ status: 303, location: '/settings/darstellung' })
   })
 
+  // R26-26 (verify-r3 MEDIUM, open redirect): dot segments survive the raw
+  // prefix checks and collapse during URL parsing, so '/.//evil.example'
+  // resolves to the path '//evil.example', a protocol-relative Location that
+  // a browser follows to another host.
+  test.each([
+    ['/./\\evil.example'],
+    ['/.//evil.example'],
+    ['/.//evil.example/x?y=1#z'],
+    ['/..//evil.example'],
+    ['/a/..//evil.example'],
+    ['/%2e//evil.example'],
+    ['/%2E//evil.example'],
+    ['/%2e%2e//evil.example'],
+    ['/.%2e//evil.example'],
+    ['/././/evil.example'],
+    ['//evil.example'],
+    ['/\\\\evil.example'],
+    ['/%5c/evil.example'],
+    ['/%2f/evil.example']
+  ])('a dot-segment or encoded redirectTo %j never leaves the origin', async (redirectTo) => {
+    const outcome = (await run(
+      switchLocale(makeEvent({ locale: 'de', redirectTo }).event, deps(vi.fn() as never, null))
+    )) as { status: number; location: string }
+    expect(outcome.status).toBe(303)
+    expect(outcome.location.startsWith('/') && !outcome.location.startsWith('//'), outcome.location).toBe(true)
+    expect(outcome.location).not.toMatch(/^\/[\\/]/)
+    for (const base of ['https://pilot.test/', 'https://pilot.test/settings?/locale']) {
+      expect(new URL(outcome.location, base).origin).toBe('https://pilot.test')
+    }
+  })
+
+  test.each([
+    ['/././/evil.example'],
+    ['/.//evil.example'],
+    ['/%2e//evil.example'],
+    ['/..//evil.example']
+  ])('a redirectTo %j that collapses to a protocol-relative path falls back to the settings page', async (redirectTo) => {
+    const outcome = await run(switchLocale(makeEvent({ locale: 'de', redirectTo }).event, deps(vi.fn() as never, null)))
+    expect(outcome).toMatchObject({ status: 303, location: '/settings/darstellung' })
+  })
+
   test.each([
     ['/settings/darstellung', '/settings/darstellung'],
     ['/dashboard?tab=2', '/dashboard?tab=2'],
