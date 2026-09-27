@@ -22,13 +22,15 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const EXACT_VARS = new Set([
+// Exported (TASK-042 Q4): lib/server/env/platform-env.ts refuses every name
+// classed here as per-tenant, so the two lists stay single-sourced.
+export const EXACT_VARS = new Set([
   // Task 23: NEWSLETTER_DB_PATH removed — the monolith SQLite newsletter store
   // was decommissioned, so the per-tenant env read no longer exists.
   'DATABASE_URL', 'KEYCLOAK_REALM', 'KEYCLOAK_ADMIN_URL', 'MATRIX_URL',
   'SYNAPSE_SERVER_NAME', 'HELIOS_URL', 'CONFIG_PATH', 'CALDAV_SHARED_USER',
 ])
-const PREFIX_VARS = ['AUTH_KEYCLOAK_', 'HELIOS_SERVICE_', 'NEXTCLOUD_', 'LIVEKIT_']
+export const PREFIX_VARS = ['AUTH_KEYCLOAK_', 'HELIOS_SERVICE_', 'NEXTCLOUD_', 'LIVEKIT_']
 const SCANNABLE = /\.(ts|svelte)$/
 // D-GUARD-TESTS (P2.1c T14): test files legitimately pin env behavior and do NOT
 // ship, so they are exempt from the build-failing guard. Skip `*.test.ts` AND
