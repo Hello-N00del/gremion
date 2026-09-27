@@ -172,7 +172,7 @@ export function globalNameViolations(render, label = 'render') {
   const out = []
   for (const kind of ['volumes', 'networks']) {
     for (const [key, def] of Object.entries(render?.[kind] ?? {})) {
-      if (/^gremion_/.test(String(def?.name ?? ''))) out.push(`${label}: ${kind}.${key} carries the global name ${def.name}`)
+      if (String(def?.name ?? '').startsWith('gremion_')) out.push(`${label}: ${kind}.${key} carries the global name ${def.name}`)
     }
   }
   return out
@@ -249,7 +249,7 @@ export function colourSuffixViolations(render, colour, label = `app-${colour}`) 
       // A HOST token only: a URL authority (after // or user@), or the whole
       // value of a *_HOST key. A bare value elsewhere is a name, not a host --
       // AUTH_KEYCLOAK_ID=gremion-ui is the OIDC client id, which no colour owns.
-      const hostKey = /HOST$/.test(key)
+      const hostKey = key.endsWith('HOST')
       for (const name of firstParty) {
         const re = hostKey
           ? new RegExp(`(?:^|//|@)${name}(-[a-z0-9-]+)?(?=$|[^a-z0-9-])`, 'g')

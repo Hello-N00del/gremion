@@ -27,7 +27,6 @@ import {
 } from './check-pooled-stack.mjs'
 
 const STACK = 'teststack'
-const clone = (o) => JSON.parse(JSON.stringify(o))
 const lim = (memory = '268435456', cpus = 0.25) => ({ resources: { limits: { memory, cpus } } })
 
 // ── synthetic renders shaped like `docker compose config --format json` ────
