@@ -1,0 +1,6 @@
+services:
+  gremion-ui:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gremion-ui.rule=Host(`example.org`) || HostRegexp(`^[a-z0-9-]+\\.example\\.org$$`)"
+      - "traefik.http.routers.gremion-ui.entrypoints=websecure"

@@ -34,7 +34,6 @@ gremion-ui/
 └── tests/unit/
     ├── auth.test.ts                       ← session/auth helpers
     ├── session.test.ts
-    ├── check-domain-regex.test.ts         ← tenant host/domain matching
     ├── check-tenant-env-guard.test.ts     ← per-tenant env isolation guard
     ├── check-tenant-secrets-dir.test.ts
     ├── assert-safe-test-db-url.test.ts

@@ -359,10 +359,9 @@ test('suppression directives: an allow-listed file is still flagged for @ts-igno
   assert.match(problems.join('\n'), /banned suppression directive \(@ts-ignore\)/)
 })
 
-test("suppression directives: the real tree's five known .mjs @ts-nocheck files are all named in the allow-list with reasons", () => {
+test("suppression directives: the real tree's four known .mjs @ts-nocheck files are all named in the allow-list with reasons", () => {
   const files = [
     'gremion-ui/scripts/check-app-port-binding.mjs',
-    'gremion-ui/scripts/check-domain-regex.mjs',
     'gremion-ui/scripts/check-tenant-env-guard.mjs',
     'gremion-ui/scripts/check-tenant-secrets-dir.mjs',
     'gremion-ui/scripts/install-git-hooks.mjs',
