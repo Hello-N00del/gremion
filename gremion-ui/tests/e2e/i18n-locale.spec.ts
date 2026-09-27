@@ -10,6 +10,9 @@
 // AUTH_SECRET: "sign in" mints the Auth.js session cookie for a member, since
 // the e2e stack has no Keycloak. The session claims mirror what jwtCallback
 // stores after a real Keycloak login (roles, uid, tokenIss, token expiry).
+// Boot a plain-http stack with ORIGIN=<PLAYWRIGHT_BASE_URL>: without it
+// adapter-node reports event.url as https, Auth.js then only reads the
+// `__Secure-authjs.session-token` cookie, and the minted session is ignored.
 import { test, expect, type Page } from '@playwright/test'
 
 // src/lib/auth/auth.d.ts declares '@auth/core/jwt' as an ambient module (to
