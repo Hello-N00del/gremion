@@ -433,14 +433,6 @@ Traefik routing, and reads two extra variables:
   `docker/pgbouncer/userlist.txt` from `userlist.txt.example` and to create the
   role.
 
-### CF_TUNNEL_TOKEN
-
-- **Type:** String (secret)
-- **Required:** Yes (production cutover, gitignored)
-- **Used by:** the `cloudflared` connector, which establishes outbound-only
-  connections to Cloudflare's edge (no inbound host ports). Passed as
-  `TUNNEL_TOKEN` to the container via the environment, not on the command line.
-
 ---
 
 ## Example: minimal local development `.env`
