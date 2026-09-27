@@ -260,6 +260,10 @@ services:
       AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/gremion
       AUTH_KEYCLOAK_ID:         ${AUTH_KEYCLOAK_ID:-gremion-ui}
       AUTH_KEYCLOAK_SECRET:     ${AUTH_KEYCLOAK_SECRET}
+      # The fleet resolves the default tenant's secret refs before it
+      # migrates it (measured: "secret ref env:KEYCLOAK_ADMIN_CLIENT_SECRET is
+      # unset" failed the fleet).
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
       CONFIG_PATH:              /app/config/config.json
       GREMION_DISABLE_SEEDS:    "true"
     volumes:
