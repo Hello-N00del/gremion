@@ -222,16 +222,31 @@ describe('T7 — InvitationRecipient schema has no address/email property', () =
   })
 })
 
+// Time budget (R26-FLAKES, R27 scope). T8 spawns `npx tsc` / `npm pack`, T9
+// spawns oasdiff. Measured 2026-09-28 on the 16-CPU dev box, "loaded" = 32
+// CPU-spinning + 4 file-I/O node processes on top of the other agents on the
+// box (idle = 5 isolated whole-package runs, loaded = pooled loaded runs):
+//
+//   T8 tsc typecheck (node-/browser-style)   idle p95 3.5 s (n=10)   loaded p95 58.9 s (n=12, p50 37.3 s)
+//   T8 npm pack --dry-run                    idle p95 2.0 s (n=5)    loaded p95 80.8 s (n=5, p50 67.7 s)
+//   T9 checkOpenApiCompat (oasdiff)          idle p95 0.4 s (n=10)   loaded p95 10.8 s (n=10)
+//
+// The old flat 120 s was under 3x the loaded p95 for T8, and T9 ran on the
+// 5 s default. Each budget is 3x its loaded p95, rounded up. No global raise.
+const TSC_FIXTURE_MS = 180_000
+const NPM_PACK_DRY_RUN_MS = 245_000
+const OASDIFF_DEMO_MS = 35_000
+
 describe('T8 — consumer fixture typechecks both import shapes', () => {
   it('the node-style fixture (relative deep import, nodenext resolution) typechecks clean', () => {
     const out = runTsc('tsconfig.consumer-node.json')
     expect(out.trim()).toBe('')
-  }, 120_000)
+  }, TSC_FIXTURE_MS)
 
   it('the browser-style fixture (package-subpath import, bundler resolution) typechecks clean', () => {
     const out = runTsc('tsconfig.consumer-browser.json')
     expect(out.trim()).toBe('')
-  }, 120_000)
+  }, TSC_FIXTURE_MS)
 
   it('the browser-style import resolves through the package export map, not a paths shim', () => {
     // package self-reference: bundler resolution reads package.json
@@ -261,7 +276,7 @@ describe('T8 — consumer fixture typechecks both import shapes', () => {
     // vacuity guard: the tarball does carry the generated client from src/
     expect(packed).toContain('src/generated/governance-client.ts')
     expect(packed.filter((p) => p.startsWith('src/consumer-fixture/'))).toEqual([])
-  }, 120_000)
+  }, NPM_PACK_DRY_RUN_MS)
 })
 
 describe('T9 — breaking demo: a required response field removed is RED at 1.0.0, GREEN at 2.0.0', () => {
@@ -275,13 +290,13 @@ describe('T9 — breaking demo: a required response field removed is RED at 1.0.
     expect(result.ok).toBe(false)
     expect(result.breaking).toBe(true)
     expect(result.reason).toMatch(/state/)
-  })
+  }, OASDIFF_DEMO_MS)
 
   it('the same removal with a MAJOR bump (1.0.0 -> 2.0.0) is GREEN', () => {
     const result = checkOpenApiCompat(base, removedBumped)
     expect(result.ok).toBe(true)
     expect(result.bump).toBe('major')
-  })
+  }, OASDIFF_DEMO_MS)
 })
 
 function runTsc(configFile: string): string {

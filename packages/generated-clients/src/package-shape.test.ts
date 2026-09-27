@@ -92,7 +92,11 @@ describe('no `node:` import in a GENERATED file', () => {
 })
 
 describe('packed-tarball proof (D1 adapt: kept from the plan idiom)', () => {
-  // Slow (runs the real build + `pnpm pack`): one test, generous timeout.
+  // Slow (runs the real build + `pnpm pack`): one test, its own budget.
+  // R26-FLAKES (R27 scope), measured 2026-09-28 on the 16-CPU dev box: idle
+  // p95 3.3 s (n=5); loaded (32 CPU + 4 I/O node workers on top of the other
+  // agents) p95 28.4 s (n=6, p50 21.2 s). The old 60 s was under 3x that; the
+  // budget is now 3x the loaded p95, rounded up. No global raise.
   it('pnpm pack produces a tarball whose packed manifest passes check-packed-manifest.mjs', () => {
     const outDir = mktempPackDir()
     try {
@@ -110,7 +114,7 @@ describe('packed-tarball proof (D1 adapt: kept from the plan idiom)', () => {
     } finally {
       rmSync(outDir, { recursive: true, force: true })
     }
-  }, 60_000)
+  }, 90_000)
 })
 
 // Windows resolves `pnpm` to a .CMD shim, which is not a real PE executable —
