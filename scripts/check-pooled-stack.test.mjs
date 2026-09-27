@@ -363,6 +363,6 @@ test('real renders: the two colours are one document modulo the colour token and
   const norm = (r, c) =>
     JSON.stringify(r)
       .replaceAll(c, '@C@')
-      .replace(/"subnet":"[^"]+"/g, '"subnet":"@S@"')
+      .replace(/"(subnet|app-v[46]-subnet)":"[^"]+"/g, '"$1":"@S@"')
   assert.equal(norm(renderProject(PROJECTS[1]), 'blue'), norm(renderProject(PROJECTS[2]), 'green'))
 })

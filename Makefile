@@ -1,4 +1,4 @@
-.PHONY: up down build rebuild logs ps setup gen-realm \
+.PHONY: up down build rebuild logs ps setup gen-realm dev-networks lint-pooled-stack \
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
@@ -10,26 +10,51 @@
         health validate-env
 
 # ── Service lifecycle ────────────────────────────────────────────────────
+#
+# Two compose projects since TASK-040 (the pooled stack, PRD-PLAT-005), both
+# on the loopback-only dev ports they always had (Q6):
+#   $(DEV_STACK)-state     docker-compose.yml + docker-compose.override.yml
+#                          (auto-loaded), COMPOSE_PROFILES from .env (dev)
+#   $(DEV_STACK)-app-blue  docker-compose.app.yml + docker-compose.app.dev.yml
+# They meet only on the external $(DEV_STACK)_state / $(DEV_STACK)_edge
+# networks and share the external config volumes: dev-networks creates all of
+# them first (the host's bootstrap.sh stage_networks does the same there).
+DEV_STACK ?= dev
+DEV_STATE = STACK=$(DEV_STACK) IMAGE_TAG=dev docker compose -p $(DEV_STACK)-state
+DEV_APP = STACK=$(DEV_STACK) COLOUR=blue IMAGE_TAG=dev docker compose -f docker-compose.app.yml -f docker-compose.app.dev.yml -p $(DEV_STACK)-app-blue
 
-# Start all services
-up:
-	docker compose up -d
+# The externals both projects name; idempotent.
+dev-networks:
+	@for n in edge state; do \
+	   docker network inspect $(DEV_STACK)_$$n >/dev/null 2>&1 || docker network create $(DEV_STACK)_$$n >/dev/null; \
+	 done
+	@for v in traefik_acme config_data tenant_config_data; do \
+	   docker volume inspect $(DEV_STACK)_$$v >/dev/null 2>&1 || docker volume create $(DEV_STACK)_$$v >/dev/null; \
+	 done
 
-# Stop all services (keep volumes)
+# Start all services: state first, then the blue app colour
+up: dev-networks
+	$(DEV_STATE) up -d
+	$(DEV_APP) up -d
+
+# Stop all services (keep volumes): app first, then state
 down:
-	docker compose down
+	$(DEV_APP) down
+	$(DEV_STATE) down
 
-# Build custom images
+# Build custom images (tagged dev)
 build:
-	docker compose build
+	$(DEV_STATE) build
+	$(DEV_APP) build
 
 # Rebuild and restart
-rebuild: build
-	docker compose up -d --force-recreate
+rebuild: build dev-networks
+	$(DEV_STATE) up -d --force-recreate
+	$(DEV_APP) up -d --force-recreate
 
 # Rebuild and restart the legal service only — picks up legal/legal.env changes (~2s)
 update-legal:
-	docker compose up -d --build --force-recreate legal
+	$(DEV_STATE) up -d --build --force-recreate legal
 
 # Update legal pages in Kubernetes.
 # IMPORTANT: re-applies Secret first — rollout restart alone serves stale values.
@@ -42,13 +67,19 @@ update-legal-k8s:
 	@echo "Monitoring rollout..."
 	kubectl rollout status deployment/legal -n gremion-system
 
-# Follow logs for all services (or pass SERVICE=gremion-ui)
+# Follow logs (SERVICE=gremion-ui|gremion-public|migrate|tenant-create reads
+# the app colour, any other SERVICE the state project; none follows both).
 logs:
-	docker compose logs -f $(SERVICE)
+	@case "$(SERVICE)" in \
+	   gremion-ui|gremion-public|migrate|tenant-create) $(DEV_APP) logs -f $(SERVICE) ;; \
+	   "") $(DEV_STATE) logs -f & $(DEV_APP) logs -f; wait ;; \
+	   *) $(DEV_STATE) logs -f $(SERVICE) ;; \
+	 esac
 
-# Show running containers
+# Show running containers of both projects
 ps:
-	docker compose ps
+	$(DEV_STATE) ps
+	$(DEV_APP) ps
 
 # First-time setup: generate secrets and start services
 setup:
@@ -64,10 +95,10 @@ gen-realm:
 # ── Shell access ─────────────────────────────────────────────────────────
 
 shell-kc:
-	docker compose exec keycloak bash
+	$(DEV_STATE) exec keycloak bash
 
 shell-db:
-	docker compose exec postgres psql -U postgres
+	$(DEV_STATE) exec postgres psql -U postgres
 
 # ── App helpers ──────────────────────────────────────────────────────────
 
@@ -220,7 +251,7 @@ lint-sh:
 # Lint YAML files with yamllint
 lint-yaml:
 	@echo "Linting YAML files..."
-	@yamllint -c .yamllint.yml docker-compose.yml docker-compose.override.yml k8s/
+	@yamllint -c .yamllint.yml docker-compose.yml docker-compose.override.yml docker-compose.app.yml docker-compose.app.dev.yml k8s/
 	@echo "  yamllint: OK"
 
 # Validate JSON files
@@ -234,6 +265,23 @@ lint-compose:
 	@echo "Validating Docker Compose config..."
 	@docker compose config > /dev/null
 	@echo "  docker compose config: valid"
+
+# TASK-040: the pooled-stack guard (TRD-177/038/045, TRD-440's static half).
+# Renders the state project, both app colours, ops and mail from the fixed
+# env files under test/host/fixtures/pooled-stack/ with EVERY profile on and
+# fails on a service without a memory or CPU limit, an app-tier volume that is
+# not external, a service outside the placement table, a non-council service
+# sharing a network with ${STACK}_state, and zero services. The suite runs
+# first and must collect tests: a renderer that silently returned an empty
+# document would let every rule pass vacuously. TASK-053 wires `verify`.
+lint-pooled-stack:
+	@echo "Checking the pooled stack..."
+	@out=$$(node --test --test-reporter=tap scripts/check-pooled-stack.test.mjs 2>&1); status=$$?; \
+	 printf '%s\n' "$$out" | grep -E '^(not ok|# (tests|pass|fail))' >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 n=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^# tests \([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 [ -n "$$n" ] && [ "$$n" -gt 0 ] || { echo "lint-pooled-stack: the suite collected no tests" >&2; exit 1; }
+	@node scripts/check-pooled-stack.mjs
 
 # Run all linters
 # Kernel repo hygiene: dead workspace globs, floating :latest image tags,
@@ -447,7 +495,7 @@ lint-tenant-db-access:
 	@echo "Checking tenant-DB access..."
 	@node packages/tenant-store/scripts/check-tenant-db-access.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access
+lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
@@ -484,7 +532,8 @@ src=open('.github/labels.yml',encoding='utf-8').read(); \
 # Check health of all running services
 health:
 	@echo "=== Service Health ==="
-	@docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+	@$(DEV_STATE) ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+	@$(DEV_APP) ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 	@echo ""
 	@echo "=== Endpoint Checks ==="
 	@curl -sf http://localhost:3001/ > /dev/null && echo "  gremion-ui  (3001): OK" || echo "  gremion-ui  (3001): NOT REACHABLE"
