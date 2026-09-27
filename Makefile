@@ -447,7 +447,46 @@ lint-tenant-db-access:
 	@echo "Checking tenant-DB access..."
 	@node packages/tenant-store/scripts/check-tenant-db-access.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access
+# TASK-200 (R27 orchestrator grant): the in-tree module guards. lint-module-scan
+# refuses a modules/** import, path literal or Dockerfile COPY that leaves its
+# own modules/<id>/ (or names upstream/, services/, the StuRa tree, @stura*)
+# unless modules' reasoned allowlist names it; lint-module-migration-names
+# refuses a module migration basename equal to a kernel gremion-ui/migrations
+# one, a number used twice in one chain, and an app-chain number another chain
+# already uses. Each suite runs first with its collected count asserted, the
+# same way lint-toolchain does: `node --test` exits 0 on a file that collects
+# nothing. The source-parity guard is deliberately NOT here (brief TDD 1: it
+# needs a StuRa checkout, and modules diverge from the tag by design later).
+.PHONY: lint-module-scan lint-module-migration-names
+lint-module-scan:
+	@echo "Checking in-tree module source for escaping imports..."
+	@declared=$$(grep -c '^test(' scripts/check-module-source-scan.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-module-source-scan.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-module-scan: scripts/check-module-source-scan.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[module-source-scan] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-module-source-scan.mjs
+
+lint-module-migration-names:
+	@echo "Checking module migration names against the kernel chain..."
+	@declared=$$(grep -c '^test(' scripts/check-module-migration-names.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-module-migration-names.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-module-migration-names: scripts/check-module-migration-names.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[module-migration-names] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-module-migration-names.mjs
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-module-scan lint-module-migration-names
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
