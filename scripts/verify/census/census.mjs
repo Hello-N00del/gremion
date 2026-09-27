@@ -200,7 +200,8 @@ export function buildOnly(service, { root = REPO_ROOT, log = console.log } = {})
     return 1
   }
   const builds = buildImages(mine, { buildSha: sha.slice(0, 7), log: (l) => log(`[census] ${l}`) })
-  removeTags([...builds.entries()].filter(([, b]) => b.ok).map(([ref]) => ref))
+  const leak = removeTags([...builds.entries()].filter(([, b]) => b.ok).map(([ref]) => ref))
+  if (leak) log(`[census] ${leak}`)
   const failed = [...builds.values()].filter((b) => !b.ok)
   for (const b of failed) log(`[census] ${b.detail}`)
   return failed.length === 0 ? 0 : 1

@@ -85,7 +85,8 @@ export function runCensusSuite({
   try {
     inspected = inspectHealthchecks(inspectable.map((e) => e.ref), { docker, pullable: (ref) => !censusRefs.has(ref), log: (l) => timings.push(l) })
   } finally {
-    removeTags([...censusRefs].filter((ref) => builds.get(ref)?.ok), { docker })
+    const leak = removeTags([...censusRefs].filter((ref) => builds.get(ref)?.ok), { docker })
+    if (leak) timings.push(leak)
   }
 
   const images = new Map()

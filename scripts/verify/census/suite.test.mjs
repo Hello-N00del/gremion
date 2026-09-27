@@ -86,3 +86,11 @@ test('runCensusSuite is synchronous: it returns the result, never a Promise', ()
   assert.equal(typeof r?.then, 'undefined', 'a thenable reaches runAll() as `collected 0`')
   assert.equal(r.collected, 1)
 })
+
+test('a failed census tag cleanup is named in the suite detail', () => {
+  const { docker: base } = fakeDocker({ services: { v: { image: 'x', build: { context: ROOT }, healthcheck: { test: ['CMD', 'true'] } } }, inspect: () => ({ code: 0, stdout: 'null\n' }) })
+  const docker = (cmd, args, o) => (args[0] === 'image' && args[1] === 'rm' ? { stdout: '', stderr: 'conflict: unable to remove', error: null, durationMs: 1, code: 1 } : base(cmd, args, o))
+  const r = runCensusSuite(opts(docker))
+  assert.match(r.detail, /census-abcdef12\/v/)
+  assert.match(r.detail, /image rm exited 1.*unable to remove/s)
+})

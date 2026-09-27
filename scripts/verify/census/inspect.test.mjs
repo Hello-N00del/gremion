@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { test } from 'node:test'
-import { buildArgv, buildImages, censusTag, inspectHealthchecks, planImages } from './inspect.mjs'
+import { buildArgv, buildImages, censusTag, inspectHealthchecks, planImages, removeTags } from './inspect.mjs'
 
 function recorder(handler) {
   const calls = []
@@ -105,4 +105,16 @@ test('inspect output that is not one JSON Healthcheck per ref is a failure', () 
   assert.equal(inspectHealthchecks(['a'], { docker: garbage.docker }).get('a').ok, false)
   const array = recorder(() => ({ code: 0, stdout: '[1]\n' }))
   assert.equal(inspectHealthchecks(['a'], { docker: array.docker }).get('a').ok, false)
+})
+
+test('removeTags reports a failed `docker image rm` instead of leaking the census tags silently', () => {
+  const ok = recorder(() => ({ code: 0 }))
+  assert.equal(removeTags(['census-abcdef12/v', 'census-abcdef12/v'], { docker: ok.docker }), null)
+  assert.deepEqual(ok.calls, [['image', 'rm', 'census-abcdef12/v']])
+  const bad = recorder(() => ({ code: 1, stderr: 'image is being used by running container' }))
+  const msg = removeTags(['census-abcdef12/v'], { docker: bad.docker })
+  assert.match(msg, /census-abcdef12\/v/)
+  assert.match(msg, /exited 1/)
+  assert.match(msg, /being used by running container/)
+  assert.equal(removeTags([], { docker: bad.docker }), null)
 })

@@ -145,9 +145,16 @@ export function inspectHealthchecks(refs, { docker = run, pullable = () => true,
   return out
 }
 
-/** Removes the census build tags (brief S9: removed by tag after). */
+/**
+ * Removes the census build tags (brief S9: removed by tag after). Returns
+ * null on success, or a line naming the tags left behind when `docker image
+ * rm` did not exit 0 -- a leak is reported, never swallowed. It does not
+ * change the verdict: the tags are local build output, not a census result.
+ */
 export function removeTags(refs, { docker = run } = {}) {
   const unique = [...new Set(refs)]
-  if (unique.length === 0) return
-  docker('docker', ['image', 'rm', ...unique], { timeout: INSPECT_TIMEOUT_MS })
+  if (unique.length === 0) return null
+  const res = docker('docker', ['image', 'rm', ...unique], { timeout: INSPECT_TIMEOUT_MS })
+  if (res.code === 0) return null
+  return `census tags left behind (${unique.join(', ')}): docker image rm exited ${res.code ?? res.signal ?? res.error?.code}: ${tail(res.stderr || res.stdout, 300)}`
 }
