@@ -650,8 +650,9 @@ phase_tenant_after() {
 phase_switch() {
     require_scratch switch
     [[ -s "$OUT/state-snapshot.txt" ]] || die "no state snapshot (run state-wait first)"
-    phase_app_up green
-    phase_app_wait green
+    # green must already be up and healthy (app-up green, app-wait green)
+    local g; g="$(svc_cid app-green gremion-ui)"
+    [[ -n "$g" ]] && wait_health "$g" 30 || die "app-green is not up and healthy -- run app-up green and app-wait green first"
     # blue leaves: removal by label, never `compose down`
     docker ps -aq --filter "label=com.docker.compose.project=${STACK}-app-blue" | xargs -r docker rm -f >/dev/null
     local now_snap
@@ -722,7 +723,7 @@ info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
 if [[ "$1" == all ]]; then
     require_scratch all
     trap 'phase_teardown || true' EXIT
-    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation tenant-before tenant tenant-after switch cold-state limits; do
+    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits; do
         # shellcheck disable=SC2086
         run_phase $ph
     done
