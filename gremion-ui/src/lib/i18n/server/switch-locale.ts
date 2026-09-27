@@ -36,11 +36,29 @@ export interface SwitchLocaleEvent {
   locals: unknown
 }
 
-/** Same-origin absolute path only: no scheme, no protocol-relative `//`, no backslash tricks. */
-function safeTarget(value: FormDataEntryValue | null): string {
+// C0 controls and DEL. WHATWG URL parsing strips tab/CR/LF, so '/\t/evil.example'
+// would resolve to '//evil.example'; CR/LF would also make redirect() throw.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+
+/**
+ * Same-origin path only. The raw value must be a single-slash absolute path
+ * with no backslash or control character, and it must also resolve to the
+ * request's own origin, so no parser quirk can leave the site.
+ */
+function safeTarget(value: FormDataEntryValue | null, base: URL): string {
   if (typeof value !== 'string') return DEFAULT_TARGET
-  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return DEFAULT_TARGET
-  return value
+  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || CONTROL_CHARS.test(value)) {
+    return DEFAULT_TARGET
+  }
+  let target: URL
+  try {
+    target = new URL(value, base)
+  } catch {
+    return DEFAULT_TARGET
+  }
+  if (target.origin !== base.origin) return DEFAULT_TARGET
+  return target.pathname + target.search + target.hash
 }
 
 export async function switchLocale(event: SwitchLocaleEvent, deps: SwitchLocaleDeps) {
@@ -69,5 +87,5 @@ export async function switchLocale(event: SwitchLocaleEvent, deps: SwitchLocaleD
     }
   }
 
-  redirect(303, safeTarget(form.get('redirectTo')))
+  redirect(303, safeTarget(form.get('redirectTo'), event.url))
 }

@@ -133,13 +133,33 @@ describe('switchLocale form action (TASK-062 TDD 5)', () => {
     expect(port.set).not.toHaveBeenCalled()
   })
 
-  test.each([['//evil.example/x'], ['https://evil.example/'], ['/\\evil.example'], ['settings'], ['']])(
-    'an unsafe redirectTo %j falls back to the settings page',
-    async (redirectTo) => {
-      const outcome = await run(switchLocale(makeEvent({ locale: 'de', redirectTo }).event, deps(vi.fn() as never, null)))
-      expect(outcome).toMatchObject({ status: 303, location: '/settings/darstellung' })
-    }
-  )
+  test.each([
+    ['//evil.example/x'],
+    ['https://evil.example/'],
+    ['/\\evil.example'],
+    ['settings'],
+    [''],
+    // WHATWG URL parsing strips ASCII tab/newline, so these become `//evil.example`.
+    ['/\t/evil.example/x'],
+    ['/\n/evil.example/x'],
+    ['/\r/evil.example/x'],
+    ['\t//evil.example/x']
+  ])('an unsafe redirectTo %j falls back to the settings page', async (redirectTo) => {
+    const outcome = await run(switchLocale(makeEvent({ locale: 'de', redirectTo }).event, deps(vi.fn() as never, null)))
+    expect(outcome).toMatchObject({ status: 303, location: '/settings/darstellung' })
+  })
+
+  test.each([
+    ['/settings/darstellung', '/settings/darstellung'],
+    ['/dashboard?tab=2', '/dashboard?tab=2'],
+    ['/%09/evil.example', '/%09/evil.example']
+  ])('a same-origin redirectTo %j is kept as %j', async (redirectTo, expected) => {
+    const outcome = (await run(
+      switchLocale(makeEvent({ locale: 'de', redirectTo }).event, deps(vi.fn() as never, null))
+    )) as { status: number; location: string }
+    expect(outcome).toMatchObject({ status: 303, location: expected })
+    expect(new URL(outcome.location, 'https://pilot.test/').origin).toBe('https://pilot.test')
+  })
 
   test('the cookie is not marked Secure on plain http (local dev), so the browser keeps it', async () => {
     const { event, cookieCalls } = makeEvent({ locale: 'en' }, 'http://localhost:4001/settings?/locale')
