@@ -319,6 +319,11 @@ services:
       # gremion-ui mounts the same directory read-only).
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants
       - ./docker/keycloak/certs/internal-ca.pem:/etc/ssl/internal/internal-ca.pem:ro
+      # The base realm the provisioner composes every tenant realm from
+      # (loadBaseRealmDoc reads <repo>/docker/keycloak/realm-export.base.json);
+      # the builder image carries only the workspace packages. Measured: without
+      # it provision dies "ENOENT ... /repo/docker/keycloak/realm-export.base.json".
+      - ./docker/keycloak/realm-export.base.json:/repo/docker/keycloak/realm-export.base.json:ro
     networks:
       edge:
         aliases: ["tenant-create-${COLOUR:?COLOUR required}"]

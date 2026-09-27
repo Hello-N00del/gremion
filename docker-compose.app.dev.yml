@@ -66,3 +66,4 @@ services:
       - config-data:/app/config
       - tenant-config-data:/data
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants
+      - ./docker/keycloak/realm-export.base.json:/repo/docker/keycloak/realm-export.base.json:ro

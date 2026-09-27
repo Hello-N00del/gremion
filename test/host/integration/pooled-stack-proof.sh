@@ -616,7 +616,7 @@ phase_tenant() {
         || { tail -15 "$OUT/ledger/trd440-bootstrap.log" >&2; bad "bootstrap-provisioner failed"; return; }
     compose app-blue "${run[@]}" provision "$TENANT_SLUG" --config "/fixture/tenant-${TENANT_SLUG}.json" \
         > "$OUT/ledger/trd440-provision.log" 2>&1 \
-        || { tail -25 "$OUT/ledger/trd440-provision.log" >&2; bad "provision $TENANT_SLUG failed"; }
+        || { tail -25 "$OUT/ledger/trd440-provision.log" >&2; bad "provision $TENANT_SLUG failed"; return; }
     ok "tenant: bootstrap-provisioner and provision $TENANT_SLUG ran (ledger/trd440-*.log)"
 }
 
