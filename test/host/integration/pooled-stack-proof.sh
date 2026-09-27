@@ -18,7 +18,8 @@
 #   aux-up       the non-council ops and mail projects
 #   limits       HostConfig.Memory and NanoCpus > 0 on every container
 #   rss          idle RSS below 80 % of the limit on every container
-#   isolation    project classification, network membership, TCP probes
+#   isolation    project classification, network membership
+#   probes       TCP probes: positive control from _state, then each non-council net
 #   tenant-before / tenant / tenant-after
 #                TRD-440: a second tenant adds no container and no project
 #   switch       blue -> green: state IDs and volume CreatedAt unchanged
@@ -35,7 +36,7 @@
 # On the live host (TASK-038, after the re-init) run ONLY the check phases
 # against the real env files, and never prepare/up/teardown:
 #   POOLED_STACK=<stack> POOLED_ENV_DIR=/opt/gremion/etc/env POOLED_SCOPE=host \
-#     bash test/host/integration/pooled-stack-proof.sh limits rss isolation
+#     bash test/host/integration/pooled-stack-proof.sh limits rss isolation probes
 # POOLED_SCOPE=host classifies EVERY compose project on the host (the R26-1
 # sales site included); the scratch default classifies the ${STACK}-* ones.
 #
@@ -551,8 +552,18 @@ phase_isolation() {
         done
     done
     (( ${#nets[@]} > 0 )) || bad "isolation: the non-council projects are on no network"
+    printf '%s\n' "${nets[@]}" > "$OUT/noncouncil-nets.txt"
+    ok "isolation: ${#nonc[@]} non-council project(s) on ${#nets[@]} network(s), none sharing a member with ${STACK}_state (ledger/isolation.txt)"
+}
+
+# The TCP half of TRD-045, its own phase so each stays inside a time box.
+phase_probes() {
+    local nets=() net cid svc ip port
+    [[ -s "$OUT/noncouncil-nets.txt" ]] || die "run the isolation phase first (no non-council network list)"
+    mapfile -t nets < <(sed '/^$/d' "$OUT/noncouncil-nets.txt")
+    printf '# TRD-045 probes, %s, STACK=%s\n' "$(now)" "$STACK" >> "$OUT/ledger/isolation.txt"
     # 3. TCP probes: positive control from _state, then every non-council network
-    local targets=() cid svc ip port
+    local targets=()
     for cid in $(docker network inspect "${STACK}_state" -f '{{range $id, $c := .Containers}}{{$id}} {{end}}'); do
         svc="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$cid" 2>/dev/null || true)"
         [[ -n "$svc" ]] || continue   # a probe container of this run
@@ -581,8 +592,8 @@ phase_isolation() {
         closed="$(printf '%s\n' "$res" | grep -c ' CLOSED$' || true)"
         [[ "$closed" == "${#targets[@]}" ]] || bad "non-council network $net REACHES: $(printf '%s' "$res" | grep ' OPEN$' | tr '\n' ';')"
     done
-    [[ -s "$OUT/ledger/isolation.txt" ]] || bad "isolation: empty ledger"
-    ok "isolation: ${#nonc[@]} non-council project(s), ${#nets[@]} network(s), ${#targets[@]} target(s) (ledger/isolation.txt)"
+    [[ -s "$OUT/ledger/isolation.txt" ]] || bad "probes: empty ledger"
+    ok "probes: ${#targets[@]} target(s), positive control from ${STACK}_state, ${#nets[@]} non-council network(s) (ledger/isolation.txt)"
 }
 
 # ── TRD-440 ────────────────────────────────────────────────────────────────
@@ -712,6 +723,7 @@ run_phase() {
         limits) phase_limits ;;
         rss) phase_rss ;;
         isolation) phase_isolation ;;
+        probes) phase_probes ;;
         tenant-before) phase_tenant_before ;;
         tenant) phase_tenant ;;
         tenant-after) phase_tenant_after ;;
@@ -727,7 +739,7 @@ info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
 if [[ "$1" == all ]]; then
     require_scratch all
     trap 'phase_teardown || true' EXIT
-    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits; do
+    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits; do
         # shellcheck disable=SC2086
         run_phase $ph
     done
