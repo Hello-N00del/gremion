@@ -158,13 +158,7 @@ describe('no truncation: a file over the ceiling never yields a success', () => 
       reply.code(201)
       return { sha256: '0'.repeat(64), bytes }
     })
-    // Inlined (not expectTyped413): oxlint's expect-expect only recognises
-    // bare `expect(...)` calls in the test body, not assertions made inside a
-    // helper function.
-    const res = await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) })
-    expect(res.statusCode).toBe(413)
-    expect(String(res.headers['content-type'])).toContain(PROBLEM_CONTENT_TYPE)
-    expect(res.json()).toMatchObject({ type: PROBLEM_TYPES.payloadTooLarge, status: 413, limitBytes: 1024 })
+    expectTyped413(await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) }), 1024)
   })
 
   it('a handler may still LOWER the limit per call', async () => {
@@ -191,12 +185,6 @@ describe('no truncation: a file over the ceiling never yields a success', () => 
       reply.code(201)
       return { sha256: '0'.repeat(64), bytes }
     })
-    // Inlined (not expectTyped413): oxlint's expect-expect only recognises
-    // bare `expect(...)` calls in the test body, not assertions made inside a
-    // helper function.
-    const res = await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) })
-    expect(res.statusCode).toBe(413)
-    expect(String(res.headers['content-type'])).toContain(PROBLEM_CONTENT_TYPE)
-    expect(res.json()).toMatchObject({ type: PROBLEM_TYPES.payloadTooLarge, status: 413, limitBytes: 1024 })
+    expectTyped413(await app.inject({ method: 'POST', url: '/uploads', ...multipart(4096) }), 1024)
   })
 })
