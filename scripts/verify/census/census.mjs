@@ -63,10 +63,28 @@ export function classifyService({ name, service, image, exempt }) {
  */
 export function runCensus({ projects, images }) {
   const out = { collected: 0, passed: 0, failed: 0, unparseable: false, lines: [], problems: [] }
+  // Vacuity guard (brief S1, TDD 4). A census that read nothing passes in
+  // silence -- recorded against the commit before this guard existed: a
+  // project rendering {"services":{}}, a failed render and zero projects all
+  // came back with failed 0 and no problem. Each is now unparseable by name.
+  if (!Array.isArray(projects) || projects.length === 0) {
+    out.unparseable = true
+    out.problems.push('no production project to census -- the census read nothing')
+    return out
+  }
   for (const p of projects) {
     out.lines.push(...(p.notes ?? []))
+    if (!p.render.ok) {
+      out.unparseable = true
+      out.problems.push(`${p.project}: render failed: ${p.render.detail ?? '(no detail)'}`)
+      continue
+    }
     const services = p.render.services ?? {}
     const names = Object.keys(services).sort()
+    if (names.length === 0 && !p.render.allowed) {
+      out.unparseable = true
+      out.problems.push(`${p.project} rendered 0 services -- a census of nothing is not a pass`)
+    }
     const exempt = new Set(p.exempt ?? [])
     for (const name of names) {
       const service = services[name]
