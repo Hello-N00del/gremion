@@ -1,12 +1,32 @@
 // T6: codegen drift — hand edit, stale spec, missing output, each named.
 // RED because: there was no codegen at all before this commit.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+//
+// Time budget (R26-FLAKES). Every generateClientSource() / checkCodegenDrift()
+// call spawns a fresh `node openapi-typescript` process, and that cold start is
+// the whole cost of this file. Measured 2026-09-27 on the 16-CPU dev box, "loaded"
+// = 32 busy + 4 I/O node workers on top of the 14-23 agents running that night:
+//
+//   one spawn over MINI_SPEC            idle 0.40-0.89 s   loaded 4.3-6.3 s
+//   the real tree (2 spawns, real specs) idle 0.93-2.25 s   loaded 7.9-10.0 s
+//
+// The scratch tests used to spawn TWICE each (once to build the expected output,
+// once inside checkCodegenDrift), so under load they took 5.2-7.7 s against the
+// 5 s default timeout and failed in kernel gates 50a3c78 and c2810a8. MINI_SPEC
+// is a constant, so its generated source is computed ONCE (beforeAll) and every
+// scratch test now spawns only inside the function under test. Each spawning
+// test carries an explicit budget of >= 3x the loaded p95 — no global raise.
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkCodegenDrift } from './codegen-drift.js'
 import { generateClientSource, type GeneratedClientSpec } from './codegen.js'
 import { REPO_ROOT } from './repo-root.js'
+
+/** One openapi-typescript spawn: 3x the loaded p95 (6.3 s), rounded up. */
+const ONE_SPAWN_MS = 20_000
+/** checkCodegenDrift over the real registry (2 spawns, larger specs): 3x 10.0 s. */
+const REAL_TREE_MS = 30_000
 
 const MINI_SPEC = {
   openapi: '3.1.0',
@@ -21,20 +41,46 @@ const MINI_SPEC = {
   },
 }
 
+const SPEC: GeneratedClientSpec = {
+  specFile: 'contracts/kernel/openapi.drift-fixture.json',
+  outputFile: 'packages/generated-clients/src/generated/drift-fixture-client.ts',
+  factoryName: 'createDriftFixtureClient',
+}
+
+/** A scratch repo root carrying MINI_SPEC at SPEC.specFile (and no output yet). */
+function scratchTree(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'codegen-drift-fixture-'))
+  mkdirSync(join(dir, 'contracts', 'kernel'), { recursive: true })
+  mkdirSync(join(dir, 'packages', 'generated-clients', 'src', 'generated'), { recursive: true })
+  writeFileSync(join(dir, SPEC.specFile), JSON.stringify(MINI_SPEC, null, 2))
+  return dir
+}
+
 describe('checkCodegenDrift — scratch fixtures', () => {
   let dir: string
-  let spec: GeneratedClientSpec
+  // What MINI_SPEC generates today, computed once. generateClientSource is a
+  // pure function of the spec's content (codegen.ts), so re-running it per test
+  // bought nothing but a second process per test. If the output ever came to
+  // depend on anything else (e.g. the scratch path), the "passes when the
+  // output matches" test below would go RED — it compares this cached text
+  // against a fresh generation in a DIFFERENT scratch root.
+  let miniSource: string
+
+  beforeAll(() => {
+    const seed = scratchTree()
+    try {
+      miniSource = generateClientSource(seed, SPEC)
+    } finally {
+      rmSync(seed, { recursive: true, force: true })
+    }
+    // A vacuous cache (empty text, a tool that printed nothing) would make the
+    // tests below compare nothing against nothing.
+    expect(miniSource).toContain('"/ping"')
+    expect(miniSource).toContain(`export function ${SPEC.factoryName}(`)
+  }, ONE_SPAWN_MS)
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'codegen-drift-fixture-'))
-    mkdirSync(join(dir, 'contracts', 'kernel'), { recursive: true })
-    mkdirSync(join(dir, 'packages', 'generated-clients', 'src', 'generated'), { recursive: true })
-    writeFileSync(join(dir, 'contracts', 'kernel', 'openapi.drift-fixture.json'), JSON.stringify(MINI_SPEC, null, 2))
-    spec = {
-      specFile: 'contracts/kernel/openapi.drift-fixture.json',
-      outputFile: 'packages/generated-clients/src/generated/drift-fixture-client.ts',
-      factoryName: 'createDriftFixtureClient',
-    }
+    dir = scratchTree()
   })
 
   afterEach(() => {
@@ -42,38 +88,35 @@ describe('checkCodegenDrift — scratch fixtures', () => {
   })
 
   it('names a missing output', () => {
-    const problems = checkCodegenDrift(dir, [spec])
-    expect(problems.some((p) => p.includes(spec.outputFile) && /missing output/.test(p))).toBe(true)
+    const problems = checkCodegenDrift(dir, [SPEC])
+    expect(problems.some((p) => p.includes(SPEC.outputFile) && /missing output/.test(p))).toBe(true)
   })
 
   it('passes when the output matches what the spec generates today', () => {
-    const source = generateClientSource(dir, spec)
-    writeFileSync(join(dir, spec.outputFile), source, 'utf8')
-    expect(checkCodegenDrift(dir, [spec])).toEqual([])
-  })
+    writeFileSync(join(dir, SPEC.outputFile), miniSource, 'utf8')
+    expect(checkCodegenDrift(dir, [SPEC])).toEqual([])
+  }, ONE_SPAWN_MS)
 
   it('names a hand edit (output present, does not match current codegen)', () => {
-    const source = generateClientSource(dir, spec)
-    writeFileSync(join(dir, spec.outputFile), `${source}\n// a human added this line by hand\n`, 'utf8')
-    const problems = checkCodegenDrift(dir, [spec])
-    expect(problems.some((p) => p.includes(spec.outputFile))).toBe(true)
-  })
+    writeFileSync(join(dir, SPEC.outputFile), `${miniSource}\n// a human added this line by hand\n`, 'utf8')
+    const problems = checkCodegenDrift(dir, [SPEC])
+    expect(problems.some((p) => p.includes(SPEC.outputFile))).toBe(true)
+  }, ONE_SPAWN_MS)
 
   it('names a spec changed without regeneration (output is stale)', () => {
-    const source = generateClientSource(dir, spec)
-    writeFileSync(join(dir, spec.outputFile), source, 'utf8')
+    writeFileSync(join(dir, SPEC.outputFile), miniSource, 'utf8')
     // Now change the spec (add a path) WITHOUT regenerating the output.
     const changed = { ...MINI_SPEC, paths: { ...MINI_SPEC.paths, '/pong': { get: { summary: 'pong', responses: { '200': { description: 'ok' } } } } } }
-    writeFileSync(join(dir, spec.specFile), JSON.stringify(changed, null, 2))
-    const problems = checkCodegenDrift(dir, [spec])
-    expect(problems.some((p) => p.includes(spec.outputFile))).toBe(true)
-  })
+    writeFileSync(join(dir, SPEC.specFile), JSON.stringify(changed, null, 2))
+    const problems = checkCodegenDrift(dir, [SPEC])
+    expect(problems.some((p) => p.includes(SPEC.outputFile))).toBe(true)
+  }, ONE_SPAWN_MS)
 })
 
 describe('checkCodegenDrift — the real tree', () => {
   it('the committed kernel-governance-client.ts matches what the governance spec generates today', () => {
     expect(checkCodegenDrift(REPO_ROOT)).toEqual([])
-  })
+  }, REAL_TREE_MS)
 
   it('the generated client carries no `node:` import (T7)', () => {
     const outPath = join(REPO_ROOT, 'packages/generated-clients/src/generated/kernel-governance-client.ts')
