@@ -26,6 +26,8 @@
 import { env } from '$env/dynamic/private'
 import { timingSafeEqual } from 'node:crypto'
 import { getTenantOrNull } from '$lib/server/tenant/context'
+import type { TenantContext } from '$lib/server/tenant/context'
+import { normaliseHost } from '$lib/server/tenant/host'
 
 // `PUBLIC_BASE_URL` cannot be read from `$env/dynamic/private` (the
 // PUBLIC_* prefix excludes it from that module), and `$env/dynamic/public`
@@ -87,26 +89,34 @@ function resolveInternalBaseUrl(): string {
 }
 
 /**
- * P2.1c (T4): the registrable apex domain for tenant forwarded-host injection.
- * Derived from the host of `PUBLIC_BASE_URL` (the process-wide apex, e.g.
- * `council.example`) — the same allowlisted origin `resolveInternalBaseUrl` trusts.
- * The current tenant's slug is prepended (`<slug>.<apexDomain>`) so the inner
- * server-to-server request carries the SAME 3-label host the edge would inject,
- * which `extractLeftmostLabel` (resolve.ts) resolves back to that tenant.
+ * Tenancy D1 (§1.5; TASK-041, ported from StuRaOS internal-fetch.ts) — the
+ * forwarded host for a server-to-server hop.
  *
- * Returns `null` when PUBLIC_BASE_URL is unset/unparseable — the caller then
- * sends no tenant header (fail-soft: a missing apex must never silently widen
- * the forwarded host to an attacker-influenced value).
+ * This REPLACES the old apex synthesis, which took the host of PUBLIC_BASE_URL
+ * and stamped `<slug>.<apex>`. That was a cross-tenant hazard once resolve.ts
+ * started selecting on the WHOLE host:
+ *
+ *   * on a tenant-owned domain the synthesised host is not a `tenant_domain`
+ *     row at all, so the inner hop 404s and the feature simply breaks; and
+ *   * if some OTHER tenant has registered `<this-slug>.<apex>` — nothing stops
+ *     that, `host` is the PK, not `(tenant_id, host)` — the inner hop executes
+ *     against THAT tenant's data plane while carrying this process's
+ *     internal-trust secret. Fail-OPEN, cross-tenant, silent.
+ *
+ * The only host guaranteed to round-trip to the tenant we are already inside is
+ * one the control plane registered FOR that tenant: `ctx.primaryHost`, the
+ * `tenant_domain` row with `is_primary`, carried on the context by the
+ * registry's own hydration.
+ *
+ * It is re-run through `normaliseHost` — the same pure function the receiving
+ * resolver applies to the header it receives — so the value we stamp is by
+ * construction the value the receiver will look up, and anything the receiver
+ * would refuse we decline to send at all. `null` (no primary row, or a stored
+ * host that no longer normalises) means send NO tenant header: the receiver
+ * then 404s. Fail closed; there is no apex fallback, ever.
  */
-function resolveApexDomain(): string | null {
-  const pub = readEnv('PUBLIC_BASE_URL')?.trim()
-  if (!pub) return null
-  try {
-    const host = new URL(pub).hostname
-    return host.length > 0 ? host : null
-  } catch {
-    return null
-  }
+function forwardedHostForTenant(ctx: TenantContext): string | null {
+  return normaliseHost(ctx.primaryHost)
 }
 
 /**
@@ -185,16 +195,17 @@ export async function internalFetch(path: string, init: InternalFetchOptions = {
   // tenant from `x-forwarded-host`; ALS does NOT cross this fresh HTTP request,
   // so without re-injection the inner call would 404 (fail-closed). When this
   // call runs INSIDE a runWithTenant(ctx, …) scope we re-stamp the current
-  // tenant's 3-label forwarded host + a constant-time internal-trust secret so
+  // tenant's REGISTERED primary host (D1 §1.5, never `<slug>.<apex>`) + a
+  // constant-time internal-trust secret so
   // the receiver re-establishes the SAME tenant without depending on the edge
   // proxy-trust header (the resolver validates the secret in always-equal time
   // with `constantTimeEqual`). Outside any ALS scope (boot/cron callers) we
   // inject NEITHER header — those paths keep today's behavior. The injected
   // values OVERWRITE any caller-supplied ones (a caller may not forge them).
   const ctx = getTenantOrNull()
-  const apexDomain = ctx ? resolveApexDomain() : null
-  if (ctx && apexDomain) {
-    headers['x-forwarded-host'] = `${ctx.slug}.${apexDomain}`
+  const forwardedHost = ctx ? forwardedHostForTenant(ctx) : null
+  if (forwardedHost) {
+    headers['x-forwarded-host'] = forwardedHost
     headers['x-internal-host-trust'] = secret
   }
   // T16 (P1 propagation point 2): forward the request-scoped correlation id.

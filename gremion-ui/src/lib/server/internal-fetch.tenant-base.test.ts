@@ -1,22 +1,34 @@
-// FIX4 (P2.1c) — INTERNAL_BASE_URL bypasses the apex forwarded-host middleware.
+// FIX4 (P2.1c) — INTERNAL_BASE_URL keeps the inner hop off the edge.
+// Ported from StuRaOS (Tenancy D1 stage §1.5) by TASK-041 (L3-08).
 //
-// The apex router (docker-compose.prod.yml gremion-ui-apex, priority 20) prepends
-// the gremion-ui-apexhost middleware, which UNCONDITIONALLY sets
-// `X-Forwarded-Host: default.${DOMAIN}`. If internalFetch's inner hop targets the
-// public apex (the PUBLIC_BASE_URL fallback), that middleware OVERWRITES the
-// `<slug>.<apex>` value T4 stamps -> the element-0 resolver reads `default` ->
-// the server-to-server call executes against the DEFAULT tenant's data plane
-// (cross-tenant read+write, fail-OPEN because x-internal-host-trust survives).
+// Original premise: the apex router (docker-compose.prod.yml gremion-ui-apex)
+// prepended the gremion-ui-apexhost middleware, which UNCONDITIONALLY set
+// `X-Forwarded-Host: default.${DOMAIN}`. If internalFetch's inner hop targeted
+// the public apex (the PUBLIC_BASE_URL fallback), that middleware OVERWROTE the
+// host T4 stamps → the element-0 resolver read `default` → the server-to-server
+// call executed against the DEFAULT tenant's data plane. Cross-tenant read+write,
+// fail-OPEN, because x-internal-host-trust survived the rewrite.
 //
 // FIX: set INTERNAL_BASE_URL to an in-container/in-cluster origin
-// (`http://gremion-ui:3000`) that reaches gremion-ui WITHOUT traversing the apex
-// router. Then the inner hop never hits Traefik/the apexhost middleware, so the
-// stamped `x-forwarded-host` survives and the resolver re-selects the ORIGINAL
-// tenant. This file pins that behavior: with INTERNAL_BASE_URL set to a non-apex
-// origin, (1) the inner fetch targets that origin (NOT the apex), and (2) the
-// RECEIVED x-forwarded-host equals the SENT `<slug>.<apex>`, which the REAL
-// element-0 selector (extractLeftmostLabel) resolves back to the ORIGINAL slug
-// (not `default`).
+// (`http://gremion-ui:3000`) that reaches gremion-ui WITHOUT traversing Traefik.
+// The stamped `x-forwarded-host` then arrives unmodified and the resolver
+// re-selects the ORIGINAL tenant.
+//
+// TENANCY D1 (§1.3/§1.5) — the premise, restated for the current model. §1.3
+// DELETES the apexhost middleware outright, so the specific rewrite above is
+// gone from the edge. This file is still load-bearing, for a reason that
+// outlives that middleware: ANY hop that traverses the edge is subject to
+// whatever the edge chooses to say about `x-forwarded-host`, and that header is
+// now the ENTIRE tenant selector — there is no in-app re-derivation left to
+// disagree with it. Keeping the internal hop off the edge keeps the header the
+// sender's statement rather than the proxy's.
+//
+// §1.5 also changes WHAT is stamped: the tenant's REGISTERED primary host from
+// `ctx.primaryHost`, not `<slug>.<apex>`. That makes the property below strictly
+// stronger. Under the old model the surviving value was a synthesised string
+// whose only claim to correctness was that the receiver parsed it the same way;
+// now it is a `tenant_domain` row, so "the value survived" and "the right tenant
+// was selected" are the same statement.
 //
 // NOTE: a separate file from internal-fetch.tenant.test.ts is required because
 // vi.mock('$env/dynamic/private') is module-hoisted — that file pins the
@@ -37,13 +49,18 @@ vi.mock('$env/dynamic/private', () => ({
 import { internalFetch } from './internal-fetch'
 import { runWithTenant } from './tenant/context'
 import type { TenantContext } from './tenant/context'
-// The REAL element-0 tenant selector — no mocks. This is what resolve.ts runs on
-// the inbound x-forwarded-host as sequence() element 0.
-import { extractLeftmostLabel } from './tenant/resolve'
+// The REAL forwarded-host normaliser — no mocks. This is what resolve.ts runs
+// on the inbound x-forwarded-host as sequence() element 0 before the
+// tenant_domain lookup.
+import { normaliseHost } from './tenant/host'
 
-function tenant(slug: string): TenantContext {
-  return { slug } as unknown as TenantContext
+/** A tenant on its OWN apex — the D1 shape, and one no `<slug>.<apex>` string
+ *  could ever have produced. */
+function tenant(slug: string, primaryHost: string): TenantContext {
+  return { slug, primaryHost } as unknown as TenantContext
 }
+
+const T2 = tenant('t2', 'zweite-stadt.example')
 
 // typescript(no-base-to-string): RequestInfo includes Request, whose
 // String() coercion falls back to Object.prototype.toString ('[object
@@ -55,7 +72,7 @@ function urlOf(input: RequestInfo | URL): string {
   return input.url
 }
 
-describe('internalFetch + INTERNAL_BASE_URL — bypasses the apex forwarded-host middleware (FIX4)', () => {
+describe('internalFetch + INTERNAL_BASE_URL — keeps the inner hop off the edge (FIX4)', () => {
   const originalFetch = globalThis.fetch
   let lastCall: { url: string; init: RequestInit } | null = null
 
@@ -71,42 +88,43 @@ describe('internalFetch + INTERNAL_BASE_URL — bypasses the apex forwarded-host
     globalThis.fetch = originalFetch
   })
 
-  it('targets the in-container origin (NOT the public apex) so the inner hop never hits the apex router', async () => {
-    await runWithTenant(tenant('t2'), () =>
-      internalFetch('/api/news/abc', { method: 'GET' }),
-    )
+  it('targets the in-container origin (NOT the public apex) so the inner hop never reaches Traefik', async () => {
+    await runWithTenant(T2, () => internalFetch('/api/news/abc', { method: 'GET' }))
     expect(lastCall).not.toBeNull()
     // The inner request goes to gremion-ui:3000 directly — it does NOT traverse
-    // Traefik, so the apex router (Host(`${DOMAIN}`), priority 20) + its
-    // gremion-ui-apexhost middleware never run and never overwrite x-forwarded-host.
+    // Traefik, so no edge router or middleware gets to restate x-forwarded-host.
     expect(lastCall!.url).toBe('http://gremion-ui:3000/api/news/abc')
     expect(lastCall!.url).not.toContain('stura.test') // NOT the public apex
   })
 
-  it('the SENT x-forwarded-host survives and the REAL resolver re-selects the ORIGINAL tenant (not default)', async () => {
-    await runWithTenant(tenant('t2'), () =>
-      internalFetch('/api/news/abc', { method: 'GET' }),
-    )
+  it('the SENT x-forwarded-host survives and is the tenant’s OWN registered row', async () => {
+    await runWithTenant(T2, () => internalFetch('/api/news/abc', { method: 'GET' }))
     const headers = lastCall!.init.headers as Record<string, string>
-    // T4 stamps the current tenant's 3-label host. Because the hop bypasses the
-    // apexhost middleware, this is exactly what the receiver's element-0 resolver
-    // observes — the value is NOT overwritten to `default.<apex>`.
     const received = headers['x-forwarded-host']
-    expect(received).toBe('t2.stura.test')
-    // Feed the RECEIVED header into the REAL element-0 selector (resolve.ts):
-    // it re-selects the ORIGINAL tenant slug, NOT `default`.
-    expect(extractLeftmostLabel(received)).toBe('t2')
-    expect(extractLeftmostLabel(received)).not.toBe('default')
-    // The internal-trust secret rides along (it is NOT stripped by any apex
-    // middleware on this path), so isProxyTrusted still authorizes the hop.
+    // T4 stamps the current tenant's REGISTERED host (D1 §1.5). Because the hop
+    // bypasses the edge, this is exactly what the receiver's element-0 resolver
+    // observes.
+    expect(received).toBe('zweite-stadt.example')
+    // Feed the RECEIVED header into the REAL normaliser (host.ts): it yields
+    // t2's OWN tenant_domain lookup key — a different row from the default
+    // tenant's host, and from anything derived from the deployment apex.
+    expect(normaliseHost(received)).toBe('zweite-stadt.example')
+    expect(normaliseHost(received)).not.toBe(normaliseHost('default.stura.test'))
+    expect(normaliseHost(received)).not.toBe(normaliseHost('stura.test'))
+    // Nothing apex-shaped reached the wire at all.
+    expect(received).not.toContain('stura.test')
+    // The internal-trust secret rides along (nothing on this path strips it), so
+    // isProxyTrusted still authorizes the hop.
     expect(headers['x-internal-host-trust']).toBe('test-secret-32-bytes-of-padding-xxx')
   })
 
-  it('CONTRAST: had the hop used the apex origin, the apexhost middleware would force `default` — that is the bug this fixes', () => {
-    // Documents the defeated failure mode. The apexhost middleware
-    // (docker-compose.prod.yml) sets X-Forwarded-Host=default.${DOMAIN} on the
-    // apex router; the resolver would then read `default` and execute against the
-    // DEFAULT tenant. INTERNAL_BASE_URL prevents the hop from ever reaching it.
-    expect(extractLeftmostLabel('default.stura.test')).toBe('default')
+  it('CONTRAST: an edge-restated host would select a DIFFERENT tenant — that is what staying off the edge prevents', () => {
+    // Documents the defeated failure mode. The apexhost middleware set
+    // X-Forwarded-Host=default.${DOMAIN} on the apex router; the resolver would
+    // then look up the DEFAULT tenant's row and execute against ITS data plane.
+    // (§1.3 deletes that middleware; INTERNAL_BASE_URL independently keeps the
+    // hop from ever meeting an edge that could do the same thing again.)
+    expect(normaliseHost('default.stura.test')).toBe('default.stura.test')
+    expect(normaliseHost('default.stura.test')).not.toBe(normaliseHost('zweite-stadt.example'))
   })
 })
