@@ -11,6 +11,21 @@ import { join } from 'node:path'
 import { checkOpenApiCompat, classifyVersionBump, runOasdiffBreaking, stripCompatNoise } from './oasdiff-gate.js'
 import { REPO_ROOT } from './repo-root.js'
 
+// Time budget (R26-FLAKES, R27 scope). Every T3 fixture test with a structural
+// change spawns the oasdiff binary twice (`breaking` + the `--version` probe;
+// the docker fallback when no binary is on PATH). Measured 2026-09-28 on the
+// 16-CPU dev box, "loaded" = 32 CPU-spinning + 4 file-I/O node processes on top
+// of the other agents on the box:
+//
+//   one oasdiff-spawning T3 test   idle p95 0.37 s (n=45, max 0.88 s)   loaded p95 42.0 s (n=48, p50 4.1 s, max 114.5 s)
+//
+// The loaded tail is CPU-scheduling starvation of the spawned process, not this
+// file: timing `oasdiff breaking` alone under CPU-only load gives max 24.7 s,
+// under I/O-only load max 45 ms. It failed the 5 s default in integration gates.
+// Budget = 3x the loaded p95, rounded up; the pure and hostile-PATH tests stay
+// on the default (loaded max 0.2 s). No global raise.
+const OASDIFF_VERDICT_MS = 130_000
+
 const FIXTURES = join(REPO_ROOT, 'contracts', 'fixtures', 'compat', 'openapi')
 const load = (name: string) => readFileSync(join(FIXTURES, name), 'utf8')
 const base = load('base-1.0.0.json')
@@ -40,13 +55,13 @@ describe('checkOpenApiCompat — T3 fixtures', () => {
     const res = checkOpenApiCompat(base, load('removed-endpoint-1.0.0.json'))
     expect(res.ok).toBe(false)
     expect(res.breaking).toBe(true)
-  })
+  }, OASDIFF_VERDICT_MS)
 
   it('remove (breaking) with a MAJOR bump: PASSES', () => {
     const res = checkOpenApiCompat(base, load('removed-endpoint-2.0.0.json'))
     expect(res.ok).toBe(true)
     expect(res.bump).toBe('major')
-  })
+  }, OASDIFF_VERDICT_MS)
 
   // MEDIUM finding (round 1): surviving mutant G1b — `bump === 'major'`
   // loosened to `bump === 'major' || bump === 'minor'` in both
@@ -58,31 +73,31 @@ describe('checkOpenApiCompat — T3 fixtures', () => {
     expect(res.ok).toBe(false)
     expect(res.breaking).toBe(true)
     expect(res.bump).toBe('minor')
-  })
+  }, OASDIFF_VERDICT_MS)
 
   it('narrow (breaking) with NO bump: FAILS', () => {
     const res = checkOpenApiCompat(base, load('narrowed-param-1.0.0.json'))
     expect(res.ok).toBe(false)
     expect(res.breaking).toBe(true)
-  })
+  }, OASDIFF_VERDICT_MS)
 
   it('narrow (breaking) with a MAJOR bump: PASSES', () => {
     const res = checkOpenApiCompat(base, load('narrowed-param-2.0.0.json'))
     expect(res.ok).toBe(true)
-  })
+  }, OASDIFF_VERDICT_MS)
 
   it('add (non-breaking) with NO bump: FAILS', () => {
     const res = checkOpenApiCompat(base, load('added-param-1.0.0.json'))
     expect(res.ok).toBe(false)
     expect(res.breaking).toBe(false)
     expect(res.structuralChange).toBe(true)
-  })
+  }, OASDIFF_VERDICT_MS)
 
   it('add (non-breaking) with a MINOR bump: PASSES', () => {
     const res = checkOpenApiCompat(base, load('added-param-1.1.0.json'))
     expect(res.ok).toBe(true)
     expect(res.bump).toBe('minor')
-  })
+  }, OASDIFF_VERDICT_MS)
 
   it('description-only change: PASSES regardless of (same) version', () => {
     const res = checkOpenApiCompat(base, load('description-only-1.0.0.json'))
@@ -109,12 +124,12 @@ describe('checkOpenApiCompat — T3 fixtures', () => {
     const res = checkOpenApiCompat(respBase, load('removed-response-property-1.0.0.json'))
     expect(res.ok).toBe(false)
     expect(res.breaking).toBe(true)
-  })
+  }, OASDIFF_VERDICT_MS)
   it('remove optional response property with a MAJOR bump: PASSES', () => {
     const res = checkOpenApiCompat(respBase, load('removed-response-property-2.0.0.json'))
     expect(res.ok).toBe(true)
     expect(res.bump).toBe('major')
-  })
+  }, OASDIFF_VERDICT_MS)
 })
 
 describe('runOasdiffBreaking — T5: fail closed with no verdict', () => {
