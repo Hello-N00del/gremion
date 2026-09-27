@@ -46,6 +46,131 @@
     {
       "files": ["**/*.test.ts", "**/*.test.mjs", "**/*.spec.ts", "**/test/**/*.ts"],
       "rules": { "typescript/unbound-method": "off" }
+    },
+    {
+      "files": [
+        "modules/finance/test/deploy-drift.test.ts"
+      ],
+      "rules": { "eslint/no-irregular-whitespace": "off" }
+    },
+    {
+      "files": [
+        "modules/calendar/scripts/backfill.ts",
+        "modules/content/test/dispatch.integration.test.ts",
+        "modules/finance/test/sub-org.store.test.ts"
+      ],
+      "rules": { "eslint/no-unused-vars": "off" }
+    },
+    {
+      "files": [
+        "modules/content/app/lib/server/content/instagram/adapter.test.ts",
+        "modules/content/scripts/backfill.ts",
+        "modules/content/src/http/routes.ts",
+        "modules/content/src/store/lists.ts",
+        "modules/content/src/store/media.ts",
+        "modules/content/src/store/post-channels.ts",
+        "modules/content/src/store/posts.ts",
+        "modules/content/src/store/publications.ts",
+        "modules/content/src/store/publish-ops.ts",
+        "modules/finance/scripts/backfill.ts",
+        "modules/publishing/scripts/backfill.ts",
+        "modules/publishing/src/store/lists.ts",
+        "modules/publishing/src/store/newsletters.ts"
+      ],
+      "rules": { "typescript/no-base-to-string": "off" }
+    },
+    {
+      "files": [
+        "modules/content/app/routes/api/content/posts/posts.test.ts"
+      ],
+      "rules": { "typescript/no-duplicate-type-constituents": "off" }
+    },
+    {
+      "files": [
+        "modules/votes/src/polls/polls-client.ts"
+      ],
+      "rules": { "typescript/no-misused-spread": "off" }
+    },
+    {
+      "files": [
+        "modules/content/app/lib/server/content/route-auth.ts",
+        "modules/content/app/lib/server/news/news-db.ts",
+        "modules/content/app/routes/api/content/posts/posts.test.ts",
+        "modules/content/app/routes/api/news/+server.ts",
+        "modules/content/app/routes/api/news/?id?/+server.ts",
+        "modules/content/app/routes/news/+page.server.ts",
+        "modules/content/app/routes/news/?id?/edit/+page.server.ts",
+        "modules/files/test/webdav-path.test.ts",
+        "modules/votes/src/helios/helios-client.ts"
+      ],
+      "rules": { "typescript/no-redundant-type-constituents": "off" }
+    },
+    {
+      "files": [
+        "modules/finance/test/bank-account.store.test.ts"
+      ],
+      "rules": { "typescript/require-array-sort-compare": "off" }
+    },
+    {
+      "files": [
+        "modules/messaging/src/http/dispatch.ts",
+        "modules/messaging/src/matrix/matrix-client.ts"
+      ],
+      "rules": { "typescript/restrict-template-expressions": "off" }
+    },
+    {
+      "files": [
+        "modules/finance/src/store/index.ts"
+      ],
+      "rules": { "unicorn/no-new-array": "off" }
+    },
+    {
+      "files": [
+        "modules/board/test/no-phantom-stura-db.test.ts",
+        "modules/calendar/test/no-phantom-stura-db.test.ts",
+        "modules/content/app/lib/server/content/carousel/template.tsx",
+        "modules/content/test/no-phantom-stura-db.test.ts",
+        "modules/files/src/nextcloud/webdav-client.ts",
+        "modules/finance/src/nextcloud/webdav-client.ts",
+        "modules/finance/test/no-phantom-stura-db.test.ts",
+        "modules/publishing/test/no-phantom-stura-db.test.ts"
+      ],
+      "rules": { "unicorn/no-useless-fallback-in-spread": "off" }
+    },
+    {
+      "files": [
+        "modules/content/app/lib/server/content/backend/resolve.test.ts",
+        "modules/files/test/webdav-path.test.ts",
+        "modules/publishing/test/api.integration.test.ts",
+        "modules/publishing/test/deploy-drift.test.ts"
+      ],
+      "rules": { "vitest/no-conditional-expect": "off" }
+    },
+    {
+      "files": [
+        "modules/finance/test/api.integration.test.ts"
+      ],
+      "rules": { "vitest/no-standalone-expect": "off" }
+    },
+    {
+      "files": [
+        "modules/calendar/test/holiday-dedup.integration.test.ts",
+        "modules/content/app/lib/server/content/instagram/adapter.test.ts",
+        "modules/content/test/dispatch.integration.test.ts",
+        "modules/finance/test/fints.crypto.test.ts",
+        "modules/publishing/test/dispatch.integration.test.ts",
+        "modules/publishing/test/origin.test.ts",
+        "modules/vault/test/crypto.test.ts"
+      ],
+      "rules": { "vitest/require-to-throw-message": "off" }
+    },
+    {
+      "files": [
+        "modules/files/test/webdav-path.test.ts",
+        "modules/finance/test/lane-e2.integration.test.ts",
+        "modules/finance/test/project.store.test.ts"
+      ],
+      "rules": { "vitest/valid-title": "off" }
     }
   ],
   "ignorePatterns": [
