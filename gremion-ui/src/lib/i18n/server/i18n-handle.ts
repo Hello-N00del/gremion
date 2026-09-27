@@ -103,11 +103,13 @@ export function createI18nHandle(customerIdOf: (locals: LocalsLike) => string | 
     const locale = await resolveRequestLocale(event as unknown as MinimalRequestEvent, customerIdOf)
     ;(event.locals as App.Locals & { locale?: Locale }).locale = locale
 
-    // R26-TRAIN4-FIX r3 (WCAG 3.1.1): the page is rendered and declared in the
-    // language it is written in. A German-only route (content-locale.ts) is
-    // German for everyone; `locals.locale` stays the person's locale, and
-    // app.html carries it aside in data-ui-locale for the client.
-    const contentLocale = contentLocaleFor(event.url.pathname, locale)
+    // R26-TRAIN4-FIX (WCAG 3.1.1): the page is rendered and declared in the
+    // language it is written in. SvelteKit has matched the route before handle
+    // runs; a route whose page is not translated (content-locale.ts, fail-safe
+    // German) is German for everyone. `locals.locale` stays the person's
+    // locale, and app.html carries it aside in data-ui-locale for the client.
+    const routeId = (event as { route?: { id: string | null } }).route?.id ?? null
+    const contentLocale = contentLocaleFor(routeId, locale)
 
     // A body-less stand-in: Paraglide clones the Request it is given, and
     // cloning an upload would tee (and buffer) its body. The stand-in carries

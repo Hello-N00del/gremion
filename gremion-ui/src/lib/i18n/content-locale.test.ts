@@ -1,16 +1,29 @@
-// R26-TRAIN4-FIX (WCAG 3.1.1, operator ruling 2026-09-27): `<html lang>`
+// R26-TRAIN4-FIX (WCAG 2.2 SC 3.1.1, operator ruling 2026-09-27): `<html lang>`
 // names the language the page is written in. The language is decided per
-// page, not per shell: a route keeps the person's locale only when its page
-// renders from the catalogue; every other route is declared German, shell
-// routes (/beschluesse, /protokolle, /systemstatus, ...) included, and the
-// catalogue strings around it (shell chrome, +error) render German with it.
+// page, not per shell, and fails safe: a route follows the person's locale
+// only when its page is PROVEN translated (below); every other route is
+// declared German, shell routes (/beschluesse, /protokolle, /systemstatus,
+// ...) included, and the catalogue strings around it (shell chrome, +error)
+// render German with it.
+//
+// "Proven translated" is checked mechanically over the real route tree
+// (every +page.svelte, its nested +layout.svelte files and every .svelte
+// component they import, recursively): the tree renders from the catalogue
+// AND carries no hard-coded text, neither a text node nor a user-facing
+// attribute (title, aria-label, placeholder, ...). A hard-coded string in this
+// codebase is German (UX-015 German-first), so one of them is enough to keep a
+// page German. A part explicitly marked lang="de" is German on purpose (WCAG
+// 3.1.2) and does not count.
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
+import { parse } from 'svelte/compiler'
 import {
+  TRANSLATED_ROUTE_IDS,
   UI_LOCALE_ATTRIBUTE,
   contentLocaleFor,
   htmlLangAttributes,
+  isTranslatedRoute,
   syncDocumentLang,
   uiLocaleOf
 } from './content-locale'
@@ -31,27 +44,33 @@ describe('contentLocaleFor (route id)', () => {
     ['/members/committees/[id]/protokolle/[protocolId]', 'de'],
     ['/members/committees/[id]/protokolle/new', 'de'],
     ['/settings/compliance/print', 'de'],
+    // Shell routes that render some catalogue strings but still carry
+    // hard-coded German (headings, <title>, tab bodies): German until TASK-161.
+    ['/', 'de'],
+    ['/settings', 'de'],
+    ['/settings/[section]', 'de'],
+    ['/members', 'de'],
+    ['/members/committees/new', 'de'],
+    ['/members/committees/[id]', 'de'],
     // Routes outside the shell with German-only pages.
     ['/legal/impressum', 'de'],
     ['/setup', 'de'],
     ['/auth/step-up', 'de'],
     ['/auth/logout', 'de'],
-    // Pages that render from the catalogue follow the person.
-    ['/', 'en'],
-    ['/settings', 'en'],
-    ['/settings/[section]', 'en'],
-    ['/members', 'en'],
-    ['/members/committees/new', 'en'],
-    ['/members/committees/[id]', 'en'],
-    ['/auth/login', 'en'],
-    // No matching route: SvelteKit renders +error, which renders from the catalogue.
-    [null, 'en']
+    // A route nobody has classified yet is German (fail safe).
+    ['/some/new/route', 'de'],
+    // No matching route: +error, inside the shell for a signed-in person, and
+    // the shell is not translated yet.
+    [null, 'de'],
+    [undefined, 'de'],
+    // Proven translated, outside the shell: follows the person.
+    ['/auth/login', 'en']
   ] as const)('%s -> %s for an English person', (routeId, expected) => {
     expect(contentLocaleFor(routeId, 'en')).toBe(expected)
   })
 
   it('a German person gets German everywhere', () => {
-    for (const id of ['/', '/beschluesse', '/legal/impressum', null]) expect(contentLocaleFor(id, 'de')).toBe('de')
+    for (const id of ['/', '/auth/login', '/beschluesse', '/legal/impressum', null]) expect(contentLocaleFor(id, 'de')).toBe('de')
   })
 })
 
@@ -105,7 +124,7 @@ describe('syncDocumentLang (client-side navigation, root +layout.svelte)', () =>
     expect(root.getAttribute(UI_LOCALE_ATTRIBUTE)).toBe('en')
   })
 
-  it('shell -> legal page: lang becomes de and the person locale is kept aside', () => {
+  it('translated page -> legal page: lang becomes de and the person locale is kept aside', () => {
     const root = fakeRoot('en')
     syncDocumentLang(root, '/legal/impressum')
     expect(root.lang).toBe('de')
@@ -114,14 +133,14 @@ describe('syncDocumentLang (client-side navigation, root +layout.svelte)', () =>
 
   it('German page (served lang="de" data-ui-locale="en") -> translated page: lang returns to en', () => {
     const root = fakeRoot('de', { [UI_LOCALE_ATTRIBUTE]: 'en' })
-    syncDocumentLang(root, '/')
+    syncDocumentLang(root, '/auth/login')
     expect(root.lang).toBe('en')
     expect(root.getAttribute(UI_LOCALE_ATTRIBUTE)).toBeNull()
   })
 
   it('a navigation that keeps the language writes nothing (no lang mutation)', () => {
     for (const [lang, id] of [
-      ['en', '/settings/[section]'],
+      ['en', '/auth/login'],
       ['de', '/'],
       ['de', '/legal/datenschutz'],
       ['de', '/beschluesse']
@@ -157,13 +176,107 @@ function svelteImports(file: string): string[] {
     .filter((p): p is string => p !== null && existsSync(p))
 }
 
-/** True when the component, or any .svelte component it imports, renders from the catalogue. */
-function rendersFromCatalogue(file: string, seen = new Set<string>()): boolean {
-  if (seen.has(file)) return false
-  seen.add(file)
-  if (CATALOGUE.test(readFileSync(file, 'utf8'))) return true
-  return svelteImports(file).some((f) => rendersFromCatalogue(f, seen))
+/** Attributes and component props whose literal value is read or shown to a person. */
+const USER_FACING = new Set([
+  'title',
+  'label',
+  'placeholder',
+  'alt',
+  'aria-label',
+  'aria-description',
+  'aria-roledescription',
+  'aria-valuetext',
+  'heading',
+  'subtitle',
+  'description',
+  'eyebrow',
+  'hint',
+  'text'
+])
+
+type AstNode = { type?: string; [key: string]: unknown }
+
+/** Keys of the modern Svelte AST under which markup continues. */
+const MARKUP_KEYS = ['fragment', 'nodes', 'attributes', 'consequent', 'alternate', 'body', 'fallback', 'pending', 'then', 'catch']
+
+function staticAttribute(node: AstNode, name: string): string | null {
+  const attr = (node.attributes as AstNode[] | undefined)?.find((a) => a.type === 'Attribute' && a.name === name)
+  const value = attr?.value
+  return Array.isArray(value) && value.length === 1 && (value[0] as AstNode).type === 'Text'
+    ? String((value[0] as AstNode).data)
+    : null
 }
+
+/** Hard-coded, human-readable text in a component's markup (script, style and parts marked lang="de" excluded). */
+function literalTexts(node: unknown, out: string[]): string[] {
+  if (Array.isArray(node)) {
+    for (const n of node) literalTexts(n, out)
+    return out
+  }
+  if (!node || typeof node !== 'object') return out
+  const n = node as AstNode
+  if (n.type === 'Text') {
+    const text = String(n.data).trim()
+    if (/\p{L}{2,}/u.test(text)) out.push(text)
+    return out
+  }
+  if (n.type === 'Attribute') {
+    if (USER_FACING.has(String(n.name)) && Array.isArray(n.value)) literalTexts(n.value, out)
+    return out
+  }
+  if ((n.type === 'RegularElement' || n.type === 'SvelteElement') && (n.name === 'script' || n.name === 'style')) return out
+  // A part marked German on purpose (WCAG 3.1.2), e.g. the root layout's skip link.
+  if (n.type === 'RegularElement' && staticAttribute(n, 'lang') === 'de') return out
+  for (const key of MARKUP_KEYS) literalTexts(n[key], out)
+  return out
+}
+
+interface Evidence {
+  catalogue: boolean
+  literals: string[]
+}
+
+/** Walks a component and every .svelte component it imports. */
+function evidenceFor(files: string[]): Evidence {
+  const seen = new Set<string>()
+  const evidence: Evidence = { catalogue: false, literals: [] }
+  const visit = (file: string) => {
+    if (seen.has(file)) return
+    seen.add(file)
+    const source = readFileSync(file, 'utf8')
+    if (CATALOGUE.test(source)) evidence.catalogue = true
+    const ast = parse(source, { modern: true }) as unknown as { fragment: unknown }
+    for (const text of literalTexts(ast.fragment, [])) evidence.literals.push(`${relative(SRC, file)}: ${text}`)
+    for (const f of svelteImports(file)) visit(f)
+  }
+  for (const f of files) visit(f)
+  return evidence
+}
+
+const proven = (e: Evidence) => e.catalogue && e.literals.length === 0
+
+/** A page's own +page.svelte plus every nested +layout.svelte above it (the root layout is the shell, not the page). */
+function pageTree(pageFile: string): string[] {
+  const files = [pageFile]
+  for (let dir = dirname(pageFile); dir !== ROUTES && dir.startsWith(ROUTES); dir = dirname(dir)) {
+    const layout = join(dir, '+layout.svelte')
+    if (existsSync(layout)) files.push(layout)
+  }
+  return files
+}
+
+describe('the proof itself', () => {
+  const probe = (markup: string) => literalTexts(parse(markup, { modern: true }).fragment, [])
+
+  it('finds hard-coded text nodes and user-facing attributes, not code, classes or marked German parts', () => {
+    expect(probe('<h1>Mitglieder</h1>')).toEqual(['Mitglieder'])
+    expect(probe('<PageTitle title="Übersicht" />')).toEqual(['Übersicht'])
+    expect(probe('<button aria-label="Schließen">✕</button>')).toEqual(['Schließen'])
+    expect(probe('{#if x}<p>Keine Einträge</p>{:else}<p>{$t("a.b")}</p>{/if}')).toEqual(['Keine Einträge'])
+    expect(probe('<p class="text-sm text-ink">{$t("a.b")} · {n}</p>')).toEqual([])
+    expect(probe('<a lang="de" href="#main">Zum Inhalt springen</a>')).toEqual([])
+  })
+})
 
 describe('every page is declared in the language it renders in (guard)', () => {
   // Every +page.svelte under routes/, shell routes included: the round-3 scan
@@ -180,9 +293,36 @@ describe('every page is declared in the language it renders in (guard)', () => {
     expect(pages.map((p) => p.id)).toContain('/beschluesse')
   })
 
+  // The root layout wraps every page in AppShell (a signed-in person) except
+  // the pages under these prefixes; the chrome is part of the document, so a
+  // page inside the shell is translated only when the shell is too.
+  const OUTSIDE_SHELL = ['/auth', '/legal', '/setup']
+  const insideShell = (pathname: string) => !OUTSIDE_SHELL.some((p) => pathname.startsWith(p))
+  const shell = evidenceFor([join(SRC, 'lib', 'components', 'layout', 'AppShell.svelte')])
+  const shellWhy = `shell hard-coded text: ${JSON.stringify(shell.literals.slice(0, 5))}`
+
   it.each(pages)('$id', ({ file, id }) => {
-    const translated = rendersFromCatalogue(file)
-    expect(contentLocaleFor(id, 'en'), `${id}: renders from the catalogue = ${translated}`).toBe(translated ? 'en' : 'de')
+    const e = evidenceFor(pageTree(file))
+    const translated = proven(e) && (!insideShell(id) || proven(shell))
+    const why = `${id}: catalogue=${e.catalogue}, hard-coded text: ${JSON.stringify(e.literals.slice(0, 5))}; ${shellWhy}`
+    expect(isTranslatedRoute(id), why).toBe(translated)
+    expect(contentLocaleFor(id, 'en'), why).toBe(translated ? 'en' : 'de')
+  })
+
+  it('no route matched (null): +error follows the person only while it and the shell around it are proven translated', () => {
+    const e = evidenceFor([join(ROUTES, '+error.svelte')])
+    expect(isTranslatedRoute(null), `${JSON.stringify(e.literals)}; ${shellWhy}`).toBe(proven(e) && proven(shell))
+  })
+
+  it('the shell rule above mirrors the root layout', () => {
+    const src = readFileSync(join(ROUTES, '+layout.svelte'), 'utf8')
+    const prefixes = [...src.matchAll(/!\$page\.url\.pathname\.startsWith\('([^']+)'\)/g)].map((m) => m[1])
+    expect(prefixes.sort()).toEqual([...OUTSIDE_SHELL].sort())
+  })
+
+  it('every listed route id names a real page (no stale entries)', () => {
+    const ids = new Set(pages.map((p) => p.id))
+    for (const id of TRANSLATED_ROUTE_IDS) expect(ids.has(id), id).toBe(true)
   })
 
   const layout = readFileSync(join(ROUTES, '+layout.svelte'), 'utf8')

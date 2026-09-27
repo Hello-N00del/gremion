@@ -47,7 +47,10 @@ function fakeEvent(opts: {
   const cookies = new Map<string, string>()
   if (opts.cookie != null) cookies.set(LOCALE_COOKIE, opts.cookie)
   return {
-    url: new URL('https://pilot.test/'),
+    // A proven-translated page (content-locale.ts), so the rendered lang is the
+    // resolved locale; the route-dependent cases override url and route.
+    url: new URL('https://pilot.test/auth/login'),
+    route: { id: '/auth/login' as string | null },
     cookies: { get: (name: string) => cookies.get(name) ?? undefined },
     request: { headers: { get: (name: string) => (name.toLowerCase() === 'accept-language' ? (opts.acceptLanguage ?? null) : null) } },
     locals: { user: opts.userId ? { id: opts.userId } : null, tenant: opts.tenantId ? { id: opts.tenantId } : undefined }
@@ -143,10 +146,14 @@ describe('createI18nHandle (TDD 2: the raw SSR response carries the resolved lan
     ['/members/committees/c1/protokolle', '/members/committees/[id]/protokolle', 'en-US', '<html lang="de" data-ui-locale="en">'],
     ['/settings/compliance/print', '/settings/compliance/print', 'en-US', '<html lang="de" data-ui-locale="en">'],
     ['/auth/login', '/auth/login', 'en-US', '<html lang="en">'],
-    ['/settings/darstellung', '/settings/[section]', 'en-US', '<html lang="en">'],
-    ['/members/committees/c1', '/members/committees/[id]', 'en-US', '<html lang="en">'],
-    // No route matched: SvelteKit renders +error, which renders from the catalogue.
-    ['/legal/no-such-page', null, 'en-US', '<html lang="en">']
+    // Round 5 (fail safe): pages that use some catalogue strings but still
+    // carry hard-coded German are German too, until they are proven translated.
+    ['/settings/darstellung', '/settings/[section]', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/members/committees/c1', '/members/committees/[id]', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/', '/', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    ['/a/route/added/later', '/a/route/added/later', 'en-US', '<html lang="de" data-ui-locale="en">'],
+    // No route matched: +error, inside the not-yet-translated shell when signed in.
+    ['/legal/no-such-page', null, 'en-US', '<html lang="de" data-ui-locale="en">']
   ])('%s (route %s) with Accept-Language %j -> %s', async (path, routeId, header, expected) => {
     const event = { ...fakeEvent({ acceptLanguage: header }), url: new URL(path, 'https://pilot.test'), route: { id: routeId } }
     const response = await createI18nHandle(customerIdOf)({ event, resolve: renderAppHtml } as never)
@@ -160,7 +167,8 @@ describe('createI18nHandle (TDD 2: the raw SSR response carries the resolved lan
   it.each([
     ['/legal/impressum', 'Dateien'],
     ['/beschluesse', 'Dateien'],
-    ['/', 'Files']
+    ['/', 'Dateien'],
+    ['/auth/login', 'Files']
   ])('page %s renders its catalogue strings (shell chrome, +error) in its own language: %s', async (routeId, expected) => {
     const event = { ...fakeEvent({ acceptLanguage: 'en-US' }), url: new URL(routeId, 'https://pilot.test'), route: { id: routeId } }
     const resolve = async () => new Response(messages['nav.files']!())

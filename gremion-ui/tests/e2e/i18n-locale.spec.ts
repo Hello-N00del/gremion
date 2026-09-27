@@ -4,8 +4,10 @@
 //       on a page that renders from the catalogue (the login interstitial),
 //       and lang="de" on a German-only page (R26-TRAIN4-FIX r3, WCAG 3.1.1);
 //   (b) signed in, switch to English through the settings form (POST + 303),
-//       reload, open a second route: every document is English, and a
-//       MutationObserver on <html lang> records zero changes on each of them.
+//       reload, open a second route: every server response reflects the stored
+//       choice (lang="en" on a proven-translated document, data-ui-locale="en"
+//       beside lang="de" on a page still written in German, R26-TRAIN4-FIX r5),
+//       and a MutationObserver on <html lang> records zero changes on each.
 //
 // Needs a running app (PLAYWRIGHT_BASE_URL) booted against a migrated DB, as
 // the @smoke job does (SMOKE_TENANT_HOST selects the tenant), plus the app's
@@ -101,7 +103,7 @@ test.describe('server-decided locale (TASK-062)', () => {
   test.describe('(b) signed-in switch', () => {
     test.use({ locale: 'de-DE' })
 
-    test('switch to English, reload, second route: all English, zero lang mutations', async ({ page, baseURL }) => {
+    test('switch to English, reload, second route: every SSR response reflects the choice, zero lang mutations', async ({ page, baseURL }) => {
       await signInAsMember(page, baseURL!)
       await watchLang(page)
 
@@ -118,7 +120,11 @@ test.describe('server-decided locale (TASK-062)', () => {
       expect(post.status()).toBe(303)
       expect(post.headers()['location']).toBe('/settings/darstellung')
       await page.waitForURL('**/settings/darstellung')
-      await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+      // R26-TRAIN4-FIX r5 (WCAG 3.1.1, fail safe): the settings page still
+      // carries hard-coded German (content-locale.ts), so it stays declared
+      // German; the stored choice travels in data-ui-locale.
+      await expect(page.locator('html')).toHaveAttribute('lang', 'de')
+      await expect(page.locator('html')).toHaveAttribute('data-ui-locale', 'en')
       await expect(page.getByRole('button', { name: 'English' })).toHaveAttribute('aria-pressed', 'true')
       const cookie = (await page.context().cookies()).find((c) => c.name === 'gremion.locale')
       expect(cookie).toMatchObject({ value: 'en', path: '/', httpOnly: true, sameSite: 'Lax' })
@@ -126,20 +132,29 @@ test.describe('server-decided locale (TASK-062)', () => {
       expect(await langMutations(page)).toEqual([])
 
       const reloaded = await page.reload()
-      expect(await reloaded!.text()).toContain('<html lang="en">')
+      expect(await reloaded!.text()).toContain('<html lang="de" data-ui-locale="en">')
       await page.waitForLoadState('networkidle')
       expect(await langMutations(page)).toEqual([])
 
+      // Second route, a German shell page: German declaration, German chrome
+      // (the whole document speaks one language), the choice kept aside.
       const second = await page.goto('/')
       expect(second!.status()).toBe(200)
       const html = await second!.text()
-      expect(html).toContain('<html lang="en">')
-      // $t-rendered shell strings arrive in English on the server, never as raw keys.
-      expect(html).toContain('aria-label="Main navigation"')
+      expect(html).toContain('<html lang="de" data-ui-locale="en">')
+      // $t-rendered shell strings arrive translated on the server, never as raw keys.
+      expect(html).toContain('aria-label="Hauptnavigation"')
       expect(html).not.toMatch(/(>|=")(nav|a11y|topbar)\.[a-z][a-zA-Z.]*(<|")/)
       await page.waitForLoadState('networkidle')
       expect(await langMutations(page)).toEqual([])
-      await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+      await expect(page.locator('html')).toHaveAttribute('lang', 'de')
+
+      // The proven-translated page renders the stored choice in English on the
+      // server: the cookie outranks this context's de-DE Accept-Language.
+      const login = await page.request.get('/auth/login')
+      const loginHtml = await login.text()
+      expect(loginHtml).toContain('<html lang="en">')
+      expect(loginHtml).toContain('Redirecting you to sign in')
     })
   })
 })
