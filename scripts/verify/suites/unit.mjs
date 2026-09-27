@@ -230,6 +230,11 @@ export const UNIT_PARTS = {
     const cwd = path.join(root, 'packages', 'tokens')
     return nodeTestParts({ cwd, files: globSync('test/*.test.mjs', { cwd }).toSorted() })
   },
+  // TASK-034 (R26): the edge-router emitter, fleet sync, DNS pre-flight and the
+  // hygiene (j) plants; unit-packages.test.mjs caught it missing (intake r1/r2).
+  'edge-routers': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'edge-routers'), testScript: 'test', root, label: '@gremion/edge-routers vitest (test)' }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }
