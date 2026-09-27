@@ -59,11 +59,15 @@ describe('package shape mirrors @gremion/ports', () => {
     }
   })
 
-  it('any @gremion/* dependency uses "workspace:*" as the only specifier', () => {
-    const deps = { ...manifest.dependencies, ...manifest.devDependencies }
-    for (const [name, spec] of Object.entries(deps)) {
-      if (name.startsWith('@gremion/')) expect(spec).toBe('workspace:*')
-    }
+  // The package declares no @gremion/* dependency today, so this holds
+  // trivially until one is added; the assertion always runs (an empty
+  // offender list), and names the offending entries when it fails.
+  it('any @gremion/* dependency uses "workspace:*" as the only specifier (none declared today)', () => {
+    const deps: Record<string, string> = { ...manifest.dependencies, ...manifest.devDependencies }
+    const offenders = Object.entries(deps).filter(
+      ([name, spec]) => name.startsWith('@gremion/') && spec !== 'workspace:*',
+    )
+    expect(offenders).toEqual([])
   })
 
   it('tools/ is not shipped', () => {

@@ -384,7 +384,7 @@ export class KcProvisionApi {
     //    round-tripped realm rep 500s on KC 26); merge existing attributes. Runs
     //    AFTER the flow exists.
     const realmRep = await this.realmGet<{ attributes?: Record<string, unknown> }>(realm, '')
-    const attrs = { ...(realmRep.attributes ?? {}), 'acr.loa.map': '{"loa1":1,"loa2":2}' }
+    const attrs = { ...realmRep.attributes, 'acr.loa.map': '{"loa1":1,"loa2":2}' }
     await this.realmReq(realm, 'PUT', '', {
       realm,
       browserFlow: 'browser-stepup',

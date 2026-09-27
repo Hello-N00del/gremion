@@ -27,7 +27,11 @@
       }
     ],
     "vitest/require-mock-type-parameters": "off",
-    "vitest/valid-expect": ["error", { "maxArgs": 2 }]
+    "vitest/valid-expect": ["error", { "maxArgs": 2 }],
+    "vitest/expect-expect": [
+      "error",
+      { "assertFunctionNames": ["expect", "expectTypeOf", "assert", "assertType", "expectTyped413"] }
+    ]
   },
   "globals": {
     "$state": "readonly",
