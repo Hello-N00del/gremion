@@ -1809,16 +1809,25 @@ check('n3 the "absent from the kernel" arithmetic is the product chain minus wha
 // none of the literals it hunts for. docs/superpowers/specs/ is the B0
 // carve-out (byte-identical approved specs that describe these deletions).
 
-const J_TRACKED = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
-  .split('\0')
-  .filter(Boolean)
-  .filter((f) => !SPEC_DOCS_REL.test(f))
+// The tracked-file list is read lazily, INSIDE the checks that need it: a
+// module-level git call that throws (no git on PATH, not a work tree) would
+// abort the whole run before the report, and every other verdict with it
+// (merge train 4: g2's setup-first line vanished that way). Inside check() the
+// same throw fails j2-j4 loudly as "threw" and the rest still report.
+let jTrackedCache
+function jTracked() {
+  jTrackedCache ??= execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
+    .split('\0')
+    .filter(Boolean)
+    .filter((f) => !SPEC_DOCS_REL.test(f))
+  return jTrackedCache
+}
 const J_BINARY = /\.(png|jpe?g|gif|ico|pdf|woff2?|ttf|otf|gz|tgz|zip)$/i
 
 function jScan(needle) {
   const hits = []
   let scanned = 0
-  for (const f of J_TRACKED) {
+  for (const f of jTracked()) {
     if (J_BINARY.test(f)) continue
     const abs = join(ROOT, f)
     if (!existsSync(abs)) continue
@@ -1915,7 +1924,7 @@ function jEdgeMounts() {
   const mounts = []
   const ancestors = []
   const problems = []
-  const files = J_TRACKED.filter((f) => J_COMPOSE.test(f) && !f.startsWith('test/') && existsSync(join(ROOT, f)))
+  const files = jTracked().filter((f) => J_COMPOSE.test(f) && !f.startsWith('test/') && existsSync(join(ROOT, f)))
   for (const f of files) {
     const lines = readFileSync(join(ROOT, f), 'utf8').split('\n')
     lines.forEach((line, i) => {

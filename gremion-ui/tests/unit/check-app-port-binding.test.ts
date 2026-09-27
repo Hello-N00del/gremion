@@ -246,4 +246,37 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
     },
     120_000,
   )
+
+  // Merge train 4 (TASK-034 x TASK-028): section (j) read `git ls-files` at
+  // module load, outside check(). On the PATH above (no git) that threw before
+  // the report, so g2's setup-first line never printed. A check may FAIL on a
+  // missing tool; it must never abort the run and take every other verdict
+  // with it.
+  it(
+    'completes without git on PATH: every check reports, j2-j4 fail loudly as "threw", none aborts the run',
+    () => {
+      const clone = path.join(tmp, 'clone')
+      const cl = spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone], { encoding: 'utf8' })
+      expect(cl.status, cl.stderr).toBe(0)
+      const res = spawnSync(process.execPath, [HYGIENE], {
+        encoding: 'utf8',
+        env: { ...process.env, GREMION_REPO_ROOT: clone, PATH: path.dirname(process.execPath) },
+        timeout: 120_000,
+      })
+      const out = `${res.stdout}${res.stderr}`
+      expect(out, 'an uncaught throw escaped check()').not.toMatch(/node:internal|^\s+at .*kernel-hygiene-check\.mjs/m)
+      // Every check() in the script reported: the denominator is the number of
+      // check( calls, so a run cut short by a top-level throw cannot pass.
+      const declared = (readFileSync(HYGIENE, 'utf8').match(/^check\(/gm) ?? []).length
+      expect(declared).toBeGreaterThan(40)
+      expect(out).toMatch(new RegExp(`\\[kernel-hygiene\\] \\d+/${declared} check\\(s\\) FAILED:`))
+      const lines = out.split('\n')
+      for (const id of ['j2', 'j3', 'j4']) {
+        const line = lines.find((l) => l.includes(`✗ ${id} `)) ?? ''
+        expect(line, `${id} must fail, not pass, when it cannot list the tracked files`).toMatch(/threw/)
+      }
+      expect(lines.find((l) => l.includes('✗ g2 ')) ?? '').toMatch(/dev: NOT CHECKED/)
+    },
+    120_000,
+  )
 })
