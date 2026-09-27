@@ -76,12 +76,14 @@ describe('T7: ceiling config validation', () => {
     ['object', {}],
   ])('%s refuses to boot with a named error', (_label, value) => {
     expect(() => service(value)).toThrow(InvalidUploadCeilingError)
+    let caught: unknown
     try {
       service(value)
     } catch (e) {
-      expect((e as InvalidUploadCeilingError).code).toBe('GREMION_INVALID_UPLOAD_CEILING')
-      expect((e as Error).message).toMatch(/uploadCeilingBytes must be a positive safe integer/)
+      caught = e
     }
+    expect((caught as InvalidUploadCeilingError | undefined)?.code).toBe('GREMION_INVALID_UPLOAD_CEILING')
+    expect((caught as Error | undefined)?.message).toMatch(/uploadCeilingBytes must be a positive safe integer/)
   })
 
   it('never falls back: resolveUploadCeiling returns the default only for undefined', () => {

@@ -110,8 +110,12 @@ export function makeLogTracer(correlationId: string): TracerPort {
             ...attrs,
           }
           if (error !== undefined) {
-            record['error'] =
-              error instanceof Error ? error.message : String(error)
+            // `error` is `unknown` (end()'s public contract). Known pre-existing gap: a thrown
+            // non-Error object is recorded as "[object Object]" (String()'s default), which
+            // loses its content. No test pins this; left unchanged because the R25 refactor
+            // lane is behaviour-preserving.
+            // eslint-disable-next-line @typescript-eslint/no-base-to-string
+            record['error'] = error instanceof Error ? error.message : String(error)
           }
           // One valid-JSON line (no trailing newline — console.log adds it).
           console.log(JSON.stringify(record))

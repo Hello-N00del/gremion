@@ -2,7 +2,6 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
-import type { ApiResponse } from '$lib/api-response'
 
 // POST — intentionally returns 501 Not Implemented
 // A full data wipe must be initiated from the server CLI for safety.

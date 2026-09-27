@@ -475,7 +475,9 @@ export class NatsBroker implements BrokerPort {
     // This process just moved the filter under its own consumers. The server
     // will not tell them; this is the only place that can.
     if (moved && name === this.streamName) {
-      for (const sub of [...this.live]) {
+      // Snapshot before iterating: fault() removes the entry from `this.live`,
+      // and Set mutation during iteration is exactly what we need to avoid here.
+      for (const sub of Array.from(this.live)) {
         sub.fault(new StreamRepointedError(name, sub.pattern, current, subjects))
       }
     }
@@ -857,6 +859,7 @@ export class NatsBroker implements BrokerPort {
       },
     )
 
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- entry.stop is an arrow function (defined above) that closes over `entry`/`this` lexically; it does not read its own `this`, so detaching it here is safe.
     return { ready, closed, unsubscribe: entry.stop }
   }
 
@@ -896,7 +899,8 @@ export class NatsBroker implements BrokerPort {
     // Each `closed` already carries an inert catch, so a rejection here is not
     // an unhandled rejection; allSettled keeps the drain unconditional.
     const outcomes = [...pending].map((sub) => sub.closed.then(() => pending.delete(sub), () => pending.delete(sub)))
-    for (const sub of [...this.live]) sub.stop()
+    // Snapshot before iterating: stop() removes the entry from `this.live`.
+    for (const sub of Array.from(this.live)) sub.stop()
     let timer: ReturnType<typeof setTimeout> | undefined
     const gaveUp = await Promise.race([
       Promise.allSettled(outcomes).then(() => false),

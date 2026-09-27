@@ -24,7 +24,7 @@ function collect(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const FILES = collect(SRC).filter((f) => !/\.test\.ts$/.test(f));
+const FILES = collect(SRC).filter((f) => !f.endsWith('.test.ts'));
 const rel = (f: string) => relative(SRC, f).split('\\').join('/');
 const body = (f: string) => readFileSync(f, 'utf8');
 

@@ -1,0 +1,9 @@
+{
+  "core": {
+    "color": {
+      "graphite": {
+        "42": { "$type": "color", "$value": "oklch(42% 0.0154 265)" }
+      }
+    }
+  }
+}

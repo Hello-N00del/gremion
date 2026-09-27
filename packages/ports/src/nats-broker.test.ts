@@ -24,6 +24,7 @@ describe('@gremion/ports/broker exports the port error classes', () => {
   ]
 
   it.each(cases)('%s is an Error subclass whose name is itself and which names the stream and the pattern', (name, make) => {
+    // eslint-disable-next-line import/namespace -- computed access is the point: this table drives every export through the same check.
     const ctor = broker[name]
     expect(typeof ctor, `${name} is not exported`).toBe('function')
     const err = make()
@@ -39,6 +40,7 @@ describe('@gremion/ports/broker exports the timing bounds NatsBroker implements'
   it.each(['LIVENESS_FAULT_BOUND_MS', 'SETUP_TIMEOUT_MS', 'CLOSE_TIMEOUT_MS'] as const)(
     '%s is a positive whole number of milliseconds',
     (name) => {
+      // eslint-disable-next-line import/namespace -- computed access is the point: this table drives every export through the same check.
       const value = broker[name]
       expect(typeof value, `${name} is not exported`).toBe('number')
       expect(Number.isInteger(value)).toBe(true)
