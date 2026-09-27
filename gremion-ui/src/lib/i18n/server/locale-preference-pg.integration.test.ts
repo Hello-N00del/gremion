@@ -13,7 +13,8 @@
 // spec B section 6), it runs the no-truncate guard itself at import -- before
 // any connection, not relying on setupFiles -- and again on the URL it derives.
 // Run it with:
-//   GREMION_PRODUCTION_STACK=none pnpm vitest run --config vitest.integration.config.ts //     src/lib/i18n/server/locale-preference-pg.integration.test.ts
+//   GREMION_PRODUCTION_STACK=none pnpm vitest run --config vitest.integration.config.ts \
+//     src/lib/i18n/server/locale-preference-pg.integration.test.ts
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
