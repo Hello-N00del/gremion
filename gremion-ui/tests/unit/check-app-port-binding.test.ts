@@ -50,11 +50,27 @@ function composeCopy(): string {
   return tmp
 }
 
-function runCli(script: string, root: string) {
+// Time budget for the two docker tests (R26-FLAKES, R27 scope). Each runs the
+// port-check CLI on a SET-UP tree, and the CLI renders the composition twice
+// (`docker compose ... config` for the dev and the prod file set). Measured
+// 2026-09-28 on the 16-CPU dev box, "loaded" = 32 CPU-spinning + 4 file-I/O node
+// processes on top of the other agents on the box:
+//
+//   the port-check CLI on a SET-UP tree   idle p95 0.73 s (n=5)   loaded 49.8-63.8 s (n=6, p95 >= 63.8 s)
+//   `docker version` alone (daemon trip)  idle p95 0.16 s (n=5)   loaded 2.6-12.5 s (n=6)
+//   the docker tests themselves           idle 0.54-1.48 s (n=10) loaded 24.2 / 39.4 s (one loaded file run)
+//
+// They ran on the 5 s default and failed an integration gate at 8.7 s. The
+// test budget is 3x the loaded p95, rounded up; the CLI's own spawn timeout sits
+// 10 s under it, so a hung render fails on the status assertion (and is killed)
+// instead of being cut off by vitest. No global raise.
+const DOCKER_RENDER_MS = 195_000
+
+function runCli(script: string, root: string, timeout = 120_000) {
   return spawnSync(process.execPath, [script], {
     encoding: 'utf8',
     env: { ...process.env, GREMION_REPO_ROOT: root },
-    timeout: 120_000,
+    timeout,
   })
 }
 
@@ -200,12 +216,12 @@ describe.skipIf(!dockerUp)('check-app-port-binding on a SET-UP working copy (nee
       path.join(root, 'docker-compose.override.yml'),
       'services:\n  gremion-ui:\n    ports:\n      - "3999:3000"\n',
     )
-    const res = runCli(PORT_CHECK, root)
+    const res = runCli(PORT_CHECK, root, DOCKER_RENDER_MS - 10_000)
     const out = `${res.stdout}${res.stderr}`
     expect(res.status).toBe(1)
     expect(out).toContain('non-loopback')
     expect(out).not.toContain(SETUP_FIRST)
-  })
+  }, DOCKER_RENDER_MS)
 })
 
 describe.skipIf(!dockerUp)('the stderr second net answers setup-first ONLY for the local env files (needs docker)', () => {
@@ -218,13 +234,13 @@ describe.skipIf(!dockerUp)('the stderr second net answers setup-first ONLY for t
       path.join(root, 'docker-compose.override.yml'),
       'services:\n  gremion-ui:\n    env_file: [secrets/typo.env]\n',
     )
-    const res = runCli(PORT_CHECK, root)
+    const res = runCli(PORT_CHECK, root, DOCKER_RENDER_MS - 10_000)
     const out = `${res.stdout}${res.stderr}`
     expect(res.status).toBe(1)
     expect(out).toContain('ERROR')
     expect(out).not.toContain(SETUP_FIRST)
     expect(out).not.toContain('not a security finding')
-  })
+  }, DOCKER_RENDER_MS)
 })
 
 const kubectlUp = spawnSync('kubectl', ['version', '--client'], { encoding: 'utf8' }).status === 0
