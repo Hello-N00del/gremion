@@ -8,16 +8,26 @@
  * off-host — Traefik must be the sole ingress. A published port on 0.0.0.0 (any
  * interface) lets an off-host client set `x-forwarded-host` and select ANY
  * tenant. This check renders each compose file set with `docker compose config`
- * (read-only — it NEVER touches a running project) and fails if gremion-ui
- * publishes a port whose host binding is not loopback.
+ * (read-only — it NEVER touches a running project) and fails if an app-tier
+ * service publishes a port whose host binding is not loopback.
  *
- * File sets checked:
- *   - dev:  docker-compose.yml + docker-compose.override.yml   (the `up` recipe)
- *   - prod: docker-compose.yml + docker-compose.prod.yml --profile production
+ * TASK-040 (pooled stack, PRD-PLAT-005) moved gremion-ui and gremion-public
+ * out of the root files into the per-colour app tier, so the file sets are the
+ * app tier's:
+ *   - dev:  docker-compose.app.yml + docker-compose.app.dev.yml, rendered as
+ *           the Makefile's DEV_APP renders it (STACK=dev COLOUR=blue
+ *           IMAGE_TAG=dev) — the dev layer is the file that publishes
+ *           :3001 / :3002, so it is the one this check must cover;
+ *   - prod: docker-compose.app.yml alone, per colour (the host's COMPOSE_FILE
+ *           adds only the release pins file, which carries images) — zero
+ *           published ports is the expected state there.
+ * Every profile is on (COMPOSE_PROFILES='*'), so the migrate / tenant-create
+ * one-shots are read too. gremion-ui must be in every render (its absence
+ * means the check reads the wrong files, never "nothing to check"), and EVERY
+ * service in the render must publish loopback only.
  *
  * A published port is OK iff its host_ip is a loopback address (127.0.0.0/8 or
- * ::1); a missing host_ip means 0.0.0.0 (all interfaces) -> FAIL. gremion-ui
- * publishing NO ports (prod, fronted by Traefik) is OK.
+ * ::1); a missing host_ip means 0.0.0.0 (all interfaces) -> FAIL.
  *
  * Exit: 0 = OK (or docker unavailable -> loud SKIP); 1 = a non-loopback binding
  * or a missing prerequisite. The two are reported SEPARATELY on purpose: a
@@ -34,20 +44,51 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..')
-const SERVICE = 'gremion-ui'
+export const SERVICE = 'gremion-ui'
 
-const FILE_SETS = [
-  { name: 'dev', args: ['-f', 'docker-compose.yml', '-f', 'docker-compose.override.yml'] },
+// The render env pins the interpolation the app files require (`${STACK:?}`,
+// `${COLOUR:?}`, `${IMAGE_TAG:?}`) over whatever the ambient .env carries.
+export const FILE_SETS = [
   {
-    name: 'prod',
-    args: ['-f', 'docker-compose.yml', '-f', 'docker-compose.prod.yml', '--profile', 'production'],
+    name: 'dev',
+    args: ['-f', 'docker-compose.app.yml', '-f', 'docker-compose.app.dev.yml', '-p', 'portcheck-dev-app-blue'],
+    env: { STACK: 'dev', COLOUR: 'blue', IMAGE_TAG: 'dev', COMPOSE_PROFILES: '*' },
+  },
+  {
+    name: 'prod-blue',
+    args: ['-f', 'docker-compose.app.yml', '-p', 'portcheck-app-blue'],
+    env: { STACK: 'portcheck', COLOUR: 'blue', IMAGE_TAG: 'portcheck', COMPOSE_PROFILES: '*' },
+  },
+  {
+    name: 'prod-green',
+    args: ['-f', 'docker-compose.app.yml', '-p', 'portcheck-app-green'],
+    env: { STACK: 'portcheck', COLOUR: 'green', IMAGE_TAG: 'portcheck', COMPOSE_PROFILES: '*' },
   },
 ]
 
-function isLoopback(hostIp) {
+export function isLoopback(hostIp) {
   if (!hostIp) return false // unset host_ip = 0.0.0.0 (all interfaces)
   if (hostIp === '::1' || hostIp === '[::1]') return true
   return hostIp === 'localhost' || hostIp.startsWith('127.')
+}
+
+/** Every non-loopback published port in a parsed render, plus the absence of
+ *  gremion-ui (a render without it is the wrong file set, not a clean one). */
+export function portViolations(parsed, setName) {
+  const services = parsed?.services ?? {}
+  if (!services[SERVICE]) return [`service '${SERVICE}' absent from the ${setName} render`]
+  const out = []
+  for (const [name, svc] of Object.entries(services)) {
+    for (const p of Array.isArray(svc?.ports) ? svc.ports : []) {
+      // compose config --format json publishes ports as objects:
+      //   { mode, host_ip?, target, published, protocol }
+      if (isLoopback(p?.host_ip)) continue
+      const bind = p?.host_ip ? p.host_ip : '0.0.0.0'
+      const published = p?.published ?? p?.target
+      out.push(`${name} publishes ${bind}:${published}->${p?.target} (${setName}) — must bind loopback only`)
+    }
+  }
+  return out
 }
 
 /** A compose render that failed because the working copy has not been set up
@@ -59,15 +100,16 @@ function missingSetupPrerequisite(stderr) {
   return null
 }
 
-/** Renders one file set. Returns { ok, skip, prereq, ports } — skip=true when
- *  docker is unavailable, prereq=the missing file, ports=the resolved
- *  gremion-ui ports list (possibly empty). */
-function renderPorts(fileSet) {
-  const res = spawnSync(
-    'docker',
-    ['compose', ...fileSet.args, 'config', '--format', 'json'],
-    { cwd: REPO_ROOT, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 },
-  )
+/** Renders one file set. Returns { skip } when docker is unavailable,
+ *  { prereq } for a missing setup file, { ok:false, reason } on a render or
+ *  parse error, else { parsed }. */
+function render(fileSet) {
+  const res = spawnSync('docker', ['compose', ...fileSet.args, 'config', '--format', 'json'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf-8',
+    maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, ...fileSet.env },
+  })
   if (res.error && res.error.code === 'ENOENT') {
     return { skip: true, reason: 'docker not found on PATH' }
   }
@@ -83,15 +125,11 @@ function renderPorts(fileSet) {
     if (prereq) return { prereq }
     return { ok: false, reason: `docker compose config (${fileSet.name}) failed: ${stderr.trim()}` }
   }
-  let parsed
   try {
-    parsed = JSON.parse(res.stdout)
+    return { parsed: JSON.parse(res.stdout) }
   } catch (err) {
     return { ok: false, reason: `could not parse config JSON (${fileSet.name}): ${err.message}` }
   }
-  const svc = parsed?.services?.[SERVICE]
-  if (!svc) return { ok: false, reason: `service '${SERVICE}' absent from the ${fileSet.name} render` }
-  return { ports: Array.isArray(svc.ports) ? svc.ports : [] }
 }
 
 function main() {
@@ -99,7 +137,7 @@ function main() {
   const missing = new Set()
   let anySkipped = false
   for (const fileSet of FILE_SETS) {
-    const r = renderPorts(fileSet)
+    const r = render(fileSet)
     if (r.prereq) {
       missing.add(r.prereq)
       continue
@@ -114,17 +152,9 @@ function main() {
       failures.push(`${fileSet.name}: ${r.reason}`)
       continue
     }
-    for (const p of r.ports) {
-      // compose config --format json publishes ports as objects:
-      //   { mode, host_ip?, target, published, protocol }
-      const hostIp = p.host_ip
-      const published = p.published ?? p.target
-      if (!isLoopback(hostIp)) {
-        const bind = hostIp ? hostIp : '0.0.0.0'
-        const msg = `${SERVICE} publishes ${bind}:${published}->${p.target} (${fileSet.name}) — must bind loopback only`
-        console.error(`[port-binding] FAIL: ${msg}`)
-        failures.push(msg)
-      }
+    for (const msg of portViolations(r.parsed, fileSet.name)) {
+      console.error(`[port-binding] FAIL: ${msg}`)
+      failures.push(msg)
     }
   }
   if (missing.size > 0) {
@@ -138,7 +168,7 @@ function main() {
   }
   if (failures.length > 0) {
     console.error(
-      `[port-binding] FAIL: ${failures.length} non-loopback ${SERVICE} binding(s). ` +
+      `[port-binding] FAIL: ${failures.length} app-tier port-binding issue(s). ` +
         'Traefik must be the sole ingress (resolve.ts SECURITY INVARIANT); bind to 127.0.0.1.',
     )
     process.exit(1)
@@ -147,8 +177,14 @@ function main() {
     console.warn('[port-binding] SKIPPED — docker unavailable; binding NOT verified (re-run with docker up).')
     process.exit(0)
   }
-  console.info(`[port-binding] OK — ${SERVICE} publishes only loopback bindings in every file set`)
+  console.info(
+    `[port-binding] OK — the app tier publishes only loopback bindings in every file set (${FILE_SETS.map((s) => s.name).join(', ')})`,
+  )
   process.exit(0)
 }
 
-main()
+// Only run main() when invoked as a script (not when a unit test imports the
+// exported helpers) — matches check-domain-regex.mjs.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main()
+}
