@@ -24,7 +24,7 @@
       "category": "integration",
       "cwd": "gremion-ui",
       "kind": "vitest",
-      "command": "pnpm run test:integration",
+      "command": "node -e \"const e=process.env,k='GREMION_PRODUCTION_STACK';if(!(e[k]||'').trim())e[k]='none';process.exit(require('node:child_process').spawnSync('pnpm run test:integration',{stdio:'inherit',shell:true}).status??1)\"",
       "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
@@ -35,7 +35,7 @@
       "category": "integration",
       "cwd": "gremion-ui",
       "kind": "vitest",
-      "command": "pnpm run test:deselection",
+      "command": "node -e \"const e=process.env,k='GREMION_PRODUCTION_STACK';if(!(e[k]||'').trim())e[k]='none';process.exit(require('node:child_process').spawnSync('pnpm run test:deselection',{stdio:'inherit',shell:true}).status??1)\"",
       "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
