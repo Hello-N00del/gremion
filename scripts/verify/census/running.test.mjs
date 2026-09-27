@@ -52,8 +52,15 @@ test('0 containers in a project -> FAIL', () => {
 })
 
 test('.State.Health absent -> FAIL at once, without waiting out the deadline', () => {
+  // The injected sleep still advances the fake clock and the deadline is short,
+  // so a broken guard fails this test in fake time instead of busy-looping.
   let slept = 0
-  const r = run([[c('a', 'running', 'healthy'), c('bare', 'running', null)]], { sleep: (ms) => { slept += ms } })
+  const fake = clock()
+  const r = run([[c('a', 'running', 'healthy'), c('bare', 'running', null)]], {
+    now: fake.now,
+    sleep: (ms) => { slept += ms; fake.sleep(ms) },
+    timeoutMs: 10_000,
+  })
   assert.equal(r.pass, false)
   assert.match(r.failures.join('\n'), /bare \[p\]: no healthcheck \(\.State\.Health absent\)/)
   assert.equal(slept, 0)
