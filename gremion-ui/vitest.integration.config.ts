@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { sveltekit } from '@sveltejs/kit/vite'
 import { defineConfig } from 'vitest/config'
-import { assertSafeTestDbUrl } from './tests/integration/assert-safe-test-db-url'
+import { assertNonProductionDbUrl } from './tests/integration/assert-safe-test-db-url'
 
 // P2.1c (T15 / §6-P2.2): the real-boot fleet (hooks.boot-real.integration.test)
 // now asserts a COMPLETE brand identity per tenant after migrations succeed. In
@@ -59,9 +59,11 @@ process.env.AUTH_KEYCLOAK_ISSUER ??= 'https://council.example/auth/realms/gremio
 process.env.AUTH_KEYCLOAK_BASE ??= 'https://council.example/auth/realms/gremion-test'
 
 // Fail-closed: guard every DB URL the suite connects to — at config-load time
-// so vitest refuses to even boot when a dangerous URL is set.
-assertSafeTestDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
-assertSafeTestDbUrl(process.env.CONTROL_DATABASE_URL ?? '', 'CONTROL_DATABASE_URL')
+// so vitest refuses to even boot when a dangerous URL is set. D2:
+// GREMION_PRODUCTION_STACK gets NO default here (no `??=`); unset, the guard
+// refuses and names the fix (`none` on a host with no production unit).
+assertNonProductionDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
+assertNonProductionDbUrl(process.env.CONTROL_DATABASE_URL ?? '', 'CONTROL_DATABASE_URL')
 
 // Integration test config — DB-backed *.integration.test.ts files.
 //

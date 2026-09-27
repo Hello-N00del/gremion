@@ -14,10 +14,15 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { execFileSync, execSync, spawnSync } from 'node:child_process'
-import { join, dirname, relative } from 'node:path'
+import { join, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+import { LOCAL_ENV_FILES, missingLocalEnvFiles, SETUP_FIRST } from './env/local-setup.mjs'
+
+// GREMION_REPO_ROOT points the whole run at another tree; the g2 unit test in
+// gremion-ui/tests/unit/check-app-port-binding.test.ts uses it on a temp copy.
+const ROOT = process.env.GREMION_REPO_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..')
+if (process.env.GREMION_REPO_ROOT) console.warn(`[kernel-hygiene] checking ${ROOT} (GREMION_REPO_ROOT override)`)
 const failures = []
 const checks = []
 
@@ -407,26 +412,53 @@ function stderrCause(text) {
 // A render can fail for two very different reasons, and conflating them cost a
 // debugging cycle: the overlay is broken, or the working copy simply has not
 // been set up (the dev overlay's secretGenerator reads the git-ignored .env and
-// legal/legal.env, so `make lint` is RED out of the box on a fresh clone). Only
-// the first is a defect in the repo. Say which one this is.
-function missingLocalEnvFile(text) {
-  const m = /env source files: \[([^\]]+)\]/.exec(text)
-  if (m && /no such file|cannot find the file/i.test(text)) return m[1].trim()
-  return null
+// legal/legal.env). Only the first is a defect in the repo. Say which one this is.
+//
+// TASK-028 (D1): the answer comes from the file system, BEFORE the render
+// (scripts/env/local-setup.mjs). LOCAL_ENV_OVERLAYS names the overlays whose
+// generators read those files; any other overlay is always rendered. The
+// stderr match below is only the second net.
+const LOCAL_ENV_OVERLAYS = new Set(['dev'])
+// A stat error other than ENOENT (EACCES, ENOTDIR) is not "absent"; it is
+// reported by g2 itself instead of killing every other check at import.
+let MISSING_LOCAL_ENV = []
+let LOCAL_ENV_ERROR = null
+try {
+  MISSING_LOCAL_ENV = missingLocalEnvFiles(ROOT)
+} catch (err) {
+  LOCAL_ENV_ERROR = err
 }
 
+// Only a LOCAL_ENV_FILES path counts: an overlay naming any other missing file
+// is broken, and "run setup first" would not fix it.
+function missingLocalEnvFile(text, overlay) {
+  const m = /env source files: \[([^\]]+)\]/.exec(text)
+  if (!m || !/no such file|cannot find the file/i.test(text)) return null
+  const rel = relative(ROOT, resolve(OVERLAY_ROOT, overlay, m[1].trim())).replace(/\\/g, '/')
+  return LOCAL_ENV_FILES.includes(rel) ? rel : null
+}
+
+const notSetUp = (name, missing) =>
+  `${name}: NOT CHECKED — this working copy has no ${missing}; ${SETUP_FIRST}. The overlay itself was not evaluated.`
+
 check('g2 every overlay renders, and renders a non-zero number of image: lines', () => {
-  const bad = overlayNames.map(renderOverlay).filter((r) => r.error || r.images.length === 0)
-  if (!bad.length) return null
-  return bad
-    .map((r) => {
-      if (!r.error) return `${r.name}: rendered zero image: lines`
-      const missing = missingLocalEnvFile(r.error)
-      return missing
-        ? `${r.name}: NOT CHECKED — this working copy has no ${missing}; run scripts/setup.sh first. The overlay itself was not evaluated.`
-        : `${r.name}: render FAILED — ${stderrCause(r.error)}`
-    })
-    .join(' | ')
+  const problems = []
+  if (LOCAL_ENV_ERROR) problems.push(`local env files could not be checked: ${LOCAL_ENV_ERROR.message}`)
+  for (const name of overlayNames) {
+    if (LOCAL_ENV_OVERLAYS.has(name) && MISSING_LOCAL_ENV.length > 0) {
+      problems.push(notSetUp(name, MISSING_LOCAL_ENV.join(', ')))
+      continue
+    }
+    const r = renderOverlay(name)
+    if (!r.error && r.images.length > 0) continue
+    if (!r.error) {
+      problems.push(`${r.name}: rendered zero image: lines`)
+      continue
+    }
+    const missing = missingLocalEnvFile(r.error, r.name)
+    problems.push(missing ? notSetUp(r.name, missing) : `${r.name}: render FAILED — ${stderrCause(r.error)}`)
+  }
+  return problems.length ? problems.join(' | ') : null
 })
 
 check('g3 no BASE image is a placeholder that the overlays fail to patch', () => {
