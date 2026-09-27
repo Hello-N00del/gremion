@@ -116,7 +116,7 @@ case "$backup_key_ref" in
     key_var="${backup_key_ref#env:}"
     BACKUP_KEY="${!key_var:-}"
     [[ -n "$BACKUP_KEY" ]] || error "backup key env var ${key_var} is unset"
-    info "backup key: env:${key_var} (default-tenant root secret)"
+    info "backup key: env:${key_var} (operator root secret)"
     ;;
   *)
     error "unsupported backup_key_ref scheme: ${backup_key_ref%%:*}:"
@@ -124,12 +124,10 @@ case "$backup_key_ref" in
 esac
 
 # ── Per-tenant data-plane DB name ─────────────────────────────────────────────
-# DB name mirrors slug.ts dbNameForSlug() / register-default (env:DATABASE_URL).
-if [[ "$slug" == "default" ]]; then
-    db_name="${POSTGRES_DB:-gremion}"
-else
-    db_name="t_${slug}"
-fi
+# DB name mirrors slug.ts dbNameForSlug(): t_<slug> for EVERY slug. There is no
+# env-derived default tenant any more (TASK-042): a tenant whose slug happens
+# to be "default" is an ordinary tenant with its own t_default database.
+db_name="t_${slug}"
 
 OUT_DIR="${BACKUP_DIR%/}/tenants/${residency_zone:-eu}/${slug}"
 mkdir -p "$OUT_DIR"
