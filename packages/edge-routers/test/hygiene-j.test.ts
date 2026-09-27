@@ -227,15 +227,21 @@ beforeAll(async () => {
   for (let i = 0; i < LANES; i++) lanes.push(new Lane(join(runDir, `lane-${i}`), files))
   await Promise.all(lanes.map((l) => l.init()))
   const queue = Object.entries(cases)
-  await Promise.all(
+  // allSettled, not all: a lane that fails must not leave the other lanes'
+  // children running (and holding files) while teardown deletes their trees.
+  const settled = await Promise.allSettled(
     lanes.map(async (lane) => {
       for (let next = queue.shift(); next !== undefined; next = queue.shift()) outcomes.set(next[0], await runCase(lane, next[1]))
     }),
   )
+  const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected')
+  if (failed) throw failed.reason
 }, SETUP_TIMEOUT_MS)
 
 afterAll(() => {
-  if (runDir) rmSync(runDir, { recursive: true, force: true })
+  // retries: on Windows a just-closed git/node child or a file scanner can
+  // hold a handle for a moment after exit (transient EBUSY/EPERM)
+  if (runDir) rmSync(runDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 }, SETUP_TIMEOUT_MS)
 
 /** The `✗ jN` lines of a case; rethrows the case's own failure. */
