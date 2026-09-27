@@ -87,7 +87,7 @@
       "path": "modules/content/app/scripts/news-posts-public-grant-proof.test.mjs",
       "reason": "added: node --test time-bound test for the Q9 proof (a hung docker exec must end it with a named RESULT: FAIL); not a StuRa file",
       "owner": "TASK-200",
-      "blob": "0a3ac71fbf3129066a8911b5469c4fac9af6e6d6"
+      "blob": "c4c0958c676dfab5c14fc0b5282db09b4818ad80"
     },
     {
       "path": "modules/content/test/guard.test.ts",
