@@ -34,10 +34,10 @@ test('1. every service probed by compose -> pass, one line per service', () => {
 })
 
 test('2. no healthcheck, disable:true, or ["NONE"] -> FAIL naming the service', () => {
-  for (const [name, service] of [
-    ['bare', { image: 'x', restart: 'unless-stopped' }],
-    ['disabled', { image: 'x', healthcheck: { disable: true } }],
-    ['none', { image: 'x', healthcheck: { test: ['NONE'] } }],
+  for (const { name, service } of [
+    { name: 'bare', service: { image: 'x', restart: 'unless-stopped' } },
+    { name: 'disabled', service: { image: 'x', healthcheck: { disable: true } } },
+    { name: 'none', service: { image: 'x', healthcheck: { test: ['NONE'] } } },
   ]) {
     const r = census([project('state', { ok: { image: 'o', healthcheck: HC }, [name]: service })])
     assert.equal(r.failed, 1, name)
