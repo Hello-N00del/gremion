@@ -57,6 +57,18 @@ GUARD="${NO_TRUNCATE_GUARD_FILE:-${ROOT}/gremion-ui/tests/integration/assert-saf
 command -v docker >/dev/null || { echo "precondition: docker not on PATH"; exit 2; }
 [[ -f "$ENV_FILE" ]] || { echo "precondition: no env file at ${ENV_FILE}"; exit 2; }
 [[ -f "$GUARD" ]] || { echo "precondition: no guard at ${GUARD}"; exit 2; }
+
+# With MSYS_NO_PATHCONV set, a POSIX-style HOST path (/c/Users/..., which
+# `pwd` returns) reaches the Windows docker CLI unconverted and is not found.
+# Host-side paths are handed to docker in mixed form (C:/Users/...).
+host_path() {
+    case "${OSTYPE:-}" in
+        msys*|cygwin*) cygpath -m "$1" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+ENV_FILE="$(host_path "$ENV_FILE")"
+GUARD="$(host_path "$GUARD")"
 docker image inspect "$IMAGE" >/dev/null 2>&1 \
     || { echo "precondition: image ${IMAGE} is not present locally (build it first)"; exit 2; }
 
