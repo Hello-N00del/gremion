@@ -52,14 +52,16 @@ FIX="$REPO_ROOT/test/host/fixtures/tenant-host-proof"
 # /etc/traefik); host paths handed to docker/node go through hostpath().
 export MSYS_NO_PATHCONV=1
 hostpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+cd "$REPO_ROOT"
 
+step() { echo "[t041 +${SECONDS}s] $*" >&2; }
 die() { echo "tenant-host-proof: FAIL: $*" >&2; exit 1; }
 precondition() { echo "tenant-host-proof: PRECONDITION: $*" >&2; exit 2; }
 for c in docker curl git node pnpm openssl; do command -v "$c" >/dev/null 2>&1 || precondition "missing $c"; done
 docker info >/dev/null 2>&1 || precondition "no Docker daemon"
 
 REF="${PROOF_APP_REF:-HEAD}"
-SHA="$(git -C "$REPO_ROOT" rev-parse --verify "${REF}^{commit}")" || precondition "unknown ref $REF"
+SHA="$(git rev-parse --verify "${REF}^{commit}")" || precondition "unknown ref $REF"
 SHA8="${SHA:0:8}"
 N="t041-$SHA8"
 NET="$N-net" PG="$N-pg" APP="$N-app" FB="$N-fallback" TR="$N-traefik"
@@ -72,9 +74,11 @@ TR_IMAGE="$(grep -oE 'image: traefik:v[0-9.]+' "$REPO_ROOT/docker-compose.yml" |
 [ -n "$PG_IMAGE" ] || precondition "no pinned postgres:18 digest in docker-compose.yml"
 [ -n "$TR_IMAGE" ] || precondition "no pinned traefik image in docker-compose.yml"
 
-teardown() {
-    docker rm -f "$TR" "$APP" "$FB" "$PG" >/dev/null 2>&1 || true
-    docker network rm "$NET" >/dev/null 2>&1 || true
+teardown() { # by this run's names only: t041-<sha8>-*
+    local ids
+    ids="$(docker ps -aq --filter "name=^$N-" 2>/dev/null || true)"
+    if [ -n "$ids" ]; then docker rm -f $ids >/dev/null 2>&1 || true; fi
+    if docker network ls -q --filter "name=^$NET\$" | grep -q .; then docker network rm "$NET" >/dev/null 2>&1 || true; fi
     rm -rf "$ROOT"
 }
 on_exit() {
@@ -83,20 +87,28 @@ on_exit() {
         echo "--- $APP log (tail) ---" >&2
         docker logs --tail 40 "$APP" 2>&1 | sed 's/^/    /' >&2 || true
     fi
-    if [ "${T041_KEEP:-0}" = "1" ]; then echo "T041_KEEP=1: left $N-* up" >&2; else teardown; fi
+    if [ "${T041_KEEP:-0}" = "1" ] || { [ "$rc" -eq 0 ] && [ "${KEEP_ON_SUCCESS:-0}" = "1" ]; }; then
+        echo "left $N-* up" >&2
+    else
+        teardown
+    fi
     exit "$rc"
 }
 trap on_exit EXIT
-teardown # a previous aborted run of THIS commit, by name only
 
 secret() { openssl rand -hex 24; }
+
+phase_up() {
+teardown # a previous aborted run of THIS commit, by name only
+
 PG_PW="$(secret)" CTL_PW="$(secret)" UI_PW="$(secret)" KC_PW="$(secret)" PUB_PW="$(secret)"
 PROXY_SECRET="$(secret)"
 
 # ── images ────────────────────────────────────────────────────────────────────
+step "images"
 if ! docker image inspect "$APP_IMG" >/dev/null 2>&1; then
     echo "building $APP_IMG from $SHA8 ..."
-    git -C "$REPO_ROOT" archive --format=tar "$SHA" | docker build -q -f gremion-ui/Dockerfile -t "$APP_IMG" - >/dev/null \
+    git archive --format=tar "$SHA" | docker build -q -f gremion-ui/Dockerfile -t "$APP_IMG" - >/dev/null \
         || precondition "gremion-ui image build failed"
 fi
 docker build -q -t "$FB_IMG" "$(hostpath "$REPO_ROOT/docker/fallback")" >/dev/null || precondition "fallback image build failed"
@@ -104,6 +116,7 @@ docker build -q -t "$FB_IMG" "$(hostpath "$REPO_ROOT/docker/fallback")" >/dev/nu
 docker network create "$NET" >/dev/null
 
 # ── Postgres 18 (TASK-019 digest), init-databases.sh, tmpfs data ─────────────
+step "postgres"
 docker create --name "$PG" --network "$NET" --network-alias postgres -p 127.0.0.1::5432 \
     --tmpfs /var/lib/postgresql \
     -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$PG_PW" \
@@ -127,12 +140,14 @@ docker exec "$PG" psql -q -U postgres -c "CREATE DATABASE t041a OWNER gremion" >
 PG_PORT="$(docker port "$PG" 5432/tcp | head -n1 | sed 's/.*://')"
 
 # ── customer A: registered and bound through the registry (addTenantDomain) ──
-BIND_OUT="$(cd "$REPO_ROOT" && CONTROL_DATABASE_URL="postgresql://control:$CTL_PW@127.0.0.1:$PG_PORT/control" \
+step "bind customer A"
+BIND_OUT="$(PLATFORM_DOMAIN=t041.test CONTROL_DATABASE_URL="postgresql://control:$CTL_PW@127.0.0.1:$PG_PORT/control" \
     pnpm -s -C gremion-ui exec tsx ../test/host/fixtures/tenant-host-proof/bind-customer.mjs 2>&1)" \
     || { echo "$BIND_OUT" >&2; precondition "binding customer A failed"; }
 echo "$BIND_OUT" | grep -q 'T041-BIND .* host=a.t041.test' || { echo "$BIND_OUT" >&2; die "customer A not bound"; }
 
 # ── gremion-ui at the tested commit ───────────────────────────────────────────
+step "app"
 docker create --name "$APP" --network "$NET" --network-alias gremion-ui \
     -e DATABASE_URL="postgresql://gremion:$UI_PW@postgres:5432/gremion" \
     -e CONTROL_DATABASE_URL="postgresql://control:$CTL_PW@postgres:5432/control" \
@@ -165,6 +180,7 @@ done
 docker logs "$APP" 2>&1 | grep -q '\[boot\] Migrations complete' || die "$APP never finished boot"
 
 # ── Traefik: rendered production static config + the proof entrypoint ────────
+step "traefik"
 TRUST_LINE="$(T041_SHA8="$SHA8" T041_PROXY_SECRET="$PROXY_SECRET" T041_PROOF_PORT="$PROOF_PORT" \
     node "$(hostpath "$FIX/render-traefik.mjs")" "$(hostpath "$ROOT/etc-traefik")")"
 WS="$(echo "$TRUST_LINE" | sed -n 's/^T041-TRUSTED websecure=\(.*\) proof=.*$/\1/p')"
@@ -185,6 +201,7 @@ case "$R" in *'t041-a@file'*) ;; *) die "Traefik never registered the proof rout
 TR_PORT="$(docker port "$TR" "$PROOF_PORT/tcp" | head -n1 | sed 's/.*://')"
 
 # ── the production keycloak router is Host-literal on the apex (Q6) ──────────
+step "keycloak rule"
 KC_RULE="$(node --input-type=module -e "
 import { readFileSync } from 'node:fs'
 import { parse } from 'yaml'
@@ -197,11 +214,16 @@ case "$KC_RULE" in
     *) die "keycloak rule is not Host-literal on the apex: $KC_RULE" ;;
 esac
 
+}
+
 # ── probes ────────────────────────────────────────────────────────────────────
+phase_probe() {
+docker inspect "$TR" >/dev/null 2>&1 || precondition "the proof stack is not up (run with T041_PHASE=up first)"
+TR_PORT="$(docker port "$TR" "$PROOF_PORT/tcp" | head -n1 | sed 's/.*://')"
 A_MARK='T041CUSTA' D_MARK='T041DFLT'
 probe() { # probe <host> [extra curl args...] -> sets STATUS BODY HDRS
     local host="$1"; shift
-    HDRS="$(curl -sS -o "$ROOT/body" -D - -H "Host: $host" "$@" "http://127.0.0.1:$TR_PORT/" | tr -d '\r')"
+    HDRS="$(curl -sS -o "$(hostpath "$ROOT/body")" -D - -H "Host: $host" "$@" "http://127.0.0.1:$TR_PORT/" | tr -d '\r')"
     STATUS="$(printf '%s\n' "$HDRS" | sed -n '1s/^HTTP\/[0-9.]* \([0-9]*\).*/\1/p')"
     BODY="$(cat "$ROOT/body")"
 }
@@ -214,6 +236,7 @@ events() { docker logs "$APP" 2>&1 | grep '"msg":"tenant.host.rejected"' || true
 mkdir -p "$ROOT"
 
 # (a) an unregistered host: no router -> Traefik's own 404; the app never sees it.
+step "probe (a)"
 probe nope.t041.test
 [ "$STATUS" = "404" ] || die "(a) nope.t041.test: status $STATUS, want 404"
 no_marker "(a)"
@@ -221,6 +244,7 @@ events | grep -q 'nope.t041.test' && die "(a) the app saw nope.t041.test (want T
 RESULT_A=ok
 
 # (b) the unbound host, no X-Forwarded-Host, from the host: app 404 + one event.
+step "probe (b)"
 probe t041.test
 [ "$STATUS" = "404" ] || die "(b) t041.test: status $STATUS, want 404"
 no_marker "(b)"
@@ -232,6 +256,7 @@ printf '%s' "$B_EVENTS" | grep -Eq '"ts":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z"'
 RESULT_B=ok
 
 # (c) a forged X-Forwarded-Host naming customer A, from Traefik's trusted loopback.
+step "probe (c)"
 C_OUT="$(docker exec "$TR" wget -S -O- --header 'Host: t041.test' --header 'X-Forwarded-Host: a.t041.test' \
     "http://127.0.0.1:$PROOF_PORT/" 2>&1 || true)"
 printf '%s\n' "$C_OUT" | grep -q 'HTTP/1.1 404' || die "(c) want 404, got: $C_OUT"
@@ -242,6 +267,7 @@ printf '%s' "$C_EVENTS" | grep -q '"host":"a.t041.test"' || die "(c) forged line
 RESULT_C=ok
 
 # (d) customer A on its bound host: the app answers with A's sign-in redirect.
+step "probe (d)"
 probe a.t041.test
 [ "$STATUS" = "302" ] || die "(d) a.t041.test: status $STATUS, want 302 (body: ${BODY:0:200})"
 LOC="$(printf '%s\n' "$HDRS" | sed -n 's/^[Ll]ocation: *//p' | head -n1)"
@@ -250,6 +276,7 @@ case "$LOC" in http*://*) case "$LOC" in http*://a.t041.test/*) ;; *) die "(d) r
 RESULT_D=ok
 
 # (e) the app stopped: the starting page (the errors middleware), not a raw 502.
+step "probe (e)"
 docker stop -t 5 "$APP" >/dev/null
 probe a.t041.test
 case "$BODY" in *'Gremion is starting'*) ;; *) die "(e) want the starting page, got $STATUS: ${BODY:0:200}" ;; esac
@@ -257,3 +284,15 @@ case "$BODY" in *'Bad Gateway'*) die "(e) a raw 502 body leaked" ;; esac
 RESULT_E=ok
 
 echo "TENANT-HOST-PROOF: a=$RESULT_A b=$RESULT_B c=$RESULT_C d=$RESULT_D e=$RESULT_E (app $SHA8, $TR_IMAGE, ${PG_IMAGE%%@*})"
+}
+
+# T041_PHASE: all (default) | up (build + start, leave running) | probe (assert
+# against a running `up`, then tear down) | down. The split exists for callers
+# whose single command is time-boxed: on Docker Desktop the whole run takes ~5 min.
+case "${T041_PHASE:-all}" in
+    all) phase_up; phase_probe ;;
+    up) phase_up; KEEP_ON_SUCCESS=1; echo "TENANT-HOST-PROOF: up ($N-*)" ;;
+    probe) phase_probe ;;
+    down) ;;
+    *) precondition "unknown T041_PHASE=${T041_PHASE}" ;;
+esac
