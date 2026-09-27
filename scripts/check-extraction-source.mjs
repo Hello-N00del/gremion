@@ -151,7 +151,7 @@ export function checkVacuity(entries, { allowZero = false, modulesRoot = null } 
   if (entries.length > 0 || allowZero) return []
   return asked
     ? [
-        `no module directory under --modules-root ${modulesRoot} — the agreement check would pass vacuously (pass --allow-zero for the zero-module assemble)`,
+        `no module directory under --modules-root ${String(modulesRoot)} — the agreement check would pass vacuously (pass --allow-zero for the zero-module assemble)`,
       ]
     : [
         'no --modules-root given — the agreement check would pass vacuously over zero module.json (pass --allow-zero to check the doc and the assembler wiring only)',

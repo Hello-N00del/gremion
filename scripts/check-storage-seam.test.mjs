@@ -79,7 +79,7 @@ test('RED — s3 sees aliased, namespace, require, dynamic-import and getBuiltin
   seed(tree, 'gremion-ui/src/f.svelte', "<script>\nimport fse from 'fs-extra'\nfse.outputFileSync('x', 'y')\n</script>\n")
   try {
     const r = scan({ root: tree, allowlist: [] })
-    const files = [...new Set(r.findings.filter((f) => f.guard === 's3').map((f) => f.file))].sort()
+    const files = [...new Set(r.findings.filter((f) => f.guard === 's3').map((f) => f.file))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     assert.deepEqual(files, [
       'gremion-public/src/c.js',
       'gremion-ui/src/a.ts',
@@ -109,7 +109,7 @@ test('RED — review round 1: comment prefix, bracket access, references, destru
   seed(tree, 'gremion-ui/src/c9.ts', "const dir = process.env.RECEIPT_STORAGE_DIR\n")
   try {
     const r = scan({ root: tree, allowlist: [] })
-    const files = [...new Set(r.findings.filter((f) => f.guard === 's3').map((f) => f.file))].sort()
+    const files = [...new Set(r.findings.filter((f) => f.guard === 's3').map((f) => f.file))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     assert.deepEqual(files, [
       'gremion-ui/src/c1.ts', 'gremion-ui/src/c2.ts', 'gremion-ui/src/c3.ts', 'gremion-ui/src/c4.ts',
       'gremion-ui/src/c5.ts', 'gremion-ui/src/c6.ts', 'gremion-ui/src/c7.ts', 'gremion-ui/src/c8.ts',
@@ -131,7 +131,7 @@ test('RED — review round 2: module laundering, createRequire, derived namespac
   seed(tree, 'gremion-ui/src/d6.ts', fsImport + 'const fsp = fs.promises\nconst w = fsp.writeFile\n')
   try {
     const r = scan({ root: tree, allowlist: [] })
-    const files = [...new Set(r.findings.filter((f) => f.guard === 's3').map((f) => f.file))].sort()
+    const files = [...new Set(r.findings.filter((f) => f.guard === 's3').map((f) => f.file))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     assert.deepEqual(files, ['gremion-ui/src/d1.ts', 'gremion-ui/src/d2.ts', 'gremion-ui/src/d3.ts', 'gremion-ui/src/d4.ts', 'gremion-ui/src/d5.ts', 'gremion-ui/src/d6.ts'])
   } finally {
     rmSync(tree, { recursive: true, force: true })

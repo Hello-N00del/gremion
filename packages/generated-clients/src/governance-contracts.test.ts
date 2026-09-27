@@ -84,9 +84,10 @@ describe('T2 — every operation has an operationId and named ($ref) schemas', (
     const doc = loadOpenApi()
     for (const { path, method, op } of allOperations(doc)) {
       const reqSchema = op.requestBody?.content?.['application/json']?.schema
-      if (reqSchema) expect(reqSchema.$ref, `${method} ${path} requestBody`).toBeDefined()
+      const reqSchemaOk = !reqSchema || Boolean(reqSchema.$ref)
+      expect(reqSchemaOk, `${method} ${path} requestBody`).toBe(true)
       for (const [status, resp] of Object.entries<any>(op.responses)) {
-        if (!/^2/.test(status)) continue
+        if (!status.startsWith('2')) continue
         const schema = resp.content?.['application/json']?.schema
         if (!schema) continue
         const target = schema.type === 'array' ? schema.items : schema
@@ -98,10 +99,15 @@ describe('T2 — every operation has an operationId and named ($ref) schemas', (
   it('every $ref used by an operation names a schema present in components.schemas', () => {
     const doc = loadOpenApi()
     const schemaNames = new Set(Object.keys(doc.components.schemas))
+    let checked = 0
     for (const { op } of allOperations(doc)) {
       const reqRef = op.requestBody?.content?.['application/json']?.schema?.$ref
-      if (reqRef) expect(schemaNames.has(reqRef.replace('#/components/schemas/', ''))).toBe(true)
+      if (!reqRef) continue
+      expect(schemaNames.has(reqRef.replace('#/components/schemas/', ''))).toBe(true)
+      checked++
     }
+    // A guard that checked zero operations "passes" without checking anything.
+    expect(checked).toBeGreaterThan(0)
   })
 })
 

@@ -1,0 +1,19 @@
+{
+  "core": {
+    "color": {
+      "graphite": {
+        "42": { "$type": "color", "$value": { "colorSpace": "oklch", "components": [0.42, 0.0154, 265] } }
+      }
+    }
+  },
+  "semantic": {
+    "color": {
+      "accent": { "default": { "$type": "color", "$value": "{core.color.graphite.42}" } }
+    }
+  },
+  "component": {
+    "dialog": {
+      "focus-ring": { "$type": "color", "$value": "{core.color.graphite.42}" }
+    }
+  }
+}

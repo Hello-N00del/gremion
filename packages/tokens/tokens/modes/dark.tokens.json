@@ -1,0 +1,149 @@
+{
+  "$description": "Dark mode set (UX-030 modifier \"theme\", context \"dark\"). Overrides semantic tokens only; merged over gremion.tokens.json by the resolver.",
+  "semantic": {
+    "color": {
+      "accent": {
+        "default": {
+          "$type": "color",
+          "$value": "{core.color.graphite.72}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--accent"
+            }
+          }
+        },
+        "ink": {
+          "$type": "color",
+          "$value": "{core.color.graphite.78}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--accent-ink"
+            }
+          }
+        },
+        "soft": {
+          "$type": "color",
+          "$value": "{core.color.graphite.28}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--accent-soft"
+            }
+          }
+        },
+        "faint": {
+          "$type": "color",
+          "$value": "{core.color.graphite.22}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--accent-faint"
+            }
+          }
+        }
+      },
+      "scrim": {
+        "$type": "color",
+        "$value": "{core.color.scrim.dark}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--scrim"
+          }
+        }
+      },
+      "surface": {
+        "raised": {
+          "$type": "color",
+          "$value": "{core.color.v8-dark.surface}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--surface",
+              "handWritten": true
+            }
+          }
+        },
+        "sunken": {
+          "$type": "color",
+          "$value": "{core.color.v8-dark.surface-2}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--surface-2",
+              "handWritten": true
+            }
+          }
+        }
+      },
+      "text": {
+        "default": {
+          "$type": "color",
+          "$value": "{core.color.v8-dark.ink}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--ink",
+              "handWritten": true
+            }
+          }
+        },
+        "muted": {
+          "$type": "color",
+          "$value": "{core.color.v8-dark.ink-muted}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--ink-muted",
+              "handWritten": true
+            }
+          }
+        }
+      },
+      "border": {
+        "default": {
+          "$type": "color",
+          "$value": "{core.color.v8-dark.border}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--border",
+              "handWritten": true
+            }
+          }
+        },
+        "strong": {
+          "$type": "color",
+          "$value": "{core.color.v8-dark.border-strong}",
+          "$extensions": {
+            "org.gremion": {
+              "css": "--border-strong",
+              "handWritten": true
+            }
+          }
+        }
+      }
+    },
+    "elevation": {
+      "1": {
+        "$type": "shadow",
+        "$value": "{core.shadow.dark-1}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--sh-1"
+          }
+        }
+      },
+      "2": {
+        "$type": "shadow",
+        "$value": "{core.shadow.dark-2}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--sh-2"
+          }
+        }
+      },
+      "3": {
+        "$type": "shadow",
+        "$value": "{core.shadow.dark-3}",
+        "$extensions": {
+          "org.gremion": {
+            "css": "--sh-3"
+          }
+        }
+      }
+    }
+  }
+}

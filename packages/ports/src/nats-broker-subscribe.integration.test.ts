@@ -622,6 +622,7 @@ describe('NatsBroker.subscribe() missing-resource faulting', () => {
     const died = new Error('consumer deleted')
     // The library's iterator throws once the server reports the resource gone.
     const dying = {
+      // eslint-disable-next-line require-yield -- must stay an async generator to satisfy AsyncIterable; every path throws by design (the resource is gone).
       async *[Symbol.asyncIterator]() {
         await Promise.resolve()
         throw died
@@ -701,8 +702,6 @@ describe('NatsBroker.publish() subject cache', () => {
         info: async () => {
           infoCalls++
           if (gone) throw streamNotFound()
-          return { config: { subjects: [...serverFilter] } }
-          infoCalls++
           return { config: { subjects: [...serverFilter] } }
         },
         add: async () => {},

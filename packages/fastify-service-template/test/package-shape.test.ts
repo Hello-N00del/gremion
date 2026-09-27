@@ -57,8 +57,8 @@ describe('T9: package shape mirrors @gremion/ports', () => {
     const deps = { ...manifest.dependencies, ...manifest.devDependencies }
     expect(Object.keys(deps).length).toBeGreaterThan(0)
     for (const [name, spec] of Object.entries(deps)) {
-      if (name.startsWith('@gremion/')) expect(spec).toBe('workspace:*')
-      else expect(spec, `${name}@${spec}`).toMatch(/^\d+\.\d+\.\d+$/)
+      const pinned = name.startsWith('@gremion/') ? spec === 'workspace:*' : /^\d+\.\d+\.\d+$/.test(spec)
+      expect(pinned, `${name}@${spec}`).toBe(true)
     }
   })
 

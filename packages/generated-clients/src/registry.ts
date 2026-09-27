@@ -109,10 +109,10 @@ export function validateRegistry(repoRoot: string): { problems: string[]; entrie
       problems.push(`specs[${i}] (${String(name)}): entry has no "file"`)
       continue
     }
-    if (typeof status !== 'string' || status.length === 0) problems.push(`specs[${i}] (${name}): missing "status"`)
-    if (typeof owner !== 'string' || owner.length === 0) problems.push(`specs[${i}] (${name}): missing "owner"`)
+    if (typeof status !== 'string' || status.length === 0) problems.push(`specs[${i}] (${String(name)}): missing "status"`)
+    if (typeof owner !== 'string' || owner.length === 0) problems.push(`specs[${i}] (${String(name)}): missing "owner"`)
     if (!existsSync(join(repoRoot, file))) {
-      problems.push(`specs[${i}] (${name}): file "${file}" does not exist on disk`)
+      problems.push(`specs[${i}] (${String(name)}): file "${file}" does not exist on disk`)
     }
     if (typeof name === 'string') {
       if (seenNames.has(name)) problems.push(`duplicate registry entry name "${name}"`)
