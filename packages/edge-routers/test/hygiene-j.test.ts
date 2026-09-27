@@ -252,7 +252,7 @@ function lines(name: keyof typeof cases): string[] {
   return o.lines
 }
 
-const ids = (ls: string[]) => [...new Set(ls.map((l) => /✗ (j\d)/.exec(l)![1]))].sort()
+const ids = (ls: string[]) => [...new Set(ls.map((l) => /✗ (j\d)/.exec(l)![1]!))].sort((a, b) => a.localeCompare(b))
 
 describe('kernel hygiene (j) — TDD 8', () => {
   it('declares j2, j3 and j4, and no check bans Vaultwarden (B18 j1 is dropped: R8-4, TRD-263)', () => {

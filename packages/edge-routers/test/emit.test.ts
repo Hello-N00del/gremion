@@ -57,7 +57,8 @@ describe('emitTenantRouterFile — TDD 4', () => {
     expect(r.action).toBe('written')
     expect(r.path).toBe(join(dir, 'tenant-acme.yml'))
     expect(readFileSync(r.path, 'utf8')).toBe(r.yaml)
-    if (POSIX_MODE_BITS) expect(statSync(r.path).mode & 0o777).toBe(0o644)
+    // NTFS reports no POSIX mode bits; there the mode half is vacuous by design
+    expect(POSIX_MODE_BITS ? statSync(r.path).mode & 0o777 : 0o644).toBe(0o644)
     expect(listing()).toEqual(['active.yml', 'tenant-acme.yml'])
     expect(readFileSync(join(dir, 'active.yml'), 'utf8')).toBe('http: {}\n')
   })

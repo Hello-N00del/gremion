@@ -97,13 +97,14 @@ describe('renderTenantRouter — TDD 2: what the file declares and chains', () =
   it('UNIVERSAL: every emitted router pins its own literal host, first, and nothing else pins', () => {
     const lines = yaml.split('\n')
     const pinValue = new Map<string, string>()
-    for (let i = 0; i < lines.length; i++) {
-      const m = /^ {4}(edge-hostpin-[a-z0-9-]+):$/.exec(lines[i]!)
-      if (m?.[1]) {
-        const v = /^ {10}X-Forwarded-Host: "([^"]+)"$/.exec(lines[i + 3] ?? '')
-        expect(v, `pin ${m[1]} body`).not.toBeNull()
-        pinValue.set(m[1], v![1]!)
-      }
+    const pins = lines.flatMap((l, i) => {
+      const name = /^ {4}(edge-hostpin-[a-z0-9-]+):$/.exec(l)?.[1]
+      return name ? [{ name, body: lines[i + 3] ?? '' }] : []
+    })
+    for (const { name, body } of pins) {
+      const v = /^ {10}X-Forwarded-Host: "([^"]+)"$/.exec(body)
+      expect(v, `pin ${name} body`).not.toBeNull()
+      pinValue.set(name, v![1]!)
     }
     const routersSection = yaml.slice(0, yaml.indexOf('\n  middlewares:\n'))
     const routerBlocks = routersSection.split(/\n(?= {4}tenant-)/).slice(1)
