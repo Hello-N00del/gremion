@@ -11,7 +11,8 @@
 //    response already carries `<html lang="en">` before any script runs. The
 //    same mechanism tenantBrandStyleHandle uses; sequence() merges both.
 //
-// Person-preference and customer-default lookups are best-effort: an
+// Person-preference and customer-default lookups are best-effort. The customer
+// default is read for every request with a customer (anonymous too). An
 // unconfigured LocalePreferencePort (Q1: no production adapter is bound until
 // TASK-080) is caught so a missing DB writer never turns an unrelated page
 // load into a 500, and personIdOf() is null until the subject->person mapping
@@ -19,7 +20,7 @@
 import type { Handle } from '@sveltejs/kit'
 import { resolveLocale, type Locale, type PersonLocalePreference } from './resolve-locale'
 import { personIdOf } from './person-id'
-import { getLocalePreferencePort } from './locale-preference-port'
+import { getLocalePreferencePort, isLocalePreferenceConfigured } from './locale-preference-port'
 import { GREMION_STRATEGY, LOCALE_COOKIE } from '../locale'
 import { paraglideMiddleware } from '../paraglide/server.js'
 import { defineCustomServerStrategy } from '../paraglide/runtime.js'
@@ -61,18 +62,24 @@ export async function resolveRequestLocale(
   const acceptLanguage = event.request?.headers?.get('accept-language') ?? null
   const personId = personIdOf(event.locals ?? { user: null })
 
+  const customerId = event.locals ? customerIdOf(event.locals) : null
+
   let personPreference: PersonLocalePreference = null
   let customerDefaultLocale: Locale | null = null
 
-  if (personId) {
+  // The customer default (cascade step 4) applies to every request with a
+  // customer: anonymous visitors and unmapped subjects too, not only a mapped
+  // person. While no adapter is bound (Q1) the lookup is skipped without a
+  // per-request warning. A mapped person with no adapter is a misconfiguration,
+  // so that case still reaches getLocalePreferencePort() and is logged below.
+  if (customerId && (isLocalePreferenceConfigured() || personId)) {
     try {
       const port = getLocalePreferencePort()
-      const customerId = customerIdOf(event.locals)
-      if (customerId) {
+      if (personId) {
         const row = await port.get(customerId, personId)
         personPreference = row?.locale ?? null
-        customerDefaultLocale = await port.getCustomerDefault(customerId)
       }
+      customerDefaultLocale = await port.getCustomerDefault(customerId)
     } catch (err) {
       // Read side of Q1: resolve without the stored preference rather than
       // fail the page. Logged so a broken adapter is visible, not silent.

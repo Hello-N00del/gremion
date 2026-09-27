@@ -104,6 +104,11 @@ export function configureLocalePreference(config: LocalePreferenceConfig): void 
   activePort = createLocalePreferencePort(config)
 }
 
+/** True once an adapter is bound. Lets the read path skip lookups quietly while none is (Q1). */
+export function isLocalePreferenceConfigured(): boolean {
+  return activePort !== null
+}
+
 export function getLocalePreferencePort(): LocalePreferencePort {
   if (!activePort) throw new Error('LocalePreferencePort not configured — call configureLocalePreference() first')
   return activePort
