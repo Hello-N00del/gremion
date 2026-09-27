@@ -16,7 +16,15 @@
 // gates 50a3c78 and c2810a8. MINI_SPEC is a constant, so its generated source is
 // computed ONCE (beforeAll) and every scratch test now spawns only inside the
 // function under test. Each spawning test carries an explicit budget of >= 3x
-// the loaded p95 — no global raise.
+// the loaded p95 — no global raise. Fixed file under the same load, 10 runs
+// in a row: 10/10 green, file 6.1-22.1 s, slowest test 6.6 s.
+//
+// Not a timeout: one earlier loaded run failed 4.1 s into the real-tree test
+// with "codegen tool errored ... Command failed: node openapi-typescript ..."
+// and no stderr (the child exited non-zero or was killed, and codegen-drift.ts
+// reports only the message). 102 back-to-back loaded spawns of both real specs
+// did not reproduce it (0 failures, p95 2.9 s, max 22.2 s). If it recurs, the
+// drift check's message needs the child's status/signal to say which.
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
