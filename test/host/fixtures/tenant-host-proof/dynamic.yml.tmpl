@@ -1,0 +1,50 @@
+# TASK-041 (L3-08): the proof edge's routers. THIS task's fixture, independent
+# of the TASK-034 emitter (whose chain lacks proxytrust and starting, a named
+# carry-over): each router here is what a customer router must look like.
+#
+#   t041-a        Host-literal on customer A's bound host. Chains the host pin
+#                 (X-Forwarded-Host overwritten with the host the router
+#                 matched), the production proxy-trust stamp and the production
+#                 "starting" errors middleware.
+#   t041-unbound  Host-literal on a host NO tenant binds (the apex shape).
+#                 Chains proxy-trust only.
+#
+# Middleware names and bodies copy the gremion-ui labels of
+# docker-compose.prod.yml (gremion-ui-proxytrust, gremion-ui-starting); the
+# fallback service is a build of docker/fallback (prod `fallback:`).
+# @SHA8@ and @PROXY_SECRET@ are rendered per run by render-traefik.mjs.
+http:
+  routers:
+    t041-a:
+      entryPoints: ["proof"]
+      rule: "Host(`a.t041.test`)"
+      service: t041-app
+      middlewares: ["t041-a-pin", "gremion-ui-proxytrust", "gremion-ui-starting"]
+    t041-unbound:
+      entryPoints: ["proof"]
+      rule: "Host(`t041.test`)"
+      service: t041-app
+      middlewares: ["gremion-ui-proxytrust"]
+  middlewares:
+    t041-a-pin:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Host: "a.t041.test"
+    gremion-ui-proxytrust:
+      headers:
+        customRequestHeaders:
+          x-proxy-trust: "@PROXY_SECRET@"
+    gremion-ui-starting:
+      errors:
+        status: ["502-504"]
+        service: fallback
+        query: "/"
+  services:
+    t041-app:
+      loadBalancer:
+        servers:
+          - url: "http://t041-@SHA8@-app:3000"
+    fallback:
+      loadBalancer:
+        servers:
+          - url: "http://t041-@SHA8@-fallback:80"

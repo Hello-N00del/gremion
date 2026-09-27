@@ -1,0 +1,2 @@
+# Per-run render output of tenant-host-proof.sh (holds the per-run proxy-trust secret).
+.proof-root/
