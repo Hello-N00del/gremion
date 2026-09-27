@@ -72,10 +72,10 @@
       "blob": "a16a92e9225d131085ae963c80b204d336a37c63"
     },
     {
-      "path": "modules/content/app/migrations/1205_news_posts_public_reader_columns.sql",
-      "reason": "added: forward migration narrowing 1200's whole-table public-reader grant to the seven portal columns of published rows, with RLS (Q9); not a StuRa file",
+      "path": "modules/content/app/migrations/1201_news_posts_public_reader_columns.sql",
+      "reason": "added: forward migration narrowing 1200's whole-table public-reader grant to the seven portal columns of published rows, with RLS (Q9); numbered 1201 per R26-25; not a StuRa file",
       "owner": "TASK-200",
-      "blob": "0fd03f6ed658799963c939f4107f302270c6635a"
+      "blob": "7573db1aa2d4f6adc5c5a5572554b55f1483b745"
     },
     {
       "path": "modules/content/app/scripts/news-posts-public-grant-proof.sh",
