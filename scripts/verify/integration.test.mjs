@@ -3,7 +3,7 @@
 // counts come from what the target says it proved, not a fixed 1.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { judgeFreshInit, judgeNatsTest } from './suites/integration.mjs'
+import { integrationVitestEnv, judgeFreshInit, judgeNatsTest } from './suites/integration.mjs'
 
 const NATS_OK =
   '[nats-test] running the ports suite against nats://127.0.0.1:4222\n' +
@@ -45,4 +45,31 @@ test('fresh-init-proof: exit 0 without its post-condition line is untrusted', ()
 test('fresh-init-proof: a non-zero exit is a failure even with ok lines printed', () => {
   const p = judgeFreshInit({ code: 1, stdout: '  ok a\nFAIL b: expected x\n[fresh-init] FAILED\n', stderr: '' })
   assert.ok(p.failed > 0, JSON.stringify(p))
+})
+
+// TASK-028 intake round 3 (verify-r1/r2 HIGH 2): gremion-ui's integration
+// config has NO default for GREMION_PRODUCTION_STACK (D2) and refuses to load
+// while it is unset. This suite is a whole-tree caller: it points DATABASE_URL
+// at a throwaway container IT started on an ephemeral loopback port, so it
+// declares `none` itself -- and must do so even over an ambient value, since
+// the guard refuses loopback on a host that declares a production stack.
+const DB = { password: 'fake-pw-0000', port: 54321 }
+
+test('integrationVitestEnv declares GREMION_PRODUCTION_STACK=none for the harness-owned database', () => {
+  const env = integrationVitestEnv({ baseEnv: {}, db: DB, uiDir: '/ui' })
+  assert.equal(env.GREMION_PRODUCTION_STACK, 'none')
+})
+
+test('integrationVitestEnv overrides an ambient GREMION_PRODUCTION_STACK (the URL is the run-owned container)', () => {
+  const env = integrationVitestEnv({ baseEnv: { GREMION_PRODUCTION_STACK: 'gremion' }, db: DB, uiDir: '/ui' })
+  assert.equal(env.GREMION_PRODUCTION_STACK, 'none')
+})
+
+test('integrationVitestEnv points both URLs at the loopback test container and drops the raw password keys', () => {
+  const env = integrationVitestEnv({ baseEnv: { POSTGRES_PASSWORD: 'x', PGPASSWORD: 'y', KEEP: 'k' }, db: DB, uiDir: '/ui' })
+  assert.equal(env.DATABASE_URL, 'postgres://gremion_test:fake-pw-0000@127.0.0.1:54321/gremion')
+  assert.equal(env.CONTROL_DATABASE_URL, 'postgres://gremion_test:fake-pw-0000@127.0.0.1:54321/control')
+  assert.equal(env.POSTGRES_PASSWORD, undefined)
+  assert.equal(env.PGPASSWORD, undefined)
+  assert.equal(env.KEEP, 'k')
 })

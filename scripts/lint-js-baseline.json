@@ -1,4 +1,4 @@
 {
-  "baseline": 96,
-  "note": "R25-KB: standalone oxlint --type-aware error count on unit/R25-refactor-src after merging main da181ca (main itself counts 174 there); only ever lowered"
+  "baseline": 90,
+  "note": "R25-KC: standalone oxlint --type-aware error count on unit/R25-dedup after merging main c2810a8 (main itself counts 96 there); only ever lowered"
 }

@@ -16,7 +16,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { headSha } from './lib/git.mjs'
 import { readRecord, recordPath } from './lib/record.mjs'
-import { loadRequiredSuites, REQUIRED_SUITES_PATH } from './verify.mjs'
+import { loadRequiredSuites } from './verify.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
 

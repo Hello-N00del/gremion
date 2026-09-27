@@ -14,10 +14,15 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { execFileSync, execSync, spawnSync } from 'node:child_process'
-import { join, dirname, relative } from 'node:path'
+import { join, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+import { LOCAL_ENV_FILES, missingLocalEnvFiles, SETUP_FIRST } from './env/local-setup.mjs'
+
+// GREMION_REPO_ROOT points the whole run at another tree; the g2 unit test in
+// gremion-ui/tests/unit/check-app-port-binding.test.ts uses it on a temp copy.
+const ROOT = process.env.GREMION_REPO_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..')
+if (process.env.GREMION_REPO_ROOT) console.warn(`[kernel-hygiene] checking ${ROOT} (GREMION_REPO_ROOT override)`)
 const failures = []
 const checks = []
 
@@ -407,26 +412,53 @@ function stderrCause(text) {
 // A render can fail for two very different reasons, and conflating them cost a
 // debugging cycle: the overlay is broken, or the working copy simply has not
 // been set up (the dev overlay's secretGenerator reads the git-ignored .env and
-// legal/legal.env, so `make lint` is RED out of the box on a fresh clone). Only
-// the first is a defect in the repo. Say which one this is.
-function missingLocalEnvFile(text) {
-  const m = /env source files: \[([^\]]+)\]/.exec(text)
-  if (m && /no such file|cannot find the file/i.test(text)) return m[1].trim()
-  return null
+// legal/legal.env). Only the first is a defect in the repo. Say which one this is.
+//
+// TASK-028 (D1): the answer comes from the file system, BEFORE the render
+// (scripts/env/local-setup.mjs). LOCAL_ENV_OVERLAYS names the overlays whose
+// generators read those files; any other overlay is always rendered. The
+// stderr match below is only the second net.
+const LOCAL_ENV_OVERLAYS = new Set(['dev'])
+// A stat error other than ENOENT (EACCES, ENOTDIR) is not "absent"; it is
+// reported by g2 itself instead of killing every other check at import.
+let MISSING_LOCAL_ENV = []
+let LOCAL_ENV_ERROR = null
+try {
+  MISSING_LOCAL_ENV = missingLocalEnvFiles(ROOT)
+} catch (err) {
+  LOCAL_ENV_ERROR = err
 }
 
+// Only a LOCAL_ENV_FILES path counts: an overlay naming any other missing file
+// is broken, and "run setup first" would not fix it.
+function missingLocalEnvFile(text, overlay) {
+  const m = /env source files: \[([^\]]+)\]/.exec(text)
+  if (!m || !/no such file|cannot find the file/i.test(text)) return null
+  const rel = relative(ROOT, resolve(OVERLAY_ROOT, overlay, m[1].trim())).replace(/\\/g, '/')
+  return LOCAL_ENV_FILES.includes(rel) ? rel : null
+}
+
+const notSetUp = (name, missing) =>
+  `${name}: NOT CHECKED — this working copy has no ${missing}; ${SETUP_FIRST}. The overlay itself was not evaluated.`
+
 check('g2 every overlay renders, and renders a non-zero number of image: lines', () => {
-  const bad = overlayNames.map(renderOverlay).filter((r) => r.error || r.images.length === 0)
-  if (!bad.length) return null
-  return bad
-    .map((r) => {
-      if (!r.error) return `${r.name}: rendered zero image: lines`
-      const missing = missingLocalEnvFile(r.error)
-      return missing
-        ? `${r.name}: NOT CHECKED — this working copy has no ${missing}; run scripts/setup.sh first. The overlay itself was not evaluated.`
-        : `${r.name}: render FAILED — ${stderrCause(r.error)}`
-    })
-    .join(' | ')
+  const problems = []
+  if (LOCAL_ENV_ERROR) problems.push(`local env files could not be checked: ${LOCAL_ENV_ERROR.message}`)
+  for (const name of overlayNames) {
+    if (LOCAL_ENV_OVERLAYS.has(name) && MISSING_LOCAL_ENV.length > 0) {
+      problems.push(notSetUp(name, MISSING_LOCAL_ENV.join(', ')))
+      continue
+    }
+    const r = renderOverlay(name)
+    if (!r.error && r.images.length > 0) continue
+    if (!r.error) {
+      problems.push(`${r.name}: rendered zero image: lines`)
+      continue
+    }
+    const missing = missingLocalEnvFile(r.error, r.name)
+    problems.push(missing ? notSetUp(r.name, missing) : `${r.name}: render FAILED — ${stderrCause(r.error)}`)
+  }
+  return problems.length ? problems.join(' | ') : null
 })
 
 check('g3 no BASE image is a placeholder that the overlays fail to patch', () => {
@@ -1754,6 +1786,223 @@ check('n3 the "absent from the kernel" arithmetic is the product chain minus wha
     }
   }
   return wrong.length ? wrong.join(' | ') : null
+})
+
+// ── (j) the edge router emitter's perimeter (TASK-034) ─────────────────────
+// Three post-conditions the per-tenant router library depends on, each watched
+// RED on a seeded plant by packages/edge-routers/test/hygiene-j.test.ts:
+//
+//   j2  no CDN API token variable anywhere in the kernel. The edge issues its
+//       own certificates over ACME HTTP-01; a CDN DNS-API credential in the
+//       tree means a DNS-01/CDN path crept back, and it would be the one
+//       secret able to repoint every tenant hostname.
+//   j3  no carrier of the deleted StuRa edge planner (spec B B-06): not the
+//       file, not an import of it, not its origin-server constant or its
+//       NS-delegation renderer. Only renderTenantRouter emits routers.
+//   j4  etc/edge is bind-mounted EXACTLY ONCE across the kernel compose files,
+//       read-only, into the traefik service. The app process never holds a
+//       writable mount of the router directory: an app-level compromise must
+//       not be able to publish a Host() router.
+//
+// There is no j1: the StuRa j1 banned Vaultwarden, which is supported here
+// (R8-4, TRD-263). The needles are assembled from parts so this file carries
+// none of the literals it hunts for. docs/superpowers/specs/ is the B0
+// carve-out (byte-identical approved specs that describe these deletions).
+
+// The tracked-file list is read lazily, INSIDE the checks that need it: a
+// module-level git call that throws (no git on PATH, not a work tree) would
+// abort the whole run before the report, and every other verdict with it
+// (merge train 4: g2's setup-first line vanished that way). Inside check() the
+// same throw fails j2-j4 loudly as "threw" and the rest still report.
+let jTrackedCache
+function jTracked() {
+  jTrackedCache ??= execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
+    .split('\0')
+    .filter(Boolean)
+    .filter((f) => !SPEC_DOCS_REL.test(f))
+  return jTrackedCache
+}
+const J_BINARY = /\.(png|jpe?g|gif|ico|pdf|woff2?|ttf|otf|gz|tgz|zip)$/i
+
+function jScan(needle) {
+  const hits = []
+  let scanned = 0
+  for (const f of jTracked()) {
+    if (J_BINARY.test(f)) continue
+    const abs = join(ROOT, f)
+    if (!existsSync(abs)) continue
+    scanned++
+    if (needle.test(f)) hits.push(`${f} (path)`)
+    const lines = readFileSync(abs, 'utf8').split('\n')
+    lines.forEach((l, i) => {
+      if (needle.test(l)) hits.push(`${f}:${i + 1}`)
+    })
+  }
+  return { hits, scanned }
+}
+
+const J_MIN_SCANNED = 200 // the kernel tracks ~1100 files; far fewer means the scan is looking at the wrong tree
+
+check('j2 no CDN API token variable in the kernel', () => {
+  // Every spelling Traefik/lego and the CDN's own tooling read for a DNS-01 /
+  // API credential: <CF|CLOUDFLARE>_[DNS_|ZONE_]API_<TOKEN|KEY>, and the
+  // account e-mail that pairs with a global key.
+  const cdn = ['CF', ['CLOUD', 'FLARE'].join('')].join('|')
+  const needle = new RegExp(
+    `\\b(${cdn})_(DNS_|ZONE_)?API_(TOKEN|KEY)\\b|\\b(${cdn})_(API_)?EMAIL\\b`,
+    'i',
+  )
+  const { hits, scanned } = jScan(needle)
+  if (scanned < J_MIN_SCANNED) return `scanned only ${scanned} tracked file(s) — the scan proves nothing`
+  return hits.length ? `found in: ${hits.join(' | ')}` : null
+})
+
+check('j3 no carrier of the deleted edge planner', () => {
+  const needle = new RegExp(
+    [
+      ['edge', 'plan'].join('[-_.]?'),
+      ['render', 'Ns', 'Delegation'].join(''),
+      ['DEFAULT', 'ORIGIN', 'SERVER', 'NAME'].join('_'),
+    ].join('|'),
+    'i',
+  )
+  const { hits, scanned } = jScan(needle)
+  if (scanned < J_MIN_SCANNED) return `scanned only ${scanned} tracked file(s) — the scan proves nothing`
+  return hits.length ? `found in: ${hits.join(' | ')}` : null
+})
+
+// j4 reads the compose files as TEXT, because the question is about every
+// spelling that could mount the directory — short syntax, long syntax, a
+// parent directory, an inherited volume set — not about what one parser makes
+// of one file. Scope: EVERY tracked *compose*.y(a)ml outside test/ (the ops and
+// mail projects are deployed too; test/ fixtures are throwaway stacks such as
+// edge-proto's). A line naming etc/edge that is neither a recognised
+// short-syntax mount nor a long-syntax `source:` is itself a failure:
+// unrecognised is not "not a mount".
+//
+// Sources are normalised (`//` and `/./` collapsed, trailing `/` dropped)
+// before they are compared. A bind of an ANCESTOR of etc/edge (`/`, /opt,
+// /opt/gremion, …/etc, ${GREMION_ROOT}, ${GREMION_ROOT}/etc) is a second view
+// of the router directory: it must be read-only (node-exporter's `/:/rootfs:ro`
+// is), and a writable one fails. `volumes_from` or `extends` naming traefik
+// would hand its etc/edge mount — possibly writable — to another service, and
+// fails outright. A source spelled through another variable (${EDGE_DIR})
+// cannot be resolved from text and is not claimed to be caught.
+const J_COMPOSE = /(^|\/)[^/]*compose[^/]*\.ya?ml$/i
+const J_EDGE_DIR = /etc\/edge(?![A-Za-z0-9_-])/
+const J_ANCESTORS = new Set(['/', '/opt', '/opt/gremion', '/opt/gremion/etc', '${GREMION_ROOT}', '${GREMION_ROOT}/etc', '$GREMION_ROOT', '$GREMION_ROOT/etc'])
+
+function jNormalise(src) {
+  let s = src.replace(/\/+/g, '/')
+  while (s.includes('/./')) s = s.replace('/./', '/')
+  if (s.length > 1) s = s.replace(/\/$/, '')
+  return s
+}
+
+function jServiceAt(lines, i) {
+  for (let k = i; k >= 0; k--) {
+    const m = /^ {2}([A-Za-z0-9._-]+):\s*(#.*)?$/.exec(lines[k])
+    if (m) return m[1]
+    if (/^\S/.test(lines[k]) && !lines[k].startsWith('#')) return null
+  }
+  return null
+}
+
+/** The lines of the block opened at line i (same item, deeper indent). */
+function jBlock(lines, i) {
+  const indent = lines[i].search(/\S/)
+  const out = [lines[i]]
+  for (let k = i + 1; k < lines.length; k++) {
+    if (lines[k].trim() === '' || /^\s*#/.test(lines[k])) continue
+    if (lines[k].search(/\S/) <= indent) break
+    out.push(lines[k])
+  }
+  return out
+}
+
+function jEdgeMounts() {
+  const mounts = []
+  const ancestors = []
+  const problems = []
+  const files = jTracked().filter((f) => J_COMPOSE.test(f) && !f.startsWith('test/') && existsSync(join(ROOT, f)))
+  for (const f of files) {
+    const lines = readFileSync(join(ROOT, f), 'utf8').split('\n')
+    lines.forEach((line, i) => {
+      if (/^\s*#/.test(line)) return
+      const where = `${f}:${i + 1}`
+      const inherit = /^\s*(volumes_from|extends)\s*:/.exec(line)
+      if (inherit && /traefik/.test(jBlock(lines, i).join('\n'))) {
+        problems.push(`${where}: ${inherit[1]} names traefik in service ${jServiceAt(lines, i)} — it would inherit the etc/edge mount`)
+        return
+      }
+      const short = /^\s*-\s*["']?([^"'\s]+)["']?\s*(#.*)?$/.exec(line)
+      const long = /^(\s*)(?:-\s*)?source:\s*["']?([^"'\s]+)["']?\s*(#.*)?$/.exec(line)
+      if (short && !/^\s*-\s*source:/.test(line) && short[1].includes(':')) {
+        const parts = short[1].split(':')
+        const src = jNormalise(parts[0])
+        const opts = (parts[2] ?? '').split(',')
+        const ro = opts.includes('ro')
+        if (J_EDGE_DIR.test(src)) {
+          mounts.push({ where, service: jServiceAt(lines, i), target: parts[1] ?? '', ro })
+        } else if (J_ANCESTORS.has(src)) {
+          ancestors.push({ where, service: jServiceAt(lines, i), src, ro })
+        } else if (J_EDGE_DIR.test(line)) {
+          problems.push(`${where}: etc/edge appears in a mount's target or options, not its source: ${line.trim()}`)
+        }
+        return
+      }
+      if (long) {
+        const src = jNormalise(long[2])
+        const isEdge = J_EDGE_DIR.test(src)
+        if (!isEdge && !J_ANCESTORS.has(src)) return
+        const indent = long[1].length
+        let ro = false
+        let target = ''
+        // The rest of this list item: lines after `source:` at least as deep,
+        // plus the lines before it up to the item's own `- ` marker.
+        let start = i
+        for (let k = i - 1; k >= 0; k--) {
+          const depth = lines[k].search(/\S/)
+          if (/^\s*-\s/.test(lines[k]) && depth < indent) {
+            start = k
+            break
+          }
+          if (depth < indent) break
+          start = k
+        }
+        for (let k = start; k < lines.length; k++) {
+          if (k > i && (lines[k].search(/\S/) < indent || /^\s*-\s/.test(lines[k]))) break
+          if (/^\s*read_only:\s*["']?true["']?\s*(#.*)?$/.test(lines[k])) ro = true
+          const t = /^\s*target:\s*["']?([^"'\s]+)/.exec(lines[k])
+          if (t) target = t[1]
+        }
+        if (isEdge) mounts.push({ where, service: jServiceAt(lines, i), target, ro })
+        else ancestors.push({ where, service: jServiceAt(lines, i), src, ro })
+        return
+      }
+      if (J_EDGE_DIR.test(line)) {
+        problems.push(`${where}: names etc/edge in a shape j4 cannot classify, so it cannot prove this is not a mount: ${line.trim()}`)
+      }
+    })
+  }
+  return { files, mounts, ancestors, problems }
+}
+
+check('j4 etc/edge is mounted exactly once, read-only, into traefik', () => {
+  const { files, mounts, ancestors, problems } = jEdgeMounts()
+  if (files.length === 0) return 'no kernel compose file found — the scan proves nothing'
+  if (mounts.length !== 1) {
+    problems.push(`${mounts.length} mounts of etc/edge (expected exactly 1): ${mounts.map((m) => `${m.where} [${m.service}]`).join(', ')}`)
+  }
+  for (const m of mounts) {
+    if (!m.ro) problems.push(`${m.where}: the etc/edge mount in service ${m.service} is not read-only`)
+    if (m.service !== 'traefik') problems.push(`${m.where}: etc/edge is mounted into service ${m.service}, not traefik`)
+    if (m.target !== '/etc/traefik/dynamic') problems.push(`${m.where}: etc/edge is mounted at ${m.target || '(no target)'}, not /etc/traefik/dynamic`)
+  }
+  for (const a of ancestors) {
+    if (!a.ro) problems.push(`${a.where}: service ${a.service} binds ${a.src}, an ancestor of etc/edge, WRITABLE — a second, writable view of the router directory`)
+  }
+  return problems.length ? problems.join(' | ') : null
 })
 
 // ── report ─────────────────────────────────────────────────────────────────
