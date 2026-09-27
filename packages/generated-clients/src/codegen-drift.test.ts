@@ -85,8 +85,9 @@ describe('checkCodegenDrift — scratch fixtures', () => {
     }
     // A vacuous cache (empty text, a tool that printed nothing) would make the
     // tests below compare nothing against nothing. A throw (not expect(): the
-    // vitest/no-standalone-expect lint rule forbids assertions in hooks) fails
-    // every test in this block.
+    // vitest/no-standalone-expect lint rule forbids assertions in hooks) is
+    // reported by vitest as a suite error: the FILE goes red and this block's
+    // tests are skipped, not run (measured: "1 failed | 1 passed | 4 skipped").
     for (const needle of ['"/ping"', `export function ${SPEC.factoryName}(`]) {
       if (!miniSource.includes(needle)) {
         throw new Error(`codegen-drift fixture: MINI_SPEC's generated source lacks ${needle} -- the cache is vacuous`)
