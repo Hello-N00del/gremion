@@ -3,6 +3,8 @@ import { svelteTesting } from '@testing-library/svelte/vite'
 import tailwindcss from '@tailwindcss/vite'
 import { configDefaults, defineConfig } from 'vitest/config'
 import { playwright } from '@vitest/browser-playwright'
+import { paraglideVitePlugin } from '@inlang/paraglide-js'
+import paraglideOptions from './src/lib/i18n/paraglide-options.js'
 
 // TASK-208: the responsive-shell component suite runs in real Chromium (Vitest
 // browser mode, Playwright provider). CHROMIUM_EXECUTABLE_PATH points it at a
@@ -26,7 +28,9 @@ export default defineConfig({
   // (ENOENT opening a literal "tailwindcss" file), a known rolldown-vite/
   // postcss-import interaction. The official fix is Tailwind's own Vite
   // plugin, which bypasses postcss's import resolution entirely.
-  plugins: [tailwindcss(), sveltekit(), svelteTesting()],
+  // TASK-062 (TRD-412): Paraglide compiles src/lib/i18n/messages into
+  // src/lib/i18n/paraglide (generated, gitignored) on dev, build and vitest.
+  plugins: [paraglideVitePlugin(paraglideOptions), tailwindcss(), sveltekit(), svelteTesting()],
   server: {
     // #260: default to loopback so `pnpm dev` does NOT expose the dev server
     // (source via /@fs, HMR websocket) to the LAN of the operator box that also

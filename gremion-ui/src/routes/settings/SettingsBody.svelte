@@ -63,10 +63,14 @@
   // Active section: alias route passes activeSection; else default 'profil'.
   // Guard against a member landing on an admin-only deep-link (they silently
   // fall back to Profil, matching the prototype's show-based filtering).
-  let activeKey = $state<SectionKey>('profil')
-  $effect(() => {
+  // TASK-062: a (writable) $derived, not $state + $effect, so the deep-linked
+  // section is already chosen during SSR. An $effect never runs on the server,
+  // so /settings/darstellung used to render Profil until hydration, and the
+  // language switch (a JS-off form) was unreachable without JavaScript.
+  // selectSection() still reassigns it on click.
+  let activeKey = $derived.by<SectionKey>(() => {
     const want = (activeSection ?? 'profil') as SectionKey
-    activeKey = visible.some((s) => s.key === want) ? want : 'profil'
+    return visible.some((s) => s.key === want) ? want : 'profil'
   })
   const cur = $derived(visible.find((s) => s.key === activeKey) ?? visible[0])
 
