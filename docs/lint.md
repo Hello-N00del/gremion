@@ -55,10 +55,14 @@ the flag.
   `typescript/no-base-to-string` 23, `typescript/no-redundant-type-constituents`
   20, `unicorn/no-useless-fallback-in-spread` 15,
   `vitest/require-to-throw-message` 13). Those files are frozen copies:
-  byte-equal to the `extraction-source-f1` tag or listed in
+  byte-equal to the `extraction-source-f2` tag or listed in
   `modules/EXTRACTION-DELTA.json`, proven by
   `scripts/check-module-source-parity.mjs`; fixing them in the move would
-  turn a verbatim copy into an unreviewed rewrite. They are StuRa-era debt,
+  turn a verbatim copy into an unreviewed rewrite. The re-pin from
+  `extraction-source-f1` to `-f2` (StuRa's own lint clean-up, R25-4 S-C,
+  landed between them) removed 17 file entries and three whole overrides
+  (`no-misused-spread`, `restrict-template-expressions`, `no-new-array`):
+  those files no longer report the rule. They are StuRa-era debt,
   not new errors, and raising `scripts/lint-js-baseline.json` is not allowed.
   Deliberately NOT a `modules/**` ignore pattern: every other rule stays on
   in those files, and every rule stays on in every other file under
