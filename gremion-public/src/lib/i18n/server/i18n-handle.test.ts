@@ -42,7 +42,7 @@ function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name)
     if (statSync(path).isDirectory()) return sourceFiles(path)
-    return /\.(svelte|ts)$/.test(name) && !/\.test\.ts$/.test(name) ? [path] : []
+    return /\.(svelte|ts)$/.test(name) && !name.endsWith('.test.ts') ? [path] : []
   })
 }
 
@@ -82,9 +82,10 @@ describe('createI18nHandle (gremion-public)', () => {
         /paraglide\/messages|\$lib\/i18n/.test(readFileSync(f, 'utf8'))
       )
       // The day a page renders from the catalogue, this list is non-empty and
-      // the assertion below may change with it (TASK-161). Until then the
-      // portal must not declare a language its pages are not written in.
-      if (consumers.length === 0) expect([...CONTENT_LOCALES]).toEqual(['de'])
+      // CONTENT_LOCALES may grow with it (TASK-161). Until then the portal
+      // must not declare a language its pages are not written in.
+      const germanOnly = CONTENT_LOCALES.length === 1 && CONTENT_LOCALES[0] === 'de'
+      expect(consumers.length > 0 || germanOnly, `CONTENT_LOCALES ${JSON.stringify(CONTENT_LOCALES)} with no catalogue consumer`).toBe(true)
     })
   })
 
