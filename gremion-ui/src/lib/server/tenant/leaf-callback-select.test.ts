@@ -57,19 +57,16 @@ const SQUATTER: Ctx = {
 const INACTIVE_ID = 'dddddddd-4444-4444-8444-dddddddddddd'
 
 /**
- * The kernel's host path is STILL slug-shaped in this unit: element-0 takes the
- * leftmost label of `x-forwarded-host` and calls `resolveTenantBySlug`
- * (`resolve.ts:186-188`). `B10-resolver-fullhost` is the unit that replaces it
- * with `resolveTenantByHost`. So the fixture is keyed on the leftmost label of
- * the SAME hostnames, and the trap survives intact: `rat-musterstadt.gremion.example`
- * — the string a pre-D1 leaf synthesises as `<slug>.<apex>` for MUSTERSTADT —
- * has leftmost label `rat-musterstadt`, which is registered to SQUATTER.
- * MUSTERSTADT's own `rat-musterstadt.de` and DEFAULT's `gremion.example` are 2-label
- * hosts the leftmost-label rule cannot serve at all, which is precisely why the
- * id path has to exist.
+ * The host path selects on the WHOLE forwarded host (TASK-041,
+ * B10-resolver-fullhost): the fixture is the `tenant_domain` table itself.
+ * `rat-musterstadt.gremion.example` — the string a pre-D1 leaf synthesises as
+ * `<slug>.<apex>` for MUSTERSTADT — is registered to SQUATTER, so any
+ * reintroduced host-driven selection on the callback path lands on SQUATTER.
  */
-const BY_SLUG: Record<string, Ctx> = {
-  'rat-musterstadt': SQUATTER,
+const BY_HOST: Record<string, Ctx> = {
+  'rat-musterstadt.de': MUSTERSTADT,
+  'gremion.example': DEFAULT,
+  'rat-musterstadt.gremion.example': SQUATTER,
 }
 const BY_ID: Record<string, Ctx> = {
   [MUSTERSTADT.id]: MUSTERSTADT,
@@ -77,15 +74,14 @@ const BY_ID: Record<string, Ctx> = {
   [SQUATTER.id]: SQUATTER,
 }
 
-/** The CURRENT host entry point, spied so "the host path was never consulted"
- *  is asserted against the code that actually runs, not against a name the
- *  resolver does not call yet. B10 renames this back to resolveTenantByHost. */
-const hostPathSpy = vi.fn(async (slug: string) => BY_SLUG[slug] ?? null)
-const getTenantStatusBySlug = vi.fn(async (slug: string) => (BY_SLUG[slug] ? 'active' : null))
+/** The host entry point, spied so "the host path was never consulted" is
+ *  asserted against the code that actually runs. */
+const resolveTenantByHost = vi.fn(async (host: string) => BY_HOST[host] ?? null)
+const getTenantStatusByHost = vi.fn(async (host: string) => (BY_HOST[host] ? 'active' : null))
 const resolveTenantById = vi.fn(async (id: string) => BY_ID[id] ?? null)
 vi.mock('$lib/server/tenant/registry', () => ({
-  resolveTenantBySlug: (slug: string) => hostPathSpy(slug),
-  getTenantStatusBySlug: (slug: string) => getTenantStatusBySlug(slug),
+  resolveTenantByHost: (host: string) => resolveTenantByHost(host),
+  getTenantStatusByHost: (host: string) => getTenantStatusByHost(host),
   resolveTenantById: (id: string) => resolveTenantById(id),
 }))
 
@@ -141,7 +137,7 @@ function newLeaf(tenant: Ctx, secret = NL_SECRET): Record<string, string> {
 
 const saved = { nl: process.env.INTERNAL_NEWSLETTER_SECRET, ct: process.env.INTERNAL_CONTENT_SECRET }
 beforeEach(() => {
-  hostPathSpy.mockClear()
+  resolveTenantByHost.mockClear()
   resolveTenantById.mockClear()
   process.env.INTERNAL_NEWSLETTER_SECRET = NL_SECRET
   process.env.INTERNAL_CONTENT_SECRET = CONTENT_SECRET
@@ -165,7 +161,7 @@ describe('a leaf callback needs no host', () => {
     expect(got.tenant?.id).toBe(MUSTERSTADT.id)
     // …and it got there without consulting the host table at all.
     expect(resolveTenantById).toHaveBeenCalledWith(MUSTERSTADT.id)
-    expect(hostPathSpy).not.toHaveBeenCalled()
+    expect(resolveTenantByHost).not.toHaveBeenCalled()
   })
 
   it('THE FIXED BUG: this is exactly the request a stage-D leaf makes with an empty catalog', async () => {
@@ -201,15 +197,14 @@ describe('a host the leaf may still be carrying is NOT an input', () => {
       'x-proxy-trust': PROXY_SECRET,
       'x-forwarded-host': `${MUSTERSTADT.slug}.gremion.example`,
     }
-    // The trap is live: the synthesised host's leftmost label IS the slug, and
-    // that label is registered to SQUATTER.
-    expect(BY_SLUG[MUSTERSTADT.slug].id).toBe(SQUATTER.id)
+    // The trap is live: the synthesised host is SQUATTER's registered row.
+    expect(BY_HOST[`${MUSTERSTADT.slug}.gremion.example`].id).toBe(SQUATTER.id)
 
     const got = await receive(RENDER, oldLeaf)
     expect(got.status).toBe(200)
     expect(got.tenant?.id).toBe(MUSTERSTADT.id)
     expect(got.tenant?.id).not.toBe(SQUATTER.id)
-    expect(hostPathSpy).not.toHaveBeenCalled()
+    expect(resolveTenantByHost).not.toHaveBeenCalled()
   })
 
   it('a STALE host (the tenant moved domains) cannot aim the callback at the new owner', async () => {
@@ -266,6 +261,7 @@ describe('fail closed', () => {
     const got = await receive(RENDER, {
       'x-proxy-trust': PROXY_SECRET,
       'x-tenant-id': MUSTERSTADT.id,
+      host: SQUATTER.primaryHost!, // the Host the edge router matched (Q2)
       'x-forwarded-host': SQUATTER.primaryHost!,
     })
     expect(resolveTenantById).not.toHaveBeenCalled()
@@ -289,6 +285,30 @@ describe('fail closed', () => {
   })
 })
 
-// The three `the host path is untouched` cases (frozen source 277-295) move to
-// B10-resolver-fullhost, which is the unit that makes the resolver call
-// resolveTenantByHost at all.
+// Ported from StuRaOS f276af59 (leaf-callback-select.test.ts:277-295) with the
+// Host header the edge forwards: under the enforced gate an edge request is
+// also held to the TASK-041 Q2 cross-check (Host == X-Forwarded-Host).
+describe('the host path is untouched', () => {
+  it('an ordinary edge request on a custom domain still resolves by whole host', async () => {
+    const got = await receive('/', {
+      'x-proxy-trust': PROXY_SECRET,
+      host: 'rat-musterstadt.de',
+      'x-forwarded-host': 'rat-musterstadt.de',
+    })
+    expect(got.status).toBe(200)
+    expect(got.tenant?.id).toBe(MUSTERSTADT.id)
+    expect(resolveTenantByHost).toHaveBeenCalledWith('rat-musterstadt.de')
+    expect(resolveTenantById).not.toHaveBeenCalled()
+  })
+
+  it('an unregistered host is still a 404 with no fallback tenant', async () => {
+    const got = await receive('/', {
+      'x-proxy-trust': PROXY_SECRET,
+      host: 'attacker.example',
+      'x-forwarded-host': 'attacker.example',
+    })
+    expect(got.status).toBe(404)
+    expect(got.tenant).toBeUndefined()
+    expect(resolveTenantById).not.toHaveBeenCalled()
+  })
+})

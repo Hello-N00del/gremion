@@ -1,10 +1,13 @@
 // src/lib/server/tenant/resolve.ts
 import type { Handle, HandleFetch } from '@sveltejs/kit'
 import {
-  resolveTenantBySlug,
-  getTenantStatusBySlug,
+  resolveTenantByHost,
+  getTenantStatusByHost,
   resolveTenantById,
+  type TenantStatus,
 } from '$lib/server/tenant/registry'
+import { normaliseHost } from '$lib/server/tenant/host'
+import { logHostRejection, type HostRejectReason } from '$lib/server/tenant/host-mismatch-log'
 import { leafCallbackClaim } from '$lib/server/tenant/leaf-trust'
 import { runWithTenant } from '$lib/server/tenant/context'
 import type { TenantContext } from '$lib/server/tenant/context'
@@ -22,37 +25,6 @@ import {
   readProxyTrustSecret,
 } from '$lib/server/internal-fetch'
 import { isResolveExemptRequest } from '$lib/server/boot-exempt'
-
-/**
- * Extract the tenant slug = the leftmost DNS label of the trusted edge-forwarded
- * host. Under the flat single-stem model `tenant.example.org` (spec §3.2 / D3)
- * the tenant lives in the leftmost label. Returns null when there is no tenant
- * subdomain (bare apex, single-label, empty) so the caller can 404 — NEVER a
- * silent default to tenant #1 (spec §1.7 fail-closed RULE).
- *
- * #256-2 hardening (the P2.1c edge makes these header forms reachable):
- *  - comma/whitespace-joined lists (duplicate or chained X-Forwarded-Host
- *    headers join to 'client-value, edge-value') are REJECTED outright —
- *    taking the first (client-most) value would let an attacker-supplied
- *    label win over the trusted hop's appended value; ambiguous = fail closed.
- *  - exactly ONE trailing dot (FQDN root form) is stripped BEFORE splitting,
- *    so 'example.org.' stays the 2-label apex (404) instead of bypassing the
- *    labels.length < 3 rule and resolving the 2LD as a tenant slug.
- *  - EMPTY labels anywhere ('tenant..org', '.t.example.org') are rejected.
- */
-export function extractLeftmostLabel(forwardedHost: string | undefined | null): string | null {
-  if (!forwardedHost) return null
-  const raw = forwardedHost.trim()
-  if (!raw) return null
-  if (raw.includes(',') || /\s/.test(raw)) return null // multi-value list — fail closed
-  let hostNoPort = raw.split(':', 1)[0].toLowerCase()
-  if (hostNoPort.endsWith('.')) hostNoPort = hostNoPort.slice(0, -1) // exactly one FQDN root dot
-  if (!hostNoPort) return null
-  const labels = hostNoPort.split('.')
-  if (labels.length < 3) return null // need sub.example.org; fewer = no tenant subdomain
-  if (labels.some((l) => l.length === 0)) return null // empty label anywhere — reject
-  return labels[0]
-}
 
 /**
  * P2.1c (T4): is this request a TRUSTED internal server-to-server caller?
@@ -104,17 +76,21 @@ export function isProxyTrusted(request: Request, internalTrusted: boolean): bool
 
 /**
  * Element 0 of sequence(...) — runs BEFORE authHandle. Resolves the request's
- * tenant from the TRUSTED edge-forwarded host (x-forwarded-host, injected by
- * Traefik), sets event.locals.tenant, and runs the downstream chain inside
- * runWithTenant(...) so every tenant-keyed accessor resolves the SAME canonical
- * id (spec §7.1).
+ * tenant from the WHOLE trusted edge-forwarded host (x-forwarded-host, injected
+ * by Traefik; Tenancy D1 §1.3, TASK-041), sets event.locals.tenant, and runs the
+ * downstream chain inside runWithTenant(...) so every tenant-keyed accessor
+ * resolves the SAME canonical id (spec §7.1).
  *
  * Security (spec §3.2/§1.6/§7-D7): the raw Host header is attacker-controllable
- * and is NEVER read — tenant selection is authoritative ONLY from the
- * edge-injected x-forwarded-host. Unknown/missing subdomain -> 404 (fail closed,
- * spec §1.7). Control-DB unreachable -> 503. The reroute hook is deliberately
- * NOT used (spec §3.2) — tenant is a data-plane selector in locals, not a route
- * rewrite.
+ * and is NEVER a selector — tenant selection is authoritative ONLY from the
+ * edge-injected x-forwarded-host, looked up whole in `tenant_domain` (host is
+ * its PRIMARY KEY). Unparseable, unbound or non-active host -> 404 (fail closed,
+ * spec §1.7; no default tenant, TRD-075), each emitting one
+ * `tenant.host.rejected` event (TRD-076). The Host header is read for ONE thing
+ * only: the Q2 cross-check, which can REJECT an edge request whose Host and
+ * X-Forwarded-Host disagree and can never select. Control-DB unreachable -> 503.
+ * The reroute hook is deliberately NOT used (spec §3.2) — tenant is a data-plane
+ * selector in locals, not a route rewrite.
  *
  * NOTE on internal callers: internalFetch (internal-fetch.ts) makes a FRESH
  * server-to-server HTTP request WITHOUT an x-forwarded-host, so once this handle
@@ -137,7 +113,7 @@ export function isProxyTrusted(request: Request, internalTrusted: boolean): bool
 // bound" acceptance check are P2.1c. The in-app backstop is the Task 28
 // iss-match assertion (token iss == resolved tenant issuer) before any
 // data-plane query. The raw Host header is attacker-controllable and is
-// never read.
+// never a selector (TASK-041 Q2 reads it only to REJECT a mismatch).
 /**
  * gremion#22 finding 1 (HIGH): P2.1c internalFetch forwarded-host, wired as
  * SvelteKit's `handleFetch`. This is the `event.fetch` half of the seam
@@ -199,8 +175,8 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
   // leaf-trust.ts for why the host was the wrong thing to communicate, and why
   // the per-leaf secret (unlike proxy-trust, which Traefik stamps on every edge
   // request) is the only thing that could gate a header-driven selector.
-  // `null` for every other request, which therefore takes the host path below
-  // UNCHANGED — B10-resolver-fullhost is the unit that replaces that branch.
+  // `null` for every other request, which therefore takes the whole-host path
+  // below (TASK-041).
   const leafClaim = leafCallbackClaim(event.url.pathname, event.request.headers)
 
   if (!isProxyTrusted(event.request, internalTrusted || leafClaim !== null)) {
@@ -239,39 +215,9 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
       return new Response('Not Found', { status: 404 })
     }
   } else {
-    const forwardedHost = event.request.headers.get('x-forwarded-host')
-    const slug = extractLeftmostLabel(forwardedHost)
-    if (!slug) return new Response('Not Found', { status: 404 })
-
-    try {
-      // resolveTenantBySlug MUST validate the slug (validateSlug) before any
-      // registry/DB use; the guard lives there — do NOT swap it for a raw
-      // getTenantBySlug without re-adding validation.
-      ctx = await resolveTenantBySlug(slug)
-      if (!ctx) {
-        // P2.1c (T6): resolveTenantBySlug returns null for unknown / invalid /
-        // NON-ACTIVE rows alike. Consult the status-only control-DB read (no
-        // data-plane resolution) to distinguish a SUSPENDED tenant — which
-        // serves a branded, data-plane-free 503 page instead of the
-        // indistinguishable 404 — from a truly unknown slug or a
-        // deleting/deleted tombstone (both 404; §7.8 identifier-reuse defence
-        // keeps a tombstoned slug unservable). Order: invalid slug → 404; row
-        // absent → 404; suspended → 503 page; deleting/deleted → 404. active
-        // never reaches here (ctx is non-null).
-        const status = await getTenantStatusBySlug(slug)
-        if (status === 'suspended') return suspendedTenantResponse()
-        return new Response('Not Found', { status: 404 })
-      }
-    } catch (err) {
-      tlog('error', '[tenant-resolve] registry lookup failed', {
-        slug,
-        err: err instanceof Error ? err.message : String(err),
-      })
-      return new Response('Service Unavailable: tenant registry', {
-        status: 503,
-        headers: { 'Retry-After': '5' },
-      })
-    }
+    const selected = await resolveByForwardedHost(event.request, !internalTrusted)
+    if (selected instanceof Response) return selected
+    ctx = selected
   }
 
   // P2.1b T3 (D-READY): per-tenant boot readiness gate. A tenant whose
@@ -310,4 +256,91 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
   // Reuses the value computed for the T5 gate above (single source).
   event.locals.tenantSelectionTrusted = internalTrusted
   return runWithTenant(ctx, () => resolve(event))
+}
+
+/**
+ * TASK-041 (L3-08; B10-resolver-fullhost Task 1, ported from StuRaOS
+ * resolve.ts `resolveByForwardedHost`): the host path. Returns the resolved
+ * ACTIVE context, or the Response the resolver must return.
+ *
+ * Outcomes (each 404 emits ONE `tenant.host.rejected` event after the decision
+ * and before the return; neither 503 emits):
+ *   unparseable / absent x-forwarded-host   -> 404 `unparseable`, NO registry read
+ *   edge Host != x-forwarded-host (Q2)      -> 404 `forged`, NO registry read
+ *   no tenant_domain row                    -> 404 `unbound`
+ *   deleting / deleted tenant               -> 404 `inactive`
+ *   suspended tenant                        -> branded 503 (no data plane touched)
+ *   control DB unreachable                  -> 503 Retry-After 5
+ * There is NO fallback, NO leftmost-label path and NO apex special case.
+ *
+ * `edge` is true for a request that did not prove internal trust; the caller
+ * only reaches here for a request that is not a leaf claim.
+ */
+async function resolveByForwardedHost(
+  request: Request,
+  edge: boolean,
+): Promise<TenantContext | Response> {
+  // Tenancy D1 (§1.3): the WHOLE edge-forwarded host is the tenant selector.
+  // `normaliseHost` runs here — before any registry work — so a malformed /
+  // ambiguous / absent header 404s without a single control-DB read. The
+  // accessors call it again internally (the guard lives in THEM, as
+  // resolveTenantBySlug owned validateSlug); normaliseHost is idempotent.
+  const rawForwarded = request.headers.get('x-forwarded-host')
+  const host = normaliseHost(rawForwarded)
+  if (!host) return rejectHost('unparseable', rawForwarded)
+
+  // Q2 (RFC 7239 §8.1; RFC 9110 §7.2): a forwarded header is only as
+  // trustworthy as every hop that could set it, and traefik.yml trusts the
+  // edge subnets once they are attached — so the edge's per-host pin must not
+  // be the only layer. On an EDGE request with the proxy-trust contract in
+  // force, the Host the router matched must name the same host the forwarded
+  // header does. Reject-only: a match changes nothing, a mismatch is a 404.
+  // Internal hops (internalFetch / handleFetch) legitimately carry the
+  // container's own Host and are proven by their secret instead.
+  if (edge && readProxyTrustSecret() && normaliseHost(request.headers.get('host')) !== host) {
+    return rejectHost('forged', host)
+  }
+
+  let ctx: TenantContext | null
+  let status: TenantStatus | null = null
+  try {
+    // `host` is tenant_domain's PRIMARY KEY, so the lookup can never be
+    // ambiguous; a host that is not a row resolves to NOTHING.
+    ctx = await resolveTenantByHost(host)
+    // P2.1c (T6): resolveTenantByHost returns null for unknown AND non-active
+    // rows alike. The status-only control-DB read (no data plane) separates a
+    // SUSPENDED tenant — branded 503 page — from an unregistered host or a
+    // provisioning/deleting/deleted row (all 404; §7.8 identifier-reuse
+    // defence keeps a tombstoned tenant's hosts unservable).
+    if (!ctx) status = await getTenantStatusByHost(host)
+  } catch (err) {
+    // `host` passed normaliseHost (ASCII LDH, no separators) and tlog emits
+    // one-line JSON, so it stays a single structured field.
+    tlog('error', '[tenant-resolve] registry lookup failed', {
+      host,
+      err: err instanceof Error ? err.message : String(err),
+    })
+    return new Response('Service Unavailable: tenant registry', {
+      status: 503,
+      headers: { 'Retry-After': '5' },
+    })
+  }
+  if (ctx) return ctx
+  if (status === 'suspended') return suspendedTenantResponse()
+  return rejectHost(status === null ? 'unbound' : 'inactive', host)
+}
+
+/**
+ * A host-path 404: decided first, then the TRD-076 event, then the return.
+ * The emitter never throws; the try/catch makes that a property of THIS call
+ * site too, so no logging failure can turn the 404 into a 500 or a 503.
+ */
+function rejectHost(reason: HostRejectReason, host: string | null): Response {
+  const res = new Response('Not Found', { status: 404 })
+  try {
+    logHostRejection(reason, host)
+  } catch {
+    // swallowed: the 404 stands
+  }
+  return res
 }
