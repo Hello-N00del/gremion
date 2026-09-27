@@ -223,6 +223,13 @@ export const UNIT_PARTS = {
   'tenant-store': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'tenant-store'), testScript: 'test', root, label: '@gremion/tenant-store vitest (test)' }),
   ],
+  // TASK-082 (R26): @gremion/tokens is a node:test suite (DTCG schema, tier
+  // lint, accent parity and the app.css fence-staleness sync test), so it runs
+  // per file through nodeTestParts like scripts/**, not through vitest.
+  tokens: (root) => {
+    const cwd = path.join(root, 'packages', 'tokens')
+    return nodeTestParts({ cwd, files: globSync('test/*.test.mjs', { cwd }).toSorted() })
+  },
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }
