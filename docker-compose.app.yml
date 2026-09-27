@@ -101,7 +101,13 @@ services:
       AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/gremion
       AUTH_TRUST_HOST:          "1"
       STEPUP_FRESHNESS_SECONDS: ${STEPUP_FRESHNESS_SECONDS:-300}
-      PUBLIC_BASE_URL:          ${PUBLIC_BASE_URL:-https://${PLATFORM_DOMAIN}}
+      # TASK-028 (spec B section 6, TRD-039): the app's DOMAIN is bound from
+      # the one key the host env files carry, `:?`-guarded (it moved here with
+      # the gremion-ui block from docker-compose.prod.yml). Every read of
+      # PLATFORM_DOMAIN in the compose files carries `:?`
+      # (test/host/validate-env.bats).
+      DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      PUBLIC_BASE_URL:          ${PUBLIC_BASE_URL:-https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
       # AGPL-3.0 section 13: an operator running a MODIFIED build MUST point
       # this at their own repository. Unset falls back to upstream.
       PUBLIC_SOURCE_URL:        ${PUBLIC_SOURCE_URL:-}
