@@ -51,7 +51,13 @@ FIX="$REPO_ROOT/test/host/fixtures/tenant-host-proof"
 # Git Bash on Windows: stop MSYS rewriting container paths (/app/config,
 # /etc/traefik); host paths handed to docker/node go through hostpath().
 export MSYS_NO_PATHCONV=1
-hostpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+# Pure bash (no process spawn: on Docker Desktop hosts every spawn costs ~2 s).
+hostpath() {
+    case "${OSTYPE:-}" in
+        msys*|cygwin*) if [[ "$1" =~ ^/([a-zA-Z])/(.*)$ ]]; then printf '%s:/%s' "${BASH_REMATCH[1]^^}" "${BASH_REMATCH[2]}"; return; fi ;;
+    esac
+    printf '%s' "$1"
+}
 cd "$REPO_ROOT"
 
 step() { echo "[t041 +${SECONDS}s] $*" >&2; }
@@ -69,8 +75,12 @@ APP_IMG="$N-app:local" FB_IMG="$N-fallback:local"
 ROOT="$FIX/.proof-root/$SHA8"
 PROOF_PORT=8090
 
-PG_IMAGE="$(grep -oE 'image: postgres:18-alpine@sha256:[0-9a-f]{64}' "$REPO_ROOT/docker-compose.yml" | head -n1 | sed 's/image: //')"
-TR_IMAGE="$(grep -oE 'image: traefik:v[0-9.]+' "$REPO_ROOT/docker-compose.yml" | head -n1 | sed 's/image: //')"
+COMPOSE_TEXT="$(<"$REPO_ROOT/docker-compose.yml")"
+PG_RE='image: (postgres:18-alpine@sha256:[0-9a-f]{64})'
+TR_RE='image: (traefik:v[0-9.]+)'
+PG_IMAGE='' TR_IMAGE=''
+if [[ "$COMPOSE_TEXT" =~ $PG_RE ]]; then PG_IMAGE="${BASH_REMATCH[1]}"; fi
+if [[ "$COMPOSE_TEXT" =~ $TR_RE ]]; then TR_IMAGE="${BASH_REMATCH[1]}"; fi
 [ -n "$PG_IMAGE" ] || precondition "no pinned postgres:18 digest in docker-compose.yml"
 [ -n "$TR_IMAGE" ] || precondition "no pinned traefik image in docker-compose.yml"
 
@@ -96,13 +106,14 @@ on_exit() {
 }
 trap on_exit EXIT
 
-secret() { openssl rand -hex 24; }
+# One openssl spawn for every per-run secret: 12 x 48 hex characters.
+secret_into() { printf -v "$1" '%s' "${SECRETS:$((SECRET_I * 48)):48}"; SECRET_I=$((SECRET_I + 1)); }
 
 phase_up() {
 teardown # a previous aborted run of THIS commit, by name only
 
-PG_PW="$(secret)" CTL_PW="$(secret)" UI_PW="$(secret)" KC_PW="$(secret)" PUB_PW="$(secret)"
-PROXY_SECRET="$(secret)"
+SECRETS="$(openssl rand -hex 288)" SECRET_I=0
+for v in PG_PW CTL_PW UI_PW KC_PW PUB_PW PROXY_SECRET AUTH_SEC KC_SEC PUSH_SEC KCADM_SEC; do secret_into "$v"; done
 
 # ── images ────────────────────────────────────────────────────────────────────
 step "images"
@@ -152,13 +163,13 @@ docker create --name "$APP" --network "$NET" --network-alias gremion-ui \
     -e DATABASE_URL="postgresql://gremion:$UI_PW@postgres:5432/gremion" \
     -e CONTROL_DATABASE_URL="postgresql://control:$CTL_PW@postgres:5432/control" \
     -e T041_A_DATABASE_URL="postgresql://gremion:$UI_PW@postgres:5432/t041a" \
-    -e AUTH_SECRET="$(secret)" -e AUTH_KEYCLOAK_ID=gremion-ui -e AUTH_KEYCLOAK_SECRET="$(secret)" \
+    -e AUTH_SECRET="$AUTH_SEC" -e AUTH_KEYCLOAK_ID=gremion-ui -e AUTH_KEYCLOAK_SECRET="$KC_SEC" \
     -e AUTH_KEYCLOAK_ISSUER=http://t041.test/auth/realms/gremion \
     -e AUTH_KEYCLOAK_INTERNAL=http://keycloak:8080/auth/realms/gremion \
     -e AUTH_TRUST_HOST=1 -e PUBLIC_BASE_URL=http://t041.test \
-    -e INTERNAL_PUSH_SECRET="$(secret)" -e INTERNAL_BASE_URL=http://gremion-ui:3000 \
+    -e INTERNAL_PUSH_SECRET="$PUSH_SEC" -e INTERNAL_BASE_URL=http://gremion-ui:3000 \
     -e TENANT_PROXY_SHARED_SECRET="$PROXY_SECRET" \
-    -e KEYCLOAK_ADMIN_URL=http://keycloak:8080/auth -e KEYCLOAK_ADMIN_CLIENT_SECRET="$(secret)" \
+    -e KEYCLOAK_ADMIN_URL=http://keycloak:8080/auth -e KEYCLOAK_ADMIN_CLIENT_SECRET="$KCADM_SEC" \
     -e CONFIG_PATH=/app/config/config.json \
     "$APP_IMG" >/dev/null
 docker cp "$(hostpath "$FIX/config/default")/." "$APP:/app/config"
@@ -241,7 +252,7 @@ probe nope.t041.test
 [ "$STATUS" = "404" ] || die "(a) nope.t041.test: status $STATUS, want 404"
 no_marker "(a)"
 events | grep -q 'nope.t041.test' && die "(a) the app saw nope.t041.test (want Traefik's no-router 404)"
-RESULT_A=ok
+RESULT_A=ok; echo "  (a) $STATUS ${BODY:0:40}"
 
 # (b) the unbound host, no X-Forwarded-Host, from the host: app 404 + one event.
 step "probe (b)"
@@ -253,7 +264,7 @@ B_EVENTS="$(events | grep '"host":"t041.test"' || true)"
 [ "$(printf '%s' "$B_EVENTS" | grep -c . || true)" = "1" ] || die "(b) want exactly one tenant.host.rejected for t041.test, got: ${B_EVENTS:-none}"
 printf '%s' "$B_EVENTS" | grep -q '"reason":"unbound"' || die "(b) reason is not unbound: $B_EVENTS"
 printf '%s' "$B_EVENTS" | grep -Eq '"ts":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z"' || die "(b) no RFC 3339 ts: $B_EVENTS"
-RESULT_B=ok
+RESULT_B=ok; echo "  (b) 404 + $B_EVENTS"
 
 # (c) a forged X-Forwarded-Host naming customer A, from Traefik's trusted loopback.
 step "probe (c)"
@@ -264,7 +275,7 @@ case "$C_OUT" in *"$A_MARK"*|*'ocation:'*) die "(c) customer A answered a forged
 C_EVENTS="$(events | grep '"reason":"forged"' || true)"
 [ "$(printf '%s' "$C_EVENTS" | grep -c . || true)" = "1" ] || die "(c) want exactly one reason=forged line, got: ${C_EVENTS:-none}"
 printf '%s' "$C_EVENTS" | grep -q '"host":"a.t041.test"' || die "(c) forged line does not name a.t041.test: $C_EVENTS"
-RESULT_C=ok
+RESULT_C=ok; echo "  (c) 404 + $C_EVENTS"
 
 # (d) customer A on its bound host: the app answers with A's sign-in redirect.
 step "probe (d)"
@@ -273,7 +284,7 @@ probe a.t041.test
 LOC="$(printf '%s\n' "$HDRS" | sed -n 's/^[Ll]ocation: *//p' | head -n1)"
 case "$LOC" in *'/auth/'*) ;; *) die "(d) redirect is not to the sign-in: $LOC" ;; esac
 case "$LOC" in http*://*) case "$LOC" in http*://a.t041.test/*) ;; *) die "(d) redirect leaves A's host: $LOC" ;; esac ;; esac
-RESULT_D=ok
+RESULT_D=ok; echo "  (d) $STATUS Location: $LOC"
 
 # (e) the app stopped: the starting page (the errors middleware), not a raw 502.
 step "probe (e)"
@@ -281,7 +292,7 @@ docker stop -t 5 "$APP" >/dev/null
 probe a.t041.test
 case "$BODY" in *'Gremion is starting'*) ;; *) die "(e) want the starting page, got $STATUS: ${BODY:0:200}" ;; esac
 case "$BODY" in *'Bad Gateway'*) die "(e) a raw 502 body leaked" ;; esac
-RESULT_E=ok
+RESULT_E=ok; echo "  (e) $STATUS starting page"
 
 echo "TENANT-HOST-PROOF: a=$RESULT_A b=$RESULT_B c=$RESULT_C d=$RESULT_D e=$RESULT_E (app $SHA8, $TR_IMAGE, ${PG_IMAGE%%@*})"
 }
