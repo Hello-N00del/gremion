@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, chmodSync, lstatSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -282,17 +282,61 @@ test('RED: a delta entry pins the blob it excuses — a further edit to a listed
   }
 })
 
-test('RED: a mode change (chmod +x) or a symlink in place of a copied file fails', () => {
+// What this filesystem can express, probed rather than assumed from the
+// platform name: on Windows a file never carries an exec bit (lstat mode has
+// no 0o111, whatever chmod does) and a symlink needs Developer Mode or
+// elevation (else EPERM; MSYS `ln -s` silently copies). A RED the platform
+// cannot express is SKIPPED with that reason, never faked GREEN; on
+// Linux/macOS both run.
+function fsCaps() {
+  const dir = mkdtempSync(join(tmpdir(), 't200-parity-caps-'))
+  try {
+    const f = join(dir, 'f')
+    writeFileSync(f, '')
+    let exec = false
+    try {
+      chmodSync(f, 0o755)
+      exec = (lstatSync(f).mode & 0o111) !== 0
+    } catch {
+      exec = false
+    }
+    let link = false
+    try {
+      symlinkSync('f', join(dir, 'l'))
+      link = lstatSync(join(dir, 'l')).isSymbolicLink()
+    } catch {
+      link = false
+    }
+    return { exec, link }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+const CAPS = fsCaps()
+const NO_EXEC = 'this filesystem gives no file an exec bit (Windows): the mode RED cannot be expressed here; it runs on Linux/macOS'
+const NO_LINK = 'this platform cannot create a symlink (Windows without Developer Mode): the symlink RED cannot be expressed here; it runs on Linux/macOS'
+
+test('RED: a mode change (chmod +x) of a copied file fails', { skip: CAPS.exec ? false : NO_EXEC }, () => {
   const f = fixture()
   try {
     execFileSync('git', ['add', '-A'], { cwd: f.kernel })
-    execFileSync('chmod', ['+x', join(f.kernel, 'modules/messaging/src/m.ts')])
+    chmodSync(join(f.kernel, 'modules/messaging/src/m.ts'), 0o755)
     assert.ok(runParity(f.opts).problems.some((p) => /mode/.test(p) && /m\.ts/.test(p)))
-    execFileSync('chmod', ['-x', join(f.kernel, 'modules/messaging/src/m.ts')])
+    chmodSync(join(f.kernel, 'modules/messaging/src/m.ts'), 0o644)
+    assert.deepEqual(runParity(f.opts).problems, [])
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a symlink in place of a copied file fails', { skip: CAPS.link ? false : NO_LINK }, () => {
+  const f = fixture()
+  try {
+    execFileSync('git', ['add', '-A'], { cwd: f.kernel })
     assert.deepEqual(runParity(f.opts).problems, [])
     put(f.kernel, 'modules/elsewhere.ts', 'export const m = 1\n')
     rmSync(join(f.kernel, 'modules/messaging/src/m.ts'))
-    execFileSync('ln', ['-s', '../../elsewhere.ts', join(f.kernel, 'modules/messaging/src/m.ts')])
+    symlinkSync('../../elsewhere.ts', join(f.kernel, 'modules/messaging/src/m.ts'))
     assert.ok(runParity(f.opts).problems.some((p) => /symlink/.test(p)))
   } finally {
     f.cleanup()

@@ -8,7 +8,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 
@@ -460,7 +460,7 @@ test('the lexer ignores comments and keeps quotes inside regex literals from ope
   assert.deepEqual(extractSpecifiers(src).map((s) => s.spec), ['./y'])
 })
 
-test('RED (round 2): bare/workspace path deps, npm:@stura aliases, lifecycle scripts, and symlinks leaving the module', () => {
+test('RED (round 2): bare/workspace path deps, npm:@stura aliases and lifecycle scripts leaving the module', () => {
   const t = tree({
     ...BASE,
     'modules/finance/package.json': JSON.stringify({
@@ -470,12 +470,38 @@ test('RED (round 2): bare/workspace path deps, npm:@stura aliases, lifecycle scr
     }),
   })
   try {
-    symlinkSync('../../../scripts', join(t.root, 'modules/finance/src/linked'))
     const r = scanModules(t.root, OPTS)
-    const mine = r.problems.filter((p) => /modules\/finance\/(package\.json|src\/linked)/.test(p))
-    for (const w of ['dependencies.a', 'dependencies.b', 'dependencies.c', 'scripts.pretest', 'src/linked'])
+    const mine = r.problems.filter((p) => /modules\/finance\/package\.json/.test(p))
+    for (const w of ['dependencies.a', 'dependencies.b', 'dependencies.c', 'scripts.pretest'])
       assert.ok(mine.some((p) => p.includes(w)), `${w} not flagged:\n${r.problems.join('\n')}`)
     assert.ok(!mine.some((p) => /dependencies\.ok|scripts\.build/.test(p)))
+  } finally {
+    t.cleanup()
+  }
+})
+
+// A symlink needs Developer Mode or elevation on Windows (else EPERM), so the
+// capability is probed, not assumed from the platform name; where it is
+// missing the RED is SKIPPED with that reason, never faked GREEN.
+function canSymlink() {
+  const dir = mkdtempSync(join(tmpdir(), 't200-scan-caps-'))
+  try {
+    writeFileSync(join(dir, 'f'), '')
+    symlinkSync('f', join(dir, 'l'))
+    return lstatSync(join(dir, 'l')).isSymbolicLink()
+  } catch {
+    return false
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+test('RED (round 2): a symlink leaving the module', { skip: canSymlink() ? false : 'this platform cannot create a symlink (Windows without Developer Mode): the symlink RED cannot be expressed here; it runs on Linux/macOS' }, () => {
+  const t = tree({ ...BASE })
+  try {
+    symlinkSync('../../../scripts', join(t.root, 'modules/finance/src/linked'))
+    const r = scanModules(t.root, OPTS)
+    assert.ok(r.problems.some((p) => p.includes('modules/finance/src/linked')), `src/linked not flagged:\n${r.problems.join('\n')}`)
   } finally {
     t.cleanup()
   }
