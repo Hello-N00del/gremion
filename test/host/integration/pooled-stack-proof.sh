@@ -619,7 +619,11 @@ phase_tenant() {
     compose app-blue "${run[@]}" provision "$TENANT_SLUG" --config "/fixture/tenant-t040-b.json" \
         > "$OUT/ledger/trd440-provision.log" 2>&1 \
         || { tail -25 "$OUT/ledger/trd440-provision.log" >&2; bad "provision $TENANT_SLUG failed"; return; }
-    ok "tenant: bootstrap-provisioner and provision $TENANT_SLUG ran (ledger/trd440-*.log)"
+    # The operator's step after provision (runbook tenant-lifecycle): the
+    # tenant's own config at /data/<slug>/config.json on the external
+    # tenant-config-data volume. The fleet (migrate) asserts its brand identity.
+    docker run --rm -i --name "${STACK}-seed-tenant" -v "${STACK}_tenant_config_data:/d" --entrypoint sh "$PROBE_IMAGE"         -c "mkdir -p /d/${TENANT_SLUG} && cat > /d/${TENANT_SLUG}/config.json && chown -R 1000:1000 /d/${TENANT_SLUG}"         < "$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json"
+    ok "tenant: bootstrap-provisioner and provision $TENANT_SLUG ran; its config is in place (ledger/trd440-*.log)"
 }
 
 # Split so no call outlives a time box: each compose render is ~10 s here.
