@@ -288,7 +288,12 @@ services:
       context: .
       dockerfile: gremion-ui/Dockerfile
       target: builder
-    entrypoint: ["node", "gremion-ui/scripts/tenant-provision.mjs"]
+    # Under tsx, as the runbook (docs/runbooks/tenant-lifecycle.md) and
+    # gremion-ui's own `provision` script run it. Measured on the scratch proof,
+    # the brief's plain `node gremion-ui/scripts/tenant-provision.mjs` dies with
+    # ERR_MODULE_NOT_FOUND on the extensionless '../src/lib/modules/registry'.
+    working_dir: /repo/gremion-ui
+    entrypoint: ["pnpm", "exec", "tsx", "scripts/tenant-provision.mjs"]
     restart: "no"
     logging: *logging
     deploy: *limits-m
