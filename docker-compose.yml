@@ -476,12 +476,34 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 2>/dev/null && echo healthy || exit 1"]
+      # TASK-036 (brief Q3, TRD-178): Keycloak's own readiness check on the
+      # management port (9000; KC_HEALTH_ENABLED + KC_HTTP_MANAGEMENT_RELATIVE_PATH
+      # below put it at /health/ready). A bare socket connect on :8080 passed as
+      # soon as the JVM bound the port, before the database or anything else was
+      # ready. The image ships neither curl nor wget, so bash's /dev/tcp speaks
+      # HTTP/1.0 itself; the probe needs a 200 status line AND "status": "UP".
+      # scripts/verify/census/keycloak-probe.test.mjs runs this script against
+      # 503/DOWN stubs. `$$` is compose's escape for a literal `$`.
+      test:
+        - CMD
+        - bash
+        - -c
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/9000 || exit 1
+          printf 'GET /health/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+          r=''
+          while IFS= read -r -t 5 l <&3; do r+="$$l"$$'\n'; done
+          r+="$$l"
+          case "$$r" in 'HTTP/1.'?' 200 '*'"status": "UP"'*) exit 0 ;; esac
+          exit 1
       interval: 20s
       timeout: 10s
       retries: 5
       start_period: 60s
     environment:
+      # TASK-036 (Q3): health endpoints on the management port, at its root.
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_MANAGEMENT_RELATIVE_PATH: /
       # Admin credentials (KC_BOOTSTRAP_* replaces KEYCLOAK_ADMIN_* in KC 26+)
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
