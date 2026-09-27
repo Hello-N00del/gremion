@@ -51,9 +51,8 @@ pnpm install
 
 1. `check-tenant-env-guard.mjs --enforce --root src` — tenancy/env-isolation guard
 2. `check-app-port-binding.mjs` — app port-binding guard
-3. `check-domain-regex.mjs` — tenant-domain regex guard
-4. `check-tenant-secrets-dir.mjs` — per-tenant secrets-dir guard
-5. `svelte-kit sync` then `svelte-check --tsconfig ./tsconfig.json` — type +
+3. `check-tenant-secrets-dir.mjs` — per-tenant secrets-dir guard
+4. `svelte-kit sync` then `svelte-check --tsconfig ./tsconfig.json` — type +
    Svelte diagnostics across the whole app
 
 ```bash

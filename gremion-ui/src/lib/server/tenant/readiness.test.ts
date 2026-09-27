@@ -11,6 +11,9 @@ import type { TenantContext } from './context'
 vi.mock('./registry', () => ({
   listActiveTenants: vi.fn(),
   resolveTenantBySlug: vi.fn(),
+  // TASK-041: the resolver selects by WHOLE host (the fleet still resolves by slug).
+  resolveTenantByHost: vi.fn(),
+  getTenantStatusByHost: vi.fn(async () => null),
   startTenantMigrationRun: vi.fn(),
   finishTenantMigrationRun: vi.fn(),
 }))
@@ -31,7 +34,12 @@ vi.mock('$lib/server/config', () => ({
   })),
 }))
 
-import { resolveTenantBySlug, startTenantMigrationRun, finishTenantMigrationRun } from './registry'
+import {
+  resolveTenantBySlug,
+  resolveTenantByHost,
+  startTenantMigrationRun,
+  finishTenantMigrationRun,
+} from './registry'
 import { runMigrations, getDb } from '$lib/server/db'
 import { currentTenantId } from './context'
 import { tenantResolveHandle } from './resolve'
@@ -59,6 +67,11 @@ beforeEach(() => {
   vi.mocked(resolveTenantBySlug).mockImplementation(async (slug: string) => {
     if (slug === 'alpha') return ctxFor('tid-a', 'alpha')
     if (slug === 'beta') return ctxFor('tid-b', 'beta')
+    return null
+  })
+  vi.mocked(resolveTenantByHost).mockImplementation(async (host) => {
+    if (host === 'alpha.example.org') return ctxFor('tid-a', 'alpha')
+    if (host === 'beta.example.org') return ctxFor('tid-b', 'beta')
     return null
   })
   vi.mocked(startTenantMigrationRun).mockImplementation(async (tenantId: string) => `run-${tenantId}`)

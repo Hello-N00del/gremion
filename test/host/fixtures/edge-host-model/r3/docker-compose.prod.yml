@@ -1,0 +1,6 @@
+services:
+  gremion-ui:
+    labels:
+      - "traefik.http.routers.gremion-ui-apex.rule=Host(`example.org`)"
+      - "traefik.http.routers.gremion-ui-apex.middlewares=gremion-ui-apexhost"
+      - "traefik.http.middlewares.gremion-ui-apexhost.headers.customrequestheaders.X-Forwarded-Host=default.example.org"

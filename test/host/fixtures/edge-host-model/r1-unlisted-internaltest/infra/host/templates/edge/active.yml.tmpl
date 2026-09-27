@@ -1,0 +1,17 @@
+http:
+  routers:
+    test-app:
+      entryPoints: ["internaltest"]
+      rule: "HostRegexp(`.+`)"
+      service: "app-next"
+      priority: 1
+    test-public:
+      entryPoints: ["internaltest"]
+      rule: "HostRegexp(`.+`) && PathPrefix(`/portal`)"
+      service: "public-next"
+      priority: 100
+    test-extra:
+      entryPoints: ["internaltest"]
+      rule: "HostRegexp(`.+`) && PathPrefix(`/extra`)"
+      service: "app-next"
+      priority: 50

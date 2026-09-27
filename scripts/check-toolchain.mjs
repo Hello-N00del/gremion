@@ -74,7 +74,6 @@ export const ALLOWED_FIRST_PARTY_LIFECYCLE = {}
 // not silently unguarded (verifier MEDIUM finding 5).
 export const ALLOWED_FIRST_PARTY_TS_NOCHECK = {
   'gremion-ui/scripts/check-app-port-binding.mjs': 'standalone node build script (CLI-invoked, not TS-typed); owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
-  'gremion-ui/scripts/check-domain-regex.mjs': 'standalone node build script (CLI-invoked, not TS-typed); owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
   'gremion-ui/scripts/check-tenant-env-guard.mjs': 'standalone node build script (invoked via the CLI, not TS-typed); owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
   'gremion-ui/scripts/check-tenant-secrets-dir.mjs': 'standalone node build script (CLI-invoked, not TS-typed); owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',
   'gremion-ui/scripts/install-git-hooks.mjs': 'standalone node build script imported by a unit test, which pulls it into the svelte-check (checkJs+strict) program — a real escape, not dead code; owned by TASK-032 (gremion-ui/**) — residual recorded by TASK-017, not fixed here',

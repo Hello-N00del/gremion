@@ -1,5 +1,5 @@
 // No shebang: invoked via `node …` (package.json `check`) — matches the sibling
-// check-domain-regex.mjs / check-app-port-binding.mjs / check-tenant-env-guard.mjs
+// check-app-port-binding.mjs / check-tenant-env-guard.mjs
 // convention (a hashbang breaks the vitest inline .mjs transform if a unit test
 // imports a helper here).
 // @ts-nocheck — standalone node build script (CLI-invoked, not TS-typed).
@@ -102,7 +102,7 @@ function main() {
 }
 
 // Only run main() when invoked as a script (not when a unit test imports the
-// exported helpers) — matches check-domain-regex.mjs.
+// exported helpers) — matches check-tenant-env-guard.mjs.
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main()
 }

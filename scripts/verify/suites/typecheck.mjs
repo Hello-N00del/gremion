@@ -15,13 +15,12 @@ import { parseSvelteCheckMachine } from '../lib/parsers.mjs'
 import { run, spawnMissing, tail } from '../lib/proc.mjs'
 import { REPO_ROOT } from '../lib/vitest.mjs'
 
-// The four TASK-032-owned build guards gremion-ui's own `check` script runs
+// The three TASK-032-owned build guards gremion-ui's own `check` script runs
 // before svelte-check. Called individually (not via `pnpm check`) so
 // svelte-check can be run separately with `--output machine`.
 const UI_PRECHECKS = [
   ['scripts/check-tenant-env-guard.mjs', ['--enforce', '--root', 'src']],
   ['scripts/check-app-port-binding.mjs', []],
-  ['scripts/check-domain-regex.mjs', []],
   ['scripts/check-tenant-secrets-dir.mjs', []],
 ]
 

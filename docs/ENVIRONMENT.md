@@ -51,24 +51,11 @@ DOMAIN=localhost
 DOMAIN=gremion.example.org
 ```
 
-### DOMAIN_REGEX
-
-- **Type:** String (Go regexp, with literal dots backslash-escaped)
-- **Required in production** whenever `DOMAIN` is a real domain.
-- **Used by:** the tenant wildcard edge routers in `docker-compose.prod.yml`
-  (Traefik v3 `HostRegexp`).
-- **Impact:** **Load-bearing.** If left unset/empty with a real `DOMAIN`, every
-  wildcard router leg renders the dead pattern `^[a-z0-9-]+\.$`, which matches
-  no tenant host — so all tenant subdomains 404 at Traefik while the apex still
-  works and masks it. This is a silent misconfig, not a safe fail-closed.
-  `pnpm -C gremion-ui check` (`scripts/check-domain-regex.mjs`) fails the build if
-  a real prod `DOMAIN` is set with an empty `DOMAIN_REGEX`. Leave unset in dev
-  (`DOMAIN=localhost` does not use wildcard routing).
-
-```bash
-# DOMAIN=gremion.example.org -> DOMAIN_REGEX=gremion\.example\.org
-DOMAIN_REGEX=gremion\.example\.org
-```
+> **No wildcard key.** Since TASK-041 a request is resolved by its WHOLE host
+> (a `tenant_domain` row) and every tenant host has its own `Host(...)`-literal
+> router, so there is no regexp-escaped domain variable any more. `DOMAIN` names
+> only the apex, which binds no tenant (TRD-075). See
+> [runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a.
 
 ### TENANT_SECRETS_DIR
 
@@ -520,9 +507,8 @@ curl https://${DOMAIN}/auth/realms/<realm>/.well-known/openid-configuration
 grep -E 'GREMION_(UI|ADMIN)_OIDC_CLIENT_SECRET' .env
 ```
 
-### Tenant subdomains 404 in production
+### A tenant host 404s in production
 
-Confirm `DOMAIN_REGEX` is set to the backslash-escaped `DOMAIN`; an empty
-`DOMAIN_REGEX` with a real `DOMAIN` collapses every wildcard router leg to a
-pattern that matches no tenant host while the apex keeps working. See
-[runbooks/tenant-edge.md](runbooks/tenant-edge.md).
+The host needs both a `tenant_domain` row and its own `Host(...)`-literal
+router. An app 404 logs one `tenant.host.rejected` line whose `reason` names the
+cause. See [runbooks/tenant-edge.md](runbooks/tenant-edge.md).

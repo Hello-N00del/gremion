@@ -86,9 +86,9 @@ All configuration lives in `.env` (copied from `.env.example`). The setup
 script fills in the secrets and the domain; the rest of the template documents
 each variable inline. The most relevant groups:
 
-- **`DOMAIN`** — `localhost` for dev, your real domain for a deployment.
-  `DOMAIN_REGEX` (the regexp-escaped domain) is **required in production** for
-  the Traefik tenant-wildcard routers.
+- **`DOMAIN`** — `localhost` for dev, your real domain for a deployment. It
+  names the apex only; tenant hosts are bound one by one (no wildcard router,
+  see `docs/runbooks/tenant-edge.md`).
 - **PostgreSQL** — `POSTGRES_USER`/`POSTGRES_PASSWORD`, the Keycloak DB
   (`KEYCLOAK_DB_*`), the application DB (`GREMION_DB_*`), and the control-plane
   DB (`CONTROL_DB_*`, the tenant registry + fleet-migration ledger).
