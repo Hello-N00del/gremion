@@ -71,55 +71,7 @@ until curl -sf --max-time 5 "${KC_FETCH_URL}" >/dev/null 2>&1; do
   sleep 2
 done
 
-KEYCLOAK_FETCH_URL="${KC_FETCH_URL}" python3 - "$OUTPUT" <<'PY'
-import json
-import os
-import sys
-import textwrap
-import urllib.error
-import urllib.request
-
-import yaml
-
-config_path = sys.argv[1]
-fetch_url = os.environ.get("KEYCLOAK_FETCH_URL", "").strip()
-
-pem = None
-if fetch_url:
-    try:
-        with urllib.request.urlopen(fetch_url, timeout=10) as r:
-            realm_data = json.load(r)
-        public_key = realm_data.get("public_key")
-        if public_key:
-            pem_body = "\n".join(textwrap.wrap(public_key, 64))
-            pem = f"-----BEGIN PUBLIC KEY-----\n{pem_body}\n-----END PUBLIC KEY-----\n"
-        else:
-            sys.stderr.write(
-                "[gremion-synapse] Keycloak realm response missing public_key field\n"
-            )
-    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-        sys.stderr.write(f"[gremion-synapse] Keycloak fetch failed: {exc}\n")
-
-with open(config_path) as f:
-    cfg = yaml.safe_load(f)
-
-jwt_cfg = cfg.setdefault("jwt_config", {})
-if pem:
-    jwt_cfg["secret"] = pem
-    sys.stderr.write(
-        "[gremion-synapse] Injected Keycloak realm public key into jwt_config.secret\n"
-    )
-else:
-    # No key available — disable JWT login so Synapse still boots.
-    jwt_cfg["enabled"] = False
-    jwt_cfg.pop("secret", None)
-    sys.stderr.write(
-        "[gremion-synapse] WARNING: jwt_config disabled — Keycloak public key unavailable\n"
-    )
-
-with open(config_path, "w") as f:
-    yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
-PY
+KEYCLOAK_FETCH_URL="${KC_FETCH_URL}" python3 /inject-jwt-key.py "$OUTPUT"
 
 # Rendered file must be readable/writable by the synapse user.
 if [ "$(id -u)" = "0" ]; then

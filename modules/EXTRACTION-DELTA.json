@@ -147,7 +147,7 @@
       "path": "modules/messaging/synapse/Dockerfile",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "84e738121f2a88137c57fde2370de543088ab366"
+      "blob": "fe027f3b2c0c16fc8e2164a9c7ca098b65821550"
     },
     {
       "path": "modules/messaging/synapse/bootstrap.sh",
@@ -165,7 +165,7 @@
       "path": "modules/messaging/synapse/entrypoint.sh",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "21a1aeba64e0827052c9c2d74ce82a993aa85669"
+      "blob": "bf0d62d25f4bc8a4aa0c1ed39729ebad95925868"
     },
     {
       "path": "modules/messaging/synapse/healthcheck.sh",
@@ -178,6 +178,12 @@
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
       "blob": "abc575f20fa036dfd9cc77adf29231de7ac753af"
+    },
+    {
+      "path": "modules/messaging/synapse/inject-jwt-key.py",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "80a6d106052441ebf13342b88ac9635ac80d0916"
     },
     {
       "path": "modules/messaging/synapse/log.config",
@@ -202,6 +208,12 @@
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
       "blob": "557942107c7c31eab331184b96862bf1c4bf781f"
+    },
+    {
+      "path": "modules/messaging/synapse/test/inject.test.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "f3584afd8a6c36f746aa8135b2cb737745c51683"
     },
     {
       "path": "modules/messaging/synapse/test/preflight.test.mjs",
