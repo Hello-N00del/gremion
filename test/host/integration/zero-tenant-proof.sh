@@ -250,7 +250,10 @@ stack_is_up() {
     docker inspect "$APP" >/dev/null 2>&1 || precondition "the proof stack is not up (run T042_PHASE=up first)"
     [ -f "$ROOT/trust.hdr" ] || precondition "no per-run trust header (run T042_PHASE=up first)"
     ROOT_H="$(hostpath "$ROOT")"
-    APP_PORT="$(docker port "$APP" 3000/tcp 2>/dev/null | head -n1 | sed 's/.*://')"
+    # A restarting container publishes no port: every probe then records
+    # "status none" instead of aborting the run.
+    APP_PORT="$(docker port "$APP" 3000/tcp 2>/dev/null | head -n1 | sed 's/.*://' || true)"
+    APP_PORT="${APP_PORT:-1}"
 }
 
 phase_probe_boot() {
@@ -338,7 +341,7 @@ phase_probe_wizard() {
     else
         bad "wizard never-existing-path" "status ${n_status:-none} Location ${n_loc:-none}"
     fi
-    is "$s_status ${s_loc/\%2Fsetup/X}" "$n_status ${n_loc/\%2Ft042-no-such-route/X}" \
+    is "${s_status:-none} ${s_loc/\%2Fsetup/X}" "${n_status:-no-answer} ${n_loc/\%2Ft042-no-such-route/X}" \
         "wizard /setup answers exactly as a never-existing path" \
         "/setup ${s_status:-none} ${s_loc:-none} vs unknown ${n_status:-none} ${n_loc:-none}"
 
@@ -347,7 +350,9 @@ phase_probe_wizard() {
     local ids
     # adapter-node's route manifest: build/server/manifest.js, or (current
     # Vite bundling) the hashed chunk build/server/chunks/manifest.js-<hash>.js.
-    ids="$(docker exec "$APP" sh -c 'cat /app/build/server/manifest.js /app/build/server/chunks/manifest.js-*.js 2>/dev/null' \
+    # Read from the IMAGE (a throwaway container), so a crash-looping app
+    # cannot hide it.
+    ids="$(docker run --rm --name "$N-manifest" --entrypoint sh "$APP_IMG" -c 'cat /app/build/server/manifest.js /app/build/server/chunks/manifest.js-*.js 2>/dev/null' \
         | grep -oE 'id: *"/[^"]*"' | sed -E 's/id: *"(.*)"/\1/' | sort -u || true)"
     if [ -z "$ids" ]; then
         bad "manifest readable" "no route ids read from the image's adapter-node manifest"
