@@ -25,6 +25,7 @@ TRD-004 guard set re-run, a TRD-340 snapshot taken.
 
 ```bash
 sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
+sudo -u gremion ln /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcrypt_key.txt"
 docker compose --env-file /opt/gremion/etc/env/state.env up -d
 ```
 

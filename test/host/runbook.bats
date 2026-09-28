@@ -542,6 +542,25 @@ check_render_first() {
     if [ -z "$render" ] || [ "$render" -gt "$up" ]; then
         echo "install.md starts the state project before gremion-render (as the deploy user) has written its bind sources" >&2; return 1
     fi
+    # The state project's file secrets (docker-compose.yml, top-level
+    # `secrets: <name>: file: ./<path>`) are read from the release tree at `up`.
+    # One gremion-render does not write there has to be put there by a step
+    # before the `up`; the day the render writes it, the step may go.
+    local p before bad=0 seen=0
+    before="$(head -n "$up" <<<"$steps")"
+    while read -r p; do
+        [ -n "$p" ] || continue
+        seen=$((seen + 1))
+        grep -qF -- "\${RELEASE_DIR}/${p}" "${TREE_ROOT}/infra/host/bin/gremion-render" && continue
+        if ! grep -F -- "\$REL/${p}" <<<"$before" | grep -q 'sudo -u gremion '; then
+            echo "install.md starts the state project without ${p} in the release tree (a docker-compose.yml secret gremion-render does not write)" >&2; bad=1
+        fi
+    done < <(tr -d '\r' < "${TREE_ROOT}/docker-compose.yml" | awk '
+                 /^secrets:/ { s = 1; next }
+                 /^[^[:space:]#]/ { s = 0 }
+                 s && /^[[:space:]]+file:[[:space:]]*\.\// { sub(/^[[:space:]]+file:[[:space:]]*\.\//, ""); print }')
+    [ "$seen" -gt 0 ] || { echo "no file secret extracted from docker-compose.yml; the extractor is reading nothing" >&2; return 1; }
+    return "$bad"
 }
 
 # gremion-deploy logs in under the HOME of the user that runs it, so a procedure
@@ -946,6 +965,11 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
     grep -vF 'state.env up' "$d/install.md" > "$d/install.tmp" && mv "$d/install.tmp" "$d/install.md"
     run check_render_first "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"never starts the state project"* ]]
+    # The compose file secret gremion-render does not write into the release tree.
+    d="$(fixture valid)"
+    grep -vF 'secrets/ipcrypt_key.txt' "$d/install.md" > "$d/install.tmp" && mv "$d/install.tmp" "$d/install.md"
+    run check_render_first "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"without secrets/ipcrypt_key.txt in the release tree"* ]]
 }
 
 @test "every variable a post-condition reads is assigned there or in the preamble" {
