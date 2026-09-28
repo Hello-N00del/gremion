@@ -33,7 +33,8 @@
 #            setup_complete false): unauthenticated GET /setup on its host
 #            answers exactly like the never-existing /t042-no-such-route:
 #            302 to /auth/login?callbackUrl=<the URL-encoded path>
-#   manifest /app/build/server/manifest.js holds no route id /setup or
+#   manifest the image's adapter-node route manifest (build/server/manifest.js
+#            or its hashed chunk) holds no route id /setup or
 #            /api/setup/{admins,config,health} (and does hold /api/setup/seed)
 #   admins   POST /api/setup/admins with a planted .setup-token sent as
 #            X-Setup-Token answers authGuard's 401 {error:'Unauthenticated'}
@@ -315,10 +316,18 @@ phase_probe_wizard() {
     docker cp "$(hostpath "$FIX/config/proof")" "$APP:/data/"
     step "wizard"
     local s_status s_loc n_status n_loc
+    # A customer bound after boot is not in the boot fleet: its first request
+    # starts the single-flighted lazy migration and answers the tenant-scoped
+    # 503 (D-READY). Wait that out on the never-existing path first, so both
+    # compared requests meet a READY tenant.
+    for _ in $(seq 1 20); do
+        probe /t042-no-such-route "$FIXTURE_HOST"
+        [ "$STATUS" = "503" ] || break
+        sleep 3
+    done
+    n_status="$STATUS" n_loc="$LOCATION"
     probe /setup "$FIXTURE_HOST"
     s_status="$STATUS" s_loc="$LOCATION"
-    probe /t042-no-such-route "$FIXTURE_HOST"
-    n_status="$STATUS" n_loc="$LOCATION"
     if [ "$s_status" = "302" ] && [ "$s_loc" = "/auth/login?callbackUrl=%2Fsetup" ]; then
         ok "wizard /setup -> 302 $s_loc"
     else
@@ -336,9 +345,12 @@ phase_probe_wizard() {
     # ── manifest ───────────────────────────────────────────────────────────────
     step "manifest"
     local ids
-    ids="$(docker exec "$APP" cat /app/build/server/manifest.js 2>/dev/null | grep -oE 'id: *"/[^"]*"' | sed -E 's/id: *"(.*)"/\1/' | sort -u || true)"
+    # adapter-node's route manifest: build/server/manifest.js, or (current
+    # Vite bundling) the hashed chunk build/server/chunks/manifest.js-<hash>.js.
+    ids="$(docker exec "$APP" sh -c 'cat /app/build/server/manifest.js /app/build/server/chunks/manifest.js-*.js 2>/dev/null' \
+        | grep -oE 'id: *"/[^"]*"' | sed -E 's/id: *"(.*)"/\1/' | sort -u || true)"
     if [ -z "$ids" ]; then
-        bad "manifest readable" "no route ids read from /app/build/server/manifest.js"
+        bad "manifest readable" "no route ids read from the image's adapter-node manifest"
     else
         if printf '%s\n' "$ids" | grep -qx '/api/setup/seed'; then ok "manifest control: /api/setup/seed present"; else bad "manifest control" "/api/setup/seed not found (the scan is blind)"; fi
         local r hit=''
@@ -363,7 +375,6 @@ phase_probe_wizard() {
     fi
 
     echo "ZERO-TENANT-PROOF: boot=$(result_of boot) state=$(result_of state) hosts=$(result_of hosts) wizard=$(result_of wizard) manifest=$(result_of manifest) admins=$(result_of admins) (app $SHA8, ${PG_IMAGE%%@*}, healthz=${HZ:-not-probed})"
-    save_results
     [ "$FAILS" -eq 0 ] || { echo "zero-tenant-proof: $FAILS check(s) FAILED" >&2; return 1; }
 }
 
