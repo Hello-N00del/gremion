@@ -68,13 +68,15 @@ describe('host scripts (E6, G7, G8)', () => {
     expect(out).toContain('x_nats_secrets')
     expect(out).toContain('x_nats_accounts')
   })
-  test('gremion-deploy runs nats-auth init in step 3, after the pinned-image check', () => {
+  test('gremion-deploy runs nats-auth init at the end of step 4 -- after gremion-render made the files tenant-create binds -- and never in step 3', () => {
     const s3 = body('infra/host/bin/gremion-deploy', 'step_3_space_and_pull')
-    const pinned = s3.indexOf('every pinned image present locally')
-    const init = s3.indexOf('run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init')
-    expect(init).toBeGreaterThan(pinned)
-    expect(pinned).toBeGreaterThan(-1)
-    expect(s3).toMatch(/exec nats-auth init \\\n\s+\|\| die /)
+    const s4 = body('infra/host/bin/gremion-deploy', 'step_4_render')
+    expect(s3).not.toContain('nats-auth init')
+    const render = s4.indexOf('"$prog" --release "$RELEASE_DIR"')
+    const init = s4.indexOf('run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init')
+    expect(render).toBeGreaterThan(-1)
+    expect(init).toBeGreaterThan(render)
+    expect(s4).toMatch(/exec nats-auth init \\\n\s+\|\| die /)
   })
 })
 
