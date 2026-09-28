@@ -447,6 +447,14 @@ step_3_space_and_pull() {
         docker image inspect "$ref" >/dev/null 2>&1 || die "image absent after pull: $ref" 1
     done <<< "$PINNED_IMAGES"
     ok "every pinned image present locally"
+    # TASK-024 (Q12): nats-auth init before any colour comes up -- the NATS
+    # SYS reload seed and the accounts file on the external nats volumes.
+    # Idempotent and offline (--no-deps): a present seed is kept, an unchanged
+    # file is not rewritten. A changed render is loaded by the next reload
+    # (tenant-create) or nats restart.
+    compose "app-${NEW_COLOUR}" run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init \
+        || die "nats-auth init failed for $TAG" 1
+    ok "nats-auth init: seeds and accounts file in place"
 }
 # ── step 4 — host-rendered files (§F.4.4) ───────────────────────────────────
 # bin_path is captured into a variable BEFORE it is invoked, in this step and
