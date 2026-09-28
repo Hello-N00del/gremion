@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 1.0.0
+- Version: 2.0.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -174,11 +174,21 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
   --mail-ip "$MAIL_BIND_IP" --mail-ip6 "$MAIL_BIND_IP6" --edit 1
 ```
 
-12. **Start the state project.** No program starts it; `gremion-deploy` only
-    pulls it. The registry token is read at a prompt and the login is removed
-    again at once.
+12. **Render the host-owned files, then start the state project.** The state
+    project bind-mounts files only `gremion-render` writes into the release
+    tree: the pgbouncer `userlist.txt` and the Keycloak certificate and key
+    under `docker/keycloak/certs/`. Started without them, Docker creates the
+    missing `userlist.txt` as a root-owned directory, Keycloak has no
+    certificate, and the first deploy's own render (its step 4, as the deploy
+    user) dies on that directory. The render runs as the deploy user, because it
+    keeps the Keycloak CA in `etc/secrets/keycloak` for every later release,
+    and it ends with a `RENDER:` line. No program starts the state project;
+    `gremion-deploy` only pulls it. The registry token is read at a prompt and
+    the login is removed again at once.
 
 ```bash
+sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
+stat -c '%U %F %n' "$REL/docker/pgbouncer/userlist.txt" "$REL/docker/keycloak/certs/keycloak.crt"   # gremion regular file, both
 cd "$REL"
 read -rs GHCR_TOKEN
 printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u x-access-token --password-stdin
@@ -365,4 +375,5 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 2.0.0 (2026-09-28): step 12 runs `gremion-render` as the deploy user before the state project's first `up` and observes its outputs (TASK-037 review).
 - 1.0.0 (2026-09-27): first version (TASK-037).

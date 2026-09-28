@@ -11,7 +11,7 @@ recorded as one.
 
 | Procedure | What it does | Version | First run |
 |---|---|---|---|
-| [install.md](install.md) | the from-zero bring-up a rebuilt host follows (TRD-042, R15-2) | 1.0.0 | TASK-038, the pilot re-initialisation |
+| [install.md](install.md) | the from-zero bring-up a rebuilt host follows (TRD-042, R15-2) | 2.0.0 | TASK-038, the pilot re-initialisation |
 | [upgrade.md](upgrade.md) | one release onto a running installation through `gremion-deploy` | 1.0.0 (provisional) | the first pilot release after the re-initialisation |
 | [backup.md](backup.md) | the pilot posture: installed, verified once, then disabled (R15-1) | 1.0.0 | TASK-089 |
 | [restore.md](restore.md) | three arms: the provider host-backup drill, the platform restore into a non-production stack, the reboot measurement | 1.0.0 | TASK-089 (arms A, B), TASK-123 (arm C) |
@@ -27,10 +27,11 @@ reads state rather than an exit code.
 **Where things run.** Every step runs as root on the host unless it says
 otherwise. The exception is the deploy user's own programs: `gremion-init-secrets`,
 `gremion-backup`, `gremion-deploy`, `gremion-verify`, `gremion-restore-into`,
-`gremion-snapshot`, `gremion-switch` and `gremion-rollback` always run as
-`sudo -u gremion`, as the installed systemd units do. They read
-`etc/env/*.env` inside the deploy user's 0700 `etc/`, and `gremion-deploy` runs
-git in the release checkout, which git refuses when another user owns it. So
+`gremion-snapshot`, `gremion-switch`, `gremion-rollback` and `gremion-render`
+always run as `sudo -u gremion`, as the installed systemd units do. They read
+`etc/env/*.env` inside the deploy user's 0700 `etc/`, `gremion-deploy` runs
+git in the release checkout, which git refuses when another user owns it, and
+re-renders the release tree's host-owned files as `gremion`. So
 the env files and every release tree belong to `gremion`: a release tree root
 clones is handed over with `chown -R gremion:gremion` before anything reads it,
 and `test/host/runbook.bats` fails on a deploy-user program run as root.
