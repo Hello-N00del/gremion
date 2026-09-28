@@ -3,6 +3,9 @@
 // so no per-tenant variable may be read from the process env: every name the
 // build-time env guard classes as per-tenant is refused, loudly, naming it.
 import { describe, it, expect, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { platformEnv, PLATFORM_ENV_NAMES } from './platform-env'
 
 const saved = { NATS_URL: process.env.NATS_URL }
@@ -39,5 +42,28 @@ describe('platformEnv (deployment-global env only, TASK-042 Q4)', () => {
   it('its closed list holds NATS_URL and no per-tenant name', () => {
     expect(PLATFORM_ENV_NAMES).toContain('NATS_URL')
     for (const n of PLATFORM_ENV_NAMES) expect(() => platformEnv(n)).not.toThrow()
+  })
+})
+
+// TASK-042 R28 (MEDIUM 6): the per-tenant name list is RUNTIME data shared by
+// this module and the build-time guard (scripts/check-tenant-env-guard.mjs).
+// The runtime module owns it; the CLI script imports it, never the reverse, so
+// no server module depends on an untyped (@ts-nocheck) build script.
+describe('the per-tenant env name list is single-sourced in a runtime module', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+
+  it('platform-env.ts imports nothing from scripts/', () => {
+    const src = readFileSync(resolve(here, 'platform-env.ts'), 'utf-8')
+    expect(src).not.toMatch(/from\s+['"][^'"]*scripts\//)
+  })
+
+  it('the guard classifies exactly what the shared runtime module classifies', async () => {
+    const shared = await import('./per-tenant-env-names.js')
+    const guard = await import('../../../../scripts/check-tenant-env-guard.mjs')
+    expect(guard.EXACT_VARS).toBe(shared.PER_TENANT_EXACT_VARS)
+    expect(guard.PREFIX_VARS).toBe(shared.PER_TENANT_PREFIX_VARS)
+    for (const n of ['CONFIG_PATH', 'LIVEKIT_URL', 'AUTH_KEYCLOAK_ISSUER', 'NATS_URL', 'PLATFORM_DOMAIN']) {
+      expect(shared.isPerTenantEnvName(n)).toBe(n !== 'NATS_URL' && n !== 'PLATFORM_DOMAIN')
+    }
   })
 })

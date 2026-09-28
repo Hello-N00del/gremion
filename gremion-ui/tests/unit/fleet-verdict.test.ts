@@ -6,7 +6,6 @@
 // tenants migrated", and a caller that needs a migrated data plane
 // (--require-tenant / MIGRATE_REQUIRE_TENANT=1) must fail there.
 import { describe, it, expect } from 'vitest'
-// @ts-expect-error -- plain .mjs CLI helper, no declaration file
 import { fleetVerdict, requireTenantFrom } from '../../scripts/fleet-verdict.mjs'
 
 type Outcome = { ok: boolean; error?: string; cause?: unknown }
