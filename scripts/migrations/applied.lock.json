@@ -155,6 +155,19 @@
         "001_init.sql": "d4a3e825d132d1b2049b7bb1a876be5d46c58068604e314264fec2341ccdd5ba",
         "002_access_log_survives_delete.sql": "9f68964c68887f7baefcc0331f1592db91b034fc11b5787bb50526ced2c4f3e3"
       }
+    },
+    "platform": {
+      "legacyFloor": 3,
+      "legacy": [
+        "0001_plt_setup.sql",
+        "0002_plt_module.sql",
+        "0003_plt_module_database.sql"
+      ],
+      "files": {
+        "0001_plt_setup.sql": "80797659ccd6364c8653647bcf49cdfbd71fb473db5d76e7f29852bca2e31b07",
+        "0002_plt_module.sql": "a52fa722eec6bcfedf0214ac4f22412d56296e89b750fc46fea1b45e69830729",
+        "0003_plt_module_database.sql": "ad86a84ee8b38a37c6a4771dacf90d02189b79f6971930d7c3937e255e1d975a"
+      }
     }
   }
 }

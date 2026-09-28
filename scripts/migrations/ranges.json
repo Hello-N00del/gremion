@@ -195,6 +195,24 @@
       "highWater": 0,
       "legacyFloor": 0,
       "legacy": []
+    },
+    {
+      "id": "platform",
+      "database": "gremion_platform",
+      "dirs": [
+        "packages/tenant-store/src/lifecycle/platform-migrations"
+      ],
+      "manifestDirs": [
+        "packages/tenant-store/src/lifecycle/platform-migrations"
+      ],
+      "padWidth": 4,
+      "highWater": 3,
+      "legacyFloor": 3,
+      "legacy": [
+        "0001_plt_setup.sql",
+        "0002_plt_module.sql",
+        "0003_plt_module_database.sql"
+      ]
     }
   ],
   "nonMigration": [
@@ -217,6 +235,10 @@
     {
       "glob": "packages/tenant-store/**/fixtures/**",
       "reason": "tenant-store runner fixture chain (TASK-020), applied only to scratch test databases"
+    },
+    {
+      "glob": "packages/module-catalogue/test/fixtures/**/migrations/*.sql",
+      "reason": "module-catalogue validator fixtures (TASK-021): fixture module roots whose migrations/manifest.json the validator checks for presence, never applied by a runner"
     }
   ]
 }

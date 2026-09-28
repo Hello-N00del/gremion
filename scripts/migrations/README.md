@@ -58,6 +58,7 @@ database. `legacyFloor` / `legacy[]` are written once and never edited
 | `module-<id>` | module:<id> | `modules/<id>/migrations` (board, calendar, content, finance, publishing, vault) | 3 | 15, numbers kept |
 | `kernel-api` | service:kernel-api | `services/kernel-api/migrations/{bodies,authz,roles,erasure}` | 4 | none yet |
 | `governance`, `mail` | service:<id> | `services/<id>/migrations` | 4 | none yet |
+| `platform` | gremion_platform | `packages/tenant-store/src/lifecycle/platform-migrations` (TASK-021) | 4 | 3 legacy (<= 0003) |
 
 A chain with no file must keep `highWater` 0 and no locked file. The rule is
 read **per chain**: an empty lock entry (`files: {}`) counts as "no lock
