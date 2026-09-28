@@ -5,7 +5,7 @@
 #   * every required input (brief section 5.2) must be non-empty; a key that
 #     has a default gets it only when UNSET, so `KEY=` is a refusal, never a
 #     silent default;
-#   * after envsubst, the rendered YAML is parsed and asserted: the database
+#   * after substitution, the rendered YAML is parsed and asserted: the database
 #     engine is psycopg2 (a SQLite render is refused naming sqlite3), and every
 #     required YAML key is non-empty and equals its input -- a value that broke
 #     out of its YAML quoting fails here, not inside Synapse.
@@ -103,8 +103,8 @@ esac
 export SYNAPSE_SERVER_NAME MATRIX_PUBLIC_URL SYNAPSE_DB_PASSWORD SYNAPSE_KEYCLOAK_ISSUER_URL
 export SYNAPSE_REGISTRATION_SHARED_SECRET="${SYNAPSE_REGISTRATION_SHARED_SECRET:-}"
 
-# Env-gated security knobs. envsubst has no ${VAR:-default}
-# syntax, so the defaults live HERE: unset vars get the conservative
+# Env-gated security knobs. The template has no ${VAR:-default}
+# syntax (nor does the substitution below), so the defaults live HERE: unset vars get the conservative
 # production posture (password auth OFF, Synapse's upstream rate-limit
 # defaults).
 export SYNAPSE_PASSWORD_AUTH="${SYNAPSE_PASSWORD_AUTH:-false}"
@@ -133,39 +133,44 @@ for v in SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND SYNAPSE_RC_LOGIN_ADDRESS_BURST \
   esac
 done
 
-# Only the named variables are substituted; any other `$` in the template
-# (comments included) is left alone.
-# shellcheck disable=SC2016 # the literal ${VAR} list is envsubst's SHELL-FORMAT
-VARS='${SYNAPSE_SERVER_NAME} ${MATRIX_PUBLIC_URL} ${SYNAPSE_DB_USER} ${SYNAPSE_DB_PASSWORD}
-${SYNAPSE_DB_NAME} ${SYNAPSE_DB_HOST} ${SYNAPSE_DB_PORT} ${SYNAPSE_REGISTRATION_SHARED_SECRET}
-${SYNAPSE_KEYCLOAK_ISSUER_URL} ${SYNAPSE_IDP_NAME} ${SYNAPSE_OIDC_CLIENT_SECRET}
-${SYNAPSE_PASSWORD_AUTH} ${SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND} ${SYNAPSE_RC_LOGIN_ADDRESS_BURST}
-${SYNAPSE_RC_LOGIN_ACCOUNT_PER_SECOND} ${SYNAPSE_RC_LOGIN_ACCOUNT_BURST}
-${SYNAPSE_RC_MESSAGE_PER_SECOND} ${SYNAPSE_RC_MESSAGE_BURST}'
+# Only the named variables are substituted (envsubst's SHELL-FORMAT
+# semantics, done in Python so the image needs no gettext-base apt layer);
+# any other `$` in the template, comments included, is left alone.
+export SYNAPSE_RENDER_VARS="SYNAPSE_SERVER_NAME MATRIX_PUBLIC_URL SYNAPSE_DB_USER SYNAPSE_DB_PASSWORD
+SYNAPSE_DB_NAME SYNAPSE_DB_HOST SYNAPSE_DB_PORT SYNAPSE_REGISTRATION_SHARED_SECRET
+SYNAPSE_KEYCLOAK_ISSUER_URL SYNAPSE_IDP_NAME SYNAPSE_OIDC_CLIENT_SECRET
+SYNAPSE_PASSWORD_AUTH SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND SYNAPSE_RC_LOGIN_ADDRESS_BURST
+SYNAPSE_RC_LOGIN_ACCOUNT_PER_SECOND SYNAPSE_RC_LOGIN_ACCOUNT_BURST
+SYNAPSE_RC_MESSAGE_PER_SECOND SYNAPSE_RC_MESSAGE_BURST"
+export BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-0}"
 
 # Render to a temporary file next to the output and move it into place only
 # once it has passed: a refused render leaves no config behind.
 [[ -r "$TPL" ]] || die "template $TPL cannot be read"
 tmp="$(mktemp "${OUT}.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
-envsubst "$VARS" < "$TPL" > "$tmp"
 
-if [[ "${BOOTSTRAP_MODE:-0}" != "1" ]]; then
-  # Strip the registration_shared_secret line. Only matches at column 0
-  # so commented references in surrounding text are left untouched.
-  sed -i '/^registration_shared_secret:/d' "$tmp"
-fi
-
-# The post-render assertion. Messages name the engine or the key, never a value.
-python3 - "$tmp" <<'PY' || die "the rendered homeserver.yaml failed its assertion -- refusing to start Synapse"
+# The render and its post-render assertion. Messages name the engine or the
+# key, never a value; nothing is written unless every check passes.
+python3 - "$TPL" "$tmp" <<'PY' || die "the rendered homeserver.yaml failed its assertion -- refusing to start Synapse"
 import os
+import re
 import sys
 
 import yaml
 
+with open(sys.argv[1]) as f:
+    text = f.read()
+names = set(os.environ["SYNAPSE_RENDER_VARS"].split())
+# One pass: a substituted value is never scanned again for ${...}.
+text = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), "") if m.group(1) in names else m.group(0), text)
+if os.environ["BOOTSTRAP_MODE"] != "1":
+    # Strip the registration_shared_secret line. Only matches at column 0
+    # so commented references in surrounding text are left untouched.
+    text = "".join(line for line in text.splitlines(keepends=True) if not line.startswith("registration_shared_secret:"))
+
 try:
-    with open(sys.argv[1]) as f:
-        cfg = yaml.safe_load(f)
+    cfg = yaml.safe_load(text)
 except yaml.YAMLError as exc:
     mark = getattr(exc, "problem_mark", None)
     where = f" (line {mark.line + 1})" if mark else ""
@@ -194,7 +199,6 @@ db = cfg.get("database") if isinstance(cfg.get("database"), dict) else {}
 engine = db.get("name")
 if engine != "psycopg2":
     problems.append(f"database.name is {engine!r}: only psycopg2 (PostgreSQL) is allowed, never sqlite3")
-text = open(sys.argv[1]).read()
 for token in ("sqlite3", "homeserver.db"):
     if token in text:
         problems.append(f"the render names {token}")
@@ -235,6 +239,8 @@ if problems:
     for p in problems:
         sys.stderr.write(f"[render-homeserver] ERROR: {p}\n")
     sys.exit(1)
+with open(sys.argv[2], "w") as f:
+    f.write(text)
 PY
 
 mv "$tmp" "$OUT"

@@ -48,7 +48,7 @@ export function scratchDir() {
  * or null when nothing (or nothing parseable) was written.
  */
 export function render(env, { template = TEMPLATE, args = ['true'] } = {}) {
-  requireTools(['bash', 'python3', 'envsubst'])
+  requireTools(['bash', 'python3'])
   const dir = scratchDir()
   const out = join(dir, 'homeserver.yaml')
   try {

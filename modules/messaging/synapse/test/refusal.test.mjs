@@ -1,6 +1,6 @@
 // TDD 2 (TASK-198): the render shim fails closed. A non-psycopg2 engine is
 // refused naming the engine, each blank required key by name, and no refusal
-// prints a secret. jwt_config.secret is empty after envsubst by design (the
+// prints a secret. jwt_config.secret is empty after the render by design (the
 // entrypoint injects it later; the probe judges it), so it alone is no refusal.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
