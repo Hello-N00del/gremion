@@ -271,7 +271,7 @@ export function getProtocolDocumentPort(): ProtocolDocumentPort | undefined {
 // No reader since TASK-042: the setup-wizard health route (/api/setup/health)
 // that was meant to iterate getSetupHealthProbes() is deleted with the wizard
 // (Q1). The API stays (TASK-042 Q10): it is a published module seam with
-// callers in civitas-modules and StuRaOS, and removing it is a major change
+// callers in the out-of-tree module repo and the pilot app, and removing it is a major change
 // (SemVer 2.0 §8). Residual for TASK-043: its pre-provision credential checks
 // consume these probes, or the seam is retired in a major release.
 
