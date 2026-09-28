@@ -40,7 +40,8 @@ export const INIT_SOURCE = `${MODULE_DIR}/postgres-init/10-synapse-db.sh`
 export const PROBE = '/synapse-healthcheck.sh'
 // start_period (brief section 5.5): SYNAPSE_KC_MAX key-fetch attempts of ~7 s
 // each (curl --max-time 5 + sleep 2) plus the first boot measured by the
-// scratch proof (phase b), rounded up.
+// scratch proof (phase b: 17 s and 18 s to healthy on an empty synapse
+// database, Synapse 1.160, 2026-09-28), rounded up to 30 s.
 export const KC_MAX_DEFAULT = 30
 export const KC_ATTEMPT_S = 7
 export const FIRST_BOOT_S = 30
