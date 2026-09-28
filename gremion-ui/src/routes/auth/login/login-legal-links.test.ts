@@ -18,12 +18,22 @@ vi.mock('$app/state', () => ({ page: mockPage }))
 // it is stubbed for every test here regardless of which branch is asserted.
 vi.mock('@auth/sveltekit/client', () => ({ signIn: vi.fn() }))
 
-import { describe, test, expect, vi } from 'vitest'
+import { describe, test, expect, vi, afterEach } from 'vitest'
 import { render } from '@testing-library/svelte'
 import Page from './+page.svelte'
 
 const EXPECTED_HREFS = ['/legal/impressum', '/legal/datenschutz', '/legal/barrierefreiheit']
 const EXPECTED_LABELS = ['Impressum', 'Datenschutz', 'Barrierefreiheit']
+// R27-SIGNIN-LEGAL-K round 2 (house review HIGH): /auth/login is the one route
+// content-locale.ts proves translated (i18n-handle.test.ts:148 -- an en-US
+// visitor gets <html lang="en">, not the German-with-data-ui-locale fallback),
+// so an English visitor must see English vernacular here, not the German
+// words parked in the EN catalogue (WCAG 2.2 SC 3.1.2 Language of Parts).
+const EXPECTED_LABELS_EN = ['Legal notice', 'Privacy', 'Accessibility']
+
+afterEach(() => {
+  document.documentElement.lang = ''
+})
 
 describe('/auth/login legal links (R27-SIGNIN-LEGAL-K)', () => {
   test('the default (redirecting) branch -- what an anonymous visitor and a JS-less crawler see -- renders all three links in a footer landmark', () => {
@@ -67,5 +77,17 @@ describe('/auth/login legal links (R27-SIGNIN-LEGAL-K)', () => {
     expect(getByText('Sie wurden abgemeldet')).toBeTruthy() // sanity: the loggedOut branch
     const hrefs = Array.from(container.querySelectorAll('footer a')).map((a) => a.getAttribute('href'))
     expect(hrefs).toEqual(EXPECTED_HREFS)
+  })
+
+  test('an en-US visitor (<html lang="en">, the server-decided content locale) sees English labels, same hrefs', () => {
+    document.documentElement.lang = 'en'
+    mockPage.url = new URL('http://localhost/auth/login')
+    const { container } = render(Page)
+
+    const footer = container.querySelector('footer')
+    expect(footer).not.toBeNull()
+    const anchors = Array.from(footer!.querySelectorAll('a'))
+    expect(anchors.map((a) => a.getAttribute('href'))).toEqual(EXPECTED_HREFS)
+    expect(anchors.map((a) => a.textContent?.trim())).toEqual(EXPECTED_LABELS_EN)
   })
 })
