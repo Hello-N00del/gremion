@@ -588,26 +588,82 @@ exit 0'
     [[ "$output" == *"--external-to"* ]]
 }
 
-@test "assert 6a requires an app-tier network to send from" {
+@test "assert 6a requires the ACTIVE colour's app-tier network to send from" {
     shim_dns_check_ok
+    echo green > "${GREMION_ROOT}/runtime/active-colour"
     shim docker 'exit 1'
     run "$BRINGUP" --assert 6a --external-to probe@example.net
     [ "$status" -eq 2 ]
-    [[ "$output" == *"staging-app-blue_app"* ]]
+    [[ "$output" == *"staging-app-green_app"* ]] || { echo "$output"; return 1; }
 }
 
-@test "assert 6a sends from an app-subnet container and then blocks on the header" {
+@test "assert 6a with no active colour (none or absent) is a named precondition failure" {
     shim_dns_check_ok
     shim docker 'exit 0'
+    rm -f "${GREMION_ROOT}/runtime/active-colour"
     run "$BRINGUP" --assert 6a --external-to probe@example.net
-    [ "$status" -eq 3 ]
-    assert_recorded docker "--network staging-app-blue_app"
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"runtime/active-colour"* ]]
+    echo none > "${GREMION_ROOT}/runtime/active-colour"
+    run "$BRINGUP" --assert 6a --external-to probe@example.net
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"runtime/active-colour"* ]]
+    refute_recorded docker 'run'
+}
+
+# shim_app_colours <up colour> — only that colour's app network exists; every
+# `docker run` stdin (the probe script) is kept in $GREMION_ROOT/probe-<n>.sh.
+shim_app_colours() {
+    shim docker '
+case "$1 $2" in
+  "network inspect") [ "$3" = "staging-app-'"$1"'_app" ] && exit 0; echo "Error: network $3 not found" >&2; exit 1 ;;
+esac
+if [ "$1" = run ]; then n=$(ls "'"${GREMION_ROOT}"'"/probe-*.sh 2>/dev/null | wc -l); cat > "'"${GREMION_ROOT}"'/probe-${n}.sh"; fi
+exit 0'
+}
+
+@test "assert 6a sends from the live green colour while blue is stopped, as system@, then blocks on the header" {
+    shim_dns_check_ok
+    echo green > "${GREMION_ROOT}/runtime/active-colour"
+    shim_app_colours green
+    run "$BRINGUP" --assert 6a --external-to probe@example.net
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded docker "--network staging-app-green_app"
+    refute_recorded docker "staging-app-blue_app"
     [[ "$output" == *"6a=BLOCKED"* ]]
     [[ "$output" == *"MX-PUBLICATION: HOLD"* ]]
+    local probe="${GREMION_ROOT}/probe-0.sh"
+    [ -s "$probe" ] || { echo "no probe script reached docker run"; return 1; }
+    grep -qx 'From: system@example.org' "$probe" || { cat "$probe"; return 1; }
+    grep -qx 'mail-from = "system@example.org"' "$probe" || { cat "$probe"; return 1; }
+    grep -qx 'user = "system@example.org:unit-test-vendor-password"' "$probe" || { cat "$probe"; return 1; }
+    ! grep -q 'platform@\|no-reply@\|unit-test-platform-password' "$probe" || { echo "6a still submits as the platform identity"; cat "$probe"; return 1; }
+    [[ "$output" != *"unit-test-vendor-password"* ]]
+}
+
+@test "assert 3's loopback probe submits as system@ with the vendor password (TASK-015)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail"
+    openssl genrsa -out "${GREMION_ROOT}/etc/secrets/mail/g2026a.private" 2048 2>/dev/null
+    local pub
+    pub="$(openssl rsa -in "${GREMION_ROOT}/etc/secrets/mail/g2026a.private" \
+           -pubout -outform DER 2>/dev/null | openssl base64 -A)"
+    shim dig "case \"\$*\" in
+      *\"TXT g2026a._domainkey.example.org\"*) echo '\"v=DKIM1; k=rsa; p=${pub}\"' ;;
+    esac
+    exit 0"
+    shim curl '
+while [ "$#" -gt 0 ]; do case "$1" in -K) cp "$2" "'"${GREMION_ROOT}"'/probe.curl"; shift 2 ;; *) shift ;; esac; done
+exit 1'
+    run "$BRINGUP" --assert 3
+    [ -s "${GREMION_ROOT}/probe.curl" ] || { echo "the loopback probe never reached curl: $output"; return 1; }
+    grep -qx 'mail-from = "system@example.org"' "${GREMION_ROOT}/probe.curl"
+    grep -qx 'user = "system@example.org:unit-test-vendor-password"' "${GREMION_ROOT}/probe.curl"
 }
 
 @test "assert 6a passes when the pasted header shows all three verdicts and IP-B" {
     shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
     shim docker 'exit 0'
     cat > "${GREMION_ROOT}/results.txt" <<'EOF'
 Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=example.org; dmarc=pass header.from=example.org
@@ -620,6 +676,7 @@ EOF
 
 @test "assert 6a fails when the delivering source is not IP-B" {
     shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
     shim docker 'exit 0'
     cat > "${GREMION_ROOT}/results.txt" <<'EOF'
 Authentication-Results: mx.example.net; dkim=pass; spf=pass; dmarc=pass
@@ -749,6 +806,7 @@ EOF
     mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
     echo '{"realm":"platform"}' > "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
     shim dig 'exit 0'; shim openssl 'exit 0'; shim curl 'exit 1'; shim docker 'exit 0'
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
     run "$BRINGUP" --assert all --external-to probe@example.net
     [[ "$output" =~ MAIL-BRINGUP:\ 1=[a-zA-Z]+\ 2=[a-zA-Z]+\ 3=[a-zA-Z]+\ 4=[a-zA-Z]+\ 5=[a-zA-Z]+\ 6a=[a-zA-Z]+\ 6b=[a-zA-Z]+ ]]
 }

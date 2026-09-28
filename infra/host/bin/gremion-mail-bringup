@@ -436,7 +436,7 @@ submit_loopback_probe() {   # echoes the round-tripped message
     local id uid msg tries=0
     id="bringup-$(date -u +%s)-$$@${PLATFORM_DOMAIN}"
     {
-        printf 'From: platform@%s\r\n' "$PLATFORM_DOMAIN"
+        printf 'From: system@%s\r\n' "$PLATFORM_DOMAIN"
         printf 'To: roles@%s\r\n' "$PLATFORM_DOMAIN"
         printf 'Subject: gremion mail bring-up probe\r\n'
         printf 'Message-ID: <%s>\r\n' "$id"
@@ -447,9 +447,9 @@ submit_loopback_probe() {   # echoes the round-tripped message
     cat > "$TMPDIR_BRINGUP/probe.curl" <<EOF
 url = "smtp://${MAIL_HOSTNAME}:587"
 ssl-reqd
-mail-from = "platform@${PLATFORM_DOMAIN}"
+mail-from = "system@${PLATFORM_DOMAIN}"
 mail-rcpt = "roles@${PLATFORM_DOMAIN}"
-user = "platform@${PLATFORM_DOMAIN}:${PLATFORM_SMTP_PASSWORD}"
+user = "system@${PLATFORM_DOMAIN}:${VENDOR_SMTP_PASSWORD}"
 upload-file = "${TMPDIR_BRINGUP}/probe.eml"
 EOF
     curl -sS -K "$TMPDIR_BRINGUP/probe.curl" >/dev/null || return 1
@@ -574,7 +574,21 @@ assert_5_mta_sts() {
 assert_6a_external() {
     [ -n "$EXTERNAL_TO" ] || die "--external-to is required for assert 6a" "$GREMION_EXIT_USAGE"
     need_cmd docker
-    local net="${STACK}-app-blue_app"
+    # The LIVE colour, the one gremion-deploy recorded (runtime/active-colour):
+    # a hardcoded blue failed as soon as a deploy made green live and stopped
+    # blue. This is the only SNAT proof from an app subnet, so it must send
+    # from the colour that is actually serving.
+    local colour_file colour
+    colour_file="$(gremion_root)/runtime/active-colour"
+    colour=""
+    [ ! -f "$colour_file" ] || colour="$(tr -d '[:space:]' < "$colour_file")"
+    case "$colour" in
+        blue|green) ;;
+        ""|none) die "no live app colour: runtime/active-colour is ${colour:-absent}; assert 6a sends from the active colour's app network (deploy first)" \
+                     "$GREMION_EXIT_USAGE" ;;
+        *) die "runtime/active-colour holds '${colour}' (want blue|green|none)" "$GREMION_EXIT_USAGE" ;;
+    esac
+    local net="${STACK}-app-${colour}_app"
     if ! docker network inspect "$net" >/dev/null 2>&1; then
         die "app-tier network ${net} is not up; assert 6a must send from an app subnet" \
             "$GREMION_EXIT_USAGE"
@@ -588,7 +602,7 @@ assert_6a_external() {
         if docker run --rm -i --network "$net" --entrypoint sh "$PROBE_CURL_IMAGE" -s <<SH
 set -eu
 cat > /tmp/msg <<'MSG'
-From: no-reply@${PLATFORM_DOMAIN}
+From: system@${PLATFORM_DOMAIN}
 To: ${addr}
 Subject: Gremion mail bring-up probe (assert 6a)
 Message-ID: <${id}>
@@ -598,9 +612,9 @@ MSG
 cat > /tmp/cfg <<'CFG'
 url = "smtp://${MAIL_HOSTNAME}:587"
 ssl-reqd
-mail-from = "no-reply@${PLATFORM_DOMAIN}"
+mail-from = "system@${PLATFORM_DOMAIN}"
 mail-rcpt = "${addr}"
-user = "platform@${PLATFORM_DOMAIN}:${PLATFORM_SMTP_PASSWORD}"
+user = "system@${PLATFORM_DOMAIN}:${VENDOR_SMTP_PASSWORD}"
 upload-file = "/tmp/msg"
 CFG
 curl -sS -K /tmp/cfg
