@@ -201,8 +201,13 @@ assert_free_space() {
 # a single call with both projects returns the empty set. One call per project.
 project_volumes() { docker volume ls -q --filter "label=com.docker.compose.project=$1"; }
 
+# TASK-040: the app tier's config volumes became externals (both colours mount
+# them, no project labels them), so the project queries below no longer see
+# them. They were compose-created in the state project before, and backed up
+# through its label; without this line they would silently drop out.
 external_volumes() {
-    printf '%s\n' "${STACK}_traefik_acme" "${STACK}_tenant_secrets" "${STACK}_mail_data"
+    printf '%s\n' "${STACK}_traefik_acme" "${STACK}_tenant_secrets" "${STACK}_mail_data" \
+        "${STACK}_config_data" "${STACK}_tenant_config_data"
 }
 
 # TASK 9, corrected against the brief: the "enumeration failed" condition is

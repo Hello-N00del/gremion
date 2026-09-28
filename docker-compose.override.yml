@@ -1,9 +1,11 @@
 ##############################################################
 # docker-compose.override.yml
 #
-# Local development overrides — auto-loaded by docker compose.
+# Local development overrides for the STATE project — auto-loaded by
+# docker compose (`make up` runs it as project ${STACK}-state, STACK=dev).
 # DO NOT commit secrets to this file.
-# Exposes service ports on localhost for direct access.
+# Exposes service ports on localhost for direct access. The app tier's dev
+# layer is docker-compose.app.dev.yml.
 #
 # Dual-stack note: every host-facing port binds both IPv4
 # (127.0.0.1) and IPv6 (::1). Modern browsers (Chrome, Firefox,
@@ -30,39 +32,9 @@ services:
       - "127.0.0.1:8026:8025"
       - "[::1]:8026:8025"
 
-  gremion-ui:
-    ports:
-      # P2.1c T5 (#202) D-PORTBIND: bind the dev port to LOOPBACK only. A bare
-      # `3001:3000` publishes on 0.0.0.0 (all interfaces), which would let an
-      # off-host client set x-forwarded-host and select ANY tenant (the SECURITY
-      # INVARIANT in resolve.ts). Loopback keeps the app reachable for local dev
-      # without exposing the tenant-selection seam. The [::1] line is the IPv6
-      # parity binding. check-app-port-binding.mjs enforces this in `check`.
-      - "127.0.0.1:3001:3000"
-      - "[::1]:3001:3000"
-    environment:
-      ORIGIN: "http://localhost:3001"
-      PUBLIC_BASE_URL: "http://localhost:3001"
-      # Keycloak 26 hostname v2: iss = KC_HOSTNAME/realms/{realm}.
-      # KC_HOSTNAME includes /auth, so iss = http://localhost:8082/auth/realms/gremion.
-      AUTH_KEYCLOAK_ISSUER: "http://localhost:8082/auth/realms/gremion"
-      AUTH_KEYCLOAK_BASE: "http://localhost:8082/auth/realms/gremion"
-      # Server-side token refresh uses Docker-internal URL (avoids localhost from inside container).
-      # G-080: dev keeps plain http (dev realm = sslRequired:external); base
-      # defaults both of these to https://keycloak:8443 for prod internal TLS.
-      AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/gremion"
-      KEYCLOAK_ADMIN_URL: "http://keycloak:8080/auth"
-      # The structure-aware seeder (POST /api/setup/seed) is now the single
-      # seeding path — disable the 011 dev-seed migration in dev too.
-      GREMION_DISABLE_SEEDS: "true"
-
-  gremion-public:
-    ports:
-      - "127.0.0.1:3002:3000"
-      - "[::1]:3002:3000"
-    environment:
-      ORIGIN: "http://localhost:3002"
-      PUBLIC_MAIN_APP_URL: "http://localhost:3001"
+  # gremion-ui (:3001) and gremion-public (:3002) are the app tier now:
+  # docker-compose.app.dev.yml publishes them on the dev-app-blue project
+  # (`make up`), loopback only, exactly as they were published here.
 
   keycloak:
     ports:

@@ -262,3 +262,8 @@ docker/keycloak/realm-export.json
 
 # Local generator smoke output (TASK-083 brief Q3: dart-dio smoke into .tmp/dart-gov/); never committed
 .tmp/
+
+# TASK-040: the release pins layer (written by the release workflow, TASK-046) is
+# never committed at the root; the guard renders with the fixture copy under
+# test/host/fixtures/pooled-stack/.
+/docker-compose.pins.yml
