@@ -268,3 +268,63 @@ write_state_env() {
     [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"no single running keycloak"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# collect: the host inputs of check-principals, secrets stripped
+# ---------------------------------------------------------------------------
+
+# shim_principal_list <json body> — curl answering the principal list with
+# HTTP 200 and <json body>, as the pinned build does for success AND failure.
+# It also records the credential it was handed on stdin (-K -), so a test can
+# prove the credential never rode on the argv.
+shim_principal_list() {
+    printf '%s' "$1" > "${GREMION_ROOT}/principal-list.json"
+    shim curl '
+out=/dev/null
+while [ "$#" -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -K) cat > "'"${GREMION_ROOT}"'/curl-config"; shift 2 ;; *) shift ;; esac; done
+cp "'"${GREMION_ROOT}"'/principal-list.json" "$out"'
+}
+
+@test "collect writes names/emails/roles and realm smtp users, never a secret" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 0 ]
+    shim_principal_list '{"data":{"items":[{"id":2,"type":"individual","name":"system@example.org","emails":["system@example.org"],"roles":["user"],"secrets":["$app$gremion-vendor$unit-vendor-secret-value"]}],"total":1}}'
+    mkdir -p "${GREMION_ROOT}/collect"
+    run "$LAUNCHER" collect --out "${GREMION_ROOT}/collect"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    run jq -e '. == [{"name":"system@example.org","type":"individual","emails":["system@example.org"],"roles":["user"]}]' "${GREMION_ROOT}/collect/principals.json"
+    [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/collect/principals.json"; return 1; }
+    run jq -e '.[0] | .realm == "master" and .smtp.user == "system@example.org" and (.smtp | has("password") | not)' "${GREMION_ROOT}/collect/realms.json"
+    [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/collect/realms.json"; return 1; }
+    ! grep -rqF 'unit-vendor-secret-value' "${GREMION_ROOT}/collect" || { echo "a secret reached the collect output"; return 1; }
+    grep -qF 'unit-admin-secret-value' "${GREMION_ROOT}/curl-config"
+    refute_secret_in_argv
+}
+
+@test "collect: an HTTP 200 {\"error\":...} principal list is a failure (exit 1), not an empty list" {
+    shim_keycloak
+    write_state_env
+    shim_principal_list '{"error":"forbidden","details":"quirk"}'
+    mkdir -p "${GREMION_ROOT}/collect"
+    run "$LAUNCHER" collect --out "${GREMION_ROOT}/collect"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"is a failure, not an empty list"* ]]
+    [ ! -f "${GREMION_ROOT}/collect/principals.json" ]
+}
+
+@test "collect: a kcadm that cannot list the realms is a failure (exit 1)" {
+    shim_keycloak
+    write_state_env
+    shim_principal_list '{"data":{"items":[],"total":0}}'
+    # the keycloak shim knows no `get realms` until a realm file exists; make
+    # the listing itself fail
+    printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" docker "$*" >> "$SHIM_LOG"\ncase " $* " in *" get realms --fields realm,smtpServer "*) echo "kcadm: 500" >&2; exit 1 ;; esac\nexec %s "$@"\n' \
+        "${SHIM_DIR}/docker.real" > "${SHIM_DIR}/docker.wrap"
+    mv "${SHIM_DIR}/docker" "${SHIM_DIR}/docker.real"; mv "${SHIM_DIR}/docker.wrap" "${SHIM_DIR}/docker"; chmod +x "${SHIM_DIR}/docker"
+    mkdir -p "${GREMION_ROOT}/collect"
+    run "$LAUNCHER" collect --out "${GREMION_ROOT}/collect"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"kcadm could not list the realms"* ]]
+}
