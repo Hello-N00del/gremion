@@ -28,6 +28,7 @@
 
 import { registerHooks } from 'node:module'
 import { resolve as shimResolve, load as shimLoad } from './sveltekit-env-shim.mjs'
+import { fleetVerdict, requireTenantFrom } from './fleet-verdict.mjs'
 
 registerHooks({ resolve: shimResolve, load: shimLoad })
 
@@ -37,26 +38,25 @@ registerHooks({ resolve: shimResolve, load: shimLoad })
 // does — control migrations → fleet-migrate every ACTIVE registry tenant
 // (runFleetMigrations resolves each by slug and applies runMigrations() inside
 // runWithTenant(ctx, …)). TASK-042: it registers NO tenant; on an empty
-// registry it migrates zero tenants. The integration harness creates its
-// fixture tenant first (`pnpm migrate:test-fixture`,
+// registry it migrates the control plane only and SAYS so (exit 0: a fresh
+// host before its first customer is a legitimate state). A caller that needs a
+// migrated data plane passes `--require-tenant` (or MIGRATE_REQUIRE_TENANT=1)
+// and fails there (scripts/fleet-verdict.mjs). The integration harness creates
+// its fixture tenant first (`pnpm migrate:test-fixture`,
 // scripts/migrate-test-fixture.mjs). Requires CONTROL_DATABASE_URL (+ the
 // control DB to exist), exactly like a real boot.
 try {
+  const requireTenant = requireTenantFrom(process.argv.slice(2), process.env)
   const { runControlMigrations } = await import('../src/lib/server/tenant/control-migrations.ts')
   const { runFleetMigrations } = await import('../src/lib/server/tenant/fleet.ts')
 
   await runControlMigrations()
   const outcomes = await runFleetMigrations()
 
-  const failed = [...outcomes.entries()].filter(([, o]) => !o.ok)
-  if (failed.length > 0) {
-    for (const [id, o] of failed) {
-      console.error(`[run-migrations-verified] tenant ${id} FAILED: ${o.error ?? ''}`, o.cause ?? '')
-    }
-    process.exit(1)
-  }
-  console.info(`[run-migrations-verified] all tenants migrated + verified (${outcomes.size} tenant(s))`)
-  process.exit(0)
+  const verdict = fleetVerdict(outcomes, { requireTenant, tag: '[run-migrations-verified]' })
+  for (const args of verdict.errors) console.error(...args)
+  for (const line of verdict.info) console.info(line)
+  process.exit(verdict.code)
 } catch (err) {
   console.error('[run-migrations-verified] migration failure:', err)
   process.exit(1)
