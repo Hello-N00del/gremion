@@ -280,9 +280,9 @@ write_state_env() {
 shim_principal_list() {
     printf '%s' "$1" > "${GREMION_ROOT}/principal-list.json"
     shim curl '
-out=/dev/null
+out=""
 while [ "$#" -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -K) cat > "'"${GREMION_ROOT}"'/curl-config"; shift 2 ;; *) shift ;; esac; done
-cp "'"${GREMION_ROOT}"'/principal-list.json" "$out"'
+if [ -n "$out" ]; then cp "'"${GREMION_ROOT}"'/principal-list.json" "$out"; else cat "'"${GREMION_ROOT}"'/principal-list.json"; fi'
 }
 
 @test "collect writes names/emails/roles and realm smtp users, never a secret" {
@@ -327,4 +327,143 @@ cp "'"${GREMION_ROOT}"'/principal-list.json" "$out"'
     run "$LAUNCHER" collect --out "${GREMION_ROOT}/collect"
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"kcadm could not list the realms"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# review round 1 (TASK-015): network, logs, mounts, --host paths, env reads
+# ---------------------------------------------------------------------------
+
+@test "every node subcommand but principals runs with --network none and --log-driver none" {
+    local sub
+    for sub in check-identities check-received check-upstream-image check-deliverability-record; do
+        : > "$SHIM_LOG"
+        : > "${REL}/ops/vendor-mail/${sub}.mjs"
+        : > "${GREMION_ROOT}/etc/env/ops.env"
+        run "$LAUNCHER" "$sub" --file /dev/null
+        [ "$status" -eq 0 ] || { echo "${sub}: status=$status $output"; return 1; }
+        assert_recorded docker "--name guardstack-vendor-mail-${sub}-"
+        assert_recorded docker '--network none'
+        refute_recorded docker '--network host'
+        assert_recorded docker '--log-driver none'
+    done
+    : > "$SHIM_LOG"
+    run "$LAUNCHER" principals list
+    assert_recorded docker '--network host'
+    # the one-time app password must not land in the daemon's log driver
+    assert_recorded docker '--log-driver none'
+}
+
+@test "check-received gets the domain and bind addresses as arguments, not the secret-bearing mail.env" {
+    run "$LAUNCHER" check-received --file /dev/null --receiver google
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    refute_recorded docker '/run/gremion/env/mail.env'
+    assert_recorded docker 'check-received.mjs --domain example.org --bind-ip 192.0.2.25 --bind-ip6 2001:db8::25 --file /run/gremion/in/received.eml --receiver google'
+}
+
+@test "a relative MAIL_ENV is mounted by its absolute path" {
+    cp "${GREMION_ROOT}/etc/env/mail.env" "${GREMION_ROOT}/rel-mail.env"
+    ( cd "$GREMION_ROOT" && MAIL_ENV=rel-mail.env "$LAUNCHER" principals list ) || true
+    assert_recorded docker "${GREMION_ROOT}/rel-mail.env:/run/gremion/env/mail.env:ro"
+}
+
+@test "check-secret-separation --host mounts the stores read-only and hands over only hashes of the ui env" {
+    : > "${REL}/ops/vendor-mail/check-secret-separation.mjs"
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail" "${GREMION_ROOT}/etc/secrets/tenants"
+    echo green > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker '
+case "$1" in
+  ps) case " $* " in *"project=guardstack-app-green "*"service=gremion-ui "*) echo uicid1 ;; esac; exit 0 ;;
+  inspect) printf "SECRET_THING=unit-ui-secret-value\nPLAIN=x\n\n"; exit 0 ;;
+  run) for a in "$@"; do case "$a" in *:/run/gremion/collect:ro) cp "${a%%:*}/ui-env.tsv" "'"${GREMION_ROOT}"'/ui-env.copy" ;; esac; done; exit 0 ;;
+esac
+exit 0'
+    run "$LAUNCHER" check-secret-separation --host
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded docker '--network none'
+    refute_recorded docker '--network host'
+    assert_recorded docker "${GREMION_ROOT}/etc/env:/run/gremion/env-all:ro"
+    assert_recorded docker "${GREMION_ROOT}/etc/secrets:/run/gremion/secrets:ro"
+    grep -qP '^green\tSECRET_THING\t[0-9a-f]{64}$' "${GREMION_ROOT}/ui-env.copy" || { cat "${GREMION_ROOT}/ui-env.copy"; return 1; }
+    ! grep -qF 'unit-ui-secret-value' "${GREMION_ROOT}/ui-env.copy" || { echo "a raw ui env value reached the check"; return 1; }
+    [[ "$output" == *"gremion-ui containers hashed: 1"* ]]
+}
+
+@test "check-secret-separation --host with the active colour's gremion-ui not running is a precondition failure" {
+    : > "${REL}/ops/vendor-mail/check-secret-separation.mjs"
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail" "${GREMION_ROOT}/etc/secrets/tenants"
+    echo green > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker 'exit 0'
+    run "$LAUNCHER" check-secret-separation --host
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"no gremion-ui container of the active colour green"* ]]
+    refute_recorded docker 'run --rm'
+}
+
+@test "check-secret-separation --host: a docker inspect that fails is a failure, not an empty environment" {
+    : > "${REL}/ops/vendor-mail/check-secret-separation.mjs"
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail" "${GREMION_ROOT}/etc/secrets/tenants"
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker '
+case "$1" in
+  ps) case " $* " in *"project=guardstack-app-blue "*"service=gremion-ui "*) echo uicid1 ;; esac; exit 0 ;;
+  inspect) echo "Error: No such object: uicid1" >&2; exit 1 ;;
+esac
+exit 0'
+    run "$LAUNCHER" check-secret-separation --host
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    refute_recorded docker 'run --rm'
+}
+
+@test "check-principals --host runs collect first and mounts its output read-only" {
+    : > "${REL}/ops/vendor-mail/check-principals.mjs"
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    shim_principal_list '{"data":{"items":[{"name":"system@example.org","type":"individual","emails":["system@example.org"],"roles":["user"]}],"total":1}}'
+    local wrapped="${SHIM_DIR}/docker"
+    mv "$wrapped" "${SHIM_DIR}/docker.kc"
+    printf '#!/usr/bin/env bash\nif [ "$1" = run ]; then printf "%%s %%s\\n" docker "$*" >> "$SHIM_LOG"; for a in "$@"; do case "$a" in *:/run/gremion/collect:ro) ls "${a%%%%:*}" > "%s/collect.ls" ;; esac; done; exit 0; fi\nexec %s "$@"\n' \
+        "$GREMION_ROOT" "${SHIM_DIR}/docker.kc" > "$wrapped"
+    chmod +x "$wrapped"
+    run "$LAUNCHER" check-principals --host --no-allowances
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded docker ':/run/gremion/collect:ro'
+    assert_recorded docker '--network none'
+    refute_recorded docker '--network host'
+    assert_recorded docker 'check-principals.mjs --host --no-allowances'
+    grep -qx 'principals.json' "${GREMION_ROOT}/collect.ls"
+    grep -qx 'realms.json' "${GREMION_ROOT}/collect.ls"
+}
+
+@test "collect leaves no copy of the principal list (plaintext app secrets) in a temp directory" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    shim_principal_list '{"data":{"items":[{"name":"system@example.org","secrets":["$app$gremion-vendor$unit-vendor-secret-value"]}],"total":1}}'
+    mkdir -p "${GREMION_ROOT}/collect" "${GREMION_ROOT}/tmp"
+    TMPDIR="${GREMION_ROOT}/tmp" run "$LAUNCHER" collect --out "${GREMION_ROOT}/collect"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    ! grep -rqF 'unit-vendor-secret-value' "${GREMION_ROOT}/tmp" || { echo "a temp file kept the secrets"; return 1; }
+}
+
+@test "state.env keys are read like load_env reads them: one layer of quotes stripped, a duplicate refused" {
+    shim_keycloak
+    printf 'KEYCLOAK_ADMIN="admin"\nKEYCLOAK_ADMIN_PASSWORD="unit-kc-admin-password"\n' > "${GREMION_ROOT}/etc/env/state.env"
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    printf 'KEYCLOAK_ADMIN=admin\nKEYCLOAK_ADMIN_PASSWORD=a\nKEYCLOAK_ADMIN_PASSWORD=b\n' > "${GREMION_ROOT}/etc/env/state.env"
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"duplicate key KEYCLOAK_ADMIN_PASSWORD"* ]]
+}
+
+@test "collect escapes a quote or backslash in the admin password for curl's config" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    sed -i 's/^STALWART_ADMIN_PASSWORD=.*/STALWART_ADMIN_PASSWORD=unit"adm\\in/' "${GREMION_ROOT}/etc/env/mail.env"
+    shim_principal_list '{"data":{"items":[],"total":0}}'
+    mkdir -p "${GREMION_ROOT}/collect"
+    run "$LAUNCHER" collect --out "${GREMION_ROOT}/collect"
+    grep -qxF 'user = "admin:unit\"adm\\in"' "${GREMION_ROOT}/curl-config" || { cat "${GREMION_ROOT}/curl-config"; return 1; }
 }

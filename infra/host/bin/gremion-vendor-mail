@@ -29,15 +29,22 @@ set -euo pipefail
 # ISOLATION table (it is a transient one-shot, not a project service);
 # ops/vendor-mail/RUNBOOK.md states it.
 #
-# SECRETS never travel on an argv: mail.env (and, per subcommand, ops.env,
-# the secret stores) are MOUNTED read-only and read by the check itself; the
-# realm SMTP password reaches kcadm on stdin; the Keycloak admin password is
-# passed as a name-only `docker exec -e`, so its value is in no host argv.
+# SECRETS: mail.env (and, per subcommand, ops.env, the secret stores) are
+# MOUNTED read-only, and only into the checks that read them; the realm SMTP
+# password reaches kcadm on stdin; the Stalwart admin credential reaches curl
+# on stdin. The Keycloak admin password is passed as a name-only
+# `docker exec -e`, so it is on no argv of the docker CLI -- but kcadm's own
+# `config credentials --password` puts it on the java argv INSIDE the
+# Keycloak container, which host root can see (residual, named in
+# ops/vendor-mail/RUNBOOK.md; the same holds for gremion-neuter and
+# gremion-mail-bringup). Node check containers run with --log-driver none,
+# so what they print (principals' one-time app password) reaches the caller's
+# terminal and no daemon log.
 #
 # Subcommands
 #   principals issue|revoke|list --tenant <token>     (node, --network host)
 #   check-identities                                   (node)
-#   check-received --file <headers file> [--receiver <id>] (node)
+#   check-received --file <headers file> --receiver <name> | --authserv-id <id> (node)
 #   check-upstream-image                               (node)
 #   check-deliverability-record [--require]            (node)
 #   check-secret-separation --host                     (node; value hashes)
@@ -63,7 +70,7 @@ usage() {
 usage: gremion-vendor-mail <subcommand> [args...]
   principals issue|revoke|list --tenant <token> [--rotate]
   check-identities | check-upstream-image | check-deliverability-record [--require]
-  check-received --file <headers file> [--receiver <authserv-id>]
+  check-received --file <headers file> --receiver <name> | --authserv-id <id>
   check-secret-separation --host
   check-principals --host [--no-allowances]
   realm-smtp            (the operator realm `master` -> system@<PLATFORM_DOMAIN>)
@@ -74,9 +81,15 @@ EOF
 # env_key <file> <key> — ONE key of an env file, never the whole file (the
 # single whole-file reader is load_env). Empty when absent.
 env_key() {
-    local file="$1" key="$2"
+    local file="$1" key="$2" n v
     [[ -f "$file" ]] || die "env file not found: ${file}" "$GREMION_EXIT_USAGE"
-    sed -n "s/^${key}=//p" "$file" | tail -n1
+    n="$(grep -c "^${key}=" "$file" || true)"
+    [[ "$n" -le 1 ]] || die "duplicate key ${key} in ${file}" "$GREMION_EXIT_USAGE"
+    v="$(sed -n "s/^${key}=//p" "$file")"
+    v="${v%$'\r'}"
+    # one layer of matching quotes, as load_env and compose --env-file strip it
+    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
+    printf '%s' "$v"
 }
 
 resolve_vendor_dir() {
@@ -89,6 +102,9 @@ resolve_vendor_dir() {
 
 load_mail_env() {
     MAIL_ENV="${MAIL_ENV:-$(gremion_root)/etc/env/mail.env}"
+    # docker -v reads a relative source as a volume NAME; mount by path.
+    [[ -f "$MAIL_ENV" ]] || die "mail env file not found: ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
+    MAIL_ENV="$(realpath "$MAIL_ENV")"
     # From mail.env ONLY: a value exported by the caller must not survive a file
     # that does not declare the key.
     unset VENDOR_MAIL_NODE_IMAGE
@@ -113,8 +129,8 @@ kc_connect() {
     need_cmd docker jq
     STATE_ENV="${STATE_ENV_FILE:-$(gremion_root)/etc/env/state.env}"
     local admin="${KEYCLOAK_ADMIN:-}" password="${KEYCLOAK_ADMIN_PASSWORD:-}" rc=0
-    [[ -n "$admin" ]]    || admin="$(env_key "$STATE_ENV" KEYCLOAK_ADMIN)"
-    [[ -n "$password" ]] || password="$(env_key "$STATE_ENV" KEYCLOAK_ADMIN_PASSWORD)"
+    if [[ -z "$admin" ]]; then admin="$(env_key "$STATE_ENV" KEYCLOAK_ADMIN)" || exit $?; fi
+    if [[ -z "$password" ]]; then password="$(env_key "$STATE_ENV" KEYCLOAK_ADMIN_PASSWORD)" || exit $?; fi
     [[ -n "$admin" && -n "$password" ]] \
         || die "KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD are unset (neither exported nor in ${STATE_ENV}); kcadm has no credential" \
                "$GREMION_EXIT_USAGE"
@@ -126,7 +142,8 @@ kc_connect() {
                "$GREMION_EXIT_USAGE" ;;
     esac
     # Name-only -e: docker copies the value from this process's environment,
-    # so it is on no host argv.
+    # so it is on no argv of the docker CLI (see the SECRETS note above for
+    # kcadm's own argv inside the container).
     KC_LOGIN_PASSWORD="$password" docker exec -e KC_LOGIN_PASSWORD "$KC_CID" sh -c \
         '"$0" config credentials --server "$1" --realm master --user "$2" --password "$KC_LOGIN_PASSWORD" >/dev/null' \
         "$KCADM_BIN" "$KC_SERVER" "$admin" \
@@ -196,20 +213,27 @@ cmd_collect() {
     done
     [[ -n "$out" && -d "$out" ]] || die "collect needs --out <existing directory>" "$GREMION_EXIT_USAGE"
     need_cmd curl jq docker
-    local raw; raw="$(mktemp)"
-    # The admin credential goes to curl on stdin (-K -), never on its argv.
-    printf 'user = "%s:%s"\n' "$STALWART_ADMIN_USER" "$STALWART_ADMIN_PASSWORD" \
-        | curl -sS -K - -o "$raw" "${STALWART_ADMIN_URL}/api/principal?types=individual&limit=0" \
-        || { rm -f "$raw"; die "the management API at ${STALWART_ADMIN_URL} did not answer" "$GREMION_EXIT_ASSERT"; }
+    # The list answers every principal WITH its plaintext app secrets, so it is
+    # held in memory only (never a temp file a signal could leave behind) and
+    # stripped before anything is written.
+    local raw esc_user esc_pw
+    esc_user="${STALWART_ADMIN_USER//\\/\\\\}"; esc_user="${esc_user//\"/\\\"}"
+    esc_pw="${STALWART_ADMIN_PASSWORD//\\/\\\\}"; esc_pw="${esc_pw//\"/\\\"}"
+    # The admin credential goes to curl on stdin (-K -), never on its argv;
+    # quotes and backslashes are escaped for curl's config syntax.
+    raw="$(printf 'user = "%s:%s"\n' "$esc_user" "$esc_pw" \
+        | curl -sS -K - "${STALWART_ADMIN_URL}/api/principal?types=individual&limit=0")" \
+        || die "the management API at ${STALWART_ADMIN_URL} did not answer" "$GREMION_EXIT_ASSERT"
     # HTTP 200 carries failures too: the verdict is the body.
-    if ! jq -e 'has("data") and (.data.items | type == "array")' "$raw" >/dev/null 2>&1; then
-        rm -f "$raw"
+    if ! printf '%s' "$raw" | jq -e 'has("data") and (.data.items | type == "array")' >/dev/null 2>&1; then
         die "the principal list came back without a data.items array (an {\"error\":...} body is a failure, not an empty list)" \
             "$GREMION_EXIT_ASSERT"
     fi
-    jq '[.data.items[] | if type == "string" then {name: .} else {name, type, emails: (.emails // []), roles: (.roles // [])} end]' \
-        "$raw" | atomic_write "${out}/principals.json" 0600
-    rm -f "$raw"
+    printf '%s' "$raw" \
+        | jq '[.data.items[] | if type == "string" then {name: .} else {name, type, emails: (.emails // []), roles: (.roles // [])} end]' \
+        | atomic_write "${out}/principals.json" 0600 \
+        || die "the principal list could not be stripped and written" "$GREMION_EXIT_ASSERT"
+    raw=""
     kc_connect
     local realms
     realms="$(docker exec "$KC_CID" "$KCADM_BIN" get realms --fields realm,smtpServer)" \
@@ -223,19 +247,36 @@ cmd_collect() {
 # The gremion-ui containers' environment as <colour>\t<KEY>\t<sha256(value)>
 # lines, so the separation check compares values it is never handed.
 ui_env_hashes() {   # <file>
-    local file="$1" colour cid line
+    local file="$1" colour cid line env active="" n=0
     : > "$file"
+    [[ ! -f "$(gremion_root)/runtime/active-colour" ]] \
+        || active="$(tr -d '[:space:]' < "$(gremion_root)/runtime/active-colour")"
     for colour in blue green; do
         cid="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${colour}" \
-                            --filter "label=com.docker.compose.service=gremion-ui" | head -n1)" \
+                            --filter "label=com.docker.compose.service=gremion-ui")" \
             || die "docker could not list the ${STACK}-app-${colour} containers" "$GREMION_EXIT_USAGE"
-        [[ -n "$cid" ]] || continue
+        cid="${cid%%$'\n'*}"
+        if [[ -z "$cid" ]]; then
+            # The live colour's app MUST be read: an empty arm is not "shares
+            # nothing", it is "never looked".
+            [[ "$colour" != "$active" ]] \
+                || die "no gremion-ui container of the active colour ${active} is running: its environment cannot be compared" \
+                       "$GREMION_EXIT_USAGE"
+            continue
+        fi
+        # Captured first: a failed inspect inside < <(...) would read as an
+        # empty environment.
+        env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$cid")" \
+            || die "docker could not inspect the ${STACK}-app-${colour} gremion-ui container" "$GREMION_EXIT_USAGE"
         while IFS= read -r line; do
             [[ "$line" == *=* ]] || continue
             printf '%s\t%s\t%s\n' "$colour" "${line%%=*}" \
                 "$(printf '%s' "${line#*=}" | sha256sum | cut -d' ' -f1)" >> "$file"
-        done < <(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$cid")
+        done <<< "$env"
+        env=""
+        n=$((n + 1))
     done
+    info "gremion-ui containers hashed: ${n}"
 }
 
 run_node() {
@@ -246,12 +287,18 @@ run_node() {
     local net=none root work="" a
     root="$(gremion_root)"
     [[ "$sub" == principals ]] && net=host
-    local -a mounts=(-v "${VENDOR_MAIL_DIR}:/release/ops/vendor-mail:ro"
-                     -v "${MAIL_ENV}:/run/gremion/env/mail.env:ro")
+    local -a mounts=(-v "${VENDOR_MAIL_DIR}:/release/ops/vendor-mail:ro")
     local -a args=()
     case "$sub" in
+        principals)
+            mounts+=(-v "${MAIL_ENV}:/run/gremion/env/mail.env:ro") ;;
         check-identities)
-            mounts+=(-v "${root}/etc/env/ops.env:/run/gremion/env/ops.env:ro") ;;
+            mounts+=(-v "${MAIL_ENV}:/run/gremion/env/mail.env:ro"
+                     -v "${root}/etc/env/ops.env:/run/gremion/env/ops.env:ro") ;;
+        check-received)
+            # Untrusted input: it gets the three non-secret values it needs as
+            # arguments, and no secret-bearing file.
+            args+=(--domain "$PLATFORM_DOMAIN" --bind-ip "$MAIL_BIND_IP" --bind-ip6 "$MAIL_BIND_IP6") ;;
         check-upstream-image|check-deliverability-record)
             mounts+=(-v "${RELEASE_DIR}/infra/host/mail:/release/infra/host/mail:ro"
                      -v "${RELEASE_DIR}/infra/host/templates/env:/release/infra/host/templates/env:ro") ;;
@@ -288,6 +335,7 @@ run_node() {
     local rc=0
     docker run --rm --name "${STACK}-vendor-mail-${sub}-$$" --label "gremion.stack=${STACK}" \
         --network "$net" --read-only --cap-drop ALL --security-opt no-new-privileges \
+        --log-driver none --pids-limit 64 --memory 256m \
         --user "$(id -u):$(id -g)" -e VENDOR_MAIL_MODE=host \
         "${mounts[@]}" "$VENDOR_MAIL_NODE_IMAGE" node "/release/ops/vendor-mail/${sub}.mjs" "${args[@]}" \
         || rc=$?
