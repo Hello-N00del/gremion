@@ -88,6 +88,7 @@ skip { next }
   gsub(/\$\{MAIL_RATE_LIMIT_RCPT\}/, "100/1h"); gsub(/\$\{MAIL_LOG_RETENTION_DAYS\}/, "7")
   gsub(/\$\{STALWART_ADMIN_USER\}/, "admin"); gsub(/\$\{STALWART_ADMIN_PASSWORD\}/, PW); print }' \
     "$ROOT/infra/host/mail/config.toml.tmpl" > "$WORK/config.toml"
+# shellcheck disable=SC2016  # the LITERAL two characters a surviving placeholder starts with
 if grep -q '\${' "$WORK/config.toml"; then echo "scratch render left a placeholder" >&2; exit 2; fi
 
 # ── the scratch mail.env: every template key, test values, fresh secrets ──

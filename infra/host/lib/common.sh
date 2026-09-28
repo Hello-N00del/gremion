@@ -372,8 +372,10 @@ load_env() {
 # more than one, is running; 2 when docker itself could not be asked.
 # Used by gremion-mail-bringup, gremion-neuter and gremion-vendor-mail.
 state_kc_cid() {
-    local stack="$1" ids n
-    ids="$(docker ps -q --filter "label=com.docker.compose.project=${stack}-state" \
+    # Not named `stack`: every program that sources this library reads the
+    # env's STACK, and shellcheck (SC2153) reads a lowercase twin as a typo.
+    local kc_stack="$1" ids n
+    ids="$(docker ps -q --filter "label=com.docker.compose.project=${kc_stack}-state" \
                         --filter "label=com.docker.compose.service=keycloak")" || return 2
     n="$(printf '%s\n' "$ids" | sed '/^[[:space:]]*$/d' | wc -l)"
     [[ "$n" -eq 1 ]] || return 1
