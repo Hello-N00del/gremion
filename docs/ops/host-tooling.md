@@ -98,7 +98,11 @@ list of keys still to fill. The non-secret set, with generic examples:
 
 Secret keys are every `CHANGE_ME_` key of `.env.example` plus
 `RESTIC_PASSWORD`, `RCLONE_CONFIG_BACKUP_*`, `INTERNAL_PUSH_SECRET`,
-`STALWART_ADMIN_PASSWORD`, `STALWART_API_KEY` and `PLATFORM_SMTP_PASSWORD`.
+`STALWART_ADMIN_PASSWORD`, `STALWART_API_KEY` (both `mail.env`; the API key
+also `ops.env`), `VENDOR_SMTP_PASSWORD` (`system@`, `mail.env` only),
+`ALERT_SMTP_PASSWORD` (`alerts@`, `mail.env` and `ops.env`) and the transitional
+`PLATFORM_SMTP_PASSWORD` (`platform@`, `mail.env` and the app tier) -- three
+generator groups, never one (TASK-015, TRD-251).
 `app-blue.env` and `app-green.env` additionally set `COLOUR` and the
 colour-suffixed service URLs (`INTERNAL_BASE_URL`, `KERNEL_BASE_URL`,
 `<LEAF>_SERVICE_URL`); no app-tier URL names a bare service name.

@@ -254,20 +254,55 @@ copy_host_src() {
     [[ "$url" == *":${pw}@"* ]] || { echo "url=${url}"; return 1; }
 }
 
-@test "mail.env and ops.env reuse the platform SMTP password and the Stalwart API key" {
+@test "vendor, alert and platform SMTP passwords are three pairwise different secrets (TASK-015, TRD-251)" {
+    # Rewritten from the R-E5a equality test: ONE platform_smtp value used to
+    # authenticate Keycloak, the leaves and Alertmanager alike, so a leak from
+    # any council-facing tier was the vendor's own sender. The split gives
+    # system@ (vendor_smtp, mail.env only), alerts@ (alert_smtp, mail.env and
+    # ops.env) and the transitional platform@ (platform_smtp, mail.env and the
+    # app tier) three generated values.
     render
-    local pw key
-    pw="$(value_of "${ENV_DIR}/state.env" PLATFORM_SMTP_PASSWORD)"
-    key="$(value_of "${ENV_DIR}/state.env" STALWART_API_KEY)"
-    [ -n "$pw" ] && [ -n "$key" ]
-    [ "$(value_of "${ENV_DIR}/mail.env"     PLATFORM_SMTP_PASSWORD)" = "$pw" ]
-    [ "$(value_of "${ENV_DIR}/ops.env"      ALERT_SMTP_PASSWORD)" = "$pw" ]
-    [ "$(value_of "${ENV_DIR}/app-blue.env" PLATFORM_SMTP_PASSWORD)" = "$pw" ]
-    [ "$(value_of "${ENV_DIR}/mail.env"     STALWART_API_KEY)" = "$key" ]
-    [ "$(value_of "${ENV_DIR}/ops.env"      STALWART_API_KEY)" = "$key" ]
+    local vendor alert platform key
+    vendor="$(value_of "${ENV_DIR}/mail.env" VENDOR_SMTP_PASSWORD)"
+    alert="$(value_of "${ENV_DIR}/mail.env" ALERT_SMTP_PASSWORD)"
+    platform="$(value_of "${ENV_DIR}/mail.env" PLATFORM_SMTP_PASSWORD)"
+    key="$(value_of "${ENV_DIR}/mail.env" STALWART_API_KEY)"
+    [ -n "$vendor" ]
+    [ -n "$alert" ]
+    [ -n "$platform" ]
+    [ -n "$key" ]
+    [ "$vendor" != "$alert" ]
+    [ "$vendor" != "$platform" ]
+    [ "$alert" != "$platform" ]
+    # alerts@ is the one identity two projects share: provision-roles.sh sets
+    # it from mail.env, Alertmanager authenticates with it from ops.env.
+    [ "$(value_of "${ENV_DIR}/ops.env" ALERT_SMTP_PASSWORD)" = "$alert" ]
+    [ "$(value_of "${ENV_DIR}/app-blue.env" PLATFORM_SMTP_PASSWORD)" = "$platform" ]
+    [ "$(value_of "${ENV_DIR}/ops.env" STALWART_API_KEY)" = "$key" ]
+    # The vendor's own password lives in mail.env and nowhere else.
+    local f
+    for f in state.env app-blue.env app-green.env ops.env; do
+        ! grep -q '^VENDOR_SMTP_PASSWORD=' "${ENV_DIR}/${f}" || { echo "VENDOR_SMTP_PASSWORD in ${f}"; return 1; }
+        ! grep -qF -- "$vendor" "${ENV_DIR}/${f}" || { echo "the vendor value leaked into ${f}"; return 1; }
+    done
     # Task 11's render-ops.sh reads ALERT_SMTP_PASSWORD from ops.env and
     # appends no copy of it (load_env would refuse the duplicate with exit 2).
     [ "$(grep -c '^ALERT_SMTP_PASSWORD=' "${ENV_DIR}/ops.env")" = 1 ]
+}
+
+@test "state.env carries no Stalwart credential and no SMTP password (no reader, TASK-015)" {
+    render
+    local k
+    for k in STALWART_ADMIN_PASSWORD STALWART_API_KEY PLATFORM_SMTP_PASSWORD VENDOR_SMTP_PASSWORD ALERT_SMTP_PASSWORD; do
+        ! grep -q "^${k}=" "${ENV_DIR}/state.env" || { echo "state.env declares ${k}"; return 1; }
+    done
+}
+
+@test "ALERT_EMAIL_FROM is an operator item, never a shipped example address (TASK-015)" {
+    render
+    [ "$(value_of "${ENV_DIR}/ops.env" ALERT_EMAIL_FROM)" = "CHANGE_ME_OPERATOR_alert_email_from" ]
+    [[ "$output" == *"ops.env: ALERT_EMAIL_FROM"* ]]
+    [[ "$output" == *"ops.env: ALERT_SMTP_USER"* ]]
 }
 
 @test "two roots receive different secrets" {
