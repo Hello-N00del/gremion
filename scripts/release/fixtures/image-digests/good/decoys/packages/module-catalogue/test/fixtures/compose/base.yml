@@ -1,0 +1,3 @@
+services:
+  decoy:
+    image: nginx:1.29

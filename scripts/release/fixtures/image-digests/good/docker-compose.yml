@@ -1,0 +1,6 @@
+services:
+  db:
+    image: postgres:18-alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  app:
+    build: ./app
+    image: ghcr.io/hello-n00del/gremion-app:${IMAGE_TAG:-dev}
