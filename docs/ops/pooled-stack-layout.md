@@ -35,8 +35,9 @@ and that code is the authoritative copy.
 
 | Service | Class | Project | Networks |
 |---|---|---|---|
-| postgres, 6 × `<id>-postgres`, pgbouncer | council store | state | `_state` |
+| postgres, 7 × `<id>-postgres`, pgbouncer | council store | state | `_state` |
 | keycloak | council | state | `_state`, `_edge` |
+| matrix (Synapse, `profiles: [messaging]`, TASK-198) | council | state | `_state` only, no ports |
 | legal, fallback | council (edge) | state | `_edge` |
 | traefik | council (edge) | state | `_edge`, `socket` |
 | docker-socket-proxy | council (edge) | state | `socket` only (internal) |
@@ -72,7 +73,8 @@ limit.
 | Project | Service | Memory | CPUs | Per tenant |
 |---|---|---|---|---|
 | state | postgres | 1G | 1.0 | 0 |
-| state | 6 × `<id>-postgres` (profile-gated, only enabled modules start) | 6 × 256M | 6 × 0.25 | 0 |
+| state | 7 × `<id>-postgres` (profile-gated, only enabled modules start) | 7 × 256M | 7 × 0.25 | 0 |
+| state | matrix (profile-gated with messaging-postgres, TASK-198) | 1G | 1.0 | 0 |
 | state | pgbouncer | 256M | 0.25 | 0 |
 | state | keycloak | 1.5G | 1.0 | 0 |
 | state | legal | 256M | 0.25 | 0 |

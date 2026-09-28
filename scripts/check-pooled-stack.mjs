@@ -61,7 +61,7 @@ export const PROJECTS = [
 export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create']
 export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public']
 export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create' }
-export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault']
+export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
 /** The leaf services app.env.tmpl names (content-service ... vault-service). */
 export const LEAF_SERVICES = ['content', 'finance', 'files', 'votes', 'messages', 'newsletter', 'calendar', 'board', 'vault'].map(
   (l) => `${l}-service`,
@@ -85,6 +85,9 @@ export const PLACEMENT = {
     ...Object.fromEntries(MODULE_POSTGRES_IDS.map((id) => [`${id}-postgres`, store])),
     pgbouncer: store,
     keycloak: { class: 'council', networks: ['edge', 'state'] },
+    // TASK-198: the chat module's Synapse (profiles: [messaging]); the app tier
+    // reaches it on _state, and it publishes nothing.
+    matrix: { class: 'council', networks: ['state'] },
     legal: { class: 'council-edge', networks: ['edge'] },
     fallback: { class: 'council-edge', networks: ['edge'] },
     traefik: { class: 'council-edge', networks: ['edge', 'socket'] },

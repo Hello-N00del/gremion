@@ -243,6 +243,25 @@ services:
     volumes:
       - vault-pg-data:/var/lib/postgresql
 
+  # The chat module's server (TASK-198, D14): Synapse's own PostgreSQL 18.
+  # Unlike the six above it carries ONE initdb script, bound read-only:
+  # modules/messaging/synapse/postgres-init/10-synapse-db.sh creates the
+  # synapse role (no superuser) and database with LOCALE 'C' from template0,
+  # and aborts initdb when SYNAPSE_DB_PASSWORD is empty. No ${VAR:?} here: it
+  # would bind every profile and verb (see x-required-env).
+  messaging-postgres:
+    <<: *module-postgres
+    profiles: [messaging]
+    labels:
+      org.gremion.postgres: "module:messaging"
+    environment:
+      POSTGRES_USER:       ${MESSAGING_PG_USER:-messaging}
+      POSTGRES_PASSWORD:   ${MESSAGING_PG_PASSWORD}
+      SYNAPSE_DB_PASSWORD: ${SYNAPSE_DB_PASSWORD}
+    volumes:
+      - messaging-pg-data:/var/lib/postgresql
+      - ./modules/messaging/synapse/postgres-init/10-synapse-db.sh:/docker-entrypoint-initdb.d/10-synapse-db.sh:ro
+
   # ============================================================
   # Mailpit — SMTP catcher for staging / local dev (#162)
   # ============================================================
@@ -608,6 +627,67 @@ services:
       - traefik-logs:/logs/traefik:rw
       - vector-processed-logs:/logs/processed
 
+  # ============================================================
+  # Matrix (Synapse) — the chat module's homeserver (TASK-198)
+  # ============================================================
+  # Profile-gated with its database (messaging). Built from
+  # modules/messaging/synapse: the template, the render shim, the probe and
+  # the database preflight are baked into the image (no bind mount), so every
+  # boot renders a PostgreSQL-only config (the shim refuses anything else)
+  # and runs db-preflight.py (C collation, major 18) before Synapse starts.
+  # Fail-closed lives there, not in `${VAR:?}` forms, which would bind every
+  # profile and verb. _state only, no ports: the app tier reaches it as
+  # http://matrix:8008 (modules/messaging). The healthcheck reads the login
+  # flows, not /versions: unhealthy while the JWT arm or the oidc-keycloak
+  # provider is missing. start_period = SYNAPSE_KC_MAX (30) key-fetch attempts
+  # of ~7 s + the measured first boot (scripts/check-synapse-stack.mjs).
+  # Realm, issuer and the OIDC secret file (/run/secrets/...) are TASK-038's.
+  matrix:
+    build:
+      context: modules/messaging/synapse
+    image: ghcr.io/hello-n00del/gremion-synapse:${IMAGE_TAG:-latest}
+    profiles: [messaging]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    depends_on:
+      messaging-postgres:
+        condition: service_healthy
+    environment:
+      SYNAPSE_SERVER_NAME:          ${PLATFORM_DOMAIN}
+      MATRIX_PUBLIC_URL:            https://${PLATFORM_DOMAIN}
+      SYNAPSE_DB_HOST:              messaging-postgres
+      SYNAPSE_DB_PORT:              "5432"
+      SYNAPSE_DB_NAME:              synapse
+      SYNAPSE_DB_USER:              synapse
+      SYNAPSE_DB_PASSWORD:          ${SYNAPSE_DB_PASSWORD}
+      # Blank until the realm exists (TASK-028 contract); the shim refuses a
+      # blank issuer at boot. A blank fetch URL derives the in-network one.
+      SYNAPSE_KEYCLOAK_ISSUER_URL:  ${SYNAPSE_KEYCLOAK_ISSUER_URL:-}
+      SYNAPSE_KEYCLOAK_FETCH_URL:   ${SYNAPSE_KEYCLOAK_FETCH_URL:-}
+      # Scratch only: on a host the secret is the mounted file, which wins.
+      SYNAPSE_OIDC_CLIENT_SECRET:   ${SYNAPSE_OIDC_CLIENT_SECRET:-}
+      # Rendered only in a BOOTSTRAP_MODE=1 boot (bootstrap.sh), else stripped.
+      SYNAPSE_REGISTRATION_SHARED_SECRET: ${SYNAPSE_REGISTRATION_SHARED_SECRET:-}
+      BOOTSTRAP_MODE:               ${SYNAPSE_BOOTSTRAP_MODE:-0}
+      SYNAPSE_KC_MAX:               ${SYNAPSE_KC_MAX:-30}
+    volumes:
+      # Media and the signing key (the homeserver's identity) live only here:
+      # no S3 offload (TASK-198 Q5). Backed up by project label (TASK-089).
+      - synapse-data:/data
+    deploy: *limits-l
+    networks:
+      - state
+    healthcheck:
+      test: ["CMD", "/synapse-healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 240s
+
 # ============================================================
 # Volumes
 # ============================================================
@@ -624,6 +704,8 @@ volumes:
   finance-pg-data:
   newsletter-pg-data:
   vault-pg-data:
+  messaging-pg-data:
+  synapse-data:
   mailpit-data:
   traefik-logs:
   # Created by infra/host/bootstrap.sh (stage_networks) and never by compose,
