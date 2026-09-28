@@ -126,7 +126,9 @@ test('raw: a lookalike prefix is third-party (canonical-prefix compare)', () => 
     'ghcr.io:443/hello-n00del/x:${IMAGE_TAG:-dev}',
   ]) {
     const res = checkTree(tree({ 'docker-compose.yml': fpBuild(img) }))
-    assert.deepEqual(codes(res), ['unpinned'], `${img}: ${JSON.stringify(res.problems)}`)
+    // a literal lookalike is also named as such (review round 1)
+    const want = img.includes('$') ? ['unpinned'] : ['first-party-lookalike', 'unpinned']
+    assert.deepEqual(codes(res), want, `${img}: ${JSON.stringify(res.problems)}`)
   }
 })
 
@@ -320,7 +322,8 @@ test('r1: .yaml compose variants are discovered', () => {
 })
 
 test('r1: YAML environment keys MINIO_*/ *_S3_* (list or map form) are object-storage keys', () => {
-  for (const env of ['      - MINIO_ROOT_USER=x\n', '      MINIO_ROOT_USER: x\n', '      AWS_S3_BUCKET: y\n']) {
+  assert.deepEqual(codes(checkTree(tree({ 'infra/host/templates/env/state.env.tmpl': 'S3_ENDPOINT=\n' }))), ['object-storage-key'])
+  for (const env of ['      - MINIO_ROOT_USER=x\n', '      MINIO_ROOT_USER: x\n', '      AWS_S3_BUCKET: y\n', '      - S3_BUCKET=y\n']) {
     const res = checkTree(tree({ 'docker-compose.yml': compose(`  x:\n    image: redis@sha256:${D('a')}\n    environment:\n${env}`) }))
     assert.deepEqual(codes(res), ['object-storage-key'], env)
   }

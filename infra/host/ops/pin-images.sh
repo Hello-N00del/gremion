@@ -41,11 +41,12 @@ pin_file() {
     [[ -f "$file" ]] || die "no such file: ${file}" 2
     while IFS= read -r ref; do
         [[ "$ref" == *"@sha256:"* ]] && continue
-        # A first-party build: image is tagged ${IMAGE_TAG:-dev}; its digest is
+        # A first-party build: image is tagged ${IMAGE_TAG:-dev} (only that
+        # form is skipped; a literal first-party tag is resolved); its digest is
         # written by the release pins layer, not resolved here. A ${VAR} ref is
         # resolved from the project's env template, where the digest lives.
         # scripts/release/check-image-digests.mjs judges both.
-        if [[ "$ref" == "$FIRST_PARTY_PREFIX"* || "$ref" == *'$'* ]]; then
+        if [[ ( "$ref" == "$FIRST_PARTY_PREFIX"* && "$ref" =~ :\$\{IMAGE_TAG(:-dev|:\?[^}]*)\}$ ) || "$ref" == *'$'* ]]; then
             info "skipping ${ref} (first-party or \${...}: pinned elsewhere)"
             continue
         fi

@@ -43,14 +43,19 @@
 // Make:  make lint-image-digests
 
 import { readFileSync, existsSync } from 'node:fs'
-import { join, matchesGlob } from 'node:path'
+import { dirname, join, matchesGlob, normalize } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 export const SCAN_PATTERNS = Object.freeze([
   ':(top,glob)docker-compose*.yml',
+  ':(top,glob)docker-compose*.yaml',
+  ':(top,glob)compose*.yml',
+  ':(top,glob)compose*.yaml',
   ':(top,glob)compose/**/*.yml',
+  ':(top,glob)compose/**/*.yaml',
   ':(top,glob)infra/**/docker-compose*.yml',
+  ':(top,glob)infra/**/docker-compose*.yaml',
   ':(top,glob)infra/**/values.yaml',
   ':(top,glob)infra/host/templates/env/*.tmpl',
   ':(top,glob)infra/host/bin/*',
@@ -85,21 +90,40 @@ const TAGGED_RE = new RegExp(`^(${REPO})(?::([A-Za-z0-9_][A-Za-z0-9_.-]{0,127}))
 const FIRST_PARTY_TAG_RE = new RegExp(
   `^${FIRST_PARTY.registry.replace(/\./g, '\\.')}/${FIRST_PARTY.namespace}/${COMPONENT}(?:/${COMPONENT})*:\\$\\{IMAGE_TAG(?::-dev|:\\?[^}]*)\\}$`,
 )
-// ${VAR}, ${VAR:-d}, ${VAR-d}, ${VAR:?m}, ${VAR?m}, $VAR
-const EXPANSION_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g
-const DEFAULT_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:?-)([^}]*)\}/g
-const IMAGE_ASSIGN_RE = /^\s*(?:(?:export|local|readonly|declare(?:\s+-\w+)*)\s+)?([A-Za-z_][A-Za-z0-9_]*_IMAGE)=(.*)$/
+// ${VAR}, ${VAR:-d}, ${VAR-d}, ${VAR:=d}, ${VAR:?m}, ${VAR?m}, $VAR
+const EXPANSION_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?=])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g
+const DEFAULT_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-=])([^}]*)\}/g
+// A `latest` default anywhere, nested defaults included (${T:-${U:-latest}}).
+const LATEST_DEFAULT_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=]["']?(?:[^}"'\s]*:)?latest["']?\}/
+// An image variable: IMAGE or *_IMAGE.
+const IMAGE_VAR_RE = /(^|_)IMAGE$/
+// Every IMAGE / *_IMAGE assignment on a shell or env line (several per line,
+// behind export/local/readonly/typeset/declare).
+const IMAGE_ASSIGN_G = /(?:^|[\s;])(?:(?:export|local|readonly|typeset|declare(?:\s+-\w+)*)\s+)?((?:[A-Za-z_][A-Za-z0-9_]*_)?IMAGE)=("[^"]*"|'[^']*'|[^\s;#]*)/g
+// ...and in a compose environment list or map.
+const YAML_IMAGE_ENV_RE = /^\s*(?:-\s+["']?((?:[A-Za-z_][A-Za-z0-9_]*_)?IMAGE)=(.*?)["']?|["']?((?:[A-Za-z_][A-Za-z0-9_]*_)?IMAGE)["']?:\s*(.+))\s*$/
 const IMAGE_TAG_ASSIGN_RE = /^\s*(?:(?:export|local|readonly)\s+)?((?:[A-Za-z_][A-Za-z0-9_]*_)?IMAGE_TAG)=(.*)$/
 // A value is plain reference characters and whole ${...} expansions (whose
 // :?message may hold spaces); a flow mapping, a trailing token, a quoted key
 // or an unbalanced brace is not canonical.
-const CANONICAL_IMAGE_LINE_RE = /^\s*(?:-\s+)?image:\s*(["']?)((?:\$\{[^{}\n"']*\}|\$(?!\{)|[^\s"'{}#,[\]$])+)\1\s*$/
+const CANONICAL_IMAGE_LINE_RE = /^\s*image:\s*(["']?)((?:\$\{[^{}\n"']*\}|\$(?!\{)|[^\s"'{}#,[\]$])+)\1\s*$/
 const IMAGE_KEY_RE = /(^|[\s{,])["']?image["']?\s*:/
-// TRD-066/354 key definition (brief section 1), applied verbatim.
-const OS_ASSIGN_RE = /^\s*(export\s+)?(MINIO_\w*|\w*_S3_\w*)=/
-const OS_EXPANSION_RE = /\$\{?(MINIO_|\w*_S3_)/
+// TRD-066/354 key definition (brief section 1), widened by review round 1 to
+// keys that START with S3_ (S3_ENDPOINT), which the brief's \w*_S3_ misses.
+const OS_ASSIGN_RE = /^\s*(export\s+)?(MINIO_\w*|(?:\w*_)?S3_\w*)=/
+const OS_EXPANSION_RE = /\$\{?(MINIO_|(?:\w*_)?S3_)/
 const OS_PROFILE_RE = /(^\s*profiles\s*:.*\bobject-storage\b)|(^\s*-\s*["']?object-storage["']?\s*$)|(COMPOSE_PROFILES=.*\bobject-storage\b)/
 const OS_SERVICE_RE = /^ {2}["']?[A-Za-z0-9_.-]*minio[A-Za-z0-9_.-]*["']?\s*:/i
+const OS_YAML_KEY_RE = /^\s*(?:-\s+)?["']?(MINIO_\w*|(?:\w*_)?S3_\w*)["']?\s*[:=]/
+// A minio repository anywhere on a line (docker run, a default, an env value).
+const OS_REF_RE = /(?:^|[\s="'@/:-])minio\/(?:minio|mc)(?=[\s:@"'/]|$)|quay\.io\/minio\/|(?:^|[\s="'])(?:docker\.io\/)?(?:library\/)?minio(?::[\w.-]+)?(?:@sha256:[0-9a-f]+)?(?=["'\s]|$)/
+// YAML the line scan cannot read as YAML does: a line break other than \n or
+// \r\n (go-yaml also breaks on a lone CR, NEL, LS and PS), and keys spelled
+// in a form other than a plain word (explicit `? key`, an alias `*k :`, an
+// escaped double-quoted key).
+const YAML_BREAK_RE = /\r(?!\n)|\u0085|\u2028|\u2029/
+const YAML_KEY_HAZARD_RE = /^\s*(?:-\s+)?(?:\?(?:\s|$)|\*[^\s:]+\s*:|"[^"]*\\[^"]*"\s*:)/
+const NOT_A_BUILD_RE = /^(?:!reset(?:\s+null)?|null|~|""|'')?\s*$/
 const OS_LOCK_RE = /^\s+['"]?(minio|@aws-sdk\/client-s3)(@[^:'"]+)?['"]?\s*:/
 
 const isYaml = (f) => /\.ya?ml$/.test(f)
@@ -122,6 +146,14 @@ export function canonicalRepo(ref) {
 export function isFirstParty(ref) {
   const parts = ref.split('/')
   return parts.length >= 3 && parts[0] === FIRST_PARTY.registry && parts[1] === FIRST_PARTY.namespace
+}
+
+/** Anything that names our registry host or namespace without being exactly first-party. */
+export function isFirstPartyLookalike(ref) {
+  if (isFirstParty(ref)) return false
+  const parts = ref.toLowerCase().split('/')
+  if (parts.length < 2) return false
+  return parts[0].replace(/:\d+$/, '') === FIRST_PARTY.registry || parts.slice(0, -1).includes(FIRST_PARTY.namespace)
 }
 
 function git(root, args) {
@@ -151,6 +183,23 @@ function codeLines(text, yaml) {
   })
 }
 
+/** Is line `i` an `extends:` that names a file (flow or block form)? */
+function isExtendsFile(lines, i) {
+  const l = lines[i].line
+  const m = /^(\s*)extends\s*:(.*)$/.exec(l)
+  if (!m) return false
+  if (/\bfile\s*:/.test(m[2])) return true
+  if (m[2].trim()) return false
+  const n = m[1].length
+  for (let j = i + 1; j < lines.length; j++) {
+    const x = lines[j].line
+    if (!x.trim()) continue
+    if (/^(\s*)/.exec(x)[1].length <= n) break
+    if (/^\s*file\s*:/.test(x)) return true
+  }
+  return false
+}
+
 /** Does the YAML mapping holding line `i` (same indent) carry a build: key? */
 function siblingHasBuild(lines, i) {
   const indentOf = (l) => /^(\s*)/.exec(l)[1].length
@@ -167,7 +216,9 @@ function siblingHasBuild(lines, i) {
     for (let j = i + dir; j >= 0 && j < lines.length; j += dir) {
       const w = within(j)
       if (w === 'stop') break
-      if (w === 'sibling' && /^\s*build\s*:/.test(lines[j].line)) return true
+      const b = /^\s*build\s*:(.*)$/.exec(lines[j].line)
+      // `build: !reset null` (a pins layer), null, ~ or "" is NOT a build.
+      if (w === 'sibling' && b) return !NOT_A_BUILD_RE.test(b[1].trim()) || b[1].trim() === ''
     }
   }
   return false
@@ -185,7 +236,7 @@ export function judgeRef(raw, ctx) {
     if (d === 'latest' || /:latest$/.test(d)) {
       return { problem: { code: 'latest', message: `literal default '${d}' in ${ref} (latest fails everywhere)` } }
     }
-    if (/_IMAGE$/.test(m[1]) && !PINNED_RE.test(d)) {
+    if (IMAGE_VAR_RE.test(m[1]) && !PINNED_RE.test(d)) {
       return { problem: { code: 'unpinned', message: `default of \${${m[1]}} is not <repo>[:tag]@sha256:<64 hex>: '${d}'` } }
     }
   }
@@ -199,8 +250,8 @@ export function judgeRef(raw, ctx) {
   const resolved = ref.replace(EXPANSION_RE, (whole, name, op, arg, bare) => {
     const v = name ?? bare
     const fromEnv = ctx.env?.get(v)
-    if (fromEnv !== undefined && !(op === ':-' && fromEnv === '')) return fromEnv
-    if (op === ':-' || op === '-') return unquote(arg ?? '')
+    if (fromEnv !== undefined && !((op === ':-' || op === ':=') && fromEnv === '')) return fromEnv
+    if (op === ':-' || op === '-' || op === ':=' || op === '=') return unquote(arg ?? '')
     unresolved ??= v
     return whole
   })
@@ -255,6 +306,7 @@ export function checkTree(root) {
     if (typeof e.reason !== 'string' || !e.reason.trim()) add('exclusion-no-reason', where, `${e.glob}: an exclusion needs a reason`)
     const hit = files.filter((f) => matchesGlob(f, e.glob))
     if (!hit.length) add('exclusion-stale', where, `${e.glob} matches no discovered file`)
+    if (hit.length > 1) add('exclusion-broad', where, `${e.glob} matches ${hit.length} files; an exclusion names exactly one`)
     for (const f of hit) excluded.add(f)
   }
 
@@ -269,16 +321,39 @@ export function checkTree(root) {
     return envCache.get(tmpl)
   }
 
+  // Every COMPOSE_FILE component a template names is a file this scan reads
+  // (relative to its project directory), bar the release pins layer, which is
+  // never committed and is judged by check-pins.mjs and gremion-deploy.
+  const tmplDirs = new Map()
+  for (const [compose, tmpl] of Object.entries(PROJECT_ENV)) tmplDirs.set(tmpl, dirname(compose))
+  const checkComposeFile = (f, text) => {
+    for (const [i, line] of text.split(/\r?\n/).entries()) {
+      const m = /^\s*(?:export\s+)?COMPOSE_FILE=(.*)$/.exec(line)
+      if (!m) continue
+      for (const c of unquote(m[1].replace(/\s+#.*$/, '')).split(':').filter(Boolean)) {
+        if (c.split('/').pop() === 'docker-compose.pins.yml') continue
+        const p = normalize(join(tmplDirs.get(f) ?? '.', c))
+        if (!files.includes(p)) add('compose-file-unscanned', `${f}:${i + 1}`, `COMPOSE_FILE names ${c} (${p}), which the scan set does not discover`)
+      }
+    }
+  }
+
   let refs = 0
   const thirdParty = new Set()
   const judge = (raw, where, ctx) => {
     refs += 1
+    const lit = unquote(raw)
+    if (!lit.includes('$') && isFirstPartyLookalike(lit)) add('first-party-lookalike', where, `${lit} names ${FIRST_PARTY.registry}/${FIRST_PARTY.namespace}/ in another spelling`)
     const { problem, resolved } = judgeRef(raw, ctx)
     if (problem) return add(problem.code, where, problem.message)
     if (resolved) {
       const repo = canonicalRepo(resolved)
       if (/(^|\/)minio(\/|$)/.test(repo)) add('object-storage-image', where, `${resolved}: an object-storage image (TRD-066/354)`)
-      if (!isFirstParty(resolved)) thirdParty.add(repo)
+      // gremion-deploy verifies a signature only on the exact first-party
+      // prefix; a lookalike would reach the host third-party list and deploy
+      // unsigned, so it is refused here, never listed.
+      if (isFirstPartyLookalike(resolved)) add('first-party-lookalike', where, `${resolved} names ${FIRST_PARTY.registry}/${FIRST_PARTY.namespace}/ in another spelling`)
+      else if (!isFirstParty(resolved)) thirdParty.add(repo)
     }
   }
 
@@ -291,7 +366,9 @@ export function checkTree(root) {
       continue
     }
     const yaml = isYaml(f)
+    if (yaml && YAML_BREAK_RE.test(text)) add('yaml-line-break', f, 'a line break other than LF/CRLF (lone CR, NEL, LS, PS): YAML reads lines this scan does not')
     const lines = codeLines(text, yaml)
+    if (/\.tmpl$/.test(f)) checkComposeFile(f, text)
     const raw = !excluded.has(f)
     const env = envFor(f)
     for (const [i, l] of lines.entries()) {
@@ -301,12 +378,19 @@ export function checkTree(root) {
       if (OS_ASSIGN_RE.test(l.line) || OS_EXPANSION_RE.test(l.line)) add('object-storage-key', where, `object-storage key: ${l.line.trim()}`)
       if (OS_PROFILE_RE.test(l.line)) add('object-storage-profile', where, `object-storage profile: ${l.line.trim()}`)
       if (yaml && OS_SERVICE_RE.test(l.line)) add('object-storage-service', where, `object-storage service: ${l.line.trim()}`)
-      const osRef = /minio\/|(^|[\s=:"'])minio(:|@|["'\s]|$)/.test(l.line) && /image/i.test(l.line)
-      if (!raw) {
-        if (osRef) add('object-storage-image', where, `object-storage image: ${l.line.trim()}`)
+      if (yaml && OS_YAML_KEY_RE.test(l.line)) add('object-storage-key', where, `object-storage key: ${l.line.trim()}`)
+      if (OS_REF_RE.test(l.line)) add('object-storage-image', where, `object-storage image: ${l.line.trim()}`)
+      if (!raw) continue
+      // raw arm.
+      if (LATEST_DEFAULT_RE.test(l.line)) add('latest', where, `a latest default: ${l.line.trim()} (latest fails everywhere)`)
+      if (yaml && YAML_KEY_HAZARD_RE.test(l.line)) {
+        add('non-canonical', where, `a YAML key this scan cannot read (explicit, alias or escaped): ${l.line.trim()}`)
         continue
       }
-      // raw arm.
+      if (yaml && /compose/.test(f) && (/^include\s*:/.test(l.line) || isExtendsFile(lines, i))) {
+        add('compose-include', where, `compose loads another file (include/extends file:), outside the scan set: ${l.line.trim()}`)
+        continue
+      }
       if (yaml && IMAGE_KEY_RE.test(l.line)) {
         const m = CANONICAL_IMAGE_LINE_RE.exec(l.line)
         if (!m) {
@@ -316,18 +400,24 @@ export function checkTree(root) {
         judge(m[2], where, { env, build: siblingHasBuild(lines, i) })
         continue
       }
-      const a = IMAGE_ASSIGN_RE.exec(l.line)
-      if (a) {
-        judge(a[2].replace(/\s+#.*$/, ''), where, { env: yaml ? env : null, build: false })
-        continue
+      if (yaml) {
+        const y = YAML_IMAGE_ENV_RE.exec(l.line)
+        if (y) {
+          judge(y[2] ?? y[4], where, { env, build: false })
+          continue
+        }
+      } else {
+        const as = [...l.line.matchAll(IMAGE_ASSIGN_G)]
+        for (const a of as) judge(a[2], where, { env: null, build: false })
+        if (as.length) continue
       }
       const t = IMAGE_TAG_ASSIGN_RE.exec(l.line)
-      if (t && unquote(t[2]) === 'latest') {
+      if (t && unquote(t[2].replace(/\s+#.*$/, '')) === 'latest') {
         add('latest', where, `${t[1]}=latest (latest fails everywhere)`)
         continue
       }
       for (const m of l.line.matchAll(DEFAULT_RE)) {
-        if (/_IMAGE$/.test(m[1]) || unquote(m[3]) === 'latest') judge(m[0], where, { env: null, build: false })
+        if (IMAGE_VAR_RE.test(m[1])) judge(m[0], where, { env: null, build: false })
       }
     }
   }
