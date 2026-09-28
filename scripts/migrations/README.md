@@ -59,7 +59,34 @@ database. `legacyFloor` / `legacy[]` are written once and never edited
 | `kernel-api` | service:kernel-api | `services/kernel-api/migrations/{bodies,authz,roles,erasure}` | 4 | none yet |
 | `governance`, `mail` | service:<id> | `services/<id>/migrations` | 4 | none yet |
 
-A chain with no file must keep `highWater` 0 and no locked file.
+A chain with no file must keep `highWater` 0 and no locked file. The rule is
+read **per chain**: an empty lock entry (`files: {}`) counts as "no lock
+entry", and a declared directory of a chain that already has files elsewhere
+may still be absent. `kernel-api`'s four subdirectories fill one at a time
+(TASK-080/081/204/132), so refusing an absent sibling would refuse the first
+claim into any of them.
+
+## Deviations from the brief (recorded for the ledger)
+
+- **Lock format (Q6).** The brief names `applied.lock.json` as
+  `{chain: {file: sha256}}`; the lock is
+  `{frozenAt, hash, chains: {<chain>: {legacyFloor, legacy, files: {<file>: sha256}}}}`,
+  so the write-once `legacyFloor` / `legacy[]` are frozen next to the hashes
+  and `check` can refuse an edit to them (`LEGACY_EDITED`). The hash is
+  sha256 of the working bytes; `check` asserts `eol=lf` per file, which makes
+  them the git index blob.
+- **StuRa-slug rule scope (§1).** The brief says a listed slug fails "at any
+  number". It fails at any number in a chain of the **kernel** database only.
+  The module-finance leaf chain runs in its own database and legitimately
+  carries `money_running_no_fiscal_year_idx` and `money_fk_indexes`; applying
+  the rule there would refuse TASK-200's measured tree. The number-range rule
+  (1000-1199, 1300-2099) still applies to every tracked file.
+- **B7 reuse.** The PLAN names B7 Tasks 1-4 and 6-11. This unit took only
+  what the brief's section 4 lists (order/pad and coverage guards, the
+  baseline check as the lock check, a pure `git mv` renumber with manifest
+  regeneration, the `CROSS_CUTTING_MIGRATIONS` keys) and dropped the
+  ownership harvest, `NEXT_FREE_MIGRATION_NUMBER`, T5, T12 and the Linux-only
+  capture (B7 .6/.7).
 
 ## Known limits (residuals)
 
@@ -68,4 +95,22 @@ A chain with no file must keep `highWater` 0 and no locked file.
   `chainPreApply` already treats the chain as that union.
 - gremion-ui's own ledger (`db.ts`) has no sha256 column, so the kernel data
   plane checks file = manifest for every file at boot (G5) but not
-  applied row = manifest; that half lands with the move onto tenant-store.
+  applied row = manifest; that half lands with the move onto tenant-store
+  (owner named by the orchestrator; TASK-038 re-asserts).
+- Nothing in the kernel data plane refuses a **pre-renumber (pad-3) ledger**.
+  `db.ts` compares ledger names only through `applied.has(file)`, so on a
+  database whose `schema_migrations` still records the 31 pad-3 names it
+  treats all 31 pad-4 files as pending and fails only by accident, on the
+  first `CREATE TABLE ... already exists`, without naming the cause. **A
+  re-init is mandatory** for every kernel database created before the
+  renumber; the StuRaOS gitlink bump that picks up TASK-029 must say so.
+  `chainPreApply` refuses such a ledger before any DDL
+  (`LEDGER_NAME_NOT_IN_CHAIN`, proven in `runtime.test.mjs`); wiring it into
+  the kernel data plane belongs to the same owner as the ledger hash (a
+  `db.ts` change beyond G5 is outside this unit).
+- `modules/content/app/migrations` (1200, 1201; kernel database) has no
+  `manifest.json` and so no `manifestDirs` entry: neither verify's
+  migration-hash suite nor `verifyApplied` covers it, and `verifyApplied`
+  would refuse those rows as `NOT_IN_MANIFEST` once a union runner uses it
+  for kernel-data. The manifest for that directory lives in a module tree
+  this unit does not own: TASK-075/077.
