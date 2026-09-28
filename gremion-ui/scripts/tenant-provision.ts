@@ -579,10 +579,6 @@ async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verif
     tenantHost: tenantHostFromIssuer(tenant.issuer),
     apexDomain: apexDomain(),
     base,
-    // (B) a realm whose client URIs were never minted from a tenant host
-    // legitimately keeps its localhost dev URIs — flag it so the URI checks
-    // don't false-fail.
-    isDefault: tenant.slug === 'default',
     verifyOnly,
   })
 }
@@ -641,18 +637,18 @@ async function cmdReconcile(positional: string | undefined): Promise<void> {
 
 // ── materialize-config (T15) ───────────────────────────────────────────────
 /** The on-disk config path for a slug — mirrors registry.ts configPathForTenant
- *  (D-CONFIGPATH): `default` → the CONFIG_PATH env (same fallback as
- *  loadDefaultConfig); any other slug → /data/<slug>/config.json. An explicit
- *  `--config <path>` overrides it (for a smoke-stack/S4 copy, per the plan). */
+ *  (D-CONFIGPATH, TASK-042): `${TENANT_DATA_ROOT:-/data}/<slug>/config.json` for
+ *  EVERY slug. An explicit `--config <path>` overrides it (for a smoke-stack/S4
+ *  copy, per the plan). */
 function configPathForSlug(slug: string): string {
   const override = flag('--config')
   if (override) return override
-  if (slug === 'default') return process.env.CONFIG_PATH ?? join(repoRoot, 'config', 'config.json')
-  return `/data/${slug}/config.json`
+  const root = (process.env.TENANT_DATA_ROOT ?? '/data').replace(/\/+$/, '')
+  return `${root}/${slug}/config.json`
 }
 
 /**
- * materialize-config <slug> (default slug: `default`) — read the tenant's stored
+ * materialize-config <slug> (required, TASK-042: there is no default tenant) — read the tenant's stored
  * config.json, run it through `materializeConfig` (defaults + stored, fully
  * merged), enforce the §6-P2.2 brand-identity guard, and write the complete
  * config back atomically. After T15 the source DEFAULT_CONFIG brand/legal block
@@ -663,7 +659,8 @@ function configPathForSlug(slug: string): string {
  * brand — no silent blank render.
  */
 function cmdMaterializeConfig(positional: string | undefined): void {
-  const slug = positional ?? 'default'
+  if (!positional) throw new Error('materialize-config requires <slug> (there is no default tenant)')
+  const slug = positional
   const v = validateSlug(slug)
   if (!v.ok) throw new Error(`invalid slug "${slug}": ${v.reason}`)
   const path = configPathForSlug(v.slug)

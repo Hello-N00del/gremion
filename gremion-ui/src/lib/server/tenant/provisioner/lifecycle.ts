@@ -92,13 +92,9 @@ export interface DeleteResult {
   shreddedPaths: readonly string[]
 }
 
-/** The default tenant is the bootstrap root (env-keyed secrets, the global stack);
- *  its data + key are NEVER tenant-lifecycle-managed (design §3 bootstrap caveat). */
-const DEFAULT_SLUG = 'default'
-
 /**
  * Translate a per-tenant `file:` secret REF to its HOST path, or null for a
- * non-file ref (e.g. the default tenant's `env:` refs — nothing to shred). Reuses
+ * non-file ref (e.g. an `env:` ref — nothing to shred). Reuses
  * tenantSecretHostPath so the shred target is the SAME path the backup script
  * (T16) and provisioner (T10) write.
  */
@@ -112,8 +108,8 @@ function hostPathForRef(ref: string | null | undefined): string | null {
  * the backup key FIRST (the §7.9 exactly-one location — shredding it voids all
  * backups), then the data-plane DB credential and every confidential-client
  * secret, so no live credential outlives the tenant. Deterministic file names
- * mirror pipeline.provisionTenant; refs that are not `file:` (default-tenant
- * `env:` refs) contribute nothing. De-duplicated, backup key first.
+ * mirror pipeline.provisionTenant; refs that are not `file:` (`env:` refs)
+ * contribute nothing. De-duplicated, backup key first.
  */
 function shredTargets(tenant: Tenant, tenantSecretsDir: string): string[] {
   const root = tenantSecretsDir.replace(/\/$/, '')
@@ -145,8 +141,9 @@ function shredTargets(tenant: Tenant, tenantSecretsDir: string): string[] {
  * Crypto-shred-on-delete (§8.7). See the file header for the full contract.
  * Order: status->deleting → KEY SHRED (first) → DB drop → realm delete → NC/Matrix
  * marked for manual teardown → tombstone status='deleted' + evict runtime.
- * Idempotent + resumable; the default tenant is hard-refused; a tombstoned slug
- * is a terminal-safe no-op (§7.8 — the slug is never reusable).
+ * Idempotent + resumable; a tombstoned slug is a terminal-safe no-op (§7.8 —
+ * the slug is never reusable). TASK-042: every tenant is deletable, a slug
+ * spelled `default` included (TRD-042 [D R15-2]: there is no bootstrap tenant).
  */
 export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise<DeleteResult> {
   // (0) slug guard before ANY subsystem touch.
@@ -154,21 +151,8 @@ export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise
   if (!v.ok) throw new Error(`invalid slug "${slugInput}": ${v.reason}`)
   const slug = v.slug
 
-  // (0a) the default tenant is NEVER deletable (bootstrap root — hard guard).
-  if (slug === DEFAULT_SLUG) {
-    throw new Error('refusing to delete the default tenant (bootstrap root — not lifecycle-managed)')
-  }
-
   const tenant = await deps.registry.getTenantBySlug(slug)
   if (!tenant) throw new Error(`unknown tenant "${slug}"`)
-  // Belt-and-braces: the RESOLVED ROW must not be the default tenant either —
-  // compare the row's SLUG (the identifier) to DEFAULT_SLUG, not its id (a UUID
-  // that is never the literal 'default'). This defends in depth if a registry
-  // lookup ever returned the default row for a non-`default` input slug; the
-  // (0a) guard above already covers the input-slug==='default' path.
-  if (tenant.slug === DEFAULT_SLUG) {
-    throw new Error('refusing to delete the default tenant (bootstrap root — not lifecycle-managed)')
-  }
 
   // (0b) §7.8 tombstone is terminal — a re-run on an already-deleted tenant is a
   // no-op (the destructive work is done; the slug stays reserved forever).
