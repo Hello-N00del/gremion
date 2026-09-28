@@ -44,6 +44,7 @@ import { existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { REPO_ROOT, readEnvFile, renderState } from './compose-edge.mjs'
+import { appTierServiceNames, renderColourViolations } from './verify/render/colour-suffix.mjs'
 
 export { REPO_ROOT }
 

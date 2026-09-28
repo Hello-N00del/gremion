@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { FIRST_PARTY_IMAGE } from '../../check-pooled-stack.mjs'
+import { colourSuffixViolations, FIRST_PARTY_IMAGE } from '../../check-pooled-stack.mjs'
 import {
   appTierServiceNames,
   claimingName,
@@ -63,6 +63,22 @@ const both = (blueEnv = {}, greenEnv = {}) => ({ blue: appRender('blue', blueEnv
 test('the declared prefix equals check-pooled-stack FIRST_PARTY_IMAGE', () => {
   assert.equal(FIRST_PARTY_IMAGE.source, `^${P.replace(/[.\/]/g, (c) => `\\${c}`)}`)
   assert.ok(FIRST_PARTY_IMAGE.test(`${P}anything`))
+})
+
+test('G2: check-pooled-stack colourSuffixViolations delegates here -- a strict superset of its old list-bound scan', () => {
+  // kernel-api is in neither APP_SERVICES nor LEAF_SERVICES: only the image
+  // derivation knows it (the section 1 seed, which the old body passed).
+  const r = appRender('blue', { KERNEL_API_URL: 'http://kernel-api:3000', FILES_SERVICE_URL: 'http://files-service:8080' })
+  r.services['kernel-api'] = { image: `${P}kernel-api:dist`, environment: { COLOUR: 'blue' } }
+  const out = colourSuffixViolations(r, 'blue', 'app-blue')
+  assert.deepEqual(out, [
+    'app-blue/gremion-ui: environment.KERNEL_API_URL names kernel-api without the -blue suffix: http://kernel-api:3000',
+    'app-blue/gremion-ui: environment.FILES_SERVICE_URL names files-service without the -blue suffix: http://files-service:8080',
+  ])
+  // the caller-passed list stays live: a leaf name on a render with no image of it
+  assert.deepEqual(colourSuffixViolations(appRender('blue'), 'blue', 'app-blue'), [])
+  const src = readFileSync(path.join(import.meta.dirname, '..', '..', 'check-pooled-stack.mjs'), 'utf8')
+  assert.match(src, /from '\.\/verify\/render\/colour-suffix\.mjs'/)
 })
 
 test('colour-suffix.mjs is a leaf: it imports neither check-pooled-stack nor the harness', () => {
