@@ -12,6 +12,8 @@ The frozen commit, recorded once, here:
 extraction-source: f276af5925abacdcfd05f6613fc11afff2d804c5
 ```
 
+- In-tree modules (TASK-200): `modules/<id>/` is copied from a LATER StuRa commit than the SHA above, the annotated tag `extraction-source-f2` (peels to `d0c656d0b266f3a1741f34454e0061bc5078c3f4`; it superseded `extraction-source-f1` at `0c9d342e9a1f9785b6f976719008134237198d0d`, which predates R25-4 S-C), blob-checked by `scripts/check-module-source-parity.mjs` (output in `docs/ops/module-source-parity*.txt`); that tag's `gremion-ui/src/lib/server/calendar/notification-scheduler.ts` carries the civitas-modules 1295a40 fix, which enters `modules/calendar/app/` with TASK-205.
+
 - The StuRa tree carries the annotated tag `extraction-source` — that exact
   string — at that commit. `ARCHIVED.md` in the archived StuRa tree names it
   verbatim. The tag must be present on that repository's `origin` before any

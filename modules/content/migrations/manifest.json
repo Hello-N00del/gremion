@@ -1,0 +1,5 @@
+{
+  "001_init.sql": "1ac30addb1962043c2afd7944dfa13328e2b531468a2ecd59ce201b22db18a43",
+  "002_posts_status.sql": "e5dbc428b0112c3b3db27527f344740e6d932dc68387f50488f254c68bc4c7fc",
+  "003_content_audit.sql": "5a53b37fbb3e2bde39077705a80576e1af155769b161e2663bcb6fb15f9dd8b3"
+}
