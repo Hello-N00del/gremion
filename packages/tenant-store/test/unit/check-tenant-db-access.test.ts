@@ -35,13 +35,25 @@ function allowList(rows: object[]) {
 }
 const row = (path: string, calls: number, imports: number) => ({ path, calls, imports, adoptedBy: 'TASK-077', since: '2026-09-25', reason: 'a test row with a reason' })
 
+// The two real-tree tests each read and scan the whole repository (~1.4k
+// files, ~9.5 MB). Measured 2026-09-28 on the 16-CPU intake box: idle CLI
+// 1.4-2.8 s (n=5); under the artificial load (32 CPU + 4 I/O node workers on
+// top of the other agents) one whole-tree scan took 97.3, 111.0 and 126.6 s
+// (CLI) and 123.4 and 146.2 s (in-process, the drop-row test's exact call):
+// pooled n=5, p95 = max 146.2 s. The budget is 3x that, rounded up. It is per
+// test; the fixture and pure tests stay on vitest's default (loaded max 0.8 s).
+const REAL_TREE_SCAN_MS = 440_000
+
 describe('check-tenant-db-access (TRD-426)', () => {
   it('the real tree is green: every site outside the package is on the dated allow-list', () => {
-    const r = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' })
+    // the child is killed 10 s before the test's own budget, so a hung scan
+    // fails on its status (named below) instead of outliving the worker
+    const r = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', timeout: 50 })
+    expect(r.error, `the scan did not complete: status=${r.status} signal=${r.signal}`).toBeUndefined()
     expect(r.stderr).toBe('')
     expect(r.status).toBe(0)
     expect(r.stdout).toMatch(/OK — \d{3,} file\(s\) scanned/)
-  })
+  }, REAL_TREE_SCAN_MS)
 
   it('RED fixture: the seeded postgres(url) in services/x.ts fails, naming the file (CLI exit 1)', () => {
     const r = spawnSync(process.execPath, [SCRIPT, '--root', FIXTURE, '--allow-list', FIXTURE_ALLOW], { encoding: 'utf8' })
@@ -182,6 +194,6 @@ describe('check-tenant-db-access (TRD-426)', () => {
     const dropped = allowList(real.rows.slice(1))
     const p = check({ root: fileURLToPath(new URL('../../../../', import.meta.url)), allowList: dropped }).problems
     expect(p).toEqual([expect.stringMatching(new RegExp(`^${real.rows[0]!.path.replaceAll('.', '\\.')}: opens a database connection`))])
-  })
+  }, REAL_TREE_SCAN_MS)
 })
 
