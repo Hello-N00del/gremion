@@ -635,8 +635,9 @@ services:
   # the database preflight are baked into the image (no bind mount), so every
   # boot renders a PostgreSQL-only config (the shim refuses anything else)
   # and runs db-preflight.py (C collation, major 18) before Synapse starts.
-  # Fail-closed lives there, not in `${VAR:?}` forms, which would bind every
-  # profile and verb. _state only, no ports: the app tier reaches it as
+  # Fail-closed lives there, not in `${VAR:?}` forms on the chat keys, which
+  # would bind every profile and verb (PLATFORM_DOMAIN's guarded read is the
+  # kernel's own rule and binds nothing new). _state only, no ports: the app tier reaches it as
   # http://matrix:8008 (modules/messaging). The healthcheck reads the login
   # flows, not /versions: unhealthy while the JWT arm or the oidc-keycloak
   # provider is missing. start_period = SYNAPSE_KC_MAX (30) key-fetch attempts
@@ -657,8 +658,10 @@ services:
       messaging-postgres:
         condition: service_healthy
     environment:
-      SYNAPSE_SERVER_NAME:          ${PLATFORM_DOMAIN}
-      MATRIX_PUBLIC_URL:            https://${PLATFORM_DOMAIN}
+      # The one guarded read: every PLATFORM_DOMAIN read carries :? (TASK-028,
+      # test/host/validate-env.bats), and every env the kernel renders sets it.
+      SYNAPSE_SERVER_NAME:          ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      MATRIX_PUBLIC_URL:            https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
       SYNAPSE_DB_HOST:              messaging-postgres
       SYNAPSE_DB_PORT:              "5432"
       SYNAPSE_DB_NAME:              synapse

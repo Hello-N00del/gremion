@@ -164,7 +164,13 @@ export function serviceBlock(text, name) {
   return lines.slice(i, j).join('\n')
 }
 
-/** `${VAR:?...}` inside the chat service blocks (comments excluded). */
+/**
+ * `${VAR:?...}` inside the chat service blocks (comments excluded). The one
+ * exemption is PLATFORM_DOMAIN: the kernel requires EVERY read of it to be
+ * guarded (TASK-028, test/host/validate-env.bats), and every env the kernel
+ * renders already sets it, so its guard binds no verb that was not bound.
+ */
+export const GUARDED_KERNEL_KEYS = ['PLATFORM_DOMAIN']
 export function requiredFormViolations(text) {
   const out = []
   for (const name of ['messaging-postgres', 'matrix']) {
@@ -175,7 +181,7 @@ export function requiredFormViolations(text) {
     }
     const code = block.split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n')
     for (const m of code.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*):?\?/g))
-      out.push(`${name}: \${${m[1]}:?} binds every profile and verb -- fail-closed lives in the shim, initdb and preflight`)
+      if (!GUARDED_KERNEL_KEYS.includes(m[1])) out.push(`${name}: \${${m[1]}:?} binds every profile and verb -- fail-closed lives in the shim, initdb and preflight`)
   }
   return out
 }
