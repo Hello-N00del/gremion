@@ -33,8 +33,10 @@ COPY render-homeserver.sh /render-homeserver.sh
 COPY healthcheck.sh /synapse-healthcheck.sh
 COPY db-preflight.py /db-preflight.py
 COPY inject-jwt-key.py /inject-jwt-key.py
+# The one-time admin-bot bootstrap (docker compose exec matrix bash /bootstrap.sh).
+COPY bootstrap.sh /bootstrap.sh
 RUN chmod 0644 /config/homeserver.yaml.tpl \
- && chmod 0755 /gremion-synapse-entrypoint.sh /render-homeserver.sh /synapse-healthcheck.sh /db-preflight.py /inject-jwt-key.py
+ && chmod 0755 /gremion-synapse-entrypoint.sh /render-homeserver.sh /synapse-healthcheck.sh /db-preflight.py /inject-jwt-key.py /bootstrap.sh
 
 # Healthy means login works (TRD-178): the JWT flow and the oidc-keycloak
 # provider are both offered. Replaces the upstream /health probe, which reads

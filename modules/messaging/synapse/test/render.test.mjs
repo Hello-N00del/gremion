@@ -105,3 +105,20 @@ test('the OIDC client secret file wins over the env value; a named file that can
   assert.notEqual(missing.status, 0)
   assert.match(missing.stderr, /SYNAPSE_OIDC_CLIENT_SECRET_FILE/)
 })
+
+test('the Dockerfile bakes every script the image runs or documents, bootstrap.sh included', () => {
+  const df = readFileSync(join(TEMPLATE, '..', 'Dockerfile'), 'utf8')
+  for (const [src, dst] of [
+    ['homeserver.yaml', '/config/homeserver.yaml.tpl'],
+    ['entrypoint.sh', '/gremion-synapse-entrypoint.sh'],
+    ['render-homeserver.sh', '/render-homeserver.sh'],
+    ['healthcheck.sh', '/synapse-healthcheck.sh'],
+    ['db-preflight.py', '/db-preflight.py'],
+    ['inject-jwt-key.py', '/inject-jwt-key.py'],
+    ['bootstrap.sh', '/bootstrap.sh'],
+  ]) {
+    assert.match(df, new RegExp(`^COPY ${src.replace('.', '\\.')} ${dst.replace(/\./g, '\\.')}$`, 'm'), `${src} is not baked at ${dst}`)
+  }
+  const bs = readFileSync(join(TEMPLATE, '..', 'bootstrap.sh'), 'utf8')
+  assert.doesNotMatch(bs, /b"\$\{(SHARED_SECRET|NONCE|PASSWORD)\}"/, 'bootstrap.sh splices a secret into Python source')
+})

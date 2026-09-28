@@ -11,6 +11,7 @@ DISABLED so Synapse still boots (degrade-and-boot); /synapse-healthcheck.sh
 reports that state as unhealthy.
 """
 
+import http.client
 import json
 import os
 import sys
@@ -26,7 +27,7 @@ def fetch_pem(fetch_url):
     try:
         with urllib.request.urlopen(fetch_url, timeout=10) as r:
             realm_data = json.load(r)
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
         sys.stderr.write(f"[gremion-synapse] realm key fetch failed: {exc}\n")
         return None
     public_key = realm_data.get("public_key") if isinstance(realm_data, dict) else None

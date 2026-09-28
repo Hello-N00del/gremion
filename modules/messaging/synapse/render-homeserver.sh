@@ -81,7 +81,10 @@ fi
 if [[ -n "${SYNAPSE_OIDC_CLIENT_SECRET_FILE:-}" ]]; then
   [[ -r "$SYNAPSE_OIDC_CLIENT_SECRET_FILE" ]] || die "SYNAPSE_OIDC_CLIENT_SECRET_FILE names a file that cannot be read"
   secret_file="$SYNAPSE_OIDC_CLIENT_SECRET_FILE"
-elif [[ -r "$DEFAULT_SECRET_FILE" ]]; then
+elif [[ -e "$DEFAULT_SECRET_FILE" ]]; then
+  # Mounted but unreadable (a wrong mode on the secret) is a refusal, never
+  # a quiet fallback to the env value.
+  [[ -r "$DEFAULT_SECRET_FILE" ]] || die "$DEFAULT_SECRET_FILE exists but cannot be read"
   secret_file="$DEFAULT_SECRET_FILE"
 else
   secret_file=""
@@ -129,7 +132,7 @@ for v in SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND SYNAPSE_RC_LOGIN_ADDRESS_BURST \
          SYNAPSE_RC_MESSAGE_PER_SECOND SYNAPSE_RC_MESSAGE_BURST; do
   val="${!v}"
   case "$val" in
-    ''|*[!0-9.]*|*.*.*) die "$v must be a plain non-negative number, got '${val}'." ;;
+    ''|.|*[!0-9.]*|*.*.*) die "$v must be a plain non-negative number, got '${val}'." ;;
   esac
 done
 
@@ -143,6 +146,17 @@ SYNAPSE_PASSWORD_AUTH SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND SYNAPSE_RC_LOGIN_ADDRE
 SYNAPSE_RC_LOGIN_ACCOUNT_PER_SECOND SYNAPSE_RC_LOGIN_ACCOUNT_BURST
 SYNAPSE_RC_MESSAGE_PER_SECOND SYNAPSE_RC_MESSAGE_BURST"
 export BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-0}"
+
+# Every substituted value lands inside YAML double quotes (or bare): a
+# newline, carriage return, double quote or backslash could break out and
+# inject keys (a secret ending in "\nenable_registration: true" would open
+# registration). Refused by key; the value is never printed.
+for v in $SYNAPSE_RENDER_VARS; do
+  val="${!v:-}"
+  case "$val" in
+    *$'\n'*|*$'\r'*|*'"'*|*$'\\'*) die "$v contains a newline, carriage return, double quote or backslash -- refusing to render it into YAML" ;;
+  esac
+done
 
 # Render to a temporary file next to the output and move it into place only
 # once it has passed: a refused render leaves no config behind.
@@ -161,14 +175,14 @@ import yaml
 
 with open(sys.argv[1]) as f:
     text = f.read()
+if os.environ["BOOTSTRAP_MODE"] != "1":
+    # Strip the registration_shared_secret line from the TEMPLATE, before
+    # substitution, so no value can ever reach the render through it. Only
+    # matches at column 0 so commented references are left untouched.
+    text = "".join(line for line in text.splitlines(keepends=True) if not line.startswith("registration_shared_secret:"))
 names = set(os.environ["SYNAPSE_RENDER_VARS"].split())
 # One pass: a substituted value is never scanned again for ${...}.
 text = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), "") if m.group(1) in names else m.group(0), text)
-if os.environ["BOOTSTRAP_MODE"] != "1":
-    # Strip the registration_shared_secret line. Only matches at column 0
-    # so commented references in surrounding text are left untouched.
-    text = "".join(line for line in text.splitlines(keepends=True) if not line.startswith("registration_shared_secret:"))
-
 try:
     cfg = yaml.safe_load(text)
 except yaml.YAMLError as exc:
@@ -232,6 +246,14 @@ for lst in cfg.get("listeners") or []:
     for res in lst.get("resources") or []:
         if "federation" in (res.get("names") or []):
             problems.append("a listener serves the federation resource")
+for key in ("enable_registration", "enable_registration_without_verification"):
+    if cfg.get(key) is not False:
+        problems.append(f"{key} is not false (registration stays closed)")
+if os.environ["BOOTSTRAP_MODE"] == "1":
+    if cfg.get("registration_shared_secret") != os.environ.get("SYNAPSE_REGISTRATION_SHARED_SECRET"):
+        problems.append("registration_shared_secret does not hold its input in a bootstrap render")
+elif "registration_shared_secret" in cfg:
+    problems.append("registration_shared_secret is rendered outside BOOTSTRAP_MODE=1")
 if "media_storage_providers" in cfg:
     problems.append("media_storage_providers is set (S3 offload is not deployed)")
 

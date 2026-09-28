@@ -72,3 +72,33 @@ test('an empty jwt_config.secret alone is not refused (the entrypoint injects it
   assert.equal(r.cfg.jwt_config.secret, '')
   assert.equal(r.cfg.jwt_config.enabled, true)
 })
+
+test('a value that could break out of its YAML quoting is refused by key: newline, CR, double quote, backslash', () => {
+  const cases = [
+    ['SYNAPSE_REGISTRATION_SHARED_SECRET', 'abc\nenable_registration: true', {}],
+    ['SYNAPSE_REGISTRATION_SHARED_SECRET', 'abc"\nenable_registration: true', { BOOTSTRAP_MODE: '1' }],
+    ['SYNAPSE_DB_PASSWORD', 'pw"x', {}],
+    ['SYNAPSE_OIDC_CLIENT_SECRET', 'a\\b', {}],
+    ['SYNAPSE_SERVER_NAME', 'chat.example.org\r', {}],
+  ]
+  for (const [key, value, extra] of cases) {
+    const r = render(baseEnv({ [key]: value, ...extra }))
+    assert.notEqual(r.status, 0, `${key}=${JSON.stringify(value)} rendered`)
+    assert.match(r.stderr, new RegExp(key), `${key}: the refusal does not name it`)
+    assert.equal(r.text, null)
+    assert.ok(!r.stderr.includes(value), `${key}: the refusal prints the value`)
+  }
+})
+
+test('registration stays closed: a template that opens it is refused', () => {
+  const tpl = editedTemplate((t) => t.replace(/^enable_registration: false$/m, 'enable_registration: true'))
+  const r = render(baseEnv(), { template: tpl })
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /enable_registration/)
+})
+
+test('a rate-limit knob that is only a dot is refused by name', () => {
+  const r = render(baseEnv({ SYNAPSE_RC_MESSAGE_PER_SECOND: '.' }))
+  assert.notEqual(r.status, 0)
+  assert.match(r.stderr, /SYNAPSE_RC_MESSAGE_PER_SECOND/)
+})

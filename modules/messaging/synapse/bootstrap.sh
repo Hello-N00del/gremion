@@ -28,16 +28,13 @@ NONCE=$(curl -sf "${SYNAPSE_URL}/_synapse/admin/v1/register" | python3 -c "impor
 
 # Compute MAC: HMAC-SHA1(shared_secret, nonce + NUL + username + NUL + password + NUL + "admin")
 PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
-MAC=$(python3 - <<EOF
-import hmac, hashlib
-secret = b"${SHARED_SECRET}"
-nonce = b"${NONCE}"
-username = b"${BOT_LOCALPART}"
-password = b"${PASSWORD}"
-admin = b"admin"
-message = nonce + b"\x00" + username + b"\x00" + password + b"\x00" + admin
-mac = hmac.new(secret, message, hashlib.sha1).hexdigest()
-print(mac)
+# The secret, nonce and password reach Python through its environment, never
+# spliced into its source (a quote in the secret would break or inject code).
+MAC=$(BS_SECRET="${SHARED_SECRET}" BS_NONCE="${NONCE}" BS_USER="${BOT_LOCALPART}" BS_PASSWORD="${PASSWORD}" python3 - <<'EOF'
+import hashlib, hmac, os
+e = {k: os.environ[k].encode() for k in ("BS_SECRET", "BS_NONCE", "BS_USER", "BS_PASSWORD")}
+message = e["BS_NONCE"] + b"\x00" + e["BS_USER"] + b"\x00" + e["BS_PASSWORD"] + b"\x00" + b"admin"
+print(hmac.new(e["BS_SECRET"], message, hashlib.sha1).hexdigest())
 EOF
 )
 
