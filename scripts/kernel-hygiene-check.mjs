@@ -897,10 +897,10 @@ const PRODUCT_TOKEN_EXEMPT_PATHS = [
   /^scripts\/kernel-hygiene-check\.mjs$/,
   /^gremion-ui\/src\/lib\/server\/tenant\/provisioner\/realm-identity\.test\.ts$/,
   /^gremion-ui\/scripts\/install-git-hooks\.mjs$/,
-  /^gremion-ui\/migrations\/008_public_portal\.sql$/,
-  /^gremion-ui\/migrations\/042_protocol_resolution_required_majority\.sql$/,
-  /^gremion-ui\/migrations\/043_audit_log_hash_chain\.sql$/,
-  /^gremion-ui\/migrations\/048_resolution_decided_at\.sql$/,
+  /^gremion-ui\/migrations\/0008_public_portal\.sql$/,
+  /^gremion-ui\/migrations\/0042_protocol_resolution_required_majority\.sql$/,
+  /^gremion-ui\/migrations\/0043_audit_log_hash_chain\.sql$/,
+  /^gremion-ui\/migrations\/0048_resolution_decided_at\.sql$/,
 ]
 
 // PENDING - a dated, per-line waiver, and NOT a second allow-list. The
@@ -1705,6 +1705,8 @@ check('m1 the port-back record names the frozen extraction source and all ten fi
   const doc = read(p)
   const SOURCE = 'f276af5925abacdcfd05f6613fc11afff2d804c5'
   if (!doc.includes(SOURCE)) return `does not name the frozen extraction source ${SOURCE}`
+  // The dated record names the files as they were ported (pad 3); TASK-029
+  // renumbered the data-plane ones to 0003..0058 afterwards (pure renames).
   const ported = [
     '003_calendar_schema.sql', '034_deck_board.sql', '049_org_unit_event_outbox.sql',
     '053_notification_read_marker.sql', '054_resolution_adoption_mode.sql',

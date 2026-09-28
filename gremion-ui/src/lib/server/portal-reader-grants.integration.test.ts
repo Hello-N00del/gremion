@@ -72,7 +72,7 @@ function kernelChain(): Array<{ name: string; sql: string }> {
     .map((name) => ({
       name,
       sql: readFileSync(
-        name === '058_public_reader_grants.sql' && override ? override : path.join(MIGRATIONS, name),
+        name === '0058_public_reader_grants.sql' && override ? override : path.join(MIGRATIONS, name),
         'utf8',
       ),
     }))
@@ -194,7 +194,7 @@ describe('portal reader grants (B4a Task 3 on the TASK-054 result)', () => {
     const sql = await scratchDb('missing')
     try {
       await sql.unsafe('CREATE TABLE protocols (id int)') // org_units deliberately absent
-      const m058 = kernelChain().find((f) => f.name === '058_public_reader_grants.sql')
+      const m058 = kernelChain().find((f) => f.name === '0058_public_reader_grants.sql')
       expect(m058).toBeDefined()
       await expect(applyAll(sql, [m058!])).rejects.toThrow(/do not exist: org_units/)
       expect(await readable(sql)).toEqual([])

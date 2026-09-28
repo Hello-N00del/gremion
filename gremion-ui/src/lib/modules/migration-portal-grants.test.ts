@@ -16,7 +16,7 @@ const executable = (f: string) =>
 // The tables the anonymous public portal actually reads (R-E13:
 // gremion-public/src/lib/server/public-db.ts:51,82,105 reads only `protocols`
 // and `org_units`, nothing else). news_posts is NOT here: kernel
-// 008_public_portal.sql:4-6 records that it moved out with the content
+// 0008_public_portal.sql:4-6 records that it moved out with the content
 // module, so a content-OFF kernel-only install has no such table;
 // B4a-news-posts-ownership gives content its own grant.
 const KERNEL_PORTAL_TABLES = ['org_units', 'protocols']
@@ -24,8 +24,8 @@ const KERNEL_PORTAL_TABLES = ['org_units', 'protocols']
 // Tables 058 actively REVOKEs rather than merely omitting from portal_tables.
 // `protocol_attendance`, `protocol_action_items` and `protocol_resolutions`
 // are granted directly to gremion_public_reader by kernel
-// 008_public_portal.sql (008:23-29); `resolution_challenges` by
-// 055_resolution_challenges.sql (055:69). Both run before 058 on every
+// 0008_public_portal.sql (008:23-29); `resolution_challenges` by
+// 0055_resolution_challenges.sql (055:69). Both run before 058 on every
 // install, so these four REVOKEs are load-bearing on a fresh install too —
 // without them gremion_public_reader would still end up holding all four via
 // 008/055 alone. `calendar_events` and `event_recurrence` are not granted by
@@ -46,14 +46,14 @@ const REVOKED_TABLES = [
 describe('058 public-reader grants', () => {
   it('055 sorts strictly before 058 — the REVOKE must run after 055 GRANTs resolution_challenges', () => {
     const list = sorted()
-    expect(list.indexOf('055_resolution_challenges.sql')).toBeGreaterThanOrEqual(0)
-    expect(list.indexOf('055_resolution_challenges.sql')).toBeLessThan(
-      list.indexOf('058_public_reader_grants.sql'),
+    expect(list.indexOf('0055_resolution_challenges.sql')).toBeGreaterThanOrEqual(0)
+    expect(list.indexOf('0055_resolution_challenges.sql')).toBeLessThan(
+      list.indexOf('0058_public_reader_grants.sql'),
     )
   })
 
   it('portal_tables is exactly the two tables the anonymous portal reads', () => {
-    const body = executable('058_public_reader_grants.sql')
+    const body = executable('0058_public_reader_grants.sql')
     const block = body.match(/portal_tables CONSTANT text\[\] := ARRAY\[([^\]]*)\]/)
     expect(block, 'portal_tables ARRAY literal not found').not.toBeNull()
     const names = [...block![1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort()
@@ -61,7 +61,7 @@ describe('058 public-reader grants', () => {
   })
 
   it('revoked_tables is a superset of the four tables narrowed out of portal_tables (R-E13)', () => {
-    const body = executable('058_public_reader_grants.sql')
+    const body = executable('0058_public_reader_grants.sql')
     const block = body.match(/revoked_tables CONSTANT text\[\] := ARRAY\[([^\]]*)\]/)
     expect(block, 'revoked_tables ARRAY literal not found').not.toBeNull()
     const names = [...block![1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1])
@@ -74,12 +74,12 @@ describe('058 public-reader grants', () => {
   })
 
   it('does not grant news_posts — that table is content-owned (1200_content_news_posts.sql)', () => {
-    const body = executable('058_public_reader_grants.sql')
+    const body = executable('0058_public_reader_grants.sql')
     expect(body).not.toMatch(/'news_posts'/)
   })
 
   it('058 still aborts on a missing table rather than granting a partial set', () => {
-    const body = executable('058_public_reader_grants.sql')
+    const body = executable('0058_public_reader_grants.sql')
     expect(body).toMatch(/RAISE EXCEPTION/)
     expect(body).toMatch(/array_length\(missing, 1\) IS NOT NULL/)
   })
@@ -101,15 +101,15 @@ describe('058 public-reader grants', () => {
   })
 
   it('058 points the operator at the env var the kernel actually defines', () => {
-    expect(executable('058_public_reader_grants.sql')).toMatch(/GREMION_PUBLIC_DB_URL/)
+    expect(executable('0058_public_reader_grants.sql')).toMatch(/GREMION_PUBLIC_DB_URL/)
   })
 
   it('every portal table is created by a migration that sorts before 058', () => {
     const list = sorted()
-    const i058 = list.indexOf('058_public_reader_grants.sql')
+    const i058 = list.indexOf('0058_public_reader_grants.sql')
     for (const table of KERNEL_PORTAL_TABLES) {
-      // org_units is never CREATEd: 001_governance_schema.sql creates `committees`
-      // and 010_org_units.sql:6 RENAMEs it. A "creator" is therefore a CREATE
+      // org_units is never CREATEd: 0001_governance_schema.sql creates `committees`
+      // and 0010_org_units.sql:6 RENAMEs it. A "creator" is therefore a CREATE
       // TABLE **or** the ALTER ... RENAME TO that produces the name — asserted
       // against the EXECUTABLE body, so a prose mention in a comment cannot stand
       // in for DDL.
@@ -189,7 +189,7 @@ describe('058 prerequisite: every shipped path provisions gremion_public_reader'
     // remediation that names a file the kernel does not ship sends the operator
     // nowhere. Only `dir/name.ext` tokens are read -- bare basenames like `db.ts`
     // are prose cross-references, not instructions.
-    const text = read('058_public_reader_grants.sql')
+    const text = read('0058_public_reader_grants.sql')
     const paths = [
       ...new Set(text.match(/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+\.(?:sh|ya?ml|ts|sql|json)/g) ?? []),
     ]

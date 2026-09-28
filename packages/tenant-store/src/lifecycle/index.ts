@@ -1,0 +1,33 @@
+// @gremion/tenant-store/lifecycle — create or drop the database of one
+// (tenant, module) (D13, TRD-424), and the TRD-089 inspection. A subpath of
+// its own: the package root exports no create/drop helper (index.test.ts).
+export { disableModule, dropTenantModuleDatabase } from './disable.js'
+export { enableModule, ensureModuleRoles, lockDownDatabase } from './enable.js'
+export { exportDatabase, exportStamp, pgDumpExporter } from './export.js'
+export type { PgDumpExporterOptions, VerifiedExport } from './export.js'
+export {
+  assertTenantModuleTarget,
+  LifecycleError,
+  moduleRoles,
+  NEVER_OPENED,
+  RESERVED_MODULE_IDS,
+  TENANT_MODULE_DB,
+} from './guards.js'
+export type { LifecycleErrorCode } from './guards.js'
+export { inspectTenantDatabases } from './inspect.js'
+export type { InspectionReport, InspectRegistry, InspectServer, ServerReport } from './inspect.js'
+export { assertPlatform, migratePlatform, PLATFORM_DATABASE, PLATFORM_MIGRATIONS_DIR } from './platform.js'
+export { scramSha256Verifier } from './scram.js'
+export type {
+  Actor,
+  DisableResult,
+  EnableGate,
+  EnableResult,
+  Exporter,
+  ExportTarget,
+  GateResult,
+  LifecycleDeps,
+  LifecycleModule,
+  LifecycleStep,
+  ModuleServer,
+} from './types.js'
