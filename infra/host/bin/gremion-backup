@@ -136,7 +136,7 @@ load_state_env() {
 # backup set unnoticed. Key names only are printed, never values.
 refuse_object_storage_config() {
     local keys rc=0
-    keys="$(grep -oE '^[[:space:]]*(export[[:space:]]+)?(MINIO|[A-Z0-9_]*_S3)_[A-Z0-9_]*=' "$STATE_ENV")" || rc=$?
+    keys="$(grep -oE '^[[:space:]]*(export[[:space:]]+)?(MINIO|([A-Za-z0-9_]*_)?S3)_[A-Za-z0-9_]*=' "$STATE_ENV")" || rc=$?
     [ "$rc" -le 1 ] || die "cannot read ${STATE_ENV}" 2
     [ -z "$keys" ] || die "object-storage key(s) in ${STATE_ENV}: $(printf '%s\n' "$keys" \
         | sed -E 's/^[[:space:]]*(export[[:space:]]+)?//; s/=$//' | tr '\n' ' ')- the pilot runs no object storage (TRD-066) and gremion-backup mirrors no buckets (TRD-354); remove them" 2
@@ -810,11 +810,13 @@ main() {
     parse_args "$@"
     require_tools
     load_state_env
-    refuse_object_storage_config
     require_keys
     # From here every exit path reports: §J requires a report on BOTH outcomes,
     # and an unreachable remote is the failure most worth hearing about.
     trap on_exit EXIT
+    # After the trap (TASK-048 review): a stale object-storage key stops every
+    # nightly, so it is reported and alerted like any other failed run.
+    refuse_object_storage_config
     RELEASE_DIR="${GREMION_RELEASE_DIR:-$(gremion_root)/current}"
     [ -d "$RELEASE_DIR" ] || die "release tree absent: ${RELEASE_DIR}" 2
     # BACKUP_DIR for the kernel dump script; DUMP_DIR is the staged tree that

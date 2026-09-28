@@ -610,11 +610,13 @@ exit 0'
 # ---------------------------------------------------------------------------
 
 @test "the bucket class is always zero and no object-storage client runs" {
-    shim_baseline; shim_docker_full
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
     run "$BACKUP"
+    [ "$status" -eq 0 ]
     [ "$(jq -r '.artefacts.buckets' "${GREMION_ROOT}/runtime/last-backup.json")" = "0" ]
-    run grep -E 'mc|minio' "$SHIM_LOG"
-    [ "$status" -ne 0 ]
+    [ -s "$SHIM_LOG" ]
+    run grep -wE 'mc|minio' "$SHIM_LOG"
+    [ "$status" -eq 1 ]
 }
 
 @test "a MINIO_* key left in state.env is refused (exit 2, TRD-066) and its value is never printed" {
@@ -629,6 +631,11 @@ exit 0'
     [[ "$output" != *"leftoversecretvalue"* ]]
     # refused before any work: nothing was staged
     [ ! -e "${GREMION_ROOT}/backups/current" ]
+    # ...but reported on the alert channel and in the report, as every other
+    # failed run is: a nightly that stops on a stale key must not go quiet
+    [ "$(jq -r '.ok' "${GREMION_ROOT}/runtime/last-backup.json")" = "false" ]
+    grep -q '^curl .*-X POST' "$SHIM_LOG"
+    ! grep -q leftoversecretvalue "${GREMION_ROOT}/runtime/last-backup.json" "$SHIM_LOG"
 }
 
 @test "a *_S3_* key left in state.env is refused (exit 2)" {

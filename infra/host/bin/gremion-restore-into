@@ -473,7 +473,7 @@ restore_volumes() {
 # BLOCKED (exit 3) before any database or volume is touched: a restore that
 # skipped it would report success while dropping that data silently.
 refuse_buckets() {
-    if [[ -e "${DUMP_DIR}/buckets" ]]; then
+    if [[ -e "${DUMP_DIR}/buckets" || -L "${DUMP_DIR}/buckets" ]]; then
         die "BLOCKED: snapshot ${SNAPSHOT} carries buckets/ (object-storage data); the pilot restores no object storage (TRD-066/354) - nothing restored" 3
     fi
     info "snapshot carries no buckets/ (no object storage, TRD-066); buckets=0"

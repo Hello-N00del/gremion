@@ -254,6 +254,27 @@ exit 0'
     [ "$status" -ne 0 ]
 }
 
+@test "gremion-restore-into refuses a snapshot whose buckets is a dangling symlink (refused, never skipped)" {
+    shim restic '
+target=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "--target" ]; then target="$a"; fi
+  prev="$a"
+done
+s="$target/opt/gremion/backups/current"
+mkdir -p "$s/volumes" "$target/opt/gremion/etc/env"
+ln -s /nonexistent-bucket-store "$s/buckets"
+: >"$s/control.sql.gz"
+printf "STACK=alpha\n" >"$target/opt/gremion/etc/env/state.env"
+printf "x" >"$s/volumes/alpha_traefik_acme.tar"
+exit 0'
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
+        --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"BLOCKED: snapshot latest carries buckets/"* ]]
+    [ ! -e "${GREMION_ROOT}/runtime/restore-sh.log" ]
+}
+
 # The flat disaster-recovery layout stays supported.
 @test "gremion-restore-into also finds the flat backups tree" {
     shim restic '
