@@ -242,6 +242,49 @@ test('vacuity RED: an empty rule table', () => {
   assert.equal(isClean(res), false)
 })
 
+// TASK-040 moved gremion-ui and gremion-public out of docker-compose.yml into
+// the per-colour app file (and its dev layer). A guard whose scope silently
+// stopped at the state files would lose the two services that carried every
+// wildcard leg and the apex injection, so the app files are pinned in scope
+// and a re-break of the REAL app file (its own text, one label added) is RED.
+const APP_FILES = ['docker-compose.app.yml', 'docker-compose.app.dev.yml']
+
+test('TASK-040 app tier: both app compose files are tracked and in R1, R2b, R3 and R4 scope', () => {
+  const tracked = listTrackedFiles()
+  for (const f of APP_FILES) {
+    assert.ok(tracked.includes(f), `${f} is not tracked`)
+    for (const id of ['R1', 'R2b', 'R3', 'R4']) {
+      const r = RULES.find((x) => x.id === id)
+      const inScope = r.scope.some((g) => globToRegExp(g).test(f)) && !r.exempt.some((e) => globToRegExp(e.glob).test(f))
+      assert.ok(inScope, `${id} does not scan ${f}`)
+    }
+  }
+})
+
+test('TASK-040 app tier RED: a HostRegexp router or the apex injection added to the real app file', () => {
+  const rel = 'docker-compose.app.yml'
+  const real = readFileSync(path.join(REPO_ROOT, rel), 'utf8')
+  const anchor = '      traefik.enable: "false"\n'
+  assert.ok(real.includes(anchor), `${rel} lost the map-form traefik.enable label this test anchors on`)
+  const withLeg = real.replace(
+    anchor,
+    `${anchor}      traefik.http.routers.wild.rule: "HostRegexp(\`^[a-z0-9-]+\\\\.example$$\`)"\n      traefik.http.routers.wild.entrypoints: websecure\n`,
+  )
+  const withApex = real.replace(anchor, `${anchor}      traefik.http.routers.apex.middlewares: gremion-ui-apex${'host'}\n`)
+  const scanText = (text, ids) => scan({ root: REPO_ROOT, files: [rel], rules: ids.flatMap(rule), read: () => text })
+  // The unmodified file is clean, and R1 parsed it (a guard that could not
+  // read the app file would pass the re-breaks below vacuously).
+  const clean = scanText(real, ['R1', 'R3'])
+  assert.deepEqual(clean.findings, [])
+  assert.ok(clean.stats.R1.files === 1, formatReport(clean))
+  const r1 = findingsOf(scanText(withLeg, ['R1']), 'R1')
+  assert.equal(r1.length, 1)
+  assert.match(r1[0].detail, /router 'wild' on \[websecure\] has a HostRegexp leg/)
+  const r3 = findingsOf(scanText(withApex, ['R3']), 'R3')
+  assert.equal(r3.length, 1)
+  assert.equal(r3[0].file, rel)
+})
+
 test('the real tree is GREEN: no wildcard leg, no wildcard key, no apex injection, no leftmost label', () => {
   const files = listTrackedFiles()
   const res = scan({ root: REPO_ROOT, files, rules: RULES })
