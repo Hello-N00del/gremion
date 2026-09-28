@@ -121,9 +121,26 @@ the layout's contribution and makes no cost claim.
 
 ## Deploy ordering hazard
 
-The gremion-ui routers left `docker-compose.prod.yml` with the split. The apex
-has no websecure router until TASK-034's 34b labels block lands. **No deploy
-may be scheduled between TASK-040 and 34b.** TASK-038's waits carry this.
+The app tier carries no docker-provider router (`traefik.enable=false`), so
+two websecure routers left the compose files with the split:
+
+- **the apex** (`gremion-ui`, `Host(${DOMAIN})` in `docker-compose.prod.yml`),
+  with its `gremion-ui-proxytrust` / `gremion-ui-starting` chain, whose two
+  middlewares now sit on the traefik container as interim names;
+- **the public portal** (`gremion-public`, `Host(public.${DOMAIN})` in
+  `docker-compose.yml`, with `public-ratelimit@docker`, which also moved onto
+  the traefik container).
+
+The former `gremion-ui-apexhost` middleware (the apex tenant injection) is not
+restored anywhere: TASK-041's edge host model deleted it and its guard
+(`lint-edge-host`, rule R3) keeps it out of the app files too.
+
+Neither host has a websecure router until TASK-034's 34b block lands (its
+`edge-*@docker` middlewares and the static `app` / `portal` routers onto
+`app@file` / `public@file`; `active.yml` today routes only the loopback
+`internaltest` entrypoint).
+**No deploy may be scheduled between TASK-040 and 34b**: the apex and
+`public.<domain>` would both answer 404. TASK-038's waits carry this.
 
 ## Scratch proof record (2026-09-27, [A] numbers)
 
@@ -155,4 +172,9 @@ material.
 - **TRD-038:** the switch from blue to green (migrate, then up, green healthy,
   then blue removed) left all 16 state container IDs and volume `CreatedAt`
   lines unchanged. After a cold restart of the state tier, the green
-  gremion-ui answered `{"ok":true,"tenant":null,"colour":"green"}`.
+  gremion-ui answered `{"ok":true,"tenant":null,"colour":"green"}` on
+  `/healthz`. That is liveness only and does not prove the boot retry; the
+  cold-state phase now stops state, re-boots the app against it and asserts
+  readiness on `/api/health` once state returns (shim-tested in
+  `test/host/pooled-stack-proof.bats`). Its first scratch run is still to be
+  recorded here.
