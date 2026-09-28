@@ -285,7 +285,9 @@ for v in traefik_acme tenant_secrets mail_data; do
 done
 openssl s_client -connect "${EDGE_BIND_IP}:443" -servername "$host" </dev/null 2>/dev/null \
   | openssl x509 -noout -issuer -startdate                                     # the ACME CA, issued today
-jq -e '(.auths // {}) | length == 0' /root/.docker/config.json                 # no registry credential left
+for f in /root/.docker/config.json /home/gremion/.docker/config.json; do    # step 12 logs in as root, step 14 as gremion
+  [ -f "$f" ] && jq -e '(.auths // {}) | length == 0' "$f"                     # no registry credential left
+done
 ```
 
 Every running container declares a healthcheck and reports `healthy`; a
