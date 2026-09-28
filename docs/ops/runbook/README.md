@@ -12,7 +12,7 @@ recorded as one.
 | Procedure | What it does | Version | First run |
 |---|---|---|---|
 | [install.md](install.md) | the from-zero bring-up a rebuilt host follows (TRD-042, R15-2) | 2.0.0 | TASK-038, the pilot re-initialisation |
-| [upgrade.md](upgrade.md) | one release onto a running installation through `gremion-deploy` | 1.0.0 (provisional) | the first pilot release after the re-initialisation |
+| [upgrade.md](upgrade.md) | one release onto a running installation through `gremion-deploy` | 2.0.0 (provisional) | the first pilot release after the re-initialisation |
 | [backup.md](backup.md) | the pilot posture: installed, verified once, then disabled (R15-1) | 1.0.0 | TASK-089 |
 | [restore.md](restore.md) | three arms: the provider host-backup drill, the platform restore into a non-production stack, the reboot measurement | 1.0.0 | TASK-089 (arms A, B), TASK-123 (arm C) |
 | [run-record.md](run-record.md) | the record every run of a procedure leaves | — | — |
@@ -101,10 +101,16 @@ Each of these is named at the step that needs it:
 
 - PENDING TASK-043 (`packages/provisioning/`): creating the pilot customer through the provisioning orchestrator and its first administrator's sign-in (install.md).
 - PENDING TASK-039 (`compose/observability/`): the operator-only observability stack (install.md).
-- PENDING TASK-029 (`scripts/migrations/ranges.json`): the per-chain migration register and the boot-time migration hash check (upgrade.md).
 - PENDING TASK-075 (`scripts/migrations/runner/`): the pre-migration dump taken by the migration runner itself (upgrade.md).
 - PENDING TASK-089 (`scripts/backup/`): the per-module backup verification that replaces today's enumeration (backup.md).
 - PENDING TASK-119 (`services/kernel-api/export/`): the tenant export, and its restore on a clean host by someone who is not the vendor (restore.md).
+
+Landed since the first version: TASK-029's per-chain migration register
+(`scripts/migrations/ranges.json`, its frozen hashes in
+`scripts/migrations/applied.lock.json`, `scripts/migrations/register.mjs` and the
+boot-check library `scripts/migrations/verify-applied.mjs`). upgrade.md step 1 and
+its post-condition read the lock with `jq`; its Known gaps (d) and (e) name what
+the register does not yet enforce on a running host.
 
 ## What this runbook is not
 

@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 1.0.0
+- Version: 2.0.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -40,10 +40,19 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
   stops the deploy at STEP 2, before any colour is touched.
 - Every migration in the release is expand/contract (TRD-361): the colour still
   serving can run against the migrated schema.
-- Every migration claimed its number from its database chain's register, which
-  refuses a renumber of an applied migration (TRD-344), and a service refuses to
-  start when an applied migration's hash differs from its manifest (TRD-353).
-  PENDING TASK-029 (`scripts/migrations/ranges.json`): until the register lands, the `migrations` array read in step 1 is the only list (see Known gaps).
+- Every migration claimed its number from its database chain's register,
+  `scripts/migrations/ranges.json` (TRD-344), and was frozen with its sha256 in
+  `scripts/migrations/applied.lock.json`. `scripts/migrations/register.mjs check`
+  refuses a renumbered, edited or deleted locked migration; it runs in `make lint`
+  and in verify's carve-lint, not on the host, which has no node. Step 1 therefore
+  reads the running and the new release's lock with `jq`, and the post-condition
+  reads them again. At boot the kernel data plane checks every migration file
+  against its manifest before any runs (TRD-353, the file half); the applied-row
+  half, `verifyApplied` in `scripts/migrations/verify-applied.mjs`, is not yet
+  called by any service (see Known gaps).
+- The running installation's kernel database was created at or after the
+  migration renumber of the register (TASK-029): nothing in the kernel data plane
+  refuses a ledger that still records the old three-digit names (see Known gaps).
 - The administrator holds a registry read token, typed at a prompt, never
   written to disk.
 - No other deploy, rollback or switch is running on the host; the agent's log,
@@ -54,13 +63,26 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
 1. **Read the running state and the new release.** `gremion-deploy` reuses a
    checkout at the same tag, so cloning it here costs nothing later. The deploy
    user clones it: `gremion-deploy` runs as `gremion` and runs git in this
-   checkout, which git refuses ("dubious ownership") when root owns it.
+   checkout, which git refuses ("dubious ownership") when root owns it. Then
+   compare the two releases' migration locks: every migration the running
+   release locked must be locked in the new release under the same chain, name
+   and sha256, so no applied migration was renumbered, edited or deleted
+   (TRD-344). A non-empty list stops the upgrade here. The kernel database's
+   ledger must record the four-digit names of the register (the first kernel
+   migration is `0001_governance_schema.sql`); a count of 0 means the database
+   predates the renumber and stops the upgrade (see Known gaps).
 
 ```bash
 cat /opt/gremion/runtime/current-tag /opt/gremion/runtime/active-colour
 sudo -u gremion git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$REL"
 stat -c '%U %n' "$REL"                                            # gremion
 jq '{tag, overlap, migrations}' "$REL/release.json"
+jq -s 'map([.chains | to_entries[] | .key + " " + (.value.files | to_entries[] | .key + " " + .value)]) | .[0] - .[1]' \
+  /opt/gremion/current/scripts/migrations/applied.lock.json "$REL/scripts/migrations/applied.lock.json"   # []
+kdb="<the kernel database>"
+cd /opt/gremion/current
+docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
+  psql -U postgres -d "$kdb" -tAc "SELECT count(*) FROM schema_migrations WHERE filename = '0001_governance_schema.sql'"   # 1
 ```
 
 2. **Validate the env files against the new tree (E1).**
@@ -114,10 +136,14 @@ fi
 ## Post-condition
 
 The new release serves, the deploy logged twelve good steps and no failed one,
-and no dump is left on the host:
+the serving release keeps every migration the previous one locked, and no dump
+is left on the host:
 
 ```bash
 grep -Fx "$TAG" /opt/gremion/runtime/current-tag
+prev="$(cat /opt/gremion/runtime/previous-tag)"
+jq -s 'map([.chains | to_entries[] | .key + " " + (.value.files | to_entries[] | .key + " " + .value)]) | .[0] - .[1]' \
+  "/opt/gremion/releases/${prev}/scripts/migrations/applied.lock.json" /opt/gremion/current/scripts/migrations/applied.lock.json   # []
 tail -n 12 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+ [a-z-]+ ok$'     # 12
 tail -n 12 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+ [a-z-]+ fail$'   # 0
 jq -r '.ts, .ok, (.failures | length)' /opt/gremion/runtime/last-verify.json        # now, true, 0
@@ -153,9 +179,11 @@ switch has succeeded.
 - (a) TRD-348: `gremion-deploy` pulls digest-pinned, signature-verified images from the registry and refuses a `build:` key in production; TRD-348 keeps building from source at redeploy time until the build-versus-registry decision is taken. TASK-123 measures build and redeploy time and decides TRD-348/TRD-349.
 - (b) R15-1 and TRD-206: the deploy's step 5 runs `gremion-snapshot`, which runs `gremion-backup --class snapshot`. That needs a reachable off-site remote and keeps a restic snapshot until it is forgotten, which contradicts both the no-backup posture (R15-1) and the single dump deleted after the switch (TRD-206). With the remote unreachable an upgrade stops at `STEP 5 snapshot fail`, before any colour is stopped.
 - (b) continued: PENDING TASK-075 (`scripts/migrations/runner/`) takes the pre-migration dump inside the migration runner; until then step 3 is the TRD-206 dump, taken by hand.
-- PENDING TASK-029 (`scripts/migrations/ranges.json`): the per-chain migration register (TRD-344) and the boot-time hash check (TRD-353). Until it lands nothing on the host refuses a renumbered or altered migration, so the administrator compares the release's `migrations` array with the previous release's before step 3.
+- (d) TRD-344 and TRD-353: the migration register (`scripts/migrations/ranges.json`, `scripts/migrations/applied.lock.json`) is enforced by `scripts/migrations/register.mjs check` in `make lint`, not on the host, so step 1 compares the two releases' locks with `jq`. A running release older than the register has no lock to compare; its upgrade compares the two releases' `migrations` arrays by hand instead. At boot the kernel data plane checks every migration file against its manifest (the file half of TRD-353), but its ledger has no sha256 column, so the applied-row half, `verifyApplied` (`scripts/migrations/verify-applied.mjs`), runs in no service yet (`scripts/migrations/README.md`, Known limits).
+- (e) The register renumbered the kernel chain from three to four digits. The kernel data plane compares its ledger by name only and refuses no ledger that still records the old names: on a kernel database created before the renumber it treats every migration as pending and stops at the first `already exists` error without naming the cause. Such a database is re-initialised, not upgraded; step 1's ledger count observes it.
 - (c) TRD-189: a release with `overlap: false` makes the deploy's step 6 stop the old colour before the migration, so that release has downtime, where TRD-189 asks for a zero-downtime switch. The idle-colour test against live council data with its records marked as test data and removed afterwards (TRD-179) is not done by `gremion-deploy`, whose step 9 checks health and the verification contract only.
 
 ## Changelog
 
+- 2.0.0 (2026-09-28): the migration register landed (TASK-029). Step 1 compares the running and the new release's `applied.lock.json` and reads the kernel ledger's naming; the post-condition compares the previous and the serving release's locks. Preconditions and Known gaps (d), (e) describe the landed register instead of a PENDING one. Major: a step and the post-condition changed (Q8).
 - 1.0.0 (2026-09-27): first version, provisional (TASK-037).
