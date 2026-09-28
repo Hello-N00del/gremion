@@ -207,7 +207,8 @@ project_volumes() { docker volume ls -q --filter "label=com.docker.compose.proje
 # through its label; without this line they would silently drop out.
 external_volumes() {
     printf '%s\n' "${STACK}_traefik_acme" "${STACK}_tenant_secrets" "${STACK}_mail_data" \
-        "${STACK}_config_data" "${STACK}_tenant_config_data"
+        "${STACK}_config_data" "${STACK}_tenant_config_data" \
+        "${STACK}_nats_secrets" "${STACK}_nats_accounts"
 }
 
 # TASK 9, corrected against the brief: the "enumeration failed" condition is
