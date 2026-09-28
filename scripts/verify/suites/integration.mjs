@@ -201,23 +201,28 @@ export function judgeNatsTest(res) {
  * summary AND the proof's own "[nats-auth-proof] N passing" and OK lines;
  * collected is the unit count plus N.
  */
+export const NATS_AUTH_MIN_PROOFS = 25
+
 export function judgeNatsAuthTest(res) {
   const label = 'make test-nats-auth'
   const out = `${res.stdout}\n${res.stderr}`
   // The unit run prints BEFORE the proof starts; the proof echoes its own
   // live-suite summary, which must not stand in for the unit one.
   const unit = out.split(/^\[nats-auth-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
-  const count = out.match(/^\[nats-auth-proof\] (\d+) passing \(minimum \d+\)\s*$/m)
+  // The floor is proof.sh's own (25 live cases); a log claiming a lower one
+  // did not run the proof this judge vouches for.
+  const count = out.match(/^\[nats-auth-proof\] (\d+) passing \(minimum (\d+)\)\s*$/m)
+  const floorOk = count !== null && Number(count[2]) >= NATS_AUTH_MIN_PROOFS && Number(count[1]) >= Number(count[2])
   const ok = /^\[nats-auth-proof\] OK -- the authenticated broker admits and refuses as specified\s*$/m.test(out)
   if (res.code !== 0) {
     const n = Math.max(1, (unit ? Number(unit[1]) : 0) + (count ? Number(count[1]) : 0))
     return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
   }
-  if (!unit || !count || !ok) {
+  if (!unit || !count || !ok || !floorOk) {
     return {
       label,
       unparseable: true,
-      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, "[nats-auth-proof] N passing" and "[nats-auth-proof] OK" lines -- untrusted\n${tail(out)}`,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, "[nats-auth-proof] N passing (minimum >= 25)" and "[nats-auth-proof] OK" lines -- untrusted\n${tail(out)}`,
     }
   }
   const n = Number(unit[1]) + Number(count[1])

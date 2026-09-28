@@ -57,6 +57,11 @@ for (const [missing, drop] of [
   })
 }
 
+test('test-nats-auth: a proof run with its floor lowered below 25 is untrusted', () => {
+  const p = judgeNatsAuthTest({ code: 0, stdout: NATS_AUTH_OK.replace('25 passing (minimum 25)', '3 passing (minimum 3)'), stderr: '' })
+  assert.equal(p.unparseable, true, JSON.stringify(p))
+})
+
 test('test-nats-auth: a non-zero exit is a failure', () => {
   const p = judgeNatsAuthTest({ code: 1, stdout: '[nats-auth-proof] FAILED: the live suite exited 1\n', stderr: '' })
   assert.ok(p.failed > 0 && !p.unparseable, JSON.stringify(p))

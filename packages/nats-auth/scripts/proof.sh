@@ -42,8 +42,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 IMAGE="${NATS_AUTH_IMAGE:-nats:2.12.15-alpine@sha256:b270f5e2428354c0335612694d7dd2fb588148e567a5757fdff325ef9c9332e6}"
 LIVE_FILE="test/live/nats-auth.live.test.ts"
 # A minimum, not an exact count (25 cases today): adding a case needs no
-# edit here, removing one below the floor fails until lowered on purpose.
-MIN_PASS="${NATS_AUTH_MIN_PASS:-25}"
+# edit here, removing one below the floor fails until lowered on purpose --
+# in this file, never from the environment (the verify judge pins it too).
+MIN_PASS=25
 OPEN_F_CASES=4
 READY_TIMEOUT_S="${NATS_AUTH_READY_TIMEOUT_S:-60}"
 
@@ -52,7 +53,15 @@ fail() { echo "[nats-auth-proof] FAILED: $*" >&2; }
 # --auth: every case of the live file passed, none skipped, at least MIN_PASS.
 check_auth() {
   local log="$1" ran bad
+  # An unreadable log must never read as zero failures: grep would print
+  # nothing, the numeric tests below would error, and inside `&&` / `if`
+  # errexit does not fire.
+  if [ ! -r "$log" ] || [ ! -s "$log" ]; then
+    fail "no readable log at $log"
+    return 1
+  fi
   bad="$(grep -Ec "^[[:space:]]*(×|✗|↓) ${LIVE_FILE} >" "$log" || true)"
+  bad="${bad:-0}"
   if [ "$bad" -ne 0 ]; then
     fail "${bad} case(s) of ${LIVE_FILE} failed or were skipped"
     grep -E "^[[:space:]]*(×|✗|↓) ${LIVE_FILE} >" "$log" >&2 || true
@@ -64,6 +73,7 @@ check_auth() {
     return 1
   fi
   ran="$(grep -Ec "^[[:space:]]*✓ ${LIVE_FILE} >" "$log" || true)"
+  ran="${ran:-0}"
   if [ "$ran" -lt "$MIN_PASS" ]; then
     fail "only ${ran} passing case(s) from ${LIVE_FILE} (need >= ${MIN_PASS})"
     return 1
@@ -75,9 +85,15 @@ check_auth() {
 # record holds (the caller still exits 1: the suite failed, as it must).
 check_open() {
   local log="$1" a_total a_red f_green
-  a_total="$(grep -Ec "^[[:space:]]*(✓|×) ${LIVE_FILE} > A[0-9]" "$log" || true)"
+  if [ ! -r "$log" ] || [ ! -s "$log" ]; then
+    fail "no readable log at $log"
+    return 1
+  fi
+  # A skipped (↓) A case counts in the total and not as RED: it fails the record.
+  a_total="$(grep -Ec "^[[:space:]]*(✓|×|↓) ${LIVE_FILE} > A[0-9]" "$log" || true)"
   a_red="$(grep -Ec "^[[:space:]]*× ${LIVE_FILE} > A[0-9]" "$log" || true)"
   f_green="$(grep -Ec "^[[:space:]]*✓ ${LIVE_FILE} > F " "$log" || true)"
+  a_total="${a_total:-0}" a_red="${a_red:-0}" f_green="${f_green:-0}"
   echo "[nats-auth-proof] open broker: A cases RED ${a_red}/${a_total}, F cases GREEN ${f_green}/${OPEN_F_CASES}"
   if [ "$a_total" -eq 0 ] || [ "$a_red" -ne "$a_total" ]; then
     fail "an A case PASSED against the open broker (or none ran) -- it does not test authentication"
