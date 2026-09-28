@@ -22,6 +22,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/schema-gate.test.ts': 8,
     'src/index.test.ts': 2,
     'src/lifecycle/lifecycle.test.ts': 22,
+    'src/lifecycle/export.test.ts': 8,
     'test/unit/check-tenant-db-access.test.ts': 18,
     'test/unit/suite-size.test.ts': 4,
   },

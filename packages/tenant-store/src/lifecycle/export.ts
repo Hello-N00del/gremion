@@ -7,10 +7,12 @@
 // custom-format pg_dump (an [A] choice; the open-format export is TASK-091's).
 // At rest: mode 0600 under <exportDir>/<tenant>/<module>/ (Q7; encryption
 // follows the backup-host contract, TASK-089).
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, createReadStream, createWriteStream, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, createReadStream, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import type { Exporter, ExportTarget } from './types.js'
 import { LifecycleError } from './guards.js'
 
@@ -23,51 +25,85 @@ export interface PgDumpExporterOptions {
   connection(target: ExportTarget): { args: string[]; env?: Record<string, string> }
 }
 
-function run(argv: readonly string[], opts: { env?: Record<string, string>; stdin?: string; stdout?: string }): Promise<string> {
+/**
+ * Error codes of the WRITE side of a pipe into a child that stopped reading:
+ * EPIPE (POSIX), EOF (Windows named pipes), a reset or a stream destroyed or
+ * closed under the writer. pg_restore --list reads only the archive header
+ * and TOC and then exits, so any archive larger than the pipe buffer ends
+ * this way; the child's exit code, not the write, decides the outcome.
+ */
+const STOPPED_READING = new Set(['EPIPE', 'EOF', 'ECONNRESET', 'ERR_STREAM_PREMATURE_CLOSE', 'ERR_STREAM_DESTROYED'])
+
+/**
+ * Runs argv. With `stdout`, the child's stdout goes to that file, which is
+ * opened 'wx' 0600 BEFORE the child starts (an existing file, a missing or
+ * unwritable directory rejects here and nothing is spawned). With `stdin`,
+ * that file is piped into the child. Every stream error rejects the returned
+ * promise (none escapes as an uncaught exception or unhandled rejection), a
+ * sink or input failure kills the child so it cannot block on a full pipe,
+ * and the promise settles only once the child has closed.
+ */
+async function run(argv: readonly string[], opts: { env?: Record<string, string>; stdin?: string; stdout?: string }): Promise<string> {
   const [cmd, ...args] = argv
-  if (!cmd) return Promise.reject(new Error('empty command'))
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { env: { ...process.env, ...opts.env }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
-    const errChunks: Buffer[] = []
-    const outChunks: Buffer[] = []
-    let sink: ReturnType<typeof createWriteStream> | undefined
-    let sinkDone: Promise<void> = Promise.resolve()
-    if (opts.stdout) {
-      // wx: never overwrite; 0600 from the first byte.
-      const s = createWriteStream(opts.stdout, { flags: 'wx', mode: 0o600 })
-      sink = s
-      sinkDone = new Promise((res, rej) => {
-        s.on('finish', () => res())
-        s.on('error', rej)
-      })
-      child.stdout.pipe(s)
-    } else {
-      child.stdout.on('data', (c: Buffer) => outChunks.push(c))
-    }
-    child.stderr.on('data', (c: Buffer) => errChunks.push(c))
-    if (opts.stdin) {
-      const input = createReadStream(opts.stdin)
-      input.on('error', reject)
-      input.pipe(child.stdin)
-    } else {
-      child.stdin.end()
-    }
-    child.on('error', reject)
-    child.on('close', (code) => {
-      sinkDone.then(
-        () => {
-          if (code !== 0) {
-            const tail = Buffer.concat(errChunks).toString('utf8').trim().split('\n').slice(-3).join(' | ')
-            reject(new Error(`${basename(cmd)} exited ${code}${tail ? `: ${tail}` : ''}`))
-          } else {
-            resolve(Buffer.concat(outChunks).toString('utf8'))
-          }
-        },
-        (err: unknown) => reject(err),
-      )
+  if (!cmd) throw new Error('empty command')
+  // wx: never overwrite; 0600 from the first byte.
+  const sinkHandle = opts.stdout ? await open(opts.stdout, 'wx', 0o600) : undefined
+  let child: ChildProcessWithoutNullStreams
+  try {
+    child = spawn(cmd, args, { env: { ...process.env, ...opts.env }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+  } catch (err) {
+    await sinkHandle?.close().catch(() => undefined)
+    throw err
+  }
+  const errChunks: Buffer[] = []
+  const outChunks: Buffer[] = []
+  const failures: unknown[] = []
+  let spawnError: unknown
+  const fail = (err: unknown) => {
+    failures.push(err)
+    child.kill()
+  }
+  const exited = new Promise<number | null>((resolve) => {
+    child.once('error', (err) => {
+      spawnError ??= err
+      resolve(null)
     })
-    void sink
+    child.once('close', (code) => resolve(code))
   })
+  child.stderr.on('data', (c: Buffer) => errChunks.push(c))
+  // Belt and braces: the pipes below handle stdin's errors, and this keeps a
+  // late EPIPE/EOF after they settled from ever becoming an uncaught exception.
+  child.stdin.on('error', () => undefined)
+  const pumps: Promise<void>[] = []
+  if (sinkHandle) {
+    pumps.push(pipeline(child.stdout, sinkHandle.createWriteStream()).catch(fail))
+  } else {
+    child.stdout.on('data', (c: Buffer) => outChunks.push(c))
+  }
+  if (opts.stdin) {
+    const input = createReadStream(opts.stdin)
+    pumps.push(
+      pipeline(input, child.stdin).catch((err: unknown) => {
+        if (STOPPED_READING.has((err as NodeJS.ErrnoException).code ?? '')) return
+        fail(err)
+      }),
+    )
+  } else {
+    child.stdin.end()
+  }
+  try {
+    const [code] = await Promise.all([exited, ...pumps])
+    if (spawnError !== undefined) throw spawnError
+    if (failures.length > 0) throw failures[0]
+    if (code !== 0) {
+      const tail = Buffer.concat(errChunks).toString('utf8').trim().split('\n').slice(-3).join(' | ')
+      throw new Error(`${basename(cmd)} exited ${code}${tail ? `: ${tail}` : ''}`)
+    }
+    return Buffer.concat(outChunks).toString('utf8')
+  } finally {
+    // The write stream closes the handle when the pipe ends; this covers a child that never started.
+    await sinkHandle?.close().catch(() => undefined)
+  }
 }
 
 /** The production Exporter: pg_dump -Fc to the file (via stdout), pg_restore --list from it (via stdin). */
