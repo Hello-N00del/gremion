@@ -374,7 +374,15 @@ Because the server says nothing, every signal is produced client-side, by
 `NatsBroker` in [`packages/ports/src/nats-broker.ts`](../packages/ports/src/nats-broker.ts):
 
 - `ensureStream()` **refuses** to repoint a live stream's subject filter unless
-  you pass `{ repointSubjects: true }`, and names both filters.
+  you pass `{ repointSubjects: true }`, and names both filters. It **writes
+  only on drift** (TASK-024 G2): when the server's subjects, storage,
+  `max_age`, `max_msgs`, `duplicate_window` and retention already equal what
+  it would write, it reads (`streams.info`) and returns; the subject cache is
+  still dropped. On the authenticated broker (below) a module's nkey may read
+  its streams' info but never create or update one, so a limit change reaches
+  the server only through the tenant admin -- a `tenant-create` rerun of
+  `ensureTenantAccount()` -- and a module booting against drift fails loudly
+  with the server's `Permissions Violation` rather than rewriting the stream.
 - `subscribe()` asks the **server** what the bound stream captures before it
   creates a consumer — not the `STREAMS` topology, not the last
   `ensureStream()` argument. A pattern the live filter does not cover rejects
@@ -477,6 +485,20 @@ them, so drain first:
 6. **Verify against the running system, not the repo.** `nats stream info
    NEWSLETTER` shows the new filter, and a real publish must arrive:
    `nats sub 'gremion.>'` in one shell while the leaf emits one event.
+
+**Authentication (TASK-024).** The kernel's broker (the state project's
+`nats`, [`docker/nats/nats.conf`](../docker/nats/nats.conf)) admits a client
+only by nkey: one account per tenant (`T_<tenant>`, its own JetStream, so the
+stream names above exist once per tenant and a tenant never sees another's
+messages), one user per module from the flow matrix in
+[`packages/nats-auth`](../packages/nats-auth/src/flows.ts), no anonymous user.
+A module passes its identity as `NatsBroker.connect(url, STREAMS.X.name,
+natsConnectOptionsFor(tenant, module))`; wiring the modules is TASK-079's, the
+audit consumers' move TASK-205's. Accounts hide the global account's streams:
+the `nats stream ...` commands above run as a tenant's admin
+(`_admin/tenant_<t>.nk` in the seeds volume), not anonymously. The StuRaOS test
+environment's broker stays open until its re-init. Proof:
+`make test-nats-auth` ([`packages/nats-auth/scripts/proof.sh`](../packages/nats-auth/scripts/proof.sh)).
 
 The kernel's proof that these paths behave is `make test-ports-nats`
 ([`packages/ports/scripts/nats-test.sh`](../packages/ports/scripts/nats-test.sh)),
