@@ -124,7 +124,11 @@ export function renderViolations(render, { stack, project, domain }) {
     }
     if (binds.length !== 1) out.push(`messaging-postgres: ${binds.length} bind mounts, want exactly the initdb script`)
     const test = pg.healthcheck?.test ?? []
-    if (!String(test.join(' ')).includes('pg_isready -h 127.0.0.1')) out.push('messaging-postgres: not the anchor\'s TCP pg_isready healthcheck')
+    const probe = String(test.join(' '))
+    if (!probe.includes('pg_isready -h 127.0.0.1')) out.push('messaging-postgres: not the anchor\'s TCP pg_isready healthcheck')
+    // initdb.d runs once: a failed first init leaves a server that answers
+    // pg_isready without the synapse database, so healthy must require it.
+    if (!/datname\s*=\s*'synapse'/.test(probe)) out.push('messaging-postgres: the healthcheck does not require the synapse database (a failed first initdb would read healthy)')
   }
   if (mx) {
     profile('matrix', mx)

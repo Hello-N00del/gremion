@@ -5,11 +5,13 @@ every boot, as the entrypoint's last step.
 Reads the database block of the RENDERED homeserver.yaml (argv[1]) and asks
 the server itself:
 
-    SELECT datcollate, datctype FROM pg_database WHERE datname = current_database()
+    SELECT datcollate, datctype, datlocprovider, datlocale FROM pg_database
+      WHERE datname = current_database()
     SHOW server_version_num
 
-and exits non-zero, naming the value, unless collation and ctype are both C
-and the major is 18. Synapse's own IncorrectDatabaseSetup check is only the
+and exits non-zero, naming the value, unless collation and ctype are both C,
+the locale provider is libc (an ICU database reports datcollate C yet sorts
+linguistically) and the major is 18. Synapse's own IncorrectDatabaseSetup check is only the
 second line: it runs after Synapse has started, and it accepts any C-like
 locale when `allow_unsafe_locale` is set. Zero rows, an unreadable version, a
 config without a psycopg2 database and a server that never answers are
@@ -26,14 +28,17 @@ CONNECT_DELAY_S = 2
 
 
 def evaluate(rows, server_version_num):
-    """The judgement: rows are (datcollate, datctype) tuples, the version is
+    """The judgement: rows are (datcollate, datctype, datlocprovider, datlocale)
+    tuples, the version is
     server_version_num as text. Returns the list of problems (empty = pass)."""
     problems = []
     if len(rows) != 1:
         got = "no row" if not rows else f"{len(rows)} rows"
         problems.append(f"expected one pg_database row for the Synapse database, got {got}")
     else:
-        collate, ctype = rows[0]
+        collate, ctype, provider = rows[0][0], rows[0][1], rows[0][2]
+        if provider != "c":
+            problems.append(f"datlocprovider is {provider!r}, Synapse needs 'c' (libc) for byte-order C collation")
         if collate != REQUIRED_COLLATE:
             problems.append(f"datcollate is {collate!r}, Synapse needs {REQUIRED_COLLATE!r}")
         if ctype != REQUIRED_COLLATE:
@@ -88,7 +93,9 @@ def main(argv):
         fail(f"no connection to {conn_args['host']}:{conn_args['port']}/{conn_args['dbname']} after {CONNECT_ATTEMPTS} attempts")
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT datcollate, datctype FROM pg_database WHERE datname = current_database()")
+            cur.execute(
+                "SELECT datcollate, datctype, datlocprovider, datlocale FROM pg_database WHERE datname = current_database()"
+            )
             rows = [tuple(r) for r in cur.fetchall()]
             cur.execute("SHOW server_version_num")
             version = cur.fetchone()[0]

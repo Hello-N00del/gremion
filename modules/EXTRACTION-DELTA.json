@@ -159,7 +159,7 @@
       "path": "modules/messaging/synapse/db-preflight.py",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "6aa9152f4f412006d1d82178fa2abbb0c26b1a0d"
+      "blob": "0a3030d92b5e106259efaf8b26858c53c2a3859f"
     },
     {
       "path": "modules/messaging/synapse/entrypoint.sh",
@@ -195,7 +195,7 @@
       "path": "modules/messaging/synapse/postgres-init/10-synapse-db.sh",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "f739a5d7ef0b2358f590999add34166bef1085ce"
+      "blob": "bf57011395eeafe75a1f047e03b9d47e92532f54"
     },
     {
       "path": "modules/messaging/synapse/render-homeserver.sh",
@@ -219,7 +219,7 @@
       "path": "modules/messaging/synapse/test/preflight.test.mjs",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "63bc6df7106911bbdd4648d55d407ea48ee9a049"
+      "blob": "2cdbb698a42a2a0b13149024697c0921845ca547"
     },
     {
       "path": "modules/messaging/synapse/test/probe.test.mjs",

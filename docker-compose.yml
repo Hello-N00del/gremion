@@ -246,8 +246,9 @@ services:
   # The chat module's server (TASK-198, D14): Synapse's own PostgreSQL 18.
   # Unlike the six above it carries ONE initdb script, bound read-only:
   # modules/messaging/synapse/postgres-init/10-synapse-db.sh creates the
-  # synapse role (no superuser) and database with LOCALE 'C' from template0,
-  # and aborts initdb when SYNAPSE_DB_PASSWORD is empty. No ${VAR:?} here: it
+  # synapse role (no superuser) and database (libc LOCALE 'C', template0)
+  # where missing, and aborts the first init when SYNAPSE_DB_PASSWORD is
+  # empty; its healthcheck requires that database. No ${VAR:?} here: it
   # would bind every profile and verb (see x-required-env).
   messaging-postgres:
     <<: *module-postgres
@@ -261,6 +262,18 @@ services:
     volumes:
       - messaging-pg-data:/var/lib/postgresql
       - ./modules/messaging/synapse/postgres-init/10-synapse-db.sh:/docker-entrypoint-initdb.d/10-synapse-db.sh:ro
+    healthcheck:
+      # The anchor's TCP pg_isready, AND the synapse database must exist:
+      # initdb.d runs only on the first start, so a first init that failed
+      # (e.g. an empty SYNAPSE_DB_PASSWORD) leaves a server that answers
+      # pg_isready without it -- that must read unhealthy, and matrix
+      # (depends_on: service_healthy) must never start against it. Recovery:
+      # fix the env, re-run the (idempotent) script in the container.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" && [ \"$$(psql -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d postgres -AtXc \"SELECT 1 FROM pg_database WHERE datname = 'synapse'\")\" = 1 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # ============================================================
   # Mailpit — SMTP catcher for staging / local dev (#162)

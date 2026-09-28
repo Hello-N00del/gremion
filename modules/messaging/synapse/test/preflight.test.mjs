@@ -1,7 +1,8 @@
 // TDD 4 (TASK-198): db-preflight.py refuses a Synapse database whose
 // collation or ctype is not C, or a server whose major is not 18 -- naming the
-// value -- and refuses zero rows. The query layer is injected: evaluate() is
-// the pure judgement main() applies to what the live server returned.
+// value -- refuses a locale provider other than libc (an ICU database reads
+// datcollate C yet sorts linguistically), and refuses zero rows. The query
+// layer is injected: evaluate() is the pure judgement main() applies to what the live server returned.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { test } from 'node:test'
@@ -26,25 +27,32 @@ function evaluate(rows, version) {
 }
 
 test('passes C / C on major 18', () => {
-  assert.deepEqual(evaluate([['C', 'C']], '180003'), [])
+  assert.deepEqual(evaluate([['C', 'C', 'c', null]], '180003'), [])
 })
 
 test('fails on a non-C collation, naming it', () => {
-  const p = evaluate([['en_US.utf8', 'C']], '180003')
+  const p = evaluate([['en_US.utf8', 'C', 'c', null]], '180003')
   assert.equal(p.length, 1)
   assert.match(p[0], /datcollate/)
   assert.match(p[0], /en_US\.utf8/)
 })
 
 test('fails on a non-C ctype, naming it', () => {
-  const p = evaluate([['C', 'en_US.utf8']], '180003')
+  const p = evaluate([['C', 'en_US.utf8', 'c', null]], '180003')
   assert.equal(p.length, 1)
   assert.match(p[0], /datctype/)
   assert.match(p[0], /en_US\.utf8/)
 })
 
+test('fails on a non-libc locale provider even when collate and ctype read C (ICU sorts linguistically)', () => {
+  const p = evaluate([['C', 'C', 'i', 'C']], '180003')
+  assert.equal(p.length, 1)
+  assert.match(p[0], /datlocprovider/)
+  assert.match(p[0], /'i'/)
+})
+
 test('fails on major 16, naming it', () => {
-  const p = evaluate([['C', 'C']], '160004')
+  const p = evaluate([['C', 'C', 'c', null]], '160004')
   assert.equal(p.length, 1)
   assert.match(p[0], /16/)
 })
@@ -52,7 +60,7 @@ test('fails on major 16, naming it', () => {
 test('fails on zero rows and on an unreadable version', () => {
   assert.equal(evaluate([], '180003').length, 1)
   assert.match(evaluate([], '180003')[0], /no row/)
-  assert.equal(evaluate([['C', 'C']], '').length, 1)
+  assert.equal(evaluate([['C', 'C', 'c', null]], '').length, 1)
 })
 
 test('main() refuses without a config and exits non-zero, never 0', () => {
