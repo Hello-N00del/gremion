@@ -29,6 +29,14 @@ test('a template whose database is SQLite is refused, naming sqlite3', () => {
   assert.equal(r.text, null, 'a refused render must not leave a config behind')
 })
 
+test('any other engine name is refused naming it, even with the PostgreSQL args intact', () => {
+  const tpl = editedTemplate((t) => t.replace(/^  name: psycopg2$/m, '  name: psycopg2cffi'))
+  const r = render(baseEnv(), { template: tpl })
+  assert.notEqual(r.status, 0, 'a non-psycopg2 engine must not pass')
+  assert.match(r.stderr, /psycopg2cffi/)
+  assert.equal(r.text, null)
+})
+
 test('each blank required key is refused by name', () => {
   for (const key of REQUIRED) {
     const r = render(baseEnv({ [key]: '' }))
