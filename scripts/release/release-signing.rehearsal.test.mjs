@@ -97,7 +97,7 @@ test('rehearsal (stub record): push -> emit-pins -> check-pins -> sign-release.s
   assert.equal(dl.status, 0, dl.stderr)
   const sigs = dl.stdout.trim().split('\n').map((l) => JSON.parse(l))
   assert.ok(sigs.length >= 1, 'no signature stored for the image')
-  for (const sig of sigs) assert.ok('Base64Signature' in sig && 'Bundle' in sig, `unexpected download shape: ${Object.keys(sig)}`)
+  for (const sig of sigs) assert.ok('Base64Signature' in sig && 'Bundle' in sig, `unexpected download shape: ${Object.keys(sig).join(',')}`)
   for (const sig of sigs) assert.ok(sig.Bundle === null, `a Rekor bundle is attached: ${JSON.stringify(sig.Bundle).slice(0, 120)}`)
   const claims = JSON.parse(ok.stdout.trim().split('\n')[0])
   assert.equal(claims[0].critical.image['docker-manifest-digest'], ref.split('@')[1])

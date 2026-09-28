@@ -32,7 +32,7 @@ export function appServices(composeText) {
   if (start < 0) throw new Error('the app compose file has no top-level services: block')
   const out = []
   for (const l of lines.slice(start + 1)) {
-    if (/^\S/.test(l) && !/^#/.test(l)) break
+    if (/^\S/.test(l) && !l.startsWith('#')) break
     if (!/^ {2}\S/.test(l) || /^\s*#/.test(l)) continue
     // A service line in any other spelling (anchor, quoted key, flow map)
     // would silently shrink the expected set, so it is refused.

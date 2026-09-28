@@ -47,6 +47,9 @@ import { join, matchesGlob, posix } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
+/** Code-unit order (what a bare .sort() gives strings), stated explicitly. */
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+
 export const SCAN_PATTERNS = Object.freeze([
   ':(top,glob)docker-compose*.yml',
   ':(top,glob)docker-compose*.yaml',
@@ -233,7 +236,7 @@ export function judgeRef(raw, ctx) {
   // 1. literal defaults, before any resolution.
   for (const m of ref.matchAll(DEFAULT_RE)) {
     const d = unquote(m[3])
-    if (d === 'latest' || /:latest$/.test(d)) {
+    if (d === 'latest' || d.endsWith(':latest')) {
       return { problem: { code: 'latest', message: `literal default '${d}' in ${ref} (latest fails everywhere)` } }
     }
     if (IMAGE_VAR_RE.test(m[1]) && !PINNED_RE.test(d)) {
@@ -255,7 +258,7 @@ export function judgeRef(raw, ctx) {
     unresolved ??= v
     return whole
   })
-  if (unresolved) return { problem: { code: 'unresolvable', message: `\${${unresolved}} in ${ref} resolves from no env template and has no default` } }
+  if (unresolved) return { problem: { code: 'unresolvable', message: `\${${String(unresolved)}} in ${ref} resolves from no env template and has no default` } }
   const pin = PINNED_RE.exec(resolved)
   if ((pin ?? TAGGED_RE.exec(resolved))?.[2] === 'latest') return { problem: { code: 'latest', message: `${resolved}: a :latest tag` } }
   if (!pin) {
@@ -370,7 +373,7 @@ export function checkTree(root) {
     const yaml = isYaml(f)
     if (yaml && YAML_BREAK_RE.test(text)) add('yaml-line-break', f, 'a line break other than LF/CRLF (lone CR, NEL, LS, PS): YAML reads lines this scan does not')
     const lines = codeLines(text, yaml)
-    if (/\.tmpl$/.test(f)) checkComposeFile(f, text)
+    if (f.endsWith('.tmpl')) checkComposeFile(f, text)
     const raw = !excluded.has(f)
     const env = envFor(f)
     for (const [i, l] of lines.entries()) {
@@ -434,7 +437,7 @@ export function checkTree(root) {
     add('lockfile-unreadable', LOCKFILE, err.message)
   }
 
-  return { files, refs, problems, thirdParty: [...thirdParty].sort() }
+  return { files, refs, problems, thirdParty: [...thirdParty].sort(byCodeUnit) }
 }
 
 /** The third-party list for the host; throws on a RED tree (a partial list is worse than none). */

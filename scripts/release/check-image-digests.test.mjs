@@ -69,7 +69,7 @@ function tree(edits = {}, { empty = false } = {}) {
   return r
 }
 
-const codes = (res) => [...new Set(res.problems.map((p) => p.code))].sort()
+const codes = (res) => [...new Set(res.problems.map((p) => p.code))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 const withCode = (res, code) => res.problems.filter((p) => p.code === code)
 const compose = (svc) => `services:\n${svc}`
 const fpBuild = (image) => compose(`  x:\n    build: ./x\n    image: ${image}\n`)
