@@ -262,6 +262,109 @@ test('third-party list: the canonical non-first-party repositories of the fixtur
   assert.throws(() => thirdPartyList(tree({ 'docker-compose.yml': plain('nginx:1.29') })), /unpinned/)
 })
 
+// ── review round 1 (TASK-048 self-review: security, silent-failure, quality) ──
+
+test('r1: a first-party lookalike is refused, never listed as third-party (host allow-list would skip its signature)', () => {
+  for (const img of [
+    `ghcr.io:443/hello-n00del/app@sha256:${D('a')}`,
+    `GHCR.IO/hello-n00del/app@sha256:${D('a')}`,
+    `ghcr.io.evil/hello-n00del/app@sha256:${D('a')}`,
+    `docker.io/hello-n00del/app@sha256:${D('a')}`,
+    `ghcr.io/Hello-N00del/app@sha256:${D('a')}`,
+  ]) {
+    const r = tree({ 'docker-compose.yml': plain(img) })
+    assert.ok(codes(checkTree(r)).includes('first-party-lookalike'), img)
+    assert.throws(() => thirdPartyList(r), /first-party-lookalike/, img)
+  }
+})
+
+test('r1: a minio image anywhere in a scanned file fails, not only on image:/ *_IMAGE= lines', () => {
+  const bin = (l) => ({ 'infra/host/bin/gremion-helper': `#!/usr/bin/env bash\n${l}\n` })
+  for (const l of [
+    'docker run --rm --network host quay.io/minio/mc:RELEASE.2025 ls gremion',
+    `docker run --rm minio/mc@sha256:${D('a')} ls`,
+    'MC="${MC:-minio/mc:RELEASE.2025}"',
+  ]) assert.ok(codes(checkTree(tree(bin(l)))).includes('object-storage-image'), l)
+})
+
+test('r1: YAML the line scan cannot see is refused: lone CR/NEL/LS/PS breaks, escaped, explicit and alias keys', () => {
+  for (const body of [
+    '  x:\n    # c\r    image: nginx:1.29\n',
+    '  x:\n    # c\u0085    image: nginx:1.29\n',
+    '  x:\n    # c\u2028    image: nginx:1.29\n',
+    '  x:\n    "\\x69mage": nginx:1.29\n',
+    '  x:\n    ? image\n    : nginx:1.29\n',
+    'x-k: [&k image]\nservices:\n  x:\n    *k : nginx:1.29\n',
+  ]) {
+    const text = body.startsWith('x-k') ? body : compose(body)
+    const res = checkTree(tree({ 'docker-compose.yml': text }))
+    assert.ok(res.problems.length > 0 && codes(res).some((c) => ['yaml-line-break', 'non-canonical'].includes(c)), JSON.stringify(body))
+  }
+})
+
+test('r1: compose extends/include and a COMPOSE_FILE component outside the scan set fail', () => {
+  assert.deepEqual(codes(checkTree(tree({ 'docker-compose.yml': compose(`  x:\n    extends: {file: test/x.yml, service: y}\n`) }))), ['compose-include'])
+  assert.deepEqual(codes(checkTree(tree({ 'docker-compose.yml': compose(`  x:\n    extends:\n      file: test/x.yml\n      service: y\n`) }))), ['compose-include'])
+  assert.deepEqual(codes(checkTree(tree({ 'docker-compose.yml': `include:\n  - k8s/evil/compose.yml\n${compose(`  x:\n    image: redis@sha256:${D('a')}\n`)}` }))), ['compose-include'])
+  const mail = { 'infra/host/templates/env/mail.env.tmpl': `COMPOSE_FILE=docker-compose.yml:extra.yaml\nSTALWART_IMAGE=docker.io/stalwartlabs/stalwart@sha256:${D('b')}\n` }
+  assert.deepEqual(codes(checkTree(tree(mail))), ['compose-file-unscanned'])
+  // the release pins layer is judged by check-pins/gremion-deploy, never committed
+  const pins = { 'infra/host/templates/env/state.env.tmpl': 'IMAGE_TAG=CHANGE_ME_OPERATOR_image_tag\nCOMPOSE_FILE=docker-compose.yml:docker-compose.pins.yml\n' }
+  assert.deepEqual(checkTree(tree(pins)).problems, [])
+})
+
+test('r1: .yaml compose variants are discovered', () => {
+  for (const p of ['docker-compose.extra.yaml', 'compose.yaml', 'compose/extra/x.yaml', 'infra/host/extra/docker-compose.yaml']) {
+    assert.deepEqual(codes(checkTree(tree({ [p]: plain('nginx:1.29') }))), ['unpinned'], p)
+  }
+})
+
+test('r1: YAML environment keys MINIO_*/ *_S3_* (list or map form) are object-storage keys', () => {
+  for (const env of ['      - MINIO_ROOT_USER=x\n', '      MINIO_ROOT_USER: x\n', '      AWS_S3_BUCKET: y\n']) {
+    const res = checkTree(tree({ 'docker-compose.yml': compose(`  x:\n    image: redis@sha256:${D('a')}\n    environment:\n${env}`) }))
+    assert.deepEqual(codes(res), ['object-storage-key'], env)
+  }
+})
+
+test('r1: every latest default fails (any variable, nested, := form, inline comment)', () => {
+  const bin = (l) => ({ 'infra/host/bin/gremion-helper': `#!/usr/bin/env bash\n${l}\n` })
+  for (const l of ['IMG="${HELPER_IMG:-redis:latest}"', 'TAG=${T:-${U:-latest}}', ': "${X_IMAGE:=redis:latest}"']) {
+    assert.ok(codes(checkTree(tree(bin(l)))).includes('latest'), l)
+  }
+  assert.deepEqual(codes(checkTree(tree({ '.env.example': 'IMAGE_TAG=latest  # default\n' }))), ['latest'])
+  assert.deepEqual(codes(checkTree(tree({ '.env.example': 'IMAGE_TAG="latest" # x\n' }))), ['latest'])
+})
+
+test('r1: more *_IMAGE shapes are judged (:= default, IMAGE=, typeset, several per line, a compose environment item)', () => {
+  const bin = (l) => ({ 'infra/host/bin/gremion-helper': `#!/usr/bin/env bash\n${l}\n` })
+  for (const l of [': "${X_IMAGE:=alpine:3}"', 'IMAGE=alpine:3', 'X="${IMAGE:-busybox:1}"', 'typeset X_IMAGE=alpine:3', 'export A=1 X_IMAGE=alpine:3']) {
+    assert.deepEqual(codes(checkTree(tree(bin(l)))), ['unpinned'], l)
+  }
+  const envItem = compose(`  x:\n    image: redis@sha256:${D('a')}\n    environment:\n      - MC_IMAGE=foo:1\n`)
+  assert.deepEqual(codes(checkTree(tree({ 'docker-compose.yml': envItem }))), ['unpinned'])
+})
+
+test('r1: build: !reset null, null, ~ or empty is not a build (first-party tag ref fails)', () => {
+  for (const b of ['!reset null', 'null', '~', '""']) {
+    const res = checkTree(tree({ 'docker-compose.yml': compose(`  x:\n    build: ${b}\n    image: ghcr.io/hello-n00del/x:\${IMAGE_TAG:-dev}\n`) }))
+    assert.deepEqual(codes(res), ['first-party-no-build'], b)
+  }
+})
+
+test('r1: an exclusion glob may name one file only; a list-item image: is not canonical', () => {
+  const ex = { 'scripts/release/image-scan-exclusions.json': JSON.stringify({ exclusions: [{ glob: '**', reason: 'x' }] }) }
+  assert.ok(codes(checkTree(tree(ex))).includes('exclusion-broad'))
+  assert.ok(codes(checkTree(tree({ 'docker-compose.yml': compose(`  x:\n    - image: redis@sha256:${D('a')}\n`) }))).includes('non-canonical'))
+})
+
+test('r1: the decoys really are tracked in the scratch repo (the anchoring test is not vacuous)', () => {
+  const r = tree()
+  const tracked = git(r, 'ls-files').split('\n')
+  for (const p of ['packages/module-catalogue/test/fixtures/compose/base.yml', 'scripts/verify/census/__fixtures__/state/state.env.tmpl',
+    'test/host/fixtures/x/docker-compose.yml', 'scripts/release/fixtures/y/docker-compose.yml', 'k8s/base/x/docker-compose.yml',
+    '.github/workflows/docker-compose.yml']) assert.ok(tracked.includes(p), p)
+})
+
 // ── pin-images.sh (G2): the resolver that turns a tag into tag@digest ──────
 
 test('pin-images.sh pins third-party tags, leaves first-party ${IMAGE_TAG} refs and ${...} alone, still pins a lookalike', () => {
@@ -283,6 +386,8 @@ test('pin-images.sh pins third-party tags, leaves first-party ${IMAGE_TAG} refs 
     '    image: ghcr.io.evil/hello-n00del/x:1',
     '  e:',
     `    image: redis:7-alpine@sha256:${D('a')}`,
+    '  f:',
+    '    image: ghcr.io/hello-n00del/gremion-f:1.0',
     '',
   ].join('\n'))
   const r = spawnSync('bash', [join(REPO_ROOT, 'infra/host/ops/pin-images.sh'), file], {
@@ -295,7 +400,8 @@ test('pin-images.sh pins third-party tags, leaves first-party ${IMAGE_TAG} refs 
   assert.match(out, /image: ghcr\.io\/hello-n00del\/gremion-b:\$\{IMAGE_TAG:-dev\}$/m)
   assert.match(out, /image: \$\{STALWART_IMAGE:\?x\}$/m)
   assert.match(out, new RegExp(`image: ghcr\\.io\\.evil/hello-n00del/x:1@sha256:${D('9')}$`, 'm'))
-  assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n').sort(), ['ghcr.io.evil/hello-n00del/x:1', 'traefik:v3.7.1'])
+  assert.match(out, new RegExp(`image: ghcr\\.io/hello-n00del/gremion-f:1\\.0@sha256:${D('9')}$`, 'm'))
+  assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n').sort(), ['ghcr.io.evil/hello-n00del/x:1', 'ghcr.io/hello-n00del/gremion-f:1.0', 'traefik:v3.7.1'])
 })
 
 // ── CLI ──────────────────────────────────────────────────────────────────
