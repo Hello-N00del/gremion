@@ -52,11 +52,14 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
 ## Steps
 
 1. **Read the running state and the new release.** `gremion-deploy` reuses a
-   checkout at the same tag, so cloning it here costs nothing later.
+   checkout at the same tag, so cloning it here costs nothing later. The deploy
+   user clones it: `gremion-deploy` runs as `gremion` and runs git in this
+   checkout, which git refuses ("dubious ownership") when root owns it.
 
 ```bash
 cat /opt/gremion/runtime/current-tag /opt/gremion/runtime/active-colour
-git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$REL"
+sudo -u gremion git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$REL"
+stat -c '%U %n' "$REL"                                            # gremion
 jq '{tag, overlap, migrations}' "$REL/release.json"
 ```
 
