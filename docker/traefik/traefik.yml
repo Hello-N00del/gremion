@@ -74,11 +74,13 @@ entryPoints:
     # ${STACK}_edge subnets. Every range here is an X-Forwarded-For forgery
     # away for any peer inside it -- including the subnet's gateway, which is
     # where Docker's userland proxy re-originates IPv6 clients from.
-    # NOTE (TASK-022 residual): this composition still attaches traefik to
-    # gremion_net only, which is not ${STACK}_edge, so today these two entries
-    # match no peer (fail-closed: forwarded headers from the network are
-    # dropped, IPv6 clients all appear as the gremion_net gateway). Moving the
-    # service onto ${STACK}_edge is TASK-040's, and re-weighs this list.
+    # TASK-040: traefik is attached to ${STACK}_edge (plus the private socket
+    # net to its Docker API proxy), so these two entries now match real peers.
+    # Every peer on ${STACK}_edge is first-party (keycloak, legal, fallback,
+    # the app tier of both colours and the tenant-create one-shot; no
+    # non-council workload joins it -- scripts/check-pooled-stack.mjs), and the
+    # subnet's gateway is where Docker's userland proxy re-originates IPv6
+    # clients. The list is left unchanged; any narrowing is TASK-041's call.
     forwardedHeaders:
       trustedIPs:
         - "127.0.0.1/32"
@@ -122,7 +124,9 @@ providers:
     # proxy. The proxy exposes only the GET endpoints this provider needs.
     endpoint: "tcp://docker-socket-proxy:2375"
     exposedByDefault: false
-    network: gremion_net
+    # No provider-wide network (TASK-040 G1): every docker-routed service
+    # names traefik.docker.network=${STACK}_edge on its own labels, the one
+    # network traefik shares with it.
   file:
     # The WHOLE directory, watched: per-tenant router files and
     # etc/edge/active.yml reach Traefik through the single read-only bind

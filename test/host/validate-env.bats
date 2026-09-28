@@ -327,16 +327,38 @@ second_readers() {
 # ---------------------------------------------------------------------------
 
 DOMAIN_BINDING='DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
+GUARDED_READ='${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
 
-@test "DOMAIN is bound from PLATFORM_DOMAIN exactly once across the compose files" {
-    local n any
-    n="$(cat "${KERNEL_ROOT}/docker-compose.yml" "${KERNEL_ROOT}/docker-compose.prod.yml" \
-        | grep -cF "$DOMAIN_BINDING" || true)"
-    [ "$n" -eq 1 ]
-    # ...and nothing else reads PLATFORM_DOMAIN (a second, unguarded binding)
-    any="$(cat "${KERNEL_ROOT}/docker-compose.yml" "${KERNEL_ROOT}/docker-compose.prod.yml" \
-        | grep -vE '^[[:space:]]*#' | grep -c 'PLATFORM_DOMAIN' || true)"
-    [ "$any" -eq 1 ] || { echo "PLATFORM_DOMAIN read ${any} times"; return 1; }
+# TASK-040 (pooled stack) split the production render: the state project is
+# docker-compose.yml + docker-compose.prod.yml, the app tier (gremion-ui and
+# the tenant-create one-shot, both of which read DOMAIN) is
+# docker-compose.app.yml. TASK-028's "bound once, nothing else reads it" rule
+# existed to forbid an UNGUARDED second read; across three files the rule is:
+# every DOMAIN binding is the guarded one, and every read of PLATFORM_DOMAIN
+# carries `:?`, so no read of it can ever render empty. (Retargeted under the
+# TASK-040 round-3 grant, verify-r2 HIGH 1.)
+PRODUCTION_COMPOSE_FILES=(docker-compose.yml docker-compose.prod.yml docker-compose.app.yml)
+
+production_compose_text() {
+    local f
+    for f in "${PRODUCTION_COMPOSE_FILES[@]}"; do
+        [[ -f "${KERNEL_ROOT}/$f" ]] || { echo "missing ${f}" >&2; return 1; }
+        grep -vE '^[[:space:]]*#' "${KERNEL_ROOT}/$f"
+    done
+}
+
+@test "DOMAIN is bound only from PLATFORM_DOMAIN across the compose files, and every PLATFORM_DOMAIN read is guarded" {
+    local text bindings bad n rest
+    text="$(production_compose_text)"
+    bindings="$(printf '%s\n' "$text" | grep -E '^[[:space:]]+DOMAIN:' || true)"
+    [ -n "$bindings" ] || { echo "no DOMAIN binding in any compose file"; return 1; }
+    bad="$(printf '%s\n' "$bindings" | grep -vF "$DOMAIN_BINDING" || true)"
+    [ -z "$bad" ] || { echo "DOMAIN bound otherwise:"; echo "$bad"; return 1; }
+    n="$(printf '%s\n' "$text" | grep -cF "$GUARDED_READ" || true)"
+    [ "$n" -ge 1 ] || { echo "vacuous: no guarded PLATFORM_DOMAIN read"; return 1; }
+    rest="$(printf '%s\n' "$text" | awk -v g="$GUARDED_READ" '{ while ((i = index($0, g)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(g)); print }' \
+        | grep -n 'PLATFORM_DOMAIN' || true)"
+    [ -z "$rest" ] || { echo "unguarded PLATFORM_DOMAIN read(s):"; echo "$rest"; return 1; }
 }
 
 @test "a GREMION_PRODUCTION_STACK that is neither none nor a stack name exits 1" {
@@ -361,9 +383,31 @@ prod_render() {
         sed -i '/^PLATFORM_DOMAIN=/d' "$envf"
         shift
     fi
+    # The host env templates carry no DOMAIN (TASK-040): render as a host does.
+    if [[ "${1:-}" == "--without-domain" ]]; then
+        sed -i '/^DOMAIN=/d' "$envf"
+        shift
+    fi
     run env -i PATH="$PATH" HOME="${HOME:-/root}" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
         docker compose --project-directory "$proj" --env-file "$envf" \
         -f "$proj/docker-compose.yml" -f "$proj/docker-compose.prod.yml" --profile production "$@"
+}
+
+# The app tier's render (TASK-040): docker-compose.app.yml alone, from the
+# pooled-stack app-blue fixture, every profile on so the one-shots render too.
+app_render() {
+    local proj="${GREMION_ROOT}/app-proj" envf="${GREMION_ROOT}/app-render.env"
+    mkdir -p "$proj"
+    cp "${KERNEL_ROOT}/docker-compose.app.yml" "$proj/"
+    grep -v '^COMPOSE_FILE=\|^COMPOSE_PROFILES=\|^COMPOSE_PATH_SEPARATOR=\|^COMPOSE_PROJECT_NAME=' \
+        "${KERNEL_ROOT}/test/host/fixtures/pooled-stack/app-blue.env" > "$envf"
+    if [[ "${1:-}" == "--without-platform-domain" ]]; then
+        sed -i '/^PLATFORM_DOMAIN=/d' "$envf"
+        shift
+    fi
+    run env -i PATH="$PATH" HOME="${HOME:-/root}" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+        docker compose --project-directory "$proj" --env-file "$envf" \
+        -f "$proj/docker-compose.app.yml" --profile migrate --profile tenant-create "$@"
 }
 
 need_docker_cli() {
@@ -374,17 +418,32 @@ need_docker_cli() {
 @test "the production render with PLATFORM_DOMAIN unset aborts with 'PLATFORM_DOMAIN required'" {
     need_docker_cli
     prod_render --without-platform-domain config
-    [ "$status" -ne 0 ]
+    [ "$status" -ne 0 ] || { echo "state render exited 0 without PLATFORM_DOMAIN"; return 1; }
+    [[ "$output" == *"PLATFORM_DOMAIN required"* ]]
+    app_render --without-platform-domain config
+    [ "$status" -ne 0 ] || { echo "app render exited 0 without PLATFORM_DOMAIN"; return 1; }
     [[ "$output" == *"PLATFORM_DOMAIN required"* ]]
 }
 
 @test "the production render with PLATFORM_DOMAIN set binds gremion-ui's DOMAIN to it" {
     need_docker_cli
-    prod_render config --format json
+    app_render config --format json
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    local got
-    got="$(printf '%s' "$output" | sed -n '/^{/,$p' | jq -r '.services["gremion-ui"].environment.DOMAIN')"
-    [ "$got" = "guard.example.org" ]
+    local json got
+    json="$(printf '%s' "$output" | sed -n '/^{/,$p')"
+    for svc in gremion-ui tenant-create; do
+        got="$(printf '%s' "$json" | jq -r --arg s "$svc" '.services[$s].environment.DOMAIN')"
+        [ "$got" = "guard.example.org" ] || { echo "${svc} DOMAIN=${got}"; return 1; }
+    done
+    # ...and the state render's Host rules name the same apex from
+    # PLATFORM_DOMAIN alone (a bare ${DOMAIN} renders Host(``) on a host)
+    prod_render --without-domain config --format json
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    json="$(printf '%s' "$output" | sed -n '/^{/,$p')"
+    for svc in keycloak fallback; do
+        got="$(printf '%s' "$json" | jq -r --arg s "$svc" '.services[$s].labels["traefik.http.routers.\($s).rule"]')"
+        [[ "$got" == *'Host(`guard.example.org`)'* ]] || { echo "${svc} rule: ${got}"; return 1; }
+    done
 }
 
 @test "':?' aborts an 'up' before any container is created (compose --dry-run)" {

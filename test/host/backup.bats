@@ -402,10 +402,10 @@ esac
 exit 0'
 }
 
-@test "enumeration unions both project queries and the three external volumes" {
+@test "enumeration unions both project queries and the five external volumes" {
     shim_baseline; shim_docker_ok
     run "$BACKUP"
-    [[ "$output" == *"volumes enumerated: 6"* ]]
+    [[ "$output" == *"volumes enumerated: 8"* ]]
     # Repeated --filter label= is ANDed by docker, so the two projects MUST be
     # two calls; one call with both filters returns nothing.
     assert_recorded docker "label=com.docker.compose.project=staging-state"
@@ -585,7 +585,10 @@ exit 0'
     [ -s "${d}/staging_traefik_acme.tar" ]
     [ -s "${d}/staging_tenant_secrets.tar" ]
     [ -s "${d}/staging_mail_data.tar" ]
-    [[ "$output" == *"archived 6 volume(s) with alpine@sha256:00000000"* ]]
+    # TASK-040: the app tier's two external config volumes
+    [ -s "${d}/staging_config_data.tar" ]
+    [ -s "${d}/staging_tenant_config_data.tar" ]
+    [[ "$output" == *"archived 8 volume(s) with alpine@sha256:00000000"* ]]
 }
 
 @test "the archive container mounts each volume read-only" {
@@ -842,11 +845,11 @@ exit 0'
     [ "$(jq -r '.label'               "$f")" = "nightly-1" ]
     [ "$(jq -r '.class'               "$f")" = "daily" ]
     [ "$(jq -r '.artefacts.databases' "$f")" = "5" ]
-    [ "$(jq -r '.artefacts.volumes'   "$f")" = "6" ]
+    [ "$(jq -r '.artefacts.volumes'   "$f")" = "8" ]
     [ "$(jq -r '.artefacts.buckets'   "$f")" = "0" ]
     [ "$(jq -r '.offsite'             "$f")" = "true" ]
     [ -f "${GREMION_ROOT}/runtime/last-backup-daily.json" ]
-    [[ "$output" == *"BACKUP: label=nightly-1 class=daily databases=5 volumes=6 buckets=0 offsite=true ok=true"* ]]
+    [[ "$output" == *"BACKUP: label=nightly-1 class=daily databases=5 volumes=8 buckets=0 offsite=true ok=true"* ]]
 }
 
 @test "a failed run still writes ok:false and still alerts" {
@@ -926,9 +929,9 @@ exit 0'
 
 @test "gremion-snapshot fails when an artefact class is below the last daily (guard watched RED)" {
     shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
-    # A daily that saw 6 volumes...
+    # A daily that saw 8 volumes...
     run "$BACKUP" --class daily --label nightly-4
-    [ "$(jq -r '.artefacts.volumes' "${GREMION_ROOT}/runtime/last-backup-daily.json")" = "6" ]
+    [ "$(jq -r '.artefacts.volumes' "${GREMION_ROOT}/runtime/last-backup-daily.json")" = "8" ]
     # ...then a snapshot taken while the mail project's volumes are gone.
     shim docker 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
@@ -953,7 +956,7 @@ esac
 exit 0'
     run "$SNAPSHOT" dist-v1.2.4
     [ "$status" -eq 1 ]
-    [[ "$output" == *"snapshot artefact class volumes: 4 < last daily 6"* ]]
+    [[ "$output" == *"snapshot artefact class volumes: 6 < last daily 8"* ]]
 }
 
 # ---------------------------------------------------------------------------

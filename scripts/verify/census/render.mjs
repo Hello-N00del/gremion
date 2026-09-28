@@ -50,16 +50,12 @@ export const PINS_FILE = 'docker-compose.pins.yml'
  * the allowance itself FAILS the census, so the merge that lands the file has
  * to delete the entry here in the same change. An absent file with no
  * allowance is a failure, never a skip.
+ *
+ * Empty since TASK-040's merge: the only entry (project app,
+ * docker-compose.app.yml, dated 2026-09-27) retired in the change that landed
+ * the file, so the app project is censused like every other.
  */
-export const ALLOWANCES = [
-  {
-    project: 'app',
-    file: 'docker-compose.app.yml',
-    dated: '2026-09-27',
-    removedBy: 'TASK-040',
-    why: 'the compose split (Q2) lands docker-compose.app.yml; until it merges the app services render inside the state project',
-  },
-]
+export const ALLOWANCES = []
 
 /**
  * The value of `key` in an env-file text, located by key. Returns null when

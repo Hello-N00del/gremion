@@ -719,6 +719,11 @@ stage_networks() {
     ensure_network "${STACK}_edge"  "${EDGE_V4_SUBNET}"  "${EDGE_V6_SUBNET}"
     ensure_network "${STACK}_state" "${STATE_V4_SUBNET}" "${STATE_V6_SUBNET}"
     ensure_volume  "${STACK}_traefik_acme"
+    # The app tier's two persisted volumes (TASK-040, TRD-038): both colours
+    # mount them as externals, so no colour owns them and no switch, `down`
+    # or `down -v` of a colour can remove them.
+    ensure_volume  "${STACK}_config_data"
+    ensure_volume  "${STACK}_tenant_config_data"
     ensure_volume  "${STACK}_tenant_secrets"
     ensure_volume  "${STACK}_mail_data"
 }
