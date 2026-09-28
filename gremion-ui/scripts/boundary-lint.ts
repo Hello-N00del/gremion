@@ -237,6 +237,20 @@ if (mode !== '--staged' && mode !== '--all') {
 }
 
 const inputs = mode === '--staged' ? collectStaged() : collectAll(allFlags!.root)
+
+// G-053-boundary-lint-vacuity (TASK-053, TRD-444): a full-tree run that scanned
+// nothing, or less than its floor, proved nothing -- it printed `OK (0 file(s)
+// checked)` and exited 0 before this refusal. Checked BEFORE runBoundaryLint,
+// so the refusal is the first line printed (an empty scan would otherwise also
+// report every allowlist entry as stale). `--staged` never reaches it.
+if (mode === '--all' && inputs.length < allFlags!.minFiles) {
+  console.error(
+    `[boundary-lint] scanned ${inputs.length} file(s) under ${allFlags!.root} -- below the floor of ${allFlags!.minFiles}; ` +
+      'refusing to report OK on a scan that checked (almost) nothing',
+  )
+  process.exit(1)
+}
+
 const res = runBoundaryLint(inputs)
 
 // unusedAllow is only meaningful on a full-tree run (staged subsets legitimately
