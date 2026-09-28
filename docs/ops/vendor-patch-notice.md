@@ -30,7 +30,7 @@ specified but not yet in this repository; see `docs/deployment-architecture.md`.
 
 | System | Role in Gremion | Where it is defined | Version recorded in this repository (2026-09-25) |
 |---|---|---|---|
-| **Keycloak** | identity provider for every tenant realm | kernel: `docker-compose.yml` (`keycloak` service), `k8s/base/keycloak/deployment.yaml` | upstream `keycloak/keycloak` image, tag `26.6.1`, pinned by tag in both places |
+| **Keycloak** | identity provider for every tenant realm | kernel: `docker-compose.yml` (`keycloak` service), `k8s/base/keycloak/deployment.yaml` | upstream `keycloak/keycloak` image, tag `26.6.1`; `docker-compose.yml` pins it by digest (`quay.io/keycloak/keycloak:26.6.1@sha256:dea26401…`, TASK-048, TRD-350), `k8s/base/keycloak/deployment.yaml` by tag (k8s is outside the digest guard, D16) |
 | **Synapse** (Matrix homeserver) | chat and rooms for the messages module | module-owned, not in this repository (the messages module ships it) | no pin here; `docs/ops/topology.md` §1 records a locally built `matrix` image on the pilot host; `docs/ops/postgres-major.md` checked Synapse 1.160's support matrix, which is not a pin |
 | **LiveKit** (SFU, with its JWT auth-service) | audio/video calls | module-owned, not in this repository | no pin here; `docs/ops/topology.md` §2 records the target `livekit-server:v1.7.2`, not yet deployed (`[A]`, pin at re-init) |
 | **Element Call** | call front end on top of LiveKit | module-owned, not in this repository; its config is rendered by `gremion-render` (`docs/ops/host-tooling.md`) | no version recorded anywhere in this repository |
