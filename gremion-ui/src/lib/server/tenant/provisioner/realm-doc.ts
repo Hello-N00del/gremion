@@ -37,6 +37,7 @@
 //       only a vocabulary that is a SUBSET of the carried realm roles may be
 //       provisioned.
 import { composeRealm } from '$lib/modules/realm'
+import { normaliseHost } from '$lib/server/tenant/host'
 import type { ModuleManifest } from '$lib/modules/types'
 
 type ModulesConfig = {
@@ -70,9 +71,19 @@ export const PROVISIONER_SECRET_CLIENTS = [
 
 export type ProvisionerSecretClient = (typeof PROVISIONER_SECRET_CLIENTS)[number]
 
-/** D-ISSUER-HOST: NEW tenants get a tenant-subdomain issuer. */
-export function issuerForTenant(slug: string, realmName: string, apexDomain: string): string {
-  return `https://${slug}.${apexDomain}/auth/realms/${realmName}`
+/**
+ * TASK-042 Q2 (TRD-075, spec B §T.2): a tenant's issuer is minted from the host
+ * the OPERATOR supplied for it, used verbatim — never synthesised from the slug
+ * and the platform apex. The host must already be the canonical lower-case
+ * `tenant_domain.host` form (normaliseHost); anything else is refused, so the
+ * issuer and the tenant's primary `tenant_domain` row can never disagree.
+ */
+export function issuerForTenant(host: string, realmName: string): string {
+  const canonical = normaliseHost(host)
+  if (!canonical || canonical !== host) {
+    throw new Error(`tenant: host is not a valid hostname (${JSON.stringify(host)})`)
+  }
+  return `https://${host}/auth/realms/${realmName}`
 }
 
 /**

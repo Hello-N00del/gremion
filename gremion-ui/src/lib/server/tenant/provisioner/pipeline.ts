@@ -90,11 +90,15 @@ export interface ProvisionRegistry {
   getTenantResources(
     tenantId: string,
   ): Promise<readonly Pick<TenantProvisioningResource, 'subsystem' | 'status'>[]>
+  /** TASK-042 Q2: register the tenant's PRIMARY host (idempotent for the same tenant). */
+  addTenantDomain(tenantId: string, host: string, opts: { isPrimary: boolean }): Promise<unknown>
 }
 
 export interface ProvisionDeps {
   manifests: ModuleManifest[]
-  /** The deployment apex domain (e.g. `council.example`) — issuer/host derivation. */
+  /** The deployment apex domain (e.g. `council.example`) the base realm template's
+   *  exact URIs reference (buildTenantRealmDoc swaps it for the tenant host). It
+   *  is NEVER used to synthesise a tenant host (TASK-042 Q2). */
   apexDomain: string
   /** The platform's authenticating SMTP sender (gremion#6). REQUIRED: the base
    *  template's __SMTP_*__ sentinels have no other filler now that the Keycloak
@@ -137,6 +141,10 @@ export interface ProvisionDeps {
 
 export interface ProvisionArgs {
   slug: string
+  /** TASK-042 Q2: the tenant's primary host, supplied by the operator and used
+   *  verbatim for the issuer, the realm's exact URIs and the primary
+   *  `tenant_domain` row. Never synthesised from the slug. */
+  host: string
   /** The KC realm name for this tenant (defaults to the slug if omitted). */
   realmName?: string
   configFile: string
@@ -192,8 +200,10 @@ export async function provisionTenant(
     )
   }
   const realmName = args.realmName ?? slug
-  const tenantHost = `${slug}.${deps.apexDomain}`
-  const issuer = issuerForTenant(slug, realmName, deps.apexDomain)
+  // TASK-042 Q2: the operator-supplied host, verbatim (issuerForTenant refuses a
+  // non-canonical one BEFORE any write).
+  const issuer = issuerForTenant(args.host, realmName)
+  const tenantHost = args.host
   // (A) #139/G-080: internal-TLS kcInternal so the admin client can reach a
   // realm stamped sslRequired:'all' (deps.kcInternalBase derived from
   // AUTH_KEYCLOAK_INTERNAL like the default tenant; TLS default otherwise).
@@ -225,7 +235,7 @@ export async function provisionTenant(
     authClientRef,
     ncTarget: {},
     matrixSpace: { aliasNamespace: `${slug}-` },
-    domainProfile: { subdomain: slug, residencyZone: 'eu' },
+    domainProfile: { residencyZone: 'eu' },
     brandRef: `config:${slug}`,
     // P2.3 (#202): the per-tenant seed path resolves THIS ref back to the
     // tenant's own blueprint. Defaults to the StuRa ref (byte-identical to the
@@ -237,6 +247,10 @@ export async function provisionTenant(
   }
   const tenant = await deps.registry.registerTenant(insert)
   const tenantId = tenant.id
+  // TASK-042 Q2: the ONE primary tenant_domain row the resolver selects the
+  // tenant by (idempotent for the same tenant; a host another tenant owns is
+  // refused by the registry before anything else is created).
+  await deps.registry.addTenantDomain(tenantId, tenantHost, { isPrimary: true })
 
   // Open every ledger row up front (idempotent), so a retry sees prior state.
   for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) {
