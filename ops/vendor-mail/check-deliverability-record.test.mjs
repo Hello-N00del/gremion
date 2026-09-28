@@ -39,8 +39,9 @@ test('after the first record, a fingerprint change fails verify (STALE)', () => 
 
 test('--require needs both provider classes at the current fingerprint, all pass, inbox', () => {
   assert.equal(evaluate({ records: [rec()], current: FP, require: true }).status, 'INCOMPLETE')
-  assert.equal(evaluate({ records: [rec(), rec({ providerClass: 'university', placement: 'spam' })], current: FP, require: true }).status, 'INCOMPLETE')
-  assert.equal(evaluate({ records: [rec(), rec({ providerClass: 'university', dmarc: 'fail' })], current: FP, require: true }).status, 'INCOMPLETE')
+  // a spam or failing record at the current fingerprint is FAILED, before completeness
+  assert.equal(evaluate({ records: [rec(), rec({ providerClass: 'university', placement: 'spam' })], current: FP, require: true }).status, 'FAILED')
+  assert.equal(evaluate({ records: [rec(), rec({ providerClass: 'university', dmarc: 'fail' })], current: FP, require: true }).status, 'FAILED')
   assert.equal(evaluate({ records: [rec(), rec({ providerClass: 'university' })], current: FP, require: true }).status, 'OK')
 })
 
@@ -61,4 +62,10 @@ test('the CLI reads a records file: STALE exit 1, unparseable exit 2', () => {
   } finally {
     rmSync(d, { recursive: true, force: true })
   }
+})
+
+test('a failing record at the current fingerprint fails even without --require (review C8)', () => {
+  assert.equal(evaluate({ records: [rec({ dmarc: 'fail' })], current: FP }).status, 'FAILED')
+  assert.equal(evaluate({ records: [rec({ placement: 'spam' })], current: FP }).status, 'FAILED')
+  assert.equal(evaluate({ records: [rec({ dmarc: 'fail', fingerprint: 'f'.repeat(64) }), rec()], current: FP }).status, 'OK')
 })

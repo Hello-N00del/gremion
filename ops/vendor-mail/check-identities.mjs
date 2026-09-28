@@ -36,9 +36,10 @@ export function identityViolations(mail, ops) {
     else if (v.startsWith('CHANGE_ME_')) out.push(`ops.env ${k} still holds its operator sentinel; it must be ${want}`)
     else if (v !== want) out.push(`ops.env ${k} is ${v}; it must be ${want} (the alerts@ principal; must-match-sender refuses anything else with 5.7.1)`)
   }
-  if (ops.ALERT_SMTP_HOST !== undefined && !ops.ALERT_SMTP_HOST.startsWith('CHANGE_ME_') && ops.ALERT_SMTP_HOST !== `mail.${domain}`) {
-    out.push(`ops.env ALERT_SMTP_HOST is ${ops.ALERT_SMTP_HOST}; alerts are submitted to mail.${domain}`)
-  }
+  const h = ops.ALERT_SMTP_HOST
+  if (h === undefined || h === '') out.push(`ops.env ALERT_SMTP_HOST is unset; alerts are submitted to mail.${domain}`)
+  else if (h.startsWith('CHANGE_ME_')) out.push(`ops.env ALERT_SMTP_HOST still holds its operator sentinel; alerts are submitted to mail.${domain}`)
+  else if (h !== `mail.${domain}`) out.push(`ops.env ALERT_SMTP_HOST is ${h}; alerts are submitted to mail.${domain}`)
   const a = mail.ALERT_SMTP_PASSWORD
   const b = ops.ALERT_SMTP_PASSWORD
   if (!a || !b) out.push('ALERT_SMTP_PASSWORD is missing from mail.env or ops.env')

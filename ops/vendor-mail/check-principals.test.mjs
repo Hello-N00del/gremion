@@ -78,3 +78,26 @@ test('an API {"error":...} body, zero principals or zero realms on a host are un
   assert.match(check({ principals: load().principals, realms: [] }, { host: true }).unparseable, /zero realms/)
   assert.equal(main(['--host', '--dir', '/nonexistent-t015'], { log() {}, error() {} }), 2)
 })
+
+test('host mode: the vendor realm master with no SMTP user is RED (realm-smtp never ran, or was undone)', () => {
+  const x = load()
+  x.realms = x.realms.map((r) => (r.realm === 'master' ? { realm: 'master', smtp: { user: null, from: null, host: null } } : r))
+  assert.deepEqual(check(x, { host: true }).violations, ['vendor realm master has no SMTP user: run gremion-vendor-mail realm-smtp'])
+})
+
+test('a realm with a From or a host but no user (an unauthenticated or third-party sender) is RED', () => {
+  const r = check(withRealm({ realm: 'gamma_council', smtp: { user: '', from: 'system@example.org', host: 'mail.example.org' } }))
+  assert.match(r.violations.join('\n'), /realm gamma_council: sends \(host mail\.example\.org, From system@example\.org\) without an SMTP user/)
+  const q = check(withRealm({ realm: 'gamma_council', smtp: { user: null, from: null, host: 'smtp.relay.example.com' } }))
+  assert.match(q.violations.join('\n'), /realm gamma_council: sends \(host smtp\.relay\.example\.com, From <none>\) without an SMTP user/)
+})
+
+test('a customer realm on a principal that is neither kc-* nor transitional is RED', () => {
+  const x = withRealm(realm('gamma_council', 'billing@example.org'))
+  x.principals.push({ name: 'billing@example.org', emails: ['billing@example.org'], roles: ['user'] })
+  assert.deepEqual(check(x).violations, ['customer realm gamma_council sends as billing@example.org, not as a kc-<tenant token>@ principal'])
+})
+
+test('--dir without a value is a usage error, not the default directory', () => {
+  assert.equal(main(['--dir'], { log() {}, error() {} }), 2)
+})

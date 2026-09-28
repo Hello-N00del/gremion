@@ -17,7 +17,12 @@
 //     realm (master, platform -- principals.vendorRealms, structural, kept
 //     under --no-allowances) sending as anything but a vendor principal;
 //   * a realm whose SMTP user is no principal at all, or whose From is not its
-//     user (must-match-sender refuses that envelope with 501 5.5.4);
+//     user (must-match-sender refuses that envelope with 501 5.5.4) -- this
+//     holds for the transitional platform@ realms too: realm-doc.ts stamps
+//     them with From no-reply@, which the pinned build refuses (TASK-043);
+//   * a realm that sends (a host or a From) with no SMTP user, a customer
+//     realm on a principal that is neither kc-* nor the transitional
+//     platform@, and -- on a host -- the vendor realm master with no sender;
 //   * an orphan kc-* principal no realm uses (a credential nobody should hold);
 //   * a customer realm on platform@, unless the transitional allowance holds
 //     (principals.transitional; dropped by --no-allowances).
@@ -37,6 +42,7 @@ const KC_RE = /^kc-[a-z][a-z0-9_]{2,39}@/
 const local = (addr) => String(addr).split('@')[0].toLowerCase()
 
 export function principalViolations({ principals, realms }, allowances, { useAllowances = true, host = false } = {}) {
+  const hostMode = host
   for (const [label, v] of [['principals', principals], ['realms', realms]]) {
     if (!Array.isArray(v)) return { unparseable: `${label} is not an array${v && typeof v === 'object' && 'error' in v ? ` (API error: ${v.error})` : ''}`, violations: [] }
   }
@@ -51,9 +57,18 @@ export function principalViolations({ principals, realms }, allowances, { useAll
   for (const r of realms) {
     const realm = r?.realm
     const user = r?.smtp?.user ? String(r.smtp.user).toLowerCase() : ''
+    const from = r?.smtp?.from ? String(r.smtp.from).toLowerCase() : ''
+    const host = r?.smtp?.host ? String(r.smtp.host).toLowerCase() : ''
     if (!realm) return { unparseable: 'a realm entry has no name', violations: [] }
-    if (!user) continue
-    const from = r.smtp.from ? String(r.smtp.from).toLowerCase() : ''
+    if (!user) {
+      // A realm that sends (a host or a From) without authenticating is an
+      // unauthenticated submission or a third-party relay -- never one of
+      // this server's principals. A realm with no sender at all sends nothing,
+      // except the vendor's own realm, which must: realm-smtp sets it.
+      if (host || from) out.push(`realm ${realm}: sends (host ${host || '<none>'}, From ${from || '<none>'}) without an SMTP user`)
+      else if (realm === 'master' && hostMode) out.push('vendor realm master has no SMTP user: run gremion-vendor-mail realm-smtp')
+      continue
+    }
     if (!names.has(user)) out.push(`realm ${realm}: SMTP user ${user} is no principal on the vendor's Stalwart`)
     if (from !== user) out.push(`realm ${realm}: From ${from || '<none>'} is not its SMTP user ${user} (must-match-sender refuses it)`)
     if (vendorRealms.has(realm)) {
@@ -61,7 +76,9 @@ export function principalViolations({ principals, realms }, allowances, { useAll
       continue
     }
     if (vendorLocals.has(local(user))) out.push(`customer realm ${realm} shares the vendor's own principal ${user}`)
-    else if (local(user) === 'platform' && !transitional.has('platform')) out.push(`customer realm ${realm} sends as the transitional platform@ principal${useAllowances ? '' : ' (--no-allowances)'}`)
+    else if (local(user) === 'platform') {
+      if (!transitional.has('platform')) out.push(`customer realm ${realm} sends as the transitional platform@ principal${useAllowances ? '' : ' (--no-allowances)'}`)
+    } else if (!KC_RE.test(user)) out.push(`customer realm ${realm} sends as ${user}, not as a kc-<tenant token>@ principal`)
     if (!usedBy.has(user)) usedBy.set(user, [])
     usedBy.get(user).push(realm)
   }
@@ -81,7 +98,13 @@ export function main(argv = process.argv.slice(2), log = console) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--host') host = true
     else if (argv[i] === '--no-allowances') useAllowances = false
-    else if (argv[i] === '--dir') dir = argv[++i]
+    else if (argv[i] === '--dir') {
+      dir = argv[++i]
+      if (!dir) {
+        log.error('usage: check-principals.mjs --dir requires a value')
+        return 2
+      }
+    }
     else {
       log.error(`usage: check-principals.mjs [--host [--no-allowances] [--dir D]]: unknown argument ${argv[i]}`)
       return 2

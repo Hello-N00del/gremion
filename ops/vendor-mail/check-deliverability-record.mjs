@@ -14,7 +14,9 @@
 // VERDICT
 //   PENDING   no record yet: exit 0, printed as PENDING (TRD-252 gate F2 is
 //             where it must exist; TASK-038 and F2 run --require).
-//   OK        a record exists for the current fingerprint.
+//   OK        records exist for the current fingerprint, every one of them a
+//             pass (spf/dkim/dmarc=pass, placement=inbox).
+//   FAILED    a record at the current fingerprint did not pass: exit 1.
 //   STALE     records exist, none for the current fingerprint: exit 1 -- the
 //             mail server changed after the last test; re-test and record.
 //   --require additionally needs, at the current fingerprint, one record per
@@ -76,6 +78,10 @@ export function evaluate({ records, current, require = false }) {
   if (records.length === 0) return require ? { status: 'MISSING', problems: ['no deliverability record exists (--require)'] } : { status: 'PENDING', problems: [] }
   const now = records.filter((r) => r.fingerprint === current)
   if (now.length === 0) return { status: 'STALE', problems: ['the mail server changed after the last deliverability test (fingerprint differs): re-test at both provider classes and record'] }
+  // A test the CURRENT server failed is a failing result in every mode, not
+  // an "OK, a record exists".
+  const bad = now.filter((r) => r.spf !== 'pass' || r.dkim !== 'pass' || r.dmarc !== 'pass' || r.placement !== 'inbox')
+  if (bad.length) return { status: 'FAILED', problems: bad.map((r) => `the ${r.providerClass} test of ${r.date} at the current fingerprint did not pass (spf=${r.spf} dkim=${r.dkim} dmarc=${r.dmarc} placement=${r.placement})`) }
   if (require) {
     const missing = CLASSES.filter((c) => !now.some((r) => r.providerClass === c && r.spf === 'pass' && r.dkim === 'pass' && r.dmarc === 'pass' && r.placement === 'inbox'))
     if (missing.length) return { status: 'INCOMPLETE', problems: missing.map((c) => `no ${c} record with spf/dkim/dmarc=pass and placement=inbox at the current fingerprint`) }
