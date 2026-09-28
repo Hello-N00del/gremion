@@ -54,12 +54,17 @@ function session(sock) {
   }
 }
 
+// --repeat N: N whole sessions in one process (the auth-failure probe),
+// reported as a histogram of AUTH reply codes.
+const repeat = Number(arg('repeat') ?? 1)
+
+async function once() {
 const out = {}
-const timer = setTimeout(() => {
-  out.error = 'timeout'
-  console.log(JSON.stringify(out))
-  process.exit(3)
-}, 20000)
+let timer
+const timeout = new Promise((res) => {
+  timer = setTimeout(() => res('timeout'), repeat > 1 ? 8000 : 20000)
+})
+const work = (async () => {
 try {
   const raw = net.connect({ host, port })
   await new Promise((res, rej) => raw.once('connect', res).once('error', rej))
@@ -104,5 +109,33 @@ try {
 } catch (e) {
   out.error = e.code ?? e.message
 }
+})()
+if ((await Promise.race([work, timeout])) === 'timeout') out.error = 'timeout'
 clearTimeout(timer)
-console.log(JSON.stringify(out))
+return out
+}
+
+if (repeat > 1) {
+  // Stops early once three sessions in a row did not even reach a 535: the
+  // source is banned (or the server gone), and waiting out every timeout
+  // would only measure the timeout.
+  const hist = {}
+  let attempts = 0
+  let streak = 0
+  let firstNon535 = null
+  for (let i = 0; i < repeat && streak < 3; i++) {
+    const r = await once()
+    attempts++
+    const k = r.auth ?? r.error ?? 'none'
+    hist[k] = (hist[k] ?? 0) + 1
+    if (k === 535) streak = 0
+    else {
+      streak++
+      firstNon535 ??= attempts
+    }
+  }
+  console.log(JSON.stringify({ repeat, attempts, firstNon535, auth: hist }))
+} else {
+  console.log(JSON.stringify(await once()))
+}
+process.exit(0)
