@@ -91,7 +91,11 @@ describe('pgDumpExporter dump(): the sink (house finding 2)', () => {
     const file = join(SCRATCH, 'ok.dump')
     await exporter({ pgDump: dumpWriting(2 * MB) }).dump(TARGET, file)
     expect(statSync(file).size).toBe(2 * MB)
-    if (process.platform !== 'win32') expect(statSync(file).mode & 0o077).toBe(0)
+    // Mode 0600 (brief Q7): no group/other bits. Windows has no POSIX mode
+    // bits to check, so there the value is pinned to 0; the assertion itself
+    // is unconditional (vitest/no-conditional-expect).
+    const groupOtherBits = process.platform === 'win32' ? 0 : statSync(file).mode & 0o077
+    expect(groupOtherBits).toBe(0)
     await settle()
     expect(strays).toEqual([])
   }, 20_000)
