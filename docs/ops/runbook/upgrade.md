@@ -78,7 +78,7 @@ done
 
 ```bash
 db="<the database the migration alters>"
-svc="<the compose service that serves it>"
+svc="postgres"          # the state project's server holding it: postgres (kernel) or <id>-postgres (module)
 dumpdir=/opt/gremion/backups
 dump="${dumpdir}/pre-migration-${TAG}-${db}.dump"
 cd /opt/gremion/current

@@ -34,7 +34,8 @@ star for the 12-month form, once paying councils exist (R13-4, TRD-171).
   timer is disabled.
 - The state project and the serving colour are up, so the backup enumerates
   every database, volume and bucket from the running system.
-- `BACKUP_POSTGRES_SERVICES`, `RESTIC_REPOSITORY`, `RESTIC_PASSWORD` and the three
+- `BACKUP_POSTGRES_SERVICES` (every PostgreSQL server of the state project,
+  see Known gaps), `RESTIC_REPOSITORY`, `RESTIC_PASSWORD` and the three
   `RCLONE_*` keys are filled in `/opt/gremion/etc/env/state.env`, and the remote
   answers for this one run (see Known gaps).
 - A non-production unit is ready for [restore.md](restore.md), arm B, which is
@@ -113,7 +114,7 @@ systemctl show gremion-backup.timer -p NextElapseUSecRealtime --value      # a d
 ## Known gaps
 
 - `gremion-backup` refuses without a reachable off-site remote, while the pilot keeps off-site copies off; the verification run therefore needs a remote for that one run.
-- PENDING TASK-040 (`compose/README.md`): the pooled layout puts each module's database on its own PostgreSQL 18 container (D14); the single `postgres` service that `BACKUP_POSTGRES_SERVICES` names today and that [restore.md](restore.md) arms A and B query becomes the database's own service in that wave.
+- The pooled layout (TASK-040, [pooled-stack-layout.md](../pooled-stack-layout.md)) puts the kernel's databases on the state project's `postgres` and each enabled module's on its own `<id>-postgres` (D14). `BACKUP_POSTGRES_SERVICES` must name every one of them for step 3 to find one dump per database; the release's restore script still restores into `postgres` only, so `gremion-restore-into` stops with `BLOCKED:` on a module server's dump ([restore.md](restore.md), arm B), until PENDING TASK-089 (`scripts/backup/`) lands the per-module path.
 - PENDING TASK-089 (`scripts/backup/`): the per-module verification (one database per module server, D14) and the pilot's verification path replace today's enumeration; TASK-089 also runs this procedure first.
 
 ## Changelog

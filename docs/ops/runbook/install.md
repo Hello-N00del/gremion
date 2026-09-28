@@ -12,6 +12,17 @@ over. The procedure ends with the F1 guard set re-run on the rebuilt host
 (TRD-004), a dated TRD-340 snapshot of every suite, and the platform's own
 backup job installed but disabled (R15-1, see [backup.md](backup.md)).
 
+The stack is the pooled layout ([pooled-stack-layout.md](../pooled-stack-layout.md)):
+one stack per host, five compose projects, each named by its own env file under
+`/opt/gremion/etc/env/`:
+
+| Env file | Project | Compose files (from the env file's `COMPOSE_FILE`) | Started by |
+|---|---|---|---|
+| `state.env` | `${STACK}-state`: every database and volume, keycloak, the edge | `docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.pins.yml` | step 12 |
+| `app-blue.env`, `app-green.env` | `${STACK}-app-blue`, `${STACK}-app-green`: gremion-ui, gremion-public and the `migrate` one-shot, one colour serving at a time | `docker-compose.app.yml`, `docker-compose.pins.yml` | `gremion-deploy`, step 14 (the first deploy starts blue) |
+| `ops.env` | `${STACK}-ops`: on-box monitoring, non-council | `infra/host/ops/docker-compose.yml` | step 15 |
+| `mail.env` | `${STACK}-mail`: the platform mail server, non-council | `infra/host/mail/docker-compose.yml` | the go-live gate (see Known gaps) |
+
 Every bash step assumes this preamble, typed once per shell:
 
 ```bash
@@ -115,11 +126,13 @@ stat -c '%U %a %n' /opt/gremion/etc/env/*.env                 # gremion 600, for
 
 7. **Fill the operator keys.** Every key the previous step listed, in every file
    the search names: the platform domain, the edge and mail addresses, the ACME
-   contact, the alert sinks, `GREMION_PRODUCTION_STACK`. Edit as the deploy
-   user, so each file keeps its owner.
+   contact, the alert sinks, `GREMION_PRODUCTION_STACK`, and in `ops.env`
+   `OPS_UID` and `OPS_GID` (the deploy user's ids, printed below). Edit as the
+   deploy user, so each file keeps its owner.
 
 ```bash
 grep -n 'CHANGE_ME_OPERATOR_' /opt/gremion/etc/env/*.env     # the keys still to fill
+id -u gremion; id -g gremion                                  # OPS_UID and OPS_GID
 sudo -u gremion "${EDITOR:-vi}" /opt/gremion/etc/env/state.env   # and each other file named above
 ```
 
@@ -192,7 +205,22 @@ printf 'TOKEN %s\n' "$GHCR_TOKEN" | sudo -u gremion /opt/gremion/bin/gremion-dep
 unset GHCR_TOKEN
 ```
 
-15. **Edge and verification contract.** Work through the pilot-host edge
+15. **Start the ops project.** On-box monitoring, non-council, in its own
+    project and network (`infra/host/ops/README.md`). `render-ops.sh` runs as
+    the deploy user, because it refuses to render unless `OPS_UID` and
+    `OPS_GID` in `ops.env` (step 7) are the ids it runs as; it writes the scrape
+    targets, the Alertmanager config and the ops credential files and ends with
+    an `OPS-RENDER:` line. Compose runs from the project's own directory,
+    because `ops.env` names its `COMPOSE_FILE` relative to it.
+
+```bash
+sudo -u gremion /opt/gremion/current/infra/host/ops/render-ops.sh
+cd /opt/gremion/current/infra/host/ops
+docker compose --env-file /opt/gremion/etc/env/ops.env up -d
+docker compose --env-file /opt/gremion/etc/env/ops.env ps
+```
+
+16. **Edge and verification contract.** Work through the pilot-host edge
     checklist in `docs/deployment.md` (items 1 to 7): nothing listens on all
     interfaces, the Traefik API answers on loopback only, and every certificate
     is newly issued by the ACME CA into the empty `${STACK}_traefik_acme`. Then
@@ -203,7 +231,7 @@ sudo -u gremion /opt/gremion/bin/gremion-verify
 jq -e '.ok == true and (.failures | length) == 0' /opt/gremion/runtime/last-verify.json
 ```
 
-16. **Create the pilot customer.** PENDING TASK-043 (`packages/provisioning/`):
+17. **Create the pilot customer.** PENDING TASK-043 (`packages/provisioning/`):
     the customer is created through the provisioning orchestrator, which creates
     its realm, databases and broker account and invites its first
     administrators. Until that lands, this step is recorded as blocked.
@@ -213,7 +241,7 @@ test -d /opt/gremion/current/packages/provisioning \
   || echo 'BLOCKED: TASK-043 provisioning orchestrator not in this release'
 ```
 
-17. **Re-run the F1 guard set and take the TRD-340 snapshot** with
+18. **Re-run the F1 guard set and take the TRD-340 snapshot** with
     `scripts/ci-local/snapshot.mjs`. On the
     administrator's workstation, in a clean checkout of this tag beside a clean
     checkout of the vertical, with `--stack-env` naming the marker of the stack
@@ -229,7 +257,7 @@ node scripts/ci-local/snapshot.mjs --kernel . --vertical "<vertical checkout>" \
   --out "<evidence dir>" --stack-env "<stack marker>"
 ```
 
-18. **Close SSH to keys only.** Only after a key-based login as the deploy user
+19. **Close SSH to keys only.** Only after a key-based login as the deploy user
     succeeded from a second session; `harden-ssh` is not part of `all` on
     purpose.
 
@@ -237,7 +265,7 @@ node scripts/ci-local/snapshot.mjs --kernel . --vertical "<vertical checkout>" \
 bash "$REL/infra/host/bootstrap.sh" harden-ssh
 ```
 
-19. **Install the timers and the reboot gate.** `bootstrap.sh timers` installs
+20. **Install the timers and the reboot gate.** `bootstrap.sh timers` installs
     `gremion-backup.service`, `gremion-backup.timer` and `gremion-verify.service`,
     and enables the timer (see Known gaps).
 
@@ -245,7 +273,7 @@ bash "$REL/infra/host/bootstrap.sh" harden-ssh
 bash "$REL/infra/host/bootstrap.sh" timers
 ```
 
-20. **Disable the backup timer (R15-1).** The job stays installed, so turning
+21. **Disable the backup timer (R15-1).** The job stays installed, so turning
     it back on is a configuration change, not a build ([backup.md](backup.md)).
 
 ```bash
@@ -299,12 +327,14 @@ meet. Every first-party database answers on PostgreSQL 18 (TRD-425):
 ```bash
 docker inspect --format '{{.Name}} {{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
   $(docker ps -q)                                                              # every line: healthy
+docker ps --format '{{.Label "com.docker.compose.project"}}' | sort -u          # ${STACK}-state, ${STACK}-app-blue, ${STACK}-ops; no app-green
+cat /opt/gremion/runtime/active-colour                                         # blue
 (cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
   psql -U postgres -tAc 'SHOW server_version_num')                             # 18xxxx
 ```
 
 The pilot customer's first administrator has signed in (PENDING TASK-043 until
-step 16 runs): the customer's realm holds a `LOGIN` event.
+step 17 runs): the customer's realm holds a `LOGIN` event.
 
 ```bash
 kc="$(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
@@ -313,7 +343,7 @@ docker exec "$kc" /opt/keycloak/bin/kcadm.sh config credentials --server http://
 docker exec "$kc" /opt/keycloak/bin/kcadm.sh get events -r "<customer realm>" -q type=LOGIN -q max=1
 ```
 
-The two snapshot files of step 17 read PASS for every row:
+The two snapshot files of step 18 read PASS for every row:
 
 ```bash
 jq -e '.overallExit == 0 and (.suites | length) > 0 and all(.suites[]; .status == "PASS" and .collected > 0)' \
@@ -325,12 +355,12 @@ in [run-record.md](run-record.md).
 
 ## Known gaps
 
-- `bash infra/host/bootstrap.sh timers` (`stage_timers`, also run by `all`) does `systemctl enable --now gremion-backup.timer`, while R15-1 wants the job installed and disabled; step 20 therefore disables it again. Owner: TASK-040 (`infra/**`). `test/host/runbook.bats` fails the day `stage_timers` stops enabling the timer, so step 20 and this entry change in the same commit.
+- `bash infra/host/bootstrap.sh timers` (`stage_timers`, also run by `all`) does `systemctl enable --now gremion-backup.timer`, while R15-1 wants the job installed and disabled; step 21 therefore disables it again. Owner: TASK-040 (`infra/**`), which merged with `stage_timers` unchanged, so the change is still open. `test/host/runbook.bats` fails the day `stage_timers` stops enabling the timer, so step 21 and this entry change in the same commit.
 - `gremion-deploy` step 3 refuses without `runtime/last-backup.json`, and `gremion-backup` refuses without a reachable off-site remote (`RCLONE_REMOTE`), while the pilot keeps off-site copies off as the north star (R13-4). Step 13 therefore needs a remote for that one run. PENDING TASK-089 (`scripts/backup/`) decides the pilot's verification path.
-- Customer creation and the first administrator's sign-in: PENDING TASK-043 (`packages/provisioning/`), steps 16 and the post-condition.
-- The operator-only observability stack is not brought up here: PENDING TASK-039 (`compose/observability/`).
-- The pooled compose layout: PENDING TASK-040 (`compose/README.md`); the state and app projects cited here may change shape in that wave.
-- [A] Step 17's end-to-end suites run against the stack its `--stack-env` marker names; which stack that is for the rebuilt host is decided by TASK-038's first run.
+- Customer creation and the first administrator's sign-in: PENDING TASK-043 (`packages/provisioning/`), step 17 and the post-condition.
+- The ops project of step 15 (`infra/host/ops/`) is the on-box monitoring until the observability stack moves into its own project: PENDING TASK-039 (`compose/observability/`).
+- The pooled layout (TASK-040, [pooled-stack-layout.md](../pooled-stack-layout.md)) carries a deploy ordering hazard until TASK-034's 34b block lands: neither the apex nor `public.<domain>` has a websecure router, so the first deploy's public verification (step 14) and the post-condition's `/api/health` answer 404. No install is scheduled before 34b; TASK-038's waits carry it.
+- [A] Step 18's end-to-end suites run against the stack its `--stack-env` marker names; which stack that is for the rebuilt host is decided by TASK-038's first run.
 - Mail bring-up is not part of this procedure: it is the go-live gate's item G4-MAIL (`gremion-mail-bringup`), see [go-live-gate.md](../go-live-gate.md).
 
 ## Changelog

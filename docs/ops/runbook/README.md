@@ -33,11 +33,16 @@ otherwise. The exception is the deploy user's own programs: `gremion-init-secret
 git in the release checkout, which git refuses when another user owns it. So
 the env files and every release tree belong to `gremion`: a release tree root
 clones is handed over with `chown -R gremion:gremion` before anything reads it,
-and `test/host/runbook.bats` fails on a deploy-user program run as root. The programs and the host layout are described in
+and `test/host/runbook.bats` fails on a deploy-user program run as root.
+The programs and the host layout are described in
 [host-tooling.md](../host-tooling.md) and [infra/host/README.md](../../../infra/host/README.md);
 this runbook cites them and does not repeat them. `docker compose` is only ever
 called as `docker compose --env-file /opt/gremion/etc/env/<project>.env <verb>`,
-from the release tree, because each env file carries its project's composition.
+because each env file carries its project's composition, and from the directory
+its relative `COMPOSE_FILE` names: the release tree for `state`, `app-blue` and
+`app-green`, `infra/host/ops/` and `infra/host/mail/` inside it for `ops` and
+`mail`. The five projects are the pooled layout of
+[pooled-stack-layout.md](../pooled-stack-layout.md); install.md tables them.
 
 **The env contract.** `load_env` in `infra/host/lib/common.sh` is the single
 reader of an env file; nothing sources one any other way. `gremion-validate-env`
@@ -95,7 +100,6 @@ Each of these is named at the step that needs it:
 
 - PENDING TASK-043 (`packages/provisioning/`): creating the pilot customer through the provisioning orchestrator and its first administrator's sign-in (install.md).
 - PENDING TASK-039 (`compose/observability/`): the operator-only observability stack (install.md).
-- PENDING TASK-040 (`compose/README.md`): the pooled compose layout; the tools this runbook cites may change in the same wave (install.md).
 - PENDING TASK-029 (`scripts/migrations/ranges.json`): the per-chain migration register and the boot-time migration hash check (upgrade.md).
 - PENDING TASK-075 (`scripts/migrations/runner/`): the pre-migration dump taken by the migration runner itself (upgrade.md).
 - PENDING TASK-089 (`scripts/backup/`): the per-module backup verification that replaces today's enumeration (backup.md).
