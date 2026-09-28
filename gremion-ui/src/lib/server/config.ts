@@ -37,8 +37,8 @@ export interface GremionConfig {
   // name + domain; these complete the handoff BRAND model. P2.1c (T15,
   // §6-P2.2): the DEFAULT_CONFIG values below are NEUTRAL placeholders — the
   // real per-tenant identity lives only in each tenant's materialized
-  // config.json (the default tenant's is written by
-  // `tenant-provision materialize-config`). resolveBrand()/requireBrand() read
+  // config.json (written by `tenant-provision materialize-config <slug>`).
+  // resolveBrand()/requireBrand() read
   // them; no institution literal is hardcoded in source.
   brand: {
     product: string           // e.g. 'Musterrat' (per-tenant; neutral default)
@@ -401,11 +401,10 @@ export const gremionConfigSchema = z
 export const configUpdateSchema = gremionConfigSchema.strict()
 
 function getConfigPath(tenant: ConfigTenant): string {
-  // §8.1 / D-CONFIGPATH: trust tenant.configPath UNCONDITIONALLY — the default
-  // row rides the same path as every other tenant. The slug→path derivation
-  // lives once in registry.ts (configPathForTenant), which already maps the
-  // `default` slug to the CONFIG_PATH env; config.ts no longer special-cases the
-  // default id or re-reads env (the second derivation that this removes).
+  // §8.1 / D-CONFIGPATH: trust tenant.configPath UNCONDITIONALLY. The slug→path
+  // derivation lives once in registry.ts (configPathForTenant:
+  // TENANT_DATA_ROOT/<slug>/config.json for EVERY slug, TASK-042); config.ts
+  // special-cases no id and reads no env.
   return tenant.configPath
 }
 
@@ -493,8 +492,8 @@ export function parseConfig(raw: unknown): GremionConfig {
 }
 
 // Per-tenant readConfig — reads tenant.configPath unconditionally (§8.1 /
-// D-CONFIGPATH; the default row's configPath is registry-derived from the CONFIG_PATH
-// env, byte-identical). Composed with P0.2's mergeStored/parseConfig extraction.
+// D-CONFIGPATH; registry-derived for every slug alike, TASK-042). Composed with
+// P0.2's mergeStored/parseConfig extraction.
 export function readConfig(tenant: ConfigTenant = requireTenant()): GremionConfig {
   const path = getConfigPath(tenant)
   if (!existsSync(path)) return { ...DEFAULT_CONFIG }

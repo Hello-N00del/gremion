@@ -107,17 +107,16 @@ export interface ProvisionDeps {
   /** (A) #139/G-080: the in-cluster KC admin/OIDC base (scheme+authority+`/auth`,
    *  NO realm suffix) the provisioned tenant's admin client uses. MUST be the
    *  internal-TLS URL (`https://keycloak:8443/auth`) so it can reach a realm
-   *  stamped `sslRequired:'all'`. Derived by the CLI from `AUTH_KEYCLOAK_INTERNAL`
-   *  exactly like the default tenant (register-default.ts); omitted -> the TLS
-   *  default in kcInternalForTenant. */
+   *  stamped `sslRequired:'all'`. Derived by the CLI from `AUTH_KEYCLOAK_INTERNAL`;
+   *  omitted -> the TLS default in kcInternalForTenant. */
   kcInternalBase?: string
   /** The module-neutral base realm template (parsed realm-export.base.json). */
   loadBaseRealm(): Record<string, unknown>
   /** The tenant's vertical config (drives module deselection). */
   loadTenantConfig(configFile: string): { modules: Record<string, boolean> }
   /** Build the tenant's FULL runtime DB connection URL. resolveTenantBySlug reads
-   *  the db secret AS the connection URL (mirroring the default tenant's
-   *  env:DATABASE_URL) — NOT a bare password, so this must produce a complete URL.
+   *  the db secret AS the connection URL — NOT a bare password, so this must
+   *  produce a complete URL.
    *  The CLI derives the host/port authority from the app's DATABASE_URL (pgbouncer
    *  in prod); tests supply a deterministic builder. */
   tenantDbUrl(role: string, password: string, dbName: string): string
@@ -150,8 +149,8 @@ export interface ProvisionArgs {
   configFile: string
   /** P2.3 (#202): the registry `blueprint_ref` to stamp on the tenant row — the
    *  per-tenant seed path (resolveBlueprint) reads it back to feed this tenant
-   *  ITS OWN blueprint at seed time. Defaults to the StuRa ref so the default /
-   *  existing provision path stays byte-identical. The CLI's `--blueprint` flag
+   *  ITS OWN blueprint at seed time. Defaults to the StuRa ref so the existing
+   *  provision path stays byte-identical. The CLI's `--blueprint` flag
    *  supplies e.g. `MUNICIPAL_BLUEPRINT@1` for a municipal tenant. */
   blueprintRef?: string
 }
@@ -206,7 +205,7 @@ export async function provisionTenant(
   const tenantHost = args.host
   // (A) #139/G-080: internal-TLS kcInternal so the admin client can reach a
   // realm stamped sslRequired:'all' (deps.kcInternalBase derived from
-  // AUTH_KEYCLOAK_INTERNAL like the default tenant; TLS default otherwise).
+  // AUTH_KEYCLOAK_INTERNAL; TLS default otherwise).
   const kcInternal = kcInternalForTenant(realmName, deps.kcInternalBase)
   const dbName = dbNameForSlug(slug) // t_<slug>
   const dbRoleName = dbName // role shares the db name (init-databases.sh shape)
