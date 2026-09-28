@@ -61,7 +61,7 @@
     },
     {
       "path": "modules/content/app/lib/server/content/register.server.ts",
-      "reason": "TASK-042 (Q3, G6): the deleted default-tenant env family (tenant/default-env) replaced by platformEnv('NATS_URL') from $lib/server/env/platform-env - NATS_URL is deployment-global and the kernel boots with zero tenants",
+      "reason": "TASK-042 (Q3, G6): the import of the deleted default-tenant env helper replaced by platformEnv('NATS_URL') from $lib/server/env/platform-env - NATS_URL is deployment-global and the kernel boots with zero tenants",
       "owner": "TASK-042",
       "blob": "6d912e98c4d7e866f13b37b09d420ddbd9f3877b"
     },
