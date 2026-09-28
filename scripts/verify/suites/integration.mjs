@@ -195,6 +195,36 @@ export function judgeNatsTest(res) {
 }
 
 /**
+ * `make test-nats-auth` (TASK-024): @gremion/nats-auth's unit suite, then
+ * packages/nats-auth/scripts/proof.sh --auth against a real broker. Judged
+ * like judgeNatsTest: exit 0 counts only with the unit run's all-passed
+ * summary AND the proof's own "[nats-auth-proof] N passing" and OK lines;
+ * collected is the unit count plus N.
+ */
+export function judgeNatsAuthTest(res) {
+  const label = 'make test-nats-auth'
+  const out = `${res.stdout}\n${res.stderr}`
+  // The unit run prints BEFORE the proof starts; the proof echoes its own
+  // live-suite summary, which must not stand in for the unit one.
+  const unit = out.split(/^\[nats-auth-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
+  const count = out.match(/^\[nats-auth-proof\] (\d+) passing \(minimum \d+\)\s*$/m)
+  const ok = /^\[nats-auth-proof\] OK -- the authenticated broker admits and refuses as specified\s*$/m.test(out)
+  if (res.code !== 0) {
+    const n = Math.max(1, (unit ? Number(unit[1]) : 0) + (count ? Number(count[1]) : 0))
+    return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
+  }
+  if (!unit || !count || !ok) {
+    return {
+      label,
+      unparseable: true,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, "[nats-auth-proof] N passing" and "[nats-auth-proof] OK" lines -- untrusted\n${tail(out)}`,
+    }
+  }
+  const n = Number(unit[1]) + Number(count[1])
+  return { label, collected: n, passed: n, failed: 0, skipped: 0 }
+}
+
+/**
  * `make fresh-init-proof` (gremion-ui/scripts/fresh-init-proof.sh). Its
  * checks print `  ok <name>` / `FAIL <name>: ...`; collected is their count,
  * and exit 0 must come with its own "[fresh-init] all post-conditions hold".
@@ -226,6 +256,7 @@ export const INTEGRATION_PARTS = {
   vitest: (root) => vitestPart({ root }),
   'fresh-init': (root) => makePart('fresh-init-proof', judgeFreshInit, root),
   nats: (root) => makePart('test-ports-nats', judgeNatsTest, root),
+  'nats-auth': (root) => makePart('test-nats-auth', judgeNatsAuthTest, root),
 }
 
 export function runIntegrationSuite({ root = REPO_ROOT, only } = {}) {
