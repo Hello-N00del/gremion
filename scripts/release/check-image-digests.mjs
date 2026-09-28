@@ -43,7 +43,7 @@
 // Make:  make lint-image-digests
 
 import { readFileSync, existsSync } from 'node:fs'
-import { dirname, join, matchesGlob, normalize } from 'node:path'
+import { join, matchesGlob, posix } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -324,15 +324,17 @@ export function checkTree(root) {
   // Every COMPOSE_FILE component a template names is a file this scan reads
   // (relative to its project directory), bar the release pins layer, which is
   // never committed and is judged by check-pins.mjs and gremion-deploy.
+  // `files` holds git's forward-slash paths, so the component resolves with
+  // posix join/normalize on every OS (the platform ones give `\` on Windows).
   const tmplDirs = new Map()
-  for (const [compose, tmpl] of Object.entries(PROJECT_ENV)) tmplDirs.set(tmpl, dirname(compose))
+  for (const [compose, tmpl] of Object.entries(PROJECT_ENV)) tmplDirs.set(tmpl, posix.dirname(compose))
   const checkComposeFile = (f, text) => {
     for (const [i, line] of text.split(/\r?\n/).entries()) {
       const m = /^\s*(?:export\s+)?COMPOSE_FILE=(.*)$/.exec(line)
       if (!m) continue
       for (const c of unquote(m[1].replace(/\s+#.*$/, '')).split(':').filter(Boolean)) {
         if (c.split('/').pop() === 'docker-compose.pins.yml') continue
-        const p = normalize(join(tmplDirs.get(f) ?? '.', c))
+        const p = posix.normalize(posix.join(tmplDirs.get(f) ?? '.', c))
         if (!files.includes(p)) add('compose-file-unscanned', `${f}:${i + 1}`, `COMPOSE_FILE names ${c} (${p}), which the scan set does not discover`)
       }
     }

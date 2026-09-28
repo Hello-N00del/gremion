@@ -315,6 +315,17 @@ test('r1: compose extends/include and a COMPOSE_FILE component outside the scan 
   assert.deepEqual(checkTree(tree(pins)).problems, [])
 })
 
+test('r2: a subdirectory template naming its own compose file in COMPOSE_FILE passes (repo paths are POSIX on every OS)', () => {
+  // mail.env.tmpl's project directory is infra/host/mail; git ls-files lists
+  // forward-slash paths, so the resolved component must be compared in POSIX
+  // form (a platform join gives infra\host\mail\... on Windows and never matches).
+  for (const cf of ['docker-compose.yml', './docker-compose.yml']) {
+    const mail = { 'infra/host/templates/env/mail.env.tmpl': `COMPOSE_FILE=${cf}\nSTALWART_IMAGE=docker.io/stalwartlabs/stalwart@sha256:${D('b')}\n` }
+    const res = checkTree(tree(mail))
+    assert.deepEqual(res.problems, [], `${cf}: ${JSON.stringify(res.problems, null, 1)}`)
+  }
+})
+
 test('r1: .yaml compose variants are discovered', () => {
   for (const p of ['docker-compose.extra.yaml', 'compose.yaml', 'compose/extra/x.yaml', 'infra/host/extra/docker-compose.yaml']) {
     assert.deepEqual(codes(checkTree(tree({ [p]: plain('nginx:1.29') }))), ['unpinned'], p)
