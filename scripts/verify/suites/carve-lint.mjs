@@ -61,6 +61,10 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-hygiene', kind: 'make', target: 'lint-hygiene' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
+  // TASK-198: the chat module's Synapse (module suites + the compose render of
+  // messaging-postgres and matrix): docker. The scratch proof (synapse-proof)
+  // is deliberately NOT here.
+  { name: 'lint-synapse', kind: 'make', target: 'lint-synapse', tool: 'docker' },
   {
     name: 'lockfile-frozen',
     kind: 'cmd',

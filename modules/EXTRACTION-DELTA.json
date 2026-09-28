@@ -240,6 +240,12 @@
       "blob": "7e1a40c57c19466c51fac7e2195895720806c07f"
     },
     {
+      "path": "modules/messaging/synapse/test/scratch-proof.sh",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "1934eb05f6f68dafe41c7154b4e98deecab9215c"
+    },
+    {
       "path": "modules/publishing/src/dispatch.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
       "owner": "TASK-200",

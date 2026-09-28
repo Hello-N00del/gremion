@@ -238,6 +238,7 @@ lint-sh:
 	@echo "Linting shell scripts..."
 	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
+	@shellcheck -x modules/messaging/synapse/*.sh modules/messaging/synapse/postgres-init/*.sh modules/messaging/synapse/test/*.sh
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
 		[ -e "$$f" ] || continue; \
 		shellcheck -x --source-path=SCRIPTDIR "$$f" || exit 1; \
@@ -561,7 +562,41 @@ lint-module-migration-names:
 	 echo "[module-migration-names] suite: $collected of $declared declared test(s) ran"
 	@node scripts/check-module-migration-names.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names
+# TASK-198: the chat module's Synapse. lint-synapse runs the module suites
+# (render, refusal, probe, preflight, inject: modules/messaging/synapse/test/) and the
+# kernel's static half (scripts/check-synapse-stack.test.mjs: the
+# messaging-postgres and matrix render, .env.example with the profile off,
+# this wiring), each with its collected count asserted against its declared
+# `test(` count -- `node --test` exits 0 on a file that collects nothing --
+# then the guard itself. Needs docker (compose config only, never `up`).
+# synapse-proof is the scratch-stack proof (TDD 5 and 7), one PHASE per call
+# (prepare, names, initdb, a..f, teardown): Docker, minutes, never in `lint`
+# or verify. The compose file is passed from here so the module script names
+# nothing outside modules/messaging/.
+.PHONY: lint-synapse synapse-proof
+lint-synapse:
+	@echo "Checking the chat module's Synapse..."
+	@for suite in modules/messaging/synapse/test/inject.test.mjs modules/messaging/synapse/test/preflight.test.mjs \
+	             modules/messaging/synapse/test/probe.test.mjs modules/messaging/synapse/test/refusal.test.mjs \
+	             modules/messaging/synapse/test/render.test.mjs \
+	             scripts/check-synapse-stack.test.mjs; do \
+	   declared=$$(grep -c '^test(' "$$suite"); \
+	   out=$$(node --test --test-reporter=tap "$$suite" 2>&1); \
+	   status=$$?; \
+	   [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	   collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	   if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	     echo "lint-synapse: $$suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	     exit 1; \
+	   fi; \
+	   echo "[synapse] $$suite: $$collected of $$declared declared test(s) ran"; \
+	 done
+	@node scripts/check-synapse-stack.mjs
+
+synapse-proof:
+	@bash modules/messaging/synapse/test/scratch-proof.sh "$(PHASE)" "$(CURDIR)/docker-compose.yml"
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
