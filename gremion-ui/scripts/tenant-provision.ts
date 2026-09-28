@@ -396,10 +396,15 @@ async function cmdProvision(slug: string): Promise<void> {
   // blueprint (e.g. `--blueprint MUNICIPAL_BLUEPRINT@1` for a municipal tenant).
   // Omitted → the pipeline default `STURA_BLUEPRINT@1` (byte-identical).
   const blueprintRef = flag('--blueprint')
+  // TASK-042 Q2: the tenant's primary host is SUPPLIED by the operator and used
+  // verbatim (issuer, realm URIs, primary tenant_domain row); it is never
+  // synthesised from the slug. The pipeline refuses a non-canonical host.
+  const host = flag('--host')
+  if (!host) throw new Error('provision requires --host <tenant-host>')
   const { deps, cleanup } = liveDeps()
   try {
     const result = await provisionTenant(
-      { slug, realmName, configFile, ...(blueprintRef ? { blueprintRef } : {}) },
+      { slug, host, realmName, configFile, ...(blueprintRef ? { blueprintRef } : {}) },
       deps,
       tenantSecretsDir(),
     )

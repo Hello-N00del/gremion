@@ -249,7 +249,8 @@ export async function provisionTenant(
   const tenantId = tenant.id
   // TASK-042 Q2: the ONE primary tenant_domain row the resolver selects the
   // tenant by (idempotent for the same tenant; a host another tenant owns is
-  // refused by the registry before anything else is created).
+  // refused by the registry here, before any DB or realm is created, and the
+  // row stays 'provisioning' so it never resolves).
   await deps.registry.addTenantDomain(tenantId, tenantHost, { isPrimary: true })
 
   // Open every ledger row up front (idempotent), so a retry sees prior state.

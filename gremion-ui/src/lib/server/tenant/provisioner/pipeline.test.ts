@@ -35,6 +35,7 @@ type Row = {
   blueprintRef: string
 }
 type Resource = { status: string }
+type DomainRow = { tenantId: string; host: string; isPrimary: boolean }
 
 /** A stateful in-memory harness that backs the ProvisionDeps with mutable
  *  registry + ledger state, so a retry sees the prior run's persisted rows. */
@@ -42,6 +43,7 @@ function harness(opts: { realmFailsOnce?: boolean } = {}) {
   const rows = new Map<string, Row>()
   const resources = new Map<string, Map<string, Resource>>() // tenantId -> subsystem -> status
   const secrets = new Map<string, string>()
+  const domains = new Map<string, DomainRow>() // host -> row (host is the PK)
   let realmCreated = false
   let realmCalls = 0
   let dbCreated = false
@@ -126,12 +128,20 @@ function harness(opts: { realmFailsOnce?: boolean } = {}) {
           subsystem,
           status: r.status,
         })) as never,
+      // TASK-042 Q2: mirrors registry.addTenantDomain — idempotent for the SAME
+      // tenant, refused when another tenant owns the host (host is the PK).
+      addTenantDomain: vi.fn(async (tenantId: string, host: string, opts: { isPrimary: boolean }) => {
+        const owner = domains.get(host)
+        if (owner && owner.tenantId !== tenantId) throw new Error(`host ${host} is already registered to another tenant`)
+        domains.set(host, { tenantId, host, isPrimary: opts.isPrimary })
+        return domains.get(host)
+      }),
     },
   }
-  return { deps, rows, resources, secrets }
+  return { deps, rows, resources, secrets, domains }
 }
 
-const args = { slug: 't2', realmName: 'verein', configFile: '/tmp/verein.json' }
+const args = { slug: 't2', host: 't2.council.example', realmName: 'verein', configFile: '/tmp/verein.json' }
 
 describe('provisionTenant — fail-closed ordering', () => {
   // TASK-042 TDD 8: the D-WIZARD gate is gone; ProvisionDeps carries no
@@ -360,5 +370,59 @@ describe('provisionTenant — gremion#6 SMTP delta on the already-exists branch'
       /platform SMTP settings are unset/,
     )
     expect(updateRealmSmtp).not.toHaveBeenCalled()
+  })
+})
+
+// TASK-042 TDD 9 (Q2, TRD-075, spec B §T.2): the tenant's host is SUPPLIED by
+// the operator and used verbatim for the issuer, the realm's exact URIs and the
+// ONE primary tenant_domain row; it is never synthesised from slug + apex.
+describe('provisionTenant — supplied host (TASK-042 Q2)', () => {
+  const own = { ...args, slug: 'kreisrat', realmName: 'stura', host: 'stura-example.de' }
+
+  it('mints the issuer from the supplied host, not from slug + apex', async () => {
+    const h = harness()
+    const res = await provisionTenant(own, h.deps)
+    expect(res.issuer).toBe('https://stura-example.de/auth/realms/stura')
+    const insertArg = (h.deps.registry.registerTenant as any).mock.calls[0][0]
+    expect(insertArg.issuer).toBe('https://stura-example.de/auth/realms/stura')
+    expect(JSON.stringify(insertArg)).not.toContain('council.example')
+  })
+
+  it("stamps the realm's exact URIs with the supplied host, never <slug>.<apex>", async () => {
+    const h = harness()
+    await provisionTenant(own, h.deps)
+    const doc = JSON.stringify((h.deps.kc.createRealm as any).mock.calls[0][0])
+    expect(doc).toContain('https://stura-example.de/')
+    expect(doc).not.toContain('kreisrat.council.example')
+  })
+
+  it('writes exactly ONE primary tenant_domain row for the supplied host', async () => {
+    const h = harness()
+    await provisionTenant(own, h.deps)
+    expect([...h.domains.values()]).toEqual([{ tenantId: 'id-kreisrat', host: 'stura-example.de', isPrimary: true }])
+    // a re-run is idempotent: still one row
+    await provisionTenant(own, h.deps)
+    expect([...h.domains.values()]).toEqual([{ tenantId: 'id-kreisrat', host: 'stura-example.de', isPrimary: true }])
+  })
+
+  it.each(['', 'Stura-Example.de', 'stura example.de', 'https://stura-example.de', 'stura-example.de/x'])(
+    'refuses the host %j before ANY write',
+    async (host) => {
+      const h = harness()
+      await expect(provisionTenant({ ...own, host }, h.deps)).rejects.toThrow(/tenant: host is not a valid hostname/)
+      expect(h.deps.registry.registerTenant).not.toHaveBeenCalled()
+      expect(h.deps.registry.addTenantDomain).not.toHaveBeenCalled()
+      expect(h.deps.db.createDatabaseAndRole).not.toHaveBeenCalled()
+      expect(h.deps.kc.createRealm).not.toHaveBeenCalled()
+    },
+  )
+
+  it('a host another tenant owns is refused before any DB or realm is created', async () => {
+    const h = harness()
+    h.domains.set('stura-example.de', { tenantId: 'id-other', host: 'stura-example.de', isPrimary: true })
+    await expect(provisionTenant(own, h.deps)).rejects.toThrow(/another tenant/)
+    expect(h.deps.db.createDatabaseAndRole).not.toHaveBeenCalled()
+    expect(h.deps.kc.createRealm).not.toHaveBeenCalled()
+    expect(h.rows.get('kreisrat')!.status).toBe('provisioning') // never active
   })
 })
