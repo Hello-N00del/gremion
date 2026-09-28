@@ -25,7 +25,15 @@ reads state rather than an exit code.
 ## Conventions
 
 **Where things run.** Every step runs as root on the host unless it says
-otherwise. The programs and the host layout are described in
+otherwise. The exception is the deploy user's own programs: `gremion-init-secrets`,
+`gremion-backup`, `gremion-deploy`, `gremion-verify`, `gremion-restore-into`,
+`gremion-snapshot`, `gremion-switch` and `gremion-rollback` always run as
+`sudo -u gremion`, as the installed systemd units do. They read
+`etc/env/*.env` inside the deploy user's 0700 `etc/`, and `gremion-deploy` runs
+git in the release checkout, which git refuses when another user owns it. So
+the env files and every release tree belong to `gremion`: a release tree root
+clones is handed over with `chown -R gremion:gremion` before anything reads it,
+and `test/host/runbook.bats` fails on a deploy-user program run as root. The programs and the host layout are described in
 [host-tooling.md](../host-tooling.md) and [infra/host/README.md](../../../infra/host/README.md);
 this runbook cites them and does not repeat them. `docker compose` is only ever
 called as `docker compose --env-file /opt/gremion/etc/env/<project>.env <verb>`,

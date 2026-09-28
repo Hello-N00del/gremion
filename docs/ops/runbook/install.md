@@ -63,7 +63,8 @@ export PATH="/opt/gremion/bin:$PATH"
    platform domain and each tenant host, pointing at the edge addresses. Record
    the time.
 
-3. **Fetch the release tree.**
+3. **Fetch the release tree.** The deploy user does not exist yet, so root
+   clones it; step 4 hands it over before anything else reads it.
 
 ```bash
 apt-get update && apt-get install -y --no-install-recommends git ca-certificates
@@ -73,12 +74,19 @@ git -C "$REL" describe --tags --exact-match          # prints the tag
 ```
 
 4. **Base system, deploy user, Docker.** `infra/host/bootstrap.sh`, stages
-   `base`, `user` and `docker`; each asserts its own post-conditions.
+   `base`, `user` and `docker`; each asserts its own post-conditions. `user`
+   creates the deploy user `gremion` and the host layout it owns (`etc/` mode
+   0700). Then the release tree is handed to that user: `gremion-deploy` runs
+   git in it as `gremion`, and git refuses a checkout another user owns
+   ("dubious ownership").
 
 ```bash
 bash "$REL/infra/host/bootstrap.sh" base
 bash "$REL/infra/host/bootstrap.sh" user
 bash "$REL/infra/host/bootstrap.sh" docker
+chown -R gremion:gremion "$REL"
+stat -c '%U %a %n' /opt/gremion /opt/gremion/releases "$REL" /opt/gremion/etc    # gremion, all four
+sudo -u gremion git -C "$REL" describe --tags --exact-match                       # the tag, read as gremion
 ```
 
 5. **Install the host programs.** Real files, copied, never symlinks
@@ -91,21 +99,28 @@ install -m 0644 -o gremion -g gremion "$REL/infra/host/lib/common.sh" /opt/gremi
 ```
 
 6. **Render the env files and generate every secret.** Run from the release
-   tree, where the program finds its templates. It refuses to overwrite an
-   existing file and ends with an `INIT-SECRETS:` line naming how many keys the
-   administrator must still fill.
+   tree, where the program finds its templates, and as the deploy user: the
+   program writes with umask 077, so the owner of the five files is whoever
+   runs it, and every later deploy-user run (the baseline backup, the first
+   deploy, the verification, and the installed `gremion-backup.service` and
+   `gremion-verify.service`) reads them. Run as
+   root, it leaves root-owned 0600 files those runs cannot read. It refuses to
+   overwrite an existing file and ends with an `INIT-SECRETS:` line naming how
+   many keys the administrator must still fill.
 
 ```bash
-"$REL/infra/host/bin/gremion-init-secrets" --stack gremion
+sudo -u gremion "$REL/infra/host/bin/gremion-init-secrets" --stack gremion
+stat -c '%U %a %n' /opt/gremion/etc/env/*.env                 # gremion 600, for each of the five
 ```
 
 7. **Fill the operator keys.** Every key the previous step listed, in every file
    the search names: the platform domain, the edge and mail addresses, the ACME
-   contact, the alert sinks, `GREMION_PRODUCTION_STACK`.
+   contact, the alert sinks, `GREMION_PRODUCTION_STACK`. Edit as the deploy
+   user, so each file keeps its owner.
 
 ```bash
 grep -n 'CHANGE_ME_OPERATOR_' /opt/gremion/etc/env/*.env     # the keys still to fill
-"${EDITOR:-vi}" /opt/gremion/etc/env/state.env                # and each other file named above
+sudo -u gremion "${EDITOR:-vi}" /opt/gremion/etc/env/state.env   # and each other file named above
 ```
 
 8. **Validate every env file (E1).** Nothing is started until all five pass.
@@ -249,6 +264,15 @@ systemctl is-active gremion-backup.timer           # inactive
 systemctl is-enabled gremion-verify.service        # enabled: the reboot gate runs at every boot
 jq -r '.ts, .ok, (.failures | length)' /opt/gremion/runtime/last-verify.json    # today, true, 0
 grep -Fx "$TAG" /opt/gremion/runtime/current-tag
+```
+
+The deploy user owns what its programs and units read, so the next timer run,
+reboot gate or deploy does not die on a root-owned file:
+
+```bash
+stat -c '%U %a %n' /opt/gremion/etc/env/*.env                                 # gremion 600, for each of the five
+stat -c '%U %n' "$REL" "$(readlink -f /opt/gremion/current)"                    # gremion, both
+find /opt/gremion/etc/env "$REL" ! -user gremion | wc -l                        # 0 (etc/cosign.pub stays root's on purpose)
 ```
 
 Readiness, fresh volumes and fresh certificates:
