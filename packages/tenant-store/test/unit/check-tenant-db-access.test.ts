@@ -35,20 +35,24 @@ function allowList(rows: object[]) {
 }
 const row = (path: string, calls: number, imports: number) => ({ path, calls, imports, adoptedBy: 'TASK-077', since: '2026-09-25', reason: 'a test row with a reason' })
 
-// The two real-tree tests each read and scan the whole repository (~1.4k
-// files, ~9.5 MB). Measured 2026-09-28 on the 16-CPU intake box: idle CLI
-// 1.4-2.8 s (n=5); under the artificial load (32 CPU + 4 I/O node workers on
-// top of the other agents) one whole-tree scan took 97.3, 111.0 and 126.6 s
-// (CLI) and 123.4 and 146.2 s (in-process, the drop-row test's exact call):
-// pooled n=5, p95 = max 146.2 s. The budget is 3x that, rounded up. It is per
-// test; the fixture and pure tests stay on vitest's default (loaded max 0.8 s).
-const REAL_TREE_SCAN_MS = 440_000
+// The two real-tree tests each read and scan the whole repository (1417
+// files, 9.6 M chars). Measured 2026-09-28 on the 16-CPU dev box. Idle CLI:
+// 1.4, 1.6, 2.1, 2.3, 2.8 s (n=5); idle phases of one scan: walk 0.04 s, read
+// 0.9-1.4 s, strip comments 0.3 s, match 0.2 s -- the time is file reads, which
+// the test cannot skip. Under the artificial load (32 CPU-spinning + 4 file-I/O
+// node workers on top of the other agents) one whole-tree scan took 97.3,
+// 111.0 and 147.3 s (CLI) and 125.7 and 147.7 s (in-process, the drop-row
+// test's exact call, node start included): pooled n=5 complete, p95 = max
+// 147.7 s (3 more loaded samples were cut by the probe's own deadline, at
+// 19.5, 64.8 and 99.5 s). The budget is 3x that, rounded up. It is per test;
+// the fixture and pure tests stay on vitest's default (loaded max 0.8 s).
+const REAL_TREE_SCAN_MS = 450_000
 
 describe('check-tenant-db-access (TRD-426)', () => {
   it('the real tree is green: every site outside the package is on the dated allow-list', () => {
     // the child is killed 10 s before the test's own budget, so a hung scan
     // fails on its status (named below) instead of outliving the worker
-    const r = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', timeout: 50 })
+    const r = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', timeout: REAL_TREE_SCAN_MS - 10_000 })
     expect(r.error, `the scan did not complete: status=${r.status} signal=${r.signal}`).toBeUndefined()
     expect(r.stderr).toBe('')
     expect(r.status).toBe(0)
