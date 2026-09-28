@@ -253,7 +253,9 @@ describe('F the current flows deliver, as the callers boot', () => {
 })
 
 describe.runIf(MODE === 'auth')('I idempotence, additions, eviction (auth broker)', () => {
-  const C = 'tc'
+  // Production tenant ids are lowercase UUIDs: prove the server takes one as
+  // an account name (T_<uuid>) and inside an inbox prefix.
+  const C = '0f7c2a52-3c1e-4b8e-9a51-6d2f0c9e4b7a'
   const loadTime = () => monitor<{ config_load_time: string }>('/varz').config_load_time
   const accounts = () => readFileSync(path.join(ACCOUNTS, 'accounts.conf'), 'utf8')
 
@@ -360,8 +362,40 @@ describe.runIf(MODE === 'auth')('reload (TRD-440)', () => {
     const c = await as('te', 'admin')
     const info = await (await jetstreamManager(c.nc)).getAccountInfo()
     expect(info.streams).toBeGreaterThanOrEqual(1)
+    // the per-tenant JetStream ceilings are in force on the server
+    expect(info.limits).toMatchObject({ max_streams: 8, max_consumers: 64, max_storage: 512_000_000, max_memory: 8_000_000 })
     const after = containerState()
     expect(after).toEqual(before)
     expect(CONTAINER).toMatch(/^t024-/)
+  })
+})
+
+// RESIDUAL R1 (security review, reported to the orchestrator, NOT fixed in
+// this unit): NATS checks publish permission on a message's SUBJECT only,
+// never on its reply subject. Any JetStream API request a module may send
+// ($JS.API.INFO at least) with a reply subject inside another module's
+// stream makes the server's own response land in that stream. Tenant
+// isolation holds (accounts); within a tenant only a structural change --
+// one account per (tenant, stream owner) with exports/imports -- closes it.
+// This characterises the gap so its fix flips the test; the injected message
+// carries no Nats-Msg-Id, which is what a consumer-side check can reject.
+describe.runIf(MODE === 'auth')('R1 residual: reply-subject injection within a tenant', () => {
+  test('R1 finance of tb writes a JetStream API response into tb NEWSLETTER via a reply subject; it carries no Nats-Msg-Id', async () => {
+    const admin = await as(B, 'admin')
+    const jsm = await jetstreamManager(admin.nc)
+    const before = (await jsm.streams.info('NEWSLETTER')).state.messages
+    const fin = await as(B, 'finance')
+    await refused(fin, {
+      control: async () => (await jetstreamManager(fin.nc)).streams.info('ORGUNIT'),
+      forbidden: async () => fin.nc.publish(`gremion.${B}.newsletter.r1-direct`, '{}'),
+      text: `Permissions Violation for Publish to "gremion.${B}.newsletter.r1-direct"`,
+    })
+    fin.nc.publish('$JS.API.INFO', '', { reply: `gremion.${B}.newsletter.r1` })
+    await fin.nc.flush()
+    await sleep(300)
+    expect((await jsm.streams.info('NEWSLETTER')).state.messages, 'the reply-subject gap is closed -- remove residual R1').toBe(before + 1)
+    const m = await jsm.streams.getMessage('NEWSLETTER', { last_by_subj: `gremion.${B}.newsletter.r1` })
+    expect(m, 'the injected message is not in the stream').not.toBeNull()
+    expect(m!.header?.get('Nats-Msg-Id') ?? '').toBe('')
   })
 })

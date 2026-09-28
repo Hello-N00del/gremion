@@ -87,7 +87,8 @@ describe('renderServerConfig (TDD 3)', () => {
       expect(b).toContain(k.pub)
       expect(a).not.toContain(k.pub)
     }
-    expect(a).toMatch(/jetstream: enabled/)
+    // bounded JetStream per tenant: one tenant cannot fill the server's store
+    expect(a).toMatch(/jetstream: \{ max_mem: 8M, max_file: 512M, max_streams: 8, max_consumers: 64 \}/)
     expect(accountBlock(out, 'SYS')).not.toMatch(/jetstream/)
   })
 
