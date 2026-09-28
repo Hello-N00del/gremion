@@ -351,10 +351,6 @@ function liveDeps(): { deps: ProvisionDeps; cleanup: () => Promise<void> } {
     platformSmtp: platformSmtpFromEnv(process.env),
     kcInternalBase: kcInternalBase(),
     adminKc,
-    loadDefaultConfig: () => {
-      const p = process.env.CONFIG_PATH ?? join(repoRoot, 'config', 'config.json')
-      return existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : {}
-    },
     loadBaseRealm: () => loadBaseRealmDoc(),
     loadTenantConfig: (configFile: string) => JSON.parse(readFileSync(configFile, 'utf-8')),
     tenantDbUrl,

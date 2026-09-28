@@ -7,7 +7,7 @@
 // live deps.
 //
 // Fail-closed ordering (review round 1; each step idempotent + ledger-marked):
-//   (1) slug guard + D-WIZARD gate
+//   (1) slug guard
 //   (2) registry INSERT-FIRST with status='provisioning' (NEVER 'active' —
 //       resolveTenantBySlug resolves only active rows, so a half-provisioned
 //       tenant is structurally non-resolvable)
@@ -24,7 +24,6 @@
 //       existing org-unit provisioning worker once the tenant is active)
 //   (8) FINAL: flip status -> 'active' via updateTenantStatus (also evicts runtime)
 import { validateSlug, dbNameForSlug } from '$lib/server/tenant/slug'
-import { assertMultiTenantEnabled } from './wizard-gate'
 import {
   assertSmtpConfiguredForEmailLogin,
   buildTenantRealmDoc,
@@ -108,8 +107,6 @@ export interface ProvisionDeps {
    *  exactly like the default tenant (register-default.ts); omitted -> the TLS
    *  default in kcInternalForTenant. */
   kcInternalBase?: string
-  /** The DEFAULT tenant's parsed config (D-WIZARD gate consumes deployment.mode). */
-  loadDefaultConfig(): unknown
   /** The module-neutral base realm template (parsed realm-export.base.json). */
   loadBaseRealm(): Record<string, unknown>
   /** The tenant's vertical config (drives module deselection). */
@@ -176,10 +173,10 @@ export async function provisionTenant(
   deps: ProvisionDeps,
   tenantSecretsDir = './secrets/tenants',
 ): Promise<ProvisionResult> {
-  // (1) slug guard + D-WIZARD gate (before ANY write).
+  // (1) slug guard (before ANY write). TASK-042: the D-WIZARD single/multi
+  // gate is gone with the default tenant — the platform always hosts tenants.
   const v = validateSlug(args.slug)
   if (!v.ok) throw new Error(`invalid slug "${args.slug}": ${v.reason}`)
-  assertMultiTenantEnabled(deps.loadDefaultConfig())
 
   const slug = v.slug
 

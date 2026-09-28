@@ -54,7 +54,6 @@ function makeDeps(opts: { realmFailsOnce?: boolean } = {}) {
       user: 'platform@example.org',
       password: 'unit-test-platform-password',
     },
-    loadDefaultConfig: () => ({ deployment: { mode: 'multi' } }),
     loadBaseRealm: () => JSON.parse(JSON.stringify(base)),
     loadTenantConfig: () => ({ modules: { finance: false, elections: true } }),
     tenantDbUrl: (role: string, password: string, dbName: string) =>

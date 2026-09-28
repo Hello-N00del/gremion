@@ -38,7 +38,7 @@ type Resource = { status: string }
 
 /** A stateful in-memory harness that backs the ProvisionDeps with mutable
  *  registry + ledger state, so a retry sees the prior run's persisted rows. */
-function harness(opts: { realmFailsOnce?: boolean; multi?: boolean } = {}) {
+function harness(opts: { realmFailsOnce?: boolean } = {}) {
   const rows = new Map<string, Row>()
   const resources = new Map<string, Map<string, Resource>>() // tenantId -> subsystem -> status
   const secrets = new Map<string, string>()
@@ -50,7 +50,6 @@ function harness(opts: { realmFailsOnce?: boolean; multi?: boolean } = {}) {
     const m = resources.get(tid)!
     if (!m.has(sub)) m.set(sub, { status: 'pending' })
   }
-  const cfg = opts.multi === false ? {} : { deployment: { mode: 'multi' } }
 
   const deps: ProvisionDeps = {
     manifests: MODULE_MANIFESTS,
@@ -62,7 +61,6 @@ function harness(opts: { realmFailsOnce?: boolean; multi?: boolean } = {}) {
       user: 'platform@example.org',
       password: 'unit-test-platform-password',
     },
-    loadDefaultConfig: () => cfg as never,
     loadBaseRealm: () => JSON.parse(JSON.stringify(base)),
     loadTenantConfig: () => ({ modules: { finance: false, elections: true } }) as never,
     tenantDbUrl: (role: string, password: string, dbName: string) =>
@@ -136,10 +134,13 @@ function harness(opts: { realmFailsOnce?: boolean; multi?: boolean } = {}) {
 const args = { slug: 't2', realmName: 'verein', configFile: '/tmp/verein.json' }
 
 describe('provisionTenant — fail-closed ordering', () => {
-  it('refuses when the deployment is single-tenant (D-WIZARD gate, before any write)', async () => {
-    const h = harness({ multi: false })
-    await expect(provisionTenant(args, h.deps)).rejects.toThrow(/single-tenant|deployment\.mode/i)
-    expect(h.deps.registry.registerTenant).not.toHaveBeenCalled()
+  // TASK-042 TDD 8: the D-WIZARD gate is gone; ProvisionDeps carries no
+  // default-tenant config loader (checked by name so a revert fails here).
+  it('ProvisionDeps has no default-config loader and a fresh platform provisions', async () => {
+    const h = harness()
+    expect(Object.keys(h.deps)).not.toContain('load' + 'DefaultConfig')
+    await provisionTenant(args, h.deps)
+    expect(h.rows.get('t2')!.status).toBe('active')
   })
 
   it('inserts the row with status=provisioning FIRST, flips to active only at the end', async () => {
@@ -248,33 +249,6 @@ describe('provisionTenant — blueprintRef threading (T3)', () => {
     expect(h.rows.get('t2')!.blueprintRef).toBe('MUNICIPAL_BLUEPRINT@1')
     const insertArg = (h.deps.registry.registerTenant as any).mock.calls[0][0]
     expect(insertArg.blueprintRef).toBe('MUNICIPAL_BLUEPRINT@1')
-  })
-})
-
-// T12 cross-test: the REAL config layer's default (single) drives the gate to
-// refuse — i.e. `provision t2` against a freshly-set-up (default) tenant config
-// exits 1 naming the toggle. Uses parseConfig (not a hand-rolled `{}`) so a
-// regression in the config default would surface here.
-describe('provisionTenant — D-WIZARD cross-test against the real config default', () => {
-  it('a default (single) tenant config makes provision t2 refuse, naming deployment.mode', async () => {
-    const { parseConfig } = await import('$lib/server/config')
-    const defaultConfig = parseConfig({}) // the T12 default → deployment.mode === 'single'
-    expect((defaultConfig as { deployment: { mode: string } }).deployment.mode).toBe('single')
-    const h = harness()
-    h.deps.loadDefaultConfig = () => defaultConfig
-    await expect(provisionTenant(args, h.deps)).rejects.toThrow(/deployment\.mode/)
-    // exit-1 semantics: refused BEFORE any registry write (the CLI maps the throw
-    // to process.exitCode = 1 in its main().catch).
-    expect(h.deps.registry.registerTenant).not.toHaveBeenCalled()
-  })
-
-  it('flipping the real config to multi lets provision t2 proceed', async () => {
-    const { parseConfig } = await import('$lib/server/config')
-    const multiConfig = parseConfig({ deployment: { mode: 'multi' } })
-    const h = harness()
-    h.deps.loadDefaultConfig = () => multiConfig
-    await provisionTenant(args, h.deps)
-    expect(h.rows.get('t2')!.status).toBe('active')
   })
 })
 
