@@ -12,7 +12,7 @@
 # `docker compose`, never a shared volume.
 #
 # The app runs with `--restart unless-stopped` and the healthcheck of the
-# gremion-ui service in docker-compose.yml (parsed, asserted equal on the
+# gremion-ui service in docker-compose.app.yml (parsed, asserted equal on the
 # running container), so a boot that exits is OBSERVABLE as RestartCount > 0.
 # No AUTH_KEYCLOAK_ISSUER is set: nothing in a zero-tenant boot may need it.
 #
@@ -91,7 +91,12 @@ APEX="t042.test"
 FIXTURE_HOST="proof.$APEX"
 FIXTURE_MARK="T042FIXTURE"
 
-# ── the compose file is the single source for the PG pin and the healthcheck ──
+# ── the compose files are the single source for the PG pin and the healthcheck ──
+# The PostgreSQL pin lives in the base compose (the state tier); the gremion-ui
+# service, and with it its healthcheck, moved to docker-compose.app.yml with
+# TASK-040 (pooled stack, blue/green colours).
+APP_COMPOSE="$REPO_ROOT/docker-compose.app.yml"
+[ -f "$APP_COMPOSE" ] || precondition "no docker-compose.app.yml (the gremion-ui service definition)"
 COMPOSE_TEXT="$(<"$REPO_ROOT/docker-compose.yml")"
 # Split so no scannable image-ref token sits in this file (lint-postgres-major).
 PG_RE='image: (postgres'
@@ -105,7 +110,7 @@ import { parse } from 'yaml'
 const y = parse(readFileSync(process.argv[1], 'utf8'), { logLevel: 'error' })
 const h = y.services['gremion-ui'].healthcheck
 console.log([JSON.stringify(h.test), h.interval, h.timeout, h.retries, h.start_period].join('|'))
-" "$(hostpath "$REPO_ROOT/docker-compose.yml")")" || precondition "cannot parse the gremion-ui healthcheck from docker-compose.yml"
+" "$(hostpath "$APP_COMPOSE")")" || precondition "cannot parse the gremion-ui healthcheck from docker-compose.app.yml"
 IFS='|' read -r HC_TEST HC_INTERVAL HC_TIMEOUT HC_RETRIES HC_START <<<"$HC"
 [ "$HC_TEST" = '["CMD","wget","-qO-","http://127.0.0.1:3000/healthz"]' ] \
     || precondition "the compose healthcheck is not the /healthz wget probe: $HC_TEST"
