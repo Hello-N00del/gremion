@@ -230,7 +230,7 @@ exit 0'
     [ "$status" -ne 0 ]
 }
 
-@test "gremion-restore-into exits 3 when a snapshot carries buckets without a pinned mc image" {
+@test "gremion-restore-into refuses a snapshot carrying buckets/ (exit 3) before restoring anything (TRD-066/354)" {
     shim restic '
 target=""; prev=""
 for a in "$@"; do
@@ -243,10 +243,15 @@ mkdir -p "$s/volumes" "$s/buckets/nextcloud" "$target/opt/gremion/etc/env"
 printf "STACK=alpha\n" >"$target/opt/gremion/etc/env/state.env"
 printf "x" >"$s/volumes/alpha_traefik_acme.tar"
 exit 0'
-    run env MC_IMAGE= "$RESTORE_INTO" --stack stg --snapshot latest \
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
         --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
     [ "$status" -eq 3 ]
-    [[ "$output" == *"BLOCKED: bucket restore needs MC_IMAGE"* ]]
+    [[ "$output" == *"BLOCKED: snapshot latest carries buckets/"* ]]
+    # refused, never skipped, and nothing restored: restore.sh never ran and
+    # no volume was created or unpacked
+    [ ! -e "${GREMION_ROOT}/runtime/restore-sh.log" ]
+    run grep -cE "volume create|tar -xf" "$SHIM_LOG"
+    [ "$status" -ne 0 ]
 }
 
 # The flat disaster-recovery layout stays supported.

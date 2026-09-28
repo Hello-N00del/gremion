@@ -348,7 +348,7 @@ write_last_backup_json() {   # $1 = bytes, $2 = ok(true|false), $3 = class
     mkdir -p "${GREMION_ROOT}/runtime"
     jq -n --argjson bytes "$1" --argjson ok "$2" --arg class "$3" \
        '{ts:"2026-09-01T02:00:00Z", ok:$ok, label:"prev", class:$class,
-         artefacts:{databases:5, volumes:4, buckets:2},
+         artefacts:{databases:5, volumes:4, buckets:0},
          offsite:true, bytes:$bytes}' \
        >"${GREMION_ROOT}/runtime/last-backup.json"
 }
@@ -606,36 +606,37 @@ exit 0'
 }
 
 # ---------------------------------------------------------------------------
-# Object storage buckets
+# Object storage: none on the pilot (TRD-066), plumbing removed (TRD-354)
 # ---------------------------------------------------------------------------
 
-@test "without MINIO_ENDPOINT the bucket class is zero and the reason is printed" {
+@test "the bucket class is always zero and no object-storage client runs" {
     shim_baseline; shim_docker_full
     run "$BACKUP"
-    [[ "$output" == *"MINIO_ENDPOINT unset"* ]]
-    [[ "$output" == *"covered by the volume class"* ]]
     [ "$(jq -r '.artefacts.buckets' "${GREMION_ROOT}/runtime/last-backup.json")" = "0" ]
+    run grep -E 'mc|minio' "$SHIM_LOG"
+    [ "$status" -ne 0 ]
 }
 
-@test "MINIO_ENDPOINT without BACKUP_MC_IMAGE is a precondition failure (exit 2)" {
-    shim_baseline; shim_docker_full
-    echo 'MINIO_ENDPOINT=http://127.0.0.1:9000' >>"${GREMION_ROOT}/etc/env/state.env"
-    run "$BACKUP"
-    [ "$status" -eq 2 ]
-    [[ "$output" == *"MINIO_ENDPOINT is set but BACKUP_MC_IMAGE is not"* ]]
-}
-
-@test "MINIO_ENDPOINT set but no bucket found fails rather than reporting zero" {
+@test "a MINIO_* key left in state.env is refused (exit 2, TRD-066) and its value is never printed" {
     shim_baseline; shim_docker_full
     {
         echo 'MINIO_ENDPOINT=http://127.0.0.1:9000'
-        echo 'MINIO_ACCESS_KEY=testaccess'
-        echo 'MINIO_SECRET_KEY=testsecret'
-        echo 'BACKUP_MC_IMAGE=minio/mc@sha256:0000000000000000000000000000000000000000000000000000000000000002'
+        echo 'MINIO_SECRET_KEY=leftoversecretvalue'
     } >>"${GREMION_ROOT}/etc/env/state.env"
     run "$BACKUP"
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"bucket enumeration returned nothing"* ]]
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"object-storage key(s) in"*"MINIO_ENDPOINT"*"MINIO_SECRET_KEY"* ]]
+    [[ "$output" != *"leftoversecretvalue"* ]]
+    # refused before any work: nothing was staged
+    [ ! -e "${GREMION_ROOT}/backups/current" ]
+}
+
+@test "a *_S3_* key left in state.env is refused (exit 2)" {
+    shim_baseline; shim_docker_full
+    echo 'SYNAPSE_MEDIA_S3_ENDPOINT=http://127.0.0.1:9000' >>"${GREMION_ROOT}/etc/env/state.env"
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"object-storage key(s) in"*"SYNAPSE_MEDIA_S3_ENDPOINT"* ]]
 }
 
 # ---------------------------------------------------------------------------
