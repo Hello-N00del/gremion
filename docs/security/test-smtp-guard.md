@@ -1,8 +1,9 @@
 # `/api/setup/test-smtp` — outbound target guard
 
 `POST /api/setup/test-smtp` opens an outbound TCP connection to a
-**body-supplied** `host:port` during the pre-setup window, authorised by the
-setup token alone. Without a target guard that is a server-side request forgery
+**body-supplied** `host:port`. Since TASK-042 (Q1) it is authorised by a
+signed-in session holding `Role.ITAdmin` (the setup token and the first-run
+wizard are deleted). Without a target guard that is a server-side request forgery
 and internal port-probe oracle: a caller can aim it at a cloud metadata address
 or at any service reachable from the container's network and read the outcome
 back out of the returned error string.
@@ -82,9 +83,10 @@ while dialling another is the whole bug class.
 
 ## There is no host allowlist
 
-Exempting `config.smtp.host` does not work: `PATCH /api/setup/config` writes
-that value under the **same setup token** this endpoint accepts, so the
-"operator's own choice" is attacker-supplied and two requests re-open the
+Exempting `config.smtp.host` does not work: it is a value a caller of the
+settings surface writes (formerly `PATCH /api/setup/config` under the same setup
+token this endpoint accepted, deleted with the wizard in TASK-042), so the
+"operator's own choice" is caller-supplied and two requests would re-open the
 metadata address. The `EMAIL_HOST` / `SMTP_HOST` environment names are not set
 on the `gremion-ui` container at all.
 
@@ -129,12 +131,12 @@ name states, so mutating either boundary fails a test.
 ## The refusal hint, and where it is rendered
 
 A refusal answers `400` with `error` plus a `hint` naming the opt-in and the
-exact ranges it waives. Both in-repo consumers render that hint:
+exact ranges it waives. The in-repo consumer renders that hint (the first-run
+wizard's `Step4Smtp.svelte` was the second, deleted in TASK-042):
 
-- `gremion-ui/src/routes/setup/steps/Step4Smtp.svelte` (first-run wizard)
 - `gremion-ui/src/routes/settings/tabs/TabEmail.svelte` (Settings → E-Mail)
 
-Both render it as **plain text**, never `{@html}` — the string arrives in a
+It renders it as **plain text**, never `{@html}` — the string arrives in a
 server response body — and both place it **inside** the refusal's
 `role="alert"` region, so assistive technology announces the remediation
 together with the refusal instead of staying silent about it. Each component's
@@ -150,15 +152,12 @@ The DNS-failure hint is rendered the same way, by the same two components.
 Known gaps that this guard does **not** close. They are listed so a later reader
 finds them here rather than discovering them in production.
 
-**R1 — neither UI surface can reach this endpoint.** A property of the
-endpoint's auth model, not of the guard, and deliberately unchanged here: the
-handler returns **401** without an `X-Setup-Token` header (no `.svelte`
-component sends one) and **404** once `setup_complete` is true — which
-Settings → E-Mail always is. So today the hint is rendered by two surfaces that
-cannot currently trigger it. The guard is still the right place for the check:
-it protects the endpoint for any caller that *does* hold the token, which is the
-threat model that matters, and both consumers become correct the moment the auth
-model is fixed. Changing that model is separate work.
+**R1 — closed by TASK-042 (Q1).** The endpoint used to answer **401** without
+an `X-Setup-Token` header (no `.svelte` component sent one) and **404** once
+`setup_complete` was true, so Settings → E-Mail could never reach it. It is now
+gated by session + `Role.ITAdmin` (401 without a session, 403 without the
+role), which is exactly what Settings → E-Mail carries; the rate limit and this
+target guard are unchanged.
 
 **R2 — with the opt-in set, the rest of the private ranges are reachable.** That
 is what the opt-in *is*: outside the two carved-out metadata prefixes, the guard
