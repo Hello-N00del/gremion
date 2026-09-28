@@ -88,6 +88,7 @@ Each of these is named at the step that needs it:
 - PENDING TASK-043 (`packages/provisioning/`): creating the pilot customer through the provisioning orchestrator and its first administrator's sign-in (install.md).
 - PENDING TASK-039 (`compose/observability/`): the operator-only observability stack (install.md).
 - PENDING TASK-040 (`compose/README.md`): the pooled compose layout; the tools this runbook cites may change in the same wave (install.md).
+- PENDING TASK-029 (`scripts/migrations/ranges.json`): the per-chain migration register and the boot-time migration hash check (upgrade.md).
 - PENDING TASK-075 (`scripts/migrations/runner/`): the pre-migration dump taken by the migration runner itself (upgrade.md).
 - PENDING TASK-089 (`scripts/backup/`): the per-module backup verification that replaces today's enumeration (backup.md).
 - PENDING TASK-119 (`services/kernel-api/export/`): the tenant export, and its restore on a clean host by someone who is not the vendor (restore.md).

@@ -223,6 +223,8 @@ jq -e --argjson boot "$boot" '.ok == true and ((.ts | fromdateiso8601) > $boot)'
 grep -E 'REBOOT-GATE: verify=pass restarted=[01]' /opt/gremion/logs/reboot-gate.log | tail -n 1
 host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -n 1)"
 curl -s -o /dev/null -w '%{http_code}\n' "https://${host}/api/health"            # 200
+docker inspect --format '{{.Name}} {{.State.StartedAt}} {{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
+  $(docker ps -q)                                                              # every line: started after the boot, healthy
 ```
 
 A `last-verify.json` older than the boot means the gate did not run, however

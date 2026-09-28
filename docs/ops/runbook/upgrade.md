@@ -40,6 +40,10 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
   stops the deploy at STEP 2, before any colour is touched.
 - Every migration in the release is expand/contract (TRD-361): the colour still
   serving can run against the migrated schema.
+- Every migration claimed its number from its database chain's register, which
+  refuses a renumber of an applied migration (TRD-344), and a service refuses to
+  start when an applied migration's hash differs from its manifest (TRD-353).
+  PENDING TASK-029 (`scripts/migrations/ranges.json`): until the register lands, the `migrations` array read in step 1 is the only list (see Known gaps).
 - The administrator holds a registry read token, typed at a prompt, never
   written to disk.
 - No other deploy, rollback or switch is running on the host; the agent's log,
@@ -146,6 +150,7 @@ switch has succeeded.
 - (a) TRD-348: `gremion-deploy` pulls digest-pinned, signature-verified images from the registry and refuses a `build:` key in production; TRD-348 keeps building from source at redeploy time until the build-versus-registry decision is taken. TASK-123 measures build and redeploy time and decides TRD-348/TRD-349.
 - (b) R15-1 and TRD-206: the deploy's step 5 runs `gremion-snapshot`, which runs `gremion-backup --class snapshot`. That needs a reachable off-site remote and keeps a restic snapshot until it is forgotten, which contradicts both the no-backup posture (R15-1) and the single dump deleted after the switch (TRD-206). With the remote unreachable an upgrade stops at `STEP 5 snapshot fail`, before any colour is stopped.
 - (b) continued: PENDING TASK-075 (`scripts/migrations/runner/`) takes the pre-migration dump inside the migration runner; until then step 3 is the TRD-206 dump, taken by hand.
+- PENDING TASK-029 (`scripts/migrations/ranges.json`): the per-chain migration register (TRD-344) and the boot-time hash check (TRD-353). Until it lands nothing on the host refuses a renumbered or altered migration, so the administrator compares the release's `migrations` array with the previous release's before step 3.
 - (c) TRD-189: a release with `overlap: false` makes the deploy's step 6 stop the old colour before the migration, so that release has downtime, where TRD-189 asks for a zero-downtime switch. The idle-colour test against live council data with its records marked as test data and removed afterwards (TRD-179) is not done by `gremion-deploy`, whose step 9 checks health and the verification contract only.
 
 ## Changelog

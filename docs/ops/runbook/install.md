@@ -264,6 +264,19 @@ openssl s_client -connect "${EDGE_BIND_IP}:443" -servername "$host" </dev/null 2
 jq -e '(.auths // {}) | length == 0' /root/.docker/config.json                 # no registry credential left
 ```
 
+Every running container declares a healthcheck and reports `healthy`; a
+container reporting none fails (TRD-178). `scripts/verify/census/running.mjs`
+(TASK-036) takes the same reading per compose project with a bounded wait, and
+fails on a project with no container, wherever Node and the host's Docker socket
+meet. Every first-party database answers on PostgreSQL 18 (TRD-425):
+
+```bash
+docker inspect --format '{{.Name}} {{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
+  $(docker ps -q)                                                              # every line: healthy
+(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
+  psql -U postgres -tAc 'SHOW server_version_num')                             # 18xxxx
+```
+
 The pilot customer's first administrator has signed in (PENDING TASK-043 until
 step 16 runs): the customer's realm holds a `LOGIN` event.
 

@@ -79,6 +79,7 @@ FORBIDDEN_FIXTURES=(vendor-contact compose-f compose-profile compose-p down-v
 # its reason is the only kind this file accepts (brief Q5: the owning task's own
 # gate goes RED, and the orchestrator grants the line edit).
 PENDING_PATHS=(
+    'scripts/migrations/ranges.json|TASK-029'  # the migration register (upgrade.md)
     'scripts/migrations/runner/|TASK-075'      # the pre-migration dump (upgrade.md)
     'scripts/backup/|TASK-089'                 # the one-off verification (backup.md)
     'compose/observability/|TASK-039'          # the operator-only stack (install.md)

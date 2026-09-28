@@ -113,6 +113,7 @@ systemctl show gremion-backup.timer -p NextElapseUSecRealtime --value      # a d
 ## Known gaps
 
 - `gremion-backup` refuses without a reachable off-site remote, while the pilot keeps off-site copies off; the verification run therefore needs a remote for that one run.
+- PENDING TASK-040 (`compose/README.md`): the pooled layout puts each module's database on its own PostgreSQL 18 container (D14); the single `postgres` service that `BACKUP_POSTGRES_SERVICES` names today and that [restore.md](restore.md) arms A and B query becomes the database's own service in that wave.
 - PENDING TASK-089 (`scripts/backup/`): the per-module verification (one database per module server, D14) and the pilot's verification path replace today's enumeration; TASK-089 also runs this procedure first.
 
 ## Changelog
