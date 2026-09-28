@@ -55,6 +55,8 @@
 # unless T042_KEEP=1.
 #
 # Prints:  ZERO-TENANT-PROOF: boot=ok state=ok hosts=ok wizard=ok manifest=ok admins=ok
+# (boot/state/hosts read `not-run`, and the run fails, when probe-wizard runs
+# on a stack probe-boot never checked.)
 # Exit codes: 0 ok · 1 an assertion failed · 2 missing precondition.
 
 set -euo pipefail
@@ -217,14 +219,23 @@ phase_up() {
     echo "ZERO-TENANT-PROOF: up ($N-*)"
 }
 
-FAILS=0 BAD_GROUPS=''
+FAILS=0 BAD_GROUPS='' BOOT_PROBED=0
 ok() { echo "  ok $1"; }
 bad() { echo "FAIL $1: $2"; FAILS=$((FAILS + 1)); BAD_GROUPS+=" ${1%% *}"; }
 is() { if [ "$1" = "$2" ]; then ok "$3"; else bad "$3" "$4"; fi; } # is <actual> <want> <label> <why>
-result_of() { case "$BAD_GROUPS" in *" $1"*) echo FAIL ;; *) echo ok ;; esac; }
+# boot/state/hosts are probe-boot's groups: without its results they are
+# `not-run`, never `ok` (TASK-042 R28: a verdict must not report a check it
+# never made).
+result_of() {
+    if [ "$BOOT_PROBED" != 1 ]; then
+        case "$1" in boot | state | hosts) echo not-run; return ;; esac
+    fi
+    case "$BAD_GROUPS" in *" $1"*) echo FAIL ;; *) echo ok ;; esac
+}
 
-# Results cross phase boundaries (probe-boot, then probe-wizard) in the per-run root.
-save_results() { printf 'FAILS=%s\nBAD_GROUPS=%q\nHZ=%q\n' "$FAILS" "$BAD_GROUPS" "${HZ:-}" >"$ROOT/results"; }
+# Results cross phase boundaries (probe-boot, then probe-wizard) in the per-run
+# root; `up` removes that root, so a results file always belongs to this stack.
+save_results() { printf 'FAILS=%s\nBAD_GROUPS=%q\nHZ=%q\nBOOT_PROBED=1\n' "$FAILS" "$BAD_GROUPS" "${HZ:-}" >"$ROOT/results"; }
 # shellcheck source=/dev/null # the per-run results file save_results wrote
 load_results() { if [ -f "$ROOT/results" ]; then . "$ROOT/results"; fi; }
 
@@ -315,6 +326,9 @@ phase_probe_boot() {
 phase_probe_wizard() {
     stack_is_up
     load_results
+    if [ "$BOOT_PROBED" != 1 ]; then
+        bad "boot probe-boot-ran" "no probe-boot results for this stack ($ROOT/results): boot, state and hosts were never checked (run T042_PHASE=probe-boot first)"
+    fi
 
     # ── wizard: a bound customer's /setup is an unknown path ───────────────────
     step "bind the fixture customer ($FIXTURE_HOST) by SQL"
