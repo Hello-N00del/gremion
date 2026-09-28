@@ -75,8 +75,24 @@ KEYCLOAK_PROBE_USER=operator
 EOF
 }
 
+# The vendor mail launcher as bringup calls it (VENDOR_MAIL_BIN). realm-smtp
+# is the REAL launcher (it only drives docker, which each test shims); the node
+# checks run in a pinned container on a host, so here they answer from
+# VM_<SUBCOMMAND> (exit code, default 0) and record their argv.
+shim_vendor_mail() {
+    shim gremion-vendor-mail '
+case "$1" in
+  realm-smtp) exec "'"${PROJECT_ROOT}"'/infra/host/bin/gremion-vendor-mail" "$@" ;;
+  check-identities) exit "${VM_CHECK_IDENTITIES:-0}" ;;
+  check-received) exit "${VM_CHECK_RECEIVED:-0}" ;;
+esac
+exit 0'
+    export VENDOR_MAIL_BIN="${SHIM_DIR}/gremion-vendor-mail"
+}
+
 setup() {
     setup_host_root
+    shim_vendor_mail
     write_mail_env
     # --render-config now ends in the executable bind check (--check-binds), so
     # every render path needs a docker that can answer `compose … config`. The
@@ -639,6 +655,20 @@ exit 0'
     grep -qx 'user = "system@example.org:unit-test-vendor-password"' "$probe" || { cat "$probe"; return 1; }
     ! grep -q 'platform@\|no-reply@\|unit-test-platform-password' "$probe" || { echo "6a still submits as the platform identity"; cat "$probe"; return 1; }
     [[ "$output" != *"unit-test-vendor-password"* ]]
+}
+
+@test "assert 3 fails on an inconsistent alerts@ identity before anything is submitted (TASK-015)" {
+    shim_dns_check_ok
+    shim dig 'exit 0'
+    shim curl 'exit 0'
+    export VM_CHECK_IDENTITIES=1
+    run "$BRINGUP" --assert 3
+    unset VM_CHECK_IDENTITIES
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded gremion-vendor-mail 'check-identities'
+    refute_recorded curl 'smtp://'
+    [[ "$output" == *"3=FAIL"* ]]
+    [[ "$output" == *"alerts@"* ]]
 }
 
 @test "assert 3's loopback probe submits as system@ with the vendor password (TASK-015)" {

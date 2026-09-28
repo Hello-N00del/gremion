@@ -473,6 +473,15 @@ EOF
 
 assert_3_dkim() {
     local sel="$DKIM_SELECTOR_A" rc=0 keyfile local_pub published msg hdr bh_pub bh_calc
+    # The vendor's sending identities first (TASK-015): Alertmanager's
+    # ALERT_SMTP_USER and ALERT_EMAIL_FROM must both be alerts@<domain>, with
+    # the alert_smtp password equal in mail.env and ops.env. must-match-sender
+    # refuses anything else with 5.7.1, so a mismatch here is an alert channel
+    # that cannot send, found before the first alert is due.
+    if ! "$VENDOR_MAIL_BIN" check-identities; then
+        bad "the alerts@${PLATFORM_DOMAIN} identity is inconsistent (gremion-vendor-mail check-identities)"
+        return 1
+    fi
     keyfile="$(gremion_root)/etc/secrets/mail/${sel}.private"
     if [ ! -f "$keyfile" ]; then
         bad "DKIM private key missing: ${keyfile}"; return 1
