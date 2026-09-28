@@ -28,10 +28,13 @@
 //                  to (or embeds) a vendor value. Vacuity guards: > 0 app
 //                  services rendered, and the vendor values pairwise distinct;
 //                  a render that fails is unparseable, never "no finding".
-//   --host         value HASHES (sha256) over etc/env/*.env, etc/secrets/mail/*
-//                  (vendor) and etc/secrets/tenants/** plus the running
-//                  gremion-ui containers' environment (connector). No value is
-//                  ever printed. An unreadable store is unparseable.
+//   --host         the live stores: vendor = mail.env's secret keys and
+//                  etc/secrets/mail/**; connector = app-*.env, state.env,
+//                  ops.env (minus its two vendor keys), etc/secrets/tenants/**
+//                  (compared in memory, by substring) and the running
+//                  gremion-ui environment (sha256 hashes from the launcher).
+//                  Two vendor secrets with one value fail. No value is ever
+//                  printed. An unreadable store is unparseable.
 //
 // BLIND SPOT, named: a `docker compose run -e X=...` injection (as
 // test/host/integration/pooled-stack-proof.sh does for tenant-create) is in
@@ -164,7 +167,7 @@ export function composeViolations(renders, vendorValues, allowances) {
       for (const [k, v] of envEntries(svc)) {
         for (const [vk, vv] of entries) {
           if (!vv || !v.includes(vv)) continue
-          if (id.startsWith('app-') && allowed(allowances, { file: CONNECTOR_TEMPLATE, key: vk, vendorKey: vk })) continue
+          if (id.startsWith('app-') && k === vk && v === vv && allowed(allowances, { file: CONNECTOR_TEMPLATE, key: vk, vendorKey: vk })) continue
           violations.push(`${id}/${name}: environment ${k} resolves to the vendor secret ${vk}`)
         }
       }
@@ -207,40 +210,62 @@ export function readStore(dir, { reader = readFileSync, lister = readdirSync, st
   return out
 }
 
+// ops.env is the vendor side (Alertmanager, the Stalwart integration): it
+// holds these two vendor values BY DESIGN and nothing else of the vendor's.
+export const OPS_VENDOR_KEYS = new Set(['ALERT_SMTP_PASSWORD', 'STALWART_API_KEY'])
+
 /**
+ * Values are compared IN MEMORY inside a --network none container, by
+ * SUBSTRING (a vendor secret embedded in a URL or a JSON file is still that
+ * secret); the running gremion-ui environment arrives as sha256 hashes only
+ * (the launcher never writes those values to disk), so it is compared by
+ * whole value. No value is ever printed.
  * @param {{envDir: string, secretsDir: string, uiEnvFile: string|null, allowances: object, io?: object}} o
  */
 export function hostViolations({ envDir, secretsDir, uiEnvFile, allowances, io = {} }) {
   const reader = io.reader ?? readFileSync
+  const readEnv = (name) => envMap(String(reader(path.join(envDir, name), 'utf8')), name)
   let mail
   try {
-    mail = envMap(String(reader(path.join(envDir, 'mail.env'), 'utf8')), 'mail.env')
+    mail = readEnv('mail.env')
   } catch (e) {
     return { unparseable: `cannot read mail.env: ${e.code ?? e.message}`, violations: [] }
   }
-  const vendor = new Map() // hash -> label
-  for (const [k, v] of Object.entries(mail)) if (VENDOR_SECRET_KEY_RE.test(k) && v) vendor.set(sha256(v), `mail.env ${k}`)
-  if (vendor.size === 0) return { unparseable: 'mail.env carries no vendor secret value', violations: [] }
+  const vendor = [] // {label, key, value}
+  for (const [k, v] of Object.entries(mail)) if (VENDOR_SECRET_KEY_RE.test(k) && v) vendor.push({ label: `mail.env ${k}`, key: k, value: v })
+  if (vendor.length === 0) return { unparseable: 'mail.env carries no vendor secret value', violations: [] }
   try {
-    for (const [rel, content] of readStore(path.join(secretsDir, 'mail'), io)) if (content) vendor.set(sha256(content), `secrets/mail/${rel}`)
+    for (const [rel, content] of readStore(path.join(secretsDir, 'mail'), io)) if (content) vendor.push({ label: `secrets/mail/${rel}`, key: null, value: content })
   } catch (e) {
     return { unparseable: `cannot read the vendor store secrets/mail: ${e.code ?? e.message}`, violations: [] }
   }
-  const connector = []
-  for (const colour of ['blue', 'green']) {
-    let app
+  const violations = []
+  // Two vendor secrets with one value are ONE secret: every label but the
+  // first would otherwise hide behind it (and behind its allowance).
+  const first = new Map()
+  for (const v of vendor) {
+    if (first.has(v.value)) violations.push(`${v.label} holds the same value as ${first.get(v.value).label} -- two vendor secrets are one`)
+    else first.set(v.value, v)
+  }
+  const connector = [] // {label, key, file, value} or {label, key, hash}
+  for (const name of ['app-blue.env', 'app-green.env', 'state.env', 'ops.env']) {
+    let env
     try {
-      app = envMap(String(reader(path.join(envDir, `app-${colour}.env`), 'utf8')), `app-${colour}.env`)
+      env = readEnv(name)
     } catch (e) {
-      return { unparseable: `cannot read app-${colour}.env: ${e.code ?? e.message}`, violations: [] }
+      return { unparseable: `cannot read ${name}: ${e.code ?? e.message}`, violations: [] }
     }
-    for (const [k, v] of Object.entries(app)) if (v) connector.push({ label: `app-${colour}.env ${k}`, key: k, hash: sha256(v), file: CONNECTOR_TEMPLATE })
+    for (const [k, v] of Object.entries(env)) {
+      if (!v || (name === 'ops.env' && OPS_VENDOR_KEYS.has(k))) continue
+      connector.push({ label: `${name} ${k}`, key: k, file: name.startsWith('app-') ? CONNECTOR_TEMPLATE : name, value: v })
+    }
   }
   try {
-    for (const [rel, content] of readStore(path.join(secretsDir, 'tenants'), io)) if (content) connector.push({ label: `secrets/tenants/${rel}`, hash: sha256(content) })
+    for (const [rel, content] of readStore(path.join(secretsDir, 'tenants'), io)) if (content) connector.push({ label: `secrets/tenants/${rel}`, key: null, value: content })
   } catch (e) {
     return { unparseable: `cannot read the connector store secrets/tenants: ${e.code ?? e.message}`, violations: [] }
   }
+  let uiContainers = 0
   if (uiEnvFile) {
     let tsv
     try {
@@ -248,21 +273,28 @@ export function hostViolations({ envDir, secretsDir, uiEnvFile, allowances, io =
     } catch (e) {
       return { unparseable: `cannot read the gremion-ui environment hashes: ${e.code ?? e.message}`, violations: [] }
     }
+    const colours = new Set()
     for (const line of tsv.split('\n').filter(Boolean)) {
       const [colour, key, hash] = line.split('\t')
-      if (!/^[0-9a-f]{64}$/.test(hash ?? '')) return { unparseable: `gremion-ui environment hash line is malformed`, violations: [] }
-      connector.push({ label: `gremion-ui (${colour}) env ${key}`, key, hash, file: CONNECTOR_TEMPLATE })
+      if (!/^[0-9a-f]{64}$/.test(hash ?? '')) return { unparseable: 'gremion-ui environment hash line is malformed', violations: [] }
+      colours.add(colour)
+      connector.push({ label: `gremion-ui (${colour}) env ${key}`, key, file: CONNECTOR_TEMPLATE, hash })
+    }
+    uiContainers = colours.size
+  }
+  for (const c of connector) {
+    for (const w of vendor) {
+      const hit = c.hash !== undefined ? c.hash === sha256(w.value) : c.value.includes(w.value)
+      if (!hit) continue
+      // The one allowance: the app tier's PLATFORM_SMTP_PASSWORD holding
+      // EXACTLY platform@'s value (and platform@'s value is no other vendor
+      // secret's -- a duplicate is reported above and never allowed).
+      const exact = c.hash !== undefined || c.value === w.value
+      if (exact && c.key && c.key === w.key && c.file === CONNECTOR_TEMPLATE && first.get(w.value) === w && vendor.filter((x) => x.value === w.value).length === 1 && allowed(allowances, { file: CONNECTOR_TEMPLATE, key: c.key, vendorKey: w.key })) continue
+      violations.push(`${c.label} holds the vendor secret ${w.label}`)
     }
   }
-  const violations = []
-  for (const c of connector) {
-    const v = vendor.get(c.hash)
-    if (!v) continue
-    const vendorKey = v.startsWith('mail.env ') ? v.slice('mail.env '.length) : null
-    if (c.key && vendorKey && c.key === vendorKey && allowed(allowances, { file: c.file, key: c.key, vendorKey })) continue
-    violations.push(`${c.label} holds the same value as ${v}`)
-  }
-  return { unparseable: null, violations, vendorCount: vendor.size, connectorCount: connector.length }
+  return { unparseable: null, violations, vendorCount: vendor.length, connectorCount: connector.length, uiContainers }
 }
 
 // ── CLI ────────────────────────────────────────────────────────────────────
@@ -302,7 +334,7 @@ export async function main(argv = process.argv.slice(2), log = console, { compos
       return 2
     }
     for (const v of r.violations) log.error(`FAIL ${v}`)
-    log.log(`SECRET-SEPARATION: mode=host vendor-values=${r.vendorCount} connector-values=${r.connectorCount} shared=${r.violations.length}`)
+    log.log(`SECRET-SEPARATION: mode=host vendor-values=${r.vendorCount} connector-values=${r.connectorCount} ui-containers=${r.uiContainers} shared=${r.violations.length}`)
     return r.violations.length ? 1 : 0
   }
   const a = staticViolations(readTemplates(), allowances)

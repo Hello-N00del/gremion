@@ -155,6 +155,8 @@ function hostTree() {
   mkdirSync(path.join(sec, 'tenants', 'alpha'), { recursive: true })
   writeFileSync(path.join(env, 'mail.env'), Object.entries(VENDOR).map(([k, v]) => `${k}=${v}`).join('\n') + '\nPLATFORM_DOMAIN=example.org\n')
   for (const c of ['blue', 'green']) writeFileSync(path.join(env, `app-${c}.env`), 'PLATFORM_DOMAIN=example.org\nPLATFORM_SMTP_PASSWORD=fixture-platform-smtp-value\nAUTH_SECRET=other\n')
+  writeFileSync(path.join(env, 'state.env'), 'PLATFORM_DOMAIN=example.org\n')
+  writeFileSync(path.join(env, 'ops.env'), 'PLATFORM_DOMAIN=example.org\nALERT_SMTP_PASSWORD=fixture-alert-smtp-value\nSTALWART_API_KEY=fixture-stalwart-api-value\n')
   writeFileSync(path.join(sec, 'mail', 'g2026a.private'), 'dkim-key-fixture')
   writeFileSync(path.join(sec, 'tenants', 'alpha', 'smtp-password'), 'tenant-own-value')
   return { root, env, sec }
@@ -184,7 +186,7 @@ test('--host: a tenant secret equal to VENDOR_SMTP_PASSWORD is RED, and no value
     lines.length = 0
     const code2 = await main(['--host', '--env-dir', t.env, '--secrets-dir', t.sec, '--ui-env', path.join(t.root, 'ui.tsv')], log)
     assert.equal(code2, 1)
-    assert.match(lines.join('\n'), /FAIL secrets\/tenants\/alpha\/smtp-password holds the same value as mail\.env VENDOR_SMTP_PASSWORD/)
+    assert.match(lines.join('\n'), /FAIL secrets\/tenants\/alpha\/smtp-password holds the vendor secret mail\.env VENDOR_SMTP_PASSWORD/)
     for (const v of Object.values(VENDOR)) assert.ok(!lines.join('\n').includes(v), `printed ${v}`)
   } finally {
     rmSync(t.root, { recursive: true, force: true })
@@ -198,7 +200,7 @@ test('--host: a gremion-ui container env value equal to ALERT_SMTP_PASSWORD (by 
     const h = createHash('sha256').update('fixture-alert-smtp-value').digest('hex')
     writeFileSync(path.join(t.root, 'ui.tsv'), `green\tMAILER_PW\t${h}\n`)
     const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: path.join(t.root, 'ui.tsv'), allowances: ALLOW })
-    assert.deepEqual(r.violations, ['gremion-ui (green) env MAILER_PW holds the same value as mail.env ALERT_SMTP_PASSWORD'])
+    assert.deepEqual(r.violations, ['gremion-ui (green) env MAILER_PW holds the vendor secret mail.env ALERT_SMTP_PASSWORD'])
   } finally {
     rmSync(t.root, { recursive: true, force: true })
   }
@@ -230,6 +232,55 @@ test('--host: an unreadable NESTED tenant directory is unparseable too', () => {
     }
     const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: null, allowances: ALLOW, io: { lister } })
     assert.match(r.unparseable ?? '', /secrets\/tenants: EACCES/)
+  } finally {
+    rmSync(t.root, { recursive: true, force: true })
+  }
+})
+
+test('--host: two vendor keys sharing one value are RED, and cannot ride the platform allowance (review A1/B3/C1)', () => {
+  const t = hostTree()
+  try {
+    // system@'s password equal to platform@'s: the app tier's allowed
+    // PLATFORM_SMTP_PASSWORD would then BE system@'s password.
+    writeFileSync(path.join(t.env, 'mail.env'), readFileSync(path.join(t.env, 'mail.env'), 'utf8').replace('VENDOR_SMTP_PASSWORD=fixture-vendor-smtp-value', 'VENDOR_SMTP_PASSWORD=fixture-platform-smtp-value'))
+    const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: null, allowances: ALLOW })
+    assert.match(r.violations.join('\n'), /mail\.env PLATFORM_SMTP_PASSWORD holds the same value as mail\.env VENDOR_SMTP_PASSWORD -- two vendor secrets are one/)
+    assert.match(r.violations.join('\n'), /app-blue\.env PLATFORM_SMTP_PASSWORD holds the vendor secret mail\.env VENDOR_SMTP_PASSWORD/)
+  } finally {
+    rmSync(t.root, { recursive: true, force: true })
+  }
+})
+
+test('--host: a vendor value EMBEDDED in a connector value (a URL password) is RED', () => {
+  const t = hostTree()
+  try {
+    writeFileSync(path.join(t.env, 'app-green.env'), 'PLATFORM_DOMAIN=example.org\nSMTP_URL=smtp://alerts:fixture-alert-smtp-value@mail.example.org:587\n')
+    writeFileSync(path.join(t.sec, 'tenants', 'alpha', 'config.json'), '{"smtp":{"password":"fixture-stalwart-api-value"}}')
+    const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: null, allowances: ALLOW })
+    assert.match(r.violations.join('\n'), /app-green\.env SMTP_URL holds the vendor secret mail\.env ALERT_SMTP_PASSWORD/)
+    assert.match(r.violations.join('\n'), /secrets\/tenants\/alpha\/config\.json holds the vendor secret mail\.env STALWART_API_KEY/)
+  } finally {
+    rmSync(t.root, { recursive: true, force: true })
+  }
+})
+
+test('--host: ops.env may hold its two vendor keys, and nothing else of the vendor', () => {
+  const t = hostTree()
+  try {
+    writeFileSync(path.join(t.env, 'ops.env'), readFileSync(path.join(t.env, 'ops.env'), 'utf8') + 'EXTRA=fixture-stalwart-admin-value\n')
+    const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: null, allowances: ALLOW })
+    assert.deepEqual(r.violations, ['ops.env EXTRA holds the vendor secret mail.env STALWART_ADMIN_PASSWORD'])
+  } finally {
+    rmSync(t.root, { recursive: true, force: true })
+  }
+})
+
+test('--host: state.env (the council tier) is in the connector set', () => {
+  const t = hostTree()
+  try {
+    writeFileSync(path.join(t.env, 'state.env'), 'KEYCLOAK_SMTP_PASSWORD=fixture-vendor-smtp-value\n')
+    const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: null, allowances: ALLOW })
+    assert.deepEqual(r.violations, ['state.env KEYCLOAK_SMTP_PASSWORD holds the vendor secret mail.env VENDOR_SMTP_PASSWORD'])
   } finally {
     rmSync(t.root, { recursive: true, force: true })
   }
