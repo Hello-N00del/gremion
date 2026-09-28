@@ -79,7 +79,6 @@ FORBIDDEN_FIXTURES=(vendor-contact compose-f compose-profile compose-p down-v
 # its reason is the only kind this file accepts (brief Q5: the owning task's own
 # gate goes RED, and the orchestrator grants the line edit).
 PENDING_PATHS=(
-    'scripts/migrations/ranges.json|TASK-029'  # the migration register (upgrade.md)
     'scripts/migrations/runner/|TASK-075'      # the pre-migration dump (upgrade.md)
     'scripts/backup/|TASK-089'                 # the one-off verification (backup.md)
     'compose/observability/|TASK-039'          # the operator-only stack (install.md)
@@ -737,6 +736,22 @@ check_pending_cited() {
     return "$bad"
 }
 
+# The reverse of check_pending_cited: every 'PENDING TASK-nnn' the runbook says
+# must still be backed by a PENDING_PATHS entry of that task. Deleting an entry
+# once its path lands (pending_landed) would otherwise leave the prose claiming
+# the dependency is missing, with nothing to notice (TASK-029, 2026-09-28).
+check_pending_backed() {
+    local t e bad=0 backed
+    while read -r t; do
+        backed=0
+        for e in "${PENDING_PATHS[@]}"; do
+            [ "${e#*|}" = "$t" ] && { backed=1; break; }
+        done
+        [ "$backed" -eq 1 ] || { echo "the runbook cites 'PENDING ${t}' but PENDING_PATHS has no ${t} entry: rewrite the citation to describe what landed" >&2; bad=1; }
+    done < <(all_text "$1" | grep -oE 'PENDING TASK-[0-9]{3}' | sed 's/^PENDING //' | sort -u)
+    return "$bad"
+}
+
 pending_landed() {                               # <tree root>
     local e p landed=()
     for e in "${PENDING_PATHS[@]}"; do
@@ -760,7 +775,7 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
             check_postconditions check_required check_forbidden check_restore_target
             check_install_tail check_run_record check_floor check_artefacts
             check_deploy_log check_reboot_gate check_deploy_user check_registry_creds
-            check_post_vars check_render_first)
+            check_post_vars check_render_first check_pending_backed)
 
 # ---------------------------------------------------------------------------
 
@@ -1042,6 +1057,17 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
     d="$(real_dir)"
     [ "${#PENDING_PATHS[@]}" -ge 1 ]
     check_pending_cited "$d"
+}
+
+@test "every PENDING citation in the runbook is still backed by a PENDING entry" {
+    d="$(real_dir)"
+    check_pending_backed "$d"
+    # Watched RED on the valid fixture carrying a citation no entry backs.
+    d="$(fixture valid)"
+    printf '\n- PENDING TASK-999 (`scripts/nowhere/`): a dependency that has no entry.\n' >> "$d/README.md"
+    run check_pending_backed "$d"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"PENDING_PATHS has no TASK-999 entry"* ]]
 }
 
 @test "positive control: the valid fixture passes every check" {
