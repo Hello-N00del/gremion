@@ -138,7 +138,7 @@ function readFixtureLines(file: string): string[] {
 
 describe('the default-tenant family is gone from the tracked tree (TASK-042 deletion assertion)', () => {
   for (const fam of FAMILIES) {
-    describe(fam.id, () => {
+    describe(`${fam.id}`, () => {
       const pathspecs = [...fam.scope, ...BASE_EXCLUDES]
 
       it('scans a non-empty scope that lists its sentinel carriers and no markdown', () => {
