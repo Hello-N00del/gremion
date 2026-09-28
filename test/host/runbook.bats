@@ -529,6 +529,31 @@ check_registry_creds() {
     return "$bad"
 }
 
+# A post-condition is often typed in a new shell (after a restore, a reboot, a
+# second session), so every lowercase variable it reads must be assigned in the
+# post-condition itself or in the file's preamble (the bash before the first
+# `## ` heading). Uppercase names come from load_env and the preamble exports.
+assigned_names() {                               # (stdin: bash text)
+    grep -v '^[[:space:]]*#' \
+        | grep -oE '(^|[[:space:];(]|export[[:space:]]+)[a-z_][a-z0-9_]*=|for[[:space:]]+[a-z_][a-z0-9_]*[[:space:]]+in' \
+        | grep -oE '[a-z_][a-z0-9_]*(=| in)$' | sed -E 's/(=| in)$//' | sort -u
+}
+
+check_post_vars() {
+    local u pre text assigned v bad=0
+    for u in "${UNITS[@]}"; do
+        pre="$(awk '/^## / { exit } { print }' "$1/$(file_of "$u").md" | bash_blocks)"
+        text="$(postcondition_blocks "$1" "$u")"
+        assigned="$(printf '%s\n%s\n' "$pre" "$text" | assigned_names)"
+        while read -r v; do
+            [ -n "$v" ] || continue
+            grep -qxF -- "$v" <<<"$assigned" \
+                || { echo "${u}: Post-condition reads \$${v}, which neither it nor the preamble assigns (the shell that set it may be gone)" >&2; bad=1; }
+        done < <(grep -v '^[[:space:]]*#' <<<"$text" | grep -oE '\$\{?[a-z_][a-z0-9_]*' | sed -E 's/^\$\{?//' | sort -u)
+    done
+    return "$bad"
+}
+
 check_install_tail() {
     local last post
     last="$(unit_text "$1" install | section_body '## Steps' | awk '
@@ -683,7 +708,8 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
             check_operator_phrase check_commands check_repo_paths check_host_paths
             check_postconditions check_required check_forbidden check_restore_target
             check_install_tail check_run_record check_floor check_artefacts
-            check_deploy_log check_reboot_gate check_deploy_user check_registry_creds)
+            check_deploy_log check_reboot_gate check_deploy_user check_registry_creds
+            check_post_vars)
 
 # ---------------------------------------------------------------------------
 
@@ -850,6 +876,14 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
     grep -vF '/home/gremion/.docker/config.json' "$d/upgrade.md" > "$d/upgrade.tmp" && mv "$d/upgrade.tmp" "$d/upgrade.md"
     run check_registry_creds "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"upgrade.md runs gremion-deploy but its Post-condition does not read /home/gremion/.docker/config.json"* ]]
+}
+
+@test "every variable a post-condition reads is assigned there or in the preamble" {
+    d="$(real_dir)"; check_post_vars "$d"
+    d="$(fixture valid)"; check_post_vars "$d"
+    d="$(fixture unset-var)"
+    run check_post_vars "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *'restore-A: Post-condition reads $file'* ]]
 }
 
 @test "install ends by disabling the backup timer and asserts disabled and inactive" {
