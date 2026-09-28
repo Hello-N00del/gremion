@@ -36,15 +36,20 @@ backup product; once it passes, that product is switched off for the pilot
 
 ### Steps
 
-1. **Record the expected data**, just before the provider backup is taken.
+1. **Record the expected data**, just before the provider backup is taken. The
+   file `/root/drill-expected.txt` is part of that backup, so the restored host
+   carries the values it is compared with. `pg` is the state project's server
+   that holds the database: `postgres` for the kernel's databases, `<id>-postgres`
+   for a module's (the pooled layout, [pooled-stack-layout.md](../pooled-stack-layout.md)).
+   Write the values down: the post-condition types them again in a new shell.
 
 ```bash
 . /opt/gremion/lib/common.sh && load_env /opt/gremion/etc/env/state.env
 cd /opt/gremion/current
 env_file="/opt/gremion/etc/env/<project>.env"; svc="<service>"; file="<container path>"
-db="<database>"; sql="<query with a one-value answer>"
+pg="postgres"; db="<database>"; sql="<query with a one-value answer>"
 docker compose --env-file "$env_file" exec -T "$svc" sha256sum "$file" | tee /root/drill-expected.txt
-docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
+docker compose --env-file /opt/gremion/etc/env/state.env exec -T "$pg" \
   psql -U postgres -d "$db" -tAc "$sql" | tee -a /root/drill-expected.txt
 ```
 
@@ -65,14 +70,19 @@ journalctl --list-boots | tail -n 2
 
 ### Post-condition
 
-The restored host holds the expected data, and the reboot gate passed on it:
+The restored host holds the expected data, and the reboot gate passed on it.
+The restore replaced the shell of step 1, so the same values are typed again
+here and the fresh readings are compared with the recorded ones:
 
 ```bash
 . /opt/gremion/lib/common.sh && load_env /opt/gremion/etc/env/state.env
 cd /opt/gremion/current
-docker compose --env-file "$env_file" exec -T "$svc" sha256sum "$file"            # equals line 1 of drill-expected.txt
-docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
-  psql -U postgres -d "$db" -tAc "$sql"                                          # equals line 2 of drill-expected.txt
+env_file="/opt/gremion/etc/env/<project>.env"; svc="<service>"; file="<container path>"   # as in step 1
+pg="postgres"; db="<database>"; sql="<query with a one-value answer>"                      # as in step 1
+{ docker compose --env-file "$env_file" exec -T "$svc" sha256sum "$file"
+  docker compose --env-file /opt/gremion/etc/env/state.env exec -T "$pg" \
+    psql -U postgres -d "$db" -tAc "$sql"; } | diff /root/drill-expected.txt -   # no output: file and row unchanged
+test -s /root/drill-expected.txt && wc -l < /root/drill-expected.txt             # 2: the comparison had something to compare
 systemctl show gremion-verify.service -p Result --value                          # success
 jq -r '.ts, .ok' /opt/gremion/runtime/last-verify.json                           # after the restore, true
 host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -n 1)"
@@ -102,7 +112,11 @@ by value (E12). It prints `RESTORE-PROOF:` and, with `--rto`, `RTO-SECONDS=`.
 - Its `RESTIC_REPOSITORY` and `RESTIC_PASSWORD` reach the repository that holds
   the verification snapshot of [backup.md](backup.md), step 2.
 - Its `/opt/gremion/current` is the release tree of the same tag.
-- The proof values were recorded on the production host at backup time.
+- The proof values were recorded on the production host at backup time. The
+  proof row is a kernel database on the state project's `postgres`:
+  `gremion-restore-into` proves rows there only, and stops with `BLOCKED:` on a
+  dump of a module's own `<id>-postgres` server until the release's restore
+  script can target a second server (PENDING TASK-089, `scripts/backup/`).
 
 ### Steps
 
