@@ -189,7 +189,18 @@ describe('migrations reference no renamed tables (post-010 org_units rename)', (
   const stripComments = (sql: string): string =>
     sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '')
 
-  const prefixNum = (file: string): number => Number.parseInt(file.slice(0, 3), 10)
+  // TASK-029: the number is every leading digit, not the first three. With a
+  // fixed slice(0, 3), 0018_ parsed as 1 after the pad-4 renumber and every
+  // case below silently vanished (21 -> 0).
+  const prefixNum = (file: string): number => {
+    const m = /^(\d+)_/.exec(file)
+    return m ? Number(m[1]) : Number.NaN
+  }
+
+  it('collects one case per file past each rename (21 at the pad-4 renumber, never 0)', () => {
+    const cases = RENAMES.flatMap(({ afterMigration }) => sqlFiles.filter((f) => prefixNum(f) > afterMigration))
+    expect(cases.length).toBeGreaterThanOrEqual(21)
+  })
 
   for (const { table, renamedTo, afterMigration } of RENAMES) {
     // `\bcommittees\b` matches the standalone table name but NOT `committee_*`

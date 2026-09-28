@@ -1,0 +1,20 @@
+{
+  "$comment": "TASK-029 TDD 10: after the pad-4 renumber, `git grep -nE '\\b0[0-5][0-9]_(<31 kernel-data slugs>)'` may hit only these paths. commentOnly: every hit line in that path must be a comment. Checked both ways by renumber.test.mjs (an unlisted hit fails; an entry matching no hit fails).",
+  "allow": [
+    { "glob": "gremion-ui/migrations/*.sql", "reason": "applied migration bytes are locked (applied.lock.json); their header comments keep the names they were written with" },
+    { "glob": "modules/*/migrations/*.sql", "reason": "applied module leaf migration bytes are locked; comments name the kernel file they were squashed from" },
+    { "glob": "modules/*/app/migrations/*.sql", "reason": "applied content app-chain bytes are locked (1200_ is frozen, 1201_ is its forward fix)" },
+    { "glob": "docs/superpowers/**", "reason": "brief section 3: do not touch docs/superpowers/" },
+    { "glob": "docker/**", "reason": "brief section 3: do not touch docker/ (init-databases.sh error text names 058_; residual for the compose/infra owner)" },
+    { "glob": "k8s/**", "reason": "brief section 3: do not touch k8s/ (same error text; residual for the k8s owner)" },
+    { "glob": "docs/ops/migration-portback-2026-09-15.md", "reason": "dated provenance record: names the files as they were ported" },
+    { "glob": "docs/ops/postgres-major.md", "reason": "dated measurement record: names the ledger rows as they were read back" },
+    { "glob": "modules/*/scripts/backfill.ts", "reason": "TASK-200 module source copy (parity with the extraction source); names the kernel file at extraction", "commentOnly": true },
+    { "glob": "modules/*/test/backfill.integration.test.ts", "reason": "TASK-200 module source copy; comment names the kernel file at extraction", "commentOnly": true },
+    { "glob": "modules/calendar/src/tenant-store.ts", "reason": "TASK-200 module source copy; comment names the kernel file at extraction", "commentOnly": true },
+    { "glob": "gremion-ui/src/lib/server/content-news-posts-migration.test.ts", "reason": "cites the StuRaOS tree's own 008_ file, not this repository's", "commentOnly": true },
+    { "glob": "scripts/kernel-hygiene-check.mjs", "reason": "check m1 reads the dated port-back record, which names the files as ported" },
+    { "glob": "scripts/check-module-migration-names.mjs", "reason": "G6 comment explaining why slugs are compared (a pad-3 module name vs the pad-4 kernel name)", "commentOnly": true },
+    { "glob": "scripts/check-module-migration-names.test.mjs", "reason": "G6 fixtures: a module file named with a kernel slug at pad 3 is the RED case" }
+  ]
+}
