@@ -592,18 +592,32 @@ assert_5_mta_sts() {
 # RECEIVER_AUTHSERV_ID gives the provider's authserv-id directly (the
 # university's is never committed). Neither set is an operator step, so the
 # callers turn it into BLOCKED before anything is judged.
-receiver_named() { [ -n "${RECEIVER:-}" ] || [ -n "${RECEIVER_AUTHSERV_ID:-}" ]; }
+# Exactly one of the two forms; RECEIVER_AUTHSERV_ID needs RECEIVER_DOMAIN (the
+# receiver's own domain -- guessing it from the id's last two labels makes
+# mx.uni-x.ac.uk's hosts "*.ac.uk"). Both forms at once would trust two
+# receivers, which is the union check-received refuses.
+receiver_named() {
+    if [ -n "${RECEIVER:-}" ]; then
+        [ -z "${RECEIVER_AUTHSERV_ID:-}" ]
+    else
+        [ -n "${RECEIVER_AUTHSERV_ID:-}" ] && [ -n "${RECEIVER_DOMAIN:-}" ]
+    fi
+}
 
 blocked_on_receiver() {   # <assert>
-    printf 'BLOCKED: name the receiving mailbox provider for the header verdict of assert %s:\n' "$1"
+    printf 'BLOCKED: name ONE receiving mailbox provider for the header verdict of assert %s:\n' "$1"
     printf '  RECEIVER=<name in ops/vendor-mail/deliverability/receivers.json>, or\n'
-    printf '  RECEIVER_AUTHSERV_ID=<the authserv-id in its Authentication-Results>\n'
+    printf '  RECEIVER_AUTHSERV_ID=<the authserv-id in its Authentication-Results> and\n'
+    printf '  RECEIVER_DOMAIN=<the receiver'"'"'s own domain> -- not both forms\n'
 }
 
 check_received_headers() {   # <file>
     local -a args=(check-received --file "$1")
-    [ -z "${RECEIVER:-}" ] || args+=(--receiver "$RECEIVER")
-    [ -z "${RECEIVER_AUTHSERV_ID:-}" ] || args+=(--authserv-id "$RECEIVER_AUTHSERV_ID")
+    if [ -n "${RECEIVER:-}" ]; then
+        args+=(--receiver "$RECEIVER")
+    else
+        args+=(--authserv-id "$RECEIVER_AUTHSERV_ID" --receiver-domain "$RECEIVER_DOMAIN")
+    fi
     "$VENDOR_MAIL_BIN" "${args[@]}"
 }
 
@@ -707,8 +721,8 @@ assert_6b_keycloak() {
     # realm senders are TASK-043's). A reset probed from any other realm would
     # prove whatever sender THAT realm has, not system@.
     if [ "${KEYCLOAK_PROBE_REALM:-}" != "master" ]; then
-        printf 'BLOCKED: KEYCLOAK_PROBE_REALM=%s: realm-smtp sets the vendor sender on master only;\n' "$KEYCLOAK_PROBE_REALM"
-        printf 'the %s realm'"'"'s sender is TASK-043'"'"'s. Probe from master (the mail.env.tmpl default).\n' "$KEYCLOAK_PROBE_REALM"
+        printf 'BLOCKED: KEYCLOAK_PROBE_REALM=%s: realm-smtp sets the vendor sender on master only;\n' "${KEYCLOAK_PROBE_REALM:-<unset>}"
+        printf 'the %s realm'"'"'s sender is TASK-043'"'"'s. Probe from master (the mail.env.tmpl default).\n' "${KEYCLOAK_PROBE_REALM:-<unset>}"
         return 3
     fi
     need_cmd docker

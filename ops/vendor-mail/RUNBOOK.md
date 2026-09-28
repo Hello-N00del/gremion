@@ -44,7 +44,7 @@ from the release tree: `/opt/gremion/current/infra/host/bin/gremion-vendor-mail`
 | `realm-smtp` | `master` -> `system@` via `mail.<domain>:587` STARTTLS; password on stdin; read back. `--realm/--tenant/--rotate/--revoke` are reserved for TASK-043 and refused |
 | `collect --out DIR` | principal names/emails/roles and every realm's smtp user, secrets stripped |
 | `check-identities` | alerts@ identity consistent across `mail.env` / `ops.env` |
-| `check-received --file F --receiver NAME \| --authserv-id ID` | a delivered message's headers prove an own-server, SPF/DKIM/DMARC-passing delivery at ONE named receiver: only its authserv-id is trusted, and the accepting hop (and every hop above it) must be `by` one of its hosts (`hostSuffixes` in `deliverability/receivers.json`, or `--receiver-domain`, default the last two labels of the authserv-id). In bring-up, set `RECEIVER` or `RECEIVER_AUTHSERV_ID`; without either, 6a/6b are BLOCKED |
+| `check-received --file F --receiver NAME \| --authserv-id ID` | a delivered message's headers prove an own-server, SPF/DKIM/DMARC-passing delivery at ONE named receiver: only its authserv-id is trusted, and the accepting hop (and every hop above it) must be `by` one of its hosts (`hostSuffixes` in `deliverability/receivers.json`, or the mandatory `--receiver-domain` with `--authserv-id`). In bring-up, set `RECEIVER`, or `RECEIVER_AUTHSERV_ID` together with `RECEIVER_DOMAIN` (never both forms); otherwise 6a/6b are BLOCKED |
 | `check-secret-separation --host` | value hashes: no vendor secret in `app-*.env`, `etc/secrets/tenants/**` or the running gremion-ui environment |
 | `check-principals --host [--no-allowances]` | no realm shares a principal with another or with the vendor |
 | `check-upstream-image`, `check-deliverability-record [--require]` | TRD-253 / TRD-252 |
@@ -121,6 +121,16 @@ TASK-038 and gate F2 run `--require`.
   a receiver whose Authentication-Results carries no authserv-id (reported for
   Microsoft 365) cannot be proven by check-received until its format is
   measured and handled.
+- **check-received, remaining trust limits (round-2 review, LOW):** the
+  accepting hop is the LOWEST hop from IP-B, so a sender who controls the
+  vendor side could pre-write a hop below Stalwart's own; a bare token in a
+  from-clause comment is read as an address, and some MTAs write the client's
+  HELO there. **from-align.sieve** does not decode comments, quoted group
+  names or full-width characters in From, and leaves Sender/Reply-To
+  unchecked (display-level only: DMARC alignment still holds).
+  **check-secret-separation --host** does not decode percent- or
+  JSON-escaped copies of a vendor value, and hashes only the first
+  gremion-ui container of each colour.
 - **Connection rate limit:** the pinned build limits connections per source IP
   (`[5, 1000ms]`, measured); a burst from one source is delayed, not refused.
 - **Host-only (TASK-038 re-runs):** `${STACK}-mail-stalwart` healthy

@@ -251,6 +251,11 @@ ui_env_hashes() {   # <file>
     : > "$file"
     [[ ! -f "$(gremion_root)/runtime/active-colour" ]] \
         || active="$(tr -d '[:space:]' < "$(gremion_root)/runtime/active-colour")"
+    # No live colour recorded means no app to compare against: "hashed 0" is
+    # never a pass (round-2 review).
+    [[ "$active" == blue || "$active" == green ]] \
+        || die "runtime/active-colour is ${active:-absent}, not blue or green: there is no live gremion-ui to compare (deploy first)" \
+               "$GREMION_EXIT_USAGE"
     for colour in blue green; do
         cid="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${colour}" \
                             --filter "label=com.docker.compose.service=gremion-ui")" \

@@ -704,7 +704,7 @@ exit 1'
 Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=example.org; dmarc=pass header.from=example.org
 Received: from mail.example.org (mail.example.org. [203.0.113.25]) by mx.example.net
 EOF
-    RECEIVER_AUTHSERV_ID=mx.example.net \
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
         run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"6a=ok"* ]]
@@ -723,7 +723,7 @@ Received: from o1.sendgrid.net (o1.sendgrid.net. [198.51.100.77]) by mx.example.
 
 sent on behalf of 203.0.113.25
 EOF
-    RECEIVER_AUTHSERV_ID=mx.example.net \
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
         run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"sendgrid.net"* ]]
@@ -738,7 +738,7 @@ EOF
 Authentication-Results: mx.example.net; dkim=pass; spf=pass; dmarc=pass
 Received: from mail.example.org (mail.example.org. [203.0.113.10]) by mx.example.net
 EOF
-    RECEIVER_AUTHSERV_ID=mx.example.net \
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
         run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
     [ "$status" -eq 1 ]
     [[ "$output" == *"203.0.113.25"* ]]
@@ -752,6 +752,19 @@ EOF
     run env -u RECEIVER -u RECEIVER_AUTHSERV_ID "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
     [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"BLOCKED:"*"RECEIVER_AUTHSERV_ID"* ]]
+    refute_recorded gremion-vendor-mail 'check-received'
+}
+
+@test "the 6a header verdict is BLOCKED for an authserv-id without its domain, or two named receivers (round 2)" {
+    shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker 'exit 0'
+    printf 'x: y\n' > "${GREMION_ROOT}/results.txt"
+    run env -u RECEIVER -u RECEIVER_DOMAIN RECEIVER_AUTHSERV_ID=mx.example.net "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"RECEIVER_DOMAIN"* ]]
+    run env RECEIVER=google RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
     refute_recorded gremion-vendor-mail 'check-received'
 }
 
@@ -869,7 +882,7 @@ echo "unexpected kcadm call: $*" >&2; exit 1'
 Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=system@example.org; dmarc=pass header.from=example.org
 Received: from mail.example.org (mail.example.org [203.0.113.25]) by mx.example.net
 EOF
-    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net \
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
         run "$BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
     [[ "$output" == *"Keycloak reset mail dispatched"* ]] || { echo "status=${status}"; echo "$output"; return 1; }
     [ -f "${GREMION_ROOT}/kc/actions.json" ] || { echo "execute-actions-email never reached kcadm"; return 1; }
@@ -890,7 +903,7 @@ EOF
 Authentication-Results: mx.example.net; dkim=pass header.d=mailer.example.com; spf=pass smtp.mailfrom=system@example.org; dmarc=pass header.from=example.org
 Received: from mail.example.org (mail.example.org [203.0.113.25]) by mx.example.net
 EOF
-    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net \
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
         run "$BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"no dkim=pass with header.d=example.org"* ]]

@@ -81,7 +81,7 @@ test('comments inside Authentication-Results cannot smuggle a verdict', () => {
 
 test('the CLI: exit 0 on a proof, 1 on a relay, 2 without --file', () => {
   const quiet = { log() {}, error() {} }
-  const base = ['--domain', 'example.org', '--bind-ip', '192.0.2.25', '--authserv-id', 'mx.example.net']
+  const base = ['--domain', 'example.org', '--bind-ip', '192.0.2.25', '--authserv-id', 'mx.example.net', '--receiver-domain', 'example.net']
   assert.equal(main(['--file', path.join(FX, 'good-two-gateway-hops.eml'), ...base], quiet), 0)
   assert.equal(main(['--file', path.join(FX, 'esp-sendgrid.eml'), ...base], quiet), 1)
   assert.equal(main(base, quiet), 2)
@@ -127,4 +127,23 @@ test("--receiver <name> trusts that receiver's authserv-ids and host suffixes fr
   const g = read('good-two-gateway-hops.eml').replaceAll('example.net', 'google.com').replace('Authentication-Results: mx.google.com;', 'Authentication-Results: mx.google.com;')
   assert.deepEqual(checkReceived(g, { ...OPTS, authservIds: ['mx.google.com'], receiverSuffixes: ['google.com'] }).reasons, [])
   assert.equal(main(['--file', path.join(FX, 'good-two-gateway-hops.eml'), ...base, '--receiver', 'nope'], quiet), 2)
+})
+
+test('--authserv-id alone without --receiver-domain is a usage error: two labels of mx.uni-x.ac.uk are a public suffix (round 2)', () => {
+  const quiet = { log() {}, error() {} }
+  const base = ['--file', path.join(FX, 'good-two-gateway-hops.eml'), '--domain', 'example.org', '--bind-ip', '192.0.2.25']
+  assert.equal(main([...base, '--authserv-id', 'mx.example.net'], quiet), 2)
+  assert.equal(main([...base, '--authserv-id', 'mx.example.net', '--receiver-domain', 'example.net'], quiet), 0)
+})
+
+test('--receiver and --authserv-id are mutually exclusive, and --authserv-id is given once (round 2)', () => {
+  const quiet = { log() {}, error() {} }
+  const base = ['--file', path.join(FX, 'good-two-gateway-hops.eml'), '--domain', 'example.org', '--bind-ip', '192.0.2.25', '--receiver-domain', 'example.net']
+  assert.equal(main([...base, '--authserv-id', 'mx.example.net', '--receiver', 'google'], quiet), 2)
+  assert.equal(main([...base, '--authserv-id', 'mx.example.net', '--authserv-id', 'mx.google.com'], quiet), 2)
+})
+
+test('a hex-only host name (cafe.be) is not an address literal (round 2)', () => {
+  const t = read('good-two-gateway-hops.eml').replace('by relay-7.example.net', 'by cafe.be')
+  assert.match(check(t).reasons.join('\n'), /a hop above the accepting one is by cafe\.be/)
 })

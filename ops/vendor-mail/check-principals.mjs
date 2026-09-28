@@ -69,6 +69,10 @@ export function principalViolations({ principals, realms }, allowances, { useAll
       else if (realm === 'master' && hostMode) out.push('vendor realm master has no SMTP user: run gremion-vendor-mail realm-smtp')
       continue
     }
+    // The credential goes where the host points: anything but the vendor's
+    // own server hands a principal's password to a third party.
+    const want = `mail.${user.split('@')[1] ?? ''}`
+    if (host !== want) out.push(`realm ${realm}: sends its SMTP user ${user} to ${host || '<no host>'}, not ${want}`)
     if (!names.has(user)) out.push(`realm ${realm}: SMTP user ${user} is no principal on the vendor's Stalwart`)
     if (from !== user) out.push(`realm ${realm}: From ${from || '<none>'} is not its SMTP user ${user} (must-match-sender refuses it)`)
     if (vendorRealms.has(realm)) {

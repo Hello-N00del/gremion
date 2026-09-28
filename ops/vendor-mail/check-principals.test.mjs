@@ -101,3 +101,9 @@ test('a customer realm on a principal that is neither kc-* nor transitional is R
 test('--dir without a value is a usage error, not the default directory', () => {
   assert.equal(main(['--dir'], { log() {}, error() {} }), 2)
 })
+
+test('a realm whose SMTP user is set but whose host is not mail.<its domain> is RED (round 2 M2)', () => {
+  const x = load()
+  x.realms = x.realms.map((r) => (r.realm === 'master' ? { realm: 'master', smtp: { user: 'system@example.org', from: 'system@example.org', host: 'smtp.sendgrid.net' } } : r))
+  assert.deepEqual(check(x).violations, ['realm master: sends its SMTP user system@example.org to smtp.sendgrid.net, not mail.example.org'])
+})

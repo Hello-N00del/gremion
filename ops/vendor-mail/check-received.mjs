@@ -5,7 +5,7 @@
 //
 //   node ops/vendor-mail/check-received.mjs --file <headers>
 //        [--domain D] [--bind-ip IP] [--bind-ip6 IP6]    (default: mail.env)
-//        --receiver NAME | --authserv-id ID [--receiver-domain D]
+//        --receiver NAME | --authserv-id ID --receiver-domain D
 //        [--receivers F]
 //
 // It replaces the substring greps of gremion-mail-bringup asserts 6a/6b,
@@ -28,6 +28,7 @@
 //
 // EXIT: 0 proven - 1 not proven (each reason printed) - 2 unreadable/usage.
 import { readFileSync } from 'node:fs'
+import { isIP } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { envMap } from './lib/env.mjs'
@@ -123,7 +124,7 @@ export function fromClauseAddresses(value) {
   return out.map(normaliseIp)
 }
 
-const isAddressLiteral = (h) => /^\[?(?:ipv6:)?[0-9a-f:.]+\]?$/i.test(h ?? '') && /[:.]/.test(h ?? '') && !/[g-z]/i.test(h ?? '')
+const isAddressLiteral = (h) => isIP(String(h ?? '').replace(/^\[|\]$/g, '').replace(/^ipv6:/i, '')) !== 0
 const inSuffixes = (host, suffixes) => Boolean(host) && suffixes.some((x) => host === x || host.endsWith(`.${x}`))
 
 export function byClauseHost(value) {
@@ -215,7 +216,10 @@ export function main(argv = process.argv.slice(2), log = console) {
       else if (a === '--domain') o.domain = v()
       else if (a === '--bind-ip') o.ip = v()
       else if (a === '--bind-ip6') o.ip6 = v()
-      else if (a === '--authserv-id') o.authservIds.push(v())
+      else if (a === '--authserv-id') {
+        if (o.authservIds.length) throw new Error('--authserv-id is given once: one receiver per run')
+        o.authservIds.push(v())
+      }
       else if (a === '--receiver') o.receiver = v()
       else if (a === '--receiver-domain') o.receiverDomain = v()
       else if (a === '--receivers') o.receivers = v()
@@ -250,6 +254,10 @@ export function main(argv = process.argv.slice(2), log = console) {
   }
   let ids = o.authservIds
   let suffixes = o.receiverDomain ? [o.receiverDomain] : []
+  if (o.receiver && o.authservIds.length) {
+    log.error('usage: --receiver and --authserv-id are mutually exclusive: one receiver per run')
+    return 2
+  }
   if (o.receiver) {
     const entry = receivers.receivers[o.receiver]
     if (!entry || !Array.isArray(entry.authservIds) || !Array.isArray(entry.hostSuffixes)) {
@@ -259,9 +267,10 @@ export function main(argv = process.argv.slice(2), log = console) {
     ids = [...ids, ...entry.authservIds]
     suffixes = [...suffixes, ...entry.hostSuffixes]
   } else if (!suffixes.length) {
-    // --authserv-id alone: the receiver's hosts are its registrable domain,
-    // read naively as the last two labels (pass --receiver-domain otherwise).
-    suffixes = ids.map((id) => id.split('.').slice(-2).join('.')).filter((x) => x.includes('.'))
+    // No guessing the receiver's domain from its authserv-id: the last two
+    // labels of mx.uni-x.ac.uk are the public suffix ac.uk (round-2 review).
+    log.error('usage: --authserv-id needs --receiver-domain <the receiver\'s own domain>')
+    return 2
   }
   if (!ids.length) {
     log.error('usage: name the receiver: --receiver <name in receivers.json> or --authserv-id <id> [--receiver-domain D]')

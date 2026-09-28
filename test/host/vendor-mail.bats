@@ -399,6 +399,20 @@ exit 0'
     refute_recorded docker 'run --rm'
 }
 
+@test "check-secret-separation --host without a live colour recorded is a precondition failure (round 2)" {
+    : > "${REL}/ops/vendor-mail/check-secret-separation.mjs"
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail" "${GREMION_ROOT}/etc/secrets/tenants"
+    rm -f "${GREMION_ROOT}/runtime/active-colour"
+    shim docker 'exit 0'
+    run "$LAUNCHER" check-secret-separation --host
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"runtime/active-colour"* ]]
+    echo none > "${GREMION_ROOT}/runtime/active-colour"
+    run "$LAUNCHER" check-secret-separation --host
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    refute_recorded docker 'run --rm'
+}
+
 @test "check-secret-separation --host: a docker inspect that fails is a failure, not an empty environment" {
     : > "${REL}/ops/vendor-mail/check-secret-separation.mjs"
     mkdir -p "${GREMION_ROOT}/etc/secrets/mail" "${GREMION_ROOT}/etc/secrets/tenants"
