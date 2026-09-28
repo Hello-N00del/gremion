@@ -25,6 +25,8 @@ setup() {
     export SHIM_PROXY_SECRET="shim-secret-$RANDOM$RANDOM"
     export POOLED_STACK=t040-shim
     export POOLED_OUT="${BATS_TEST_TMPDIR}/out"
+    # the directories prepare would have made before any later phase runs
+    mkdir -p "${POOLED_OUT}/ledger"
     # cold-state budgets, in seconds, kept short for the shim
     export POOLED_COLD_HOLD=0
     export POOLED_COLD_BUDGET=3
@@ -143,4 +145,127 @@ setup() {
     [[ "$output" == *"FAIL cold-state: /api/health answers ok with the state tier DOWN"* ]]
     [[ "$output" == *"[pooled-proof] RED"* ]]
     [ "$status" -eq 1 ]
+}
+
+# ── render-env: every COMPOSE_FILE entry is a file that exists (TASK-040-FU 1) ─
+# prepare's env render, alone: no docker engine, no write under the repo. The
+# entries are read the way compose reads them -- split on the file's own
+# COMPOSE_PATH_SEPARATOR, a relative entry resolved against the directory the
+# proof's compose() runs in -- and every one must be an existing file.
+
+# unresolved_compose_files <env file> <dir compose runs in>: prints every entry
+# that does not resolve to an existing file; prints nothing when all resolve.
+unresolved_compose_files() {
+    local f="$1" dir="$2" files sep e
+    files="$(sed -n 's/^COMPOSE_FILE=//p' "$f")"; files="${files#\"}"; files="${files%\"}"
+    sep="$(sed -n 's/^COMPOSE_PATH_SEPARATOR=//p' "$f")"; sep="${sep#\"}"; sep="${sep%\"}"
+    [[ -n "$files" && -n "$sep" ]] || { echo "$f: no COMPOSE_FILE or COMPOSE_PATH_SEPARATOR"; return 0; }
+    local IFS="$sep"
+    for e in $files; do
+        e="${e#Z:}"   # the fake cygpath's drive letter (see the drive-letter test)
+        case "$e" in /*) ;; *) e="${dir}/${e}" ;; esac
+        [[ -f "$e" ]] || echo "$f: $e"
+    done
+}
+
+# assert_env_files_resolve: state and both app colours run compose from the
+# repo root, ops and mail from infra/host/<project> (the proof's compose()).
+assert_env_files_resolve() {
+    local env="${POOLED_OUT}/env" bad=""
+    local p
+    for p in state app-blue app-green; do
+        [ -s "${env}/${p}.env" ]
+        bad+="$(unresolved_compose_files "${env}/${p}.env" "$REPO_ROOT")"
+    done
+    for p in ops mail; do
+        [ -s "${env}/${p}.env" ]
+        bad+="$(unresolved_compose_files "${env}/${p}.env" "${REPO_ROOT}/infra/host/${p}")"
+    done
+    [ -z "$bad" ] || { echo "unresolved COMPOSE_FILE entries: $bad" >&2; return 1; }
+}
+
+@test "render-env: POOLED_OUT outside the repo -- every COMPOSE_FILE entry names a file that exists, the overlays the ones written there" {
+    case "$POOLED_OUT" in "$REPO_ROOT"/*) skip "BATS_TEST_TMPDIR is under the repo" ;; esac
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    [ -s "${POOLED_OUT}/state.proof.yml" ] && [ -s "${POOLED_OUT}/ops.proof.yml" ] && [ -s "${POOLED_OUT}/mail.proof.yml" ]
+    assert_env_files_resolve
+    # the overlays named are the ones this run wrote, not a stale in-repo copy
+    grep -qF "${POOLED_OUT}/state.proof.yml" "${POOLED_OUT}/env/state.env"
+    grep -qF "${POOLED_OUT}/ops.proof.yml" "${POOLED_OUT}/env/ops.env"
+    grep -qF "${POOLED_OUT}/mail.proof.yml" "${POOLED_OUT}/env/mail.env"
+}
+
+@test "render-env: POOLED_OUT under the repo keeps repo-relative COMPOSE_FILE entries that resolve" {
+    export POOLED_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/t040-shim-bats-${BATS_TEST_NUMBER}-$$"
+    IN_REPO_OUT="$POOLED_OUT"
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    assert_env_files_resolve
+    local rel=".scratch/pooled-stack-proof/t040-shim-bats-${BATS_TEST_NUMBER}-$$"
+    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:docker-compose.prod.yml:test/host/fixtures/pooled-stack/docker-compose.pins.yml:${rel}/state.proof.yml\"" "${POOLED_OUT}/env/state.env"
+    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../../${rel}/ops.proof.yml\"" "${POOLED_OUT}/env/ops.env"
+    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../../${rel}/mail.proof.yml\"" "${POOLED_OUT}/env/mail.env"
+}
+
+@test "render-env: a drive-letter host path (cygpath -m) is not split on ':' and the env file still sources in bash" {
+    case "$POOLED_OUT" in "$REPO_ROOT"/*) skip "BATS_TEST_TMPDIR is under the repo" ;; esac
+    # a Windows box's cygpath -m: /x/y -> Z:/x/y
+    printf '#!/usr/bin/env bash\n[[ "$1" == -m ]] && shift\nprintf "Z:%%s" "$1"\n' > "${BATS_TEST_TMPDIR}/bin/cygpath"
+    chmod +x "${BATS_TEST_TMPDIR}/bin/cygpath"
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qF "Z:${POOLED_OUT}/state.proof.yml" "${POOLED_OUT}/env/state.env"
+    assert_env_files_resolve
+    # state-wait, tenant and tenant-after source state.env: a ';' list must
+    # arrive whole, and nothing in it may run as a command
+    run bash -c 'set -eu; . "$1"; printf "%s|%s" "$COMPOSE_PATH_SEPARATOR" "$COMPOSE_FILE"' _ "${POOLED_OUT}/env/state.env"
+    [ "$status" -eq 0 ]
+    [[ "$output" == ";|docker-compose.yml;"*";Z:${POOLED_OUT}/state.proof.yml" ]]
+}
+
+# ── a failing `compose config` is never silent (TASK-040-FU 2) ────────────────
+# names and counts ran `compose config 2>/dev/null` inside $(...) under
+# pipefail: a render error either exited the proof with status 1 and no word
+# (names) or recorded services=0 on both sides of TRD-440 (counts).
+
+@test "names: positive control -- a clean render under \${STACK} is GREEN" {
+    run bash "$PROOF" names
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok   names: every rendered project"* ]]
+    [ -f "${POOLED_OUT}/.names-ok" ]
+}
+
+@test "names: a failing compose config is a FATAL naming the project and compose's stderr (first 5 lines only)" {
+    export SHIM_COMPOSE_CONFIG=fail
+    run bash "$PROOF" names
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: "*"t040-shim-state"* ]]
+    [[ "$output" == *"shim-compose-error line 1: service \"svc\" refers to undefined network nowhere"* ]]
+    [[ "$output" == *"shim-compose-error line 5"* ]]
+    [[ "$output" != *"shim-compose-error line 6"* ]]
+    [ ! -f "${POOLED_OUT}/.names-ok" ]
+    # the captured stderr does not outlive the message
+    [ -z "$(find "$POOLED_OUT" -name '*.err' 2>/dev/null)" ]
+}
+
+@test "tenant-before: positive control -- the baseline counts the rendered services" {
+    run bash "$PROOF" tenant-before
+    [ "$status" -eq 0 ]
+    grep -qx 'state services=2 running=3' "${POOLED_OUT}/ledger/trd440-before.txt"
+}
+
+@test "tenant-before: a failing compose config is a FATAL, never a services=0 baseline" {
+    export SHIM_COMPOSE_CONFIG=fail
+    run bash "$PROOF" tenant-before
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: "*"t040-shim-state"*"shim-compose-error line 1"* ]]
+    [[ "$output" != *"ok   tenant-before"* ]]
+    ! grep -q 'services=0' "${POOLED_OUT}/ledger/trd440-before.txt" 2>/dev/null
+    # no half-written baseline for the tenant phase to accept
+    [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt" ]
+}
+
+teardown() {
+    [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
 }
