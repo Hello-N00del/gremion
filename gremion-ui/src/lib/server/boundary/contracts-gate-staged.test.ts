@@ -17,6 +17,14 @@ import * as gate from '../../../../scripts/contracts-gate'
 const gremionUiRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const repoRoot = join(gremionUiRoot, '..')
 
+// Per-test budget for the gateStagedSpecs tests: each spawns git ~11 times
+// (6 to build the scratch repo, ~5 inside the gate). Measured 2026-09-28 on a
+// 16-CPU box under 32 CPU + 4 I/O artificial load: pooled p95 10.1 s, max
+// 12.0 s (n=40; idle p95 1.1 s), against vitest's 5 s default. 3x the loaded
+// p95, rounded up. The oasdiff verdict itself is injected, so none of this is
+// the tool under test (R26-FLAKES r4).
+const GIT_FIXTURE_MS = 35_000
+
 /** The digest-pinned image TASK-030's port uses — the single source this
  *  gate must agree with (gremion-ui does not depend on that package, and
  *  install-git-hooks.test.ts copies contracts-gate.ts into a scratch repo on
@@ -108,31 +116,31 @@ describe('gateStagedSpecs — CONTRACTS_ALLOW_BREAKING=1 still requires a MAJOR 
     expect(problems[0]).toMatch(/major/i)
     expect(problems[0]).toContain('1.4.2')
     expect(problems[0]).toContain('1.5.0')
-  })
+  }, GIT_FIXTURE_MS)
 
   it('ALLOW_BREAKING=1 with the version untouched (1.4.2 -> 1.4.2): FAILS', () => {
     vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '1')
     dir = stagedBreak('1.4.2')
     expect(gate.gateStagedSpecs(dir, { compare: breaking })).toHaveLength(1)
-  })
+  }, GIT_FIXTURE_MS)
 
   it('ALLOW_BREAKING=1 with an unparseable version: FAILS closed', () => {
     vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '1')
     dir = stagedBreak('two')
     expect(gate.gateStagedSpecs(dir, { compare: breaking })).toHaveLength(1)
-  })
+  }, GIT_FIXTURE_MS)
 
   it('ALLOW_BREAKING=1 with a major bump (1.4.2 -> 2.0.0): allowed', () => {
     vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '1')
     dir = stagedBreak('2.0.0')
     expect(gate.gateStagedSpecs(dir, { compare: breaking })).toEqual([])
-  })
+  }, GIT_FIXTURE_MS)
 
   it('without ALLOW_BREAKING a break FAILS even with a major bump (the bypass is still opt-in)', () => {
     vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '')
     dir = stagedBreak('2.0.0')
     expect(gate.gateStagedSpecs(dir, { compare: breaking })).toHaveLength(1)
-  })
+  }, GIT_FIXTURE_MS)
 
   // Round-1 verifier HIGH (pre-existing): `git mv` + a break was staged as
   // R096, `git show HEAD:<new path>` failed and the spec was skipped as "new".
@@ -147,7 +155,7 @@ describe('gateStagedSpecs — CONTRACTS_ALLOW_BREAKING=1 still requires a MAJOR 
     expect(seen[0][1]).toBe(spec('1.4.2', false))
     expect(problems).toHaveLength(1)
     expect(problems[0]).toContain('contracts/kernel/openapi.z.json')
-  })
+  }, GIT_FIXTURE_MS)
 
   // Round-2 verifier HIGH: renamed AND mostly rewritten is below git's rename
   // similarity (staged as D + A); the registry name pairs it instead.
@@ -175,11 +183,11 @@ describe('gateStagedSpecs — CONTRACTS_ALLOW_BREAKING=1 still requires a MAJOR 
     const problems = gate.gateStagedSpecs(dir, { compare: (o, n) => { seen.push([o, n]); return breaking() } })
     expect(seen).toEqual([[big, small]])
     expect(problems).toHaveLength(1)
-  })
+  }, GIT_FIXTURE_MS)
 
   it('a non-breaking verdict passes regardless of version', () => {
     vi.stubEnv('CONTRACTS_ALLOW_BREAKING', '')
     dir = stagedBreak('1.4.2')
     expect(gate.gateStagedSpecs(dir, { compare: clean })).toEqual([])
-  })
+  }, GIT_FIXTURE_MS)
 })
