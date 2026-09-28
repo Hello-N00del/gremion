@@ -474,6 +474,58 @@ check_restore_target() {
     return "$bad"
 }
 
+# The programs the deploy user runs, by hand here and as User=gremion in the
+# systemd units: they read etc/env/*.env (inside the deploy user's 0700 etc/),
+# and gremion-deploy runs git in the release checkout, which git refuses as
+# "dubious ownership" when root owns it. Run as root, gremion-init-secrets leaves
+# root-owned 0600 env files every later deploy-user run dies on.
+DEPLOY_USER_PROGRAMS='gremion-(init-secrets|backup|deploy|verify|restore-into|snapshot|switch|rollback)'
+
+check_deploy_user() {
+    local f text line target seen=0 bad=0
+    for f in "${PROCEDURE_FILES[@]}"; do
+        text="$(bash_blocks < "$1/$f.md")"
+        while IFS= read -r line; do
+            [ "$line" = __BLOCK__ ] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            if grep -qE "(^|[[:space:];|&/])${DEPLOY_USER_PROGRAMS}([[:space:]]|\$)" <<<"$line"; then
+                seen=$((seen + 1))
+                if [[ "$line" != *'sudo -u gremion '* ]]; then
+                    echo "$f.md runs a deploy-user program as root: ${line}" >&2; bad=1
+                fi
+            fi
+            if [[ "$line" == *'git clone '* ]] && [[ "$line" != *'sudo -u gremion git clone '* ]]; then
+                target="$(sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/.*[[:space:]]//' <<<"$line")"
+                if ! grep -F -- 'chown -R gremion:gremion' <<<"$text" | grep -qF -- "$target"; then
+                    echo "$f.md clones as root and never hands ${target} to the deploy user: ${line}" >&2; bad=1
+                fi
+            fi
+        done <<<"$text"
+    done
+    [ "$seen" -gt 0 ] || { echo "no deploy-user program invocation found in any bash block" >&2; return 1; }
+    if ! postcondition_blocks "$1" install | grep -qE "stat -c '%U %a( %n)?' /opt/gremion/etc/env/\\*\\.env"; then
+        echo "install.md Post-condition does not observe the owner and mode of /opt/gremion/etc/env/*.env" >&2; bad=1
+    fi
+    return "$bad"
+}
+
+# gremion-deploy logs in under the HOME of the user that runs it, so a procedure
+# that runs it observes that user's registry config as well as root's.
+check_registry_creds() {
+    local u post bad=0 seen=0 want
+    for u in install upgrade; do
+        grep -qE "sudo -u gremion .*gremion-deploy" "$1/$u.md" || continue
+        seen=$((seen + 1))
+        post="$(postcondition_blocks "$1" "$u")"
+        for want in /root/.docker/config.json /home/gremion/.docker/config.json; do
+            grep -qF -- "$want" <<<"$post" \
+                || { echo "${u}.md runs gremion-deploy but its Post-condition does not read ${want}" >&2; bad=1; }
+        done
+    done
+    [ "$seen" -gt 0 ] || { echo "no procedure runs gremion-deploy as the deploy user" >&2; return 1; }
+    return "$bad"
+}
+
 check_install_tail() {
     local last post
     last="$(unit_text "$1" install | section_body '## Steps' | awk '
@@ -628,7 +680,7 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
             check_operator_phrase check_commands check_repo_paths check_host_paths
             check_postconditions check_required check_forbidden check_restore_target
             check_install_tail check_run_record check_floor check_artefacts
-            check_deploy_log check_reboot_gate)
+            check_deploy_log check_reboot_gate check_deploy_user check_registry_creds)
 
 # ---------------------------------------------------------------------------
 
@@ -769,6 +821,29 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
     d="$(fixture_snippet "${FIX}/snippets/restore-into-production.md" restore)"
     run check_restore_target "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"targets the production stack (gremion)"* ]]
+}
+
+@test "the deploy user runs its programs and owns the release tree and the env files" {
+    d="$(real_dir)"; check_deploy_user "$d"
+    d="$(fixture valid)"; check_deploy_user "$d"
+    d="$(fixture_snippet "${FIX}/snippets/root-init-secrets.md" install)"
+    run check_deploy_user "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"install.md runs a deploy-user program as root"* ]]
+    d="$(fixture_snippet "${FIX}/snippets/root-clone.md" upgrade)"
+    run check_deploy_user "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"upgrade.md clones as root and never hands"* ]]
+    d="$(fixture valid)"
+    grep -vF "stat -c '%U %a" "$d/install.md" > "$d/install.tmp" && mv "$d/install.tmp" "$d/install.md"
+    run check_deploy_user "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"does not observe the owner and mode"* ]]
+}
+
+@test "a procedure that runs gremion-deploy reads root's and the deploy user's registry config" {
+    d="$(real_dir)"; check_registry_creds "$d"
+    d="$(fixture valid)"; check_registry_creds "$d"
+    grep -vF '/home/gremion/.docker/config.json' "$d/upgrade.md" > "$d/upgrade.tmp" && mv "$d/upgrade.tmp" "$d/upgrade.md"
+    run check_registry_creds "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"upgrade.md runs gremion-deploy but its Post-condition does not read /home/gremion/.docker/config.json"* ]]
 }
 
 @test "install ends by disabling the backup timer and asserts disabled and inactive" {
