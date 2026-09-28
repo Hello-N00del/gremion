@@ -650,6 +650,9 @@ importers:
       '@gremion/db':
         specifier: workspace:*
         version: link:../db
+      '@gremion/module-catalogue':
+        specifier: workspace:*
+        version: link:../module-catalogue
       postgres:
         specifier: ^3.4.4
         version: 3.4.9

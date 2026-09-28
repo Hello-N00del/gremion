@@ -59,7 +59,7 @@ describe('the real modules/ tree', () => {
     expect(text).toMatch(/calendar: migrations\/manifest\.json is on disk but runtime\.database is null/)
   })
 
-  it('the derived backup list is the kernel server then the six database servers; removing calendar drops calendar-postgres (and leaves it unclaimed)', () => {
+  it('the derived backup list is the kernel server then the six database servers; removing calendar drops calendar-postgres, which is then unclaimed', () => {
     expect(deriveBackupServices(loadCatalogue(MODULES).modules)).toEqual([
       'postgres',
       'board-postgres',
