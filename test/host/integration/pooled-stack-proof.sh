@@ -9,6 +9,7 @@
 # Phases, in order (each is its own call so no single step outlives a
 # supervisor's time box; state lives in the ledger directory):
 #   prepare      env files, scratch root, externals, the proof overlays
+#                (render-env: the env files and overlays alone, no engine)
 #   names        every rendered name is under ${STACK}; state-up refuses without it
 #   state-up     the state project (production profile)
 #   state-wait   postgres + keycloak healthy, pgbouncer auth staged; records
@@ -143,16 +144,38 @@ chmod_app_volumes() {
 }
 
 # ── prepare ────────────────────────────────────────────────────────────────
-phase_prepare() {
-    require_scratch prepare
-    mkdir -p "$ENV_DIR" "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$OUT/ledger"
-    local SROOT_H; SROOT_H="$(host_path "$SROOT")"
+# Where the env files point compose at the overlays in $OUT. POOLED_OUT may put
+# $OUT outside the repository, so the overlay entry is never a hard-wired repo
+# path: compose resolves a relative COMPOSE_FILE entry against the directory it
+# runs in (ROOT, or infra/host/<project> for ops and mail -- see compose()), so
+# an $OUT under ROOT is named relative to that directory, and any other $OUT by
+# its host path. A host path can carry a drive letter (cygpath -m: C:/...),
+# which a ':' list would split, so those env files use ';'. The lists are
+# double-quoted: compose's env-file parser strips the quotes, and state.env is
+# also sourced by bash (state-wait, tenant, tenant-after), where an unquoted ';'
+# would end the assignment and run the next entry as a command.
+OVL_REL=""; OVL_HOST=""; OVL_SEP=":"
+locate_overlays() {
+    local out_abs root_abs
+    out_abs="$(cd "$OUT" && pwd -P)"; root_abs="$(cd "$ROOT" && pwd -P)"
+    if [[ "$out_abs" == "$root_abs"/* ]]; then OVL_REL="${out_abs#"$root_abs"/}"
+    else OVL_HOST="$(host_path "$out_abs")"; [[ "$OVL_HOST" != *:* ]] || OVL_SEP=";"; fi
+}
+# overlay_ref <overlay file> <path from the project's directory back to ROOT>
+overlay_ref() {
+    if [[ -n "$OVL_REL" ]]; then printf '%s%s/%s' "$2" "$OVL_REL" "$1"
+    else printf '%s/%s' "$OVL_HOST" "$1"; fi
+}
 
-    # Subnets: a dedicated 10.231.0.0/16 and fd5a:231::/48, refused if taken.
-    local taken
-    # shellcheck disable=SC2046  # one argument per network id, on purpose
-    taken="$(docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null | grep -E ' 10\.231\.' | grep -v "^${STACK}" || true)"
-    [[ -z "$taken" ]] || die "10.231.0.0/16 already in use on this engine: $taken"
+# The env files and the proof overlays, and nothing else: no docker engine
+# (bar free_port's `docker ps`) and no file under the repository. prepare
+# starts with it; on its own it is the render-env phase.
+phase_render_env() {
+    require_scratch render-env
+    mkdir -p "$ENV_DIR" "$OUT"
+    locate_overlays
+    local SROOT_H; SROOT_H="$(host_path "$SROOT")"
+    local s="$OVL_SEP"
 
     local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push
     pw_pg="$(gen)"; pw_kcdb="$(gen)"; pw_kc="$(gen)"; pw_gr="$(gen)"; pw_ctl="$(gen)"; pw_pub="$(gen)"
@@ -162,8 +185,8 @@ phase_prepare() {
 
     cat > "$ENV_DIR/state.env" <<EOF
 COMPOSE_PROJECT_NAME=${STACK}-state
-COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:test/host/fixtures/pooled-stack/docker-compose.pins.yml:${OUT_REL}/state.proof.yml
-COMPOSE_PATH_SEPARATOR=:
+COMPOSE_FILE="docker-compose.yml${s}docker-compose.prod.yml${s}test/host/fixtures/pooled-stack/docker-compose.pins.yml${s}$(overlay_ref state.proof.yml '')"
+COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=production
 STACK=${STACK}
 GREMION_ROOT=${SROOT_H}
@@ -224,8 +247,8 @@ EOF
     cat > "$ENV_DIR/ops.env" <<EOF
 STACK=${STACK}
 COMPOSE_PROJECT_NAME=${STACK}-ops
-COMPOSE_FILE=docker-compose.yml:../../../${OUT_REL}/ops.proof.yml
-COMPOSE_PATH_SEPARATOR=:
+COMPOSE_FILE="docker-compose.yml${s}$(overlay_ref ops.proof.yml ../../../)"
+COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=production
 OPS_V4_SUBNET=10.231.8.0/24
 OPS_V6_SUBNET=fd5a:231:8::/64
@@ -239,8 +262,8 @@ EOF
 STACK=${STACK}
 GREMION_ROOT=${SROOT_H}
 COMPOSE_PROJECT_NAME=${STACK}-mail
-COMPOSE_FILE=docker-compose.yml:../../../${OUT_REL}/mail.proof.yml
-COMPOSE_PATH_SEPARATOR=:
+COMPOSE_FILE="docker-compose.yml${s}$(overlay_ref mail.proof.yml ../../../)"
+COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=mail
 PLATFORM_DOMAIN=proof.example.org
 MAIL_BIND_IP=127.0.0.1
@@ -279,6 +302,22 @@ services:
   stalwart:
     ports: !reset []
 EOF
+    ok "render-env ${STACK}: env files in ${ENV_DIR}, overlays in ${OUT}"
+}
+
+phase_prepare() {
+    require_scratch prepare
+    mkdir -p "$ENV_DIR" "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$OUT/ledger"
+
+    # Subnets: a dedicated 10.231.0.0/16 and fd5a:231::/48, refused if taken.
+    local taken
+    # shellcheck disable=SC2046  # one argument per network id, on purpose
+    taken="$(docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null | grep -E ' 10\.231\.' | grep -v "^${STACK}" || true)"
+    [[ -z "$taken" ]] || die "10.231.0.0/16 already in use on this engine: $taken"
+
+    phase_render_env
+    local pw_bnc; pw_bnc="$(sed -n 's/^PGBOUNCER_AUTH_PASSWORD=//p' "$ENV_DIR/state.env")"
+    [[ -n "$pw_bnc" ]] || die "render-env wrote no PGBOUNCER_AUTH_PASSWORD"
 
     # Files the renders bind-mount (all gitignored or under the scratch root).
     [[ -f "$ROOT/legal/legal.env" ]] || { mkdir -p "$ROOT/legal"; cp "$ROOT/legal/legal.env.example" "$ROOT/legal/legal.env"; }
@@ -799,6 +838,7 @@ phase_teardown() {
 run_phase() {
     case "$1" in
         prepare) phase_prepare ;;
+        render-env) phase_render_env ;;
         names) phase_names ;;
         state-up) phase_state_up ;;
         state-wait) phase_state_wait ;;
