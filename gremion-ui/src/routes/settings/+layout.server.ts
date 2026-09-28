@@ -5,12 +5,13 @@ import type { SessionUser } from '$lib/auth/types'
 import { generateLoeschkonzept } from '$lib/server/loeschkonzept'
 import { getDataProvider } from '$lib/server/modules/runtime-registry'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
+import type { TenantContext } from '$lib/server/tenant/context'
 
 // Keycloak account console for the "Profil in Keycloak" handoff. Derived from
 // the REQUEST tenant's Auth.js external base ({base}/realms/<realm> →
 // {…}/account; TASK-042: per tenant, never a deployment-global env), surfaced
 // as a ready-made absolute URL (or null when there is no resolved tenant).
-function keycloakAccountUrl(tenant: { authExternalBase?: string } | null | undefined): string | null {
+function keycloakAccountUrl(tenant: Pick<TenantContext, 'authExternalBase'> | null | undefined): string | null {
   const base = (tenant?.authExternalBase ?? '').replace(/\/$/, '')
   return base ? `${base}/account` : null
 }
