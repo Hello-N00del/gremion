@@ -379,8 +379,9 @@ services:
     # Same reason as gremion-public above: k8s/base/legal/deployment.yaml pins
     # ghcr.io/hello-n00del/gremion-legal, which nothing could build.
     # IMAGE_TAG is the release tag on a host (the pins layer resolves it to a
-    # digest); `:-latest` keeps the TASK-022 edge-render fixture, which carries
-    # no IMAGE_TAG, rendering unchanged.
+    # digest); `:-dev` names the local dev build and keeps the TASK-022
+    # edge-render fixture, which carries no IMAGE_TAG, rendering (never
+    # `latest`: lint-image-digests fails a latest default everywhere).
     image: ghcr.io/hello-n00del/gremion-legal:${IMAGE_TAG:-dev}
     build:
       context: docker/legal
