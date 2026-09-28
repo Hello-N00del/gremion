@@ -30,6 +30,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { REPO_ROOT, readEnvFile, renderState } from './compose-edge.mjs'
+import { POSTGRES_IMAGE_REF } from './check-postgres-major.mjs'
 
 export const MODULE_DIR = 'modules/messaging/synapse'
 export const POOLED_FIXTURE = 'test/host/fixtures/pooled-stack/state.env'
@@ -106,7 +107,7 @@ export function renderViolations(render, { stack, project, domain }) {
     onlyState('messaging-postgres', pg)
     if (String(pg.labels?.['org.gremion.postgres']) !== 'module:messaging')
       out.push(`messaging-postgres: label org.gremion.postgres is ${JSON.stringify(pg.labels?.['org.gremion.postgres'] ?? null)}, want module:messaging`)
-    if (!/^postgres:18-alpine@sha256:[0-9a-f]{64}$/.test(String(pg.image))) out.push(`messaging-postgres: image ${pg.image} is not the pinned 18-alpine digest`)
+    if (pg.image !== POSTGRES_IMAGE_REF) out.push(`messaging-postgres: image ${pg.image} is not the kernel pin (check-postgres-major.mjs)`)
     const e = pg.environment ?? {}
     if (!e.POSTGRES_USER) out.push('messaging-postgres: POSTGRES_USER renders empty')
     for (const k of ['POSTGRES_PASSWORD', 'SYNAPSE_DB_PASSWORD']) if (!(k in e)) out.push(`messaging-postgres: environment lacks ${k}`)

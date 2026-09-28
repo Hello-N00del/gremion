@@ -56,6 +56,7 @@ test('the render guard catches ports, a bind, a named volume, a wrong probe, a s
     [(r) => (r.services['messaging-postgres'].volumes.find((v) => v.type === 'bind').read_only = false), /read-only/],
     [(r) => delete r.services.matrix.depends_on, /service_healthy/],
     [(r) => (r.services.matrix.profiles = []), /profiles/],
+    [(r) => (r.services['messaging-postgres'].image = 'registry.example.org/other-db:1'), /kernel pin/],
   ]
   for (const [mutate, want] of cases) {
     const r = structuredClone(base)
