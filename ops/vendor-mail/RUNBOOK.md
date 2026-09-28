@@ -25,7 +25,10 @@ identities sharing one value.
 Every authenticated message must carry its authenticated address as its only
 `From` (`infra/host/mail/from-align.sieve`): `must-match-sender` binds only the
 envelope, and a customer principal writing `From: system@...` was measured
-being queued -- DMARC-aligned -- before that script existed.
+being queued -- DMARC-aligned -- before that script existed. The script also
+refuses a From with no mailbox and an address inside the display name
+(`"system@<domain> Gremion" <kc-a@...>`); an RFC 2047 encoded display name is
+not decoded by it (residual).
 
 ## 2. The launcher
 
@@ -41,7 +44,7 @@ from the release tree: `/opt/gremion/current/infra/host/bin/gremion-vendor-mail`
 | `realm-smtp` | `master` -> `system@` via `mail.<domain>:587` STARTTLS; password on stdin; read back. `--realm/--tenant/--rotate/--revoke` are reserved for TASK-043 and refused |
 | `collect --out DIR` | principal names/emails/roles and every realm's smtp user, secrets stripped |
 | `check-identities` | alerts@ identity consistent across `mail.env` / `ops.env` |
-| `check-received --file F` | a delivered message's headers prove an own-server, SPF/DKIM/DMARC-passing delivery (set `RECEIVER_AUTHSERV_ID`, or pass `--authserv-id`, for a receiver not in `deliverability/receivers.json`) |
+| `check-received --file F --receiver NAME \| --authserv-id ID` | a delivered message's headers prove an own-server, SPF/DKIM/DMARC-passing delivery at ONE named receiver: only its authserv-id is trusted, and the accepting hop (and every hop above it) must be `by` one of its hosts (`hostSuffixes` in `deliverability/receivers.json`, or `--receiver-domain`, default the last two labels of the authserv-id). In bring-up, set `RECEIVER` or `RECEIVER_AUTHSERV_ID`; without either, 6a/6b are BLOCKED |
 | `check-secret-separation --host` | value hashes: no vendor secret in `app-*.env`, `etc/secrets/tenants/**` or the running gremion-ui environment |
 | `check-principals --host [--no-allowances]` | no realm shares a principal with another or with the vendor |
 | `check-upstream-image`, `check-deliverability-record [--require]` | TRD-253 / TRD-252 |
@@ -96,7 +99,30 @@ TASK-038 and gate F2 run `--require`.
   platform password only through an operator `-e` today (breaks Q3).
 - **Blind spot:** a `docker compose run -e X=...` injection is in no template
   and no render; only `check-secret-separation --host` sees it, while that
-  container lives.
+  container lives. The running gremion-ui environment is compared by whole
+  value (the launcher hands over hashes only), not by substring.
+- **kcadm argv:** the Keycloak admin password is on no argv of the docker CLI,
+  but `kcadm.sh config credentials --password` still puts it on the java argv
+  inside the Keycloak container, visible to host root (realm-smtp, collect,
+  gremion-mail-bringup 6b, gremion-neuter). Closing it needs a kcadm
+  credential path verified against the pinned Keycloak build.
+- **Restored instances (gremion-neuter):** the env keys of every vendor
+  credential are blanked (system@, alerts@, roles@, platform@, the Stalwart
+  admin password and API key), but the files render-ops.sh derived from them
+  (`etc/secrets/ops/smtp-password`, `stalwart-api-key`, the rendered
+  Alertmanager config) and the DKIM keys in `etc/secrets/mail` are not
+  rewritten by neuter; the restore procedure's owner must re-render or blank
+  them before the ops project starts.
+- **Assert 6a sends as system@ from the app network** (brief decision): the
+  vendor password is in a one-shot probe container's stdin on the active
+  colour's app network for the duration of the probe; system@ has no source
+  restriction on the pinned build.
+- **Receivers:** only `mx.google.com` is committed as a measured authserv-id;
+  a receiver whose Authentication-Results carries no authserv-id (reported for
+  Microsoft 365) cannot be proven by check-received until its format is
+  measured and handled.
+- **Connection rate limit:** the pinned build limits connections per source IP
+  (`[5, 1000ms]`, measured); a burst from one source is delayed, not refused.
 - **Host-only (TASK-038 re-runs):** `${STACK}-mail-stalwart` healthy
   (`docker exec`); `--host` separation and principals; bring-up 1..6b green with
   6b's reset mail passing `check-received`; inbox at both provider classes,
