@@ -1,0 +1,36 @@
+# base.yml plus a platform-only messaging-postgres (Amendment R27 test 2).
+x-module-postgres: &module-postgres
+  image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: postgres
+    labels:
+      org.gremion.postgres: "kernel"
+  alpha-postgres:
+    <<: *module-postgres
+    labels:
+      org.gremion.postgres: "module:alpha"
+    environment:
+      POSTGRES_USER: ${ALPHA_PG_USER:-alpha}
+  beta-postgres:
+    <<: *module-postgres
+    labels:
+      - "org.gremion.postgres=module:beta"
+    environment:
+      - POSTGRES_USER=beta
+  gamma-postgres:
+    <<: *module-postgres
+    labels:
+      org.gremion.postgres: "module:gamma"
+    environment:
+      POSTGRES_USER: ${GAMMA_PG_USER:-gamma}
+  messaging-postgres:
+    <<: *module-postgres
+    labels:
+      org.gremion.postgres: "module:messaging"
+    environment:
+      POSTGRES_USER: ${MESSAGING_PG_USER:-messaging}

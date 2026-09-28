@@ -21,6 +21,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/runner.test.ts': 6,
     'src/schema-gate.test.ts': 8,
     'src/index.test.ts': 2,
+    'src/lifecycle/lifecycle.test.ts': 22,
+    'src/lifecycle/export.test.ts': 8,
     'test/unit/check-tenant-db-access.test.ts': 18,
     'test/unit/suite-size.test.ts': 4,
   },
@@ -32,6 +34,10 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/service.test.ts': 6,
     // TASK-029: boot verification (TRD-353) and the chain hook under the runner
     'test/integration/verify-applied.test.ts': 6,
+    // TASK-021 (G3): the lifecycle on the scratch stack's module server.
+    'test/integration/lifecycle-enable.test.ts': 7,
+    'test/integration/lifecycle-disable.test.ts': 6,
+    'test/integration/lifecycle-inspect.test.ts': 7,
   },
 }
 

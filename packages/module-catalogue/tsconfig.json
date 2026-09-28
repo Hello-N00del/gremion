@@ -1,0 +1,29 @@
+{
+  // Typecheck gate for @gremion/module-catalogue: `tsc --noEmit -p packages/module-catalogue`.
+  // Sources import each other with .ts extensions so bin/check.mjs runs them
+  // under plain node (type stripping, erasable syntax only), the same layout
+  // as packages/generated-clients-dart. allowJs lets the validator import the
+  // frozen extraction-source helper (scripts/lib/extraction-source.mjs) with
+  // inferred types; checkJs stays off, that file is scripts/'s own.
+  // src/runtime.ts has no relative import at all: @gremion/tenant-store's
+  // lifecycle imports it (./runtime) and type-checks it under its own flags.
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["esnext"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+}

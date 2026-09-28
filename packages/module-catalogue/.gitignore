@@ -1,0 +1,3 @@
+node_modules/
+# spec scratch (copies of fixture roots the derivation tests mutate)
+test/.tmp/
