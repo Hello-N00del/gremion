@@ -280,7 +280,7 @@ function parseArgs(argv) {
   return o
 }
 
-export async function main(argv = process.argv.slice(2), log = console) {
+export async function main(argv = process.argv.slice(2), log = console, { compose = runCompose } = {}) {
   let o
   try {
     o = parseArgs(argv)
@@ -306,7 +306,7 @@ export async function main(argv = process.argv.slice(2), log = console) {
     return r.violations.length ? 1 : 0
   }
   const a = staticViolations(readTemplates(), allowances)
-  const b = await runCompose({ allowances })
+  const b = await compose({ allowances })
   for (const v of a.violations) log.error(`FAIL (a) ${v}`)
   if (b.unparseable) {
     log.error(`UNPARSEABLE (b) ${b.unparseable}`)

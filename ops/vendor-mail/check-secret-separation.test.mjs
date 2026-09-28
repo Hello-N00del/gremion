@@ -204,6 +204,37 @@ test('--host: a gremion-ui container env value equal to ALERT_SMTP_PASSWORD (by 
   }
 })
 
+test('verify mode runs the compose arm: a compose finding fails main() with exit 1', async () => {
+  const lines = []
+  const log = { log: (x) => lines.push(x), error: (x) => lines.push(x) }
+  let called = 0
+  const code = await main([], log, {
+    compose: async () => {
+      called++
+      return { unparseable: null, violations: ['app-blue/gremion-ui: environment X resolves to the vendor secret STALWART_API_KEY'], appServices: 8 }
+    },
+  })
+  assert.equal(called, 1)
+  assert.equal(code, 1)
+  assert.match(lines.join('\n'), /FAIL \(b\) app-blue\/gremion-ui/)
+  const code2 = await main([], log, { compose: async () => ({ unparseable: 'ops: render failed', violations: [], appServices: 0 }) })
+  assert.equal(code2, 2)
+})
+
+test('--host: an unreadable NESTED tenant directory is unparseable too', () => {
+  const t = hostTree()
+  try {
+    const lister = (d) => {
+      if (d.endsWith(`${path.sep}alpha`)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+      return readdirSyncReal(d)
+    }
+    const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: null, allowances: ALLOW, io: { lister } })
+    assert.match(r.unparseable ?? '', /secrets\/tenants: EACCES/)
+  } finally {
+    rmSync(t.root, { recursive: true, force: true })
+  }
+})
+
 test('--host: an unreadable store is unparseable, not empty', () => {
   const t = hostTree()
   try {
