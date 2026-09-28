@@ -30,6 +30,7 @@ import { runIsolationSuite } from './suites/isolation.mjs'
 import { runMigrationHashSuite } from './suites/migration-hash.mjs'
 import { runTypecheckSuite } from './suites/typecheck.mjs'
 import { runUnitSuite, UNIT_PARTS } from './suites/unit.mjs'
+import { runVendorMailSuite } from '../../ops/vendor-mail/suite.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
 export const REQUIRED_SUITES_PATH = path.join(import.meta.dirname, 'required-suites.txt')
@@ -66,6 +67,8 @@ export const SUITE_REGISTRY = {
   isolation: () => runIsolationSuite({ root: REPO_ROOT }),
   // TASK-036 (L1-17, TRD-178): declared health census of the production renders.
   census: () => runCensusSuite(),
+  // TASK-015 (TRD-251/252/253, L3-11): the vendor mail guards and their tests.
+  'vendor-mail': () => runVendorMailSuite(),
   ...UNIT_PART_ENTRIES,
   ...INTEGRATION_PART_ENTRIES,
   __fixture_node_zero__: runFixtureNodeZero,
