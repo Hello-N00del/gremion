@@ -70,7 +70,7 @@ consumed from <root>/etc/env/state.env (not from your shell — sudo resets it):
 environment:
   RESTORE_VOLUME_SKIP_RE  ERE of volume names restored from the dumps instead of
                           the archive (default: (_pg-data|_postgres-data|_pgdata)$)
-  RESTORE_HELPER_IMAGE    image used to unpack volume archives (default alpine:3.22)
+  RESTORE_HELPER_IMAGE    image used to unpack volume archives (default alpine:3.22, digest-pinned)
 EOF
     exit 2
 }

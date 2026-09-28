@@ -983,7 +983,7 @@ exit 0'
 }
 
 @test "gremion-backup.service allows a run longer than the default timeout" {
-    # A full run copies volumes, mirrors buckets and reads 5% of the
+    # A full run copies volumes, dumps the databases and reads 5% of the
     # repository back; systemd's 90 s default would kill it mid-restic.
     grep -qE '^TimeoutStartSec=(6h|21600)$' "${UNIT_DIR}/gremion-backup.service"
 }
