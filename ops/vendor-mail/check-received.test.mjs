@@ -8,7 +8,7 @@ import { checkReceived, loadReceivers, main, parseAuthResults, unfoldHeaders } f
 const FX = path.join(import.meta.dirname, '__fixtures__', 'received')
 const read = (n) => readFileSync(path.join(FX, n), 'utf8')
 const { espMarkers } = loadReceivers()
-const OPTS = { domain: 'example.org', bindIps: ['192.0.2.25', '2001:db8::25'], authservIds: ['mx.example.net'], espMarkers }
+const OPTS = { domain: 'example.org', bindIps: ['192.0.2.25', '2001:db8::25'], authservIds: ['mx.example.net'], receiverSuffixes: ['example.net'], espMarkers }
 const check = (text, o = {}) => checkReceived(text, { ...OPTS, ...o })
 
 // The substring greps gremion-mail-bringup ran before TASK-015 (6a: :618-625,
@@ -85,4 +85,46 @@ test('the CLI: exit 0 on a proof, 1 on a relay, 2 without --file', () => {
   assert.equal(main(['--file', path.join(FX, 'good-two-gateway-hops.eml'), ...base], quiet), 0)
   assert.equal(main(['--file', path.join(FX, 'esp-sendgrid.eml'), ...base], quiet), 1)
   assert.equal(main(base, quiet), 2)
+})
+
+test('no receiver named is unparseable: trusting every known authserv-id is how a forged one gets in', () => {
+  assert.match(check(read('good-two-gateway-hops.eml'), { authservIds: [] }).unparseable, /no receiver named/)
+  const quiet = { log() {}, error() {} }
+  assert.equal(main(['--file', path.join(FX, 'good-two-gateway-hops.eml'), '--domain', 'example.org', '--bind-ip', '192.0.2.25'], quiet), 2)
+})
+
+test("an A-R carrying ANOTHER known receiver's authserv-id does not count at this receiver", () => {
+  const t = read('good-two-gateway-hops.eml').replace('Authentication-Results: mx.example.net;', 'Authentication-Results: mx.google.com;')
+  assert.match(check(t).reasons.join('\n'), /no Authentication-Results from the receiver \(mx\.example\.net\); saw mx\.google\.com/)
+})
+
+test("an unlisted smarthost between the vendor and the receiver is RED (the accepting hop is not the receiver's)", () => {
+  const r = check(read('unlisted-smarthost.eml'))
+  assert.match(r.reasons.join('\n'), /the accepting hop is by smarthost\.example\.com, not a host of the receiver \(example\.net\)/)
+})
+
+test("a hop above the accepting one that is neither the receiver's nor an address literal is RED", () => {
+  const t = read('good-two-gateway-hops.eml').replace('by relay-7.example.net', 'by relay-7.example.com')
+  assert.match(check(t).reasons.join('\n'), /a hop above the accepting one is by relay-7\.example\.com, not the receiver's/)
+})
+
+test('a bare address in the from-clause comment (no brackets) is an exact match too', () => {
+  const t = read('good-two-gateway-hops.eml').replace('(mail.example.org. [192.0.2.25])', '(192.0.2.25)')
+  assert.deepEqual(check(t).reasons, [])
+  const u = read('good-two-gateway-hops.eml').replace('(mail.example.org. [192.0.2.25])', '(192.0.2.250)')
+  assert.match(check(u).reasons.join('\n'), /no Received hop accepted the message/)
+})
+
+test('IPv6 bind addresses are compared normalised (2001:db8:0::25 = 2001:db8::25)', () => {
+  const t = read('good-two-gateway-hops.eml').replace('[192.0.2.25])', '[IPv6:2001:DB8::25])')
+  assert.deepEqual(check(t, { bindIps: ['192.0.2.99', '2001:db8:0:0::25'] }).reasons, [])
+})
+
+test("--receiver <name> trusts that receiver's authserv-ids and host suffixes from receivers.json", () => {
+  const quiet = { log() {}, error() {} }
+  const base = ['--domain', 'example.org', '--bind-ip', '192.0.2.25']
+  assert.equal(main(['--file', path.join(FX, 'good-two-gateway-hops.eml'), ...base, '--receiver', 'google'], quiet), 1)
+  const g = read('good-two-gateway-hops.eml').replaceAll('example.net', 'google.com').replace('Authentication-Results: mx.google.com;', 'Authentication-Results: mx.google.com;')
+  assert.deepEqual(checkReceived(g, { ...OPTS, authservIds: ['mx.google.com'], receiverSuffixes: ['google.com'] }).reasons, [])
+  assert.equal(main(['--file', path.join(FX, 'good-two-gateway-hops.eml'), ...base, '--receiver', 'nope'], quiet), 2)
 })

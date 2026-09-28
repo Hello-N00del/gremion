@@ -5,7 +5,8 @@
 //
 //   node ops/vendor-mail/check-received.mjs --file <headers>
 //        [--domain D] [--bind-ip IP] [--bind-ip6 IP6]    (default: mail.env)
-//        [--authserv-id ID] [--receivers F]
+//        --receiver NAME | --authserv-id ID [--receiver-domain D]
+//        [--receivers F]
 //
 // It replaces the substring greps of gremion-mail-bringup asserts 6a/6b,
 // which passed a relayed message (grep "dkim=pass" is satisfied by
@@ -13,15 +14,16 @@
 // anywhere, the body included). Here:
 //   * the header block is UNFOLDED (RFC 5322 2.2.3) and ends at the first
 //     empty line: nothing in the body counts;
-//   * Authentication-Results counts only from the RECEIVER's own authserv-id
-//     (RFC 8601 section 5; deliverability/receivers.json or --authserv-id),
-//     and only the topmost such field;
+//   * ONE receiver per run (--receiver, or --authserv-id): Authentication-
+//     Results counts only from ITS authserv-id (RFC 8601 section 5), and only
+//     the topmost such field;
 //   * spf=pass with smtp.mailfrom in <domain>, dkim=pass with header.d (or
 //     header.i) = <domain>, dmarc=pass with header.from = <domain>;
 //   * the accepting hop is the LOWEST Received whose from-clause carries
 //     MAIL_BIND_IP or MAIL_BIND_IP6 as an address literal (an exact token,
-//     never a substring); receiver-internal hops above it are allowed; every
-//     hop below it must be `by mail.<domain>` (the vendor's own server);
+//     never a substring), and it must be `by` a host of the receiver; hops
+//     above it must be the receiver's too (or address literals, its internal
+//     hops); every hop below it must be `by mail.<domain>`;
 //   * no third-party mail-API marker anywhere in the header block.
 //
 // EXIT: 0 proven - 1 not proven (each reason printed) - 2 unreadable/usage.
@@ -94,22 +96,49 @@ const inDomain = (v, d) => {
   return x === d || x.endsWith(`.${d}`)
 }
 
-/** The address literals of a Received field's from-clause (before ` by `). */
+/** One canonical spelling per address, so 2001:db8:0::25 equals 2001:db8::25. */
+export function normaliseIp(a) {
+  const s = String(a).trim().toLowerCase().replace(/^ipv6:/, '')
+  if (!s.includes(':')) return s
+  try {
+    return new URL(`http://[${s}]/`).hostname.slice(1, -1)
+  } catch {
+    return s
+  }
+}
+
+const IP_TOKEN = /^(?:\d{1,3}(?:\.\d{1,3}){3}|(?:IPv6:)?[0-9A-Fa-f]*:[0-9A-Fa-f:.]*)$/
+
+/** The address literals of a Received field's from-clause (before ` by `):
+ * bracketed ([192.0.2.25], [IPv6:...]) and bare tokens inside its comment
+ * ((192.0.2.25), the form some receivers write), each an exact token. */
 export function fromClauseAddresses(value) {
   const v = value.replace(/\s+/g, ' ')
   const byAt = v.search(/\sby\s/i)
   const from = /^\s*from\s/i.test(v) ? v.slice(0, byAt < 0 ? v.length : byAt) : ''
-  return [...from.matchAll(/\[(?:IPv6:)?([0-9A-Fa-f:.]+)\]/g)].map((m) => m[1].toLowerCase())
+  const out = [...from.matchAll(/\[(?:IPv6:)?([0-9A-Fa-f:.]+)\]/g)].map((m) => m[1])
+  for (const m of from.matchAll(/\(([^()]*)\)/g)) {
+    for (const tok of m[1].split(/[\s,;]+/)) if (IP_TOKEN.test(tok)) out.push(tok)
+  }
+  return out.map(normaliseIp)
 }
+
+const isAddressLiteral = (h) => /^\[?(?:ipv6:)?[0-9a-f:.]+\]?$/i.test(h ?? '') && /[:.]/.test(h ?? '') && !/[g-z]/i.test(h ?? '')
+const inSuffixes = (host, suffixes) => Boolean(host) && suffixes.some((x) => host === x || host.endsWith(`.${x}`))
 
 export function byClauseHost(value) {
   const m = /\sby\s+([^\s;()]+)/i.exec(value.replace(/\s+/g, ' '))
   return m ? m[1].toLowerCase().replace(/\.$/, '') : null
 }
 
-export function checkReceived(text, { domain, bindIps, authservIds, espMarkers }) {
+export function checkReceived(text, { domain, bindIps, authservIds, receiverSuffixes = [], espMarkers }) {
   const d = domain.toLowerCase()
   const why = []
+  // ONE receiver per run: trusting the union of every known authserv-id is
+  // how a sender-written `Authentication-Results: <another provider>; pass`
+  // gets counted at a receiver that does not strip that other provider's id.
+  if (!authservIds.length || !receiverSuffixes.length) return { unparseable: 'no receiver named (--receiver <name in receivers.json> or --authserv-id <id>)', reasons: [] }
+  const suffixes = receiverSuffixes.map((x) => x.toLowerCase().replace(/^\./, ''))
   let fields
   try {
     fields = unfoldHeaders(text)
@@ -131,7 +160,7 @@ export function checkReceived(text, { domain, bindIps, authservIds, espMarkers }
   }
   // Received chain, top (newest) to bottom (oldest).
   const received = fields.filter((f) => f.name.toLowerCase() === 'received').map((f) => f.value)
-  const ips = new Set(bindIps.filter(Boolean).map((s) => s.toLowerCase()))
+  const ips = new Set(bindIps.filter(Boolean).map(normaliseIp))
   let accept = -1
   for (let i = received.length - 1; i >= 0; i--) {
     if (fromClauseAddresses(received[i]).some((a) => ips.has(a))) {
@@ -141,6 +170,14 @@ export function checkReceived(text, { domain, bindIps, authservIds, espMarkers }
   }
   if (accept < 0) why.push(`no Received hop accepted the message from ${[...ips].join(' / ')}`)
   else {
+    // The accepting hop is the RECEIVER's; an unlisted smarthost that took the
+    // message from IP-B and passed it on would otherwise be read as delivery.
+    const acceptedBy = byClauseHost(received[accept])
+    if (!inSuffixes(acceptedBy, suffixes)) why.push(`the accepting hop is by ${acceptedBy ?? '<none>'}, not a host of the receiver (${suffixes.join(', ')})`)
+    for (let i = 0; i < accept; i++) {
+      const by = byClauseHost(received[i])
+      if (!inSuffixes(by, suffixes) && !isAddressLiteral(by)) why.push(`a hop above the accepting one is by ${by ?? '<none>'}, not the receiver's (${suffixes.join(', ')}) -- a relay`)
+    }
     for (let i = accept + 1; i < received.length; i++) {
       const by = byClauseHost(received[i])
       if (by !== `mail.${d}`) why.push(`a hop below the accepting one is by ${by ?? '<none>'}, not mail.${d}`)
@@ -179,6 +216,8 @@ export function main(argv = process.argv.slice(2), log = console) {
       else if (a === '--bind-ip') o.ip = v()
       else if (a === '--bind-ip6') o.ip6 = v()
       else if (a === '--authserv-id') o.authservIds.push(v())
+      else if (a === '--receiver') o.receiver = v()
+      else if (a === '--receiver-domain') o.receiverDomain = v()
       else if (a === '--receivers') o.receivers = v()
       else if (a === '--mail-env') o.mailEnv = v()
       else throw new Error(`unknown argument ${a}`)
@@ -209,8 +248,26 @@ export function main(argv = process.argv.slice(2), log = console) {
     log.error('UNPARSEABLE no domain / bind address (pass --domain and --bind-ip, or mount mail.env)')
     return 2
   }
-  const ids = [...o.authservIds, ...Object.values(receivers.receivers).flatMap((r) => r.authservIds)]
-  const r = checkReceived(text, { domain: o.domain, bindIps: [o.ip, o.ip6], authservIds: ids, espMarkers: receivers.espMarkers })
+  let ids = o.authservIds
+  let suffixes = o.receiverDomain ? [o.receiverDomain] : []
+  if (o.receiver) {
+    const entry = receivers.receivers[o.receiver]
+    if (!entry || !Array.isArray(entry.authservIds) || !Array.isArray(entry.hostSuffixes)) {
+      log.error(`usage: --receiver ${o.receiver} is not in deliverability/receivers.json (${Object.keys(receivers.receivers).join(', ')})`)
+      return 2
+    }
+    ids = [...ids, ...entry.authservIds]
+    suffixes = [...suffixes, ...entry.hostSuffixes]
+  } else if (!suffixes.length) {
+    // --authserv-id alone: the receiver's hosts are its registrable domain,
+    // read naively as the last two labels (pass --receiver-domain otherwise).
+    suffixes = ids.map((id) => id.split('.').slice(-2).join('.')).filter((x) => x.includes('.'))
+  }
+  if (!ids.length) {
+    log.error('usage: name the receiver: --receiver <name in receivers.json> or --authserv-id <id> [--receiver-domain D]')
+    return 2
+  }
+  const r = checkReceived(text, { domain: o.domain, bindIps: [o.ip, o.ip6], authservIds: ids, receiverSuffixes: suffixes, espMarkers: receivers.espMarkers })
   if (r.unparseable) {
     log.error(`UNPARSEABLE ${r.unparseable}`)
     return 2

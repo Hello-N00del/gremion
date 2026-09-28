@@ -1,11 +1,14 @@
 {
   "schemaVersion": 1,
-  "_comment": "TASK-015 (RFC 8601 section 5): an Authentication-Results field counts only when its authserv-id is the RECEIVING provider's own. One entry per provider class the deliverability record uses. The university mailbox's authserv-id identifies the institution and is therefore never committed: pass it at run time with --authserv-id (check-received.mjs), and record only its class in records.json. Add a provider only with the authserv-id MEASURED from a delivered message's headers, never from memory.",
+  "_comment": "TASK-015 (RFC 8601 section 5): an Authentication-Results field counts only when its authserv-id is the RECEIVING provider's own. One entry per provider class the deliverability record uses: its authservIds, and the hostSuffixes its own MTAs are named under (the accepting hop and every hop above it must be `by` one of them). The university mailbox's authserv-id identifies the institution and is therefore never committed: pass it at run time with --authserv-id (check-received.mjs), and record only its class in records.json. Add a provider only with the authserv-id MEASURED from a delivered message's headers, never from memory.",
   "receivers": {
     "google": {
       "class": "large-consumer",
       "authservIds": [
         "mx.google.com"
+      ],
+      "hostSuffixes": [
+        "google.com"
       ]
     }
   },
