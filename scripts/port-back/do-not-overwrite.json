@@ -36,14 +36,15 @@
     "TASK-041 (L3-08) executes the B10 amendment above on the current count: it",
     "deletes gremion-ui/scripts/check-domain-regex.mjs and removes that row here",
     "(42 -> 41 doNotDelete, expectedEntries 44 -> 43); its assertion now asserts",
-    "the path is absent from the set."
+    "the path is absent from the set.",
+    "TASK-042 (zero-tenant boot) deletes gremion-ui/src/routes/setup/steps/wizard-submit-schema.test.ts (the first-run wizard, Q1) and removes that row here (41 -> 40 doNotDelete, expectedEntries 43 -> 42); its assertion asserts the path is absent from the set."
   ],
   "frozenAt": {
     "kernel": "f7ac82609eb4b6dedd415d2ef6d7f8d1736ae543",
     "stura": "f276af5925abacdcfd05f6613fc11afff2d804c5",
     "on": "2026-09-16"
   },
-  "expectedEntries": 43,
+  "expectedEntries": 42,
   "doNotDelete": [
     "gremion-ui/src/hooks.audit-integrity.test.ts",
     "gremion-ui/src/lib/components/committee/CommitteeCard.svelte",
@@ -68,7 +69,6 @@
     "gremion-ui/src/lib/source-offer.test.ts",
     "gremion-ui/src/lib/source-offer.ts",
     "gremion-ui/src/lib/source-offer.wiring.test.ts",
-    "gremion-ui/src/routes/setup/steps/wizard-submit-schema.test.ts",
     "k8s/base/keycloak/pdb.yaml",
     "k8s/overlays/dev/patches/ingressroutes-dev/gremion-ui-apexhost.yaml",
     "k8s/overlays/dev/patches/ingressroutes-dev/gremion-ui-https.yaml",

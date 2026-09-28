@@ -358,6 +358,12 @@ function tenantMismatchResponse(path: string): Response {
   return new Response('Forbidden: tenant mismatch', { status: 403 })
 }
 
+/**
+ * The session guard's public allow-list (see authGuard). Exported so the pin in
+ * hooks.boot.test.ts reads the shipped list, not a copy of it.
+ */
+export const PUBLIC_PATHS: readonly string[] = ['/auth/', '/legal/', '/api/setup/seed', '/api/health', '/api/public/protocols/']
+
 export const authGuard: Handle = async ({ event, resolve }) => {
   const path = event.url.pathname
 
@@ -405,7 +411,9 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // the session, Bearer, iss-match and module gates below exactly as before.
   if (unresolvedExempt) return resolve(event)
 
-  // Public routes — no auth required
+  // Public routes — no auth required (PUBLIC_PATHS, below this handle).
+  // TASK-042 Q1: '/setup' is gone with the first-run wizard; a request for it is
+  // answered like any unknown path (Q9: no authGuard change).
   // /api/setup/seed self-guards with the X-Seed-Token header + an empty-DB check,
   // so it is exempt from the session guard (the one-time production seed runbook
   // calls it unauthenticated with only that header).
@@ -417,7 +425,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // public portal (gremion-public) redirects the browser to — it self-enforces
   // status='published' + public org-unit visibility, so the session guard is
   // skipped here. The tenant resolver (element 0) still runs.
-  const publicPaths = ['/auth/', '/legal/', '/setup', '/api/setup/seed', '/api/health', '/api/public/protocols/']
+  const publicPaths = PUBLIC_PATHS
   // Match on a SEGMENT boundary, not a bare prefix: a plain startsWith(p) also
   // matched every path that merely EXTENDS an entry ('/setupmalicious' extends
   // '/setup', '/api/healthz' extends '/api/health'), which would serve such a

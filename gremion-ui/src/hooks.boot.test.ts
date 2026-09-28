@@ -759,13 +759,12 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
    *
    * Only the entries WITHOUT a trailing slash carry that hazard: '/auth/',
    * '/legal/' and '/api/public/protocols/' already end on a separator, so no
-   * extension of them can slip past a bare startsWith. The three boundary-less
+   * extension of them can slip past a bare startsWith. The two boundary-less
    * entries below are therefore the complete negative set, and each one is
-   * exercised — a single '/setupmalicious' case would have left the other two
-   * unguarded.
+   * exercised. ('/setup' left the list with the first-run wizard, TASK-042 Q1;
+   * '/setupmalicious' is covered by the deleted-wizard case further down.)
    */
   const BOUNDARY_LESS_ENTRIES = [
-    { entry: '/setup', attack: '/setupmalicious' },
     { entry: '/api/setup/seed', attack: '/api/setup/seedling' },
     { entry: '/api/health', attack: '/api/healthz' },
   ] as const
@@ -818,7 +817,7 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
   }
 
   /**
-   * Positive coverage for ALL SIX publicPaths entries — the tightened matcher
+   * Positive coverage for ALL FIVE publicPaths entries — the tightened matcher
    * must not have closed a door that was legitimately open. Each entry appears
    * as an exact hit where that is a real URL, and as a '/'-delimited child.
    */
@@ -826,8 +825,6 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/auth/', path: '/auth/login' },
     { entry: '/auth/', path: '/auth/signout' },
     { entry: '/legal/', path: '/legal/imprint' },
-    { entry: '/setup', path: '/setup' },
-    { entry: '/setup', path: '/setup/wizard' },
     { entry: '/api/setup/seed', path: '/api/setup/seed' },
     { entry: '/api/setup/seed', path: '/api/setup/seed/status' },
     { entry: '/api/health', path: '/api/health' },
@@ -835,12 +832,48 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/api/public/protocols/', path: '/api/public/protocols/42/pdf' },
   ] as const
 
-  it('covers every one of the six publicPaths entries', async () => {
-    const covered = new Set(PUBLIC_HITS.map((h) => h.entry))
-    expect([...covered].sort()).toEqual(
-      ['/api/health', '/api/public/protocols/', '/api/setup/seed', '/auth/', '/legal/', '/setup'].sort()
-    )
+  // TASK-042 TDD 5 (Q1): the first-run wizard is gone, so '/setup' is no
+  // longer public. The pin reads the SHIPPED list, not a copy of it.
+  const FIVE = ['/api/health', '/api/public/protocols/', '/api/setup/seed', '/auth/', '/legal/']
+
+  it('the shipped publicPaths list is exactly the five entries (no /setup)', async () => {
+    const mod = await import('./hooks.server')
+    expect([...mod.PUBLIC_PATHS].sort()).toEqual([...FIVE].sort())
   })
+
+  it('covers every one of the five publicPaths entries', async () => {
+    const covered = new Set(PUBLIC_HITS.map((h) => h.entry))
+    expect([...covered].sort()).toEqual([...FIVE].sort())
+  })
+
+  // Q9: no authGuard change for the deleted wizard paths; an unauthenticated
+  // request for one is answered exactly like a never-existing path.
+  for (const path of ['/setup', '/setup/wizard', '/setupmalicious', '/t042-no-such-route']) {
+    it(`redirects unauthenticated '${path}' to the login page like any unknown path`, async () => {
+      const mod = await import('./hooks.server')
+      await mod.boot()
+      const event = makeFakeEvent(path)
+      event.locals.auth = async () => null
+      let resolveCalled = false
+      let thrown: unknown = null
+      try {
+        await mod.authGuard({
+          event: event as never,
+          resolve: async () => {
+            resolveCalled = true
+            return new Response('public-short-circuit', { status: 200 })
+          },
+        } as never)
+      } catch (err) {
+        thrown = err
+      }
+      expect(resolveCalled).toBe(false)
+      expect(isRedirect(thrown)).toBe(true)
+      const red = thrown as { status: number; location: string }
+      expect(red.status).toBe(302)
+      expect(red.location).toBe(`/auth/login?callbackUrl=${encodeURIComponent(path)}`)
+    })
+  }
 
   for (const { entry, path } of PUBLIC_HITS) {
     it(`still treats '${path}' as public (entry '${entry}')`, async () => {
