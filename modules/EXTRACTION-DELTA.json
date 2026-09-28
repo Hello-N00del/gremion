@@ -243,7 +243,7 @@
       "path": "modules/messaging/synapse/test/scratch-proof.sh",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "1934eb05f6f68dafe41c7154b4e98deecab9215c"
+      "blob": "35d98fae0bda851710d66180c13c5c9b843c94c8"
     },
     {
       "path": "modules/publishing/src/dispatch.ts",

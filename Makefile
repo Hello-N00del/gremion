@@ -589,12 +589,16 @@ lint-synapse:
 	     echo "lint-synapse: $$suite declares $$declared test(s) but node ran '$$collected'." >&2; \
 	     exit 1; \
 	   fi; \
+	   if printf '%s\n' "$$out" | tr -d '\r' | grep -Eq '^# (skipped|todo) [1-9]'; then \
+	     echo "lint-synapse: $$suite skipped or left todo test(s) -- the TAP plan would count them as run." >&2; \
+	     exit 1; \
+	   fi; \
 	   echo "[synapse] $$suite: $$collected of $$declared declared test(s) ran"; \
 	 done
 	@node scripts/check-synapse-stack.mjs
 
 synapse-proof:
-	@bash modules/messaging/synapse/test/scratch-proof.sh "$(PHASE)" "$(CURDIR)/docker-compose.yml"
+	@bash modules/messaging/synapse/test/scratch-proof.sh "$(PHASE)" "$(CURDIR)/docker-compose.yml" "$(CURDIR)/scripts/check-postgres-major-running.mjs"
 
 lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-synapse
 	@echo "All linters passed."

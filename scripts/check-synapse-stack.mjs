@@ -222,6 +222,8 @@ export function wiringViolations(makefile, carveTargets, suites) {
   else {
     for (const s of [...suites, 'scripts/check-synapse-stack.test.mjs']) if (!recipe.includes(s)) out.push(`lint-synapse does not run ${s}`)
     if (!recipe.includes("grep -c '^test('")) out.push('lint-synapse does not compare declared test( counts with collected ones')
+    // TAP's 1..N plan counts skipped and todo tests as run.
+    if (!recipe.includes('skipped') || !recipe.includes('todo')) out.push('lint-synapse does not refuse skipped or todo tests (the TAP plan counts them as run)')
     if (!recipe.includes('node scripts/check-synapse-stack.mjs')) out.push('lint-synapse does not run node scripts/check-synapse-stack.mjs')
   }
   const proof = recipeOf(makefile, 'synapse-proof')
