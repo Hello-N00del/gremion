@@ -169,7 +169,7 @@ beforeEach(() => {
   migrationsImpl = async () => {}
   controlMigrationsImpl = async () => {}
   listActiveTenantsImpl = async () => [{ id: 'default', slug: 'default', status: 'active' }]
-  exitSpy =vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+  exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
   appEnv.building = true
 })
 
