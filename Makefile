@@ -535,30 +535,30 @@ lint-tenant-db-access:
 .PHONY: lint-module-scan lint-module-migration-names
 lint-module-scan:
 	@echo "Checking in-tree module source for escaping imports..."
-	@declared=$(grep -c '^test(' scripts/check-module-source-scan.test.mjs); \
-	 out=$(node --test --test-reporter=tap scripts/check-module-source-scan.test.mjs 2>&1); \
-	 status=$?; \
-	 [ "$status" -eq 0 ] || { printf '%s\n' "$out" >&2; exit "$status"; }; \
-	 collected=$(printf '%s\n' "$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$/\1/p' | tail -n1); \
-	 if [ "$declared" -lt 1 ] || [ "$collected" != "$declared" ]; then \
-	   echo "lint-module-scan: scripts/check-module-source-scan.test.mjs declares $declared test(s) but node ran '$collected'." >&2; \
+	@declared=$$(grep -c '^test(' scripts/check-module-source-scan.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-module-source-scan.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-module-scan: scripts/check-module-source-scan.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
 	   exit 1; \
 	 fi; \
-	 echo "[module-source-scan] suite: $collected of $declared declared test(s) ran"
+	 echo "[module-source-scan] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-module-source-scan.mjs
 
 lint-module-migration-names:
 	@echo "Checking module migration names against the kernel chain..."
-	@declared=$(grep -c '^test(' scripts/check-module-migration-names.test.mjs); \
-	 out=$(node --test --test-reporter=tap scripts/check-module-migration-names.test.mjs 2>&1); \
-	 status=$?; \
-	 [ "$status" -eq 0 ] || { printf '%s\n' "$out" >&2; exit "$status"; }; \
-	 collected=$(printf '%s\n' "$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$/\1/p' | tail -n1); \
-	 if [ "$declared" -lt 1 ] || [ "$collected" != "$declared" ]; then \
-	   echo "lint-module-migration-names: scripts/check-module-migration-names.test.mjs declares $declared test(s) but node ran '$collected'." >&2; \
+	@declared=$$(grep -c '^test(' scripts/check-module-migration-names.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-module-migration-names.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-module-migration-names: scripts/check-module-migration-names.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
 	   exit 1; \
 	 fi; \
-	 echo "[module-migration-names] suite: $collected of $declared declared test(s) ran"
+	 echo "[module-migration-names] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-module-migration-names.mjs
 
 lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names
