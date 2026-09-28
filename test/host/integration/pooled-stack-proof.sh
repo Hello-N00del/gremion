@@ -23,7 +23,8 @@
 #   tenant-before / tenant / tenant-after
 #                TRD-440: a second tenant adds no container and no project
 #   switch       blue -> green: state IDs and volume CreatedAt unchanged
-#   cold-state   restart the state tier; the app colour is healthy after it
+#   cold-state   stop the state tier, re-boot the app colour against it (not
+#                ready while state is down), start state: /api/health ready
 #   teardown     docker rm -f / network rm / volume rm, by the ${STACK} prefix
 #
 # Scratch safety (TASK-040 brief §5): STACK=t040-<sha8> names every project,
@@ -698,16 +699,51 @@ phase_switch() {
     fi
 }
 
+# The replacement for the deleted cross-project depends_on (brief section 9):
+# the app colour boots while the state tier is DOWN and must become READY
+# (TASK-023's boot retry) once state is back. /healthz is liveness and answers
+# 200 even after a failed boot, so readiness is /api/health (200 {"status":"ok"}
+# only once boot -- migrations and workers -- completed; 503 before).
+ready_body() { docker exec "$1" wget -qO- http://127.0.0.1:3000/api/health 2>/dev/null || true; }
 phase_cold_state() {
     require_scratch cold-state
-    docker ps -q --filter "label=com.docker.compose.project=${STACK}-state" | xargs -r docker restart -t 5 >/dev/null
-    local cid c body
+    local cid c body s scid t=0 stamp
+    local budget="${POOLED_COLD_BUDGET:-240}" hold="${POOLED_COLD_HOLD:-20}" poll="${POOLED_POLL:-3}"
+    local -a state=() app=()
     for c in green blue; do cid="$(svc_cid "app-$c" gremion-ui)"; [[ -n "$cid" ]] && break; done
     [[ -n "$cid" ]] || { bad "cold-state: no app colour running"; return; }
-    sleep 20
-    wait_health "$cid" 180 || bad "cold-state: app-$c gremion-ui unhealthy after the state restart"
-    body="$(docker exec "$cid" wget -qO- http://127.0.0.1:3000/healthz 2>/dev/null || true)"
-    [[ "$body" == *'"ok":true'* ]] && ok "cold-state: app-$c healthy after a cold state start ($body)" || bad "cold-state: /healthz after restart: $body"
+    mapfile -t state < <(docker ps -aq --filter "label=com.docker.compose.project=${STACK}-state" | sed '/^$/d')
+    mapfile -t app < <(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-$c" | sed '/^$/d')
+    (( ${#state[@]} > 0 )) || { bad "cold-state: the state project has no container"; return; }
+    stamp="$(now)"
+    # 1. state DOWN, then the app colour re-boots against it
+    docker stop -t 5 "${state[@]}" >/dev/null
+    docker restart -t 5 "${app[@]}" >/dev/null
+    sleep "$hold"
+    # 2. negative control: with state down the app must NOT report ready
+    body="$(ready_body "$cid")"
+    [[ "$body" == *'"status":"ok"'* ]] \
+        && bad "cold-state: /api/health answers ok with the state tier DOWN -- the probe cannot tell ready from booting ($body)"
+    # 3. state back up, healthy
+    docker start "${state[@]}" >/dev/null
+    for s in postgres keycloak; do
+        scid="$(svc_cid state "$s")"
+        if [[ -z "$scid" ]] || ! wait_health "$scid" 200; then bad "cold-state: state/$s not healthy after the cold start"; fi
+    done
+    # 4. the app becomes READY within the budget, without a restart of its own
+    while (( t < budget )); do
+        body="$(ready_body "$cid")"
+        [[ "$body" == *'"status":"ok"'* ]] && break
+        sleep "$poll"; t=$(( t + poll ))
+    done
+    if [[ "$body" == *'"status":"ok"'* ]]; then
+        ok "cold-state: app-$c booted against a DOWN state tier and is ready ${t}s after state returned ($body)"
+        printf '%s cold-state ready app-%s after %ss (state down %ss at boot)\n' "$stamp" "$c" "$t" "$hold" | ledger cold-state.log
+    else
+        bad "cold-state: app-$c gremion-ui not ready ${budget}s after the state tier returned (/api/health: ${body:-no answer})"
+        printf '%s cold-state NOT ready app-%s after %ss\n' "$stamp" "$c" "$budget" | ledger cold-state.log
+        docker logs --tail 30 "$cid" >&2 || true
+    fi
 }
 
 phase_teardown() {
