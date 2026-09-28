@@ -226,11 +226,16 @@ is() { if [ "$1" = "$2" ]; then ok "$3"; else bad "$3" "$4"; fi; } # is <actual>
 # boot/state/hosts are probe-boot's groups: without its results they are
 # `not-run`, never `ok` (TASK-042 R28: a verdict must not report a check it
 # never made).
+# result_of <group> <var> sets <var> WITHOUT a subshell: on Docker Desktop hosts
+# each $(...) costs seconds, and six of them pushed the verdict line past the
+# caller's time box.
 result_of() {
+    local _res
+    case "$BAD_GROUPS" in *" $1"*) _res=FAIL ;; *) _res=ok ;; esac
     if [ "$BOOT_PROBED" != 1 ]; then
-        case "$1" in boot | state | hosts) echo not-run; return ;; esac
+        case "$1" in boot | state | hosts) _res=not-run ;; esac
     fi
-    case "$BAD_GROUPS" in *" $1"*) echo FAIL ;; *) echo ok ;; esac
+    printf -v "$2" '%s' "$_res"
 }
 
 # Results cross phase boundaries (probe-boot, then probe-wizard) in the per-run
@@ -398,7 +403,12 @@ phase_probe_wizard() {
         bad "admins POST" "status ${STATUS:-none}, body ${BODY:0:120}, want 401 {error:'Unauthenticated'}"
     fi
 
-    echo "ZERO-TENANT-PROOF: boot=$(result_of boot) state=$(result_of state) hosts=$(result_of hosts) wizard=$(result_of wizard) manifest=$(result_of manifest) admins=$(result_of admins) (app $SHA8, ${PG_IMAGE%%@*}, healthz=${HZ:-not-probed})"
+    local g res verdict=''
+    for g in boot state hosts wizard manifest admins; do
+        result_of "$g" res
+        verdict+=" $g=$res"
+    done
+    echo "ZERO-TENANT-PROOF:$verdict (app $SHA8, ${PG_IMAGE%%@*}, healthz=${HZ:-not-probed})"
     [ "$FAILS" -eq 0 ] || { echo "zero-tenant-proof: $FAILS check(s) FAILED" >&2; return 1; }
 }
 
