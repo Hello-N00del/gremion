@@ -261,7 +261,9 @@ assert_env_files_resolve() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"FATAL: "*"t040-shim-state"*"shim-compose-error line 1"* ]]
     [[ "$output" != *"ok   tenant-before"* ]]
-    ! grep -q 'services=0' "${POOLED_OUT}/ledger/trd440-before.txt" 2>/dev/null
+    # not `! grep` mid-body: a !-negated command can never fail a bats test (common.bats:160 guard)
+    run grep -q 'services=0' "${POOLED_OUT}/ledger/trd440-before.txt"
+    [ "$status" -ne 0 ]
     # no half-written baseline for the tenant phase to accept
     [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt" ]
 }
