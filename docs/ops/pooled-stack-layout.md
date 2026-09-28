@@ -142,17 +142,29 @@ Neither host has a websecure router until TASK-034's 34b block lands (its
 **No deploy may be scheduled between TASK-040 and 34b**: the apex and
 `public.<domain>` would both answer 404. TASK-038's waits carry this.
 
-## Scratch proof record (2026-09-27, [A] numbers)
+## Scratch proof record (2026-09-27, [A] numbers, NOT yet at the merge commit)
 
 `test/host/integration/pooled-stack-proof.sh` ran phase by phase on a scratch
 stack (`STACK=t040-fa154764`, Docker 29 on Docker Desktop) and then tore it
 down. The full ledger is kept outside the repository with the unit's review
 material.
 
+**Status of this record.** It comes from an older TASK-040 tree: before the
+TASK-041 merge (app services moved into `docker-compose.app.yml`, host rules),
+the `PLATFORM_DOMAIN` binding and the cold-state phase. It is therefore not
+the brief's "proved on a scratch stack from the merge commit". The kept
+ledger's `limits.tsv` and `rss.tsv` were later overwritten by the guard-efficacy
+runs (the starved-Keycloak re-break: keycloak `521.2MiB / 600MiB`, 86 %), so
+the TRD-177 numbers below have no surviving green ledger. A green
+`pooled-stack-proof.sh all` at the merge commit, with efficacy runs under
+their own `POOLED_OUT`, replaces this section (owner: the orchestrator's
+merge train, before TASK-038's live re-run; see Named residuals).
+
 - **TRD-177:** 16 running containers were inspected (state, app-blue, ops,
   mail). Every one had `HostConfig.Memory` > 0 and `NanoCpus` > 0. Idle RSS
-  was at most 31 % of the limit (keycloak, 487 MiB of 1.5 GiB). Every other
-  container was at or below 6 %.
+  was reported at most 31 % of the limit (keycloak, 487 MiB of 1.5 GiB), every
+  other container at or below 6 %; the ledger for these numbers is gone (see
+  above).
 - **TRD-045:** 2 non-council projects (ops, mail) were found on 2 networks,
   and neither network shares a member with `_state`. Each of the 5
   state-network targets (postgres, pgbouncer, keycloak, and the colour's
@@ -175,9 +187,16 @@ material.
   gremion-ui answered `{"ok":true,"tenant":null,"colour":"green"}` on
   `/healthz`. That is liveness only and does not prove the boot retry; the
   cold-state phase now stops state, re-boots the app against it and asserts
-  readiness on `/api/health` once state returns (shim-tested in
-  `test/host/pooled-stack-proof.bats`). Its first scratch run is still to be
-  recorded here.
+  readiness on `/api/health` once state returns. `/api/health` is not
+  resolve-exempt (403 without `x-proxy-trust`, 404 without a registered
+  forwarded host), so the phase first registers the proof host for the
+  default tenant in `control.tenant_domain` and probes the way the edge does:
+  `x-proxy-trust` from the container's own `TENANT_PROXY_SHARED_SECRET`
+  (never on the host's argv or in the ledger) with a matching
+  `x-forwarded-host` and `Host`. A positive control on the running app comes
+  before state is stopped. The shim in `test/host/pooled-stack-proof.bats`
+  models the resolver, so a bare probe goes RED there. Its first scratch run
+  is still to be recorded here.
 
 ## Named residuals
 
@@ -200,6 +219,16 @@ Left open by TASK-040, each with its owner:
   it.
 - **gremion-public `/healthz`** carries no colour field (gremion-ui's does).
 - **NATS account per tenant** (TRD-440 lists it): TASK-024 / TASK-043.
-- **Dev loop proof (Q6).** `make up` serving `127.0.0.1:3001` / `:3002` has
-  not been run and recorded; only the dev render is guarded (loopback-only
-  binds).
+- **Dev loop proof (Q6; orchestrator or operator).** `make up` serving
+  `127.0.0.1:3001` / `:3002` has not been run and recorded; only the dev
+  render is guarded (loopback-only binds). `make up` brings up the base
+  compose file, which unit agents may not run: run it once in a scratch
+  `DEV_STACK` and record `curl` of both ports, or accept this residual
+  explicitly.
+- **Running proof at the merge commit (orchestrator's merge train).**
+  `bash test/host/integration/pooled-stack-proof.sh all` on
+  `STACK=t040-<sha8>` of the merge commit, including cold-state, with the
+  green `limits.tsv`, `rss.tsv`, `isolation.txt`, `trd440-*`,
+  `state-*-switch.txt` and `cold-state.log` saved to the unit's ledger. The
+  state project renders the base `docker-compose.yml`, which unit agents may
+  not run under `docker compose`.
