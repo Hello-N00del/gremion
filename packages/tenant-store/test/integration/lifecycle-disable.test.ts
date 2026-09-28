@@ -148,6 +148,37 @@ describe('disableModule on the scratch stack', () => {
     expect(await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))).toMatchObject({ dropped: false, noop: true })
   })
 
+  it('TDD 9 (r2, pipe buffer): a database whose dump is > 1 MB exports, verifies through pg_restore --list and drops, with no stray EPIPE/EOF', async () => {
+    const strays: unknown[] = []
+    const onStray = (err: unknown) => strays.push(err)
+    process.on('uncaughtException', onStray)
+    process.on('unhandledRejection', onStray)
+    try {
+      const X = uuidv7()
+      const db = tenantModuleDbName(X, 'lcfix')
+      await enableWithRow(X)
+      const sql = connectModule(db, { max: 1 })
+      try {
+        // hex digests barely compress, so the -Fc archive stays well above the pipe buffer
+        await sql`INSERT INTO item (customer_id, note)
+                  SELECT ${X}, md5(g::text) || md5((g::bigint * 7919)::text) || md5((g::bigint * 104729)::text)
+                    FROM generate_series(1, 40000) AS g`
+      } finally {
+        await sql.end()
+      }
+      const r = await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
+      expect(r.dropped).toBe(true)
+      expect(r.export!.bytes).toBeGreaterThan(1024 * 1024)
+      expect(await state(X)).toMatchObject({ state: 'dropped', export_sha256: r.export!.sha256 })
+      expect(await databasesOn(server.admin)).not.toContain(db)
+      await new Promise((res) => setTimeout(res, 500))
+      expect(strays).toEqual([])
+    } finally {
+      process.off('uncaughtException', onStray)
+      process.off('unhandledRejection', onStray)
+    }
+  }, 120_000)
+
   it('re-enable after a drop creates a fresh database and migrates it again', async () => {
     const X = uuidv7()
     const db = tenantModuleDbName(X, 'lcfix')
