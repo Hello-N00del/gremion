@@ -65,6 +65,8 @@ STALWART_ADMIN_URL=http://127.0.0.1:8086
 STALWART_ADMIN_USER=admin
 STALWART_ADMIN_PASSWORD=unit-test-admin-password
 STALWART_API_KEY=unit-test-api-key
+VENDOR_SMTP_PASSWORD=unit-test-vendor-password
+ALERT_SMTP_PASSWORD=unit-test-alert-password
 PLATFORM_SMTP_PASSWORD=unit-test-platform-password
 ROLES_IMAP_PASSWORD=unit-test-roles-password
 MAIL_DNS_RESOLVER=203.0.113.53
@@ -916,6 +918,37 @@ exit 0'
         '(.data.secrets // []) | index($s)' "${GREMION_ROOT}/api/roles@example.org.json"
     [ "$status" -eq 0 ] \
         || { echo "the roles secret is not the representation verify_secret accepts"; return 1; }
+}
+
+@test "provision-roles.sh creates system@ and alerts@, each with its own app password (TASK-015)" {
+    shim_stalwart_api yes
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local p
+    for p in system alerts platform roles; do
+        run jq -e --arg n "${p}@example.org" '.data.name == $n and ((.data.roles // []) | index("user") != null)' \
+            "${GREMION_ROOT}/api/${p}@example.org.json"
+        [ "$status" -eq 0 ] || { echo "${p}@example.org missing, misnamed or without the login role"; return 1; }
+    done
+    run jq -e --arg s '$app$gremion-vendor$unit-test-vendor-password' '.data.secrets == [$s]' \
+        "${GREMION_ROOT}/api/system@example.org.json"
+    [ "$status" -eq 0 ] || { echo "system@ does not hold exactly the vendor_smtp secret"; return 1; }
+    run jq -e --arg s '$app$gremion-alerts$unit-test-alert-password' '.data.secrets == [$s]' \
+        "${GREMION_ROOT}/api/alerts@example.org.json"
+    [ "$status" -eq 0 ] || { echo "alerts@ does not hold exactly the alert_smtp secret"; return 1; }
+    run jq -e --arg s '$app$gremion-platform$unit-test-platform-password' '.data.secrets == [$s]' \
+        "${GREMION_ROOT}/api/platform@example.org.json"
+    [ "$status" -eq 0 ] || { echo "platform@ does not hold exactly the platform_smtp secret"; return 1; }
+}
+
+@test "provision-roles.sh refuses two identities sharing one password, printing neither (TASK-015)" {
+    shim_stalwart_api yes
+    sed -i 's/^ALERT_SMTP_PASSWORD=.*/ALERT_SMTP_PASSWORD=unit-test-vendor-password/' "${GREMION_ROOT}/etc/env/mail.env"
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 2 ] || { echo "status=$status: $output"; return 1; }
+    [[ "$output" == *"VENDOR_SMTP_PASSWORD"*"ALERT_SMTP_PASSWORD"* ]]
+    [[ "$output" != *"unit-test-vendor-password"* ]]
+    ! grep -q -- '-X POST' "$SHIM_LOG" || { echo "it created principals before refusing"; return 1; }
 }
 
 # ---------------------------------------------------------------------------
