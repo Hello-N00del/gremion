@@ -1,7 +1,7 @@
 <script lang="ts">
   import PageTitle from '$lib/components/PageTitle.svelte'
   // Aggregate Protokolle (meeting minutes) surface. v4 nav links here from the
-  // Gremien section. Aggregates every committee's protocols (007_protocols);
+  // Gremien section. Aggregates every committee's protocols (0007_protocols);
   // the table renders when rows exist, otherwise the first-class empty state.
   import type { PageData } from './$types'
   import Icon from '$lib/components/ui/Icon.svelte'

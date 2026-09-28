@@ -568,11 +568,11 @@ validate-env:
 	fi
 	@echo "  .env: OK (no placeholders found)"
 	@# The read-only portal role is a BOOT prerequisite, not a nicety:
-	@# gremion-ui/migrations/058_public_reader_grants.sql aborts the whole
+	@# gremion-ui/migrations/0058_public_reader_grants.sql aborts the whole
 	@# data-plane chain when gremion_public_reader is missing, and
 	@# docker/postgres/init-databases.sh refuses to start without this value.
 	@# An empty one here is a stack that comes up and never migrates.
-	@grep -qE "^PUBLIC_DB_PASSWORD=.+" .env || (echo "ERROR: PUBLIC_DB_PASSWORD is unset or empty in .env - the gremion_public_reader role cannot be created, and gremion-ui/migrations/058_public_reader_grants.sql aborts the migration chain without it" && exit 1)
+	@grep -qE "^PUBLIC_DB_PASSWORD=.+" .env || (echo "ERROR: PUBLIC_DB_PASSWORD is unset or empty in .env - the gremion_public_reader role cannot be created, and gremion-ui/migrations/0058_public_reader_grants.sql aborts the migration chain without it" && exit 1)
 	@echo "  public reader: OK (PUBLIC_DB_PASSWORD is set)"
 	@# B-01: KEYCLOAK_REALM and the /realms/ segment of AUTH_KEYCLOAK_ISSUER
 	@# name ONE realm. Disagreement is silent and is a WRITE — see

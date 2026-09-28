@@ -84,7 +84,7 @@ Its retention window must be controlled by policy, not by an ops tool.
 - **Tamper-evidence (governance invariant INV-1):** a `BEFORE INSERT` trigger
   hash-chains every row — `row_hash = sha256(prev_hash || canonical(row))` —
   serialized per-DB via an advisory xact lock
-  ([`gremion-ui/migrations/043_audit_log_hash_chain.sql`](../gremion-ui/migrations/043_audit_log_hash_chain.sql)).
+  ([`gremion-ui/migrations/0043_audit_log_hash_chain.sql`](../gremion-ui/migrations/0043_audit_log_hash_chain.sql)).
   `verifyAuditChain()` (in `audit-db.ts`) calls the in-DB
   `audit_log_verify_chain()` verifier and returns the id of the first broken
   row, or `{ ok: true }` when intact. Retention prunes from the chain tail
