@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "gamma",
+  "extractionSource": "1111111111111111111111111111111111111111",
+  "runtime": {
+    "version": "1.0.0",
+    "database": null,
+    "export": null,
+    "timedJobs": [],
+    "platformServer": null
+  }
+}

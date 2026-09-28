@@ -1,0 +1,40 @@
+{
+  "name": "@gremion/module-catalogue",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "The one module.json validator and the catalogue-derived ops facts (backup servers, colour-gated jobs, platform databases) for the Gremion governance kernel",
+  "type": "module",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hello-N00del/gremion.git",
+    "directory": "packages/module-catalogue"
+  },
+  "homepage": "https://github.com/Hello-N00del/gremion/tree/main/packages/module-catalogue",
+  "bugs": "https://github.com/Hello-N00del/gremion/issues",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    },
+    "./runtime": {
+      "import": "./src/runtime.ts"
+    }
+  },
+  "bin": {
+    "gremion-module-catalogue": "./bin/check.mjs"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check": "node bin/check.mjs --check ../../modules"
+  },
+  "dependencies": {
+    "@gremion/generated-clients": "workspace:*",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11"
+  }
+}

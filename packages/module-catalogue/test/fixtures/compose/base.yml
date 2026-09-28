@@ -1,0 +1,41 @@
+# Fixture compose for @gremion/module-catalogue's tests: the same shapes as the
+# kernel docker-compose.yml (an x-module-postgres anchor merged with `<<`,
+# ${VAR:-default} credentials, map- and list-form labels and environment).
+x-module-postgres: &module-postgres
+  image: postgres:18-alpine
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: postgres
+    labels:
+      org.gremion.postgres: "kernel"
+
+  alpha-postgres:
+    <<: *module-postgres
+    labels:
+      org.gremion.postgres: "module:alpha"
+    environment:
+      POSTGRES_USER: ${ALPHA_PG_USER:-alpha}
+      POSTGRES_PASSWORD: ${ALPHA_PG_PASSWORD}
+
+  beta-postgres:
+    <<: *module-postgres
+    labels:
+      - "org.gremion.postgres=module:beta"
+    environment:
+      - POSTGRES_USER=beta
+      - POSTGRES_PASSWORD=${BETA_PG_PASSWORD}
+
+  gamma-postgres:
+    <<: *module-postgres
+    labels:
+      org.gremion.postgres: "module:gamma"
+    environment:
+      POSTGRES_USER: ${GAMMA_PG_USER:-gamma}
+
+  web:
+    image: nginx:alpine

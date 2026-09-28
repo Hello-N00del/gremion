@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "alpha",
+  "extractionSource": "f276af5925abacdcfd05f6613fc11afff2d804c5",
+  "runtime": {
+    "version": "1.0.0",
+    "database": { "postgresService": "ghost-postgres", "migrations": "migrations" },
+    "export": { "kind": "pg_dump", "retentionProfile": "rp-alp-module-data" },
+    "timedJobs": [],
+    "platformServer": null
+  }
+}
