@@ -100,16 +100,31 @@ parse_args() {
 }
 
 # api <method> <path> [json-body] — response body in $API_OUT.
+#
+# NO SECRET ON AN ARGV (TASK-015): the admin credential reaches curl as a -K
+# config on a process-substitution descriptor, and a body -- which carries an
+# app password for the secret calls -- on stdin (--data-binary @-). Both used
+# to be curl arguments, readable by any local user in `ps` while provisioning
+# ran; with system@ and alerts@ that is the vendor's own sender.
 api() {
-    local method="$1" path="$2" body="${3:-}"
+    local method="$1" path="$2" body="${3:-}" u p
+    u="${STALWART_ADMIN_USER//\\/\\\\}"; u="${u//\"/\\\"}"
+    p="${STALWART_ADMIN_PASSWORD//\\/\\\\}"; p="${p//\"/\\\"}"
     local args=(-sS -o "$API_OUT" -X "$method"
-                -u "${STALWART_ADMIN_USER}:${STALWART_ADMIN_PASSWORD}"
                 -H 'Content-Type: application/json'
                 "${STALWART_ADMIN_URL}${path}")
-    [ -z "$body" ] || args+=(--data-binary "$body")
-    curl "${args[@]}" \
-        || die "the management API at ${STALWART_ADMIN_URL} did not answer ${method} ${path}" \
-               "$GREMION_EXIT_USAGE"
+    # The <( ) sits on the curl command line itself: in an array assignment
+    # its descriptor is closed again before the next command runs.
+    if [ -n "$body" ]; then
+        printf '%s' "$body" \
+            | curl -K <(printf 'user = "%s:%s"\n' "$u" "$p") "${args[@]}" --data-binary @- \
+            || die "the management API at ${STALWART_ADMIN_URL} did not answer ${method} ${path}" \
+                   "$GREMION_EXIT_USAGE"
+    else
+        curl -K <(printf 'user = "%s:%s"\n' "$u" "$p") "${args[@]}" \
+            || die "the management API at ${STALWART_ADMIN_URL} did not answer ${method} ${path}" \
+                   "$GREMION_EXIT_USAGE"
+    fi
 }
 
 # The last response carried a data payload, i.e. the call did what was asked.
@@ -191,24 +206,28 @@ ensure_alias() {   # <principal> <address>
     ok "alias ${addr} -> ${p}"
 }
 
+# Converges the principal to EXACTLY this one app password. `addItem` left a
+# rotated-away password valid beside the new one (TASK-015 review); `set`
+# replaces the whole field, and the read-back demands the one secret.
+# The secret reaches jq through its environment ($ENV), never an --arg.
 ensure_secret() {   # <principal> <app-name> <password>
-    local p="$1" app="$2" pw="$3" secret
+    local p="$1" app="$2" pw="$3"
     [ -n "$pw" ] || die "the password for ${p}/${app} is empty in the mail env file" "$GREMION_EXIT_USAGE"
     # The representation verify_secret accepts; see item 3 of the header note.
-    secret="\$app\$${app}\$${pw}"
+    local -x PROVISION_SECRET="\$app\$${app}\$${pw}"
     api GET "/api/principal/${p}"
     api_ok || die "principal ${p} missing: $(api_error)" "$GREMION_EXIT_ASSERT"
-    if jq -e --arg s "$secret" '(.data.secrets // []) | index($s)' "$API_OUT" >/dev/null 2>&1; then
-        ok "${p}: app password ${app} already set"
+    if jq -e '(.data.secrets // []) == [$ENV.PROVISION_SECRET]' "$API_OUT" >/dev/null 2>&1; then
+        ok "${p}: app password ${app} already set (and the only one)"
         return 0
     fi
     api PATCH "/api/principal/${p}" \
-        "$(jq -nc --arg s "$secret" '[{action:"addItem", field:"secrets", value:$s}]')"
+        "$(jq -nc '[{action:"set", field:"secrets", value:[$ENV.PROVISION_SECRET]}]')"
     api_ok || die "setting ${p}/${app} failed: $(api_error)" "$GREMION_EXIT_ASSERT"
     api GET "/api/principal/${p}"
-    jq -e --arg s "$secret" '(.data.secrets // []) | index($s)' "$API_OUT" >/dev/null 2>&1 \
-        || die "app password ${app} absent on ${p} after PATCH" "$GREMION_EXIT_ASSERT"
-    ok "${p}: app password ${app} set"
+    jq -e '(.data.secrets // []) == [$ENV.PROVISION_SECRET]' "$API_OUT" >/dev/null 2>&1 \
+        || die "${p} does not hold exactly the app password ${app} after PATCH" "$GREMION_EXIT_ASSERT"
+    ok "${p}: app password ${app} set (the only one)"
 }
 
 # §I wants the platform app password usable only from the app-tier subnets.

@@ -199,12 +199,15 @@ STALWART_API_KEY=live-api-key
 VENDOR_SMTP_PASSWORD=live-vendor-password
 ALERT_SMTP_PASSWORD=live-alert-password
 PLATFORM_SMTP_PASSWORD=live-platform-password
+ROLES_IMAP_PASSWORD=live-roles-password
 EOF
     chmod 600 "${GREMION_ROOT}/etc/env/ops.env" "${GREMION_ROOT}/etc/env/mail.env"
     run "$NEUTER" --stack stg
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     local k
-    for k in STALWART_ADMIN_PASSWORD STALWART_API_KEY VENDOR_SMTP_PASSWORD ALERT_SMTP_PASSWORD PLATFORM_SMTP_PASSWORD; do
+    # roles@ holds the login role too (it can submit as any of its thirteen
+    # aliases), so its password is a live sending credential (review B2).
+    for k in STALWART_ADMIN_PASSWORD STALWART_API_KEY VENDOR_SMTP_PASSWORD ALERT_SMTP_PASSWORD PLATFORM_SMTP_PASSWORD ROLES_IMAP_PASSWORD; do
         grep -q "^${k}=$" "${GREMION_ROOT}/etc/env/mail.env" || { echo "mail.env ${k} not blanked"; return 1; }
     done
     grep -q '^ALERT_SMTP_PASSWORD=$' "${GREMION_ROOT}/etc/env/ops.env" || { echo "ops.env ALERT_SMTP_PASSWORD survived"; return 1; }

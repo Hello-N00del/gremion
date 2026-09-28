@@ -124,6 +124,8 @@ if (repeat > 1) {
   let streak = 0
   let firstNon535 = null
   for (let i = 0; i < repeat && streak < 3; i++) {
+    // under the server's per-IP connection rate limit ([5, 1000ms] measured)
+    if (i) await new Promise((res) => setTimeout(res, 250))
     const r = await once()
     attempts++
     const k = r.auth ?? r.error ?? 'none'

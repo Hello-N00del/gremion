@@ -34,11 +34,11 @@ NEUTER_EXEC_EXEMPT="${NEUTER_EXEC_EXEMPT:-}"
 
 NEUTER_HOST_KEYS_RE='(^|_)(SMTP_HOST|EMAIL_HOST|SMTP_SERVER)$'
 NEUTER_PORT_KEYS_RE='(^|_)(SMTP_PORT|EMAIL_PORT)$'
-# TASK-015: the vendor mail credentials (system@, alerts@, the Stalwart admin
+# TASK-015: the vendor mail credentials (system@, alerts@, roles@, the Stalwart admin
 # and API key) are live secrets of the production sender and are blanked too.
 # Named exactly: a looser `.*_PASSWORD|STALWART_.*` would also blank
 # STALWART_IMAGE, the digest pin the restored mail project starts from.
-NEUTER_TOKEN_KEYS_RE='^(INSTAGRAM_.+|.+_PUBLISH_TOKEN|.+_ACCESS_TOKEN|.+_WEBHOOK_URL|EMAIL_HOST_PASSWORD|SMTP_PASSWORD|PLATFORM_SMTP_PASSWORD|VENDOR_SMTP_PASSWORD|ALERT_SMTP_PASSWORD|STALWART_(ADMIN_PASSWORD|API_KEY))$'
+NEUTER_TOKEN_KEYS_RE='^(INSTAGRAM_.+|.+_PUBLISH_TOKEN|.+_ACCESS_TOKEN|.+_WEBHOOK_URL|EMAIL_HOST_PASSWORD|SMTP_PASSWORD|PLATFORM_SMTP_PASSWORD|VENDOR_SMTP_PASSWORD|ALERT_SMTP_PASSWORD|ROLES_IMAP_PASSWORD|STALWART_(ADMIN_PASSWORD|API_KEY))$'
 
 ENV_FILES_SEEN=0
 ENV_FILES_CHANGED=0
@@ -487,7 +487,9 @@ neuter_keycloak_realms() {
     [[ -n "$admin" && -n "$password" ]] \
         || die "KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD are unset in ${STATE_ENV}; kcadm has no credential and the realm senders cannot be neutered" 2
     # /auth: the state keycloak's relative path. The password is passed as a
-    # name-only `docker exec -e`, so it is on no host argv.
+    # name-only `docker exec -e`, so it is on no argv of the docker CLI (kcadm's
+    # own --password still puts it on the java argv inside the container: a
+    # residual named in ops/vendor-mail/RUNBOOK.md).
     KC_LOGIN_PASSWORD="$password" docker exec -e KC_LOGIN_PASSWORD "$kc" sh -c \
         '"$0" config credentials --server "$1" --realm master --user "$2" --password "$KC_LOGIN_PASSWORD" >/dev/null' \
         "$KCADM_BIN" http://127.0.0.1:8080/auth "$admin" \

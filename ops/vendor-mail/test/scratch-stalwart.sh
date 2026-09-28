@@ -125,8 +125,12 @@ record() { R["$1"]="$2"; }
 expect() {   # <label> <actual> <wanted regex>
     if [[ "$2" =~ $3 ]]; then record "$1" "$2"; else record "$1" "$2 (WANTED $3)"; FAILS=$((FAILS + 1)); fi
 }
+# Paced: the pinned build rate-limits connections per source IP (measured:
+# "Rate limit exceeded ... id = "ip", limit = [5, 1000ms]"), and a probe that
+# ran into that limit would read as a timeout, not as the verdict it tests.
 probe() {    # <password var value> <user> [probe args...]  -> JSON line
     local pw="$1" user="$2"; shift 2
+    sleep 0.3
     SMTP_PROBE_PASSWORD="$pw" node "$ROOT/ops/vendor-mail/test/smtp-probe.mjs" \
         --host "$IP" --port "$SUB_PORT" --user "$user" "$@"
 }
@@ -168,6 +172,10 @@ m="$(probe "$B_PW" "kc-beta_council@${DOMAIN}" --mail-from "kc-beta_council@${DO
 expect council_header_from "$(jq -r '.dataText' <<<"$m")" '^5[0-9][0-9] .*5\.7\.1'
 m="$(probe "$B_PW" "kc-beta_council@${DOMAIN}" --mail-from "kc-beta_council@${DOMAIN}" --rcpt "probe@example.net" --header-from "system@${DOMAIN}")"
 expect customer_as_vendor_header_from "$(jq -r '.dataText' <<<"$m")" '^5[0-9][0-9] .*5\.7\.1'
+m="$(probe "$B_PW" "kc-beta_council@${DOMAIN}" --mail-from "kc-beta_council@${DOMAIN}" --rcpt "probe@example.net" --header-from "\"system@${DOMAIN} Gremion\" <kc-beta_council@${DOMAIN}>")"
+expect vendor_address_in_display_name "$(jq -r '.dataText' <<<"$m")" '^5[0-9][0-9] .*5\.7\.1'
+m="$(probe "$B_PW" "kc-beta_council@${DOMAIN}" --mail-from "kc-beta_council@${DOMAIN}" --rcpt "probe@example.net" --header-from "undisclosed:;")"
+expect group_from_without_mailbox "$(jq -r '.dataText' <<<"$m")" '^5[0-9][0-9] .*5\.7\.1'
 m="$(probe "$B_PW" "kc-beta_council@${DOMAIN}" --mail-from "kc-beta_council@${DOMAIN}" --rcpt "probe@example.net" --header-from "\"Gremion\" <kc-beta_council@${DOMAIN}>")"
 expect customer_own_from "$(jq -r '.data' <<<"$m")" '^250$'
 m="$(probe "$PLATFORM_PW" "platform@${DOMAIN}" --mail-from "no-reply@${DOMAIN}" --rcpt "probe@example.net")"
