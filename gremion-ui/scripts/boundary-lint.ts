@@ -8,7 +8,7 @@
 // Run: pnpm -C gremion-ui exec tsx scripts/boundary-lint.ts --staged
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { runBoundaryLint, type LintInput } from '../src/lib/server/boundary/engine'
 import { runOasdiffBreaking, gateStagedSpecs } from './contracts-gate'
 
@@ -82,13 +82,16 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-function collectAll(): LintInput[] {
+/** Every .sql/.ts file under <root>/{migrations,migrations-control,src}.
+ *  `root` defaults to gremion-ui; `--root <dir>` points it elsewhere (TASK-053:
+ *  the vacuity proof runs `--all` over an empty directory). */
+function collectAll(root: string = gremionUi): LintInput[] {
   const out: LintInput[] = []
   for (const top of ['migrations', 'migrations-control', 'src']) {
-    const dir = join(gremionUi, top)
+    const dir = join(root, top)
     if (!existsSync(dir)) continue
     for (const abs of walk(dir)) {
-      const rel = relative(gremionUi, abs).split('\\').join('/')
+      const rel = relative(root, abs).split('\\').join('/')
       if (rel.endsWith('.sql') || rel.endsWith('.ts')) out.push({ file: rel, content: readFileSync(abs, 'utf8') })
     }
   }
@@ -191,12 +194,49 @@ if (mode === '--gate-self-test') {
   process.exit(ok ? 0 : 1)
 }
 
-if (mode !== '--staged' && mode !== '--all') {
-  console.error('usage: boundary-lint.ts --staged | --all | --coverage-report | --contracts | --gate-self-test')
+// TASK-053 (B32 Task 9): `--all` takes two optional flags after the mode.
+//   --root <dir>       walk <dir>/{migrations,migrations-control,src} instead of gremion-ui
+//   --min-files <n>    the scanned-file floor (default 1; verify's suite passes 300)
+// `--staged` takes neither: a pre-commit with no gremion-ui file staged is a
+// legitimate empty scan and must never inherit a floor.
+const USAGE =
+  'usage: boundary-lint.ts --staged | --all [--root <dir>] [--min-files <n>] | --coverage-report | --contracts | --gate-self-test'
+
+function parseAllFlags(args: string[]): { root: string; minFiles: number } | string {
+  let root = gremionUi
+  let minFiles = 1
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i]
+    const value = args[i + 1]
+    if (flag !== '--root' && flag !== '--min-files') return `unknown argument: ${flag}`
+    if (value === undefined || value.startsWith('--')) return `${flag} needs a value`
+    i++
+    if (flag === '--root') root = resolve(process.cwd(), value)
+    else {
+      if (!/^[1-9]\d*$/.test(value)) return `--min-files must be a positive integer, got ${JSON.stringify(value)}`
+      minFiles = Number(value)
+    }
+  }
+  return { root, minFiles }
+}
+
+const extraArgs = process.argv.slice(3)
+if (mode === '--staged' && extraArgs.length > 0) {
+  console.error(`[boundary-lint] --staged takes no further arguments (got ${extraArgs.join(' ')})\n${USAGE}`)
+  process.exit(2)
+}
+const allFlags = mode === '--all' ? parseAllFlags(extraArgs) : null
+if (typeof allFlags === 'string') {
+  console.error(`[boundary-lint] ${allFlags}\n${USAGE}`)
   process.exit(2)
 }
 
-const inputs = mode === '--staged' ? collectStaged() : collectAll()
+if (mode !== '--staged' && mode !== '--all') {
+  console.error(USAGE)
+  process.exit(2)
+}
+
+const inputs = mode === '--staged' ? collectStaged() : collectAll(allFlags!.root)
 const res = runBoundaryLint(inputs)
 
 // unusedAllow is only meaningful on a full-tree run (staged subsets legitimately
