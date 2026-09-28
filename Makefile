@@ -513,7 +513,33 @@ lint-module-migration-names:
 	 echo "[module-migration-names] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-module-migration-names.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names
+# TASK-029 (TRD-344, grant G4): the migration register. Every *.sql is in
+# exactly one database chain of scripts/migrations/ranges.json or a declared
+# non-migration; each chain is padded, in numeric order, gap-free above its
+# frozen legacy floor, claimed (highWater) and locked (applied.lock.json, so a
+# rename, renumber, edit or deletion of an applied migration fails); no
+# StuRa-only slug or StuRa block number enters. Each suite runs first with its
+# collected count asserted against its declared top-level `test(` count (the
+# lint-toolchain pattern: `node --test` exits 0 on a file that collects
+# nothing), then the check over the real tree.
+.PHONY: lint-migration-register
+lint-migration-register:
+	@echo "Checking the migration register..."
+	@for suite in scripts/migrations/*.test.mjs; do \
+	   declared=$$(grep -c '^test(' "$$suite"); \
+	   out=$$(node --test --test-reporter=tap "$$suite" 2>&1); \
+	   status=$$?; \
+	   [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	   collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	   if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	     echo "lint-migration-register: $$suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	     exit 1; \
+	   fi; \
+	   echo "[migration-register] $$suite: $$collected of $$declared declared test(s) ran"; \
+	 done
+	@node scripts/migrations/register.mjs check
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

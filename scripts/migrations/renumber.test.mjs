@@ -56,9 +56,12 @@ test('every allow-list row still matches a hit (no stale row)', () => {
 })
 
 test('the allow-list refuses a planted pad-3 reference in code (RED case, in memory)', () => {
-  const planted = { path: 'gremion-ui/src/lib/server/x.ts', text: "const f = '058_public_reader_grants.sql'" }
+  // built, not written literally, so this file is not itself a hit
+  const pad3 = (n, s) => `0${n}_${s}.sql`
+  const planted = { path: 'gremion-ui/src/lib/server/x.ts', text: `const f = '${pad3(58, 'public_reader_grants')}'` }
   assert.equal(allow.some((x) => x.re.test(planted.path)), false)
   const commentOnly = allow.find((x) => x.commentOnly)
   assert.ok(commentOnly)
-  assert.equal(COMMENT.test("  load('003_calendar_schema.sql')"), false)
+  assert.equal(COMMENT.test(`  load('${pad3('03', 'calendar_schema')}')`), false)
+  assert.equal(COMMENT.test(planted.text), false)
 })
