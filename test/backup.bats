@@ -172,10 +172,14 @@ teardown() {
 # psql answers one registry row; docker records its argv; openssl passes stdin
 # through. KEYCLOAK_ADMIN is left unset, so the run stops right after the DB
 # dump (the realm export needs a live Keycloak) -- the dump call is what we
-# assert on.
+# assert on. The script cds to its repo root and loads that root's .env, which
+# would override the stubbed POSTGRES_USER/KEYCLOAK_ADMIN on any checkout that
+# has one; it therefore runs from a copy in an empty temp "repo" with no .env.
 run_tenant_backup_stubbed() {
-    local slug="$1" bin="${TEST_TEMP_DIR}/bin"
-    mkdir -p "$bin"
+    local slug="$1" bin="${TEST_TEMP_DIR}/bin" repo="${TEST_TEMP_DIR}/repo"
+    mkdir -p "$bin" "${repo}/scripts"
+    cp "${PROJECT_ROOT}/scripts/tenant-backup.sh" "${repo}/scripts/tenant-backup.sh"
+    [[ ! -e "${repo}/.env" ]]
     printf '#!/usr/bin/env bash\nprintf "realm1\\tactive\\teu\\tenv:BACKUP_KEY\\n"\n' > "${bin}/psql"
     printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.log"\n' "$TEST_TEMP_DIR" > "${bin}/docker"
     printf '#!/usr/bin/env bash\ncat\n' > "${bin}/openssl"
@@ -183,7 +187,7 @@ run_tenant_backup_stubbed() {
     run env -u KEYCLOAK_ADMIN PATH="${bin}:${PATH}" \
         CONTROL_DATABASE_URL=postgres://stub/control POSTGRES_USER=pg_stub POSTGRES_DB=gremion \
         BACKUP_KEY=stub-key BACKUP_DIR="${TEST_TEMP_DIR}/backups" \
-        bash "${PROJECT_ROOT}/scripts/tenant-backup.sh" "$slug"
+        bash "${repo}/scripts/tenant-backup.sh" "$slug"
 }
 
 @test "tenant-backup.sh dumps t_default for slug default, like any other slug" {
