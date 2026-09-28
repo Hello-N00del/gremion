@@ -94,6 +94,19 @@ test('6: the kernel-data chain is the union of its dirs ordered by number (0058 
   assert.deepEqual(names.slice(-2), ['1200_content_news_posts.sql', '1201_news_posts_public_reader_columns.sql'])
 })
 
+test('6: a pre-renumber (pad-3) kernel ledger is refused against the real kernel-data chain before any DDL, naming every pad-3 row', async () => {
+  // The hook the gremion-ui move onto tenant-store must wire (residual,
+  // TASK-038 re-asserts): today db.ts compares ledger names only through
+  // applied.has(file) and would start re-applying at 0001_ on such a database.
+  const chainFiles = chainFileNames('kernel-data', { root: REPO_ROOT })
+  const pad3 = chainFiles.filter((f) => /^0\d{3}_/.test(f)).map((f) => f.slice(1))
+  assert.equal(pad3.length, 31)
+  const err = await refused({ ledger: pad3, pending: chainFiles, hook: chainPreApply({ chainFiles }) }, 'LEDGER_NAME_NOT_IN_CHAIN')
+  assert.deepEqual([...err.files].sort(byName), [...pad3].sort(byName))
+  assert.equal(chainFiles[0], '0001_governance_schema.sql')
+  assert.ok(err.files.includes(chainFiles[0].slice(1)), 'the first kernel migration, in its pad-3 spelling, is named')
+})
+
 // ---- TDD 7/8 against an in-memory ledger ------------------------------------
 const sha = (s) => createHash('sha256').update(s).digest('hex')
 
