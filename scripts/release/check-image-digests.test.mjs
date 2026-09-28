@@ -10,7 +10,7 @@
 
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readdirSync, renameSync, statSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, renameSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
@@ -260,6 +260,42 @@ test('third-party list: the canonical non-first-party repositories of the fixtur
     'docker.io/stalwartlabs/stalwart',
   ])
   assert.throws(() => thirdPartyList(tree({ 'docker-compose.yml': plain('nginx:1.29') })), /unpinned/)
+})
+
+// ── pin-images.sh (G2): the resolver that turns a tag into tag@digest ──────
+
+test('pin-images.sh pins third-party tags, leaves first-party ${IMAGE_TAG} refs and ${...} alone, still pins a lookalike', () => {
+  const dir = join(SCRATCH, `pin-${++n}`)
+  mkdirSync(join(dir, 'bin'), { recursive: true })
+  const log = join(dir, 'docker.log')
+  writeFileSync(join(dir, 'bin/docker'), `#!/usr/bin/env bash\nprintf '%s\\n' "\${@: -1}" >> '${log}'\necho sha256:${D('9')}\n`, { mode: 0o755 })
+  const file = join(dir, 'docker-compose.yml')
+  writeFileSync(file, [
+    'services:',
+    '  a:',
+    '    image: traefik:v3.7.1',
+    '  b:',
+    '    build: ./b',
+    '    image: ghcr.io/hello-n00del/gremion-b:${IMAGE_TAG:-dev}',
+    '  c:',
+    '    image: ${STALWART_IMAGE:?x}',
+    '  d:',
+    '    image: ghcr.io.evil/hello-n00del/x:1',
+    '  e:',
+    `    image: postgres:18-alpine@sha256:${D('a')}`,
+    '',
+  ].join('\n'))
+  const r = spawnSync('bash', [join(REPO_ROOT, 'infra/host/ops/pin-images.sh'), file], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}` },
+  })
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  const out = readFileSync(file, 'utf8')
+  assert.match(out, new RegExp(`image: traefik:v3\\.7\\.1@sha256:${D('9')}$`, 'm'))
+  assert.match(out, /image: ghcr\.io\/hello-n00del\/gremion-b:\$\{IMAGE_TAG:-dev\}$/m)
+  assert.match(out, /image: \$\{STALWART_IMAGE:\?x\}$/m)
+  assert.match(out, new RegExp(`image: ghcr\\.io\\.evil/hello-n00del/x:1@sha256:${D('9')}$`, 'm'))
+  assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n').sort(), ['ghcr.io.evil/hello-n00del/x:1', 'traefik:v3.7.1'])
 })
 
 // ── CLI ──────────────────────────────────────────────────────────────────
