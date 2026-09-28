@@ -178,3 +178,28 @@ material.
   readiness on `/api/health` once state returns (shim-tested in
   `test/host/pooled-stack-proof.bats`). Its first scratch run is still to be
   recorded here.
+
+## Named residuals
+
+Left open by TASK-040, each with its owner:
+
+- **Docs sweep (docs owners).** Several operator and developer pages still show
+  single-project commands against `gremion-ui` (`docker compose build|up|logs|
+  restart|exec gremion-ui`): `docs/DEVELOPMENT.md`, `docs/LOCAL_TESTING.md`,
+  `docs/OPERATIONS.md`, `docs/TROUBLESHOOTING.md`,
+  `docs/security/test-smtp-guard.md`. The app services now live in
+  `docker-compose.app.yml` under the `<stack>-app-<colour>` project (dev: `make
+  up`, project `dev-app-blue`).
+- **check-postgres-major (TASK-019's owner).** With `name: gremion_*` stripped,
+  `scripts/check-postgres-major.mjs` compares volume keys, so its
+  forbidden-name check goes quiet. `check-pooled-stack` asserts that no
+  rendered name matches `gremion_*`; hardening the postgres check itself stays
+  with its owner.
+- **`docker/cloudflared/origin-ca-root.pem`** is orphaned by the cloudflared
+  deletion. It is outside this unit's files and stays until its owner removes
+  it.
+- **gremion-public `/healthz`** carries no colour field (gremion-ui's does).
+- **NATS account per tenant** (TRD-440 lists it): TASK-024 / TASK-043.
+- **Dev loop proof (Q6).** `make up` serving `127.0.0.1:3001` / `:3002` has
+  not been run and recorded; only the dev render is guarded (loopback-only
+  binds).
