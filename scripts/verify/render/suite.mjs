@@ -18,12 +18,11 @@
 //   0 projects, a thrown render, a failed harness post-condition, an
 //   unreadable allowances.json      -> unparseable, naming the project
 //   collected = one per (guard, project); failed = checks with a problem.
-import { PROJECTS, renderProject } from '../../check-pooled-stack.mjs'
 import { toolAvailable } from '../lib/proc.mjs'
 import { buildAbsenceViolations, loadAllowances, scopeOf, summaryLine } from './build-absence.mjs'
 import { colourSuffixGuard } from './colour-suffix.mjs'
 import { driftChecks } from './drift.mjs'
-import { HarnessError, renderAll } from './harness.mjs'
+import { HarnessError, pooledStack, renderAll } from './harness.mjs'
 
 /** Every guard id TASK-053 exports; red-ledger.md carries one section each. */
 export const GUARD_IDS = [
@@ -68,8 +67,8 @@ export function judgeRenders({ projects, renders, counts, allowances, templateTe
  * @returns {{toolMissing: string|null, unparseable: boolean, collected: number, passed: number, failed: number, skipped: number, detail: string}}
  */
 export function runRenderGuardsSuite({
-  projects = PROJECTS,
-  render = renderProject,
+  projects = pooledStack().PROJECTS,
+  render = pooledStack().renderProject,
   toolAvailableFn = toolAvailable,
   loadAllowancesFn = loadAllowances,
   templateText,

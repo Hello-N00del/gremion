@@ -23,6 +23,8 @@ import { parseSvelteCheckMachine } from './lib/parsers.mjs'
 import { writeRecord } from './lib/record.mjs'
 import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
 import { runCensusSuite } from './census/suite.mjs'
+import { runBoundaryLintSuite } from './boundary-lint/suite.mjs'
+import { runRenderGuardsSuite } from './render/suite.mjs'
 import { runCarveLintSuite } from './suites/carve-lint.mjs'
 import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } from './suites/fixtures.mjs'
 import { DEFERRED_BATS_NOTE, INTEGRATION_PARTS, runIntegrationSuite } from './suites/integration.mjs'
@@ -66,6 +68,11 @@ export const SUITE_REGISTRY = {
   isolation: () => runIsolationSuite({ root: REPO_ROOT }),
   // TASK-036 (L1-17, TRD-178): declared health census of the production renders.
   census: () => runCensusSuite(),
+  // TASK-053 (L2-05, TRD-440/444/343): pooled-stack render guards over the
+  // production renders, and boundary-lint's full-tree scan with its
+  // scanned-file floor. See render/suite.mjs and boundary-lint/suite.mjs.
+  'render-guards': () => runRenderGuardsSuite(),
+  'boundary-lint': () => runBoundaryLintSuite({ root: REPO_ROOT }),
   ...UNIT_PART_ENTRIES,
   ...INTEGRATION_PART_ENTRIES,
   __fixture_node_zero__: runFixtureNodeZero,

@@ -20,8 +20,20 @@
 //     fixture's digest;
 //   - the state render contains no APP_SERVICES entry (no phantom services).
 // A renderer that returns a Promise is refused (verify's runAll is synchronous).
-import { APP_SERVICES, PROJECTS, renderProject } from '../../check-pooled-stack.mjs'
-import { readEnvFile } from '../../compose-edge.mjs'
+//
+// TASK-040's modules are loaded on FIRST USE, not at import time: verify.mjs
+// imports the render-guards suite, and verify.test.mjs runs a copy of
+// scripts/verify ALONE (its space-in-path test), where ../../check-pooled-stack.mjs
+// does not exist -- a static import there fails before main() runs.
+// require(esm) is synchronous (Node >= 22.12; the repo pins Node 26), so the
+// suite stays synchronous; a missing module surfaces as a thrown runner, which
+// runAll reports as its own FAIL.
+import { createRequire } from 'node:module'
+
+const requireHere = createRequire(import.meta.url)
+/** TASK-040's check-pooled-stack.mjs (PROJECTS, renderProject, APP_SERVICES, ...). */
+export const pooledStack = () => requireHere('../../check-pooled-stack.mjs')
+const readEnvFile = (file) => requireHere('../../compose-edge.mjs').readEnvFile(file)
 
 /** The release contract fixture (read only; TASK-046/048 own it). */
 export const RELEASE_PINS_FIXTURE = 'test/host/fixtures/release/valid/docker-compose.pins.yml'
@@ -79,7 +91,7 @@ export function renderProblems(id, render, { swap = SWAP_PINS } = {}) {
     }
   }
   if (id === 'state') {
-    for (const s of APP_SERVICES) if (svcs[s]) out.push(`state: carries the app-tier service ${s} (a pins layer added a phantom service)`)
+    for (const s of pooledStack().APP_SERVICES) if (svcs[s]) out.push(`state: carries the app-tier service ${s} (a pins layer added a phantom service)`)
   }
   return out
 }
@@ -91,7 +103,7 @@ export function renderProblems(id, render, { swap = SWAP_PINS } = {}) {
  * for anything else (0 projects, a failed render naming its project, a
  * post-condition that does not hold).
  */
-export function renderAll({ projects = PROJECTS, render = renderProject, readEnv = readEnvFile, swap = SWAP_PINS } = {}) {
+export function renderAll({ projects = pooledStack().PROJECTS, render = pooledStack().renderProject, readEnv = readEnvFile, swap = SWAP_PINS } = {}) {
   if (!Array.isArray(projects) || projects.length === 0) throw new HarnessError('unparseable', 'the harness was given 0 projects to render')
   const renders = {}
   const counts = {}
