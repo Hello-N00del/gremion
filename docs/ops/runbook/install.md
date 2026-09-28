@@ -182,13 +182,19 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
     certificate, and the first deploy's own render (its step 4, as the deploy
     user) dies on that directory. The render runs as the deploy user, because it
     keeps the Keycloak CA in `etc/secrets/keycloak` for every later release,
-    and it ends with a `RENDER:` line. No program starts the state project;
-    `gremion-deploy` only pulls it. The registry token is read at a prompt and
-    the login is removed again at once.
+    and it ends with a `RENDER:` line. The log pipeline's `ipcrypt_key` secret
+    is read from the release tree's `secrets/ipcrypt_key.txt`, while the render
+    keeps that key in `etc/secrets/ipcrypt_key.txt`; a hard link made as the
+    deploy user puts the same key into the tree (one inode, so an in-place key
+    rotation reaches both names; see Known gaps). No program starts the state
+    project; `gremion-deploy` only pulls it. The registry token is read at a
+    prompt and the login is removed again at once.
 
 ```bash
 sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
 stat -c '%U %F %n' "$REL/docker/pgbouncer/userlist.txt" "$REL/docker/keycloak/certs/keycloak.crt"   # gremion regular file, both
+sudo -u gremion ln /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcrypt_key.txt"
+stat -c '%i %U %n' /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcrypt_key.txt"         # one inode, gremion, both
 cd "$REL"
 read -rs GHCR_TOKEN
 printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u x-access-token --password-stdin
@@ -367,6 +373,7 @@ in [run-record.md](run-record.md).
 
 - `bash infra/host/bootstrap.sh timers` (`stage_timers`, also run by `all`) does `systemctl enable --now gremion-backup.timer`, while R15-1 wants the job installed and disabled; step 21 therefore disables it again. Owner: TASK-040 (`infra/**`), which merged with `stage_timers` unchanged, so the change is still open. `test/host/runbook.bats` fails the day `stage_timers` stops enabling the timer, so step 21 and this entry change in the same commit.
 - `gremion-deploy` step 3 refuses without `runtime/last-backup.json`, and `gremion-backup` refuses without a reachable off-site remote (`RCLONE_REMOTE`), while the pilot keeps off-site copies off as the north star (R13-4). Step 13 therefore needs a remote for that one run. PENDING TASK-089 (`scripts/backup/`) decides the pilot's verification path.
+- `docker-compose.yml` declares the log pipeline's `ipcrypt_key` secret as `./secrets/ipcrypt_key.txt` in the release tree, while `gremion-render` generates the key once in `etc/secrets/ipcrypt_key.txt` under the host root and nothing in `infra/host` puts it into a release tree; step 12 links it by hand. Every later release tree the state project is started from needs the same link first. Owner: the host tooling of TASK-040 (`infra/**`, `docker-compose*.yml`), merged with this divergence, so it needs a follow-up task. `test/host/runbook.bats` stops asking for the link the day `gremion-render` writes the key into the release tree.
 - Customer creation and the first administrator's sign-in: PENDING TASK-043 (`packages/provisioning/`), step 17 and the post-condition.
 - The ops project of step 15 (`infra/host/ops/`) is the on-box monitoring until the observability stack moves into its own project: PENDING TASK-039 (`compose/observability/`).
 - The pooled layout (TASK-040, [pooled-stack-layout.md](../pooled-stack-layout.md)) carries a deploy ordering hazard until TASK-034's 34b block lands: neither the apex nor `public.<domain>` has a websecure router, so the first deploy's public verification (step 14) and the post-condition's `/api/health` answer 404. No install is scheduled before 34b; TASK-038's waits carry it.
@@ -375,5 +382,5 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
-- 2.0.0 (2026-09-28): step 12 runs `gremion-render` as the deploy user before the state project's first `up` and observes its outputs (TASK-037 review).
+- 2.0.0 (2026-09-28): step 12 runs `gremion-render` as the deploy user before the state project's first `up`, links the ipcrypt key into the release tree, and observes both (TASK-037 review).
 - 1.0.0 (2026-09-27): first version (TASK-037).
