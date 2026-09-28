@@ -1,0 +1,8 @@
+{
+  "comment": "Modules that install and typecheck with the workspace but are excluded from the default build and deploy. Each is \"private\": true in its package.json. Validated by scripts/check-module-source-scan.mjs (id is a module directory, private, reason present, no duplicates). Consumers of a default module set (image builds, TASK-038/TASK-198; the assembler) must read this file rather than restate it.",
+  "disabled": [
+    { "id": "content", "reason": "fixed by the TASK-200 brief (section 5): disabled by default in the kernel tree" },
+    { "id": "finance", "reason": "fixed by the TASK-200 brief (section 5): disabled by default in the kernel tree" },
+    { "id": "vault", "reason": "fixed by the TASK-200 brief (section 5): disabled by default in the kernel tree" }
+  ]
+}

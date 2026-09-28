@@ -295,11 +295,12 @@ recorded before re-checking its hash — but no such database exists: kernel
 `058` has never shipped on `main` or `origin/main`.
 
 `news_posts` and its `GRANT SELECT` live in the content module's
-`1200_content_news_posts.sql`, staged outside this directory
-(`modules/content/migrations/`) until the content module repo exists; that
-grant covers the whole row today, drafts and `author_id` included, since no
-portal query reads `news_posts` yet — narrowing it to a published-only view
-is a follow-on unit, not this one. The consequence is the rule: a
+`1200_content_news_posts.sql`, staged outside this directory in the content
+module's app chain (`modules/content/app/migrations/`). That grant covers
+the whole row, drafts and `author_id` included; the forward migration
+`1201_news_posts_public_reader_columns.sql` in the same chain narrows it to the
+seven columns the portal reads, on published rows only (row-level security).
+The consequence is the rule: a
 **content-OFF** kernel-only fresh init completes green and serves the
 anonymous portal on exactly `protocols` and `org_units`, and a content-ON
 install additionally grants `news_posts`.

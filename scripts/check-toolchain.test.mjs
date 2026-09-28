@@ -6,7 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, cpSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, cpSync, existsSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
@@ -402,7 +402,22 @@ test('the real tree passes every check with zero violations', () => {
 test('gatherRepoState: Dockerfile discovery is name-based (not a hardcoded path list) and excludes non-node bases', () => {
   const state = gatherRepoState(ROOT)
   const paths = state.dockerfiles.map((f) => f.path).sort()
-  assert.deepEqual(paths, ['gremion-public/Dockerfile', 'gremion-ui/Dockerfile', 'test/host/runner/Dockerfile'])
+  const kernelDockerfiles = ['gremion-public/Dockerfile', 'gremion-ui/Dockerfile', 'test/host/runner/Dockerfile']
+  for (const p of kernelDockerfiles) {
+    assert.ok(paths.includes(p), `${p} should be discovered as a node Dockerfile`)
+  }
+  // modules/<id>/Dockerfile (TASK-200) are node Dockerfiles too — discovery is
+  // name-based, so every module that has one must be found, not just a fixed
+  // set known at the time this assertion was written.
+  const moduleDockerfiles = readdirSync(join(ROOT, 'modules'), { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => `modules/${e.name}/Dockerfile`)
+    .filter((p) => existsSync(join(ROOT, p)))
+  assert.ok(moduleDockerfiles.length > 0, 'fixture precondition: at least one modules/*/Dockerfile is tracked')
+  for (const p of moduleDockerfiles) {
+    assert.ok(paths.includes(p), `${p} should be discovered as a node Dockerfile`)
+  }
+  assert.deepEqual(paths, [...kernelDockerfiles, ...moduleDockerfiles].sort())
   // docker/legal, docker/vector, docker/fallback are tracked Dockerfiles but
   // name non-node bases (nginx/vector/debian) — never discovered as node.
   for (const p of ['docker/legal/Dockerfile', 'docker/vector/Dockerfile', 'docker/fallback/Dockerfile']) {

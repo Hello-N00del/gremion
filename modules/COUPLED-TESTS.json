@@ -1,0 +1,31 @@
+{
+  "comment": "Tests of the in-tree modules that read or import trees the kernel does not hold. Each is excluded from `pnpm --filter ./modules/<id> test` via `node scripts/check-module-source-scan.mjs --coupled-excludes <id>`, and is the scan's only allowance for a non-Dockerfile coupling — per finding: \"allows\" lists the exact targets (repo-relative paths; a directory covers what is under it; '.' is the repository root itself) the file may reach. The list fails on a missing reason or owner, a nonexistent path, or an entry the scan finds no coupling in (stale).",
+  "entries": [
+    {
+      "path": "modules/finance/test/yearend-parity.test.ts",
+      "reason": "imports the StuRa app half's year-end services (../../../gremion-ui/src/lib/server/finance/services/yearend/{retention,reserves}.ts, repositories/types.ts), which the kernel does not carry; the finance app half enters modules/finance/app/ with TASK-205",
+      "owner": "TASK-205",
+      "allows": [
+        "gremion-ui/src/lib/server/finance"
+      ]
+    },
+    {
+      "path": "modules/publishing/test/deploy-drift.test.ts",
+      "reason": "compares the StuRa docker-compose.yml newsletter/nats services with k8s/base/{nats,newsletter}; neither the compose services nor those k8s bases exist in the kernel, and the in-tree image/deploy wiring is TASK-038/TASK-198's",
+      "owner": "TASK-038/TASK-198",
+      "allows": [
+        ".",
+        "docker-compose.yml",
+        "k8s/base"
+      ]
+    },
+    {
+      "path": "modules/votes/test/aggregator-parity.test.ts",
+      "reason": "compares the leaf aggregator with the app oracle at ../../../gremion-ui/src/lib/votes/{aggregator,types}.ts, which the kernel does not carry; the elections app half (lib/votes) enters in-tree with TASK-205. Measured by the scan and the test run; not in the brief's two-test list",
+      "owner": "TASK-205",
+      "allows": [
+        "gremion-ui/src/lib/votes"
+      ]
+    }
+  ]
+}

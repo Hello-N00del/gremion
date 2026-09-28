@@ -2,6 +2,7 @@ packages:
   - 'gremion-ui'
   - 'gremion-public'
   - 'packages/*'
+  - 'modules/*'
 
 # TASK-017 (TRD-401 [D R19-D34]): Node 26 everywhere. engineStrict makes a
 # mismatched engines.node (root package.json) a FAILED install, not a warning
@@ -28,11 +29,12 @@ engineStrict: true
 # `onlyBuiltDependencies` (an explicit ALLOW, which actually runs the script)
 # is the mechanism that works, and both scripts here are side-effect-free
 # dev/build-only steps (see the guard's reason table), so allowing them is
-# safe. `better-sqlite3` (the previous, stale allowance in package.json's
-# `pnpm` field) is gone: it is not a dependency of anything in this lockfile,
-# so it was dead weight the guard now rejects on sight.
+# safe. `better-sqlite3` was once a stale allowance in package.json's `pnpm`
+# field and was removed; it is back HERE, with a reason, because the in-tree
+# modules (TASK-200) resolve it as a devDependency.
 strictDepBuilds: true
 onlyBuiltDependencies:
+  - better-sqlite3
   - esbuild
   - msw
 
@@ -93,6 +95,11 @@ overrides:
   # vitest pins exactly, so both are floored and both stay on the 4.x line.
   vitest: '>=4.1.11 <5'
   '@vitest/mocker': '>=4.1.11 <5'
+  # GHSA-w5hq-g745-h8pq — uuid <11.1.1: missing buffer bounds check in v3/v5/v6 when
+  # `buf` is provided. Arrives with the in-tree finance module (TASK-200) through
+  # exceljs's `uuid: ^8.3.0`, so only an override moves it; 11.x keeps the CJS
+  # `require('uuid').v4` entry exceljs uses. Scoped selector, bounded to 11.x.
+  uuid@<11.1.1: '>=11.1.1 <12'
   # GHSA-9rgm-9g3h-6x36 — devalue <5.9.1: DoS via malformed input (Dependabot #7, medium;
   # first patched release 5.9.2). Transitive through @sveltejs/kit, which declares
   # `devalue: ^5.x`; bounded to 5.x so the floor never drags kit onto devalue 6.

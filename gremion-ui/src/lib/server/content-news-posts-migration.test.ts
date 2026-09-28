@@ -1,8 +1,10 @@
 // B4a-news-posts-ownership — the content-owned creation migration for news_posts.
 //
-// The file is staged in the kernel repo at modules/content/migrations/ and is
-// moved, bytes unchanged, into gremion-module-content/app/migrations/ by
-// D5-remaining-module-repos. It must NOT live in gremion-ui/migrations/: the
+// The file lives in the kernel repo at modules/content/app/migrations/ — the
+// content module's APP chain, beside the content leaf's own chain in
+// modules/content/migrations/ (TASK-200 Q7: the leaf's prebuild hashes
+// ../migrations/*.sql, so leaving 1200 there would pull it into the leaf
+// manifest). It moved there bytes unchanged. It must NOT live in gremion-ui/migrations/: the
 // kernel registry has only the core and governance manifests
 // (manifests/index.generated.ts), so disabledModuleMigrationFiles has nothing to
 // gate it with and a content-OFF kernel-only fresh init would create the table.
@@ -14,7 +16,7 @@ import { join } from 'node:path'
 
 const KERNEL_MIGRATIONS_DIR = join(process.cwd(), 'migrations')
 const CONTENT_MIGRATION = join(
-  process.cwd(), '..', 'modules', 'content', 'migrations', '1200_content_news_posts.sql',
+  process.cwd(), '..', 'modules', 'content', 'app', 'migrations', '1200_content_news_posts.sql',
 )
 
 // Lifted VERBATIM from StuRaOS/gremion-ui/migrations/008_public_portal.sql:14-27
