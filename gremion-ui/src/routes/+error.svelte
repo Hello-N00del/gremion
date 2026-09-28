@@ -70,12 +70,14 @@
     <h1 class="display error-heading">{heading}</h1>
 
     {#if moduleOff}
-      <p class="error-detail">
+      <!-- R26-TRAIN4-FIX (WCAG 3.1.2): not in the catalogue yet (TASK-161), so
+           marked German on a page declared in the person's language. -->
+      <p class="error-detail" lang="de">
         Das Modul <strong>{moduleOff.label}</strong> ist für diese Instanz abgeschaltet.
         Es erscheint nicht in der Navigation und belegt keine Rollen oder Realm-Gruppen.
       </p>
       {#if moduleOff.note}
-        <div class="error-context">{moduleOff.note}</div>
+        <div class="error-context" lang="de">{moduleOff.note}</div>
       {/if}
     {:else}
       <p class="error-detail">{detail}</p>
@@ -107,7 +109,7 @@
       </a>
       {#if moduleOff}
         {#if isItAdmin}
-          <a href="/systemstatus" class="btn">
+          <a href="/systemstatus" class="btn" lang="de">
             <Icon name="activity" size={14} /> Module verwalten
           </a>
         {/if}

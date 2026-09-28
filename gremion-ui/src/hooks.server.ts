@@ -19,6 +19,7 @@ import { generateErrId } from '$lib/server/err-id'
 import { assertIssMatch } from '$lib/server/tenant/iss-match'
 import { roleVocabularyForTenant } from '$lib/server/tenant/role-vocabulary'
 import { tenantResolveHandle, tenantForwardFetch } from '$lib/server/tenant/resolve'
+import { createI18nHandle } from '$lib/i18n/server/i18n-handle'
 import { runControlMigrations } from '$lib/server/tenant/control-migrations'
 import { registerDefaultTenant } from '$lib/server/tenant/register-default'
 import { runFleetMigrations } from '$lib/server/tenant/fleet'
@@ -617,6 +618,14 @@ export const CSP_HEADER_VALUE = [
   "object-src 'none'",
 ].join('; ')
 
+// TASK-062 (brief §3): exactly one exported i18nHandle, placed after
+// authGuard in the sequence below. Resolves event.locals.locale, runs the
+// rest of the chain inside Paraglide's request scope and fills app.html's
+// <html lang> placeholder with the resolved value via transformPageChunk,
+// the same mechanism tenantBrandStyleHandle already uses
+// for the per-tenant accent tag — both survive sequence() (brief §4).
+export const i18nHandle: Handle = createI18nHandle((locals) => locals.tenant?.id ?? null)
+
 export const cspGuard: Handle = async ({ event, resolve }) => {
   const response = await resolve(event)
   const contentType = response.headers.get('content-type') ?? ''
@@ -700,6 +709,7 @@ export const handle = sequence(
   tenantBrandStyleHandle,
   authHandleUnlessExempt,
   authGuard,
+  i18nHandle,
   cspGuard,
 )
 

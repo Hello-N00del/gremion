@@ -5,3 +5,6 @@ build/
 .env.*
 !.env.example
 coverage/
+
+# TASK-062: Paraglide output, compiled from src/lib/i18n/messages on dev/build/check
+src/lib/i18n/paraglide/

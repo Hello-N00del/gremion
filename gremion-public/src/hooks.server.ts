@@ -1,4 +1,6 @@
 import type { Handle } from '@sveltejs/kit'
+import { sequence } from '@sveltejs/kit/hooks'
+import { createI18nHandle } from '$lib/i18n/server/i18n-handle'
 
 /**
  * #259-2: app-layer security headers for the PUBLIC portal.
@@ -41,7 +43,7 @@ export const CSP_HEADER_VALUE = [
   "object-src 'none'",
 ].join('; ')
 
-export const handle: Handle = async ({ event, resolve }) => {
+export const securityHeadersHandle: Handle = async ({ event, resolve }) => {
   const response = await resolve(event)
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.startsWith('text/html')) {
@@ -53,3 +55,10 @@ export const handle: Handle = async ({ event, resolve }) => {
   }
   return response
 }
+
+// TASK-062 (brief §3): the one hooks.server.ts change this unit is granted
+// here. i18nHandle runs first: it resolves the locale, runs the chain inside
+// Paraglide's request scope and fills app.html's <html lang> placeholder.
+export const i18nHandle: Handle = createI18nHandle()
+
+export const handle = sequence(i18nHandle, securityHeadersHandle)

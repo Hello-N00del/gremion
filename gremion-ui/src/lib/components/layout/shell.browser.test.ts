@@ -22,8 +22,8 @@ import {
 import { TOPBAR_SLOT_BELOW_RAIL } from './topbar-slot'
 import { NAV_CONTROL_SIZE, NAV_SIDEBAR_WIDTH, NAV_RAIL_WIDTH, NAV_STORAGE_KEY, NAV_MAIN_MIN_CONTENT } from './nav-constants'
 import { fontSizePx } from '$lib/stores/font-size'
-import de from '$lib/i18n/de'
-import en from '$lib/i18n/en'
+import de from '$lib/i18n/messages/de.json'
+import en from '$lib/i18n/messages/en.json'
 
 const pageState = vi.hoisted(() => ({ url: new URL('http://localhost/members'), data: {} as Record<string, unknown> }))
 vi.mock('$app/state', () => ({ page: pageState }))
@@ -88,6 +88,9 @@ beforeEach(() => {
     /* private mode */
   }
   document.documentElement.className = ''
+  // TASK-062: $t follows the server-rendered <html lang>; the harness page is
+  // lang="en", the app's German-first SSR default is de.
+  document.documentElement.lang = 'de'
   document.documentElement.style.removeProperty('--base-font-size')
   pageState.data = {}
   document.addEventListener('click', stopNavigation, true)

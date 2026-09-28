@@ -16,6 +16,9 @@ vi.mock('$app/state', () => ({ page: pageState }))
 
 beforeEach(() => {
   document.documentElement.className = ''
+  // TASK-062: $t follows the server-rendered <html lang>; the harness page is
+  // lang="en", the app's German-first SSR default is de.
+  document.documentElement.lang = 'de'
 })
 afterEach(() => cleanup())
 
