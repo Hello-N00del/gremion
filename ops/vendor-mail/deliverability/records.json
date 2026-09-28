@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "_comment": "TASK-015 (PRD-REC-006, TRD-252, Q5, Q6). One entry per delivered test mail: date, provider class (large-consumer | university), the receiver's spf/dkim/dmarc verdicts (read with check-received.mjs), placement (inbox | spam), and the mail-server fingerprint it was taken at (check-deliverability-record.mjs --print-fingerprint). Raw headers, addresses, IPs and provider names stay OFF git (GDPR Art. 5(1)(c)); check-deliverability-record.mjs refuses an entry carrying any of them. Empty until the operator's first live test (host residual).",
+  "records": []
+}
