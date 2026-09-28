@@ -6,9 +6,9 @@
 // lint-migration-register` compares their count with node's TAP plan.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { check, claim, freeze, globToRegExp, loadRegister, RegisterError, treeState } from './register.mjs'
+import { byName, check, claim, freeze, globToRegExp, loadRegister, RegisterError, treeState } from './register.mjs'
 
-const codes = (problems) => [...new Set(problems.map((p) => p.code))].sort()
+const codes = (problems) => [...new Set(problems.map((p) => p.code))].sort(byName)
 
 function base() {
   const register = {

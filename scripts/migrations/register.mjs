@@ -65,6 +65,9 @@ export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex'
 
 const isInt = (n, min = 0) => Number.isInteger(n) && n >= min
 
+/** Code-unit string order, the order `ls`/`readdir().sort()` and the runners use. */
+export const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+
 // ---------------------------------------------------------------- loader --
 
 /**
@@ -177,7 +180,7 @@ export function globToRegExp(glob) {
  * @param {object} s.register   parsed ranges.json
  * @param {unknown} s.lock      parsed applied.lock.json, or undefined when absent
  * @param {unknown} s.slugs     parsed stura-only-slugs.json
- * @param {{path: string, bytes: Buffer|string}[]} s.files  every tracked *.sql
+ * @param {{path: string, bytes: Uint8Array|string}[]} s.files  every tracked *.sql
  * @param {(path: string) => string} s.eolOf  git's `eol` attribute of a path
  * @returns {{code: string, message: string}[]}
  */
@@ -294,7 +297,7 @@ export function check({ register, lock, slugs, files, eolOf }) {
       if (!lc) {
         if (cf.length) p('NOT_LOCKED', `chain ${c.id} has ${cf.length} file(s) but no ${LOCK_PATH} entry -- run register.mjs freeze --chain ${c.id}`)
       } else {
-        if (lc.legacyFloor !== c.legacyFloor || !Array.isArray(lc.legacy) || [...lc.legacy].sort().join('\n') !== [...c.legacy].sort().join('\n'))
+        if (lc.legacyFloor !== c.legacyFloor || !Array.isArray(lc.legacy) || [...lc.legacy].sort(byName).join('\n') !== [...c.legacy].sort(byName).join('\n'))
           p('LEGACY_EDITED', `chain ${c.id} legacyFloor/legacy[] differ from the values frozen in ${LOCK_PATH} -- they are written once and never edited`)
         const present = new Map(parsed.map((x) => [x.base, x]))
         for (const [name, hash] of Object.entries(lc.files)) {
@@ -349,7 +352,7 @@ export function freeze({ register, lock, files, chains, frozenAt }) {
     const c = reg.chains.find((x) => x.id === id)
     if (!c) throw new RegisterError('UNKNOWN_CHAIN', `no chain ${id} in the register`)
     const cf = files.filter((f) => c.dirs.includes(posix.dirname(f.path)))
-    const lc = (out.chains[id] ??= { legacyFloor: c.legacyFloor, legacy: [...c.legacy].sort(), files: {} })
+    const lc = (out.chains[id] ??= { legacyFloor: c.legacyFloor, legacy: [...c.legacy].sort(byName), files: {} })
     const present = new Map(cf.map((f) => [posix.basename(f.path), f]))
     for (const [name, hash] of Object.entries(lc.files)) {
       const f = present.get(name)
@@ -376,7 +379,7 @@ export function treeFiles() {
   const listed = git(['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', '*.sql'])
     .split('\0')
     .filter(Boolean)
-  const paths = [...new Set(listed)].filter((p) => existsSync(join(REPO_ROOT, p))).sort()
+  const paths = [...new Set(listed)].filter((p) => existsSync(join(REPO_ROOT, p))).sort(byName)
   return paths.map((path) => ({ path, bytes: readFileSync(join(REPO_ROOT, path)) }))
 }
 

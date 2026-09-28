@@ -8,17 +8,17 @@
 // packages/tenant-store/test/integration/verify-applied.test.ts.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { chainFileNames, chainPreApply, ChainRefusal } from './pre-apply.mjs'
 import { compareLedger, readChain, verifyApplied, VerifyAppliedError } from './verify-applied.mjs'
-import { REPO_ROOT } from './register.mjs'
+import { byName, REPO_ROOT } from './register.mjs'
 
-async function run({ ledger, chainFiles, pending, hook }) {
+async function run({ ledger, pending, hook }) {
   const state = { ledger: [...ledger], ddl: [] }
-  const ctx = { applied: [...ledger].sort(), pending: [...pending].sort() }
+  const ctx = { applied: [...ledger].sort(byName), pending: [...pending].sort(byName) }
   for (const f of ctx.pending) {
     await hook(f, ctx)
     state.ddl.push(`DDL ${f}`)
@@ -32,7 +32,7 @@ async function refused(o, code) {
   let err
   const state = { ledger: [...o.ledger], ddl: [] }
   try {
-    const ctx = { applied: [...o.ledger].sort(), pending: [...o.pending].sort() }
+    const ctx = { applied: [...o.ledger].sort(byName), pending: [...o.pending].sort(byName) }
     for (const f of ctx.pending) {
       await o.hook(f, ctx)
       state.ddl.push(`DDL ${f}`)
@@ -104,7 +104,7 @@ function chainDir(files, { manifest } = {}) {
     writeFileSync(join(dir, name), body)
     m[name] = sha(body)
   }
-  writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ ...m, ...(manifest ?? {}) }))
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ ...m, ...manifest }))
   return dir
 }
 
