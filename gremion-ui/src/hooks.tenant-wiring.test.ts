@@ -57,7 +57,6 @@ vi.mock('$lib/server/governance/provisioning/worker', () => ({ startProvisioning
 vi.mock('$lib/server/jwt-verify', () => ({ verifyBearerJwt: vi.fn(async () => null) }))
 vi.mock('$lib/server/audit-db', () => ({ purgeAuditLogsOlderThan: vi.fn(async () => ({ purged: 0 })) }))
 vi.mock('$lib/server/tenant/control-migrations', () => ({ runControlMigrations: vi.fn(async () => {}) }))
-vi.mock('$lib/server/tenant/register-default', () => ({ registerDefaultTenant: vi.fn(async () => ({ id: 'tid-1' })) }))
 // boot() fleet-migrates the active tenants (P2.1b T2) then resolves the default
 // context for the audit-purge interval; the listActiveTenants id must match the
 // registerDefaultTenant mock above.
@@ -68,7 +67,6 @@ vi.mock('$lib/server/tenant/registry', () => ({
   finishTenantMigrationRun: vi.fn(async () => {}),
 }))
 vi.mock('$lib/server/tenant/context', () => ({ runWithTenant: (_ctx: unknown, fn: () => unknown) => fn() }))
-vi.mock('$lib/server/tenant/default-tenant', () => ({ DEFAULT_TENANT: { id: 'default', configPath: '/tmp/config.json' } }))
 vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }))
 
 beforeEach(() => { callOrder.length = 0; vi.resetModules() })

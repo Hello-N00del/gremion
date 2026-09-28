@@ -12,7 +12,6 @@ vi.mock('$lib/server/audit-db', () => ({ purgeAuditLogsOlderThan: vi.fn(async ()
 vi.mock('./auth', () => ({ handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) => resolve(event) }))
 vi.mock('$lib/server/jwt-verify', () => ({ verifyBearerJwt: vi.fn(async () => null) }))
 vi.mock('$lib/server/tenant/control-migrations', () => ({ runControlMigrations: vi.fn(async () => {}) }))
-vi.mock('$lib/server/tenant/register-default', () => ({ registerDefaultTenant: vi.fn(async () => ({ id: 'tid-1' })) }))
 // P2.1b T2: boot's fleet runner lists active tenants (id must match the
 // registerDefaultTenant mock above) and ledgers each run.
 vi.mock('$lib/server/tenant/registry', () => ({
@@ -22,7 +21,6 @@ vi.mock('$lib/server/tenant/registry', () => ({
   finishTenantMigrationRun: vi.fn(async () => {}),
 }))
 vi.mock('$lib/server/tenant/context', () => ({ runWithTenant: (_ctx: unknown, fn: () => unknown) => fn() }))
-vi.mock('$lib/server/tenant/default-tenant', () => ({ DEFAULT_TENANT: { id: 'default', configPath: '/tmp/config.json' } }))
 vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }))
 // --- end stubs ---
 

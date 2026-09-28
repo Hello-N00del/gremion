@@ -21,10 +21,8 @@ import { roleVocabularyForTenant } from '$lib/server/tenant/role-vocabulary'
 import { tenantResolveHandle, tenantForwardFetch } from '$lib/server/tenant/resolve'
 import { createI18nHandle } from '$lib/i18n/server/i18n-handle'
 import { runControlMigrations } from '$lib/server/tenant/control-migrations'
-import { registerDefaultTenant } from '$lib/server/tenant/register-default'
 import { runFleetMigrations } from '$lib/server/tenant/fleet'
 import { setTenantReadinessFromFleet } from '$lib/server/tenant/readiness'
-import { resolveTenantBySlug } from '$lib/server/tenant/registry'
 import { getControlDb } from '$lib/server/tenant/control-db'
 import { startTenantEvictListener } from '$lib/server/tenant/evict-listener'
 import { forEachActiveTenant } from '$lib/server/tenant/worker-fleet'
@@ -136,21 +134,22 @@ export function boot(): Promise<void> {
       // data-plane runMigrations() runs inside the runWithTenant block below.
       await waitForDbReady({ ping: () => getControlDb()`SELECT 1` })
 
-      // P2.1a: migrate the control plane and register this deployment itself as
-      // the canonical `default` tenant #1 BEFORE the data-plane migration — the
-      // default registry row must exist so resolveTenantBySlug('default') below
-      // can build the ALS context the data-plane migration runs inside.
-      // Control migrations + default registration touch ONLY the control pool
-      // (no ALS), so they can run before any tenant scope is established.
+      // P2.1a: migrate the control plane BEFORE the data-plane migration.
+      // Control migrations touch ONLY the control pool (no ALS), so they run
+      // before any tenant scope is established.
+      //
+      // TASK-042 (PRD-PLAT-012, TRD-075): boot WRITES NOTHING into the tenant
+      // registry. There is no deployment-derived tenant #1 any more; every
+      // customer is created by the platform operator (TASK-043), and a platform
+      // with zero customers boots healthy and serves no tenant content.
       await runControlMigrations()
-      await registerDefaultTenant()
 
       // P2.1b T2+T3 (D-FLEET / D-READY): the data-plane migration step is a
-      // FLEET run over every ACTIVE registry tenant (default included — same
-      // path), each applied inside runWithTenant(ctx, …) so the P0.2
-      // module-skip uses THAT tenant's config, with the per-tenant outcome
-      // ledgered in the control plane's tenant_migration_run. One tenant's
-      // failure — the DEFAULT included — no longer fails boot: the outcomes
+      // FLEET run over every ACTIVE registry tenant (zero included: an empty
+      // fleet is a complete run), each applied inside runWithTenant(ctx, …) so
+      // the P0.2 module-skip uses THAT tenant's config, with the per-tenant
+      // outcome ledgered in the control plane's tenant_migration_run. One
+      // tenant's failure no longer fails boot: the outcomes
       // populate the per-tenant readiness map and tenantResolveHandle serves a
       // failed/pending tenant a tenant-scoped 503 with a single-flighted lazy
       // re-migration retry, while every other tenant serves normally. The
@@ -171,11 +170,10 @@ export function boot(): Promise<void> {
       }
       console.info('[boot] Migrations complete')
 
-      // Control-plane sanity check: the default tenant must resolve after
-      // registration — if it can't, nothing will (process-wide boot failure).
-      if (!(await resolveTenantBySlug('default'))) {
-        throw new Error('[boot] default tenant not resolvable after registration')
-      }
+      // TASK-042: the former "default tenant must resolve" sanity check is gone
+      // (zero tenants is a valid, healthy state). Its control-plane-check role is
+      // kept by runFleetMigrations above: listActiveTenants() reads the control
+      // plane, and its failure still reaches the catch below (exit 1).
 
       // G-XPROC (SP-4): subscribe THIS process to cross-process tenant evictions
       // so a CLI suspend/delete busts this app replica's resolution cache +
@@ -217,12 +215,10 @@ export function boot(): Promise<void> {
       // ambient ALS scope established during boot does NOT survive into it, so
       // purgeAuditLogsOlderThan -> getDb() would throw "no tenant context"
       // (fail-closed). forEachActiveTenant re-establishes an EXPLICIT
-      // runWithTenant scope per ACTIVE tenant (previously only the captured
-      // default context), purging each tenant's audit_log with THAT tenant's
-      // configured retention window — with per-(worker, tenant) single-flight
-      // and per-tenant try/catch + structured log in the helper. readConfig()
-      // resolves the CURRENT tenant from the ALS scope (the default tenant's
-      // config path is byte-identical to DEFAULT_TENANT's).
+      // runWithTenant scope per ACTIVE tenant, purging each tenant's audit_log
+      // with THAT tenant's configured retention window — with per-(worker,
+      // tenant) single-flight and per-tenant try/catch + structured log in the
+      // helper. readConfig() resolves the CURRENT tenant from the ALS scope.
       const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000
       setInterval(
         () =>

@@ -112,23 +112,21 @@ vi.mock('$lib/server/tenant/resolve', () => ({
 vi.mock('$lib/server/tenant/control-migrations', () => ({
   runControlMigrations: () => controlMigrationsImpl(),
 }))
-vi.mock('$lib/server/tenant/register-default', () => ({
-  registerDefaultTenant: vi.fn(async () => ({ id: 'default' })),
-}))
+// TASK-042: boot registers no tenant any more; the fleet is whatever the
+// registry lists. Steerable per test (zero tenants, a failing control plane).
+let listActiveTenantsImpl: () => Promise<unknown[]> = async () => [
+  { id: 'default', slug: 'default', status: 'active' },
+]
 vi.mock('$lib/server/tenant/registry', () => ({
+  // The fleet runner resolves each listed tenant's context (fleet.ts).
   resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/gremion-test' })),
-  // P2.1b T2: boot's fleet runner lists the active tenants and ledgers each
-  // run. The id must match registerDefaultTenant's mock so boot's default-
-  // outcome gate finds the fleet result.
-  listActiveTenants: vi.fn(async () => [{ id: 'default', slug: 'default', status: 'active' }]),
+  // P2.1b T2: boot's fleet runner lists the active tenants and ledgers each run.
+  listActiveTenants: vi.fn(() => listActiveTenantsImpl()),
   startTenantMigrationRun: vi.fn(async () => 'run-1'),
   finishTenantMigrationRun: vi.fn(async () => {}),
 }))
 vi.mock('$lib/server/tenant/context', () => ({
   runWithTenant: (_ctx: unknown, fn: () => unknown) => fn(),
-}))
-vi.mock('$lib/server/tenant/default-tenant', () => ({
-  DEFAULT_TENANT: { id: 'default', configPath: '/tmp/config.json' },
 }))
 
 // ./auth re-exports a SvelteKit `handle`. TASK-023: faithful to the real one in
@@ -170,7 +168,8 @@ beforeEach(() => {
   process.exitCode = 0
   migrationsImpl = async () => {}
   controlMigrationsImpl = async () => {}
-  exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+  listActiveTenantsImpl = async () => [{ id: 'default', slug: 'default', status: 'active' }]
+  exitSpy =vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
   appEnv.building = true
 })
 
@@ -227,6 +226,40 @@ describe('hooks.server boot sequencing (T4.1 / G-014 + P2.1b T3 / D-READY)', () 
     expect(process.exitCode).toBe(1)
     // TASK-023: a non-transient failure exits, so `restart: unless-stopped`
     // recycles the container instead of it latching a permanent 503.
+    expect(exitSpy).toHaveBeenCalledWith(1)
+  })
+
+  // TASK-042 TDD 3 (PRD-PLAT-012, TRD-075): a platform with zero customers boots.
+  it('boots with ZERO active tenants: complete, no error, exitCode 0, nothing exits', async () => {
+    listActiveTenantsImpl = async () => []
+
+    const mod = await import('./hooks.server')
+    await mod.boot()
+
+    const status = mod.getBootStatus()
+    expect(status.error).toBeNull()
+    expect(status.complete).toBe(true)
+    expect(process.exitCode).toBe(0)
+    expect(exitSpy).not.toHaveBeenCalled()
+    const readiness = await import('$lib/server/tenant/readiness')
+    expect(readiness.isFleetPopulated()).toBe(true)
+  })
+
+  // TASK-042 §9: the deleted "default must resolve" check doubled as a control-
+  // plane check; listing the fleet keeps that role.
+  it('a failing listActiveTenants (control plane) still fails boot and exits 1', async () => {
+    const failure = new Error('relation "tenant" does not exist')
+    listActiveTenantsImpl = async () => {
+      throw failure
+    }
+
+    const mod = await import('./hooks.server')
+    await mod.boot()
+
+    const status = mod.getBootStatus()
+    expect(status.complete).toBe(false)
+    expect(status.error).toBe(failure)
+    expect(process.exitCode).toBe(1)
     expect(exitSpy).toHaveBeenCalledWith(1)
   })
 
