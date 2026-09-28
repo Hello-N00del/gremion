@@ -9,10 +9,12 @@ runner or the pilot host**. No public transparency log is used (D R20-D18).
 ## Key custody
 
 - `cosign.key` and its password live in the operator vault and the recovery kit
-  only. The key file must sit **outside any checkout** — `sign-release.sh`
-  resolves the key path and refuses one inside the repository toplevel, even a
-  gitignored one (`sign-release.sh`, the `realpath` check before signing;
-  `sign-release.test.mjs` "a key path inside the repository is refused").
+  only. The key file must sit **outside any checkout**, in the vault path.
+  `sign-release.sh` enforces the part it can see: it resolves the key path and
+  refuses one inside the release checkout's toplevel, even a gitignored one
+  (the `realpath` check before signing; `sign-release.test.mjs` "a key path
+  inside the repository is refused"). A key inside some *other* checkout is
+  not detected; keeping it in the vault path is the operator's rule.
 - The pilot host holds only the public half, installed by
   `sudo infra/host/bootstrap.sh --cosign-pubkey <path>/cosign.pub trust` as
   `$ROOT/etc/cosign.pub`. `gremion-deploy` step 2 verifies every first-party pin
@@ -79,9 +81,11 @@ Each step is a precondition of the next; stop at the first failure.
      ghcr.io/hello-n00del/gremion-ui@sha256:<64 hex>
    ```
 
-   Expected: exit 0, "The signatures were verified against the specified public
-   key", and **no** "transparency log was verified" line (there is no tlog
-   entry). The same command with any other public key must fail.
+   Expected: exit 0 and "The signatures were verified against the specified
+   public key". The same command with any other public key must fail. To show
+   there is no tlog entry, `cosign download signature <ref>` must print
+   `"Bundle":null` for every signature (`--insecure-ignore-tlog` only skips the
+   check, so verify output alone cannot show it).
 
 The host's third-party allow-list comes from the same tree:
 `node scripts/release/check-image-digests.mjs --third-party-list` prints the
@@ -95,14 +99,31 @@ digest guard rejects.
 throwaway material: the TASK-046 harness's local `registry:2` on 127.0.0.1,
 throwaway key pairs, and a nested throwaway repository whose check record is a
 **stub record** printing `STUB: rehearsal only`. It proves the sequence signs,
-verifies with the rehearsal public key, leaves no tlog line, fails with another
-key, refuses a key inside the repository, and fails (never skips) when docker or
+verifies with the rehearsal public key, leaves no tlog line and no Rekor
+bundle, fails with another key, refuses a key inside the repository, and fails (never skips) when docker or
 cosign is missing. The real verify record, the vault key and the private
 registry are exercised only by the first real signing below.
 
 ## First real signing (operator, Q9)
 
-Not done by TASK-048; recorded there as a residual. The operator signs
-`gremion-legal` with the vault key after steps 1–2 have pushed it to private
-GHCR, then records in handover section 8: the digest, the `cosign verify --key
-cosign.pub` output, "no tlog", and that the key's recovery-kit copy was checked.
+Not done by TASK-048; recorded there as a residual. On the operator
+workstation, from a clean checkout of a commit whose `make verify` is green:
+
+```sh
+docker buildx build --push -t ghcr.io/hello-n00del/gremion-legal:<tag> docker/legal
+REF="ghcr.io/hello-n00del/gremion-legal@$(docker buildx imagetools inspect \
+  --format '{{json .Manifest}}' ghcr.io/hello-n00del/gremion-legal:<tag> | jq -r .digest)"
+COSIGN_PASSWORD=… scripts/release/sign-release.sh --key <vault>/cosign.key "$REF"
+cosign verify --key cosign.pub --insecure-ignore-tlog=true "$REF"
+cosign download signature "$REF" | jq -c .Bundle      # every line: null
+```
+
+Record in handover section 8: `$REF` (the digest), the `cosign verify --key
+cosign.pub` output, "no tlog" (the `null` bundle lines), and that the key's
+recovery-kit copy was checked.
+
+Also before the first deploy: the Keycloak pin in `docker-compose.yml` was
+resolved from `docker.io/keycloak/keycloak:26.6.1` (quay.io was unreachable
+where TASK-048 ran). Confirm it on quay.io:
+`docker buildx imagetools inspect --format '{{json .Manifest}}' quay.io/keycloak/keycloak:26.6.1 | jq -r .digest`
+must print the digest `docker-compose.yml` pins.

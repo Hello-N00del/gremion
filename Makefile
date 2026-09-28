@@ -573,12 +573,13 @@ lint-image-digests:
 	@echo "Checking image digests and object storage..."
 	@declared=$$(grep -c '^test(' scripts/release/check-image-digests.test.mjs); \
 	 out=$$(node --test --test-reporter=tap scripts/release/check-image-digests.test.mjs 2>&1); status=$$?; \
-	 printf '%s\n' "$$out" | grep -E '^(not ok|# (tests|pass|fail|skipped))' >&2; \
+	 printf '%s\n' "$$out" | grep -E '^(not ok|# (tests|pass|fail|skipped|todo))' >&2; \
 	 [ "$$status" -eq 0 ] || exit "$$status"; \
 	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^# tests \([0-9][0-9]*\)$$/\1/p' | tail -n1); \
 	 skipped=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^# skipped \([0-9][0-9]*\)$$/\1/p' | tail -n1); \
-	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ] || [ "$${skipped:-0}" != "0" ]; then \
-	   echo "lint-image-digests: the suite declares $$declared test(s) but node ran '$$collected' (skipped $${skipped:-?})." >&2; \
+	 todo=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^# todo \([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ] || [ "$${skipped:-x}" != "0" ] || [ "$${todo:-x}" != "0" ]; then \
+	   echo "lint-image-digests: the suite declares $$declared test(s) but node ran '$$collected' (skipped $${skipped:-?}, todo $${todo:-?})." >&2; \
 	   exit 1; \
 	 fi; \
 	 echo "[image-digests] suite: $$collected of $$declared declared test(s) ran"

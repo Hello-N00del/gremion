@@ -33,8 +33,12 @@ export function appServices(composeText) {
   const out = []
   for (const l of lines.slice(start + 1)) {
     if (/^\S/.test(l) && !/^#/.test(l)) break
+    if (!/^ {2}\S/.test(l) || /^\s*#/.test(l)) continue
+    // A service line in any other spelling (anchor, quoted key, flow map)
+    // would silently shrink the expected set, so it is refused.
     const m = /^ {2}([A-Za-z0-9][A-Za-z0-9_.-]*):\s*(#.*)?$/.exec(l)
-    if (m) out.push(m[1])
+    if (!m) throw new Error(`not a plain service line under services: ${l.trim()}`)
+    out.push(m[1])
   }
   if (!out.length) throw new Error('the app compose services: block names no service')
   return out
@@ -55,8 +59,15 @@ export function parsePinLines(text) {
   return pins
 }
 
+export const FIRST_PARTY_PREFIX = 'ghcr.io/hello-n00del/'
+
 /** The pins layer text, in the expected service order; throws unless check-pins passes it. */
-export function emitPins(pins, services) {
+export function emitPins(pins, services, { firstPartyPrefix = FIRST_PARTY_PREFIX } = {}) {
+  // The app layer is first-party only: a pin outside the prefix is not
+  // signature-verified by gremion-deploy, it is looked up as third-party.
+  for (const [svc, ref] of pins) {
+    if (!ref.startsWith(firstPartyPrefix)) throw new Error(`${svc}: ${ref} is not first-party (${firstPartyPrefix}*)`)
+  }
   const order = [...services.filter((s) => pins.has(s)), ...[...pins.keys()].filter((s) => !services.includes(s))]
   const body = order.map((s) => `  ${s}:\n    build: !reset null\n    image: ${pins.get(s)}\n`).join('')
   const text =

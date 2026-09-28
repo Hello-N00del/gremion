@@ -103,3 +103,19 @@ test('cli: writes the layer only when check-pins passes; the file passes check-p
   const usage = spawnSync(process.execPath, [cli], { encoding: 'utf8', input: '' })
   assert.equal(usage.status, 2)
 })
+
+// review round 1: a service line in any other spelling must not shrink the
+// expected set; the app layer names first-party images only.
+test('r1: an anchored, quoted or flow service line under services: is refused, not skipped', () => {
+  for (const c of ['services:\n  a: &a\n    image: x\n  b:\n    image: y\n', 'services:\n  "a":\n    image: x\n  b:\n    image: y\n', 'services:\n  a: {image: x}\n  b:\n    image: y\n']) {
+    assert.throws(() => appServices(c), /not a plain service line/, c)
+  }
+})
+
+test('r1: a pin outside the first-party prefix is refused (the host would treat it as third-party)', () => {
+  assert.throws(() => emitPins(parsePinLines(`gremion-ui=docker.io/library/nginx@sha256:${D('1')}`), ['gremion-ui']), /not first-party/)
+  assert.throws(() => emitPins(parsePinLines(`gremion-ui=ghcr.io.evil/hello-n00del/gremion-ui@sha256:${D('1')}`), ['gremion-ui']), /not first-party/)
+  // an explicit prefix (the rehearsal's local registry) is honoured
+  const out = emitPins(parsePinLines(`gremion-ui=127.0.0.1:5000/hello-n00del/gremion-ui@sha256:${D('1')}`), ['gremion-ui'], { firstPartyPrefix: '127.0.0.1:5000/hello-n00del/' })
+  assert.deepEqual(checkPins(out, { services: ['gremion-ui'] }), [])
+})

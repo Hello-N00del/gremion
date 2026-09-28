@@ -77,7 +77,7 @@ test('rehearsal (stub record): push -> emit-pins -> check-pins -> sign-release.s
   // emit-pins + check-pins over a one-service app compose
   const compose = 'services:\n  legal:\n    build: ./legal\n    image: x\n'
   const services = appServices(compose)
-  const pins = emitPins(parsePinLines(`legal=${ref}\n`), services)
+  const pins = emitPins(parsePinLines(`legal=${ref}\n`), services, { firstPartyPrefix: `${h.registry}/hello-n00del/` })
   assert.deepEqual(checkPins(pins, { services }), [])
   // sign-release.sh: clean nested tree, stub record, key outside the toplevel
   const r = nestedRepo()
@@ -90,7 +90,15 @@ test('rehearsal (stub record): push -> emit-pins -> check-pins -> sign-release.s
   const ok = verify(ref, key.pub)
   assert.equal(ok.status, 0, ok.stderr)
   assert.match(ok.stderr, /The signatures were verified against the specified public key/)
-  assert.doesNotMatch(ok.stderr, /transparency log was verified/i, 'a tlog entry exists for a key-based, no-tlog signature')
+  // No tlog: the signature in the registry carries no Rekor bundle. (A verify
+  // run with --insecure-ignore-tlog never checks the log, so its output cannot
+  // prove this; the stored signature can.)
+  const dl = sh('cosign', ['download', 'signature', ref])
+  assert.equal(dl.status, 0, dl.stderr)
+  const sigs = dl.stdout.trim().split('\n').map((l) => JSON.parse(l))
+  assert.ok(sigs.length >= 1, 'no signature stored for the image')
+  for (const sig of sigs) assert.ok('Base64Signature' in sig && 'Bundle' in sig, `unexpected download shape: ${Object.keys(sig)}`)
+  for (const sig of sigs) assert.ok(sig.Bundle === null, `a Rekor bundle is attached: ${JSON.stringify(sig.Bundle).slice(0, 120)}`)
   const claims = JSON.parse(ok.stdout.trim().split('\n')[0])
   assert.equal(claims[0].critical.image['docker-manifest-digest'], ref.split('@')[1])
   // another key does not verify
