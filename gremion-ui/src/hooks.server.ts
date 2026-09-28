@@ -157,8 +157,7 @@ export function boot(): Promise<void> {
       // tenants (and whole ticks pre-population), so background writes never
       // hit a half-migrated tenant DB either (G-014's "no traffic against a
       // half-migrated DB" now holds per tenant on BOTH planes). Only a
-      // CONTROL-plane failure (control migrations, default registration,
-      // listing the fleet) escapes into the process-wide catch below — nothing
+      // CONTROL-plane failure (control migrations, listing the fleet) escapes into the process-wide catch below — nothing
       // can resolve without the control plane.
       const fleetOutcomes = await runFleetMigrations()
       setTenantReadinessFromFleet(fleetOutcomes)

@@ -1,0 +1,2 @@
+# Per-run output of zero-tenant-proof.sh (holds the per-run proxy-trust header).
+.proof-root/
