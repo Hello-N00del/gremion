@@ -6,16 +6,29 @@ server_name: "${SYNAPSE_SERVER_NAME}"
 # Signing key is generated automatically on first start.
 signing_key_path: "/data/homeserver.signing.key"
 
-# Database — use SQLite for local dev; switch to PostgreSQL for production.
+# Database — PostgreSQL only (TASK-198): the chat module's own server,
+# messaging-postgres, database `synapse`, created with LOCALE 'C' from
+# template0 by postgres-init/10-synapse-db.sh. db-preflight.py refuses to
+# start Synapse on any other collation or major. There is no SQLite path:
+# render-homeserver.sh refuses a rendered engine other than psycopg2.
+# SYNAPSE_DB_PORT is judged an integer by the shim before it lands here.
 database:
-  name: sqlite3
+  name: psycopg2
   args:
-    database: /data/homeserver.db
+    user: "${SYNAPSE_DB_USER}"
+    password: "${SYNAPSE_DB_PASSWORD}"
+    dbname: "${SYNAPSE_DB_NAME}"
+    host: "${SYNAPSE_DB_HOST}"
+    port: ${SYNAPSE_DB_PORT}
+    cp_min: 5
+    cp_max: 10
 
 # Media store
 media_store_path: /data/media_store
 
-# Listener — expose only on internal Docker network
+# Listener — internal Docker network only, and the client API only: no
+# federation resource (PRD-MSG-002, defence in depth; the network proof is
+# TASK-060).
 listeners:
   - port: 8008
     tls: false
@@ -24,11 +37,13 @@ listeners:
     bind_addresses:
       - "0.0.0.0"
     resources:
-      - names: [client, federation]
+      - names: [client]
         compress: false
 
 # Disable federation — a closed, single-organisation deployment
 federation_domain_whitelist: []
+# ... and never ask a notary for another server's keys.
+trusted_key_servers: []
 
 # Registration is disabled post-bootstrap. JWT login with
 # jwt_config.enabled=true still auto-creates Matrix users from valid
@@ -51,14 +66,15 @@ allow_guest_access: false
 registration_shared_secret: "${SYNAPSE_REGISTRATION_SHARED_SECRET}"
 
 # JWT login — allows gremion-ui to exchange a Keycloak JWT for a Matrix token.
-# Requires KEYCLOAK_JWT_PUBLIC_KEY to be set (RS256 public key in PEM format).
-# Disabled by default in local dev; set the key to enable.
+# secret is EMPTY after the render by design: the entrypoint fetches the
+# realm's RS256 public key and injects it as PEM, or disables jwt_config when
+# the fetch fails -- which healthcheck.sh then reports as unhealthy.
 jwt_config:
   enabled: true
-  secret: "${KEYCLOAK_JWT_PUBLIC_KEY}"
+  secret: ""
   algorithm: "RS256"
   subject_claim: "preferred_username"
-  issuer: "${KEYCLOAK_ISSUER_URL}"
+  issuer: "${SYNAPSE_KEYCLOAK_ISSUER_URL}"
   # Do NOT accept the default Keycloak `account` audience — every
   # authenticated token carries it, which would let other clients' tokens
   # log in to Matrix as the wrong user. Only accept the audience explicitly
@@ -70,19 +86,19 @@ jwt_config:
 # OIDC SSO — Keycloak provider for element-call authentication.
 # discover: false splits browser-facing auth_endpoint from internal token/userinfo URLs
 # (the pattern the other OIDC clients use). issuer + authorization_endpoint are
-# browser-facing and driven by KEYCLOAK_ISSUER_URL (e.g.
+# browser-facing and driven by SYNAPSE_KEYCLOAK_ISSUER_URL (e.g.
 # https://example.org/auth/realms/<realm>); token/userinfo/jwks: see below.
 oidc_providers:
   - idp_id: keycloak
     idp_name: "${SYNAPSE_IDP_NAME}"
     discover: false
-    issuer: "${KEYCLOAK_ISSUER_URL}"
+    issuer: "${SYNAPSE_KEYCLOAK_ISSUER_URL}"
     client_id: "synapse"
     client_secret: "${SYNAPSE_OIDC_CLIENT_SECRET}"
-    authorization_endpoint: "${KEYCLOAK_ISSUER_URL}/protocol/openid-connect/auth"
-    token_endpoint: "${KEYCLOAK_ISSUER_URL}/protocol/openid-connect/token"
-    userinfo_endpoint: "${KEYCLOAK_ISSUER_URL}/protocol/openid-connect/userinfo"
-    jwks_uri: "${KEYCLOAK_ISSUER_URL}/protocol/openid-connect/certs"
+    authorization_endpoint: "${SYNAPSE_KEYCLOAK_ISSUER_URL}/protocol/openid-connect/auth"
+    token_endpoint: "${SYNAPSE_KEYCLOAK_ISSUER_URL}/protocol/openid-connect/token"
+    userinfo_endpoint: "${SYNAPSE_KEYCLOAK_ISSUER_URL}/protocol/openid-connect/userinfo"
+    jwks_uri: "${SYNAPSE_KEYCLOAK_ISSUER_URL}/protocol/openid-connect/certs"
     scopes: ["openid", "profile", "email"]
     # token/userinfo/jwks MUST be https. Synapse 1.153 (authlib RFC 8414)
     # validates operator-supplied OIDC metadata even with discover:false and
@@ -92,7 +108,7 @@ oidc_providers:
     # 'oidc-keycloak'. Login may be broken!"), and the login/sso/redirect
     # endpoint then self-loops instead of redirecting to Keycloak — Element Call
     # SSO silently breaks. So these go through the public https issuer
-    # (${KEYCLOAK_ISSUER_URL}); the matrix container reaches it through the
+    # (${SYNAPSE_KEYCLOAK_ISSUER_URL}); the matrix container reaches it through the
     # public edge, the same dependency the browser has. The token `iss` still matches `issuer` because Keycloak stamps its
     # fixed public hostname on tokens regardless of which endpoint minted them.
     # Keeping the back-channel strictly internal would require KC internal TLS
@@ -110,13 +126,7 @@ oidc_providers:
 # extra_well_known_client_content. In local dev this is the Matrix port on localhost.
 public_baseurl: "${MATRIX_PUBLIC_URL}/"
 
-# MatrixRTC focus discovery — element-call reads this from .well-known/matrix/client
-# to locate the LiveKit JWT service (MSC4195 / org.matrix.msc4143.rtc_foci).
-# The livekit_service_url must be browser-accessible (localhost:3001 in local dev).
-extra_well_known_client_content:
-  org.matrix.msc4143.rtc_foci:
-    - type: livekit
-      livekit_service_url: "${LIVEKIT_JWT_SERVICE_URL}"
+# No MatrixRTC focus (rtc_foci) here: Element Call returns with TASK-101.
 
 # MatrixRTC / MSC support — required by element-call latest-ci.
 # MSC3266: room summary endpoint (element-call resolves room aliases via this)
@@ -201,7 +211,7 @@ rc_delayed_event_mgmt:
 
 # Resource limits
 # Synapse will OOM-kill rather than gracefully degrade; keep this conservative.
-# The Docker mem_limit in docker-compose.yml is the hard ceiling (768m).
+# The compose deploy limit (limits-l, docker-compose.yml) is the hard ceiling.
 caches:
   global_factor: 0.5
 

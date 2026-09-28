@@ -147,7 +147,7 @@
       "path": "modules/messaging/synapse/Dockerfile",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "03b29f3d02c8388c96a68ab81a57e8fa84bd8bcd"
+      "blob": "e38583e974ae2ca4b8c6584a1f902f0719b1480e"
     },
     {
       "path": "modules/messaging/synapse/bootstrap.sh",
@@ -165,7 +165,7 @@
       "path": "modules/messaging/synapse/homeserver.yaml",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "998ddd6976a87b008bbd1ec8f1832b62f5e7d1ff"
+      "blob": "abc575f20fa036dfd9cc77adf29231de7ac753af"
     },
     {
       "path": "modules/messaging/synapse/log.config",
@@ -177,7 +177,25 @@
       "path": "modules/messaging/synapse/render-homeserver.sh",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "56dd9f4aa394a7351b253c8031133f8ab718185b"
+      "blob": "39d5dd82952c5a5df854c6f38bb5bad0361365da"
+    },
+    {
+      "path": "modules/messaging/synapse/test/helpers.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "a9aa3d186deac3fc3f85ea82bd63413e4c0a51ab"
+    },
+    {
+      "path": "modules/messaging/synapse/test/refusal.test.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "78c6639d9b9830ada100104e5d29957617c17627"
+    },
+    {
+      "path": "modules/messaging/synapse/test/render.test.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "7e1a40c57c19466c51fac7e2195895720806c07f"
     },
     {
       "path": "modules/publishing/src/dispatch.ts",

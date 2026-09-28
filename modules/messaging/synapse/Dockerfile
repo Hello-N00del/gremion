@@ -10,13 +10,8 @@ FROM matrixdotorg/synapse:v1.124.0
 USER root
 RUN apt-get update -qq && apt-get install -y --no-install-recommends gettext-base && rm -rf /var/lib/apt/lists/*
 
-# Object storage (DEFAULT-OFF): the synapse-s3-storage-provider module lets
-# homeserver.yaml offload the media repository to S3/MinIO when
-# SYNAPSE_MEDIA_S3_ENABLED=true (render-homeserver.sh appends the
-# media_storage_providers block). Installed unconditionally into Synapse's venv
-# (pip on PATH is the matrix-synapse venv pip) — it is inert until the rendered
-# config references it. Pinned; bump via Dependabot after smoke-testing.
-RUN pip install --no-cache-dir synapse-s3-storage-provider==1.6.1
+# No S3 media offload (TASK-198 Q5: MinIO is not deployed, TRD-354): media
+# and the signing key live only in the synapse-data volume.
 
 # Bake log.config into the image at a path outside /data.
 # Avoids bind-mounting a single file into the named synapse-data volume,
