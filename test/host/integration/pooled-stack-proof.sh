@@ -51,8 +51,10 @@ export MSYS_NO_PATHCONV=1
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 host_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 ROOT_H="$(host_path "$ROOT")"
-SHA8="$(git -C "$ROOT_H" rev-parse --short=8 HEAD)"
-STACK="${POOLED_STACK:-t040-${SHA8}}"
+# git only when the stack name is derived (the shim tests and the live host
+# name it, and a bats container cannot read a Windows worktree's .git file).
+if [[ -n "${POOLED_STACK:-}" ]]; then STACK="$POOLED_STACK"
+else STACK="t040-$(git -C "$ROOT_H" rev-parse --short=8 HEAD)"; fi
 SCOPE="${POOLED_SCOPE:-stack}"
 IMAGE_TAG_PROOF="${POOLED_IMAGE_TAG:-t040-proof}"
 OUT_REL=".scratch/pooled-stack-proof/${STACK}"
@@ -63,8 +65,11 @@ PROBE_IMAGE="postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6
 TENANT_SLUG="${POOLED_TENANT_SLUG:-t040-b}"   # its config is always the t040-b fixture
 
 RED=0
+FAILS=0   # a counter, so a phase can tell whether ITS checks failed
 ok()   { printf '  ok   %s\n' "$*"; }
-bad()  { printf '  FAIL %s\n' "$*" >&2; RED=1; }
+# bad() must run in the proof's own shell: inside a command substitution
+# ($(...)) or a pipeline it only sets a subshell's RED and the run stays GREEN.
+bad()  { printf '  FAIL %s\n' "$*" >&2; RED=1; FAILS=$(( FAILS + 1 )); }
 die()  { printf 'FATAL: %s\n' "$*" >&2; exit 2; }
 info() { printf '[pooled-proof] %s\n' "$*"; }
 now()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -384,7 +389,9 @@ phase_app_up() {
 
 # The same checks gremion-deploy's assert_stack_isolation makes, on the real
 # containers: mounts and networks under ${STACK}, and the <svc>-<colour>
-# alias on both shared networks.
+# alias on both shared networks. Call it directly, never as $(...): its bad()
+# calls must reach the proof's RED. The container count lands in ISO_SEEN.
+ISO_SEEN=0
 isolation_of_colour() {
     local c="$1" cid name mounts nets svc eps n al t seen=0
     local allowed=" ${STACK}_edge ${STACK}_state ${STACK}-app-${c}_app "
@@ -406,7 +413,7 @@ isolation_of_colour() {
         done
     done
     (( seen > 0 )) || bad "app-$c runs no container"
-    echo "$seen"
+    ISO_SEEN="$seen"
 }
 
 phase_app_wait() {
@@ -420,8 +427,11 @@ phase_app_wait() {
     printf '%s app-%s gremion-ui /healthz %s\n' "$(now)" "$c" "$body" | ledger healthz.log
     [[ "$body" == *"\"colour\":\"$c\""* ]] && ok "app-$c gremion-ui /healthz reports colour $c" \
         || bad "app-$c gremion-ui /healthz does not report colour $c: $body"
-    local seen; seen="$(isolation_of_colour "$c")"
-    ok "app-$c: $seen container(s), every mount/network under ${STACK}, every shared-network alias <svc>-$c"
+    local before="$FAILS"
+    isolation_of_colour "$c"
+    (( FAILS == before )) \
+        && ok "app-$c: $ISO_SEEN container(s), every mount/network under ${STACK}, every shared-network alias <svc>-$c" \
+        || bad "app-$c: isolation of $ISO_SEEN container(s) failed (see above)"
 }
 
 # ── the non-council projects ───────────────────────────────────────────────
