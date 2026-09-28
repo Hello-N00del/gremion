@@ -1,12 +1,12 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { env } from '$env/dynamic/private'
-import { readConfig } from '$lib/server/config'
 import { z } from 'zod'
 import nodemailer from 'nodemailer'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
-import { validateSetupToken } from '$lib/server/setup-token'
+import { hasRole, Role } from '$lib/auth'
+import type { SessionUser } from '$lib/auth/types'
 import { requireSetupRateLimit } from '$lib/server/rate-limit'
 
 // The rate limit below bounds how OFTEN this endpoint can be used as an
@@ -46,18 +46,12 @@ const DNS_TIMEOUT_MS = 5000
 const BLOCKED_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.home.arpa']
 
 /**
- * Operator-facing remediation for a refusal. BOTH in-repo SMTP surfaces render
- * it — `routes/setup/steps/Step4Smtp.svelte` (first-run wizard) and
- * `routes/settings/tabs/TabEmail.svelte` (Settings → E-Mail) — so an operator
- * pointing at an internal mail catcher is told what to do instead of
- * dead-ending on a bare refusal.
- *
- * ⚠ Neither surface can actually reach this endpoint today: POST below returns
- * 401 without an `X-Setup-Token` header that no `.svelte` sends, and 404 once
- * `setup_complete` is true — which Settings → E-Mail always is. That is a
- * PRE-EXISTING product defect of the setup-token auth model, not a property of
- * this guard, and this change deliberately does not alter that model. See
- * docs/security/test-smtp-guard.md.
+ * Operator-facing remediation for a refusal. The in-repo SMTP surface
+ * `routes/settings/tabs/TabEmail.svelte` (Settings → E-Mail) renders it, so an
+ * operator pointing at an internal mail catcher is told what to do instead of
+ * dead-ending on a bare refusal. (TASK-042 Q1: the first-run wizard and its
+ * token are gone; the endpoint is gated by the session plus Role.ITAdmin, so
+ * that surface reaches it. See docs/security/test-smtp-guard.md.)
  *
  * The text names the exact rule the predicate below implements: the opt-in
  * widens RFC1918 and IPv6 ULA only.
@@ -359,19 +353,24 @@ const smtpTestSchema = z.object({
 })
 
 export const POST: RequestHandler = async (event) => {
-  const { request } = event
-  // #257-3: rate-limit BEFORE token validation so wrong-token attempts still
-  // count, matching the config/admins setup endpoints. This endpoint also opens
-  // an outbound SMTP connection to a body-supplied host:port, so the cap also
-  // bounds its use as an SSRF/port-probe oracle during the pre-setup window.
+  const { request, locals } = event
+  // #257-3: rate-limit BEFORE the auth check so refused attempts still count.
+  // This endpoint opens an outbound SMTP connection to a body-supplied
+  // host:port, so the cap also bounds its use as an SSRF/port-probe oracle.
   const limited = requireSetupRateLimit(clientIp(event))
   if (limited) return limited
-  if (!validateSetupToken(request.headers.get('X-Setup-Token'))) {
-    return json({ success: false, error: 'Invalid or missing setup token' }, { status: 401 })
+  // TASK-042 Q1 (PRD-IDN-005 [D R18-1]; OWASP 2021 A01/A05): the first-run
+  // wizard and its bearer token are gone. The session plus Role.ITAdmin gates
+  // this endpoint, exactly as api/settings/backup does; the authGuard already
+  // refuses an unauthenticated /api/ request, and this is the handler's own
+  // deny-by-default copy of that check.
+  const session = await locals.auth()
+  const sessionUser = session?.user as SessionUser | undefined
+  if (!sessionUser) {
+    return json({ success: false, error: 'Unauthenticated' }, { status: 401 })
   }
-  const config = readConfig()
-  if (config.setup_complete) {
-    return json({ success: false, error: 'Setup already complete' }, { status: 404 })
+  if (!hasRole(sessionUser.roles, Role.ITAdmin)) {
+    return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   const body = await request.json()

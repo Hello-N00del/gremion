@@ -36,6 +36,8 @@ const hoisted = vi.hoisted(() => ({
   createTransport: vi.fn(),
   readConfig: vi.fn(),
   env: {} as Record<string, string | undefined>,
+  /** The session user locals.auth() answers with; null = no session. */
+  user: null as { id: string; roles: string[] } | null,
 }))
 hoisted.createTransport.mockImplementation(() => ({ sendMail: hoisted.sendMail }))
 
@@ -57,7 +59,6 @@ function resolveMock() {
 
 vi.mock('$env/dynamic/private', () => ({ env: hoisted.env }))
 vi.mock('$lib/server/config', () => ({ readConfig: hoisted.readConfig }))
-vi.mock('$lib/server/setup-token', () => ({ validateSetupToken: () => true }))
 // The route handler is called directly (no hooks.server.ts runWithTenant wrap),
 // so the ALS-backed canonical tenant id used by the rate limiter is stubbed.
 vi.mock('$lib/server/tenant/context', () => ({ currentTenantId: () => 'default' }))
@@ -65,6 +66,9 @@ vi.mock('$lib/server/tenant/context', () => ({ currentTenantId: () => 'default' 
 import { POST } from './+server'
 import { __resetRateLimits } from '$lib/server/rate-limit'
 import { isIP } from 'node:net'
+import { Role } from '$lib/auth'
+
+const IT_ADMIN = { id: 'it-admin-1', roles: [Role.ITAdmin] }
 
 const BODY = {
   port: 587,
@@ -74,13 +78,14 @@ const BODY = {
   to_address: 'admin@example.org',
 }
 
-function call(host: string, port = 587) {
+function call(host: string, port = 587, headers: Record<string, string> = {}) {
   const request = new Request('http://localhost/api/setup/test-smtp', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'X-Setup-Token': 't' },
+    headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify({ ...BODY, host, port }),
   })
-  return POST({ request, getClientAddress: () => '203.0.113.9' } as never)
+  const locals = { auth: async () => (hoisted.user ? { user: hoisted.user } : null) }
+  return POST({ request, locals, getClientAddress: () => '203.0.113.9' } as never)
 }
 
 beforeEach(() => {
@@ -91,7 +96,58 @@ beforeEach(() => {
   hoisted.sendMail.mockClear()
   hoisted.createTransport.mockClear()
   hoisted.readConfig.mockReturnValue({ setup_complete: false, smtp: { host: '' } })
+  hoisted.user = IT_ADMIN
   for (const k of Object.keys(hoisted.env)) delete hoisted.env[k]
+})
+
+// TASK-042 Q1 (PRD-IDN-005 [D R18-1]; OWASP 2021 A01/A05): the first-run wizard
+// and its log-printed, never-expiring setup token are gone. The endpoint's one
+// remaining consumer is Settings -> E-Mail, an authenticated IT-admin surface,
+// so the gate is the session plus Role.ITAdmin (as api/settings/backup). The
+// rate limit and the target guard below are unchanged.
+describe('POST /api/setup/test-smtp -- session + IT-admin gate (TASK-042 Q1)', () => {
+  it('answers 401 without a session, before any connect', async () => {
+    hoisted.user = null
+    const res = await call('smtp.example.com')
+    expect(res.status).toBe(401)
+    expect(hoisted.createTransport).not.toHaveBeenCalled()
+  })
+
+  it('answers 401 without a session even when a setup-token header is planted', async () => {
+    hoisted.user = null
+    const res = await call('smtp.example.com', 587, { 'X-Setup-Token': 'planted-token' })
+    expect(res.status).toBe(401)
+    expect(hoisted.createTransport).not.toHaveBeenCalled()
+  })
+
+  it('answers 403 to a session without Role.ITAdmin', async () => {
+    hoisted.user = { id: 'member-1', roles: [Role.Member] }
+    const res = await call('smtp.example.com')
+    expect(res.status).toBe(403)
+    expect(hoisted.createTransport).not.toHaveBeenCalled()
+  })
+
+  it('lets an IT admin with NO setup-token header reach the target guard', async () => {
+    const refused = await call('10.0.0.5')
+    expect(refused.status).toBe(400)
+    const { hint } = (await refused.json()) as { hint: string }
+    expect(hint).toContain('SMTP_TEST_ALLOW_PRIVATE')
+    const allowed = await call('smtp.example.com')
+    expect(allowed.status).toBe(200)
+    expect(hoisted.sendMail).toHaveBeenCalledTimes(1)
+  })
+
+  it('serves an IT admin after setup is complete (Settings -> E-Mail), no 404', async () => {
+    hoisted.readConfig.mockReturnValue({ setup_complete: true, smtp: { host: '' } })
+    const res = await call('smtp.example.com')
+    expect(res.status).toBe(200)
+  })
+
+  it('the handler reads no setup-token header and imports no setup-token module', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '+server.ts'), 'utf8')
+    expect(src).not.toMatch(/x-setup-token/i)
+    expect(src).not.toMatch(/setup-token/)
+  })
 })
 
 describe('POST /api/setup/test-smtp — internal target guard', () => {
