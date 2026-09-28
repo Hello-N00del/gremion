@@ -45,9 +45,14 @@ describe('seed custody (compose renders)', () => {
     for (const s of ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create']) expect(Object.keys(app.services)).toContain(s)
   })
 
-  test('only tenant-create mounts nats-secrets or carries NATS_URL', () => {
-    expect(custodyViolations(state, 'state')).toEqual([])
-    expect(custodyViolations(app, 'app-blue')).toEqual([])
+  test('only tenant-create mounts nats-secrets or carries NATS_URL -- in every project the host renders', () => {
+    const ids = PROJECTS.map((p: { id: string }) => p.id)
+    expect(ids).toEqual(expect.arrayContaining(['state', 'app-blue', 'app-green', 'ops', 'mail']))
+    for (const id of ids) {
+      const r = id === 'state' ? state : id === 'app-blue' ? app : render(id)
+      expect(Object.keys(r.services ?? {}).length, `${id} renders no service`).toBeGreaterThan(0)
+      expect(custodyViolations(r, id)).toEqual([])
+    }
   })
 
   test('tenant-create holds the seeds (rw), the accounts volume and NATS_URL', () => {

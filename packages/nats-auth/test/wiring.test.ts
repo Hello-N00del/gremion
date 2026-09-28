@@ -37,6 +37,12 @@ describe('Makefile (E5)', () => {
     expect(stateUp).toBeGreaterThan(init)
     expect(out).toMatch(/for v in [^;]*\bnats_accounts\b[^;]*\bnats_secrets\b/)
   })
+  test('make -n rebuild runs nats-auth init before the state project is recreated', () => {
+    const out = make('rebuild')
+    const init = out.indexOf('tenant-create exec nats-auth init')
+    expect(init, 'no nats-auth init in make -n rebuild').toBeGreaterThan(-1)
+    expect(out.search(/-p dev-state up -d --force-recreate/)).toBeGreaterThan(init)
+  })
   test('make -n lint-sh lints proof.sh', () => {
     expect(make('lint-sh')).toContain('packages/nats-auth/scripts/proof.sh')
   })

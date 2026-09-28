@@ -53,8 +53,8 @@ build:
 	$(DEV_STATE) build
 	$(DEV_APP) build
 
-# Rebuild and restart
-rebuild: build dev-networks
+# Rebuild and restart (nats-init: fresh volumes need the accounts file first)
+rebuild: build dev-networks nats-init
 	$(DEV_STATE) up -d --force-recreate
 	$(DEV_APP) up -d --force-recreate
 

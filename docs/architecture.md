@@ -497,7 +497,13 @@ natsConnectOptionsFor(tenant, module))`; wiring the modules is TASK-079's, the
 audit consumers' move TASK-205's. Accounts hide the global account's streams:
 the `nats stream ...` commands above run as a tenant's admin
 (`_admin/tenant_<t>.nk` in the seeds volume), not anonymously. The StuRaOS test
-environment's broker stays open until its re-init. Proof:
+environment's broker stays open until its re-init. Known residual (R1, open):
+NATS checks publish permission on a message's subject, not its reply subject,
+so within ONE tenant a module can make the server write a JetStream API
+response into another module's stream by naming it as the reply subject;
+such a message carries no `Nats-Msg-Id`. Closing it needs one account per
+(tenant, stream owner) with exports/imports; until then consumers must
+reject messages without `Nats-Msg-Id` (TASK-206/205). Proof:
 `make test-nats-auth` ([`packages/nats-auth/scripts/proof.sh`](../packages/nats-auth/scripts/proof.sh)).
 
 The kernel's proof that these paths behave is `make test-ports-nats`
