@@ -186,6 +186,12 @@
       "blob": "261e8ce6b2df1124ea3280b0a99989691b51d2a3"
     },
     {
+      "path": "modules/messaging/synapse/postgres-init/10-synapse-db.sh",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "f739a5d7ef0b2358f590999add34166bef1085ce"
+    },
+    {
       "path": "modules/messaging/synapse/render-homeserver.sh",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
