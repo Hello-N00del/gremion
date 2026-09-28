@@ -147,6 +147,31 @@ component mutated.
 
 The DNS-failure hint is rendered the same way, by the same two components.
 
+## Caller scope: every tenant's IT admins (decision, TASK-042 R28)
+
+Deleting the setup token (TASK-042 Q1) moved this endpoint from *the operator,
+before setup* to *every tenant's `Role.ITAdmin` holders, at any time*. The
+TASK-042 brief keeps that grant on purpose: Settings → E-Mail is a tenant IT
+admin surface and its "test" button is the endpoint's one consumer. Restricting
+it to an operator/platform scope would leave that button permanently broken
+(the R1 defect below, reopened). So the grant stays, and the oracle it hands a
+tenant admin is narrowed instead:
+
+- **SMTP ports only.** The body's `port` must be 25, 465, 587 or 2525; 1025
+  (the usual local mail-catcher port) only with `SMTP_TEST_ALLOW_PRIVATE=1`.
+  Anything else is refused with `400` before a DNS lookup or a socket. Without
+  this, a tenant admin could port-scan arbitrary public hosts from the
+  platform's address and read the outcome back out of the error string.
+- **A per-user cap on top of the per-IP one.** Both are 5 per hour
+  (`RATE_LIMITS.setup`), keyed per tenant. The per-IP bucket still counts
+  refused, unauthenticated attempts; the per-user bucket stops an admin who
+  rotates client addresses from lifting the bound.
+
+Both are asserted in `server.test.ts` ("tenant-admin scope hardening"); the
+address cases there use an allowed port so a refusal is always the address
+guard's. Operator/platform scope for this endpoint is **not** adopted; revisit
+if a platform-operator role gains its own SMTP surface (TASK-043).
+
 ## Residuals
 
 Known gaps that this guard does **not** close. They are listed so a later reader

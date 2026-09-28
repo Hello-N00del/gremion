@@ -6,15 +6,17 @@ import { fileURLToPath } from 'node:url'
 // SSRF guard for the test-smtp endpoint.
 //
 // /api/setup/test-smtp opens an outbound TCP connection to a BODY-SUPPLIED
-// host:port during the pre-setup window (setup token only). On a public host
-// whose container can reach a cloud metadata endpoint that is an SSRF /
-// internal port-probe oracle. The target must be refused BEFORE any connection
-// is attempted — and the decision must be made on the CANONICAL bytes of the
-// address, not on one of its many textual spellings.
+// host:port for any tenant IT admin (TASK-042 Q1; before it: the setup token
+// in the pre-setup window). On a public host whose container can reach a cloud
+// metadata endpoint that is an SSRF / internal port-probe oracle. The target
+// must be refused BEFORE any connection is attempted — and the decision must
+// be made on the CANONICAL bytes of the address, not on one of its many
+// textual spellings. The address cases below use an allowed SMTP port, so a
+// refusal is the address guard's, never the port rule's (TASK-042 R28).
 //
-// There is NO host allowlist: `config.smtp.host` is writable through
-// PATCH /api/setup/config under the SAME setup token that calls this endpoint,
-// so treating it as trusted would re-open the exact hole the guard closes.
+// There is NO host allowlist: `config.smtp.host` is writable by the same
+// caller (Settings -> E-Mail; formerly PATCH /api/setup/config under the setup
+// token), so treating it as trusted would re-open the exact hole the guard closes.
 // The only escape hatch is SMTP_TEST_ALLOW_PRIVATE=1, and it is a
 // PRIVATE-RANGE opt-in, not a kill switch: loopback, link-local/metadata,
 // multicast, CGNAT and the blocked names stay refused with it set.
@@ -150,6 +152,59 @@ describe('POST /api/setup/test-smtp -- session + IT-admin gate (TASK-042 Q1)', (
   })
 })
 
+// TASK-042 R28 (security MEDIUM 5). Q1 hands this outbound-connect endpoint to
+// every tenant's IT admins (Settings -> E-Mail), no longer to the operator alone
+// before setup. Decision (recorded in docs/security/test-smtp-guard.md): keep the
+// tenant-admin grant the brief makes, and narrow the oracle it exposes:
+//   - a PER-USER cap on top of the per-IP one, so an admin rotating client
+//     addresses cannot lift the 5/hour bound;
+//   - SMTP ports only (25, 465, 587, 2525; plus the local mail-catcher port
+//     1025 under the SMTP_TEST_ALLOW_PRIVATE opt-in), so a tenant admin cannot
+//     port-scan public hosts from the platform's address.
+describe('POST /api/setup/test-smtp -- tenant-admin scope hardening (TASK-042 R28)', () => {
+  function callFrom(ip: string, host = 'smtp.example.com', port = 587) {
+    const request = new Request('http://localhost/api/setup/test-smtp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...BODY, host, port }),
+    })
+    const locals = { auth: async () => (hoisted.user ? { user: hoisted.user } : null) }
+    return POST({ request, locals, getClientAddress: () => ip } as never)
+  }
+
+  it('caps one IT admin at 5 tests an hour however many client addresses it rotates through', async () => {
+    const statuses: number[] = []
+    for (let i = 1; i <= 6; i++) statuses.push((await callFrom(`203.0.113.${i}`)).status)
+    expect(statuses).toEqual([200, 200, 200, 200, 200, 429])
+    expect(hoisted.createTransport).toHaveBeenCalledTimes(5)
+  })
+
+  it('the per-user cap is per user: a second IT admin is not starved by the first', async () => {
+    for (let i = 1; i <= 5; i++) await callFrom(`203.0.113.${i}`)
+    hoisted.user = { id: 'it-admin-2', roles: [Role.ITAdmin] }
+    expect((await callFrom('203.0.113.50')).status).toBe(200)
+  })
+
+  it.each([22, 80, 443, 3306, 5432, 6379, 8080, 1025])('refuses the non-SMTP port %i before any connect', async (port) => {
+    const res = await callFrom('203.0.113.9', 'smtp.example.com', port)
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toMatch(/Port/)
+    expect(hoisted.createTransport).not.toHaveBeenCalled()
+  })
+
+  it.each([25, 465, 587, 2525])('allows the SMTP port %i', async (port) => {
+    const res = await callFrom('203.0.113.9', 'smtp.example.com', port)
+    expect(res.status).toBe(200)
+    expect(hoisted.createTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows the mail-catcher port 1025 only under SMTP_TEST_ALLOW_PRIVATE=1', async () => {
+    hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
+    const res = await callFrom('203.0.113.9', 'smtp.example.com', 1025)
+    expect(res.status).toBe(200)
+  })
+})
+
 describe('POST /api/setup/test-smtp — internal target guard', () => {
   // Every row is RED against f2d7751: the kernel route has no guard at all.
   const blocked: Array<[label: string, host: string]> = [
@@ -264,7 +319,7 @@ describe('POST /api/setup/test-smtp — no mutable host allowlist', () => {
   it('refuses an internal relay name even when it IS the configured smtp host', async () => {
     hoisted.readConfig.mockReturnValue({ setup_complete: false, smtp: { host: 'mailpit' } })
     hoisted.lookupAddresses = [{ address: '172.18.0.5', family: 4 }]
-    const res = await call('mailpit', 1025)
+    const res = await call('mailpit', 587)
     expect(res.status).toBe(400)
     expect(hoisted.createTransport).not.toHaveBeenCalled()
   })
@@ -272,7 +327,7 @@ describe('POST /api/setup/test-smtp — no mutable host allowlist', () => {
   it('refuses an internal relay name even when EMAIL_HOST names it', async () => {
     hoisted.env.EMAIL_HOST = 'mailpit'
     hoisted.lookupAddresses = [{ address: '172.18.0.5', family: 4 }]
-    const res = await call('mailpit', 1025)
+    const res = await call('mailpit', 587)
     expect(res.status).toBe(400)
     expect(hoisted.createTransport).not.toHaveBeenCalled()
   })
@@ -280,7 +335,7 @@ describe('POST /api/setup/test-smtp — no mutable host allowlist', () => {
   it('refuses an internal relay name even when SMTP_HOST names it', async () => {
     hoisted.env.SMTP_HOST = 'mailpit'
     hoisted.lookupAddresses = [{ address: '172.18.0.5', family: 4 }]
-    const res = await call('mailpit', 1025)
+    const res = await call('mailpit', 587)
     expect(res.status).toBe(400)
     expect(hoisted.createTransport).not.toHaveBeenCalled()
   })
@@ -292,7 +347,7 @@ describe('POST /api/setup/test-smtp — no mutable host allowlist', () => {
       setup_complete: false,
       smtp: { host: '169.254.169.254' },
     })
-    const res = await call('169.254.169.254', 80)
+    const res = await call('169.254.169.254', 587)
     expect(res.status).toBe(400)
     expect(hoisted.createTransport).not.toHaveBeenCalled()
   })
@@ -351,7 +406,7 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
 
   it('still refuses a private target when SMTP_TEST_ALLOW_PRIVATE is anything else', async () => {
     hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '0'
-    const res = await call('10.0.0.5', 1025)
+    const res = await call('10.0.0.5', 587)
     expect(res.status).toBe(400)
     expect(hoisted.createTransport).not.toHaveBeenCalled()
   })
@@ -387,7 +442,7 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
     const flag = allowPrivate ? 'SMTP_TEST_ALLOW_PRIVATE=1' : 'no flag'
     it(`allows ${label} (${host}) with ${flag}`, async () => {
       if (allowPrivate) hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
-      const res = await call(host, 1025)
+      const res = await call(host, 587)
       expect(res.status).toBe(200)
       expect(hoisted.createTransport).toHaveBeenCalledTimes(1)
       expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({ host })
@@ -405,7 +460,7 @@ describe('POST /api/setup/test-smtp — SMTP_TEST_ALLOW_PRIVATE is a private-ran
   }
 
   it('refuses a CGNAT address by default too', async () => {
-    const res = await call('100.64.0.1', 1025)
+    const res = await call('100.64.0.1', 587)
     expect(res.status).toBe(400)
     expect(hoisted.createTransport).not.toHaveBeenCalled()
   })
@@ -447,7 +502,7 @@ describe('POST /api/setup/test-smtp — resolve once, connect to the vetted IP',
       for (const k of Object.keys(hoisted.env)) delete hoisted.env[k]
       Object.assign(hoisted.env, envVars)
       hoisted.lookupAddresses = [{ address: resolvesTo, family: 4 }]
-      const res = await call(host, 1025)
+      const res = await call(host, 587)
       expect(res.status, `status for ${host}`).toBe(200)
       const dialled = (hoisted.createTransport.mock.calls[0][0] as { host: string }).host
       expect(isIP(dialled), `dialled ${dialled} for ${host}`).not.toBe(0)
@@ -606,14 +661,14 @@ describe('POST /api/setup/test-smtp — the IPv6 metadata prefix is never waivab
 
   for (const [label, host] of vectors) {
     it(`refuses ${label} (${host}) WITHOUT the flag`, async () => {
-      const res = await call(host, 80)
+      const res = await call(host, 587)
       expect(res.status).toBe(400)
       expect(hoisted.createTransport).not.toHaveBeenCalled()
     })
 
     it(`refuses ${label} (${host}) WITH SMTP_TEST_ALLOW_PRIVATE=1`, async () => {
       hoisted.env.SMTP_TEST_ALLOW_PRIVATE = '1'
-      const res = await call(host, 80)
+      const res = await call(host, 587)
       expect(res.status).toBe(400)
       expect(hoisted.createTransport).not.toHaveBeenCalled()
     })
