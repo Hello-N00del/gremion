@@ -80,7 +80,11 @@ shim_docker_empty() {
 args="$*"
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -142,7 +146,11 @@ esac'
 args="$*"
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -172,6 +180,50 @@ esac'
     grep -q '^POSTGRES_USER=postgres$'         "${GREMION_ROOT}/etc/env/state.env"
 }
 
+@test "gremion-neuter blanks the vendor mail credentials and keeps STALWART_IMAGE (TASK-015)" {
+    # The vendor's own mail credentials are live secrets of the PRODUCTION
+    # sender: a restored instance must not hold them. SMTP_PASSWORD matched
+    # exactly, so ALERT_SMTP_PASSWORD survived a neuter unchanged.
+    shim_docker_empty
+    cat >"${GREMION_ROOT}/etc/env/ops.env" <<'EOF'
+STACK=stg
+ALERT_SMTP_USER=alerts@example.org
+ALERT_SMTP_PASSWORD=live-alert-password
+STALWART_API_KEY=live-api-key
+EOF
+    cat >"${GREMION_ROOT}/etc/env/mail.env" <<'EOF'
+STACK=stg
+STALWART_IMAGE=docker.io/stalwartlabs/stalwart@sha256:1111111111111111111111111111111111111111111111111111111111111111
+STALWART_ADMIN_PASSWORD=live-admin-password
+STALWART_API_KEY=live-api-key
+VENDOR_SMTP_PASSWORD=live-vendor-password
+ALERT_SMTP_PASSWORD=live-alert-password
+PLATFORM_SMTP_PASSWORD=live-platform-password
+EOF
+    chmod 600 "${GREMION_ROOT}/etc/env/ops.env" "${GREMION_ROOT}/etc/env/mail.env"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local k
+    for k in STALWART_ADMIN_PASSWORD STALWART_API_KEY VENDOR_SMTP_PASSWORD ALERT_SMTP_PASSWORD PLATFORM_SMTP_PASSWORD; do
+        grep -q "^${k}=$" "${GREMION_ROOT}/etc/env/mail.env" || { echo "mail.env ${k} not blanked"; return 1; }
+    done
+    grep -q '^ALERT_SMTP_PASSWORD=$' "${GREMION_ROOT}/etc/env/ops.env" || { echo "ops.env ALERT_SMTP_PASSWORD survived"; return 1; }
+    grep -q '^STALWART_API_KEY=$' "${GREMION_ROOT}/etc/env/ops.env" || { echo "ops.env STALWART_API_KEY survived"; return 1; }
+    # a looser regex would also blank the image pin
+    grep -q '^STALWART_IMAGE=docker.io/stalwartlabs/stalwart@sha256:1111111111111111111111111111111111111111111111111111111111111111$' \
+        "${GREMION_ROOT}/etc/env/mail.env" || { echo "STALWART_IMAGE was rewritten"; return 1; }
+    grep -q '^ALERT_SMTP_USER=alerts@example.org$' "${GREMION_ROOT}/etc/env/ops.env"
+}
+
+@test "gremion-neuter finds keycloak by its compose labels and logs in at /auth (TASK-015)" {
+    shim_docker_empty
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded docker 'label=com.docker.compose.service=keycloak'
+    refute_recorded docker 'inspect stg-state-keycloak'
+    ! grep -qF 'unit-test-kc-password' "$SHIM_LOG" || { echo "kc admin password on a docker argv"; return 1; }
+}
+
 @test "gremion-neuter starts the null sink on the state network with the alias" {
     shim_docker_empty
     run "$NEUTER" --stack stg
@@ -195,7 +247,11 @@ args="$*"
 clean="$GREMION_ROOT/runtime/.cleaned"
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -248,7 +304,11 @@ shim_docker_exempt() {
 args="$*"
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -338,7 +398,11 @@ esac'
 args="$*"
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -371,7 +435,11 @@ esac'
 args="$*"
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -413,7 +481,11 @@ for a in "$@"; do
 done
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -540,7 +612,11 @@ args="$*"
 clean="$GREMION_ROOT/runtime/.cleaned"
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -588,7 +664,11 @@ shim_docker_stuck() {
 args="$*"
 case "$args" in
   *"config --services"*) printf "postgres\nkeycloak\n"; exit 0 ;;
-  "inspect stg-state-keycloak") exit 0 ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*) echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) echo master; echo t1; exit 0 ;;
   *"kcadm.sh update realms/"*) cat >"$GREMION_ROOT/runtime/.kc-last-put"; exit 0 ;;
   *"kcadm.sh get realms/"*)
@@ -704,7 +784,9 @@ esac'
 # A stack whose only running container is postgres, plus a scriptable Keycloak.
 #   runtime/.kc-realms    what `kcadm get realms` lists
 #   runtime/.kc-readback  the host `kcadm get realms/<r>` reports afterwards
-#   KC_PRESENT_RC         exit code of `docker inspect <keycloak>`
+#   KC_PRESENT_RC         0: the label lookup finds the keycloak container;
+#                         anything else: it finds none (TASK-015 rewrote this
+#                         from a `docker inspect <name>` exit code)
 shim_docker_kc() {
     printf 'postgres\nkeycloak\n' >"${GREMION_ROOT}/runtime/.kc-services"
     printf 'master\nt1\n' >"${GREMION_ROOT}/runtime/.kc-realms"
@@ -714,7 +796,12 @@ shim_docker_kc() {
 args="$*"
 case "$args" in
   *"config --services"*) cat "$GREMION_ROOT/runtime/.kc-services"; exit 0 ;;
-  "inspect stg-state-keycloak") exit "${KC_PRESENT_RC:-0}" ;;
+  "inspect stg-state-keycloak") echo "Error: No such object: stg-state-keycloak" >&2; exit 1 ;;
+  *"ps -q --filter label=com.docker.compose.project=stg-state --filter label=com.docker.compose.service=keycloak"*)
+      [ "${KC_PRESENT_RC:-0}" = 0 ] && echo kcid1; exit 0 ;;
+  *"config credentials"*)
+      case "$args" in *"kcid1 "*"http://127.0.0.1:8080/auth "*) exit 0 ;; esac
+      echo "kcadm: wrong container or no /auth: $args" >&2; exit 1 ;;
   *"kcadm.sh get realms --fields realm"*) cat "$GREMION_ROOT/runtime/.kc-realms"; exit 0 ;;
   *"kcadm.sh update realms/"*)
       { echo "$args"; cat; echo; } >> "$GREMION_ROOT/runtime/.kc-updates"; exit 0 ;;
@@ -791,7 +878,7 @@ esac'
     run "$NEUTER" --stack stg
     unset KC_PRESENT_RC
     [ "$status" -eq 2 ]
-    [[ "$output" == *"stg-state-keycloak"* ]]
+    [[ "$output" == *"no single running keycloak in the stg-state project"* ]]
 }
 
 @test "gremion-neuter exits 2 when the state env carries no kcadm credential" {
