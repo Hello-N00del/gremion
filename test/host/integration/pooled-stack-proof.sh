@@ -295,6 +295,7 @@ EOF
              "$SROOT/etc/mail" "$SROOT/etc/secrets/mail"
     cp "$ROOT/infra/host/ops/prometheus.yml" "$ROOT/infra/host/ops/alerts.yml" "$ROOT/infra/host/ops/blackbox.yml" "$SROOT/current/infra/host/ops/"
     gen > "$SROOT/etc/secrets/ops/stalwart-api-key"; gen > "$SROOT/etc/secrets/ops/smtp-password"
+    # shellcheck disable=SC2016  # envsubst takes the literal ${VAR} list it may replace
     PLATFORM_DOMAIN=proof.example.org ALERT_EMAIL_FROM=alerts@proof.example.org ALERT_SMTP_USER=alerts \
         ALERT_WEBHOOK_URL=http://127.0.0.1:9/none \
         envsubst '${PLATFORM_DOMAIN} ${ALERT_EMAIL_FROM} ${ALERT_SMTP_USER} ${ALERT_WEBHOOK_URL}' \
@@ -357,7 +358,7 @@ phase_state_wait() {
         wait_health "$cid" 200 || die "state/$s did not become healthy"
     done
     # pgbouncer's auth_query role (docs/runbooks/pgbouncer.md), per database.
-    # shellcheck disable=SC1090
+    # shellcheck source=/dev/null  # the per-run env file, written by prepare
     . "$ENV_DIR/state.env"
     cid="$(svc_cid state postgres)"
     docker exec -i "$cid" psql -v ON_ERROR_STOP=1 -qU postgres -d postgres >/dev/null <<EOF
@@ -431,13 +432,13 @@ phase_app_wait() {
     cid="$(svc_cid "app-$c" gremion-ui)"
     body="$(docker exec "$cid" wget -qO- http://127.0.0.1:3000/healthz 2>/dev/null || true)"
     printf '%s app-%s gremion-ui /healthz %s\n' "$(now)" "$c" "$body" | ledger healthz.log
-    [[ "$body" == *"\"colour\":\"$c\""* ]] && ok "app-$c gremion-ui /healthz reports colour $c" \
-        || bad "app-$c gremion-ui /healthz does not report colour $c: $body"
+    if [[ "$body" == *"\"colour\":\"$c\""* ]]; then ok "app-$c gremion-ui /healthz reports colour $c"
+    else bad "app-$c gremion-ui /healthz does not report colour $c: $body"; fi
     local before="$FAILS"
     isolation_of_colour "$c"
-    (( FAILS == before )) \
-        && ok "app-$c: $ISO_SEEN container(s), every mount/network under ${STACK}, every shared-network alias <svc>-$c" \
-        || bad "app-$c: isolation of $ISO_SEEN container(s) failed (see above)"
+    if (( FAILS == before )); then
+        ok "app-$c: $ISO_SEEN container(s), every mount/network under ${STACK}, every shared-network alias <svc>-$c"
+    else bad "app-$c: isolation of $ISO_SEEN container(s) failed (see above)"; fi
 }
 
 # ── the non-council projects ───────────────────────────────────────────────
@@ -558,6 +559,7 @@ phase_isolation() {
     local statemembers net nets=() m
     statemembers=" $(docker network inspect "${STACK}_state" -f '{{range $id, $c := .Containers}}{{$id}} {{end}}') "
     for p in "${nonc[@]}"; do
+        # shellcheck disable=SC2016  # a Go template for docker inspect, not a shell expansion
         for net in $(docker ps -q --filter "label=com.docker.compose.project=$p" | xargs -r docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' | tr ' ' '\n' | sed '/^$/d' | sort -u); do
             [[ "$net" == "${STACK}_state" ]] && { bad "$p is ON ${STACK}_state"; continue; }
             nets+=("$net")
@@ -627,7 +629,7 @@ counts() {
 }
 phase_tenant() {
     require_scratch tenant
-    # shellcheck disable=SC1090
+    # shellcheck source=/dev/null  # the per-run env file, written by prepare
     . "$ENV_DIR/state.env"
     [[ -s "$OUT/ledger/trd440-before.txt" ]] || die "run tenant-before first"
     # The provisioner runs as the product's own tenant-create one-shot (app
@@ -660,20 +662,20 @@ phase_tenant_before() {
     ok "tenant-before: baseline recorded"
 }
 phase_tenant_after() {
-    # shellcheck disable=SC1090
+    # shellcheck source=/dev/null  # the per-run env file, written by prepare
     . "$ENV_DIR/state.env"
     local before after
     before="$(cat "$OUT/ledger/trd440-before.txt")"
     after="$(counts)"
     printf '%s\n' "$after" > "$OUT/ledger/trd440-after.txt"
-    [[ "$before" == "$after" ]] && ok "TRD-440: services, running containers and compose projects unchanged by the tenant-add" \
-        || bad "TRD-440: the tenant-add changed the stack: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')"
+    if [[ "$before" == "$after" ]]; then ok "TRD-440: services, running containers and compose projects unchanged by the tenant-add"
+    else bad "TRD-440: the tenant-add changed the stack: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')"; fi
     local cid db realm
     cid="$(svc_cid state postgres)"
     db="$(docker exec "$cid" psql -tAqU postgres -c "SELECT datname FROM pg_database WHERE datname IN ('t_${TENANT_SLUG//-/_}', 't_${TENANT_SLUG}')" | tr -d '\r')"
-    [[ -n "$db" ]] && ok "TRD-440: tenant database $db exists" || bad "TRD-440: no tenant database for $TENANT_SLUG"
+    if [[ -n "$db" ]]; then ok "TRD-440: tenant database $db exists"; else bad "TRD-440: no tenant database for $TENANT_SLUG"; fi
     realm="$(docker exec "$(svc_cid state keycloak)" sh -c "/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user '${KEYCLOAK_ADMIN}' --password '${KEYCLOAK_ADMIN_PASSWORD}' >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${TENANT_SLUG} --fields realm" 2>/dev/null | tr -d '\r' || true)"
-    [[ "$realm" == *"\"${TENANT_SLUG}\""* ]] && ok "TRD-440: realm $TENANT_SLUG exists" || bad "TRD-440: realm $TENANT_SLUG absent"
+    if [[ "$realm" == *"\"${TENANT_SLUG}\""* ]]; then ok "TRD-440: realm $TENANT_SLUG exists"; else bad "TRD-440: realm $TENANT_SLUG absent"; fi
     printf '%s db=%s realm=%s\n' "$(now)" "${db:-none}" "$(echo "$realm" | tr -d ' \n')" | ledger trd440.log
 }
 
@@ -683,7 +685,7 @@ phase_switch() {
     [[ -s "$OUT/state-snapshot.txt" ]] || die "no state snapshot (run state-wait first)"
     # green must already be up and healthy (app-up green, app-wait green)
     local g; g="$(svc_cid app-green gremion-ui)"
-    [[ -n "$g" ]] && wait_health "$g" 30 || die "app-green is not up and healthy -- run app-up green and app-wait green first"
+    if [[ -z "$g" ]] || ! wait_health "$g" 30; then die "app-green is not up and healthy -- run app-up green and app-wait green first"; fi
     # blue leaves: removal by label, never `compose down`
     docker ps -aq --filter "label=com.docker.compose.project=${STACK}-app-blue" | xargs -r docker rm -f >/dev/null
     local now_snap
@@ -759,7 +761,8 @@ phase_teardown() {
     [[ -f "$OUT/.created-ipcrypt" ]] && rm -f "$ROOT/secrets/ipcrypt_key.txt" "$OUT/.created-ipcrypt"
     local left
     left="$(docker ps -aq --filter "name=^${STACK}" | grep -c . || true)$(docker network ls -q --filter "name=^${STACK}" | grep -c . || true)$(docker volume ls -q --filter "name=^${STACK}" | grep -c . || true)"
-    [[ "$left" == 000 ]] && ok "teardown: no container, network or volume under ${STACK} remains" || bad "teardown left resources (containers/networks/volumes: $left)"
+    if [[ "$left" == 000 ]]; then ok "teardown: no container, network or volume under ${STACK} remains"
+    else bad "teardown left resources (containers/networks/volumes: $left)"; fi
 }
 
 run_phase() {
