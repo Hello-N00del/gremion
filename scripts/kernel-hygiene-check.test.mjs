@@ -83,7 +83,7 @@ after(() => {
   if (root) rmSync(root, { recursive: true, force: true })
 })
 
-const composeOf = (dir) => g9Surfaces(dir).filter((f) => /docker-compose/.test(f)).sort()
+const composeOf = (dir) => g9Surfaces(dir).filter((f) => /docker-compose/.test(f)).toSorted((a, b) => a.localeCompare(b, 'en'))
 
 test('g9 compose surfaces: every tracked root docker-compose*.yml and infra/host/*/docker-compose.yml, no fixtures', () => {
   const dir = fixture({}, { 'docker-compose.untracked.yml': `services:\n  x:\n    image: ${BAD_UI}\n` })
@@ -124,8 +124,8 @@ test('g9 fails loudly when the root carries no tracked compose file (vacuity)', 
 
 test('the real tree: g9 reads both app-tier compose files and is GREEN', () => {
   const compose = composeOf(REPO_ROOT)
-  for (const f of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) assert.ok(compose.includes(f), `${f} missing from ${compose}`)
-  assert.ok(!compose.some((f) => /fixtures\//.test(f)), `a fixture leaked into the surface: ${compose}`)
+  for (const f of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) assert.ok(compose.includes(f), `${f} missing from ${compose.join(', ')}`)
+  assert.ok(!compose.some((f) => /fixtures\//.test(f)), `a fixture leaked into the surface: ${compose.join(', ')}`)
   assert.equal(g9Check(REPO_ROOT), null)
 })
 
