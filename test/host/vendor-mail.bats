@@ -151,3 +151,120 @@ refute_secret_in_argv() {
     done
     refute_recorded docker 'exec'
 }
+
+# ---------------------------------------------------------------------------
+# realm-smtp: the operator realm sends as system@ (kcadm, label lookup, /auth)
+# ---------------------------------------------------------------------------
+
+# shim_keycloak [readback] — a docker that knows the state keycloak ONLY by its
+# compose labels (its name is <stack>-state-keycloak-1, so a lookup by
+# <stack>-state-keycloak finds nothing) and whose kcadm serves only under
+# /auth. Realm smtpServer state lives in files, so a second run sees the first.
+# readback=broken stores a different user than it was sent (read-back guard).
+shim_keycloak() {
+    local mode="${1:-ok}" expect_pw="${2:-unit-kc-admin-password}"
+    mkdir -p "${GREMION_ROOT}/kc"
+    echo "$mode" > "${GREMION_ROOT}/kc/mode"
+    shim docker '
+ST="'"${GREMION_ROOT}"'/kc"; KC=kc0a1b2c3d4e
+case "$1" in
+  ps)
+    case " $* " in
+      *"label=com.docker.compose.project=guardstack-state "*"label=com.docker.compose.service=keycloak "*) echo "$KC" ;;
+    esac
+    exit 0 ;;
+  inspect) echo "Error: No such object: $2" >&2; exit 1 ;;
+  exec) shift ;;
+  *) exit 0 ;;
+esac
+while :; do case "$1" in -i) shift ;; -e) shift 2 ;; *) break ;; esac; done
+cid="$1"; shift
+[ "$cid" = "$KC" ] || { echo "Error response from daemon: No such container: $cid" >&2; exit 1; }
+case " $* " in
+  *"config credentials"*)
+    case " $* " in *" http://127.0.0.1:8080/auth "*) ;; *) echo "HTTP 404 (no /auth)" >&2; exit 1 ;; esac
+    [ "${KC_LOGIN_PASSWORD:-}" = "'"${expect_pw}"'" ] || { echo "invalid_grant" >&2; exit 1; }
+    touch "$ST/logged-in"; exit 0 ;;
+esac
+[ -f "$ST/logged-in" ] || { echo "not logged in" >&2; exit 1; }
+realm=""
+for a in "$@"; do case "$a" in realms/*) realm="${a#realms/}" ;; esac; done
+case " $* " in
+  *" update realms/"*" -f - "*)
+    cat > "$ST/payload-$realm.json"
+    if [ "$(cat "$ST/mode")" = broken ]; then
+      jq -c ".smtpServer | del(.password) | .user = \"someone-else@example.org\"" "$ST/payload-$realm.json" > "$ST/realm-$realm.json"
+    else
+      jq -c ".smtpServer | del(.password)" "$ST/payload-$realm.json" > "$ST/realm-$realm.json"
+    fi
+    exit 0 ;;
+  *" get realms/"*" --fields smtpServer "*)
+    if [ -f "$ST/realm-$realm.json" ]; then jq -c "{smtpServer: .}" "$ST/realm-$realm.json"; else echo "{}"; fi
+    exit 0 ;;
+  *" get realms --fields realm,smtpServer "*)
+    printf "["; sep=""
+    for f in "$ST"/realm-*.json; do [ -f "$f" ] || continue; r="${f##*/realm-}"; r="${r%.json}"
+      printf "%s{\"realm\":\"%s\",\"smtpServer\":%s}" "$sep" "$r" "$(cat "$f")"; sep=","; done
+    printf "]\n"; exit 0 ;;
+esac
+echo "unexpected kcadm call: $*" >&2; exit 1'
+}
+
+write_state_env() {
+    printf 'KEYCLOAK_ADMIN=admin\nKEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-password\n' \
+        > "${GREMION_ROOT}/etc/env/state.env"
+}
+
+@test "realm-smtp points master at system@ through mail.<domain>:587 STARTTLS, password on stdin only" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    [[ "$output" == *"REALM-SMTP: realm=master user=system@example.org changed=yes"* ]]
+    run jq -e '.smtpServer | .host == "mail.example.org" and .port == "587" and .starttls == "true"
+               and .auth == "true" and .user == "system@example.org" and .from == "system@example.org"
+               and .password == "unit-vendor-secret-value"' "${GREMION_ROOT}/kc/payload-master.json"
+    [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/kc/payload-master.json"; return 1; }
+    ! grep -qF 'unit-kc-admin-password' "$SHIM_LOG" || { echo "kc admin password on a docker argv"; return 1; }
+    run "$LAUNCHER" realm-smtp
+    refute_secret_in_argv
+    [[ "$output" != *"unit-kc-admin-password"* ]]
+}
+
+@test "realm-smtp is idempotent: the second run reports changed=no and leaves the realm as it was" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 0 ]
+    local before; before="$(cat "${GREMION_ROOT}/kc/realm-master.json")"
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"changed=no"* ]]
+    [ "$(cat "${GREMION_ROOT}/kc/realm-master.json")" = "$before" ]
+}
+
+@test "realm-smtp fails (exit 1) when the realm reads back something other than it wrote" {
+    shim_keycloak broken
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"read back"* ]]
+    [[ "$output" != *"unit-vendor-secret-value"* ]]
+}
+
+@test "realm-smtp finds keycloak by its compose labels, not by a container name" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 0 ]
+    assert_recorded docker 'label=com.docker.compose.project=guardstack-state'
+    refute_recorded docker 'guardstack-state-keycloak'
+}
+
+@test "realm-smtp with no running state keycloak is a named precondition failure (exit 2)" {
+    shim docker 'exit 0'
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"no single running keycloak"* ]]
+}

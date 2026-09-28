@@ -22,6 +22,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/../lib/common.sh"
 
 MAIL_TMPL_DIR="${MAIL_TMPL_DIR:-$SCRIPT_DIR/../mail}"
+# The vendor mail launcher (TASK-015): realm-smtp and the header checks.
+VENDOR_MAIL_BIN="${VENDOR_MAIL_BIN:-$SCRIPT_DIR/gremion-vendor-mail}"
+# kcadm inside the state Keycloak. The container is found by its compose
+# labels (state_kc_cid, lib/common.sh) and serves under /auth.
+KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
+KC_SERVER="http://127.0.0.1:8080/auth"
 
 TMPDIR_BRINGUP="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_BRINGUP"' EXIT
@@ -651,21 +657,31 @@ assert_6b_keycloak() {
         return 3
     fi
     need_cmd docker
-    local kc="${STACK}-state-keycloak" uid
-    docker inspect "$kc" >/dev/null 2>&1 \
-        || die "keycloak container ${kc} is not running" "$GREMION_EXIT_USAGE"
-    docker exec "$kc" /opt/keycloak/bin/kcadm.sh config credentials \
-        --server http://127.0.0.1:8080 --realm master \
-        --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null \
-        || die "kcadm could not authenticate against ${kc}" "$GREMION_EXIT_USAGE"
-    uid="$(docker exec "$kc" /opt/keycloak/bin/kcadm.sh get users \
+    # The vendor realm must send as system@ before a reset is triggered: the
+    # same verb the operator runs, so the assert proves what production uses.
+    "$VENDOR_MAIL_BIN" realm-smtp \
+        || { bad "realm-smtp did not converge the operator realm onto system@${PLATFORM_DOMAIN}"; return 1; }
+    local kc uid rc=0
+    # By compose LABELS: the container is ${STACK}-state-keycloak-1, and the
+    # name this assert used to inspect never existed (TASK-015).
+    kc="$(state_kc_cid "$STACK")" || rc=$?
+    [ "$rc" -eq 0 ] \
+        || die "no single running keycloak in the ${STACK}-state project (compose labels project=${STACK}-state, service=keycloak)" \
+               "$GREMION_EXIT_USAGE"
+    # Name-only -e: the admin password is copied from this process's
+    # environment and is on no host argv.
+    KC_LOGIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_LOGIN_PASSWORD "$kc" sh -c \
+        '"$0" config credentials --server "$1" --realm master --user "$2" --password "$KC_LOGIN_PASSWORD" >/dev/null' \
+        "$KCADM_BIN" "$KC_SERVER" "$KEYCLOAK_ADMIN" \
+        || die "kcadm could not authenticate against the state keycloak at ${KC_SERVER}" "$GREMION_EXIT_USAGE"
+    uid="$(docker exec "$kc" "$KCADM_BIN" get users \
              -r "$KEYCLOAK_PROBE_REALM" -q "username=${KEYCLOAK_PROBE_USER}" \
              --fields id --format csv --noquotes | sed -n '1p')"
     if [ -z "$uid" ]; then
         bad "user ${KEYCLOAK_PROBE_USER} not found in realm ${KEYCLOAK_PROBE_REALM}"; return 1
     fi
     printf '["UPDATE_PASSWORD"]' | docker exec -i "$kc" \
-        /opt/keycloak/bin/kcadm.sh update "users/${uid}/execute-actions-email" \
+        "$KCADM_BIN" update "users/${uid}/execute-actions-email" \
         -r "$KEYCLOAK_PROBE_REALM" -f - >/dev/null \
         || { bad "Keycloak refused to send the reset mail"; return 1; }
     ok "Keycloak reset mail dispatched to ${KEYCLOAK_PROBE_USER}"

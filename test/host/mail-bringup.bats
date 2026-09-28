@@ -655,27 +655,82 @@ EOF
         || { echo "$output"; return 1; }
 }
 
+# shim_keycloak_labels — a docker that knows the state keycloak ONLY by its
+# compose labels: the real container is <stack>-state-keycloak-1 (only the mail
+# project sets container_name), so `docker inspect <stack>-state-keycloak`
+# answers "No such object"; and its kcadm serves only under /auth
+# (KC_HTTP_RELATIVE_PATH). Rewritten from the name-matching shim (TASK-015):
+# that shim answered any name, which is how assert 6b stayed green here while
+# it could never reach a real Keycloak.
+shim_keycloak_labels() {
+    mkdir -p "${GREMION_ROOT}/kc"
+    shim docker '
+ST="'"${GREMION_ROOT}"'/kc"; KC=kc0a1b2c3d4e
+case "$1" in
+  ps)
+    case " $* " in
+      *"label=com.docker.compose.project=staging-state "*"label=com.docker.compose.service=keycloak "*) echo "$KC" ;;
+    esac
+    exit 0 ;;
+  inspect) echo "Error: No such object: $2" >&2; exit 1 ;;
+  exec) shift ;;
+  *) exit 0 ;;
+esac
+while :; do case "$1" in -i) shift ;; -e) shift 2 ;; *) break ;; esac; done
+cid="$1"; shift
+[ "$cid" = "$KC" ] || { echo "Error response from daemon: No such container: $cid" >&2; exit 1; }
+case " $* " in
+  *"config credentials"*)
+    case " $* " in *" http://127.0.0.1:8080/auth "*) ;; *) echo "HTTP 404 (no /auth)" >&2; exit 1 ;; esac
+    [ "${KC_LOGIN_PASSWORD:-}" = "unit-test-kc-password" ] || { echo "invalid_grant" >&2; exit 1; }
+    touch "$ST/logged-in"; exit 0 ;;
+esac
+[ -f "$ST/logged-in" ] || { echo "not logged in" >&2; exit 1; }
+realm=""
+for a in "$@"; do case "$a" in realms/*) realm="${a#realms/}" ;; esac; done
+case " $* " in
+  *" update realms/"*" -f - "*)
+    jq -c ".smtpServer | del(.password)" > "$ST/realm-$realm.json"; exit 0 ;;
+  *" get realms/"*" --fields smtpServer "*)
+    if [ -f "$ST/realm-$realm.json" ]; then jq -c "{smtpServer: .}" "$ST/realm-$realm.json"; else echo "{}"; fi
+    exit 0 ;;
+  *" get users "*) printf "0d1f2e3a-0000-4000-8000-000000000001\n"; exit 0 ;;
+  *"execute-actions-email"*) cat > "$ST/actions.json"; exit 0 ;;
+esac
+echo "unexpected kcadm call: $*" >&2; exit 1'
+}
+
 @test "assert 6b dispatches the reset mail and passes on pasted dkim/spf/dmarc headers (B2)" {
     shim_dns_check_ok
     mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
     cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
        "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
-    # kcadm: config credentials succeeds, `get users` yields one id, the
-    # execute-actions-email update succeeds.
-    shim docker '
-case " $* " in
-  *" get users "*) printf "0d1f2e3a-0000-4000-8000-000000000001\n"; exit 0 ;;
-esac
-exit 0'
+    shim_keycloak_labels
     cat > "${GREMION_ROOT}/results.txt" <<EOF
 Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass; dmarc=pass
 Received: from mail.example.org (mail.example.org [203.0.113.25])
 EOF
     KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password \
         run "$BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
-    [ "$status" -eq 0 ] || { echo "status=${status}"; echo "$output"; return 1; }
-    [[ "$output" == *"Keycloak reset mail dispatched"* ]]
-    [[ "$output" == *"dkim=pass spf=pass dmarc=pass from 203.0.113.25"* ]]
+    [[ "$output" == *"Keycloak reset mail dispatched"* ]] || { echo "status=${status}"; echo "$output"; return 1; }
+    [ -f "${GREMION_ROOT}/kc/actions.json" ] || { echo "execute-actions-email never reached kcadm"; return 1; }
+    refute_recorded docker 'staging-state-keycloak'
+    [[ "$output" != *"unit-test-kc-password"* ]]
+    ! grep -qF 'unit-test-kc-password' "$SHIM_LOG" || { echo "kc admin password on a docker argv"; return 1; }
+}
+
+@test "assert 6b runs realm-smtp first: master sends as system@ before the reset is triggered (TASK-015)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
+       "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
+    shim_keycloak_labels
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password \
+        run "$BRINGUP" --assert 6b
+    [[ "$output" == *"REALM-SMTP: realm=master user=system@example.org"* ]] || { echo "$output"; return 1; }
+    run jq -e '.user == "system@example.org" and .from == "system@example.org" and .host == "mail.example.org"' \
+        "${GREMION_ROOT}/kc/realm-master.json"
+    [ "$status" -eq 0 ]
 }
 
 @test "MX-PUBLICATION stays HOLD while any assert is not ok" {
