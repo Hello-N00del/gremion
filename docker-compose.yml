@@ -1,15 +1,60 @@
 ##############################################################
-# Gremion — Docker Compose (governance-only kernel)
+# Gremion — Docker Compose: the STATE project (governance-only kernel)
 #
-# Services: postgres, keycloak, gremion-ui, gremion-public, legal,
-#           vector, mailpit (+ traefik / docker-socket-proxy in the
-#           production profile).
+# One pooled stack per host (PRD-PLAT-005, TRD-440): this file (+ the prod
+# overlay and the release pins layer) is the ${STACK}-state project --
+# postgres, the six profile-gated <id>-postgres, keycloak, legal, vector,
+# and in the production profile traefik, docker-socket-proxy, pgbouncer and
+# fallback. mailpit is dev-only (profiles: [dev]).
 #
-# Quick start:
+# The app tier (gremion-ui, gremion-public, the migrate and tenant-create
+# one-shots) is NOT here: it is docker-compose.app.yml, instantiated twice as
+# ${STACK}-app-blue and ${STACK}-app-green, so a colour switch never touches a
+# persisted volume (TRD-038). The two tiers meet only on the external
+# ${STACK}_state and ${STACK}_edge networks bootstrap.sh creates. A new tenant
+# adds databases, a realm and an account -- never a container (TRD-440).
+# Placement and limits: docs/ops/pooled-stack-layout.md; the guard is
+# scripts/check-pooled-stack.mjs (make lint-pooled-stack).
+#
+# Quick start (dev):
 #   cp .env.example .env
-#   ./scripts/setup.sh      (generates secrets, starts services)
+#   ./scripts/setup.sh      (generates secrets, starts state + app-blue)
 #   make logs               (follow logs)
 ##############################################################
+
+# ============================================================
+# Container limits (TRD-177) — every service of every project declares both
+# ============================================================
+# Three sizes plus Keycloak's own (TASK-040 Q4). compose applies
+# deploy.resources.limits outside swarm too: they land as HostConfig.Memory and
+# HostConfig.NanoCpus, which is what test/host/integration/pooled-stack-proof.sh
+# reads back from the running containers. Values are [A] until TRD-226's
+# measurement exists; the proof's idle-RSS check (below 80 % of the limit on
+# every container) is what catches a limit set too low. Keycloak: the Keycloak
+# 26 guide "Concepts for sizing CPU and memory resources" gives a 1250 MB base
+# with 300 MB non-heap at a 70 % heap share, so (1250 - 300) / 0.7 = 1.36 GB,
+# rounded up to 1.5 GB. The same anchors are repeated in docker-compose.app.yml
+# (YAML anchors do not cross files).
+x-limits-s: &limits-s
+  resources:
+    limits:
+      memory: 256M
+      cpus: "0.25"
+x-limits-m: &limits-m
+  resources:
+    limits:
+      memory: 512M
+      cpus: "0.5"
+x-limits-l: &limits-l
+  resources:
+    limits:
+      memory: 1G
+      cpus: "1.0"
+x-limits-keycloak: &limits-keycloak
+  resources:
+    limits:
+      memory: 1536M
+      cpus: "1.0"
 
 # ============================================================
 # Per-module PostgreSQL (D14) — the shape every <id>-postgres shares
@@ -25,13 +70,14 @@
 x-module-postgres: &module-postgres
   image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
   restart: unless-stopped
+  deploy: *limits-s
   logging:
     driver: json-file
     options:
       max-size: "50m"
       max-file: "5"
   networks:
-    - gremion-net
+    - state
   healthcheck:
     # over TCP: the entrypoint's temporary init server listens on no address,
     # so it can never be mistaken for the final one
@@ -103,8 +149,13 @@ services:
       - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     labels:
       org.gremion.postgres: "kernel"
+    deploy: *limits-l
     networks:
-      - gremion-net
+      state:
+        # <service>-<stack>, the idiom of gremion-deploy's evict_alias: every
+        # app-tier database URL names its stack (postgres-${STACK}), so a URL
+        # can be read for WHICH stack it targets from inside the container.
+        aliases: ["postgres-${STACK:?STACK required}"]
     healthcheck:
       # over TCP: the entrypoint's temporary init server listens on no
       # address, so "healthy" can never mean that server
@@ -118,11 +169,14 @@ services:
   # Per-module PostgreSQL (D14) — one per extraction-source leaf
   # ============================================================
   # Profile-gated: a plain `up` starts none of them, `--profile <id>` starts
-  # that module's server. Credentials come from <ID>_PG_USER /
-  # <ID>_PG_PASSWORD; an unset password makes the image refuse to initialise,
-  # loudly. The volumes carry names of their own (gremion_module_<id>_pg_data)
-  # and NEVER the extraction source's gremion_<id>_pg_data: those hold its
-  # live PG16 clusters (the guard refuses them, FORBIDDEN_MODULE_VOLUMES).
+  # that module's server. Each is size `s` (x-module-postgres) and sits on
+  # ${STACK}_state only (D14: only the enabled profiles start). Credentials
+  # come from <ID>_PG_USER / <ID>_PG_PASSWORD; an unset password makes the
+  # image refuse to initialise, loudly.
+  # The volumes carry NO global name any more (TASK-040): each realises as
+  # ${STACK}-state_<id>-pg-data, so it can never be the extraction source's
+  # gremion_<id>_pg_data (live PG16 clusters). check-pooled-stack.mjs refuses
+  # any rendered gremion_* name.
   board-postgres:
     <<: *module-postgres
     profiles: [board]
@@ -203,9 +257,14 @@ services:
   # real outbound relay is a pure .env change — no compose edit. See
   # docs/runbooks/email-smtp.md for the activation steps.
   mailpit:
+    # Dev only (TRD topology "mailpit: not deployed", TRD-251): a host renders
+    # with COMPOSE_PROFILES=production, so no mail catcher exists there. Local
+    # dev sets COMPOSE_PROFILES=dev (.env.example; `make up` defaults it).
+    profiles: [dev]
     # Pinned — do NOT use :latest. Bump deliberately after a smoke test.
     image: axllent/mailpit:v1.30.1
     restart: unless-stopped
+    deploy: *limits-s
     logging:
       driver: json-file
       options:
@@ -221,7 +280,7 @@ services:
     volumes:
       - mailpit-data:/data
     networks:
-      - gremion-net
+      - state
     healthcheck:
       # Mailpit ships without a shell/curl/wget; use its own CLI healthcheck.
       test: ["CMD", "/mailpit", "readyz"]
@@ -230,226 +289,8 @@ services:
       retries: 5
       start_period: 10s
 
-  # ============================================================
-  # Gremion UI — unified SvelteKit frontend
-  # ============================================================
-  gremion-ui:
-    build:
-      context: .
-      dockerfile: gremion-ui/Dockerfile
-    image: ghcr.io/hello-n00del/gremion-ui:latest
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      keycloak:
-        condition: service_healthy
-    environment:
-      AUTH_SECRET:              ${AUTH_SECRET}
-      AUTH_KEYCLOAK_ID:         ${AUTH_KEYCLOAK_ID:-gremion-ui}
-      AUTH_KEYCLOAK_SECRET:     ${AUTH_KEYCLOAK_SECRET}
-      AUTH_KEYCLOAK_ISSUER:     ${AUTH_KEYCLOAK_ISSUER}
-      # G-080: server-to-server OIDC over internal TLS (token/userinfo/jwks/refresh
-      # + Bearer-JWKS) — the secure prod default. docker-compose.prod.yml adds
-      # NODE_EXTRA_CA_CERTS so undici/jose trust the internal cert; the dev
-      # override drops this back to http://keycloak:8080 (dev realm=external).
-      AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/gremion
-      AUTH_TRUST_HOST:          "1"
-      # Generic step-up freshness window (seconds) — the validity of a fresh LoA-2
-      # elevation before a re-prompt. Kernel auth keeps the KC step-up/acr plumbing;
-      # the finance approval enforcement flag left with the finance module.
-      STEPUP_FRESHNESS_SECONDS: ${STEPUP_FRESHNESS_SECONDS:-300}
-      PUBLIC_BASE_URL:          ${PUBLIC_BASE_URL:-http://localhost:3000}
-      # AGPL-3.0 section 13: the running app offers its Corresponding Source.
-      # An operator running a MODIFIED build MUST point this at their own
-      # repository — upstream is not the corresponding source of their version,
-      # so leaving it unset would make the offer false. Unset (empty) falls back
-      # to upstream, which is correct for an unmodified deployment.
-      PUBLIC_SOURCE_URL:        ${PUBLIC_SOURCE_URL:-}
-      # NOTE: ORIGIN is deliberately NOT pinned here. In the multi-tenant
-      # deployment every tenant is served on its OWN bound host (its
-      # tenant_domain rows; the apex serves no tenant), so a single fixed ORIGIN
-      # would make SvelteKit's adapter-node derive the same origin for every
-      # tenant — which then makes the CSRF origin check 403 every tenant's
-      # SSO/form POST (the browser's Origin is the tenant host, the pinned
-      # origin would not be).
-      # With ORIGIN unset, adapter-node derives the origin from the real inbound
-      # Host header (Traefik passHostHeader=true preserves it per tenant), while
-      # the tenant resolver selects on the whole x-forwarded-host its router
-      # pins, cross-checked against that same Host.
-      # Protocol is forced to https in the prod overlay (PROTOCOL_HEADER).
-      # Dev/local: docker-compose.override.yml sets ORIGIN=http://localhost:<port>.
-      # G-080: Admin REST over internal TLS (governance committee provisioning,
-      # #164 hasOtpCredential). Dev override → http://keycloak:8080.
-      KEYCLOAK_ADMIN_URL:       https://keycloak:8443/auth
-      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
-      CONFIG_PATH:              /app/config/config.json
-      DATABASE_URL:             postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@postgres:5432/${GREMION_DB_NAME:-gremion}
-      # P2.1c T1 (#202): control-plane registry DB (tenant registry + fleet-
-      # migration ledger, gremion-ui/migrations-control/) — without it boot()'s
-      # runControlMigrations() dies and every request 503s. D-CONTROLDIRECT:
-      # targets postgres:5432 DIRECTLY on purpose — it must NOT follow the
-      # production overlay's PgBouncer DATABASE_URL re-point (the control
-      # plane is the direct "+ control" term in P2.1b's connection budget;
-      # registry reads are cached). The prod overlay deliberately does NOT
-      # override this key — it inherits this value (see docker-compose.prod.yml).
-      CONTROL_DATABASE_URL:     postgresql://${CONTROL_DB_USER:-control}:${CONTROL_DB_PASSWORD}@postgres:5432/${CONTROL_DB_NAME:-control}
-      SEED_TOKEN:               ${SEED_TOKEN:-}
-      SEED_USER_PASSWORD:       ${SEED_USER_PASSWORD:-}
-      # Shared secret for the server-only internalFetch helper (server-to-server
-      # hops). Set by scripts/setup.sh.
-      INTERNAL_PUSH_SECRET:     ${INTERNAL_PUSH_SECRET:-}
-      # P2.1c (#202): the in-container origin internalFetch's server-to-server
-      # hop targets — so resolveInternalBaseUrl() (internal-fetch.ts) returns
-      # THIS instead of falling through to PUBLIC_BASE_URL = the public apex.
-      # LOAD-BEARING for tenant isolation: the inner hop must NOT traverse the
-      # edge. The X-Forwarded-Host T4 stamps (the tenant's registered primary
-      # host, TASK-041) is the ENTIRE tenant selector; an edge that restated it
-      # would aim a tenant's self-call at another tenant's data plane
-      # (cross-tenant read+write). Hitting gremion-ui:3000 directly
-      # (adapter-node's in-container port; the compose service name resolves on
-      # gremion_net) bypasses Traefik entirely, so the stamped forwarded host
-      # survives and the resolver re-selects the right tenant. Set in the BASE file so dev + prod inherit. Do NOT point this at
-      # the public apex.
-      INTERNAL_BASE_URL:        http://gremion-ui:3000
-      # /api/setup/test-smtp refuses any target that is not a demonstrably
-      # public address (SSRF / internal port-probe oracle — see
-      # docs/security/test-smtp-guard.md). This is the ONE opt-in that widens
-      # that predicate, for RFC1918 + IPv6 unique-local only, so an operator can
-      # point the SMTP test at an internal relay. It is read from the process
-      # environment, so without this passthrough a value in .env never reaches
-      # the container and the refusal hint would name a variable that does
-      # nothing. Default OFF; compose reads .env at CREATE time, so a change
-      # needs `up -d --force-recreate gremion-ui`, not `restart`.
-      SMTP_TEST_ALLOW_PRIVATE:  ${SMTP_TEST_ALLOW_PRIVATE:-}
-      TRACE_EXPORTER:           ${TRACE_EXPORTER:-log}
-    volumes:
-      - gremion-config-data:/app/config
-      # /data holds the per-tenant config files written by the provisioner
-      # (/data/<slug>/config.json — see registry.ts configPathForTenant). It used
-      # to ALSO hold the newsletter SQLite store, removed in Task 23; the mount
-      # (and its named volume) stay because tenant config still lives here.
-      - newsletter-data:/data
-      # P2.1c T1 (#202) D-SECMOUNT: per-tenant secrets cross the host->container
-      # boundary via this ONE read-only bind mount. Bind mounts are LIVE — a new
-      # per-tenant secret file written by the provisioner appears in the running
-      # container WITHOUT a compose edit or recreate (compose top-level `secrets:`
-      # are static per-file and cannot do this). The T7 `file:` secret-ref
-      # allowlist is pinned to the CONTAINER prefix /run/secrets/. Create the
-      # host dir (mkdir -p secrets/tenants) before `up` — Docker would otherwise
-      # create it root-owned.
-      - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
-    networks:
-      - gremion-net
-    healthcheck:
-      # TASK-023 (B-05): /healthz is on the closed boot-and-resolve exemption
-      # list, so this probe needs no host header, no proxy-trust secret and no
-      # tenant row, and it no longer names the `default` tenant. It is LIVENESS
-      # only: a still-booting or boot-failed process also answers 200 here
-      # (/api/health is the boot probe). A non-transient boot failure exits 1
-      # instead, and `restart: unless-stopped` recycles the container.
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
-  # ============================================================
-  # gremion-public — read-only public portal (B5)
-  # Served at public.${DOMAIN} — no auth, no sessions
-  # ============================================================
-  gremion-public:
-    # The image COORDINATE, so `docker compose build` produces the name
-    # k8s/base/gremion-public/deployment.yaml pins and k8s/base/kustomization.yaml
-    # tells an operator to push. Without it the build was tagged
-    # <project>-gremion-public and ghcr.io/hello-n00del/gremion-public could never
-    # be produced by the documented `make build`.
-    image: ghcr.io/hello-n00del/gremion-public:latest
-    build:
-      context: .
-      dockerfile: gremion-public/Dockerfile
-      args:
-        # v12 apex topology — build-time mount point for the portal. Empty (the
-        # default) serves it at `/`, which is what the `Host(public.${DOMAIN})`
-        # router below expects. Set PUBLIC_BASE_PATH=/portal only together with a
-        # router rule that actually routes that prefix here; the healthcheck
-        # below follows the same variable, because probing `/` under a base path
-        # 404s and Traefik drops an unhealthy container's routers.
-        BASE_PATH: ${PUBLIC_BASE_PATH:-}
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      ORIGIN:                     https://public.${DOMAIN}
-      GREMION_PUBLIC_DB_URL:        postgresql://gremion_public_reader:${PUBLIC_DB_PASSWORD}@postgres:5432/${GREMION_DB_NAME:-gremion}
-      PUBLIC_CONTACT_NAME:        ${PUBLIC_CONTACT_NAME:-Studierendenrat}
-      PUBLIC_CONTACT_ADDRESS:     ${PUBLIC_CONTACT_ADDRESS:-}
-      PUBLIC_CONTACT_EMAIL:       ${PUBLIC_CONTACT_EMAIL:-}
-      PUBLIC_CONTACT_PHONE:       ${PUBLIC_CONTACT_PHONE:-}
-      PUBLIC_IMPRINT_RESPONSIBLE:  ${PUBLIC_IMPRINT_RESPONSIBLE:-Vorsitz des StuRa}
-      PUBLIC_MAIN_APP_URL:         https://${DOMAIN}
-      # AGPL-3.0 section 13 — see the gremion-ui block above. Same variable, so
-      # one setting in .env covers both shells.
-      PUBLIC_SOURCE_URL:           ${PUBLIC_SOURCE_URL:-}
-      PUBLIC_LEGISLATURE_LABEL:    ${PUBLIC_LEGISLATURE_LABEL:-}
-      # v12 — optional back-route up to a site above the portal. Unset here by
-      # default; the portal then renders neither the apex strip nor the footer
-      # colophon. Each of the two needs BOTH a URL and its own label.
-      PUBLIC_APEX_URL:             ${PUBLIC_APEX_URL:-}
-      PUBLIC_APEX_LABEL:           ${PUBLIC_APEX_LABEL:-}
-      PUBLIC_APEX_NOTE:            ${PUBLIC_APEX_NOTE:-}
-      PUBLIC_APEX_COLOPHON:        ${PUBLIC_APEX_COLOPHON:-}
-      # #241: Nextcloud admin credentials are deliberately NOT injected here. The
-      # anonymous, internet-facing public portal no longer streams PDFs via WebDAV;
-      # its /api/public/protocols/[id]/pdf route redirects the browser to the main
-      # app (PUBLIC_MAIN_APP_URL above), which holds the NC creds legitimately. An
-      # RCE/SSRF/env-leak in this container can no longer reach Nextcloud admin.
-    networks:
-      - gremion-net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.gremion-public.rule=Host(`public.${DOMAIN}`)"
-      - "traefik.http.routers.gremion-public.entrypoints=websecure"
-      - "traefik.http.routers.gremion-public.tls=true"
-      - "traefik.http.routers.gremion-public.middlewares=public-ratelimit@docker"
-      - "traefik.http.services.gremion-public.loadbalancer.server.port=3000"
-      - "traefik.http.middlewares.public-ratelimit.ratelimit.average=100"
-      - "traefik.http.middlewares.public-ratelimit.ratelimit.burst=50"
-      - "traefik.http.middlewares.public-ratelimit.ratelimit.period=1m"
-      # TASK-022 (round-2 HIGH): #251's original comment here said "key the
-      # bucket on the real client IP (Cloudflare sets CF-Connecting-IP)". That
-      # was true when cloudflared sat in front of Traefik and rewrote the
-      # header itself. TASK-022 makes Traefik the first hop (see
-      # docker/traefik/traefik.yml's forwardedHeaders header: "nothing keyed
-      # on security may read a forwarded header"), so a sourceCriterion keyed
-      # on a request header is read verbatim from whatever the client sends --
-      # any client can rotate CF-Connecting-IP itself and mint a fresh 100
-      # req/min bucket per request, voiding the limit. No sourceCriterion is
-      # declared below, so Traefik falls back to the connection's own remote
-      # address, which is the real client now that nothing sits in front of
-      # it. Guarded by scripts/check-compose-edge.test.mjs guard 4, which reads
-      # every service's rendered labels for a ratelimit sourceCriterion keyed
-      # on CF-Connecting-IP / X-Forwarded-For / X-Real-IP.
-    healthcheck:
-      # Follows PUBLIC_BASE_PATH: under a base path the portal 404s outside it,
-      # the container is marked unhealthy, and Traefik v3 removes its routers.
-      # TASK-023: probes the database-free /healthz marker, not the home page.
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000${PUBLIC_BASE_PATH:-}/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
+  # gremion-ui and gremion-public live in docker-compose.app.yml (TASK-040):
+  # one app project per colour, attached to ${STACK}_state and ${STACK}_edge.
 
   # ============================================================
   # Keycloak — central identity provider (OIDC/SSO)
@@ -523,8 +364,13 @@ services:
     volumes:
       # PR 7 (T7.1): gremion login theme (design-refresh tokens).
       - ./docker/keycloak/themes:/opt/keycloak/themes:ro
+    deploy: *limits-keycloak
     networks:
-      - gremion-net
+      # _state: its database, and the app tier's server-to-server OIDC and
+      # Admin REST calls (https://keycloak:8443). _edge: Traefik's docker
+      # provider routes the public OIDC surface to it.
+      - edge
+      - state
 
   # ============================================================
   # Legal — Static legal/portal pages (GDPR, Impressum, etc.)
@@ -532,7 +378,10 @@ services:
   legal:
     # Same reason as gremion-public above: k8s/base/legal/deployment.yaml pins
     # ghcr.io/hello-n00del/gremion-legal, which nothing could build.
-    image: ghcr.io/hello-n00del/gremion-legal:latest
+    # IMAGE_TAG is the release tag on a host (the pins layer resolves it to a
+    # digest); `:-latest` keeps the TASK-022 edge-render fixture, which carries
+    # no IMAGE_TAG, rendering unchanged.
+    image: ghcr.io/hello-n00del/gremion-legal:${IMAGE_TAG:-latest}
     build:
       context: docker/legal
     restart: unless-stopped
@@ -546,8 +395,11 @@ services:
     ports:
       # A-021 wave 2: container now serves on :8080 (non-root nginx).
       - "127.0.0.1:8083:8080"
+    deploy: *limits-s
     networks:
-      - gremion-net
+      # _edge only: Traefik routes to it, and gremion-ui (also on _edge) reads
+      # its imprint pages. It holds no data and needs no database.
+      - edge
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/impressum | grep -q 'Impressum' || exit 1"]
       interval: 30s
@@ -661,15 +513,22 @@ services:
       # Origin certificate mounts left with dynamic/tls.yml.
       - traefik-acme:/letsencrypt
       - traefik-logs:/logs
+    deploy: *limits-m
     networks:
-      - gremion-net
+      # ${STACK}_edge (the pinned EDGE_V4/V6 subnets the forwardedHeaders list
+      # trusts) plus the private socket net to its Docker API proxy. NEVER
+      # ${STACK}_state: the edge process holds no route to a data store.
+      - edge
+      - socket
 
   # ============================================================
   # docker-socket-proxy — read-only Docker API gateway (production only)
   # Holds /var/run/docker.sock so Traefik's docker provider can read container
   # labels WITHOUT the internet-facing edge proxy mounting the raw socket. Only
   # the GET endpoints the provider needs are allowed; all writes (POST) and
-  # dangerous endpoints stay denied. Not published — internal gremion-net only.
+  # dangerous endpoints stay denied. Not published, and on the private `socket`
+  # network ONLY (internal: true, shared with traefik and nothing else): no app
+  # container and no data store can reach the Docker API (BSI NET.1.1).
   # Pinned by digest (supply-chain hardening, #252 / gremion#22): the digest
   # below is the multi-arch manifest-list index for the 0.1.1 tag, so `docker`
   # still selects the right platform at pull time while the ref stays immutable.
@@ -700,8 +559,9 @@ services:
       POST: "0"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy: *limits-s
     networks:
-      - gremion-net
+      - socket
 
   # ============================================================
   # Vector — log pipeline with ipcrypt-nd IP pseudonymisation
@@ -711,8 +571,13 @@ services:
     build:
       context: docker/vector
       dockerfile: Dockerfile
-    image: ghcr.io/hello-n00del/gremion-vector:latest
+    image: ghcr.io/hello-n00del/gremion-vector:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    # No network at all (TASK-040 Q3): vector reads traefik's access log off a
+    # shared volume and writes its output to another; it talks to nothing.
+    # The healthcheck below still works: network_mode none keeps loopback.
+    network_mode: none
+    deploy: *limits-m
     healthcheck:
       # TASK-036 (TRD-178): Vector's own loopback API (docker/vector/vector.toml
       # [api]), measured answering {"ok":true} in the built image. entrypoint.sh
@@ -742,37 +607,25 @@ services:
       # used solely by the rotation loop.
       - traefik-logs:/logs/traefik:rw
       - vector-processed-logs:/logs/processed
-    networks:
-      - gremion-net
 
 # ============================================================
 # Volumes
 # ============================================================
+# No global name: on any of them (TASK-040): each realises as
+# ${COMPOSE_PROJECT_NAME}_<key>, i.e. ${STACK}-state_<key> on a host, so two
+# stacks (or two worktrees) on one Docker engine never share a data volume.
+# The app tier's persisted volumes are EXTERNAL (docker-compose.app.yml,
+# created by bootstrap.sh stage_networks), never declared by a colour.
 volumes:
   pg-data:
-    name: gremion_pg_data
   board-pg-data:
-    name: gremion_module_board_pg_data
   calendar-pg-data:
-    name: gremion_module_calendar_pg_data
   content-pg-data:
-    name: gremion_module_content_pg_data
   finance-pg-data:
-    name: gremion_module_finance_pg_data
   newsletter-pg-data:
-    name: gremion_module_newsletter_pg_data
   vault-pg-data:
-    name: gremion_module_vault_pg_data
   mailpit-data:
-    name: gremion_mailpit_data
-  gremion-config-data:
-    name: gremion_config_data
-  # Mounted at /data on gremion-ui. Holds the per-tenant config files
-  # (/data/<slug>/config.json).
-  newsletter-data:
-    name: gremion_tenant_config_data
   traefik-logs:
-    name: gremion_traefik_logs
   # Created by infra/host/bootstrap.sh (stage_networks) and never by compose,
   # so a `down -v` cannot take the ACME account with it. Stack-scoped name
   # (spec A §E): a hardcoded gremion_traefik_acme is forbidden.
@@ -780,7 +633,6 @@ volumes:
     name: ${STACK}_traefik_acme
     external: true
   vector-processed-logs:
-    name: gremion_vector_processed_logs
 
 # ============================================================
 # Secrets
@@ -793,6 +645,16 @@ secrets:
 # Networks
 # ============================================================
 networks:
-  gremion-net:
-    name: gremion_net
-    driver: bridge
+  # The two stack-scoped externals bootstrap.sh stage_networks creates (dual
+  # stack, pinned subnets). The KEY is a fixed local alias because compose
+  # validates keys before interpolating; name: carries the identity.
+  edge:
+    external: true
+    name: ${STACK:?STACK required}_edge
+  state:
+    external: true
+    name: ${STACK:?STACK required}_state
+  # Project-scoped (${STACK}-state_socket): traefik <-> docker-socket-proxy
+  # only. internal: true -- no route off the host from it.
+  socket:
+    internal: true

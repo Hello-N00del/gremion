@@ -7,7 +7,8 @@
 // default as its Corresponding Source. For a fork that modified the program that
 // offer is FALSE, which is exactly what source-offer.ts says must not happen.
 //
-// So the escape hatch is pinned to the surfaces an operator actually edits. Each
+// So the escape hatch is pinned to the surfaces an operator actually edits (the
+// app tier docker-compose.app.yml since TASK-040 split the pooled stack). Each
 // case also asserts a sibling variable it ships next to: if a manifest is moved
 // or its shape changes, the case fails loudly instead of passing vacuously.
 import { describe, it, expect } from 'vitest'
@@ -28,23 +29,23 @@ const read = (rel: string) => readFileSync(join(repoRoot, rel), 'utf8')
  */
 function composeService(text: string, name: string): string {
   const start = text.indexOf(`\n  ${name}:\n`)
-  expect(start, `docker-compose.yml has no "${name}" service`).toBeGreaterThan(-1)
+  expect(start, `docker-compose.app.yml has no "${name}" service`).toBeGreaterThan(-1)
   const rest = text.slice(start + 1)
   const next = rest.search(/\n(?: {2})?[a-z][a-z0-9-]*:\n/)
   return next === -1 ? rest : rest.slice(0, next)
 }
 
 describe('PUBLIC_SOURCE_URL is settable on every deployment surface', () => {
-  it('docker-compose.yml passes it to gremion-ui', () => {
-    const block = composeService(read('docker-compose.yml'), 'gremion-ui')
+  it('docker-compose.app.yml passes it to gremion-ui', () => {
+    const block = composeService(read('docker-compose.app.yml'), 'gremion-ui')
     expect(block, 'vacuity: the gremion-ui block lost its PUBLIC_BASE_URL sibling').toContain(
       'PUBLIC_BASE_URL:',
     )
     expect(block).toContain('PUBLIC_SOURCE_URL:')
   })
 
-  it('docker-compose.yml passes it to gremion-public', () => {
-    const block = composeService(read('docker-compose.yml'), 'gremion-public')
+  it('docker-compose.app.yml passes it to gremion-public', () => {
+    const block = composeService(read('docker-compose.app.yml'), 'gremion-public')
     expect(block, 'vacuity: the gremion-public block lost its PUBLIC_APEX_URL sibling').toContain(
       'PUBLIC_APEX_URL:',
     )
