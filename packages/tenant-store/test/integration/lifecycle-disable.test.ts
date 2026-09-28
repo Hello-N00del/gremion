@@ -82,7 +82,7 @@ describe('disableModule on the scratch stack', () => {
         const v = Reflect.get(target, prop, receiver)
         if (prop === 'unsafe') {
           return (q: string, ...rest: unknown[]) => {
-            if (/^DROP DATABASE/.test(q)) events.push('drop')
+            if (q.startsWith('DROP DATABASE')) events.push('drop')
             return (v as (...a: unknown[]) => unknown).call(target, q, ...rest)
           }
         }

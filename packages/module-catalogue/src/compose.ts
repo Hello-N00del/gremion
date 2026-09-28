@@ -19,9 +19,12 @@ export const COMPOSE_POSTGRES_LABEL = 'org.gremion.postgres'
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** `${VAR:-default}` / `${VAR-default}` -> default; `${VAR}` / `${VAR:?msg}` -> undefined; a literal stays. */
+const scalar = (v: unknown): string | undefined =>
+  typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : undefined
+
 export function composeDefault(value: unknown): string | undefined {
-  if (value === null || value === undefined) return undefined
-  const s = String(value)
+  const s = scalar(value)
+  if (s === undefined) return undefined
   const whole = /^\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-([^}]*))?(?::?\?[^}]*)?\}$/.exec(s)
   if (whole) return whole[1]
   if (s.includes('${')) return undefined // an interpolation embedded in text: no single default
@@ -47,7 +50,7 @@ export function parseCompose(text: string): ComposeModel {
   for (const [name, raw] of Object.entries(doc.services)) {
     const svc = isRecord(raw) ? raw : {}
     let postgresLabel: string | null = null
-    for (const [k, v] of pairs(svc.labels)) if (k === COMPOSE_POSTGRES_LABEL) postgresLabel = v === undefined || v === null ? '' : String(v)
+    for (const [k, v] of pairs(svc.labels)) if (k === COMPOSE_POSTGRES_LABEL) postgresLabel = scalar(v) ?? ''
     const env: Record<string, string | undefined> = {}
     for (const [k, v] of pairs(svc.environment)) env[k] = composeDefault(v)
     services.set(name, { name, postgresLabel, env })

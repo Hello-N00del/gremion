@@ -52,7 +52,7 @@ describe('bin/check.mjs', () => {
     const out = join(TMP, `cli-${process.pid}`, 'refused.json')
     const r = run('--check', join(FIX, 'roots/three'), '--compose', join(FIX, 'compose/with-messaging.yml'), '--emit-ops', out)
     expect(r.status).toBe(1)
-    expect(() => readFileSync(out)).toThrow()
+    expect(() => readFileSync(out)).toThrow(/ENOENT/)
   })
 
   it('arguments are parsed strictly: no --check, an unknown flag, a dropped value', () => {

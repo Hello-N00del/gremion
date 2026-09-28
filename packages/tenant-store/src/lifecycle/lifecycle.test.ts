@@ -165,8 +165,8 @@ describe('scramSha256Verifier', () => {
   })
 
   it('refuses a short or non-ASCII password', () => {
-    expect(() => scramSha256Verifier('short')).toThrow()
-    expect(() => scramSha256Verifier('ä'.repeat(20))).toThrow()
+    expect(() => scramSha256Verifier('short')).toThrow(/16-256 printable ASCII/)
+    expect(() => scramSha256Verifier('ä'.repeat(20))).toThrow(/16-256 printable ASCII/)
   })
 })
 
@@ -190,7 +190,9 @@ describe('exportDatabase — verify before anything may be dropped (TDD 8, no da
     expect(r.sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(readFileSync(`${r.path}.sha256`, 'utf8')).toBe(`${r.sha256}  ${r.path.split(/[\\/]/).pop()}\n`)
     expect(r.path.startsWith(join(SCRATCH, T, 'board'))).toBe(true)
-    if (process.platform !== 'win32') expect(statSync(r.path).mode & 0o077).toBe(0)
+    // mode 0600 (Q7); Windows has no POSIX group/other bits to assert on
+    const groupOtherBits = process.platform === 'win32' ? 0 : statSync(r.path).mode & 0o077
+    expect(groupOtherBits).toBe(0)
   })
 
   it('an exporter that throws -> EXPORT_FAILED', async () => {

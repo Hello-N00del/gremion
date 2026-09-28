@@ -103,7 +103,7 @@ export function connectModule(db: string, opts: postgres.Options<{}> & { role?: 
     max: 2,
     onnotice: () => {},
     ...rest,
-    ...(role ? { connection: { ...(rest.connection ?? {}), options: `-c role=${role}` } } : {}),
+    ...(role ? { connection: { ...rest.connection, options: `-c role=${role}` } } : {}),
   })
 }
 
