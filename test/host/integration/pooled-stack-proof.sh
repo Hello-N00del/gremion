@@ -44,6 +44,11 @@
 # connect, a database row), never an exit code alone. Zero containers, zero
 # probe targets, a failed positive control, an unclassified project or an
 # empty ledger file is a FAILURE, never a vacuous pass.
+#
+# Guard-efficacy runs (a stray unlimited container, a starved Keycloak limit)
+# write their RED ledger under their own POOLED_OUT, never over the green
+# ledger that records TRD-177/045/440/038. run.log names the phases each run
+# executed and its RED verdict.
 # ============================================================
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
@@ -745,6 +750,7 @@ run_phase() {
 }
 
 [[ $# -gt 0 ]] || set -- all
+PHASES="$*"   # recorded before the loop below shifts the arguments away
 info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
 if [[ "$1" == all ]]; then
     require_scratch all
@@ -761,6 +767,6 @@ else
         esac
     done
 fi
-printf '%s phases [%s] RED=%s\n' "$(now)" "$*" "$RED" | ledger run.log
+printf '%s phases [%s] RED=%s\n' "$(now)" "$PHASES" "$RED" | ledger run.log
 if (( RED )); then echo "[pooled-proof] RED" >&2; exit 1; fi
 echo "[pooled-proof] GREEN"
