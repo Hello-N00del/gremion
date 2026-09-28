@@ -45,6 +45,9 @@ export const CARVE_LINT_TARGETS = [
   // TASK-040: the pooled-stack guard renders state, both app colours, ops and
   // mail with every profile (TRD-177/038/045): docker.
   { name: 'lint-pooled-stack', kind: 'make', target: 'lint-pooled-stack', tool: 'docker' },
+  // TASK-041 (L3-08): the edge host-model guard (no HostRegexp leg, no
+  // wildcard env key, no apex host injection, no leftmost-label resolver).
+  { name: 'lint-edge-host', kind: 'make', target: 'lint-edge-host' },
   // TASK-020 (R25): no direct tenant-DB connection outside @gremion/tenant-store.
   { name: 'lint-tenant-db-access', kind: 'make', target: 'lint-tenant-db-access' },
   // R25-oxlint: the standalone oxlint ratchet (scripts/check-lint-js.mjs).

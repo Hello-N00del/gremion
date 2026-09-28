@@ -5,6 +5,8 @@
 // StuRaOS f276af59. TASK-022 amended it to 42 + 2: it deletes
 // docker/traefik/dynamic/tls.yml (the Cloudflare Origin default-certificate
 // store) on purpose, so that row and its assertion left in the same commit.
+// TASK-041 amended it to 41 + 2: it deletes gremion-ui/scripts/check-domain-
+// regex.mjs with the wildcard edge (the B10 amendment), in the same commit.
 //
 //   node --test scripts/port-back/check-do-not-overwrite.test.mjs
 
@@ -18,12 +20,12 @@ const set = JSON.parse(readFileSync(SET_FILE, 'utf8'))
 
 describe('do-not-overwrite.json — shape', () => {
   test('declares its own entry count and carries exactly that many', () => {
-    assert.equal(set.expectedEntries, 44)
+    assert.equal(set.expectedEntries, 43)
     assert.equal(set.doNotDelete.length + set.kernelAhead.length, set.expectedEntries)
   })
 
-  test('doNotDelete carries the 42 remaining measured paths, sorted and unique', () => {
-    assert.equal(set.doNotDelete.length, 42)
+  test('doNotDelete carries the 41 remaining measured paths, sorted and unique', () => {
+    assert.equal(set.doNotDelete.length, 41)
     assert.deepEqual(set.doNotDelete, [...new Set(set.doNotDelete)].sort())
   })
 
@@ -38,7 +40,9 @@ describe('do-not-overwrite.json — shape', () => {
     assert.ok(has('gremion-ui/src/lib/source-offer.test.ts'))
     assert.ok(has('gremion-ui/src/lib/source-offer.wiring.test.ts'))
     assert.ok(has('gremion-ui/src/lib/components/layout/ThemeToggle.svelte'))
-    assert.ok(has('gremion-ui/scripts/check-domain-regex.mjs'))
+    // TASK-041 deleted the DOMAIN_REGEX detector with the wildcard edge (the B10
+    // amendment): its row left the set in the same commit as the file.
+    assert.ok(!has('gremion-ui/scripts/check-domain-regex.mjs'))
     // TASK-022 deleted the Cloudflare Origin certificate store (spec B "Edge"
     // §2, TRD-042). A protected row for a path that must NOT come back would
     // make the guard demand the very file the edge removed.

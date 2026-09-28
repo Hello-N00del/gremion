@@ -111,9 +111,13 @@ services:
       # AGPL-3.0 section 13: an operator running a MODIFIED build MUST point
       # this at their own repository. Unset falls back to upstream.
       PUBLIC_SOURCE_URL:        ${PUBLIC_SOURCE_URL:-}
-      # ORIGIN deliberately unset (multi-tenant CSRF, #202): adapter-node
-      # derives it from the real Host; PROTOCOL_HEADER forces https from
-      # Traefik's x-forwarded-proto.
+      # ORIGIN deliberately unset (multi-tenant CSRF, #202): every tenant is
+      # served on its OWN bound host (its tenant_domain rows; the apex serves
+      # no tenant, TASK-041), so one fixed ORIGIN would 403 every tenant's
+      # SSO/form POST. adapter-node derives it from the real inbound Host,
+      # while the tenant resolver selects on the whole x-forwarded-host its
+      # router pins, cross-checked against that same Host. PROTOCOL_HEADER
+      # forces https from Traefik's x-forwarded-proto.
       PROTOCOL_HEADER:          x-forwarded-proto
       KEYCLOAK_ADMIN_URL:       https://keycloak:8443/auth
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
@@ -132,8 +136,12 @@ services:
       INTERNAL_PUSH_SECRET:     ${INTERNAL_PUSH_SECRET:-}
       # LOAD-BEARING for tenant isolation (#202): the inner server-to-server
       # hop targets THIS colour's container directly, bypassing Traefik, so the
-      # stamped forwarded host survives. Derived from COLOUR, never read from
-      # an env value that could name the other colour or no colour.
+      # stamped forwarded host survives. That X-Forwarded-Host (the tenant's
+      # registered primary host, TASK-041) is the ENTIRE tenant selector; an
+      # edge that restated it would aim a tenant's self-call at another
+      # tenant's data plane (cross-tenant read+write). Derived from COLOUR,
+      # never read from an env value that could name the other colour or no
+      # colour.
       INTERNAL_BASE_URL:        http://gremion-ui-${COLOUR:?COLOUR required}:3000
       # P2.1c T5 (#202): the app enforces the proxy-trust gate with the same
       # secret the traefik container's gremion-ui-proxytrust middleware stamps.

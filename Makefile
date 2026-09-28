@@ -444,6 +444,33 @@ lint-edge-render:
 	 fi; \
 	 echo "[edge-render] suite: $$collected of $$declared declared test(s) ran"
 
+# TASK-041 (L3-08; TRD-074/075): the edge host-model guard
+# (scripts/check-edge-host-model.test.mjs). Under whole-host resolution no
+# router may carry a HostRegexp leg (bar the two loopback internaltest routers
+# pinned by value), the wildcard env key, the apex host injection and the
+# leftmost-label resolver stay gone. The suite's collected count is asserted
+# against its declared `test(` count, as lint-edge-render does, then the guard
+# scans the tracked tree. Wired into `lint` and verify carve-lint.
+.PHONY: lint-edge-host
+lint-edge-host:
+	@echo "Checking the edge host model..."
+	@declared=$$(grep -c '^test(' scripts/check-edge-host-model.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-edge-host-model.test.mjs 2>&1); \
+	 status=$$?; \
+	 printf '%s\n' "$$out" >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ]; then \
+	   echo "lint-edge-host: scripts/check-edge-host-model.test.mjs declares no top-level test() -- the suite collects nothing and would still exit 0." >&2; \
+	   exit 1; \
+	 fi; \
+	 if [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-edge-host: the suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[edge-host-model] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-edge-host-model.mjs
+
 # TASK-022: the scratch-stack proof of the ACME edge (Docker; minutes, not
 # seconds -- it waits for a real certificate renewal). Brings up only traefik,
 # docker-socket-proxy and a scratch ACME CA under a t022-<sha8> project and
@@ -495,7 +522,7 @@ lint-tenant-db-access:
 	@echo "Checking tenant-DB access..."
 	@node packages/tenant-store/scripts/check-tenant-db-access.mjs
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access
+lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

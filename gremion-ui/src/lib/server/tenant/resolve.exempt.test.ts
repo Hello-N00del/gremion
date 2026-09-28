@@ -13,12 +13,13 @@ import { dirname, join } from 'node:path'
 
 const registryCalls: string[] = []
 vi.mock('$lib/server/tenant/registry', () => ({
-  resolveTenantBySlug: async (slug: string) => {
-    registryCalls.push(`slug:${slug}`)
+  // TASK-041: the host path looks up the WHOLE host.
+  resolveTenantByHost: async (host: string) => {
+    registryCalls.push(`host:${host}`)
     return null
   },
-  getTenantStatusBySlug: async (slug: string) => {
-    registryCalls.push(`status:${slug}`)
+  getTenantStatusByHost: async (host: string) => {
+    registryCalls.push(`status:${host}`)
     return null
   },
   resolveTenantById: async (id: string) => {
@@ -36,6 +37,7 @@ vi.mock('$lib/server/tenant/readiness', () => ({
   getTenantReadiness: () => 'ready',
   triggerTenantMigrationRetry: vi.fn(),
 }))
+vi.mock('$lib/server/tenant/host-mismatch-log', () => ({ logHostRejection: vi.fn() }))
 vi.mock('$lib/server/tenant/rate-limit', () => ({
   checkTenantRateLimit: () => ({ allowed: true }),
 }))

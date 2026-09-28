@@ -1,8 +1,9 @@
 // src/lib/server/tenant/host.ts
 // Tenancy D1 (design spec §1.3) — the ONE host normaliser.
 //
-// It replaces resolve.ts:extractLeftmostLabel, which derived the tenant slug
-// from the LEFTMOST DNS label of the edge-forwarded host. Under D1 a tenant
+// It replaced the resolver's leftmost-label extractor (deleted by TASK-041),
+// which derived the tenant slug from the LEFTMOST DNS label of the
+// edge-forwarded host. Under D1 a tenant
 // brings its own domain, so the WHOLE host is the lookup key
 // (tenant_domain.host, a PRIMARY KEY) and there is no label arithmetic left.
 //
@@ -14,7 +15,7 @@
 //     agree by construction: no registered row is unreachable, and no reachable
 //     request can match a row the write path would have rejected.
 //
-// #256-2 hardening, carried over verbatim in intent from extractLeftmostLabel
+// #256-2 hardening, carried over verbatim in intent from that extractor
 // (the P2.1c edge makes every one of these header forms REACHABLE):
 //  - comma/whitespace-joined lists (duplicate or chained X-Forwarded-Host
 //    headers join to 'client-value, edge-value') are REJECTED outright —

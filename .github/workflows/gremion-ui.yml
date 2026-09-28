@@ -80,11 +80,11 @@ jobs:
       # not configured" when it is absent, and a job-level value caches a control
       # connection that defeats that test.
       # Tell playwright.config.ts to stamp x-forwarded-host on every smoke request
-      # so `/` and `/finance` resolve the seeded `default` tenant (see the
-      # "Run Playwright smoke suite" step). The slug is the LEFTMOST label, and the
-      # resolver requires >=3 labels (extractLeftmostLabel: `need sub.example.org`),
-      # so a 2-label `default.localhost` would 404 — use a 3-label loopback FQDN
-      # whose leftmost label is the ACTIVE slug `default`.
+      # (see the "Run Playwright smoke suite" step). Since TASK-041 the resolver
+      # looks the WHOLE host up in tenant_domain and the default tenant binds no
+      # host (TRD-075), so this host resolves only once the smoke setup binds it
+      # via addTenantDomain (TASK-041 Q8; TASK-042's fixture factory). Actions
+      # are off; this comment records the gap, the job is not re-run here.
       SMOKE_TENANT_HOST: default.localhost.localdomain
 
     steps:

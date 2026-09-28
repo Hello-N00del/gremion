@@ -295,36 +295,41 @@ Usually a redirect-URI or origin mismatch.
 
 ## Multi-tenancy & `x-forwarded-host`
 
-The tenant resolver is **fail-closed**: any request that arrives **without** an
-`x-forwarded-host` header gets a **404** (it cannot select a tenant). In
+The tenant resolver is **fail-closed**: it looks the WHOLE `x-forwarded-host`
+up in `tenant_domain`, and any request whose host is absent, malformed or bound
+to no active tenant gets a **404** (it cannot select a tenant), logged as one
+`tenant.host.rejected` line naming the host and the reason. In
 production a missing edge-injected `x-proxy-trust` (once
 `TENANT_PROXY_SHARED_SECRET` is set) gets a **403**.
 
 ### Every request 404s locally
 
-The dev probe must carry the tenant host. The `gremion-ui` healthcheck sends
-`X-Forwarded-Host: default.${DOMAIN}` itself for exactly this reason. To test by
-hand:
+A request must carry a host that is BOUND to a tenant (`addTenantDomain`); the
+default tenant binds none (TRD-075), and no shipped tool binds one yet (the
+customer-create CLI of TASK-043 is the first; see
+[runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a), so on a stack
+built from this tree every tenant route 404s. The `gremion-ui` healthcheck probes
+`/healthz`, which is exempt from resolution. To test by hand, stamp a bound
+host:
 
 ```bash
-curl -s -H 'X-Forwarded-Host: default.localhost' http://localhost:3001/
+curl -s -H 'X-Forwarded-Host: <a-bound-host>' http://localhost:3001/
 ```
 
-### A non-default tenant 404s at the edge (production)
+### A tenant host 404s at the edge (production)
 
-A real `DOMAIN` requires `DOMAIN_REGEX` (the regexp-escaped domain, e.g.
-`council\.example`) for the Traefik wildcard routers. If it is empty, **every**
-tenant subdomain 404s while the apex/default host still works (a silent
-misconfig). `pnpm -C gremion-ui check` catches this; see
-[runbooks/tenant-edge.md](runbooks/tenant-edge.md) step 0a.
+There is no wildcard router: each tenant host needs its own `Host(...)`-literal
+router and a `tenant_domain` row. A bare Traefik 404 means the router is
+missing; an app 404 logs a `tenant.host.rejected` line with the reason. See
+[runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a.
 
 ### Cross-tenant data / wrong tenant resolved on a self-call
 
 `INTERNAL_BASE_URL` must stay `http://gremion-ui:3000` (the in-container origin).
-If it falls through to the public apex, the apex middleware overwrites the
-per-tenant `X-Forwarded-Host` with `default.<DOMAIN>` and a second tenant's
-self-call executes against the **default** tenant. Do not point it at the public
-apex.
+If it falls through to the public apex, the hop crosses the edge, which then
+decides what `X-Forwarded-Host` (the whole tenant selector) says; historically
+that aimed a second tenant's self-call at the **default** tenant. Do not point
+it at the public apex.
 
 ---
 

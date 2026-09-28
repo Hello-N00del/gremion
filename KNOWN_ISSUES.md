@@ -324,15 +324,13 @@ a value position of a tracked `*env.example` is neither a name IANA reserves for
 documentation nor a dotless compose-service alias.
 
 It is not renamed in 0.1.0 because it is a coupled set, not a string: the
-Traefik `Host(...)` / `HostRegexp(...)` pairs and the compose `DOMAIN` /
-`DOMAIN_REGEX` pair must move together or every tenant subdomain 404s silently
-(hygiene check `j1` and `gremion-ui/scripts/check-domain-regex.mjs` exist
-because of exactly that failure), and
-`gremion-ui/src/lib/server/tenant/resolve.test.ts` asserts on the leftmost
-label. `.github/workflows/gremion-ui.yml` and
+Traefik `Host(...)` rules and the compose `DOMAIN` must move together (hygiene
+check `j1` exists because of exactly that failure). The wildcard tenant legs
+and their regexp-escaped domain key are gone since TASK-041 (whole-host
+resolution), so that half of the set no longer exists. `.github/workflows/gremion-ui.yml` and
 `gremion-ui/vitest.integration.config.ts` already use `council.example`, so the
 tree is not internally consistent either — a normalisation pass should do all
-of it at once, with the domain-regex guard watched.
+of it at once, with hygiene check `j1` and `make lint-edge-host` watched.
 
 ### The retired staging host
 

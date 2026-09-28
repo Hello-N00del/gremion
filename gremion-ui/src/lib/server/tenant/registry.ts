@@ -149,7 +149,9 @@ export async function getTenantBySlug(slug: string): Promise<Tenant | null> {
 }
 
 /**
- * P2.1c (T6) — STATUS-ONLY lookup for the resolver's NULL path. resolveTenantBySlug
+ * P2.1c (T6) — STATUS-ONLY lookup by slug. Since TASK-041 the request resolver
+ * uses the host-keyed twin (getTenantStatusByHost); this one stays for
+ * scripts/tenant-provision.ts. Originally the resolver's NULL path: resolveTenantBySlug
  * collapses unknown / invalid / non-active into a single `null`, which the resolver
  * 404s. To distinguish a SUSPENDED tenant (503 branded page) from a truly unknown
  * slug or a deleting/deleted tombstone (404), the resolver consults this on the null
@@ -875,14 +877,11 @@ export async function setPrimaryDomain(tenantId: string, rawHost: string): Promi
  * PK the join yields at most one row, so an ambiguous host is not merely
  * improbable — it is unrepresentable.
  *
- * TASK-025 Q1 (ledger): on this base, resolve.ts's request path still selects
- * the tenant by the leftmost DNS label (extractLeftmostLabel) — this function
- * has NO production caller yet. TASK-025 proves the request clause HERE,
- * against this function directly, via registry.domain.integration.test.ts's
- * two-tenant-isolation and B8-post-condition blocks (real Postgres, real
- * tenant_domain rows, a raw-host lookup). The request-path cut-over — wiring
- * resolve.ts's Handle to call resolveTenantByHost instead of extractLeftmostLabel
- * — is TASK-041 (B10-resolver-fullhost), not this task.
+ * TASK-041 (B10-resolver-fullhost) made this the request path's ONLY host
+ * selector: resolve.ts's Handle calls it with the normalised x-forwarded-host.
+ * TASK-025's proof of the request clause (registry.domain.integration.test.ts,
+ * two-tenant-isolation and B8-post-condition blocks: real Postgres, real
+ * tenant_domain rows, a raw-host lookup) is therefore the resolver's too.
  */
 export async function resolveTenantByHost(
   host: string | undefined | null,

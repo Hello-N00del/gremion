@@ -1,7 +1,11 @@
-# Runbook — Tenant edge (wildcard ingress + per-tenant host routing)
+# Runbook — Tenant edge (per-host ingress + whole-host tenant routing)
 
-How tenant subdomains (`<slug>.<your-domain>`) reach the governance kernel, and
-the operator steps to turn them on. This is the operational layer; for the
+How a tenant's hosts reach the governance kernel, and the operator steps to
+turn them on. Every served host is a row in the control DB's `tenant_domain`
+table and a `Host(...)`-literal edge router; there is no wildcard router and no
+default tenant on the apex (TASK-041; TRD-074/075).
+
+This is the operational layer; for the
 multi-tenancy design, the control-plane registry, and the fail-closed tenant
 model see [about-gremion.md](../about-gremion.md).
 
@@ -13,7 +17,7 @@ both names appear in the compose files and Traefik router labels below.
 
 ```
 browser ──TLS──> CDN / tunnel edge ──https──> traefik:443 ──> app routers
-                                                              ├─ gremion-ui   (apex + tenant subdomains)
+                                                              ├─ gremion-ui   (apex + one router per tenant host)
                                                               ├─ keycloak   (/auth path routers)
                                                               └─ gremion-public (public.example.org)
 ```
@@ -47,23 +51,31 @@ Tenant selection is performed in `gremion-ui` by the resolver
 (`gremion-ui/src/lib/server/tenant/resolve.ts`), which runs as element 0 of the
 handle sequence — before auth:
 
-1. **Slug = leftmost DNS label of the edge-forwarded host.**
-   `extractLeftmostLabel(x-forwarded-host)` splits the trusted
-   `X-Forwarded-Host` value. `acme.example.org` → slug `acme`. The raw `Host`
-   header is **never** read — it is attacker-controllable.
-2. **Fail-closed.** A 2-label apex, a single label, an empty/multi-value list,
-   or any empty label resolves to `null` → **404**. There is no silent default
-   to a "first" tenant. An unknown/deleted slug → 404; a *suspended* tenant → a
-   branded 503 page; the control DB being unreachable → 503.
-3. **Apex → default tenant.** The apex host (`example.org`, two labels) would
-   otherwise 404. A dedicated apex router (`gremion-ui-apex`, priority 20) prepends
-   the `gremion-ui-apexhost` middleware, which sets
-   `X-Forwarded-Host: default.${DOMAIN}` so the resolver reads slug `default`.
+1. **The WHOLE edge-forwarded host is the key.** The resolver normalises the
+   trusted `X-Forwarded-Host` (`normaliseHost` in `tenant/host.ts`: lowercase,
+   one trailing dot and a numeric port stripped, ASCII LDH only) and looks it up
+   in `tenant_domain`, whose `host` is the PRIMARY KEY. `acme.example.org` is
+   looked up as `acme.example.org`, never as a slug `acme`. The raw `Host`
+   header is **never** a selector.
+2. **Fail-closed.** An absent, multi-value or malformed header, a host bound to
+   no tenant, and a host of a provisioning/deleting/deleted tenant all return
+   **404**; a *suspended* tenant returns a branded 503 page; the control DB being
+   unreachable returns 503. There is no default tenant: the apex binds no host
+   (TRD-075), so `https://example.org` 404s until a tenant binds it.
+3. **Host cross-check.** On an edge request (proxy-trust secret set, STEP 0c),
+   the `Host` the router matched must normalise to the same host as
+   `X-Forwarded-Host`; a mismatch is a 404 before any lookup. The check only
+   rejects — it never selects.
+4. **Every host-path 404 is logged** as one JSON line
+   `{"level":"warn","msg":"tenant.host.rejected","ts":"<RFC 3339>","host":"…","reason":"unparseable|unbound|inactive|forged"}`
+   (TRD-076). Repeats of one `(reason, host)` within 60 s are folded into the
+   next line's `suppressed` count, and a process writes at most 60 such lines a
+   minute, then one `tenant.host.rejected.flood` line with `dropped`.
 
 The trust model is documented inline in `resolve.ts`: the forwarded host is
 authoritative **only** because Traefik is the sole ingress and the app port is
-never externally bound. The executable proxy-trust gate (STEP 0c below) makes
-this enforceable rather than topology-only.
+never externally bound. The executable proxy-trust gate (STEP 0c below) and the
+host cross-check make this enforceable rather than topology-only.
 
 ## Operator steps
 
@@ -74,68 +86,76 @@ this enforceable rather than topology-only.
 > Use `up -d --force-recreate <svc>` (never plain `restart`) whenever an env var
 > changes — a restart does **not** reload `.env`.
 
-### ⛔ STEP 0a — set `DOMAIN_REGEX` in `.env` BEFORE the recreate (LOAD-BEARING)
+### ⛔ STEP 0a — bind every host you serve (no wildcard)
 
-The tenant-subdomain wildcard routers (`docker-compose.prod.yml`: `gremion-ui`,
-`keycloak`, `keycloak-admin`, `fallback`) each carry a leg
-``HostRegexp(`^[a-z0-9-]+\.${DOMAIN_REGEX:-}$`)``. **`DOMAIN_REGEX` is
-load-bearing and defaults EMPTY.** If it is unset when the stack is recreated,
-every wildcard leg collapses to the dead pattern ``^[a-z0-9-]+\.$``, which
-matches **NO** real tenant host — so **every `<slug>.${DOMAIN}` subdomain 404s
-at Traefik** while the apex/default host keeps working and masks the omission.
-This is a silent misconfig, not a safe fail-closed.
+A host reaches a tenant only when BOTH exist:
 
-Set `DOMAIN_REGEX` to the **regexp-escaped** `DOMAIN` (Traefik v3 `HostRegexp`
-takes a Go regexp, so every literal dot must be backslash-escaped):
+- a `tenant_domain` row binding it to the tenant (written only by the registry
+  call `addTenantDomain`), and
+- a `Host(...)`-literal Traefik router for exactly that host, chaining
+  `gremion-ui-proxytrust` and `gremion-ui-starting` and pinning
+  `X-Forwarded-Host` to that host (rendered per customer host by the edge
+  router emitter, TASK-034).
 
-```
-# .env — next to DOMAIN. Escape every literal dot.
-DOMAIN=example.org
-DOMAIN_REGEX=example\.org
-```
+> **⛔ No shipped tool writes a `tenant_domain` row yet, so a kernel stack
+> built from this tree serves NO tenant on ANY host.** The resolver selects
+> by the whole bound host only (TASK-041); the apex binds no tenant (TRD-075)
+> and the old wildcard and apex default-tenant routes are gone. Nothing that
+> ships calls `addTenantDomain`: `gremion-ui/scripts/tenant-provision.ts`
+> creates a tenant but binds no host, the default tenant binds none, and
+> migration `004_tenant_domain.sql` creates the table empty. The binding
+> arrives with the customer-create CLI (TASK-043: its provisioning run writes
+> the `tenant_domain` row for the customer's domain) on top of the zero-tenant
+> boot (TASK-042). Until TASK-043 lands, **do not deploy this kernel to a
+> stack that must serve a tenant**, and do not hand-insert `tenant_domain`
+> rows: `addTenantDomain` carries the reserved-host refusal, the owner
+> pre-read and the cache-eviction notice in one transaction, and a raw
+> `INSERT` skips all three.
 
-Verify the rendered routers embed the escaped domain (read-only — never `up`):
+The compose files carry only the apex routers (`gremion-ui`, `keycloak`,
+`keycloak-admin`, `fallback`), each literal on `${DOMAIN}`. A request for any
+other host gets Traefik's own no-router 404 (visible in Traefik's access log
+with an empty router name). `make lint-edge-host`
+(`scripts/check-edge-host-model.mjs`) fails the tree if a `HostRegexp` leg, the
+old wildcard env key, the apex default-tenant injection or the leftmost-label
+resolver comes back.
+
+Verify the rendered apex routers (read-only — never `up`):
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   --profile production config \
   | grep -E 'routers\.(gremion-ui|keycloak|keycloak-admin|fallback)\.rule'
-# PASS: each HostRegexp embeds the escaped domain, e.g.
-#   HostRegexp(`^[a-z0-9-]+\.example\.org$`)
-# FAIL (DOMAIN_REGEX unset/empty): the collapsed dead pattern
-#   HostRegexp(`^[a-z0-9-]+\.$`)   <-- matches nothing; tenant subdomains 404
+# PASS: every rule is Host(`example.org`) literal (keycloak adds its path prefixes)
+# FAIL: any HostRegexp(...) leg
 ```
-
-This is also enforced automatically: `pnpm -C gremion-ui check` runs
-`scripts/check-domain-regex.mjs`, which fails the build if a real production
-`DOMAIN` is configured with an empty `DOMAIN_REGEX`. (`DOMAIN=localhost` for
-local dev does not use wildcard routing, so `DOMAIN_REGEX` may stay unset.)
 
 ### ⛔ STEP 0b — `INTERNAL_BASE_URL` must be the in-container origin (tenant isolation, LOAD-BEARING)
 
 `internalFetch` (`gremion-ui/src/lib/server/internal-fetch.ts`) makes a fresh
 server-to-server HTTP hop for same-app `/api/` calls (e.g. a governance
 protocol-publish step calling another internal route). On that hop it re-stamps
-the **current tenant's** `X-Forwarded-Host: <slug>.<apex>` so the resolver
-re-selects the SAME tenant, plus a constant-time-validated
-`x-internal-host-trust` secret. `resolveInternalBaseUrl()` picks the hop's base
+the **current tenant's registered primary host** (`ctx.primaryHost`, the
+`tenant_domain` row with `is_primary`, normalised; never a synthesised
+slug-dot-apex string) as `X-Forwarded-Host` so the resolver re-selects the SAME
+tenant, plus a constant-time-validated `x-internal-host-trust` secret. A tenant
+with no primary host gets neither header, and the inner call 404s. `resolveInternalBaseUrl()` picks the hop's base
 origin: **`INTERNAL_BASE_URL` if set, else it falls through to
 `PUBLIC_BASE_URL` = the public apex `https://${DOMAIN}`.**
 
-**The apex fallback is a tenant-isolation hole.** A hop to the public apex
-re-enters Traefik and matches the apex router (`gremion-ui-apex`, priority 20),
-whose `gremion-ui-apexhost` middleware **unconditionally** sets
-`X-Forwarded-Host=default.${DOMAIN}` — overwriting the `<slug>.<apex>` the hop
-stamped. The resolver then reads `default`, and the inner call (a *write* on a
-governance write path) executes against the **default tenant's data plane**:
-cross-tenant read+write. Harmless while only one tenant exists; activates the
-instant a second tenant is provisioned.
+**The apex fallback is a tenant-isolation hazard.** A hop to the public apex
+re-enters Traefik, and the edge — not the sender — then decides what
+`X-Forwarded-Host` says. Historically the apex router's host-injection
+middleware overwrote the stamped host with the default tenant's, so the inner
+call (a *write* on a governance write path) executed against the **default
+tenant's data plane**. That middleware is gone (TASK-041), but the header is now
+the ENTIRE tenant selector, so the inner hop must still never meet an edge that
+could restate it.
 
 **`INTERNAL_BASE_URL=http://gremion-ui:3000`** (set on the gremion-ui service in
 `docker-compose.yml`, inherited by prod) points the hop at the in-container
-service origin directly — it never traverses Traefik or the apexhost middleware,
-so the stamped `<slug>.<apex>` survives and the resolver re-selects the correct
-tenant. **Leave it set; do NOT point it at the public apex.** Verify
+service origin directly — it never traverses Traefik, so the stamped primary
+host survives and the resolver re-selects the correct tenant. **Leave it set; do NOT point it at the public apex.** Verify
 (read-only — never `up`):
 
 ```bash
@@ -153,7 +173,7 @@ topology alone. The executable proxy-trust gate
 (`isProxyTrusted` in `resolve.ts`) hardens this: when
 `TENANT_PROXY_SHARED_SECRET` is set, Traefik's `gremion-ui-proxytrust` middleware
 stamps `x-proxy-trust: <secret>` on **every** edge request reaching gremion-ui
-(applied to both the apex and wildcard routers), and the resolver 403s any
+(applied to the apex router and to every per-host router), and the resolver 403s any
 request whose `x-proxy-trust` does not constant-time-match — *before* any
 registry lookup. An `internalFetch` hop never traverses the edge, so its
 `x-internal-host-trust` secret (STEP 0b) satisfies the gate as an OR.
@@ -184,6 +204,11 @@ stored config has a blank/missing brand it exits non-zero and writes nothing** �
 fix the brand (Setup wizard / Settings) and re-run before deploying.
 
 ### 1. Add the wildcard public hostname on the tunnel
+
+A wildcard tunnel hostname only carries `*.example.org` traffic to Traefik. It
+serves nothing by itself: which hosts reach a tenant is decided by the
+per-host routers and `tenant_domain` rows of STEP 0a. A customer's own domain
+(not under `example.org`) needs its own literal public hostname.
 
 In the tunnel provider's dashboard, add a public hostname for the tunnel:
 
@@ -241,7 +266,8 @@ runs `scripts/check-tenant-secrets-dir.mjs` as a guard.)
 
 ### 5. Verify
 
-Use a slug that is actually **provisioned** (substitute a real slug for `acme`):
+Use a host that is actually **bound** to a provisioned tenant (substitute a real
+bound host for `acme.example.org`):
 
 ```bash
 # Follow redirects + show the final URL so the PASS signal is UNAMBIGUOUS.
@@ -249,36 +275,37 @@ curl -sS -o /dev/null -w '%{http_code} %{url_effective}\n' -L https://acme.examp
 # PASS: the APP answered — e.g. a redirect to .../auth/login?callbackUrl=...
 #   (the Auth.js login flow) OR a 200 carrying a gremion-ui/tenant marker.
 
-# The tenant's Keycloak issuer is reachable on the same host (KC path routers
-# are realm-agnostic, so the wildcard leg routes /auth too):
-curl -sI https://acme.example.org/auth/realms/<tenant-realm>/.well-known/openid-configuration
-#   PASS: 200 — NOT a bare 404.
-
-# The apex still answers as the default tenant:
-curl -sI https://example.org
-#   PASS: e.g. 302 -> /auth/login; any 5xx/530 here is a regression.
+# An unbound host is refused, with no tenant content and no default tenant:
+curl -sI https://not-bound.example.org
+#   PASS: 404 (Traefik no-router, or the app's 404 plus one
+#   tenant.host.rejected line in the gremion-ui log).
 ```
 
+Per-host Keycloak routing for a customer's primary host (its issuer host) is not
+in the compose files: it arrives with the per-host router emitter (TASK-034) and
+the issuer re-mint (TASK-043). Until then only the apex routes `/auth/*` to
+Keycloak.
+
 > **A bare Traefik 404 (no `Location`, no app/login redirect, no gremion-ui
-> marker) is a FALSE GREEN.** It is indistinguishable from a healthy
-> unprovisioned-tenant response by the status line alone — always follow
+> marker) is a FALSE GREEN for a host you expected to serve.** Always follow
 > redirects / inspect the body.
 
 **Troubleshooting an unexpected response — check in this order:**
 
-1. **Traefik no-router 404 = `DOMAIN_REGEX` unset/empty (STEP 0a, first
-   suspect).** A bare 404 with no `Location`/app body means no router matched
-   because the wildcard leg collapsed to ``^[a-z0-9-]+\.$``. Confirm with the
-   STEP 0a render command, set `DOMAIN_REGEX`, recreate, re-test.
-2. **403 Forbidden** = the proxy-trust gate (STEP 0c) rejected the request —
+1. **Traefik no-router 404 = no router for that host (STEP 0a, first
+   suspect).** A bare 404 with no `Location`/app body means no `Host(...)`
+   router matched: the host has no rendered per-host router.
+2. **App 404 with a `tenant.host.rejected` line** in the gremion-ui log: its
+   `reason` says why — `unbound` (no `tenant_domain` row: bind it), `inactive`
+   (the tenant is provisioning/deleting/deleted), `forged` (the `Host` and
+   `X-Forwarded-Host` disagreed: check the router's host pin), `unparseable`
+   (a malformed or absent forwarded host).
+3. **403 Forbidden** = the proxy-trust gate (STEP 0c) rejected the request —
    the app has `TENANT_PROXY_SHARED_SECRET` set but the Traefik
    `gremion-ui-proxytrust` middleware is not stamping a matching `x-proxy-trust`
    (the env var and the label must hold the same value).
-3. **Edge 5xx (e.g. 530)** = the tunnel rejected/missed the hostname (step 1).
-4. **NXDOMAIN** = the wildcard DNS record is missing (step 2).
-5. Only once the request demonstrably reaches gremion-ui (login redirect / app
-   body): a fallback page or apex/default content under an unprovisioned slug is
-   app-level routing (the resolver / readiness gate), not an edge problem.
+4. **Edge 5xx (e.g. 530)** = the tunnel rejected/missed the hostname (step 1).
+5. **NXDOMAIN** = the DNS record is missing (step 2).
 
 ## Residual risk + fallback
 
