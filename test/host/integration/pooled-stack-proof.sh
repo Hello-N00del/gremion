@@ -103,6 +103,26 @@ compose() {
     ( cd "$dir" && docker compose --env-file "$(host_path "$ENV_DIR/${p}.env")" "$@" )
 }
 
+# compose_config <project-suffix> <config args...> -- `compose config` whose
+# failure is never silent. Callers run it as `x="$(compose_config ...)" ||
+# exit $?`: a bare `$(compose config 2>/dev/null | ...)` under pipefail either
+# ended the proof with status 1 and no word, or (as a printf argument) turned
+# a render error into a count of 0. On failure it dies naming the project and
+# the first 5 lines of compose's own stderr -- never more, and never the
+# render: a config error can quote env values. The stderr file lives under
+# $OUT only until it is read.
+compose_config() {
+    local p="$1" err out rc=0 msg; shift
+    mkdir -p "$OUT"; err="$OUT/.compose-config-${p}.err"
+    out="$(compose "$p" config "$@" 2>"$err")" || rc=$?
+    if (( rc != 0 )); then
+        msg="$(head -n 5 "$err" | tr -d '\r')"; rm -f "$err"
+        die "compose config of ${STACK}-${p} failed (exit ${rc}): ${msg:-compose wrote nothing on stderr}"
+    fi
+    rm -f "$err"
+    printf '%s\n' "$out"
+}
+
 # Every container of this stack's five projects, by the compose label.
 stack_containers() {
     local p
@@ -372,10 +392,11 @@ phase_prepare() {
 # Names on `config` BEFORE any `up`: every rendered network and volume is
 # under ${STACK}, and every project is ${STACK}-<suffix>.
 phase_names() {
-    local p names
+    local p json names
     for p in state app-blue app-green ops mail; do
-        names="$(COMPOSE_PROFILES='*' compose "$p" config --format json 2>/dev/null \
-                 | jq -r '.name, (.networks // {} | to_entries[] | (.value.name // .key)), (.volumes // {} | to_entries[] | (.value.name // .key))')"
+        json="$(COMPOSE_PROFILES='*' compose_config "$p" --format json)" || exit $?
+        names="$(jq -r '.name, (.networks // {} | to_entries[] | (.value.name // .key)), (.volumes // {} | to_entries[] | (.value.name // .key))' <<< "$json")" \
+            || die "$p: jq could not read the compose config render"
         [[ -n "$names" ]] || die "$p renders nothing"
         while IFS= read -r n; do
             [[ "$n" == "${STACK}"* || "$n" == "default" ]] || die "$p renders a name outside ${STACK}: $n"
@@ -658,10 +679,12 @@ phase_probes() {
 
 # ── TRD-440 ────────────────────────────────────────────────────────────────
 counts() {
-    local p
+    local p svcs
     for p in state app-blue app-green ops mail; do
+        # a render error is FATAL here, never services=0 on both sides of TRD-440
+        svcs="$(compose_config "$p" --services)" || exit $?
         printf '%s services=%s running=%s\n' "$p" \
-            "$(compose "$p" config --services 2>/dev/null | grep -c .)" \
+            "$(printf '%s\n' "$svcs" | grep -c .)" \
             "$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-$p" | grep -c .)"
     done
     printf 'compose-ls %s\n' "$(docker compose ls -a --format json | jq -r --arg p "${STACK}-" '[.[] | select(.Name | startswith($p)) | .Name] | sort | join(",")')"
@@ -699,7 +722,9 @@ phase_tenant() {
 
 # Split so no call outlives a time box: each compose render is ~10 s here.
 phase_tenant_before() {
-    counts > "$OUT/ledger/trd440-before.txt"
+    # via .part: a counts that dies half-way must not leave a baseline behind
+    counts > "$OUT/ledger/trd440-before.txt.part"
+    mv -f "$OUT/ledger/trd440-before.txt.part" "$OUT/ledger/trd440-before.txt"
     [[ -s "$OUT/ledger/trd440-before.txt" ]] || die "empty TRD-440 baseline"
     ok "tenant-before: baseline recorded"
 }
@@ -708,7 +733,7 @@ phase_tenant_after() {
     . "$ENV_DIR/state.env"
     local before after
     before="$(cat "$OUT/ledger/trd440-before.txt")"
-    after="$(counts)"
+    after="$(counts)" || exit $?
     printf '%s\n' "$after" > "$OUT/ledger/trd440-after.txt"
     if [[ "$before" == "$after" ]]; then ok "TRD-440: services, running containers and compose projects unchanged by the tenant-add"
     else bad "TRD-440: the tenant-add changed the stack: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')"; fi

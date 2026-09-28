@@ -25,6 +25,8 @@ setup() {
     export SHIM_PROXY_SECRET="shim-secret-$RANDOM$RANDOM"
     export POOLED_STACK=t040-shim
     export POOLED_OUT="${BATS_TEST_TMPDIR}/out"
+    # the directories prepare would have made before any later phase runs
+    mkdir -p "${POOLED_OUT}/ledger"
     # cold-state budgets, in seconds, kept short for the shim
     export POOLED_COLD_HOLD=0
     export POOLED_COLD_BUDGET=3
@@ -220,6 +222,48 @@ assert_env_files_resolve() {
     run bash -c 'set -eu; . "$1"; printf "%s|%s" "$COMPOSE_PATH_SEPARATOR" "$COMPOSE_FILE"' _ "${POOLED_OUT}/env/state.env"
     [ "$status" -eq 0 ]
     [[ "$output" == ";|docker-compose.yml;"*";Z:${POOLED_OUT}/state.proof.yml" ]]
+}
+
+# ── a failing `compose config` is never silent (TASK-040-FU 2) ────────────────
+# names and counts ran `compose config 2>/dev/null` inside $(...) under
+# pipefail: a render error either exited the proof with status 1 and no word
+# (names) or recorded services=0 on both sides of TRD-440 (counts).
+
+@test "names: positive control -- a clean render under \${STACK} is GREEN" {
+    run bash "$PROOF" names
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok   names: every rendered project"* ]]
+    [ -f "${POOLED_OUT}/.names-ok" ]
+}
+
+@test "names: a failing compose config is a FATAL naming the project and compose's stderr (first 5 lines only)" {
+    export SHIM_COMPOSE_CONFIG=fail
+    run bash "$PROOF" names
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: "*"t040-shim-state"* ]]
+    [[ "$output" == *"shim-compose-error line 1: service \"svc\" refers to undefined network nowhere"* ]]
+    [[ "$output" == *"shim-compose-error line 5"* ]]
+    [[ "$output" != *"shim-compose-error line 6"* ]]
+    [ ! -f "${POOLED_OUT}/.names-ok" ]
+    # the captured stderr does not outlive the message
+    [ -z "$(find "$POOLED_OUT" -name '*.err' 2>/dev/null)" ]
+}
+
+@test "tenant-before: positive control -- the baseline counts the rendered services" {
+    run bash "$PROOF" tenant-before
+    [ "$status" -eq 0 ]
+    grep -qx 'state services=2 running=3' "${POOLED_OUT}/ledger/trd440-before.txt"
+}
+
+@test "tenant-before: a failing compose config is a FATAL, never a services=0 baseline" {
+    export SHIM_COMPOSE_CONFIG=fail
+    run bash "$PROOF" tenant-before
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: "*"t040-shim-state"*"shim-compose-error line 1"* ]]
+    [[ "$output" != *"ok   tenant-before"* ]]
+    ! grep -q 'services=0' "${POOLED_OUT}/ledger/trd440-before.txt" 2>/dev/null
+    # no half-written baseline for the tenant phase to accept
+    [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt" ]
 }
 
 teardown() {
