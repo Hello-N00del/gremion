@@ -51,8 +51,8 @@ digest of its bytes:
 
 ```json
 {
-  "001_governance_schema.sql": "b3d1f0a2…",
-  "002_config_store.sql": "7c4e9d18…"
+  "0001_governance_schema.sql": "b3d1f0a2…",
+  "0002_config_store.sql": "7c4e9d18…"
 }
 ```
 
@@ -119,9 +119,15 @@ runner skips them, so production never applies a seed.
 
 ## House convention for migration files
 
-1. **Filename:** `NNN_snake_case.sql`, zero-padded to 3 digits, `NNN` =
-   (current highest) + 1. Files run in lexical order; never reuse or reorder a
-   number that has shipped.
+1. **Filename:** `NNNN_snake_case.sql`, zero-padded to 4 digits (TASK-029),
+   and the number is **claimed from the register**, never picked by hand:
+   `node scripts/migrations/register.mjs claim --chain kernel-data --name <slug>`
+   prints the name and bumps the chain's `highWater` line in
+   `scripts/migrations/ranges.json`; once the file is written,
+   `node scripts/migrations/register.mjs freeze --chain kernel-data` locks its
+   sha256 in `scripts/migrations/applied.lock.json`. Files run in lexical order;
+   never reuse, reorder, rename or edit a number that has shipped
+   (`register.mjs check`, in `make lint`, refuses all four).
 2. **Line endings: LF.** The hash is over the raw bytes — a CRLF would change
    the digest and fail verification on a checkout that normalises differently.
 3. **No `BEGIN` / `COMMIT` inside the file.** The runner already wraps each
@@ -241,12 +247,12 @@ nevertheless applied by every tenant, module ON or OFF:
 
 | Migration | Module table |
 |---|---|
-| `003_calendar_schema.sql` | `calendar_events` |
-| `004_committee_elections.sql` | `committee_elections` |
-| `034_deck_board.sql` | `deck_board` |
+| `0003_calendar_schema.sql` | `calendar_events` |
+| `0004_committee_elections.sql` | `committee_elections` |
+| `0034_deck_board.sql` | `deck_board` |
 
 They are kernel-applied by written rule, because later **ungated** kernel DDL
-depends on the tables existing — `010_org_units.sql` ALTERs
+depends on the tables existing — `0010_org_units.sql` ALTERs
 `committee_elections` — and `gremion-ui/scripts/fresh-init-proof.sh` measures
 all three against a real database regardless of module state. The set is
 machine-readable as `CROSS_CUTTING_MIGRATIONS` in
@@ -262,17 +268,17 @@ produces. A table a module owns is created by that module's own migration, in
 that module's block (B-04: kernel `0001`–`0199`, module blocks of 100 from
 `1000`), and is granted by that module's own migration too.
 
-`news_posts` is the worked example. `008_public_portal.sql` records that the
+`news_posts` is the worked example. `0008_public_portal.sql` records that the
 table moved out with the calendar/news modules during the Civitas kernel carve,
-so nothing here creates it. `058_public_reader_grants.sql` grants the
+so nothing here creates it. `0058_public_reader_grants.sql` grants the
 anonymous reader role `gremion_public_reader` only the tables the anonymous
 public portal actually reads (R-E13: `gremion-public/src/lib/server/public-db.ts`
 reads `protocols` and `org_units`, nothing else) —
 
 | Table | Produced by |
 |---|---|
-| `protocols` | `007_protocols.sql` |
-| `org_units` | `010_org_units.sql` (`ALTER TABLE committees RENAME TO org_units`) |
+| `protocols` | `0007_protocols.sql` |
+| `org_units` | `0010_org_units.sql` (`ALTER TABLE committees RENAME TO org_units`) |
 
 — and still **aborts** when one of them is absent: an absent kernel table means
 a broken replay, and a silent skip is the defect `058` exists to close. `058`
@@ -281,13 +287,13 @@ also **REVOKEs** SELECT on `calendar_events`, `event_recurrence`,
 table the anonymous portal's own queries never read — alongside the
 pre-existing `protocol_attendance` / `protocol_action_items` revoke. The
 REVOKE is load-bearing on every install, fresh included: kernel
-`008_public_portal.sql` grants `protocol_resolutions`, `protocol_attendance`
+`0008_public_portal.sql` grants `protocol_resolutions`, `protocol_attendance`
 and `protocol_action_items` to `gremion_public_reader` directly, and
-`055_resolution_challenges.sql` grants `resolution_challenges` the same way —
+`0055_resolution_challenges.sql` grants `resolution_challenges` the same way —
 both run before `058`. Without the REVOKE, a brand-new database would still
 end up holding those grants. `calendar_events` and `event_recurrence` are not
 granted by any kernel migration today; revoking them is defensive. The REVOKE
-runs after `055_resolution_challenges.sql`'s own GRANT, keeping the `055` →
+runs after `0055_resolution_challenges.sql`'s own GRANT, keeping the `055` →
 `058` filename ordering load-bearing. Editing `058` in place does not converge
 a database that already applied an earlier, six-table version of it under
 this filename — the migration runner skips a filename it has already
@@ -334,12 +340,22 @@ product schema. See [What is here, what is not](#what-is-here-what-is-not).
 shipped file makes every existing database report it as missing from the
 manifest and re-apply it.
 
-The next free data-plane number is **current highest + 1**, read off the
-directory — never a number reused from a gap.
+The next free data-plane number is **the register's `highWater` + 1**
+(`register.mjs claim`) — never a number reused from a gap. The 31 inherited
+names up to `0058` are the chain's frozen `legacy[]`; `register.mjs check`
+refuses any other file at or below that floor.
+
+**The TASK-029 renumber (2026-09-28) is the one deliberate rename**: every file
+here went from pad 3 to pad 4 (`001_` → `0001_`, numbers and bytes unchanged,
+pure `git mv`), so a `130_` can never sort after the content module's `1200_`.
+Like the port-back below, it holds only for a database initialised from this
+tree: one whose `schema_migrations` still records the pad-3 names must be
+re-initialised (`docker compose down -v`) — the runner would otherwise see 31
+unapplied files.
 
 **The 2026-09-15 port-back is the one recorded exception**, and it is a closed
-one: `003_calendar_schema.sql` and `034_deck_board.sql` were back-filled into
-gaps below `048_resolution_decided_at.sql`, the highest number this repository
+one: `0003_calendar_schema.sql` and `0034_deck_board.sql` were back-filled into
+gaps below `0048_resolution_decided_at.sql`, the highest number this repository
 shipped before it. A fresh install is unaffected — sort order applies them in
 dependency order — but a database initialised **before** that commit has already
 recorded `048`, picks `003` up out of order on its next boot, and aborts on
@@ -364,37 +380,37 @@ order:
 
 | File | What it does |
 |------|--------------|
-| `001_governance_schema.sql` | The governance core: bodies, committees, members, mandates. |
-| `002_config_store.sql` | The per-tenant configuration store the brand/module config is read from. |
-| `003_calendar_schema.sql` | The calendar tables (`event_types`, `calendar_events`, recurrence, CalDAV sync queue). Calendar is a *module*, but this DDL is kernel-applied even with the module OFF — see [Cross-cutting module tables](#cross-cutting-module-tables). |
-| `004_committee_elections.sql` | Bridges external election ids (Helios) to committees in this database. Elections is a module; the DDL is cross-cutting, as above. |
-| `005_dev_seed.sql` | Dev-only seed keyed by dev-realm Keycloak UUIDs. Skipped when `GREMION_DISABLE_SEEDS=true`. |
-| `006_full_seed.sql` | The larger dev-only fixture set. Same skip rule. |
-| `007_protocols.sql` | Protocols (*Protokolle*) and their agenda / resolution structure. |
-| `008_public_portal.sql` | The protocol PDF path, plus the read-only database role the `gremion-public` container connects as. |
-| `009_audit_log.sql` | The `audit_log` table — INV-1 storage. |
-| `010_org_units.sql` | The unified org-unit tree and the provisioning ledger. |
-| `011_org_units_dev_seed.sql` | Dev-only org-unit fixtures. Same skip rule. |
-| `012_role_assignment_history_pseudonymize.sql` | Pseudonymisation of historical role assignments (Art. 17 support). |
-| `018_sub_org_type.sql` | A catalogue of sub-org types (AG, Referat, Projektgruppe) a sub-org can be classified under. |
-| `024_audit_log_composite_index.sql` | Read-path index on `audit_log`. |
-| `033_org_unit_child_term.sql` | The admin-editable `org_units.child_term` label for a node’s children (e.g. *Referate*); `NULL` falls back to a computed default. |
-| `034_deck_board.sql` | The native task board (`board` / `stack` / `card`), a card optionally linking a protocol action item. Board is a module; the DDL is cross-cutting, as above. |
-| `037_provisioning_member_ops.sql` | The durable `provisioning_member_ops` membership-remove outbox the reconcile worker drains. |
-| `038_org_unit_kind_catalog.sql` | Demotes the closed `OrgUnitKind` taxonomy to the per-tenant `org_unit_kind` reference table (FK from `org_units.kind`), plus root policy, display-label override, authority + voting flags. |
-| `039_caucus.sql` | The orthogonal caucus / *Fraktion* dimension (`caucus` + `caucus_membership`), off by default — zero rows means the feature is disabled. |
-| `040_event_consumption.sql` | Consumer-side idempotency for broker events, plus `correlation_id` on `audit_log`. |
-| `041_protocol_resolution_global_nr_unique.sql` | Global uniqueness of a resolution number within a tenant, with backfill and trigger. |
-| `042_protocol_resolution_required_majority.sql` | Persists the required majority on the resolution, fixed at creation. |
-| `043_audit_log_hash_chain.sql` | The INV-1 hash chain: the advisory-lock-serialized `BEFORE INSERT` trigger and the chain columns. |
-| `048_resolution_decided_at.sql` | `resolution.decided_at`, the adoption timestamp the quorum gate stamps. |
-| `049_org_unit_event_outbox.sql` | The transactional org-unit event outbox: every `org_units` DML co-commits one row here, and the relay drains it to the broker. |
-| `053_notification_read_marker.sql` | One row per user: the instant the notification bell was last marked all-read. |
-| `054_resolution_adoption_mode.sql` | `adoption_mode` (`tally` \| `acclamation`) on a resolution, with the vote/mode CHECK matrix enforced in the database. |
-| `055_resolution_challenges.sql` | Contestability: `resolution_challenges`, the standing channel by which those bound may contest an adopted resolution. |
-| `056_role_assignment_history_recalled.sql` | Recall: widens the `001` CHECK so an archived assignment may carry `ended_reason = 'recalled'`. |
-| `057_fk_hot_filter_indexes.sql` | Read-path indexes on five FK columns used as hot WHERE predicates. |
-| `058_public_reader_grants.sql` | Closes the fresh-install grant hole for the anonymous portal: grants `gremion_public_reader` on the portal tables, and aborts rather than granting nothing. |
+| `0001_governance_schema.sql` | The governance core: bodies, committees, members, mandates. |
+| `0002_config_store.sql` | The per-tenant configuration store the brand/module config is read from. |
+| `0003_calendar_schema.sql` | The calendar tables (`event_types`, `calendar_events`, recurrence, CalDAV sync queue). Calendar is a *module*, but this DDL is kernel-applied even with the module OFF — see [Cross-cutting module tables](#cross-cutting-module-tables). |
+| `0004_committee_elections.sql` | Bridges external election ids (Helios) to committees in this database. Elections is a module; the DDL is cross-cutting, as above. |
+| `0005_dev_seed.sql` | Dev-only seed keyed by dev-realm Keycloak UUIDs. Skipped when `GREMION_DISABLE_SEEDS=true`. |
+| `0006_full_seed.sql` | The larger dev-only fixture set. Same skip rule. |
+| `0007_protocols.sql` | Protocols (*Protokolle*) and their agenda / resolution structure. |
+| `0008_public_portal.sql` | The protocol PDF path, plus the read-only database role the `gremion-public` container connects as. |
+| `0009_audit_log.sql` | The `audit_log` table — INV-1 storage. |
+| `0010_org_units.sql` | The unified org-unit tree and the provisioning ledger. |
+| `0011_org_units_dev_seed.sql` | Dev-only org-unit fixtures. Same skip rule. |
+| `0012_role_assignment_history_pseudonymize.sql` | Pseudonymisation of historical role assignments (Art. 17 support). |
+| `0018_sub_org_type.sql` | A catalogue of sub-org types (AG, Referat, Projektgruppe) a sub-org can be classified under. |
+| `0024_audit_log_composite_index.sql` | Read-path index on `audit_log`. |
+| `0033_org_unit_child_term.sql` | The admin-editable `org_units.child_term` label for a node’s children (e.g. *Referate*); `NULL` falls back to a computed default. |
+| `0034_deck_board.sql` | The native task board (`board` / `stack` / `card`), a card optionally linking a protocol action item. Board is a module; the DDL is cross-cutting, as above. |
+| `0037_provisioning_member_ops.sql` | The durable `provisioning_member_ops` membership-remove outbox the reconcile worker drains. |
+| `0038_org_unit_kind_catalog.sql` | Demotes the closed `OrgUnitKind` taxonomy to the per-tenant `org_unit_kind` reference table (FK from `org_units.kind`), plus root policy, display-label override, authority + voting flags. |
+| `0039_caucus.sql` | The orthogonal caucus / *Fraktion* dimension (`caucus` + `caucus_membership`), off by default — zero rows means the feature is disabled. |
+| `0040_event_consumption.sql` | Consumer-side idempotency for broker events, plus `correlation_id` on `audit_log`. |
+| `0041_protocol_resolution_global_nr_unique.sql` | Global uniqueness of a resolution number within a tenant, with backfill and trigger. |
+| `0042_protocol_resolution_required_majority.sql` | Persists the required majority on the resolution, fixed at creation. |
+| `0043_audit_log_hash_chain.sql` | The INV-1 hash chain: the advisory-lock-serialized `BEFORE INSERT` trigger and the chain columns. |
+| `0048_resolution_decided_at.sql` | `resolution.decided_at`, the adoption timestamp the quorum gate stamps. |
+| `0049_org_unit_event_outbox.sql` | The transactional org-unit event outbox: every `org_units` DML co-commits one row here, and the relay drains it to the broker. |
+| `0053_notification_read_marker.sql` | One row per user: the instant the notification bell was last marked all-read. |
+| `0054_resolution_adoption_mode.sql` | `adoption_mode` (`tally` \| `acclamation`) on a resolution, with the vote/mode CHECK matrix enforced in the database. |
+| `0055_resolution_challenges.sql` | Contestability: `resolution_challenges`, the standing channel by which those bound may contest an adopted resolution. |
+| `0056_role_assignment_history_recalled.sql` | Recall: widens the `001` CHECK so an archived assignment may carry `ended_reason = 'recalled'`. |
+| `0057_fk_hot_filter_indexes.sql` | Read-path indexes on five FK columns used as hot WHERE predicates. |
+| `0058_public_reader_grants.sql` | Closes the fresh-install grant hole for the anonymous portal: grants `gremion_public_reader` on the portal tables, and aborts rather than granting nothing. |
 
 Plus **5 control-plane migrations** in
 [`../migrations-control/`](../migrations-control/): `001_tenant_registry.sql`,

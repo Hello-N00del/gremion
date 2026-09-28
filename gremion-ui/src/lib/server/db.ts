@@ -250,6 +250,18 @@ export async function runMigrations(): Promise<void> {
   // sql.unsafe() is allowed to execute the contents — so a swapped or
   // tampered migration aborts the boot rather than silently running.
   const manifest = loadMigrationManifest(dir)
+  // TASK-029 G5 (TRD-353): verify EVERY file -- applied, seed-skipped and
+  // module-skipped ones included -- before the applied-skip below and before
+  // any file runs. Checking only the file about to be applied let a tampered
+  // manifest entry or a swapped file for an ALREADY-applied migration boot
+  // clean. The ledger-hash half (applied row sha256 = manifest) needs the
+  // sha256 ledger column and is the owner-of-the-tenant-store-move's residual.
+  const texts = new Map<string, string>()
+  for (const file of files) {
+    const text = readFileSync(join(dir, file), 'utf-8')
+    verifyMigrationIntegrity(file, text, manifest)
+    texts.set(file, text)
+  }
 
   const skipSeeds = env.GREMION_DISABLE_SEEDS === 'true'
 
@@ -283,9 +295,8 @@ export async function runMigrations(): Promise<void> {
     }
     if (applied.has(file)) continue
 
-    const sql_text = readFileSync(join(dir, file), 'utf-8')
-    // G-012: verify hash BEFORE handing the text to sql.unsafe().
-    verifyMigrationIntegrity(file, sql_text, manifest)
+    // G-012: every file was verified above, BEFORE any sql.unsafe().
+    const sql_text = texts.get(file) as string
     await applyMigrationFile(sql, file, sql_text)
     console.info(`[migrations] applied ${file}`)
   }

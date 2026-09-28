@@ -1,0 +1,222 @@
+{
+  "$comment": "TASK-029 migration register (PRD-REC-005, TRD-344). One entry per database chain. A new migration takes its number ONLY via `node scripts/migrations/register.mjs claim --chain <id> --name <slug>` (bumps highWater) and is locked with `freeze --chain <id>`. legacyFloor/legacy[] were written once from the measured tree and are never edited (checked against applied.lock.json). See scripts/migrations/README.md.",
+  "chains": [
+    {
+      "id": "kernel-data",
+      "database": "kernel",
+      "dirs": [
+        "gremion-ui/migrations",
+        "modules/content/app/migrations"
+      ],
+      "manifestDirs": [
+        "gremion-ui/migrations"
+      ],
+      "padWidth": 4,
+      "highWater": 58,
+      "legacyFloor": 58,
+      "legacy": [
+        "0001_governance_schema.sql",
+        "0002_config_store.sql",
+        "0003_calendar_schema.sql",
+        "0004_committee_elections.sql",
+        "0005_dev_seed.sql",
+        "0006_full_seed.sql",
+        "0007_protocols.sql",
+        "0008_public_portal.sql",
+        "0009_audit_log.sql",
+        "0010_org_units.sql",
+        "0011_org_units_dev_seed.sql",
+        "0012_role_assignment_history_pseudonymize.sql",
+        "0018_sub_org_type.sql",
+        "0024_audit_log_composite_index.sql",
+        "0033_org_unit_child_term.sql",
+        "0034_deck_board.sql",
+        "0037_provisioning_member_ops.sql",
+        "0038_org_unit_kind_catalog.sql",
+        "0039_caucus.sql",
+        "0040_event_consumption.sql",
+        "0041_protocol_resolution_global_nr_unique.sql",
+        "0042_protocol_resolution_required_majority.sql",
+        "0043_audit_log_hash_chain.sql",
+        "0048_resolution_decided_at.sql",
+        "0049_org_unit_event_outbox.sql",
+        "0053_notification_read_marker.sql",
+        "0054_resolution_adoption_mode.sql",
+        "0055_resolution_challenges.sql",
+        "0056_role_assignment_history_recalled.sql",
+        "0057_fk_hot_filter_indexes.sql",
+        "0058_public_reader_grants.sql"
+      ],
+      "blocks": [
+        {
+          "dir": "modules/content/app/migrations",
+          "lo": 1200,
+          "hi": 1299,
+          "highWater": 1201
+        }
+      ]
+    },
+    {
+      "id": "control",
+      "database": "control",
+      "dirs": [
+        "gremion-ui/migrations-control"
+      ],
+      "manifestDirs": [
+        "gremion-ui/migrations-control"
+      ],
+      "padWidth": 3,
+      "highWater": 6,
+      "legacyFloor": 6,
+      "legacy": [
+        "001_tenant_registry.sql",
+        "002_tenant_migration_runs.sql",
+        "003_tenant_uniques.sql",
+        "004_tenant_domain.sql",
+        "006_boundary_ids_uuidv7.sql"
+      ]
+    },
+    {
+      "id": "module-board",
+      "database": "module:board",
+      "dirs": [
+        "modules/board/migrations"
+      ],
+      "manifestDirs": [
+        "modules/board/migrations"
+      ],
+      "padWidth": 3,
+      "highWater": 1,
+      "legacyFloor": 0,
+      "legacy": []
+    },
+    {
+      "id": "module-calendar",
+      "database": "module:calendar",
+      "dirs": [
+        "modules/calendar/migrations"
+      ],
+      "manifestDirs": [
+        "modules/calendar/migrations"
+      ],
+      "padWidth": 3,
+      "highWater": 3,
+      "legacyFloor": 0,
+      "legacy": []
+    },
+    {
+      "id": "module-content",
+      "database": "module:content",
+      "dirs": [
+        "modules/content/migrations"
+      ],
+      "manifestDirs": [
+        "modules/content/migrations"
+      ],
+      "padWidth": 3,
+      "highWater": 3,
+      "legacyFloor": 0,
+      "legacy": []
+    },
+    {
+      "id": "module-finance",
+      "database": "module:finance",
+      "dirs": [
+        "modules/finance/migrations"
+      ],
+      "manifestDirs": [
+        "modules/finance/migrations"
+      ],
+      "padWidth": 3,
+      "highWater": 5,
+      "legacyFloor": 0,
+      "legacy": []
+    },
+    {
+      "id": "module-publishing",
+      "database": "module:publishing",
+      "dirs": [
+        "modules/publishing/migrations"
+      ],
+      "manifestDirs": [
+        "modules/publishing/migrations"
+      ],
+      "padWidth": 3,
+      "highWater": 1,
+      "legacyFloor": 0,
+      "legacy": []
+    },
+    {
+      "id": "module-vault",
+      "database": "module:vault",
+      "dirs": [
+        "modules/vault/migrations"
+      ],
+      "manifestDirs": [
+        "modules/vault/migrations"
+      ],
+      "padWidth": 3,
+      "highWater": 2,
+      "legacyFloor": 0,
+      "legacy": []
+    },
+    {
+      "id": "kernel-api",
+      "database": "service:kernel-api",
+      "dirs": [
+        "services/kernel-api/migrations/bodies",
+        "services/kernel-api/migrations/authz",
+        "services/kernel-api/migrations/roles",
+        "services/kernel-api/migrations/erasure"
+      ],
+      "padWidth": 4,
+      "highWater": 0,
+      "legacyFloor": 0,
+      "legacy": []
+    },
+    {
+      "id": "governance",
+      "database": "service:governance",
+      "dirs": [
+        "services/governance/migrations"
+      ],
+      "padWidth": 4,
+      "highWater": 0,
+      "legacyFloor": 0,
+      "legacy": []
+    },
+    {
+      "id": "mail",
+      "database": "service:mail",
+      "dirs": [
+        "services/mail/migrations"
+      ],
+      "padWidth": 4,
+      "highWater": 0,
+      "legacyFloor": 0,
+      "legacy": []
+    }
+  ],
+  "nonMigration": [
+    {
+      "glob": "docker/pgbouncer/pgbouncer-auth.sql",
+      "reason": "PgBouncer auth_query function, run by the pooler's init, not a chain migration"
+    },
+    {
+      "glob": "gremion-ui/src/lib/server/boundary/fixtures/**",
+      "reason": "boundary-lint fixture: a deliberately violating migration the boundary tests scan"
+    },
+    {
+      "glob": "gremion-ui/src/lib/i18n/server/testing/*.fixture.sql",
+      "reason": "i18n test fixture (TASK-062) loaded by an integration test, never by a runner"
+    },
+    {
+      "glob": "scripts/verify/__fixtures__/**",
+      "reason": "verify migration-hash suite fixtures (TASK-045)"
+    },
+    {
+      "glob": "packages/tenant-store/**/fixtures/**",
+      "reason": "tenant-store runner fixture chain (TASK-020), applied only to scratch test databases"
+    }
+  ]
+}

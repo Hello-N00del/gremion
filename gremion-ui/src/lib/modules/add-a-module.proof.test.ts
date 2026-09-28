@@ -169,7 +169,7 @@ describe('WP4 plug-in proof — migration gating + OFF→ON runtime catch-up (WP
     expect(
       moduleReenableCatchup({
         isFreshDb: false,
-        applied: new Set(['001_governance_schema.sql']),
+        applied: new Set(['0001_governance_schema.sql']),
         config: cfg(true),
         manifests: [demoVerticalManifest],
       }),

@@ -30,6 +30,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/runner.test.ts': 14,
     'test/integration/pooler.test.ts': 3,
     'test/integration/service.test.ts': 6,
+    // TASK-029: boot verification (TRD-353) and the chain hook under the runner
+    'test/integration/verify-applied.test.ts': 6,
   },
 }
 

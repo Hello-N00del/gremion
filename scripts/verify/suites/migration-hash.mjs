@@ -85,9 +85,32 @@ export function checkMigrationHashes(dir) {
   }
 }
 
-/** Run the suite over both kernel migration directories. */
+/**
+ * TASK-029 (G5b): the directories come from the migration register
+ * (scripts/migrations/ranges.json, every chain's manifestDirs[]), no longer
+ * two hard-coded paths, so a new chain with a manifest is hash-checked the day
+ * it is registered. A missing or malformed register, or one declaring no
+ * manifest directory, is unparseable -- never "nothing to check".
+ * scripts/migrations/wiring.test.mjs fails if this stops reading the register.
+ */
+export function migrationHashDirs(root) {
+  let reg
+  try {
+    reg = JSON.parse(readFileSync(path.join(root, 'scripts', 'migrations', 'ranges.json'), 'utf8'))
+  } catch {
+    return null
+  }
+  if (!reg || !Array.isArray(reg.chains)) return null
+  const dirs = reg.chains.flatMap((c) => (Array.isArray(c.manifestDirs) ? c.manifestDirs : []))
+  return dirs.length ? dirs.map((d) => path.join(root, ...d.split('/'))) : null
+}
+
+/** Run the suite over every manifest directory the migration register declares. */
 export function runMigrationHashSuite({ root = path.join(import.meta.dirname, '..', '..', '..') } = {}) {
-  const dirs = [path.join(root, 'gremion-ui', 'migrations'), path.join(root, 'gremion-ui', 'migrations-control')]
+  const dirs = migrationHashDirs(root)
+  if (!dirs) {
+    return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `${path.join(root, 'scripts', 'migrations', 'ranges.json')}: missing, malformed, or declares no manifestDirs` }
+  }
   let collected = 0
   let passed = 0
   let failed = 0

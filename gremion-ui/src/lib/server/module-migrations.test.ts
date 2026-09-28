@@ -29,18 +29,18 @@ describe('disabledModuleMigrationFiles', () => {
   it('unions the files of multiple disabled toggleable modules', () => {
     const elections: ModuleManifest = {
       id: 'elections', toggleable: true, pages: [], routePrefixes: [],
-      migrations: ['004_committee_elections'],
+      migrations: ['0004_committee_elections'],
     }
     const c = { modules: { finance: false, elections: false } } as any
     expect(disabledModuleMigrationFiles(c, [core, finance, elections]))
-      .toEqual(new Set(['013_finance_schema.sql', '028_approval_unified.sql', '004_committee_elections.sql']))
+      .toEqual(new Set(['013_finance_schema.sql', '028_approval_unified.sql', '0004_committee_elections.sql']))
   })
 })
 
 describe('moduleReenableCatchup', () => {
   it('plans the catch-up files of a true OFF→ON re-enable (module ON, non-fresh DB, NONE of its migrations applied), in filename order', () => {
     expect(
-      moduleReenableCatchup({ isFreshDb: false, applied: new Set(['001_governance_schema.sql']), config: cfg(true), manifests: [finance] }),
+      moduleReenableCatchup({ isFreshDb: false, applied: new Set(['0001_governance_schema.sql']), config: cfg(true), manifests: [finance] }),
     ).toEqual([{ moduleId: 'finance', files: ['013_finance_schema.sql', '028_approval_unified.sql'] }])
   })
   it('returns [] on a forward migration (module ON, base applied, a NEW migration appended, non-fresh DB) — normal forward apply, NOT catch-up', () => {
