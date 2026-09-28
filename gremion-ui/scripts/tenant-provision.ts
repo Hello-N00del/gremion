@@ -8,7 +8,7 @@
 // never reachable from any tenant data-plane.
 //
 // Subcommands:
-//   provision <slug> --config <file> [--realm <name>] [--blueprint <ref>]
+//   provision <slug> --host <tenant-host> --config <file> [--realm <name>] [--blueprint <ref>]
 //                                                        — idempotent DB/realm/registry pipeline
 //                                                          (--blueprint stamps the row's blueprint_ref;
 //                                                           default STURA_BLUEPRINT@1)
@@ -40,6 +40,7 @@ import {
   getTenantStatusBySlug,
   listTenants,
   evictTenantRuntime,
+  addTenantDomain,
   resumeTenant,
   suspendTenant,
   type Tenant,
@@ -367,6 +368,7 @@ function liveDeps(): { deps: ProvisionDeps; cleanup: () => Promise<void> } {
       markTenantResourceOk,
       markTenantResourceFailed,
       getTenantResources,
+      addTenantDomain,
     },
   }
   return { deps, cleanup: () => db.end() }
