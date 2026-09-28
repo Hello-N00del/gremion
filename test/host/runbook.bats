@@ -487,10 +487,10 @@ check_deploy_user() {
         while IFS= read -r line; do
             [ "$line" = __BLOCK__ ] && continue
             [[ "$line" =~ ^[[:space:]]*# ]] && continue
-            # Command position only (line start, after ; | &, a path, or the
-            # sudo prefix): `journalctl -u gremion-backup` names a unit, it runs
-            # nothing.
-            if grep -qE "(^[[:space:]]*|[;|&][[:space:]]*|/|sudo -u gremion[[:space:]]+)${DEPLOY_USER_PROGRAMS}([[:space:]\"']|\$)" <<<"$line"; then
+            # Command position only (line start, after ; | & (, a path, or a
+            # command prefix, then any VAR=value words): `journalctl -u
+            # gremion-backup` names a unit, it runs nothing.
+            if grep -qE "(^[[:space:]]*|[;|&(][[:space:]]*|/|(sudo -u gremion|env|time|nohup|exec|timeout [0-9]+[smh]?)[[:space:]]+)([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*${DEPLOY_USER_PROGRAMS}([[:space:]\"')]|\$)" <<<"$line"; then
                 seen=$((seen + 1))
                 if [[ "$line" != *'sudo -u gremion '* ]]; then
                     echo "$f.md runs a deploy-user program as root: ${line}" >&2; bad=1
@@ -857,6 +857,13 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
     # A unit name is not a program run: no false alarm outside command position.
     printf '\n```bash\njournalctl -u gremion-backup --since today\n```\n' >> "$d/backup.md"
     check_deploy_user "$d"
+    # A command prefix or an environment assignment does not hide a root run.
+    for pfx in 'env GREMION_ROOT=/opt/gremion ' 'GREMION_ROOT=/opt/gremion ' 'timeout 60 '; do
+        d="$(fixture valid)"
+        printf '\n```bash\n%sgremion-verify\n```\n' "$pfx" >> "$d/backup.md"
+        run check_deploy_user "$d"
+        [ "$status" -ne 0 ]; [[ "$output" == *"backup.md runs a deploy-user program as root"* ]]
+    done
     d="$(fixture_snippet "${FIX}/snippets/root-init-secrets.md" install)"
     run check_deploy_user "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"install.md runs a deploy-user program as root"* ]]
