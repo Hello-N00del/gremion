@@ -62,7 +62,7 @@ test('the render guard catches ports, a bind, a named volume, a wrong probe, a s
     const r = structuredClone(base)
     mutate(r)
     const v = renderViolations(r, CTX)
-    assert.ok(v.some((x) => want.test(x)), `${want}: not caught; got ${JSON.stringify(v)}`)
+    assert.ok(v.some((x) => want.test(x)), `${want.source}: not caught; got ${JSON.stringify(v)}`)
   }
 })
 

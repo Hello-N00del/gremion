@@ -192,7 +192,7 @@ export function requiredFormViolations(text) {
 export function moduleSuites(root = REPO_ROOT) {
   return readdirSync(path.join(root, MODULE_DIR, 'test'))
     .filter((f) => f.endsWith('.test.mjs'))
-    .sort()
+    .toSorted()
     .map((f) => `${MODULE_DIR}/test/${f}`)
 }
 
@@ -208,11 +208,11 @@ export function recipeOf(makefile, target) {
 
 export function wiringViolations(makefile, carveTargets, suites) {
   const out = []
-  const lint = (makefile.match(/^lint:([^\n]*)$/m)?.[1] ?? '').trim().split(/\s+/)
-  const phony = [...makefile.matchAll(/^\.PHONY:([^\n]*(?:\\\n[^\n]*)*)/gm)].flatMap((m) => m[1].replace(/\\\n/g, ' ').trim().split(/\s+/))
-  if (!lint.includes('lint-synapse')) out.push('lint-synapse is not a prerequisite of `lint:`')
-  if (lint.includes('synapse-proof')) out.push('synapse-proof is in `lint:` -- the scratch proof is never part of lint')
-  for (const t of ['lint-synapse', 'synapse-proof']) if (!phony.includes(t)) out.push(`${t} is not .PHONY`)
+  const lint = new Set((makefile.match(/^lint:([^\n]*)$/m)?.[1] ?? '').trim().split(/\s+/))
+  const phony = new Set([...makefile.matchAll(/^\.PHONY:([^\n]*(?:\\\n[^\n]*)*)/gm)].flatMap((m) => m[1].replace(/\\\n/g, ' ').trim().split(/\s+/)))
+  if (!lint.has('lint-synapse')) out.push('lint-synapse is not a prerequisite of `lint:`')
+  if (lint.has('synapse-proof')) out.push('synapse-proof is in `lint:` -- the scratch proof is never part of lint')
+  for (const t of ['lint-synapse', 'synapse-proof']) if (!phony.has(t)) out.push(`${t} is not .PHONY`)
   const recipe = recipeOf(makefile, 'lint-synapse')
   if (recipe === null) out.push('the Makefile defines no lint-synapse target')
   else {
