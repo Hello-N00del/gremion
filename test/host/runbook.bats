@@ -483,24 +483,34 @@ check_restore_target() {
 DEPLOY_USER_PROGRAMS='gremion-(init-secrets|backup|deploy|verify|restore-into|snapshot|switch|rollback|render)'
 
 check_deploy_user() {
-    local f text line target seen=0 bad=0
+    local f text line target rest n seen=0 bad=0
+    # Command position only (line start, after ; | & (, a path, or a command
+    # prefix, then any VAR=value words): `journalctl -u gremion-backup` names a
+    # unit, it runs nothing.
+    local cmdpos="(^[[:space:]]*|[;|&(][[:space:]]*|/|(sudo -u gremion|env|time|nohup|exec|timeout [0-9]+[smh]?)[[:space:]]+)([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*${DEPLOY_USER_PROGRAMS}([[:space:]\"')]|\$)"
+    # A run `sudo -u gremion` itself starts: the program directly after it, past
+    # any VAR=value words and an optional path to the program.
+    local sudorun="sudo -u gremion[[:space:]]+([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(\"?[^[:space:]\";|&]*/)?${DEPLOY_USER_PROGRAMS}"
     for f in "${PROCEDURE_FILES[@]}"; do
         text="$(bash_blocks < "$1/$f.md")"
+        n=0
         while IFS= read -r line; do
+            n=$((n + 1))
             [ "$line" = __BLOCK__ ] && continue
             [[ "$line" =~ ^[[:space:]]*# ]] && continue
-            # Command position only (line start, after ; | & (, a path, or a
-            # command prefix, then any VAR=value words): `journalctl -u
-            # gremion-backup` names a unit, it runs nothing.
-            if grep -qE "(^[[:space:]]*|[;|&(][[:space:]]*|/|(sudo -u gremion|env|time|nohup|exec|timeout [0-9]+[smh]?)[[:space:]]+)([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*${DEPLOY_USER_PROGRAMS}([[:space:]\"')]|\$)" <<<"$line"; then
+            if grep -qE -- "$cmdpos" <<<"$line"; then
                 seen=$((seen + 1))
-                if [[ "$line" != *'sudo -u gremion '* ]]; then
+                # Blank every deploy-user run; whatever still runs in command
+                # position runs as root (`sudo -u gremion true; gremion-deploy`).
+                rest="$(sed -E "s#${sudorun}#SUDO_RUN#g" <<<"$line")"
+                if grep -qE -- "$cmdpos" <<<"$rest"; then
                     echo "$f.md runs a deploy-user program as root: ${line}" >&2; bad=1
                 fi
             fi
             if [[ "$line" == *'git clone '* ]] && [[ "$line" != *'sudo -u gremion git clone '* ]]; then
                 target="$(sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/.*[[:space:]]//' <<<"$line")"
-                if ! grep -F -- 'chown -R gremion:gremion' <<<"$text" | grep -qF -- "$target"; then
+                # The hand-over counts only AFTER the clone it hands over.
+                if ! awk -v n="$n" 'NR > n' <<<"$text" | grep -F -- 'chown -R gremion:gremion' | grep -qF -- "$target"; then
                     echo "$f.md clones as root and never hands ${target} to the deploy user: ${line}" >&2; bad=1
                 fi
             fi
