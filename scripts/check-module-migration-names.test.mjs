@@ -19,8 +19,8 @@ function tree(files) {
 }
 
 const BASE = [
-  'gremion-ui/migrations/001_governance_schema.sql',
-  'gremion-ui/migrations/058_public_reader_grants.sql',
+  'gremion-ui/migrations/0001_governance_schema.sql',
+  'gremion-ui/migrations/0058_public_reader_grants.sql',
   'modules/finance/migrations/001_init.sql',
   'modules/content/migrations/001_init.sql',
   'modules/content/app/migrations/1200_content_news_posts.sql',
@@ -30,7 +30,7 @@ test('collects kernel basenames and every module migrations/ directory at any de
   const t = tree([...BASE, 'modules/finance/node_modules/x/migrations/058_public_reader_grants.sql'])
   try {
     const { kernel, modules } = collectMigrationNames(t.root)
-    assert.deepEqual(kernel.sort(), ['001_governance_schema.sql', '058_public_reader_grants.sql'])
+    assert.deepEqual(kernel.sort(), ['0001_governance_schema.sql', '0058_public_reader_grants.sql'])
     assert.deepEqual(
       modules.map((m) => m.path).sort(),
       [
@@ -53,13 +53,13 @@ test('GREEN: no module basename equals a kernel basename', () => {
   }
 })
 
-test('RED: a seeded modules/finance/migrations/058_public_reader_grants.sql collides with kernel 058', () => {
+test('RED: a seeded modules/finance/migrations/058_public_reader_grants.sql collides with kernel 0058 by slug (G6: renumbered basenames differ)', () => {
   const t = tree([...BASE, 'modules/finance/migrations/058_public_reader_grants.sql'])
   try {
     const { problems } = checkMigrationNames(t.root)
     assert.equal(problems.length, 1)
     assert.match(problems[0], /modules\/finance\/migrations\/058_public_reader_grants\.sql/)
-    assert.match(problems[0], /gremion-ui\/migrations\/058_public_reader_grants\.sql/)
+    assert.match(problems[0], /gremion-ui\/migrations\/0058_public_reader_grants\.sql/)
   } finally {
     t.cleanup()
   }
@@ -69,7 +69,7 @@ test('RED: the same collision inside an app/migrations chain', () => {
   const t = tree([...BASE, 'modules/content/app/migrations/001_governance_schema.sql'])
   try {
     const { problems } = checkMigrationNames(t.root)
-    assert.ok(problems.some((p) => /has the basename of kernel/.test(p)), problems.join('\n'))
+    assert.ok(problems.some((p) => /has the slug of kernel/.test(p)), problems.join('\n'))
     assert.ok(problems.some((p) => /numbered 1,/.test(p)), problems.join('\n'))
   } finally {
     t.cleanup()
@@ -83,7 +83,7 @@ test('RED: zero kernel migrations or zero module migrations refuse instead of pa
   } finally {
     a.cleanup()
   }
-  const b = tree(['gremion-ui/migrations/001_governance_schema.sql'])
+  const b = tree(['gremion-ui/migrations/0001_governance_schema.sql'])
   try {
     assert.ok(checkMigrationNames(b.root).problems.some((p) => /module/.test(p) && /zero/.test(p)))
   } finally {
