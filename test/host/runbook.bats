@@ -736,6 +736,20 @@ check_pending_cited() {
     return "$bad"
 }
 
+# README's procedure table shows each procedure's version; a bump in the file that
+# leaves the table behind tells a run record the wrong version to cite.
+check_readme_versions() {
+    local f v row bad=0
+    for f in "${PROCEDURE_FILES[@]}"; do
+        v="$(sed -nE 's/^(- )?Version: ([0-9]+\.[0-9]+\.[0-9]+)$/\2/p' "$1/$f.md" | head -n 1)"
+        row="$(grep -F "| [${f}.md](${f}.md) |" "$1/README.md" | head -n 1)"
+        if [ -z "$row" ]; then echo "README.md has no table row for ${f}.md" >&2; bad=1; continue; fi
+        awk -F'|' -v v="$v" '{ c = $4; gsub(/^[ \t]+|[ \t]+$/, "", c); exit !(c == v || index(c, v " ") == 1) }' <<<"$row" \
+            || { echo "README.md's table shows a version for ${f}.md other than its Version: ${v}" >&2; bad=1; }
+    done
+    return "$bad"
+}
+
 # The reverse of check_pending_cited: every 'PENDING TASK-nnn' the runbook says
 # must still be backed by a PENDING_PATHS entry of that task. Deleting an entry
 # once its path lands (pending_landed) would otherwise leave the prose claiming
@@ -1057,6 +1071,16 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
     d="$(real_dir)"
     [ "${#PENDING_PATHS[@]}" -ge 1 ]
     check_pending_cited "$d"
+}
+
+@test "README's procedure table shows each procedure's current Version" {
+    d="$(real_dir)"
+    check_readme_versions "$d"
+    # Watched RED on a copy whose table row still shows a superseded version.
+    sed -i -E 's/^(\| \[upgrade\.md\]\(upgrade\.md\) \|[^|]*\| )[0-9]+\.[0-9]+\.[0-9]+/\10.9.9/' "$d/README.md"
+    run check_readme_versions "$d"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other than its Version"* ]]
 }
 
 @test "every PENDING citation in the runbook is still backed by a PENDING entry" {
