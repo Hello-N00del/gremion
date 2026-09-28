@@ -235,6 +235,12 @@ export const UNIT_PARTS = {
   'edge-routers': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'edge-routers'), testScript: 'test', root, label: '@gremion/edge-routers vitest (test)' }),
   ],
+  // TASK-024: the NATS auth unit suite (matrix, permissions, render, ensure,
+  // custody and wiring read out of compose renders and make -n). Its live
+  // half is integration:nats-auth.
+  'nats-auth': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'nats-auth'), testScript: 'test', root, label: '@gremion/nats-auth vitest (test)' }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }
