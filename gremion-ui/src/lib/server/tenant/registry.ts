@@ -3,7 +3,6 @@
 // Reads ONLY the control pool (getControlDb) — never a tenant data-plane pool,
 // never the ALS resolver. The ledger functions mirror ledger.ts's idempotency
 // pattern at tenant granularity, keyed by (tenant_id, subsystem).
-import { env } from '$env/dynamic/private'
 import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
 import { normaliseHost } from './host'
@@ -401,9 +400,9 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
   const dbPrepare = conn.prepare ?? true
   const issuer = row.issuer.replace(/\/$/, '')
   const kcInternal = row.kcInternal.replace(/\/$/, '')
-  // CR1: per-tenant audiences come from the registry row (seeded for `default`
-  // from parseAudiences(env.AUTH_JWT_AUDIENCES) at registration — Task 30); the
-  // parseAudiences(undefined) fallback only fires for a malformed empty row.
+  // CR1: per-tenant audiences come from the registry row (written at
+  // provisioning); the parseAudiences(undefined) fallback only fires for a
+  // malformed empty row.
   const audiences = row.audiences.length ? Array.from(row.audiences) : parseAudiences(undefined)
   const matrixSpace = row.matrixSpace as {
     serverName?: string
@@ -415,13 +414,13 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
   // P2.1b T7: per-tenant external-service endpoints. domain_profile carries the
   // helios/livekit resolution; matrix_space carries the homeserver/admin refs
   // (spec §3.1 "Matrix url/admin-ref/serverName/aliasNamespace"). All optional —
-  // an absent field means env fallback at the consuming module, and the DEFAULT
-  // tenant ignores `services` entirely (env stays its source of truth).
+  // an absent field means the consuming module's own fallback; every tenant
+  // is read the same way (TASK-042: there is no env-derived tenant).
   const domainProfile = row.domainProfile as {
     heliosUrl?: string
     livekit?: { url?: string; apiKeyRef?: string; apiSecretRef?: string }
     // SP-2: per-tenant SMTP credential ref + optional host/port/from override.
-    // The default row carries no `smtp` key ⇒ undefined ⇒ config.smtp + auth-less.
+    // A row without an `smtp` key ⇒ undefined ⇒ config.smtp + auth-less.
     smtp?: { host?: string; port?: number; from?: string; user?: string; passwordRef?: string }
   }
   const configPath = configPathForTenant(row.slug)
@@ -458,11 +457,9 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
     kcClientSecretRef: row.kcClientRef,
     // MJ-secret: the Auth.js provider uses the UI client (gremion-ui) + its OWN secret
     // ref (row.authClientRef), NOT the admin client/secret above.
-    // externalBase (point 6): for the `default` tenant this must derive from
-    // AUTH_KEYCLOAK_BASE (matching auth.ts:19 `AUTH_KEYCLOAK_BASE ?? AUTH_KEYCLOAK_ISSUER`)
-    // so the browser authorization redirect URL is byte-identical to today; other
-    // tenants fall back to their issuer.
-    authExternalBase: authExternalBaseForTenant(row.slug, issuer),
+    // externalBase (point 6, TASK-042): every tenant's is its own issuer; no
+    // slug reads the deployment env (registry.integration.test.ts point 6).
+    authExternalBase: authExternalBaseForTenant(issuer),
     // D-UICLIENT (P2.1c §8.1): the UI client id is FROZEN to `gremion-ui` for every
     // tenant realm — no per-tenant registry column. The realm template's UI client
     // is `gremion-ui` (realm-export.base.json) and the provisioner always creates it
@@ -491,8 +488,8 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
       livekitUrl: domainProfile.livekit?.url,
       livekitApiKeyRef: domainProfile.livekit?.apiKeyRef,
       livekitApiSecretRef: domainProfile.livekit?.apiSecretRef,
-      // SP-2 (O-2): per-tenant SMTP from domain_profile.smtp. Absent on the
-      // default row ⇒ undefined ⇒ tenant-mail falls back to config.smtp + auth-less.
+      // SP-2 (O-2): per-tenant SMTP from domain_profile.smtp. Absent ⇒
+      // undefined ⇒ tenant-mail falls back to config.smtp + auth-less.
       smtp: domainProfile.smtp,
     },
   }
@@ -770,7 +767,7 @@ export function configPathForTenant(slug: string): string {
  * made one slug special; a tenant whose KC runs under a different relative path
  * carries that in its issuer.
  */
-export function authExternalBaseForTenant(_slug: string, issuer: string): string {
+export function authExternalBaseForTenant(issuer: string): string {
   return issuer
 }
 
@@ -789,7 +786,7 @@ function kcAdminUrlFromInternal(kcInternal: string): string {
 // which is kernel-portable (no SvelteKit import, see kernel-portable.guard.
 // test.ts) — every function below is a THIN WRAPPER that supplies the three
 // things only registry.ts is allowed to know about: getControlDb() (the
-// control pool), env.PLATFORM_DOMAIN, and evictTenantRuntime (the runtime
+// control pool), platformEnv('PLATFORM_DOMAIN'), and evictTenantRuntime (the runtime
 // eviction callback). No behaviour change: same exports, same signatures,
 // same errors — the extraction moved code, not semantics.
 export type { TenantDomain }
@@ -844,7 +841,7 @@ export async function addTenantDomain(
   opts: AddTenantDomainOptions = {},
 ): Promise<TenantDomain> {
   return tdAdd(getControlDb(), tenantId, rawHost, opts, {
-    platformDomain: env.PLATFORM_DOMAIN ?? '',
+    platformDomain: platformEnv('PLATFORM_DOMAIN') ?? '',
     onEvict: evictTenantRuntime,
   })
 }

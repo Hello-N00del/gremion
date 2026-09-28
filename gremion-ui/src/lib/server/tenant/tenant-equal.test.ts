@@ -22,7 +22,7 @@ function shapeFor(slug: string) {
   const issuer = `https://${slug}.council.example/auth/realms/${slug}`
   return {
     configPath: configPathForTenant(slug).split(slug).join('<slug>'),
-    authExternalBase: authExternalBaseForTenant(slug, issuer).split(slug).join('<slug>'),
+    authExternalBase: authExternalBaseForTenant(issuer).split(slug).join('<slug>'),
   }
 }
 
@@ -36,7 +36,10 @@ describe('every tenant is equal (TASK-042): no slug reads the deployment env', (
     delete process.env.TENANT_DATA_ROOT
     expect(configPathForTenant('default')).toBe('/data/default/config.json')
     const issuer = 'https://default.council.example/auth/realms/default'
-    expect(authExternalBaseForTenant('default', issuer)).toBe(issuer)
+    // The resolved context (slug `default`, decoy env set) is pinned by
+    // registry.integration.test.ts point 6; the helper takes no slug at all.
+    expect(authExternalBaseForTenant(issuer)).toBe(issuer)
+    expect(authExternalBaseForTenant.length).toBe(1)
   })
 
   it('`default` and `alpha` are byte-equal up to the slug', () => {
