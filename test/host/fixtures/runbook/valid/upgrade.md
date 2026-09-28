@@ -15,7 +15,7 @@ The TRD-206 pre-migration dump (R18-4), TRD-348 images, TRD-189 blue/green.
 1. **Deploy the tag.**
 
 ```bash
-printf 'TOKEN %s\n' "$GHCR_TOKEN" | /opt/gremion/bin/gremion-deploy "$TAG"
+printf 'TOKEN %s\n' "$GHCR_TOKEN" | sudo -u gremion /opt/gremion/bin/gremion-deploy "$TAG"
 ```
 
 ## Post-condition
@@ -23,6 +23,9 @@ printf 'TOKEN %s\n' "$GHCR_TOKEN" | /opt/gremion/bin/gremion-deploy "$TAG"
 ```bash
 tail -n 12 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+ [a-z-]+ ok$'     # 12
 tail -n 12 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+ [a-z-]+ fail$'   # 0
+for f in /root/.docker/config.json /home/gremion/.docker/config.json; do
+  [ -f "$f" ] && jq -e '(.auths // {}) | length == 0' "$f"
+done
 ```
 
 ## Known gaps

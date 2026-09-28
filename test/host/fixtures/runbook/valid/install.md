@@ -33,6 +33,7 @@ systemctl disable --now gremion-backup.timer
 systemctl is-enabled gremion-backup.timer    # disabled
 systemctl is-active gremion-backup.timer     # inactive
 jq -e '.ok == true' /opt/gremion/runtime/last-verify.json
+stat -c '%U %a %n' /opt/gremion/etc/env/*.env   # gremion 600, every file
 ```
 
 ## Known gaps

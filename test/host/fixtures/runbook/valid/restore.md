@@ -38,7 +38,7 @@ jq -e '.ok == true' /opt/gremion/runtime/last-verify.json
 1. **Restore into the staging stack.**
 
 ```bash
-/opt/gremion/bin/gremion-restore-into --stack staging --snapshot latest --rto \
+sudo -u gremion /opt/gremion/bin/gremion-restore-into --stack staging --snapshot latest --rto \
   --proof-file "${file}:${sha}" --proof-row db=gremion sql="$sql" want="$want"
 ```
 
