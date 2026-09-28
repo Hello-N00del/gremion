@@ -231,11 +231,24 @@ describe('T7 — InvitationRecipient schema has no address/email property', () =
 //   T8 npm pack --dry-run                    idle p95 2.0 s (n=5)    loaded p95 80.8 s (n=5, p50 67.7 s)
 //   T9 checkOpenApiCompat (oasdiff)          idle p95 0.4 s (n=10)   loaded p95 10.8 s (n=10)
 //
+// T9 makes the SAME checkOpenApiCompat -> `oasdiff breaking` spawn as the T3
+// fixture tests in oasdiff-gate.test.ts, whose larger sample is the honest
+// tail: loaded p95 42.0 s (n=48, max 114.5 s). The n=10 sample above
+// under-read it; a loaded run (r4pkL-1, R26-FLAKES r4) timed T9 out at 37.6 s
+// against a 35 s budget. So T9 shares that measurement and budget (130 s).
+//
+// T8 tsc, re-pooled in r4 with three more loaded runs: n=15, p50 44.4 s,
+// p95 = max 127.7 s (the node-style fixture alone under load, r4pkA-1). The
+// 180 s set from n=12 was 1.4x that. tsc is a single-threaded CPU-bound
+// typecheck (idle 5-14 s on the shared box), so it starves like the other
+// spawns; routing around npx (node + typescript/bin/tsc directly) measured no
+// faster (3 idle pairs: npx 7.1/5.4/5.1 s, direct 7.7/8.8/14.1 s).
+//
 // The old flat 120 s was under 3x the loaded p95 for T8, and T9 ran on the
 // 5 s default. Each budget is 3x its loaded p95, rounded up. No global raise.
-const TSC_FIXTURE_MS = 180_000
+const TSC_FIXTURE_MS = 390_000
 const NPM_PACK_DRY_RUN_MS = 245_000
-const OASDIFF_DEMO_MS = 35_000
+const OASDIFF_DEMO_MS = 130_000
 
 describe('T8 — consumer fixture typechecks both import shapes', () => {
   it('the node-style fixture (relative deep import, nodenext resolution) typechecks clean', () => {
@@ -306,11 +319,13 @@ function runTsc(configFile: string): string {
       process.platform === 'win32'
         ? ['/d', '/s', '/c', 'npx', 'tsc', '--noEmit', '-p', configFile]
         : ['tsc', '--noEmit', '-p', configFile],
-      { cwd: PKG_DIR, encoding: 'utf8' },
+      // kill deadline 10 s inside the test budget: a hung tsc fails with its
+      // status/signal below instead of outliving the test
+      { cwd: PKG_DIR, encoding: 'utf8', timeout: TSC_FIXTURE_MS - 10_000 },
     )
   } catch (e: any) {
     // tsc writes errors to stdout, not stderr, and exits non-zero — surface
     // that output as the test failure message rather than just "exit 1".
-    throw new Error(`tsc -p ${configFile} failed:\n${e.stdout ?? e.message}`)
+    throw new Error(`tsc -p ${configFile} failed (exit status ${e.status ?? 'none'}, signal ${e.signal ?? 'none'}):\n${e.stdout || e.message}`)
   }
 }
