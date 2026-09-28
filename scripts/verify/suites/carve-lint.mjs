@@ -47,6 +47,12 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-edge-host', kind: 'make', target: 'lint-edge-host' },
   // TASK-020 (R25): no direct tenant-DB connection outside @gremion/tenant-store.
   { name: 'lint-tenant-db-access', kind: 'make', target: 'lint-tenant-db-access' },
+  // TASK-200 (R27): the in-tree module guards (no modules/** import or path
+  // leaving its own module; no module migration basename colliding with the
+  // kernel chain or another chain). Merged into the `lint` aggregate by the
+  // unit; the meta-test caught the missing rows at verify r5.
+  { name: 'lint-module-scan', kind: 'make', target: 'lint-module-scan' },
+  { name: 'lint-module-migration-names', kind: 'make', target: 'lint-module-migration-names' },
   // R25-oxlint: the standalone oxlint ratchet (scripts/check-lint-js.mjs).
   { name: 'lint-js', kind: 'make', target: 'lint-js' },
   { name: 'lint-hygiene', kind: 'make', target: 'lint-hygiene' },
