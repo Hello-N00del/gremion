@@ -46,6 +46,8 @@ describe('/auth/login legal links (R27-SIGNIN-LEGAL-K)', () => {
     const anchors = Array.from(footer!.querySelectorAll('a'))
     expect(anchors.map((a) => a.getAttribute('href'))).toEqual(EXPECTED_HREFS)
     expect(anchors.map((a) => a.textContent?.trim())).toEqual(EXPECTED_LABELS)
+    // The targets are German pages regardless of the visitor's locale.
+    expect(anchors.map((a) => a.getAttribute('hreflang'))).toEqual(['de', 'de', 'de'])
     // WCAG 2.2 SC 2.5.8 (target size, min 24x24 CSS px) is met by the
     // `.signin-legal a { min-height: 24px }` rule in +page.svelte (mirroring
     // LegalMenu's `.legal-list a`, same 24px floor) -- jsdom's getComputedStyle
@@ -89,5 +91,6 @@ describe('/auth/login legal links (R27-SIGNIN-LEGAL-K)', () => {
     const anchors = Array.from(footer!.querySelectorAll('a'))
     expect(anchors.map((a) => a.getAttribute('href'))).toEqual(EXPECTED_HREFS)
     expect(anchors.map((a) => a.textContent?.trim())).toEqual(EXPECTED_LABELS_EN)
+    expect(anchors.map((a) => a.getAttribute('hreflang'))).toEqual(['de', 'de', 'de'])
   })
 })
