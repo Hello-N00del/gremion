@@ -887,6 +887,16 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
         run check_deploy_user "$d"
         [ "$status" -ne 0 ]; [[ "$output" == *"backup.md runs a deploy-user program as root"* ]]
     done
+    # `sudo -u gremion` elsewhere on the line does not cover the program run.
+    d="$(fixture valid)"
+    printf '\n```bash\nsudo -u gremion true; gremion-deploy "$TAG"\n```\n' >> "$d/backup.md"
+    run check_deploy_user "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"backup.md runs a deploy-user program as root"* ]]
+    # A hand-over typed before the clone hands over nothing.
+    d="$(fixture valid)"
+    printf '\n```bash\nchown -R gremion:gremion "$REL"\ngit clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$REL"\n```\n' >> "$d/upgrade.md"
+    run check_deploy_user "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"upgrade.md clones as root and never hands"* ]]
     d="$(fixture_snippet "${FIX}/snippets/root-init-secrets.md" install)"
     run check_deploy_user "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"install.md runs a deploy-user program as root"* ]]
