@@ -1,0 +1,22 @@
+{
+  "$comment": "TASK-075 (TRD-206, Q7): which runner applies each chain of scripts/migrations/ranges.json, and so who takes the pre-migration dump. Must cover ranges.json exactly (suite.mjs). tenant-store: packages/tenant-store runMigrations with the dump hook (cli.ts migrate). legacy-boot: the kernel's boot/db.ts runners; gremion-migration-dump preflight takes the host-side dump (Q11). unadopted: no runner here dumps yet; a new file needs -- gremion:manual-dump <runbook step>. An adopter flips its chain's class.",
+  "classes": {
+    "tenant-store": "packages/tenant-store runMigrations; cli.ts migrate composes TASK-029's chainPreApply and the dump hook",
+    "legacy-boot": "gremion-ui db.ts / control-migrations.ts via the migrate service; gremion-migration-dump preflight takes the host-side dump",
+    "unadopted": "no runner in this repo dumps the database yet; module-* upgrades run in the leaf runner, fresh-DB enable needs no dump (README)"
+  },
+  "chains": {
+    "kernel-data": "legacy-boot",
+    "control": "legacy-boot",
+    "platform": "tenant-store",
+    "module-board": "unadopted",
+    "module-calendar": "unadopted",
+    "module-content": "unadopted",
+    "module-finance": "unadopted",
+    "module-publishing": "unadopted",
+    "module-vault": "unadopted",
+    "kernel-api": "unadopted",
+    "governance": "unadopted",
+    "mail": "unadopted"
+  }
+}

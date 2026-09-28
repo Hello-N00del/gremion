@@ -642,10 +642,16 @@ export function droppedIdentifiers(toks) {
  * 0 = the file as a whole (header, lock_timeout). Contract files are checked
  * here for their statements only; checkContract does the git half.
  */
-export function lintSql(text, { priorRoutines = new Set() } = {}) {
-  const header = parseHeader(text)
+export function lintSql(text, { priorRoutines = new Set(), classifyAs = null } = {}) {
+  // classifyAs (baseline.mjs only): judge a pre-header legacy file AS IF it
+  // declared that phase -- no header, no lock_timeout, and (migrate) no
+  // tenant context required, since the legacy chains predate all three.
+  const header = classifyAs ? { phase: classifyAs, contractAfter: null, manualDump: null, problems: [] } : parseHeader(text)
   const res = { phase: header.phase, contractAfter: header.contractAfter, manualDump: header.manualDump, dropped: [], problems: [] }
-  const fail = (statement, rule, message) => res.problems.push({ statement, rule, message })
+  const fail = (statement, rule, message) => {
+    if (classifyAs && (rule === RULES.noLockTimeout || rule === RULES.dmlBeforeTenant)) return
+    res.problems.push({ statement, rule, message })
+  }
   if (header.problems.length) fail(0, RULES.headerMalformed, header.problems.join('; '))
   if (header.phase === null) {
     if (!header.problems.length) fail(0, RULES.headerMissing, 'the first line must be -- gremion:phase expand|migrate|contract')

@@ -23,6 +23,7 @@ import { parseSvelteCheckMachine } from './lib/parsers.mjs'
 import { writeRecord } from './lib/record.mjs'
 import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
 import { runCensusSuite } from './census/suite.mjs'
+import { runExpandContractSuite } from '../migrations/runner/suite.mjs'
 import { runCarveLintSuite } from './suites/carve-lint.mjs'
 import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } from './suites/fixtures.mjs'
 import { DEFERRED_BATS_NOTE, INTEGRATION_PARTS, runIntegrationSuite } from './suites/integration.mjs'
@@ -66,6 +67,8 @@ export const SUITE_REGISTRY = {
   isolation: () => runIsolationSuite({ root: REPO_ROOT }),
   // TASK-036 (L1-17, TRD-178): declared health census of the production renders.
   census: () => runCensusSuite(),
+  // TASK-075 (TRD-361): a migration that would break the serving colour is refused before merge.
+  'expand-contract': () => runExpandContractSuite({ root: REPO_ROOT }),
   ...UNIT_PART_ENTRIES,
   ...INTEGRATION_PART_ENTRIES,
   __fixture_node_zero__: runFixtureNodeZero,
