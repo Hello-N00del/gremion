@@ -1,10 +1,10 @@
 # base.yml plus a platform-only messaging-postgres (Amendment R27 test 2).
 x-module-postgres: &module-postgres
-  image: postgres:18-alpine
+  image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_DB: postgres
