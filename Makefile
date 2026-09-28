@@ -574,16 +574,16 @@ lint-module-migration-names:
 lint-migration-register:
 	@echo "Checking the migration register..."
 	@for suite in scripts/migrations/*.test.mjs; do \
-	   declared=$(grep -c '^test(' "$suite"); \
-	   out=$(node --test --test-reporter=tap "$suite" 2>&1); \
-	   status=$?; \
-	   [ "$status" -eq 0 ] || { printf '%s\n' "$out" >&2; exit "$status"; }; \
-	   collected=$(printf '%s\n' "$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$/\1/p' | tail -n1); \
-	   if [ "$declared" -lt 1 ] || [ "$collected" != "$declared" ]; then \
-	     echo "lint-migration-register: $suite declares $declared test(s) but node ran '$collected'." >&2; \
+	   declared=$$(grep -c '^test(' "$$suite"); \
+	   out=$$(node --test --test-reporter=tap "$$suite" 2>&1); \
+	   status=$$?; \
+	   [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	   collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	   if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	     echo "lint-migration-register: $$suite declares $$declared test(s) but node ran '$$collected'." >&2; \
 	     exit 1; \
 	   fi; \
-	   echo "[migration-register] $suite: $collected of $declared declared test(s) ran"; \
+	   echo "[migration-register] $$suite: $$collected of $$declared declared test(s) ran"; \
 	 done
 	@node scripts/migrations/register.mjs check
 
