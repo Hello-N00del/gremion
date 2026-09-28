@@ -9,7 +9,7 @@
   import type { Brand } from '$lib/brand'
   import type { TopbarModuleSlot } from './topbar-slot'
   import { onMount, tick, untrack } from 'svelte'
-  import { t } from '$lib/i18n'
+  import { t, translate, type Language } from '$lib/i18n'
   import { resolveSourceUrl } from '$lib/source-offer'
   import { MQ_COLUMN, MQ_WIDE, navShellCss } from './nav-constants'
   import { applyNavPrefClass, createNavPrefStore, modeFromMatches, type NavMode, type NavPref } from './nav-state'
@@ -27,6 +27,7 @@
     sourceUrl = resolveSourceUrl(),
     topbarModules,
     bodyContext,
+    locale,
     children
   }: {
     nav?: NavItem[]
@@ -42,8 +43,17 @@
     topbarModules?: TopbarModuleSlot
     /** TASK-208: the TopBar's body-context slot. */
     bodyContext?: Snippet
+    /**
+     * R26-TRAIN4-FIX (WCAG 3.1.1): the language of the page the shell wraps
+     * (root +layout.svelte, content-locale.ts). The chrome speaks it, so a
+     * German page carries no English chrome. Reactive: the shell stays mounted
+     * across client-side navigation. Unset: the current locale, as before.
+     */
+    locale?: Language
     children: Snippet
   } = $props()
+
+  let tr = $derived(locale ? translate(locale) : $t)
 
   const DRAWER_ID = 'nav-drawer'
   // The whole layout-critical CSS comes from nav-constants.ts, so SSR's <head>
@@ -161,7 +171,7 @@
     {mode}
     ontoggle={toggleSidebar}
     suppressCurrent={drawerOpen}
-    labels={navLabels($t)}
+    labels={navLabels(tr)}
   />
   <div class="app-shell-body">
     <TopBar {brand} {nav} unread={counts.unread} modules={topbarModules} {bodyContext}>
@@ -170,7 +180,7 @@
           bind:this={hamburger}
           type="button"
           class="nav-hamburger nav-drawer-only"
-          aria-label={$t('nav.menu')}
+          aria-label={tr('nav.menu')}
           aria-expanded={drawerOpen}
           aria-controls={drawerOpen ? DRAWER_ID : undefined}
           onclick={openDrawer}

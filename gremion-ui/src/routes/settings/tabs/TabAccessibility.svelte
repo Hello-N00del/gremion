@@ -2,6 +2,8 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import { colorblind, themeMode, fontSize, reducedMotion, type ColorblindType } from '$lib/stores/theme'
   import { t, lang } from '$lib/i18n'
+  // KIT-2 rule (R25-3): $app/state, not the deprecated $app/stores.
+  import { page } from '$app/state'
 
   const MODES: { key: ColorblindType; label: string; desc: string }[] = [
     { key: 'none', label: 'Keine Korrektur',    desc: 'Standard-Palette, keine Anpassung' },
@@ -22,12 +24,17 @@
   <section>
     <h3 class="text-sm font-semibold mb-1" style="font-family: var(--font-display);">{$t('settings.appearance.language')}</h3>
     <p class="text-xs text-ink-muted mb-4">{$t('settings.appearance.language.sub')}</p>
-    <div class="flex gap-2" role="group" aria-labelledby="lang-select">
+    <!-- TASK-062: a plain form POST + 303 (routes/settings/+page.server.ts,
+         action `locale`). Works with JS off; the next document is rendered
+         in the new language by the server, so nothing flips after hydration. -->
+    <form method="POST" action="/settings?/locale" class="flex gap-2" role="group" aria-labelledby="lang-select">
+      <input type="hidden" name="redirectTo" value={page.url.pathname} />
       <button
-        type="button"
+        type="submit"
+        name="locale"
+        value="de"
         id="lang-select"
         aria-pressed={$lang === 'de'}
-        onclick={() => lang.set('de')}
         class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors
                {$lang === 'de'
                  ? 'border-accent bg-accent/10 text-accent'
@@ -37,9 +44,10 @@
         {$t('settings.appearance.lang.de')}
       </button>
       <button
-        type="button"
+        type="submit"
+        name="locale"
+        value="en"
         aria-pressed={$lang === 'en'}
-        onclick={() => lang.set('en')}
         class="flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors
                {$lang === 'en'
                  ? 'border-accent bg-accent/10 text-accent'
@@ -48,7 +56,12 @@
         <span class="text-base" aria-hidden="true">🇬🇧</span>
         {$t('settings.appearance.lang.en')}
       </button>
-    </div>
+    </form>
+    {#if page.form?.localeError === 'not-saved'}
+      <p role="alert" class="mt-3 text-xs text-rust-ink">{$t('settings.appearance.language.notSaved')}</p>
+    {:else if page.form?.localeError === 'invalid'}
+      <p role="alert" class="mt-3 text-xs text-rust-ink">{$t('settings.appearance.language.invalid')}</p>
+    {/if}
   </section>
 
   <!-- Color vision -->

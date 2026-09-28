@@ -8,7 +8,7 @@
     "prebuild": "node scripts/build-module-manifest.mjs && node scripts/build-module-server-init.mjs && node scripts/build-migration-manifest.mjs && node scripts/build-migration-manifest.mjs migrations-control",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "node scripts/check-tenant-env-guard.mjs --enforce --root src && node scripts/check-app-port-binding.mjs && node scripts/check-domain-regex.mjs && node scripts/check-tenant-secrets-dir.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check": "node src/lib/i18n/compile.js && node scripts/check-tenant-env-guard.mjs --enforce --root src && node scripts/check-app-port-binding.mjs && node scripts/check-tenant-secrets-dir.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "test:unit": "vitest run --project unit",
     "test:browser": "vitest run --project browser && vitest run --project browser-dsf2",
@@ -23,6 +23,7 @@
     "provision": "tsx scripts/tenant-provision.mjs"
   },
   "devDependencies": {
+    "@inlang/paraglide-js": "^2.25.4",
     "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-node": "^5.5.7",
     "@sveltejs/kit": "^2.70.2",

@@ -1,5 +1,7 @@
 import { sveltekit } from '@sveltejs/kit/vite'
 import { defineConfig } from 'vitest/config'
+import { paraglideVitePlugin } from '@inlang/paraglide-js'
+import paraglideOptions from './src/lib/i18n/paraglide-options.js'
 
 // The DB-backed FinTS crypto tests read FINTS_PASSWORD_KEY via
 // $env/dynamic/private, which snapshots process.env when the SvelteKit env
@@ -22,8 +24,13 @@ process.env.FINTS_PASSWORD_KEY ??= '0'.repeat(64)
 //
 // Run with `pnpm test:deselection` against the isolated stack — see
 // tests/integration/README.md for the full runbook. It is NOT a CI lane.
+//
+// TASK-062 / R26-TRAIN4-FIX r3: paraglideVitePlugin compiles the generated,
+// gitignored src/lib/i18n/paraglide/ for anything this lane loads under
+// $lib/i18n (hooks.server.ts reaches it); same reason as the integration
+// config. tests/unit/vitest-configs-paraglide.test.ts keeps it here.
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [paraglideVitePlugin(paraglideOptions), sveltekit()],
   ssr: { noExternal: ['@gremion/db'] },
   test: {
     include: ['tests/integration/**/*.integration.test.ts'],

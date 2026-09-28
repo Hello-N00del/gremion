@@ -1,20 +1,18 @@
-import { describe, test, expect, beforeEach, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { get } from 'svelte/store'
 
-// gremion#22: the `gremion.lang` preference key (B8 / design-review 2026-07
-// T5, same treatment as the theme stores in $lib/stores/theme.ts and covered
-// there by theme.storage-keys.test.ts) has a one-time `stura-lang` legacy
-// fallback in getInitialLang() but shipped with no direct unit coverage —
-// this file closes that gap for $lib/i18n/index.ts.
+// gremion#22 pinned the `gremion.lang` preference key and its one-time
+// `stura-lang` legacy fallback here. TASK-062 (brief §4, deletion-aware)
+// retires both keys: the person's stored preference (idt.preference) and its
+// per-device cookie mirror are the source of truth, and the server renders
+// the locale into <html lang> before any client script runs.
 //
-// The store gates every localStorage touch on `browser`; force the browser
-// path (inverse of the hooks tests' `building: true` mock).
+// Deletion ledger: this file stays (it is in scripts/port-back/do-not-overwrite.json)
+// and now pins the retirement itself. A stale value under either key is
+// ignored, never read, never migrated and never rewritten, so no browser can
+// resurrect the old per-device flash.
 vi.mock('$app/environment', () => ({ browser: true }))
 
-// jsdom's localStorage is not wired in this vitest config (known quirk — see
-// the notes in CommandPalette.test.ts / theme.storage-keys.test.ts): the
-// global accessor yields undefined. Stub a spec-sufficient in-memory Storage;
-// the store references the bare `localStorage` global, so this is what it hits.
 function makeStorageStub(): Storage {
   const store = new Map<string, string>()
   return {
@@ -28,61 +26,61 @@ function makeStorageStub(): Storage {
     }
   } as Storage
 }
-vi.stubGlobal('localStorage', makeStorageStub())
 
-/** Fresh module instance so each test re-runs the import-time initial read. */
+let storage: Storage
+
 async function freshI18n() {
   vi.resetModules()
   return await import('./index')
 }
 
 beforeEach(() => {
-  localStorage.clear()
+  storage = makeStorageStub()
+  vi.stubGlobal('localStorage', storage)
 })
 
-describe('i18n lang store — namespaced gremion.lang key with one-time stura-lang fallback', () => {
-  test('namespaced key read: gremion.lang is honored as the initial store value', async () => {
-    localStorage.setItem('gremion.lang', 'en')
-    const m = await freshI18n()
-    expect(get(m.lang)).toBe('en')
+afterEach(() => {
+  document.documentElement.lang = ''
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+describe('retired gremion.lang / stura-lang keys (TASK-062 deletion ledger)', () => {
+  test('a stale gremion.lang value is ignored: the server-rendered <html lang> decides', async () => {
+    storage.setItem('gremion.lang', 'de')
+    document.documentElement.lang = 'en'
+    const { t, lang } = await freshI18n()
+    expect(get(lang)).toBe('en')
+    expect(get(t)('nav.files')).toBe('Files')
   })
 
-  test('legacy-key fallback migration: stura-lang is honored, migrated, and removed', async () => {
-    localStorage.setItem('stura-lang', 'en')
-    const m = await freshI18n()
-    // honored as the initial value
-    expect(get(m.lang)).toBe('en')
-    // migrated: the namespaced key now carries it
-    expect(localStorage.getItem('gremion.lang')).toBe('en')
-    // and the legacy key is gone, so the fallback fires at most once
-    expect(localStorage.getItem('stura-lang')).toBeNull()
+  test('a stale stura-lang value is ignored and not migrated to gremion.lang', async () => {
+    storage.setItem('stura-lang', 'en')
+    document.documentElement.lang = 'de'
+    const { lang } = await freshI18n()
+    expect(get(lang)).toBe('de')
+    expect(storage.getItem('gremion.lang')).toBeNull()
+    expect(storage.getItem('stura-lang')).toBe('en')
   })
 
-  test('default when neither key is present: falls back to de without creating keys', async () => {
-    const m = await freshI18n()
-    expect(get(m.lang)).toBe('de')
-    expect(localStorage.getItem('gremion.lang')).toBeNull()
-    expect(localStorage.getItem('stura-lang')).toBeNull()
+  test('neither key is read or written while the shim evaluates', async () => {
+    storage.setItem('gremion.lang', 'de')
+    storage.setItem('stura-lang', 'de')
+    const getItem = vi.spyOn(storage, 'getItem')
+    const setItem = vi.spyOn(storage, 'setItem')
+    const removeItem = vi.spyOn(storage, 'removeItem')
+    document.documentElement.lang = 'en'
+    const { t, lang } = await freshI18n()
+    get(lang)
+    get(t)('nav.files')
+    expect(getItem).not.toHaveBeenCalled()
+    expect(setItem).not.toHaveBeenCalled()
+    expect(removeItem).not.toHaveBeenCalled()
   })
 
-  test('the gremion.lang key wins over a stale legacy value', async () => {
-    localStorage.setItem('gremion.lang', 'de')
-    localStorage.setItem('stura-lang', 'en')
-    const m = await freshI18n()
-    expect(get(m.lang)).toBe('de')
-    // the stale legacy key is left untouched — it was never consulted.
-    expect(localStorage.getItem('stura-lang')).toBe('en')
-  })
-
-  test('lang.set() writes ONLY gremion.lang — never stura-lang (acceptance)', async () => {
-    localStorage.setItem('stura-lang', 'en')
-    const m = await freshI18n()
-    const spy = vi.spyOn(localStorage, 'setItem')
-    m.lang.set('en')
-    const keys = spy.mock.calls.map(([k]) => k)
-    spy.mockRestore()
-    expect(keys).toContain('gremion.lang')
-    expect(keys.filter((k) => k.startsWith('stura-'))).toEqual([])
-    expect(localStorage.getItem('gremion.lang')).toBe('en')
+  test('the shim exposes no setter, so nothing can write a per-device key again', async () => {
+    const { lang } = await freshI18n()
+    expect('set' in lang).toBe(false)
+    expect('update' in lang).toBe(false)
   })
 })

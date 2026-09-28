@@ -59,6 +59,14 @@ declare global {
        * request chain is traceable across async hops and log lines.
        */
       correlationId: string
+      /**
+       * TASK-062: resolved by i18nHandle (hooks.server.ts, sequence element
+       * after authGuard) from resolveLocale's cascade (person preference ->
+       * cookie -> Accept-Language -> customer default -> 'de'). Present on
+       * every response i18nHandle runs on; absent only on a short-circuit
+       * that returns before it (mirrors tenant/tenantSelectionTrusted above).
+       */
+      locale?: import('$lib/i18n/server/resolve-locale').Locale
     }
   }
 }

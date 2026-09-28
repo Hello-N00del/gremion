@@ -136,7 +136,6 @@ pnpm -C gremion-ui build                 # adapter-node production build
 `pnpm -C gremion-ui check` also runs the kernel guard scripts, including:
 
 - `boundary/kernel-clean.test.ts` (via the boundary enforcer in `gremion-ui/src/lib/server/boundary/`) — fails if the kernel imports any feature module by name. The dependency direction is **kernel → never a module**.
-- `scripts/check-domain-regex.mjs` — fails the build if a real prod `DOMAIN` is set with an empty `DOMAIN_REGEX`.
 - `scripts/check-app-port-binding.mjs` — enforces the loopback-only dev port bind.
 - `scripts/check-tenant-secrets-dir.mjs` — fails if the tenant provisioner credential resolves inside `TENANT_SECRETS_DIR`.
 

@@ -66,7 +66,7 @@ Task-specific operator runbooks live under [`docs/runbooks/`](runbooks/) and
 | Runbook | Purpose |
 |---------|---------|
 | [runbooks/email-smtp.md](runbooks/email-smtp.md) | Outgoing email — the Mailpit staging catcher + how to switch to a real SMTP relay for production |
-| [runbooks/tenant-edge.md](runbooks/tenant-edge.md) | Tenant edge routing (`DOMAIN_REGEX`, wildcard Traefik routers, control-DB bootstrap) |
+| [runbooks/tenant-edge.md](runbooks/tenant-edge.md) | Tenant edge routing (whole-host resolution, per-host Traefik routers, control-DB bootstrap) |
 | [runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md) | Provisioning, suspending, and deleting tenants |
 | [runbooks/pgbouncer.md](runbooks/pgbouncer.md) | PgBouncer transaction-pooling front (production overlay) — deploy / verify / rollback |
 | [ops/restore-runbook.md](ops/restore-runbook.md) | Step-by-step disaster restore from a restic snapshot |
@@ -423,14 +423,13 @@ created by `init-databases.sh`; on an existing volume run the one-shot in
 always reached **directly** at `postgres:5432` — never through the production
 PgBouncer overlay.
 
-### Tenant subdomains 404 (production)
+### A tenant host 404s (production)
 
-`DOMAIN_REGEX` is unset or empty with a real `DOMAIN`. The wildcard Traefik
-routers then render the dead pattern `^[a-z0-9-]+\.$`, which matches no tenant
-host (the apex/default host still works and masks the misconfig). Set
-`DOMAIN_REGEX` to the regexp-escaped domain (e.g. `council\.example`) before the
-recreate. `pnpm -C gremion-ui check` fails the build if a real prod `DOMAIN` is set
-with an empty `DOMAIN_REGEX`. See [runbooks/tenant-edge.md](runbooks/tenant-edge.md).
+A bare Traefik 404 means no `Host(...)` router exists for that host; an app 404
+logs one `tenant.host.rejected` line in the gremion-ui log whose `reason` is
+`unbound` (no `tenant_domain` row), `inactive`, `forged` (Host and
+X-Forwarded-Host disagreed) or `unparseable`. The apex binds no tenant and 404s
+by design. See [runbooks/tenant-edge.md](runbooks/tenant-edge.md).
 
 ### Keycloak slow authentication
 
@@ -591,7 +590,7 @@ docker compose up -d
 - [ ] `.env` backed up securely (contains all secrets)
 - [ ] Keycloak realm exported
 - [ ] Per-tenant backups run for every active tenant (`scripts/tenant-backup.sh`)
-- [ ] DNS records and `DOMAIN` / `DOMAIN_REGEX` documented
+- [ ] DNS records, `DOMAIN` and every bound tenant host documented
 - [ ] TLS certificate / Cloudflare tunnel renewal verified
 - [ ] Restore drill performed (test-restore monthly)
 

@@ -1,0 +1,6 @@
+http:
+  routers:
+    wild:
+      entryPoints: ["websecure"]
+      rule: "HostRegexp(`^[a-z0-9-]+\\.example\\.org$`)"
+      service: "app"
