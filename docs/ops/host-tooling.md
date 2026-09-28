@@ -135,6 +135,7 @@ than exit codes.
 | `gremion-hostd --socket \| --ssh` | the restricted agent of section 5 |
 | `gremion-dns-check --domain D --edge-ip A --mail-ip B [--edit N]` | verify the published record set for one edit of the DNS table, one line per record |
 | `gremion-mail-bringup [--assert N\|all]` | the mail asserts in their required order, refusing to run out of order |
+| `gremion-vendor-mail <subcommand>` | the vendor mail tooling of `ops/vendor-mail` (TASK-015): `principals issue\|revoke\|list`, `realm-smtp`, `collect` and the vendor-mail checks, each `.mjs` run as `docker run --rm` of the digest-pinned `VENDOR_MAIL_NODE_IMAGE` (the host carries no Node). Runs from `current/infra/host/bin`; see `ops/vendor-mail/RUNBOOK.md` |
 | `gremion-verify [--colour c] [--hosts FILE] [--reboot]` | the verification contract: enumerate every router from the Traefik API, classify it, assert certificates, health, the host pin and the ACME path; print the six P4 waivers of `docs/ops/release-1-waivers.md` as `WAIVED`; writes `runtime/last-verify.json`. **Refuses to run without that ledger** — see below |
 | `gremion-switch <colour> [--no-evict]` | fan the eviction out, rewrite `etc/edge/active.yml` atomically, wait for Traefik to serve the new target, record `runtime/active-colour` |
 | `gremion-deploy <tag>` | the release procedure, twelve steps, token on stdin; logs `STEP n <name> ok\|fail` to `runtime/deploy.log` |
