@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "content",
+  "extractionSource": "f276af5925abacdcfd05f6613fc11afff2d804c5",
+  "runtime": {
+    "version": "1.0.0",
+    "database": { "postgresService": "content-postgres", "migrations": "migrations" },
+    "export": { "kind": "pg_dump", "retentionProfile": "rp-pub-module-data" },
+    "timedJobs": [
+      { "id": "content-publish", "activeColourOnly": true },
+      { "id": "content-instagram-publish", "activeColourOnly": true }
+    ],
+    "platformServer": null
+  }
+}

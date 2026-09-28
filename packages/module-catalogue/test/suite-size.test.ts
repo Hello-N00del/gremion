@@ -14,6 +14,7 @@ const PKG = fileURLToPath(new URL('../', import.meta.url))
 export const DECLARED: Record<string, number> = {
   'test/catalogue.test.ts': 21,
   'test/cli.test.ts': 6,
+  'test/real-tree.test.ts': 7,
   'test/suite-size.test.ts': 3,
   'test/validate.test.ts': 29,
 }
