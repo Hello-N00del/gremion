@@ -477,8 +477,10 @@ check_restore_target() {
 # systemd units: they read etc/env/*.env (inside the deploy user's 0700 etc/),
 # and gremion-deploy runs git in the release checkout, which git refuses as
 # "dubious ownership" when root owns it. Run as root, gremion-init-secrets leaves
-# root-owned 0600 env files every later deploy-user run dies on.
-DEPLOY_USER_PROGRAMS='gremion-(init-secrets|backup|deploy|verify|restore-into|snapshot|switch|rollback)'
+# root-owned 0600 env files every later deploy-user run dies on. gremion-render
+# keeps the Keycloak CA in etc/secrets/keycloak, and gremion-deploy's step 4
+# re-renders as the deploy user over whatever an earlier render left.
+DEPLOY_USER_PROGRAMS='gremion-(init-secrets|backup|deploy|verify|restore-into|snapshot|switch|rollback|render)'
 
 check_deploy_user() {
     local f text line target seen=0 bad=0
@@ -509,6 +511,27 @@ check_deploy_user() {
         echo "install.md Post-condition does not observe the owner and mode of /opt/gremion/etc/env/*.env" >&2; bad=1
     fi
     return "$bad"
+}
+
+# The state project bind-mounts files only gremion-render writes into the release
+# tree (docker/pgbouncer/userlist.txt, docker/keycloak/certs/keycloak.crt). An
+# `up` before the render finds no bind source: Docker creates userlist.txt as a
+# root-owned DIRECTORY, keycloak has no certificate, and gremion-deploy's step 4,
+# which renders as the deploy user, then dies on "render output is a directory".
+# So install renders, as the deploy user, before its first state-project `up`.
+STATE_UP_RE='docker compose --env-file /opt/gremion/etc/env/state\.env up([[:space:]]|$)'
+
+check_render_first() {
+    local steps up render
+    steps="$(unit_text "$1" install | section_body '## Steps' | bash_blocks | grep -v '^[[:space:]]*#' || true)"
+    up="$(grep -nE -- "$STATE_UP_RE" <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$up" ]; then
+        echo "install.md never starts the state project ('docker compose --env-file /opt/gremion/etc/env/state.env up')" >&2; return 1
+    fi
+    render="$(grep -nE -- 'sudo -u gremion [^;|&]*gremion-render --release' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$render" ] || [ "$render" -gt "$up" ]; then
+        echo "install.md starts the state project before gremion-render (as the deploy user) has written its bind sources" >&2; return 1
+    fi
 }
 
 # gremion-deploy logs in under the HOME of the user that runs it, so a procedure
@@ -708,7 +731,7 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
             check_postconditions check_required check_forbidden check_restore_target
             check_install_tail check_run_record check_floor check_artefacts
             check_deploy_log check_reboot_gate check_deploy_user check_registry_creds
-            check_post_vars)
+            check_post_vars check_render_first)
 
 # ---------------------------------------------------------------------------
 
@@ -882,6 +905,27 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
     grep -vF '/home/gremion/.docker/config.json' "$d/upgrade.md" > "$d/upgrade.tmp" && mv "$d/upgrade.tmp" "$d/upgrade.md"
     run check_registry_creds "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"upgrade.md runs gremion-deploy but its Post-condition does not read /home/gremion/.docker/config.json"* ]]
+}
+
+@test "install renders the host-owned files as the deploy user before the state project's first up" {
+    d="$(real_dir)"; check_render_first "$d"
+    d="$(fixture valid)"; check_render_first "$d"
+    # No render at all.
+    grep -vF 'gremion-render' "$d/install.md" > "$d/install.tmp" && mv "$d/install.tmp" "$d/install.md"
+    run check_render_first "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"starts the state project before gremion-render"* ]]
+    # The render only after the up.
+    d="$(fixture valid)"
+    awk '/gremion-render --release/ { r = $0; next } { print } /state\.env up/ { print r }' \
+        "$d/install.md" > "$d/install.tmp" && mv "$d/install.tmp" "$d/install.md"
+    grep -A1 -F 'state.env up' "$d/install.md" | grep -qF 'gremion-render --release'
+    run check_render_first "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"starts the state project before gremion-render"* ]]
+    # No state-project up at all is not a pass over an empty extraction.
+    d="$(fixture valid)"
+    grep -vF 'state.env up' "$d/install.md" > "$d/install.tmp" && mv "$d/install.tmp" "$d/install.md"
+    run check_render_first "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"never starts the state project"* ]]
 }
 
 @test "every variable a post-condition reads is assigned there or in the preamble" {

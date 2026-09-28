@@ -21,7 +21,14 @@ TRD-004 guard set re-run, a TRD-340 snapshot taken.
 /opt/gremion/bin/gremion-validate-env --env-file /opt/gremion/etc/env/state.env
 ```
 
-3. **Disable the backup timer.**
+3. **Render, then start the state project.**
+
+```bash
+sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
+docker compose --env-file /opt/gremion/etc/env/state.env up -d
+```
+
+4. **Disable the backup timer.**
 
 ```bash
 systemctl disable --now gremion-backup.timer
