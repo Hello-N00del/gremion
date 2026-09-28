@@ -122,8 +122,12 @@ Record in handover section 8: `$REF` (the digest), the `cosign verify --key
 cosign.pub` output, "no tlog" (the `null` bundle lines), and that the key's
 recovery-kit copy was checked.
 
-Also before the first deploy: the Keycloak pin in `docker-compose.yml` was
-resolved from `docker.io/keycloak/keycloak:26.6.1` (quay.io was unreachable
-where TASK-048 ran). Confirm it on quay.io:
-`docker buildx imagetools inspect --format '{{json .Manifest}}' quay.io/keycloak/keycloak:26.6.1 | jq -r .digest`
-must print the digest `docker-compose.yml` pins.
+The Keycloak pin in `docker-compose.yml` was first resolved from
+`docker.io/keycloak/keycloak:26.6.1` (quay.io was unreachable where TASK-048
+was first implemented). It was confirmed on quay.io on 2026-09-28 (TASK-048
+review round 2):
+`docker buildx imagetools inspect --format '{{json .Manifest}}' quay.io/keycloak/keycloak:26.6.1`
+gives the index digest
+`sha256:dea26401d06341095cc4ea9d66896200b55de5ca1daa1d2fcbe58493afa6e0ad`,
+the digest `docker-compose.yml` pins. Re-run the same command whenever the
+Keycloak pin changes.
