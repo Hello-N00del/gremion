@@ -48,7 +48,7 @@ describe('platformEnv (deployment-global env only, TASK-042 Q4)', () => {
 // TASK-042 R28 (MEDIUM 6): the per-tenant name list is RUNTIME data shared by
 // this module and the build-time guard (scripts/check-tenant-env-guard.mjs).
 // The runtime module owns it; the CLI script imports it, never the reverse, so
-// no server module depends on an untyped (@ts-nocheck) build script.
+// no server module depends on an untyped (ts-nocheck) build script.
 describe('the per-tenant env name list is single-sourced in a runtime module', () => {
   const here = dirname(fileURLToPath(import.meta.url))
 
