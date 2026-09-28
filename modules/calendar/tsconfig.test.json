@@ -1,0 +1,33 @@
+{
+  // Typecheck the files `tsconfig.json` cannot see. That one carries
+  // `rootDir: "src"` and `exclude: ["test"]`, so `pnpm typecheck` structurally
+  // cannot reach test/ or scripts/ - which is how a test file carrying two
+  // TS7006 implicit-any errors shipped through a green typecheck gate (T05
+  // round-2 review). `pnpm typecheck:tests` closes that hole.
+  //
+  // noEmit + allowImportingTsExtensions: the tests import "../src/x.ts" by its
+  // real extension (vitest resolves it), and tsc accepts that only when nothing
+  // is emitted.
+  //
+  // The exclusions below are PRE-EXISTING failures, untouched by T05 and out of
+  // its scope - listed one file at a time deliberately, so a NEW test file is
+  // covered by default and can never slip past this gate silently. Integration
+  // tests are excluded on the same rule vitest.config.ts uses (they are not part
+  // of `pnpm test`). Follow-up: fix these files and shorten this list.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"],
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "test/**/*.integration.test.ts",
+    "test/caldav.test.ts",
+    "test/scheduler.test.ts",
+    "scripts/backfill.ts"
+  ]
+}

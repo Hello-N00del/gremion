@@ -1,6 +1,8 @@
 import { resolve } from 'node:path'
 import { sveltekit } from '@sveltejs/kit/vite'
 import { defineConfig } from 'vitest/config'
+import { paraglideVitePlugin } from '@inlang/paraglide-js'
+import paraglideOptions from './src/lib/i18n/paraglide-options.js'
 import { assertNonProductionDbUrl } from './tests/integration/assert-safe-test-db-url'
 
 // P2.1c (T15 / §6-P2.2): the real-boot fleet (hooks.boot-real.integration.test)
@@ -70,8 +72,14 @@ assertNonProductionDbUrl(process.env.CONTROL_DATABASE_URL ?? '', 'CONTROL_DATABA
 // These require a real Postgres reachable via DATABASE_URL with all
 // migrations applied. Run with `pnpm test:integration`.
 // The fast, dependency-free unit suite lives in vite.config.ts (`pnpm test:unit`).
+//
+// TASK-062 / R26-TRAIN4-FIX r3: paraglideVitePlugin compiles the generated,
+// gitignored src/lib/i18n/paraglide/ that hooks.server.ts reaches through
+// $lib/i18n/server/i18n-handle (iss-replay-e2e imports hooks.server). Without it
+// a clean checkout fails with "Cannot find module '../paraglide/server.js'".
+// tests/unit/vitest-configs-paraglide.test.ts keeps it here.
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [paraglideVitePlugin(paraglideOptions), sveltekit()],
   ssr: { noExternal: ['@gremion/db'] },
   test: {
     include: ['src/**/*.integration.test.ts'],

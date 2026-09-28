@@ -1,0 +1,13 @@
+module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
+source: annotated tag extraction-source-f1 -> 0c9d342e9a1f9785b6f976719008134237198d0d; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
+kernel: d6c3232bddde986dcd5cd12cee1e883e391f910b
+mode: --copy (every difference fails, listed or not)
+
+set A — services/** changed f276af59..extraction-source-f1: 21 files, 0 differ (0 listed, 0 unlisted)
+set B — services/** at extraction-source-f1: 383 files, 0 differ (0 listed, 0 unlisted)
+set C — content UI half (gremion-ui/src -> modules/content/app): 95 files, 0 differ (0 listed, 0 unlisted)
+extras — kernel files in a mapped module directory that no tag path maps to: 1 (1 listed)
+  listed   modules/content/app/migrations/1200_content_news_posts.sql
+delta entries: 1
+
+RESULT: OK

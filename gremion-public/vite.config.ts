@@ -8,6 +8,8 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
+import { paraglideVitePlugin } from '@inlang/paraglide-js';
+import paraglideOptions from './src/lib/i18n/paraglide-options.js';
 
 export default defineConfig({
   // #436 — Tailwind v4 via its own Vite plugin, mirroring gremion-ui. This
@@ -15,7 +17,9 @@ export default defineConfig({
   // entries): vite 8's rolldown-based CSS resolver mis-resolves the bare
   // `@import 'tailwindcss'` specifier through postcss-import, and v4 does its
   // own vendor prefixing via Lightning CSS, so neither postcss entry survives.
-  plugins: [tailwindcss(), sveltekit()],
+  // TASK-062 (TRD-412): Paraglide compiles src/lib/i18n/messages into
+  // src/lib/i18n/paraglide (generated, gitignored) on dev, build and vitest.
+  plugins: [paraglideVitePlugin(paraglideOptions), tailwindcss(), sveltekit()],
   ssr: {
     noExternal: ['@gremion/db']
   },

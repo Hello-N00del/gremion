@@ -1,0 +1,38 @@
+{
+  "name": "finance-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "StuRaOS finance leaf service (#369 slice 2) — node:http, per-tenant PG, own finance schema + id-preserving backfill; route surface locked (501) until the operator-held cutover",
+  "main": "dist/index.js",
+  "scripts": {
+    "build:manifest": "node scripts/build-migration-manifest.mjs",
+    "prebuild": "node scripts/build-migration-manifest.mjs",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --external:@nats-io/transport-node --external:@nats-io/jetstream --external:@nats-io/nats-core --external:postgres --external:exceljs --external:papaparse --external:sepa --external:xmllint-wasm",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@gremion/ports": "workspace:*",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
+    "exceljs": "^4.4.0",
+    "papaparse": "^5.5.3",
+    "postgres": "^3.4.4",
+    "sepa": "^3.0.0",
+    "xmllint-wasm": "^5.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/papaparse": "^5.5.2",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,75 @@
+// services/vault/src/http/guard.ts
+// Internal-only request guard for the vault leaf. Every route EXCEPT the health
+// probes requires:
+//   1. a correct `x-internal-auth` shared secret (constant-time compare via
+//      timingSafeEqual; env var INTERNAL_VAULT_SECRET) → else 403, and
+//   2. `x-tenant-id` + a grammar-valid `x-tenant-slug` (slug grammar mirrors
+//      gremion-ui/src/lib/server/tenant/slug.ts — a SEPARATE process so the rule is
+//      duplicated, not imported; keep the two in sync) → else 400.
+// Order matters: the secret is checked FIRST so an unauthenticated caller never
+// learns anything about tenant-header validation (no 400-vs-403 oracle).
+import { timingSafeEqual } from 'node:crypto'
+
+/** Mirror of SLUG_PATTERN in gremion-ui/src/lib/server/tenant/slug.ts. */
+export const SLUG_PATTERN = /^[a-z0-9-]{1,30}$/
+
+export interface TenantHeaders {
+  id: string
+  slug: string
+}
+
+export type GuardResult =
+  | { ok: true; tenant: TenantHeaders }
+  | { ok: false; status: 400 | 403; message: string }
+
+export interface GuardInput {
+  path: string
+  headers: Record<string, string | undefined>
+  secret: string | undefined
+}
+
+/** /health and /healthz (and their subpaths) are guard-EXEMPT — liveness/readiness
+ *  probes carry no secret/tenant context. Exact `/health`/`/healthz` or a
+ *  `/health/<sub>` / `/healthz/<sub>` segment only (NOT `/healthzzz`). */
+export function isHealthPath(path: string): boolean {
+  return (
+    path === '/health' ||
+    path === '/healthz' ||
+    path.startsWith('/health/') ||
+    path.startsWith('/healthz/')
+  )
+}
+
+/** Constant-time secret compare (pads to equal length first so length is not
+ *  leaked via early return). */
+function secretMatches(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided)
+  const b = Buffer.from(expected)
+  const len = Math.max(a.length, b.length)
+  const pa = Buffer.alloc(len)
+  const pb = Buffer.alloc(len)
+  a.copy(pa)
+  b.copy(pb)
+  return timingSafeEqual(pa, pb) && a.length === b.length
+}
+
+export function checkGuard(input: GuardInput): GuardResult {
+  const { headers, secret } = input
+
+  // 1. Shared secret (fail-closed if the server has none configured).
+  const provided = headers['x-internal-auth']
+  if (!secret || !provided || !secretMatches(provided, secret)) {
+    return { ok: false, status: 403, message: 'forbidden' }
+  }
+
+  // 2. Tenant identity headers.
+  const id = headers['x-tenant-id']
+  if (!id) return { ok: false, status: 400, message: 'missing x-tenant-id header' }
+  const slug = headers['x-tenant-slug']
+  if (!slug) return { ok: false, status: 400, message: 'missing x-tenant-slug header' }
+  if (!SLUG_PATTERN.test(slug)) {
+    return { ok: false, status: 400, message: 'x-tenant-slug must match ^[a-z0-9-]{1,30}$' }
+  }
+
+  return { ok: true, tenant: { id, slug } }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "content-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "StuRaOS content leaf service (Pillar 2 / L4 extraction) — node:http, per-tenant PG, NATS outbox, 3 channels",
+  "main": "dist/index.js",
+  "scripts": {
+    "build:manifest": "node scripts/build-migration-manifest.mjs",
+    "prebuild": "node scripts/build-migration-manifest.mjs",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --external:@nats-io/transport-node --external:@nats-io/jetstream --external:@nats-io/nats-core --external:postgres --external:zod",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@gremion/ports": "workspace:*",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
+    "postgres": "^3.4.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.10"
+  }
+}
