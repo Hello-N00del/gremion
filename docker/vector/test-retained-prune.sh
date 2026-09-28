@@ -114,6 +114,10 @@ run_prune "$T2" RETAINED_TODAY=not-a-date RETAINED_RETENTION_DAYS=31
 rc=$?; [ "$rc" -ne 0 ] && [ -e "$T2/retained-2000-01-01.log" ] && [ -e "$T2/retained-2000-01-01.log.1" ]
 check $? "invalid RETAINED_TODAY: non-zero exit, nothing deleted"
 
+run_prune "$T2" RETAINED_TODAY=2026-02-30 RETAINED_RETENTION_DAYS=31
+rc=$?; [ "$rc" -ne 0 ] && [ -e "$T2/retained-2000-01-01.log" ]
+check $? "non-calendar RETAINED_TODAY (2026-02-30): non-zero exit, nothing deleted"
+
 run_prune "$T2" RETAINED_TODAY=2026-03-02 RETAINED_RETENTION_DAYS=abc
 rc=$?; [ "$rc" -ne 0 ] && [ -e "$T2/retained-2000-01-01.log" ]
 check $? "non-numeric retention: non-zero exit, nothing deleted"
