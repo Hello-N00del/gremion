@@ -15,7 +15,8 @@ INSERT INTO tenant (
   '{}', '{}', '{}', 'config:proof', 'STURA_BLUEPRINT@1',
   '{"perTenantMax": 2, "prepare": true}', 'env:AUTH_KEYCLOAK_SECRET',
   ARRAY['gremion-ui']
-);
+) ON CONFLICT (slug) DO NOTHING;
 INSERT INTO tenant_domain (tenant_id, host, is_primary)
-  SELECT id, 'proof.t042.test', true FROM tenant WHERE slug = 'proof';
+  SELECT id, 'proof.t042.test', true FROM tenant WHERE slug = 'proof'
+  ON CONFLICT (host) DO NOTHING;
 COMMIT;

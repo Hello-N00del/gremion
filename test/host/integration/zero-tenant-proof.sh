@@ -46,10 +46,12 @@
 # PROOF_WITH_ISSUER=1 exists only for that RED run (the base cannot boot
 # without it); it is never part of the green proof.
 #
-# T042_PHASE: all (default) | build | up | probe | down. The split exists
-# because each caller command is time-boxed: `build` warms the image, `up`
-# starts the stack and waits out the boot window, `probe` asserts and tears
-# down. T042_KEEP=1 leaves the containers up.
+# T042_PHASE: all (default) | build | up | probe-boot | probe-wizard | down.
+# The split exists because each caller command is time-boxed: `build` warms
+# the image, `up` starts the stack and waits out the boot window, the two probe
+# halves assert (boot/state/hosts, then wizard/manifest/admins and the verdict)
+# and leave the stack up, `down` removes it by name. `all` tears down on exit
+# unless T042_KEEP=1.
 #
 # Prints:  ZERO-TENANT-PROOF: boot=ok state=ok hosts=ok wizard=ok manifest=ok admins=ok
 # Exit codes: 0 ok · 1 an assertion failed · 2 missing precondition.
@@ -215,22 +217,43 @@ bad() { echo "FAIL $1: $2"; FAILS=$((FAILS + 1)); BAD_GROUPS+=" ${1%% *}"; }
 is() { if [ "$1" = "$2" ]; then ok "$3"; else bad "$3" "$4"; fi; } # is <actual> <want> <label> <why>
 result_of() { case "$BAD_GROUPS" in *" $1"*) echo FAIL ;; *) echo ok ;; esac; }
 
-# probe <path> <host|-> [curl args...] -> STATUS BODY LOCATION
+# Results cross phase boundaries (probe-boot, then probe-wizard) in the per-run root.
+save_results() { printf 'FAILS=%s\nBAD_GROUPS=%q\nHZ=%q\n' "$FAILS" "$BAD_GROUPS" "${HZ:-}" >"$ROOT/results"; }
+# shellcheck source=/dev/null # the per-run results file save_results wrote
+load_results() { if [ -f "$ROOT/results" ]; then . "$ROOT/results"; fi; }
+
+# probe <path> <host|-> [curl args...] -> STATUS BODY LOCATION. Only curl is
+# spawned: headers and body are parsed with bash builtins (on Docker Desktop
+# hosts every extra process costs seconds).
 probe() {
     local path="$1" host="$2"; shift 2
-    local hdr=(-H "@$(hostpath "$ROOT/trust.hdr")")
+    local hdr=(-H "@$ROOT_H/trust.hdr")
     if [ "$host" != "-" ]; then hdr+=(-H "Host: $host" -H "X-Forwarded-Host: $host"); fi
-    local out
-    out="$(curl -sS --max-time 20 -o "$(hostpath "$ROOT/body")" -D - "${hdr[@]}" "$@" "http://127.0.0.1:$APP_PORT$path" 2>&1 | tr -d '\r')" || true
-    STATUS="$(printf '%s\n' "$out" | sed -n '1s/^HTTP\/[0-9.]* \([0-9]*\).*/\1/p')"
-    LOCATION="$(printf '%s\n' "$out" | sed -n 's/^[Ll]ocation: *//p' | head -n1)"
-    BODY="$(cat "$ROOT/body" 2>/dev/null || true)"
+    : >"$ROOT/body"; : >"$ROOT/hdrs"
+    curl -sS --max-time 20 -o "$ROOT_H/body" -D "$ROOT_H/hdrs" "${hdr[@]}" "$@" "http://127.0.0.1:$APP_PORT$path" 2>/dev/null || true
+    STATUS='' LOCATION='' BODY=''
+    local line first=1
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        if [ "$first" = 1 ]; then
+            if [[ "$line" =~ ^HTTP/[0-9.]+\ ([0-9]+) ]]; then STATUS="${BASH_REMATCH[1]}"; fi
+            first=0
+        elif [ -z "$LOCATION" ] && [[ "$line" =~ ^[Ll]ocation:\ *(.*)$ ]]; then
+            LOCATION="${BASH_REMATCH[1]}"
+        fi
+    done <"$ROOT/hdrs"
+    IFS= read -r -d '' BODY <"$ROOT/body" || true
 }
 
-phase_probe() {
+stack_is_up() {
     docker inspect "$APP" >/dev/null 2>&1 || precondition "the proof stack is not up (run T042_PHASE=up first)"
     [ -f "$ROOT/trust.hdr" ] || precondition "no per-run trust header (run T042_PHASE=up first)"
+    ROOT_H="$(hostpath "$ROOT")"
     APP_PORT="$(docker port "$APP" 3000/tcp 2>/dev/null | head -n1 | sed 's/.*://')"
+}
+
+phase_probe_boot() {
+    stack_is_up
 
     # ── boot ───────────────────────────────────────────────────────────────────
     step "boot"
@@ -261,10 +284,10 @@ phase_probe() {
 
     # ── hosts: no tenant content anywhere ──────────────────────────────────────
     step "hosts"
-    local h p hz
+    local h p
     probe /healthz -
-    hz="$STATUS"
-    echo "  (recorded, not a discriminator) /healthz -> $hz"
+    HZ="$STATUS"
+    echo "  (recorded, not a discriminator) /healthz -> $HZ"
     for h in - "nope.$APEX" "default.$APEX" "$APEX"; do
         for p in / /setup; do
             probe "$p" "$h"
@@ -277,6 +300,12 @@ phase_probe() {
             fi
         done
     done
+    save_results
+}
+
+phase_probe_wizard() {
+    stack_is_up
+    load_results
 
     # ── wizard: a bound customer's /setup is an unknown path ───────────────────
     step "bind the fixture customer ($FIXTURE_HOST) by SQL"
@@ -333,7 +362,8 @@ phase_probe() {
         bad "admins POST" "status ${STATUS:-none}, body ${BODY:0:120}, want 401 {error:'Unauthenticated'}"
     fi
 
-    echo "ZERO-TENANT-PROOF: boot=$(result_of boot) state=$(result_of state) hosts=$(result_of hosts) wizard=$(result_of wizard) manifest=$(result_of manifest) admins=$(result_of admins) (app $SHA8, ${PG_IMAGE%%@*}, healthz=$hz)"
+    echo "ZERO-TENANT-PROOF: boot=$(result_of boot) state=$(result_of state) hosts=$(result_of hosts) wizard=$(result_of wizard) manifest=$(result_of manifest) admins=$(result_of admins) (app $SHA8, ${PG_IMAGE%%@*}, healthz=${HZ:-not-probed})"
+    save_results
     [ "$FAILS" -eq 0 ] || { echo "zero-tenant-proof: $FAILS check(s) FAILED" >&2; return 1; }
 }
 
@@ -354,8 +384,10 @@ on_exit() {
 case "${T042_PHASE:-all}" in
     build) phase_build ;;
     up) trap on_exit EXIT; LEAVE_UP=1; phase_up ;;
-    probe) trap on_exit EXIT; phase_probe ;;
+    # The probe halves leave the stack up; `down` removes it by name.
+    probe-boot) phase_probe_boot; echo "ZERO-TENANT-PROOF: boot/state/hosts done, $FAILS failure(s) so far" ;;
+    probe-wizard) phase_probe_wizard ;;
     down) teardown ;;
-    all) trap on_exit EXIT; phase_build; phase_up; phase_probe ;;
+    all) trap on_exit EXIT; phase_build; phase_up; phase_probe_boot; phase_probe_wizard ;;
     *) precondition "unknown T042_PHASE=${T042_PHASE}" ;;
 esac
