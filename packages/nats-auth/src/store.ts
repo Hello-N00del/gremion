@@ -41,6 +41,15 @@ function fail(msg: string, cause?: unknown): never {
 
 export const tenantFile = (tenant: string): string => `tenant_${tenant}.nk`
 
+function writeFileSyncSafe(file: string, text: string): void {
+  const fd = openSync(file, 'wx', 0o600)
+  try {
+    writeSync(fd, text)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 export class SeedStore {
   constructor(readonly root: string) {}
 
@@ -111,6 +120,47 @@ export class SeedStore {
       return s
     }
     return this.write(d, name)
+  }
+
+  /**
+   * One nats-auth run at a time across every container that mounts this
+   * store: two tenant-create runs rendering concurrently would each write an
+   * accounts file missing the other's users (a lost update), and a sweep
+   * would remove the other's in-flight temp seed. mkdir is atomic; a lock
+   * older than `staleMs` (a run that died) is taken over. Returns release().
+   */
+  lock(staleMs = 10 * 60_000): () => void {
+    const p = path.join(this.dir(SYS_DIR), '.lock')
+    const take = () => {
+      mkdirSync(p, { mode: 0o700 })
+      const stamp = `${process.pid}-${randomBytes(4).toString('hex')}`
+      writeFileSyncSafe(path.join(p, 'owner'), stamp)
+      return stamp
+    }
+    let stamp: string
+    try {
+      stamp = take()
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') fail(`cannot take the lock ${p}`, err)
+      const age = Date.now() - statSync(p).mtimeMs
+      if (age <= staleMs) fail(`another nats-auth run holds ${p} (taken ${Math.round(age / 1000)} s ago); if none is running, remove it`)
+      rmSync(p, { recursive: true, force: true })
+      try {
+        stamp = take()
+      } catch (err2) {
+        fail(`another nats-auth run took over the stale lock ${p} first`, err2)
+      }
+    }
+    return () => {
+      // release only our own lock: a run that took over a stale one owns it now
+      let owner = ''
+      try {
+        owner = readFileSync(path.join(p, 'owner'), 'utf8')
+      } catch {
+        return
+      }
+      if (owner === stamp) rmSync(p, { recursive: true, force: true })
+    }
   }
 
   /** The SYS reload seed, created if absent (nats-auth init). */

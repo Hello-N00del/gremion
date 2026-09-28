@@ -22,7 +22,7 @@
 //
 // A dropped module's live connection is closed by the server on reload with
 // Authorization Violation, and its old seed is refused from then on (I3).
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { DEFAULT_ACCOUNTS_DIR, secretsDirOf } from './connect.ts'
@@ -36,6 +36,9 @@ export interface BrokerOps {
   reload(): Promise<void>
   /** As the tenant admin, ensure each stream exists with the modules' config. */
   ensureStreams(tenant: string, streams: string[]): Promise<void>
+  /** Each dropped identity's seed must now be REFUSED by the server; throws
+   *  naming any the server still admits. */
+  assertRevoked(tenant: string, seeds: { module: string; seed: Uint8Array }[]): Promise<void>
 }
 
 export interface EnsureOptions {
@@ -65,7 +68,7 @@ function readOr(file: string, fallback: string | undefined): string | undefined 
 }
 
 function writeAtomic(file: string, text: string, mode: number): void {
-  const tmp = `${file}.tmp-${process.pid}`
+  const tmp = `${file}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`
   try {
     mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(tmp, text, { mode })
@@ -77,7 +80,7 @@ function writeAtomic(file: string, text: string, mode: number): void {
 }
 
 /** The whole server state, from the public keys of every seed in the store. */
-export function stateFromStore(store: SeedStore): ServerState {
+export function stateFromStore(store: SeedStore, exclude: { tenant: string; modules: readonly string[] } = { tenant: '', modules: [] }): ServerState {
   // A module seed for a tenant without an admin seed cannot be rendered into
   // an account; it is a half-created tenant -- fail rather than drop it.
   const orphans = store.orphans()
@@ -87,7 +90,19 @@ export function stateFromStore(store: SeedStore): ServerState {
   const tenants = store.tenants().map((tenant) => ({
     tenant,
     admin: store.seedFor(ADMIN_DIR, tenant).publicKey,
-    modules: Object.fromEntries(store.modulesOf(tenant).map((m) => [m, store.seedFor(m, tenant).publicKey])),
+    modules: Object.fromEntries(
+      store
+        .modulesOf(tenant)
+        .filter((m) => !(tenant === exclude.tenant && exclude.modules.includes(m)))
+        .map((m) => {
+          // A module that left FLOWS (NO_BROKER, renamed) cannot be rendered;
+          // say which seed blocks every tenant and how to clear it.
+          if (!(m in FLOWS)) {
+            throw new Error(`[nats-auth] ${m}/tenant_${tenant}.nk belongs to a module no longer in FLOWS -- re-ensure tenant ${tenant} without it (or remove that seed by hand)`)
+          }
+          return [m, store.seedFor(m, tenant).publicKey]
+        }),
+    ),
   }))
   return { sysReload: store.sysReload().publicKey, tenants }
 }
@@ -115,12 +130,17 @@ export function streamsFor(users: readonly string[]): string[] {
  *  the store (SYS-only on a fresh volume). Idempotent; no network. */
 export async function initAccounts(opts: { secretsDir?: string; accountsDir?: string } = {}) {
   const store = new SeedStore(secretsDirOf(opts))
-  const sys = store.ensureSysReload()
-  const file = path.join(accountsDirOf(opts), ACCOUNTS_FILE)
-  const bytes = renderServerConfig(stateFromStore(store))
-  const wrote = readOr(file, undefined) !== bytes
-  if (wrote) writeAtomic(file, bytes, 0o644)
-  return { createdSysReload: sys.created, wrote, accountsFile: file }
+  const release = store.lock()
+  try {
+    const sys = store.ensureSysReload()
+    const file = path.join(accountsDirOf(opts), ACCOUNTS_FILE)
+    const bytes = renderServerConfig(stateFromStore(store))
+    const wrote = readOr(file, undefined) !== bytes
+    if (wrote) writeAtomic(file, bytes, 0o644)
+    return { createdSysReload: sys.created, wrote, accountsFile: file }
+  } finally {
+    release()
+  }
 }
 
 export async function ensureTenantAccount(
@@ -132,24 +152,8 @@ export async function ensureTenantAccount(
   const users = usersFor(input.modules)
   const store = new SeedStore(secretsDirOf(opts))
   store.sysReload() // init must have run
-
-  const createdUsers: string[] = []
-  if ((await store.ensureSeed(ADMIN_DIR, tenant)).created) createdUsers.push('admin')
-  for (const u of users) if ((await store.ensureSeed(u, tenant)).created) createdUsers.push(u)
-  const removedUsers: string[] = []
-  for (const m of store.modulesOf(tenant)) {
-    if (!users.includes(m)) {
-      store.removeModuleSeed(m, tenant)
-      removedUsers.push(m)
-    }
-  }
-
-  const dir = accountsDirOf(opts)
-  const file = path.join(dir, ACCOUNTS_FILE)
-  const marker = path.join(dir, LOADED_MARKER)
-  const bytes = renderServerConfig(stateFromStore(store))
-  const loaded = readOr(file, undefined) === bytes && readOr(marker, '')?.trim() === sha256(bytes)
-
+  // Every precondition before the first write: a run that cannot reach the
+  // broker must not change the store.
   let broker = opts.broker
   if (!broker) {
     const url = process.env.NATS_URL
@@ -158,21 +162,47 @@ export async function ensureTenantAccount(
     broker = natsBrokerOps({ url, secretsDir: secretsDirOf(opts) })
   }
 
-  let reloaded = false
-  if (!loaded) {
-    if (readOr(file, undefined) !== bytes) writeAtomic(file, bytes, 0o644)
-    try {
-      await broker.reload()
-    } catch (err) {
-      throw new Error(
-        `[nats-auth] ${file} was written but is NOT loaded by the server (rerun to retry the reload): ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
-      )
-    }
-    writeAtomic(marker, `${sha256(bytes)}\n`, 0o644)
-    reloaded = true
-  }
+  const release = store.lock()
+  try {
+    // Additive first: new seeds cannot hurt a live identity.
+    const createdUsers: string[] = []
+    if ((await store.ensureSeed(ADMIN_DIR, tenant)).created) createdUsers.push('admin')
+    for (const u of users) if ((await store.ensureSeed(u, tenant)).created) createdUsers.push(u)
+    // Removals stay PENDING -- rendered out, but their seeds kept -- until the
+    // server has dropped the keys; a failure anywhere before that leaves them
+    // for the rerun to report and remove.
+    const pending = store.modulesOf(tenant).filter((m) => !users.includes(m))
+    const pendingSeeds = pending.map((module) => ({ module, seed: store.seedFor(module, tenant).seed }))
 
-  await broker.ensureStreams(tenant, streamsFor(users))
-  return { accountRef: accountFor(tenant), createdUsers: createdUsers.sort(), removedUsers: removedUsers.sort(), reloaded }
+    const dir = accountsDirOf(opts)
+    const file = path.join(dir, ACCOUNTS_FILE)
+    const marker = path.join(dir, LOADED_MARKER)
+    const bytes = renderServerConfig(stateFromStore(store, { tenant, modules: pending }))
+    const loaded = readOr(file, undefined) === bytes && readOr(marker, '')?.trim() === sha256(bytes)
+
+    let reloaded = false
+    if (!loaded) {
+      if (readOr(file, undefined) !== bytes) writeAtomic(file, bytes, 0o644)
+      try {
+        await broker.reload()
+      } catch (err) {
+        throw new Error(
+          `[nats-auth] ${file} was written but is NOT loaded by the server (rerun to retry the reload): ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        )
+      }
+      reloaded = true
+    }
+    // The server's answer, not the reload reply, decides that a key is gone.
+    if (pendingSeeds.length) await broker.assertRevoked(tenant, pendingSeeds)
+    for (const m of pending) store.removeModuleSeed(m, tenant)
+
+    await broker.ensureStreams(tenant, streamsFor(users))
+    // Only now is "the server serves these bytes" known: the tenant's admin
+    // was admitted and every stream answered.
+    if (!loaded) writeAtomic(marker, `${sha256(bytes)}\n`, 0o644)
+    return { accountRef: accountFor(tenant), createdUsers: createdUsers.sort(), removedUsers: [...pending].sort(), reloaded }
+  } finally {
+    release()
+  }
 }

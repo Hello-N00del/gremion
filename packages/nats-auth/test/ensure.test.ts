@@ -1,6 +1,6 @@
 // TDD 4 — ensureTenantAccount() and nats-auth init, against a fake broker
 // (reload / stream calls recorded) and a real seed store in a scratch dir.
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { fromSeed } from '@nats-io/nkeys'
@@ -17,13 +17,21 @@ let accountsDir: string
 class FakeBroker implements BrokerOps {
   reloads = 0
   streams: { tenant: string; streams: string[] }[] = []
+  revoked: string[][] = []
   failReload: Error | undefined
+  failStreams: Error | undefined
+  failRevoked: Error | undefined
   async reload(): Promise<void> {
     if (this.failReload) throw this.failReload
     this.reloads++
   }
   async ensureStreams(tenant: string, streams: string[]): Promise<void> {
+    if (this.failStreams) throw this.failStreams
     this.streams.push({ tenant, streams })
+  }
+  async assertRevoked(_tenant: string, seeds: { module: string; seed: Uint8Array }[]): Promise<void> {
+    if (this.failRevoked) throw this.failRevoked
+    this.revoked.push(seeds.map((s) => s.module))
   }
 }
 
@@ -190,6 +198,78 @@ describe('ensureTenantAccount (TDD 4)', () => {
     await init()
     await new SeedStore(secretsDir).ensureSeed('finance', 'tz')
     await expect(ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir, broker: new FakeBroker() })).rejects.toThrow(/without a tenant admin seed: finance\/tenant_tz\.nk/)
+  })
+
+  test('a drop whose reload fails keeps the seed; the rerun still reports the removal', async () => {
+    await init()
+    const b = new FakeBroker()
+    await ensureTenantAccount({ tenant: 'ta', modules: ['publishing', 'finance'] }, { secretsDir, accountsDir, broker: b })
+    b.failReload = new Error('connection refused')
+    await expect(ensureTenantAccount({ tenant: 'ta', modules: ['publishing'] }, { secretsDir, accountsDir, broker: b })).rejects.toThrow(/NOT loaded/)
+    expect(existsSync(path.join(secretsDir, 'finance/tenant_ta.nk')), 'seed deleted before the server dropped the key').toBe(true)
+    b.failReload = undefined
+    const r = await ensureTenantAccount({ tenant: 'ta', modules: ['publishing'] }, { secretsDir, accountsDir, broker: b })
+    expect(r.removedUsers).toEqual(['finance'])
+    expect(b.revoked).toEqual([['finance']])
+    expect(existsSync(path.join(secretsDir, 'finance/tenant_ta.nk'))).toBe(false)
+  })
+
+  test('a dropped key the server still admits fails loudly and keeps the seed', async () => {
+    await init()
+    const b = new FakeBroker()
+    await ensureTenantAccount({ tenant: 'ta', modules: ['finance'] }, { secretsDir, accountsDir, broker: b })
+    b.failRevoked = new Error('finance@ta still admitted')
+    await expect(ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir, broker: b })).rejects.toThrow(/still admitted/)
+    expect(existsSync(path.join(secretsDir, 'finance/tenant_ta.nk'))).toBe(true)
+  })
+
+  test('the loaded marker is written only after the streams are ensured', async () => {
+    await init()
+    const b = new FakeBroker()
+    b.failStreams = new Error('admin not admitted')
+    await expect(ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir, broker: b })).rejects.toThrow(/admin not admitted/)
+    b.failStreams = undefined
+    const r = await ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir, broker: b })
+    expect(r.reloaded, 'the rerun trusted a marker written before the streams').toBe(true)
+  })
+
+  test('without NATS_URL (and no broker) nothing in the store changes', async () => {
+    await init()
+    await ensureTenantAccount({ tenant: 'ta', modules: ['finance'] }, { secretsDir, accountsDir, broker: new FakeBroker() })
+    const before = seedFiles()
+    const saved = process.env.NATS_URL
+    delete process.env.NATS_URL
+    try {
+      await expect(ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir })).rejects.toThrow(/NATS_URL is unset/)
+    } finally {
+      if (saved !== undefined) process.env.NATS_URL = saved
+    }
+    expect(seedFiles()).toEqual(before)
+  })
+
+  test('a run holding the lock makes a second run fail loudly; a stale lock is taken over', async () => {
+    await init()
+    const store = new SeedStore(secretsDir)
+    const release = store.lock()
+    await expect(ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir, broker: new FakeBroker() })).rejects.toThrow(/another nats-auth run holds/)
+    await expect(initAccounts({ secretsDir, accountsDir })).rejects.toThrow(/another nats-auth run holds/)
+    release()
+    const again = store.lock()
+    const old = new Date(Date.now() - 60 * 60_000)
+    utimesSync(path.join(secretsDir, '_sys/.lock'), old, old)
+    const r = await ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir, broker: new FakeBroker() })
+    expect(r.reloaded).toBe(true)
+    again() // releasing a lock someone took over is harmless
+    expect(existsSync(path.join(secretsDir, '_sys/.lock')), 'the run left its lock behind').toBe(false)
+  })
+
+  test('a seed of a module that left FLOWS names the cleanup', async () => {
+    await init()
+    await ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir, broker: new FakeBroker() })
+    mkdirSync(path.join(secretsDir, 'votes'), { recursive: true, mode: 0o700 })
+    writeFileSync(path.join(secretsDir, 'votes/tenant_tb.nk'), readFileSync(path.join(secretsDir, 'kernel/tenant_ta.nk')), { mode: 0o600 })
+    await new SeedStore(secretsDir).ensureSeed('_admin', 'tb')
+    await expect(ensureTenantAccount({ tenant: 'ta', modules: [] }, { secretsDir, accountsDir, broker: new FakeBroker() })).rejects.toThrow(/votes\/tenant_tb\.nk.*re-ensure tenant tb/)
   })
 
   test('natsConnectOptionsFor reads the module seed and sets its inbox prefix and name', async () => {

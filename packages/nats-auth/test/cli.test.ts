@@ -31,7 +31,19 @@ describe('nats-auth bin', () => {
     expect(r.stderr.toString()).toMatch(/usage: nats-auth/)
   })
   test('ensure without NATS_URL exits 1 naming it', () => {
-    const r = spawnSync(process.execPath, [BIN, 'ensure', 'ta'], { env })
+    const r = spawnSync(process.execPath, [BIN, 'ensure', 'ta', '--modules', 'publishing'], { env })
+    expect(r.status).toBe(1)
+    expect(r.stderr.toString()).toMatch(/NATS_URL is unset/)
+  })
+  for (const args of [['ensure', 'ta'], ['ensure', 'ta', '--modules=publishing'], ['ensure', 'ta', '--module', 'x'], ['ensure', 'ta', '--modules'], ['ensure', 'ta', '--modules', 'a', '--suspend'], ['ensure', 'ta', '--modules', 'a', 'extra']]) {
+    test(`ensure ${args.slice(1).join(' ')}: refused with the usage, exit 2`, () => {
+      const r = spawnSync(process.execPath, [BIN, ...args], { env })
+      expect(r.status, r.stderr.toString()).toBe(2)
+      expect(r.stderr.toString()).toMatch(/usage: nats-auth/)
+    })
+  }
+  test('ensure --suspend is the explicit empty set (reaches the NATS_URL check)', () => {
+    const r = spawnSync(process.execPath, [BIN, 'ensure', 'ta', '--suspend'], { env })
     expect(r.status).toBe(1)
     expect(r.stderr.toString()).toMatch(/NATS_URL is unset/)
   })

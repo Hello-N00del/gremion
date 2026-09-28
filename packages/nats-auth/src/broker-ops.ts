@@ -12,7 +12,7 @@
 // Every connection is retried a bounded number of times (the broker may not
 // be up yet: no depends_on across projects), then fails naming the url.
 import { connect } from '@nats-io/transport-node'
-import type { NatsConnection } from '@nats-io/nats-core'
+import { nkeyAuthenticator, type NatsConnection } from '@nats-io/nats-core'
 import { jetstreamManager } from '@nats-io/jetstream'
 import { STREAMS } from '@gremion/ports/broker'
 import { NatsBroker } from '@gremion/ports/nats'
@@ -64,6 +64,23 @@ export function natsBrokerOps(opts: BrokerOpsOptions): BrokerOps {
         if (body.error) throw new Error(`[nats-auth] the server refused the reload: ${body.error.description ?? JSON.stringify(body.error)}`)
       } finally {
         await nc.close()
+      }
+    },
+
+    async assertRevoked(tenant, seeds) {
+      const admitted: string[] = []
+      for (const { module, seed } of seeds) {
+        let err = ''
+        try {
+          const nc = await connect({ servers: opts.url, authenticator: nkeyAuthenticator(seed), reconnect: false, timeout: 5_000 })
+          await nc.close()
+        } catch (e) {
+          err = msg(e)
+        }
+        if (!err.includes('Authorization Violation')) admitted.push(`${module}@${tenant}${err ? ` (${err})` : ''}`)
+      }
+      if (admitted.length) {
+        throw new Error(`[nats-auth] dropped identities still admitted by the server after the reload: ${admitted.join(', ')} -- their seeds are kept; rerun`)
       }
     },
 
