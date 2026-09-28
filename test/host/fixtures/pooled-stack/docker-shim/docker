@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# test/host/fixtures/pooled-stack/docker-shim/docker
+#
+# A docker CLI stand-in for test/host/pooled-stack-proof.bats (TASK-040). It
+# answers ONLY the calls the proof's app-wait and cold-state phases make, for
+# one app-blue colour (gremion-ui + gremion-public) and a three-container
+# state tier, and records every stop/start/restart in $SHIM_DIR/calls.log.
+# It never reaches a real engine.
+#
+# gremion-ui's HTTP answers model the real app (hooks.server.ts sequence
+# element 0 is tenantResolveHandle, resolve.ts):
+#   /healthz      on the boot-and-resolve exemption list: always answers
+#   /api/health   NOT exempt. With TENANT_PROXY_SHARED_SECRET set (it always
+#                 is on the pooled stack) a request without a matching
+#                 x-proxy-trust is 403; then an absent x-forwarded-host, a
+#                 Host that differs from it, or a host with no tenant_domain
+#                 row is 404; the state tier DOWN is 503 (control DB); only
+#                 then does the boot state decide 200 {"status":"ok"} / 503.
+# `docker exec <cid> sh -c <script> <arg0> <args...>` runs <script> here with
+# the container's env (TENANT_PROXY_SHARED_SECRET) and a `wget` that is this
+# model, so the proof's real probe command is what gets tested.
+#
+#   SHIM_STACK        the STACK the proof runs under (required)
+#   SHIM_DIR          scratch directory for the shim's own state (required)
+#   SHIM_ALIAS_STATE  the alias gremion-ui carries on ${SHIM_STACK}_state
+#                     (the correct one is gremion-ui-blue)
+#   SHIM_PROXY_SECRET gremion-ui's TENANT_PROXY_SHARED_SECRET (default below)
+#   SHIM_READY        ok: boot completes whenever the state tier is up;
+#                     stuck: ready until the app is restarted, never after;
+#                     anything else: boot never completes (503 booting)
+#   SHIM_READY_DOWN   ok: /api/health answers ok even with the state tier DOWN
+#                     (a probe that cannot tell ready from not ready)
+#   SHIM_REGISTER     fail: the tenant_domain registration writes no row
+set -u
+S="${SHIM_STACK:?SHIM_STACK required}"
+D="${SHIM_DIR:?SHIM_DIR required}"
+SECRET="${SHIM_PROXY_SECRET:-shim-proxy-secret-7f3a91}"
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+mkdir -p "$D"
+[[ -f "$D/state" ]] || echo up > "$D/state"
+state_up() { [[ "$(cat "$D/state")" == up ]]; }
+
+# ── the gremion-ui HTTP model, reached as `wget` ─────────────────────────────
+if [[ "${1:-}" == __wget ]]; then
+    shift
+    url="" trust="" fwd="" host=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --header) h="$2"; shift 2
+                case "${h,,}" in
+                    x-proxy-trust:*) trust="${h#*:}"; trust="${trust# }" ;;
+                    x-forwarded-host:*) fwd="${h#*:}"; fwd="${fwd# }" ;;
+                    host:*) host="${h#*:}"; host="${host# }" ;;
+                esac ;;
+            --header=*) set -- --header "${1#--header=}" "${@:2}" ;;
+            http://*) url="$1"; shift ;;
+            *) shift ;;
+        esac
+    done
+    err() { echo "wget: server returned error: HTTP/1.1 $1" >&2; exit 1; }
+    case "$url" in
+        */healthz) echo '{"ok":true,"colour":"blue"}'; exit 0 ;;
+        */api/health) ;;
+        *) err "404 Not Found" ;;
+    esac
+    [[ "${SHIM_READY_DOWN:-}" == ok ]] && { echo '{"status":"ok"}'; exit 0; }
+    [[ -n "$trust" && "$trust" == "$SECRET" ]] || err "403 Forbidden"
+    [[ -n "$fwd" ]] || err "404 Not Found"
+    [[ "${host:-127.0.0.1:3000}" == "$fwd" ]] || err "404 Not Found"
+    state_up || err "503 Service Unavailable"
+    grep -qxF "$fwd" "$D/hosts" 2>/dev/null || err "404 Not Found"
+    case "${SHIM_READY:-}" in
+        ok) ;;
+        stuck) [[ ! -f "$D/restarted" ]] || err "503 Service Unavailable" ;;
+        *) err "503 Service Unavailable" ;;
+    esac
+    echo '{"status":"ok"}'; exit 0
+fi
+
+printf '%s\n' "$*" >> "$D/calls.log"
+args=" $* "
+case "$1" in
+    ps)
+        case "$args" in
+            *"project=${S}-app-blue "*)
+                case "$args" in
+                    *"service=gremion-public "*) echo cid-public ;;
+                    *"service=gremion-ui "*) echo cid-ui ;;
+                    *"service="*) : ;;
+                    *) echo cid-ui; echo cid-public ;;
+                esac ;;
+            *"project=${S}-state "*)
+                if [[ "$args" != *" -aq "* && "$args" != *" -a "* ]] && ! state_up; then exit 0; fi
+                case "$args" in
+                    *"service=postgres "*) echo cid-postgres ;;
+                    *"service=keycloak "*) echo cid-keycloak ;;
+                    *"service=pgbouncer "*) echo cid-pgbouncer ;;
+                    *"service="*) : ;;
+                    *) echo cid-postgres; echo cid-keycloak; echo cid-pgbouncer ;;
+                esac ;;
+            *) : ;;
+        esac ;;
+    inspect)
+        shift
+        fmt="" cid=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in -f) fmt="$2"; shift 2 ;; *) cid="$1"; shift ;; esac
+        done
+        case "$fmt" in
+            *State.Health*) echo healthy ;;
+            '{{.Name}}') echo "/${cid}" ;;
+            *.Mounts*) echo "${S}_config_data ${S}_tenant_config_data " ;;
+            *com.docker.compose.service*)
+                case "$cid" in cid-public) echo gremion-public ;; *) echo gremion-ui ;; esac ;;
+            *Aliases*)
+                svc=gremion-ui; [[ "$cid" == cid-public ]] && svc=gremion-public
+                sa="${svc}-blue"; [[ "$svc" == gremion-ui ]] && sa="${SHIM_ALIAS_STATE:-gremion-ui-blue}"
+                echo "${S}_edge=${svc}-blue,abc123, ${S}_state=${sa},abc123, ${S}-app-blue_app=abc123, " ;;
+            *NetworkSettings.Networks*) echo "${S}_edge ${S}_state ${S}-app-blue_app " ;;
+            *) echo "shim: unhandled inspect format: $fmt" >&2; exit 1 ;;
+        esac ;;
+    exec)
+        shift
+        while [[ "${1:-}" == -* ]]; do shift; done   # -i / -t
+        cid="${1:-}"; shift
+        case "$cid" in
+            cid-ui|cid-public)
+                mkdir -p "$D/bin"
+                printf '#!/usr/bin/env bash\nexec "%s" __wget "$@"\n' "$SELF" > "$D/bin/wget"
+                chmod +x "$D/bin/wget"
+                if [[ "${1:-}" == sh && "${2:-}" == -c ]]; then
+                    script="$3"; shift 3
+                    PATH="$D/bin:$PATH" TENANT_PROXY_SHARED_SECRET="$SECRET" sh -c "$script" "$@"
+                    exit $?
+                elif [[ "${1:-}" == wget ]]; then
+                    shift; exec "$SELF" __wget "$@"
+                fi
+                echo "shim: unhandled app exec: $*" >&2; exit 1 ;;
+            cid-postgres)
+                state_up || { echo "shim: container cid-postgres is not running" >&2; exit 1; }
+                case "$args" in
+                    *"INSERT INTO tenant_domain"*)
+                        h="$(printf '%s' "$args" | sed -n "s/.*SELECT '\([^']*\)', id FROM tenant.*/\1/p")"
+                        if [[ "${SHIM_REGISTER:-}" != fail && -n "$h" ]]; then
+                            grep -qxF "$h" "$D/hosts" 2>/dev/null || echo "$h" >> "$D/hosts"
+                            echo 1
+                        else echo 0; fi ;;
+                    *) echo "shim: unhandled psql exec: $*" >&2; exit 1 ;;
+                esac ;;
+            *) echo "shim: unhandled exec on $cid: $*" >&2; exit 1 ;;
+        esac ;;
+    stop) echo down > "$D/state" ;;
+    start) echo up > "$D/state" ;;
+    restart) : > "$D/restarted" ;;
+    logs) echo "shim: no logs" ;;
+    *) echo "shim: unhandled docker call: $*" >&2; exit 1 ;;
+esac

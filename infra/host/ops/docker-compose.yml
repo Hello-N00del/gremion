@@ -11,6 +11,13 @@ services:
   prometheus:
     image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
     restart: unless-stopped
+    # TRD-177 (TASK-040 Q4): every container of every project is limited;
+    # [A] until TRD-226. See docs/ops/pooled-stack-layout.md.
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
     user: "${OPS_UID:?OPS_UID required}:${OPS_GID:?OPS_GID required}"
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -37,6 +44,13 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
     restart: unless-stopped
+    # TRD-177 (TASK-040 Q4): every container of every project is limited;
+    # [A] until TRD-226. See docs/ops/pooled-stack-layout.md.
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
     user: "${OPS_UID}:${OPS_GID}"
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
@@ -60,6 +74,13 @@ services:
   node-exporter:
     image: prom/node-exporter:v1.9.1@sha256:d00a542e409ee618a4edc67da14dd48c5da66726bbd5537ab2af9c1dfc442c8a
     restart: unless-stopped
+    # TRD-177 (TASK-040 Q4): every container of every project is limited;
+    # [A] until TRD-226. See docs/ops/pooled-stack-layout.md.
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
     pid: host
     command:
       - "--path.procfs=/host/proc"
@@ -87,6 +108,13 @@ services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.52.1@sha256:f40e65878e25c2e78ea037f73a449527a0fb994e303dc3e34cb6b187b4b91435
     restart: unless-stopped
+    # TRD-177 (TASK-040 Q4): every container of every project is limited;
+    # [A] until TRD-226. See docs/ops/pooled-stack-layout.md.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
     command:
       - "--housekeeping_interval=30s"
       - "--docker_only=true"
@@ -106,6 +134,13 @@ services:
   blackbox:
     image: prom/blackbox-exporter:v0.26.0@sha256:92e05d5fe0df01d3980518dc42f07b778a8997048b57392ebc7f7391ebd7bb06
     restart: unless-stopped
+    # TRD-177 (TASK-040 Q4): every container of every project is limited;
+    # [A] until TRD-226. See docs/ops/pooled-stack-layout.md.
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
     command:
       - "--config.file=/etc/blackbox/blackbox.yml"
       - "--web.listen-address=:9115"

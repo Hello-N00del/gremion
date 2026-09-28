@@ -28,6 +28,13 @@ services:
     container_name: ${STACK}-mail-stalwart
     hostname: mail.${PLATFORM_DOMAIN}
     restart: unless-stopped
+    # TRD-177 (TASK-040 Q4): every container of every project is limited;
+    # [A] until TRD-226. See docs/ops/pooled-stack-layout.md.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
     # No command: override. The pinned image's entrypoint already execs
     #   stalwart --config /opt/stalwart/etc/config.toml
     # which is exactly the path the rendered config is mounted at, and it only
