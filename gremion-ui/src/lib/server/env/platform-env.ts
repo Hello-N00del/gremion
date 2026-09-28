@@ -10,7 +10,6 @@
 //
 // It reads `process.env` at call time (never `$env/dynamic/private`), so the
 // seam survives a later SvelteKit major unchanged (R25-3).
-// @ts-expect-error -- untyped standalone node script (it carries @ts-nocheck)
 import { EXACT_VARS, PREFIX_VARS } from '../../../../scripts/check-tenant-env-guard.mjs'
 
 /**

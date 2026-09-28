@@ -20,6 +20,7 @@ import {
   markTenantResourceOk,
   markTenantResourceFailed,
   getTenantResources,
+  addTenantDomain,
   resolveTenantBySlug,
   _resetResolutionCacheForTests,
 } from '../registry'
@@ -97,6 +98,7 @@ function makeDeps(opts: { realmFailsOnce?: boolean } = {}) {
       markTenantResourceOk,
       markTenantResourceFailed,
       getTenantResources,
+      addTenantDomain,
     },
   }
   return { deps, writtenSecrets }
@@ -113,7 +115,7 @@ describe('provision pipeline — real control DB, mocked DB-create + KC', () => 
 
   it('provisions verein end-to-end; the persisted row + ledger reflect the §4 contract', async () => {
     const { deps } = makeDeps()
-    const res = await provisionTenant({ slug: 't2', realmName: 'verein', configFile: 'verein.json' }, deps)
+    const res = await provisionTenant({ slug: 't2', host: 't2.council.example', realmName: 'verein', configFile: 'verein.json' }, deps)
     expect(res.realmCreated).toBe(true)
 
     const row = await getTenantBySlug('t2')
@@ -121,6 +123,13 @@ describe('provision pipeline — real control DB, mocked DB-create + KC', () => 
     expect(row!.status).toBe('active') // resolvable only after every step
     expect(row!.realmName).toBe('verein')
     expect(row!.issuer).toBe('https://t2.council.example/auth/realms/verein')
+    // TASK-042 TDD 9 (Q2): exactly ONE tenant_domain row, primary, for the
+    // operator-supplied host (verbatim, the issuer's authority).
+    const domains = await getControlDb()<{ host: string; is_primary: boolean }[]>`
+      SELECT host, is_primary FROM tenant_domain WHERE tenant_id = ${row!.id}`
+    expect(domains.map((d) => ({ host: d.host, isPrimary: d.is_primary }))).toEqual([
+      { host: 't2.council.example', isPrimary: true },
+    ])
     // (A) #139/G-080: the persisted in-cluster admin URL is internal-TLS (https,
     // not plaintext :8080) so the admin client can reach a realm stamped
     // sslRequired:'all'. makeDeps leaves kcInternalBase unset -> the TLS default.
@@ -162,7 +171,7 @@ describe('provision pipeline — real control DB, mocked DB-create + KC', () => 
   it('a fail-closed mid-pipeline tenant (provisioning) is NOT resolvable', async () => {
     const { deps } = makeDeps({ realmFailsOnce: true })
     await expect(
-      provisionTenant({ slug: 't2', realmName: 'verein', configFile: 'verein.json' }, deps),
+      provisionTenant({ slug: 't2', host: 't2.council.example', realmName: 'verein', configFile: 'verein.json' }, deps),
     ).rejects.toThrow(/boom/)
     const row = await getTenantBySlug('t2')
     expect(row!.status).toBe('provisioning')
@@ -173,11 +182,11 @@ describe('provision pipeline — real control DB, mocked DB-create + KC', () => 
 
   it('double-provision is idempotent: second run short-circuits, row id stable, no duplicate', async () => {
     const { deps } = makeDeps()
-    const first = await provisionTenant({ slug: 't2', realmName: 'verein', configFile: 'verein.json' }, deps)
+    const first = await provisionTenant({ slug: 't2', host: 't2.council.example', realmName: 'verein', configFile: 'verein.json' }, deps)
     const idAfterFirst = (await getTenantBySlug('t2'))!.id
     ;(deps.db.createDatabaseAndRole as any).mockClear()
     ;(deps.kc.createRealm as any).mockClear()
-    const second = await provisionTenant({ slug: 't2', realmName: 'verein', configFile: 'verein.json' }, deps)
+    const second = await provisionTenant({ slug: 't2', host: 't2.council.example', realmName: 'verein', configFile: 'verein.json' }, deps)
     // already-present everywhere
     expect(deps.db.createDatabaseAndRole).not.toHaveBeenCalled()
     expect(deps.kc.createRealm).not.toHaveBeenCalled()
@@ -186,13 +195,15 @@ describe('provision pipeline — real control DB, mocked DB-create + KC', () => 
     expect((await getTenantBySlug('t2'))!.id).toBe(idAfterFirst)
     const count = await getControlDb()<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant`
     expect(count[0].n).toBe(1)
+    const domainCount = await getControlDb()<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant_domain`
+    expect(domainCount[0].n).toBe(1)
     expect(first.realmCreated).toBe(true)
   })
 
   it('half-onboarded retry: DB ok + realm failed -> re-run completes; row VALUES persisted', async () => {
     const { deps } = makeDeps({ realmFailsOnce: true })
     await expect(
-      provisionTenant({ slug: 't2', realmName: 'verein', configFile: 'verein.json' }, deps),
+      provisionTenant({ slug: 't2', host: 't2.council.example', realmName: 'verein', configFile: 'verein.json' }, deps),
     ).rejects.toThrow(/boom/)
     const mid = await getTenantBySlug('t2')
     expect(mid!.status).toBe('provisioning')
@@ -201,7 +212,7 @@ describe('provision pipeline — real control DB, mocked DB-create + KC', () => 
     expect(midLedger.get('realm')).toBe('failed')
 
     ;(deps.db.createDatabaseAndRole as any).mockClear()
-    await provisionTenant({ slug: 't2', realmName: 'verein', configFile: 'verein.json' }, deps)
+    await provisionTenant({ slug: 't2', host: 't2.council.example', realmName: 'verein', configFile: 'verein.json' }, deps)
     // DB not re-created (already ok)
     expect(deps.db.createDatabaseAndRole).not.toHaveBeenCalled()
     const done = await getTenantBySlug('t2')
