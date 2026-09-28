@@ -498,6 +498,10 @@ check('g4 no overlay RENDERS a placeholder image (the applyable-output post-cond
 
 // FIRST_PARTY_IMAGE (scripts/lib/image-surfaces.mjs) decides whether g5 has
 // anything to check at all; keep it and the manifests in step.
+// g5's surface is every k8s/base image line (k8sImageLines walks k8s/), never a
+// file list, so it has no g9-style hand-listed blind spot. The compose files'
+// first-party tags (${IMAGE_TAG...} on a build: service, or a digest) are
+// deliberately NOT g5's: tag policy for them is TASK-048's lint-image-digests.
 check('g5 base pins every first-party gremion image to the kernel version', () => {
   const version = JSON.parse(read('package.json')).version
   if (!version) return 'package.json declares no version'

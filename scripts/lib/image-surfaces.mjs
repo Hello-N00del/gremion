@@ -24,6 +24,7 @@
 // cannot survive its own rationale being written down gets deleted instead of
 // obeyed.
 
+import { execFileSync } from 'node:child_process'
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
@@ -35,14 +36,28 @@ import { join, relative } from 'node:path'
 export const FIRST_PARTY_IMAGE = /(^|\/)ghcr\.io\/hello-n00del\/gremion-[a-z][a-z-]*(:|@|$)/
 
 const G9_SURFACE_DIRS = ['k8s', 'docs']
-const G9_SURFACE_FILES = [
-  'docker-compose.yml',
-  'docker-compose.prod.yml',
-  'docker-compose.override.yml',
-  'README.md',
-  'KNOWN_ISSUES.md',
-  'Makefile',
+const G9_ROOT_DOCS = ['README.md', 'KNOWN_ISSUES.md', 'Makefile']
+// The compose surface is DERIVED, never listed. The hand list named
+// docker-compose.yml / .prod.yml / .override.yml, so when TASK-040 moved
+// gremion-ui / gremion-public / migrate into docker-compose.app.yml a
+// Docker-Hub coordinate planted there passed the whole run. ROOT-ANCHORED:
+// the tracked docker-compose*.yml at the root plus infra/host/<name>/, via
+// :(glob) pathspecs (whose `*` never crosses a '/'), so test fixtures such as
+// packages/*/test/fixtures/compose/ or test/host/fixtures/** stay out.
+// Tag policy for these files is not g9's: g9 checks the namespace only.
+const COMPOSE_PATHSPECS = [
+  ':(glob)docker-compose*.yml',
+  ':(glob)docker-compose*.yaml',
+  ':(glob)infra/host/*/docker-compose.yml',
+  ':(glob)infra/host/*/docker-compose.yaml',
 ]
+
+/** The tracked compose files g9 reads under `root`, root-relative. */
+export function composeSurfaces(root) {
+  return execFileSync('git', ['ls-files', '-z', '--', ...COMPOSE_PATHSPECS], { cwd: root, encoding: 'utf8' })
+    .split('\0')
+    .filter(Boolean)
+}
 // The five images this repo builds. Naming them individually (rather than
 // `gremion/\w+`) keeps GitHub URLs such as .../Hello-N00del/gremion/issues —
 // PUBLIC_SOURCE_URL's own neighbourhood — out of the match.
@@ -69,12 +84,18 @@ export function g9Surfaces(root) {
     if (!existsSync(join(root, dir))) continue
     out.push(...walk(join(root, dir)).map((f) => relative(root, f).replace(/\\/g, '/')))
   }
-  out.push(...G9_SURFACE_FILES.filter((f) => existsSync(join(root, f))))
+  out.push(...composeSurfaces(root))
+  out.push(...G9_ROOT_DOCS.filter((f) => existsSync(join(root, f))))
   return out.filter((f) => /\.(ya?ml|md)$/.test(f) || f === 'Makefile')
 }
 
 /** g9's verdict on `root`: null when clean, else the problem text. */
 export function g9Check(root) {
+  // The derivation's own vacuity guard: the five coordinates below can all be
+  // seen in k8s/ and docs/ alone, so a pathspec that stops matching would
+  // otherwise drop every compose file silently.
+  if (!composeSurfaces(root).some((f) => !f.includes('/')))
+    return 'git ls-files matched zero tracked docker-compose*.yml at the root — the compose surface is empty, so g9 would vacuously pass it'
   const surfaces = g9Surfaces(root)
   const problems = []
   const seenServices = new Set()
