@@ -528,7 +528,7 @@ assert_dump_coverage() {
 
 archive_volumes() {
     local v img
-    img="${BACKUP_ARCHIVE_IMAGE:-alpine:3.22}"
+    img="${BACKUP_ARCHIVE_IMAGE:-alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}"
     mkdir -p "${DUMP_DIR}/volumes"
     docker pull --quiet "$img" >/dev/null 2>&1 \
         || die "cannot pull archive image ${img}" 1

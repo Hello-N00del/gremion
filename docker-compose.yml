@@ -262,7 +262,7 @@ services:
     # dev sets COMPOSE_PROFILES=dev (.env.example; `make up` defaults it).
     profiles: [dev]
     # Pinned — do NOT use :latest. Bump deliberately after a smoke test.
-    image: axllent/mailpit:v1.30.1
+    image: axllent/mailpit:v1.30.1@sha256:3bd7c2f2696deb35a4780d152b404dceec99cb041b942c0877b3b22384714f85
     restart: unless-stopped
     deploy: *limits-s
     logging:
@@ -298,7 +298,7 @@ services:
   # Admin UI: http://localhost:8082/auth/admin
   # ============================================================
   keycloak:
-    image: quay.io/keycloak/keycloak:26.6.1
+    image: quay.io/keycloak/keycloak:26.6.1@sha256:dea26401d06341095cc4ea9d66896200b55de5ca1daa1d2fcbe58493afa6e0ad
     restart: unless-stopped
     logging:
       driver: json-file
@@ -381,7 +381,7 @@ services:
     # IMAGE_TAG is the release tag on a host (the pins layer resolves it to a
     # digest); `:-latest` keeps the TASK-022 edge-render fixture, which carries
     # no IMAGE_TAG, rendering unchanged.
-    image: ghcr.io/hello-n00del/gremion-legal:${IMAGE_TAG:-latest}
+    image: ghcr.io/hello-n00del/gremion-legal:${IMAGE_TAG:-dev}
     build:
       context: docker/legal
     restart: unless-stopped
@@ -414,7 +414,7 @@ services:
   # ============================================================
   traefik:
     profiles: [production]
-    image: traefik:v3.7.1
+    image: traefik:v3.7.1@sha256:6b9cbca6fac42ab0075f5437d8dc1685cfd188626d8d515839ea94f8b6271c42
     restart: unless-stopped
     logging:
       driver: json-file
@@ -571,7 +571,7 @@ services:
     build:
       context: docker/vector
       dockerfile: Dockerfile
-    image: ghcr.io/hello-n00del/gremion-vector:${IMAGE_TAG:-latest}
+    image: ghcr.io/hello-n00del/gremion-vector:${IMAGE_TAG:-dev}
     restart: unless-stopped
     # No network at all (TASK-040 Q3): vector reads traefik's access log off a
     # shared volume and writes its output to another; it talks to nothing.

@@ -256,7 +256,7 @@ test('object storage: the Q8 refusal regex line passes (the good fixture carries
 test('third-party list: the canonical non-first-party repositories of the fixture tree', () => {
   assert.deepEqual(thirdPartyList(tree()), [
     'docker.io/library/alpine',
-    'docker.io/library/postgres',
+    'docker.io/library/redis',
     'docker.io/stalwartlabs/stalwart',
   ])
   assert.throws(() => thirdPartyList(tree({ 'docker-compose.yml': plain('nginx:1.29') })), /unpinned/)
@@ -282,7 +282,7 @@ test('pin-images.sh pins third-party tags, leaves first-party ${IMAGE_TAG} refs 
     '  d:',
     '    image: ghcr.io.evil/hello-n00del/x:1',
     '  e:',
-    `    image: postgres:18-alpine@sha256:${D('a')}`,
+    `    image: redis:7-alpine@sha256:${D('a')}`,
     '',
   ].join('\n'))
   const r = spawnSync('bash', [join(REPO_ROOT, 'infra/host/ops/pin-images.sh'), file], {
@@ -310,7 +310,7 @@ test('cli: exit 1 with the finding on a RED tree, exit 0 with a count on a GREEN
   assert.match(green.stdout, /check-image-digests: \d+ file\(s\), \d+ image reference\(s\), 0 problem\(s\)/)
   const list = spawnSync(process.execPath, [cli, '--root', tree(), '--third-party-list'], { encoding: 'utf8' })
   assert.equal(list.status, 0, list.stderr)
-  assert.equal(list.stdout, 'docker.io/library/alpine\ndocker.io/library/postgres\ndocker.io/stalwartlabs/stalwart\n')
+  assert.equal(list.stdout, 'docker.io/library/alpine\ndocker.io/library/redis\ndocker.io/stalwartlabs/stalwart\n')
 })
 
 // ── 3. the real tree ─────────────────────────────────────────────────────

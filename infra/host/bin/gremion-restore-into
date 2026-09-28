@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NEUTER_BIN="${NEUTER_BIN:-${SCRIPT_DIR}/gremion-neuter}"
 # Unpacks volume archives; the same helper Task 9 uses to create them.
-RESTORE_HELPER_IMAGE="${RESTORE_HELPER_IMAGE:-alpine:3.22}"
+RESTORE_HELPER_IMAGE="${RESTORE_HELPER_IMAGE:-alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}"
 # The digest-pinned MinIO client of the release; only needed when the snapshot
 # carries buckets/.
 MC_IMAGE="${MC_IMAGE:-}"
