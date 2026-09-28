@@ -1208,6 +1208,24 @@ exit 0'
 # Log sinks: exactly one, and it is the one the compose driver bounds
 # ---------------------------------------------------------------------------
 
+@test "authenticated mail must carry the authenticated sender as its only From (TASK-015, TRD-253)" {
+    # must-match-sender checks the ENVELOPE only: measured on the pinned build
+    # (2026-09-28), kc-alpha@ authenticated, MAIL FROM:<kc-alpha@> and header
+    # `From: system@<domain>` was queued 250 -- a customer credential sending
+    # as the vendor, and DMARC-aligned (d= and the envelope are the vendor
+    # domain). A trusted Sieve script at DATA refuses every From that is not
+    # exactly the envelope sender.
+    local sieve="${PROJECT_ROOT}/infra/host/mail/from-align.sieve"
+    assert_present '^\[sieve\.trusted\.scripts\."from-align"\]$' "${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
+    assert_present '^contents = "%\{file:/opt/stalwart/etc/sieve/from-align\.sieve\}%"$' "${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
+    assert_present '^\[session\.data\]$' "${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
+    assert_present "^script = \[ \{ if = \"!is_empty\(authenticated_as\)\", then = \"'from-align'\" \},$" "${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
+    assert_present 'address :all :value "ne" "from" "\$\{envelope\.from\}"' "$sieve"
+    assert_present 'not address :all :is "from" "\$\{envelope\.from\}"' "$sieve"
+    assert_present 'not exists "from"' "$sieve"
+    assert_present '^      - \./from-align\.sieve:/opt/stalwart/etc/sieve/from-align\.sieve:ro$' "${PROJECT_ROOT}/infra/host/mail/docker-compose.yml"
+}
+
 @test "config template declares no file-log tracer, whose directory nothing creates" {
     # A `[tracer.<id>] type = "log"` sink writes <STALWART_PATH>/logs/<prefix>.<date>.
     # That directory is created by `stalwart --init <path>` and by nothing else,
