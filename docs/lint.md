@@ -47,6 +47,32 @@ the flag.
   variant of the rule, which Oxlint does not ship, so the rule is off in
   tests and stays an error in source.
 
+- **Frozen module copies: per-rule, per-file `off` overrides** (TASK-200,
+  2026-09-27) - the overrides after the test-file override each name ONE
+  rule and the exact `modules/**` files where that rule reported an
+  error-level diagnostic when TASK-200 moved the StuRa module source
+  in-tree (96 errors in 50 files, 14 rules; the largest:
+  `typescript/no-base-to-string` 23, `typescript/no-redundant-type-constituents`
+  20, `unicorn/no-useless-fallback-in-spread` 15,
+  `vitest/require-to-throw-message` 13). Those files are frozen copies:
+  byte-equal to the `extraction-source-f2` tag or listed in
+  `modules/EXTRACTION-DELTA.json`, proven by
+  `scripts/check-module-source-parity.mjs`; fixing them in the move would
+  turn a verbatim copy into an unreviewed rewrite. The re-pin from
+  `extraction-source-f1` to `-f2` (StuRa's own lint clean-up, R25-4 S-C,
+  landed between them) removed 17 file entries and three whole overrides
+  (`no-misused-spread`, `restrict-template-expressions`, `no-new-array`):
+  those files no longer report the rule. They are StuRa-era debt,
+  not new errors, and raising `scripts/lint-js-baseline.json` is not allowed.
+  Deliberately NOT a `modules/**` ignore pattern: every other rule stays on
+  in those files, and every rule stays on in every other file under
+  `modules/`. New module code (TASK-152..157, TASK-190, TASK-205) is linted
+  in full, and a new error in a frozen file still fails (both watched RED).
+  A task that edits one of these files fixes the finding and deletes the
+  path from its override; an override left with no files is deleted. File
+  paths containing `[` or `]` (SvelteKit route params) are written with `?`
+  in their place, because the override globs treat brackets as a class.
+
 ## Svelte 5 runes
 
 Empirically Oxlint 1.85.0 already resolves `$state`, `$derived`, `$effect`,

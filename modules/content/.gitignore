@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+# Transient SQLite WAL siblings (the committed backfill fixture is DELETE-mode,
+# a single file; never commit -wal/-shm scratch left by an ad-hoc reader).
+*.db-wal
+*.db-shm
