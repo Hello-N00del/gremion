@@ -75,13 +75,13 @@ test('an empty jwt_config.secret alone is not refused (the entrypoint injects it
 
 test('a value that could break out of its YAML quoting is refused by key: newline, CR, double quote, backslash', () => {
   const cases = [
-    ['SYNAPSE_REGISTRATION_SHARED_SECRET', 'abc\nenable_registration: true', {}],
-    ['SYNAPSE_REGISTRATION_SHARED_SECRET', 'abc"\nenable_registration: true', { BOOTSTRAP_MODE: '1' }],
-    ['SYNAPSE_DB_PASSWORD', 'pw"x', {}],
-    ['SYNAPSE_OIDC_CLIENT_SECRET', 'a\\b', {}],
-    ['SYNAPSE_SERVER_NAME', 'chat.example.org\r', {}],
+    { key: 'SYNAPSE_REGISTRATION_SHARED_SECRET', value: 'abc\nenable_registration: true', extra: {} },
+    { key: 'SYNAPSE_REGISTRATION_SHARED_SECRET', value: 'abc"\nenable_registration: true', extra: { BOOTSTRAP_MODE: '1' } },
+    { key: 'SYNAPSE_DB_PASSWORD', value: 'pw"x', extra: {} },
+    { key: 'SYNAPSE_OIDC_CLIENT_SECRET', value: 'a\\b', extra: {} },
+    { key: 'SYNAPSE_SERVER_NAME', value: 'chat.example.org\r', extra: {} },
   ]
-  for (const [key, value, extra] of cases) {
+  for (const { key, value, extra } of cases) {
     const r = render(baseEnv({ [key]: value, ...extra }))
     assert.notEqual(r.status, 0, `${key}=${JSON.stringify(value)} rendered`)
     assert.match(r.stderr, new RegExp(key), `${key}: the refusal does not name it`)

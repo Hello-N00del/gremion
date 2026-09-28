@@ -231,13 +231,13 @@
       "path": "modules/messaging/synapse/test/refusal.test.mjs",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "e5622dd6188de36e087090c712685de29f93d9e9"
+      "blob": "c65dcc3a82d16593229021d14fdf15c069965c8f"
     },
     {
       "path": "modules/messaging/synapse/test/render.test.mjs",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
-      "blob": "9facb949d02972f40679545dfb3c32689066d15c"
+      "blob": "09975480d12e49592dcd4ff009d1530a646393ff"
     },
     {
       "path": "modules/messaging/synapse/test/scratch-proof.sh",

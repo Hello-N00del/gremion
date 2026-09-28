@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { TEMPLATE, baseEnv, render, scratchDir } from './helpers.mjs'
+import { SYN, TEMPLATE, baseEnv, render, scratchDir } from './helpers.mjs'
 
 test('the template names no SQLite database', () => {
   const text = readFileSync(TEMPLATE, 'utf8')
@@ -107,7 +107,7 @@ test('the OIDC client secret file wins over the env value; a named file that can
 })
 
 test('the Dockerfile bakes every script the image runs or documents, bootstrap.sh included', () => {
-  const df = readFileSync(join(TEMPLATE, '..', 'Dockerfile'), 'utf8')
+  const df = readFileSync(join(SYN, 'Dockerfile'), 'utf8')
   for (const [src, dst] of [
     ['homeserver.yaml', '/config/homeserver.yaml.tpl'],
     ['entrypoint.sh', '/gremion-synapse-entrypoint.sh'],
@@ -119,6 +119,6 @@ test('the Dockerfile bakes every script the image runs or documents, bootstrap.s
   ]) {
     assert.match(df, new RegExp(`^COPY ${src.replace('.', '\\.')} ${dst.replace(/\./g, '\\.')}$`, 'm'), `${src} is not baked at ${dst}`)
   }
-  const bs = readFileSync(join(TEMPLATE, '..', 'bootstrap.sh'), 'utf8')
+  const bs = readFileSync(join(SYN, 'bootstrap.sh'), 'utf8')
   assert.doesNotMatch(bs, /b"\$\{(SHARED_SECRET|NONCE|PASSWORD)\}"/, 'bootstrap.sh splices a secret into Python source')
 })
