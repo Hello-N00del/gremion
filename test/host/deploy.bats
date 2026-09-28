@@ -113,7 +113,7 @@ stub_docker() {
     shim docker '
 st="$BATS_TEST_TMPDIR"
 args="$*"
-case "$args" in *app-green*) c=green ;; *) c=blue ;; esac
+case "$args" in *app-green*|*c-green-*) c=green ;; *) c=blue ;; esac
 case "$1" in
   login)    cat >/dev/null; printf "Login Succeeded\n"; exit 0 ;;
   logout)   exit 0 ;;
@@ -127,6 +127,9 @@ case "$1" in
       exit 0 ;;
   inspect)
       case "$args" in
+        # the per-network alias query of assert_stack_isolation (TASK-040) also
+        # contains "Aliases", so it is matched first.
+        *"\$ep.Aliases"*)                 printf "%s_edge=gremion-ui-%s,ui-1, %s_state=gremion-ui-%s, \n" "$STACK" "$c" "$STACK" "$c" ;;
         *Aliases*)                      printf "gremion-ui-%s \n" "$c" ;;
         *ExposedPorts*)                 printf "3000/tcp \n" ;;
         # ORDER IS LOAD-BEARING: the mounts format is
@@ -569,6 +572,66 @@ exit 0
     [[ "$output" == *"attached to foreign network 'otherstack_edge'"* ]]
 }
 
+# TASK-040: the alias half of assert_stack_isolation. The shim answers mounts
+# and networks exactly like a healthy colour; only the aliases differ.
+alias_shim() { # <answer to the per-network alias query>
+    printf '%s' "$1" > "${BATS_TEST_TMPDIR}/alias-answer"
+    shim docker '
+st="$BATS_TEST_TMPDIR"
+args="$*"
+case "$1" in
+  login) cat >/dev/null; exit 0 ;;
+  manifest) printf "{\"config\":{\"size\":1},\"layers\":[{\"size\":1}]}\n"; exit 0 ;;
+  image) exit 0 ;;
+  ps) exit 0 ;;
+  inspect)
+      case "$args" in
+        *"\$ep.Aliases"*)           cat "$st/alias-answer"; printf "\n" ;;
+        *"range .Mounts"*)              printf "%s_tenant_secrets \n" "$STACK" ;;
+        *"{{.Name}}"*)                  printf "/ui-1\n" ;;
+        *"NetworkSettings.Networks"*)   printf "%s_edge %s_state \n" "$STACK" "$STACK" ;;
+        *"com.docker.compose.service"*) printf "gremion-ui\n" ;;
+        *)                              printf "\n" ;;
+      esac
+      exit 0 ;;
+  compose)
+      case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac
+      case "$args" in
+        *" up -d"*) : > "$st/up-blue"; exit 0 ;;
+        *" down"*)  rm -f "$st/up-blue"; exit 0 ;;
+        *" ps -a -q"*|*" ps -q"*) [ -f "$st/up-blue" ] && printf "c1\n"; exit 0 ;;
+      esac
+      exit 0 ;;
+esac
+exit 0
+'
+}
+
+@test "an app container without its <service>-<colour> alias fails isolation and stops the colour" {
+    stub_git; stub_siblings
+    # on both shared networks, but answering only to the bare service name
+    alias_shim "teststack_edge=gremion-ui,ui-1, teststack_state=gremion-ui, "
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"on 'teststack_edge' carries no 'gremion-ui-blue' alias"* ]]
+    [[ "$output" == *"stack isolation violated"* ]]
+    [ ! -f "${BATS_TEST_TMPDIR}/up-blue" ]
+}
+
+@test "the other colour's alias, or the alias on one shared network only, fails isolation" {
+    stub_git; stub_siblings
+    alias_shim "teststack_edge=gremion-ui-green, teststack_state=gremion-ui-green, "
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"carries no 'gremion-ui-blue' alias"* ]]
+    # aliased on _edge, bare on _state: the _state hop is still ambiguous
+    alias_shim "teststack_edge=gremion-ui-blue, teststack_state=gremion-ui, "
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"on 'teststack_state' carries no 'gremion-ui-blue' alias"* ]]
+    [ ! -f "${BATS_TEST_TMPDIR}/up-blue" ]
+}
+
 @test "an exempt one-shot service must have exited 0, not be running forever" {
     stub_git; stub_siblings
     shim docker '
@@ -583,6 +646,7 @@ case "$1" in
       case "$args" in
         *"range .Mounts"*)              printf "\n" ;;
         *"{{.Name}}"*)                  printf "/mc-1\n" ;;
+        *"\$ep.Aliases"*)                 printf "%s_state=minio-mc-blue, \n" "$STACK" ;;
         *"NetworkSettings.Networks"*)   printf "%s_state \n" "$STACK" ;;
         *"com.docker.compose.service"*) printf "minio-mc\n" ;;
         *"{{.State.Status}}"*)          printf "exited\n" ;;

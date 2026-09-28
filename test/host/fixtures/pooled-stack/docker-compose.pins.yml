@@ -1,0 +1,8 @@
+# test/host/fixtures/pooled-stack/docker-compose.pins.yml
+#
+# A stand-in for the release pins layer (docker-compose.pins.yml is written by
+# the release workflow and never committed). It is EMPTY on purpose: a pins
+# layer only swaps image references and resets build:, so the placement, limits
+# and isolation the guard reads are the same with or without it. The
+# FORM of the real layer is asserted by gremion-deploy's validate_release_tree.
+services: {}

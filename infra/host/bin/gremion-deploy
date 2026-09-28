@@ -527,7 +527,7 @@ assert_stack_isolation() {
     local colour="$1"
     local project="${STACK}-app-${colour}"
     local allowed=" ${STACK}_edge ${STACK}_state ${project}_app "
-    local cid name mounts nets m n seen=0
+    local cid name mounts nets m n svc eps al t seen=0
     while IFS= read -r cid; do
         [[ -n "$cid" ]] || continue
         seen=$(( seen + 1 ))
@@ -549,6 +549,25 @@ assert_stack_isolation() {
             case "$allowed" in
                 *" $n "*) : ;;
                 *) bad "container ${name} attached to foreign network '${n}' (STACK=${STACK})"
+                   return 1 ;;
+            esac
+        done
+        # TASK-040: on the two SHARED networks both colours are attached to,
+        # every app container must answer to <service>-<colour>. The bare
+        # service name resolves to whichever colour Docker answers with, so an
+        # unaliased (or other-colour-aliased) container is exactly the
+        # cross-colour hop the blue/green switch exists to rule out.
+        svc="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$cid")"
+        eps="$(docker inspect --format '{{range $net, $ep := .NetworkSettings.Networks}}{{$net}}={{range $ep.Aliases}}{{.}},{{end}} {{end}}' "$cid")"
+        for n in $nets; do
+            [[ "$n" == "${STACK}_edge" || "$n" == "${STACK}_state" ]] || continue
+            al=""
+            for t in $eps; do
+                [[ "$t" == "${n}="* ]] && al="${t#*=}"
+            done
+            case ",${al}" in
+                *",${svc}-${colour},"*) : ;;
+                *) bad "container ${name} on '${n}' carries no '${svc}-${colour}' alias (§E colour-suffixed aliases)"
                    return 1 ;;
             esac
         done

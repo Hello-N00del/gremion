@@ -517,13 +517,13 @@ describe('POST /api/setup/test-smtp — resolve once, connect to the vetted IP',
 // set a variable that has no effect, which is the shape of a hint that lies.
 describe('SMTP_TEST_ALLOW_PRIVATE reaches the shipped gremion-ui container', () => {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../../../..')
-  const compose = () => readFileSync(join(repoRoot, 'docker-compose.yml'), 'utf8')
+  const compose = () => readFileSync(join(repoRoot, 'docker-compose.app.yml'), 'utf8')
 
   /** The `environment:` mapping compose renders for one service. */
   function serviceEnvironment(text: string, service: string): Record<string, string> {
     const lines = text.split('\n')
     const start = lines.findIndex((l) => l === `  ${service}:`)
-    expect(start, `docker-compose.yml has no service ${service}`).toBeGreaterThan(-1)
+    expect(start, `docker-compose.app.yml has no service ${service}`).toBeGreaterThan(-1)
     let inEnv = false
     const out: Record<string, string> = {}
     for (const line of lines.slice(start + 1)) {
@@ -548,7 +548,7 @@ describe('SMTP_TEST_ALLOW_PRIVATE reaches the shipped gremion-ui container', () 
     const env = serviceEnvironment(compose(), 'gremion-ui')
     expect(
       env,
-      'the only escape hatch must be settable without editing docker-compose.yml',
+      'the only escape hatch must be settable without editing docker-compose.app.yml',
     ).toHaveProperty('SMTP_TEST_ALLOW_PRIVATE')
     expect(
       env.SMTP_TEST_ALLOW_PRIVATE,

@@ -6,7 +6,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 import { run } from '../lib/proc.mjs'
-import { childEnv, parseExemptList, PINS_FILE, planRender, PROJECTS, readEnvKey, RENDER_ENV, renderProject, REPO_ROOT } from './render.mjs'
+import { ALLOWANCES, childEnv, parseExemptList, PINS_FILE, planRender, PROJECTS, readEnvKey, RENDER_ENV, renderProject, REPO_ROOT } from './render.mjs'
 
 const FIXTURES = path.join(import.meta.dirname, '__fixtures__')
 const byName = (n) => PROJECTS.find((p) => p.name === n)
@@ -70,17 +70,27 @@ test('a template without COMPOSE_FILE, or with only the pins file, is an error',
   )
 })
 
-test('the dated app allowance holds only while docker-compose.app.yml is absent, and fails once it exists', () => {
+test('a dated allowance holds only while its file is absent, and fails once it exists', () => {
   const tmpl = fakeTemplate(['COMPOSE_FILE=docker-compose.app.yml:docker-compose.pins.yml', 'COMPOSE_PROFILES=production'])
-  const absent = planRender(byName('app'), { root: '/r', exists: () => false, readText: tmpl })
+  const allowances = [{ project: 'app', file: 'docker-compose.app.yml', dated: '2026-09-27', removedBy: 'TASK-040', why: 'fixture' }]
+  const absent = planRender(byName('app'), { root: '/r', allowances, exists: () => false, readText: tmpl })
   assert.equal(absent.allowed, true)
   assert.deepEqual(absent.errors, [])
   assert.ok(absent.notes.some((n) => /dated allowance 2026-09-27, removed by TASK-040/.test(n)), absent.notes.join('\n'))
-  const present = planRender(byName('app'), { root: '/r', exists: () => true, readText: tmpl })
+  const present = planRender(byName('app'), { root: '/r', allowances, exists: () => true, readText: tmpl })
   assert.match(present.errors.join('\n'), /stale allowance: docker-compose\.app\.yml now exists/)
   // No allowance at all: absent is simply a failure.
   const strict = planRender(byName('app'), { root: '/r', allowances: [], exists: () => false, readText: tmpl })
   assert.match(strict.errors.join('\n'), /docker-compose\.app\.yml, which does not exist/)
+})
+
+test('TASK-040 retired the app allowance: none is shipped and the real app project plans a render', () => {
+  assert.deepEqual(ALLOWANCES, [])
+  const plan = planRender(byName('app'))
+  assert.deepEqual(plan.errors, [])
+  assert.equal(plan.allowed, false)
+  assert.ok(plan.argv, 'the app project must produce a render argv')
+  assert.ok(plan.files.some((f) => path.basename(f) === 'docker-compose.app.yml'), plan.files.join('\n'))
 })
 
 test('childEnv drops COMPOSE_* and interpolated names, keeps the OS/docker ones', () => {

@@ -171,20 +171,33 @@ info "Ensuring internal TLS certificates (G-080)..."
 bash docker/keycloak/certs/gen-internal-ca.sh
 
 # ── Build & start ──────────────────────────────────────────
-info "Building images..."
-docker compose build --quiet
+# Two compose projects since TASK-040 (the pooled stack): the STATE project
+# (docker-compose.yml + docker-compose.override.yml) and ONE app colour, blue
+# (docker-compose.app.yml + docker-compose.app.dev.yml). The Makefile's
+# DEV_STATE / DEV_APP carry both command lines, so this script and `make up`
+# can never drift apart. They meet only on the external ${DEV_STACK}_state /
+# _edge networks and share the external config volumes: those come FIRST, or
+# the first `up` refuses on a missing external. Dev data from before the split
+# lived in the global gremion_* volumes, which nothing mounts any more: the
+# dev stack re-seeds (POST /api/setup/seed).
+info "Ensuring the dev networks and external volumes..."
+make --no-print-directory dev-networks
 
-info "Starting core services (postgres, keycloak, gremion-ui)..."
-docker compose up -d postgres keycloak gremion-ui
+info "Building images..."
+make --no-print-directory build
+
+info "Starting the state project, then the app colour (blue)..."
+make --no-print-directory up
 
 # ── Wait for gremion-ui ──────────────────────────────────────
-# postgres + keycloak come up first (compose depends_on with
-# condition: service_healthy gates gremion-ui), so waiting on gremion-ui's
-# health implicitly confirms the IdP and database are ready too.
+# No cross-project depends_on any more: gremion-ui's own boot retry (TASK-023)
+# waits for postgres and keycloak, so waiting on gremion-ui's health still
+# confirms the IdP and database are ready too.
 info "Waiting for gremion-ui to become healthy (this takes ~60–90s on first run)..."
+DEV_STACK="${DEV_STACK:-dev}"
 ATTEMPTS=0
 MAX=36
-until [[ "$(docker compose ps -q gremion-ui | xargs -r docker inspect -f '{{.State.Health.Status}}' 2>/dev/null)" == "healthy" ]]; do
+until [[ "$(docker ps -q --filter "label=com.docker.compose.project=${DEV_STACK}-app-blue" --filter "label=com.docker.compose.service=gremion-ui" | xargs -r docker inspect -f '{{.State.Health.Status}}' 2>/dev/null)" == "healthy" ]]; do
     ATTEMPTS=$((ATTEMPTS + 1))
     if [[ $ATTEMPTS -ge $MAX ]]; then
         warn "gremion-ui health check timed out. Run 'make logs SERVICE=gremion-ui' to investigate."

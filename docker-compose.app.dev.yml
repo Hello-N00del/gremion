@@ -1,0 +1,69 @@
+##############################################################
+# docker-compose.app.dev.yml — the LOCAL dev layer of the app tier
+#
+# Never on a host (app.env.tmpl's COMPOSE_FILE does not name it). `make up`
+# runs it on top of docker-compose.app.yml as ONE colour, blue:
+#
+#   STACK=dev COLOUR=blue IMAGE_TAG=dev docker compose \
+#     -f docker-compose.app.yml -f docker-compose.app.dev.yml -p dev-app-blue up -d
+#
+# (the Makefile's DEV_APP carries the full command). The state project runs
+# beside it as dev-state from docker-compose.yml + docker-compose.override.yml
+# with COMPOSE_PROFILES=dev; the two meet on the external dev_state /
+# dev_edge networks `make dev-networks` creates.
+#
+# What this layer changes, and only this: the loopback-only host ports the
+# root override used to publish (P2.1c T5 D-PORTBIND: a 0.0.0.0 bind would
+# let an off-host client choose any tenant through x-forwarded-host), the
+# dev-only origins, plain-http Keycloak (the dev realm is sslRequired
+# external), a direct database URL (dev has no pgbouncer) and no internal-CA
+# mount. Images build locally as IMAGE_TAG=dev.
+##############################################################
+
+services:
+
+  gremion-ui:
+    ports:
+      - "127.0.0.1:3001:3000"
+      - "[::1]:3001:3000"
+    environment:
+      ORIGIN: "http://localhost:3001"
+      PUBLIC_BASE_URL: "http://localhost:3001"
+      # Keycloak 26 hostname v2: iss = KC_HOSTNAME/realms/{realm}.
+      AUTH_KEYCLOAK_ISSUER: "http://localhost:8082/auth/realms/gremion"
+      AUTH_KEYCLOAK_BASE: "http://localhost:8082/auth/realms/gremion"
+      # G-080: dev keeps plain http (dev realm = sslRequired:external).
+      AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/gremion"
+      KEYCLOAK_ADMIN_URL: "http://keycloak:8080/auth"
+      # Dev has no pgbouncer: the data plane goes direct, like the control plane.
+      DATABASE_URL: postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${GREMION_DB_NAME:-gremion}
+      NODE_EXTRA_CA_CERTS: ""
+      PROTOCOL_HEADER: ""
+    volumes: !override
+      - config-data:/app/config
+      - tenant-config-data:/data
+      - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
+
+  gremion-public:
+    ports:
+      - "127.0.0.1:3002:3000"
+      - "[::1]:3002:3000"
+    environment:
+      ORIGIN: "http://localhost:3002"
+      PUBLIC_MAIN_APP_URL: "http://localhost:3001"
+
+  migrate:
+    environment:
+      DATABASE_URL: postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${GREMION_DB_NAME:-gremion}
+
+  tenant-create:
+    environment:
+      DATABASE_URL: postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${GREMION_DB_NAME:-gremion}
+      KC_ADMIN_URL: "http://keycloak:8080/auth"
+      AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth"
+      NODE_EXTRA_CA_CERTS: ""
+    volumes: !override
+      - config-data:/app/config
+      - tenant-config-data:/data
+      - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants
+      - ./docker/keycloak/realm-export.base.json:/repo/docker/keycloak/realm-export.base.json:ro
