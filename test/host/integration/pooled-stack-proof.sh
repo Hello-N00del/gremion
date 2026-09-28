@@ -69,6 +69,9 @@ ENV_DIR="${POOLED_ENV_DIR:-${OUT}/env}"
 SROOT="${OUT}/root"              # the scratch GREMION_ROOT
 PROBE_IMAGE="postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873"
 TENANT_SLUG="${POOLED_TENANT_SLUG:-t040-b}"   # its config is always the t040-b fixture
+# The host cold-state registers for the default tenant (the scratch
+# PLATFORM_DOMAIN): /api/health resolves a tenant like every edge request.
+PROOF_HOST="proof.example.org"
 
 RED=0
 FAILS=0   # a counter, so a phase can tell whether ITS checks failed
@@ -706,10 +709,30 @@ phase_switch() {
 # (TASK-023's boot retry) once state is back. /healthz is liveness and answers
 # 200 even after a failed boot, so readiness is /api/health (200 {"status":"ok"}
 # only once boot -- migrations and workers -- completed; 503 before).
-ready_body() { docker exec "$1" wget -qO- http://127.0.0.1:3000/api/health 2>/dev/null || true; }
+#
+# /api/health is NOT on the boot-and-resolve exemption list: tenantResolveHandle
+# (hooks.server.ts sequence element 0) answers 403 without x-proxy-trust when
+# TENANT_PROXY_SHARED_SECRET is set -- it always is here -- and 404 without a
+# registered x-forwarded-host whose Host matches (resolve.ts). So the probe is
+# shaped like the edge's request: the proof host (registered by cold-state for
+# the default tenant) as both headers, and the container's OWN secret, which
+# expands inside the container and so never reaches this host's argv, output
+# or ledger. wget's stderr (the HTTP status) is the body when it is not ok.
+# shellcheck disable=SC2016  # $TENANT_PROXY_SHARED_SECRET and $1 expand in the container
+ready_body() { # <gremion-ui container> <host>
+    { docker exec "$1" sh -c 'wget -qO- -T 5 --header "x-proxy-trust: $TENANT_PROXY_SHARED_SECRET" --header "x-forwarded-host: $1" --header "Host: $1" http://127.0.0.1:3000/api/health 2>&1' sh "$2" 2>&1 || true; } | tr -d '\r'
+}
+# The proof host becomes the default tenant's (non-primary) tenant_domain row;
+# prints how many default-tenant rows carry it afterwards (1 = registered).
+register_proof_host() {
+    local pg; pg="$(svc_cid state postgres)"
+    [[ -n "$pg" ]] || { echo "no state postgres"; return 0; }
+    { docker exec "$pg" psql -v ON_ERROR_STOP=1 -tAqU postgres -d control -c \
+        "INSERT INTO tenant_domain (host, tenant_id) SELECT '${PROOF_HOST}', id FROM tenant WHERE slug = 'default' ON CONFLICT (host) DO NOTHING; SELECT count(*) FROM tenant_domain d JOIN tenant t ON t.id = d.tenant_id WHERE d.host = '${PROOF_HOST}' AND t.slug = 'default'" 2>&1 || true; } | tr -d '\r'
+}
 phase_cold_state() {
     require_scratch cold-state
-    local cid c body s scid t=0 stamp
+    local cid c body s scid t=0 stamp reg
     local budget="${POOLED_COLD_BUDGET:-240}" hold="${POOLED_COLD_HOLD:-20}" poll="${POOLED_POLL:-3}"
     local -a state=() app=()
     for c in green blue; do cid="$(svc_cid "app-$c" gremion-ui)"; [[ -n "$cid" ]] && break; done
@@ -718,12 +741,20 @@ phase_cold_state() {
     mapfile -t app < <(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-$c" | sed '/^$/d')
     (( ${#state[@]} > 0 )) || { bad "cold-state: the state project has no container"; return; }
     stamp="$(now)"
+    # 0. the probe must see the RUNNING app as ready, or neither control below
+    #    can mean anything: register the proof host, then a positive control.
+    reg="$(register_proof_host)"
+    [[ "$reg" == 1 ]] || { bad "cold-state: could not register the proof host ${PROOF_HOST} for the default tenant in control.tenant_domain (got: ${reg:-nothing})"; return; }
+    body="$(ready_body "$cid" "$PROOF_HOST")"
+    [[ "$body" == *'"status":"ok"'* ]] || {
+        bad "cold-state: positive control -- the edge-shaped /api/health probe does not see the running app-$c as ready, so it cannot prove readiness after a cold start (${body:-no answer})"
+        return; }
     # 1. state DOWN, then the app colour re-boots against it
     docker stop -t 5 "${state[@]}" >/dev/null
     docker restart -t 5 "${app[@]}" >/dev/null
     sleep "$hold"
     # 2. negative control: with state down the app must NOT report ready
-    body="$(ready_body "$cid")"
+    body="$(ready_body "$cid" "$PROOF_HOST")"
     [[ "$body" == *'"status":"ok"'* ]] \
         && bad "cold-state: /api/health answers ok with the state tier DOWN -- the probe cannot tell ready from booting ($body)"
     # 3. state back up, healthy
@@ -734,7 +765,7 @@ phase_cold_state() {
     done
     # 4. the app becomes READY within the budget, without a restart of its own
     while (( t < budget )); do
-        body="$(ready_body "$cid")"
+        body="$(ready_body "$cid" "$PROOF_HOST")"
         [[ "$body" == *'"status":"ok"'* ]] && break
         sleep "$poll"; t=$(( t + poll ))
     done
