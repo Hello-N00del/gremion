@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "_comment": "TASK-015 (RFC 8601 section 5): an Authentication-Results field counts only when its authserv-id is the RECEIVING provider's own. One entry per provider class the deliverability record uses. The university mailbox's authserv-id identifies the institution and is therefore never committed: pass it at run time with --authserv-id (check-received.mjs), and record only its class in records.json. Add a provider only with the authserv-id MEASURED from a delivered message's headers, never from memory.",
+  "receivers": {
+    "google": {
+      "class": "large-consumer",
+      "authservIds": [
+        "mx.google.com"
+      ]
+    }
+  },
+  "espMarkers": {
+    "_comment": "Third-party mail-API relays. A marker in any Received hop, header name or DKIM d= fails the check: the vendor's mail is sent by its own Stalwart (PRD-REC-006).",
+    "hosts": [
+      "sendgrid.net",
+      "amazonses.com",
+      "mailgun.org",
+      "mailgun.net",
+      "mailjet.com",
+      "sparkpostmail.com",
+      "mtasv.net",
+      "postmarkapp.com",
+      "mandrillapp.com",
+      "sendinblue.com",
+      "brevo.com",
+      "smtp2go.com",
+      "mcsv.net",
+      "mailchimp.com",
+      "sendpulse.com",
+      "elasticemail.com",
+      "resend.dev"
+    ],
+    "headerPrefixes": [
+      "x-sg-",
+      "x-ses-",
+      "x-mailgun-",
+      "x-mj-",
+      "x-msys-",
+      "x-pm-",
+      "x-mandrill-",
+      "x-sib-",
+      "x-mailchimp-"
+    ]
+  }
+}

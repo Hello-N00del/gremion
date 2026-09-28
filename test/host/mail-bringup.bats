@@ -77,14 +77,19 @@ EOF
 
 # The vendor mail launcher as bringup calls it (VENDOR_MAIL_BIN). realm-smtp
 # is the REAL launcher (it only drives docker, which each test shims); the node
-# checks run in a pinned container on a host, so here they answer from
-# VM_<SUBCOMMAND> (exit code, default 0) and record their argv.
+# checks run in a pinned container on a host; here check-identities answers
+# from VM_CHECK_IDENTITIES (default 0) and check-received runs the REAL
+# ops/vendor-mail/check-received.mjs with node unless VM_CHECK_RECEIVED forces
+# an exit code.
 shim_vendor_mail() {
     shim gremion-vendor-mail '
 case "$1" in
   realm-smtp) exec "'"${PROJECT_ROOT}"'/infra/host/bin/gremion-vendor-mail" "$@" ;;
   check-identities) exit "${VM_CHECK_IDENTITIES:-0}" ;;
-  check-received) exit "${VM_CHECK_RECEIVED:-0}" ;;
+  check-received)
+    [ -z "${VM_CHECK_RECEIVED:-}" ] || exit "$VM_CHECK_RECEIVED"
+    shift
+    exec node "'"${PROJECT_ROOT}"'/ops/vendor-mail/check-received.mjs" --mail-env "'"${GREMION_ROOT}"'/etc/env/mail.env" "$@" ;;
 esac
 exit 0'
     export VENDOR_MAIL_BIN="${SHIM_DIR}/gremion-vendor-mail"
@@ -699,9 +704,30 @@ exit 1'
 Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=example.org; dmarc=pass header.from=example.org
 Received: from mail.example.org (mail.example.org. [203.0.113.25]) by mx.example.net
 EOF
-    run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    RECEIVER_AUTHSERV_ID=mx.example.net \
+        run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"6a=ok"* ]]
+    assert_recorded gremion-vendor-mail "check-received --file ${GREMION_ROOT}/results.txt --authserv-id mx.example.net"
+}
+
+@test "assert 6a refuses a relayed (third-party API) header block the old substring greps passed (TASK-015)" {
+    shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker 'exit 0'
+    # Every string the old greps looked for is present -- the verdicts, and
+    # 203.0.113.25 in the body -- yet the mail was signed and sent by a relay.
+    cat > "${GREMION_ROOT}/results.txt" <<'EOF'
+Authentication-Results: mx.example.net; dkim=pass header.d=sendgrid.net; spf=pass smtp.mailfrom=em.example.org; dmarc=pass header.from=example.org
+Received: from o1.sendgrid.net (o1.sendgrid.net. [198.51.100.77]) by mx.example.net
+
+sent on behalf of 203.0.113.25
+EOF
+    RECEIVER_AUTHSERV_ID=mx.example.net \
+        run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"sendgrid.net"* ]]
+    [[ "$output" == *"6a=FAIL"* ]]
 }
 
 @test "assert 6a fails when the delivering source is not IP-B" {
@@ -794,16 +820,34 @@ echo "unexpected kcadm call: $*" >&2; exit 1'
        "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
     shim_keycloak_labels
     cat > "${GREMION_ROOT}/results.txt" <<EOF
-Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass; dmarc=pass
-Received: from mail.example.org (mail.example.org [203.0.113.25])
+Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=system@example.org; dmarc=pass header.from=example.org
+Received: from mail.example.org (mail.example.org [203.0.113.25]) by mx.example.net
 EOF
-    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password \
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net \
         run "$BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
     [[ "$output" == *"Keycloak reset mail dispatched"* ]] || { echo "status=${status}"; echo "$output"; return 1; }
     [ -f "${GREMION_ROOT}/kc/actions.json" ] || { echo "execute-actions-email never reached kcadm"; return 1; }
     refute_recorded docker 'staging-state-keycloak'
     [[ "$output" != *"unit-test-kc-password"* ]]
     ! grep -qF 'unit-test-kc-password' "$SHIM_LOG" || { echo "kc admin password on a docker argv"; return 1; }
+    assert_recorded gremion-vendor-mail "check-received --file ${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+}
+
+@test "assert 6b refuses a reset mail whose DKIM signer is not the vendor domain (TASK-015)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
+       "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
+    shim_keycloak_labels
+    cat > "${GREMION_ROOT}/results.txt" <<EOF
+Authentication-Results: mx.example.net; dkim=pass header.d=mailer.example.com; spf=pass smtp.mailfrom=system@example.org; dmarc=pass header.from=example.org
+Received: from mail.example.org (mail.example.org [203.0.113.25]) by mx.example.net
+EOF
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net \
+        run "$BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"no dkim=pass with header.d=example.org"* ]]
 }
 
 @test "assert 6b runs realm-smtp first: master sends as system@ before the reset is triggered (TASK-015)" {

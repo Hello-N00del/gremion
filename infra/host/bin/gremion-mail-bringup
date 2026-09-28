@@ -579,6 +579,18 @@ assert_5_mta_sts() {
     return "$rc"
 }
 
+# The header verdict of 6a and 6b (TASK-015): ops/vendor-mail/check-received
+# through the launcher. The substring greps it replaces passed a message
+# relayed by a mail API (`dkim=pass header.d=sendgrid.net` contains
+# "dkim=pass") and the bind address anywhere in the file, the body included.
+# RECEIVER_AUTHSERV_ID names the receiving provider's authserv-id when it is
+# not in deliverability/receivers.json (the university mailbox's never is).
+check_received_headers() {   # <file>
+    local -a args=(check-received --file "$1")
+    [ -z "${RECEIVER_AUTHSERV_ID:-}" ] || args+=(--authserv-id "$RECEIVER_AUTHSERV_ID")
+    "$VENDOR_MAIL_BIN" "${args[@]}"
+}
+
 # --- assert 6a: authenticated submission to two external providers ----------
 assert_6a_external() {
     [ -n "$EXTERNAL_TO" ] || die "--external-to is required for assert 6a" "$GREMION_EXIT_USAGE"
@@ -643,16 +655,11 @@ SH
         return 3
     fi
     [ -s "$RESULTS_FILE" ] || die "results file is empty: ${RESULTS_FILE}" "$GREMION_EXIT_USAGE"
-    local verdict
-    for verdict in dkim=pass spf=pass dmarc=pass; do
-        if ! grep -q "$verdict" "$RESULTS_FILE"; then
-            bad "the received headers do not show ${verdict}"; rc=1
-        fi
-    done
-    if ! grep -q "$MAIL_BIND_IP" "$RESULTS_FILE"; then
-        bad "no Received: line names the mail source address ${MAIL_BIND_IP}"; rc=1
+    if check_received_headers "$RESULTS_FILE"; then
+        ok "external delivery: dkim=pass spf=pass dmarc=pass for ${PLATFORM_DOMAIN}, accepted from ${MAIL_BIND_IP}, no third-party relay"
+    else
+        bad "the delivered headers do not prove an own-server, authenticated delivery (check-received)"; rc=1
     fi
-    [ "$rc" -eq 0 ] && ok "external delivery: dkim=pass spf=pass dmarc=pass from ${MAIL_BIND_IP}"
     return "$rc"
 }
 
@@ -713,13 +720,13 @@ assert_6b_keycloak() {
         printf '  gremion-mail-bringup --assert 6b --results-file <file>\n'
         return 3
     fi
-    local rc=0 verdict
-    for verdict in dkim=pass spf=pass dmarc=pass; do
-        grep -q "$verdict" "$RESULTS_FILE" || { bad "reset mail headers do not show ${verdict}"; rc=1; }
-    done
-    grep -q "$MAIL_BIND_IP" "$RESULTS_FILE" || { bad "reset mail was not sent from ${MAIL_BIND_IP}"; rc=1; }
-    [ "$rc" -eq 0 ] && ok "Keycloak reset mail: dkim=pass spf=pass dmarc=pass from ${MAIL_BIND_IP}"
-    return "$rc"
+    [ -s "$RESULTS_FILE" ] || die "results file is empty: ${RESULTS_FILE}" "$GREMION_EXIT_USAGE"
+    if ! check_received_headers "$RESULTS_FILE"; then
+        bad "the reset mail's headers do not prove an own-server, authenticated delivery (check-received)"
+        return 1
+    fi
+    ok "Keycloak reset mail: dkim=pass spf=pass dmarc=pass for ${PLATFORM_DOMAIN}, accepted from ${MAIL_BIND_IP}, no third-party relay"
+    return 0
 }
 
 main() {
