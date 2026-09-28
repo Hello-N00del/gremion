@@ -43,6 +43,7 @@ import {
   addTenantDomain,
   resumeTenant,
   suspendTenant,
+  configPathForTenant,
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
@@ -639,15 +640,12 @@ async function cmdReconcile(positional: string | undefined): Promise<void> {
 }
 
 // ── materialize-config (T15) ───────────────────────────────────────────────
-/** The on-disk config path for a slug — mirrors registry.ts configPathForTenant
+/** The on-disk config path for a slug — registry.ts configPathForTenant itself
  *  (D-CONFIGPATH, TASK-042): `${TENANT_DATA_ROOT:-/data}/<slug>/config.json` for
- *  EVERY slug. An explicit `--config <path>` overrides it (for a smoke-stack/S4
- *  copy, per the plan). */
+ *  EVERY slug, one implementation. An explicit `--config <path>` overrides it
+ *  (for a smoke-stack/S4 copy, per the plan). */
 function configPathForSlug(slug: string): string {
-  const override = flag('--config')
-  if (override) return override
-  const root = (process.env.TENANT_DATA_ROOT ?? '/data').replace(/\/+$/, '')
-  return `${root}/${slug}/config.json`
+  return flag('--config') || configPathForTenant(slug)
 }
 
 /**
