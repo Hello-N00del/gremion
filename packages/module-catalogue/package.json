@@ -18,6 +18,9 @@
     },
     "./runtime": {
       "import": "./src/runtime.ts"
+    },
+    "./compose": {
+      "import": "./src/compose.ts"
     }
   },
   "bin": {

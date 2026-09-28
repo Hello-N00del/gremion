@@ -31,6 +31,10 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/runner.test.ts': 14,
     'test/integration/pooler.test.ts': 3,
     'test/integration/service.test.ts': 6,
+    // TASK-021 (G3): the lifecycle on the scratch stack's module server.
+    'test/integration/lifecycle-enable.test.ts': 7,
+    'test/integration/lifecycle-disable.test.ts': 5,
+    'test/integration/lifecycle-inspect.test.ts': 7,
   },
 }
 

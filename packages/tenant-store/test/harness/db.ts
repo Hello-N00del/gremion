@@ -11,6 +11,12 @@ export interface StackState {
   user: string
   password: string
   db: string
+  /** TASK-021 G2: the module server `pgm` (label module:<moduleId>). */
+  modulePort: number
+  moduleContainer: string
+  moduleId: string
+  /** The generated compose file (the lifecycle specs read its labels). */
+  composeFile: string
 }
 
 let cached: StackState | undefined
@@ -42,7 +48,7 @@ export function assertNonProductionDbUrl(url: string): void {
   const ok =
     (u.protocol === 'postgres:' || u.protocol === 'postgresql:') &&
     u.hostname === '127.0.0.1' &&
-    (u.port === String(s.port) || u.port === String(s.poolerPort)) &&
+    (u.port === String(s.port) || u.port === String(s.poolerPort) || u.port === String(s.modulePort)) &&
     decodeURIComponent(u.username) === s.user
   if (!ok) throw new Error(`[t020] refusing a database url that is not this run's scratch server (${u.hostname}:${u.port})`)
 }
@@ -76,6 +82,38 @@ export function connect(db: string, opts: postgres.Options<{}> = {}) {
   const override = TARGET_OPTIONS.filter((k) => k in opts)
   if (override.length) throw new Error(`[t020] connect() refuses target overrides: ${override.join(', ')}`)
   return postgres(dbUrl(db), { max: 2, onnotice: () => {}, ...opts })
+}
+
+/** TASK-021 G2: `db` on the module server `pgm`, as the harness superuser. */
+export function moduleDbUrl(db: string): string {
+  const u = new URL(dbUrl(db))
+  u.port = String(stack().modulePort)
+  const url = u.toString()
+  assertNonProductionDbUrl(url)
+  return url
+}
+
+/** A connection to `db` on the module server; `role` sets the startup role (options=-c role=<role>). */
+export function connectModule(db: string, opts: postgres.Options<{}> & { role?: string } = {}) {
+  const { role, ...rest } = opts
+  const override = TARGET_OPTIONS.filter((k) => k in rest)
+  if (override.length) throw new Error(`[t020] connectModule() refuses target overrides: ${override.join(', ')}`)
+  if (role !== undefined && !/^[a-z][a-z0-9_]{0,62}$/.test(role)) throw new Error(`[t020] refusing role ${JSON.stringify(role)}`)
+  return postgres(moduleDbUrl(db), {
+    max: 2,
+    onnotice: () => {},
+    ...rest,
+    ...(role ? { connection: { ...(rest.connection ?? {}), options: `-c role=${role}` } } : {}),
+  })
+}
+
+/** A LOGIN role's own connection to `db` on the module server (roles tests). */
+export function connectModuleAs(db: string, user: string, password: string) {
+  const u = new URL(moduleDbUrl(db))
+  u.username = user
+  u.password = encodeURIComponent(password)
+  const url = u.toString()
+  return postgres(url, { max: 1, onnotice: () => {}, connect_timeout: 5 })
 }
 
 /** The ledger's filenames; [] only when the table does not exist (42P01), any other error is thrown. */

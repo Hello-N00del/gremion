@@ -6,12 +6,13 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { checkCatalogue, loadCatalogue } from '../src/catalogue.ts'
-import { readCompose } from '../src/compose.ts'
+import { COMPOSE_POSTGRES_LABEL, readCompose } from '../src/compose.ts'
 import {
   deriveBackupServices,
   deriveColourGatedJobs,
   KERNEL_PLATFORM_DATABASES,
   platformDatabases,
+  POSTGRES_LABEL,
   type CatalogueEntry,
   type ModuleJson,
 } from '../src/runtime.ts'
@@ -176,6 +177,10 @@ describe('platformDatabases(service) — a closed list', () => {
     for (const svc of ['postgres', 'alpha-postgres', 'gamma-postgres']) {
       for (const name of platformDatabases(svc, { compose, catalogue: cat })) expect(name).toMatch(/^[a-z][a-z0-9_]*$/)
     }
+  })
+
+  it('compose.ts reads the same label runtime.ts names', () => {
+    expect(COMPOSE_POSTGRES_LABEL).toBe(POSTGRES_LABEL)
   })
 
   it('an unknown or unlabelled service throws', () => {

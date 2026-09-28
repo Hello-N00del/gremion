@@ -5,9 +5,16 @@
 // ${VAR:-default} resolved to its default. Merge keys (`<<: *module-postgres`,
 // the kernel file's x-module-postgres anchor) are applied; labels and
 // environment are read in both the map and the list form.
+//
+// Like runtime.ts, this file is imported by @gremion/tenant-store's specs
+// (`@gremion/module-catalogue/compose`) and type-checked under that
+// package's flags, so its one relative import is type-only.
 import { readFileSync } from 'node:fs'
 import { parse } from 'yaml'
-import { POSTGRES_LABEL, type ComposeModel, type ComposeService } from './runtime.ts'
+import type { ComposeModel, ComposeService } from './runtime.ts'
+
+/** = runtime.ts POSTGRES_LABEL (test/catalogue.test.ts asserts the two agree). */
+export const COMPOSE_POSTGRES_LABEL = 'org.gremion.postgres'
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -40,7 +47,7 @@ export function parseCompose(text: string): ComposeModel {
   for (const [name, raw] of Object.entries(doc.services)) {
     const svc = isRecord(raw) ? raw : {}
     let postgresLabel: string | null = null
-    for (const [k, v] of pairs(svc.labels)) if (k === POSTGRES_LABEL) postgresLabel = v === undefined || v === null ? '' : String(v)
+    for (const [k, v] of pairs(svc.labels)) if (k === COMPOSE_POSTGRES_LABEL) postgresLabel = v === undefined || v === null ? '' : String(v)
     const env: Record<string, string | undefined> = {}
     for (const [k, v] of pairs(svc.environment)) env[k] = composeDefault(v)
     services.set(name, { name, postgresLabel, env })
