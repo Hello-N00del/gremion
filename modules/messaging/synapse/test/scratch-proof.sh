@@ -221,7 +221,7 @@ import sys, yaml
 text = sys.stdin.read()
 c = yaml.safe_load(text)
 assert c["database"]["name"] == "psycopg2", c["database"]["name"]
-assert c["server_name"] == sys.argv[2], c["server_name"]
+assert c["server_name"] == sys.argv[1], c["server_name"]
 assert c["database"]["args"]["dbname"] == "synapse"
 assert "sqlite3" not in text and "homeserver.db" not in text
 assert c["jwt_config"]["enabled"] is True and c["jwt_config"]["secret"].startswith("-----BEGIN PUBLIC KEY-----")
