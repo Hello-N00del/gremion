@@ -61,7 +61,16 @@ test('loader: a dir declared by two chains is DIR_IN_TWO_CHAINS', () => {
 
 test('loader: highWater below the highest file is HIGH_WATER_BEHIND (a missing claim bump)', () => {
   const s = withFile(base(), 'k/m/0005_e.sql')
-  assert.deepEqual(codes(check(s)), ['HIGH_WATER_BEHIND'])
+  assert.throws(() => loadRegister(s.register, s.files.map((f) => f.path)), (e) => e.code === 'HIGH_WATER_BEHIND')
+  assert.ok(codes(check(s)).includes('HIGH_WATER_BEHIND'))
+})
+
+test('check: HIGH_WATER_BEHIND is one problem among the rest, never an early return that hides them', () => {
+  // a missing claim bump, an unlocked file, and a StuRa-range file in no chain
+  const s = withFile(withFile(base(), 'k/m/0005_e.sql'), 'modules/x/migrations/1005_f.sql')
+  const got = codes(check(s))
+  for (const c of ['HIGH_WATER_BEHIND', 'NOT_LOCKED', 'STURA_RANGE', 'UNREGISTERED']) assert.ok(got.includes(c), `${c} missing from ${got.join(',')}`)
+  assert.ok(!got.includes('HIGH_WATER_MISMATCH'), 'the behind sequence is reported once, as HIGH_WATER_BEHIND')
 })
 
 test('loader: a chain without padWidth is NO_PAD_WIDTH', () => {

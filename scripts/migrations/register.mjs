@@ -121,18 +121,30 @@ export function loadRegister(raw, files) {
       throw new RegisterError('REGISTER_MALFORMED', 'every nonMigration entry needs a glob and a reason')
   }
   if (files) {
-    for (const c of reg.chains) {
-      for (const s of sequences(c)) {
-        const nums = files
-          .filter((f) => s.dirs.includes(posix.dirname(f)))
-          .map((f) => parseName(posix.basename(f))?.num)
-          .filter((n) => n !== undefined)
-        const max = nums.length ? Math.max(...nums) : 0
-        if (s.highWater < max) throw new RegisterError('HIGH_WATER_BEHIND', `chain ${c.id} (${s.label}) highWater ${s.highWater} is below its highest file ${max}`)
-      }
-    }
+    const [first] = highWaterBehind(reg, files)
+    if (first) throw new RegisterError(first.code, first.message)
   }
   return reg
+}
+
+/**
+ * Every sequence whose highWater is below its highest file (a missing claim
+ * bump), as {code, message, key}. `key` = `<chain>|<sequence label>`.
+ */
+export function highWaterBehind(reg, files) {
+  const out = []
+  for (const c of reg.chains) {
+    for (const s of sequences(c)) {
+      const nums = files
+        .filter((f) => s.dirs.includes(posix.dirname(f)))
+        .map((f) => parseName(posix.basename(f))?.num)
+        .filter((n) => n !== undefined)
+      const max = nums.length ? Math.max(...nums) : 0
+      if (s.highWater < max)
+        out.push({ code: 'HIGH_WATER_BEHIND', message: `chain ${c.id} (${s.label}) highWater ${s.highWater} is below its highest file ${max}`, key: `${c.id}|${s.label}` })
+    }
+  }
+  return out
 }
 
 /** The numbering sequences of a chain: the main one, then one per block. */
@@ -189,10 +201,17 @@ export function check({ register, lock, slugs, files, eolOf }) {
   const p = (code, message) => problems.push({ code, message })
   let reg
   try {
-    reg = loadRegister(register, files.map((f) => f.path))
+    // shape only: a malformed register leaves nothing to check against
+    reg = loadRegister(register)
   } catch (err) {
     if (err instanceof RegisterError) return [{ code: err.code, message: err.message }]
     throw err
+  }
+  // a missing claim bump is one problem among the rest, never an early return
+  const behind = new Set()
+  for (const b of highWaterBehind(reg, files.map((f) => f.path))) {
+    p(b.code, b.message)
+    behind.add(b.key)
   }
 
   // Coverage: every *.sql in exactly one chain's dirs[] or one nonMigration row.
@@ -273,7 +292,7 @@ export function check({ register, lock, slugs, files, eolOf }) {
       const sf = parsed.filter((x) => s.dirs.includes(x.dir))
       const max = sf.length ? Math.max(...sf.map((x) => x.num)) : 0
       const expectHw = s.main ? max : sf.length ? max : 0
-      if (s.highWater !== expectHw) p('HIGH_WATER_MISMATCH', `chain ${c.id} (${s.label}) highWater ${s.highWater} != highest file ${expectHw} -- claim the number with register.mjs claim`)
+      if (s.highWater !== expectHw && !behind.has(`${c.id}|${s.label}`)) p('HIGH_WATER_MISMATCH', `chain ${c.id} (${s.label}) highWater ${s.highWater} != highest file ${expectHw} -- claim the number with register.mjs claim`)
       for (const x of sf) {
         if (x.num < s.lo || x.num > s.hi) p('OUT_OF_BLOCK', `${x.path} (chain ${c.id}) is numbered ${x.num}, outside ${s.label}'s [${s.lo}, ${s.hi === Infinity ? '...' : s.hi}]`)
         if (x.num <= s.floor && !legacy.has(x.base)) p('NOT_LEGACY', `${x.path} (chain ${c.id}) is numbered ${x.num} <= legacyFloor ${s.floor} but is not in legacy[] -- a new migration claims the next number above the high-water`)
