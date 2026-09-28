@@ -34,18 +34,18 @@ registerHooks({ resolve: shimResolve, load: shimLoad })
 // Mirrors hooks.server.ts boot(): post-P2.1b, getDb() is fail-closed
 // (requireTenant() THROWS outside runWithTenant), so the data plane can only be
 // migrated inside a tenant scope. We therefore run the SAME orchestration boot
-// does — control migrations → register the `default` tenant in the control
-// registry → fleet-migrate every ACTIVE tenant (runFleetMigrations resolves each
-// by slug and applies runMigrations() inside runWithTenant(ctx, …)). Requires
-// CONTROL_DATABASE_URL (+ the control DB to exist) and the default tenant's
-// CONFIG_PATH, exactly like a real boot.
+// does — control migrations → fleet-migrate every ACTIVE registry tenant
+// (runFleetMigrations resolves each by slug and applies runMigrations() inside
+// runWithTenant(ctx, …)). TASK-042: it registers NO tenant; on an empty
+// registry it migrates zero tenants. The integration harness creates its
+// fixture tenant first (`pnpm migrate:test-fixture`,
+// scripts/migrate-test-fixture.mjs). Requires CONTROL_DATABASE_URL (+ the
+// control DB to exist), exactly like a real boot.
 try {
   const { runControlMigrations } = await import('../src/lib/server/tenant/control-migrations.ts')
-  const { registerDefaultTenant } = await import('../src/lib/server/tenant/register-default.ts')
   const { runFleetMigrations } = await import('../src/lib/server/tenant/fleet.ts')
 
   await runControlMigrations()
-  await registerDefaultTenant()
   const outcomes = await runFleetMigrations()
 
   const failed = [...outcomes.entries()].filter(([, o]) => !o.ok)

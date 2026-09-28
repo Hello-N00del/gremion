@@ -37,14 +37,15 @@
     "deletes gremion-ui/scripts/check-domain-regex.mjs and removes that row here",
     "(42 -> 41 doNotDelete, expectedEntries 44 -> 43); its assertion now asserts",
     "the path is absent from the set.",
-    "TASK-042 (zero-tenant boot) deletes gremion-ui/src/routes/setup/steps/wizard-submit-schema.test.ts (the first-run wizard, Q1) and removes that row here (41 -> 40 doNotDelete, expectedEntries 43 -> 42); its assertion asserts the path is absent from the set."
+    "TASK-042 (zero-tenant boot) deletes gremion-ui/src/routes/setup/steps/wizard-submit-schema.test.ts (the first-run wizard, Q1) and removes that row here (41 -> 40 doNotDelete, expectedEntries 43 -> 42); its assertion asserts the path is absent from the set.",
+    "TASK-042 also deletes the default-tenant family env test (register-default.env.test.ts under gremion-ui/src/lib/server/tenant; TRD-075) and removes that row here (40 -> 39 doNotDelete, expectedEntries 42 -> 41); its assertion asserts the path is absent from the set."
   ],
   "frozenAt": {
     "kernel": "f7ac82609eb4b6dedd415d2ef6d7f8d1736ae543",
     "stura": "f276af5925abacdcfd05f6613fc11afff2d804c5",
     "on": "2026-09-16"
   },
-  "expectedEntries": 42,
+  "expectedEntries": 41,
   "doNotDelete": [
     "gremion-ui/src/hooks.audit-integrity.test.ts",
     "gremion-ui/src/lib/components/committee/CommitteeCard.svelte",
@@ -65,7 +66,6 @@
     "gremion-ui/src/lib/i18n/index.storage-keys.test.ts",
     "gremion-ui/src/lib/instance-status.modules.test.ts",
     "gremion-ui/src/lib/server/boundary/contracts-gate-runs.test.ts",
-    "gremion-ui/src/lib/server/tenant/register-default.env.test.ts",
     "gremion-ui/src/lib/source-offer.test.ts",
     "gremion-ui/src/lib/source-offer.ts",
     "gremion-ui/src/lib/source-offer.wiring.test.ts",

@@ -119,12 +119,12 @@ export function integrationVitestEnv({ baseEnv, db, uiDir }) {
     DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion`,
     CONTROL_DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/control`,
     GREMION_PRODUCTION_STACK: 'none',
-    CONFIG_PATH: path.join(uiDir, 'tests', 'integration', 'fixtures', 'default-config.json'),
+    // TASK-042: every tenant's config is TENANT_DATA_ROOT/<slug>/config.json; the
+    // harness fixture tenant's lives in this committed tree.
+    TENANT_DATA_ROOT: path.join(uiDir, 'tests', 'integration', 'fixtures', 'tenant-data'),
     GREMION_DISABLE_SEEDS: 'true',
     KEYCLOAK_ADMIN_CLIENT_SECRET: 'test-kc-admin-secret',
     AUTH_KEYCLOAK_SECRET: 'test-ui-client-secret',
-    AUTH_KEYCLOAK_ISSUER: 'https://council.example/auth/realms/gremion',
-    AUTH_KEYCLOAK_BASE: 'https://council.example/auth/realms/gremion',
   }
   delete env.POSTGRES_PASSWORD
   delete env.PGPASSWORD
@@ -161,10 +161,12 @@ function vitestPart({ root }) {
 
     const env = integrationVitestEnv({ baseEnv: process.env, db, uiDir })
 
-    const migrate = run('pnpm', ['run', 'migrate'], { cwd: uiDir, env })
+    // TASK-042 (G2): boot and `migrate` register no tenant; the harness creates
+    // and migrates its fixture tenant (scripts/migrate-test-fixture.mjs).
+    const migrate = run('pnpm', ['run', 'migrate:test-fixture'], { cwd: uiDir, env })
     if (spawnMissing(migrate)) return { label, toolMissing: 'pnpm' }
     if (migrate.code !== 0) {
-      return { label, unparseable: true, detail: `pnpm migrate failed: ${tail(migrate.stdout + migrate.stderr)}` }
+      return { label, unparseable: true, detail: `pnpm migrate:test-fixture failed: ${tail(migrate.stdout + migrate.stderr)}` }
     }
     return runVitestJson({ label, cwd: uiDir, cmd: 'pnpm', args: ['run', 'test:integration'], env, root })
   } finally {

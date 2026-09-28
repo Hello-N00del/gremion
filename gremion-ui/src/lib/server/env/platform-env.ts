@@ -13,8 +13,12 @@
 // @ts-expect-error -- untyped standalone node script (it carries @ts-nocheck)
 import { EXACT_VARS, PREFIX_VARS } from '../../../../scripts/check-tenant-env-guard.mjs'
 
-/** The closed list of deployment-global variables a caller may read. */
-export const PLATFORM_ENV_NAMES: readonly string[] = ['NATS_URL', 'PLATFORM_DOMAIN']
+/**
+ * The closed list of deployment-global variables a caller may read.
+ * TENANT_DATA_ROOT is the directory holding every tenant's `<slug>/config.json`
+ * (default `/data`, the image's volume); it names no tenant, so it is platform.
+ */
+export const PLATFORM_ENV_NAMES: readonly string[] = ['NATS_URL', 'PLATFORM_DOMAIN', 'TENANT_DATA_ROOT']
 
 function isPerTenant(name: string): boolean {
   return (EXACT_VARS as Set<string>).has(name) || (PREFIX_VARS as string[]).some((p) => name.startsWith(p))

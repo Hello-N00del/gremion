@@ -8,48 +8,54 @@ import { _getAls, type TenantContext } from '$lib/server/tenant/context'
 assertNonProductionDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
 assertNonProductionDbUrl(process.env.CONTROL_DATABASE_URL ?? '', 'CONTROL_DATABASE_URL')
 
-// Legacy single-tenant integration tests run against the default tenant's
-// data plane. getDb()/getFinanceDb() are now fail-closed, so establish a
-// default TenantContext in ALS before each test. enterWith sets the store
-// for the remainder of the current async execution (the test body).
-const DEFAULT_TEST_TENANT = {
-  id: 'default',
-  // P2.1b T7: the per-tenant service singletons (matrix/synapse/helios/
-  // newsletter/livekit) branch on slug === 'default' to keep tenant #1 on its
-  // env-derived values byte-identically — the harness tenant must carry it.
-  slug: 'default',
-  // §8.1 / D-CONFIGPATH (P2.1c T13): the harness now carries a real configPath
-  // so it stops depending on config.ts's (removed) `id === 'default'` special-case
-  // — it rides the SAME readConfig(tenant.configPath) path as a real tenant. The
-  // value mirrors registry.ts configPathForTenant('default'): env.CONFIG_PATH with
-  // the same /app default, so default-tenant config reads stay byte-identical.
-  configPath: process.env.CONFIG_PATH ?? '/app/config/config.json',
+/**
+ * The harness tenant (TASK-042 §9). There is no default tenant: the suite's data
+ * plane belongs to the fixture tenant `fixture` that `pnpm migrate:test-fixture`
+ * (scripts/migrate-test-fixture.mjs) creates with createTestTenant and migrates.
+ * getDb()/getFinanceDb() are fail-closed, so this context is entered in ALS
+ * before each test (enterWith sets the store for the remainder of the current
+ * async execution: the test body).
+ *
+ * The id is a fixed UUIDv7: a UUID like every registry id (storage's
+ * assertTenantId refuses anything else), fixed so the context needs no control-
+ * DB read (many suites TRUNCATE the control registry between tests). Suites that
+ * need a REGISTRY tenant create one with createTestTenant.
+ */
+export const FIXTURE_TENANT_ID = '01920000-0000-7000-8000-00000000f1c5'
+const TENANT_DATA_ROOT = (process.env.TENANT_DATA_ROOT ?? '/data').replace(/\/+$/, '')
+
+const FIXTURE_TEST_TENANT = {
+  id: FIXTURE_TENANT_ID,
+  slug: 'fixture',
+  // The same `${TENANT_DATA_ROOT}/<slug>/config.json` registry.configPathForTenant
+  // derives for every tenant (vitest.integration.config.ts points the root at
+  // tests/integration/fixtures/tenant-data).
+  configPath: `${TENANT_DATA_ROOT}/fixture/config.json`,
   dbUrl: process.env.DATABASE_URL,
   dbMax: 5,
   dbPrepare: true,
-  // P2.1a — display-name / KC-admin code now reads getTenant().realmName /
-  // kcAdminUrl / kcClientId / kcClientSecretRef via ALS. Widen the default test
-  // tenant with the KC fields so any integration test that touches those paths
-  // reads real values instead of undefined.
+  // P2.1a — display-name / KC-admin code reads getTenant().realmName /
+  // kcAdminUrl / kcClientId / kcClientSecretRef via ALS; carry real values
+  // (unchanged from the pre-TASK-042 harness so KC-mocking suites keep matching).
   realmName: 'gremion-test',
   kcAdminUrl: process.env.KEYCLOAK_ADMIN_URL ?? 'http://keycloak:8080/auth',
   kcClientId: 'gremion-admin',
   kcClientSecretRef: 'env:KEYCLOAK_ADMIN_CLIENT_SECRET',
 } as unknown as TenantContext
 
-function establishDefaultTenant() {
+function establishFixtureTenant() {
   // A test file may FULLY replace $lib/server/tenant/context with vi.mock (e.g.
   // rate-limit-routes.integration.test.ts), so _getAls may not exist there.
   // Guard the enterWith so a fully-mocked context module does not crash the
   // shared harness.
   if (typeof _getAls === 'function') {
-    _getAls().enterWith(DEFAULT_TEST_TENANT)
+    _getAls().enterWith(FIXTURE_TEST_TENANT)
   }
 }
 
 // beforeAll AND beforeEach: some suites seed their data plane in a `beforeAll`
 // (e.g. tests/finance/yearend-fixture.ts truncate+seed), which runs BEFORE the
-// first `beforeEach` — so establish the default tenant in both, or beforeAll-time
+// first `beforeEach` — so establish the fixture tenant in both, or beforeAll-time
 // getDb()/getFinanceDb() fail-closed.
-beforeAll(establishDefaultTenant)
-beforeEach(establishDefaultTenant)
+beforeAll(establishFixtureTenant)
+beforeEach(establishFixtureTenant)

@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 // the authGuard tests (hooks.iss-match.test.ts) fed authGuard a HAND-BUILT
 // tenant literal. Nothing drove a REGISTRY-RESOLVED context through the REAL
 // authGuard with a replayed cross-realm token. This test closes that gap: it
-// registers two real tenants (A=default, B=tenant-b) in the control DB,
+// registers two real tenants (A=tenant-a, B=tenant-b) in the control DB,
 // resolves B's REAL TenantContext via resolveTenantBySlug, and runs the REAL
 // authGuard inside runWithTenant(b, …) against both a replayed A-realm session
 // (expect 403 TenantMismatch) and a legitimate B-realm session (expect 200).
@@ -40,12 +40,12 @@ vi.mock('$lib/server/governance/provisioning/worker', () => ({ startProvisioning
 vi.mock('$lib/server/audit-db', () => ({ purgeAuditLogsOlderThan: vi.fn(async () => ({ purged: 0 })) }))
 vi.mock('./auth', () => ({ handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) => resolve(event) }))
 vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }))
-// NOTE: registry / context / db / control-migrations / register-default are
+// NOTE: registry / context / db / control-migrations are
 // DELIBERATELY left REAL — the whole point is to drive a real resolved context.
 
 import { getControlDb } from './control-db'
 import { runControlMigrations } from './control-migrations'
-import { registerDefaultTenant } from './register-default'
+import { createTestTenant } from '../../../../tests/integration/create-test-tenant'
 import { registerTenant, resolveTenantBySlug, _resetResolutionCacheForTests } from './registry'
 import { runWithTenant, type TenantContext } from './context'
 
@@ -77,8 +77,8 @@ describe('iss-replay e2e: registry-resolved tenant through the REAL authGuard', 
     await getControlDb()`TRUNCATE tenant, tenant_provisioning_resource RESTART IDENTITY CASCADE`
     // T8: re-registered rows get NEW tenant ids — drop cached resolutions.
     _resetResolutionCacheForTests()
-    // A = default tenant (env-driven issuer).
-    await registerDefaultTenant()
+    // A = a fixture tenant with its own host-minted issuer (TASK-042: no default tenant).
+    await createTestTenant({ slug: 'tenant-a', host: 'tenant-a.example.test' })
     // B = a distinct tenant with its OWN realm/issuer.
     await registerTenant({
       slug: 'tenant-b', status: 'active', dbConnRef: 'env:DATABASE_URL',
@@ -94,7 +94,7 @@ describe('iss-replay e2e: registry-resolved tenant through the REAL authGuard', 
   it('REJECTS 403 TenantMismatch when an A-realm session is replayed on B (page)', async () => {
     const mod = await import('../../../hooks.server')
     await mod.boot()
-    const a = await resolveTenantBySlug('default')
+    const a = await resolveTenantBySlug('tenant-a')
     const b = await resolveTenantBySlug('tenant-b')
     expect(a).not.toBeNull(); expect(b).not.toBeNull()
     expect(a!.issuer).not.toBe(b!.issuer)
@@ -115,7 +115,7 @@ describe('iss-replay e2e: registry-resolved tenant through the REAL authGuard', 
   it('REJECTS 403 TenantMismatch (machine-readable JSON) on an API replay', async () => {
     const mod = await import('../../../hooks.server')
     await mod.boot()
-    const a = await resolveTenantBySlug('default')
+    const a = await resolveTenantBySlug('tenant-a')
     const b = await resolveTenantBySlug('tenant-b')
 
     const event = makeEvent({

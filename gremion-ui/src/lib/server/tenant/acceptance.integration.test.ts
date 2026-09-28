@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { getControlDb } from './control-db'
 import { runControlMigrations } from './control-migrations'
-import { registerDefaultTenant } from './register-default'
+import { createTestTenant } from '../../../../tests/integration/create-test-tenant'
 import { registerTenant } from './registry'
 import { resolveTenantBySlug, _resetResolutionCacheForTests } from './registry'
 import { runWithTenant, getTenant, currentTenantId, _getAls } from './context'
@@ -28,24 +28,20 @@ describe('P2.1a acceptance', () => {
     })
   })
 
-  it('default tenant resolves to the existing default realm + env DB (golden)', async () => {
-    await registerDefaultTenant()
-    const ctx = await resolveTenantBySlug('default')
+  // TASK-042: there is no deployment-derived tenant #1; a fixture tenant made by
+  // createTestTenant resolves to ITS realm and ITS host-minted issuer.
+  it('a registry tenant resolves to its own realm + issuer (golden)', async () => {
+    const t = await createTestTenant({ slug: 'tenant-a', host: 'tenant-a.example.test', realmName: 'gremion' })
+    const ctx = await resolveTenantBySlug('tenant-a')
     expect(ctx).not.toBeNull()
-    // 70029f7 dropped the retired 'gremion-test' realm literal from every
-    // non-doc, non-*.test.ts carrier (spec B B-01), deferring the *.test.ts
-    // occurrences to a later ticket (never landed). CI's integration job and
-    // scripts/verify/suites/integration.mjs both set
-    // AUTH_KEYCLOAK_ISSUER=".../realms/gremion" (no suffix); this asserts the
-    // realm registerDefaultTenant actually derives from that env today.
     expect(ctx!.realmName).toBe('gremion')
-    expect(ctx!.issuer).toContain('/realms/gremion')
-    // running inside the default context, the canonical id is the default row's id
+    expect(ctx!.issuer).toBe(t.issuer)
+    expect(ctx!.issuer).toBe('https://tenant-a.example.test/auth/realms/gremion')
     runWithTenant(ctx!, () => { expect(currentTenantId()).toBe(ctx!.id) })
   })
 
   it('cross-tenant iss-replay is rejected by assertIssMatch (red->green proof)', async () => {
-    await registerDefaultTenant() // tenant A (default) -> the default issuer
+    await createTestTenant({ slug: 'tenant-a', host: 'tenant-a.example.test' }) // tenant A -> its own issuer
     await registerTenant({
       slug: 'tenant-b', status: 'active', dbConnRef: 'env:DATABASE_URL',
       realmName: 'tenant-b', issuer: 'https://council.example/auth/realms/tenant-b',
@@ -55,7 +51,7 @@ describe('P2.1a acceptance', () => {
       domainProfile: {}, brandRef: 'config:tenant-b', blueprintRef: 'STURA_BLUEPRINT@1',
       connProfile: { perTenantMax: 4, prepare: true }, backupKeyRef: 'env:BACKUP_KEY', audiences: ['gremion-ui'],
     })
-    const a = await resolveTenantBySlug('default')
+    const a = await resolveTenantBySlug('tenant-a')
     const b = await resolveTenantBySlug('tenant-b')
     // A token minted for A's realm, replayed against B's host -> rejected.
     expect(assertIssMatch({ tokenIss: a!.issuer, tenantIssuer: b!.issuer })).toBe(false)
@@ -64,7 +60,7 @@ describe('P2.1a acceptance', () => {
   })
 
   it('distinct tenants resolve to distinct pools (no shared connection)', async () => {
-    await registerDefaultTenant()
+    await createTestTenant({ slug: 'tenant-a', host: 'tenant-a.example.test' })
     await registerTenant({
       slug: 'tenant-c', status: 'active', dbConnRef: 'env:DATABASE_URL', realmName: 'tenant-c',
       issuer: 'https://council.example/auth/realms/tenant-c', kcInternal: 'http://keycloak:8080/auth/realms/tenant-c',
@@ -73,7 +69,7 @@ describe('P2.1a acceptance', () => {
       domainProfile: {}, brandRef: 'config:tenant-c', blueprintRef: 'STURA_BLUEPRINT@1',
       connProfile: { perTenantMax: 4, prepare: true }, backupKeyRef: 'env:BACKUP_KEY', audiences: ['gremion-ui'],
     })
-    const a = await resolveTenantBySlug('default')
+    const a = await resolveTenantBySlug('tenant-a')
     const c = await resolveTenantBySlug('tenant-c')
     expect(a!.db).not.toBe(c!.db) // distinct pool objects keyed by canonical id
   })

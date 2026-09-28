@@ -12,8 +12,7 @@ vi.mock('$lib/server/audit-db', () => ({ purgeAuditLogsOlderThan: vi.fn(async ()
 vi.mock('./auth', () => ({ handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) => resolve(event) }))
 vi.mock('$lib/server/jwt-verify', () => ({ verifyBearerJwt: vi.fn(async () => null) }))
 vi.mock('$lib/server/tenant/control-migrations', () => ({ runControlMigrations: vi.fn(async () => {}) }))
-// P2.1b T2: boot's fleet runner lists active tenants (id must match the
-// registerDefaultTenant mock above) and ledgers each run.
+// P2.1b T2: boot's fleet runner lists active tenants and ledgers each run.
 vi.mock('$lib/server/tenant/registry', () => ({
   resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/gremion-test' })),
   listActiveTenants: vi.fn(async () => [{ id: 'tid-1', slug: 'default', status: 'active' }]),

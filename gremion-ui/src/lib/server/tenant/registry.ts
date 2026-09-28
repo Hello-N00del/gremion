@@ -31,6 +31,7 @@ import { evictJwks } from '$lib/server/jwt-verify'
 import { evictDisplayNameResolver } from '$lib/server/identity/display-names'
 import { evictTenantMail } from '$lib/server/mail/tenant-mail'
 import { runTenantEvictHooks } from '$lib/server/modules/runtime-registry'
+import { platformEnv } from '$lib/server/env/platform-env'
 import type { TenantContext } from './context'
 
 export type TenantStatus = 'provisioning' | 'active' | 'suspended' | 'deleting' | 'deleted'
@@ -751,22 +752,25 @@ export async function updateTenantProvisioning(
   return rows[0] ? hydrate(rows[0]) : null
 }
 
-/** The `default` tenant keeps env.CONFIG_PATH; others use a per-slug data dir. */
-function configPathForTenant(slug: string): string {
-  return slug === 'default' ? (env.CONFIG_PATH ?? '/app/config/config.json') : `/data/${slug}/config.json`
+/**
+ * Every tenant's config lives in its per-slug data dir under the deployment-
+ * global TENANT_DATA_ROOT (default `/data`). TASK-042 (TRD-042 [D R15-2]):
+ * there is no deployment-derived tenant #1 any more, so no slug (`default`
+ * included) reads env.CONFIG_PATH. Exported for the every-tenant-equal test
+ * (tenant-equal.test.ts).
+ */
+export function configPathForTenant(slug: string): string {
+  const root = (platformEnv('TENANT_DATA_ROOT') ?? '/data').replace(/\/+$/, '')
+  return `${root}/${slug}/config.json`
 }
 
 /**
- * Point 6 (byte-identical default): the `default` tenant's Auth.js external base
- * MUST match auth.ts:19 today — `AUTH_KEYCLOAK_BASE ?? AUTH_KEYCLOAK_ISSUER` —
- * so the browser authorization-redirect URL is unchanged. (The realm issuer can
- * differ from the OIDC endpoint base when KC runs under --http-relative-path, which
- * is exactly why auth.ts splits BASE from ISSUER.) Other tenants use their issuer.
+ * Every tenant's Auth.js external base is its own issuer (TASK-042). The former
+ * `default` branch read AUTH_KEYCLOAK_BASE/ISSUER from the deployment env, which
+ * made one slug special; a tenant whose KC runs under a different relative path
+ * carries that in its issuer.
  */
-function authExternalBaseForTenant(slug: string, issuer: string): string {
-  if (slug === 'default') {
-    return (env.AUTH_KEYCLOAK_BASE ?? env.AUTH_KEYCLOAK_ISSUER ?? issuer).replace(/\/$/, '')
-  }
+export function authExternalBaseForTenant(_slug: string, issuer: string): string {
   return issuer
 }
 
