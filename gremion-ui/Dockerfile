@@ -11,6 +11,7 @@ RUN npm install -g corepack && corepack enable pnpm
 # Install workspace deps (cache-friendly: package manifests first)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/db/package.json ./packages/db/
+COPY packages/nats-auth/package.json ./packages/nats-auth/
 COPY packages/ports/package.json ./packages/ports/
 COPY packages/storage/package.json ./packages/storage/
 COPY packages/tokens/package.json ./packages/tokens/
@@ -19,6 +20,11 @@ RUN pnpm install --frozen-lockfile
 
 # Copy workspace package sources
 COPY packages/db ./packages/db/
+# @gremion/nats-auth is a gremion-ui DEVdependency (TASK-024 G5, Q11): the
+# builder stage -- the migrate/tenant-create image -- runs `nats-auth init` and
+# ensureTenantAccount; `deploy --prod` below leaves it out of the runner, so the
+# long-running gremion-ui cannot load it.
+COPY packages/nats-auth ./packages/nats-auth/
 COPY packages/ports ./packages/ports/
 COPY packages/storage ./packages/storage/
 COPY packages/tokens ./packages/tokens/
