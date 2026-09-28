@@ -20,6 +20,13 @@ assertNonProductionDbUrl(process.env.CONTROL_DATABASE_URL ?? '', 'CONTROL_DATABA
  * assertTenantId refuses anything else), fixed so the context needs no control-
  * DB read (many suites TRUNCATE the control registry between tests). Suites that
  * need a REGISTRY tenant create one with createTestTenant.
+ *
+ * It is deliberately NOT the id of the `fixture` row migrate:test-fixture
+ * registers (the control DB mints that one, and the row is TRUNCATEd by many
+ * suites anyway). Only the DATA PLANE is shared: this context and that row both
+ * point at DATABASE_URL, whose schema_migrations the fleet run filled. Nothing
+ * here may look the ALS id up in the registry; a suite that needs registry
+ * identity uses the TestTenant createTestTenant returns.
  */
 export const FIXTURE_TENANT_ID = '01920000-0000-7000-8000-00000000f1c5'
 const TENANT_DATA_ROOT = (process.env.TENANT_DATA_ROOT ?? '/data').replace(/\/+$/, '')
