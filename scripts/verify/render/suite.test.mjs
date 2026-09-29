@@ -1,8 +1,10 @@
 // TASK-053: the render-guards suite end to end over an INJECTED renderer (the
 // real `docker compose config` runs only when verify runs the suite).
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { evaluateSuite } from '../lib/guard.mjs'
+import { APP_ENV_TEMPLATE } from './colour-suffix.mjs'
 import { RELEASE_PINS_FIXTURE, RELEASE_UI_IMAGE } from './harness.mjs'
 import { GUARD_IDS, runRenderGuardsSuite } from './suite.mjs'
 
@@ -69,6 +71,28 @@ test('the seeded defect fails naming gremion-ui, KERNEL_API_URL and kernel-api (
   assert.equal(evaluateSuite(out).status, 'fail')
   assert.match(out.detail, /FAIL colour-suffix: app-blue\/gremion-ui: environment\.KERNEL_API_URL names kernel-api without the -blue suffix/)
   assert.match(out.detail, /FAIL colour-suffix: app-green\/gremion-ui: environment\.KERNEL_API_URL names kernel-api without the -green suffix/)
+})
+
+test('the suite judges TASK-040 APP_SERVICES + LEAF_SERVICES too: a leaf missing from the template is still a derived name', () => {
+  // The template here names no leaf at all, so only the forwarded pooled-stack
+  // lists can know files-service (r2, 2026-09-29: the same union G2 uses).
+  const templateText = 'INTERNAL_BASE_URL=http://gremion-ui-${COLOUR}:3000\n'
+  const leaky = (p, o) => {
+    const r = fakeRender(p, o)
+    if (p.colour) r.services['gremion-ui'].environment.FILES_URL = 'http://files-service:8080'
+    return r
+  }
+  const out = suite({ render: leaky, templateText })
+  assert.match(out.detail, /derived app-tier names[^\n]*\bfiles-service\b/)
+  assert.match(out.detail, /FAIL colour-suffix: app-blue\/gremion-ui: environment\.FILES_URL names files-service without the -blue suffix/)
+  assert.equal(evaluateSuite(out).status, 'fail')
+})
+
+test('the real template with an unsuffixed CONTENT_SERVICE_URL fails the suite at app.env.tmpl:39', () => {
+  const templateText = readFileSync(APP_ENV_TEMPLATE, 'utf8').replace('http://content-service-${COLOUR}:8080', 'http://content-service:8080')
+  const out = suite({ templateText })
+  assert.match(out.detail, /FAIL colour-suffix: app\.env\.tmpl:39: CONTENT_SERVICE_URL names content-service without the -\$\{COLOUR\} suffix/)
+  assert.equal(evaluateSuite(out).status, 'fail')
 })
 
 test('missing docker is toolMissing and renders nothing', () => {

@@ -66,11 +66,20 @@ export function imageDerivedNames(render, prefix = FIRST_PARTY_PREFIX) {
     .map(([name]) => name)
 }
 
-/** Hosts app.env.tmpl names as `<name>-${COLOUR}:` in a *_URL value. */
+/**
+ * Hosts app.env.tmpl names as `<name>-${COLOUR}:` in a *_URL value, plus the
+ * `<x>-service` every `<X>_SERVICE_URL` KEY names. The key half exists because
+ * the leaf hosts render nowhere in this repo: were the names read from the
+ * suffixed VALUES alone, a line that lost its suffix would also drop its leaf
+ * from the set the guard judges, and the guard would hide its own regression
+ * (r2, 2026-09-29). A key cannot lose the suffix a value lost.
+ */
 export function templateDerivedNames(templateText) {
   const names = []
   for (const { key, value } of envLines(templateText)) {
     if (!key.endsWith('_URL')) continue
+    const leaf = /^([A-Z0-9]+(?:_[A-Z0-9]+)*)_SERVICE_URL$/.exec(key)
+    if (leaf) names.push(`${leaf[1].toLowerCase().replaceAll('_', '-')}-service`)
     for (const m of value.matchAll(/(?:\/\/|@)([a-z0-9][a-z0-9-]*?)-\$\{COLOUR\}:/g)) names.push(m[1])
   }
   return names
@@ -167,11 +176,14 @@ export function templateColourViolations(templateText, names, label = 'app.env.t
  * The whole G-053-colour-suffix guard, as the render-guards suite runs it.
  * `appRenders` is { <colour>: <app render> } -- the app-blue/app-green renders
  * ONLY; state/ops/mail never reach this function, so they cannot contribute a
- * name. Returns the derived names and one check per judged input.
+ * name. `extra` is forwarded into the name set (the suite passes TASK-040's
+ * APP_SERVICES + LEAF_SERVICES, the same union G2 uses): a second source the
+ * template defect cannot erase. Returns the derived names and one check per
+ * judged input.
  */
-export function colourSuffixGuard({ appRenders, templateText }) {
+export function colourSuffixGuard({ appRenders, templateText, extra = [] }) {
   const text = templateText ?? readAppTemplate()
-  const names = appTierServiceNames({ renders: Object.values(appRenders ?? {}), templateText: text })
+  const names = appTierServiceNames({ renders: Object.values(appRenders ?? {}), templateText: text, extra })
   const vacuous = vacuityProblem(names)
   const checks = Object.entries(appRenders ?? {}).map(([colour, render]) => ({
     id: `app-${colour}`,

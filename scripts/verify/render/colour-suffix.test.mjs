@@ -191,6 +191,47 @@ test('template-only names are judged by (b) only: no service of that name has to
   assert.deepEqual(problemsOf(g), [])
 })
 
+// ── the guard cannot hide its own regression (r2 fix, 2026-09-29) ──────────
+// The nine leaf hosts render nowhere in this repo, so the template is their
+// only source. If a template line loses its -${COLOUR} suffix, that leaf must
+// NOT drop out of the name set the guard checks.
+
+test('real app.env.tmpl with CONTENT_SERVICE_URL=http://content-service:8080 fails at its line', () => {
+  const real = readAppTemplate()
+  const t = real.replace('CONTENT_SERVICE_URL=http://content-service-${COLOUR}:8080', 'CONTENT_SERVICE_URL=http://content-service:8080')
+  assert.notEqual(t, real, 'the mutation must apply to the real template')
+  const g = guard(both(), t)
+  assert.ok(g.names.includes('content-service'), g.names.join(','))
+  assert.deepEqual(problemsOf(g), ['app.env.tmpl:39: CONTENT_SERVICE_URL names content-service without the -${COLOUR} suffix: http://content-service:8080'])
+})
+
+test('every leaf of the real template survives losing its suffix (each line, one at a time)', () => {
+  const real = readAppTemplate()
+  const leafLines = real.split(/\r?\n/).filter((l) => /^[A-Z_]+_SERVICE_URL=http:\/\/[a-z-]+-\$\{COLOUR\}:/.test(l))
+  assert.ok(leafLines.length >= 9, leafLines.join('\n'))
+  for (const line of leafLines) {
+    const bare = line.replace('-${COLOUR}', '')
+    const p = problemsOf(guard(both(), real.replace(line, bare)))
+    assert.equal(p.length, 1, `${bare}: ${p.join(' | ')}`)
+    assert.match(p[0], /^app\.env\.tmpl:\d+: [A-Z_]+_SERVICE_URL names [a-z-]+-service without the -\$\{COLOUR\} suffix/)
+  }
+})
+
+test('templateDerivedNames: a <X>_SERVICE_URL key names <x>-service whatever its value says', () => {
+  assert.deepEqual(templateDerivedNames('CONTENT_SERVICE_URL=http://content-service:8080\n'), ['content-service'])
+  assert.deepEqual(templateDerivedNames('# FILES_SERVICE_URL=http://files-service:8080\n'), [])
+  assert.deepEqual(templateDerivedNames('GREMION_PUBLIC_DB_URL=postgresql://r:x@postgres:5432/g\n'), [])
+})
+
+test('colourSuffixGuard forwards caller extras into the judged name set', () => {
+  const t = 'INTERNAL_BASE_URL=http://gremion-ui-${COLOUR}:3000\n'
+  const r = both({ FILES_URL: 'http://files-service:8080' })
+  assert.deepEqual(problemsOf(colourSuffixGuard({ appRenders: r, templateText: t })), [])
+  const g = colourSuffixGuard({ appRenders: r, templateText: t, extra: ['files-service'] })
+  assert.ok(g.names.includes('files-service'))
+  assert.match(problemsOf(g).join('\n'), /app-blue\/gremion-ui: environment\.FILES_URL names files-service without the -blue suffix/)
+})
+
 // ── units ──────────────────────────────────────────────────────────────────
 
 test('hostTokens: authority after // or @, the whole value of a *HOST key, nothing else', () => {

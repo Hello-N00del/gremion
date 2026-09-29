@@ -38,7 +38,7 @@ export const GUARD_IDS = [
 const ZERO = { collected: 0, passed: 0, failed: 0, skipped: 0 }
 
 /** Pure: the per-(guard, project) checks over one harness result. */
-export function judgeRenders({ projects, renders, counts, allowances, templateText, driftFn = driftChecks }) {
+export function judgeRenders({ projects, renders, counts, allowances, templateText, extraNames = [], driftFn = driftChecks }) {
   const checks = []
   for (const p of projects) checks.push({ guard: 'harness', id: p.id, problems: [], note: `${p.id}: ${counts[p.id]} service(s)` })
   for (const c of driftFn(projects)) checks.push({ guard: 'drift', id: c.id, problems: c.problems })
@@ -48,7 +48,10 @@ export function judgeRenders({ projects, renders, counts, allowances, templateTe
   if (missingColours.length) {
     checks.push({ guard: 'colour-suffix', id: 'app', problems: [`colour-suffix: no app render for ${missingColours.join(', ')} -- both colours are judged`] })
   }
-  const colour = colourSuffixGuard({ appRenders, templateText })
+  // extraNames: TASK-040's APP_SERVICES + LEAF_SERVICES (the union G2 uses), so
+  // a leaf whose template line lost its suffix stays judged even if the key
+  // derivation in colour-suffix.mjs ever regresses (r2, 2026-09-29).
+  const colour = colourSuffixGuard({ appRenders, templateText, extra: extraNames })
   for (const c of colour.checks) checks.push({ guard: 'colour-suffix', id: c.id, problems: c.problems })
 
   const judgedByBuild = projects.filter((p) => p.colour || p.id === 'state')
@@ -72,6 +75,7 @@ export function runRenderGuardsSuite({
   toolAvailableFn = toolAvailable,
   loadAllowancesFn = loadAllowances,
   templateText,
+  extraNames = [...pooledStack().APP_SERVICES, ...pooledStack().LEAF_SERVICES],
   driftFn,
   readEnv,
   log = console.log,
@@ -94,7 +98,7 @@ export function runRenderGuardsSuite({
     }
     return { toolMissing: null, unparseable: true, ...ZERO, detail: `render harness: ${err.message}` }
   }
-  const { checks, names } = judgeRenders({ projects, ...harness, allowances, templateText, ...(driftFn ? { driftFn } : {}) })
+  const { checks, names } = judgeRenders({ projects, ...harness, allowances, templateText, extraNames, ...(driftFn ? { driftFn } : {}) })
   const failed = checks.filter((c) => c.problems.length > 0)
   const lines = [
     `derived app-tier names (${names.length}): ${names.join(', ')}`,
