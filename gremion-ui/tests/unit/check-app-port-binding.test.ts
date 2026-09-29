@@ -166,7 +166,7 @@ const HYGIENE_REPORT = /^\[kernel-hygiene\] (OK — \d+ checks passed|\d+\/\d+ c
  * killed or crashed run has no verdicts, and reading one as "no g2 line" is how
  * a timeout used to surface as a wrong-verdict assertion.
  */
-function runHygiene(env: NodeJS.ProcessEnv): string {
+function runHygiene(env: NodeJS.ProcessEnv): { out: string; status: number | null } {
   const res = spawnSync(process.execPath, [HYGIENE], { encoding: 'utf8', env, timeout: HYGIENE_RUN_MS })
   const out = `${res.stdout ?? ''}${res.stderr ?? ''}`
   const completed = !res.error && !res.signal && (res.status === 0 || res.status === 1) && HYGIENE_REPORT.test(out)
@@ -174,7 +174,7 @@ function runHygiene(env: NodeJS.ProcessEnv): string {
     completed,
     `the hygiene run did not complete: status=${res.status} signal=${res.signal} error=${res.error?.message ?? '-'}\n${out.slice(-2000)}`,
   ).toBe(true)
-  return out
+  return { out, status: res.status }
 }
 
 /**
@@ -340,7 +340,7 @@ describe.skipIf(!kubectlUp)('kernel-hygiene g2 second net (needs kubectl)', () =
       const k = path.join(clone, 'k8s', 'overlays', 'dev', 'kustomization.yaml')
       writeFileSync(k, readFileSync(k, 'utf8').replace('../../../legal/legal.env', '../../../legal/legl.env'))
       const { env, usedMarker } = batsStubEnv(clone)
-      const out = runHygiene(env)
+      const { out } = runHygiene(env)
       const g2 = out.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
       expect(g2).toMatch(/dev: render FAILED/)
       expect(g2).not.toContain(SETUP_FIRST)
@@ -361,8 +361,9 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
       // so the verdict cannot depend on whether kustomize is installed.
       const env = emptyPathEnv(clone)
       expectUnresolvable('kubectl', env, clone)
-      const out = runHygiene(env)
+      const { out, status } = runHygiene(env)
       const g2 = out.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
+      expect(status).toBe(1)
       expect(out).toMatch(/\[kernel-hygiene\] \d+\/\d+ check\(s\) FAILED:/)
       expect(g2).toMatch(/dev: NOT CHECKED/)
       expect(g2).toContain(SETUP_FIRST)
@@ -385,7 +386,8 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
       const clone = cloneRepo()
       const env = emptyPathEnv(clone)
       expectUnresolvable('git', env, clone)
-      const out = runHygiene(env)
+      const { out, status } = runHygiene(env)
+      expect(status).toBe(1)
       expect(out, 'an uncaught throw escaped check()').not.toMatch(/node:internal|^\s+at .*kernel-hygiene-check\.mjs/m)
       // Every check() in the script reported: the denominator is the number of
       // check( calls, so a run cut short by a top-level throw cannot pass.
