@@ -1190,6 +1190,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/governance/committees/{id}/roles/{roleId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** INV-3 recall: revoke the role's active mandate as a recorded governance act — archives the assignment as 'recalled' and appends the 'mandate.revoked' audit act in one transaction, then reconciles the revoked holder's auto-managed Keycloak groups */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Free-text recall reason; recorded verbatim in the 'mandate.revoked' audit payload */
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Mandate revoked and recorded */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceOk"];
+                    };
+                };
+                /** @description Zod validation failure (missing/empty reason) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceError"];
+                    };
+                };
+                /** @description Not CouncilAdmin */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceError"];
+                    };
+                };
+                /** @description No active assignment for this role */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceError"];
+                    };
+                };
+                /** @description Assignment cannot be archived (NULL start/end dates — migration 010 vs history NOT NULL) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {

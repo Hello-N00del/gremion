@@ -4,10 +4,22 @@
   // Gremien section. Beschlüsse are passed resolutions from published protocols
   // (the canonical 0007_protocols source); the table renders when rows exist,
   // otherwise the first-class empty state.
+  //
+  // T6 (#320 contestability): every member sees the 'Anfechten' affordance
+  // (POST /api/protocols/resolutions/[resId]/challenges) and the
+  // 'Einspruch offen' badge; the disposition controls (stattgeben/abweisen +
+  // Anmerkung, PATCH …/challenges/[challengeId]) render ONLY for CouncilAdmin
+  // (data.isAdmin, gated server-side in +page.server.ts).
   import type { PageData } from './$types'
   import Icon from '$lib/components/ui/Icon.svelte'
   import { deriveHue } from '$lib/governance/committee-color'
   import { moduleHref } from '$lib/modules/registry'
+  import {
+    CHALLENGE_GROUNDS_MAX,
+    validateChallengeGrounds,
+    buildChallengePayload,
+  } from '$lib/governance/challenge-form'
+  import { invalidateAll } from '$app/navigation'
 
   let { data }: { data: PageData } = $props()
 
@@ -17,6 +29,102 @@
   const votesHref = moduleHref('votes')
 
   const beschluesse = $derived(data.beschluesse)
+  const isAdmin = $derived(data.isAdmin)
+
+  // Admin-only disposition data, grouped per resolution ([] for non-admins).
+  const challengesByResolution = $derived.by(() => {
+    const m = new Map<string, PageData['challenges'][number][]>()
+    for (const c of data.challenges) {
+      const list = m.get(c.resolutionId) ?? []
+      list.push(c)
+      m.set(c.resolutionId, list)
+    }
+    return m
+  })
+
+  // Per-row expandable challenge panel (form + admin disposition list).
+  let expandedId = $state<string | null>(null)
+  let grounds = $state('')
+  let formError = $state<string | null>(null)
+  let submitting = $state(false)
+  // Disposition state, keyed by challenge id.
+  let dispositionNotes = $state<Record<string, string>>({})
+  let decidingId = $state<string | null>(null)
+  let dispositionError = $state<string | null>(null)
+
+  function togglePanel(id: string) {
+    expandedId = expandedId === id ? null : id
+    grounds = ''
+    formError = null
+    dispositionError = null
+  }
+
+  async function submitChallenge(resolutionId: string) {
+    const v = validateChallengeGrounds(grounds)
+    if (!v.ok) {
+      formError = v.error
+      return
+    }
+    const req = buildChallengePayload(resolutionId, grounds)
+    submitting = true
+    formError = null
+    try {
+      const res = await fetch(req.url, {
+        method: req.method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(req.body),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null
+        formError = body?.message ?? 'Einspruch konnte nicht eingereicht werden.'
+        return
+      }
+      grounds = ''
+      expandedId = null
+      await invalidateAll()
+    } catch {
+      formError = 'Einspruch konnte nicht eingereicht werden.'
+    } finally {
+      submitting = false
+    }
+  }
+
+  async function decideChallenge(
+    resolutionId: string,
+    challengeId: string,
+    status: 'upheld' | 'dismissed',
+  ) {
+    const note = (dispositionNotes[challengeId] ?? '').trim()
+    decidingId = challengeId
+    dispositionError = null
+    try {
+      const res = await fetch(
+        `/api/protocols/resolutions/${encodeURIComponent(resolutionId)}/challenges/${encodeURIComponent(challengeId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ status, decision_note: note.length > 0 ? note : null }),
+        },
+      )
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null
+        dispositionError = body?.message ?? 'Entscheidung konnte nicht gespeichert werden.'
+        return
+      }
+      await invalidateAll()
+    } catch {
+      dispositionError = 'Entscheidung konnte nicht gespeichert werden.'
+    } finally {
+      decidingId = null
+    }
+  }
+
+  const CHALLENGE_STATUS_LABELS: Record<string, string> = {
+    open: 'offen',
+    upheld: 'stattgegeben',
+    dismissed: 'abgewiesen',
+    withdrawn: 'zurückgezogen',
+  }
 
   function fmtDate(iso: string): string {
     // iso is YYYY-MM-DD (already date-only from the DB).
@@ -68,6 +176,7 @@
         <div>Gegenstand</div>
         <div>Gremium · Datum</div>
         <div>Mehrheit</div>
+        <div>Einspruch</div>
       </div>
       {#each beschluesse as b (b.id)}
         {@const hue = deriveHue(b.committeeId)}
@@ -94,7 +203,126 @@
               <span class="mono td-muted">{b.votesYes}:{b.votesNo}:{b.votesAbstain}</span>
             {/if}
           </div>
+          <div class="td-challenge">
+            {#if b.openChallengeCount > 0}
+              <!-- Pill-icon contract (§16 finding 2): warn tone carries its
+                   clock glyph so the badge stays tellable in cb-by mode. -->
+              <span class="pill pill-warn">
+                <Icon name="clock" size={11} />
+                {b.openChallengeCount === 1
+                  ? 'Einspruch offen'
+                  : `${b.openChallengeCount} Einsprüche offen`}
+              </span>
+            {/if}
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              aria-expanded={expandedId === b.id}
+              onclick={() => togglePanel(b.id)}
+            >
+              Anfechten
+            </button>
+          </div>
         </div>
+        {#if expandedId === b.id}
+          <div class="tbl-detail">
+            <!-- Member affordance: every authenticated member may file. -->
+            <div class="challenge-form">
+              <div class="detail-ttl">Beschluss anfechten</div>
+              <p class="detail-sub">
+                Der Einspruch wird im Beschlussregister vermerkt und vom zuständigen
+                Gremium entschieden. Bitte begründen Sie Ihren Einspruch.
+              </p>
+              <textarea
+                class="grounds-input mono"
+                rows="4"
+                maxlength={CHALLENGE_GROUNDS_MAX}
+                placeholder="Begründung des Einspruchs …"
+                aria-label="Begründung"
+                bind:value={grounds}
+                disabled={submitting}
+              ></textarea>
+              <div class="form-foot">
+                <span class="mono td-muted">Pflichtfeld · höchstens {CHALLENGE_GROUNDS_MAX} Zeichen</span>
+                <div class="form-actions">
+                  <button type="button" class="btn btn-sm" onclick={() => togglePanel(b.id)}>
+                    Abbrechen
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    disabled={submitting}
+                    onclick={() => submitChallenge(b.id)}
+                  >
+                    {submitting ? 'Wird eingereicht …' : 'Einspruch einreichen'}
+                  </button>
+                </div>
+              </div>
+              {#if formError}
+                <p class="form-error" role="alert">{formError}</p>
+              {/if}
+            </div>
+
+            {#if isAdmin}
+              <!-- CouncilAdmin disposition controls — same gate as the page's
+                   surroundings (votes/+page.server.ts:129); the data itself is
+                   only loaded for admins in +page.server.ts. -->
+              {@const rowChallenges = challengesByResolution.get(b.id) ?? []}
+              <div class="disposition">
+                <div class="detail-ttl">Einsprüche entscheiden</div>
+                {#if rowChallenges.length === 0}
+                  <p class="detail-sub">Keine Einsprüche zu diesem Beschluss.</p>
+                {:else}
+                  {#each rowChallenges as c (c.id)}
+                    <div class="challenge-item">
+                      <div class="challenge-meta mono td-muted">
+                        <span>{c.raisedBy}</span>
+                        <span>·</span>
+                        <span>Status: {CHALLENGE_STATUS_LABELS[c.status] ?? c.status}</span>
+                        {#if c.resolvedBy}
+                          <span>·</span>
+                          <span>entschieden von {c.resolvedBy}</span>
+                        {/if}
+                      </div>
+                      <div class="challenge-grounds">{c.grounds}</div>
+                      {#if c.status === 'open'}
+                        <div class="disposition-controls">
+                          <input
+                            type="text"
+                            class="note-input mono"
+                            placeholder="Anmerkung zur Entscheidung (optional)"
+                            aria-label="Anmerkung zur Entscheidung"
+                            bind:value={dispositionNotes[c.id]}
+                            disabled={decidingId === c.id}
+                          />
+                          <button
+                            type="button"
+                            class="btn btn-sm"
+                            disabled={decidingId === c.id}
+                            onclick={() => decideChallenge(b.id, c.id, 'upheld')}
+                          >
+                            Stattgeben
+                          </button>
+                          <button
+                            type="button"
+                            class="btn btn-sm"
+                            disabled={decidingId === c.id}
+                            onclick={() => decideChallenge(b.id, c.id, 'dismissed')}
+                          >
+                            Abweisen
+                          </button>
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                  {#if dispositionError}
+                    <p class="form-error" role="alert">{dispositionError}</p>
+                  {/if}
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
       {/each}
     </div>
 
@@ -134,7 +362,7 @@
   }
   .tbl-row {
     display: grid;
-    grid-template-columns: 130px 1fr 200px 100px;
+    grid-template-columns: 130px 1fr 200px 100px 150px;
     gap: 12px;
     align-items: center;
     padding: 11px 16px;
@@ -171,6 +399,104 @@
   }
   .td-date {
     margin-top: 2px;
+  }
+  .td-challenge {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .td-challenge .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* Expanded challenge panel (member form + admin disposition list). */
+  .tbl-detail {
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+    padding: 14px 16px;
+    display: grid;
+    gap: 16px;
+  }
+  .tbl-detail:last-child {
+    border-bottom: none;
+  }
+  .detail-ttl {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .detail-sub {
+    color: var(--ink-muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .challenge-form {
+    display: grid;
+    gap: 8px;
+    max-width: 640px;
+  }
+  .grounds-input,
+  .note-input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+    font-size: 12.5px;
+    padding: 8px 10px;
+    resize: vertical;
+  }
+  .form-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .form-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .form-error {
+    color: var(--rust-ink, #b23a2f);
+    font-size: 12px;
+  }
+
+  .disposition {
+    display: grid;
+    gap: 10px;
+    max-width: 640px;
+  }
+  .challenge-item {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--paper);
+    padding: 10px 12px;
+    display: grid;
+    gap: 6px;
+  }
+  .challenge-meta {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 11px;
+  }
+  .challenge-grounds {
+    font-size: 12.5px;
+    white-space: pre-wrap;
+  }
+  .disposition-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .disposition-controls .note-input {
+    flex: 1 1 220px;
+    width: auto;
   }
 
   /* Committee monogram chip (com-mono) — not in app.css; ported from the

@@ -114,3 +114,30 @@ carry Phase 3); 87797e42's kernel half is item 0.
 | 3661bb6c | `packages/db/src/types.ts` | present (`adoption_mode` :87, `decision_rule_params` :90) | | | |
 | 87797e42 | finance `vier-augen-strategy`, `approval-workflow`, finance `register.server.ts`/labels, `finance/{approvals,finanzordnung}` | via TASK-205 | | | |
 | 87797e42 | `routes/+page.server.ts` (dashboard), `routes/api/notifications/+server.ts` financeRoleLabels hunks | found -> TASK-011 harvest (no notifications route in the kernel) | | | |
+
+## Items 1c + 1b: role-group reconcile and Governance Phase 3 (subtask 206-A)
+
+One commit: 29b70d92's revoke route imports the reconcile module (ea2211ae,
+ee4310f0 are its ancestors), so 1c lands with 1b. New files take their f2
+bytes (the tests at 29b70d92 predate the f2 "adopted only" filing rule and fail
+against the f2 source).
+
+| Source SHA | Disposition | Status | Guard | RED | GREEN |
+|---|---|---|---|---|---|
+| ea2211ae, ee4310f0, 74ae2780 | `lib/server/governance/role-group-reconcile.ts` (against item 0's `resolveRoleGroupGrants`), `governance-db.ts` `listAllRoleNames` / `listActiveRoleNamesForUser`, assign route reconcile (G1) | ported (the source's dead `updateRole`/`deleteRole`/`updateAssignmentStatus`, absent in the kernel, are not re-added) | `role-group-reconcile.test.ts`, `assign.reconcile.test.ts`, `revoke.reconcile.test.ts`, `governance-db.integration.test.ts` (list cases) | `Failed to resolve import "./role-group-reconcile"`; assign: 4 FAIL (`(a) assign grants the mapped groups to the incoming holder`, ...); re-break (e) reconcile add-only -> 4 FAIL incl. `(b) unassign: reassigning to a new holder removes groups the outgoing holder can no longer derive` | green |
+| ea2211ae, ee4310f0 | the three reconcile tests | adapted: `financeFlatGroupsForRole` / `FINANCE_GROUPS` (finance module) replaced by an in-test stub resolver with the same role -> group data; TASK-205's finance lane keeps the real mapping | | | |
+| 29b70d92 | `lib/server/governance/resolution-challenges-db.ts`, challenge routes `api/protocols/resolutions/[resId]/challenges/**` | ported (G1) | `challenges.test.ts` (401/201/400/409/403/404), `resolution-challenges-audit.integration.test.ts`, `resolution-challenges.integration.test.ts` (present-schema, Q1), `protocols-db.beschluesse-challenges.integration.test.ts` | `Failed to resolve import "./+server"`; re-break (c) drop `resolution_challenges_one_open_per_challenger` -> `× (1b) a second open challenge by the same user is refused (duplicate-open) and leaves no extra audit row`, `× (e) rejects a second OPEN challenge ...`; (c2) audit write outside the tx -> `× (3) an injected post-INSERT failure inside the FILING tx persists NEITHER the challenge row NOR the audit row` | green |
+| 29b70d92 | `governance-db.ts` `ArchiveReason` + `'recalled'`, `UnarchivableAssignmentError`, `archiveAssignment(…, tx)`, `revokeMandate` (same-tx `mandate.revoked`); `POST /api/governance/committees/{id}/roles/{roleId}/revoke` (CouncilAdmin) | ported (G1) | `revoke.reconcile.test.ts`, `revoke-mandate.integration.test.ts` (adapted: the kernel lane's `TRUNCATE org_units ... CASCADE` isolation added) | `Failed to resolve import "$lib/server/governance/role-group-reconcile"`; re-break (d) drop the CouncilAdmin check -> `× (b) non-admin → 403 and nothing is revoked` | green |
+| 29b70d92 | `contracts/kernel/openapi.governance.json` revoke op; 1.0.0 -> 1.1.0 (Q7) + G10 regen `kernel-governance-client.ts` | ported (the four `/api/users*` paths stay out, open-core §5) | `codegen-drift.test.ts`, `contracts-real-specs.test.ts`, `contracts:check` | spec bump before regen: `× the committed kernel-governance-client.ts matches what the governance spec generates today`; re-break (f) route removed with the op present -> `× spec inventory === kernel route inventory (both directions)` | `contracts:check` OK (6 specs); generated-clients 238/239 (the one failure, `oasdiff-gate.test.ts` "remove optional response property with NO bump: FAILS", is red on the base too) |
+| 29b70d92 | `lib/governance/challenge-form.ts`, `recall-action.ts` + tests | ported (challenge-form test: conditional expects rewritten as whole-object `toEqual`, lint ratchet) | themselves | `Failed to resolve import "./challenge-form"` / `"./recall-action"` | 33/33 (`lib/governance`) |
+| 29b70d92 (+ #439, f2 `routes/resolutions`) | `/beschluesse` challenge form, open-challenge badge, admin disposition; `+page.server.ts` admin-gated challenge rows, both loads log a summary before degrading | adapted onto the kernel segment `beschluesse` (script hunk re-applied by hand); the f2 `resolutions-page.test.ts` ported as `beschluesse-page.test.ts` (load result narrowed once for the kernel's generated type) | `beschluesse-page.test.ts` | `× #439: a failing challenge query degrades to empty for an admin, and is logged`, `× #439: a failing register query degrades to empty, and is logged` | 8/8; svelte-check 0 errors |
+| 29b70d92 | recall action on `members/committees/[id]/+page.svelte` | ported (clean hunk; byte-equal to f2) | `recall-action.test.ts`; svelte-check | | green |
+| 29b70d92 | `gremion-public` (`stura-public` at the source) `/beschluesse` register, `public-db.ts`, `packages/db/src/public-types.ts` | superseded -> TASK-145 (Q8) | | | |
+| 29b70d92 | migrations 055, 056 | present@TASK-018 / TASK-029 | | | |
+
+K1: the kernel `beschluesse/+page.svelte` no longer imports `$app/stores`
+(drift from the brief), so nothing of 7f45643 applies there; 7f45643 itself is
+not reachable from this checkout, so the committees page hunk is ported without
+it. New UI code imports only `$app/navigation` (`invalidateAll`). The UI strings
+are literal German like the surrounding kernel pages, so no G8 message keys were
+added.

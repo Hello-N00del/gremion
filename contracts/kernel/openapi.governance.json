@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Gremion kernel — governance surface",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Documents the governance/groups/health HTTP surface of the Gremion governance kernel. v0.2.0 (breaking): the users-admin API (/api/users*) left the kernel with the users-admin module during the open-core carve. Contract-first: edit this spec in the same change as the route. Error envelope: {success:false, error:string}. Coverage and breaking-change gates: see contracts/README.md."
   },
   "servers": [
@@ -1524,6 +1524,106 @@
           },
           "403": {
             "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/committees/{id}/roles/{roleId}/revoke": {
+      "post": {
+        "summary": "INV-3 recall: revoke the role's active mandate as a recorded governance act — archives the assignment as 'recalled' and appends the 'mandate.revoked' audit act in one transaction, then reconciles the revoked holder's auto-managed Keycloak groups",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "roleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Free-text recall reason; recorded verbatim in the 'mandate.revoked' audit payload"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mandate revoked and recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceOk"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Zod validation failure (missing/empty reason)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active assignment for this role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Assignment cannot be archived (NULL start/end dates — migration 010 vs history NOT NULL)",
             "content": {
               "application/json": {
                 "schema": {

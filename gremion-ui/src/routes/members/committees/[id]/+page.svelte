@@ -2,6 +2,8 @@
   import type { PageData } from './$types'
   import { invalidateAll, goto } from '$app/navigation'
   import { t } from '$lib/i18n'
+  import { Dialog, DialogHeader, DialogTitle } from '$lib/components/ui/dialog'
+  import { buildRevokeRequest } from '$lib/governance/recall-action'
 
   let { data }: { data: PageData } = $props()
 
@@ -91,6 +93,43 @@
     }
   }
 
+  // ── Recall (Abberufung) ───────────────────────────────────────────────────
+  let recallTarget = $state<{ roleId: string; roleName: string; holderName: string } | null>(null)
+  let recallReason = $state('')
+  let recallError = $state('')
+  let recalling = $state(false)
+
+  function openRecall(roleId: string, roleName: string, holderName: string) {
+    recallTarget = { roleId, roleName, holderName }
+    recallReason = ''
+    recallError = ''
+  }
+
+  async function confirmRecall() {
+    if (!recallTarget || recalling || !recallReason.trim()) return
+    recalling = true
+    recallError = ''
+    try {
+      const req = buildRevokeRequest(data.committee.id, recallTarget.roleId, recallReason)
+      const res = await fetch(req.url, {
+        method: req.method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body),
+      })
+      if (res.ok) {
+        recallTarget = null
+        await invalidateAll()
+      } else {
+        const body = await res.json().catch(() => ({}))
+        recallError = body?.error ?? `Abberufung fehlgeschlagen (${res.status})`
+      }
+    } catch {
+      recallError = 'Verbindungsfehler. Bitte erneut versuchen.'
+    } finally {
+      recalling = false
+    }
+  }
+
   async function deleteCommittee() {
     if (!confirm(`Gremium „${data.committee.name}" wirklich löschen? Dies entfernt auch die zugehörige Keycloak-Gruppe.`)) return
     deleteError = ''
@@ -125,6 +164,7 @@
 
     const roleRows = data.roles.map((r) => ({
       type: 'role' as const,
+      roleId: r.id,
       role: r.name,
       electionMethod: r.election_method,
       memberId: r.currentAssignment?.user_keycloak_id ?? null,
@@ -138,6 +178,7 @@
       .filter((m) => !assignedIds.has(m.user_keycloak_id))
       .map((m) => ({
         type: 'member' as const,
+        roleId: null,
         role: null,
         electionMethod: null,
         memberId: m.user_keycloak_id,
@@ -322,6 +363,12 @@
             {#if data.isAdmin}
               <td class="px-4 py-3 text-right">
                 {#if !row.vacant && row.memberId}
+                  {#if row.roleId}
+                    <button
+                      class="mr-3 text-xs text-rust hover:underline"
+                      onclick={() => openRecall(row.roleId!, row.role!, row.displayName ?? '')}
+                    >Abberufen</button>
+                  {/if}
                   <button
                     class="text-xs text-rust hover:underline disabled:opacity-50"
                     disabled={removingId === row.memberId}
@@ -377,4 +424,47 @@
       {/each}
     </div>
   {/if}
+
+  <!-- ── Recall confirmation dialog (required reason) ─────────────────────── -->
+  <Dialog open={recallTarget !== null} onClose={() => { if (!recalling) recallTarget = null }}>
+    <DialogHeader>
+      <DialogTitle class="text-rust">Amtsträger abberufen?</DialogTitle>
+    </DialogHeader>
+    {#if recallTarget}
+      <p class="mt-2 text-sm text-ink-muted">
+        Soll <strong>{recallTarget.holderName}</strong> wirklich aus dem Amt „{recallTarget.roleName}" abberufen werden?
+      </p>
+      <div class="mt-3 space-y-1">
+        <label for="recall-reason" class="text-sm font-medium">Grund (erforderlich)</label>
+        <textarea
+          id="recall-reason"
+          bind:value={recallReason}
+          rows="3"
+          placeholder="Grund der Abberufung…"
+          class="w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm"
+        ></textarea>
+      </div>
+      {#if recallError}
+        <p class="mt-2 text-sm text-rust" role="alert">{recallError}</p>
+      {/if}
+      <div class="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onclick={() => (recallTarget = null)}
+          disabled={recalling}
+          class="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-surface-2 disabled:opacity-50"
+        >
+          Abbrechen
+        </button>
+        <button
+          type="button"
+          onclick={confirmRecall}
+          disabled={recalling || !recallReason.trim()}
+          class="rounded-md border border-rust/40 px-3 py-1.5 text-xs font-medium text-rust hover:bg-rust-soft disabled:opacity-50"
+        >
+          {recalling ? 'Wird abberufen…' : 'Abberufen'}
+        </button>
+      </div>
+    {/if}
+  </Dialog>
 </div>
