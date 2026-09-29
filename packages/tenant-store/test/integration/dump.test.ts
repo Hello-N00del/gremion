@@ -183,6 +183,11 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
     expect(seen.calls).toBe(0)
     expect(events(dumpDir)).toEqual([])
     expect(await ddlLog(watcher)).toEqual([])
+    // G1: the ledger's own CHECKs (a contract row names its contract_after; phase is one of three)
+    const sha = 'a'.repeat(64)
+    await expect(a`INSERT INTO public.schema_migrations (filename, sha256, phase, release_ref) VALUES ('009_x.sql', ${sha}, 'contract', 'dist-v1.0.0')`).rejects.toMatchObject({ code: '23514' })
+    await expect(a`INSERT INTO public.schema_migrations (filename, sha256, phase, release_ref, contract_after) VALUES ('009_x.sql', ${sha}, 'expand', 'dist-v1.0.0', 'dist-v0.9.0')`).rejects.toMatchObject({ code: '23514' })
+    await expect(a`INSERT INTO public.schema_migrations (filename, sha256, phase, release_ref) VALUES ('009_x.sql', ${sha}, 'bogus', 'dist-v1.0.0')`).rejects.toMatchObject({ code: '23514' })
   }, SLOW)
 
   it('restore rehearsal (TRD-206): the second file fails; restore --accept-loss-since returns schema and seeded rows to the pre-run state and logs `restored`; the dump stays until discard', async () => {
