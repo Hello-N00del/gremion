@@ -7,8 +7,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join, basename } from 'node:path'
+import { tmpdir } from 'node:os'
 
 import {
   TEMPLATE_MAP,
@@ -193,5 +194,26 @@ test('Q4: every *_IMAGE key in the render env equals the same key in its env tem
     const found = tmpls.map((t) => t.match(new RegExp(`^${k}=(.*)$`, 'm'))?.[1]).filter(Boolean)
     assert.ok(found.length >= 1, `${k} is in no env template`)
     for (const f of found) assert.equal(f, want, `${k} drifted from its template`)
+  }
+})
+
+test('r1: the state render seeds the git-ignored legal/legal.env EMPTY and exclusively (a fresh checkout renders)', () => {
+  const { plans } = planRenders()
+  const state = plans.find((p) => p.id === 'state')
+  assert.deepEqual(state.seed, ['legal/legal.env'])
+  const dir = mkdtempSync(join(tmpdir(), 't048b-seed-'))
+  try {
+    const res = dockerRender({ ...state, dir }, { spawn: () => ({ status: 0, stdout: '{"services":{"a":{}}}', stderr: '' }) })
+    assert.equal(res.ok, true)
+    assert.equal(readFileSync(join(dir, 'legal/legal.env'), 'utf8'), '')
+    writeFileSync(join(dir, 'legal/legal.env'), 'KEEP=1\n')
+    dockerRender({ ...state, dir }, { spawn: () => ({ status: 0, stdout: '{"services":{"a":{}}}', stderr: '' }) })
+    assert.equal(readFileSync(join(dir, 'legal/legal.env'), 'utf8'), 'KEEP=1\n', 'an existing file is never overwritten')
+    const ops = plans.find((p) => p.id === 'ops')
+    assert.deepEqual(ops.seed, [])
+    dockerRender({ ...ops, dir: join(dir, 'ops') }, { spawn: () => ({ status: 0, stdout: '{"services":{"a":{}}}', stderr: '' }) })
+    assert.ok(!existsSync(join(dir, 'ops', 'legal')), 'only the state render seeds')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

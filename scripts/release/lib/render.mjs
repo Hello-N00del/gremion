@@ -30,8 +30,8 @@
 // Imports from the census exactly three symbols: readEnvKey, childEnv,
 // REPO_ROOT.
 
-import { readFileSync, readdirSync, existsSync } from 'node:fs'
-import { join, basename } from 'node:path'
+import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join, basename, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 import { readEnvKey, childEnv, REPO_ROOT } from '../../verify/census/render.mjs'
@@ -42,9 +42,16 @@ export const TEMPLATE_DIR = 'infra/host/templates/env'
 export const PINS_FIXTURE_DIR = 'test/host/fixtures/release/valid'
 export const RENDER_ENV = 'scripts/release/fixtures/render/render.env'
 
-/** template project -> the directory COMPOSE_FILE is relative to, and its renders. */
+/**
+ * template project -> the directory COMPOSE_FILE is relative to, its renders,
+ * and the git-ignored files compose needs to exist (`seed`, created EMPTY
+ * and exclusively when absent, never overwritten: the state project's legal
+ * service names legal/legal.env as an env_file, and a fresh checkout has
+ * none -- the file ci.yml's `touch legal/legal.env` and compose-edge.mjs's
+ * renderState leave).
+ */
 export const TEMPLATE_MAP = Object.freeze({
-  state: { dir: '.', renders: [{ id: 'state' }] },
+  state: { dir: '.', renders: [{ id: 'state' }], seed: ['legal/legal.env'] },
   app: { dir: '.', renders: [{ id: 'app-blue', colour: 'blue' }, { id: 'app-green', colour: 'green' }] },
   ops: { dir: 'infra/host/ops', renders: [{ id: 'ops' }] },
   mail: { dir: 'infra/host/mail', renders: [{ id: 'mail' }] },
@@ -127,7 +134,7 @@ export function planRenders({
         continue
       }
       const argv = ['compose', '--env-file', join(root, RENDER_ENV), '--project-directory', dir, '--project-name', name, ...files.flatMap((f) => ['-f', f]), 'config', '--format', 'json']
-      plans.push({ id: r.id, project, dir, files, argv, env })
+      plans.push({ id: r.id, project, dir, files, argv, env, seed: [...(map.seed ?? [])] })
     }
   }
   return { plans, problems }
@@ -135,6 +142,15 @@ export function planRenders({
 
 /** Run one plan with the docker CLI: {ok, doc} or {ok: false, detail[, toolMissing]}. */
 export function dockerRender(plan, { spawn = spawnSync } = {}) {
+  for (const rel of plan.seed ?? []) {
+    const f = join(plan.dir, rel)
+    try {
+      mkdirSync(dirname(f), { recursive: true })
+      writeFileSync(f, '', { flag: 'wx' })
+    } catch (err) {
+      if (err.code !== 'EEXIST') return { ok: false, detail: `cannot seed ${rel}: ${err.message}` }
+    }
+  }
   const res = spawn('docker', plan.argv, { cwd: plan.dir, env: plan.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120_000 })
   if (res.error?.code === 'ENOENT') return { ok: false, toolMissing: 'docker', detail: 'docker not found' }
   if (res.error) return { ok: false, detail: `docker could not run: ${res.error.message}` }
