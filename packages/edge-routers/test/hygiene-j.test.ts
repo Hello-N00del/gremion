@@ -40,16 +40,40 @@ import { REPO_ROOT } from './helpers.js'
 const CDN_TOKEN_VAR = ['CF', 'API', 'TOKEN'].join('_')
 const PLANNER = ['edge', 'plan'].join('-')
 
-// Measured on the native-Windows intake box (2026-09-27, serial): git
-// ls-files / init / add -A of the ~1.6k-file tree 0.03-3.2 s each, one tree
-// copy ~1.6-2.0 s, one full hygiene run 8.3-12.1 s. Three lanes in parallel:
-// see the commit message. The child timeouts are ~5x the worst observation;
-// the setup budget covers the copies plus every case at the child timeout's
-// fraction that three lanes can actually reach.
+// Time budgets (R26-FLAKES, R28). Measured on the 16-CPU dev box, three lanes
+// in parallel exactly as below, every child timed, the bats stub in place (see
+// writeBatsStub), "load" = N CPU-spinning node processes on top of the other
+// agents on the box:
+//
+//                      one hygiene run (n)          git call      tree copy
+//   no extra load      13.1-31.8 s (n=55, 5 files)  <= 5.2 s      -
+//   8 CPU              19.3-49.7 s (n=33, 3 files)  -             -
+//   16 CPU             198.7-275.2 s (n=11)         <= 7.6 s      <= 4.2 s
+//   32 CPU + 4 file-I/O  > 578-600 s (n=4, none completed: three hit the
+//                      then 600 s child timeout, the fourth was stopped
+//                      with the series at 578 s)    <= 7.6 s      <= 10.8 s
+//
+// The run is CPU-bound inside the script itself (one run alone under 16 CPU:
+// 231 s, of which 81 s in its 29 synchronous children), so under 32+4 the file cannot
+// finish in any budget a gate would wait for; the heaviest level at which it
+// completes is 16 CPU. Each child timeout is >= 3x that level's worst sample:
+// hygiene 840 s >= 3 x 275.2 s, git 30 s >= 3 x 7.6 s. Every hook and the one
+// test that spawns get a budget DERIVED from those child timeouts (see
+// SETUP_TIMEOUT_MS), so a slow child always fails first, by name, and vitest
+// never abandons a hook whose children still run (the abandoned beforeAll left
+// its lanes' children holding files, and the teardown then failed with EPERM
+// on the scratch directory -- integration gate 2c82a73).
 const LANES = 3
 const GIT_TIMEOUT_MS = 30_000
-const HYGIENE_TIMEOUT_MS = 600_000
-const SETUP_TIMEOUT_MS = 1_400_000
+const HYGIENE_TIMEOUT_MS = 840_000
+// The three tree copies are synchronous and cannot be killed: 3 copies x the
+// worst loaded copy (10.8 s) = 32.4 s, 3x that.
+const COPY_BUDGET_MS = 100_000
+// Teardown deletes the three trees; the same order of work as the copies.
+const TEARDOWN_TIMEOUT_MS = 120_000
+// The last test re-stages every lane: LANES x (git add + git write-tree). It
+// ran on vitest's 5 s default and timed out under load (16 CPU: 10.1 s).
+const FINAL_CHECK_TIMEOUT_MS = LANES * 2 * GIT_TIMEOUT_MS
 
 // The tree copies belong under the worktree's own git-excluded scratch space,
 // never under the OS temp dir (house MEDIUM finding: hygiene-j scratch trees).
@@ -229,6 +253,14 @@ const cases: Record<string, Plant> = {
     l.edit('docker-compose.yml', '      - traefik-acme:/letsencrypt\n', '      - traefik-acme:/letsencrypt\n      - ${GREMION_ROOT}/etc//edge/:/srv/x:ro\n'),
 }
 
+// The setup's worst case, summed from the child timeouts along its critical
+// path: git ls-files, the copies, each lane's init (git init, add -A,
+// write-tree; lanes in parallel), then the busiest lane's cases one after
+// another, each a git add, one hygiene run and a restore (add -A, write-tree).
+const CASES_PER_LANE = Math.ceil(Object.keys(cases).length / LANES)
+const SETUP_TIMEOUT_MS =
+  GIT_TIMEOUT_MS + COPY_BUDGET_MS + 3 * GIT_TIMEOUT_MS + CASES_PER_LANE * (HYGIENE_TIMEOUT_MS + 3 * GIT_TIMEOUT_MS) + 60_000
+
 let runDir = ''
 const lanes: Lane[] = []
 const outcomes = new Map<string, Outcome>()
@@ -272,7 +304,7 @@ afterAll(() => {
   } catch {
     // not empty (another run is live) or already gone: either way not ours to remove
   }
-}, SETUP_TIMEOUT_MS)
+}, TEARDOWN_TIMEOUT_MS)
 
 /** The `✗ jN` lines of a case; rethrows the case's own failure. */
 function lines(name: keyof typeof cases): string[] {
@@ -365,5 +397,5 @@ describe('kernel hygiene (j) — TDD 8', () => {
     expect(new Set(lanes.map((l) => l.baseline)).size).toBe(1)
     for (const l of lanes) expect(await l.stagedTree()).toBe(l.baseline)
     expect(existsSync(join(runDir, 'bin', 'used')), 'the hygiene runs never resolved the bats stub').toBe(true)
-  })
+  }, FINAL_CHECK_TIMEOUT_MS)
 })
