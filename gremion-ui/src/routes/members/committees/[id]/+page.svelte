@@ -117,7 +117,12 @@
         body: JSON.stringify(req.body),
       })
       if (res.ok) {
+        const body = await res.json().catch(() => ({}))
         recallTarget = null
+        if (body?.groupsReconciled === false) {
+          // The recall is recorded; only the module-group cleanup failed.
+          alert('Abberufung gespeichert, aber die Gruppenrechte des Mitglieds konnten nicht angepasst werden. Bitte die Gruppen in Keycloak prüfen.')
+        }
         await invalidateAll()
       } else {
         const body = await res.json().catch(() => ({}))

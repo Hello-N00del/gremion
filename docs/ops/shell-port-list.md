@@ -88,9 +88,9 @@ integration cases against a scratch `postgres:18-alpine` (migrated with
 |---|---|---|---|---|---|
 | a29347f0, 3657370c (#458-2) | `routes/protocols/+page.server.ts` log-before-degrade | adapted onto the kernel segment `routes/protokolle/+page.server.ts` (log tag `[protokolle]`; summary only, never the raw error) | `routes/protokolle/page.server.test.ts` (source test, path/tag adapted) | on base: `× logs at ERROR level — with the route, the message and the code — before degrading`, `× does NOT log the raw error object — postgres.js carries query + parameters` (2 of 4 failed); re-break (g) is the base code | 11/11 (`routes/protokolle`) |
 | a88f00c9, 3657370c (#459-4) | portal image model | N/A: OPEN at source (Q13); record ported to `docs/security/portal-image-model-open-decision.md` with kernel anchors re-measured; no `img-src` edit | the non-image guards below | | |
-| a29347f0 (895f736 in the source record) | `gremion-public/src/hooks.server.test.ts` | adapted (G5): the kernel's header hook is `securityHeadersHandle`; the "keeps Google Fonts reachable" case is dropped (kernel self-hosts fonts, pinned the other way by `lib/test/csp-no-third-party-fonts.test.ts`) | itself | mutation: drop `X-Content-Type-Options: nosniff` -> `× sets the CSP and the anti-framing headers on a text/html response` (1 of 8) | 8/8 |
-| a29347f0 (09b6128) | `gremion-public/src/lib/sanitize.test.ts` | ported (G5; one comment line adapted: the kernel portal has no `/aktuelles`); `sanitize.ts` byte-equal to the source (6fc897c) | itself | mutation: allow `script`/`iframe` + `on*` attributes -> 3 of 11 FAIL (`strips a <script> element, tag and payload alike`, ...) | 11/11; gremion-public 15 files / 187 tests |
-| 5f47943c | gremion-public nosniff + Referrer-Policy | present (`gremion-public/src/hooks.server.ts:53-54`) | `hooks.server.test.ts` | as above | green |
+| a29347f0 (the brief's 895f736 is a blob id) | `gremion-public/src/hooks.server.test.ts` | adapted (G5): the kernel's header hook is `securityHeadersHandle`; the "keeps Google Fonts reachable" case is dropped (kernel self-hosts fonts, pinned the other way by `lib/test/csp-no-third-party-fonts.test.ts`) | itself | mutation: drop `X-Content-Type-Options: nosniff` -> `× sets the CSP and the anti-framing headers on a text/html response` (1 of 8) | 8/8 |
+| a29347f0 (the brief's 09b6128 is a blob id) | `gremion-public/src/lib/sanitize.test.ts` | ported (G5; one comment line adapted: the kernel portal has no `/aktuelles`); `sanitize.ts` byte-equal to the source (blob 6fc897c) | itself | mutation: allow `script`/`iframe` + `on*` attributes -> 3 of 11 FAIL (`strips a <script> element, tag and payload alike`, ...) | 11/11; gremion-public 15 files / 187 tests |
+| a29347f0, 3657370c | gremion-public nosniff + Referrer-Policy | present (`gremion-public/src/hooks.server.ts:53-54`) | `hooks.server.test.ts` | as above | green |
 | 5f47943c | gremion-ui nosniff + Referrer-Policy | 206-B (G0, after TASK-205) | | | |
 | a29347f0 (#459-2) | rate-limit bucket eviction | present@8649555a (item 3 row, guard (n)) | | | |
 | a29347f0 (#434-6) | `gremion-public/src/lib/server/mail.ts` | N/A: no such file in the kernel portal | | | |
@@ -147,3 +147,39 @@ added.
 | Source | Disposition | Status | Guard | RED | GREEN |
 |---|---|---|---|---|---|
 | (kernel guard, no source SHA) | tracked `gremion-ui/src` files never import repo-root `modules/**`, `$lib/server/finance/**`, or a `$lib` path that exists only under a `modules/*/app` overlay (the boundary suite's own string fixtures exempt) | new | `lib/server/boundary/kernel-module-imports.test.ts` (seeded cases per rule) | re-break (s): a kernel file importing `../../../../../modules/content/app/...` -> `× no tracked gremion-ui/src file imports modules/** ...` | 6/6; boundary 12 files / 57 tests |
+
+## 206-A self-review round 1 (fixes, test first)
+
+| Finding | Fix | Guard | RED before the fix | GREEN |
+|---|---|---|---|---|
+| HIGH: the protocol editor PATCHed the whole row, `result` included, and the Phase-2 route refuses a free-hand result, so every edit failed | `lib/governance/resolution-patch-body.ts` (the f2 editor's request shaping, extracted) used by `members/committees/[id]/protokolle/[protocolId]/+page.svelte` (script only; the ResolutionRow markup port stays STOPPED) | `lib/governance/resolution-patch-body.test.ts` | `Failed to resolve import "./resolution-patch-body"` | 4/4 |
+| HIGH: revoke returned a plain 200 when the Keycloak group cleanup failed after the recall was recorded | the route answers `{ success: true, groupsReconciled }` and logs a summary; the recall dialog warns when `false`; reason capped at 4000 characters; contract 1.1.0's revoke op documents both (G10 regen in the same commit) | `revoke.reconcile.test.ts` (f), (f2) | `× (f) a Keycloak failure during reconcile keeps the recall but reports groupsReconciled: false and logs`, `× (f2) a clean reconcile reports groupsReconciled: true` | 7/7 |
+| MEDIUM: any session (a guest too) could file a challenge | POST requires `Role.Member` (hierarchy: CouncilAdmin, ITAdmin included) | `challenges.test.ts` (a2) | `× (a2) a guest → 403, service never called`, `× (a2) a session without roles → 403 ...` | 16/16 |
+| MEDIUM: reconcile removals looked ids up in the realm group list and skipped a missing one silently; adds ran first | removals first, by the user's own group ids; every step runs; an incomplete reconcile throws (callers log it; revoke reports it) | `role-group-reconcile.test.ts` (3 cases) | `× removes a held group by its own id even when the realm list omits it, removals first`, `× an add whose group does not exist makes the reconcile throw`, `× a failing removal does not stop the others ...` | 10/10 |
+| MEDIUM: the boundary scan missed relative climbs into `src/lib/server/finance` or overlay-only paths | relative specifiers that land in `src/lib` get the same finance / overlay judgement as `$lib/…` | `kernel-module-imports.test.ts` (2 seeded cases) | `× fires on a planted import: import { x } from '../finance/officer-groups'`, `× ... '../overlay-only/thing'` | 8/8 |
+
+206-A residuals (named, not fixed here):
+
+- Resolution PATCH/DELETE carry no publish lock: an adopted resolution can be
+  edited or deleted (the source's #433 atomic lock, 1e460946, is not in the
+  kernel and was not before this port; deleting cascades its challenges).
+  found -> TASK-011 harvest.
+- An acclamation row may store an informational tally that contradicts the
+  declared outcome (source behaviour; the chair's declaration is the authority).
+- Revoke reads the assignment outside the recall transaction (a concurrent
+  assign/revoke can double-archive); neither revoke nor assign checks that
+  `roleId` belongs to the path's committee (assign predates this port).
+- The assign route and the reconcile still log raw Keycloak error objects.
+- UI fetch handlers wrap `invalidateAll()` in the same catch as the request, so
+  a refresh failure after a successful write reads as a failed write.
+- ResolutionRow keeps its three-rule local type and shows empty tallies for an
+  acclamation row until the row UI port (TASK-165 dependency).
+- `lib/server/boundary/kernel-module-imports.test.ts` sits outside the unit's
+  owned paths (the brief's §6.15 names the guard and the scoped gate runs
+  `src/lib/server/boundary`); `fresh-init-proof.sh`'s `docker run` line changed
+  with the reader-login block because the probe is meaningless without it (G7).
+- K1 reactivity test (§6.14) and the kit-3 scan scripts are not run: 7f45643
+  is not reachable and 205's scan is not on the base; a manual scan of the 58
+  touched `gremion-ui/src` files found no `$app/stores`, `$app/paths`,
+  `$env/dynamic`, `$:` or absolute redirect.
+

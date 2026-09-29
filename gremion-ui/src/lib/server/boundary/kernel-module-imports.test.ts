@@ -51,24 +51,32 @@ function scanKernelFile(
 ): string[] {
   const rel = relative(REPO, absFile).split(sep).join('/')
   const out: string[] = []
-  for (const spec of specifiersOf(source)) {
-    if (spec === '$lib/server/finance' || spec.startsWith('$lib/server/finance/')) {
+  const LIB = join(SRC, 'lib')
+  // One judgement for a path under src/lib, however it was spelled ($lib/… or
+  // a relative climb that lands in src/lib).
+  const judgeLib = (spec: string, rest: string) => {
+    const posix = rest.split(sep).join('/')
+    if (posix === 'server/finance' || posix.startsWith('server/finance/')) {
       out.push(`${rel}: ${spec} (finance module server lib)`)
-      continue
+      return
     }
+    if (resolvesUnder(LIB, rest, exists)) return
+    if (overlays.some((root) => resolvesUnder(join(root, 'lib'), rest, exists))) {
+      out.push(`${rel}: ${spec} (exists only in a modules/*/app overlay)`)
+    }
+  }
+  for (const spec of specifiersOf(source)) {
     if (spec.startsWith('./') || spec.startsWith('../')) {
       const target = resolve(dirname(absFile), spec)
       if (target === MODULES || target.startsWith(MODULES + sep)) {
         out.push(`${rel}: ${spec} (repo-root modules/**)`)
+      } else if (target.startsWith(LIB + sep)) {
+        judgeLib(spec, relative(LIB, target))
       }
       continue
     }
-    if (spec.startsWith('$lib/')) {
-      const rest = spec.slice('$lib/'.length)
-      if (resolvesUnder(join(SRC, 'lib'), rest, exists)) continue
-      if (overlays.some((root) => resolvesUnder(join(root, 'lib'), rest, exists))) {
-        out.push(`${rel}: ${spec} (exists only in a modules/*/app overlay)`)
-      }
+    if (spec === '$lib/server/finance' || spec.startsWith('$lib/')) {
+      judgeLib(spec, spec.slice('$lib/'.length))
     }
   }
   return out
@@ -106,6 +114,8 @@ describe('kernel -> module imports (TASK-206-A §6.15)', () => {
     ["import { x } from '$lib/server/finance/officer-groups'", 'finance module server lib'],
     ["import { x } from '../../../../../modules/finance/app/lib/x'", 'repo-root modules/**'],
     ["const m = await import('$lib/server/overlay-only/thing')", 'exists only in a modules/*/app overlay'],
+    ["import { x } from '../finance/officer-groups'", 'finance module server lib'],
+    ["import { x } from '../overlay-only/thing'", 'exists only in a modules/*/app overlay'],
   ])('fires on a planted import: %s', (line, why) => {
     const file = join(SRC, 'lib', 'server', 'governance', 'planted.ts')
     const overlay = join(MODULES, 'planted', 'app')

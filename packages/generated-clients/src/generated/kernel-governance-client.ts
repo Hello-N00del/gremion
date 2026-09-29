@@ -1213,7 +1213,7 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        /** @description Free-text recall reason; recorded verbatim in the 'mandate.revoked' audit payload */
+                        /** @description Free-text recall reason; recorded verbatim in the 'mandate.revoked' audit payload. The route refuses more than 4000 characters (400). */
                         reason: string;
                     };
                 };
@@ -1225,7 +1225,12 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["GovernanceOk"];
+                        "application/json": {
+                            /** @constant */
+                            success: true;
+                            /** @description false when the recall was recorded but the revoked holder's auto-managed Keycloak groups could not be reconciled (the admin must check them) */
+                            groupsReconciled: boolean;
+                        };
                     };
                 };
                 /** @description Zod validation failure (missing/empty reason) */

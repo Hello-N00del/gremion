@@ -1574,7 +1574,7 @@
                   "reason": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Free-text recall reason; recorded verbatim in the 'mandate.revoked' audit payload"
+                    "description": "Free-text recall reason; recorded verbatim in the 'mandate.revoked' audit payload. The route refuses more than 4000 characters (400)."
                   }
                 }
               }
@@ -1587,7 +1587,20 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GovernanceOk"
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "groupsReconciled"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "groupsReconciled": {
+                      "type": "boolean",
+                      "description": "false when the recall was recorded but the revoked holder's auto-managed Keycloak groups could not be reconciled (the admin must check them)"
+                    }
+                  }
                 }
               }
             }

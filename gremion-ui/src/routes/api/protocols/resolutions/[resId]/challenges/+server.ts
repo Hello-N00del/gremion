@@ -1,14 +1,15 @@
 // T2 (#320 contestability): POST /api/protocols/resolutions/[resId]/challenges
 // — a MEMBER files a formal challenge against a resolution. Filing is a member
-// act: any authenticated session may POST (no CouncilAdmin required); the
-// challenger identity always comes from the session, never the body.
+// act: any session holding Role.Member (or above) may POST (no CouncilAdmin
+// required; a guest is refused, TASK-206-A review); the challenger identity
+// always comes from the session, never the body.
 //
 // Deliberately under api/protocols/ (NOT a KERNEL_PREFIXES path,
 // route-coverage.ts:8), so the kernel OpenAPI equivalence gate
 // (contracts-real-specs.test.ts) is untouched.
 import { error, json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
-import type { SessionUser } from '$lib/auth'
+import { hasRole, Role, type SessionUser } from '$lib/auth'
 import {
   fileChallenge,
   DuplicateOpenChallengeError,
@@ -22,8 +23,14 @@ function requireUser(event: RequestEvent): SessionUser {
   return user
 }
 
-export async function POST(event: RequestEvent) {
+function requireMember(event: RequestEvent): SessionUser {
   const user = requireUser(event)
+  if (!hasRole(user.roles ?? [], Role.Member)) throw error(403, 'Forbidden')
+  return user
+}
+
+export async function POST(event: RequestEvent) {
+  const user = requireMember(event)
   const body = await event.request.json()
 
   const grounds = typeof body?.grounds === 'string' ? body.grounds.trim() : ''

@@ -206,12 +206,25 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/revoke — INV-3 r
     expect(vi.mocked(reconcileUserRoleGroups)).not.toHaveBeenCalled()
   })
 
-  it('(f) a Keycloak failure during reconcile is swallowed — the recall itself still succeeds', async () => {
+  // TASK-206-A review: the recall stands (it is committed and recorded), but a
+  // failed group cleanup is REPORTED, never a silent 200 — the recalled holder
+  // may still carry module groups until someone reconciles them.
+  it('(f) a Keycloak failure during reconcile keeps the recall but reports groupsReconciled: false and logs', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     h.listUserGroups.mockRejectedValue(new Error('kc unreachable'))
     const res = await POST(event({ reason: 'x' }))
     expect(res.status, await res.clone().text()).toBe(200)
+    expect(await res.json()).toEqual({ success: true, groupsReconciled: false })
+    expect(err).toHaveBeenCalled()
     expect(h.revokeMandate).toHaveBeenCalledTimes(1)
     expect(h.addUserToGroup).not.toHaveBeenCalled()
     expect(h.removeUserFromGroup).not.toHaveBeenCalled()
+    err.mockRestore()
+  })
+
+  it('(f2) a clean reconcile reports groupsReconciled: true', async () => {
+    const res = await POST(event({ reason: 'x' }))
+    expect(res.status, await res.clone().text()).toBe(200)
+    expect(await res.json()).toEqual({ success: true, groupsReconciled: true })
   })
 })

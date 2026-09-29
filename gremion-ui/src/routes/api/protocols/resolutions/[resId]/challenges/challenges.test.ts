@@ -123,6 +123,20 @@ describe('POST /api/protocols/resolutions/[resId]/challenges — member files a 
     expect(h.fileChallenge).not.toHaveBeenCalled()
   })
 
+  // TASK-206-A review: filing is a MEMBER act. A guest (or a session without a
+  // role) can see no committee business and must not plant an audit row and a
+  // public "Einspruch offen" badge on any resolution id it learns.
+  it.each([
+    ['a guest', [Role.Guest]],
+    ['a session without roles', []],
+  ])('(a2) %s → 403, service never called', async (_n, roles) => {
+    const outsider = { id: 'guest-1', roles, groups: [], email: 'g@example.org', name: 'G' }
+    await expect(
+      POST(postEvent({ grounds: 'Verstoß gegen §7' }, outsider as never)),
+    ).rejects.toMatchObject({ status: 403 })
+    expect(h.fileChallenge).not.toHaveBeenCalled()
+  })
+
   it('(b) authenticated plain member (no CouncilAdmin) with grounds → 201', async () => {
     const res = await POST(postEvent({ grounds: 'Verstoß gegen §7 der Geschäftsordnung' }))
     expect(res.status).toBe(201)

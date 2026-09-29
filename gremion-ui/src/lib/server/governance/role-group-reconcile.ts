@@ -93,13 +93,42 @@ export async function reconcileUserRoleGroups(
   const { toAdd, toRemove } = planGroupReconcile(universe, derived, current)
   if (toAdd.length === 0 && toRemove.length === 0) return
 
-  const idByName = groupIdByName ?? new Map((await kc.listGroups()).map((g) => [g.name, g.id]))
-  for (const name of toAdd) {
-    const groupId = idByName.get(name)
-    if (groupId) await kc.addUserToGroup(userKeycloakId, groupId)
-  }
+  // TASK-206-A review: removals FIRST (the security-relevant half) and by the
+  // id the user's own group list carries — a realm group list may be paged or
+  // top-level only, and a held group missing from it used to be skipped
+  // silently. Every step runs; an incomplete reconcile THROWS at the end so the
+  // caller reports it instead of treating a half-done cleanup as success.
+  const failures: string[] = []
+  const describe = (err: unknown) => (err instanceof Error ? err.message : String(err))
+  const heldIdByName = new Map(currentGroups.map((g) => [g.name, g.id]))
   for (const name of toRemove) {
-    const groupId = idByName.get(name)
-    if (groupId) await kc.removeUserFromGroup(userKeycloakId, groupId)
+    const groupId = heldIdByName.get(name)
+    if (!groupId) {
+      failures.push(`remove ${name}: no id on the user's group`)
+      continue
+    }
+    try {
+      await kc.removeUserFromGroup(userKeycloakId, groupId)
+    } catch (err) {
+      failures.push(`remove ${name}: ${describe(err)}`)
+    }
+  }
+  if (toAdd.length > 0) {
+    const idByName = groupIdByName ?? new Map((await kc.listGroups()).map((g) => [g.name, g.id]))
+    for (const name of toAdd) {
+      const groupId = idByName.get(name)
+      if (!groupId) {
+        failures.push(`add ${name}: group not found in the realm`)
+        continue
+      }
+      try {
+        await kc.addUserToGroup(userKeycloakId, groupId)
+      } catch (err) {
+        failures.push(`add ${name}: ${describe(err)}`)
+      }
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`[role-group-reconcile] incomplete: ${failures.join('; ')}`)
   }
 }

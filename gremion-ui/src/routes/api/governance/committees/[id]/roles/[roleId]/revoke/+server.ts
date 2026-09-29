@@ -19,7 +19,7 @@ import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-adm
 
 // INV-3: a recall is only valid WITH a recorded free-text reason.
 const revokeSchema = z.object({
-  reason: z.string().trim().min(1, 'reason is required')
+  reason: z.string().trim().min(1, 'reason is required').max(4000, 'reason is too long')
 })
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
@@ -54,14 +54,21 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   }
 
   // Recall committed — now converge the revoked holder's auto-managed flat
-  // groups (audit 420). Best-effort by design: the next mutation (or a seed
-  // re-run) converges a KC hiccup; the recorded recall stands either way.
+  // groups (audit 420). The recorded recall stands either way, but a failed
+  // cleanup is REPORTED (TASK-206-A review): a recalled holder usually sees no
+  // further mutation, so "the next one converges it" may never happen, and the
+  // admin has to know the holder may still carry module groups.
+  let groupsReconciled = true
   try {
     const kc = getKeycloakAdminClientForCurrentTenant()
     await reconcileUserRoleGroups(assignment.user_keycloak_id, kc)
   } catch (err) {
-    console.error('[governance/roles/revoke] flat-group reconcile failed:', err)
+    groupsReconciled = false
+    console.error(
+      '[governance/roles/revoke] flat-group reconcile failed after the recall was recorded:',
+      err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+    )
   }
 
-  return json({ success: true }, { status: 200 })
+  return json({ success: true, groupsReconciled }, { status: 200 })
 }
