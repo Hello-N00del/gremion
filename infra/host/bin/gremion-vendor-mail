@@ -124,7 +124,9 @@ load_mail_env() {
 }
 
 require_node_image() {
-    [[ -n "${VENDOR_MAIL_NODE_IMAGE:-}" ]] \
+    # `:+set`, not a `:-` default: check-image-digests (TRD-350) reads every
+    # ${*_IMAGE:-...} as an image default, and this image has none.
+    [[ -n "${VENDOR_MAIL_NODE_IMAGE:+set}" ]] \
         || die "VENDOR_MAIL_NODE_IMAGE is not set in ${MAIL_ENV}: the checks run in that pinned image and nowhere else (no default)" \
                "$GREMION_EXIT_USAGE"
     [[ "$VENDOR_MAIL_NODE_IMAGE" =~ $DIGEST_RE ]] \
