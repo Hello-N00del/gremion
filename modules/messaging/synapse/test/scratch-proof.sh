@@ -8,7 +8,8 @@
 #
 # The compose file is passed in by the Makefile, so this script names nothing
 # outside modules/messaging/ itself; the checkout root is that file's
-# directory. Phases, in order (state lives in the proof directory):
+# directory. Phases, in order (state lives in the proof directory). Every
+# phase finishes inside the 4-minute budget of one call and is re-entrant:
 #
 #   prepare   STACK=t198-<sha8>, a gitignored env file (COMPOSE_PROJECT_NAME,
 #             COMPOSE_PROFILES=messaging, every x-required-env key; never the
@@ -24,17 +25,22 @@
 #   b         IdP stub up, matrix up: healthy; the rendered config reads
 #             psycopg2, the server name and synapse, names no SQLite;
 #             public.users exists; first-boot seconds and RSS recorded
-#   c         stub stopped, matrix restarted: "jwt_config disabled" in the
-#             log, unhealthy after start_period, while the old probe
-#             (/versions) still exits 0
-#   d         the synapse database recreated bare (en_US.utf8): the preflight
-#             names en_US.utf8 and Synapse never starts; then restored C
+#   c1        stub stopped, matrix restarted: "jwt_config disabled" in the
+#             log; the restart time is recorded for c2
+#   c2        unhealthy after start_period (240 s + 3 x 15 s from c1), while
+#             the old probe (/versions) still exits 0. Waits at most 200 s
+#             per call: before the deadline it exits 3 with PENDING -- run it
+#             again; it never reads healthy (that is a FAIL)
+#   d1        the synapse database recreated bare (en_US.utf8): the preflight
+#             names en_US.utf8 and Synapse never starts; matrix left stopped
+#   d2        the synapse database restored C|C (libc), matrix stays stopped
 #   e         the kernel postgres joins; in-container: major 18, uuidv7;
 #             then the kernel's check-postgres-major-running (path passed in)
 #   f         both data volumes carry com.docker.compose.project=${STACK}-state
 #             (the filter of gremion-backup's project_volumes)
-#   teardown  docker rm -f / network rm / volume rm / image rm, by the
-#             ${STACK} prefix only
+#   teardown  docker rm -f / network rm / volume rm / image rm (the compose
+#             tag AND the built t198-<sha8>/synapse image), by the ${STACK}
+#             prefix only
 #
 # Scratch safety: every resource is named ${STACK}-*; no host port is
 # published (probe and psql run INSIDE the containers, addressed by the
@@ -45,14 +51,25 @@
 # ============================================================
 set -euo pipefail
 
+# Git Bash on Windows (the operator's gate box while CI is off; brief section
+# 5.7): MSYS rewrites every argument that looks like a POSIX path, so the
+# container paths below (/stub, /data/homeserver.yaml, /synapse-healthcheck.sh)
+# would reach docker as paths under the Git install. Conversion is off for the
+# whole script, and every HOST path handed to docker, node or openssl is made
+# mixed-form (C:/...) by cygpath instead. Both are no-ops on Linux.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+hostpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
+
 PHASE="${1:-}"
 COMPOSE="${2:-}"
 die() { echo "[synapse-proof] FAIL: $*" >&2; exit 1; }
 ok() { echo "[synapse-proof] OK: $*"; }
 [[ -n "$PHASE" ]] || die "usage: scratch-proof.sh <phase> <docker-compose.yml> (make synapse-proof PHASE=<phase>)"
 [[ -f "$COMPOSE" ]] || die "the compose file '$COMPOSE' does not exist (pass the kernel docker-compose.yml)"
-REPO="$(cd "$(dirname "$COMPOSE")" && pwd)"
-OUT="${T198_OUT:-$REPO/.scratch/t198-proof}"
+COMPOSE="$(hostpath "$COMPOSE")"
+REPO="$(hostpath "$(cd "$(dirname "$COMPOSE")" && pwd)")"
+OUT="$(hostpath "${T198_OUT:-$REPO/.scratch/t198-proof}")"
 mkdir -p "$OUT"
 ENVF="$OUT/state.env"
 for t in docker python3 openssl; do command -v "$t" >/dev/null 2>&1 || die "missing tool: $t"; done
@@ -65,7 +82,7 @@ if [[ "$PHASE" == prepare ]]; then
   STACK="t198-${SHA8}"
 else
   [[ -f "$ENVF" ]] || die "no env file at $ENVF -- run PHASE=prepare first"
-  STACK="$(sed -n 's/^STACK=//p' "$ENVF")"
+  STACK="$(sed -n 's/^STACK=//p' "$ENVF" | tr -d '\r')"
 fi
 [[ "$STACK" =~ ^t198-[0-9a-f]{8}$ ]] || die "refusing a stack name outside t198-<sha8>: '$STACK'"
 PROJECT="${STACK}-state"
@@ -80,10 +97,10 @@ running_cid() { docker ps -q --filter "label=com.docker.compose.project=${PROJEC
 need_names() { [[ -f "$OUT/.names-ok" ]] || die "run PHASE=names before any up"; }
 psql_pg() {
   local c u; c="$(running_cid messaging-postgres)"; [[ -n "$c" ]] || die "messaging-postgres is not running"
-  u="$(sed -n 's/^MESSAGING_PG_USER=//p' "$ENVF")"
-  docker exec "$c" psql -U "${u:-messaging}" -d "${2:-postgres}" -AtX -v ON_ERROR_STOP=1 -c "$1"
+  u="$(sed -n 's/^MESSAGING_PG_USER=//p' "$ENVF" | tr -d '\r')"
+  docker exec "$c" psql -U "${u:-messaging}" -d "${2:-postgres}" -AtX -v ON_ERROR_STOP=1 -c "$1" | tr -d '\r'
 }
-health() { docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1"; }
+health() { docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1" | tr -d '\r'; }
 wait_health() { # <cid> <want> <timeout s>
   local i=0 s
   while (( i < $3 )); do
@@ -93,12 +110,23 @@ wait_health() { # <cid> <want> <timeout s>
   done
   return 1
 }
+# Poll the container log since <since> for an ERE, at most <timeout> s.
+wait_log() { # <cid> <since> <ERE> <timeout s>
+  # Captured first: `docker logs | grep -q` under pipefail reads SIGPIPE as failure.
+  local i=0 l
+  while (( i < $4 )); do
+    l="$(docker logs --since "$2" "$1" 2>&1)"
+    grep -Eq "$3" <<< "$l" && return 0
+    sleep 5; i=$((i + 5))
+  done
+  return 1
+}
 
 phase_prepare() {
   docker image inspect "$IMAGE_LOCAL" >/dev/null 2>&1 \
     || die "no image $IMAGE_LOCAL -- docker build -t $IMAGE_LOCAL modules/messaging/synapse first"
   docker tag "$IMAGE_LOCAL" "$IMAGE_COMPOSE"
-  rnd() { openssl rand -hex 16; }
+  rnd() { openssl rand -hex 16 | tr -d '\r'; }
   umask 077
   cat > "$ENVF" <<EOF
 # TASK-198 scratch proof -- generated, gitignored, never the checkout's .env
@@ -137,11 +165,11 @@ EOF
   if [[ ! -e "$REPO/legal/legal.env" ]]; then
     mkdir -p "$REPO/legal" && : > "$REPO/legal/legal.env" && : > "$OUT/.legal-created"
   fi
-  mkdir -p "$OUT/stub"
-  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/stub/key.pem" 2>/dev/null
-  local spki; spki="$(openssl pkey -in "$OUT/stub/key.pem" -pubout -outform DER | openssl base64 -A)"
+  # The private key stays OUTSIDE the directory the stub serves.
+  rm -rf "$OUT/stub"; mkdir -p "$OUT/stub"
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/stub-key.pem" 2>/dev/null
+  local spki; spki="$(openssl pkey -in "$OUT/stub-key.pem" -pubout -outform DER | openssl base64 -A | tr -d '\r')"
   printf '{"realm":"t198","public_key":"%s"}\n' "$spki" > "$OUT/stub/realm.json"
-  chmod 0755 "$OUT/stub"; chmod 0644 "$OUT/stub/realm.json"
   ok "prepared ${STACK}: env file, externals, stub key, image ${IMAGE_COMPOSE} (run PHASE=names before any up)"
   printf '%s prepared %s\n' "$(now)" "$STACK" | ledger run.log
 }
@@ -155,7 +183,7 @@ print(c.get("name", ""))
 for kind in ("networks", "volumes"):
     for k, v in (c.get(kind) or {}).items():
         print((v or {}).get("name") or k)
-')"
+' | tr -d '\r')"
   [[ -n "$names" ]] || die "the state project renders nothing"
   while IFS= read -r n; do
     [[ "$n" == "${STACK}"* ]] || die "the render names a network or volume outside ${STACK}: $n"
@@ -190,8 +218,8 @@ phase_a() {
   row="$(psql_pg "SELECT datcollate, datctype, pg_get_userbyid(datdba) FROM pg_database WHERE datname='synapse'")"
   major="$(psql_pg "SELECT current_setting('server_version_num')::int / 10000")"
   local others mx
-  others="$(docker ps -q --filter "label=com.docker.compose.project=${PROJECT}" | wc -l)"
-  mx="$(cid matrix | wc -l)"
+  others="$(docker ps -q --filter "label=com.docker.compose.project=${PROJECT}" | wc -l | tr -d ' ')"
+  mx="$(cid matrix | wc -l | tr -d ' ')"
   printf '%s a: %s major=%s running-containers=%s matrix-containers=%s\n' "$(now)" "$row" "$major" "$others" "$mx" | ledger a.log
   [[ "$mx" == "0" ]] || die "7a: $mx matrix container(s) exist"
   [[ "$row" == "C|C|synapse" ]] || die "7a: '$row', want C|C|synapse"
@@ -200,10 +228,22 @@ phase_a() {
   ok "7a: only messaging-postgres runs, no matrix container exists: C|C|synapse on 18"
 }
 
+# The IdP stub: python's http.server in the synapse image on ${STACK}_state,
+# serving realm.json. The file is copied in (docker cp) rather than
+# bind-mounted, so no host path has to survive a Windows path translation.
 stub_up() {
   docker rm -f "$STUB" >/dev/null 2>&1 || true
-  docker run -d --name "$STUB" --network "${STACK}_state" --entrypoint python3 \
-    -v "$OUT/stub:/stub:ro" "$IMAGE_LOCAL" -m http.server 8080 --directory /stub >/dev/null
+  docker create --name "$STUB" --network "${STACK}_state" --entrypoint python3 \
+    "$IMAGE_LOCAL" -m http.server 8080 --directory /stub >/dev/null
+  docker cp "$OUT/stub/." "$STUB:/stub" >/dev/null
+  docker start "$STUB" >/dev/null
+  local i=0 body=''
+  while (( i < 30 )); do
+    body="$(docker exec "$STUB" python3 -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8080/realm.json", timeout=3).read().decode())' 2>/dev/null || true)"
+    [[ "$body" == *'"public_key"'* ]] && return 0
+    sleep 2; i=$((i + 2))
+  done
+  die "the IdP stub does not serve realm.json after 30 s"
 }
 
 phase_b() {
@@ -213,7 +253,7 @@ phase_b() {
   t0="$(date +%s)"
   compose up -d --no-build matrix >/dev/null
   c="$(cid matrix)"; [[ -n "$c" ]] || die "no matrix container after up"
-  wait_health "$c" healthy 300 || { docker logs "$c" 2>&1 | tail -40 >&2; die "7b: matrix is $(health "$c"), not healthy, after 300 s"; }
+  wait_health "$c" healthy 180 || { docker logs "$c" 2>&1 | tail -40 >&2; die "7b: matrix is $(health "$c"), not healthy, after 180 s"; }
   t1="$(date +%s)"
   # The rendered config holds secrets: parsed from a pipe, never written out.
   docker exec "$c" cat /data/homeserver.yaml | python3 -c '
@@ -230,58 +270,92 @@ print("render:", c["database"]["name"], c["server_name"], c["database"]["args"][
   docker exec "$c" sh -c 'test ! -e /data/homeserver.db' || die "7b: /data/homeserver.db exists"
   users="$(psql_pg "SELECT to_regclass('public.users') IS NOT NULL" synapse)"
   [[ "$users" == "t" ]] || die "7b: public.users does not exist in the synapse database"
-  rss="$(docker stats --no-stream --format '{{.MemUsage}}' "$c")"
+  rss="$(docker stats --no-stream --format '{{.MemUsage}}' "$c" | tr -d '\r')"
   printf '%s b: healthy after %ss (SYNAPSE_KC_MAX=3), render psycopg2 %s.example.org synapse, no homeserver.db, public.users present, RSS %s\n' \
     "$(now)" "$((t1 - t0))" "$STACK" "$rss" | ledger b.log
   ok "7b: healthy after $((t1 - t0)) s; psycopg2, no SQLite, public.users present; RSS ${rss}"
 }
 
-phase_c() {
+phase_c1() {
   need_names
-  local c old new
+  local c since t0
   c="$(cid matrix)"; [[ -n "$c" ]] || die "no matrix container (PHASE=b first)"
+  [[ "$(health "$c")" == healthy ]] || die "7c1: matrix is $(health "$c"); c1 starts from the healthy matrix of PHASE=b"
   docker rm -f "$STUB" >/dev/null 2>&1 || true
+  since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; t0="$(date +%s)"
   docker restart "$c" >/dev/null
-  local since; since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  local sp; sp="$(docker inspect -f '{{.Config.Healthcheck.StartPeriod}}' "$c")"
-  echo "[synapse-proof] c: waiting for unhealthy (start_period ${sp} ns + 3 x 15 s)..."
-  wait_health "$c" unhealthy 420 || die "7c: matrix is $(health "$c") after 420 s, want unhealthy"
-  grep -q 'jwt_config disabled' <<< "$(docker logs --since "$since" "$c" 2>&1)" || die "7c: no 'jwt_config disabled' in the log since the restart"
+  printf '%s %s\n' "$since" "$t0" > "$OUT/c.since"
+  # SYNAPSE_KC_MAX=3 fetch attempts of ~7 s, then the entrypoint degrades.
+  wait_log "$c" "$since" 'jwt_config disabled' 150 || die "7c1: no 'jwt_config disabled' in the log within 150 s of the restart"
+  printf '%s c1: stub stopped, matrix restarted at %s -> "jwt_config disabled"; health=%s\n' "$(now)" "$since" "$(health "$c")" | ledger c.log
+  ok "7c1: 'jwt_config disabled' after the restart at ${since}; run PHASE=c2 (unhealthy only after start_period 240 s + 3 x 15 s)"
+}
+
+phase_c2() {
+  need_names
+  local c since t0 s='' i=0 elapsed old new
+  c="$(cid matrix)"; [[ -n "$c" ]] || die "no matrix container (PHASE=b first)"
+  [[ -f "$OUT/c.since" ]] || die "run PHASE=c1 first"
+  read -r since t0 < "$OUT/c.since"
+  while (( i < 200 )); do
+    s="$(health "$c")"
+    [[ "$s" == unhealthy ]] && break
+    [[ "$s" == healthy ]] && die "7c2: matrix reads healthy with the IdP down -- the probe does not see the missing JWT flow"
+    sleep 5; i=$((i + 5))
+  done
+  elapsed=$(( $(date +%s) - t0 ))
+  if [[ "$s" != unhealthy ]]; then
+    (( elapsed < 900 )) || die "7c2: matrix is ${s} ${elapsed} s after the restart, want unhealthy (start_period 240 s + 3 x 15 s)"
+    echo "[synapse-proof] PENDING: 7c2: matrix is ${s} ${elapsed} s after the restart at ${since}; unhealthy needs start_period 240 s + 3 x 15 s -- run PHASE=c2 again" >&2
+    exit 3
+  fi
+  grep -q 'jwt_config disabled' <<< "$(docker logs --since "$since" "$c" 2>&1)" || die "7c2: no 'jwt_config disabled' in the log since the restart"
   set +e
   docker exec "$c" curl -sf --max-time 5 http://127.0.0.1:8008/_matrix/client/versions >/dev/null; old=$?
   docker exec "$c" /synapse-healthcheck.sh > "$OUT/c-probe.txt" 2>&1; new=$?
   set -e
-  printf '%s c: stub stopped -> "jwt_config disabled"; health=%s; old probe (/versions) exit %s; new probe exit %s: %s\n' \
-    "$(now)" "$(health "$c")" "$old" "$new" "$(tr '\n' ' ' < "$OUT/c-probe.txt")" | ledger c.log
-  [[ "$old" == 0 ]] || die "7c: the old probe did not exit 0 (exit $old) -- the RED comparison is void"
-  [[ "$new" != 0 ]] || die "7c: the new probe exited 0 with jwt_config disabled"
-  grep -q 'org.matrix.login.jwt is not offered' "$OUT/c-probe.txt" || die "7c: the probe failed for another reason than the missing JWT flow"
-  ok "7c: unhealthy with the IdP down while the old /versions probe exits 0"
+  printf '%s c2: stub stopped -> "jwt_config disabled"; health=%s %ss after the restart; old probe (/versions) exit %s; new probe exit %s: %s\n' \
+    "$(now)" "$(health "$c")" "$elapsed" "$old" "$new" "$(tr '\r\n' '  ' < "$OUT/c-probe.txt")" | ledger c.log
+  [[ "$old" == 0 ]] || die "7c2: the old probe did not exit 0 (exit $old) -- the RED comparison is void"
+  [[ "$new" != 0 ]] || die "7c2: the new probe exited 0 with jwt_config disabled"
+  grep -q 'org.matrix.login.jwt is not offered' "$OUT/c-probe.txt" || die "7c2: the probe failed for another reason than the missing JWT flow"
+  ok "7c2: unhealthy ${elapsed} s after the restart with the IdP down, while the old /versions probe exits 0"
 }
 
-phase_d() {
+phase_d1() {
   need_names
-  local c logs
+  local c since logs
   c="$(cid matrix)"; [[ -n "$c" ]] || die "no matrix container (PHASE=b first)"
   docker stop "$c" >/dev/null
-  psql_pg "DROP DATABASE synapse" >/dev/null
+  psql_pg "DROP DATABASE IF EXISTS synapse" >/dev/null
   psql_pg "CREATE DATABASE synapse OWNER synapse" >/dev/null
-  printf '%s d: recreated bare: %s\n' "$(now)" "$(psql_pg "SELECT datcollate||'|'||datctype FROM pg_database WHERE datname='synapse'")" | ledger d.log
+  printf '%s d1: recreated bare: %s\n' "$(now)" "$(psql_pg "SELECT datcollate||'|'||datctype FROM pg_database WHERE datname='synapse'")" | ledger d.log
   stub_up
-  local since; since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   docker start "$c" >/dev/null
-  sleep 45
+  wait_log "$c" "$since" "datcollate is 'en_US.utf8'" 150 || true
+  # A grace for anything a (wrongly) passing preflight would start.
+  sleep 15
   logs="$(docker logs --since "$since" "$c" 2>&1)"
-  { grep '\[db-preflight\]' <<< "$logs" || true; } | ledger d.log
-  grep -q "datcollate is 'en_US.utf8'" <<< "$logs" || die "7d: the preflight did not name en_US.utf8"
-  if grep -qE 'Synapse now listening|Setting up server|synapse\.app\.homeserver' <<< "$logs"; then die "7d: Synapse started on the bare database"; fi
-  [[ "$(psql_pg "SELECT to_regclass('public.users') IS NULL" synapse)" == "t" ]] || die "7d: Synapse wrote its schema into the bare database"
   docker stop "$c" >/dev/null
-  psql_pg "DROP DATABASE synapse" >/dev/null
+  { grep '\[db-preflight\]' <<< "$logs" || true; } | ledger d.log
+  grep -q "datcollate is 'en_US.utf8'" <<< "$logs" || die "7d1: the preflight did not name en_US.utf8"
+  if grep -qE 'Synapse now listening|Setting up server|synapse\.app\.homeserver' <<< "$logs"; then die "7d1: Synapse started on the bare database"; fi
+  [[ "$(psql_pg "SELECT to_regclass('public.users') IS NULL" synapse)" == "t" ]] || die "7d1: Synapse wrote its schema into the bare database"
+  ok "7d1: the preflight names en_US.utf8 and Synapse never started; matrix stopped -- run PHASE=d2 to restore the C database"
+}
+
+phase_d2() {
+  need_names
+  local c row
+  c="$(cid matrix)"
+  if [[ -n "$c" ]]; then docker stop "$c" >/dev/null; fi
+  psql_pg "DROP DATABASE IF EXISTS synapse" >/dev/null
   psql_pg "CREATE DATABASE synapse OWNER synapse TEMPLATE template0 ENCODING 'UTF8' LOCALE_PROVIDER libc LOCALE 'C'" >/dev/null
-  [[ "$(psql_pg "SELECT datcollate || '|' || datctype || '|' || datlocprovider::text FROM pg_database WHERE datname = 'synapse'")" == "C|C|c" ]] \
-    || die "7d: the restored database is not C|C|c"
-  ok "7d: the preflight names en_US.utf8 and Synapse never started; the database is restored C"
+  row="$(psql_pg "SELECT datcollate || '|' || datctype || '|' || datlocprovider::text FROM pg_database WHERE datname = 'synapse'")"
+  printf '%s d2: restored %s\n' "$(now)" "$row" | ledger d.log
+  [[ "$row" == "C|C|c" ]] || die "7d2: the restored database is '$row', want C|C|c"
+  ok "7d2: the synapse database is restored C|C (libc); matrix stays stopped"
 }
 
 phase_e() {
@@ -297,6 +371,7 @@ phase_e() {
   # it as $3, so this script names nothing outside modules/messaging/).
   local running="${3:-}"
   if [[ -n "$running" ]]; then
+    running="$(hostpath "$running")"
     node "$running" --project "$PROJECT" --profile messaging 2>&1 | ledger e.log
     [[ "${PIPESTATUS[0]}" == 0 ]] || die "7e: $running refused the running stack"
     ok "7e: messaging-postgres runs 18 ($v); the kernel running check passed"
@@ -307,7 +382,7 @@ phase_e() {
 
 phase_f() {
   local vols
-  vols="$(docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}" | sort)"
+  vols="$(docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}" | tr -d '\r' | sort)"
   printf '%s f: %s\n' "$(now)" "$(tr '\n' ' ' <<< "$vols")" | ledger f.log
   grep -qx "${PROJECT}_messaging-pg-data" <<< "$vols" || die "7f: ${PROJECT}_messaging-pg-data does not carry the project label"
   grep -qx "${PROJECT}_synapse-data" <<< "$vols" || die "7f: ${PROJECT}_synapse-data does not carry the project label"
@@ -321,15 +396,17 @@ phase_teardown() {
   docker rm -f "$STUB" >/dev/null 2>&1 || true
   docker network rm "${STACK}_state" "${STACK}_edge" >/dev/null 2>&1 || true
   local v
-  for v in $(docker volume ls -q | grep "^${STACK}" || true); do docker volume rm "$v" >/dev/null; done
+  for v in $(docker volume ls -q | tr -d '\r' | grep "^${STACK}" || true); do docker volume rm "$v" >/dev/null; done
   docker image rm "$IMAGE_COMPOSE" >/dev/null 2>&1 || true
+  docker image rm "$IMAGE_LOCAL" >/dev/null 2>&1 || true
   if [[ -f "$OUT/.legal-created" ]]; then rm -f "$REPO/legal/legal.env" "$OUT/.legal-created"; fi
-  rm -f "$OUT/.names-ok"
+  rm -f "$OUT/.names-ok" "$OUT/c.since"
   local left
   left="$(docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}"; docker ps -aq --filter "name=^${STUB}\$";
-          docker network ls -q --filter "name=^${STACK}_"; docker volume ls -q | grep "^${STACK}" || true)"
+          docker network ls -q --filter "name=^${STACK}_"; docker volume ls -q | tr -d '\r' | grep "^${STACK}" || true;
+          docker image ls -q "$IMAGE_LOCAL"; docker image ls -q "$IMAGE_COMPOSE")"
   [[ -z "$left" ]] || die "teardown: resources under ${STACK} remain: $(tr '\n' ' ' <<< "$left")"
-  ok "teardown: ${STACK} containers, networks, volumes and the compose image tag removed"
+  ok "teardown: ${STACK} containers, networks, volumes, the compose image tag and the built image removed"
 }
 
 case "$PHASE" in
@@ -338,10 +415,12 @@ case "$PHASE" in
   initdb) phase_initdb ;;
   a) phase_a ;;
   b) phase_b ;;
-  c) phase_c ;;
-  d) phase_d ;;
+  c1) phase_c1 ;;
+  c2) phase_c2 ;;
+  d1) phase_d1 ;;
+  d2) phase_d2 ;;
   e) phase_e "$@" ;;
   f) phase_f ;;
   teardown) phase_teardown ;;
-  *) die "unknown phase '$PHASE' (prepare names initdb a b c d e f teardown)" ;;
+  *) die "unknown phase '$PHASE' (prepare names initdb a b c1 c2 d1 d2 e f teardown)" ;;
 esac

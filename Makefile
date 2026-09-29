@@ -596,7 +596,8 @@ lint-migration-register:
 # `test(` count -- `node --test` exits 0 on a file that collects nothing --
 # then the guard itself. Needs docker (compose config only, never `up`).
 # synapse-proof is the scratch-stack proof (TDD 5 and 7), one PHASE per call
-# (prepare, names, initdb, a..f, teardown): Docker, minutes, never in `lint`
+# (prepare, names, initdb, a, b, c1, c2, d1, d2, e, f, teardown; c2 exits 3
+# PENDING until start_period has run out -- run it again): Docker, minutes, never in `lint`
 # or verify. The compose file is passed from here so the module script names
 # nothing outside modules/messaging/.
 .PHONY: lint-synapse synapse-proof
