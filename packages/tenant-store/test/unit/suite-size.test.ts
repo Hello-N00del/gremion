@@ -41,7 +41,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     // TASK-029: boot verification (TRD-353) and the chain hook under the runner
     'test/integration/verify-applied.test.ts': 6,
     // TASK-021 (G3): the lifecycle on the scratch stack's module server.
-    'test/integration/lifecycle-enable.test.ts': 7,
+    // TASK-075 G1b: +1 release_ref/phase, no dump hook on a fresh DB
+    'test/integration/lifecycle-enable.test.ts': 8,
     'test/integration/lifecycle-disable.test.ts': 6,
     'test/integration/lifecycle-inspect.test.ts': 7,
     // TASK-075: the dump under the real runner, restore rehearsal, import take, scratch e2e

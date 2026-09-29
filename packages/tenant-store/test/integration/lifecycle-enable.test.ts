@@ -127,6 +127,37 @@ describe('enableModule on the scratch stack', () => {
     expect(done?.state).toBe('enabled')
   })
 
+  it('TASK-075 G1b (TDD 13): migratePlatform and enable write release_ref/phase; a fresh-DB enable runs no dump hook, a resumed (existing) DB does', async () => {
+    // migratePlatform (global setup, release dist-v0.0.1, the kernel baseline of chain platform)
+    const plt = await platform<{ filename: string; phase: string; release_ref: string; contract_after: string | null }[]>`
+      SELECT filename, phase, release_ref, contract_after FROM public.schema_migrations ORDER BY filename`
+    expect(plt.map((r) => [r.filename, r.phase, r.release_ref, r.contract_after])).toEqual([
+      ['0001_plt_setup.sql', 'contract', 'dist-v0.0.1', 'dist-v0.0.0'],
+      ['0002_plt_module.sql', 'expand', 'dist-v0.0.1', null],
+      ['0003_plt_module_database.sql', 'expand', 'dist-v0.0.1', null],
+    ])
+
+    const calls: string[] = []
+    const upgradeHooks = { preApply: (file: string) => void calls.push(file) }
+    // fresh: this enable creates the database -> nothing to lose, no hook
+    const X = uuidv7()
+    await enableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server, { releaseRef: 'dist-v2.0.0', upgradeHooks }))
+    expect(calls).toEqual([])
+    const owned = connectModule(tenantModuleDbName(X, 'lcfix'), { max: 1 })
+    try {
+      expect(await owned<{ phase: string; release_ref: string }[]>`SELECT DISTINCT phase, release_ref FROM public.schema_migrations`).toEqual([{ phase: 'expand', release_ref: 'dist-v2.0.0' }])
+    } finally {
+      await owned.end()
+    }
+
+    // an existing database (a crash after CREATE DATABASE, then the resumed call): the hook runs
+    const Y = uuidv7()
+    const late = lifecycleDeps(platform, server, { hooks: { afterStep: (step) => { if (step === 'created') throw new Error('injected crash after create') } } })
+    await expect(enableModule(Y, lcfixModule(), OPERATOR, late)).rejects.toThrow(/injected crash after create/)
+    await enableModule(Y, lcfixModule(), OPERATOR, lifecycleDeps(platform, server, { releaseRef: 'dist-v2.0.0', upgradeHooks }))
+    expect(calls).toEqual(['001_init.sql', '002_item_customer_idx.sql'])
+  })
+
   it('TDD 7a: enableGate -> null leaves no database and no enabled state', async () => {
     const X = uuidv7()
     const before = await databasesOn(server.admin)
