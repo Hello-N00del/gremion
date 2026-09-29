@@ -19,7 +19,11 @@
 //      manifest: an applied file whose bytes no longer match the sha256 the
 //      ledger recorded, or a ledger row with no file, aborts here — tamper
 //      after apply is caught before any DDL too.
-//   6. refuse a pending file that sorts below the highest applied one (Q4).
+//   6. refuse a pending file that sorts below the highest applied one (Q4),
+//      and resolve every pending file's phase (TASK-075, TRD-361): its
+//      `-- gremion:phase` header, else options.phaseFor (the baseline of
+//      files locked before the header existed), else PHASE_MISSING -- all
+//      before any hook, dump or DDL.
 //   7. per pending file: hooks.preApply (under the lock, before the file's
 //      transaction), then ONE transaction holding the file's body and its
 //      ledger row (G-078). The ledger table itself is created inside the first
@@ -29,6 +33,7 @@ import type { Sql } from '@gremion/db'
 import type postgres from 'postgres'
 import { ADVISORY_LOCKS } from './advisory-locks.js'
 import { readVerifiedMigrations, MIGRATION_FILENAME } from './manifest.js'
+import { PhaseError, resolvePhase, type PhaseErrorCode, type PhaseFor, type PhaseInfo } from './phase.js'
 import { stripOuterTransaction } from './strip-outer-transaction.js'
 
 type Reserved = postgres.ReservedSql<{}>
@@ -57,6 +62,17 @@ export interface RunMigrationsOptions {
   sql: Sql
   /** The module's migrations directory, holding manifest.json. */
   dir: string
+  /**
+   * The release this run ships (e.g. dist-v1.2.3, or import-<job>): written
+   * into every ledger row it adds (release_ref, 1-64 characters).
+   */
+  releaseRef: string
+  /**
+   * The phase of a file whose first line declares none: the baseline of files
+   * locked before the header existed (loadBaselinePhaseFor). Undefined for a
+   * file it does not know, which is then PHASE_MISSING.
+   */
+  phaseFor?: PhaseFor
   hooks?: RunMigrationsHooks
   log?: (line: string) => void
   /**
@@ -85,6 +101,7 @@ export type MigrationRunnerErrorCode =
   | 'LEDGER_UNKNOWN_FILE'
   | 'LEDGER_HASH_MISMATCH'
   | 'OUT_OF_ORDER'
+  | PhaseErrorCode
   | 'PRE_APPLY_FAILED'
   | 'APPLY_FAILED'
   | 'TRANSACTION_ESCAPED'
@@ -104,11 +121,22 @@ export class MigrationRunnerError extends Error {
 
 export const LEDGER = 'public.schema_migrations'
 
+// phase / release_ref: SCHEMA 148-160 (DB-<CTX>-SCHEMA-MIGRATION).
+// contract_after [A] (TASK-075 Q8, a SCHEMA deviation filed for a doc patch):
+// the release after which a contract may run, so the serving colour's gate
+// can accept a contract it survives (schema-gate.ts, state 'ahead').
 const LEDGER_DDL = `CREATE TABLE ${LEDGER} (
-  filename   text PRIMARY KEY CHECK (filename ~ '${MIGRATION_FILENAME.source.replaceAll("'", "''")}'),
-  sha256     text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
-  applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  filename       text PRIMARY KEY CHECK (filename ~ '${MIGRATION_FILENAME.source.replaceAll("'", "''")}'),
+  sha256         text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  applied_at     timestamptz NOT NULL DEFAULT clock_timestamp(),
+  phase          text NOT NULL CHECK (phase IN ('expand', 'migrate', 'contract')),
+  release_ref    text NOT NULL CHECK (char_length(release_ref) BETWEEN 1 AND 64),
+  contract_after text NULL,
+  CONSTRAINT schema_migrations_contract_after_check CHECK ((phase = 'contract') = (contract_after IS NOT NULL))
 )`
+
+/** The ledger columns TASK-075 added; a ledger without them predates this runner. */
+const LEDGER_COLUMNS = ['phase', 'release_ref', 'contract_after'] as const
 
 /**
  * Q3: a session advisory lock does not survive PgBouncer transaction pooling,
@@ -156,10 +184,25 @@ interface LedgerRow {
 async function readLedger(sql: Reserved): Promise<LedgerRow[] | null> {
   const [reg] = await sql<{ present: boolean }[]>`SELECT to_regclass(${LEDGER}) IS NOT NULL AS present`
   if (!reg?.present) return null
+  let rows: LedgerRow[]
   try {
-    return await sql<LedgerRow[]>`SELECT filename, sha256 FROM public.schema_migrations ORDER BY filename`
+    rows = await sql<LedgerRow[]>`SELECT filename, sha256 FROM public.schema_migrations ORDER BY filename`
   } catch (err) {
     throw new MigrationRunnerError('LEDGER_FORMAT', `${LEDGER} exists but cannot be read as (filename, sha256): ${(err as Error).message}`, [], { cause: err })
+  }
+  const cols = await sql<{ attname: string }[]>`
+    SELECT attname FROM pg_catalog.pg_attribute
+     WHERE attrelid = ${LEDGER}::regclass AND attnum > 0 AND NOT attisdropped AND attname = ANY(${[...LEDGER_COLUMNS]}::text[])`
+  const missing = LEDGER_COLUMNS.filter((c) => !cols.some((r) => r.attname === c))
+  if (missing.length) {
+    throw new MigrationRunnerError('LEDGER_FORMAT', `${LEDGER} has no ${missing.join(', ')} column(s): it predates the expand/contract ledger (TASK-075); nothing was applied`)
+  }
+  return rows
+}
+
+function assertReleaseRef(ref: unknown): asserts ref is string {
+  if (typeof ref !== 'string' || ref.length < 1 || ref.length > 64 || /[\u0000-\u001f]/.test(ref)) {
+    throw new TypeError('runMigrations needs releaseRef: the release this run ships, 1-64 printable characters (ledger release_ref)')
   }
 }
 
@@ -173,6 +216,8 @@ function assertTimeout(name: string, ms: number | undefined): void {
 
 export async function runMigrations(options: RunMigrationsOptions): Promise<RunMigrationsResult> {
   const { sql, dir, hooks = {}, log = (l) => console.info(`[tenant-store] ${l}`) } = options
+  assertReleaseRef(options.releaseRef)
+  const releaseRef = options.releaseRef
   const lockWaitTimeoutMs = options.lockWaitTimeoutMs ?? 10 * 60_000
   const ddlLockTimeoutMs = options.ddlLockTimeoutMs
   assertTimeout('lockWaitTimeoutMs', lockWaitTimeoutMs)
@@ -277,7 +322,17 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
         below,
       )
     }
-    const bodies = pending.map((m) => ({ ...m, body: stripOuterTransaction(m.text) }))
+    // TASK-075: every pending file's phase, before any hook, dump or DDL.
+    const phases = new Map<string, PhaseInfo>()
+    for (const m of pending) {
+      try {
+        phases.set(m.file, resolvePhase(m.file, m.text, options.phaseFor))
+      } catch (err) {
+        if (err instanceof PhaseError) throw new MigrationRunnerError(err.code, `${err.message}; nothing was applied`, [m.file], { cause: err })
+        throw err
+      }
+    }
+    const bodies = pending.map((m) => ({ ...m, body: stripOuterTransaction(m.text), phase: phases.get(m.file)! }))
     if (bodies.length === 0) return { applied: [], alreadyApplied: applied.size }
 
     const ctx: PreApplyContext = {
@@ -317,7 +372,9 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
         await reserved.unsafe('RESET ROLE; RESET SESSION AUTHORIZATION')
         // ... and a body that released the lock must not commit (e.g. pg_advisory_unlock_all()).
         if (!(await lockHeld())) throw new MigrationRunnerError('LOCK_NOT_HELD', `${m.file} released the migration lock; rolled back`, [m.file])
-        await reserved`INSERT INTO public.schema_migrations (filename, sha256) VALUES (${m.file}, ${m.sha256})`
+        await reserved`
+          INSERT INTO public.schema_migrations (filename, sha256, phase, release_ref, contract_after)
+          VALUES (${m.file}, ${m.sha256}, ${m.phase.phase}, ${releaseRef}, ${m.phase.phase === 'contract' ? (m.phase.contractAfter ?? null) : null})`
         await reserved.unsafe('COMMIT')
       } catch (err) {
         try {

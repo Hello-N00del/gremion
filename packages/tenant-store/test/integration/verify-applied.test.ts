@@ -17,11 +17,11 @@ import { MigrationRunnerError, runMigrations } from '../../src/runner.js'
 import { schemaGate } from '../../src/schema-gate.js'
 import { createTenantStore } from '../../src/store.js'
 import { assertNonProductionDbUrl, connect, ddlLog, ledgerFiles, resetWithProbe, serverUrl } from '../harness/db.js'
-import { cleanupFixtures, copyFixture, writeManifest } from '../harness/migrations.js'
+import { cleanupFixtures, copyFixture, FIXTURE_RELEASE, writeManifest } from '../harness/migrations.js'
 import { createFixtureService } from '../fixtures/service.js'
 
 const BOOT = fileURLToPath(new URL('../fixtures/boot.ts', import.meta.url))
-const quiet = { log: () => {} }
+const quiet = { log: () => {}, ...FIXTURE_RELEASE }
 
 function boot(dir: string, tenants: string[]): Promise<{ code: number | null; stdout: string; stderr: string; port?: number; stop: () => Promise<void> }> {
   return new Promise((resolve) => {

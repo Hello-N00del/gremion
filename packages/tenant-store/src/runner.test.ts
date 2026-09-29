@@ -42,7 +42,17 @@ describe('runMigrations pool size', () => {
     const { runMigrations } = await import('./runner.js')
     let reserved = 0
     const sql = { options: { max: 1 }, reserve: async () => (reserved++, {}) } as never
-    await expect(runMigrations({ sql, dir: '/nonexistent', log: () => {} })).rejects.toThrow(/at least 2 connections/)
+    await expect(runMigrations({ sql, dir: '/nonexistent', releaseRef: 'dist-v0.0.1', log: () => {} })).rejects.toThrow(/at least 2 connections/)
+    expect(reserved).toBe(0)
+  })
+
+  it('TASK-075: refuses a run without a releaseRef (1-64 characters) before reserving anything', async () => {
+    const { runMigrations } = await import('./runner.js')
+    let reserved = 0
+    const sql = { options: { max: 2 }, reserve: async () => (reserved++, {}) } as never
+    for (const releaseRef of [undefined, '', 'x'.repeat(65), 'a\nb']) {
+      await expect(runMigrations({ sql, dir: '/nonexistent', releaseRef: releaseRef as never, log: () => {} })).rejects.toThrow(/needs releaseRef/)
+    }
     expect(reserved).toBe(0)
   })
 })

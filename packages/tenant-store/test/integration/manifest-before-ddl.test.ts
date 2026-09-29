@@ -10,9 +10,9 @@ import { MigrationManifestError } from '../../src/manifest.js'
 import { MigrationRunnerError, runMigrations } from '../../src/runner.js'
 import { tenantModuleDbName } from '../../src/names.js'
 import { connect, ddlAttempts, ddlLog, resetWithProbe } from '../harness/db.js'
-import { cleanupFixtures, copyFixture, writeManifest } from '../harness/migrations.js'
+import { cleanupFixtures, copyFixture, FIXTURE_RELEASE, writeManifest } from '../harness/migrations.js'
 
-const quiet = { log: () => {} }
+const quiet = { log: () => {}, ...FIXTURE_RELEASE }
 
 describe('the whole manifest is checked before any DDL', () => {
   const { A } = inject('tenants')

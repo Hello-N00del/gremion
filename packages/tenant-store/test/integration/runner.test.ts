@@ -10,9 +10,9 @@ import { MigrationRunnerError, runMigrations, type PreApplyContext } from '../..
 import { openMigrationDb } from '../../src/store.js'
 import { envResolveTarget } from '../../src/names.js'
 import { assertNonProductionDbUrl, connect, ddlAttempts, ddlLog, ledgerFiles, resetWithProbe, serverUrl } from '../harness/db.js'
-import { cleanupFixtures, copyFixture, FIXTURE_MIGRATIONS, writeManifest } from '../harness/migrations.js'
+import { cleanupFixtures, copyFixture, FIXTURE_MIGRATIONS, FIXTURE_RELEASE, writeManifest } from '../harness/migrations.js'
 
-const quiet = { log: () => {} }
+const quiet = { log: () => {}, ...FIXTURE_RELEASE }
 const DEFAULT_SESSION = { st: '0', sp: '"$user", public', role: 't020_test' }
 
 /** The session state of EVERY connection of a 2-connection pool (both reserved at once). */
@@ -217,7 +217,7 @@ describe('runMigrations on a real database', () => {
       writeFileSync(join(dir, '004_unlock.sql'), 'CREATE TABLE sneaky (id int);\nSELECT pg_advisory_unlock_all();\n')
       writeManifest(dir)
       const lines: string[] = []
-      const err = await rejection(runMigrations({ sql, dir, log: (l) => lines.push(l) }))
+      const err = await rejection(runMigrations({ sql, dir, ...FIXTURE_RELEASE, log: (l) => lines.push(l) }))
       expect(err?.code).toBe('LOCK_NOT_HELD')
       // the unlock then fails (the lock is gone): the backend is terminated, not handed back
       expect(lines.join('\n')).toMatch(/after the lock was already lost .* backend \d+ was terminated/)
@@ -231,7 +231,7 @@ describe('runMigrations on a real database', () => {
       try {
         await holder`SELECT pg_advisory_lock(${ADVISORY_LOCKS.migration.classid}::int4, ${ADVISORY_LOCKS.migration.objid}::int4)`
         const lines: string[] = []
-        const err = await rejection(runMigrations({ sql, dir: FIXTURE_MIGRATIONS, lockWaitTimeoutMs: 300, log: (l) => lines.push(l) }))
+        const err = await rejection(runMigrations({ sql, dir: FIXTURE_MIGRATIONS, ...FIXTURE_RELEASE, lockWaitTimeoutMs: 300, log: (l) => lines.push(l) }))
         expect(err?.code).toBe('LOCK_TIMEOUT')
         expect(lines.join('\n')).toMatch(/waiting for the migration lock \(held by pid \d+ 't020-holder'\)/)
         expect(await ddlAttempts(watcher)).toBe(0)

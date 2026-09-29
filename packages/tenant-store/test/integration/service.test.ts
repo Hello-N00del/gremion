@@ -8,10 +8,10 @@ import { checkSchemaCurrent, schemaGate } from '../../src/schema-gate.js'
 import { createTenantStore } from '../../src/store.js'
 import { runMigrations } from '../../src/runner.js'
 import { assertNonProductionDbUrl, connect, ddlAttempts, ddlLog, resetWithProbe, serverUrl } from '../harness/db.js'
-import { cleanupFixtures, copyFixture, FIXTURE_MIGRATIONS } from '../harness/migrations.js'
+import { cleanupFixtures, copyFixture, FIXTURE_MIGRATIONS, FIXTURE_RELEASE } from '../harness/migrations.js'
 import { createFixtureService } from '../fixtures/service.js'
 
-const quiet = { log: () => {} }
+const quiet = { log: () => {}, ...FIXTURE_RELEASE }
 
 describe('the fixture service: schemaGate in front, openTenantDb behind, two tenants', () => {
   const { A, B } = inject('tenants')

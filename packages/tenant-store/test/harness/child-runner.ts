@@ -11,6 +11,7 @@ import postgres from 'postgres'
 import { runMigrations } from '../../src/runner.js'
 import { readThenApply } from '../fixtures/read-then-apply.js'
 import { assertNonProductionDbUrl } from './db.js'
+import { FIXTURE_RELEASE } from './migrations.js'
 
 const url = process.env.T020_CHILD_URL!
 const dir = process.env.T020_CHILD_DIR!
@@ -35,6 +36,7 @@ async function main() {
         : await runMigrations({
             sql,
             dir,
+            ...FIXTURE_RELEASE,
             log: (l) => process.stderr.write(`${l}\n`),
             hooks: {
               preApply: async () => {
