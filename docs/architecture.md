@@ -503,7 +503,9 @@ so within ONE tenant a module can make the server write a JetStream API
 response into another module's stream by naming it as the reply subject;
 such a message carries no `Nats-Msg-Id`. Closing it needs one account per
 (tenant, stream owner) with exports/imports; until then consumers must
-reject messages without `Nats-Msg-Id` (TASK-206/205). Proof:
+reject a message without `Nats-Msg-Id` or that is not an event envelope, with
+a test proving it (owners: TASK-079 for the module wiring, TASK-205/206 for
+the consumers). Proof:
 `make test-nats-auth` ([`packages/nats-auth/scripts/proof.sh`](../packages/nats-auth/scripts/proof.sh)).
 
 The kernel's proof that these paths behave is `make test-ports-nats`
