@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -63,12 +63,46 @@ function trackedFiles(): string[] {
   return out.split('\0').filter(Boolean)
 }
 
+// Time budget (R26-FLAKES, R28). The tree is read ONCE, in beforeAll, and the
+// three literal tests match against those texts in memory. Before, every
+// literal test re-read the whole tracked tree itself (three full reads), and
+// two of them overran vitest's 5 s default in loaded integration gates
+// (5.7-8.9 s). Measured 2026-09-29 on the 16-CPU dev box, 1659 files read:
+//
+//   reading the tree once   idle 0.45, 0.50, 0.57, 0.71, 0.91 s (n=5)
+//                           loaded 33.4, 40.7, 41.5, 44.4, 61.3 s (n=5)
+//   one literal's match     idle <= 7 ms (n=15), loaded <= 144 ms (n=12)
+//
+// "loaded" = 32 CPU-spinning + 4 file-I/O node processes on top of the other
+// agents on the box. The read budget is 3x the loaded p95 (= max, 61.3 s),
+// rounded up; a first cut at 60 s timed out on that very 61.3 s sample. The
+// match tests keep vitest's 5 s, stated explicitly (>= 30x their loaded max).
+const TREE_READ_MS = 190_000
+const MATCH_MS = 5_000
+
 describe('institution-identity guard — deploy surfaces and the whole tracked tree', () => {
   const files = trackedFiles().filter((p) => !BINARY_EXT.test(p) && !isTestFile(p))
+  // Every scanned file's text, read once. A tracked path that cannot be read
+  // as a file (deleted in the working tree, a submodule directory) is skipped,
+  // as before; the non-vacuity test below requires > 300 files actually read.
+  const texts = new Map<string, string>()
+
+  beforeAll(() => {
+    for (const rel of files) {
+      try {
+        texts.set(rel, readFileSync(resolve(REPO_ROOT, rel), 'utf8'))
+      } catch {
+        continue
+      }
+    }
+  }, TREE_READ_MS)
 
   it('scans a non-trivial number of tracked files', () => {
-    // A guard that collected zero files passes vacuously. Assert the scan is real.
+    // A guard that collected zero files passes vacuously. Assert the scan is
+    // real: listed AND actually read (a read that failed for every file would
+    // otherwise leave the literal tests matching against nothing).
     expect(files.length).toBeGreaterThan(300)
+    expect(texts.size).toBeGreaterThan(300)
   })
 
   it('includes the Keycloak theme, the realm template and the deploy config', () => {
@@ -85,15 +119,7 @@ describe('institution-identity guard — deploy surfaces and the whole tracked t
   for (const { label, re } of FORBIDDEN) {
     it(`no tracked non-test file carries the ${label} literal`, () => {
       const offenders: string[] = []
-      for (const rel of files) {
-        let text: string
-        try {
-          text = readFileSync(resolve(REPO_ROOT, rel), 'utf8')
-        } catch {
-          continue
-        }
-        if (re.test(text)) offenders.push(rel)
-      }
+      for (const [rel, text] of texts) if (re.test(text)) offenders.push(rel)
       expect(
         offenders,
         `Hardcoded ${label} found outside product source. Institution identity is ` +
@@ -101,6 +127,6 @@ describe('institution-identity guard — deploy surfaces and the whole tracked t
           `in a shipped default:\n  ` +
           offenders.join('\n  '),
       ).toEqual([])
-    })
+    }, MATCH_MS)
   }
 })
