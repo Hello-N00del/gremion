@@ -7,7 +7,7 @@
 // binding in a set-up working copy is still a FAIL.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -100,6 +100,81 @@ function emptyPathEnv(root: string): NodeJS.ProcessEnv {
   env.PATH = bin
   env.GREMION_REPO_ROOT = root
   return env
+}
+
+// Time budget for the three tests that run the WHOLE hygiene script on a clone
+// (R26-FLAKES r4, R28). The kubectl g2 test failed integration gate d3f8ad6 at
+// 129 s: its spawn timeout (120 s, equal to the test's own) killed the run, and
+// the empty output then read as "expected '' to match /dev: render FAILED/" --
+// a cut-off run misreported as a g2 verdict. Measured 2026-09-29 on the 16-CPU
+// dev box, no extra load, other agents running:
+//
+//   git clone --shared of the repo           1.0-2.0 s (n=5)
+//   the hygiene run, real `bats` on PATH     30.7 / 43.8 s (n=2); the vitest test 51.0 s
+//   the hygiene run, bats stub on PATH       13.0-18.8 s (n=3)
+//   the two PATH-stripped runs (no tools)    6.3 s / 2.9 s (one file run)
+//
+// Cause: check a9 (`bats --version`) cold-starts a bash through the Windows
+// .cmd shim (17.3 s of an idle 29.5 s run, measured in hygiene-j.test.ts). The
+// g2 test asserts g2 only, so its run gets a stub `bats` first on PATH that
+// leaves a marker (asserted, so a stub nothing resolves cannot silently cost the
+// time again). Everything else -- the script, kubectl, git, the clone -- is real.
+//
+// The loaded numbers are the ones packages/edge-routers/test/hygiene-j.test.ts
+// measured for this same script with this same stub: 16 CPU-spinning processes
+// 198.7-275.2 s per run (n=11), the heaviest level at which it completes. The
+// child timeout is 3x that worst sample (the same 840 s), git 30 s >= 3x its
+// loaded worst (7.6 s), and each test's budget is the sum of its children's
+// timeouts plus 30 s, so a slow child always fails first, by name, via
+// runHygiene's completion check. No global raise.
+const GIT_CLONE_MS = 30_000
+const HYGIENE_RUN_MS = 840_000
+const HYGIENE_TEST_MS = GIT_CLONE_MS + HYGIENE_RUN_MS + 30_000
+
+/** A fresh shared clone of this repository under the test's tmp dir. */
+function cloneRepo(): string {
+  const clone = path.join(tmp, 'clone')
+  const cl = spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone], { encoding: 'utf8', timeout: GIT_CLONE_MS })
+  expect(cl.status, `git clone: status=${cl.status} signal=${cl.signal} ${cl.error?.message ?? ''}\n${cl.stderr}`).toBe(0)
+  return clone
+}
+
+/**
+ * The parent env with GREMION_REPO_ROOT set and a stub `bats` first on PATH
+ * (under whatever case the parent spells the key). The stub answers
+ * `--version` at once and touches `usedMarker`.
+ */
+function batsStubEnv(root: string): { env: NodeJS.ProcessEnv; usedMarker: string } {
+  const bin = path.join(tmp, 'bats-stub-bin')
+  mkdirSync(bin)
+  writeFileSync(path.join(bin, 'bats.cmd'), '@type nul > "%~dp0used"\r\n@echo Bats 0.0.0 (port-binding test stub)\r\n')
+  writeFileSync(path.join(bin, 'bats'), '#!/bin/sh\n: > "$(dirname "$0")/used"\necho "Bats 0.0.0 (port-binding test stub)"\n', {
+    mode: 0o755,
+  })
+  const env: NodeJS.ProcessEnv = { ...process.env, GREMION_REPO_ROOT: root }
+  const key = Object.keys(env).find((k) => /^path$/i.test(k)) ?? 'PATH'
+  env[key] = env[key] ? `${bin}${path.delimiter}${env[key]}` : bin
+  return { env, usedMarker: path.join(bin, 'used') }
+}
+
+// Printed only by a run that got to the end of the script.
+const HYGIENE_REPORT = /^\[kernel-hygiene\] (OK — \d+ checks passed|\d+\/\d+ check\(s\) FAILED:)/m
+
+/**
+ * Run the real hygiene script and return its combined output. Fails, naming the
+ * exit, unless the run COMPLETED (exit 0 or 1 with its report line printed): a
+ * killed or crashed run has no verdicts, and reading one as "no g2 line" is how
+ * a timeout used to surface as a wrong-verdict assertion.
+ */
+function runHygiene(env: NodeJS.ProcessEnv): string {
+  const res = spawnSync(process.execPath, [HYGIENE], { encoding: 'utf8', env, timeout: HYGIENE_RUN_MS })
+  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`
+  const completed = !res.error && !res.signal && (res.status === 0 || res.status === 1) && HYGIENE_REPORT.test(out)
+  expect(
+    completed,
+    `the hygiene run did not complete: status=${res.status} signal=${res.signal} error=${res.error?.message ?? '-'}\n${out.slice(-2000)}`,
+  ).toBe(true)
+  return out
 }
 
 /**
@@ -258,23 +333,20 @@ describe.skipIf(!kubectlUp)('kernel-hygiene g2 second net (needs kubectl)', () =
   it(
     'a dev overlay naming a DIFFERENT missing env file is "render FAILED", not "run setup first"',
     () => {
-      const clone = path.join(tmp, 'clone')
-      expect(spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone]).status).toBe(0)
+      const clone = cloneRepo()
       writeFileSync(path.join(clone, '.env'), 'A=1\n')
       mkdirSync(path.join(clone, 'legal'), { recursive: true })
       writeFileSync(path.join(clone, 'legal', 'legal.env'), '')
       const k = path.join(clone, 'k8s', 'overlays', 'dev', 'kustomization.yaml')
       writeFileSync(k, readFileSync(k, 'utf8').replace('../../../legal/legal.env', '../../../legal/legl.env'))
-      const res = spawnSync(process.execPath, [HYGIENE], {
-        encoding: 'utf8',
-        env: { ...process.env, GREMION_REPO_ROOT: clone },
-        timeout: 120_000,
-      })
-      const g2 = `${res.stdout}${res.stderr}`.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
+      const { env, usedMarker } = batsStubEnv(clone)
+      const out = runHygiene(env)
+      const g2 = out.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
       expect(g2).toMatch(/dev: render FAILED/)
       expect(g2).not.toContain(SETUP_FIRST)
+      expect(existsSync(usedMarker), 'the hygiene run never resolved the bats stub').toBe(true)
     },
-    120_000,
+    HYGIENE_TEST_MS,
   )
 })
 
@@ -283,22 +355,15 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
     'reports the dev overlay as NOT CHECKED with the setup-first text, before any render',
     () => {
       // A fresh clone of this repository: exactly what a new contributor has.
-      const clone = path.join(tmp, 'clone')
-      const cl = spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone], { encoding: 'utf8' })
-      expect(cl.status, cl.stderr).toBe(0)
+      const clone = cloneRepo()
       expect(missingLocalEnvFiles(clone)).toEqual(['.env', 'legal/legal.env'])
       // PATH without kubectl: the preflight must answer before a render is tried,
       // so the verdict cannot depend on whether kustomize is installed.
       const env = emptyPathEnv(clone)
       expectUnresolvable('kubectl', env, clone)
-      const res = spawnSync(process.execPath, [HYGIENE], {
-        encoding: 'utf8',
-        env,
-        timeout: 120_000,
-      })
-      const out = `${res.stdout}${res.stderr}`
+      const out = runHygiene(env)
       const g2 = out.split('\n').find((l) => l.includes('✗ g2 ')) ?? ''
-      expect(res.status).not.toBe(0)
+      expect(out).toMatch(/\[kernel-hygiene\] \d+\/\d+ check\(s\) FAILED:/)
       expect(g2).toMatch(/dev: NOT CHECKED/)
       expect(g2).toContain(SETUP_FIRST)
       expect(g2).toContain('.env')
@@ -306,7 +371,7 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
       expect(out).not.toContain('non-loopback')
       expect(out).not.toContain('SAFETY')
     },
-    120_000,
+    HYGIENE_TEST_MS,
   )
 
   // Merge train 4 (TASK-034 x TASK-028): section (j) read `git ls-files` at
@@ -317,17 +382,10 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
   it(
     'completes without git on PATH: every check reports, j2-j4 fail loudly as "threw", none aborts the run',
     () => {
-      const clone = path.join(tmp, 'clone')
-      const cl = spawnSync('git', ['clone', '-q', '--shared', REPO_ROOT, clone], { encoding: 'utf8' })
-      expect(cl.status, cl.stderr).toBe(0)
+      const clone = cloneRepo()
       const env = emptyPathEnv(clone)
       expectUnresolvable('git', env, clone)
-      const res = spawnSync(process.execPath, [HYGIENE], {
-        encoding: 'utf8',
-        env,
-        timeout: 120_000,
-      })
-      const out = `${res.stdout}${res.stderr}`
+      const out = runHygiene(env)
       expect(out, 'an uncaught throw escaped check()').not.toMatch(/node:internal|^\s+at .*kernel-hygiene-check\.mjs/m)
       // Every check() in the script reported: the denominator is the number of
       // check( calls, so a run cut short by a top-level throw cannot pass.
@@ -341,7 +399,7 @@ describe('kernel-hygiene g2 on a working copy that is not set up', () => {
       }
       expect(lines.find((l) => l.includes('✗ g2 ')) ?? '').toMatch(/dev: NOT CHECKED/)
     },
-    120_000,
+    HYGIENE_TEST_MS,
   )
 })
 
