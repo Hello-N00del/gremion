@@ -10,15 +10,25 @@
 //
 // On top of what the host asserts, this check requires the full
 // `@sha256:<64 hex>` form and completeness against the expected service set:
-// every expected service pinned, no unexpected service. The expected set comes
-// from the app compose file (docker-compose.app.yml is spec B / B14 and absent
-// on this base — TODO(TASK-040)) or from --services; with neither it FAILS.
+// every expected service pinned, no unexpected service. The expected set is
+// DERIVED, never listed (TASK-048b, Q1): --project state|app reads COMPOSE_FILE
+// out of the project's env template and takes every service that declares
+// `build:` at its own indent in any of those files (the pins slot, basename
+// docker-compose*pins.yml, excluded). A service line in any non-plain spelling
+// is refused, a merge key contributes its anchor's build:, a later file's
+// `build: !reset null` removes the service, and zero derived services FAILS.
+// --services a,b,c states the set by hand (tests, rehearsals); with neither it
+// FAILS. The render arm (check-image-digests.mjs --render) cross-checks this
+// derivation against docker's own render.
 //
-// Run:  node scripts/release/check-pins.mjs <pins.yml> (--app-compose FILE | --services a,b,c)
+// Run:  node scripts/release/check-pins.mjs <pins.yml> (--project state|app | --services a,b,c)
 // Test: node --test scripts/release/b35-adapts.test.mjs
 
 import { readFileSync } from 'node:fs'
+import { join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { readEnvKey } from '../verify/census/render.mjs'
 
 const posix = (s) => s.replace(/\[:space:\]/g, '\\s').replace(/\[\[:space:\]\]/g, '\\s')
 
@@ -48,9 +58,11 @@ export function deployPinRegexes(deployPath) {
 }
 
 const DEPLOY = fileURLToPath(new URL('../../infra/host/bin/gremion-deploy', import.meta.url))
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const FULL_DIGEST = /@sha256:[0-9a-f]{64}["']?\s*$/
 
-/** service -> {image, build} from a compose-shaped pins file (two-space service indent). */
+/** service -> {image, build} from a PINS file (two-space service indent); never used on a
+ * compose file, whose networks:/volumes: keys it would count as services. */
 export function servicesOf(text) {
   const out = new Map()
   let cur = null
@@ -71,6 +83,104 @@ export function servicesOf(text) {
   return out
 }
 
+// ── the expected set, derived from `build:` (TASK-048b, Q1) ────────────────
+
+/** The env template whose COMPOSE_FILE defines each release project's files. */
+export const PROJECT_TEMPLATES = Object.freeze({
+  state: 'infra/host/templates/env/state.env.tmpl',
+  app: 'infra/host/templates/env/app.env.tmpl',
+})
+/** The pins layer each project reads (the pins slot of its COMPOSE_FILE). */
+export const PINS_FILES = Object.freeze({ state: 'docker-compose.state-pins.yml', app: 'docker-compose.pins.yml' })
+/** A COMPOSE_FILE entry whose basename is docker-compose*pins.yml is the pins slot. */
+export const isPinsSlot = (entry) => /^docker-compose.*pins\.yml$/.test(basename(entry))
+
+// An explicit reset only: an empty value opens a nested build: block.
+const NOT_A_BUILD = /^(?:!reset(?:\s+null)?|null|~)\s*(#.*)?$/
+const PLAIN_SERVICE = /^ {2}([A-Za-z0-9][A-Za-z0-9_.-]*):\s*(#.*)?$/
+
+/**
+ * service -> true (declares a real build:) | false (resets it) for every
+ * service of one compose file that touches build:, in file order. Strict: a
+ * service line under services: in any other spelling (anchor, quoted key,
+ * flow map) and a quoted build key throw, since either would silently shrink
+ * the set. `<<: *anchor` contributes the anchor's top-level build:.
+ */
+export function buildServicesOf(text, label) {
+  const lines = text.split(/\r?\n/)
+  // anchors of top-level blocks (x-foo: &name) and whether they carry build:
+  const anchors = new Map()
+  let anchor = null
+  for (const l of lines) {
+    const top = /^[A-Za-z0-9_.-]+:\s*&([A-Za-z0-9_-]+)\s*(#.*)?$/.exec(l)
+    if (top) {
+      anchor = top[1]
+      anchors.set(anchor, false)
+      continue
+    }
+    if (/^\S/.test(l) && !l.startsWith('#')) anchor = null
+    else if (anchor && /^ {2}build\s*:/.test(l)) anchors.set(anchor, !NOT_A_BUILD.test(l.replace(/^ {2}build\s*:\s*/, '')))
+  }
+  const out = new Map()
+  const start = lines.findIndex((l) => /^services:\s*(#.*)?$/.test(l))
+  if (start < 0) return out
+  let cur = null
+  for (const [i, l] of lines.slice(start + 1).entries()) {
+    const where = `${label}:${start + i + 2}`
+    if (/^\S/.test(l) && !l.startsWith('#')) break
+    if (!l.trim() || /^\s*#/.test(l)) continue
+    if (/^ {2}\S/.test(l)) {
+      const m = PLAIN_SERVICE.exec(l)
+      if (!m) throw new Error(`${where}: not a plain service line under services: ${l.trim()}`)
+      cur = m[1]
+      continue
+    }
+    if (!cur || !/^ {4}\S/.test(l)) continue
+    if (/^ {4}["']build["']\s*:/.test(l)) throw new Error(`${where}: quoted build key: ${l.trim()}`)
+    const b = /^ {4}build\s*:\s*(.*)$/.exec(l)
+    if (b) out.set(cur, !NOT_A_BUILD.test(b[1]))
+    const merge = /^ {4}<<\s*:\s*\*([A-Za-z0-9_-]+)\s*(#.*)?$/.exec(l)
+    if (merge) {
+      if (!anchors.has(merge[1])) throw new Error(`${where}: merge key names an unknown anchor *${merge[1]}`)
+      if (anchors.get(merge[1]) && !out.has(cur)) out.set(cur, true)
+    } else if (/^ {4}<</.test(l)) {
+      throw new Error(`${where}: merge key in a form this check cannot follow: ${l.trim()}`)
+    }
+  }
+  return out
+}
+
+/**
+ * The expected pins set of a release project: every service that builds, over
+ * the project's template COMPOSE_FILE entries (the pins slot excluded), a
+ * later file's build: winning. Zero services, an unreadable file or a template
+ * without COMPOSE_FILE throw.
+ */
+export function derivedServices(project, { root = REPO_ROOT, readText = (p) => readFileSync(p, 'utf8') } = {}) {
+  const tmpl = PROJECT_TEMPLATES[project]
+  if (!tmpl) throw new Error(`unknown project ${project} (want ${Object.keys(PROJECT_TEMPLATES).join('|')})`)
+  const composeFile = readEnvKey(readText(join(root, tmpl)), 'COMPOSE_FILE')
+  if (!composeFile) throw new Error(`${tmpl} declares no COMPOSE_FILE`)
+  const builds = new Map()
+  const order = [] // file order of first appearance, not of the last override
+  for (const entry of composeFile.split(':').map((e) => e.trim()).filter(Boolean)) {
+    if (isPinsSlot(entry)) continue
+    let text
+    try {
+      text = readText(join(root, entry))
+    } catch (err) {
+      throw new Error(`${tmpl} lists ${entry}, which cannot be read: ${err.message}`)
+    }
+    for (const [svc, b] of buildServicesOf(text, entry)) {
+      builds.set(svc, b)
+      if (!order.includes(svc)) order.push(svc)
+    }
+  }
+  const out = order.filter((s) => builds.get(s))
+  if (!out.length) throw new Error(`${tmpl}: COMPOSE_FILE ${composeFile} derives no build: service (refusing a vacuous set)`)
+  return out
+}
+
 export function checkPins(text, { services, deployPath = DEPLOY } = {}) {
   const re = deployPinRegexes(deployPath)
   const problems = []
@@ -86,7 +196,7 @@ export function checkPins(text, { services, deployPath = DEPLOY } = {}) {
     if (!re.buildReset.test(l)) add('real-build', `a real build: key (no build in production): ${l.trim()}`)
   }
   if (!Array.isArray(services) || !services.length) {
-    add('no-service-list', 'no expected service set (docker-compose.app.yml absent — TODO(TASK-040) — and no --services)')
+    add('no-service-list', 'no expected service set (neither --project nor --services)')
     return problems
   }
   const got = servicesOf(text)
@@ -102,11 +212,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   }
   const pins = process.argv[2]
   if (!pins || pins.startsWith('--')) {
-    console.error('usage: check-pins.mjs <pins.yml> (--app-compose FILE | --services a,b,c)')
+    console.error('usage: check-pins.mjs <pins.yml> (--project state|app | --services a,b,c)')
     process.exit(2)
   }
-  let services = arg('--services')?.split(',').filter(Boolean)
-  if (arg('--app-compose')) services = [...servicesOf(readFileSync(arg('--app-compose'), 'utf8')).keys()]
+  let services
+  try {
+    services = arg('--project') ? derivedServices(arg('--project')) : arg('--services')?.split(',').filter(Boolean)
+  } catch (err) {
+    console.error(`check-pins: FAIL derive: ${err.message}`)
+    process.exit(1)
+  }
   const ps = checkPins(readFileSync(pins, 'utf8'), { services })
   for (const p of ps) console.error(`check-pins: FAIL ${p.code}: ${p.message}`)
   console.log(`check-pins: ${ps.length} problem(s)`)

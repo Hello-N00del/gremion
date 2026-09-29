@@ -21,7 +21,7 @@ import { join, dirname } from 'node:path'
 import { Harness, REPO_ROOT, sh } from './lib/harness.mjs'
 import { checkDependabotDockerfiles, dockerDirectories } from './check-dependabot-dockerfiles.mjs'
 import { checkLockfileCommitted } from './check-lockfile-committed.mjs'
-import { deployPinRegexes, checkPins } from './check-pins.mjs'
+import { deployPinRegexes, checkPins, buildServicesOf, derivedServices, PROJECT_TEMPLATES } from './check-pins.mjs'
 
 const h = new Harness('b35')
 after(() => h.teardown())
@@ -136,4 +136,69 @@ test('pins: short digest, missing service, extra service, real build, gremion/ n
   assert.deepEqual(codes(checkPins(built, { services })), ['real-build'])
   assert.deepEqual(codes(checkPins(PINS([good[0], svc('migrate', `gremion/migrate@sha256:${D('3')}`)]), { services })), ['third-party-namespace'])
   assert.deepEqual(codes(checkPins('services: {}\n', { services })), ['incomplete', 'incomplete', 'no-images'])
+})
+
+// ── derivation (TASK-048b, Q1): the expected set comes from `build:` ─────────
+
+const STATE_TMPL = (files) => `# fixture\nCOMPOSE_PROJECT_NAME=x-state\nCOMPOSE_FILE=${files}\nCOMPOSE_PROFILES=production\n`
+function tree(files) {
+  n += 1
+  const r = join(h.tmp, `derive-${n}`)
+  for (const [p, c] of Object.entries(files)) {
+    mkdirSync(dirname(join(r, p)), { recursive: true })
+    writeFileSync(join(r, p), c)
+  }
+  return r
+}
+
+test('derive: the state set is the union of build: services over the template files, pins slot excluded', () => {
+  const r = tree({
+    [PROJECT_TEMPLATES.state]: STATE_TMPL('a.yml:b.yml:docker-compose.state-pins.yml'),
+    'a.yml': 'x-y: &y\n  image: z\nservices:\n  legal:\n    build:\n      context: ./legal\n    image: i\n  db:\n    image: postgres\n  mod:\n    profiles: [module]\n    build: ./m\nvolumes:\n  legal:\n',
+    'b.yml': 'services:\n  fallback:\n    build: ./fb\n  db:\n    restart: always\n',
+    // the pins slot is never read: a build: here would be a pins error, not a derived service
+    'docker-compose.state-pins.yml': 'services:\n  phantom:\n    build: ./p\n',
+  })
+  assert.deepEqual(derivedServices('state', { root: r }), ['legal', 'mod', 'fallback'])
+})
+
+test('derive: a later file that resets build: (!reset null) removes the service', () => {
+  const r = tree({
+    [PROJECT_TEMPLATES.state]: STATE_TMPL('a.yml:b.yml'),
+    'a.yml': 'services:\n  legal:\n    build: ./l\n  vector:\n    build: ./v\n',
+    'b.yml': 'services:\n  vector:\n    build: !reset null\n    image: timberio/vector\n',
+  })
+  assert.deepEqual(derivedServices('state', { root: r }), ['legal'])
+})
+
+test('derive: an anchored, quoted or flow service line, or a quoted build key, is refused', () => {
+  for (const c of [
+    'services:\n  a: &a\n    build: ./a\n',
+    'services:\n  "a":\n    build: ./a\n',
+    'services:\n  a: {build: ./a}\n',
+    'services:\n  a:\n    "build": ./a\n',
+  ]) {
+    assert.throws(() => buildServicesOf(c, 'f.yml'), /not a plain|quoted/, c)
+  }
+})
+
+test('derive: a merge key pulls build: from its anchor; an unknown anchor is refused', () => {
+  const withBuild = 'x-b: &b\n  build: ./b\nservices:\n  a:\n    <<: *b\n  c:\n    image: y\n'
+  assert.deepEqual([...buildServicesOf(withBuild, 'f.yml')].filter(([, v]) => v).map(([k]) => k), ['a'])
+  assert.throws(() => buildServicesOf('services:\n  a:\n    <<: *nope\n', 'f.yml'), /unknown anchor/)
+})
+
+test('derive: zero derived services, a missing file or a template without COMPOSE_FILE fails', () => {
+  const none = tree({ [PROJECT_TEMPLATES.state]: STATE_TMPL('a.yml'), 'a.yml': 'services:\n  db:\n    image: postgres\n' })
+  assert.throws(() => derivedServices('state', { root: none }), /derives no build: service/)
+  const missing = tree({ [PROJECT_TEMPLATES.state]: STATE_TMPL('a.yml:gone.yml'), 'a.yml': 'services:\n  l:\n    build: .\n' })
+  assert.throws(() => derivedServices('state', { root: missing }), /gone\.yml/)
+  const nokey = tree({ [PROJECT_TEMPLATES.state]: 'X=1\n' })
+  assert.throws(() => derivedServices('state', { root: nokey }), /no COMPOSE_FILE/)
+  assert.throws(() => derivedServices('ops', { root: nokey }), /unknown project/)
+})
+
+test('derive: the committed tree gives state {legal, vector, fallback} and app {gremion-ui, gremion-public, migrate, tenant-create}', () => {
+  assert.deepEqual(derivedServices('state'), ['legal', 'vector', 'fallback'])
+  assert.deepEqual(derivedServices('app'), ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create'])
 })
