@@ -28,7 +28,7 @@
 #   c1        stub stopped, matrix restarted: "jwt_config disabled" in the
 #             log; the restart time is recorded for c2
 #   c2        unhealthy after start_period (240 s + 3 x 15 s from c1), while
-#             the old probe (/versions) still exits 0. Waits at most 200 s
+#             the old probe (/versions) still exits 0. Polls at most 100 s
 #             per call: before the deadline it exits 3 with PENDING -- run it
 #             again; it never reads healthy (that is a FAIL)
 #   d1        the synapse database recreated bare (en_US.utf8): the preflight
@@ -101,23 +101,26 @@ psql_pg() {
   docker exec "$c" psql -U "${u:-messaging}" -d "${2:-postgres}" -AtX -v ON_ERROR_STOP=1 -c "$1" | tr -d '\r'
 }
 health() { docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1" | tr -d '\r'; }
+# Every wait is bounded by WALL-CLOCK seconds (bash's SECONDS), not by a count
+# of sleeps: on a loaded box each docker call costs seconds of its own, and a
+# counted 200 s loop ran past the 4-minute call budget (measured, round 2).
 wait_health() { # <cid> <want> <timeout s>
-  local i=0 s
-  while (( i < $3 )); do
+  local end=$((SECONDS + $3)) s
+  while (( SECONDS < end )); do
     s="$(health "$1")"
     [[ "$s" == "$2" ]] && return 0
-    sleep 2; i=$((i + 2))
+    sleep 2
   done
   return 1
 }
 # Poll the container log since <since> for an ERE, at most <timeout> s.
 wait_log() { # <cid> <since> <ERE> <timeout s>
   # Captured first: `docker logs | grep -q` under pipefail reads SIGPIPE as failure.
-  local i=0 l
-  while (( i < $4 )); do
+  local end=$((SECONDS + $4)) l
+  while (( SECONDS < end )); do
     l="$(docker logs --since "$2" "$1" 2>&1)"
     grep -Eq "$3" <<< "$l" && return 0
-    sleep 5; i=$((i + 5))
+    sleep 5
   done
   return 1
 }
@@ -237,11 +240,11 @@ stub_up() {
     "$IMAGE_LOCAL" -m http.server 8080 --directory /stub >/dev/null
   docker cp "$OUT/stub/." "$STUB:/stub" >/dev/null
   docker start "$STUB" >/dev/null
-  local i=0 body=''
-  while (( i < 30 )); do
+  local end=$((SECONDS + 30)) body=''
+  while (( SECONDS < end )); do
     body="$(docker exec "$STUB" python3 -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8080/realm.json", timeout=3).read().decode())' 2>/dev/null || true)"
     [[ "$body" == *'"public_key"'* ]] && return 0
-    sleep 2; i=$((i + 2))
+    sleep 2
   done
   die "the IdP stub does not serve realm.json after 30 s"
 }
@@ -253,7 +256,7 @@ phase_b() {
   t0="$(date +%s)"
   compose up -d --no-build matrix >/dev/null
   c="$(cid matrix)"; [[ -n "$c" ]] || die "no matrix container after up"
-  wait_health "$c" healthy 180 || { docker logs "$c" 2>&1 | tail -40 >&2; die "7b: matrix is $(health "$c"), not healthy, after 180 s"; }
+  wait_health "$c" healthy 150 || { docker logs "$c" 2>&1 | tail -40 >&2; die "7b: matrix is $(health "$c"), not healthy, after 150 s"; }
   t1="$(date +%s)"
   # The rendered config holds secrets: parsed from a pipe, never written out.
   docker exec "$c" cat /data/homeserver.yaml | python3 -c '
@@ -293,15 +296,19 @@ phase_c1() {
 
 phase_c2() {
   need_names
-  local c since t0 s='' i=0 elapsed old new
+  local c since t0 s='' end elapsed old new
   c="$(cid matrix)"; [[ -n "$c" ]] || die "no matrix container (PHASE=b first)"
   [[ -f "$OUT/c.since" ]] || die "run PHASE=c1 first"
   read -r since t0 < "$OUT/c.since"
-  while (( i < 200 )); do
+  # 100 s of polling: on the loaded Windows gate box one docker call has cost
+  # up to ~30 s and the phase's other calls ~60 s, and a 170 s poll ran the
+  # call to 245 s (measured, round 2).
+  end=$((SECONDS + 100))
+  while (( SECONDS < end )); do
     s="$(health "$c")"
     [[ "$s" == unhealthy ]] && break
     [[ "$s" == healthy ]] && die "7c2: matrix reads healthy with the IdP down -- the probe does not see the missing JWT flow"
-    sleep 5; i=$((i + 5))
+    sleep 5
   done
   elapsed=$(( $(date +%s) - t0 ))
   if [[ "$s" != unhealthy ]]; then
@@ -333,16 +340,16 @@ phase_d1() {
   stub_up
   since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   docker start "$c" >/dev/null
-  wait_log "$c" "$since" "datcollate is 'en_US.utf8'" 150 || true
+  wait_log "$c" "$since" "datcollate is 'en_US.utf8'" 90 || true
   # A grace for anything a (wrongly) passing preflight would start.
-  sleep 15
+  sleep 10
   logs="$(docker logs --since "$since" "$c" 2>&1)"
   docker stop "$c" >/dev/null
   { grep '\[db-preflight\]' <<< "$logs" || true; } | ledger d.log
   grep -q "datcollate is 'en_US.utf8'" <<< "$logs" || die "7d1: the preflight did not name en_US.utf8"
   if grep -qE 'Synapse now listening|Setting up server|synapse\.app\.homeserver' <<< "$logs"; then die "7d1: Synapse started on the bare database"; fi
   [[ "$(psql_pg "SELECT to_regclass('public.users') IS NULL" synapse)" == "t" ]] || die "7d1: Synapse wrote its schema into the bare database"
-  ok "7d1: the preflight names en_US.utf8 and Synapse never started; matrix stopped -- run PHASE=d2 to restore the C database"
+  ok "7d1: the preflight names en_US.utf8 and Synapse never started; matrix stopped (${SECONDS} s) -- run PHASE=d2 to restore the C database"
 }
 
 phase_d2() {
