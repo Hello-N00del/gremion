@@ -119,6 +119,9 @@ function emptyPathEnv(root: string): NodeJS.ProcessEnv {
 // g2 test asserts g2 only, so its run gets a stub `bats` first on PATH that
 // leaves a marker (asserted, so a stub nothing resolves cannot silently cost the
 // time again). Everything else -- the script, kubectl, git, the clone -- is real.
+// Watched RED: with the stub left off PATH the g2 test took 44.0 s and failed
+// "the hygiene run never resolved the bats stub"; with it, 17.9-24.4 s idle
+// (n=3) and 29.5 s under 4 CPU-spinning processes (n=1).
 //
 // The loaded numbers are the ones packages/edge-routers/test/hygiene-j.test.ts
 // measured for this same script with this same stub: 16 CPU-spinning processes
