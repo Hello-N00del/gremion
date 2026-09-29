@@ -32,7 +32,7 @@ const kindOf = (fn) => {
   try {
     fn()
   } catch (err) {
-    assert.ok(err instanceof HarnessError, `not a HarnessError: ${err}`)
+    assert.ok(err instanceof HarnessError, `not a HarnessError: ${String(err)}`)
     return { kind: err.kind, message: err.message }
   }
   assert.fail('the harness did not refuse')

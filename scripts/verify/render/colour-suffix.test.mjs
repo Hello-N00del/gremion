@@ -61,7 +61,7 @@ const both = (blueEnv = {}, greenEnv = {}) => ({ blue: appRender('blue', blueEnv
 // ── G2 contract: one prefix, a leaf module ─────────────────────────────────
 
 test('the declared prefix equals check-pooled-stack FIRST_PARTY_IMAGE', () => {
-  assert.equal(FIRST_PARTY_IMAGE.source, `^${P.replace(/[.\/]/g, (c) => `\\${c}`)}`)
+  assert.equal(FIRST_PARTY_IMAGE.source, `^${P.replace(/[./]/g, (c) => `\\${c}`)}`)
   assert.ok(FIRST_PARTY_IMAGE.test(`${P}anything`))
 })
 
