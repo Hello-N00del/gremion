@@ -3,8 +3,8 @@
 // The database half (a real pg_dump under the runner's lock) is
 // test/integration/dump.test.ts.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import type { Exporter } from '../lifecycle/types.js'
 import { runCli, parsePgDumpMajor } from './cli.js'
@@ -16,8 +16,11 @@ const roots: string[] = []
 afterAll(() => {
   for (const r of roots) rmSync(r, { recursive: true, force: true })
 })
+// Under the checkout's git-excluded .scratch/, never the system temp dir.
+const SCRATCH = fileURLToPath(new URL('../../../../.scratch/t075-unit/', import.meta.url))
 function freshDir(): string {
-  const d = mkdtempSync(join(tmpdir(), 't075-dump-'))
+  mkdirSync(SCRATCH, { recursive: true })
+  const d = mkdtempSync(join(SCRATCH, 'dump-'))
   roots.push(d)
   return d
 }
