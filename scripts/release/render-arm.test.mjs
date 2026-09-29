@@ -217,3 +217,9 @@ test('r1: the state render seeds the git-ignored legal/legal.env EMPTY and exclu
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('r1: an app render carrying a derived STATE service fails (layers merged the other way)', () => {
+  const res = arm({ render: renderer((id, doc) => (id === 'app-blue' ? { services: { ...doc.services, legal: { image: `${FP}/gremion-legal@sha256:${D('7')}` } } } : doc)) })
+  assert.deepEqual(codes(res.problems), ['app-purity'])
+  assert.equal(res.problems[0].where, 'app-blue/legal')
+})

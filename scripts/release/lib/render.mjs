@@ -16,7 +16,8 @@
 //   - every derived `build:` service appears in its project's render(s), so a
 //     profile left off cannot hide one (COMPOSE_PROFILES='*');
 //   - the state render passes check-pooled-stack's STATE PURITY: no app
-//     service is layered onto the state project.
+//     service is layered onto the state project; and no colour render
+//     carries a derived state service (app purity, the reverse merge).
 //
 // Templates are DISCOVERED (infra/host/templates/env/*.env.tmpl) and must each
 // be mapped in TEMPLATE_MAP; an unmapped template fails. Each render passes an
@@ -193,6 +194,11 @@ export function judgeRenders(results, derived) {
     }
     if (plan.id === 'state') {
       for (const v of statePurityViolations(res.doc, 'state')) add('state-purity', 'state', v)
+    }
+    // ...and the reverse: a colour carrying a state service (the state layer
+    // merged into the app pins) would run a second copy of it per colour.
+    if (plan.project === 'app') {
+      for (const s of derived.state ?? []) if (svcs[s]) add('app-purity', `${plan.id}/${s}`, `the app render carries the state service ${s} (it lives only in the state project)`)
     }
   }
   return problems
