@@ -35,8 +35,8 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
   one verification run of [backup.md](backup.md)); `gremion-deploy` sizes its
   free-space check from it and refuses without it.
 - The new tag's tree carries `release.json` (the tag, a boolean `overlap`, the
-  `migrations` array, a manifest digest), `docker-compose.pins.yml` with every
-  image pinned by digest, and `docs/ops/release-1-waivers.md`. A missing contract
+  `migrations` array, a manifest digest), `docker-compose.pins.yml` and
+  `docker-compose.state-pins.yml` with every image pinned by digest, and `docs/ops/release-1-waivers.md`. A missing contract
   stops the deploy at STEP 2, before any colour is touched.
 - Every migration in the release is expand/contract (TRD-361): the colour still
   serving can run against the migrated schema.
