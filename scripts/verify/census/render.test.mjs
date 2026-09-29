@@ -6,7 +6,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 import { run } from '../lib/proc.mjs'
-import { ALLOWANCES, childEnv, parseExemptList, PINS_FILE, planRender, PROJECTS, readEnvKey, RENDER_ENV, renderProject, REPO_ROOT } from './render.mjs'
+import { ALLOWANCES, childEnv, parseExemptList, PINS_FILES, planRender, PROJECTS, readEnvKey, RENDER_ENV, renderProject, REPO_ROOT } from './render.mjs'
 
 const FIXTURES = path.join(import.meta.dirname, '__fixtures__')
 const byName = (n) => PROJECTS.find((p) => p.name === n)
@@ -43,6 +43,18 @@ test('the state plan passes -f per listed file, never the dev override, plus --e
   assert.deepEqual(plan.exempt, ['job-a', 'job-b'])
 })
 
+test('TASK-048b: the state plan with docker-compose.state-pins.yml notes "pins: not censused" and never passes it', () => {
+  const plan = planRender(byName('state'), {
+    root: '/r',
+    exists: (p) => !p.endsWith('docker-compose.state-pins.yml'),
+    readText: fakeTemplate(['COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml', 'COMPOSE_PROFILES=production']),
+  })
+  assert.deepEqual(plan.errors, [])
+  assert.ok(plan.notes.includes('pins: not censused (state: docker-compose.state-pins.yml)'), plan.notes.join('\n'))
+  assert.ok(!plan.argv.some((a) => a.includes('pins')), plan.argv.join(' '))
+  assert.deepEqual([...PINS_FILES].sort(), ['docker-compose.pins.yml', 'docker-compose.state-pins.yml'])
+})
+
 test('mail and ops render from their own project directories', () => {
   for (const [name, dir] of [['mail', 'infra/host/mail'], ['ops', 'infra/host/ops']]) {
     const plan = planRender(byName(name), { root: '/r', exists: () => true, readText: fakeTemplate(['COMPOSE_FILE=docker-compose.yml', 'COMPOSE_PROFILES=x']) })
@@ -54,7 +66,7 @@ test('mail and ops render from their own project directories', () => {
 test('a listed compose file that is missing fails the plan; the pins file does not', () => {
   const plan = planRender(byName('state'), {
     root: '/r',
-    exists: (p) => !p.endsWith('docker-compose.prod.yml') && !p.endsWith(PINS_FILE),
+    exists: (p) => !p.endsWith('docker-compose.prod.yml') && !PINS_FILES.some((f) => p.endsWith(f)),
     readText: fakeTemplate(['COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:docker-compose.pins.yml', 'COMPOSE_PROFILES=production']),
   })
   assert.equal(plan.argv, null)

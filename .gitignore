@@ -267,3 +267,4 @@ docker/keycloak/realm-export.json
 # never committed at the root; the guard renders with the fixture copy under
 # test/host/fixtures/pooled-stack/.
 /docker-compose.pins.yml
+/docker-compose.state-pins.yml

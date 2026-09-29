@@ -20,8 +20,10 @@
 // gremion-mail-bringup's check_port_binds renders it; ops from
 // infra/host/ops/).
 //
-// Replaceable by TASK-053's shared renderer (brief S3); nothing outside
-// scripts/verify/census/ imports this file.
+// Replaceable by TASK-053's shared renderer (brief S3). Outside
+// scripts/verify/census/, only TASK-048b's release render arm
+// (scripts/release/lib/render.mjs) and check-pins.mjs import from it, and only
+// readEnvKey, childEnv and REPO_ROOT.
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { run, spawnMissing, tail } from '../lib/proc.mjs'
@@ -40,9 +42,11 @@ export const PROJECTS = [
   { name: 'ops', template: `${TEMPLATE_DIR}/ops.env.tmpl`, dir: 'infra/host/ops', exemptKey: 'HEALTH_EXEMPT_SERVICES' },
 ]
 
-/** The pins layer is resolved per release by gremion-deploy; it only swaps
- * image references for digests and is not censused (brief Q2). */
-export const PINS_FILE = 'docker-compose.pins.yml'
+/** The pins layers are resolved per release by gremion-deploy; they only swap
+ * image references for digests and are not censused (brief Q2). TASK-048b
+ * split the layer per project: the app colours read docker-compose.pins.yml,
+ * the state project docker-compose.state-pins.yml. */
+export const PINS_FILES = Object.freeze(['docker-compose.pins.yml', 'docker-compose.state-pins.yml'])
 
 /**
  * Dated allowances for a compose file a template names but the tree does not
@@ -139,7 +143,7 @@ export function planRender(project, { root = REPO_ROOT, renderEnv = RENDER_ENV, 
   for (const rel of composeFile.split(':').map((s) => s.trim()).filter(Boolean)) {
     const abs = path.join(plan.dir, rel)
     const allowance = allowances.find((a) => a.project === project.name && a.file === rel)
-    if (rel === PINS_FILE) {
+    if (PINS_FILES.includes(rel)) {
       plan.notes.push(`pins: not censused (${project.name}: ${rel})`)
       continue
     }

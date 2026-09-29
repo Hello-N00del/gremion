@@ -336,7 +336,8 @@ export function checkTree(root) {
       const m = /^\s*(?:export\s+)?COMPOSE_FILE=(.*)$/.exec(line)
       if (!m) continue
       for (const c of unquote(m[1].replace(/\s+#.*$/, '')).split(':').filter(Boolean)) {
-        if (c.split('/').pop() === 'docker-compose.pins.yml') continue
+        // the release pins layers (TASK-048b: app and state) are release outputs, judged by --render
+        if (['docker-compose.pins.yml', 'docker-compose.state-pins.yml'].includes(c.split('/').pop())) continue
         const p = posix.normalize(posix.join(tmplDirs.get(f) ?? '.', c))
         if (!files.includes(p)) add('compose-file-unscanned', `${f}:${i + 1}`, `COMPOSE_FILE names ${c} (${p}), which the scan set does not discover`)
       }
