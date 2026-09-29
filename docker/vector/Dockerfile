@@ -42,6 +42,10 @@ COPY logrotate.conf /etc/logrotate.d/vector-logs
 # the COPY lands it 0755, so normalise the mode.
 RUN chmod 0644 /etc/logrotate.d/vector-logs
 RUN chmod +x /usr/local/bin/process-logs.sh
+# Name-dated pruning of the retained-YYYY-MM-DD.log sink (R28-VECTOR-RETENTION),
+# run by the rotation loop in entrypoint.sh. POSIX sh + coreutils date only.
+COPY prune-retained.sh /usr/local/bin/prune-retained.sh
+RUN chmod +x /usr/local/bin/prune-retained.sh
 # Override entrypoint to start both process-logs.sh and Vector
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

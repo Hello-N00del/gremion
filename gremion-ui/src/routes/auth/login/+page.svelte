@@ -4,6 +4,7 @@
   import { onMount } from 'svelte'
   import { t } from '$lib/i18n'
   import PageTitle from '$lib/components/PageTitle.svelte'
+  import { LEGAL_HREFS } from '$lib/legal-links'
 
   // CONFORMANCE §1 / HANDOVER P1: the real login form is the Keycloak login
   // THEME (docker/keycloak/themes/gremion/login/). This SvelteKit page is no
@@ -70,7 +71,52 @@
   </main>
 {/if}
 
+<!-- R27-SIGNIN-LEGAL-K: section 5 DDG (Impressum) + Art. 13 GDPR (privacy
+     notice at the point of data collection) + BITV 2.0 / EN 301 549
+     (accessibility statement reachable from every page). A `<footer>` at the
+     document root (not nested in the `<main>` above) keeps its implicit
+     `contentinfo` landmark role. It renders in every branch above, including
+     the default redirect branch, so it is present in the server-rendered
+     HTML an anonymous visitor (or a URL-rating crawler that does not run JS)
+     sees before onMount's signIn() call navigates the browser away. -->
+<footer class="signin-legal">
+  <a href={LEGAL_HREFS.impressum} hreflang="de">{$t('auth.login.legal.impressum')}</a>
+  <a href={LEGAL_HREFS.datenschutz} hreflang="de">{$t('auth.login.legal.datenschutz')}</a>
+  <a href={LEGAL_HREFS.barrierefreiheit} hreflang="de">{$t('auth.login.legal.barrierefreiheit')}</a>
+</footer>
+
 <style>
+  .signin-legal {
+    /* R27-SIGNIN-LEGAL-K round 2 (house review LOW): an opaque background
+       keeps this from sitting invisibly over the forbidden/loggedOut card's
+       focusable link/button on a short viewport, at 400% zoom, or with the
+       "Sehr groß" font setting (WCAG 1.4.10 / 2.4.11). */
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    column-gap: 16px;
+    padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--paper);
+  }
+  .signin-legal a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 2px 4px;
+    /* Scales with the accessibility "Schriftgröße" control instead of a
+       fixed 12px (app.css sets --base-font-size on <html>: Normal 14 / Groß
+       16 / Sehr groß 18). */
+    font-size: var(--base-font-size, 14px);
+    color: var(--ink-muted);
+    text-decoration: none;
+  }
+  .signin-legal a:hover {
+    color: var(--ink);
+    text-decoration: underline;
+  }
   .spinner {
     width: 28px;
     height: 28px;
