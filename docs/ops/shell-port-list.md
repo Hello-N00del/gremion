@@ -81,3 +81,17 @@ integration cases against a scratch `postgres:18-alpine` (migrated with
 | 61683d99, 75cffdef | `scripts/verify-fresh-install-grants.sh` reader login over SCRAM + wrong password refused | adapted into `gremion-ui/scripts/fresh-init-proof.sh` (G7): container initdb `--auth-host=scram-sha-256`, `log_error_verbosity=verbose`, real TCP login as `gremion_public_reader` | the script's own post-conditions | before the initdb change: `FAIL reader login: a WRONG password connected as gremion_public_reader (the probe path is not authenticating)`, `[fresh-init] FAILED` | `ok reader login: a wrong password is refused (28P01)`, `ok reader login: gremion_public_reader logs in over SCRAM and reads protocols`, `[fresh-init] all post-conditions hold` |
 | 09be6d83, 61683d99 | `k8s/base/postgres/configmap.yaml` | N/A (Q5, D R19-D16) | | | |
 | 61683d99 | `docker/postgres/init-databases.sh`, `test/init-databases-role.bats` | N/A: kernel ahead, kept (fail-closed init) | | | |
+
+## Item 2: SSRF and security hardening (subtask 206-A; gremion-ui hooks are 206-B)
+
+| Source SHA | Disposition | Status | Guard | RED | GREEN |
+|---|---|---|---|---|---|
+| a29347f0, 3657370c (#458-2) | `routes/protocols/+page.server.ts` log-before-degrade | adapted onto the kernel segment `routes/protokolle/+page.server.ts` (log tag `[protokolle]`; summary only, never the raw error) | `routes/protokolle/page.server.test.ts` (source test, path/tag adapted) | on base: `× logs at ERROR level — with the route, the message and the code — before degrading`, `× does NOT log the raw error object — postgres.js carries query + parameters` (2 of 4 failed); re-break (g) is the base code | 11/11 (`routes/protokolle`) |
+| a88f00c9, 3657370c (#459-4) | portal image model | N/A: OPEN at source (Q13); record ported to `docs/security/portal-image-model-open-decision.md` with kernel anchors re-measured; no `img-src` edit | the non-image guards below | | |
+| a29347f0 (895f736 in the source record) | `gremion-public/src/hooks.server.test.ts` | adapted (G5): the kernel's header hook is `securityHeadersHandle`; the "keeps Google Fonts reachable" case is dropped (kernel self-hosts fonts, pinned the other way by `lib/test/csp-no-third-party-fonts.test.ts`) | itself | mutation: drop `X-Content-Type-Options: nosniff` -> `× sets the CSP and the anti-framing headers on a text/html response` (1 of 8) | 8/8 |
+| a29347f0 (09b6128) | `gremion-public/src/lib/sanitize.test.ts` | ported (G5; one comment line adapted: the kernel portal has no `/aktuelles`); `sanitize.ts` byte-equal to the source (6fc897c) | itself | mutation: allow `script`/`iframe` + `on*` attributes -> 3 of 11 FAIL (`strips a <script> element, tag and payload alike`, ...) | 11/11; gremion-public 15 files / 187 tests |
+| 5f47943c | gremion-public nosniff + Referrer-Policy | present (`gremion-public/src/hooks.server.ts:53-54`) | `hooks.server.test.ts` | as above | green |
+| 5f47943c | gremion-ui nosniff + Referrer-Policy | 206-B (G0, after TASK-205) | | | |
+| a29347f0 (#459-2) | rate-limit bucket eviction | present@8649555a (item 3 row, guard (n)) | | | |
+| a29347f0 (#434-6) | `gremion-public/src/lib/server/mail.ts` | N/A: no such file in the kernel portal | | | |
+| a29347f0 | messages `service-client` | via TASK-205 | | | |
