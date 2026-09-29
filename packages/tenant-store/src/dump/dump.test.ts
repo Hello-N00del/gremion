@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import type { Exporter } from '../lifecycle/types.js'
-import { runCli, parsePgDumpMajor } from './cli.js'
+import { migratePreApply, runCli, parsePgDumpMajor } from './cli.js'
 import { composePreApply, dumpHook, scopeOf } from './hook.js'
 import { appendEvent, DumpError, LEDGER_FILE, LEDGER_LOCK, liveDumps, readEvents, type DumpEvent } from './ledger.js'
 import { checkDumpDir, takeDump, uuidv7, type DumpFs, type TakeDumpOptions } from './take.js'
@@ -230,6 +230,24 @@ describe('the dump hook and composePreApply', () => {
     const ok: string[] = []
     await composePreApply(() => void ok.push('a'), undefined, () => void ok.push('b'))('f', fakeCtx('x').ctx as never)
     expect(ok).toEqual(['a', 'b'])
+  })
+
+  it('cli migrate\'s composition (migratePreApply): a ledger name the chain lacks, or a below-high-water file, refuses with no dump', async () => {
+    const dir = freshDir()
+    const ex = fakeExporter()
+    const dump = { dir, release: 'dist-v1.2.0', exporter: ex, pgDumpMajor: async () => 18, fs: posixFs(), audit: () => {} }
+    const pad3 = { ...fakeCtx('gremion_platform').ctx, applied: ['001_x.sql'], pending: ['0002_y.sql'] }
+    await expect(migratePreApply({ chainFiles: ['0001_x.sql', '0002_y.sql'], dump })('0002_y.sql', pad3 as never)).rejects.toThrow(/LEDGER_NAME_NOT_IN_CHAIN/)
+    const below = { ...fakeCtx('gremion_platform').ctx, applied: ['0001_x.sql', '0003_z.sql'], pending: ['0002_y.sql'] }
+    await expect(migratePreApply({ chainFiles: ['0001_x.sql', '0002_y.sql', '0003_z.sql'], dump })('0002_y.sql', below as never)).rejects.toThrow(/BELOW_HIGH_WATER/)
+    expect(ex.dumps).toEqual([])
+    expect(readEvents(dir)).toEqual([])
+    // a clean chain: exactly one dump
+    const ok = { ...fakeCtx('gremion_platform').ctx, applied: ['0001_x.sql'], pending: ['0002_y.sql', '0003_z.sql'] }
+    const pre = migratePreApply({ chainFiles: ['0001_x.sql', '0002_y.sql', '0003_z.sql'], dump })
+    await pre('0002_y.sql', ok as never)
+    await pre('0003_z.sql', ok as never)
+    expect(ex.dumps).toEqual(['gremion_platform'])
   })
 
   it('scopeOf: the platform, a (tenant, module) database, anything else refused', () => {

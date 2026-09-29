@@ -28,7 +28,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/lifecycle/export.test.ts': 8,
     // TASK-075 G1: phase header / baseline / PHASE_MISSING, the dump module
     'src/phase.test.ts': 7,
-    'src/dump/dump.test.ts': 19,
+    'src/dump/dump.test.ts': 20,
     'test/unit/check-tenant-db-access.test.ts': 18,
     'test/unit/suite-size.test.ts': 4,
   },

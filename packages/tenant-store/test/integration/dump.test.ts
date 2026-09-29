@@ -18,9 +18,8 @@ import type { AddressInfo } from 'node:net'
 import { delimiter, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest'
-import { chainPreApply } from '../../../../scripts/migrations/pre-apply.mjs'
-import { dumpTools, runCli } from '../../src/dump/cli.js'
-import { composePreApply, dumpHook } from '../../src/dump/hook.js'
+import { dumpTools, migratePreApply, runCli } from '../../src/dump/cli.js'
+import { composePreApply } from '../../src/dump/hook.js'
 import { readEvents, type DumpEvent } from '../../src/dump/ledger.js'
 import { defaultDumpFs, type DumpFs } from '../../src/dump/take.js'
 import { envResolveTarget, tenantModuleDbName } from '../../src/names.js'
@@ -134,10 +133,8 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
       },
       list: (file: string) => tools.exporter.list(file),
     }
-    return composePreApply(
-      chainPreApply({ chainFiles }),
-      dumpHook({ dir: dumpDir, release, exporter, pgDumpMajor: tools.pgDumpMajor, fs: FS, audit: () => {} }),
-    )
+    // cli.ts migrate's own composition (chain check, then dump)
+    return migratePreApply({ chainFiles, dump: { dir: dumpDir, release, exporter, pgDumpMajor: tools.pgDumpMajor, fs: FS, audit: () => {} } })
   }
 
   it('two pending files: ONE pg_dump under the migration lock before the first BEGIN (DDL log empty), one `created` line; nothing pending: no dump', async () => {

@@ -37,7 +37,7 @@ import { KERNEL_ROOT } from '../lifecycle/platform.js'
 import type { Exporter } from '../lifecycle/types.js'
 import { loadBaselinePhaseFor } from '../phase.js'
 import { runMigrations } from '../runner.js'
-import { composePreApply, dumpHook, scopeOf } from './hook.js'
+import { composePreApply, dumpHook, scopeOf, type DumpHookOptions, type PreApply } from './hook.js'
 import { DumpError } from './ledger.js'
 import { takeDump, type DumpFs } from './take.js'
 
@@ -117,6 +117,15 @@ export function dumpTools(url: URL, container: string | undefined): { exporter: 
   return { exporter, pgDumpMajor: async () => parsePgDumpMajor(await capture([...pgDump, '--version'])) }
 }
 
+/**
+ * The ONE preApply of `migrate`: TASK-029's chain check first, then the dump.
+ * The order is the guarantee that a chain-refused run takes no dump; the
+ * specs drive this function, so a swapped order is caught.
+ */
+export function migratePreApply(o: { chainFiles: string[]; log?: (line: string) => void; dump: DumpHookOptions }): PreApply {
+  return composePreApply(chainPreApply({ chainFiles: o.chainFiles, ...(o.log ? { log: o.log } : {}) }), dumpHook(o.dump))
+}
+
 interface Chain {
   id: string
   database: string
@@ -162,9 +171,10 @@ async function migrate(flags: Map<string, string>, env: NodeJS.ProcessEnv, io: C
       phaseFor: loadBaselinePhaseFor(chainId, root),
       log,
       hooks: {
-        preApply: composePreApply(
-          chainPreApply({ chainFiles: chainFileNames(chainId, { root }), log }),
-          dumpHook({
+        preApply: migratePreApply({
+          chainFiles: chainFileNames(chainId, { root }),
+          log,
+          dump: {
             dir: env.GREMION_MIGRATION_DUMP_DIR,
             release,
             exporter: tools.exporter,
@@ -172,8 +182,8 @@ async function migrate(flags: Map<string, string>, env: NodeJS.ProcessEnv, io: C
             audit: (l) => io.out(l),
             ...(deps.fs ? { fs: deps.fs } : {}),
             ...(deps.now ? { now: deps.now } : {}),
-          }),
-        ),
+          },
+        }),
       },
     })
     io.out(`MIGRATE-RESULT chain=${chainId} release=${release} applied=${r.applied.length} already=${r.alreadyApplied}${r.applied.length === 0 ? ' dump=none' : ''}`)
