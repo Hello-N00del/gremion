@@ -104,7 +104,8 @@ describe('schemaGate: state ahead (TASK-075, TRD-361)', () => {
     { filename: '001_a.sql', phase: 'expand' },
     { filename: '002_b.sql', phase: 'expand' },
   ]
-  const gate = (rows: Row[], lines: string[] = [], releaseRef: string | undefined = R) =>
+  // null (not undefined, which a default parameter swallows) = a gate with no releaseRef
+  const gate = (rows: Row[], lines: string[] = [], releaseRef: string | null = R) =>
     schemaGate({ dir, openDb: async () => ledgerDb(rows), log: (l) => lines.push(l), cacheTtlMs: 60_000, ...(releaseRef ? { releaseRef } : {}) })
 
   it('{1,2,3 expand} against manifest {1,2} is served, and logged once per TTL', async () => {
@@ -126,7 +127,7 @@ describe('schemaGate: state ahead (TASK-075, TRD-361)', () => {
   })
 
   it('a contract row with no releaseRef on the gate is 503', async () => {
-    expect(await gate([...both, { filename: '003_c.sql', phase: 'contract', contract_after: 'dist-v0.0.1' }], [], undefined).check(A)).toMatchObject({ ok: false, reason: 'diverged' })
+    expect(await gate([...both, { filename: '003_c.sql', phase: 'contract', contract_after: 'dist-v0.0.1' }], [], null).check(A)).toMatchObject({ ok: false, reason: 'diverged' })
   })
 
   it('{1,3 expand} against manifest {1,2,4}-shaped: an extra row below the head, or a pending file, is 503', async () => {

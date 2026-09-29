@@ -9,8 +9,10 @@ import { afterAll, describe, expect, it } from 'vitest'
 import type { Sql } from '@gremion/db'
 import { readVerifiedMigrations } from '../manifest.js'
 import { tenantModuleDbName } from '../names.js'
+import { loadBaselinePhaseFor, resolvePhase } from '../phase.js'
 import { splitStatements } from '../strip-outer-transaction.js'
 import * as lifecycle from './index.js'
+import { KERNEL_ROOT, PLATFORM_CHAIN } from './platform.js'
 import {
   assertTenantModuleTarget,
   disableModule,
