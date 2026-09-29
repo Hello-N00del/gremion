@@ -1,0 +1,7 @@
+services:
+  web:
+    # A first-party build: service carries the release tag; the pins layer
+    # swaps it for a digest at release time.
+    build:
+      context: .
+    image: ghcr.io/hello-n00del/gremion-web:${IMAGE_TAG:?IMAGE_TAG required}

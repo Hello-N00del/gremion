@@ -1,5 +1,5 @@
 [Unit]
-Description=Gremion nightly backup (databases, volumes, buckets, etc)
+Description=Gremion nightly backup (databases, volumes, etc)
 Documentation=file:${GREMION_ROOT}/current/docs/ops/host-tooling.md
 After=docker.service
 Requires=docker.service

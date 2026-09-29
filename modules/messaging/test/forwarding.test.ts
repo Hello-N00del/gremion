@@ -15,7 +15,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { checkGuard } from '../src/http/auth.ts'
 import { createMatrixClient, matrixBaseUrl } from '../src/matrix/matrix-client.ts'
-import { mintLivekitToken, roomNameFromMatrixId, dmRoomName } from '../src/livekit/livekit-client.ts'
+import { mintLivekitToken, roomNameFromMatrixId, dmRoomName, livekitRoomNamespace } from '../src/livekit/livekit-client.ts'
 import { resolveMatrixCreds } from '../src/matrix/matrix-creds.ts'
 import { createSynapseAdmin } from '../src/matrix/synapse-admin.ts'
 import { corsHeaders, sfuTokenResponse, RoomMembershipError } from '../src/livekit/livekit-jwt.ts'
@@ -113,10 +113,14 @@ describe('livekit forwarding — mintLivekitToken signs a room-pinned grant', ()
   })
 
   it('applies the per-tenant room namespace (tenant-header config → room name)', () => {
-    // Default tenant: byte-identical room names (no prefix).
-    expect(roomNameFromMatrixId('default', '!abc123:matrix.example.com')).toBe('stura-room-abc123')
-    // Non-default tenant: t.<slug>. prefix so rooms cannot collide across tenants.
+    // TASK-042 TDD 14 (PRD-PLAT-012): every tenant is equal - a tenant whose
+    // slug happens to be `default` gets the same t.<slug>. prefix as any other,
+    // so rooms cannot collide across tenants.
+    expect(livekitRoomNamespace('default')).toBe('t.default.')
+    expect(livekitRoomNamespace('kreis')).toBe('t.kreis.')
+    expect(roomNameFromMatrixId('default', '!abc123:matrix.example.com')).toBe('t.default.stura-room-abc123')
     expect(roomNameFromMatrixId('acme', '!abc123:matrix.example.com')).toBe('t.acme.stura-room-abc123')
+    expect(dmRoomName('default', '@a:s', '@b:s')).toMatch(/^t\.default\.stura-dm-[0-9a-f]{16}$/)
     expect(dmRoomName('acme', '@a:s', '@b:s')).toMatch(/^t\.acme\.stura-dm-[0-9a-f]{16}$/)
   })
 })

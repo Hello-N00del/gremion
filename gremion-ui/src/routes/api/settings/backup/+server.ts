@@ -6,7 +6,7 @@ import type { SessionUser } from '$lib/auth/types'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname } from 'node:path'
 import { env } from '$env/dynamic/private'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { getTenant } from '$lib/server/tenant/context'
 import { randomUUID } from 'node:crypto'
 
 interface BackupStep {
@@ -24,8 +24,10 @@ interface BackupRun {
   steps: BackupStep[]
 }
 
+// TASK-042: the backup log dir is the REQUEST tenant's config dir (its
+// configPath, /data/<slug>/config.json), never a deployment-global CONFIG_PATH.
 function getConfigDir(): string {
-  return (defaultTenantEnv('CONFIG_PATH') ?? '/app/config/config.json').replace(/\/[^/]+$/, '')
+  return getTenant().configPath.replace(/\/[^/]+$/, '')
 }
 
 function getBackupLogsDir(): string {

@@ -9,7 +9,7 @@ import { forEachActiveTenant } from '$lib/server/tenant/worker-fleet'
 import { drainInstagramPublishOps } from './instagram/drain'
 import { drainScheduledPublishes } from './worker'
 import { makeLogTracer, noopTracer } from '$lib/server/ports/tracer'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { platformEnv } from '$lib/server/env/platform-env'
 import { startContentAuditConsumer, CONTENT_AUDIT_WORKER } from '$lib/server/events/content-audit-consumer'
 import { superviseWorker, markWorkerOff } from '$lib/server/events/consumer-state'
 
@@ -63,7 +63,9 @@ if ((process.env.CONTENT_BACKEND ?? 'inprocess') !== 'service') {
 // (correlationId is per-envelope in the span attributes, not the tracer's bind
 // point for this long-lived consumer).
 registerServerInitHook(async () => {
-  const natsUrl = defaultTenantEnv('NATS_URL')
+  // TASK-042 (Q3, Q4): NATS_URL is deployment-global - read via platformEnv,
+  // never through the deleted default-tenant env family.
+  const natsUrl = platformEnv('NATS_URL')
   if (!natsUrl) {
     console.info('[content-audit-consumer] NATS_URL not set — consumer off')
     markWorkerOff(CONTENT_AUDIT_WORKER, 'NATS_URL not set')

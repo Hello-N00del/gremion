@@ -158,21 +158,20 @@ export const IMPORT_RULES: ImportRule[] = [
     allow: [],
   },
   {
-    id: 'no-setup-health-to-feature-module',
+    id: 'no-setup-api-to-feature-module',
     description:
-      'boundary rule A3c S2: the setup-wizard health route must never import a feature ' +
-      "module. The Synapse + Nextcloud credential probes (were $lib/server/messages/" +
-      'synapse-admin + $lib/server/files/nextcloud-client imports) are now module-' +
-      'contributed setup-health probes on the runtime-registry — the route iterates ' +
-      'getSetupHealthProbes(). This guard regression-protects the inversion: a setup-' +
-      'health→feature import is a violation.',
-    sourceDirs: ['src/routes/api/setup/health'],
+      'boundary rule A3c S2: the setup API routes must never import a feature module. ' +
+      'The setup-wizard health route this rule was written for is gone (TASK-042 Q1); ' +
+      'its credential probes stay module-contributed on the runtime-registry. The rule ' +
+      'now covers what is left of src/routes/api/setup (seed, test-smtp), so a ' +
+      'setup→feature import is still a violation and the scan never collects zero files.',
+    sourceDirs: ['src/routes/api/setup'],
     sourceExempt: [],
     forbiddenTargets: [
       'src/lib/server/finance', 'src/lib/server/messages',
       'src/lib/server/files', 'src/lib/server/elections',
     ],
-    // No allow needed: after the inversion the setup-health route imports zero feature modules.
+    // No allow needed: the setup API routes import zero feature modules.
     allow: [],
   },
 ]

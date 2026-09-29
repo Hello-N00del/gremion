@@ -60,8 +60,8 @@ export async function migrateTenant(tenant: FleetTenantRef): Promise<FleetMigrat
       // explicit scope (readConfig reads THIS tenant's config.json): a failure
       // throws, is caught below, and travels in the outcome → readiness records
       // the tenant `failed` (readiness.ts) → resolve.ts serves a TENANT-SCOPED
-      // 503 (other tenants untouched), never a blank render. The default tenant
-      // (materialized config.json with real brand values) passes unchanged.
+      // 503 (other tenants untouched), never a blank render. A tenant with a
+      // materialized config.json (real brand values) passes unchanged.
       assertBrandIdentityComplete(readConfig(ctx), tenant.slug)
       return readLastApplied()
     })

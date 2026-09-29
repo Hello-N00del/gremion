@@ -1,8 +1,8 @@
 // src/lib/server/tenant/secrets.ts
 // P2.1a — secret-ref resolver (spec §3.1: registry stores secret REFERENCES,
 // never raw passwords). Two schemes: `file:<path>` (Docker secret / mounted
-// file) and `env:<VAR>` (used by the `default` tenant so tenant #1 keeps its
-// existing env secrets byte-identically). Fail-closed: unknown scheme or
+// file) and `env:<VAR>` (the provisioner writes file: refs only; since TASK-042
+// env: refs come from test fixtures and hand-bound rows). Fail-closed: unknown scheme or
 // missing env var throws — never returns an empty secret silently.
 import { readFileSync } from 'node:fs'
 import { posix } from 'node:path'

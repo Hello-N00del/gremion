@@ -1,19 +1,37 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { env } from '$env/dynamic/private'
-import { readConfig } from '$lib/server/config'
 import { z } from 'zod'
 import nodemailer from 'nodemailer'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
-import { validateSetupToken } from '$lib/server/setup-token'
-import { requireSetupRateLimit } from '$lib/server/rate-limit'
+import { hasRole, Role } from '$lib/auth'
+import type { SessionUser } from '$lib/auth/types'
+import { requireSetupRateLimit, checkAndIncrement, RATE_LIMITS } from '$lib/server/rate-limit'
+import { currentTenantId } from '$lib/server/tenant/context'
+
+// TASK-042 R28 (Q1 follow-up; decision in docs/security/test-smtp-guard.md):
+// since the setup token is gone this endpoint serves every tenant's IT admins
+// (Settings -> E-Mail), not only the operator before setup. The brief keeps
+// that grant, so the oracle it exposes is narrowed instead:
+//   - SMTP ports only. An SMTP test never needs another port, and a body-chosen
+//     port against a public host is a port scanner run from the platform's
+//     address. 1025 (the usual local mail-catcher port) only under the
+//     SMTP_TEST_ALLOW_PRIVATE opt-in, the same switch that admits private relays.
+//   - a per-USER cap on top of the per-IP one (below), so an admin rotating
+//     client addresses cannot lift the 5/hour bound.
+const SMTP_PORTS: ReadonlySet<number> = new Set([25, 465, 587, 2525])
+const MAIL_CATCHER_PORT = 1025
+
+function isAllowedSmtpPort(port: number, allowPrivate: boolean): boolean {
+  return SMTP_PORTS.has(port) || (allowPrivate && port === MAIL_CATCHER_PORT)
+}
 
 // The rate limit below bounds how OFTEN this endpoint can be used as an
-// outbound oracle, but not WHERE it points. A caller holding only the setup
-// token could aim it at a cloud metadata address or at any service on the host
-// network and read the connection outcome back out of the error string. Refuse
-// those targets before nodemailer opens a socket.
+// outbound oracle, but not WHERE it points. A caller (today: any tenant's IT
+// admin) could aim it at a cloud metadata address or at any service on the
+// host network and read the connection outcome back out of the error string.
+// Refuse those targets before nodemailer opens a socket.
 //
 // The guard decides on the CANONICAL BYTES of an address, not on one of its
 // spellings. `::ffff:7f00:1`, `0:0:0:0:0:ffff:127.0.0.1` and `::ffff:127.0.0.1`
@@ -22,9 +40,9 @@ import { requireSetupRateLimit } from '$lib/server/rate-limit'
 // guard has no "unrecognised, therefore fine" branch.
 //
 // There is NO host allowlist. Exempting `config.smtp.host` would not work:
-// PATCH /api/setup/config writes that value under the SAME setup token this
-// endpoint accepts, so the "operator's own choice" is in fact attacker-supplied
-// and two requests re-open the metadata address. The env half (EMAIL_HOST /
+// the same tenant IT admin who calls this endpoint writes that value
+// (Settings -> E-Mail), so the "operator's own choice" is caller-supplied and
+// two requests would re-open the metadata address. The env half (EMAIL_HOST /
 // SMTP_HOST) is dead anyway — neither name exists in the gremion-ui container.
 // The only escape hatch is SMTP_TEST_ALLOW_PRIVATE, and it widens the ADDRESS
 // PREDICATE for private ranges instead of short-circuiting the whole guard:
@@ -46,18 +64,12 @@ const DNS_TIMEOUT_MS = 5000
 const BLOCKED_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.home.arpa']
 
 /**
- * Operator-facing remediation for a refusal. BOTH in-repo SMTP surfaces render
- * it — `routes/setup/steps/Step4Smtp.svelte` (first-run wizard) and
- * `routes/settings/tabs/TabEmail.svelte` (Settings → E-Mail) — so an operator
- * pointing at an internal mail catcher is told what to do instead of
- * dead-ending on a bare refusal.
- *
- * ⚠ Neither surface can actually reach this endpoint today: POST below returns
- * 401 without an `X-Setup-Token` header that no `.svelte` sends, and 404 once
- * `setup_complete` is true — which Settings → E-Mail always is. That is a
- * PRE-EXISTING product defect of the setup-token auth model, not a property of
- * this guard, and this change deliberately does not alter that model. See
- * docs/security/test-smtp-guard.md.
+ * Operator-facing remediation for a refusal. The in-repo SMTP surface
+ * `routes/settings/tabs/TabEmail.svelte` (Settings → E-Mail) renders it, so an
+ * operator pointing at an internal mail catcher is told what to do instead of
+ * dead-ending on a bare refusal. (TASK-042 Q1: the first-run wizard and its
+ * token are gone; the endpoint is gated by the session plus Role.ITAdmin, so
+ * that surface reaches it. See docs/security/test-smtp-guard.md.)
  *
  * The text names the exact rule the predicate below implements: the opt-in
  * widens RFC1918 and IPv6 ULA only.
@@ -339,7 +351,7 @@ async function resolveSmtpTarget(host: string): Promise<SmtpTarget> {
   return { allowed: true, connectHost: preferred.address, servername: name }
 }
 
-// Best-effort IP extraction — mirrors routes/api/setup/config/+server.ts.
+// Best-effort IP extraction for the per-IP rate limit.
 // getClientAddress() exists in production; partial test events may omit it.
 function clientIp(event: { getClientAddress?: () => string }): string {
   try {
@@ -359,19 +371,29 @@ const smtpTestSchema = z.object({
 })
 
 export const POST: RequestHandler = async (event) => {
-  const { request } = event
-  // #257-3: rate-limit BEFORE token validation so wrong-token attempts still
-  // count, matching the config/admins setup endpoints. This endpoint also opens
-  // an outbound SMTP connection to a body-supplied host:port, so the cap also
-  // bounds its use as an SSRF/port-probe oracle during the pre-setup window.
+  const { request, locals } = event
+  // #257-3: rate-limit BEFORE the auth check so refused attempts still count.
+  // This endpoint opens an outbound SMTP connection to a body-supplied
+  // host:port, so the cap also bounds its use as an SSRF/port-probe oracle.
   const limited = requireSetupRateLimit(clientIp(event))
   if (limited) return limited
-  if (!validateSetupToken(request.headers.get('X-Setup-Token'))) {
-    return json({ success: false, error: 'Invalid or missing setup token' }, { status: 401 })
+  // TASK-042 Q1 (PRD-IDN-005 [D R18-1]; OWASP 2021 A01/A05): the first-run
+  // wizard and its bearer token are gone. The session plus Role.ITAdmin gates
+  // this endpoint, exactly as api/settings/backup does; the authGuard already
+  // refuses an unauthenticated /api/ request, and this is the handler's own
+  // deny-by-default copy of that check.
+  const session = await locals.auth()
+  const sessionUser = session?.user as SessionUser | undefined
+  if (!sessionUser) {
+    return json({ success: false, error: 'Unauthenticated' }, { status: 401 })
   }
-  const config = readConfig()
-  if (config.setup_complete) {
-    return json({ success: false, error: 'Setup already complete' }, { status: 404 })
+  if (!hasRole(sessionUser.roles, Role.ITAdmin)) {
+    return json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  // TASK-042 R28: the per-USER cap (same budget as the per-IP one above).
+  const { limit, windowMs } = RATE_LIMITS.setup
+  if (!checkAndIncrement(`${currentTenantId()}|setup:test-smtp-user:${sessionUser.id}`, limit, windowMs)) {
+    return json({ success: false, error: 'Rate limit exceeded' }, { status: 429, headers: { 'Retry-After': '60' } })
   }
 
   const body = await request.json()
@@ -384,6 +406,14 @@ export const POST: RequestHandler = async (event) => {
   }
 
   const { host, port, user, password, from_address, to_address } = parsed.data
+
+  // TASK-042 R28: SMTP ports only, decided before any DNS lookup or socket.
+  if (!isAllowedSmtpPort(port, env.SMTP_TEST_ALLOW_PRIVATE === '1')) {
+    return json(
+      { success: false, error: 'SMTP-Port ist nicht zugelassen (erlaubt: 25, 465, 587, 2525)' },
+      { status: 400 },
+    )
+  }
 
   // Refuse internal/metadata targets BEFORE a transport (and therefore a socket)
   // exists, so no timing or error-string difference leaks the probe result.

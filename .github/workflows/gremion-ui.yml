@@ -72,20 +72,19 @@ jobs:
       CALDAV_URL: http://localhost/remote.php/dav
       DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/gremion
       # ── Multi-tenant control plane (#285 / G-099) ──────────────────────────
-      # CONTROL_DATABASE_URL / CONFIG_PATH / GREMION_DISABLE_SEEDS /
+      # CONTROL_DATABASE_URL / TENANT_DATA_ROOT / GREMION_DISABLE_SEEDS /
       # KEYCLOAK_ADMIN_CLIENT_SECRET are set at STEP level on the two steps that
-      # need them (the `pnpm migrate` seed step + the `pnpm preview` boot) — NOT
-      # here at job level. The `Unit tests` step must run with CONTROL_DATABASE_URL
-      # UNSET: control-db.test.ts asserts getControlDb() throws "CONTROL_DATABASE_URL
-      # not configured" when it is absent, and a job-level value caches a control
-      # connection that defeats that test.
+      # need them (the `pnpm migrate:test-fixture` seed step + the `pnpm preview`
+      # boot) — NOT here at job level. The `Unit tests` step must run with
+      # CONTROL_DATABASE_URL UNSET: control-db.test.ts asserts getControlDb()
+      # throws "CONTROL_DATABASE_URL not configured" when it is absent, and a
+      # job-level value caches a control connection that defeats that test.
       # Tell playwright.config.ts to stamp x-forwarded-host on every smoke request
-      # (see the "Run Playwright smoke suite" step). Since TASK-041 the resolver
-      # looks the WHOLE host up in tenant_domain and the default tenant binds no
-      # host (TRD-075), so this host resolves only once the smoke setup binds it
-      # via addTenantDomain (TASK-041 Q8; TASK-042's fixture factory). Actions
-      # are off; this comment records the gap, the job is not re-run here.
-      SMOKE_TENANT_HOST: default.localhost.localdomain
+      # (see the "Run Playwright smoke suite" step). TASK-042: the kernel boots
+      # with ZERO tenants; the seed step creates the harness fixture tenant
+      # (createTestTenant, slug `fixture`) whose PRIMARY tenant_domain host is
+      # this one, so the resolver (TASK-041: the WHOLE host) selects it.
+      SMOKE_TENANT_HOST: fixture.test
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -144,21 +143,28 @@ jobs:
         run: pnpm build
 
       # #285 / G-099: stand up the control plane the resolver needs. Mirrors the
-      # Integration Tests (DB) job: create the `control` DB, then `pnpm migrate`
-      # (control migrations -> register the `default` tenant -> fleet-migrate its
-      # data plane inside runWithTenant). After this the resolver can build an
-      # ACTIVE TenantContext for the default-tenant x-forwarded-host, so the smoke
-      # `/` and `/finance` requests resolve a tenant instead of 404-ing the apex.
+      # Integration Tests (DB) job and its local twin
+      # scripts/verify/suites/integration.mjs: create the `control` DB and the
+      # gremion_public_reader role migration 058 requires, then
+      # `pnpm migrate:test-fixture` (control migrations -> createTestTenant
+      # `fixture` with its primary host fixture.test -> fleet-migrate its data
+      # plane inside runWithTenant). TASK-042: boot and `pnpm migrate` register
+      # NO tenant, so without this step every smoke request 404s. After it the
+      # resolver builds an ACTIVE TenantContext for SMOKE_TENANT_HOST, so the
+      # smoke `/` and `/finance` requests resolve a tenant.
       # Runs AFTER `pnpm build` because prebuild generates the migration manifests
       # (build-migration-manifest.mjs) that runMigrations() G-012-verifies.
       - name: Create control database
-        run: psql "postgres://gremion:gremion_test@localhost:5432/postgres" -c 'CREATE DATABASE control'
+        run: |
+          psql "postgres://gremion:gremion_test@localhost:5432/postgres" -c 'CREATE DATABASE control'
+          psql "postgres://gremion:gremion_test@localhost:5432/gremion" \
+            -c "CREATE ROLE gremion_public_reader LOGIN PASSWORD '$(openssl rand -hex 16)'"
 
-      - name: Seed control plane + default tenant (G-099 resolver dependency)
-        run: pnpm migrate
+      - name: Seed control plane + fixture tenant (G-099 resolver dependency)
+        run: pnpm migrate:test-fixture
         env:
           CONTROL_DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/control
-          CONFIG_PATH: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/default-config.json
+          TENANT_DATA_ROOT: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/tenant-data
           GREMION_DISABLE_SEEDS: 'true'
           KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
 
@@ -195,8 +201,9 @@ jobs:
           # `pnpm preview` boots the app, which runs runMigrations() + serves the
           # resolver — so the boot needs the same control-plane env as the migrate
           # step (set here, not job-level, to keep the Unit tests step clean).
+          # TENANT_DATA_ROOT holds the fixture tenant's /<slug>/config.json.
           CONTROL_DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/control
-          CONFIG_PATH: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/default-config.json
+          TENANT_DATA_ROOT: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/tenant-data
           GREMION_DISABLE_SEEDS: 'true'
           KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
 
@@ -206,7 +213,7 @@ jobs:
           PLAYWRIGHT_BASE_URL: http://localhost:4173
           # #285 / G-099: playwright.config.ts reads SMOKE_TENANT_HOST and stamps
           # it as x-forwarded-host on every request, so the resolver selects the
-          # seeded `default` tenant for `/` and `/finance` (302 -> /auth/login).
+          # seeded `fixture` tenant for `/` and `/finance` (302 -> /auth/login).
           SMOKE_TENANT_HOST: ${{ env.SMOKE_TENANT_HOST }}
 
       - name: Stop preview server
@@ -251,19 +258,22 @@ jobs:
     env:
       DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/gremion
       CONTROL_DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/control
-      # The migrate step is a standalone tsx process (NOT vitest), so it does not
-      # load vitest.integration.config.ts. It mirrors boot's fleet migration,
-      # which resolves the default tenant's CONFIG_PATH + KC/auth env. These
-      # values match vitest.integration.config.ts's defaults so the migrate step
-      # and the test run share one tenant context. GREMION_DISABLE_SEEDS keeps
-      # runMigrations() from applying the dev *_seed.sql files (they reference
-      # dev-realm UUIDs the harness doesn't populate).
-      CONFIG_PATH: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/default-config.json
+      # Mirrors the local twin scripts/verify/suites/integration.mjs
+      # (integrationVitestEnv). The migrate step is a standalone tsx process (NOT
+      # vitest), so it does not load vitest.integration.config.ts; these values
+      # match that config's defaults so the migrate step and the test run share
+      # one fixture tenant. TASK-042: there is no default tenant and nothing
+      # reads AUTH_KEYCLOAK_ISSUER/BASE or CONFIG_PATH; every tenant's config is
+      # TENANT_DATA_ROOT/<slug>/config.json. GREMION_PRODUCTION_STACK=none: the
+      # integration config refuses to load while it is unset (TASK-028 D2), and
+      # this job's database is its own service container. GREMION_DISABLE_SEEDS
+      # keeps runMigrations() from applying the dev *_seed.sql files (they
+      # reference dev-realm UUIDs the harness doesn't populate).
+      GREMION_PRODUCTION_STACK: none
+      TENANT_DATA_ROOT: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/tenant-data
       GREMION_DISABLE_SEEDS: 'true'
       KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
       AUTH_KEYCLOAK_SECRET: test-ui-client-secret
-      AUTH_KEYCLOAK_ISSUER: https://council.example/auth/realms/gremion
-      AUTH_KEYCLOAK_BASE: https://council.example/auth/realms/gremion
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -279,18 +289,25 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Create control database
-        run: psql "postgres://gremion:gremion_test@localhost:5432/postgres" -c 'CREATE DATABASE control'
+        # ... and the gremion_public_reader role migrations/058 aborts without
+        # (init-databases.sh creates it on a real deployment; the local twin
+        # creates it the same way). Its password is never read back.
+        run: |
+          psql "postgres://gremion:gremion_test@localhost:5432/postgres" -c 'CREATE DATABASE control'
+          psql "postgres://gremion:gremion_test@localhost:5432/gremion" \
+            -c "CREATE ROLE gremion_public_reader LOGIN PASSWORD '$(openssl rand -hex 16)'"
 
-      - name: Apply migrations (control plane + default-tenant data fleet)
-        # `pnpm migrate` mirrors hooks.server.ts boot(): control migrations →
-        # register the `default` tenant → fleet-migrate it inside runWithTenant
-        # (getDb() is fail-closed post-P2.1b, so the data plane can only migrate
-        # inside a tenant scope). It still keeps the A-016 path — the fleet calls
-        # runMigrations(), which does SHA-256 manifest verification (G-012) +
-        # atomic schema_migrations bookkeeping (G-078). This now also runs the
-        # control migrations, so the old separate `pnpm migrate:control` step is
-        # redundant and has been removed.
-        run: pnpm migrate
+      - name: Apply migrations (control plane + fixture-tenant data plane)
+        # TASK-042 (zero-tenant boot): `pnpm migrate` registers NO tenant and on
+        # this empty registry would migrate zero data planes. The harness step
+        # `pnpm migrate:test-fixture` (scripts/migrate-test-fixture.mjs) runs
+        # the control migrations, creates the fixture tenant the only way a
+        # kernel suite may (createTestTenant: slug `fixture`, host fixture.test,
+        # data plane = DATABASE_URL) and fleet-migrates it inside runWithTenant
+        # (getDb() is fail-closed post-P2.1b). It keeps the A-016 path: the fleet
+        # calls runMigrations(), which does SHA-256 manifest verification
+        # (G-012) + atomic schema_migrations bookkeeping (G-078).
+        run: pnpm migrate:test-fixture
 
       - name: Integration tests
         run: pnpm test:integration
