@@ -33,7 +33,7 @@
 //   - The scratch directory is unique to this run; teardown removes only it.
 import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { REPO_ROOT } from './helpers.js'
 
@@ -48,8 +48,8 @@ const PLANNER = ['edge', 'plan'].join('-')
 // fraction that three lanes can actually reach.
 const LANES = 3
 const GIT_TIMEOUT_MS = 30_000
-const HYGIENE_TIMEOUT_MS = 90_000
-const SETUP_TIMEOUT_MS = 200_000
+const HYGIENE_TIMEOUT_MS = 600_000
+const SETUP_TIMEOUT_MS = 1_400_000
 
 // The tree copies belong under the worktree's own git-excluded scratch space,
 // never under the OS temp dir (house MEDIUM finding: hygiene-j scratch trees).
@@ -57,11 +57,35 @@ const SETUP_TIMEOUT_MS = 200_000
 // two concurrent runs never share (or delete) each other's trees.
 const SCRATCH_ROOT = join(REPO_ROOT, '.scratch', 'hygiene-j')
 
-/** The child environment: the parent's, minus every GIT_* variable. */
-function childEnv(): NodeJS.ProcessEnv {
+/**
+ * The child environment: the parent's, minus every GIT_* variable. With
+ * `binFirst`, that directory is put in front of PATH (under whatever case the
+ * parent spells the key, so Windows never sees two PATH variants).
+ */
+function childEnv(binFirst?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(process.env)) if (!/^GIT_/i.test(k)) env[k] = v
+  if (binFirst) {
+    const key = Object.keys(env).find((k) => /^path$/i.test(k)) ?? 'PATH'
+    env[key] = env[key] ? `${binFirst}${delimiter}${env[key]}` : binFirst
+  }
   return env
+}
+
+// Where the hygiene run's time goes (R26-FLAKES, R28; one run on the real
+// tree, idle, every synchronous child timed): 29.5 s in all, of which
+// `bats --version` (check a9: bats is runnable from PATH) took 17.3 s -- on
+// Windows that .cmd shim cold-starts a bash -- git grep x8 2.0 s, git submodule
+// status 1.7 s, kubectl kustomize x5 1.6 s, git ls-files x4 0.6 s. This file
+// asserts only the j lines and never a9, so every hygiene run here gets a stub
+// `bats` first on PATH that answers `--version` at once. Only the tool probe
+// is stubbed: the script, the tree it scans and every j check are the real ones.
+// The stub leaves a `used` marker, so the last test proves it was the bats the
+// runs resolved (a stub nothing picks up would silently cost the 17 s again).
+function writeBatsStub(dir: string): void {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'bats.cmd'), '@type nul > "%~dp0used"\r\n@echo Bats 0.0.0 (hygiene-j stub)\r\n')
+  writeFileSync(join(dir, 'bats'), '#!/bin/sh\n: > "$(dirname "$0")/used"\necho "Bats 0.0.0 (hygiene-j stub)"\n', { mode: 0o755 })
 }
 
 interface Exit {
@@ -73,13 +97,13 @@ interface Exit {
   stdout: string
 }
 
-function run(cmd: string, args: string[], cwd: string, timeoutMs: number): Promise<Exit> {
+function run(cmd: string, args: string[], cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv = childEnv()): Promise<Exit> {
   return new Promise((resolve) => {
     let stdout = ''
     let stderr = ''
     let error: Error | null = null
     let timedOut = false
-    const child = spawn(cmd, args, { cwd, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    const child = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     child.stdout.setEncoding('utf8').on('data', (d: string) => (stdout += d))
     child.stderr.setEncoding('utf8').on('data', (d: string) => (stderr += d))
     const timer = setTimeout(() => {
@@ -115,7 +139,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
  */
 async function runHygiene(tree: string): Promise<string[]> {
   await git(tree, ['add', '-A'])
-  const e = await run(process.execPath, ['scripts/kernel-hygiene-check.mjs'], tree, HYGIENE_TIMEOUT_MS)
+  const e = await run(process.execPath, ['scripts/kernel-hygiene-check.mjs'], tree, HYGIENE_TIMEOUT_MS, childEnv(join(runDir, 'bin')))
   const reported = /^\[kernel-hygiene\] (OK — \d+ checks passed|\d+\/\d+ check\(s\) FAILED:)/m.test(e.out)
   if (e.error || e.timedOut || e.signal || (e.status !== 0 && e.status !== 1) || !reported) {
     throw new Error(`the hygiene run did not complete: ${describeExit(e)} report=${reported}\n${e.out.slice(-2000)}`)
@@ -223,6 +247,7 @@ async function runCase(lane: Lane, plant: Plant): Promise<Outcome> {
 beforeAll(async () => {
   mkdirSync(SCRATCH_ROOT, { recursive: true })
   runDir = mkdtempSync(join(SCRATCH_ROOT, 'run-'))
+  writeBatsStub(join(runDir, 'bin'))
   const files = (await git(REPO_ROOT, ['ls-files', '-z'])).split('\0').filter(Boolean)
   for (let i = 0; i < LANES; i++) lanes.push(new Lane(join(runDir, `lane-${i}`), files))
   await Promise.all(lanes.map((l) => l.init()))
@@ -339,5 +364,6 @@ describe('kernel hygiene (j) — TDD 8', () => {
     expect([...outcomes.keys()].sort()).toEqual(Object.keys(cases).sort())
     expect(new Set(lanes.map((l) => l.baseline)).size).toBe(1)
     for (const l of lanes) expect(await l.stagedTree()).toBe(l.baseline)
+    expect(existsSync(join(runDir, 'bin', 'used')), 'the hygiene runs never resolved the bats stub').toBe(true)
   })
 })
