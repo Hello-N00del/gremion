@@ -29,6 +29,23 @@ export const BASELINE_DIGEST = '3f2bd952230928b410796c0a948371c6b23e27ee75efdbca
 
 export const CLASSES = ['tenant-store', 'legacy-boot', 'unadopted']
 
+/**
+ * The canaries fixtures/canaries.json must keep (by name). A canary deleted to
+ * quiet the suite is caught here: each one pins a refusal the lint must keep
+ * making (or, for the last, a form it must keep allowing).
+ */
+export const REQUIRED_CANARIES = [
+  'expand-drop-column',
+  'expand-unknown-statement',
+  'expand-index-on-existing-table',
+  'expand-no-lock-timeout',
+  'no-phase-header',
+  'migrate-dml-before-tenant-context',
+  'expand-uuidv7-default',
+  'contract-without-contract-after',
+  'expand-same-file-table',
+]
+
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
 
 export function loadCanaries(path = join(import.meta.dirname, 'fixtures', 'canaries.json')) {
@@ -62,18 +79,20 @@ export function runCanary(c) {
   return got.includes(c.expect) ? null : `canary ${c.name} stopped failing with ${c.expect} (got ${got.length ? got.join(', ') : 'no problem at all'})`
 }
 
-export function runExpandContractSuite({ root = REPO_ROOT, canaries, pinnedDigest = BASELINE_DIGEST } = {}) {
+export function runExpandContractSuite({ root = REPO_ROOT, canaries, canariesPath, pinnedDigest = BASELINE_DIGEST } = {}) {
   const base = { toolMissing: null, skipped: 0 }
   let register
   let lock
   let runners
   let baseline
+  // Only the checked-in set is held to REQUIRED_CANARIES; a spec may inject its own.
+  const fromFile = canaries === undefined
   try {
     register = readJson(join(root, 'scripts', 'migrations', 'ranges.json'))
     lock = readJson(join(root, 'scripts', 'migrations', 'applied.lock.json'))
     runners = readJson(join(root, 'scripts', 'migrations', 'runner', 'chain-runners.json'))
     baseline = readJson(join(root, 'scripts', 'migrations', 'runner', BASELINE_FILE))
-    canaries ??= loadCanaries()
+    canaries ??= loadCanaries(canariesPath)
     if (!Array.isArray(register.chains) || !register.chains.length) throw new Error('ranges.json declares no chain')
     if (!baseline || typeof baseline.chains !== 'object' || baseline.chains === null) throw new Error(`${BASELINE_FILE} has no chains map`)
     if (!runners || typeof runners.chains !== 'object' || runners.chains === null) throw new Error('chain-runners.json has no chains map')
@@ -130,7 +149,11 @@ export function runExpandContractSuite({ root = REPO_ROOT, canaries, pinnedDiges
   }
   check(BASELINE_FILE, bproblems)
 
-  // 3. canaries
+  // 3. canaries: the checked-in set keeps every required one, and each behaves
+  if (fromFile) {
+    const names = new Set(canaries.map((c) => c.name))
+    check('fixtures/canaries.json', REQUIRED_CANARIES.filter((n) => !names.has(n)).map((n) => `required canary ${n} is missing`))
+  }
   for (const c of canaries) {
     const bad = runCanary(c)
     check(`canary ${c.name}`, bad ? [bad] : [])

@@ -50,8 +50,20 @@ describe('expand-contract suite (TDD 3)', () => {
     const canaries = loadCanaries().length
     assert.equal(r.unparseable, false)
     assert.equal(r.failed, 0, r.detail)
-    assert.equal(r.collected, 2 + canaries)
+    // chain-runners.json + the baseline + the required-canary set + each canary
+    assert.equal(r.collected, 3 + canaries)
     assert.match(r.detail, /^linted 0 file\(s\) outside the baseline/)
+  })
+
+  test('a required canary deleted from canaries.json fails the suite (guard drill, R28)', () => {
+    const f = fixture()
+    const kept = loadCanaries().filter((c) => c.name !== 'expand-drop-column')
+    const dir = join(f.root, 'canaries')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'canaries.json'), JSON.stringify({ canaries: kept }))
+    const r = run(f, { canariesPath: join(dir, 'canaries.json') })
+    assert.equal(r.failed, 1, r.detail)
+    assert.match(r.detail, /fixtures\/canaries\.json: required canary expand-drop-column is missing/)
   })
 
   test('a canary that stops failing fails the suite', () => {
