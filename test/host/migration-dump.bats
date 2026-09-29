@@ -263,6 +263,16 @@ seed_live_dump() { # <tag>
     [[ "$output" == *"STATUS: 0 live dump(s)"* ]]
 }
 
+@test "a corrupt ledger fails switched (exit 1, LEDGER_CORRUPT), never reads as no-dump" {
+    seed_live_dump dist-v1.1.0
+    printf 'not json\n' >> "${DUMPS}/ledger.jsonl"
+    run "$TOOL" switched --release dist-v1.1.0
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"LEDGER_CORRUPT"* ]]
+    [[ "$output" != *"no-dump"* ]]
+    [ -n "$(find "$DUMPS" -name '*.dump')" ]
+}
+
 @test "switched with no dump of R is exit 0, no-dump R" {
     make_dump_dir
     run "$TOOL" switched --release dist-v1.1.0
