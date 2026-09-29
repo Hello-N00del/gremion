@@ -66,6 +66,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   // covers unassign (a user who still holds the group via another live
   // assignment keeps it — no over-revoke — and a manually-assigned group like
   // -belege, outside the auto-managed universe, is never touched).
+  // TASK-206-A review round 2: a failed cleanup is REPORTED in the response
+  // (groupsReconciled: false), like revoke — the outgoing holder's removal is
+  // the security-relevant half and must not end in a silent 201.
+  let groupsReconciled = true
+  const summary = (err: unknown) => (err instanceof Error ? `${err.name}: ${err.message}` : String(err))
   try {
     const kc = getKeycloakAdminClientForCurrentTenant()
     const groupIdByName = new Map((await kc.listGroups()).map((g) => [g.name, g.id]))
@@ -79,17 +84,19 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
       try {
         await reconcileUserRoleGroups(existing.user_keycloak_id, kc, groupIdByName)
       } catch (err) {
-        console.error('[governance/roles/assign] outgoing-holder reconcile failed:', err)
+        groupsReconciled = false
+        console.error('[governance/roles/assign] outgoing-holder reconcile failed:', summary(err))
       }
     }
     await reconcileUserRoleGroups(parsed.data.userKeycloakId, kc, groupIdByName)
   } catch (err) {
-    console.error('[governance/roles/assign] flat-group reconcile failed:', err)
+    groupsReconciled = false
+    console.error('[governance/roles/assign] flat-group reconcile failed:', summary(err))
   }
 
   const members = await listOrgUnitMembers(params.id)
   const memberIds = members.map((m) => m.user_keycloak_id)
   await scheduleNotifications(assignment, [parsed.data.userKeycloakId, ...memberIds])
 
-  return json({ success: true, data: assignment }, { status: 201 })
+  return json({ success: true, data: assignment, groupsReconciled }, { status: 201 })
 }

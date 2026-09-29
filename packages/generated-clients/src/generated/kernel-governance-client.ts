@@ -1161,6 +1161,8 @@ export interface paths {
                             /** @constant */
                             success: true;
                             data: components["schemas"]["RoleAssignment"];
+                            /** @description false when the assignment was stored but the auto-managed Keycloak groups of the incoming or outgoing holder could not be reconciled (the admin must check them) */
+                            groupsReconciled?: boolean;
                         };
                     };
                 };

@@ -183,3 +183,17 @@ added.
   touched `gremion-ui/src` files found no `$app/stores`, `$app/paths`,
   `$env/dynamic`, `$:` or absolute redirect.
 
+
+## 206-A self-review round 2
+
+| Finding | Fix | Guard | RED before the fix | GREEN |
+|---|---|---|---|---|
+| MEDIUM: assign still only logged a failed reconcile (incl. the outgoing holder's removal) and answered a plain 201 | assign answers `groupsReconciled` like revoke and logs a summary; the contract's assign 201 documents the optional field (G10 regen) | `assign.reconcile.test.ts` (a0), (e) | `× (a0) a clean reconcile reports groupsReconciled: true`, `× (e) a Keycloak failure during reconcile is swallowed — the assignment still succeeds` (flag assertion) | 6/6 |
+
+Round-2 residuals (LOW, not fixed): a vote edit on a withdrawn tally row is
+dropped (the patch body sends none for 'withdrawn'); clearing one of three
+acclamation counts keeps the stored counts instead of a 400; `/beschluesse`
+shows the challenge form to guests, who get a 403 on submit (no member flag in
+the page data); the revoke `reason` bound (4000) is only in the contract's
+description (a `maxLength` would be a breaking change against the branch
+head for the staged-spec gate).

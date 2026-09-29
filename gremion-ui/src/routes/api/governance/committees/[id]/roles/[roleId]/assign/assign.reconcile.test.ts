@@ -124,6 +124,13 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/assign — flat-gr
     _resetRuntimeRegistryForTests()
   })
 
+  it('(a0) a clean reconcile reports groupsReconciled: true', async () => {
+    h.listActiveRoleNamesForUser.mockImplementation(async () => ['Finanzvorstand'])
+    const res = await POST(event(VALID_BODY))
+    expect(res.status, await res.clone().text()).toBe(201)
+    expect((await res.json()).groupsReconciled).toBe(true)
+  })
+
   it('(a) assign grants the mapped groups to the incoming holder', async () => {
     h.listActiveRoleNamesForUser.mockImplementation(async (userId: string) =>
       userId === 'incoming' ? ['Finanzvorstand'] : [],
@@ -226,6 +233,8 @@ describe('POST /api/governance/committees/[id]/roles/[roleId]/assign — flat-gr
     expect(res.status, await res.clone().text()).toBe(201)
     const body = await res.json()
     expect(body.success).toBe(true)
+    // TASK-206-A review round 2: reported, never a silent success.
+    expect(body.groupsReconciled).toBe(false)
     expect(h.createAssignment).toHaveBeenCalled()
     expect(h.scheduleNotifications).toHaveBeenCalled()
     // Nothing could be granted since the group directory lookup itself failed.
