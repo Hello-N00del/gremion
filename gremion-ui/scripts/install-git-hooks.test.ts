@@ -766,8 +766,16 @@ describe('installer CLI hooks-dir resolution', () => {
  *        9.3-26.6 s, median 15.3 s, p95 22.0 s
  *     c) the lint-reaching tests of this file inside a loaded whole-file
  *        vitest run (2 runs): 20-36 s each
- *   The budget below is taken from the WORST series (a), the heaviest box
- *   state seen: 400 s >= 3 x 130 s. Against (b) and (c) it is >= 11x.
+ *     d) the kernel integration gates of 2026-09-28 (whole gremion-ui unit
+ *        project in parallel workers, 10-15 other agents on the box): the
+ *        first lint-reaching commit of this block took 587.9 s in gate
+ *        5c4c4fc (the file's 56 other tests that ran, four more lint-reaching
+ *        commits among them, shared the remaining 33.6 s of its 621.5 s)
+ *   The budget below is taken from the WORST observation, the gate's (d):
+ *   1800 s >= 3 x 587.9 s. It was 400 s (3 x the p95 of series (a)), which
+ *   that gate sample exceeds. These tests are synchronous (spawnSync), so the
+ *   budget is only the pass/fail line vitest applies when the commit returns;
+ *   it adds no wait to a run that finishes sooner.
  *
  * The tail is not in this harness: tracing every process in the chain put
  * 26-96 s of a slow commit inside the tsx child between its start and its
@@ -779,7 +787,7 @@ describe('installer CLI hooks-dir resolution', () => {
  * the hook before pnpm and keep 180 s) — not a global timeout raise. It was a
  * flat 180 s, which a loaded gate exceeded (kernel c2810a8, StuRaOS train 1).
  */
-const LINT_COMMIT_MS = 400_000
+const LINT_COMMIT_MS = 1_800_000
 
 describe('end-to-end rejection (throwaway repo, core.hooksPath)', () => {
   it('blocks a staged boundary-violating import and leaves no commit', () => {
