@@ -42,7 +42,7 @@ export async function open(opts: Record<string, unknown> = {}): Promise<Conn> {
   void (async () => {
     for await (const s of nc.status()) {
       const e = (s as { error?: unknown }).error
-      if (s.type === 'error' && e) errors.push(e instanceof Error ? e.message : String(e))
+      if (s.type === 'error' && e) errors.push(e instanceof Error ? e.message : typeof e === 'string' ? e : JSON.stringify(e))
     }
   })()
   return { nc, errors }
@@ -51,9 +51,10 @@ export async function open(opts: Record<string, unknown> = {}): Promise<Conn> {
 /**
  * A refusal is real only with a positive control first ON THE SAME
  * connection, and only when the server's own violation text arrives -- a
- * timeout, a closed connection or an API error is not a refusal.
+ * timeout, a closed connection or an API error is not a refusal. Returns what
+ * the server said (asserted here to hold spec.text) for the test body to assert.
  */
-export async function refused(c: Conn, spec: { control: () => Promise<unknown>; forbidden: () => Promise<unknown>; text: string }): Promise<void> {
+export async function refused(c: Conn, spec: { control: () => Promise<unknown>; forbidden: () => Promise<unknown>; text: string }): Promise<string> {
   const start = c.errors.length
   await spec.control()
   await c.nc.flush()
@@ -71,10 +72,11 @@ export async function refused(c: Conn, spec: { control: () => Promise<unknown>; 
   for (let i = 0; i < 20 && !c.errors.slice(start).some((e) => e.includes(spec.text)) && !thrown.includes(spec.text); i++) await sleep(25)
   const seen = [...c.errors.slice(start), thrown].filter(Boolean)
   expect(seen.join('\n'), `want the server's "${spec.text}", got: ${seen.length ? seen.join(' | ') : 'nothing (the server accepted it)'}`).toContain(spec.text)
+  return seen.join('\n')
 }
 
-/** A connect that must be refused with the server's Authorization Violation. */
-export async function connectRefused(opts: Record<string, unknown>): Promise<void> {
+/** A connect that must be refused with the server's Authorization Violation; returns the error text. */
+export async function connectRefused(opts: Record<string, unknown>): Promise<string> {
   let err = ''
   try {
     const nc = await connect({ servers: URL, reconnect: false, timeout: 5_000, ...opts })
@@ -83,6 +85,7 @@ export async function connectRefused(opts: Record<string, unknown>): Promise<voi
     err = e instanceof Error ? e.message : String(e)
   }
   expect(err, 'the connection was accepted').toContain('Authorization Violation')
+  return err
 }
 
 /**

@@ -90,38 +90,38 @@ describe('A1 no anonymous access', () => {
   test('A1 no credentials: Authorization Violation', async () => {
     const control = await as(A, 'kernel') // a known key IS admitted
     expect(control.nc.isClosed()).toBe(false)
-    await connectRefused({})
+    expect(await connectRefused({})).toContain('Authorization Violation')
   })
   test('A1 unknown nkey: Authorization Violation', async () => {
     await as(A, 'kernel')
-    await connectRefused({ authenticator: nkeyAuthenticator(createUser().getSeed()) })
+    expect(await connectRefused({ authenticator: nkeyAuthenticator(createUser().getSeed()) })).toContain('Authorization Violation')
   })
 })
 
 describe('A2 one account per tenant', () => {
   test("A2 A's publishing key publishing gremion.<B>.newsletter.x: Permissions Violation", async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: async () => c.nc.publish(newsletterSubject(A, 'send.succeeded'), '{}'),
       forbidden: async () => c.nc.publish(`gremion.${B}.newsletter.x`, '{}'),
       text: `Permissions Violation for Publish to "gremion.${B}.newsletter.x"`,
-    })
+    })).toContain('Permissions Violation')
   })
   test("A2 A's publishing key subscribing gremion.<B>.>: Permissions Violation", async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: async () => c.nc.subscribe('_INBOX_publishing_ta.control'),
       forbidden: async () => c.nc.subscribe(`gremion.${B}.>`),
       text: `Permissions Violation for Subscription to "gremion.${B}.>"`,
-    })
+    })).toContain('Permissions Violation')
   })
   test("A2 A's publishing key subscribing >: Permissions Violation", async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: async () => c.nc.subscribe('_INBOX_publishing_ta.control'),
       forbidden: async () => c.nc.subscribe('>'),
       text: 'Permissions Violation for Subscription to ">"',
-    })
+    })).toContain('Permissions Violation')
   })
   test("A2 B's event never reaches A's NEWSLETTER (A's admin reads it)", async () => {
     const admin = await as(A, 'admin')
@@ -160,47 +160,47 @@ describe('A3 no cross-module access (publishing vs content, tenant A)', () => {
   const infoControl = (c: Conn) => async () => (await jetstreamManager(c.nc)).streams.info('NEWSLETTER')
   test("A3 core publish to content's subjects: Permissions Violation", async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: async () => c.nc.publish(newsletterSubject(A, 'send.failed'), '{}'),
       forbidden: async () => c.nc.publish(contentSubject(A, 'publish.succeeded'), '{}'),
       text: `Permissions Violation for Publish to "${contentSubject(A, 'publish.succeeded')}"`,
-    })
+    })).toContain('Permissions Violation')
   })
   test("A3 core subscribe to content's subjects: Permissions Violation", async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: async () => c.nc.subscribe('_INBOX_publishing_ta.control'),
       forbidden: async () => c.nc.subscribe(`gremion.${A}.content.>`),
       text: `Permissions Violation for Subscription to "gremion.${A}.content.>"`,
-    })
+    })).toContain('Permissions Violation')
   })
   test('A3 consumer create on CONTENT (no flow): Permissions Violation', async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: infoControl(c),
       forbidden: async () => (await jetstreamManager(c.nc)).consumers.add('CONTENT', { name: 't024-a3', ack_policy: AckPolicy.None }),
       text: 'Permissions Violation for Publish to "$JS.API.CONSUMER.CREATE.CONTENT',
-    })
+    })).toContain('Permissions Violation')
   })
   test('A3 DIRECT.GET on CONTENT: Permissions Violation', async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: infoControl(c),
       forbidden: async () => c.nc.request('$JS.API.DIRECT.GET.CONTENT', JSON.stringify({ seq: 1 }), { timeout: 3_000 }),
       text: 'Permissions Violation for Publish to "$JS.API.DIRECT.GET.CONTENT"',
-    })
+    })).toContain('Permissions Violation')
   })
   test('A3 STREAM.MSG.GET on CONTENT: Permissions Violation', async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: infoControl(c),
       forbidden: async () => c.nc.request('$JS.API.STREAM.MSG.GET.CONTENT', JSON.stringify({ seq: 1 }), { timeout: 3_000 }),
       text: 'Permissions Violation for Publish to "$JS.API.STREAM.MSG.GET.CONTENT"',
-    })
+    })).toContain('Permissions Violation')
   })
   test("A3 side door: STREAM.UPDATE of its own NEWSLETTER widened to content's subjects: Permissions Violation", async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: infoControl(c),
       forbidden: async () => {
         const jsm = await jetstreamManager(c.nc)
@@ -208,19 +208,20 @@ describe('A3 no cross-module access (publishing vs content, tenant A)', () => {
         return jsm.streams.update('NEWSLETTER', { ...cfg, subjects: [...cfg.subjects!, `gremion.${A}.content.>`] })
       },
       text: 'Permissions Violation for Publish to "$JS.API.STREAM.UPDATE.NEWSLETTER"',
-    })
+    })).toContain('Permissions Violation')
   })
   test("A3 content's inbox prefix: Permissions Violation", async () => {
     const c = await as(A, 'publishing')
-    await refused(c, {
+    expect(await refused(c, {
       control: async () => c.nc.subscribe('_INBOX_publishing_ta.control'),
       forbidden: async () => c.nc.subscribe(`_INBOX_content_${A}.>`),
       text: `Permissions Violation for Subscription to "_INBOX_content_${A}.>"`,
-    })
+    })).toContain('Permissions Violation')
   })
 })
 
-async function flow(producer: string, consumer: string, stream: keyof typeof STREAMS, subject: string, eventType: string) {
+/** Boots consumer then producer as the callers do; returns the consumer's deliveries of the one event (exactly one, asserted). */
+async function flow(producer: string, consumer: string, stream: keyof typeof STREAMS, subject: string, eventType: string): Promise<string[]> {
   const d = STREAMS[stream]
   const sub = await bootBroker(A, consumer, stream)
   const got: string[] = []
@@ -233,22 +234,24 @@ async function flow(producer: string, consumer: string, stream: keyof typeof STR
   const pub = await bootBroker(A, producer, stream)
   await pub.publish(subject, e)
   for (let i = 0; i < 100 && !got.includes(e.eventId); i++) await sleep(50)
-  expect(got.filter((id) => id === e.eventId), `${consumer} did not receive ${producer}'s ${e.eventId}`).toEqual([e.eventId])
+  const delivered = got.filter((id) => id === e.eventId)
+  expect(delivered, `${consumer} did not receive ${producer}'s ${e.eventId}`).toEqual([e.eventId])
   s.unsubscribe()
+  return delivered
 }
 
 describe('F the current flows deliver, as the callers boot', () => {
   test('F1 kernel -> ORGUNIT -> finance', async () => {
-    await flow('kernel', 'finance', 'ORGUNIT', orgUnitSubject(A, 'upserted'), 'upserted')
+    expect(await flow('kernel', 'finance', 'ORGUNIT', orgUnitSubject(A, 'upserted'), 'upserted')).toHaveLength(1)
   })
   test('F2 publishing -> NEWSLETTER -> kernel', async () => {
-    await flow('publishing', 'kernel', 'NEWSLETTER', newsletterSubject(A, 'send.succeeded'), 'send.succeeded')
+    expect(await flow('publishing', 'kernel', 'NEWSLETTER', newsletterSubject(A, 'send.succeeded'), 'send.succeeded')).toHaveLength(1)
   })
   test('F3 content -> CONTENT -> kernel', async () => {
-    await flow('content', 'kernel', 'CONTENT', contentSubject(A, 'publish.succeeded'), 'publish.succeeded')
+    expect(await flow('content', 'kernel', 'CONTENT', contentSubject(A, 'publish.succeeded'), 'publish.succeeded')).toHaveLength(1)
   })
   test('F4 calendar -> CALENDAR -> kernel', async () => {
-    await flow('calendar', 'kernel', 'CALENDAR', calendarSubject(A, 'event.created'), 'event.created')
+    expect(await flow('calendar', 'kernel', 'CALENDAR', calendarSubject(A, 'event.created'), 'event.created')).toHaveLength(1)
   })
 })
 
@@ -327,7 +330,7 @@ describe.runIf(MODE === 'auth')('I idempotence, additions, eviction (auth broker
     expect(raw.closedAt, 'the server did not drop the socket').toBeDefined()
     expect(raw.closedAt! - t0).toBeLessThan(5_000)
     raw.end()
-    await connectRefused({ authenticator: nkeyAuthenticator(seed), inboxPrefix: `_INBOX_finance_${C}` })
+    expect(await connectRefused({ authenticator: nkeyAuthenticator(seed), inboxPrefix: `_INBOX_finance_${C}` })).toContain('Authorization Violation')
   })
 })
 
@@ -346,11 +349,11 @@ describe.runIf(MODE === 'auth')('SYS is reload-only', () => {
     test(`SYS the reload user on ${label}: Permissions Violation`, async () => {
       const { c, id } = await sys()
       const subject = subj(id)
-      await refused(c, {
+      expect(await refused(c, {
         control: async () => c.nc.request('$SYS.REQ.SERVER.PING', '', { timeout: 3_000 }),
         forbidden: async () => c.nc.request(subject, '{}', { timeout: 3_000 }),
         text: `Permissions Violation for Publish to "${subject}"`,
-      })
+      })).toContain('Permissions Violation')
     })
   }
 })
@@ -385,11 +388,11 @@ describe.runIf(MODE === 'auth')('R1 residual: reply-subject injection within a t
     const jsm = await jetstreamManager(admin.nc)
     const before = (await jsm.streams.info('NEWSLETTER')).state.messages
     const fin = await as(B, 'finance')
-    await refused(fin, {
+    expect(await refused(fin, {
       control: async () => (await jetstreamManager(fin.nc)).streams.info('ORGUNIT'),
       forbidden: async () => fin.nc.publish(`gremion.${B}.newsletter.r1-direct`, '{}'),
       text: `Permissions Violation for Publish to "gremion.${B}.newsletter.r1-direct"`,
-    })
+    })).toContain('Permissions Violation')
     fin.nc.publish('$JS.API.INFO', '', { reply: `gremion.${B}.newsletter.r1` })
     await fin.nc.flush()
     await sleep(300)

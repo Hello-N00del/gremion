@@ -32,7 +32,7 @@ describe('no seed in clear', () => {
     mkdirSync(path.join(TREE, 'secrets/nats/finance'), { recursive: true })
     writeFileSync(path.join(TREE, f), `${new TextDecoder().decode(createUser().getSeed())}\n`, { mode: 0o600 })
     // the ignore rule holds: a plain add refuses it...
-    expect(() => git(TREE, 'add', f)).toThrow()
+    expect(() => git(TREE, 'add', f)).toThrow(/Command failed:.* add secrets\/nats\/finance\/tenant_x\.nk/)
     // ...a force-add is what check-sops must catch
     git(TREE, 'add', '-f', f)
     const after = runSopsCheck(TREE) as { problems: Problem[]; secretFiles: number }
