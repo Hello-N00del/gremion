@@ -46,7 +46,7 @@ export function guardParts({ exec = run, clis = GUARD_CLIS } = {}) {
   return clis.map(({ file, summary }) => {
     const label = `ops/vendor-mail/${file}`
     const res = exec(process.execPath, [path.join(VENDOR_MAIL_DIR, file)], { cwd: REPO_ROOT, env })
-    const out = `${res.stdout}${res.stderr}`
+    const out = String(res.stdout) + String(res.stderr)
     if (res.error) return { label, unparseable: true, detail: `could not start: ${res.error.message}` }
     if (res.code === 0 && summary.test(out)) return { label, collected: 1, passed: 1, failed: 0, skipped: 0 }
     if (res.code === 1) return { label, collected: 1, passed: 0, failed: 1, skipped: 0, detail: tail(out) }

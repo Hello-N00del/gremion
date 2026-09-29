@@ -82,7 +82,7 @@ export const SUITE_REGISTRY = {
         // an unparseable result line is judged below, like no line at all
       }
     }
-    return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `ops/vendor-mail/suite-cli.mjs: exit ${String(res.code ?? res.signal)} without a result line\n${tail(`${res.stdout}${res.stderr}`)}` }
+    return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `ops/vendor-mail/suite-cli.mjs: exit ${String(res.code ?? res.signal)} without a result line\n${tail(String(res.stdout) + String(res.stderr))}` }
   },
   ...UNIT_PART_ENTRIES,
   ...INTEGRATION_PART_ENTRIES,
