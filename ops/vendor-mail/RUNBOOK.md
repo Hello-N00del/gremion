@@ -145,5 +145,52 @@ TASK-038 and gate F2 run `--require`.
   recorded; a customer-realm reset through its own `kc-*` (after TASK-043); one
   alert through `alerts@` (TASK-039); `docs/ops/release-1-waivers.md` gains the
   dated demonstration. Operator items (Q10): IP-B, PTR, port 25.
-- **TASK-015-FU:** `plt.vendor_domain` (DB-MAIL-VENDORDOMAIN) lands with
-  TASK-021's platform migrations; retire `platform@` (G8) after TASK-043.
+- **provision-roles.sh owns the whole secret list** of `system@`, `alerts@`,
+  `platform@` and `roles@`: each run SETS it to the one generated app
+  password (so a rotated-away password stops working), which also removes
+  any app password an operator added to one of those principals by hand. Add
+  none by hand; a sender that needs its own credential gets its own principal
+  (`principals issue`).
+- **TASK-015-FU:** `plt.vendor_domain` (DB-MAIL-VENDORDOMAIN) with
+  `record-posture.mjs`, and retiring `platform@` (G8) after TASK-043. Decided
+  in fix round 2 (2026-09-29) to stay in the FU although TASK-021 is on main
+  (the `platform` chain's `0004` is claimable with
+  `node scripts/migrations/register.mjs claim --chain platform --name plt_vendor_domain`):
+  its TDD item 12 needs a scratch PG18 outside this unit's docker grant, the
+  brief's own split rule sends it to the FU, and nothing on the go-live path
+  (TASK-039, TASK-043) reads `plt.vendor_domain`.
+
+## 6. Upgrading a host rendered before TASK-015
+
+A host whose env files were rendered from the pre-TASK-015 templates has ONE
+`platform_smtp` value in state.env, mail.env, ops.env and the app tier, and
+lacks the split. Its signs: `mail.env` has no `VENDOR_SMTP_PASSWORD`,
+`ALERT_SMTP_PASSWORD` or `VENDOR_MAIL_NODE_IMAGE`; `ops.env`'s
+`ALERT_SMTP_PASSWORD` equals `mail.env`'s `PLATFORM_SMTP_PASSWORD`; `state.env`
+still carries `STALWART_ADMIN_PASSWORD`, `STALWART_API_KEY` and
+`PLATFORM_SMTP_PASSWORD`. `gremion-init-secrets` will not overwrite existing
+files without `--force`, and `--force` regenerates EVERY secret, so it is not
+the upgrade path. `gremion-validate-env --env-file etc/env/mail.env --release
+current/infra/host/mail` names the missing keys (template key parity), and
+`gremion-vendor-mail check-secret-separation --host` fails on the stale
+state.env copies.
+
+1. Take a backup (`gremion-backup --label pre-vendor-mail-split`).
+2. Generate two new 32-character alphanumeric values, one for `system@` and
+   one for `alerts@` -- never reuse the platform value. Add to `mail.env`:
+   `VENDOR_SMTP_PASSWORD=<new vendor value>`,
+   `ALERT_SMTP_PASSWORD=<new alert value>`, and the
+   `VENDOR_MAIL_NODE_IMAGE=` line copied verbatim (digest) from the release's
+   `infra/host/templates/env/mail.env.tmpl`.
+3. In `ops.env`, set `ALERT_SMTP_PASSWORD` to the SAME new alert value (the
+   `alert_smtp` group spans both files), and `ALERT_SMTP_USER` and
+   `ALERT_EMAIL_FROM` to `alerts@<PLATFORM_DOMAIN>`.
+4. Delete `STALWART_ADMIN_PASSWORD`, `STALWART_API_KEY` and
+   `PLATFORM_SMTP_PASSWORD` from `state.env` (nothing reads them there).
+5. Re-run `infra/host/mail/provision-roles.sh --allow-unrestricted` (creates
+   `system@` and `alerts@`, sets each one's password), `infra/host/ops/render-ops.sh`
+   (the Alertmanager SMTP password), restart the ops project, then
+   `gremion-vendor-mail realm-smtp`.
+6. Prove it: `gremion-validate-env` on each env file, `gremion-vendor-mail
+   check-identities`, `check-secret-separation --host`, and
+   `gremion-mail-bringup --assert 3`.

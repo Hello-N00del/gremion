@@ -87,9 +87,12 @@ post-conditions — it would ship to production unfilled and silently.
 
 Every key that names the same `<group>` gets the same generated value, in every
 template. That is how the aliased OIDC secrets, the Stalwart API key shared by
-`state.env`, `mail.env` and `ops.env`, the platform SMTP password shared by four
-files, and the password embedded inside `GREMION_PUBLIC_DB_URL` stay equal
-without a reconciliation step.
+`mail.env` and `ops.env`, the `alerts@` password (`alert_smtp`) shared by
+`mail.env` and `ops.env`, the transitional `platform@` password
+(`platform_smtp`) shared by `mail.env` and the app tier, and the password
+embedded inside `GREMION_PUBLIC_DB_URL` stay equal without a reconciliation
+step. The vendor's own `system@` password (`vendor_smtp`) is in `mail.env`
+only (TASK-015; `ops/vendor-mail/RUNBOOK.md`).
 
 `load_env` refuses to load any file that still holds a `CHANGE_ME_` value unless
 `ALLOW_SENTINELS=1`.
