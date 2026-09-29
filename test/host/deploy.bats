@@ -165,7 +165,9 @@ exit 0
 
 stub_siblings() {
     shim gremion-render   'exit 0'
-    shim gremion-snapshot 'exit 0'
+    # TASK-075: step 5 is the pre-migration dump preflight; `switched` runs
+    # after step 11. DUMP_EXIT_<CMD> makes one subcommand fail.
+    shim gremion-migration-dump 'v="DUMP_EXIT_$1"; exit "${!v:-0}"'
     shim gremion-verify   'exit 0'
     shim gremion-switch   'printf "%s\n" "$1" > "$GREMION_ROOT/runtime/active-colour"; exit 0'
 }
@@ -428,11 +430,90 @@ exit 0
 # F. render, snapshot, overlap ordering, migrate (§F.4.4 – §F.4.7)
 # ---------------------------------------------------------------------------
 
-@test "the renderer and the snapshot run against this release" {
+@test "the renderer and the pre-migration dump preflight run against this release (step 5 takes no restic snapshot)" {
     stub_all
+    shim gremion-snapshot 'exit 0'
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     assert_recorded gremion-render "--release ${GREMION_ROOT}/releases/dist-v1.2.3"
-    assert_recorded gremion-snapshot "dist-v1.2.3"
+    assert_recorded gremion-migration-dump "preflight --release dist-v1.2.3 --release-dir ${GREMION_ROOT}/releases/dist-v1.2.3"
+    grep -qE ' STEP 5 migration-dump ok$' "${GREMION_ROOT}/runtime/deploy.log"
+    assert_absent '^gremion-snapshot' "$SHIM_LOG" \
+        'TASK-075: step 5 is the pre-migration dump, not a restic class=snapshot'
+}
+
+# TASK-075 (TRD-206): another release's live dump refuses at step 5, before
+# step 6 stops anything and before step 7 migrates.
+@test "a refused preflight (another release's live dump) exits 1 before the old colour is stopped or anything migrates" {
+    stub_all
+    export DUMP_EXIT_preflight=1
+    local ov="${BATS_TEST_TMPDIR}/nooverlap"
+    mkdir -p "$ov"; cp -R "${FIXTURES}/valid"/. "$ov"/
+    sed -i 's/"overlap": true/"overlap": false/' "$ov/release.json"
+    export FIXTURE_RELEASE="$ov"
+    printf 'blue\n' > "${GREMION_ROOT}/runtime/active-colour"
+    : > "${BATS_TEST_TMPDIR}/up-blue"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    grep -qE ' STEP 5 migration-dump fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    assert_absent 'app-blue.env.* down' "$SHIM_LOG" 'step 6 ran after a refused preflight'
+    assert_absent 'run --rm migrate' "$SHIM_LOG" 'step 7 migrated after a refused preflight'
+    [ -f "${BATS_TEST_TMPDIR}/up-blue" ]
+}
+
+@test "the dump is deleted after step 11 passes and before step 12: switched --release <tag>" {
+    stub_all
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    assert_recorded gremion-migration-dump "switched --release dist-v1.2.3"
+    run bash -c "grep -n '^gremion-verify' '$SHIM_LOG' | tail -1 | cut -d: -f1"
+    local v11="$output"
+    run bash -c "grep -n '^gremion-migration-dump switched' '$SHIM_LOG' | cut -d: -f1"
+    [ "$output" -gt "$v11" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "dist-v1.2.3" ]
+}
+
+@test "step 11 failing: no switched call, the dump stays live" {
+    stub_all
+    # step 9 passes (--colour), step 11 (no argument) fails
+    shim gremion-verify '[ "${1:-}" = "--colour" ] && exit 0; exit 1'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    grep -qE ' STEP 11 verify-public fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    assert_absent '^gremion-migration-dump switched' "$SHIM_LOG" 'switched ran although step 11 failed'
+}
+
+@test "--no-switch leaves the dump live (no switched call); the same tag's next deploy reuses it" {
+    stub_all
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3 --no-switch"
+    [ "$status" -eq 0 ]
+    assert_recorded gremion-migration-dump "preflight --release dist-v1.2.3"
+    assert_absent '^gremion-migration-dump switched' "$SHIM_LOG" '--no-switch deleted the dump'
+}
+
+@test "a failing switched exits 1 with DUMP-NOT-DELETED and records nothing further" {
+    stub_all
+    export DUMP_EXIT_switched=1
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"DUMP-NOT-DELETED: release=dist-v1.2.3"* ]]
+    [ ! -f "${GREMION_ROOT}/runtime/current-tag" ]
+}
+
+@test "the REAL gremion-migration-dump accepts the argv deploy passes (preflight, then switched)" {
+    stub_all
+    local bin="${GREMION_ROOT}/bin"
+    mkdir -p "$bin" "${GREMION_ROOT}/lib"
+    cp "${PROJECT_ROOT}/infra/host/bin/gremion-migration-dump" "$bin/"
+    cp "${PROJECT_ROOT}/infra/host/lib/common.sh" "${GREMION_ROOT}/lib/"
+    chmod +x "$bin/gremion-migration-dump"
+    rm -f "${SHIM_DIR}/gremion-migration-dump"
+    shim logger 'exit 0'
+    printf 'GREMION_MIGRATION_DUMP_DIR=%s/migration-dumps\n' "$GREMION_ROOT" >> "${GREMION_ROOT}/etc/env/state.env"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PREFLIGHT-OK release=dist-v1.2.3"* ]]
+    [[ "$output" == *"no-dump dist-v1.2.3"* ]]
+    [ "$(stat -c '%a' "${GREMION_ROOT}/migration-dumps")" = "700" ]
 }
 
 @test "overlap true leaves the old colour running until after the switch" {
@@ -798,7 +879,7 @@ exit 0
 @test "a switch that does not take effect fails the deploy" {
     stub_git; stub_docker
     shim gremion-render   'exit 0'
-    shim gremion-snapshot 'exit 0'
+    shim gremion-migration-dump 'exit 0'
     shim gremion-verify   'exit 0'
     shim gremion-switch   'exit 0'   # writes no runtime/active-colour
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
