@@ -62,6 +62,7 @@ test('the CLI exits 1 on a mismatch and 2 on an unreadable file', () => {
 
 test('ALERT_SMTP_HOST unset or still its operator sentinel is RED (review C7)', () => {
   assert.match(identityViolations(mail, { ...ops, ALERT_SMTP_HOST: 'CHANGE_ME_OPERATOR_alert_smtp_host' }).violations.join('\n'), /ALERT_SMTP_HOST still holds its operator sentinel; alerts are submitted to mail\.example\.org/)
-  const { ALERT_SMTP_HOST, ...noHost } = ops
+  const noHost = { ...ops }
+  delete noHost.ALERT_SMTP_HOST
   assert.match(identityViolations(mail, noHost).violations.join('\n'), /ALERT_SMTP_HOST is unset; alerts are submitted to mail\.example\.org/)
 })

@@ -59,7 +59,7 @@ export function parseArgs(argv) {
     else throw new UsageError(`unknown argument: ${a}`)
   }
   if (verb !== 'list' && o.tenant === null) throw new UsageError(`${verb} needs --tenant <token>`)
-  if (o.tenant !== null && !TOKEN_RE.test(o.tenant)) throw new UsageError(`tenant token '${o.tenant}' does not match ${TOKEN_RE}`)
+  if (o.tenant !== null && !TOKEN_RE.test(o.tenant)) throw new UsageError(`tenant token '${String(o.tenant)}' does not match ${String(TOKEN_RE)}`)
   if (o.rotate && verb !== 'issue') throw new UsageError('--rotate belongs to issue')
   return o
 }

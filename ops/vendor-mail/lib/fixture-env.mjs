@@ -35,10 +35,10 @@ function operatorValue(name) {
   if (name === 'production_stack') return 'none'
   if (name === 'alert_email_from' || name === 'alert_smtp_user') return `alerts@${FIXTURE_DOMAIN}`
   if (name === 'alert_smtp_host') return `mail.${FIXTURE_DOMAIN}`
-  if (/_ip6$/.test(name)) return `2001:db8::${n.toString(16)}`
-  if (/_ip$/.test(name)) return `192.0.2.${n}`
+  if (name.endsWith('_ip6')) return `2001:db8::${n.toString(16)}`
+  if (name.endsWith('_ip')) return `192.0.2.${n}`
   if (/(^|_)(uid|gid)$/.test(name)) return '10001'
-  if (/_url$/.test(name)) return `https://hooks.${FIXTURE_DOMAIN}/${name}`
+  if (name.endsWith('_url')) return `https://hooks.${FIXTURE_DOMAIN}/${name}`
   if (/email|_to$|_from$/.test(name)) return `${name.replace(/_/g, '-')}@${FIXTURE_DOMAIN}`
   if (/domain|host/.test(name)) return `${name.replace(/_/g, '-')}.${FIXTURE_DOMAIN}`
   return `fixture-${name.replace(/_/g, '-')}`
