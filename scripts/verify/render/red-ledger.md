@@ -137,7 +137,7 @@ The original bytes were written back (checked byte-identical), then the same com
 
 ## G-053-colour-suffix
 
-Date: 2026-09-29 (seed: 00:53-01:22 CEST; breaks b-d, k: 01:29-01:30 CEST; r2 template-hole fix: 03:3x-03:49 CEST)
+Date: 2026-09-29 (seed: 00:53-01:22 CEST; breaks b-d, k: 01:29-01:30 CEST; r2 template-hole fix: 03:33-03:49 CEST; r3 derived-only vacuity: 07:12-07:38 CEST)
 
 ### Mutation
 
