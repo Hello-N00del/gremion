@@ -53,3 +53,21 @@ Item-0 residuals (named, not silently covered):
 - `consumer-state` has no reader in the kernel yet: `/api/health` `degraded`
   and the relay are item 5 (206-B). Until then a worker state is recorded but
   not reported.
+
+## Item 3: tenancy custom domains (subtask 206-A)
+
+All present on the base; no source edit. Guards proven by re-break (Q1),
+integration cases against a scratch `postgres:18-alpine` (migrated with
+`pnpm run migrate:test-fixture`, torn down by name).
+
+| Source SHA | Disposition | Status | Guard | RED (re-break) | GREEN |
+|---|---|---|---|---|---|
+| 8f49dcaa | leaf callback resolves its tenant by id | present@6edb5b8c | `lib/server/tenant/*` resolver tests (TASK-025) | n/a (Q1: presence by commit) | green |
+| a972ed64 | cache write discarded when an eviction raced it | present (`tenant/registry.ts:293` `_evictionEpoch`, captured `:342`) | `tenant/registry.cache.test.ts` | n/a | 18/18 |
+| 8649555a (kernel) | per-tenant rate-limit bucket evicted with the tenant | present@8649555a | `tenant/registry.evict-parity.integration.test.ts` (the brief named `registry.cache.test.ts`, which does not catch it) | re-break (n): `evictTenantRateLimit` call removed at `registry.ts:546` -> `drops the per-tenant rate-limit bucket, so a re-registered id starts fresh` FAIL (1 of 2) | 2/2 |
+| 1da39600 | cross-tenant Vaultwarden host collision | superseded (Q6: reserved-host refusal + `tenant_domain` PK; emitter TASK-034, TRD-263) | TRD-074 row below | see below | green |
+| d1f670c4 | test-smtp internal-target block | present (`routes/api/setup/test-smtp/+server.ts:51` `BLOCKED_HOST_NAMES`, `:64` suffixes, `:175` `isBlockedIpv4Bytes`); element-call half via TASK-205 | `routes/api/setup/test-smtp/server.test.ts` | see e0bc11fa | 54/54 |
+| e0bc11fa | test-smtp canonical bytes + resolve-once | present (`+server.ts:39`, `:103` canonicalisation; `:351` connect to the vetted address, name only as TLS servername `:444`); helios-client + element-call via TASK-205 | `routes/api/setup/test-smtp/server.test.ts` | re-break: `connectHost: name` at `:351` -> 3 FAIL (`hands nodemailer the RESOLVED IP with the hostname as TLS servername`, `never hands nodemailer a name on ANY allowed branch`, ...) | 54/54 |
+| a29347f0 | five audit fixes | -> item 2 rows | | | |
+| 9e1cf8ef | test-smtp ClientAddress / `client-ip.ts` | via TASK-205 (its Q6; Q10) | | | |
+| TRD-074 | one domain, one tenant | present@913f1990 (TASK-025) | `tenant/registry.domain.integration.test.ts:249` describe "tenant_domain PK constraint (TRD-074)" | re-break (j): `ALTER TABLE tenant_domain DROP CONSTRAINT tenant_domain_pkey` in the scratch control DB -> FAIL `PostgresError: there is no unique or exclusion constraint matching the ON CONFLICT specification` (1 of 1 selected); PK restored | 25/25 |
