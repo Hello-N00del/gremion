@@ -13,9 +13,14 @@ export interface BeschlussRow {
   globalNr: string | null
   sequenceNr: number
   text: string
-  votesYes: number
-  votesNo: number
-  votesAbstain: number
+  // Nullable (Phase-2 acclamation franchise): an acclamation Beschluss carries
+  // NO tally — the counts are optional show-of-hands numbers, NULL when unrecorded.
+  votesYes: number | null
+  votesNo: number | null
+  votesAbstain: number | null
+  // 'tally' = counted vote (verdict computed); 'acclamation' = declared by the
+  // chair. Values match the DB column (migration 054) 1:1.
+  adoptionMode: 'tally' | 'acclamation'
   meetingDate: string // YYYY-MM-DD
   protocolTitle: string
   committeeId: string
@@ -34,6 +39,7 @@ export async function listBeschluesse(): Promise<readonly BeschlussRow[]> {
            r.votes_yes                               AS "votesYes",
            r.votes_no                                AS "votesNo",
            r.votes_abstain                           AS "votesAbstain",
+           r.adoption_mode                           AS "adoptionMode",
            to_char(p.meeting_date, 'YYYY-MM-DD')     AS "meetingDate",
            p.title                                   AS "protocolTitle",
            ou.id::text                               AS "committeeId",

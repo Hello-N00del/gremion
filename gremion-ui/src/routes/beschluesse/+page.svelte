@@ -33,6 +33,9 @@
   }
 
   function unanimous(b: PageData['beschluesse'][number]): boolean {
+    // Acclamation rows carry NO tally (null, not 0) — a null tally can never
+    // read as 'einstimmig'; those rows render the 'per Akklamation' pill instead.
+    if (b.votesYes === null || b.votesNo === null || b.votesAbstain === null) return false
     return b.votesNo === 0 && b.votesAbstain === 0 && b.votesYes > 0
   }
 </script>
@@ -81,7 +84,11 @@
             <div class="mono td-muted td-date">{fmtDate(b.meetingDate)}</div>
           </div>
           <div>
-            {#if unanimous(b)}
+            {#if b.adoptionMode === 'acclamation'}
+              <!-- Acclamation Beschluss: outcome declared by the chair, no tally
+                   to show — never 'einstimmig', never a ja:nein:enthaltung line. -->
+              <span class="pill">per Akklamation</span>
+            {:else if unanimous(b)}
               <span class="pill pill-success">einstimmig</span>
             {:else}
               <span class="mono td-muted">{b.votesYes}:{b.votesNo}:{b.votesAbstain}</span>

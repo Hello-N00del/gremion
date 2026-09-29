@@ -95,3 +95,22 @@ integration cases against a scratch `postgres:18-alpine` (migrated with
 | a29347f0 (#459-2) | rate-limit bucket eviction | present@8649555a (item 3 row, guard (n)) | | | |
 | a29347f0 (#434-6) | `gremion-public/src/lib/server/mail.ts` | N/A: no such file in the kernel portal | | | |
 | a29347f0 | messages `service-client` | via TASK-205 | | | |
+
+## Item 1a: Governance Phase 2 (subtask 206-A)
+
+Ported by hunk from `git show 3661bb6c` (not from f2 whole files, which also
+carry Phase 3); 87797e42's kernel half is item 0.
+
+| Source SHA | Disposition | Status | Guard | RED | GREEN |
+|---|---|---|---|---|---|
+| 3661bb6c | `lib/governance/compute-result.ts` (null tally -> `null`, `consent`, `support_threshold` via the shared `supportThreshold`) + test; `support-threshold-parity.test.ts` | ported | `compute-result.test.ts`, `support-threshold-parity.test.ts`; re-break (b) drop the null-tally early return -> `× null tallies (acclamation / no-tally rows): NO computed verdict`; (b2) bare `Math.ceil` -> `× support_threshold: IEEE-754 noise does NOT wrongly reject an exactly-at-quorum tally` (compute-result and decision-rule) | on base: part of the 28 failures below | green |
+| 3661bb6c | `lib/server/governance/resolution-decision.ts` (tally / acclamation inputs, delegation to the registry), `lib/server/governance/protocols-db.ts`, `lib/server/protocols/protocol-db.ts` (nullable tallies, `adoption_mode`, `decision_rule_params`) | ported (two hunks re-applied by hand: the kernel dropped a comment prefix) | `routes/api/protocols/[id]/resolutions/resolutions.test.ts` (new), `resolution-decision.integration.test.ts`, `resolution-adoption.integration.test.ts` | unit on base: 28 FAIL across 3 files, e.g. `(a) without adoption_mode defaults to tally: server computes the result from rule + tallies`, `(b) free-hand result 'passed' in tally mode → 400, nothing persisted`, `expected undefined to be 'acclamation'` | unit 28 files / 213 tests; integration 3 files / 27 tests (scratch PG18) |
+| 3661bb6c | adoption-mode routes `routes/api/protocols/[id]/resolutions/+server.ts`, `[resId]/+server.ts` | ported (G1) | `resolutions.test.ts` | as above | green |
+| 3661bb6c | `publish.test.ts` acclamation x quorum cases | ported (one hunk by hand) | itself | pinning cases, green on base | 17/17 |
+| 3661bb6c (054 schema) | `resolution-adoption-mode.integration.test.ts` (a)-(f) | ported; present-schema guard (Q1); `expect.hasAssertions()` added in (a)/(d) for the lint ratchet (their assertions live in a helper) | itself | re-break (p): drop `protocol_resolutions_votes_mode_check` in the scratch DB -> `× (a) tally with any vote tally NULL raises 23514`, `× (d) acclamation with exactly one or two tallies set raises 23514`; CHECK restored | 6/6 |
+| 3661bb6c | `routes/beschluesse/+page.svelte` (acclamation pill, null tally never "einstimmig") | ported (clean hunk); K1 NOT applied: 7f45643 is not reachable from this checkout | svelte-check | `'b.votesYes' is possibly 'null'` after the type change | 0 errors |
+| 3661bb6c | `lib/components/protocols/ResolutionRow.svelte` + `ResolutionRow.test.ts`, `resolution-row-tally.test.ts`, editor page `members/committees/[id]/protokolle/[protocolId]/+page.svelte` | STOPPED (brief: the row binds nullable numbers to `Input`, which needs the not-taken `lib/components/ui/input/input.svelte` hunk -> TASK-165). Kernel-side adaptation only: the row labels all five rules and shows "nicht berechenbar" when `computeResult` is `null` | svelte-check | 3 errors after the type change (`Record<MajorityRule, string>` missing keys; `null` as index) | 0 errors |
+| 3661bb6c | `input.svelte` | not taken (TASK-165) | | | |
+| 3661bb6c | `packages/db/src/types.ts` | present (`adoption_mode` :87, `decision_rule_params` :90) | | | |
+| 87797e42 | finance `vier-augen-strategy`, `approval-workflow`, finance `register.server.ts`/labels, `finance/{approvals,finanzordnung}` | via TASK-205 | | | |
+| 87797e42 | `routes/+page.server.ts` (dashboard), `routes/api/notifications/+server.ts` financeRoleLabels hunks | found -> TASK-011 harvest (no notifications route in the kernel) | | | |

@@ -12,7 +12,10 @@
     votes_no: number
     votes_abstain: number
     result: 'passed' | 'rejected' | 'withdrawn'
-    required_majority: MajorityRule
+    // The editor creates the three majority rules; consent/support_threshold and
+    // acclamation rows come from the API until the Phase-2 row UI lands
+    // (TASK-206-A: that port needs the not-taken input.svelte change, TASK-165).
+    required_majority: 'simple' | 'two_thirds' | 'absolute'
   }
 
   let { resolution, isAdmin, protocolId, eligibleVotingCount = 0, onSave, onDelete }: {
@@ -44,6 +47,8 @@
     simple: 'Einfache Mehrheit',
     two_thirds: 'Zwei-Drittel-Mehrheit',
     absolute: 'Absolute Mehrheit',
+    consent: 'Konsens',
+    support_threshold: 'Unterstützungsquorum',
   }
 
   // INV-5: the result shown while editing is COMPUTED from the fixed rule +
@@ -78,9 +83,15 @@
       {/if}
     </div>
     <!-- INV-5: result is computed, not chosen. Shown read-only, tagged 'berechnet'. -->
-    <div class="text-sm {RESULT_CLASS[previewResult]}">
-      Ergebnis: {RESULT_LABEL[previewResult]} <span class="text-xs text-ink-muted">(berechnet)</span>
-    </div>
+    {#if previewResult}
+      <div class="text-sm {RESULT_CLASS[previewResult]}">
+        Ergebnis: {RESULT_LABEL[previewResult]} <span class="text-xs text-ink-muted">(berechnet)</span>
+      </div>
+    {:else}
+      <!-- computeResult is null when a tally is missing: no verdict is shown
+           rather than a guessed one; the server computes the authoritative result. -->
+      <div class="text-sm text-ink-muted">Ergebnis: nicht berechenbar (Stimmen unvollständig)</div>
+    {/if}
     <div class="flex gap-2">
       <Button size="sm" onclick={() => { onSave(draft); editing = false }}>Speichern</Button>
       <Button size="sm" variant="ghost" onclick={() => editing = false}>Abbrechen</Button>

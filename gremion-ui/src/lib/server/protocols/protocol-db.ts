@@ -13,6 +13,19 @@ const getRunner = (tx: PgTransaction | undefined) => genericGetRunner(tx, getDb)
 export type ProtocolStatus = 'draft' | 'submitted' | 'published'
 export type AttendanceStatus = 'present' | 'absent' | 'excused'
 export type ResolutionResult = 'passed' | 'rejected' | 'withdrawn'
+// T4 (#320 Phase 2): HOW a resolution's binding decision is reached.
+// 'tally' — counted vote; the server computes `result` from rule + tallies.
+// 'acclamation' — chair-declared result (declared_result at the API); tallies
+// are NULL, or a full informational tally (all three) — the DB votes_mode
+// CHECK enforces exactly that all-or-nothing shape.
+export type AdoptionMode = 'tally' | 'acclamation'
+// Persistence-layer type: the FULL 5-rule core decision-rule vocabulary the DB
+// CHECK (migration 054) permits — the three majority rules plus 'consent' and the
+// parametrised 'support_threshold' (whose parameters ride in decision_rule_params,
+// e.g. { fraction: 0.5 }, fixed at creation like the rule itself). Mirrors
+// CoreDecisionRuleId; kept as its own literal union so persistence does not depend
+// on the registry module.
+export type RequiredMajority = 'simple' | 'two_thirds' | 'absolute' | 'consent' | 'support_threshold'
 
 export interface Protocol {
   id: string
@@ -46,11 +59,18 @@ export interface ProtocolResolution {
   sequence_nr: number
   global_nr: string | null
   text: string
-  votes_yes: number
-  votes_no: number
-  votes_abstain: number
+  // T4: NULL tallies are legal ONLY for adoption_mode 'acclamation' (no count
+  // was taken); a tally resolution always carries all three numbers.
+  votes_yes: number | null
+  votes_no: number | null
+  votes_abstain: number | null
   result: ResolutionResult
-  required_majority: 'simple' | 'two_thirds' | 'absolute'
+  required_majority: RequiredMajority
+  // T4: the adoption procedure ('tally' | 'acclamation'), fixed at creation.
+  adoption_mode: AdoptionMode
+  // T4: parameters of a parametrised decision rule (support_threshold →
+  // { fraction }); NULL for the parameterless rules.
+  decision_rule_params: Record<string, unknown> | null
   // INV-5 (#320, ported gremion#22 M3b): when the binding decision was
   // finalised at adoption (protocol publish). NULL for resolutions decided
   // before migration 048 added the column.
@@ -252,20 +272,26 @@ export async function listResolutions(protocolId: string): Promise<ProtocolResol
 
 export async function addResolution(protocolId: string, input: {
   text: string
-  votesYes: number
-  votesNo: number
-  votesAbstain: number
+  votesYes: number | null
+  votesNo: number | null
+  votesAbstain: number | null
   result: ResolutionResult
-  requiredMajority: 'simple' | 'two_thirds' | 'absolute'
+  requiredMajority: RequiredMajority
+  // T4: optional so every pre-existing caller keeps its exact 'tally' shape.
+  adoptionMode?: AdoptionMode
+  decisionRuleParams?: Record<string, unknown> | null
 }): Promise<ProtocolResolution> {
   const sql = getDb()
   const rows = await sql<ProtocolResolution[]>`
     INSERT INTO protocol_resolutions
-      (protocol_id, sequence_nr, text, votes_yes, votes_no, votes_abstain, result, required_majority)
+      (protocol_id, sequence_nr, text, votes_yes, votes_no, votes_abstain, result, required_majority,
+       adoption_mode, decision_rule_params)
     VALUES (
       ${protocolId},
       (SELECT COALESCE(MAX(sequence_nr), 0) + 1 FROM protocol_resolutions WHERE protocol_id = ${protocolId}),
-      ${input.text}, ${input.votesYes}, ${input.votesNo}, ${input.votesAbstain}, ${input.result}, ${input.requiredMajority}
+      ${input.text}, ${input.votesYes}, ${input.votesNo}, ${input.votesAbstain}, ${input.result}, ${input.requiredMajority},
+      ${input.adoptionMode ?? 'tally'},
+      ${input.decisionRuleParams != null ? (sql.json(input.decisionRuleParams as never) as never) : null}
     )
     RETURNING *
   `
@@ -278,8 +304,13 @@ export async function updateResolution(id: string, input: Partial<{
   votesNo: number
   votesAbstain: number
   result: ResolutionResult
-  requiredMajority: 'simple' | 'two_thirds' | 'absolute'
+  requiredMajority: RequiredMajority
   globalNr: string
+  // T4: COALESCE semantics like every other field — the ROUTES never send
+  // these on an edit (rule, params and mode are fixed at creation; the PATCH
+  // handler pins them to the stored row, [resId]/+server.ts).
+  adoptionMode: AdoptionMode
+  decisionRuleParams: Record<string, unknown>
 }>, opts?: { tx?: PgTransaction }): Promise<ProtocolResolution> {
   const sql = getRunner(opts?.tx)
   const rows = await sql<ProtocolResolution[]>`
@@ -290,6 +321,8 @@ export async function updateResolution(id: string, input: Partial<{
       votes_abstain     = COALESCE(${input.votesAbstain ?? null}, votes_abstain),
       result            = COALESCE(${input.result ?? null}, result),
       required_majority = COALESCE(${input.requiredMajority ?? null}, required_majority),
+      adoption_mode     = COALESCE(${input.adoptionMode ?? null}, adoption_mode),
+      decision_rule_params = COALESCE(${input.decisionRuleParams != null ? (sql.json(input.decisionRuleParams as never) as never) : null}, decision_rule_params),
       global_nr         = COALESCE(${input.globalNr ?? null}, global_nr)
     WHERE id = ${id}
     RETURNING *
@@ -401,10 +434,14 @@ export async function recordResolutionAdoptions(
         newValue: JSON.stringify({
           resolutionId: r.id,
           result: r.result,
+          // T4: NULL for an acclamation adoption without informational tally.
           votesYes: r.votes_yes,
           votesNo: r.votes_no,
           votesAbstain: r.votes_abstain,
           requiredMajority: r.required_majority,
+          // T4: the evidentiary record states HOW the decision was reached;
+          // snake_case key matching the DB column it mirrors.
+          adoption_mode: r.adoption_mode,
         }),
       },
       tx,
