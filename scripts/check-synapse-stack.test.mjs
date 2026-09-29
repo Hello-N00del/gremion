@@ -13,6 +13,7 @@ import {
   renderExample,
   renderProfileOn,
   renderViolations,
+  repoRelative,
   requiredFormViolations,
   wiringViolations,
 } from './check-synapse-stack.mjs'
@@ -30,6 +31,18 @@ test('profile on: messaging-postgres and matrix render exactly as granted', () =
   const r = profileOn()
   assert.ok(r.services.matrix && r.services['messaging-postgres'], `services: ${Object.keys(r.services).join(', ')}`)
   assert.deepEqual(renderViolations(r, CTX), [])
+})
+
+test('repo-relative paths are POSIX on every host: a win32 render (backslashes, drive letter) compares equal', () => {
+  const root = 'C:\\Users\\op\\kernel'
+  assert.equal(repoRelative('C:\\Users\\op\\kernel\\modules\\messaging\\synapse', { root, pathImpl: path.win32 }), 'modules/messaging/synapse')
+  assert.equal(
+    repoRelative('c:\\users\\op\\kernel\\modules\\messaging\\synapse\\postgres-init\\10-synapse-db.sh', { root, pathImpl: path.win32 }),
+    'modules/messaging/synapse/postgres-init/10-synapse-db.sh',
+  )
+  assert.equal(repoRelative('/srv/kernel/modules/messaging/synapse', { root: '/srv/kernel', pathImpl: path.posix }), 'modules/messaging/synapse')
+  // Outside the repo stays visibly outside (never silently equal to a module path).
+  assert.equal(repoRelative('D:\\elsewhere\\synapse', { root, pathImpl: path.win32 }), 'D:/elsewhere/synapse')
 })
 
 test('profile on: matrix is the honest probe with its start_period, and messaging-postgres the :ro init bind', () => {

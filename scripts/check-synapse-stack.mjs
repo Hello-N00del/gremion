@@ -71,6 +71,16 @@ export const PROFILE_ON_ENV = {
   SYNAPSE_KEYCLOAK_ISSUER_URL: 'https://guard.example.org/auth/realms/guard',
 }
 
+/**
+ * `p` relative to the repo root in POSIX form. compose renders host paths
+ * natively (backslashes and a drive letter on Windows, the operator's gate
+ * box while CI is off), and path.relative keeps the native separator, so a
+ * comparison against a POSIX literal must normalise first.
+ */
+export function repoRelative(p, { root = REPO_ROOT, pathImpl = path } = {}) {
+  return pathImpl.relative(root, p).split(pathImpl.sep).join('/')
+}
+
 const durationS = (v) => {
   if (typeof v === 'number') return v / 1e9 // compose renders nanoseconds
   const m = /^(?:(\d+)m)?(?:(\d+)s)?$/.exec(String(v ?? ''))
@@ -120,7 +130,7 @@ export function renderViolations(render, { stack, project, domain }) {
     if (!init) out.push(`messaging-postgres: no bind of the initdb script at ${INIT_TARGET}`)
     else {
       if (!init.read_only) out.push('messaging-postgres: the initdb script bind is not read-only')
-      if (path.relative(REPO_ROOT, init.source) !== INIT_SOURCE) out.push(`messaging-postgres: the initdb bind's source is ${init.source}, want ${INIT_SOURCE}`)
+      if (repoRelative(init.source) !== INIT_SOURCE) out.push(`messaging-postgres: the initdb bind's source is ${init.source}, want ${INIT_SOURCE}`)
     }
     if (binds.length !== 1) out.push(`messaging-postgres: ${binds.length} bind mounts, want exactly the initdb script`)
     const test = pg.healthcheck?.test ?? []
@@ -135,7 +145,7 @@ export function renderViolations(render, { stack, project, domain }) {
     onlyState('matrix', mx)
     const img = String(mx.image ?? '')
     if (!img.startsWith(`${IMAGE_REPO}:`)) out.push(`matrix: image ${img || '(none)'}, want ${IMAGE_REPO}:<IMAGE_TAG>`)
-    const ctx = mx.build?.context ? path.relative(REPO_ROOT, mx.build.context) : null
+    const ctx = mx.build?.context ? repoRelative(mx.build.context) : null
     if (ctx !== MODULE_DIR) out.push(`matrix: build context ${ctx}, want ${MODULE_DIR}`)
     const lim = mx.deploy?.resources?.limits ?? {}
     if (Number(lim.memory) !== LIMITS_L.memory || Number(lim.cpus) !== LIMITS_L.cpus)
