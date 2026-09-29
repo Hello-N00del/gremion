@@ -93,13 +93,23 @@ uuidv7() {
 # fsync what a created/unlinked entry depends on; GNU sync fsyncs its operands.
 fsync_paths() { sync -- "$@" 2>/dev/null || sync; }
 
+# setup_dump_dir <create:0|1> — a missing directory is created 0700 by
+# preflight (the first deploy after bootstrap); every other command reads a
+# missing directory as "no dump was ever taken" and says so.
 setup_dump_dir() {
     DUMP_DIR="${GREMION_MIGRATION_DUMP_DIR:-}"
     [[ -n "$DUMP_DIR" ]] \
         || die "DUMP_DIR_UNSET: GREMION_MIGRATION_DUMP_DIR is not set (state.env) — no pre-migration dump can be taken or found" 2
-    [[ -d "$DUMP_DIR" && ! -L "$DUMP_DIR" ]] || die "DUMP_DIR_INVALID: ${DUMP_DIR} is not a directory" 2
+    if [[ ! -e "$DUMP_DIR" && "$1" == "1" ]]; then
+        [[ -d "$(dirname "$DUMP_DIR")" ]] || die "DUMP_DIR_INVALID: the parent of ${DUMP_DIR} does not exist" 2
+        ( umask 077; mkdir -- "$DUMP_DIR" )
+        chmod 700 "$DUMP_DIR"
+        info "created ${DUMP_DIR} (0700)"
+    fi
     LEDGER="${DUMP_DIR}/ledger.jsonl"
     LOCK="${DUMP_DIR}/ledger.lock"
+    if [[ ! -e "$DUMP_DIR" ]]; then return 1; fi
+    [[ -d "$DUMP_DIR" && ! -L "$DUMP_DIR" ]] || die "DUMP_DIR_INVALID: ${DUMP_DIR} is not a directory" 2
 }
 
 # The checks a TAKE needs (brief §1): 0700 and owned by this uid.
@@ -390,7 +400,15 @@ main() {
             [[ -z "$rel" ]] || valid_release "$rel" || die "invalid release: $rel" 2 ;;
         *) usage ;;
     esac
-    setup_dump_dir
+    local create=0
+    [[ "$cmd" != preflight ]] || create=1
+    if ! setup_dump_dir "$create"; then
+        case "$cmd" in
+            switched|discard) printf 'no-dump %s\n' "$rel"; exit 0 ;;
+            status)           printf 'STATUS: 0 live dump(s)\n'; exit 0 ;;
+            *)                die "DUMP_DIR_INVALID: ${DUMP_DIR} does not exist — no dump of ${rel} was ever taken here" 1 ;;
+        esac
+    fi
     case "$cmd" in
         preflight) cmd_preflight "$rel" "${rdir:-${ROOT}/releases/${rel}}" ;;
         switched)  delete_release "$rel" switched system switched ;;
