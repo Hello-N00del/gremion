@@ -239,6 +239,10 @@
     {
       "glob": "packages/module-catalogue/test/fixtures/**/migrations/*.sql",
       "reason": "module-catalogue validator fixtures (TASK-021): fixture module roots whose migrations/manifest.json the validator checks for presence, never applied by a runner"
+    },
+    {
+      "glob": "test/host/fixtures/zero-tenant-proof/*.sql",
+      "reason": "zero-tenant proof fixture (TASK-042-b): seeded into the proof's scratch control database with psql -f by test/host/integration/zero-tenant-proof.sh, never applied by a runner"
     }
   ]
 }
