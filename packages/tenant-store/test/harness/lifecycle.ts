@@ -119,6 +119,9 @@ export function lifecycleDeps(platform: Sql, server: ModuleServer, overrides: Pa
     secrets: { appPassword: () => APP_PASSWORD },
     exporter: containerExporter(),
     exportDir: join(EXPORT_ROOT, String(process.pid)),
+    // TASK-075: the lcfix fixture chain is headerless and in no baseline.
+    releaseRef: 'dist-v0.0.1',
+    phaseFor: () => () => ({ phase: 'expand' as const }),
     log: () => {},
     ...overrides,
   }

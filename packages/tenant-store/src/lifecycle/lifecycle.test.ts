@@ -131,6 +131,15 @@ describe('refusals run no SQL at all', () => {
     await expect(disableModule(T, mod('kernel'), ACTOR, deps)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     expect(touched).toEqual([])
   })
+
+  it('TASK-075 G1b: an enable of a module with a database and no releaseRef (or a bad one) is refused before any statement', async () => {
+    const { deps, touched } = untouchableDeps()
+    for (const releaseRef of [undefined, '', 'x'.repeat(65), 'a\nb']) {
+      const d = { ...deps, releaseRef } as unknown as LifecycleDeps
+      await expect(enableModule(T, mod('board'), ACTOR, d)).rejects.toMatchObject({ code: 'INVALID_INPUT', message: expect.stringMatching(/releaseRef/) })
+    }
+    expect(touched).toEqual([])
+  })
 })
 
 describe('the platform migration folder (gremion_platform, schema plt)', () => {
@@ -139,6 +148,11 @@ describe('the platform migration folder (gremion_platform, schema plt)', () => {
   it('is verified against its sha256 manifest: 0001 setup, 0002 module tables, 0003 module_database', () => {
     expect(files.map((f) => f.file)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql'])
     for (const f of files) expect(() => splitStatements(f.text)).not.toThrow()
+  })
+
+  it('TASK-075 G1b: migratePlatform\'s default phase lookup (the kernel baseline of chain platform) knows every locked platform file', () => {
+    const phaseFor = loadBaselinePhaseFor(PLATFORM_CHAIN, KERNEL_ROOT)
+    expect(files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand'])
   })
 
   it('0002 carries the three SCHEMA tables with the level-1 gate check, and omits only the isolation-test FKs', () => {

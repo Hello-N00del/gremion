@@ -8,7 +8,8 @@
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Sql } from '@gremion/db'
-import { runMigrations, type RunMigrationsResult } from '../runner.js'
+import { loadBaselinePhaseFor, type PhaseFor } from '../phase.js'
+import { runMigrations, type RunMigrationsHooks, type RunMigrationsResult } from '../runner.js'
 import { LifecycleError } from './guards.js'
 
 export const PLATFORM_DATABASE = 'gremion_platform'
@@ -34,10 +35,37 @@ export async function assertPlatform(sql: Sql): Promise<void> {
   }
 }
 
+/**
+ * The kernel checkout this package sits in (packages/tenant-store/src|dist/lifecycle
+ * -> four levels up). A published copy has no scripts/ there, and
+ * loadBaselinePhaseFor then knows no file (fail closed: PHASE_MISSING).
+ */
+export const KERNEL_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
+
+/** The register chain of gremion_platform (scripts/migrations/ranges.json). */
+export const PLATFORM_CHAIN = 'platform'
+
+export interface MigratePlatformOptions {
+  log?: (line: string) => void
+  /** TASK-075: the release this run ships (ledger release_ref, 1-64 characters). */
+  releaseRef: string
+  /** TASK-075: phase of a headerless file; default the kernel baseline of chain `platform`. */
+  phaseFor?: PhaseFor
+  /** TASK-075: e.g. cli.ts's composed chain check + pre-migration dump (an upgrade of an existing catalogue). */
+  hooks?: RunMigrationsHooks
+}
+
 /** Migrates gremion_platform with the one runner (DL-001). `sql` needs a direct pool of >= 2. */
-export async function migratePlatform(sql: Sql, opts: { log?: (line: string) => void } = {}): Promise<RunMigrationsResult> {
+export async function migratePlatform(sql: Sql, opts: MigratePlatformOptions): Promise<RunMigrationsResult> {
   await assertPlatform(sql)
-  return runMigrations({ sql, dir: PLATFORM_MIGRATIONS_DIR, ...(opts.log ? { log: opts.log } : {}) })
+  return runMigrations({
+    sql,
+    dir: PLATFORM_MIGRATIONS_DIR,
+    releaseRef: opts?.releaseRef,
+    phaseFor: opts?.phaseFor ?? loadBaselinePhaseFor(PLATFORM_CHAIN, KERNEL_ROOT),
+    ...(opts?.hooks ? { hooks: opts.hooks } : {}),
+    ...(opts?.log ? { log: opts.log } : {}),
+  })
 }
 
 export interface ModuleVersionRow {

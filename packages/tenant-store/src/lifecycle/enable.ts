@@ -28,7 +28,8 @@ import {
   LifecycleError,
   moduleRoles,
 } from './guards.js'
-import { assertPlatform, casModuleDatabaseState, lookupModuleVersion, readModuleDatabase } from './platform.js'
+import { loadBaselinePhaseFor } from '../phase.js'
+import { assertPlatform, casModuleDatabaseState, KERNEL_ROOT, lookupModuleVersion, readModuleDatabase } from './platform.js'
 import { scramSha256Verifier } from './scram.js'
 import type { Actor, EnableResult, GateResult, LifecycleDeps, LifecycleModule, ModuleServer } from './types.js'
 
@@ -145,6 +146,10 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
   const log = deps.log ?? (() => {})
   const runtime = module.moduleJson.runtime
   const database = runtime.database
+  // TASK-075: every ledger row names its release; refused before anything is written.
+  if (database && (typeof deps.releaseRef !== 'string' || deps.releaseRef.length < 1 || deps.releaseRef.length > 64 || /[\u0000-\u001f]/.test(deps.releaseRef))) {
+    throw new LifecycleError('INVALID_INPUT', 'deps.releaseRef (the release this enable ships, 1-64 printable characters) is required for a module with a database')
+  }
   await assertPlatform(deps.platform)
 
   // 2. the catalogue must know this module version
@@ -200,7 +205,19 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
       // 7. migrations as the owner
       const owned = await openAsOwner(server, dbName, owner)
       try {
-        const r = await runMigrations({ sql: owned, dir: join(module.dir, database.migrations), log })
+        // TASK-075 G1b: a database this call created has nothing to lose, so
+        // no pre-migration dump; an existing one (upgrade, resumed enable)
+        // runs under deps.upgradeHooks (the dump hook).
+        const phaseFor = deps.phaseFor ? deps.phaseFor(moduleId) : loadBaselinePhaseFor(`module-${moduleId}`, KERNEL_ROOT)
+        const hooks = created ? undefined : deps.upgradeHooks
+        const r = await runMigrations({
+          sql: owned,
+          dir: join(module.dir, database.migrations),
+          releaseRef: deps.releaseRef as string,
+          ...(phaseFor ? { phaseFor } : {}),
+          ...(hooks ? { hooks } : {}),
+          log,
+        })
         applied = r.applied
         await grantAppPrivileges(owned, owner, app)
       } finally {
