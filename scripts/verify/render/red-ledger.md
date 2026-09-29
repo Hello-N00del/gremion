@@ -137,7 +137,7 @@ The original bytes were written back (checked byte-identical), then the same com
 
 ## G-053-colour-suffix
 
-Date: 2026-09-29 (seed: 00:53-01:22 CEST; breaks b-d, k: 01:29-01:30 CEST)
+Date: 2026-09-29 (seed: 00:53-01:22 CEST; breaks b-d, k: 01:29-01:30 CEST; r2 template-hole fix: 03:3x-03:49 CEST)
 
 ### Mutation
 
@@ -157,6 +157,16 @@ Unit breaks in `render/colour-suffix.mjs`:
 - (k2) sort alphabetically instead of longest first.
 
 In `render/suite.mjs`, (k1) let the state, ops and mail renders contribute names.
+
+r2 (review finding, 2026-09-29): the nine leaf hosts render nowhere in this repo, so before r2
+their names came only from the suffixed VALUES in `app.env.tmpl`. The real template with
+`CONTENT_SERVICE_URL=http://content-service:8080` dropped `content-service` from the name set
+and the guard reported `problems []`: it hid its own regression. Two fixes, each watched RED:
+
+- (r2-a) `templateDerivedNames` also derives `<x>-service` from every `<X>_SERVICE_URL` KEY;
+  break: disable that line (`if (leaf && false)`);
+- (r2-b) the suite forwards TASK-040's `APP_SERVICES` + `LEAF_SERVICES` as `extra` into
+  `colourSuffixGuard` (the union G2 uses); break: pass `extra: []` in `judgeRenders`.
 
 ### Observed failing output
 
@@ -203,6 +213,18 @@ exit=1
      error: derived app-tier names (16): ..., gremion-ui, fallback, migrate, vector, legal
      not ok 2 - state renders never contribute names: legal referenced from the app tier passes
      # tests 11  # pass 9  # fail 2
+
+# r2, before the fix (8b5f8e22 + the new tests; fix commit 61434deb), colour-suffix.test.mjs
+     not ok 18 - real app.env.tmpl with CONTENT_SERVICE_URL=http://content-service:8080 fails at its line
+     not ok 19 - every leaf of the real template survives losing its suffix (each line, one at a time)
+     not ok 20 - templateDerivedNames: a <X>_SERVICE_URL key names <x>-service whatever its value says
+     not ok 21 - colourSuffixGuard forwards caller extras into the judged name set
+     # tests 25  # pass 21  # fail 4
+# r2, before the fix, suite.test.mjs
+     not ok 4 - the suite judges TASK-040 APP_SERVICES + LEAF_SERVICES too: a leaf missing from the template is still a derived name
+     # tests 13  # pass 12  # fail 1
+# r2-a break 03:46:19 (both files): not ok 18, 19, 20   # tests 38  # pass 35  # fail 3
+# r2-b break 03:48:14 (both files): not ok 29 (the suite forwarding case)   # tests 38  # pass 37  # fail 1
 ```
 
 ### Observed passing output (after)
@@ -216,6 +238,8 @@ exit=0
 
 # unit breaks restored (01:29-01:30): colour-suffix.test.mjs # tests 21 # pass 21 # fail 0;
 # suite.test.mjs # tests 11 # pass 11 # fail 0
+
+# r2 restored 03:49:42: colour-suffix.test.mjs + suite.test.mjs # tests 38 # pass 38 # fail 0
 ```
 
 ### Verifier
@@ -229,7 +253,8 @@ for the unit breaks.
 For the seed: `git checkout --detach 0b72442e` in the scratch tree, leaving the seed commit
 1c69fba7 orphaned there and never on the branch. For the bonus: `git reset --hard 81d24a16`
 in the scratch tree. For the unit breaks: the original bytes were written back and checked
-byte-identical.
+byte-identical. For r2-a and r2-b: the one edited line was written back; `git status --short`
+was empty afterwards.
 
 ## G-053-build-absence
 
