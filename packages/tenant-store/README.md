@@ -16,13 +16,17 @@ const sql = await openTenantDb(tenantId, 'calendar')
 // deploy time, NOT at boot or on a request: a DIRECT connection
 const direct = await openMigrationDb(tenantId, 'calendar') // GREMION_CALENDAR_PG_DIRECT_URL
 try {
-  await runMigrations({ sql: direct, dir: '/app/migrations', hooks: { preApply } })
+  // TASK-075: every run names its release (ledger release_ref); a headerless
+  // file takes its phase from phaseFor (the kernel baseline), else PHASE_MISSING
+  await runMigrations({ sql: direct, dir: '/app/migrations', releaseRef: 'dist-v1.2.3', phaseFor, hooks: { preApply } })
 } finally {
   await direct.end()
 }
 
-// in front of every tenant route: 503 for a tenant whose database is behind
-const gate = schemaGate({ dir: '/app/migrations', openDb: (t) => openTenantDb(t, 'calendar') })
+// in front of every tenant route: 503 for a tenant whose database is behind;
+// with releaseRef, rows a NEWER release applied (expand, migrate, a contract
+// due at or before this release) are `ahead` and served (TRD-361)
+const gate = schemaGate({ dir: '/app/migrations', releaseRef: 'dist-v1.2.3', openDb: (t) => openTenantDb(t, 'calendar') })
 if (!(await gate.guard(tenantId, res))) return
 ```
 
@@ -34,7 +38,7 @@ if (!(await gate.guard(tenantId, res))) return
 | `openMigrationDb(tenant, module)` | a direct, unpooled connection for the runner (`GREMION_<MODULE>_PG_DIRECT_URL`); the caller ends it |
 | `tenantModuleDbName(tenant, module)` | the database name; the one name TASK-021 uses to create databases |
 | `envResolveTarget(env)` | the default resolver (below) |
-| `runMigrations({ sql, dir, hooks })` | the runner |
+| `runMigrations({ sql, dir, releaseRef, phaseFor, hooks })` | the runner; the pre-migration dump is `src/dump` (`cli.ts migrate`, `takeDump`), see `scripts/migrations/runner/README.md` |
 | `checkSchemaCurrent({ sql, dir })`, `schemaGate(options)` | the read-only runtime check, and the 503 gate on top of it |
 | `stripOuterTransaction(text)` | the whole-file wrapper rule |
 | `ADVISORY_LOCKS`, `ADVISORY_LOCK_CLASS_ID` | the advisory-lock registry |
