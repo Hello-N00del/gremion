@@ -40,6 +40,13 @@ export const EXCLUSIONS = [
     line: 'STALWART_IMAGE=docker.io/stalwartlabs/stalwart:fixture',
     why: 'the pooled-stack render fixture; `docker compose config` never pulls it',
   },
+  {
+    // line: null = the whole file. Stale once the file references no
+    // Stalwart image at all.
+    file: 'scripts/release/check-image-digests.test.mjs',
+    line: null,
+    why: "TASK-048's digest-lint tests seed tag and partial Stalwart references on purpose; that guard (TRD-350) pins every deployed image, and no production file is here",
+  },
 ]
 
 /** Image-shaped references to Stalwart in a line (a URL is a link, not an image). */
@@ -83,7 +90,7 @@ export function treeViolations(hits, files = {}) {
   for (const h of hits) {
     for (const ref of stalwartRefs(h.text)) {
       if (STALWART_RE.test(ref)) continue
-      const ex = EXCLUSIONS.find((e) => e.file === h.file && h.text.trim() === e.line)
+      const ex = EXCLUSIONS.find((e) => e.file === h.file && (e.line === null || h.text.trim() === e.line))
       if (ex) {
         used.add(ex.file)
         continue
@@ -93,21 +100,35 @@ export function treeViolations(hits, files = {}) {
   }
   for (const e of EXCLUSIONS) {
     const text = files[e.file]
+    if (e.line === null) {
+      const present = text !== undefined ? text.includes('stalwartlabs/stalwart') : used.has(e.file)
+      if (!present) out.push(`stale exclusion: ${e.file} no longer references a Stalwart image -- remove it from check-upstream-image.mjs EXCLUSIONS`)
+      continue
+    }
     const present = text !== undefined ? text.split(/\r?\n/).some((l) => l.trim() === e.line) : used.has(e.file)
     if (!present) out.push(`stale exclusion: ${e.file} no longer carries "${e.line}" -- remove it from check-upstream-image.mjs EXCLUSIONS`)
   }
   return out
 }
 
-function gitHits(root) {
-  const txt = execFileSync('git', ['grep', '-n', '-I', '-E', 'stalwartlabs/stalwart', '--', '.', ':!*.md', ':!ops/vendor-mail/**'], { cwd: root, encoding: 'utf8' })
+/**
+ * `git grep -n` output -> hits. CRLF line ends (a checkout with
+ * core.autocrlf) are stripped; a line that is not <file>:<n>:<text> is a named
+ * error (the caller reports it as unparseable), never a TypeError.
+ */
+export function parseGitGrep(txt) {
   return txt
-    .split('\n')
+    .split(/\r?\n/)
     .filter(Boolean)
     .map((l) => {
       const m = /^([^:]+):(\d+):(.*)$/.exec(l)
+      if (!m) throw new Error(`unparseable git grep line: ${l.slice(0, 120)}`)
       return { file: m[1], line: Number(m[2]), text: m[3] }
     })
+}
+
+function gitHits(root) {
+  return parseGitGrep(execFileSync('git', ['grep', '-n', '-I', '-E', 'stalwartlabs/stalwart', '--', '.', ':!*.md', ':!ops/vendor-mail/**'], { cwd: root, encoding: 'utf8' }))
 }
 
 export function main({ root = REPO_ROOT, host = process.env.VENDOR_MAIL_MODE === 'host', log = console } = {}) {

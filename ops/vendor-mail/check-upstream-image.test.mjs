@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { EXCLUSIONS, licenceViolations, main, scopedViolations, stalwartRefs, treeViolations } from './check-upstream-image.mjs'
+import { EXCLUSIONS, licenceViolations, main, parseGitGrep, scopedViolations, stalwartRefs, treeViolations } from './check-upstream-image.mjs'
 import { REPO_ROOT } from './lib/env.mjs'
 
 const read = (p) => readFileSync(path.join(REPO_ROOT, p), 'utf8')
@@ -52,19 +52,47 @@ test('an image bump without a licence re-read is RED', () => {
   assert.match(licenceViolations({ digest: DIGEST, register: reg, statement: st.replace('`unmodified`', '`modified`') }).join('\n'), /licensed_edition `unmodified`/)
 })
 
+// A line an exclusion covers: its own line, or (whole-file) a seeded tag.
+const SEEDED = "'STALWART_IMAGE=docker.io/stalwartlabs/stalwart:v0.15',"
+const exLine = (e) => e.line ?? SEEDED
+
 test('a tag reference elsewhere in the tree is RED; the named exclusions pass while present', () => {
   const hits = [
     { file: 'docker-compose.extra.yml', line: 3, text: '    image: docker.io/stalwartlabs/stalwart:v0.15.5-alpine' },
-    ...EXCLUSIONS.map((e, i) => ({ file: e.file, line: i + 1, text: e.line })),
+    ...EXCLUSIONS.map((e, i) => ({ file: e.file, line: i + 1, text: exLine(e) })),
   ]
-  const files = Object.fromEntries(EXCLUSIONS.map((e) => [e.file, `x\n${e.line}\n`]))
+  const files = Object.fromEntries(EXCLUSIONS.map((e) => [e.file, `x\n${exLine(e)}\n`]))
   assert.deepEqual(treeViolations(hits, files), ['docker-compose.extra.yml:3 references the Stalwart image as docker.io/stalwartlabs/stalwart:v0.15.5-alpine, not by digest'])
 })
 
 test('a stale exclusion (its line gone) is RED', () => {
-  const files = Object.fromEntries(EXCLUSIONS.map((e) => [e.file, `x\n${e.line}\n`]))
+  const files = Object.fromEntries(EXCLUSIONS.map((e) => [e.file, `x\n${exLine(e)}\n`]))
   files[EXCLUSIONS[0].file] = 'STALWART_IMAGE=stalwartlabs/stalwart:v0.16.22\n'
   assert.match(treeViolations([], files).join('\n'), /stale exclusion: test\/host\/integration\/pooled-stack-proof\.sh no longer carries/)
+})
+
+test("TASK-048's digest-lint tests are one whole-file exclusion: any seeded ref there passes, and it is stale once the file has none (fix round 2)", () => {
+  const f = 'scripts/release/check-image-digests.test.mjs'
+  const e = EXCLUSIONS.find((x) => x.file === f)
+  assert.ok(e && e.line === null, `${f} is not a whole-file exclusion`)
+  const files = Object.fromEntries(EXCLUSIONS.map((x) => [x.file, `x\n${exLine(x)}\n`]))
+  const hits = [
+    { file: f, line: 156, text: SEEDED },
+    { file: f, line: 311, text: "const mail = { 'x': `STALWART_IMAGE=docker.io/stalwartlabs/stalwart@sha256:${D('b')}\\n` }" },
+  ]
+  assert.deepEqual(treeViolations(hits, files), [])
+  // ...but only in that file
+  assert.equal(treeViolations([{ file: 'scripts/release/other.test.mjs', line: 1, text: SEEDED }], files).length, 1)
+  files[f] = 'no image here\n'
+  assert.match(treeViolations([], files).join('\n'), /stale exclusion: scripts\/release\/check-image-digests\.test\.mjs no longer references/)
+})
+
+test('git grep output parses with CRLF line ends; a line it cannot split is a named error, not a TypeError (fix round 2)', () => {
+  assert.deepEqual(parseGitGrep('a/b.yml:3:  image: x\r\nc d.sh:10:Y=z:1\r\n'), [
+    { file: 'a/b.yml', line: 3, text: '  image: x' },
+    { file: 'c d.sh', line: 10, text: 'Y=z:1' },
+  ])
+  assert.throws(() => parseGitGrep('no-line-number-here\n'), /unparseable git grep line/)
 })
 
 test('links are not image references; bare and registry-qualified refs are', () => {
