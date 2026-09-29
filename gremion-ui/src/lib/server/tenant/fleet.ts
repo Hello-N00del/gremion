@@ -20,9 +20,38 @@ import {
 } from './registry'
 import { assertBrandIdentityComplete } from './provisioner/materialize'
 
+/**
+ * T07 — WHICH subsystem failed the tenant.
+ *
+ * migrateTenant does two unrelated things inside one try: it applies the
+ * data-plane migrations, and it then asserts the tenant's brand identity is
+ * complete. Both used to leave an identical trace — an `ok:false` outcome, a
+ * `tenant_migration_run` row with `ok = false`, and a log line reading
+ * "[fleet-migrations] tenant X: FAILED". So a pilot realm's FIRST boot, whose
+ * only problem is an un-materialized config.json, reported a MIGRATION failure
+ * and sent whoever debugged it into the migration runner, the SHA-256 manifest
+ * and the SQL — a subsystem that was working perfectly.
+ *
+ * The class travels with the outcome, into the ledger's error field (prefixed,
+ * so the column is self-describing without a schema change) and into the
+ * per-tenant readiness entry (readiness.ts) that backs the tenant-scoped 503.
+ * The outcome's `error` carries the SAME prefixed string the ledger row does —
+ * two texts for one failure is how a ledger row and a 503 stop agreeing.
+ *
+ * `control-plane` is the DEFAULT, not `migration`: everything outside
+ * runWithTenant — startTenantMigrationRun, resolveTenantBySlug and the closing
+ * finishTenantMigrationRun — is a control-plane operation. Defaulting to
+ * `migration` reproduced the exact mis-attribution this type exists to remove:
+ * a control-registry outage would have been ledgered as a migration failure and
+ * sent whoever debugged it into the SQL.
+ */
+export type FleetFailureKind = 'control-plane' | 'migration' | 'brand-identity'
+
 export interface FleetMigrationOutcome {
   ok: boolean
   error?: string
+  /** Which subsystem failed. Present only on a failure (`ok: false`). */
+  kind?: FleetFailureKind
   /** The ORIGINAL thrown value, identity preserved for diagnostics — callers
    *  that need the real error must never get a re-wrapped message instead. */
   cause?: unknown
@@ -43,6 +72,13 @@ export interface FleetTenantRef {
  */
 export async function migrateTenant(tenant: FleetTenantRef): Promise<FleetMigrationOutcome> {
   let runId: string | null = null
+  // T07: the class of whatever is running RIGHT NOW. A moving flag rather than a
+  // wrapper error because `cause` below must stay the ORIGINAL thrown value —
+  // re-wrapping would break that contract. It starts at `control-plane` (the
+  // ledger-start and the registry resolve below), becomes `migration` on entry
+  // to the tenant scope, `brand-identity` for that one assertion, and returns to
+  // `control-plane` for the closing ledger write.
+  let kind: FleetFailureKind = 'control-plane'
   try {
     runId = await startTenantMigrationRun(tenant.id)
     const ctx = await resolveTenantBySlug(tenant.slug)
@@ -52,6 +88,7 @@ export async function migrateTenant(tenant: FleetTenantRef): Promise<FleetMigrat
       )
     }
     const lastApplied = await runWithTenant(ctx, async () => {
+      kind = 'migration'
       await runMigrations()
       // P2.1c (T15 / §6-P2.2): the loud brand-incomplete BOOT/READINESS guard.
       // After neutralization an un-materialized tenant's config resolves
@@ -62,25 +99,39 @@ export async function migrateTenant(tenant: FleetTenantRef): Promise<FleetMigrat
       // the tenant `failed` (readiness.ts) → resolve.ts serves a TENANT-SCOPED
       // 503 (other tenants untouched), never a blank render. A tenant with a
       // materialized config.json (real brand values) passes unchanged.
-      assertBrandIdentityComplete(readConfig(ctx), tenant.slug)
+      try {
+        assertBrandIdentityComplete(readConfig(ctx), tenant.slug)
+      } catch (brandErr) {
+        kind = 'brand-identity'
+        throw brandErr
+      }
       return readLastApplied()
     })
+    // Out of the tenant scope: the closing ledger write is control plane again.
+    // Leaving `kind` at 'migration' here would ledger a control-registry outage
+    // as a migration failure over migrations that had already SUCCEEDED.
+    kind = 'control-plane'
     await finishTenantMigrationRun(runId, { ok: true, lastApplied })
     console.info(`[fleet-migrations] tenant ${tenant.slug}: ok (last applied: ${lastApplied ?? 'none'})`)
     return { ok: true }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`[fleet-migrations] tenant ${tenant.slug}: FAILED — ${message}`)
+    // T07: ONE classified string. The ledger's single `error` text column and the
+    // outcome (→ readiness → the tenant-scoped 503) carry the identical text, so
+    // a tenant_migration_run row and an operator's 503 never disagree, and the
+    // column says which subsystem failed without a control-plane schema change.
+    const classified = `${kind}: ${message}`
+    console.error(`[fleet-migrations] tenant ${tenant.slug}: ${kind.toUpperCase()} FAILED — ${message}`)
     if (runId) {
       try {
-        await finishTenantMigrationRun(runId, { ok: false, error: message })
+        await finishTenantMigrationRun(runId, { ok: false, error: classified })
       } catch (ledgerErr) {
         // The ledger is observability, not correctness — never let a control-
         // plane write failure mask the tenant outcome already recorded above.
         console.error(`[fleet-migrations] tenant ${tenant.slug}: ledger write failed:`, ledgerErr)
       }
     }
-    return { ok: false, error: message, cause: err }
+    return { ok: false, error: classified, kind, cause: err }
   }
 }
 

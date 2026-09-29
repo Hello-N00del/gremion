@@ -71,3 +71,13 @@ integration cases against a scratch `postgres:18-alpine` (migrated with
 | a29347f0 | five audit fixes | -> item 2 rows | | | |
 | 9e1cf8ef | test-smtp ClientAddress / `client-ip.ts` | via TASK-205 (its Q6; Q10) | | | |
 | TRD-074 | one domain, one tenant | present@913f1990 (TASK-025) | `tenant/registry.domain.integration.test.ts:249` describe "tenant_domain PK constraint (TRD-074)" | re-break (j): `ALTER TABLE tenant_domain DROP CONSTRAINT tenant_domain_pkey` in the scratch control DB -> FAIL `PostgresError: there is no unique or exclusion constraint matching the ON CONFLICT specification` (1 of 1 selected); PK restored | 25/25 |
+
+## Item 4: T07 grant fixes (subtask 206-A)
+
+| Source SHA | Disposition | Status | Guard | RED | GREEN |
+|---|---|---|---|---|---|
+| 09be6d83, 61683d99, 75cffdef | `migrations/055`, `058` bytes | present@TASK-018 (kernel bytes win, D R23-16a) | `fresh-init-proof.sh` exact-set grant block (TASK-054) | n/a (present) | green |
+| 09be6d83, 75cffdef | `FleetFailureKind` in `tenant/fleet.ts` (outcome `kind`, classified ledger/outcome string) + `tenant/readiness.ts` (`kind` on the entry, `getTenantReadinessFailureKind`) | adapted (fleet: kernel comment wording from TASK-042-b kept; readiness: f2 bytes) | `tenant/fleet.test.ts` (3 T07 cases), `tenant/readiness.test.ts` (3 T07 cases; test fixtures drop `matrix_homeserver`, absent in the kernel) | fleet 3 of 12 FAIL (`classifies the outcome and the ledgered error: brand-identity vs migration`, ...); readiness 3 of 13 FAIL (`a freshly provisioned un-materialized tenant fails with the BRAND-IDENTITY class, not the migration class`, ...); re-break (k): drop `kind = 'brand-identity'` -> 2 FAIL | tenant 40 files / 535 tests |
+| 61683d99, 75cffdef | `scripts/verify-fresh-install-grants.sh` reader login over SCRAM + wrong password refused | adapted into `gremion-ui/scripts/fresh-init-proof.sh` (G7): container initdb `--auth-host=scram-sha-256`, `log_error_verbosity=verbose`, real TCP login as `gremion_public_reader` | the script's own post-conditions | before the initdb change: `FAIL reader login: a WRONG password connected as gremion_public_reader (the probe path is not authenticating)`, `[fresh-init] FAILED` | `ok reader login: a wrong password is refused (28P01)`, `ok reader login: gremion_public_reader logs in over SCRAM and reads protocols`, `[fresh-init] all post-conditions hold` |
+| 09be6d83, 61683d99 | `k8s/base/postgres/configmap.yaml` | N/A (Q5, D R19-D16) | | | |
+| 61683d99 | `docker/postgres/init-databases.sh`, `test/init-databases-role.bats` | N/A: kernel ahead, kept (fail-closed init) | | | |
