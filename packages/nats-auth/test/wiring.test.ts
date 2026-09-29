@@ -24,10 +24,11 @@ const body = (file: string, name: string): string => {
 }
 
 describe('Makefile (E5)', () => {
-  test('make -n test-all runs test-nats-auth: the unit suite and proof.sh --auth', () => {
+  test('make -n test-all runs test-nats-auth: the unit suite, proof.sh --auth and the image check', () => {
     const out = make('test-all')
     expect(out).toContain('pnpm --filter @gremion/nats-auth test')
     expect(out).toContain('bash packages/nats-auth/scripts/proof.sh --auth')
+    expect(out).toContain('bash packages/nats-auth/scripts/image-check.sh')
   })
   test('make -n up runs nats-auth init before the state project comes up', () => {
     const out = make('up')
@@ -43,8 +44,10 @@ describe('Makefile (E5)', () => {
     expect(init, 'no nats-auth init in make -n rebuild').toBeGreaterThan(-1)
     expect(out.search(/-p dev-state up -d --force-recreate/)).toBeGreaterThan(init)
   })
-  test('make -n lint-sh lints proof.sh', () => {
-    expect(make('lint-sh')).toContain('packages/nats-auth/scripts/proof.sh')
+  test('make -n lint-sh lints proof.sh and image-check.sh', () => {
+    const out = make('lint-sh')
+    expect(out).toContain('packages/nats-auth/scripts/proof.sh')
+    expect(out).toContain('packages/nats-auth/scripts/image-check.sh')
   })
 })
 

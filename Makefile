@@ -197,9 +197,12 @@ test-all: test-unit test-integration test-ports-nats test-nats-auth
 # REAL broker -- packages/nats-auth/scripts/proof.sh --auth starts the state
 # image with docker/nats/nats.conf, asserts its own post-condition (a minimum
 # of passing live cases, none skipped) and removes the container by name.
+# Last, image-check.sh builds the migrate image's builder stage and runs the
+# call every site makes in it (`pnpm exec nats-auth init|render`).
 test-nats-auth:
 	@pnpm --filter @gremion/nats-auth test
 	@bash packages/nats-auth/scripts/proof.sh --auth
+	@bash packages/nats-auth/scripts/image-check.sh
 
 # @gremion/ports against a REAL NATS JetStream server. Starts a throwaway
 # container, runs the suite against it, tears it down, and ASSERTS the
@@ -250,7 +253,7 @@ test-ports-nats:
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/nats-auth/scripts/proof.sh
+	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
 		[ -e "$$f" ] || continue; \

@@ -48,7 +48,9 @@ if [ -z "$IMG" ]; then
 fi
 
 # One container, the calls in order, each post-condition checked in place.
-out="$(docker run --rm -w /repo/gremion-ui \
+# MSYS_NO_PATHCONV: Git Bash on Windows would rewrite the container paths
+# (/repo/..., /run/...) into host paths; a no-op everywhere else.
+out="$(MSYS_NO_PATHCONV=1 docker run --rm -w /repo/gremion-ui \
   -e NATS_SECRETS_DIR=/run/secrets/nats -e NATS_ACCOUNTS_DIR=/etc/nats/accounts \
   "$IMG" sh -euc '
     pnpm exec nats-auth init
@@ -67,7 +69,7 @@ printf '%s\n' "$out" | grep -q 'SYS' || fail "render printed no SYS account"
 case "$out" in *"Command \"nats-auth\" not found"*) fail "pnpm exec cannot resolve nats-auth" ;; esac
 
 if [ -n "${NATS_AUTH_RUNNER_IMAGE:-}" ]; then
-  if docker run --rm -w /app "$NATS_AUTH_RUNNER_IMAGE" node -e "import('@gremion/nats-auth').then(()=>process.exit(0),e=>{console.error(e.code);process.exit(3)})" >/dev/null 2>&1; then
+  if MSYS_NO_PATHCONV=1 docker run --rm -w /app "$NATS_AUTH_RUNNER_IMAGE" node -e "import('@gremion/nats-auth').then(()=>process.exit(0),e=>{console.error(e.code);process.exit(3)})" >/dev/null 2>&1; then
     fail "the runner $NATS_AUTH_RUNNER_IMAGE can import @gremion/nats-auth"
   fi
   echo "[nats-auth-image] runner $NATS_AUTH_RUNNER_IMAGE cannot import @gremion/nats-auth (as required)"
