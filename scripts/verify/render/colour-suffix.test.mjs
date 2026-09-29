@@ -152,6 +152,17 @@ test('fewer than 3 derived names is vacuous, on every check', () => {
   for (const c of g.checks) assert.match(c.problems.join('\n'), /vacuous/, c.id)
 })
 
+test('vacuity counts DERIVED names only: caller extras cannot mask an empty derivation (r3, 2026-09-29)', () => {
+  // The suite path always passes TASK-040's 13 hand-listed names as `extra`.
+  // A FIRST_PARTY_PREFIX drift plus an empty template read derives nothing;
+  // the guard must still say so instead of judging against the hand list alone.
+  const drifted = (colour) => ({ services: { 'gremion-ui': { image: `ghcr.io/elsewhere/ui:${colour}`, environment: { COLOUR: colour } } } })
+  const extra = ['gremion-ui', 'gremion-public', 'migrate', 'content-service', 'vault-service', 'files-service']
+  const g = colourSuffixGuard({ appRenders: { blue: drifted('blue'), green: drifted('green') }, templateText: '', extra })
+  assert.ok(g.names.length >= MIN_DERIVED_NAMES, 'the extras still reach the judged set')
+  for (const c of g.checks) assert.match(c.problems.join('\n'), /only 0 app-tier name\(s\) derived \(none\); fewer than 3 is vacuous/, c.id)
+})
+
 // ── GREEN cases ────────────────────────────────────────────────────────────
 
 test('AUTH_KEYCLOAK_ID=gremion-ui passes: a client id is a name, not a host', () => {

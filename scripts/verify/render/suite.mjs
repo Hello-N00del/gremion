@@ -62,7 +62,7 @@ export function judgeRenders({ projects, renders, counts, allowances, templateTe
     const r = buildAbsenceViolations(renders[p.id], p.id, allowances)
     checks.push({ guard: 'build-absence', id: p.id, problems: r.problems, note: summaryLine(p.id, r) })
   }
-  return { checks, names: colour.names }
+  return { checks, names: colour.names, derived: colour.derived }
 }
 
 /**
@@ -98,10 +98,13 @@ export function runRenderGuardsSuite({
     }
     return { toolMissing: null, unparseable: true, ...ZERO, detail: `render harness: ${err.message}` }
   }
-  const { checks, names } = judgeRenders({ projects, ...harness, allowances, templateText, extraNames, ...(driftFn ? { driftFn } : {}) })
+  const { checks, names, derived } = judgeRenders({ projects, ...harness, allowances, templateText, extraNames, ...(driftFn ? { driftFn } : {}) })
   const failed = checks.filter((c) => c.problems.length > 0)
+  // derived = app renders + app.env.tmpl (the set (d) vacuity counts);
+  // judged = derived + TASK-040's hand-listed extras (the set the scan uses).
   const lines = [
-    `derived app-tier names (${names.length}): ${names.join(', ')}`,
+    `derived app-tier names (${derived.length}): ${derived.join(', ')}`,
+    `judged app-tier names (${names.length}, derived + TASK-040 APP_SERVICES/LEAF_SERVICES): ${names.join(', ')}`,
     ...checks.filter((c) => c.note).map((c) => `${c.guard} ${c.note}`),
     ...failed.flatMap((c) => c.problems.map((p) => `FAIL ${c.guard}: ${p}`)),
   ]

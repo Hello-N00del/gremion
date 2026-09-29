@@ -54,7 +54,7 @@ test('the suite is green over a conforming stack, one check per (guard, project)
 
 test('state renders never contribute names: legal referenced from the app tier passes', () => {
   const out = suite()
-  assert.doesNotMatch(out.detail, /derived app-tier names[^\n]*\blegal\b/)
+  assert.doesNotMatch(out.detail, /(derived|judged) app-tier names[^\n]*\blegal\b/)
   assert.equal(out.failed, 0, out.detail)
 })
 
@@ -83,8 +83,22 @@ test('the suite judges TASK-040 APP_SERVICES + LEAF_SERVICES too: a leaf missing
     return r
   }
   const out = suite({ render: leaky, templateText })
-  assert.match(out.detail, /derived app-tier names[^\n]*\bfiles-service\b/)
+  assert.match(out.detail, /judged app-tier names[^\n]*\bfiles-service\b/)
+  assert.doesNotMatch(out.detail, /derived app-tier names[^\n]*\bfiles-service\b/)
   assert.match(out.detail, /FAIL colour-suffix: app-blue\/gremion-ui: environment\.FILES_URL names files-service without the -blue suffix/)
+  assert.equal(evaluateSuite(out).status, 'fail')
+})
+
+test('suite path: an empty derivation is vacuous even though the 13 hand-listed extras are passed (r3, 2026-09-29)', () => {
+  // Prefix drift on every service but the pinned gremion-ui (the swap
+  // post-condition keeps that one) plus an empty template read: 1 derived name.
+  const drifted = (p, o) => {
+    const r = fakeRender(p, o)
+    if (p.colour) for (const n of ['gremion-public', 'migrate', 'tenant-create']) r.services[n].image = `ghcr.io/elsewhere/${n}:x`
+    return r
+  }
+  const out = suite({ render: drifted, templateText: '' })
+  assert.match(out.detail, /FAIL colour-suffix: colour-suffix: only 1 app-tier name\(s\) derived \(gremion-ui\); fewer than 3 is vacuous/)
   assert.equal(evaluateSuite(out).status, 'fail')
 })
 

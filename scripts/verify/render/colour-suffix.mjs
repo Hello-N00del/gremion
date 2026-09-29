@@ -178,19 +178,25 @@ export function templateColourViolations(templateText, names, label = 'app.env.t
  * ONLY; state/ops/mail never reach this function, so they cannot contribute a
  * name. `extra` is forwarded into the name set (the suite passes TASK-040's
  * APP_SERVICES + LEAF_SERVICES, the same union G2 uses): a second source the
- * template defect cannot erase. Returns the derived names and one check per
- * judged input.
+ * template defect cannot erase. Returns the judged names (derived + extra),
+ * the derived names alone, and one check per judged input.
+ *
+ * (d) vacuity is judged over the DERIVED names only (renders + template),
+ * before `extra` is merged: the suite always passes 13 hand-listed extras, so
+ * counting them would let a FIRST_PARTY_PREFIX drift or an empty template read
+ * pass silently against the hand list alone (r3, 2026-09-29).
  */
 export function colourSuffixGuard({ appRenders, templateText, extra = [] }) {
   const text = templateText ?? readAppTemplate()
-  const names = appTierServiceNames({ renders: Object.values(appRenders ?? {}), templateText: text, extra })
-  const vacuous = vacuityProblem(names)
+  const derived = appTierServiceNames({ renders: Object.values(appRenders ?? {}), templateText: text })
+  const vacuous = vacuityProblem(derived)
+  const names = longestFirst([...derived, ...extra])
   const checks = Object.entries(appRenders ?? {}).map(([colour, render]) => ({
     id: `app-${colour}`,
     problems: [...(vacuous ? [vacuous] : []), ...renderColourViolations(render, colour, names, `app-${colour}`)],
   }))
   checks.push({ id: 'app.env.tmpl', problems: [...(vacuous ? [vacuous] : []), ...templateColourViolations(text, names)] })
-  return { names, checks }
+  return { names, derived, checks }
 }
 
 /** (d): a name set this small means the derivation read nothing real. */
