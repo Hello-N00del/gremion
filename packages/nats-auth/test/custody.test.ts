@@ -24,7 +24,8 @@ export function custodyViolations(r: Render, label: string): string[] {
         v.target === SECRETS_TARGET ||
         v.target.startsWith(`${SECRETS_TARGET}/`) ||
         String(def?.name ?? '').endsWith('_nats_secrets') ||
-        (v.type === 'bind' && /(^|\/)secrets\/nats(\/|$)/.test(String(v.source ?? '')))
+        // a bind source is a host path: '/' on Linux, '\' when compose renders on Windows
+        (v.type === 'bind' && /(^|[\\/])secrets[\\/]nats([\\/]|$)/.test(String(v.source ?? '')))
       if (isSecrets && !SEED_HOLDERS.includes(name)) out.push(`${label}/${name}: mounts the NATS seeds (${v.source ?? '?'} -> ${v.target})`)
     }
     if (svc.environment && 'NATS_URL' in svc.environment && !SEED_HOLDERS.includes(name)) {

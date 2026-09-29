@@ -6,9 +6,10 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { NO_POSIX_BASH, lf } from './portable.ts'
 
 const ROOT = process.env.NATS_AUTH_WIRING_ROOT ?? path.resolve(import.meta.dirname, '../../..')
-const read = (p: string) => readFileSync(path.join(ROOT, p), 'utf8')
+const read = (p: string) => lf(readFileSync(path.join(ROOT, p), 'utf8'))
 const make = (target: string) => execFileSync('make', ['-n', '-C', ROOT, target], { env: { ...process.env, MAKEFLAGS: '' } }).toString()
 /** Run one shell function of a script in isolation (its definition only). */
 function fn(file: string, name: string, call: string, env: Record<string, string> = {}): string {
@@ -53,8 +54,11 @@ describe('Makefile (E5)', () => {
 
 describe('pooled-stack proof (E4)', () => {
   const F = 'test/host/integration/pooled-stack-proof.sh'
-  test('state_port knows nats: 4222', () => {
+  test.skipIf(NO_POSIX_BASH)('state_port knows nats: 4222 (executed; skipped on Windows: NO_POSIX_BASH)', () => {
     expect(fn(F, 'state_port', 'state_port nats').trim()).toBe('4222')
+  })
+  test('state_port reads nats -> 4222 (static; the executed case above runs on Linux)', () => {
+    expect(body(F, 'state_port')).toMatch(/^\s*nats\) echo 4222 ;;$/m)
   })
   test('prepare creates both nats volumes; state-up inits before up; state-wait waits for nats', () => {
     expect(body(F, 'phase_prepare')).toMatch(/for vol in [^;]*\bnats_accounts nats_secrets\b/)
@@ -72,10 +76,15 @@ describe('host scripts (E6, G7, G8)', () => {
     expect(b).toContain('ensure_volume  "${STACK}_nats_accounts"')
     expect(b).not.toMatch(/docker run/)
   })
-  test('gremion-backup external_volumes includes both nats volumes', () => {
+  test.skipIf(NO_POSIX_BASH)('gremion-backup external_volumes includes both nats volumes (executed; skipped on Windows: NO_POSIX_BASH)', () => {
     const out = fn('infra/host/bin/gremion-backup', 'external_volumes', 'external_volumes', { STACK: 'x' }).trim().split('\n')
     expect(out).toContain('x_nats_secrets')
     expect(out).toContain('x_nats_accounts')
+  })
+  test('gremion-backup external_volumes names both nats volumes (static; the executed case above runs on Linux)', () => {
+    const b = body('infra/host/bin/gremion-backup', 'external_volumes')
+    expect(b).toContain('${STACK}_nats_secrets')
+    expect(b).toContain('${STACK}_nats_accounts')
   })
   test('gremion-deploy runs nats-auth init at the end of step 4 -- after gremion-render made the files tenant-create binds -- and never in step 3', () => {
     const s3 = body('infra/host/bin/gremion-deploy', 'step_3_space_and_pull')

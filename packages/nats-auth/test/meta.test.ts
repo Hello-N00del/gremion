@@ -4,8 +4,10 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { lf } from './portable.ts'
 
-const LIVE = readFileSync(path.resolve(import.meta.dirname, 'live/nats-auth.live.test.ts'), 'utf8')
+// LF as committed: the break cases below splice exact '\n'-joined text.
+const LIVE = lf(readFileSync(path.resolve(import.meta.dirname, 'live/nats-auth.live.test.ts'), 'utf8'))
 
 /** [title, body] of every `test('...', ...)` in a source text. */
 export function testBlocks(src: string): [string, string][] {

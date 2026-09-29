@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
+import { NO_POSIX_BASH, posix } from './portable.ts'
 
 const PROOF = path.resolve(import.meta.dirname, '../scripts/proof.sh')
 const D = path.resolve(import.meta.dirname, `../../../.scratch/t024/unit/hook-${process.pid}`)
@@ -21,16 +22,17 @@ const green = [...A, ...Fs, ...others].map((n) => line('✓', n)).join('\n') + '
 function hook(mode: 'auth' | 'open', content: string | null) {
   const log = path.join(D, `${mode}-${Math.random().toString(16).slice(2)}.log`)
   if (content !== null) writeFileSync(log, content)
-  return spawnSync('bash', [PROOF, `--${mode}`], { env: { ...process.env, NATS_AUTH_CHECK_LOG: log } })
+  return spawnSync('bash', [posix(PROOF), `--${mode}`], { encoding: 'utf8', env: { ...process.env, NATS_AUTH_CHECK_LOG: posix(log) } })
 }
-const out = (r: ReturnType<typeof hook>) => `${r.stdout}${r.stderr}`
+const out = (r: ReturnType<typeof hook>) => r.stdout + r.stderr
 
 // F cases are "... > F the current flows ... > F1 ..." in the real file; the
 // open check matches "> F " -- build those lines accordingly.
 const fLines = (mark: string) => Fs.map((n) => ` ${mark} ${F} > F the current flows > ${n} 9ms`)
 const aLines = (mark: string) => A.map((n) => ` ${mark} ${F} > ${n.slice(0, 2)} group > ${n} 9ms`)
 
-describe('proof.sh --auth post-condition', () => {
+// Skipped on Windows, reason named in NO_POSIX_BASH (portable.ts).
+describe.skipIf(NO_POSIX_BASH)('proof.sh --auth post-condition (bash; skipped on Windows: NO_POSIX_BASH)', () => {
   test('a complete green log passes', () => {
     const r = hook('auth', green)
     expect(r.status, out(r)).toBe(0)
@@ -62,7 +64,7 @@ describe('proof.sh --auth post-condition', () => {
   })
 })
 
-describe('proof.sh --open record', () => {
+describe.skipIf(NO_POSIX_BASH)('proof.sh --open record (bash; skipped on Windows: NO_POSIX_BASH)', () => {
   const record = [...aLines('×'), ...fLines('✓')].join('\n') + '\n'
   test('every A RED and every F GREEN: exit 1 (the record holds)', () => {
     const r = hook('open', record)

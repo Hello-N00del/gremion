@@ -41,6 +41,9 @@ function fail(msg: string, cause?: unknown): never {
 
 export const tenantFile = (tenant: string): string => `tenant_${tenant}.nk`
 
+/** A seed's name as the store spells it everywhere (`<owner>/tenant_<t>.nk`), whatever the platform separator. */
+const rel = (root: string, file: string): string => path.relative(root, file).split(path.sep).join('/')
+
 function writeFileSyncSafe(file: string, text: string): void {
   const fd = openSync(file, 'wx', 0o600)
   try {
@@ -70,7 +73,7 @@ export class SeedStore {
     try {
       text = readFileSync(file, 'utf8').trim()
     } catch (err) {
-      fail(`cannot read seed ${path.relative(this.root, file)} under ${this.root}`, err)
+      fail(`cannot read seed ${rel(this.root, file)} under ${this.root}`, err)
     }
     try {
       const seed = te.encode(text)
@@ -79,7 +82,7 @@ export class SeedStore {
       if (!publicKey.startsWith('U')) throw new Error('not a user key')
       return { seed, publicKey, created: false }
     } catch {
-      fail(`${path.relative(this.root, file)} is not a user seed -- refusing to replace it (that would cut the identity's live connection); inspect and remove it by hand`)
+      fail(`${rel(this.root, file)} is not a user seed -- refusing to replace it (that would cut the identity's live connection); inspect and remove it by hand`)
     }
   }
 
@@ -100,7 +103,7 @@ export class SeedStore {
       renameSync(tmp, final)
     } catch (err) {
       rmSync(tmp, { force: true })
-      fail(`cannot write seed ${path.relative(this.root, final)} under ${this.root}`, err)
+      fail(`cannot write seed ${rel(this.root, final)} under ${this.root}`, err)
     }
     return { seed, publicKey: kp.getPublicKey(), created: true }
   }

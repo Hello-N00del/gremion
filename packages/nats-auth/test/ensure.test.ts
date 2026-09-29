@@ -8,6 +8,7 @@ import { ensureTenantAccount, initAccounts, type BrokerOps } from '../src/ensure
 import { natsConnectOptionsFor } from '../src/connect.ts'
 import { natsBrokerOps } from '../src/broker-ops.ts'
 import { SeedStore } from '../src/store.ts'
+import { NO_POSIX_MODES, posix } from './portable.ts'
 
 const SCRATCH = path.resolve(import.meta.dirname, '../../../.scratch/t024/unit')
 let root: string
@@ -52,7 +53,7 @@ const seedFiles = (): string[] => {
   const walk = (d: string) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       if (e.isDirectory()) walk(path.join(d, e.name))
-      else out.push(path.relative(secretsDir, path.join(d, e.name)))
+      else out.push(posix(path.relative(secretsDir, path.join(d, e.name))))
     }
   }
   if (existsSync(secretsDir)) walk(secretsDir)
@@ -64,12 +65,15 @@ async function init() {
 }
 
 describe('nats-auth init (TDD 4)', () => {
-  test('creates _sys/reload.nk 0600 and a SYS-only accounts.conf; idempotent', async () => {
+  test.skipIf(NO_POSIX_MODES)('_sys/reload.nk is 0600 in a 0700 dir (skipped on Windows: NO_POSIX_MODES)', async () => {
+    await init()
+    expect(mode(path.join(secretsDir, '_sys/reload.nk'))).toBe(0o600)
+    expect(mode(path.join(secretsDir, '_sys'))).toBe(0o700)
+  })
+  test('creates _sys/reload.nk and a SYS-only accounts.conf; idempotent', async () => {
     const r1 = await init()
     expect(r1.createdSysReload).toBe(true)
     const seedPath = path.join(secretsDir, '_sys/reload.nk')
-    expect(mode(seedPath)).toBe(0o600)
-    expect(mode(path.join(secretsDir, '_sys'))).toBe(0o700)
     expect(conf()).toMatch(/^\s*SYS \{/m)
     expect(conf()).not.toMatch(/T_/)
     const bytes = conf()
@@ -91,9 +95,15 @@ describe('ensureTenantAccount (TDD 4)', () => {
     expect(b.reloads).toBe(1)
     expect(b.streams).toEqual([{ tenant: 'ta', streams: ['CALENDAR', 'CONTENT', 'NEWSLETTER', 'ORGUNIT'] }])
     expect(seedFiles()).toEqual(['_admin/tenant_ta.nk', '_sys/reload.nk', 'finance/tenant_ta.nk', 'kernel/tenant_ta.nk', 'publishing/tenant_ta.nk'])
-    for (const f of seedFiles()) expect(mode(path.join(secretsDir, f)), f).toBe(0o600)
     expect(conf()).toMatch(/T_ta \{/)
     expect(conf()).not.toMatch(/# board@ta/)
+  })
+
+  test.skipIf(NO_POSIX_MODES)('every seed it writes is 0600 (skipped on Windows: NO_POSIX_MODES)', async () => {
+    await init()
+    await ensureTenantAccount({ tenant: 'ta', modules: ['publishing', 'finance'] }, { secretsDir, accountsDir, broker: new FakeBroker() })
+    expect(seedFiles().length).toBeGreaterThan(3)
+    for (const f of seedFiles()) expect(mode(path.join(secretsDir, f)), f).toBe(0o600)
   })
 
   test('I1: a second identical call creates no key, writes identical bytes, returns reloaded:false', async () => {

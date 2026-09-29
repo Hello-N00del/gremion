@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
+import { NO_POSIX_MODES } from './portable.ts'
 
 const BIN = path.resolve(import.meta.dirname, '../bin/nats-auth.mjs')
 const D = path.resolve(import.meta.dirname, `../../../.scratch/t024/unit/cli-${process.pid}`)
@@ -11,13 +12,16 @@ const env = { ...process.env, NATS_SECRETS_DIR: `${D}/secrets`, NATS_ACCOUNTS_DI
 afterAll(() => rmSync(D, { recursive: true, force: true }))
 
 describe('nats-auth bin', () => {
-  test('init twice: seed 0600, SYS-only accounts.conf, second run unchanged', () => {
+  test('init twice: SYS-only accounts.conf, second run unchanged', () => {
     expect(execFileSync(process.execPath, [BIN, 'init'], { env }).toString()).toMatch(/seed created; .* written/)
     const bytes = readFileSync(`${D}/accounts/accounts.conf`, 'utf8')
     expect(bytes).not.toMatch(/T_/)
-    expect(statSync(`${D}/secrets/_sys/reload.nk`).mode & 0o777).toBe(0o600)
     expect(execFileSync(process.execPath, [BIN, 'init'], { env }).toString()).toMatch(/seed present; .* unchanged/)
     expect(readFileSync(`${D}/accounts/accounts.conf`, 'utf8')).toBe(bytes)
+  })
+  test.skipIf(NO_POSIX_MODES)('init leaves the reload seed 0600 (skipped on Windows: NO_POSIX_MODES)', () => {
+    execFileSync(process.execPath, [BIN, 'init'], { env })
+    expect(statSync(`${D}/secrets/_sys/reload.nk`).mode & 0o777).toBe(0o600)
   })
   test('render prints public keys only', () => {
     const out = execFileSync(process.execPath, [BIN, 'render'], { env }).toString()
