@@ -94,9 +94,10 @@ describe('the real modules/ tree', () => {
     expect(platformDatabases('board-postgres', { compose, catalogue: cat })).toEqual(['board', 'postgres', 'template0', 'template1'])
     expect(platformDatabases('newsletter-postgres', { compose, catalogue: cat })).toEqual(['newsletter', 'postgres', 'template0', 'template1'])
     // TASK-198: messaging's platform server holds only platform databases (synapse), never a customer one.
-    if (compose.services.has('messaging-postgres')) {
-      expect(platformDatabases('messaging-postgres', { compose, catalogue: cat })).toEqual(['messaging', 'postgres', 'synapse', 'template0', 'template1'])
-    }
+    const messagingServer = compose.services.has('messaging-postgres')
+    expect(messagingServer ? platformDatabases('messaging-postgres', { compose, catalogue: cat }) : null).toEqual(
+      messagingServer ? ['messaging', 'postgres', 'synapse', 'template0', 'template1'] : null,
+    )
   })
 
   it('scripts/check-extraction-source.mjs agrees: 11 of 11 module directories', () => {
