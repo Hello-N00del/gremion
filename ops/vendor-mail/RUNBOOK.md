@@ -35,8 +35,14 @@ not decoded by it (residual).
 The host has no Node. `infra/host/bin/gremion-vendor-mail` runs each check as
 `docker run --rm` of `VENDOR_MAIL_NODE_IMAGE` (read from `mail.env` only, by
 digest), with `ops/vendor-mail` mounted read-only, named
-`${STACK}-vendor-mail-<sub>-<pid>` and labelled `gremion.stack=${STACK}`. Run it
-from the release tree: `/opt/gremion/current/infra/host/bin/gremion-vendor-mail`.
+`${STACK}-vendor-mail-<sub>-<pid>` and labelled `gremion.stack=${STACK}`. It
+runs from either layout: the release tree
+(`/opt/gremion/current/infra/host/bin/gremion-vendor-mail`, which finds
+`ops/vendor-mail` beside it), or the installed copy in `/opt/gremion/bin`
+(`docs/ops/runbook/install.md`; first on `PATH`, and what a bare
+`gremion-mail-bringup` calls), which takes `ops/vendor-mail` from the live
+release `/opt/gremion/current`. With neither present it stops with exit 2 and
+names both paths.
 
 | Subcommand | What it does |
 |---|---|

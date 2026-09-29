@@ -16,11 +16,15 @@ set -euo pipefail
 # mail.env ONLY (an exported value is discarded before the file is loaded, and
 # there is no default) and must be pinned by digest (TRD-350).
 #
-# WHERE IT RUNS FROM. <root>/current is a full release clone (gremion-deploy),
-# so this file is <root>/current/infra/host/bin/gremion-vendor-mail and
-# ${SCRIPT_DIR}/../../../ops/vendor-mail is <root>/current/ops/vendor-mail.
-# Only gremion-hostd is installed into <root>/bin; a hostd caller (TASK-043)
-# runs this launcher through the current/ path.
+# WHERE IT RUNS FROM. Two layouts, tried in this order (as env_template_dirs()
+# in lib/common.sh does):
+#   1. a release clone: <root>/current is a full clone (gremion-deploy), so
+#      ${SCRIPT_DIR}/../../../ops/vendor-mail is <root>/current/ops/vendor-mail;
+#   2. installed: docs/ops/runbook/install.md copies every infra/host/bin/*
+#      into <root>/bin (first on PATH; the go-live gate runs a bare
+#      `gremion-mail-bringup`, which calls this file as its sibling), so the
+#      tree is taken from the live release, $(gremion_root)/current/ops/vendor-mail.
+# Neither present is a named precondition failure (exit 2).
 #
 # CONTAINERS. Named ${STACK}-vendor-mail-<sub>-<pid>, labelled
 # gremion.stack=${STACK}, --network none -- except `principals`, which needs
@@ -93,9 +97,16 @@ env_key() {
 }
 
 resolve_vendor_dir() {
-    [[ -d "$VENDOR_MAIL_DIR" ]] \
-        || die "ops/vendor-mail not found at ${VENDOR_MAIL_DIR}: run this launcher from a release tree (<root>/current/infra/host/bin)" \
-               "$GREMION_EXIT_USAGE"
+    # The sibling tree first (run from a release clone), then the live release
+    # (installed into <root>/bin) -- the order env_template_dirs() uses.
+    local installed
+    installed="$(gremion_root)/current/ops/vendor-mail"
+    if [[ ! -d "$VENDOR_MAIL_DIR" ]]; then
+        [[ -d "$installed" ]] \
+            || die "ops/vendor-mail not found at ${VENDOR_MAIL_DIR} (beside this launcher) nor at ${installed} (the live release): deploy a release first" \
+                   "$GREMION_EXIT_USAGE"
+        VENDOR_MAIL_DIR="$installed"
+    fi
     VENDOR_MAIL_DIR="$(cd "$VENDOR_MAIL_DIR" && pwd)"
     RELEASE_DIR="$(cd "${VENDOR_MAIL_DIR}/../.." && pwd)"
 }

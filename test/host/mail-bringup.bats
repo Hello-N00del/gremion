@@ -923,6 +923,57 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+# install_bringup_into_root_bin — the layout of docs/ops/runbook/install.md:
+# every infra/host/bin/* in <root>/bin, lib/common.sh in <root>/lib, the release
+# clone at <root>/current. The go-live gate (G4-MAIL) runs a bare
+# `gremion-mail-bringup` from there, so VENDOR_MAIL_BIN is NOT overridden: the
+# bring-up calls its installed sibling, the REAL launcher.
+install_bringup_into_root_bin() {
+    unset VENDOR_MAIL_BIN
+    mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib" \
+             "${GREMION_ROOT}/current/ops/vendor-mail" \
+             "${GREMION_ROOT}/current/infra/host/templates/env" \
+             "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/infra/host/bin/gremion-mail-bringup" \
+       "${PROJECT_ROOT}/infra/host/bin/gremion-vendor-mail" "${GREMION_ROOT}/bin/"
+    cp "${PROJECT_ROOT}/infra/host/lib/common.sh" "${GREMION_ROOT}/lib/"
+    cp "${PROJECT_ROOT}/infra/host/templates/env/"*.tmpl "${GREMION_ROOT}/current/infra/host/templates/env/"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" "${GREMION_ROOT}/current/docker/keycloak/"
+    : > "${GREMION_ROOT}/current/ops/vendor-mail/check-identities.mjs"
+    : > "${GREMION_ROOT}/current/ops/vendor-mail/check-received.mjs"
+    : > "${GREMION_ROOT}/etc/env/ops.env"
+    printf 'VENDOR_MAIL_NODE_IMAGE=docker.io/library/node@sha256:%s\n' \
+        3333333333333333333333333333333333333333333333333333333333333333 >> "${GREMION_ROOT}/etc/env/mail.env"
+    INSTALLED_BRINGUP="${GREMION_ROOT}/bin/gremion-mail-bringup"
+}
+
+@test "installed into <root>/bin, assert 3 runs check-identities from the live release (fix round 2)" {
+    install_bringup_into_root_bin
+    shim_dns_check_ok
+    shim dig 'exit 0'
+    run "$INSTALLED_BRINGUP" --assert 3
+    [[ "$output" != *"could not run check-identities"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"ops/vendor-mail not found"* ]] || { echo "$output"; return 1; }
+    assert_recorded docker "${GREMION_ROOT}/current/ops/vendor-mail:/release/ops/vendor-mail:ro"
+    assert_recorded docker 'node /release/ops/vendor-mail/check-identities.mjs'
+}
+
+@test "installed into <root>/bin, assert 6b converges realm-smtp and checks the headers (fix round 2)" {
+    install_bringup_into_root_bin
+    shim_dns_check_ok
+    shim_keycloak_labels
+    cat > "${GREMION_ROOT}/results.txt" <<EOF
+Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=system@example.org; dmarc=pass header.from=example.org
+Received: from mail.example.org (mail.example.org [203.0.113.25]) by mx.example.net
+EOF
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
+        run "$INSTALLED_BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
+    [[ "$output" == *"REALM-SMTP: realm=master user=system@example.org"* ]] || { echo "status=$status $output"; return 1; }
+    [[ "$output" != *"did not converge"* ]] || { echo "$output"; return 1; }
+    assert_recorded docker 'node /release/ops/vendor-mail/check-received.mjs'
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+}
+
 @test "MX-PUBLICATION stays HOLD while any assert is not ok" {
     # The one guard that, if it lied, would publish the MX before the box is
     # provably safe. Drilled RED in Step 19.

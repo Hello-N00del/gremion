@@ -93,6 +93,42 @@ refute_secret_in_argv() {
     refute_recorded docker 'run'
 }
 
+# install_into_root_bin — lay the launcher out the way docs/ops/runbook/install.md
+# does: every infra/host/bin/* copied into <root>/bin and lib/common.sh into
+# <root>/lib, with the release clone still at <root>/current. That is where the
+# go-live gate runs gremion-mail-bringup from (PATH puts <root>/bin first).
+install_into_root_bin() {
+    mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib"
+    cp "${HOST_SRC}/bin/gremion-vendor-mail" "${GREMION_ROOT}/bin/"
+    cp "${HOST_SRC}/lib/common.sh" "${GREMION_ROOT}/lib/"
+    INSTALLED="${GREMION_ROOT}/bin/gremion-vendor-mail"
+}
+
+@test "installed into <root>/bin (install.md), the launcher finds ops/vendor-mail in <root>/current (fix round 2)" {
+    install_into_root_bin
+    run "$INSTALLED" check-received --file /dev/null
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    assert_recorded docker "${REL}/ops/vendor-mail:/release/ops/vendor-mail:ro"
+    assert_recorded docker "$NODE_DIGEST_IMAGE node /release/ops/vendor-mail/check-received.mjs"
+}
+
+@test "installed into <root>/bin, the release-tree checks mount <root>/current/infra/host (fix round 2)" {
+    install_into_root_bin
+    : > "${REL}/ops/vendor-mail/check-upstream-image.mjs"
+    run "$INSTALLED" check-upstream-image
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    assert_recorded docker "${REL}/infra/host/mail:/release/infra/host/mail:ro"
+}
+
+@test "installed into <root>/bin with no release under <root>/current, the failure names both places looked (fix round 2)" {
+    install_into_root_bin
+    rm -rf "${REL}/ops/vendor-mail"
+    run "$INSTALLED" check-received --file /dev/null
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"${GREMION_ROOT}/current/ops/vendor-mail"* ]] || { echo "$output"; return 1; }
+    refute_recorded docker 'run'
+}
+
 @test "VENDOR_MAIL_NODE_IMAGE is read from mail.env only: absent there is exit 2 even when exported" {
     write_mail_env __absent__
     VENDOR_MAIL_NODE_IMAGE="$NODE_DIGEST_IMAGE" run "$LAUNCHER" check-received --file /dev/null
