@@ -173,6 +173,9 @@ EOF
   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$OUT/stub-key.pem" 2>/dev/null
   local spki; spki="$(openssl pkey -in "$OUT/stub-key.pem" -pubout -outform DER | openssl base64 -A | tr -d '\r')"
   printf '{"realm":"t198","public_key":"%s"}\n' "$spki" > "$OUT/stub/realm.json"
+  # umask 077 above: docker cp keeps the host mode, so make the served copy
+  # world-readable for whatever user the stub process runs as.
+  chmod 0755 "$OUT/stub"; chmod 0644 "$OUT/stub/realm.json"
   ok "prepared ${STACK}: env file, externals, stub key, image ${IMAGE_COMPOSE} (run PHASE=names before any up)"
   printf '%s prepared %s\n' "$(now)" "$STACK" | ledger run.log
 }
