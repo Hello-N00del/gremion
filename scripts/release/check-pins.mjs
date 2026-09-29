@@ -181,7 +181,12 @@ export function derivedServices(project, { root = REPO_ROOT, readText = (p) => r
   const builds = new Map()
   const order = [] // file order of first appearance, not of the last override
   for (const entry of composeFile.split(':').map((e) => e.trim()).filter(Boolean)) {
-    if (isPinsSlot(entry)) continue
+    if (isPinsSlot(entry)) {
+      // only the two release layers are skipped: any other *pins.yml name
+      // would silently leave a compose file out of the derivation
+      if (!Object.values(PINS_FILES).includes(basename(entry))) throw new Error(`${tmpl}: ${entry} is not a release pins layer (${Object.values(PINS_FILES).join(', ')})`)
+      continue
+    }
     let text
     try {
       text = readText(join(root, entry))

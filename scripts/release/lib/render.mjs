@@ -76,6 +76,7 @@ export function planRenders({
   const plans = []
   const problems = []
   const add = (code, where, message) => problems.push({ code, where, message })
+  const used = new Set()
   let stack = ''
   try {
     stack = readEnvKey(readText(join(root, RENDER_ENV)), 'STACK') ?? ''
@@ -116,6 +117,7 @@ export function planRenders({
         continue
       }
       const slot = basename(entry)
+      used.add(slot)
       const fixture = pinsOverride[slot] ?? join(root, PINS_FIXTURE_DIR, slot)
       if (!existsSync(fixture)) {
         add('no-pins-fixture', where, `pins slot ${entry} has no emitted fixture ${fixture}`)
@@ -137,6 +139,10 @@ export function planRenders({
       const argv = ['compose', '--env-file', join(root, RENDER_ENV), '--project-directory', dir, '--project-name', name, ...files.flatMap((f) => ['-f', f]), 'config', '--format', 'json']
       plans.push({ id: r.id, project, dir, files, argv, env, seed: [...(map.seed ?? [])] })
     }
+  }
+  // an override no slot consumed (a typo) would leave the reference GREEN
+  for (const slot of Object.keys(pinsOverride)) {
+    if (!used.has(slot)) add('unused-override', 'render', `--render-pins ${slot} names no pins slot of any template (slots: ${[...used].join(', ') || 'none'})`)
   }
   return { plans, problems }
 }

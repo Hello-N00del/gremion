@@ -256,3 +256,8 @@ test('derive r1: compose shapes the line parser cannot read are refused, never r
     assert.throws(() => buildServicesOf(c, 'f.yml'), /f\.yml/, JSON.stringify(c))
   }
 })
+
+test('derive r1: a COMPOSE_FILE entry shaped like a pins slot but not one of the two layers is refused', () => {
+  const r = tree({ [PROJECT_TEMPLATES.state]: STATE_TMPL('a.yml:docker-compose.extra-pins.yml'), 'a.yml': 'services:\n  legal:\n    build: .\n' })
+  assert.throws(() => derivedServices('state', { root: r }), /docker-compose\.extra-pins\.yml is not a release pins layer/)
+})

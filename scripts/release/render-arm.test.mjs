@@ -223,3 +223,9 @@ test('r1: an app render carrying a derived STATE service fails (layers merged th
   assert.deepEqual(codes(res.problems), ['app-purity'])
   assert.equal(res.problems[0].where, 'app-blue/legal')
 })
+
+test('r1: a --render-pins override no pins slot consumes fails (a typo must not turn the RED reference GREEN)', () => {
+  const res = arm({ pinsOverride: { 'docker-compose.state_pins.yml': join(REPO_ROOT, PINS_FIXTURE_DIR, 'docker-compose.pins.yml') } })
+  assert.deepEqual(codes(res.problems), ['unused-override'])
+  assert.match(res.problems[0].message, /docker-compose\.state_pins\.yml/)
+})
