@@ -15,8 +15,8 @@ import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-import { appServices, parsePinLines, emitPins } from './emit-pins.mjs'
-import { checkPins, deployPinRegexes } from './check-pins.mjs'
+import { appServices, parsePinLines, emitPins, selectProject } from './emit-pins.mjs'
+import { checkPins, deployPinRegexes, derivedServices } from './check-pins.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(HERE, '..', '..')
@@ -118,4 +118,61 @@ test('r1: a pin outside the first-party prefix is refused (the host would treat 
   // an explicit prefix (the rehearsal's local registry) is honoured
   const out = emitPins(parsePinLines(`gremion-ui=127.0.0.1:5000/hello-n00del/gremion-ui@sha256:${D('1')}`), ['gremion-ui'], { firstPartyPrefix: '127.0.0.1:5000/hello-n00del/' })
   assert.deepEqual(checkPins(out, { services: ['gremion-ui'] }), [])
+})
+
+// ── TASK-048b: the state layer, --project, and the release fixtures ───────
+
+const STATE_LINES = [
+  `legal=${FP}/gremion-legal@sha256:${D('7')}`,
+  `vector=${FP}/gremion-vector@sha256:${D('8')}`,
+  `fallback=${FP}/gremion-fallback@sha256:${D('9')}`,
+]
+const RELEASE_VALID = join(REPO_ROOT, 'test/host/fixtures/release/valid')
+
+test('048b: the state layer emitted from state lines passes check-pins by the derived state set and names its file', () => {
+  const services = derivedServices('state')
+  const out = emitPins(parsePinLines(STATE_LINES.join('\n')), services, { project: 'state' })
+  assert.deepEqual(checkPins(out, { services }), [])
+  assert.match(out.split('\n')[0], /^# docker-compose\.state-pins\.yml: the release pins layer \(state services\)/)
+})
+
+test('048b: an app service in the state layer is refused, and a state service in the app layer', () => {
+  assert.throws(
+    () => emitPins(parsePinLines([...STATE_LINES, LINES[0]].join('\n')), derivedServices('state'), { project: 'state' }),
+    /unexpected-service: service gremion-ui/,
+  )
+  assert.throws(
+    () => emitPins(parsePinLines([...LINES, STATE_LINES[0]].join('\n')), derivedServices('app'), { project: 'app' }),
+    /unexpected-service: service legal/,
+  )
+})
+
+test('048b: selectProject partitions one record by the derived sets; a service in neither project is refused', () => {
+  const all = parsePinLines([...LINES, ...STATE_LINES].join('\n'))
+  assert.deepEqual([...selectProject(all, 'state').keys()], ['legal', 'vector', 'fallback'])
+  assert.deepEqual([...selectProject(all, 'app').keys()], SERVICES)
+  const stray = parsePinLines([...LINES, ...STATE_LINES, `postgres=${FP}/postgres@sha256:${D('a')}`].join('\n'))
+  assert.throws(() => selectProject(stray, 'state'), /postgres is in no release project/)
+})
+
+test('048b: valid/pins.txt reproduces both committed layers byte-equal (cli --project); missing-overlap carries the same state layer', () => {
+  const cli = join(HERE, 'emit-pins.mjs')
+  for (const [project, file] of [['state', 'docker-compose.state-pins.yml'], ['app', 'docker-compose.pins.yml']]) {
+    const res = spawnSync(process.execPath, [cli, '--project', project, '--in', join(RELEASE_VALID, 'pins.txt')], { encoding: 'utf8' })
+    assert.equal(res.status, 0, res.stderr)
+    assert.equal(res.stdout, readFileSync(join(RELEASE_VALID, file), 'utf8'), `${file} is not the emitter's output`)
+  }
+  const missingOverlap = join(REPO_ROOT, 'test/host/fixtures/release/missing-overlap/docker-compose.state-pins.yml')
+  assert.equal(readFileSync(missingOverlap, 'utf8'), readFileSync(join(RELEASE_VALID, 'docker-compose.state-pins.yml'), 'utf8'))
+  const bad = spawnSync(process.execPath, [cli, '--project', 'ops', '--in', join(RELEASE_VALID, 'pins.txt')], { encoding: 'utf8' })
+  assert.equal(bad.status, 1, bad.stdout + bad.stderr)
+  assert.match(bad.stderr, /unknown project ops/)
+  const both = spawnSync(process.execPath, [cli, '--project', 'app', '--app-compose', APP_COMPOSE], { encoding: 'utf8', input: '' })
+  assert.equal(both.status, 2, 'mixing --project and --app-compose is a usage error')
+})
+
+test('048b: the unpinned fixture state layer carries a tag-only state image that check-pins refuses', () => {
+  const text = readFileSync(join(REPO_ROOT, 'test/host/fixtures/release/unpinned/docker-compose.state-pins.yml'), 'utf8')
+  const ps = checkPins(text, { services: derivedServices('state') })
+  assert.ok(ps.some((p) => p.code === 'unpinned' && /gremion-legal:dist-v1\.2\.3/.test(p.message)), JSON.stringify(ps))
 })

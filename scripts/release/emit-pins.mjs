@@ -1,27 +1,36 @@
 #!/usr/bin/env node
-// emit-pins — write the APP layer of docker-compose.pins.yml from the digests a
-// release pushed (TASK-048, Q3; TRD-350's "deployment manifest" is the
-// rendered release: compose + this pins layer). TASK-048b adds the state layer.
+// emit-pins — write a release pins layer from the digests a release pushed
+// (TASK-048, Q3; TRD-350's "deployment manifest" is the rendered release:
+// compose + the pins layers). TASK-048b splits the layer per project:
+//   --project app   -> docker-compose.pins.yml        (app-<colour> projects)
+//   --project state -> docker-compose.state-pins.yml  (the state project)
 //
 // Input: one `service=<repo>@sha256:<64 hex>` per line (blank lines and `#`
-// comments ignored), on stdin or --in FILE. The expected service set is the
-// `services:` block of docker-compose.app.yml; every expected service must be
-// pinned exactly once and nothing else. Each service gets `build: !reset null`
-// (no build in production) and its digest `image:`.
+// comments ignored), on stdin or --in FILE: ONE record for the whole release.
+// With --project, the expected set is check-pins' derived set for that
+// project (every service with `build:` in the project's COMPOSE_FILE files);
+// the record is partitioned by the two derived sets, and a line whose service
+// is in neither project is refused. Every expected service must be pinned
+// exactly once. Each service gets `build: !reset null` (no build in
+// production) and its digest `image:`. --app-compose FILE (TASK-048) remains
+// for the app layer: the expected set is that file's services: block.
 //
-// The layer is judged by the UNCHANGED check-pins.mjs (whose regexes come out
-// of gremion-deploy) before anything is written: a layer check-pins refuses is
-// never written, and the exit code is 1.
+// The layer is judged by check-pins.mjs (whose regexes come out of
+// gremion-deploy) against the project's set before anything is written: a
+// layer check-pins refuses — an app service in the state layer, a state
+// service in the app layer, a missing one — is never written, and the exit
+// code is 1.
 //
-// Run:  node scripts/release/emit-pins.mjs --app-compose docker-compose.app.yml \
-//         [--in pins.txt] [--out docker-compose.pins.yml]
+// Run:  node scripts/release/emit-pins.mjs --project state|app \
+//         [--in pins.txt] [--out docker-compose.state-pins.yml|docker-compose.pins.yml]
+//       node scripts/release/emit-pins.mjs --app-compose docker-compose.app.yml [--in …] [--out …]
 //       (no --out: the layer goes to stdout)
 // Test: node --test scripts/release/emit-pins.test.mjs
 
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { checkPins } from './check-pins.mjs'
+import { checkPins, derivedServices, PINS_FILES, PROJECT_TEMPLATES } from './check-pins.mjs'
 
 const PIN_LINE_RE = /^([A-Za-z0-9][A-Za-z0-9_.-]*)=([a-z0-9][a-z0-9._/-]*(?::[0-9]+)?(?:\/[a-z0-9._-]+)+@sha256:[0-9a-f]{64})$/
 
@@ -61,8 +70,22 @@ export function parsePinLines(text) {
 
 export const FIRST_PARTY_PREFIX = 'ghcr.io/hello-n00del/'
 
+/**
+ * The pins of one release project out of the release's single record: the
+ * services derived for `project`. A service derived for neither project is
+ * refused (it would be silently dropped otherwise).
+ */
+export function selectProject(pins, project, { derive = derivedServices } = {}) {
+  const sets = Object.fromEntries(Object.keys(PROJECT_TEMPLATES).map((p) => [p, derive(p)]))
+  if (!sets[project]) throw new Error(`unknown project ${project} (want ${Object.keys(sets).join('|')})`)
+  for (const svc of pins.keys()) {
+    if (!Object.values(sets).some((set) => set.includes(svc))) throw new Error(`${svc} is in no release project (${Object.keys(sets).join(', ')})`)
+  }
+  return new Map([...pins].filter(([svc]) => sets[project].includes(svc)))
+}
+
 /** The pins layer text, in the expected service order; throws unless check-pins passes it. */
-export function emitPins(pins, services, { firstPartyPrefix = FIRST_PARTY_PREFIX } = {}) {
+export function emitPins(pins, services, { firstPartyPrefix = FIRST_PARTY_PREFIX, project = 'app' } = {}) {
   // The app layer is first-party only: a pin outside the prefix is not
   // signature-verified by gremion-deploy, it is looked up as third-party.
   for (const [svc, ref] of pins) {
@@ -70,8 +93,9 @@ export function emitPins(pins, services, { firstPartyPrefix = FIRST_PARTY_PREFIX
   }
   const order = [...services.filter((s) => pins.has(s)), ...[...pins.keys()].filter((s) => !services.includes(s))]
   const body = order.map((s) => `  ${s}:\n    build: !reset null\n    image: ${pins.get(s)}\n`).join('')
+  if (!PINS_FILES[project]) throw new Error(`unknown project ${project}`)
   const text =
-    '# docker-compose.pins.yml: the release pins layer (app services), written by\n' +
+    `# ${PINS_FILES[project]}: the release pins layer (${project} services), written by\n` +
     '# scripts/release/emit-pins.mjs and judged by scripts/release/check-pins.mjs.\n' +
     `services:\n${body}`
   const problems = checkPins(text, { services })
@@ -83,22 +107,30 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const opts = {}
   const argv = process.argv.slice(2)
   for (let i = 0; i < argv.length; i += 2) {
-    if (!['--app-compose', '--in', '--out'].includes(argv[i]) || argv[i + 1] === undefined) {
+    if (!['--project', '--app-compose', '--in', '--out'].includes(argv[i]) || argv[i + 1] === undefined) {
       opts.bad = true
       break
     }
     opts[argv[i]] = argv[i + 1]
   }
+  const project = opts['--project']
   const compose = opts['--app-compose']
-  if (opts.bad || !compose) {
-    console.error('usage: emit-pins.mjs --app-compose FILE [--in FILE] [--out FILE]')
+  if (opts.bad || !project === !compose) {
+    console.error('usage: emit-pins.mjs (--project state|app | --app-compose FILE) [--in FILE] [--out FILE]')
     process.exit(2)
   }
   const arg = (f) => opts[f]
   try {
-    const services = appServices(readFileSync(compose, 'utf8'))
     const input = arg('--in') ? readFileSync(arg('--in'), 'utf8') : readFileSync(0, 'utf8')
-    const text = emitPins(parsePinLines(input), services)
+    let services, pins
+    if (project) {
+      pins = selectProject(parsePinLines(input), project)
+      services = derivedServices(project)
+    } else {
+      pins = parsePinLines(input)
+      services = appServices(readFileSync(compose, 'utf8'))
+    }
+    const text = emitPins(pins, services, { project: project ?? 'app' })
     const out = arg('--out')
     if (out) {
       writeFileSync(`${out}.tmp`, text)

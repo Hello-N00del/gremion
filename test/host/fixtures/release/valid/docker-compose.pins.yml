@@ -1,5 +1,5 @@
-# Fixture: the shape spec B's release workflow writes. Digests are obviously
-# synthetic; nothing in the unit tests contacts a registry.
+# docker-compose.pins.yml: the release pins layer (app services), written by
+# scripts/release/emit-pins.mjs and judged by scripts/release/check-pins.mjs.
 services:
   gremion-ui:
     build: !reset null
