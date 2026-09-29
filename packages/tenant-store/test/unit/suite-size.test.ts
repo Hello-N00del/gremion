@@ -18,11 +18,17 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/store.test.ts': 18,
     'src/manifest.test.ts': 10,
     'src/strip-outer-transaction.test.ts': 11,
-    'src/runner.test.ts': 6,
-    'src/schema-gate.test.ts': 8,
+    // TASK-075: +1 releaseRef refusal
+    'src/runner.test.ts': 7,
+    // TASK-075 G2: +7 state `ahead`
+    'src/schema-gate.test.ts': 15,
     'src/index.test.ts': 2,
-    'src/lifecycle/lifecycle.test.ts': 22,
+    // TASK-075 G1b: +2 (releaseRef refusal, platform baseline phases)
+    'src/lifecycle/lifecycle.test.ts': 24,
     'src/lifecycle/export.test.ts': 8,
+    // TASK-075 G1: phase header / baseline / PHASE_MISSING, the dump module
+    'src/phase.test.ts': 7,
+    'src/dump/dump.test.ts': 19,
     'test/unit/check-tenant-db-access.test.ts': 18,
     'test/unit/suite-size.test.ts': 4,
   },
@@ -38,6 +44,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/lifecycle-enable.test.ts': 7,
     'test/integration/lifecycle-disable.test.ts': 6,
     'test/integration/lifecycle-inspect.test.ts': 7,
+    // TASK-075: the dump under the real runner, restore rehearsal, import take, scratch e2e
+    'test/integration/dump.test.ts': 7,
   },
 }
 

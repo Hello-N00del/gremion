@@ -6,15 +6,16 @@
 //
 // pg_dump/pg_restore run INSIDE the scratch server's container (cli.ts
 // dumpTools with a container: the server's own pg_dump 18). The host tool
-// infra/host/bin/gremion-migration-dump runs under bash (Git Bash on Windows,
-// never WSL) with a logger shim; its dir mode/owner checks belong to `take`,
+// infra/host/bin/gremion-migration-dump runs under Linux bash (natively, or on
+// Windows in the t075-dumptool image) with a logger shim; its dir mode/owner
+// checks belong to `take`,
 // which these specs drive through the node side. On Windows (no uid, NTFS
 // modes) the node side's POSIX dir checks are replaced by a stand-in that
 // reports a 0700 dir owned by this process; on Linux they run for real.
-import { spawnSync } from 'node:child_process'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
-import { delimiter, join } from 'node:path'
+import { delimiter, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest'
 import { chainPreApply } from '../../../../scripts/migrations/pre-apply.mjs'
@@ -34,15 +35,11 @@ const WORKTREE = fileURLToPath(new URL('../../../../', import.meta.url))
 const TOOL = join(WORKTREE, 'infra', 'host', 'bin', 'gremion-migration-dump')
 const SCRATCH = join(WORKTREE, '.scratch', `t075-dump-${process.pid}`)
 const phaseFor = FIXTURE_RELEASE.phaseFor
+/** docker exec/run on a loaded box take tens of seconds each. */
+const SLOW = 600_000
 
 /** Windows has no uid and NTFS reports no POSIX modes: stand in for them there only. */
 const FS: DumpFs = process.platform === 'win32' ? { ...defaultDumpFs, statDir: () => ({ isDirectory: true, mode: 0o700, uid: 0 }), uid: 0 } : defaultDumpFs
-
-function gitBash(): string {
-  if (process.platform !== 'win32') return 'bash'
-  for (const p of ['C:/Program Files/Git/bin/bash.exe', 'C:/Program Files/Git/usr/bin/bash.exe']) if (existsSync(p)) return p
-  throw new Error('[t075] Git Bash not found (WSL bash is never used)')
-}
 
 const container = () => `t020-${stack().sha8}-pg`
 
@@ -61,23 +58,30 @@ function hostTool(dumpDir: string, args: string[]): { status: number | null; out
   mkdirSync(shims, { recursive: true })
   writeFileSync(join(shims, 'logger'), '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$T075_LOGGER_LOG"\n', { mode: 0o755 })
   rmSync(loggerLog, { force: true })
-  const fwd = (p: string) => p.replaceAll('\\', '/')
-  // Windows spells it Path: drop every casing before setting ours, or the child sees two.
-  const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PATH'))
-  const r = spawnSync(gitBash(), [fwd(TOOL), ...args], {
-    encoding: 'utf8',
-    env: {
-      ...base,
-      PATH: `${shims}${delimiter}${process.env.PATH ?? ''}`,
-      GREMION_ROOT: fwd(join(SCRATCH, 'root')),
-      GREMION_MIGRATION_DUMP_DIR: fwd(dumpDir),
-      GREMION_MIGRATION_DUMP_PG_CONTAINER: container(),
-      POSTGRES_USER: stack().user,
-      T075_LOGGER_LOG: fwd(loggerLog),
-      MSYS_NO_PATHCONV: '1',
-    },
-    timeout: 120_000,
+  const toolEnv = (p: (x: string) => string) => ({
+    GREMION_ROOT: p(join(SCRATCH, 'root')),
+    GREMION_MIGRATION_DUMP_DIR: p(dumpDir),
+    GREMION_MIGRATION_DUMP_PG_CONTAINER: container(),
+    POSTGRES_USER: stack().user,
+    T075_LOGGER_LOG: p(loggerLog),
   })
+  let r: SpawnSyncReturns<string>
+  if (process.platform === 'win32') {
+    // docker.exe under Git Bash stalls inside command substitutions (measured),
+    // so on Windows the tool runs where the host runs it: Linux bash, in the
+    // t075-dumptool image (the bats runner plus the docker CLI), talking to the
+    // same daemon over its socket.
+    const inWt = (x: string) => `/wt/${relative(WORKTREE, x).replaceAll('\\', '/')}`
+    const env = { ...toolEnv(inWt), PATH: `${inWt(shims)}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` }
+    r = spawnSync(
+      'docker',
+      ['run', '--rm', '--name', `t075-dumptool-${process.pid}-${n}`, '-v', '/var/run/docker.sock:/var/run/docker.sock', '-v', `${WORKTREE.replace(/[\\/]$/, '')}:/wt`,
+        ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), 't075-dumptool', 'bash', '/wt/infra/host/bin/gremion-migration-dump', ...args],
+      { encoding: 'utf8', timeout: 200_000 },
+    )
+  } else {
+    r = spawnSync('bash', [TOOL, ...args], { encoding: 'utf8', env: { ...process.env, ...toolEnv((x) => x), PATH: `${shims}${delimiter}${process.env.PATH ?? ''}` }, timeout: 200_000 })
+  }
   const logger = existsSync(loggerLog) ? readFileSync(loggerLog, 'utf8').trim().split('\n').filter(Boolean) : []
   return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`, logger }
 }
@@ -158,7 +162,7 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
     expect((await runMigrations({ sql: a, dir: copyFixture(), releaseRef: 'dist-v1.2.0', phaseFor, log: () => {}, hooks: { preApply: hookFor(dumpDir, 'dist-v1.2.0', again) } })).applied).toEqual([])
     expect(again.calls).toBe(0)
     expect(events(dumpDir)).toEqual(['created'])
-  }, 120_000)
+  }, SLOW)
 
   it('a chain refusal (a pad-3 ledger name the pad-4 chain lacks) takes no dump: no `created` line, empty DDL log', async () => {
     await onlyInit()
@@ -171,7 +175,7 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
     expect(events(dumpDir)).toEqual([])
     expect(await ddlLog(watcher)).toEqual([])
     expect(await ledgerFiles(watcher)).toEqual(['001_init.sql'])
-  }, 120_000)
+  }, SLOW)
 
   it('PHASE_MISSING refuses before any hook: no dump, empty DDL log', async () => {
     await onlyInit()
@@ -182,7 +186,7 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
     expect(seen.calls).toBe(0)
     expect(events(dumpDir)).toEqual([])
     expect(await ddlLog(watcher)).toEqual([])
-  }, 120_000)
+  }, SLOW)
 
   it('restore rehearsal (TRD-206): the second file fails; restore --accept-loss-since returns schema and seeded rows to the pre-run state and logs `restored`; the dump stays until discard', async () => {
     await onlyInit()
@@ -218,7 +222,7 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
     expect(events(dumpDir)).toEqual(['created', 'restored', 'deleted'])
     expect(readEvents(dumpDir)[2]).toMatchObject({ reason: 'release abandoned after restore', by_kind: 'operator' })
     expect(dumpFiles(dumpDir, 'dist-v1.1.0')).toEqual([])
-  }, 240_000)
+  }, SLOW)
 
   it('member import (TASK-031 handoff): take, one INSERT and one DELETE, discard --reason import-verified: exactly one created, one deleted', async () => {
     await onlyInit()
@@ -236,7 +240,7 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
     expect(events(dumpDir)).toEqual(['created', 'deleted'])
     expect(readEvents(dumpDir)[1]).toMatchObject({ reason: 'import-verified' })
     expect(dumpFiles(dumpDir, 'import-job1')).toEqual([])
-  }, 180_000)
+  }, SLOW)
 
   it('scratch e2e: the serving colour (manifest {001,002}, dist-v1.0.0) answers 200 through the next release\'s expand; the simulated switch deletes the dump and logs it; nothing of the release is left', async () => {
     const serving = copyFixture({ only: ['001_init.sql', '002_item_state.sql'] })
@@ -281,7 +285,7 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
       await new Promise<void>((r) => server.close(() => r()))
       await store.close()
     }
-  }, 240_000)
+  }, SLOW)
 
   it('cli migrate --chain platform on the real catalogue: chain check + dump composed; nothing pending -> no dump', async () => {
     const dumpDir = freshDumpDir()
@@ -291,5 +295,5 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
     expect(code, lines.join('\n')).toBe(0)
     expect(lines.join('\n')).toMatch(/MIGRATE-RESULT chain=platform release=dist-v0\.0\.2 applied=0 already=3 dump=none/)
     expect(events(dumpDir)).toEqual([])
-  }, 120_000)
+  }, SLOW)
 })
