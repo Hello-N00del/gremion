@@ -86,6 +86,19 @@ describe('host scripts (E6, G7, G8)', () => {
     expect(b).toContain('${STACK}_nats_secrets')
     expect(b).toContain('${STACK}_nats_accounts')
   })
+  test('gremion-deploy step 4 ensures both external nats volumes before nats-auth init (a host bootstrapped before this release has neither)', () => {
+    const s4 = body('infra/host/bin/gremion-deploy', 'step_4_render')
+    const loop = s4.search(/for vol in "\$\{STACK\}_nats_secrets" "\$\{STACK\}_nats_accounts"; do/)
+    expect(loop, 'no ensure loop over both nats volumes in step 4').toBeGreaterThan(-1)
+    expect(s4).toMatch(/docker volume inspect "\$vol" >\/dev\/null 2>&1 \\\n\s+\|\| docker volume create "\$vol" >\/dev\/null \\\n\s+\|\| die /)
+    expect(s4.indexOf('exec nats-auth init')).toBeGreaterThan(loop)
+  })
+  test('install.md runs nats-auth init before the state project first comes up', () => {
+    const md = read('docs/ops/runbook/install.md')
+    const init = md.indexOf('run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init')
+    expect(init, 'install.md has no nats-auth init').toBeGreaterThan(-1)
+    expect(md.indexOf('state.env up -d')).toBeGreaterThan(init)
+  })
   test('gremion-deploy runs nats-auth init at the end of step 4 -- after gremion-render made the files tenant-create binds -- and never in step 3', () => {
     const s3 = body('infra/host/bin/gremion-deploy', 'step_3_space_and_pull')
     const s4 = body('infra/host/bin/gremion-deploy', 'step_4_render')

@@ -464,6 +464,16 @@ step_4_render() {
     # source as a directory. Idempotent and offline (--no-deps): a present
     # seed is kept, an unchanged file is not rewritten. A changed render is
     # loaded by the next reload (tenant-create) or nats restart.
+    # tenant-create mounts two EXTERNAL volumes; bootstrap stage_networks
+    # creates them on a new host, but a host bootstrapped before this release
+    # has neither and compose refuses the run. Ensured here the way
+    # ensure_volume makes them (plain, named): an existing one is kept as is.
+    local vol
+    for vol in "${STACK}_nats_secrets" "${STACK}_nats_accounts"; do
+        docker volume inspect "$vol" >/dev/null 2>&1 \
+            || docker volume create "$vol" >/dev/null \
+            || die "cannot create volume $vol for $TAG" 1
+    done
     compose "app-${NEW_COLOUR}" run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init \
         || die "nats-auth init failed for $TAG" 1
     ok "nats-auth init: seeds and accounts file in place"
