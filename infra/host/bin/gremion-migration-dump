@@ -299,10 +299,14 @@ cmd_preflight() {
 
 # delete_release <release> <reason> <by_kind> <verb>
 delete_release() {
-    local rel="$1" reason="$2" kind="$3" verb="$4" mine n i ev path at fd
+    local rel="$1" reason="$2" kind="$3" verb="$4" live mine n i ev path at fd
     take_lock
-    mine="$(jq -c --arg r "$rel" '[.[] | select(.release == $r)]' <<< "$(live_dumps)")"
+    # Plain assignments, never nested in a here-string: a LEDGER_CORRUPT die
+    # inside a nested substitution would read as "no dump" and exit 0.
+    live="$(live_dumps)"
+    mine="$(jq -c --arg r "$rel" '[.[] | select(.release == $r)]' <<< "$live")"
     n="$(jq 'length' <<< "$mine")"
+    [[ "$n" =~ ^[0-9]+$ ]] || die "cannot count the live dumps of ${rel}" 1
     if [[ "$n" -eq 0 ]]; then
         printf 'no-dump %s\n' "$rel"
         return 0
@@ -337,9 +341,10 @@ delete_release() {
 }
 
 cmd_restore() {
-    local rel="$1" db="$2" since="$3" dump path c owner ev at
+    local rel="$1" db="$2" since="$3" live dump path c owner ev at
     take_lock
-    dump="$(jq -c --arg r "$rel" --arg d "$db" '[.[] | select(.release == $r and .database == $d)]' <<< "$(live_dumps)")"
+    live="$(live_dumps)"
+    dump="$(jq -c --arg r "$rel" --arg d "$db" '[.[] | select(.release == $r and .database == $d)]' <<< "$live")"
     [[ "$(jq 'length' <<< "$dump")" == "1" ]] \
         || die "no single live dump of ${rel} for database ${db} (gremion-migration-dump status)" 1
     dump="$(jq -c '.[0]' <<< "$dump")"
