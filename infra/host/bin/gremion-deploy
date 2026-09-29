@@ -195,16 +195,26 @@ require_spec_b_contracts() { # <release dir>
 }
 
 # compose_file_basenames <env file> -> the basename of every COMPOSE_FILE entry,
-# one per line. A second COMPOSE_FILE line is refused: which one compose uses
-# is then a question of the reader.
+# one per line. Compose's own dotenv reader accepts more spellings than this
+# one (spaces or ':' around the key, a trailing comment, ${VAR} expansion, a
+# second declaration that wins, another COMPOSE_PATH_SEPARATOR), so anything
+# but ONE plain `COMPOSE_FILE=a:b:c` line (optionally double-quoted) is
+# refused rather than read differently from compose. Exit 2.
 compose_file_basenames() {
     local f="$1" n v e
     local -a parts=()
     [[ -f "$f" && -r "$f" ]] || die "env file absent or unreadable: $f" 2
-    n="$(grep -cE '^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE=' "$f" || true)"
-    [[ "$n" =~ ^[01]$ ]] || die "$f declares COMPOSE_FILE ${n} times" 2
-    v="$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE=//p' "$f" | tr -d '\r')"
-    v="${v#[\"\']}"; v="${v%[\"\']}"
+    n="$(grep -cE '^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE[[:space:]]*[=:]' "$f" || true)"
+    [[ "$n" =~ ^[01]$ ]] || die "$f declares COMPOSE_FILE ${n:-?} times" 2
+    ! grep -qE '^[[:space:]]*(export[[:space:]]+)?COMPOSE_PATH_SEPARATOR[[:space:]]*[=:][[:space:]]*["'\'']?[^:"'\''[:space:]]' "$f" \
+        || die "$f sets a COMPOSE_PATH_SEPARATOR other than ':' (refusing to split COMPOSE_FILE differently from compose)" 2
+    [[ "$n" == 1 ]] || return 0
+    v="$(grep -E '^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE[[:space:]]*[=:]' "$f" | tr -d '\r')"
+    if [[ "$v" =~ ^COMPOSE_FILE=([A-Za-z0-9._/:-]+)$ || "$v" =~ ^COMPOSE_FILE=\"([A-Za-z0-9._/:-]+)\"$ ]]; then
+        v="${BASH_REMATCH[1]}"
+    else
+        die "$f: COMPOSE_FILE is not one plain KEY=a:b:c line (no spaces, comment or \$ expansion): refusing to read it differently from compose" 2
+    fi
     IFS=':' read -r -a parts <<< "$v"
     for e in "${parts[@]}"; do
         [[ -n "$e" ]] && printf '%s\n' "${e##*/}"
@@ -445,6 +455,9 @@ validate_release_tree() { # <dir>
         # grep cannot tell an unreadable file from one without a match once
         # `|| true` swallows its status: an unreadable layer is refused here.
         [[ -f "$pins" && -r "$pins" ]] || die "$f absent or unreadable in the release tree: $pins" 1
+        # each layer is its own file: a symlink would let one layer stand in
+        # for the other (the app pins layered onto the state project)
+        [[ ! -L "$pins" ]] || die "$f is a symlink in the release tree: $pins" 1
         # `|| true` is load-bearing: without it a layer with NO image: line
         # makes the substitution exit 1 and set -e ends the program before the
         # union guard after the loop — the one that names the fault — can run.

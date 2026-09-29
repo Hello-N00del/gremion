@@ -1282,3 +1282,54 @@ exit 0
     [[ "$output" == *"app-green.env"*"docker-compose.state-pins.yml"* ]]
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
+
+@test "Q2 r1: the state.env COMPOSE_FILE forms compose reads are judged exactly; any other form is refused, exit 2" {
+    stub_all
+    local state_env="${GREMION_ROOT}/etc/env/state.env" line
+    cp "$state_env" "${BATS_TEST_TMPDIR}/state.env.orig"
+    # accepted: the quoted form (the rendered form is every other case's)
+    for line in 'COMPOSE_FILE="docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml"'; do
+        { grep -v '^COMPOSE_FILE=' "${BATS_TEST_TMPDIR}/state.env.orig"; printf '%b\n' "$line"; } > "$state_env"
+        rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+        run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+        [ "$status" -eq 0 ] || { echo "refused: $line"; echo "$output"; return 1; }
+    done
+    # refused: export (load_env's own refusal), a trailing comment or
+    # whitespace hiding the app layer, a second declaration
+    for line in 'export COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml' \
+                'COMPOSE_FILE="docker-compose.yml:docker-compose.state-pins.yml:docker-compose.pins.yml" # old' \
+                'COMPOSE_FILE=docker-compose.yml:docker-compose.state-pins.yml:docker-compose.pins.yml   ' \
+                'COMPOSE_FILE=docker-compose.yml:docker-compose.state-pins.yml\nCOMPOSE_FILE=docker-compose.yml:docker-compose.pins.yml' \
+                'COMPOSE_FILE=docker-compose.yml:docker-compose.state-pins.yml\nCOMPOSE_FILE: docker-compose.yml:docker-compose.pins.yml' \
+                'COMPOSE_FILE = docker-compose.yml:docker-compose.pins.yml:docker-compose.state-pins.yml' \
+                'P=docker-compose.pins.yml\nCOMPOSE_FILE=docker-compose.yml:${P}:docker-compose.state-pins.yml' \
+                'COMPOSE_PATH_SEPARATOR=,\nCOMPOSE_FILE=docker-compose.yml,docker-compose.pins.yml,docker-compose.state-pins.yml'; do
+        { grep -v '^COMPOSE_FILE=' "${BATS_TEST_TMPDIR}/state.env.orig"; printf '%b\n' "$line"; } > "$state_env"
+        rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+        : > "$SHIM_LOG"
+        run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+        [ "$status" -eq 2 ] || { echo "accepted: $line"; echo "$output"; return 1; }
+        [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    done
+    # the colour side: a comment hiding the state layer in app-green.env
+    cp "${BATS_TEST_TMPDIR}/state.env.orig" "$state_env"
+    sed -i 's#^COMPOSE_FILE=.*#COMPOSE_FILE=docker-compose.app.yml:docker-compose.pins.yml:docker-compose.state-pins.yml   #' \
+        "${GREMION_ROOT}/etc/env/app-green.env"
+    rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+    : > "$SHIM_LOG"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"app-green.env"*"COMPOSE_FILE"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "Q2 r1: a symlinked pins layer in the release tree is refused (the state slot must be its own file)" {
+    stub_all
+    state_tree symstate
+    rm -f "$T/docker-compose.state-pins.yml"
+    ln -s docker-compose.pins.yml "$T/docker-compose.state-pins.yml"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"docker-compose.state-pins.yml"*"symlink"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
