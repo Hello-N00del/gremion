@@ -144,6 +144,12 @@
       "blob": "191a604d7a7a062687191aaf40d66eb867af485a"
     },
     {
+      "path": "modules/messaging/synapse/.gitattributes",
+      "reason": "added: not a StuRa services/ file; kernel-only LF pin for the Synapse image sources (a Windows checkout baked CRLF into the image)",
+      "owner": "TASK-198",
+      "blob": "86e0764fe0f8ff053d3326eb451f32ec82980be1"
+    },
+    {
       "path": "modules/messaging/synapse/Dockerfile",
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
