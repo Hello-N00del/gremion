@@ -264,12 +264,13 @@ legacy_chains_with_new_files() { # <release dir> <current dir>
             done
             [[ "$new" -eq 0 ]] || break
         done <<< "$dirs"
-        if [[ "$new" -eq 1 ]]; then printf '%s %s\n' "$chain" "$db"; else info "chain ${chain}: no new migration file — no dump"; fi
+        # stdout carries ONLY the "<chain> <database>" records the caller reads.
+        if [[ "$new" -eq 1 ]]; then printf '%s %s\n' "$chain" "$db"; else info "chain ${chain}: no new migration file — no dump" >&2; fi
     done < <(jq -r '.chains | to_entries[] | select(.value == "legacy-boot") | .key' "$runners")
 }
 
 cmd_preflight() {
-    local rel="$1" rdir="$2" live other chain db current
+    local rel="$1" rdir="$2" live other chain db current hostdb records
     take_lock
     live="$(live_dumps)"
     other="$(jq -c --arg r "$rel" '[.[] | select(.release != $r)]' <<< "$live")"
@@ -282,11 +283,16 @@ cmd_preflight() {
         info "no current release under ${ROOT}: a fresh host has no data to lose — no legacy-boot dump"
     else
         [[ -d "$rdir" ]] || die "release tree absent: ${rdir}" 2
+        # Captured first (not a process substitution): a die inside it must
+        # end THIS program, and it cannot from a subshell feeding a loop.
+        records="$(legacy_chains_with_new_files "$rdir" "$current")"
         while read -r chain db; do
             [[ -n "$chain" ]] || continue
-            info "chain ${chain} gains migration file(s) at ${rel}: dumping $(chain_db "$db")"
-            take_host_dump "$rel" "$(chain_db "$db")"
-        done < <(legacy_chains_with_new_files "$rdir" "$current")
+            hostdb="$(chain_db "$db")"
+            valid_db "$hostdb" || die "chain ${chain} maps to an invalid database name '${hostdb}'" 1
+            info "chain ${chain} gains migration file(s) at ${rel}: dumping ${hostdb}"
+            take_host_dump "$rel" "$hostdb"
+        done <<< "$records"
     fi
     printf 'PREFLIGHT-OK release=%s\n' "$rel"
 }
