@@ -28,9 +28,9 @@
       "path": "gremion-ui/scripts/tenant-provision.ts",
       "calls": 3,
       "imports": 1,
-      "adoptedBy": "TASK-021",
+      "adoptedBy": "TASK-043",
       "since": "2026-09-25",
-      "reason": "the provisioner's admin, new-tenant and leaf connections; Q5: allow-listed until the lifecycle provisioner (TASK-021) owns database create/drop"
+      "reason": "the provisioner's admin, new-tenant and leaf connections (tenant-provision.ts:284 string-builds CREATE DATABASE); TASK-021 ships the lifecycle API (@gremion/tenant-store/lifecycle) that replaces it, and customer provisioning (TASK-043) adopts it"
     },
     {
       "path": "gremion-ui/scripts/tenant-health.ts",

@@ -9,6 +9,7 @@
 # Phases, in order (each is its own call so no single step outlives a
 # supervisor's time box; state lives in the ledger directory):
 #   prepare      env files, scratch root, externals, the proof overlays
+#                (render-env: the env files and overlays alone, no engine)
 #   names        every rendered name is under ${STACK}; state-up refuses without it
 #   state-up     the state project (production profile)
 #   state-wait   postgres + keycloak healthy, pgbouncer auth staged; records
@@ -102,6 +103,26 @@ compose() {
     ( cd "$dir" && docker compose --env-file "$(host_path "$ENV_DIR/${p}.env")" "$@" )
 }
 
+# compose_config <project-suffix> <config args...> -- `compose config` whose
+# failure is never silent. Callers run it as `x="$(compose_config ...)" ||
+# exit $?`: a bare `$(compose config 2>/dev/null | ...)` under pipefail either
+# ended the proof with status 1 and no word, or (as a printf argument) turned
+# a render error into a count of 0. On failure it dies naming the project and
+# the first 5 lines of compose's own stderr -- never more, and never the
+# render: a config error can quote env values. The stderr file lives under
+# $OUT only until it is read.
+compose_config() {
+    local p="$1" err out rc=0 msg; shift
+    mkdir -p "$OUT"; err="$OUT/.compose-config-${p}.err"
+    out="$(compose "$p" config "$@" 2>"$err")" || rc=$?
+    if (( rc != 0 )); then
+        msg="$(head -n 5 "$err" | tr -d '\r')"; rm -f "$err"
+        die "compose config of ${STACK}-${p} failed (exit ${rc}): ${msg:-compose wrote nothing on stderr}"
+    fi
+    rm -f "$err"
+    printf '%s\n' "$out"
+}
+
 # Every container of this stack's five projects, by the compose label.
 stack_containers() {
     local p
@@ -143,16 +164,38 @@ chmod_app_volumes() {
 }
 
 # ── prepare ────────────────────────────────────────────────────────────────
-phase_prepare() {
-    require_scratch prepare
-    mkdir -p "$ENV_DIR" "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$OUT/ledger"
-    local SROOT_H; SROOT_H="$(host_path "$SROOT")"
+# Where the env files point compose at the overlays in $OUT. POOLED_OUT may put
+# $OUT outside the repository, so the overlay entry is never a hard-wired repo
+# path: compose resolves a relative COMPOSE_FILE entry against the directory it
+# runs in (ROOT, or infra/host/<project> for ops and mail -- see compose()), so
+# an $OUT under ROOT is named relative to that directory, and any other $OUT by
+# its host path. A host path can carry a drive letter (cygpath -m: C:/...),
+# which a ':' list would split, so those env files use ';'. The lists are
+# double-quoted: compose's env-file parser strips the quotes, and state.env is
+# also sourced by bash (state-wait, tenant, tenant-after), where an unquoted ';'
+# would end the assignment and run the next entry as a command.
+OVL_REL=""; OVL_HOST=""; OVL_SEP=":"
+locate_overlays() {
+    local out_abs root_abs
+    out_abs="$(cd "$OUT" && pwd -P)"; root_abs="$(cd "$ROOT" && pwd -P)"
+    if [[ "$out_abs" == "$root_abs"/* ]]; then OVL_REL="${out_abs#"$root_abs"/}"
+    else OVL_HOST="$(host_path "$out_abs")"; [[ "$OVL_HOST" != *:* ]] || OVL_SEP=";"; fi
+}
+# overlay_ref <overlay file> <path from the project's directory back to ROOT>
+overlay_ref() {
+    if [[ -n "$OVL_REL" ]]; then printf '%s%s/%s' "$2" "$OVL_REL" "$1"
+    else printf '%s/%s' "$OVL_HOST" "$1"; fi
+}
 
-    # Subnets: a dedicated 10.231.0.0/16 and fd5a:231::/48, refused if taken.
-    local taken
-    # shellcheck disable=SC2046  # one argument per network id, on purpose
-    taken="$(docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null | grep -E ' 10\.231\.' | grep -v "^${STACK}" || true)"
-    [[ -z "$taken" ]] || die "10.231.0.0/16 already in use on this engine: $taken"
+# The env files and the proof overlays, and nothing else: no docker engine
+# (bar free_port's `docker ps`) and no file under the repository. prepare
+# starts with it; on its own it is the render-env phase.
+phase_render_env() {
+    require_scratch render-env
+    mkdir -p "$ENV_DIR" "$OUT"
+    locate_overlays
+    local SROOT_H; SROOT_H="$(host_path "$SROOT")"
+    local s="$OVL_SEP"
 
     local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push
     pw_pg="$(gen)"; pw_kcdb="$(gen)"; pw_kc="$(gen)"; pw_gr="$(gen)"; pw_ctl="$(gen)"; pw_pub="$(gen)"
@@ -162,8 +205,8 @@ phase_prepare() {
 
     cat > "$ENV_DIR/state.env" <<EOF
 COMPOSE_PROJECT_NAME=${STACK}-state
-COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:test/host/fixtures/pooled-stack/docker-compose.pins.yml:${OUT_REL}/state.proof.yml
-COMPOSE_PATH_SEPARATOR=:
+COMPOSE_FILE="docker-compose.yml${s}docker-compose.prod.yml${s}test/host/fixtures/pooled-stack/docker-compose.pins.yml${s}$(overlay_ref state.proof.yml '')"
+COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=production
 STACK=${STACK}
 GREMION_ROOT=${SROOT_H}
@@ -224,8 +267,8 @@ EOF
     cat > "$ENV_DIR/ops.env" <<EOF
 STACK=${STACK}
 COMPOSE_PROJECT_NAME=${STACK}-ops
-COMPOSE_FILE=docker-compose.yml:../../../${OUT_REL}/ops.proof.yml
-COMPOSE_PATH_SEPARATOR=:
+COMPOSE_FILE="docker-compose.yml${s}$(overlay_ref ops.proof.yml ../../../)"
+COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=production
 OPS_V4_SUBNET=10.231.8.0/24
 OPS_V6_SUBNET=fd5a:231:8::/64
@@ -239,8 +282,8 @@ EOF
 STACK=${STACK}
 GREMION_ROOT=${SROOT_H}
 COMPOSE_PROJECT_NAME=${STACK}-mail
-COMPOSE_FILE=docker-compose.yml:../../../${OUT_REL}/mail.proof.yml
-COMPOSE_PATH_SEPARATOR=:
+COMPOSE_FILE="docker-compose.yml${s}$(overlay_ref mail.proof.yml ../../../)"
+COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=mail
 PLATFORM_DOMAIN=proof.example.org
 MAIL_BIND_IP=127.0.0.1
@@ -279,6 +322,22 @@ services:
   stalwart:
     ports: !reset []
 EOF
+    ok "render-env ${STACK}: env files in ${ENV_DIR}, overlays in ${OUT}"
+}
+
+phase_prepare() {
+    require_scratch prepare
+    mkdir -p "$ENV_DIR" "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$OUT/ledger"
+
+    # Subnets: a dedicated 10.231.0.0/16 and fd5a:231::/48, refused if taken.
+    local taken
+    # shellcheck disable=SC2046  # one argument per network id, on purpose
+    taken="$(docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null | grep -E ' 10\.231\.' | grep -v "^${STACK}" || true)"
+    [[ -z "$taken" ]] || die "10.231.0.0/16 already in use on this engine: $taken"
+
+    phase_render_env
+    local pw_bnc; pw_bnc="$(sed -n 's/^PGBOUNCER_AUTH_PASSWORD=//p' "$ENV_DIR/state.env")"
+    [[ -n "$pw_bnc" ]] || die "render-env wrote no PGBOUNCER_AUTH_PASSWORD"
 
     # Files the renders bind-mount (all gitignored or under the scratch root).
     [[ -f "$ROOT/legal/legal.env" ]] || { mkdir -p "$ROOT/legal"; cp "$ROOT/legal/legal.env.example" "$ROOT/legal/legal.env"; }
@@ -333,10 +392,11 @@ EOF
 # Names on `config` BEFORE any `up`: every rendered network and volume is
 # under ${STACK}, and every project is ${STACK}-<suffix>.
 phase_names() {
-    local p names
+    local p json names
     for p in state app-blue app-green ops mail; do
-        names="$(COMPOSE_PROFILES='*' compose "$p" config --format json 2>/dev/null \
-                 | jq -r '.name, (.networks // {} | to_entries[] | (.value.name // .key)), (.volumes // {} | to_entries[] | (.value.name // .key))')"
+        json="$(COMPOSE_PROFILES='*' compose_config "$p" --format json)" || exit $?
+        names="$(jq -r '.name, (.networks // {} | to_entries[] | (.value.name // .key)), (.volumes // {} | to_entries[] | (.value.name // .key))' <<< "$json")" \
+            || die "$p: jq could not read the compose config render"
         [[ -n "$names" ]] || die "$p renders nothing"
         while IFS= read -r n; do
             [[ "$n" == "${STACK}"* || "$n" == "default" ]] || die "$p renders a name outside ${STACK}: $n"
@@ -626,10 +686,12 @@ phase_probes() {
 
 # ── TRD-440 ────────────────────────────────────────────────────────────────
 counts() {
-    local p
+    local p svcs
     for p in state app-blue app-green ops mail; do
+        # a render error is FATAL here, never services=0 on both sides of TRD-440
+        svcs="$(compose_config "$p" --services)" || exit $?
         printf '%s services=%s running=%s\n' "$p" \
-            "$(compose "$p" config --services 2>/dev/null | grep -c .)" \
+            "$(printf '%s\n' "$svcs" | grep -c .)" \
             "$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-$p" | grep -c .)"
     done
     printf 'compose-ls %s\n' "$(docker compose ls -a --format json | jq -r --arg p "${STACK}-" '[.[] | select(.Name | startswith($p)) | .Name] | sort | join(",")')"
@@ -667,7 +729,9 @@ phase_tenant() {
 
 # Split so no call outlives a time box: each compose render is ~10 s here.
 phase_tenant_before() {
-    counts > "$OUT/ledger/trd440-before.txt"
+    # via .part: a counts that dies half-way must not leave a baseline behind
+    counts > "$OUT/ledger/trd440-before.txt.part"
+    mv -f "$OUT/ledger/trd440-before.txt.part" "$OUT/ledger/trd440-before.txt"
     [[ -s "$OUT/ledger/trd440-before.txt" ]] || die "empty TRD-440 baseline"
     ok "tenant-before: baseline recorded"
 }
@@ -676,7 +740,7 @@ phase_tenant_after() {
     . "$ENV_DIR/state.env"
     local before after
     before="$(cat "$OUT/ledger/trd440-before.txt")"
-    after="$(counts)"
+    after="$(counts)" || exit $?
     printf '%s\n' "$after" > "$OUT/ledger/trd440-after.txt"
     if [[ "$before" == "$after" ]]; then ok "TRD-440: services, running containers and compose projects unchanged by the tenant-add"
     else bad "TRD-440: the tenant-add changed the stack: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')"; fi
@@ -806,6 +870,7 @@ phase_teardown() {
 run_phase() {
     case "$1" in
         prepare) phase_prepare ;;
+        render-env) phase_render_env ;;
         names) phase_names ;;
         state-up) phase_state_up ;;
         state-wait) phase_state_wait ;;

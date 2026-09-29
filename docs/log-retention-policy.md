@@ -37,11 +37,13 @@ persisted, and all retention windows are bounded by server-side hard caps.
    ├─ vector.toml       (retention filter)
    │     • drops events older than LOG_RETENTION_SECONDS
    │     └─ writes date-partitioned /logs/processed/retained-YYYY-MM-DD.log
-   └─ logrotate loop    (rotates + compresses + ages out the files)
+   └─ rotation loop     (hourly: logrotate rotates + compresses + ages out the
+                          two live logs; prune-retained.sh deletes retained
+                          day files by the date in their name)
 ```
 
 Source: `docker/vector/` (`process-logs.sh`, `vector.toml`, `logrotate.conf`,
-`entrypoint.sh`). The Vector service runs in every deployment that runs Traefik
+`prune-retained.sh`, `entrypoint.sh`). The Vector service runs in every deployment that runs Traefik
 (the production profile); local dev exposes services on direct ports and has no
 Traefik access log to process.
 
@@ -67,7 +69,26 @@ identifiers only.
 |------|-----------|-------------------|
 | Raw JSON access log (`/logs/traefik/access.log`, contains `ClientHost`) | 14 days on disk | `logrotate.conf` rule: `daily`, `maxage 14`, `rotate 14`, `compress`, `copytruncate`. Vector only **tails** this file; it is rotated in place so the writing process keeps the same FD |
 | Pseudonymised security log (`/logs/processed/security.log`) | 31 days on disk | `logrotate.conf` rule: `daily`, `maxage 31`, `rotate 31`, `compress`, `copytruncate` |
-| Date-partitioned retention sink (`/logs/processed/retained-YYYY-MM-DD.log`) | `LOG_RETENTION_SECONDS` (Vector filter) + 31-day disk cap | Vector's `enforce_retention` transform drops events older than `LOG_RETENTION_SECONDS`; logrotate ages out the per-day files (`maxage 31`) |
+| Date-partitioned retention sink (`/logs/processed/retained-YYYY-MM-DD.log`) | 31 days by the date in the file name (today − 31 … today, UTC) | Vector's `enforce_retention` transform drops events older than `LOG_RETENTION_SECONDS` on ingest; `prune-retained.sh`, run hourly by the loop in `entrypoint.sh`, deletes every form of a day file (base, `.log.N`, `.log.N.gz`) dated before today − 31 (`RETAINED_RETENTION_DAYS`, default 31). logrotate's `maxage` cannot do this: it is checked only on a rotation, and `notifempty` stops a day file's rotations after the first |
+
+#### Upper bound
+
+After R28-VECTOR-RETENTION the oldest record of any kind the edge keeps on disk
+is at most **D = 33 days** old (exactly: 32 days + one loop interval, 1 h by
+default, rounded up to whole days). Per rule, with the loop running every
+`LOGROTATE_INTERVAL` (3600 s) and the container clock on UTC:
+
+| File | Kept | Oldest record at most |
+|------|------|-----------------------|
+| Raw `access.log` | live day + 14 rotated generations | 15 days + 1 h |
+| `security.log` | live day + 31 rotated generations | 32 days + 1 h |
+| `retained-YYYY-MM-DD.log*` | day files today − 31 … today (32 calendar days) | 32 days + 1 h (the today − 32 file goes at the first loop run after UTC midnight) |
+
+The two logrotate bounds assume a rotation on every day: `notifempty` skips a
+day on which the live file stayed empty, and `maxage` is checked only on a
+rotation, so a stretch of days with no traffic at all lengthens them. Any
+period the vector container is stopped also pauses deletion; the loop catches
+up on its first run after start.
 
 **IP pseudonymisation:** `process-logs.sh` runs the client IP through `ipcrypt`
 (`nd-encrypt`, format-preserving, keyed by the `ipcrypt_key` Docker secret) before

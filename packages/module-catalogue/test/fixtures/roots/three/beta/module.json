@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "beta",
+  "extractionSource": "f276af5925abacdcfd05f6613fc11afff2d804c5",
+  "runtime": {
+    "version": "0.3.1",
+    "database": { "postgresService": "beta-postgres", "migrations": "migrations" },
+    "export": { "kind": "pg_dump", "retentionProfile": "rp-bet-module-data" },
+    "timedJobs": [],
+    "platformServer": null
+  }
+}

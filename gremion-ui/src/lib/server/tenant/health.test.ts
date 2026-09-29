@@ -50,7 +50,7 @@ function greenDeps(over: Partial<HealthDeps> = {}): HealthDeps {
     probeDataPlane: vi.fn(async () => ({ ok: true })),
     probeMigrations: vi.fn(async () => ({
       ok: true,
-      schemaVersion: '039_caucus.sql',
+      schemaVersion: '0039_caucus.sql',
       lastRun: { ok: true, finishedAt: new Date('2026-06-01T00:00:00Z'), error: null },
     })),
     probeRealmOidc: vi.fn(async () => ({ ok: true })),

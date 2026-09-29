@@ -2,7 +2,7 @@
   import PageTitle from '$lib/components/PageTitle.svelte'
   // Aggregate Beschlüsse (resolution book) surface. v4 nav links here from the
   // Gremien section. Beschlüsse are passed resolutions from published protocols
-  // (the canonical 007_protocols source); the table renders when rows exist,
+  // (the canonical 0007_protocols source); the table renders when rows exist,
   // otherwise the first-class empty state.
   import type { PageData } from './$types'
   import Icon from '$lib/components/ui/Icon.svelte'

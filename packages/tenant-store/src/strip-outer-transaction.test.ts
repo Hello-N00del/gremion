@@ -110,7 +110,7 @@ describe('stripOuterTransaction rules', () => {
   })
 
   it('handles the kernel migrations that carry a wrapper (041, 043): wrapper out, plpgsql bodies kept', () => {
-    for (const f of ['041_protocol_resolution_global_nr_unique.sql', '043_audit_log_hash_chain.sql']) {
+    for (const f of ['0041_protocol_resolution_global_nr_unique.sql', '0043_audit_log_hash_chain.sql']) {
       const path = fileURLToPath(new URL(`../../../gremion-ui/migrations/${f}`, import.meta.url))
       const text = readFileSync(path, 'utf8')
       const out = stripOuterTransaction(text)

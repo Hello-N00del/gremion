@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "gamma",
+  "extractionSource": "f276af5925abacdcfd05f6613fc11afff2d804c5",
+  "runtime": {
+    "version": "1.0.0",
+    "database": null,
+    "export": null,
+    "timedJobs": [],
+    "platformServer": null
+  },
+  "contracts": {
+    "module": "gamma",
+    "context": "cal",
+    "requires": { "apis": [{ "name": "ghost-api", "versionRange": ">=1.0.0" }] }
+  }
+}
