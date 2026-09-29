@@ -231,7 +231,7 @@ services:
     build:
       context: ./docker/fallback
       dockerfile: Dockerfile
-    image: ghcr.io/hello-n00del/gremion-fallback:${IMAGE_TAG:-latest}
+    image: ghcr.io/hello-n00del/gremion-fallback:${IMAGE_TAG:-dev}
     restart: unless-stopped
     logging:
       driver: json-file
