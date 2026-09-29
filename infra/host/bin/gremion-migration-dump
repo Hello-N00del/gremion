@@ -69,9 +69,12 @@ EOF
     exit 2
 }
 
+# Only the MAIN shell releases the lock: bash can run an inherited EXIT trap
+# when a command substitution's subshell exits (measured under Git Bash), and a
+# subshell must never remove the lock its parent still holds.
 on_exit() {
     local rc=$?
-    if [[ "$LOCKED" -eq 1 ]]; then rm -f -- "$LOCK"; LOCKED=0; fi
+    if [[ "$LOCKED" -eq 1 && "${BASHPID:-$$}" == "$$" ]]; then rm -f -- "$LOCK"; LOCKED=0; fi
     exit "$rc"
 }
 
