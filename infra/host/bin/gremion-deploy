@@ -459,15 +459,31 @@ step_4_render() {
     ok "host-rendered files produced for $TAG"
 }
 
-# ── step 5 — pre-release snapshot (§F.4.5) ──────────────────────────────────
-# gremion-snapshot itself asserts that its artefact-class counts are >= the last
-# scheduled backup's; a shortfall aborts the deploy from inside that program.
-# The snapshot it takes is restic tag class=snapshot label=<TAG>; Task 9 keeps it
-# out of the daily retention, and gremion-rollback is what forgets it.
-step_5_snapshot() {
-    local prog; prog="$(bin_path gremion-snapshot)"
-    "$prog" "$TAG"
-    ok "pre-release snapshot taken with label $TAG"
+# ── step 5 — the pre-migration dump preflight (§F.4.5, TASK-075, TRD-206) ───
+# Replaces the restic class=snapshot of the whole host: TRD-206 asks for ONE
+# dump of the database a migration alters, kept until the switch shipping it
+# succeeds (step 11, then `switched` below). preflight refuses while another
+# release's dump is live (never a series; it prints the restore/discard
+# commands), reuses this tag's own (a retry, or a --no-switch deploy), and takes
+# the host-side dump of every legacy-boot chain that gains a migration file.
+# Runs before step 6, so a refusal stops nothing.
+step_5_migration_dump() {
+    local prog; prog="$(bin_path gremion-migration-dump)"
+    "$prog" preflight --release "$TAG" --release-dir "$RELEASE_DIR"
+    ok "pre-migration dump preflight passed for $TAG"
+}
+
+# After step 11: the switch succeeded, so every dump of this release is deleted
+# and the deletion logged. A failure leaves the host serving the new release
+# with its dump still on disk, which is loud, never silent.
+dump_switched() {
+    local prog rc=0
+    prog="$(bin_path gremion-migration-dump)"
+    "$prog" switched --release "$TAG" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        printf 'DUMP-NOT-DELETED: release=%s (gremion-migration-dump switched exited %s; run it again, or: gremion-migration-dump status)\n' "$TAG" "$rc" >&2
+        exit 1
+    fi
 }
 
 # ── step 6 — overlap:false stops the old colour first (§F.4.6, §F.6) ────────
@@ -792,7 +808,7 @@ main() {
     resolve_colours
     run_step 3 space-and-pull step_3_space_and_pull
     run_step 4 render step_4_render
-    run_step 5 snapshot step_5_snapshot
+    run_step 5 migration-dump step_5_migration_dump
     run_step 6 stop-old-colour step_6_stop_old_colour
     run_step 7 migrate step_7_migrate
     run_step 8 start-colour step_8_start_colour
@@ -804,6 +820,7 @@ main() {
     else
         run_step 10 switch step_10_switch
         run_step 11 verify-public step_11_verify_public
+        dump_switched
         run_step 12 record step_12_record
     fi
 
