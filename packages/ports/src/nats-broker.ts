@@ -252,8 +252,6 @@ export interface EnsureStreamOptions {
   repointSubjects?: boolean
 }
 
-/** The two bounds NatsBroker enforces itself. Defaults are the port's
- *  SETUP_TIMEOUT_MS / CLOSE_TIMEOUT_MS; the doubles suite shortens them. */
 /** NatsBroker.connect()'s optional client identity (TASK-024 G2). */
 export interface NatsConnectOptions {
   authenticator?: Authenticator
@@ -261,6 +259,8 @@ export interface NatsConnectOptions {
   name?: string
 }
 
+/** The two bounds NatsBroker enforces itself. Defaults are the port's
+ *  SETUP_TIMEOUT_MS / CLOSE_TIMEOUT_MS; the doubles suite shortens them. */
 export interface BrokerTimeouts {
   setupMs: number
   closeMs: number
