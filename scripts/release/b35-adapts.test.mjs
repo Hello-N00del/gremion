@@ -241,3 +241,18 @@ test('pins: each pin assertion occurs exactly once in validate_release_tree; a d
   writeFileSync(f, src.replace(grep, `${grep} | cat; ${grep}`))
   assert.throws(() => deployPinRegexes(f), /build-line pattern occurs 2 times/)
 })
+
+test('derive r1: compose shapes the line parser cannot read are refused, never read as zero services', () => {
+  for (const c of [
+    'services:\n    legal:\n        build: .\n', // 4-space service indent
+    'services:\n   legal:\n     build: .\n', // 3-space
+    'services:\n\tlegal:\n\t\tbuild: .\n', // tab
+    'services:\n  legal:\n    extends: {file: b.yml, service: legal}\n', // extends
+    'services: {legal: {build: .}}\n', // flow services
+    '"services":\n  legal:\n    build: .\n', // quoted key
+    'services:\n  a:\n    image: x\n---\nservices:\n  legal:\n    build: .\n', // second document
+    'x-a: &a\n  build: .\nx-b: &b\n  <<: *a\nservices:\n  legal:\n    <<: *b\n', // chained merge in an anchor
+  ]) {
+    assert.throws(() => buildServicesOf(c, 'f.yml'), /f\.yml/, JSON.stringify(c))
+  }
+})

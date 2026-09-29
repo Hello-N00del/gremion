@@ -113,9 +113,16 @@ const PLAIN_SERVICE = /^ {2}([A-Za-z0-9][A-Za-z0-9_.-]*):\s*(#.*)?$/
 export function buildServicesOf(text, label) {
   const lines = text.split(/\r?\n/)
   // anchors of top-level blocks (x-foo: &name) and whether they carry build:
+  // Shapes a line reader cannot follow are refused outright: a second YAML
+  // document, a services: key in any spelling but the plain block, tabs.
+  for (const [i, l] of lines.entries()) {
+    if (/^---/.test(l) && i > 0) throw new Error(`${label}:${i + 1}: a second YAML document -- this check cannot follow it`)
+    if (/^["']services["']\s*:|^services\s*:\s*[^\s#]/.test(l)) throw new Error(`${label}:${i + 1}: services: is not a plain block: ${l.trim()}`)
+    if (/^\s*\t/.test(l)) throw new Error(`${label}:${i + 1}: tab indentation`)
+  }
   const anchors = new Map()
   let anchor = null
-  for (const l of lines) {
+  for (const [i, l] of lines.entries()) {
     const top = /^[A-Za-z0-9_.-]+:\s*&([A-Za-z0-9_-]+)\s*(#.*)?$/.exec(l)
     if (top) {
       anchor = top[1]
@@ -123,6 +130,7 @@ export function buildServicesOf(text, label) {
       continue
     }
     if (/^\S/.test(l) && !l.startsWith('#')) anchor = null
+    else if (anchor && /^ {2}<</.test(l)) throw new Error(`${label}:${i + 1}: merge key inside anchor &${anchor} -- this check does not follow chained merges`)
     else if (anchor && /^ {2}build\s*:/.test(l)) anchors.set(anchor, !NOT_A_BUILD.test(l.replace(/^ {2}build\s*:\s*/, '')))
   }
   const out = new Map()
@@ -139,8 +147,13 @@ export function buildServicesOf(text, label) {
       cur = m[1]
       continue
     }
-    if (!cur || !/^ {4}\S/.test(l)) continue
+    // a service must sit at exactly two spaces: anything deeper before the
+    // first service, or at one or three spaces, is a layout this reader
+    // would otherwise skip
+    if (!cur || /^ (?: {2})?\S/.test(l)) throw new Error(`${where}: not a two-space service layout: ${l.trimEnd()}`)
+    if (!/^ {4}\S/.test(l)) continue
     if (/^ {4}["']build["']\s*:/.test(l)) throw new Error(`${where}: quoted build key: ${l.trim()}`)
+    if (/^ {4}extends\s*:/.test(l)) throw new Error(`${where}: extends: -- this check cannot follow it`)
     const b = /^ {4}build\s*:\s*(.*)$/.exec(l)
     if (b) out.set(cur, !NOT_A_BUILD.test(b[1]))
     const merge = /^ {4}<<\s*:\s*\*([A-Za-z0-9_-]+)\s*(#.*)?$/.exec(l)
