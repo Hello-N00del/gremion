@@ -13,7 +13,7 @@ import {
   type SubOrgType
 } from './sub-org-types-db'
 
-describe('migration 018_sub_org_type — schema shape', () => {
+describe('migration 0018_sub_org_type — schema shape', () => {
   it('public.sub_org_type has the expected columns', async () => {
     const rows = await getDb()<Array<{
       column_name: string

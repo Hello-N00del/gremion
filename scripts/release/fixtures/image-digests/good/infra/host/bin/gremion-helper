@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# A host helper default, pinned tag@digest.
+HELPER_IMAGE="${HELPER_IMAGE:-alpine:3.22@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}"
+# The Q8 refusal shape: a regex naming the keys is not a key.
+grep -E '^(export[[:space:]]+)?(MINIO|[A-Z0-9_]*_S3)_[A-Z0-9_]*=' "$1" && exit 2
+docker run --rm "$HELPER_IMAGE" true

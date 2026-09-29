@@ -21,5 +21,6 @@ export const load: PageServerLoad = async (event) => {
     modules = {}
   }
 
-  return { instance, modules, realm: tenant?.slug ?? 'default' }
+  // TASK-042: no tenant resolved means no realm, never a made-up 'default'.
+  return { instance, modules, realm: tenant?.slug ?? null }
 }

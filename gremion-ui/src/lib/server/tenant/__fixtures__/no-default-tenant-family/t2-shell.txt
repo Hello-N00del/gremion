@@ -1,0 +1,3 @@
+if [[ "$slug" == "default" ]]; then
+if [ "${slug}" = "default" ]; then
+[[ $tenant_slug == 'default' ]] && db_name="${POSTGRES_DB:-gremion}"

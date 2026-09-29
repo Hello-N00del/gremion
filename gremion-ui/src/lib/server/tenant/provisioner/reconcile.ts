@@ -152,15 +152,6 @@ export interface ReconcileOptions {
   /** The module-neutral base template (parsed realm-export.base.json) — the
    *  expected per-tenant gremion-ui URI set is derived from it by host swap. */
   base: Record<string, unknown>
-  /** (B) True for a realm whose client URIs were NOT minted from a tenant host:
-   *  a dev-composed realm LEGITIMATELY keeps its localhost dev URIs, because the
-   *  realm doc it was imported from carries them — so the URI-set check KEEPS
-   *  localhost for such a realm and drops it ONLY for PROVISIONED tenants,
-   *  mirroring buildTenantRealmDoc's own default-vs-provisioned distinction.
-   *  Without this, reconcile against such a realm PERMANENTLY false-fails the
-   *  URI checks (never repairable).
-   *  Defaults to false (provisioned) when omitted. */
-  isDefault?: boolean
   /** verify-only = no mutation; apply (false) replays the repairable failures. */
   verifyOnly: boolean
 }
@@ -246,19 +237,16 @@ function expectedUiUris(
   base: Record<string, unknown>,
   apexDomain: string,
   tenantHost: string,
-  isDefault: boolean,
 ): { redirectUris: string[]; webOrigins: string[] } {
   const clients = (base.clients as ClientRep[] | undefined) ?? []
   const ui = clients.find((c) => c.clientId === 'gremion-ui')
-  // (B) The DEFAULT realm keeps the base URIs verbatim (localhost dev URIs + apex);
-  // a PROVISIONED tenant gets the apex host swapped for its subdomain host AND every
+  // Every tenant (TASK-042 Q8: no default-realm exception; RFC 9700 §2.1 exact
+  // redirect-URI matching) gets the apex host swapped for its own host AND every
   // localhost/foreign-host http(s) entry dropped — mirroring buildTenantRealmDoc.
   const map = (xs: string[] | undefined) =>
-    isDefault
-      ? [...(xs ?? [])]
-      : (xs ?? [])
-          .map((u) => swapHost(u, apexDomain, tenantHost))
-          .filter((u) => uriAllowedForTenant(u, tenantHost))
+    (xs ?? [])
+      .map((u) => swapHost(u, apexDomain, tenantHost))
+      .filter((u) => uriAllowedForTenant(u, tenantHost))
   return { redirectUris: map(ui?.redirectUris), webOrigins: map(ui?.webOrigins) }
 }
 
@@ -274,7 +262,6 @@ function expectedUiScopeRoles(base: Record<string, unknown>): string[] {
 
 export async function reconcileRealm(transport: KcTransport, opts: ReconcileOptions): Promise<ReconcileReport> {
   const { realm, tenantHost, apexDomain, base, verifyOnly } = opts
-  const isDefault = opts.isDefault ?? false
   // (FIX3-B) Encode the realm name as a single path segment via the SHARED
   // realmSeg helper (same encoding KcProvisionApi applies) — defence-in-depth so
   // these GET/PUT paths can never break out of their segment even though the CLI
@@ -390,7 +377,7 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
       fail('gremion-ui-sub-mapper', 'gremion-ui has no uid sub-mapper (oidc-usermodel-property-mapper -> sub)')
     }
 
-    const expected = expectedUiUris(base, apexDomain, tenantHost, isDefault)
+    const expected = expectedUiUris(base, apexDomain, tenantHost)
     if (arraysEqualAsSet(ui.redirectUris, expected.redirectUris)) {
       pass('gremion-ui-redirect-uris')
     } else {

@@ -21,9 +21,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/../lib/common.sh"
 
 # The sink accepts SMTP and discards it. Staging-only helper, never part of any
-# production composition, so it is tag-pinned rather than digest-pinned; set
-# NULL_SINK_IMAGE to a digest reference to pin it.
-NULL_SINK_IMAGE="${NULL_SINK_IMAGE:-axllent/mailpit:v1.30.1}"
+# production composition; still pinned tag@digest like every host helper
+# default (TRD-350, lint-image-digests). Give an override as tag@digest too;
+# the static guard reads only this default, not the run-time environment.
+NULL_SINK_IMAGE="${NULL_SINK_IMAGE:-axllent/mailpit:v1.30.1@sha256:3bd7c2f2696deb35a4780d152b404dceec99cb041b942c0877b3b22384714f85}"
 NULL_SINK_HOST="${NULL_SINK_HOST:-null-sink}"
 NULL_SINK_PORT="${NULL_SINK_PORT:-1025}"
 # The kcadm entrypoint inside the Keycloak image - the same path

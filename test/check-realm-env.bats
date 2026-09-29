@@ -3,8 +3,7 @@
 #
 # Two variables name ONE realm: KEYCLOAK_REALM (what dev/ops scripts hand the
 # Keycloak Admin API) and the `/realms/<name>` segment of AUTH_KEYCLOAK_ISSUER
-# (what gremion-ui authenticates against, and what registerDefaultTenant
-# derives tenant #1's realm_name from). Nothing compared them: B-01 started
+# (what the dev stack authenticates against). Nothing compared them: B-01 started
 # shipping KEYCLOAK_REALM SET in .env.example, so an operator who renames the
 # realm the documented way — by editing the issuer — leaves the two pointing at
 # different realms. The failure is silent, and it is a WRITE:
@@ -71,7 +70,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "an unset AUTH_KEYCLOAK_ISSUER passes — registerDefaultTenant already fails loudly on that" {
+@test "an unset AUTH_KEYCLOAK_ISSUER passes — there is no issuer to compare" {
     run env -u AUTH_KEYCLOAK_ISSUER KEYCLOAK_REALM=gremion bash "$GUARD"
     [ "$status" -eq 0 ]
 }

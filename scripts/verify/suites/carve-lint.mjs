@@ -56,11 +56,17 @@ export const CARVE_LINT_TARGETS = [
   // unit; the meta-test caught the missing rows at verify r5.
   { name: 'lint-module-scan', kind: 'make', target: 'lint-module-scan' },
   { name: 'lint-module-migration-names', kind: 'make', target: 'lint-module-migration-names' },
+  // TASK-029 (G5b): the migration register (chains, pad/order, claim, lock,
+  // StuRa slugs). scripts/migrations/wiring.test.mjs fails if this row goes.
+  { name: 'lint-migration-register', kind: 'make', target: 'lint-migration-register' },
   // R25-oxlint: the standalone oxlint ratchet (scripts/check-lint-js.mjs).
   { name: 'lint-js', kind: 'make', target: 'lint-js' },
   { name: 'lint-hygiene', kind: 'make', target: 'lint-hygiene' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
+  // TASK-048 (TRD-350/066/354): every deployed image pinned by digest, no
+  // object storage. Brief G4 fixes tool 'docker' (the release toolchain).
+  { name: 'lint-image-digests', kind: 'make', target: 'lint-image-digests', tool: 'docker' },
   {
     name: 'lockfile-frozen',
     kind: 'cmd',

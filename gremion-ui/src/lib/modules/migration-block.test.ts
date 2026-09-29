@@ -15,20 +15,20 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'
  * B7-renumber-ranges-baseline renumbers this set to 0001-0199.
  */
 export const KERNEL_BLOCK_BASENAMES = [
-  '001_governance_schema.sql', '002_config_store.sql', '003_calendar_schema.sql',
-  '004_committee_elections.sql', '005_dev_seed.sql', '006_full_seed.sql',
-  '007_protocols.sql', '008_public_portal.sql', '009_audit_log.sql',
-  '010_org_units.sql', '011_org_units_dev_seed.sql',
-  '012_role_assignment_history_pseudonymize.sql', '018_sub_org_type.sql',
-  '024_audit_log_composite_index.sql', '033_org_unit_child_term.sql',
-  '034_deck_board.sql', '037_provisioning_member_ops.sql',
-  '038_org_unit_kind_catalog.sql', '039_caucus.sql', '040_event_consumption.sql',
-  '041_protocol_resolution_global_nr_unique.sql',
-  '042_protocol_resolution_required_majority.sql', '043_audit_log_hash_chain.sql',
-  '048_resolution_decided_at.sql', '049_org_unit_event_outbox.sql',
-  '053_notification_read_marker.sql', '054_resolution_adoption_mode.sql',
-  '055_resolution_challenges.sql', '056_role_assignment_history_recalled.sql',
-  '057_fk_hot_filter_indexes.sql', '058_public_reader_grants.sql',
+  '0001_governance_schema.sql', '0002_config_store.sql', '0003_calendar_schema.sql',
+  '0004_committee_elections.sql', '0005_dev_seed.sql', '0006_full_seed.sql',
+  '0007_protocols.sql', '0008_public_portal.sql', '0009_audit_log.sql',
+  '0010_org_units.sql', '0011_org_units_dev_seed.sql',
+  '0012_role_assignment_history_pseudonymize.sql', '0018_sub_org_type.sql',
+  '0024_audit_log_composite_index.sql', '0033_org_unit_child_term.sql',
+  '0034_deck_board.sql', '0037_provisioning_member_ops.sql',
+  '0038_org_unit_kind_catalog.sql', '0039_caucus.sql', '0040_event_consumption.sql',
+  '0041_protocol_resolution_global_nr_unique.sql',
+  '0042_protocol_resolution_required_majority.sql', '0043_audit_log_hash_chain.sql',
+  '0048_resolution_decided_at.sql', '0049_org_unit_event_outbox.sql',
+  '0053_notification_read_marker.sql', '0054_resolution_adoption_mode.sql',
+  '0055_resolution_challenges.sql', '0056_role_assignment_history_recalled.sql',
+  '0057_fk_hot_filter_indexes.sql', '0058_public_reader_grants.sql',
 ]
 
 /** Module-owned or unshipped numbers that must never appear in the kernel block. */
@@ -53,19 +53,19 @@ describe('kernel data-plane migration block', () => {
     expect(FOREIGN_BASENAMES.filter((f) => onDisk.has(f))).toEqual([])
   })
 
-  it('every basename is three digits, an underscore and a name', () => {
+  it('every basename is four digits (pad 4, TASK-029 register), an underscore and a name', () => {
     for (const f of readdirSync(MIGRATIONS_DIR).filter((x) => x.endsWith('.sql'))) {
-      expect(f).toMatch(/^\d{3}_[a-z0-9_]+\.sql$/)
+      expect(f).toMatch(/^\d{4}_[a-z0-9_]+\.sql$/)
     }
   })
 })
 
 /** The nine data-plane basenames the 2026-09-15 port-back brought in. */
 export const PORTED_BASENAMES = [
-  '003_calendar_schema.sql', '034_deck_board.sql', '049_org_unit_event_outbox.sql',
-  '053_notification_read_marker.sql', '054_resolution_adoption_mode.sql',
-  '055_resolution_challenges.sql', '056_role_assignment_history_recalled.sql',
-  '057_fk_hot_filter_indexes.sql', '058_public_reader_grants.sql',
+  '0003_calendar_schema.sql', '0034_deck_board.sql', '0049_org_unit_event_outbox.sql',
+  '0053_notification_read_marker.sql', '0054_resolution_adoption_mode.sql',
+  '0055_resolution_challenges.sql', '0056_role_assignment_history_recalled.sql',
+  '0057_fk_hot_filter_indexes.sql', '0058_public_reader_grants.sql',
 ]
 
 // A ported file that sorts BELOW the highest basename the pre-port-back kernel
@@ -73,8 +73,8 @@ export const PORTED_BASENAMES = [
 // current highest + 1, never a number reused from a gap") forbids one. Every
 // database initialised before the port-back has already recorded that
 // high-water mark in schema_migrations, so runMigrations() picks a back-filled
-// file up out of order on the next boot: 003_calendar_schema.sql:69,77
-// REFERENCES committees(id), which 010_org_units.sql:6 renamed to org_units, so
+// file up out of order on the next boot: 0003_calendar_schema.sql:69,77
+// REFERENCES committees(id), which 0010_org_units.sql:6 renamed to org_units, so
 // it aborts, applyMigrationFile records nothing, and the boot wedges on every
 // retry with an error naming a table nobody removed. Derived from the two sets
 // rather than written down, so a future back-fill cannot slip in undeclared.
@@ -88,8 +88,8 @@ export const BACK_FILLED_BASENAMES = PORTED_BASENAMES.filter(
 
 describe('numbers back-filled below the pre-port-back high-water mark', () => {
   it('is exactly 003 and 034, measured against 048', () => {
-    expect(PRE_PORT_BACK_HIGH_WATER).toBe('048_resolution_decided_at.sql')
-    expect(BACK_FILLED_BASENAMES).toEqual(['003_calendar_schema.sql', '034_deck_board.sql'])
+    expect(PRE_PORT_BACK_HIGH_WATER).toBe('0048_resolution_decided_at.sql')
+    expect(BACK_FILLED_BASENAMES).toEqual(['0003_calendar_schema.sql', '0034_deck_board.sql'])
   })
 
   it('no file on disk sorts below the mark without being declared', () => {
@@ -106,8 +106,10 @@ describe('numbers back-filled below the pre-port-back high-water mark', () => {
     const i = doc.indexOf('## Back-filled numbers')
     expect(i, 'the provenance record has no "## Back-filled numbers" section').toBeGreaterThan(-1)
     const section = doc.slice(i)
-    for (const f of BACK_FILLED_BASENAMES) expect(section).toContain(f)
-    expect(section).toContain(PRE_PORT_BACK_HIGH_WATER)
+    // the dated record names the files as ported (pad 3), before TASK-029's pad-4 renames
+    const asRecorded = (f: string) => f.replace(/^0(\d{3}_)/, '$1')
+    for (const f of BACK_FILLED_BASENAMES) expect(section).toContain(asRecorded(f))
+    expect(section).toContain(asRecorded(PRE_PORT_BACK_HIGH_WATER))
     expect(section).toMatch(/down -v/)
     expect(section).toMatch(/re-initialis/i)
   })

@@ -291,7 +291,10 @@ describe('ConfigStore', () => {
     })
   })
 
-  describe('D-WIZARD: deployment single/multi toggle', () => {
+  // TASK-042 TDD 8: the single/multi deployment toggle (the D-WIZARD gate) is
+  // gone with the default tenant. Old configs that still carry the key read fine
+  // (the key is dropped); a write that sends it is refused by the strict schema.
+  describe('TASK-042: no deployment toggle in the config', () => {
     beforeEach(() => {
       vi.resetModules()
       vi.clearAllMocks()
@@ -299,60 +302,33 @@ describe('ConfigStore', () => {
       mockFs.renameSync.mockImplementation(() => undefined)
     })
 
-    it('defaults deployment.mode to single when absent (byte-identical for every existing config)', async () => {
+    it('readConfig() carries no deployment key, from defaults', async () => {
+      mockFs.existsSync.mockReturnValue(false)
+      const { readConfig } = await import('./config')
+      expect(Object.keys(readConfig())).not.toContain('deployment')
+    })
+
+    it('a stored config that still carries the key reads fine and drops it', async () => {
       mockFs.existsSync.mockReturnValue(true)
-      // A config persisted before T12 — no `deployment` key at all.
       mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({ setup_complete: true, org: { name: 'Legacy', domain: 'x.de', logo_path: null } }),
+        JSON.stringify({ org: { name: 'Legacy', domain: 'x.de', logo_path: null }, deployment: { mode: 'multi' } }),
       )
       const { readConfig } = await import('./config')
       const config = readConfig()
-      expect(config.deployment.mode).toBe('single')
-      // unrelated fields untouched
+      expect(Object.keys(config)).not.toContain('deployment')
       expect(config.org.name).toBe('Legacy')
     })
 
-    it('readConfig returns the default single mode when the file does not exist', async () => {
-      mockFs.existsSync.mockReturnValue(false)
-      const { readConfig } = await import('./config')
-      expect(readConfig().deployment.mode).toBe('single')
+    it('the strict update schema rejects {deployment:{mode:"multi"}}', async () => {
+      const { configUpdateSchema } = await import('./config')
+      expect(configUpdateSchema.safeParse({ deployment: { mode: 'multi' } }).success).toBe(false)
     })
 
-    it('parseConfig round-trips an explicit multi mode', async () => {
-      const { parseConfig } = await import('./config')
-      const cfg = parseConfig({ deployment: { mode: 'multi' } })
-      expect(cfg.deployment.mode).toBe('multi')
-    })
-
-    it('the setup config endpoint path (writeConfig) persists the toggle', async () => {
-      mockFs.existsSync.mockReturnValue(false) // start from defaults
-      const { writeConfig } = await import('./config')
-      const result = writeConfig({ deployment: { mode: 'multi' } })
-      expect(result.deployment.mode).toBe('multi')
-      // persisted to disk
-      expect(mockFs.writeFileSync).toHaveBeenCalledWith(
-        '/tmp/test-config.json.tmp',
-        expect.stringContaining('"mode": "multi"'),
-      )
-    })
-
-    it('the validator rejects an out-of-enum mode (writeConfig)', async () => {
+    it('writeConfig refuses the key', async () => {
       mockFs.existsSync.mockReturnValue(false)
       const { writeConfig } = await import('./config')
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect(() => writeConfig({ deployment: { mode: 'cluster' } } as any)).toThrow(/invalid update/i)
-    })
-
-    it('readConfig falls back to defaults when the stored mode is out of enum', async () => {
-      mockFs.existsSync.mockReturnValue(true)
-      mockFs.readFileSync.mockReturnValue(JSON.stringify({ deployment: { mode: 'cluster' } }))
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const { readConfig } = await import('./config')
-      const config = readConfig()
-      // schema reject → empty stored → DEFAULT_CONFIG (single)
-      expect(config.deployment.mode).toBe('single')
-      expect(warnSpy).toHaveBeenCalled()
-      warnSpy.mockRestore()
+      expect(() => writeConfig({ deployment: { mode: 'multi' } } as any)).toThrow(/invalid update/i)
     })
   })
 

@@ -338,8 +338,8 @@ it at the public apex.
 Two migration sets run at boot: **control-plane** migrations
 (`gremion-ui/migrations-control/`, against the `control` DB) and per-tenant
 **data-plane** migrations (`gremion-ui/migrations/`, governance-only:
-`001_governance_schema`, `004_committee_elections`, `007_protocols`,
-`008_public_portal`, `009_audit_log`, `010_org_units`, `043_audit_log_hash_chain`,
+`0001_governance_schema`, `0004_committee_elections`, `0007_protocols`,
+`0008_public_portal`, `0009_audit_log`, `0010_org_units`, `0043_audit_log_hash_chain`,
 …).
 
 ### Migration failure on boot

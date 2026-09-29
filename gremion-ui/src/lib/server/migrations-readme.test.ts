@@ -64,6 +64,6 @@ describe('migrations/README.md — table ownership (B4a)', () => {
 
   it('states the content-OFF rule the split exists for', () => {
     expect(readme).toContain('content-OFF')
-    expect(readme).toContain('058_public_reader_grants.sql')
+    expect(readme).toContain('0058_public_reader_grants.sql')
   })
 })

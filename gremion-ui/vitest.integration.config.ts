@@ -5,15 +5,13 @@ import { paraglideVitePlugin } from '@inlang/paraglide-js'
 import paraglideOptions from './src/lib/i18n/paraglide-options.js'
 import { assertNonProductionDbUrl } from './tests/integration/assert-safe-test-db-url'
 
-// P2.1c (T15 / §6-P2.2): the real-boot fleet (hooks.boot-real.integration.test)
-// now asserts a COMPLETE brand identity per tenant after migrations succeed. In
-// production the DEFAULT tenant is MATERIALIZED (config.json has real brand
-// values); reflect that for the suite by pointing the default tenant's
-// CONFIG_PATH (registry.configPathForTenant('default') + tests/integration/
-// setup.ts) at a committed complete-brand fixture. MUST be set here — before the
-// $env/dynamic/private snapshot at worker fork — so registry reads it. `??=`
-// lets a real shell/CI value win (e.g. the deselection-boot test's verein config).
-process.env.CONFIG_PATH ??= resolve(__dirname, 'tests/integration/fixtures/default-config.json')
+// TASK-042: there is no default tenant. Every tenant's config is
+// `${TENANT_DATA_ROOT}/<slug>/config.json` (registry.configPathForTenant), so
+// the suite points the deployment-global data root at a committed fixture tree
+// holding the harness tenant `fixture` (a COMPLETE brand, which the boot
+// fleet's brand guard requires: P2.1c T15 / §6-P2.2). `??=` lets a real shell
+// value win. tests/integration/setup.ts enters that tenant's context.
+process.env.TENANT_DATA_ROOT ??= resolve(__dirname, 'tests/integration/fixtures/tenant-data')
 
 // The DB-backed FinTS crypto tests read FINTS_PASSWORD_KEY via
 // $env/dynamic/private, which snapshots process.env when the SvelteKit env
@@ -36,7 +34,7 @@ process.env.DATABASE_URL ??= 'postgres://gremion:gremion_test@localhost:5432/gre
 // test drive the REAL boot() -> data-plane runMigrations(). The integration DB
 // has the SCHEMA migrations applied but NOT the *_seed.sql dev seeds (they
 // reference dev-realm KC UUIDs + a committees table the harness doesn't
-// populate), so an un-flagged runMigrations() would try to apply 005_dev_seed.sql
+// populate), so an un-flagged runMigrations() would try to apply 0005_dev_seed.sql
 // and explode. Production already disables seeds (docker-compose.prod.yml); set
 // the same flag here (config module, before the $env/dynamic/private snapshot)
 // so runMigrations() is a clean no-op. No existing integration test relies on
@@ -51,14 +49,12 @@ process.env.PLATFORM_DOMAIN ??= 'gremion.example'
 
 // P2.1a — resolveTenantBySlug assembles a full TenantContext, which eagerly
 // resolves the KC-admin + Auth.js UI client secret refs (getKeycloakAdminClient
-// reads resolveSecret in its constructor) and derives the default tenant's
-// authExternalBase from AUTH_KEYCLOAK_BASE/ISSUER. These are build-test
-// placeholders only — no real KC/network call is made by the build test. `??=`
-// lets a real shell/CI value win.
+// reads resolveSecret in its constructor). These are build-test placeholders
+// only — no real KC/network call is made by the build test. `??=` lets a real
+// shell/CI value win. (TASK-042: AUTH_KEYCLOAK_ISSUER/BASE are no longer read;
+// every tenant's issuer comes from its registry row.)
 process.env.KEYCLOAK_ADMIN_CLIENT_SECRET ??= 'test-kc-admin-secret'
 process.env.AUTH_KEYCLOAK_SECRET ??= 'test-ui-client-secret'
-process.env.AUTH_KEYCLOAK_ISSUER ??= 'https://council.example/auth/realms/gremion-test'
-process.env.AUTH_KEYCLOAK_BASE ??= 'https://council.example/auth/realms/gremion-test'
 
 // Fail-closed: guard every DB URL the suite connects to — at config-load time
 // so vitest refuses to even boot when a dangerous URL is set. D2:
@@ -82,7 +78,9 @@ export default defineConfig({
   plugins: [paraglideVitePlugin(paraglideOptions), sveltekit()],
   ssr: { noExternal: ['@gremion/db'] },
   test: {
-    include: ['src/**/*.integration.test.ts'],
+    // TASK-042: plus the createTestTenant factory's own suite (tests/integration
+    // holds the manual deselection lane too, so it is named, not globbed).
+    include: ['src/**/*.integration.test.ts', 'tests/integration/create-test-tenant.integration.test.ts'],
     globals: true,
     environment: 'node',
     setupFiles: ['tests/integration/setup.ts'],

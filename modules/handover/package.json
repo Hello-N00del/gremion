@@ -1,0 +1,6 @@
+{
+  "name": "handover-module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Handover module placeholder: module.json only (TASK-021); TASK-205 adds app/"
+}

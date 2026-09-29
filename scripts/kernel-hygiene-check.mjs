@@ -18,6 +18,7 @@ import { join, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { LOCAL_ENV_FILES, missingLocalEnvFiles, SETUP_FIRST } from './env/local-setup.mjs'
+import { FIRST_PARTY_IMAGE, g9Check } from './lib/image-surfaces.mjs'
 
 // GREMION_REPO_ROOT points the whole run at another tree; the g2 unit test in
 // gremion-ui/tests/unit/check-app-port-binding.test.ts uses it on a temp copy.
@@ -495,13 +496,12 @@ check('g4 no overlay RENDERS a placeholder image (the applyable-output post-cond
   return problems.length ? problems.join(' | ') : null
 })
 
-// The first-party image coordinate. Was `gremion/<name>` — an UNQUALIFIED
-// Docker Hub reference, i.e. docker.io/gremion/*, a namespace owned by an
-// unrelated third party. It is now ghcr.io/hello-n00del/gremion-<service>,
-// a namespace this project controls. Keep this regexp and the manifests in
-// step: it is the one that decides whether g5 has anything to check at all.
-const FIRST_PARTY_IMAGE = /(^|\/)ghcr\.io\/hello-n00del\/gremion-[a-z][a-z-]*(:|@|$)/
-
+// FIRST_PARTY_IMAGE (scripts/lib/image-surfaces.mjs) decides whether g5 has
+// anything to check at all; keep it and the manifests in step.
+// g5's surface is every k8s/base image line (k8sImageLines walks k8s/), never a
+// file list, so it has no g9-style hand-listed blind spot. The compose files'
+// first-party tags (${IMAGE_TAG...} on a build: service, or a digest) are
+// deliberately NOT g5's: tag policy for them is TASK-048's lint-image-digests.
 check('g5 base pins every first-party gremion image to the kernel version', () => {
   const version = JSON.parse(read('package.json')).version
   if (!version) return 'package.json declares no version'
@@ -516,78 +516,10 @@ check('g5 base pins every first-party gremion image to the kernel version', () =
     : null
 })
 
-// g9 exists because g5 CANNOT see the defect it looks like it covers. g5 filters
-// k8s/base image lines through FIRST_PARTY_IMAGE, so an image renamed AWAY from
-// ghcr.io/hello-n00del/gremion-* simply stops matching and drops out of the set —
-// injecting `image: docker.io/gremion/ui:0.1.0` into a base deployment left the
-// whole run at "OK". Nor did anything read the docs: when every manifest was
-// renamed to ghcr.io/hello-n00del/gremion-*, docs/deployment.md's deploy table
-// and docs/OPERATIONS.md's "Update services" section kept the old names for the
-// entire range, so a self-hoster copying them pulled from a stranger's registry.
-//
-// The two service names this is worth spelling out: `gremion/ui` is UNQUALIFIED,
-// which Docker resolves to docker.io/gremion/ui — a Docker Hub namespace owned
-// by an unrelated third party — and `docker compose pull` / `up --pull always`
-// are exactly the commands a self-hoster runs.
-//
-// Scope is the surfaces a reader or a cluster ACTS on. .github/workflows/ci.yml
-// and this file are deliberately outside it: both quote the bad coordinate in
-// prose in order to explain why it is banned, and a guard that cannot survive
-// its own rationale being written down gets deleted instead of obeyed.
-const G9_SURFACE_DIRS = ['k8s', 'docs']
-const G9_SURFACE_FILES = [
-  'docker-compose.yml',
-  'docker-compose.prod.yml',
-  'docker-compose.override.yml',
-  'README.md',
-  'KNOWN_ISSUES.md',
-  'Makefile',
-]
-// The five images this repo builds. Naming them individually (rather than
-// `gremion/\w+`) keeps GitHub URLs such as .../Hello-N00del/gremion/issues —
-// PUBLIC_SOURCE_URL's own neighbourhood — out of the match.
-const G9_SERVICES = ['ui', 'public', 'legal', 'vector', 'fallback']
-const G9_BAD_COORDINATE = new RegExp(
-  String.raw`(?:^|[\s(\`'"=|])(docker\.io/gremion/[a-z][a-z0-9._-]*|gremion/(?:${G9_SERVICES.join('|')})\b)`,
-  'i'
-)
-const G9_IMAGE_LINE = /^\s*(?:#\s*)?image:\s*["']?([^\s"']+)/
-
-function g9Surfaces() {
-  const out = []
-  for (const dir of G9_SURFACE_DIRS) {
-    if (!has(dir)) continue
-    out.push(...walk(join(ROOT, dir)).map((f) => relative(ROOT, f).replace(/\\/g, '/')))
-  }
-  out.push(...G9_SURFACE_FILES.filter((f) => has(f)))
-  return out.filter((f) => /\.(ya?ml|md)$/.test(f) || f === 'Makefile')
-}
-
-check('g9 no shipped manifest or deploy doc names a gremion image outside ghcr.io/hello-n00del', () => {
-  const surfaces = g9Surfaces()
-  const problems = []
-  const seenServices = new Set()
-  for (const rel of surfaces) {
-    read(rel)
-      .split('\n')
-      .forEach((line, i) => {
-        for (const m of line.matchAll(/ghcr\.io\/hello-n00del\/gremion-([a-z][a-z-]*)/g))
-          seenServices.add(m[1])
-        const img = G9_IMAGE_LINE.exec(line)
-        if (img && /gremion/i.test(img[1]) && !FIRST_PARTY_IMAGE.test(img[1]))
-          problems.push(`${rel}:${i + 1} image: ${img[1]} — not under ghcr.io/hello-n00del/`)
-        const bad = G9_BAD_COORDINATE.exec(line)
-        if (bad) problems.push(`${rel}:${i + 1} ${bad[1]} — resolves to a Docker Hub namespace we do not own`)
-      })
-  }
-  // Vacuity guard: this check reads text, so a moved directory or a renamed
-  // doc set would leave it scanning nothing and passing loudly. It only means
-  // anything while the surfaces still carry all five first-party coordinates.
-  const missing = G9_SERVICES.filter((s) => !seenServices.has(s))
-  if (missing.length)
-    return `saw no ghcr.io/hello-n00del/gremion-${missing.join(', gremion-')} coordinate across ${surfaces.length} scanned surface(s) — the scan is looking at the wrong tree, so its silence proves nothing`
-  return problems.length ? problems.join(' | ') : null
-})
+// g9 (why it exists next to g5, its surfaces, its scan) lives in
+// scripts/lib/image-surfaces.mjs so its test runs it on a fixture tree.
+check('g9 no shipped manifest or deploy doc names a gremion image outside ghcr.io/hello-n00del', () =>
+  g9Check(ROOT))
 
 // A comment claiming that a SENTINEL makes `kubectl apply` fail fast. Both word
 // orders, because the first version of this check only matched "fails fast on
@@ -897,10 +829,10 @@ const PRODUCT_TOKEN_EXEMPT_PATHS = [
   /^scripts\/kernel-hygiene-check\.mjs$/,
   /^gremion-ui\/src\/lib\/server\/tenant\/provisioner\/realm-identity\.test\.ts$/,
   /^gremion-ui\/scripts\/install-git-hooks\.mjs$/,
-  /^gremion-ui\/migrations\/008_public_portal\.sql$/,
-  /^gremion-ui\/migrations\/042_protocol_resolution_required_majority\.sql$/,
-  /^gremion-ui\/migrations\/043_audit_log_hash_chain\.sql$/,
-  /^gremion-ui\/migrations\/048_resolution_decided_at\.sql$/,
+  /^gremion-ui\/migrations\/0008_public_portal\.sql$/,
+  /^gremion-ui\/migrations\/0042_protocol_resolution_required_majority\.sql$/,
+  /^gremion-ui\/migrations\/0043_audit_log_hash_chain\.sql$/,
+  /^gremion-ui\/migrations\/0048_resolution_decided_at\.sql$/,
 ]
 
 // PENDING - a dated, per-line waiver, and NOT a second allow-list. The
@@ -1705,6 +1637,8 @@ check('m1 the port-back record names the frozen extraction source and all ten fi
   const doc = read(p)
   const SOURCE = 'f276af5925abacdcfd05f6613fc11afff2d804c5'
   if (!doc.includes(SOURCE)) return `does not name the frozen extraction source ${SOURCE}`
+  // The dated record names the files as they were ported (pad 3); TASK-029
+  // renumbered the data-plane ones to 0003..0058 afterwards (pure renames).
   const ported = [
     '003_calendar_schema.sql', '034_deck_board.sql', '049_org_unit_event_outbox.sql',
     '053_notification_read_marker.sql', '054_resolution_adoption_mode.sql',

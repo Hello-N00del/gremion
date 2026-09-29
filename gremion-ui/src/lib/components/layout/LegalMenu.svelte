@@ -5,6 +5,7 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import { DEFAULT_NAV_LABELS, type NavLabels } from './nav-labels'
   import { SOURCE_OFFER_LABEL } from '$lib/source-offer'
+  import { LEGAL_HREFS } from '$lib/legal-links'
 
   let {
     sourceUrl,
@@ -41,9 +42,9 @@
   }
 
   const LINKS = [
-    { href: '/legal/impressum', label: 'Impressum' },
-    { href: '/legal/datenschutz', label: 'Datenschutz' },
-    { href: '/legal/barrierefreiheit', label: 'Barrierefreiheit' }
+    { href: LEGAL_HREFS.impressum, label: 'Impressum' },
+    { href: LEGAL_HREFS.datenschutz, label: 'Datenschutz' },
+    { href: LEGAL_HREFS.barrierefreiheit, label: 'Barrierefreiheit' }
   ]
 </script>
 

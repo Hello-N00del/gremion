@@ -31,9 +31,9 @@ const RULES: ImportRule[] = [
     allow: [],
   },
   {
-    id: 'no-setup-health-to-feature-module',
-    description: 'setup-health route must not import a feature module (A3c S2: probes inverted)',
-    sourceDirs: ['src/routes/api/setup/health'],
+    id: 'no-setup-api-to-feature-module',
+    description: 'setup API routes must not import a feature module (A3c S2; wizard health route deleted, TASK-042)',
+    sourceDirs: ['src/routes/api/setup'],
     sourceExempt: [],
     forbiddenTargets: [
       'src/lib/server/finance', 'src/lib/server/messages',
@@ -104,14 +104,14 @@ describe('scanImports', () => {
     expect(v[0]).toMatchObject({ rule: 'no-settings-to-feature-module', line: 1 })
   })
 
-  it('flags setup-health → synapse-admin / files / elections (A3c S2 guard is non-vacuous)', () => {
+  it('flags setup API → synapse-admin / files / elections (A3c S2 guard is non-vacuous)', () => {
     const code = [
       `import { getSynapseAdmin } from '$lib/server/messages/synapse-admin'`,
       `import { createNextcloudClient } from '$lib/server/files/nextcloud-client'`,
       `import { x } from '$lib/server/elections/helios-client'`,
     ].join('\n')
-    const v = scanImports('src/routes/api/setup/health/+server.ts', code, RULES)
+    const v = scanImports('src/routes/api/setup/test-smtp/+server.ts', code, RULES)
     expect(v).toHaveLength(3)
-    expect(v.every((x) => x.rule === 'no-setup-health-to-feature-module')).toBe(true)
+    expect(v.every((x) => x.rule === 'no-setup-api-to-feature-module')).toBe(true)
   })
 })

@@ -19,16 +19,19 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  PER_TENANT_EXACT_VARS,
+  PER_TENANT_PREFIX_VARS,
+  isPerTenantEnvName,
+} from '../src/lib/server/env/per-tenant-env-names.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const EXACT_VARS = new Set([
-  // Task 23: NEWSLETTER_DB_PATH removed — the monolith SQLite newsletter store
-  // was decommissioned, so the per-tenant env read no longer exists.
-  'DATABASE_URL', 'KEYCLOAK_REALM', 'KEYCLOAK_ADMIN_URL', 'MATRIX_URL',
-  'SYNAPSE_SERVER_NAME', 'HELIOS_URL', 'CONFIG_PATH', 'CALDAV_SHARED_USER',
-])
-const PREFIX_VARS = ['AUTH_KEYCLOAK_', 'HELIOS_SERVICE_', 'NEXTCLOUD_', 'LIVEKIT_']
+// TASK-042 Q4 / R28: the per-tenant name list is runtime data owned by
+// src/lib/server/env/per-tenant-env-names.js, which platform-env.ts also
+// imports; this build script re-exports it (never the reverse).
+export const EXACT_VARS = PER_TENANT_EXACT_VARS
+export const PREFIX_VARS = PER_TENANT_PREFIX_VARS
 const SCANNABLE = /\.(ts|svelte)$/
 // D-GUARD-TESTS (P2.1c T14): test files legitimately pin env behavior and do NOT
 // ship, so they are exempt from the build-failing guard. Skip `*.test.ts` AND
@@ -37,10 +40,7 @@ const SCANNABLE = /\.(ts|svelte)$/
 const SKIP_FILE = /\.(test|integration\.test)\.(ts|svelte)$/
 const READ_RE = /\benv(?:\.([A-Z0-9_]+)\b|\[\s*['"]([A-Z0-9_]+)['"]\s*\])/g
 
-function isPerTenant(name) {
-  if (EXACT_VARS.has(name)) return true
-  return PREFIX_VARS.some((p) => name.startsWith(p))
-}
+const isPerTenant = isPerTenantEnvName
 
 export async function scanForEnvViolations(rootDir, opts = {}) {
   // Allowlist segments are matched against paths RELATIVE to rootDir. The CLI

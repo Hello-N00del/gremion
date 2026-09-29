@@ -71,13 +71,6 @@ export const ALLOWLIST = [
       'config.json lives on the /data volume beside, not inside, the storage seam; revisit if tenant config moves to the database (TRD-223 object-store cutover)',
   },
   {
-    path: 'gremion-ui/src/lib/server/setup-token.ts',
-    sites: 4,
-    reason:
-      "one-shot setup-wizard secret (.setup-token, mode 0600) in the tenant's configPath directory — an operator credential file, not tenant content",
-    residual: 'the token file is not routed through the seam; retire it when setup moves to a registry-issued token',
-  },
-  {
     path: 'gremion-ui/src/routes/api/settings/backup/+server.ts',
     sites: 3,
     reason:

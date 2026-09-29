@@ -121,7 +121,7 @@ expect_eq "control files applied" "$control_applied" "5"
 
 # -- the three cross-cutting module tables, each module OFF -------------------
 # `deck_board` is the board module's KEY in CROSS_CUTTING_MIGRATIONS, not a
-# relation: 034_deck_board.sql:8,16,23 creates `board`, `stack` and `card`.
+# relation: 0034_deck_board.sql:8,16,23 creates `board`, `stack` and `card`.
 # Measured against a real Postgres — asserting to_regclass('deck_board') failed
 # here, which is the whole point of proving this in the database.
 for t in calendar_events committee_elections board stack card \
