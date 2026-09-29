@@ -8,6 +8,7 @@
 // package itself never creates or drops a database (TASK-021 owns that).
 import { fileURLToPath } from 'node:url'
 import type { TestProject } from 'vitest/node'
+import { migratePlatform } from '../../src/lifecycle/platform.js'
 import { runMigrations } from '../../src/runner.js'
 import { tenantModuleDbName } from '../../src/names.js'
 import { connect } from './db.js'
@@ -66,6 +67,21 @@ export default async function setup(project: TestProject) {
         const name = tenantModuleDbName(t, 'fixture')
         await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
         await admin.unsafe(`CREATE DATABASE ${name}`)
+        // TASK-021 Q6: each customer's kernel database, created by the harness
+        // here (by TASK-043 for real), so the TRD-089 inspection has one.
+        const kernel = tenantModuleDbName(t, 'kernel')
+        await admin.unsafe(`DROP DATABASE IF EXISTS ${kernel} WITH (FORCE)`)
+        await admin.unsafe(`CREATE DATABASE ${kernel}`)
+      }
+      // TASK-021 Q2: the platform catalogue, created by the harness (at
+      // installation by TASK-043/TASK-077 for real), migrated by the one runner.
+      await admin.unsafe('DROP DATABASE IF EXISTS gremion_platform WITH (FORCE)')
+      await admin.unsafe('CREATE DATABASE gremion_platform')
+      const platform = connect('gremion_platform', { max: 2 })
+      try {
+        await migratePlatform(platform, { log: () => {} })
+      } finally {
+        await platform.end()
       }
       project.provide('tenants', { A, B })
     } finally {

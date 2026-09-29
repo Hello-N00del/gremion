@@ -1,6 +1,6 @@
 // src/lib/server/governance/protocols-db.ts
 // Read-side aggregation for the two top-level governance surfaces that draw
-// from the meeting-minutes schema (migrations/007_protocols.sql):
+// from the meeting-minutes schema (migrations/0007_protocols.sql):
 //   • /protokolle  — every protocol across all committees (listProtocols)
 //   • /beschluesse — passed resolutions across all published protocols
 //                    (listBeschluesse) — the canonical Beschlussbuch source.

@@ -31,6 +31,7 @@
 #   SHIM_READY_DOWN   ok: /api/health answers ok even with the state tier DOWN
 #                     (a probe that cannot tell ready from not ready)
 #   SHIM_REGISTER     fail: the tenant_domain registration writes no row
+#   SHIM_COMPOSE_CONFIG fail: `docker compose ... config` fails (names, counts)
 set -u
 S="${SHIM_STACK:?SHIM_STACK required}"
 D="${SHIM_DIR:?SHIM_DIR required}"
@@ -153,5 +154,29 @@ case "$1" in
     start) echo up > "$D/state" ;;
     restart) : > "$D/restarted" ;;
     logs) echo "shim: no logs" ;;
+    compose)
+        # `docker compose --env-file <dir>/<project>.env config|ls ...` (the
+        # proof's compose(), names and counts). The project is the env file's
+        # basename. SHIM_COMPOSE_CONFIG=fail makes `config` fail the way a bad
+        # render does: seven lines on stderr, exit 1.
+        shift; envf=""
+        [[ "${1:-}" == --env-file ]] && { envf="$2"; shift 2; }
+        proj="$(basename "${envf:-none.env}" .env)"
+        case "${1:-}" in
+            config)
+                if [[ "${SHIM_COMPOSE_CONFIG:-}" == fail ]]; then
+                    for i in 1 2 3 4 5 6 7; do
+                        echo "shim-compose-error line ${i}: service \"svc\" refers to undefined network nowhere" >&2
+                    done
+                    exit 1
+                fi
+                case "$args" in
+                    *" --services "*) printf 'svc-a\nsvc-b\n' ;;
+                    *) printf '{"name":"%s-%s","networks":{"default":{"name":"%s-%s_default"}},"volumes":{"data":{"name":"%s_data"}}}\n' \
+                           "$S" "$proj" "$S" "$proj" "$S" ;;
+                esac ;;
+            ls) echo '[]' ;;
+            *) echo "shim: unhandled compose call: $*" >&2; exit 1 ;;
+        esac ;;
     *) echo "shim: unhandled docker call: $*" >&2; exit 1 ;;
 esac

@@ -68,6 +68,12 @@ test('runMigrationHashSuite fails when EITHER directory is empty, even if the ot
     writeFileSync(path.join(healthyDir, '001_a.sql'), 'select 1;\n')
     const hash = createHash('sha256').update('select 1;\n').digest('hex')
     writeFileSync(path.join(healthyDir, 'manifest.json'), JSON.stringify({ '001_a.sql': hash }))
+    // TASK-029: the suite reads its directories from the migration register
+    mkdirSync(path.join(root, 'scripts', 'migrations'), { recursive: true })
+    writeFileSync(
+      path.join(root, 'scripts', 'migrations', 'ranges.json'),
+      JSON.stringify({ chains: [{ id: 'a', manifestDirs: ['gremion-ui/migrations'] }, { id: 'b', manifestDirs: ['gremion-ui/migrations-control'] }] }),
+    )
     // emptyDir has no .sql files and no manifest.json at all -- the
     // genuinely-empty shape.
     const r = runMigrationHashSuite({ root })

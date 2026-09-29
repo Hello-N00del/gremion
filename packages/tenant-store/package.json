@@ -22,6 +22,9 @@
   "exports": {
     ".": {
       "import": "./src/index.ts"
+    },
+    "./lifecycle": {
+      "import": "./src/lifecycle/index.ts"
     }
   },
   "publishConfig": {
@@ -30,6 +33,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
+      },
+      "./lifecycle": {
+        "types": "./dist/lifecycle/index.d.ts",
+        "import": "./dist/lifecycle/index.js"
       }
     }
   },
@@ -43,6 +50,7 @@
   },
   "dependencies": {
     "@gremion/db": "workspace:*",
+    "@gremion/module-catalogue": "workspace:*",
     "postgres": "^3.4.4"
   },
   "devDependencies": {

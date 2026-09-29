@@ -36,7 +36,7 @@ process.env.DATABASE_URL ??= 'postgres://gremion:gremion_test@localhost:5432/gre
 // test drive the REAL boot() -> data-plane runMigrations(). The integration DB
 // has the SCHEMA migrations applied but NOT the *_seed.sql dev seeds (they
 // reference dev-realm KC UUIDs + a committees table the harness doesn't
-// populate), so an un-flagged runMigrations() would try to apply 005_dev_seed.sql
+// populate), so an un-flagged runMigrations() would try to apply 0005_dev_seed.sql
 // and explode. Production already disables seeds (docker-compose.prod.yml); set
 // the same flag here (config module, before the $env/dynamic/private snapshot)
 // so runMigrations() is a clean no-op. No existing integration test relies on

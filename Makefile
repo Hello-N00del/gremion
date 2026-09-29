@@ -536,31 +536,57 @@ lint-tenant-db-access:
 .PHONY: lint-module-scan lint-module-migration-names
 lint-module-scan:
 	@echo "Checking in-tree module source for escaping imports..."
-	@declared=$(grep -c '^test(' scripts/check-module-source-scan.test.mjs); \
-	 out=$(node --test --test-reporter=tap scripts/check-module-source-scan.test.mjs 2>&1); \
-	 status=$?; \
-	 [ "$status" -eq 0 ] || { printf '%s\n' "$out" >&2; exit "$status"; }; \
-	 collected=$(printf '%s\n' "$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$/\1/p' | tail -n1); \
-	 if [ "$declared" -lt 1 ] || [ "$collected" != "$declared" ]; then \
-	   echo "lint-module-scan: scripts/check-module-source-scan.test.mjs declares $declared test(s) but node ran '$collected'." >&2; \
+	@declared=$$(grep -c '^test(' scripts/check-module-source-scan.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-module-source-scan.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-module-scan: scripts/check-module-source-scan.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
 	   exit 1; \
 	 fi; \
-	 echo "[module-source-scan] suite: $collected of $declared declared test(s) ran"
+	 echo "[module-source-scan] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-module-source-scan.mjs
 
 lint-module-migration-names:
 	@echo "Checking module migration names against the kernel chain..."
-	@declared=$(grep -c '^test(' scripts/check-module-migration-names.test.mjs); \
-	 out=$(node --test --test-reporter=tap scripts/check-module-migration-names.test.mjs 2>&1); \
-	 status=$?; \
-	 [ "$status" -eq 0 ] || { printf '%s\n' "$out" >&2; exit "$status"; }; \
-	 collected=$(printf '%s\n' "$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$/\1/p' | tail -n1); \
-	 if [ "$declared" -lt 1 ] || [ "$collected" != "$declared" ]; then \
-	   echo "lint-module-migration-names: scripts/check-module-migration-names.test.mjs declares $declared test(s) but node ran '$collected'." >&2; \
+	@declared=$$(grep -c '^test(' scripts/check-module-migration-names.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-module-migration-names.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-module-migration-names: scripts/check-module-migration-names.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
 	   exit 1; \
 	 fi; \
-	 echo "[module-migration-names] suite: $collected of $declared declared test(s) ran"
+	 echo "[module-migration-names] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-module-migration-names.mjs
+
+# TASK-029 (TRD-344, grant G4): the migration register. Every *.sql is in
+# exactly one database chain of scripts/migrations/ranges.json or a declared
+# non-migration; each chain is padded, in numeric order, gap-free above its
+# frozen legacy floor, claimed (highWater) and locked (applied.lock.json, so a
+# rename, renumber, edit or deletion of an applied migration fails); no
+# StuRa-only slug or StuRa block number enters. Each suite runs first with its
+# collected count asserted against its declared top-level `test(` count (the
+# lint-toolchain pattern: `node --test` exits 0 on a file that collects
+# nothing), then the check over the real tree.
+.PHONY: lint-migration-register
+lint-migration-register:
+	@echo "Checking the migration register..."
+	@for suite in scripts/migrations/*.test.mjs; do \
+	   declared=$$(grep -c '^test(' "$$suite"); \
+	   out=$$(node --test --test-reporter=tap "$$suite" 2>&1); \
+	   status=$$?; \
+	   [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	   collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	   if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	     echo "lint-migration-register: $$suite declares $$declared test(s) but node ran '$$collected'." >&2; \
+	     exit 1; \
+	   fi; \
+	   echo "[migration-register] $$suite: $$collected of $$declared declared test(s) ran"; \
+	 done
+	@node scripts/migrations/register.mjs check
 
 # TASK-198: the chat module's Synapse. lint-synapse runs the module suites
 # (render, refusal, probe, preflight, inject: modules/messaging/synapse/test/) and the
@@ -600,7 +626,7 @@ lint-synapse:
 synapse-proof:
 	@bash modules/messaging/synapse/test/scratch-proof.sh "$(PHASE)" "$(CURDIR)/docker-compose.yml" "$(CURDIR)/scripts/check-postgres-major-running.mjs"
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
@@ -656,11 +682,11 @@ validate-env:
 	fi
 	@echo "  .env: OK (no placeholders found)"
 	@# The read-only portal role is a BOOT prerequisite, not a nicety:
-	@# gremion-ui/migrations/058_public_reader_grants.sql aborts the whole
+	@# gremion-ui/migrations/0058_public_reader_grants.sql aborts the whole
 	@# data-plane chain when gremion_public_reader is missing, and
 	@# docker/postgres/init-databases.sh refuses to start without this value.
 	@# An empty one here is a stack that comes up and never migrates.
-	@grep -qE "^PUBLIC_DB_PASSWORD=.+" .env || (echo "ERROR: PUBLIC_DB_PASSWORD is unset or empty in .env - the gremion_public_reader role cannot be created, and gremion-ui/migrations/058_public_reader_grants.sql aborts the migration chain without it" && exit 1)
+	@grep -qE "^PUBLIC_DB_PASSWORD=.+" .env || (echo "ERROR: PUBLIC_DB_PASSWORD is unset or empty in .env - the gremion_public_reader role cannot be created, and gremion-ui/migrations/0058_public_reader_grants.sql aborts the migration chain without it" && exit 1)
 	@echo "  public reader: OK (PUBLIC_DB_PASSWORD is set)"
 	@# B-01: KEYCLOAK_REALM and the /realms/ segment of AUTH_KEYCLOAK_ISSUER
 	@# name ONE realm. Disagreement is silent and is a WRITE — see

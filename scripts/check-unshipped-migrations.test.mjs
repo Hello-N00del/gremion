@@ -17,14 +17,14 @@ function tree(files) {
 }
 
 test('a clean tree passes', () => {
-  const root = tree(['001_governance_schema.sql', '058_public_reader_grants.sql'])
+  const root = tree(['0001_governance_schema.sql', '0058_public_reader_grants.sql'])
   const r = run(root)
   assert.equal(r.status, 0, r.stdout + r.stderr)
   rmSync(root, { recursive: true, force: true })
 })
 
 test('a planted handover migration fails and is named', () => {
-  const root = tree(['001_governance_schema.sql', '050_handover_schema.sql'])
+  const root = tree(['0001_governance_schema.sql', '050_handover_schema.sql'])
   const r = run(root)
   assert.equal(r.status, 1)
   assert.match(r.stderr, /UNSHIPPED MIGRATION: .*050_handover_schema\.sql/)
