@@ -116,13 +116,36 @@ test('pins: a missing regex in gremion-deploy fails loudly (no silent fallback)'
   assert.throws(() => deployPinRegexes(f), /digest/)
 })
 
-test('pins: the release fixture passes; the unpinned fixture fails and names the image', () => {
-  const services = ['gremion-ui', 'gremion-public', 'migrate']
+test('pins: the release fixture passes by the DERIVED app set; the unpinned fixture fails and names the image', () => {
+  const services = derivedServices('app')
   const valid = readFileSync(join(REPO_ROOT, 'test/host/fixtures/release/valid/docker-compose.pins.yml'), 'utf8')
   assert.deepEqual(checkPins(valid, { services }), [])
   const unpinned = readFileSync(join(REPO_ROOT, 'test/host/fixtures/release/unpinned/docker-compose.pins.yml'), 'utf8')
   const ps = checkPins(unpinned, { services })
   assert.ok(ps.some((p) => p.code === 'unpinned' && /gremion-ui:dist-v1\.2\.3/.test(p.message)), JSON.stringify(ps))
+})
+
+test('pins: the app layer in the state slot is unexpected AND incomplete; tenant-create absent is incomplete', () => {
+  const app = readFileSync(join(REPO_ROOT, 'test/host/fixtures/release/valid/docker-compose.pins.yml'), 'utf8')
+  const ps = checkPins(app, { services: derivedServices('state') })
+  assert.deepEqual([...new Set(codes(ps))], ['incomplete', 'unexpected-service'])
+  for (const s of ['legal', 'vector', 'fallback']) assert.ok(ps.some((p) => p.code === 'incomplete' && p.message.includes(`service ${s} `)), s)
+  const noTenant = app.replace(/ {2}tenant-create:\n(?: {4}.*\n)+/, '')
+  assert.notEqual(noTenant, app)
+  assert.deepEqual(codes(checkPins(noTenant, { services: derivedServices('app') })), ['incomplete'])
+})
+
+test('pins: cli --project derives the set; --project with an unknown name fails', () => {
+  const cli = join(REPO_ROOT, 'scripts/release/check-pins.mjs')
+  const valid = join(REPO_ROOT, 'test/host/fixtures/release/valid/docker-compose.pins.yml')
+  const ok = sh(process.execPath, [cli, valid, '--project', 'app'])
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr)
+  const wrong = sh(process.execPath, [cli, valid, '--project', 'state'])
+  assert.equal(wrong.status, 1, wrong.stdout + wrong.stderr)
+  assert.match(wrong.stderr, /unexpected-service: service gremion-ui/)
+  const bad = sh(process.execPath, [cli, valid, '--project', 'ops'])
+  assert.equal(bad.status, 1)
+  assert.match(bad.stderr, /unknown project ops/)
 })
 
 test('pins: short digest, missing service, extra service, real build, gremion/ namespace, zero images -> FAIL', () => {

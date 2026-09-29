@@ -10,3 +10,6 @@ services:
   migrate:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333
+  tenant-create:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333
