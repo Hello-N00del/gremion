@@ -205,7 +205,7 @@ phase_render_env() {
 
     cat > "$ENV_DIR/state.env" <<EOF
 COMPOSE_PROJECT_NAME=${STACK}-state
-COMPOSE_FILE="docker-compose.yml${s}docker-compose.prod.yml${s}test/host/fixtures/pooled-stack/docker-compose.pins.yml${s}$(overlay_ref state.proof.yml '')"
+COMPOSE_FILE="docker-compose.yml${s}docker-compose.prod.yml${s}test/host/fixtures/pooled-stack/docker-compose.state-pins.yml${s}$(overlay_ref state.proof.yml '')"
 COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=production
 STACK=${STACK}
