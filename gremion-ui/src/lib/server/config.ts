@@ -76,6 +76,15 @@ export interface GremionConfig {
   // today. Consumed via $lib/server/tenant/role-vocabulary.ts; P2.3's
   // municipal blueprint supplies real overrides. No storage change.
   roles?: string[]
+  // Finance-vocabulary seam (labels only): per-tenant DISPLAY-LABEL override for
+  // the two finance roles (kv/hv). Optional — omitted (EVERY existing config,
+  // pinned) means the frozen KV/HV defaults, byte-identical to today. Whole-value
+  // replace-or-absent like `terms`/`roles` (no partial merge: a present object
+  // must carry BOTH labels, zod-gated). Consumed via
+  // $lib/server/tenant/role-vocabulary.ts (financeRoleLabelsForTenant). DISPLAY
+  // ONLY — required_group / KC-group values are infrastructure and never route
+  // through this vocabulary. No storage change — config-only.
+  financeRoles?: { kv: string; hv: string }
   admin_accounts: { it_admin_created: boolean; council_admin_created: boolean }
   smtp: { configured: boolean; host: string; port: number; from_address: string; from_name: string }
   // WP3-modules-dynamic: a DYNAMIC open record so a net-new toggleable module
@@ -372,6 +381,12 @@ export const gremionConfigSchema = z
     // explicit-`.optional()` convention as `terms`: absent means "default
     // vocabulary", never `[]`. Known to the `.strict()` update schema below.
     roles: z.array(z.string()).optional(),
+    // Finance-vocabulary seam (labels only): optional per-tenant finance-role
+    // label pair. Same explicit-`.optional()` convention as `terms`/`roles`:
+    // absent means the frozen KV/HV defaults, never `{}`. NOT `.partial()` — the
+    // value is whole-value replace-or-absent, so a present object must carry
+    // BOTH labels. Known to the `.strict()` update schema below.
+    financeRoles: z.object({ kv: z.string(), hv: z.string() }).optional(),
     admin_accounts: adminAccountsSchema,
     smtp: smtpSchema,
     modules: modulesSchema,
@@ -616,6 +631,12 @@ export function writeConfig(update: ConfigUpdate, tenant: ConfigTenant = require
     // `{...}` merge, and the default config stays free of the key (StuRa
     // tenant #1 = the Role enum).
     roles: (update.roles ?? current.roles) as GremionConfig['roles'],
+    // Finance-vocabulary seam: financeRoles mirrors terms/roles — an update
+    // carrying `financeRoles` replaces the whole label pair (the zod gate above
+    // requires BOTH labels when present); one without it keeps the current one.
+    // No `{...}` merge, and the default config stays free of the key (absent =
+    // the frozen KV/HV defaults).
+    financeRoles: (update.financeRoles ?? current.financeRoles) as GremionConfig['financeRoles'],
     smtp: { ...current.smtp, ...update.smtp },
     legal: { ...current.legal, ...update.legal },
     modules: mergedModules as GremionConfig['modules'],
