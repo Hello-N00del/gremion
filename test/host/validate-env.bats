@@ -102,6 +102,10 @@ refute_secrets_printed() {
     run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
     [ "$status" -eq 1 ]
     [[ "$output" == *"docker-compose.state-pins.yml"* ]]
+    rm "$RELEASE/docker-compose.pins.yml"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"docker-compose.pins.yml"* ]]
 }
 
 @test "an env file without COMPOSE_FILE exits 1 (it must name its composition, N20)" {
