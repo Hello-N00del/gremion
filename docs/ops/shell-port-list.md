@@ -141,3 +141,9 @@ not reachable from this checkout, so the committees page hunk is ported without
 it. New UI code imports only `$app/navigation` (`invalidateAll`). The UI strings
 are literal German like the surrounding kernel pages, so no G8 message keys were
 added.
+
+## Boundary scan (brief §6.15, subtask 206-A)
+
+| Source | Disposition | Status | Guard | RED | GREEN |
+|---|---|---|---|---|---|
+| (kernel guard, no source SHA) | tracked `gremion-ui/src` files never import repo-root `modules/**`, `$lib/server/finance/**`, or a `$lib` path that exists only under a `modules/*/app` overlay (the boundary suite's own string fixtures exempt) | new | `lib/server/boundary/kernel-module-imports.test.ts` (seeded cases per rule) | re-break (s): a kernel file importing `../../../../../modules/content/app/...` -> `× no tracked gremion-ui/src file imports modules/** ...` | 6/6; boundary 12 files / 57 tests |
