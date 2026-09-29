@@ -12,6 +12,11 @@ RUN npm install -g corepack && corepack enable pnpm
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/nats-auth/package.json ./packages/nats-auth/
+# The bin file must exist when pnpm installs, or pnpm cannot link
+# gremion-ui/node_modules/.bin/nats-auth and `pnpm exec nats-auth init` (the
+# tenant-create call in make nats-init, gremion-deploy, pooled-stack-proof)
+# fails "Command not found" (TASK-024 image.test.ts, scripts/image-check.sh).
+COPY packages/nats-auth/bin ./packages/nats-auth/bin/
 COPY packages/ports/package.json ./packages/ports/
 COPY packages/storage/package.json ./packages/storage/
 COPY packages/tokens/package.json ./packages/tokens/
