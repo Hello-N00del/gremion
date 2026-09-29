@@ -26,27 +26,27 @@ function applyList(offModuleId: string): string[] {
 describe('cross-cutting kernel DDL survives a module-OFF fresh init', () => {
   it('calendar OFF still applies 003, which still sorts before 058 in the kernel chain', () => {
     const list = applyList('calendar')
-    expect(list).toContain('003_calendar_schema.sql')
-    expect(list.indexOf('003_calendar_schema.sql')).toBeLessThan(
-      list.indexOf('058_public_reader_grants.sql'),
+    expect(list).toContain('0003_calendar_schema.sql')
+    expect(list.indexOf('0003_calendar_schema.sql')).toBeLessThan(
+      list.indexOf('0058_public_reader_grants.sql'),
     )
   })
 
   it('elections OFF still applies 004, and before 010 ALTERs committee_elections', () => {
     const list = applyList('elections')
-    expect(list).toContain('004_committee_elections.sql')
-    expect(list.indexOf('004_committee_elections.sql')).toBeLessThan(
-      list.indexOf('010_org_units.sql'),
+    expect(list).toContain('0004_committee_elections.sql')
+    expect(list.indexOf('0004_committee_elections.sql')).toBeLessThan(
+      list.indexOf('0010_org_units.sql'),
     )
   })
 
   it('board OFF still applies 034, after the kernel tables its FKs reference', () => {
     const list = applyList('board')
-    expect(list).toContain('034_deck_board.sql')
+    expect(list).toContain('0034_deck_board.sql')
     // board.org_unit_id -> org_units(id) (010), card.protocol_action_item_id ->
     // protocol_action_items(id) (007). Both must be created first.
-    expect(list.indexOf('007_protocols.sql')).toBeLessThan(list.indexOf('034_deck_board.sql'))
-    expect(list.indexOf('010_org_units.sql')).toBeLessThan(list.indexOf('034_deck_board.sql'))
+    expect(list.indexOf('0007_protocols.sql')).toBeLessThan(list.indexOf('0034_deck_board.sql'))
+    expect(list.indexOf('0010_org_units.sql')).toBeLessThan(list.indexOf('0034_deck_board.sql'))
   })
 
   it('no registered module manifest claims a kernel-block migration', () => {
@@ -69,29 +69,29 @@ describe('the five unclaimed kernel migrations and their order constraints', () 
   const at = (f: string) => list().indexOf(f)
 
   it('049 ships (the org-unit outbox table)', () => {
-    expect(list()).toContain('049_org_unit_event_outbox.sql')
+    expect(list()).toContain('0049_org_unit_event_outbox.sql')
   })
 
   it('053 ships (the notification read marker)', () => {
-    expect(list()).toContain('053_notification_read_marker.sql')
+    expect(list()).toContain('0053_notification_read_marker.sql')
   })
 
   it('054 sorts after 007 and 042 — it ALTERs protocol_resolutions and re-adds 042s CHECK', () => {
-    expect(at('054_resolution_adoption_mode.sql')).toBeGreaterThan(at('007_protocols.sql'))
-    expect(at('054_resolution_adoption_mode.sql')).toBeGreaterThan(
-      at('042_protocol_resolution_required_majority.sql'),
+    expect(at('0054_resolution_adoption_mode.sql')).toBeGreaterThan(at('0007_protocols.sql'))
+    expect(at('0054_resolution_adoption_mode.sql')).toBeGreaterThan(
+      at('0042_protocol_resolution_required_majority.sql'),
     )
   })
 
   it('056 sorts after 001 — it DROPs the inline CHECK 001 creates on role_assignment_history', () => {
-    expect(at('056_role_assignment_history_recalled.sql')).toBeGreaterThan(
-      at('001_governance_schema.sql'),
+    expect(at('0056_role_assignment_history_recalled.sql')).toBeGreaterThan(
+      at('0001_governance_schema.sql'),
     )
   })
 
   it('057 sorts after 010 and guards its content-schema indexes on to_regclass', () => {
-    expect(at('057_fk_hot_filter_indexes.sql')).toBeGreaterThan(at('010_org_units.sql'))
-    const body = readFileSync(join(MIGRATIONS_DIR, '057_fk_hot_filter_indexes.sql'), 'utf-8')
+    expect(at('0057_fk_hot_filter_indexes.sql')).toBeGreaterThan(at('0010_org_units.sql'))
+    const body = readFileSync(join(MIGRATIONS_DIR, '0057_fk_hot_filter_indexes.sql'), 'utf-8')
     expect(body).toMatch(/to_regclass\('content\.post_media'\)/)
     expect(body).toMatch(/to_regclass\('content\.post_recipients'\)/)
   })
@@ -99,7 +99,7 @@ describe('the five unclaimed kernel migrations and their order constraints', () 
 
 // The chain was extended BELOW what an already-initialised database has
 // applied (003 and 034 sit in gaps under the pre-port-back high-water mark
-// 048_resolution_decided_at.sql). runMigrations() applies in filename order but
+// 0048_resolution_decided_at.sql). runMigrations() applies in filename order but
 // SELECTs the applied set, so such a file is picked up out of order on the next
 // boot of an old database; 003 REFERENCES committees(id), renamed by 010, so it
 // aborts with "relation committees does not exist" — an error that names a
@@ -108,11 +108,11 @@ describe('the five unclaimed kernel migrations and their order constraints', () 
 // way; what this adds is the diagnosis, printed BEFORE the abort.
 describe('backFillNotice', () => {
   const CHAIN = [
-    '001_governance_schema.sql', '003_calendar_schema.sql', '010_org_units.sql',
-    '034_deck_board.sql', '048_resolution_decided_at.sql', '049_org_unit_event_outbox.sql',
+    '0001_governance_schema.sql', '0003_calendar_schema.sql', '0010_org_units.sql',
+    '0034_deck_board.sql', '0048_resolution_decided_at.sql', '0049_org_unit_event_outbox.sql',
   ]
   const OLD_DB = new Set([
-    '001_governance_schema.sql', '010_org_units.sql', '048_resolution_decided_at.sql',
+    '0001_governance_schema.sql', '0010_org_units.sql', '0048_resolution_decided_at.sql',
   ])
 
   it('says nothing on a fresh database — sort order makes every file apply in order', () => {
@@ -128,10 +128,10 @@ describe('backFillNotice', () => {
   it('names every back-filled file, the mark it sits under, and the remedy', () => {
     const notice = backFillNotice({ applied: OLD_DB, candidates: CHAIN })
     expect(notice).not.toBeNull()
-    expect(notice).toContain('003_calendar_schema.sql')
-    expect(notice).toContain('034_deck_board.sql')
-    expect(notice).not.toContain('049_org_unit_event_outbox.sql')
-    expect(notice).toContain('048_resolution_decided_at.sql')
+    expect(notice).toContain('0003_calendar_schema.sql')
+    expect(notice).toContain('0034_deck_board.sql')
+    expect(notice).not.toContain('0049_org_unit_event_outbox.sql')
+    expect(notice).toContain('0048_resolution_decided_at.sql')
     expect(notice).toMatch(/down -v/)
     expect(notice).toContain('docs/ops/migration-portback-2026-09-15.md')
   })
@@ -141,7 +141,7 @@ describe('backFillNotice', () => {
       backFillNotice({
         applied: OLD_DB,
         candidates: CHAIN,
-        expected: new Set(['003_calendar_schema.sql', '034_deck_board.sql']),
+        expected: new Set(['0003_calendar_schema.sql', '0034_deck_board.sql']),
       }),
     ).toBeNull()
   })

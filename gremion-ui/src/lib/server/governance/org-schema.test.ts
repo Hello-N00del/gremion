@@ -90,7 +90,7 @@ describe('GREMION_ORG_SCHEMA pins the 038 catalog seed', () => {
   // the TS constant, appears — so changing either side alone fails here.
   const sql = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..',
-      'migrations', '038_org_unit_kind_catalog.sql'),
+      'migrations', '0038_org_unit_kind_catalog.sql'),
     'utf-8'
   )
   const lit = (v: string | null) => (v === null ? 'NULL' : `'${v}'`)

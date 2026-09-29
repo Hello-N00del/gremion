@@ -1,9 +1,9 @@
 // The three kernel-block migrations that create or alter a MODULE-owned table
 // and stay kernel-applied by written rule (spec B, migrations chapter §4).
 // A vertical that runs calendar, elections or board OFF still gets these files:
-// later ungated kernel DDL (010_org_units.sql's ALTER of committee_elections)
+// later ungated kernel DDL (0010_org_units.sql's ALTER of committee_elections)
 // and gremion-ui/scripts/fresh-init-proof.sh's existence assertions depend on
-// them existing. (058_public_reader_grants.sql no longer names calendar_events
+// them existing. (0058_public_reader_grants.sql no longer names calendar_events
 // among its own dependencies as of R-E13: it grants only the tables the
 // anonymous portal reads, org_units and protocols.)
 export const CROSS_CUTTING_MODULE_TABLES = [
@@ -13,16 +13,16 @@ export const CROSS_CUTTING_MODULE_TABLES = [
 ] as const
 
 // `deck_board` is the board module's OWNERSHIP KEY, not a relation name:
-// 034_deck_board.sql:8,16,23 creates `board`, `stack` and `card`. Measured
+// 0034_deck_board.sql:8,16,23 creates `board`, `stack` and `card`. Measured
 // against a real Postgres by gremion-ui/scripts/fresh-init-proof.sh, which
 // asserts those three relations. Kept as written because the cross-unit
 // contract binds this literal — B7-renumber-ranges-baseline consumes it as
 // ranges.json's `kernel.crossCuttingModuleTables`.
 /** kernel-block migration basename -> the module table it owns. */
 export const CROSS_CUTTING_MIGRATIONS: Readonly<Record<string, string>> = {
-  '003_calendar_schema.sql': 'calendar_events',
-  '004_committee_elections.sql': 'committee_elections',
-  '034_deck_board.sql': 'deck_board',
+  '0003_calendar_schema.sql': 'calendar_events',
+  '0004_committee_elections.sql': 'committee_elections',
+  '0034_deck_board.sql': 'deck_board',
 }
 
 /**
@@ -32,8 +32,8 @@ export const CROSS_CUTTING_MIGRATIONS: Readonly<Record<string, string>> = {
  * `runMigrations()` applies in filename order but skips what
  * `schema_migrations` already holds, so a file back-filled into a gap is picked
  * up out of order on the next boot of an already-initialised database. The
- * 2026-09-15 port-back did exactly that with `003_calendar_schema.sql` and
- * `034_deck_board.sql`, which sort below `048_resolution_decided_at.sql`. `003`
+ * 2026-09-15 port-back did exactly that with `0003_calendar_schema.sql` and
+ * `0034_deck_board.sql`, which sort below `0048_resolution_decided_at.sql`. `003`
  * REFERENCES `committees`, renamed to `org_units` by `010`, so on such a
  * database it aborts — and because `applyMigrationFile` is atomic, nothing is
  * recorded and every later boot repeats the same abort, quoting a table nobody

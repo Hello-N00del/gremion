@@ -223,6 +223,11 @@ export const UNIT_PARTS = {
   'tenant-store': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'tenant-store'), testScript: 'test', root, label: '@gremion/tenant-store vitest (test)' }),
   ],
+  // TASK-021 (R27): the one module.json validator and the catalogue-derived
+  // ops facts, including the real-tree check over modules/*/module.json.
+  'module-catalogue': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'module-catalogue'), testScript: 'test', root, label: '@gremion/module-catalogue vitest (test)' }),
+  ],
   // TASK-082 (R26): @gremion/tokens is a node:test suite (DTCG schema, tier
   // lint, accent parity and the app.css fence-staleness sync test), so it runs
   // per file through nodeTestParts like scripts/**, not through vitest.

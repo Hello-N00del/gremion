@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "gamma",
+  "extractionSource": "f276af5925abacdcfd05f6613fc11afff2d804c5",
+  "runtime": {
+    "version": "2.1.0",
+    "database": null,
+    "export": null,
+    "timedJobs": [],
+    "platformServer": { "postgresService": "gamma-postgres", "databases": ["gamma"] }
+  }
+}

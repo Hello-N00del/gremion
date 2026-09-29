@@ -55,10 +55,14 @@ export function checkMigrationNames(root) {
   const problems = []
   if (kernel.length === 0) problems.push(`zero kernel migrations under ${KERNEL_MIGRATIONS}/ — the name check would pass vacuously`)
   if (modules.length === 0) problems.push('zero module migrations under modules/**/migrations/ — the name check would pass vacuously')
-  const k = new Set(kernel)
+  // TASK-029 G6: compare SLUGS (basename minus its number), not basenames. After
+  // the pad-4 renumber kernel 0058_public_reader_grants.sql and a module
+  // 058_public_reader_grants.sql differ as basenames but name the same change.
+  const slug = (f) => f.replace(/^\d+_/, '').replace(/\.sql$/, '')
+  const k = new Map(kernel.map((f) => [slug(f), f]))
   for (const m of modules)
-    if (k.has(m.base))
-      problems.push(`${m.path} has the basename of kernel ${KERNEL_MIGRATIONS}/${m.base} — the kernel file wins; rename the module migration into its own block`)
+    if (k.has(slug(m.base)))
+      problems.push(`${m.path} has the slug of kernel ${KERNEL_MIGRATIONS}/${k.get(slug(m.base))} (basename minus number) — the kernel file wins; rename the module migration into its own block`)
   // Numbers. Every chain: no number twice. App chains (modules/<id>/app/migrations)
   // run in the KERNEL database, so their numbers must also stay clear of the
   // kernel's; leaf chains run against their own databases and may reuse 001...
@@ -100,5 +104,5 @@ if (isMain) {
     for (const p of r.problems) console.error(`  x ${p}`)
     process.exit(1)
   }
-  console.log(`[module-migration-names] OK — ${r.modules} module migration(s) in ${r.dirs} chain(s); none shares a basename with the ${r.kernel} kernel migrations, no chain reuses a number, and no app chain reuses a kernel or another app chain's number`)
+  console.log(`[module-migration-names] OK — ${r.modules} module migration(s) in ${r.dirs} chain(s); none shares a slug (basename minus number) with the ${r.kernel} kernel migrations, no chain reuses a number, and no app chain reuses a kernel or another app chain's number`)
 }

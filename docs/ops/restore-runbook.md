@@ -1,5 +1,12 @@
 # Restore Runbook — Gremion
 
+> **Superseded.** This page describes the retired restic/rclone recovery of the
+> three kernel databases and is kept as a historical reference only. The current
+> procedures are the four-procedure operations runbook in
+> [runbook/README.md](runbook/README.md): install, upgrade, backup and restore
+> ([runbook/restore.md](runbook/restore.md)). Do not follow the steps below on a
+> distribution host.
+
 **Target audience:** administrator responding to data loss or corruption of a Gremion
 governance-kernel deployment.
 **Prerequisites:** shell access to the host running Gremion, the `.env` file with

@@ -8,7 +8,7 @@
 //
 // Cluster note: T2.2 acceptance #4 — assert the composite index (field,
 // created_at DESC) is used for the field+date pattern — depends on
-// migration `024_audit_log_composite_index.sql` (Cluster 1, G-076).
+// migration `0024_audit_log_composite_index.sql` (Cluster 1, G-076).
 // That migration is now on master at HEAD; the EXPLAIN assertion lands
 // inline here per the brief's "use option (a)" instruction.
 
@@ -49,7 +49,7 @@ describe('G-103 audit-db integration', () => {
   describe('NULL handling on optional fields', () => {
     it('persists oldValue as NULL when omitted (insert path)', async () => {
       // The schema declares old_value as nullable, new_value as NOT NULL
-      // (migrations/009_audit_log.sql:7-8). An audit entry recording an
+      // (migrations/0009_audit_log.sql:7-8). An audit entry recording an
       // initial-config write (no prior value) sets oldValue: null and
       // the row must persist with old_value IS NULL on read.
       await writeAuditEntry({
