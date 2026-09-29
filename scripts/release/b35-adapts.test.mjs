@@ -225,3 +225,19 @@ test('derive: the committed tree gives state {legal, vector, fallback} and app {
   assert.deepEqual(derivedServices('state'), ['legal', 'vector', 'fallback'])
   assert.deepEqual(derivedServices('app'), ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create'])
 })
+
+// ── one grep set for both layers (TASK-048b TDD 4) ─────────────────────────
+
+test('pins: each pin assertion occurs exactly once in validate_release_tree; a duplicated grep fails loudly', () => {
+  const deploy = join(REPO_ROOT, 'infra/host/bin/gremion-deploy')
+  const re = deployPinRegexes(deploy)
+  assert.equal(Object.keys(re).length, 5)
+  // Unrolling the loop (the state layer judged by its own copy of a grep)
+  // is exactly how the two files drift apart: refused.
+  const src = readFileSync(deploy, 'utf8')
+  const grep = "grep -E '^[[:space:]]*build:' \"$pins\""
+  assert.ok(src.includes(grep), 'the build-line grep moved; update this test')
+  const f = join(h.tmp, 'deploy-duplicated')
+  writeFileSync(f, src.replace(grep, `${grep} | cat; ${grep}`))
+  assert.throws(() => deployPinRegexes(f), /build-line pattern occurs 2 times/)
+})

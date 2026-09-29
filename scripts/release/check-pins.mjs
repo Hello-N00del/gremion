@@ -44,9 +44,13 @@ export function deployPinRegexes(deployPath) {
   const body = bodyOf(readFileSync(deployPath, 'utf8'), 'validate_release_tree').replace(/'\\''/g, "'")
   const greps = [...body.matchAll(/grep (-v?E|-v) '([^\n]*?)'(?= |\)|$)/gm)].map((m) => ({ flag: m[1], pat: m[2] }))
   const find = (what, pred) => {
-    const g = greps.find(pred)
-    if (!g) throw new Error(`gremion-deploy validate_release_tree: cannot find the ${what} pattern — check-pins refuses to guess`)
-    return new RegExp(posix(g.pat))
+    const hits = greps.filter(pred)
+    if (!hits.length) throw new Error(`gremion-deploy validate_release_tree: cannot find the ${what} pattern — check-pins refuses to guess`)
+    // TASK-048b: both pins layers are judged by ONE grep set inside a loop. A
+    // second copy of a pattern means a layer judged by its own copy, which is
+    // how the two files drift apart: refused, whatever the copies say.
+    if (hits.length > 1) throw new Error(`gremion-deploy validate_release_tree: the ${what} pattern occurs ${hits.length} times — one grep set must judge both pins layers`)
+    return new RegExp(posix(hits[0].pat))
   }
   return {
     imageLine: find('image-line', (g) => g.flag === '-E' && /image:'?$/.test(g.pat + "'") && !g.pat.includes('gremion/')),

@@ -31,7 +31,7 @@ seed_env() {
     cat > "${GREMION_ROOT}/etc/env/state.env" <<'EOF'
 STACK=teststack
 COMPOSE_PROJECT_NAME=teststack-state
-COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:docker-compose.pins.yml
+COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml
 COMPOSE_PROFILES=
 PLATFORM_DOMAIN=example.org
 SOAK_MINUTES=0
@@ -59,7 +59,8 @@ EOF
 seed_trust_anchor() {
     printf '%s\n' '-----BEGIN PUBLIC KEY-----' 'placeholder-not-a-key' '-----END PUBLIC KEY-----' \
         > "${GREMION_ROOT}/etc/cosign.pub"
-    # What `docker compose config --images` resolves: the canonical pins plus
+    # What `docker compose config --images` resolves: the canonical pins of
+    # BOTH layers (docker-compose.pins.yml, docker-compose.state-pins.yml) plus
     # anything a test injects through EXTRA_RESOLVED (images compose would
     # pull although no canonical `image:` line names them). Every docker shim
     # in this file answers `compose … config --images` through this helper.
@@ -68,7 +69,8 @@ seed_trust_anchor() {
     # canonical pins matching a pattern (a pin compose does not show).
     cat > "${GREMION_ROOT}/.resolve-images" <<'RESOLVE'
 #!/usr/bin/env bash
-grep -E '^[[:space:]]*image:' "$FIXTURE_RELEASE/docker-compose.pins.yml" \
+cat "$FIXTURE_RELEASE/docker-compose.pins.yml" "$FIXTURE_RELEASE/docker-compose.state-pins.yml" 2>/dev/null \
+    | grep -E '^[[:space:]]*image:' \
     | sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//' \
     | { if [ -n "${RESOLVE_OMIT:-}" ]; then grep -v -- "$RESOLVE_OMIT" || true; else cat; fi; }
 [ -z "${EXTRA_RESOLVED:-}" ] || printf '%s\n' "$EXTRA_RESOLVED"
@@ -830,7 +832,7 @@ exit 0
                gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    [[ "$output" == *"3 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"6 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
     # Order: the last verify precedes the first manifest read and the first pull.
     local last_verify first_manifest first_pull
     last_verify="$(grep -n '^cosign verify' "$SHIM_LOG" | tail -1 | cut -d: -f1)"
@@ -909,7 +911,7 @@ exit 0'
     export FIXTURE_RELEASE="$tree"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 3 ]
+    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 6 ]
     [ "$(grep -c 'releases/dist-v1.2.3/cosign.pub' "$SHIM_LOG")" -eq 0 ]
 }
 
@@ -922,6 +924,8 @@ services:
   postgres:
     image: docker.io/library/redis@sha256:4444444444444444444444444444444444444444444444444444444444444444
 PINS
+    # TASK-048b: the state layer is first-party too; empty it as well.
+    printf 'services: {}\n' > "$tp/docker-compose.state-pins.yml"
     export FIXTURE_RELEASE="$tp"
     printf 'docker.io/library/redis\n' > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
@@ -986,7 +990,7 @@ PINS
         > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 3 ]
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 6 ]
     [ "$(grep -c 'redis' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*redis' "$SHIM_LOG"
     [[ "$output" == *"1 third-party image(s) on the host list"* ]]
 }
@@ -1081,7 +1085,7 @@ PINS
         : > "$SHIM_LOG"
         run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
         [ "$status" -eq 0 ] || { echo "host list '$listed': $output"; return 1; }
-        [[ "$output" == *"3 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
+        [[ "$output" == *"6 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
         [ "$(grep -c '^cosign verify.*redis' "$SHIM_LOG")" -eq 0 ]
     done
 }
@@ -1111,7 +1115,7 @@ PINS
     export FIXTURE_RELEASE="$tagged"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"3 first-party image(s) verified"* ]]
+    [[ "$output" == *"6 first-party image(s) verified"* ]]
     assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/gremion-ui:dist-v1.2.3@sha256:"
 }
 
@@ -1139,5 +1143,142 @@ printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 1 ]
     [[ "$output" == *"signature verification failed for ghcr.io/hello-n00del/gremion-migrate@sha256:3333"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# K. the split pins layer (TASK-048b): docker-compose.state-pins.yml is the
+#    state project's layer, judged by the SAME greps as the app layer
+# ---------------------------------------------------------------------------
+
+STATE_LEGAL="ghcr.io/hello-n00del/gremion-legal@sha256:7777777777777777777777777777777777777777777777777777777777777777"
+
+# state_tree <name> -> a copy of the valid tree in $T; FIXTURE_RELEASE points
+# at it. Called directly, never in $(…): the export must reach the test.
+state_tree() {
+    T="${BATS_TEST_TMPDIR}/$1"
+    mkdir -p "$T"; cp -R "${FIXTURES}/valid"/. "$T"/
+    export FIXTURE_RELEASE="$T"
+}
+
+@test "a release tree without docker-compose.state-pins.yml exits 3 BLOCKED, nothing pulled" {
+    stub_all
+    state_tree nostate
+    rm -f "$T/docker-compose.state-pins.yml"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"BLOCKED: docker-compose.state-pins.yml absent (spec B)"* ]]
+    grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    [ "$(grep -c '^cosign' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "every state first-party image is signature-verified with the host key at step 2" {
+    stub_all
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    local img
+    for img in gremion-legal@sha256:7777777777777777777777777777777777777777777777777777777777777777 \
+               gremion-vector@sha256:8888888888888888888888888888888888888888888888888888888888888888 \
+               gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999; do
+        assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
+    done
+    [[ "$output" == *"6 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"6 pinned image(s)"* ]]
+}
+
+@test "a tag-only, real-build, gremion/ or flow-map image in the STATE layer exits 1 naming the file" {
+    stub_all
+    local body
+    for body in "    image: ghcr.io/hello-n00del/gremion-legal:dist-v1.2.3" \
+                "    build: ./legal" \
+                "    image: gremion/legal@sha256:7777777777777777777777777777777777777777777777777777777777777777" \
+                "  evil: {image: ghcr.io/hello-n00del/evil@sha256:5555555555555555555555555555555555555555555555555555555555555555}"; do
+        state_tree "bad-$RANDOM"
+        printf '%s\n' "services:" "  legal:" "    build: !reset null" "    image: ${STATE_LEGAL}" > "$T/docker-compose.state-pins.yml"
+        case "$body" in
+          "    image:"*) sed -i "s#^    image: .*#${body}#" "$T/docker-compose.state-pins.yml" ;;
+          *) printf '%s\n' "$body" >> "$T/docker-compose.state-pins.yml" ;;
+        esac
+        rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+        : > "$SHIM_LOG"
+        run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+        [ "$status" -eq 1 ] || { echo "accepted: $body"; echo "$output"; return 1; }
+        [[ "$output" == *"docker-compose.state-pins.yml"* ]] || { echo "file not named for: $body"; echo "$output"; return 1; }
+        [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+    done
+}
+
+@test "a state first-party image whose signature vouches for another digest is refused" {
+    stub_all
+    shim cosign '
+ref="${*: -1}"
+d="${ref##*@}"
+case "$ref" in *gremion-legal*) d="sha256:$(printf "%064d" 0)" ;; esac
+printf "[{\"critical\":{\"identity\":{\"docker-reference\":\"%s\"},\"image\":{\"docker-manifest-digest\":\"%s\"}}}]\n" "${ref%@*}" "$d"
+exit 0'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"signature verification failed for ${STATE_LEGAL}: no claim binds"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a state image absent after the pull fails step 3 (PINNED_IMAGES is the union of both layers)" {
+    stub_all
+    shim docker '
+case "$1" in
+  login) cat >/dev/null; exit 0 ;;
+  manifest) printf "{\"config\":{\"size\":1},\"layers\":[{\"size\":1}]}\n"; exit 0 ;;
+  image) case "$*" in *gremion-legal*) exit 1 ;; esac; exit 0 ;;
+  compose) case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac; exit 0 ;;
+esac
+exit 0
+'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"image absent after pull: ${STATE_LEGAL}"* ]]
+    assert_recorded docker "manifest inspect ${STATE_LEGAL}"
+}
+
+@test "an empty state layer passes validation when the union pins images (Q3); both empty is refused" {
+    stub_all
+    state_tree emptystate
+    printf 'services: {}\n' > "$T/docker-compose.state-pins.yml"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"3 pinned image(s)"* ]]
+    printf 'services: {}\n' > "$T/docker-compose.pins.yml"
+    rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+    : > "$SHIM_LOG"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"the pins layers pin no images"* ]]
+    [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+}
+
+@test "a stale host env layering is refused with exit 2 before any pull (Q2)" {
+    stub_all
+    local state_env="${GREMION_ROOT}/etc/env/state.env" bad
+    cp "$state_env" "${BATS_TEST_TMPDIR}/state.env.orig"
+    for bad in "docker-compose.yml:docker-compose.prod.yml:docker-compose.pins.yml" \
+               "docker-compose.yml:docker-compose.prod.yml" \
+               "docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml:docker-compose.pins.yml"; do
+        sed "s#^COMPOSE_FILE=.*#COMPOSE_FILE=${bad}#" "${BATS_TEST_TMPDIR}/state.env.orig" > "$state_env"
+        rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+        : > "$SHIM_LOG"
+        run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+        [ "$status" -eq 2 ] || { echo "accepted state COMPOSE_FILE=$bad"; echo "$output"; return 1; }
+        [[ "$output" == *"state.env"*"docker-compose.state-pins.yml"* ]]
+        [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
+        [ "$(grep -c '^cosign' "$SHIM_LOG")" -eq 0 ]
+    done
+    cp "${BATS_TEST_TMPDIR}/state.env.orig" "$state_env"
+    sed -i 's#^COMPOSE_FILE=.*#COMPOSE_FILE=docker-compose.app.yml:docker-compose.pins.yml:docker-compose.state-pins.yml#' \
+        "${GREMION_ROOT}/etc/env/app-green.env"
+    rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
+    : > "$SHIM_LOG"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"app-green.env"*"docker-compose.state-pins.yml"* ]]
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
