@@ -67,6 +67,13 @@ function renderOne(text, { colour, state } = {}) {
   body = body.replace(/^COMPOSE_FILE=(.*)$/m, (_, v) =>
     `COMPOSE_FILE=${v.replace(/(^|:)docker-compose\.pins\.yml/, `$1${FIXTURE_REL}/docker-compose.pins.yml`)}`,
   )
+  // Compose splits COMPOSE_FILE on the OS path separator (';' on Windows)
+  // unless the env file names one: a ':'-joined list read on Windows is ONE
+  // file name, the render fails and arm (b) is unparseable. The pooled-stack
+  // fixtures declare it for the same reason.
+  if (/^COMPOSE_FILE=.*:/m.test(body) && !/^COMPOSE_PATH_SEPARATOR=/m.test(body)) {
+    body = body.replace(/^(COMPOSE_FILE=.*)$/m, (line) => `${line}\nCOMPOSE_PATH_SEPARATOR=:`)
+  }
   return body
 }
 

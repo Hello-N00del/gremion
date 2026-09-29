@@ -103,7 +103,13 @@ test('(b) an override `environment: X: ${STALWART_API_KEY}` on an app service is
     const override = path.join(dir, 'override.yml')
     writeFileSync(override, 'services:\n  gremion-ui:\n    environment:\n      X: ${STALWART_API_KEY}\n')
     const env = path.join(dir, 'app-blue.env')
-    writeFileSync(env, base.replace(/^COMPOSE_FILE=(.*)$/m, `COMPOSE_FILE=$1:${override}`) + 'STALWART_API_KEY=fixture-stalwart-api-value\n')
+    // The override is an ABSOLUTE path, which on Windows carries a drive
+    // colon: join the list with the OS delimiter and declare it, so compose
+    // splits it the same way on every OS.
+    const withOverride = base
+      .replace(/^COMPOSE_PATH_SEPARATOR=.*\r?\n/m, '')
+      .replace(/^COMPOSE_FILE=(.*)$/m, (_, v) => `COMPOSE_FILE=${[...v.split(':'), override].join(path.delimiter)}\nCOMPOSE_PATH_SEPARATOR=${path.delimiter}`)
+    writeFileSync(env, withOverride + 'STALWART_API_KEY=fixture-stalwart-api-value\n')
     const projects = (await fixtureProjects()).map((p) => (p.id === 'app-blue' ? { ...p, envFile: env } : p))
     const r = await runCompose({ projects })
     assert.equal(r.unparseable, null)

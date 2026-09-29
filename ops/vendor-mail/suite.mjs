@@ -34,7 +34,9 @@ export function vendorMailTestFiles(dir = VENDOR_MAIL_DIR) {
     .map(String)
     .filter((f) => f.endsWith('.test.mjs') && !f.split(path.sep).includes('node_modules'))
     .sort()
-    .map((f) => path.relative(REPO_ROOT, path.join(dir, f)))
+    // '/'-separated on every OS: one spelling for the TAP labels and the
+    // wiring test (path.relative gives backslashes on Windows).
+    .map((f) => path.relative(REPO_ROOT, path.join(dir, f)).split(path.sep).join('/'))
 }
 
 export function guardParts({ exec = run, clis = GUARD_CLIS } = {}) {
