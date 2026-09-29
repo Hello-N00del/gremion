@@ -2,7 +2,7 @@
 // fully-mocked subsystems. No DB, no KC, no network, no filesystem. Exercises the
 // crypto-shred-FIRST ordering, the resumable mid-sequence ledger state (re-run
 // completes; key-already-shredded is terminal-safe), the §7.8 tombstone (a deleted
-// slug is never re-provisionable), the `default`-tenant hard guard, and the T21
+// slug is never re-provisionable), every-tenant-equal deletion (TASK-042), and the T21
 // leaf-shred step (drop newsletter_<slug> + delete catalog row on the leaf PG).
 import { describe, it, expect, vi } from 'vitest'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from './lifecycle'
@@ -141,27 +141,38 @@ describe('deleteTenant — crypto-shred-first ordering', () => {
   })
 })
 
-describe('deleteTenant — default-tenant hard guard', () => {
-  it('REFUSES to delete the default tenant (no shred, no drop, no realm delete)', async () => {
-    const h = harness({ row: tenant({ id: 'default', slug: 'default' }) })
-    await expect(deleteTenant('default', h.deps)).rejects.toThrow(/default tenant/i)
-    expect(h.deps.shredSecretFiles).not.toHaveBeenCalled()
-    expect(h.deps.db.dropDatabaseAndRole).not.toHaveBeenCalled()
-    expect(h.deps.kc.deleteRealm).not.toHaveBeenCalled()
+// TASK-042 TDD 6 (TRD-042 [D R15-2]): there is no bootstrap tenant, so a
+// tenant whose slug happens to be `default` is deleted exactly like any other.
+describe('deleteTenant — every tenant is equal (no default-tenant guard)', () => {
+  function forSlug(slug: string): Tenant {
+    return tenant({
+      id: `id-${slug}`,
+      slug,
+      dbConnRef: `file:/run/secrets/tenants/tenant_${slug}_db`,
+      kcClientRef: `file:/run/secrets/tenants/tenant_${slug}_client_gremion-admin`,
+      authClientRef: `file:/run/secrets/tenants/tenant_${slug}_client_gremion-ui`,
+      backupKeyRef: `file:/run/secrets/tenants/tenant_${slug}_backup_key`,
+    })
+  }
+
+  async function runDelete(slug: string) {
+    const h = harness({ row: forSlug(slug) })
+    const result = await deleteTenant(slug, h.deps)
+    const paths = ((h.deps.shredSecretFiles as any).mock.calls[0][0] as string[]).map((p) =>
+      p.split(slug).join('<slug>'),
+    )
+    return { result: { ...result, slug: '<slug>', shreddedPaths: result.shreddedPaths.map((p) => p.split(slug).join('<slug>')) }, order: h.order, paths, status: h.row!.status }
+  }
+
+  it('deletes a tenant whose slug is `default`: shred, drop, realm delete, tombstone', async () => {
+    const d = await runDelete('default')
+    expect(d.status).toBe('deleted')
+    expect(d.result.shredded).toBe(true)
+    expect(d.paths.some((p) => p.endsWith('tenant_<slug>_backup_key'))).toBe(true)
   })
 
-  // Belt-and-braces (depth): if the registry ever returns the default ROW for a
-  // non-`default` input slug, the resolved-row slug guard still refuses. (The
-  // (0a) input-slug guard cannot catch this — the input slug is not 'default'.)
-  it('REFUSES when the registry returns a row whose SLUG is default for a non-default input', async () => {
-    const h = harness()
-    // Force the registry to hand back the DEFAULT row for a non-default lookup.
-    h.deps.registry.getTenantBySlug = async () =>
-      tenant({ slug: 'default', id: 'id-default-uuid' })
-    await expect(deleteTenant('t2', h.deps)).rejects.toThrow(/default tenant/i)
-    expect(h.deps.shredSecretFiles).not.toHaveBeenCalled()
-    expect(h.deps.db.dropDatabaseAndRole).not.toHaveBeenCalled()
-    expect(h.deps.kc.deleteRealm).not.toHaveBeenCalled()
+  it('`default` and `alpha` go through byte-equal delete sequences', async () => {
+    expect(await runDelete('default')).toEqual(await runDelete('alpha'))
   })
 })
 

@@ -1,0 +1,8 @@
+await registerDefaultTenant()
+const r = resolveDefaultTenantEnv()
+const url = defaultTenantEnv('CONFIG_PATH')
+// DEFAULT_TENANT
+export const LEGACY_DEFAULT_TENANT_ID = 'default'
+import { x } from '$lib/server/tenant/register-default'
+import { y } from '$lib/server/tenant/default-tenant'
+import { z } from '$lib/server/tenant/default-env'

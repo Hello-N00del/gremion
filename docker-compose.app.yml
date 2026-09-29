@@ -265,23 +265,14 @@ services:
       # Migrations run DIRECT on postgres, never through the transaction pooler.
       DATABASE_URL: postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${GREMION_DB_NAME:-gremion}
       CONTROL_DATABASE_URL: postgresql://${CONTROL_DB_USER:-control}:${CONTROL_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
-      # run-migrations-verified mirrors boot(): control migrations, then
-      # registerDefaultTenant, then the fleet. The default tenant's row is
-      # derived from the same OIDC settings gremion-ui reads, so the one-shot
-      # needs them too (measured on the scratch proof: without the issuer the
-      # job dies "registerDefaultTenant: AUTH_KEYCLOAK_ISSUER is not set").
-      AUTH_KEYCLOAK_ISSUER:     ${AUTH_KEYCLOAK_ISSUER:-}
-      AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/gremion
-      AUTH_KEYCLOAK_ID:         ${AUTH_KEYCLOAK_ID:-gremion-ui}
-      AUTH_KEYCLOAK_SECRET:     ${AUTH_KEYCLOAK_SECRET}
-      # The fleet resolves the default tenant's secret refs before it
-      # migrates it (measured: "secret ref env:KEYCLOAK_ADMIN_CLIENT_SECRET is
-      # unset" failed the fleet).
-      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
-      CONFIG_PATH:              /app/config/config.json
+      # TASK-042 (zero-tenant boot, PRD-PLAT-012): run-migrations-verified
+      # mirrors boot(): control migrations, then the fleet of ACTIVE registry
+      # tenants. It registers no tenant, so it reads no OIDC setting and no
+      # deployment config file: every provisioned tenant's secret refs are
+      # file: refs (the mount below) and its config is /data/<slug>. On an
+      # empty registry it migrates the control plane only and says so.
       GREMION_DISABLE_SEEDS:    "true"
     volumes:
-      - config-data:/app/config
       # Every provisioned tenant's database credential is a file: ref under
       # /run/secrets/tenants, and the fleet opens it before it migrates that
       # tenant. Measured once a second tenant existed: "FAILED: ENOENT ...

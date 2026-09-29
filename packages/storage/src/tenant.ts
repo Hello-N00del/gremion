@@ -3,9 +3,10 @@
 // assertTenantId is the fail-closed gate (spec-b S2): a missing, empty or
 // malformed tenant id THROWS SYNCHRONOUSLY — there is no default and no
 // fallback tenant. It is an allowlist, not a denylist: a lowercase canonical
-// UUID (the registry's `tenant.id`, which Postgres renders lowercase) or the
-// legacy literal 'default' (Q5; see default-tenant.ts in gremion-ui). That
-// rejects `/`, `\`, `..`, whitespace and every other path-significant input by
+// UUID (the registry's `tenant.id`, which Postgres renders lowercase), and
+// nothing else. The pre-registry literal 'default' was retired with the
+// zero-tenant boot (TASK-042 Q6, TRD-042 [D R15-2]): every tenant, whatever its
+// slug, is a registry row with a UUID id. That rejects `/`, `\`, `..`, whitespace and every other path-significant input by
 // construction. An upper-case UUID is refused rather than folded: folding would
 // be harmless, but accepting two spellings of one tenant would split its data
 // across two segments.
@@ -17,10 +18,6 @@ import { posix } from 'node:path'
 export const PARTIAL_NAME_RE = /^\..+\.[0-9a-f-]{36}\.partial$/
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-
-/** Q5 residual: the pre-registry single-tenant id. Accepted as an explicit
- *  literal until the zero-tenant-boot unit retires it. */
-export const LEGACY_DEFAULT_TENANT_ID = 'default'
 
 function describeValue(value: unknown): string {
   if (value === null) return 'null'
@@ -37,10 +34,9 @@ export function assertTenantId(value: unknown): string {
         'explicit tenant; there is no default tenant (fail-closed)',
     )
   }
-  if (value === LEGACY_DEFAULT_TENANT_ID || UUID_RE.test(value)) return value
+  if (UUID_RE.test(value)) return value
   throw new TypeError(
-    `storage: invalid tenant id ${describeValue(value)} — expected a lowercase canonical ` +
-      `UUID or the legacy literal '${LEGACY_DEFAULT_TENANT_ID}'`,
+    `storage: invalid tenant id ${describeValue(value)} — expected a lowercase canonical UUID`,
   )
 }
 

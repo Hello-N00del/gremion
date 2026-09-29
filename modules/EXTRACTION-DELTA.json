@@ -60,6 +60,12 @@
       "blob": "5c37bc2a416e001ada04da05a0ad868726e02de7"
     },
     {
+      "path": "modules/content/app/lib/server/content/register.server.ts",
+      "reason": "TASK-042 (Q3, G6): the import of the deleted default-tenant env helper replaced by platformEnv('NATS_URL') from $lib/server/env/platform-env - NATS_URL is deployment-global and the kernel boots with zero tenants",
+      "owner": "TASK-042",
+      "blob": "6d912e98c4d7e866f13b37b09d420ddbd9f3877b"
+    },
+    {
       "path": "modules/content/app/lib/server/content/segment.ts",
       "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
       "owner": "TASK-200",
@@ -142,6 +148,18 @@
       "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
       "owner": "TASK-200",
       "blob": "191a604d7a7a062687191aaf40d66eb867af485a"
+    },
+    {
+      "path": "modules/messaging/src/livekit/livekit-client.ts",
+      "reason": "TASK-042 (Q3, G6; PRD-PLAT-012 every tenant is equal): livekitRoomNamespace drops the slug == 'default' branch - every tenant, default included, gets the t.<slug>. room namespace",
+      "owner": "TASK-042",
+      "blob": "bb948a0b637ab2bd8786a71153dfd0509bf2348c"
+    },
+    {
+      "path": "modules/messaging/test/forwarding.test.ts",
+      "reason": "TASK-042 TDD 14 (Q3, G6): the room-namespace case pins t.default. and t.kreis. (no un-prefixed default tenant)",
+      "owner": "TASK-042",
+      "blob": "5302e71fcfe0244c9c151d690e0c640a2110320e"
     },
     {
       "path": "modules/publishing/src/dispatch.ts",

@@ -316,49 +316,41 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
   })
 })
 
-describe('(B) reconcileRealm — the DEFAULT realm legitimately keeps localhost dev URIs', () => {
-  const DEFAULT_REALM = 'gremion-test'
-  const DEFAULT_HOST = APEX // the default tenant host IS the apex (D-ISSUER-HOST)
-  // The base gremion-ui URIs verbatim (localhost dev URIs + apex) — what the default
-  // realm legitimately carries (realm-export.base.json) and reconcile must NOT reject.
+// TASK-042 Q8 (RFC 9700 §2.1, exact redirect-URI matching): there is no
+// default-realm exception any more. Every realm, whatever its tenant's slug, is
+// held to the exact per-tenant URI set, so a localhost dev URI FAILS reconcile.
+describe('(Q8) reconcileRealm — every realm is held to the exact per-tenant URI set', () => {
   const baseUi = (base.clients as any[]).find((c: any) => c.clientId === 'gremion-ui')
   const BASE_REDIRECT = [...baseUi.redirectUris]
-  const BASE_WEB_ORIGINS = [...baseUi.webOrigins]
 
-  function defaultGreenRoutes(): Record<string, unknown> {
-    const r = greenRoutes()
-    // rekey the realm-scoped routes to the default realm name
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(r)) {
-      out[k.split(`/admin/realms/${REALM}`).join(`/admin/realms/${DEFAULT_REALM}`)] = v
-    }
-    // the gremion-ui client on the DEFAULT realm carries the base localhost+apex URIs
-    ;(out[`GET /admin/realms/${DEFAULT_REALM}/clients?clientId=gremion-ui`] as any)[0].redirectUris = [...BASE_REDIRECT]
-    ;(out[`GET /admin/realms/${DEFAULT_REALM}/clients?clientId=gremion-ui`] as any)[0].webOrigins = [...BASE_WEB_ORIGINS]
-    return out
-  }
-
-  const defaultOpts = { realm: DEFAULT_REALM, tenantHost: DEFAULT_HOST, apexDomain: APEX, base, isDefault: true }
-
-  it('PASSES the URI checks when the default realm carries the base localhost+apex URIs', async () => {
-    const { transport } = scriptedTransport(defaultGreenRoutes())
-    const report = await reconcileRealm(transport, { ...defaultOpts, verifyOnly: true })
-    const uriChecks = report.checks.filter(
-      (c) => c.name === 'gremion-ui-redirect-uris' || c.name === 'gremion-ui-web-origins',
-    )
-    for (const c of uriChecks) expect(c.ok, `${c.name}: ${c.detail}`).toBe(true)
-    expect(report.ok).toBe(true)
+  it('the base template carries a localhost URI (the fixture is non-vacuous)', () => {
+    expect(BASE_REDIRECT.some((u: string) => /localhost/.test(u))).toBe(true)
   })
 
-  it('a PROVISIONED tenant carrying localhost is STILL rejected (drop applies only to provisioned realms)', async () => {
-    // Same localhost-bearing client, but reconciled as a provisioned tenant
-    // (isDefault omitted/false, tenant host) -> the localhost entries are illegal.
+  it('a realm carrying the base localhost+apex URIs FAILS the redirect-URI check (no default exception)', async () => {
     const routes = greenRoutes()
     ;(routes[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] as any)[0].redirectUris = [...BASE_REDIRECT]
     const { transport } = scriptedTransport(routes)
     const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
     const redir = report.checks.find((c) => c.name === 'gremion-ui-redirect-uris')!
     expect(redir.ok).toBe(false)
+    expect(report.ok).toBe(false)
+  })
+
+  it('the options carry no default flag: a slug spelled default gets the same checks as alpha', async () => {
+    async function reportFor(slug: string) {
+      const host = `${slug}.${APEX}`
+      const routes = greenRoutes()
+      const ui = (routes[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] as any)[0]
+      ui.redirectUris = ui.redirectUris.map((u: string) => u.split(HOST).join(host))
+      ui.webOrigins = ui.webOrigins.map((u: string) => u.split(HOST).join(host))
+      const { transport } = scriptedTransport(routes)
+      const r = await reconcileRealm(transport, { ...opts, tenantHost: host, verifyOnly: true })
+      return JSON.parse(JSON.stringify(r).split(host).join('<host>'))
+    }
+    const d = await reportFor('default')
+    expect(d.ok).toBe(true)
+    expect(d).toEqual(await reportFor('alpha'))
   })
 })
 
