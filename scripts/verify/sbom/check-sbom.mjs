@@ -3,8 +3,10 @@
 //
 // Always (Q4): a SOURCE SBOM of the committed root pnpm-lock.yaml, produced by
 // the digest-pinned syft container (`dir:` over the lockfile alone).
-// With --pins <docker-compose.pins.yml> --key <cosign.pub> (a release for
-// HEAD): additionally, for every first-party pinned digest, the CycloneDX
+// With --pins <pins layer> --key <cosign.pub> (a release for HEAD; --pins is
+// repeatable, TASK-048b Q6: pass docker-compose.pins.yml AND
+// docker-compose.state-pins.yml): additionally, for every first-party pinned
+// digest in the union of the layers, the CycloneDX
 // attestation must verify with THAT key (`cosign verify-attestation --type
 // cyclonedx`), its subject must be the pinned digest, and its predicate is
 // what gets checked.
@@ -17,7 +19,7 @@
 //       in scripts/verify/sbom/accepted.json (id, reason, date mandatory).
 // A missing grype vulnerability DB is a FAIL (never "no findings").
 //
-// Run:  node scripts/verify/sbom/check-sbom.mjs [--pins FILE --key PUB] [--first-party PREFIX] [--grype-db-volume NAME] [--no-db-update]
+// Run:  node scripts/verify/sbom/check-sbom.mjs [--pins FILE [--pins FILE ...] --key PUB] [--first-party PREFIX] [--grype-db-volume NAME] [--no-db-update]
 // Test: node --test 'scripts/verify/sbom/*.test.mjs'
 
 import { spawnSync } from 'node:child_process'
@@ -215,6 +217,44 @@ export function firstPartyDigests(pinsText, prefix) {
   return { refs, unparsed }
 }
 
+/** Every `--pins FILE` in argv, in order (TASK-048b Q6: the flag repeats). */
+export function pinsArgs(argv) {
+  const out = []
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] !== '--pins') continue
+    const f = argv[i + 1]
+    if (!f || f.startsWith('--')) throw new Error('--pins needs a file')
+    out.push(f)
+    i += 1
+  }
+  return out
+}
+
+/**
+ * The first-party refs of several pins layers: the union, each ref once.
+ * `unparsed-pin` and `no-first-party` are judged PER FILE (a state layer with
+ * no first-party image is named even when the app layer has some), and an
+ * unreadable layer is a problem, never an empty file.
+ */
+export function pinsRefs(files, prefix, { readText = (f) => readFileSync(f, 'utf8') } = {}) {
+  const refs = []
+  const problems = []
+  for (const f of files) {
+    let text
+    try {
+      text = readText(f)
+    } catch (err) {
+      problems.push({ code: 'unreadable-pins', message: `cannot read the pins layer: ${err.message}`, where: f })
+      continue
+    }
+    const r = firstPartyDigests(text, prefix)
+    for (const u of r.unparsed) problems.push({ code: 'unparsed-pin', message: `unrecognised image declaration: ${u}`, where: f })
+    if (!r.refs.length) problems.push({ code: 'no-first-party', message: `no ${prefix}* image in ${f}`, where: f })
+    for (const ref of r.refs) if (!refs.includes(ref)) refs.push(ref)
+  }
+  return { refs, problems }
+}
+
 // ── CLI ────────────────────────────────────────────────────────────────────
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
@@ -222,7 +262,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const i = process.argv.indexOf(f)
     return i > 0 ? process.argv[i + 1] : undefined
   }
-  const pins = arg('--pins')
+  let pins = []
+  try {
+    pins = pinsArgs(process.argv.slice(2))
+  } catch (err) {
+    console.error(`check-sbom: FAIL usage cli: ${err.message}`)
+    process.exit(2)
+  }
   const key = arg('--key')
   const prefix = arg('--first-party') ?? 'ghcr.io/hello-n00del/'
   const grype = { volume: arg('--grype-db-volume') ?? 'gremion-grypedb', update: !process.argv.includes('--no-db-update') }
@@ -233,12 +279,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const src = sourceSbom(REPO_ROOT)
   problems.push(...checkSbomDoc(src, { grype, accepted: acc.entries }).map((x) => ({ ...x, where: 'pnpm-lock.yaml' })))
 
-  if (pins || key) {
-    if (!pins || !key) problems.push({ code: 'usage', message: '--pins and --key go together', where: 'cli' })
+  if (pins.length || key) {
+    if (!pins.length || !key) problems.push({ code: 'usage', message: '--pins and --key go together', where: 'cli' })
     else {
-      const { refs, unparsed } = firstPartyDigests(readFileSync(pins, 'utf8'), prefix)
-      for (const u of unparsed) problems.push({ code: 'unparsed-pin', message: `unrecognised image declaration: ${u}`, where: pins })
-      if (!refs.length) problems.push({ code: 'no-first-party', message: `no ${prefix}* image in ${pins}`, where: pins })
+      const { refs, problems: pinProblems } = pinsRefs(pins, prefix)
+      problems.push(...pinProblems)
       for (const ref of refs) {
         const a = verifyAttestation(ref, key)
         problems.push(...a.problems.map((x) => ({ ...x, where: ref })))

@@ -29,6 +29,8 @@ import {
   runGrype,
   checkSbomDoc,
   firstPartyDigests,
+  pinsArgs,
+  pinsRefs,
 } from './check-sbom.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -200,4 +202,25 @@ test('round 2: YAML features that hide an image from a line reader are problems 
     assert.ok(r.unparsed.length >= 1, `not flagged: ${JSON.stringify(extra)}`)
   }
   assert.deepEqual(firstPartyDigests(ok, 'ghcr.io/hello-n00del/').unparsed, [])
+})
+
+// ── TASK-048b: --pins is repeatable (Q6) ───────────────────────────────────
+
+test('048b: --pins is repeatable; refs are the union of every layer, unparsed-pin and no-first-party judged per file', () => {
+  assert.deepEqual(pinsArgs(['--pins', 'a.yml', '--key', 'k.pub', '--pins', 'b.yml']), ['a.yml', 'b.yml'])
+  assert.deepEqual(pinsArgs(['--key', 'k.pub']), [])
+  assert.throws(() => pinsArgs(['--pins']), /--pins needs a file/)
+  const release = join(REPO_ROOT, 'test/host/fixtures/release/valid')
+  const files = [join(release, 'docker-compose.pins.yml'), join(release, 'docker-compose.state-pins.yml')]
+  const { refs: got, problems } = pinsRefs(files, 'ghcr.io/hello-n00del/')
+  assert.deepEqual(problems, [])
+  for (const r of ['gremion-ui@sha256:1', 'gremion-legal@sha256:7', 'gremion-fallback@sha256:9']) assert.ok(got.some((x) => x.includes(r)), r)
+  assert.equal(new Set(got).size, got.length, 'the union holds each ref once (migrate and tenant-create share one)')
+  // a state layer with no first-party ref is named, even though the app layer has some
+  const texts = { 'app.yml': readFileSync(files[0], 'utf8'), 'state.yml': 'services: {}\n' }
+  const r2 = pinsRefs(['app.yml', 'state.yml'], 'ghcr.io/hello-n00del/', { readText: (f) => texts[f] })
+  assert.deepEqual(r2.problems.map((p) => `${p.code} ${p.where}`), ['no-first-party state.yml'])
+  // an unreadable layer is a problem, never an empty file
+  const r3 = pinsRefs(['app.yml', 'gone.yml'], 'ghcr.io/hello-n00del/', { readText: (f) => { if (!texts[f]) throw new Error('ENOENT'); return texts[f] } })
+  assert.deepEqual(r3.problems.map((p) => `${p.code} ${p.where}`), ['unreadable-pins gone.yml'])
 })
