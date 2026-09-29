@@ -168,6 +168,15 @@ and the guard reported `problems []`: it hid its own regression. Two fixes, each
 - (r2-b) the suite forwards TASK-040's `APP_SERVICES` + `LEAF_SERVICES` as `extra` into
   `colourSuffixGuard` (the union G2 uses); break: pass `extra: []` in `judgeRenders`.
 
+r3 (review finding, MEDIUM from two lenses, 2026-09-29): check (d) ran `vacuityProblem` over
+derived + `extra`. The suite always passes the 13 hand-listed `APP_SERVICES` + `LEAF_SERVICES`,
+so on the suite path (d) could never fire: a `FIRST_PARTY_PREFIX` drift or an empty template
+read was judged only against the hand list. Fix (ade35b68): `derived` = renders + template,
+`vacuous = vacuityProblem(derived)`, then `names = longestFirst([...derived, ...extra])`.
+
+- (r3) break, on the fixed code: `vacuityProblem([...derived, ...extra])` in
+  `colourSuffixGuard` (the pre-fix behaviour).
+
 ### Observed failing output
 
 ```text
@@ -225,6 +234,16 @@ exit=1
      # tests 13  # pass 12  # fail 1
 # r2-a break 03:46:19 (both files): not ok 18, 19, 20   # tests 38  # pass 35  # fail 3
 # r2-b break 03:48:14 (both files): not ok 29 (the suite forwarding case)   # tests 38  # pass 37  # fail 1
+
+# r3, before the fix (ac8a907e + main 7946e577 merged + the two new tests), 07:12:17,
+# colour-suffix.test.mjs + suite.test.mjs
+     not ok 13 - vacuity counts DERIVED names only: caller extras cannot mask an empty derivation (r3, 2026-09-29)
+     error: 'app-blue'   actual: ''
+     not ok 31 - suite path: an empty derivation is vacuous even though the 13 hand-listed extras are passed (r3, 2026-09-29)
+     error: The input did not match the regular expression /FAIL colour-suffix: colour-suffix: only 1 app-tier name\(s\) derived \(gremion-ui\); fewer than 3 is vacuous/. Input:
+       'derived app-tier names (13): newsletter-service, calendar-service, messages-service, content-service, finance-service, gremion-public, board-service, files-service, tenant-create, vault-service, votes-service, gremion-ui, migrate\n' + ...
+     # tests 40  # pass 38  # fail 2
+# r3 break 07:29:07 (fixed code, vacuity over derived + extra again): not ok 13, not ok 31   # tests 40  # pass 38  # fail 2
 ```
 
 ### Observed passing output (after)
@@ -240,6 +259,14 @@ exit=0
 # suite.test.mjs # tests 11 # pass 11 # fail 0
 
 # r2 restored 03:49:42: colour-suffix.test.mjs + suite.test.mjs # tests 38 # pass 38 # fail 0
+
+# r3 fixed 07:18:03 (ade35b68) and restored after the break 07:33:32:
+# colour-suffix.test.mjs + suite.test.mjs # tests 40 # pass 40 # fail 0
+# r3 real renders, 07:37:20 (ade35b68): the derived set alone is 13, so (d) holds on the real tree
+$ node scripts/verify/verify.mjs --only render-guards
+[render-guards] derived app-tier names (13): newsletter-service, calendar-service, messages-service, content-service, finance-service, gremion-public, board-service, files-service, tenant-create, vault-service, votes-service, gremion-ui, migrate
+[render-guards] judged app-tier names (13, derived + TASK-040 APP_SERVICES/LEAF_SERVICES): newsletter-service, calendar-service, messages-service, content-service, finance-service, gremion-public, board-service, files-service, tenant-create, vault-service, votes-service, gremion-ui, migrate
+[verify] PASS render-guards (54.9s) collected=16 passed=16 failed=0 skipped=0
 ```
 
 ### Verifier
@@ -254,7 +281,8 @@ For the seed: `git checkout --detach 0b72442e` in the scratch tree, leaving the 
 1c69fba7 orphaned there and never on the branch. For the bonus: `git reset --hard 81d24a16`
 in the scratch tree. For the unit breaks: the original bytes were written back and checked
 byte-identical. For r2-a and r2-b: the one edited line was written back; `git status --short`
-was empty afterwards.
+was empty afterwards. For r3: the one edited line was written back; `git diff --stat` was
+empty afterwards, then the same command ran green (07:33:32).
 
 ## G-053-build-absence
 
