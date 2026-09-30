@@ -32,8 +32,14 @@ CREATE UNIQUE INDEX provisioning_step_customer_id_step_kind_key ON plt.provision
   WHERE status = 'done';
 CREATE INDEX provisioning_step_customer_id_step_order_idx ON plt.provisioning_step (customer_id, step_order);
 CREATE INDEX provisioning_step_occurred_at_idx ON plt.provisioning_step (occurred_at);
-CREATE TRIGGER provisioning_step_append_only_trg BEFORE UPDATE ON plt.provisioning_step
+-- Append-only against the writer too (review B1, r2): UPDATE, DELETE and
+-- TRUNCATE are refused, so a done step can never be erased and re-run. The
+-- table owner can still drop a trigger (writer/owner split: TASK-192 residual);
+-- a retention purge (rp-plt-provisioning-log) arrives with its own migration.
+CREATE TRIGGER provisioning_step_append_only_trg BEFORE UPDATE OR DELETE ON plt.provisioning_step
   FOR EACH ROW EXECUTE FUNCTION plt.refuse_update();
+CREATE TRIGGER provisioning_step_no_truncate_trg BEFORE TRUNCATE ON plt.provisioning_step
+  FOR EACH STATEMENT EXECUTE FUNCTION plt.refuse_update();
 COMMENT ON TABLE plt.provisioning_step IS 'DB-PLT-PROVISIONING-STEP | K5 | rp-plt-provisioning-log | trigger: occurred_at + derived application-log window';
 COMMENT ON COLUMN plt.provisioning_step.customer_id IS 'xref DB-TNT-CUSTOMER';
 COMMENT ON COLUMN plt.provisioning_step.actor_operator_id IS 'xref DB-OAC-OPERATOR; null when the step ran automatically';
@@ -61,8 +67,12 @@ CREATE TABLE plt.operator_enable_attestation (
   CONSTRAINT operator_enable_attestation_enable_list_check CHECK (module_key = ANY (enable_list)),
   CONSTRAINT operator_enable_attestation_basis_check CHECK (basis = 'interim gate, no isolation test (TASK-044)')
 );
-CREATE TRIGGER operator_enable_attestation_append_only_trg BEFORE UPDATE ON plt.operator_enable_attestation
+-- DELETE and TRUNCATE refused as well: a deleted attestation would be
+-- re-minted with a fresh id on resume (review B1, r2).
+CREATE TRIGGER operator_enable_attestation_append_only_trg BEFORE UPDATE OR DELETE ON plt.operator_enable_attestation
   FOR EACH ROW EXECUTE FUNCTION plt.refuse_update();
+CREATE TRIGGER operator_enable_attestation_no_truncate_trg BEFORE TRUNCATE ON plt.operator_enable_attestation
+  FOR EACH STATEMENT EXECUTE FUNCTION plt.refuse_update();
 COMMENT ON TABLE plt.operator_enable_attestation IS 'TASK-043 Q19 [A] interim enable attestation | K5 | rp-plt-provisioning-log | trigger: TASK-044 re-gates the enablement';
 COMMENT ON COLUMN plt.operator_enable_attestation.customer_id IS 'xref DB-TNT-CUSTOMER';
 COMMENT ON COLUMN plt.operator_enable_attestation.operator_id IS 'xref DB-OAC-OPERATOR (the ops realm user who passed --enable)';

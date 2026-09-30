@@ -147,6 +147,16 @@ describe('plt.provisioning_step (0004, TDD 2)', () => {
     expect(err?.code).toBe('23514')
   })
 
+  // Review B1 MEDIUM (r2): a ledger that can be deleted or truncated is not
+  // append-only; a resume would then re-run done steps.
+  it('refuses DELETE and TRUNCATE (append-only); the row survives both', async () => {
+    const c = uuidv7()
+    await platform`INSERT INTO plt.provisioning_step (customer_id, step_kind, status) VALUES (${c}, 'realm_created', 'done')`
+    expect(await sqlError(platform`DELETE FROM plt.provisioning_step WHERE customer_id = ${c}`)).toMatchObject({ code: '23514' })
+    expect(await sqlError(platform`TRUNCATE plt.provisioning_step`)).toMatchObject({ code: '23514' })
+    expect((await platform`SELECT 1 FROM plt.provisioning_step WHERE customer_id = ${c}`).length).toBe(1)
+  })
+
   it('a second done of one kind is 23505 on provisioning_step_customer_id_step_kind_key; pending and failed may repeat', async () => {
     const c = uuidv7()
     for (const s of ['pending', 'failed', 'pending', 'done']) {
@@ -202,5 +212,19 @@ describe('plt.operator_enable_attestation (0004, Q19)', () => {
       await sqlError(platform`INSERT INTO plt.operator_enable_attestation (customer_id, module_key, operator_id, enable_list, basis)
                               VALUES (${c}, 'vault', ${op}, ${['vault']}, 'because')`),
     ).toMatchObject({ code: '23514', constraint_name: 'operator_enable_attestation_basis_check' })
+  })
+
+  // Review B1 MEDIUM (r2): a deleted attestation would be re-minted with a
+  // fresh id on resume, so the enablement's two references would change.
+  it('refuses DELETE and TRUNCATE; the attestation id survives both', async () => {
+    const c = uuidv7()
+    const op = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
+    const [row] = await platform<{ id: string }[]>`
+      INSERT INTO plt.operator_enable_attestation (customer_id, module_key, operator_id, enable_list, basis)
+      VALUES (${c}, 'calendar', ${op}, ${['calendar']}, 'interim gate, no isolation test (TASK-044)') RETURNING attestation_id AS id`
+    expect(await sqlError(platform`DELETE FROM plt.operator_enable_attestation WHERE customer_id = ${c}`)).toMatchObject({ code: '23514' })
+    expect(await sqlError(platform`TRUNCATE plt.operator_enable_attestation`)).toMatchObject({ code: '23514' })
+    const [still] = await platform<{ id: string }[]>`SELECT attestation_id AS id FROM plt.operator_enable_attestation WHERE customer_id = ${c}`
+    expect(still?.id).toBe(row!.id)
   })
 })

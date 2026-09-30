@@ -146,7 +146,11 @@ describe('the platform migration folder (gremion_platform, schema plt)', () => {
     expect(text).toContain('CREATE TABLE plt.provisioning_step (')
     expect(text).toMatch(/WHEN 'broker_account_created' THEN 7 WHEN 'mail_principal_issued' THEN 8/)
     expect(text).toMatch(/CREATE UNIQUE INDEX provisioning_step_customer_id_step_kind_key ON plt\.provisioning_step \(customer_id, step_kind\)\s+WHERE status = 'done'/)
-    expect(text).toMatch(/provisioning_step_append_only_trg BEFORE UPDATE ON plt\.provisioning_step\s+FOR EACH ROW EXECUTE FUNCTION plt\.refuse_update\(\)/)
+    // UPDATE, DELETE and TRUNCATE all refused (review B1, r2), on both tables
+    for (const t of ['provisioning_step', 'operator_enable_attestation']) {
+      expect(text).toMatch(new RegExp(`${t}_append_only_trg BEFORE UPDATE OR DELETE ON plt\\.${t}\\s+FOR EACH ROW EXECUTE FUNCTION plt\\.refuse_update\\(\\)`))
+      expect(text).toMatch(new RegExp(`${t}_no_truncate_trg BEFORE TRUNCATE ON plt\\.${t}\\s+FOR EACH STATEMENT EXECUTE FUNCTION plt\\.refuse_update\\(\\)`))
+    }
   })
 
   it('0002 carries the three SCHEMA tables with the level-1 gate check, and omits only the isolation-test FKs', () => {
