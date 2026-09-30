@@ -171,6 +171,19 @@ function writeSecretFile(hostPath: string, value: string): Promise<void> {
 }
 const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')
 
+/** The tenant's config.json, atomically (tmp + rename in the same directory). */
+function writeConfigFile(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, text, { mode: 0o640 })
+  renameSync(tmp, path)
+}
+
+/** A 0700 directory (the customer's storage prefix). */
+function makePrivateDir(dir: string): void {
+  mkdirSync(dir, { mode: 0o700 })
+}
+
 // ── Keycloak (the §7.2 provisioner SA; admin only for the SA bootstrap and the SA-role grant) ──
 const apexDomain = () => reqEnv('DOMAIN')
 function loadBaseRealmDoc(): Record<string, unknown> {
@@ -338,6 +351,8 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string } = {}): 
     loadBaseRealm: loadBaseRealmDoc,
     genSecret,
     writeSecretFile,
+    writeConfigFile,
+    makePrivateDir,
     kc,
     ...(adminKc ? { adminKc } : {}),
     log,
@@ -561,6 +576,8 @@ async function cmdStatus(): Promise<void> {
       loadBaseRealm: loadBaseRealmDoc,
       genSecret,
       writeSecretFile,
+      writeConfigFile,
+      makePrivateDir,
       kc: new KcProvisionApi(async () => {
         throw new Error('status reads no Keycloak')
       }),

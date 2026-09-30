@@ -213,8 +213,8 @@ render_panel_secrets() {
     openssl rand -hex 32 | write_secret "${dir}/auth_secret"
 }
 
-# init --realm-only --keycloak-container <c>: the ops realm imported into an
-# EXISTING Keycloak with kcadm (a host without the pooled stack, §11). Create
+# init --realm-only --keycloak-container <c>: the ops realm created by kcadm in
+# an EXISTING Keycloak (a host without the pooled stack, §11). Create
 # when absent, skip when equal (the template fingerprint on the realm),
 # fail when different; the client secret goes to a 0600 file, never stdout.
 init_realm_only_kcadm() {   # <container> <origin>

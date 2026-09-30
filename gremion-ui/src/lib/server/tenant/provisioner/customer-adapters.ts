@@ -8,8 +8,8 @@
 //
 // Runs in the tenant-create one-shot (scripts/tenant-provision.ts), never in
 // the app process.
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import postgres from 'postgres'
 import { checkTenantHostDns, type EdgeAddresses } from '@gremion/edge-routers'
 import { ensureTenantAccount } from '@gremion/nats-auth'
@@ -71,6 +71,11 @@ export interface CustomerAdapterOptions {
   loadBaseRealm(): Record<string, unknown>
   genSecret(): string
   writeSecretFile(hostPath: string, value: string): Promise<void>
+  /** Writes the tenant's config.json atomically (the CLI's writer: this module
+   *  holds no write-capable fs call, check-storage-seam s3). */
+  writeConfigFile(path: string, text: string): void
+  /** Creates a 0700 directory; the CLI's (same reason). */
+  makePrivateDir(dir: string): void
   kc: KcProvisionApi
   /** Admin-assisted SA-role bootstrap (see pipeline.ts ProvisionDeps.adminKc). */
   adminKc?: Pick<KcProvisionApi, 'assignServiceAccountRealmRoles'>
@@ -83,13 +88,6 @@ const secretName = {
   client: (slug: string, client: string) => `tenant_${slug}_client_${client}`,
 }
 const containerRef = (name: string) => `file:${CONTAINER_SECRETS_PREFIX}/${name}`
-
-function writeAtomic(path: string, text: string): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp-${process.pid}`
-  writeFileSync(tmp, text, { mode: 0o640 })
-  renameSync(tmp, path)
-}
 
 /** scheme://authority and ?query of a postgres url, with the credentials dropped. */
 function authorityOf(url: string, what: string): { scheme: string; hostPort: string; query: string } {
@@ -202,7 +200,7 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         if (existsSync(path)) return false
         const merged = materializeConfig(JSON.parse(readFileSync(o.configFile, 'utf-8')) as unknown)
         assertBrandIdentityComplete(merged, c.slug)
-        writeAtomic(path, `${JSON.stringify({ ...merged, setup_complete: false }, null, 2)}\n`)
+        o.writeConfigFile(path, `${JSON.stringify({ ...merged, setup_complete: false }, null, 2)}\n`)
         return true
       },
       async setupComplete(c) {
@@ -212,7 +210,7 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
       async markSetupComplete(c) {
         const path = configPathForTenant(c.slug)
         const cur = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>
-        writeAtomic(path, `${JSON.stringify({ ...cur, setup_complete: true }, null, 2)}\n`)
+        o.writeConfigFile(path, `${JSON.stringify({ ...cur, setup_complete: true }, null, 2)}\n`)
       },
     },
 
@@ -339,7 +337,7 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           if (!statSync(dir).isDirectory() || readdirSync(dir).length > 0) throw new Error(`storage prefix ${dir} exists and is not an empty directory`)
           return
         }
-        mkdirSync(dir, { mode: 0o700 })
+        o.makePrivateDir(dir)
       },
     },
 
