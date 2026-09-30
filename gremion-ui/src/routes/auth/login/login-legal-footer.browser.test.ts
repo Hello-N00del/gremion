@@ -30,17 +30,17 @@ interface Cell {
   w: number
   h: number
   font: Font
-  /** true: expected RED before the fix (the footer wraps to two rows). */
-  redBefore: boolean
 }
+// The two 320x256 cells were RED before the fix (the footer wraps to two rows and
+// covers the control); the others are regression cells, GREEN before and after.
 const CELLS: Cell[] = [
-  { w: 320, h: 256, font: 'normal', redBefore: true }, // 400 % of 1280x1024
-  { w: 320, h: 256, font: 'xlarge', redBefore: true },
-  { w: 568, h: 320, font: 'xlarge', redBefore: false }, // phone landscape
-  { w: 360, h: 520, font: 'normal', redBefore: false },
-  { w: 360, h: 520, font: 'xlarge', redBefore: false },
-  { w: 1280, h: 560, font: 'normal', redBefore: false },
-  { w: 1280, h: 560, font: 'xlarge', redBefore: false }
+  { w: 320, h: 256, font: 'normal' }, // 400 % of 1280x1024
+  { w: 320, h: 256, font: 'xlarge' },
+  { w: 568, h: 320, font: 'xlarge' }, // phone landscape
+  { w: 360, h: 520, font: 'normal' },
+  { w: 360, h: 520, font: 'xlarge' },
+  { w: 1280, h: 560, font: 'normal' },
+  { w: 1280, h: 560, font: 'xlarge' }
 ]
 const BRANCHES = [
   { name: 'forbidden', query: '?error=forbidden', control: 'main a[href="/"]' },
@@ -77,8 +77,9 @@ afterEach(() => {
   document.body.style.removeProperty('padding')
 })
 afterAll(() => {
-  // A guard that asserted nothing passes vacuously.
-  expect(asserted, 'cells asserted').toBeGreaterThan(0)
+  // A guard that asserted nothing passes vacuously. Thrown, not expect()ed: an
+  // expect outside a test block is an oxlint error (vitest/no-standalone-expect).
+  if (asserted === 0) throw new Error('login-legal-footer: zero cells asserted (vacuous guard)')
 })
 
 const intersects = (a: DOMRect, b: DOMRect) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
