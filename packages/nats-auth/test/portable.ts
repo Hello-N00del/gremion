@@ -18,9 +18,13 @@ export const NO_POSIX_MODES: string | false = IS_WINDOWS
  * for Windows' bash starts in seconds per process on the loaded gate box
  * (`bash -c 'echo hi'` measured 9.1 s), so proof.sh's grep pipeline runs past
  * any sane test timeout. These scripts only ever run on Linux hosts.
+ *
+ * NATS_AUTH_POSIX_BASH=1 opts a Windows run IN, for a box whose `bash` on
+ * PATH IS Git for Windows' bash and forks fast (run the suite from Git Bash):
+ * the one way to watch these guards go RED on the Windows gate box.
  */
-export const NO_POSIX_BASH: string | false = IS_WINDOWS
-  ? 'the scripts under test run on Linux hosts only; Windows has no usable bash for them (WSL launcher without a distro, Git bash seconds per fork)'
+export const NO_POSIX_BASH: string | false = IS_WINDOWS && process.env.NATS_AUTH_POSIX_BASH !== '1'
+  ? 'the scripts under test run on Linux hosts only; Windows has no usable bash for them (WSL launcher without a distro, Git bash seconds per fork); NATS_AUTH_POSIX_BASH=1 opts in'
   : false
 
 /** A path as a POSIX shell (and the repo's relative-path contract) spells it. */

@@ -56,21 +56,40 @@ out="$(MSYS_NO_PATHCONV=1 docker run --rm -w /repo/gremion-ui \
     pnpm exec nats-auth init
     mode="$(stat -c %a /run/secrets/nats/_sys/reload.nk)"
     [ "$mode" = 600 ] || { echo "reload.nk mode $mode, want 600" >&2; exit 11; }
-    grep -q "SYS" /etc/nats/accounts/accounts.conf || { echo "accounts.conf has no SYS" >&2; exit 12; }
+    grep -Eq "^[[:space:]]+SYS [{]" /etc/nats/accounts/accounts.conf || { echo "accounts.conf has no SYS account" >&2; exit 12; }
     if grep -Eq "^[[:space:]]+T_[^[:space:]]+ [{]" /etc/nats/accounts/accounts.conf; then echo "accounts.conf has a tenant account" >&2; exit 13; fi
+    # The second init must leave the FILE byte-identical -- compared here,
+    # not taken from the tool'"'"'s own log line.
+    before="$(sha256sum /etc/nats/accounts/accounts.conf)"
     pnpm exec nats-auth init
+    after="$(sha256sum /etc/nats/accounts/accounts.conf)"
+    [ "$before" = "$after" ] || { echo "second init changed accounts.conf" >&2; exit 14; }
+    # The render call'"'"'s own output, fenced, so no other call can stand in.
+    echo "@@nats-auth-render-begin@@"
     pnpm exec nats-auth render
+    echo "@@nats-auth-render-end@@"
   ' 2>&1)" || { printf '%s\n' "$out" >&2; fail "nats-auth in $IMG (see output above)"; }
 printf '%s\n' "$out"
 
 printf '%s\n' "$out" | grep -q 'init: sys reload seed created' || fail "first init did not create the reload seed"
 printf '%s\n' "$out" | grep -q 'init: sys reload seed present;.*unchanged' || fail "second init changed the accounts file"
-printf '%s\n' "$out" | grep -q 'SYS' || fail "render printed no SYS account"
+rendered="$(printf '%s\n' "$out" | awk '/^@@nats-auth-render-end@@$/ { f = 0 } f { print } /^@@nats-auth-render-begin@@$/ { f = 1 }')"
+printf '%s\n' "$rendered" | grep -Eq '^[[:space:]]+SYS [{]' || fail "render printed no SYS account"
 case "$out" in *"Command \"nats-auth\" not found"*) fail "pnpm exec cannot resolve nats-auth" ;; esac
 
+# Fail-closed: only a PROVEN refusal passes -- node ran inside the runner and
+# the import failed with ERR_MODULE_NOT_FOUND (exit 3 plus the marker). A
+# docker failure (image missing, daemon down), a missing node, or any other
+# load error proves nothing about reachability and fails the check.
 if [ -n "${NATS_AUTH_RUNNER_IMAGE:-}" ]; then
-  if MSYS_NO_PATHCONV=1 docker run --rm -w /app "$NATS_AUTH_RUNNER_IMAGE" node -e "import('@gremion/nats-auth').then(()=>process.exit(0),e=>{console.error(e.code);process.exit(3)})" >/dev/null 2>&1; then
-    fail "the runner $NATS_AUTH_RUNNER_IMAGE can import @gremion/nats-auth"
+  rrc=0
+  rout="$(MSYS_NO_PATHCONV=1 docker run --rm -w /app "$NATS_AUTH_RUNNER_IMAGE" node -e "import('@gremion/nats-auth').then(()=>process.exit(0),e=>{console.log('NATS_AUTH_IMPORT_REFUSED '+e.code);process.exit(3)})" 2>&1)" || rrc=$?
+  if [ "$rrc" -eq 0 ]; then
+    fail "the runner $NATS_AUTH_RUNNER_IMAGE CAN import @gremion/nats-auth"
+  fi
+  if [ "$rrc" -ne 3 ] || ! printf '%s\n' "$rout" | grep -qx 'NATS_AUTH_IMPORT_REFUSED ERR_MODULE_NOT_FOUND'; then
+    printf '%s\n' "$rout" >&2
+    fail "could not prove the runner $NATS_AUTH_RUNNER_IMAGE refuses @gremion/nats-auth (exit $rrc, no ERR_MODULE_NOT_FOUND refusal; output above)"
   fi
   echo "[nats-auth-image] runner $NATS_AUTH_RUNNER_IMAGE cannot import @gremion/nats-auth (as required)"
 fi
