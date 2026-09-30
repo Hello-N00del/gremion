@@ -26,11 +26,27 @@
     },
     {
       "path": "gremion-ui/scripts/tenant-provision.ts",
+      "calls": 7,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-30",
+      "reason": "TASK-043 adopted @gremion/tenant-store/lifecycle: no database is created or dropped here any more (ensureKernelDatabase, enableModule, dropKernelDatabase do it, server-quoted). What remains are the ADMIN connections the lifecycle takes injected: gremion_platform as its owner, the kernel and module servers' POSTGRES_USER (ModuleServer.admin needs CREATEDB/CREATEROLE), and the leaf newsletter shred; the registry (TASK-077) takes them over"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/tenant/provisioner/customer-adapters.ts",
       "calls": 3,
       "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-30",
+      "reason": "TASK-043 tenant-create adapters: the kernel server's POSTGRES_USER as the injected ModuleServer of ensureKernelDatabase, and a read-only post-condition read of the new kernel database's ledger and counts; no tenant data-plane pool (the kernel migration runs inside runWithTenant on the provisioning context)"
+    },
+    {
+      "path": "packages/provisioning/test/integration/platform.int.test.ts",
+      "calls": 2,
+      "imports": 1,
       "adoptedBy": "TASK-043",
-      "since": "2026-09-25",
-      "reason": "the provisioner's admin, new-tenant and leaf connections (tenant-provision.ts:284 string-builds CREATE DATABASE); TASK-021 ships the lifecycle API (@gremion/tenant-store/lifecycle) that replaces it, and customer provisioning (TASK-043) adopts it"
+      "since": "2026-09-30",
+      "reason": "a destructive integration proof on its own scratch server (test/integration/run.mjs): it bootstraps gremion_platform from nothing and enables modules into throwaway (tenant, module) databases; openTenantDb cannot address a server that has no platform yet; stays allow-listed while the test exists"
     },
     {
       "path": "gremion-ui/scripts/tenant-health.ts",
