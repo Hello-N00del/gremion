@@ -177,15 +177,18 @@ install_into_root_bin() {
     [[ "$output" == *"usage"* ]]
 }
 
-@test "realm-smtp reserves --realm/--tenant/--rotate/--revoke for TASK-043 and refuses them (exit 2)" {
+@test "realm-smtp: a flag set that names no valid arm is a usage error (exit 2) before any kcadm or principal call (TASK-043 G2)" {
     local a
-    for a in "--realm alpha" "--realm alpha --tenant alpha_council" "--realm alpha --rotate" "--realm alpha --revoke"; do
+    for a in "--realm alpha" "--realm master" "--rotate" "--revoke" "--tenant alpha_council" \
+             "--realm master --tenant alpha_council" "--realm platform --tenant alpha_council" \
+             "--realm alpha-council --tenant beta_council" "--realm alpha-council --tenant alpha_council --rotate --revoke" \
+             "--realm platform --rotate" "--realm Alpha --tenant alpha" "--realm alpha-council --tenant x"; do
         # shellcheck disable=SC2086
         run "$LAUNCHER" realm-smtp $a
         [ "$status" -eq 2 ] || { echo "${a}: status=$status $output"; return 1; }
-        [[ "$output" == *"owned by TASK-043"* ]] || { echo "${a}: $output"; return 1; }
     done
     refute_recorded docker 'exec'
+    refute_recorded docker 'principals.mjs'
 }
 
 # ---------------------------------------------------------------------------
@@ -211,6 +214,31 @@ case "$1" in
     exit 0 ;;
   inspect) echo "Error: No such object: $2" >&2; exit 1 ;;
   exec) shift ;;
+  run)
+    # TASK-043 G2: principals.mjs issue|revoke|list, principal state in files.
+    # issue prints the app password ONCE on stdout, as the real CLI does.
+    rest=""; hit=no
+    for a in "$@"; do
+      if [ "$hit" = yes ]; then rest="$rest $a"; fi
+      case "$a" in */principals.mjs) hit=yes ;; esac
+    done
+    [ "$hit" = yes ] || exit 0
+    # shellcheck disable=SC2086
+    set -- $rest
+    verb="$1"; shift; tok=""; rot=no
+    while [ $# -gt 0 ]; do case "$1" in --tenant) tok="$2"; shift 2 ;; --rotate) rot=yes; shift ;; *) shift ;; esac; done
+    name="kc-$tok@example.org"
+    case "$verb" in
+      list) n=0; if [ -f "$ST/principal-$tok" ]; then echo "$name"; n=1; fi; echo "KC-PRINCIPALS: $n"; exit 0 ;;
+      issue)
+        if [ -f "$ST/principal-$tok" ] && [ "$rot" != yes ]; then echo "FAIL $name already exists; pass --rotate" >&2; exit 2; fi
+        c=$(( $(cat "$ST/issued" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$ST/issued"
+        echo "$rot" >> "$ST/issue-log"; touch "$ST/principal-$tok"
+        echo "KC-PRINCIPAL: $([ "$rot" = yes ] && echo rotated || echo issued) $name"
+        echo "APP-PASSWORD: unit-app-password-$c"; exit 0 ;;
+      revoke) rm -f "$ST/principal-$tok"; echo "KC-PRINCIPAL: revoked $name"; exit 0 ;;
+    esac
+    exit 0 ;;
   *) exit 0 ;;
 esac
 while :; do case "$1" in -i) shift ;; -e) shift 2 ;; *) break ;; esac; done
@@ -228,10 +256,12 @@ for a in "$@"; do case "$a" in realms/*) realm="${a#realms/}" ;; esac; done
 case " $* " in
   *" update realms/"*" -f - "*)
     cat > "$ST/payload-$realm.json"
+    # Keycloak answers a set smtpServer password as its mask, never the value.
+    mask="if ((.password // \"\") != \"\") then .password = \"**********\" else del(.password) end"
     if [ "$(cat "$ST/mode")" = broken ]; then
-      jq -c ".smtpServer | del(.password) | .user = \"someone-else@example.org\"" "$ST/payload-$realm.json" > "$ST/realm-$realm.json"
+      jq -c ".smtpServer | $mask | .user = \"someone-else@example.org\"" "$ST/payload-$realm.json" > "$ST/realm-$realm.json"
     else
-      jq -c ".smtpServer | del(.password)" "$ST/payload-$realm.json" > "$ST/realm-$realm.json"
+      jq -c ".smtpServer | $mask" "$ST/payload-$realm.json" > "$ST/realm-$realm.json"
     fi
     exit 0 ;;
   *" get realms/"*" --fields smtpServer "*)
@@ -303,6 +333,118 @@ write_state_env() {
     run "$LAUNCHER" realm-smtp
     [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"no single running keycloak"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# realm-smtp --tenant: a customer realm sends as its OWN principal (TASK-043 G2)
+# ---------------------------------------------------------------------------
+
+# refute_app_password — no issued app password on any recorded argv, and none
+# in what the launcher printed (stdout and stderr are both in $output).
+refute_app_password() {
+    ! grep -qF 'unit-app-password' "$SHIM_LOG" || { echo "an app password on a recorded argv:"; cat "$SHIM_LOG"; return 1; }
+    [[ "$output" != *"unit-app-password"* && "$output" != *"APP-PASSWORD"* ]] || { echo "the app password was printed: $output"; return 1; }
+}
+
+issue_calls() { grep -c 'principals.mjs issue' "$SHIM_LOG" || true; }
+
+@test "realm-smtp --tenant, principal absent: issue, stamp kc-<token>@ through mail.<domain>:587 STARTTLS, changed=yes, secret on stdin only" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    [[ "$output" == *"REALM-SMTP: realm=alpha-council user=kc-alpha_council@example.org changed=yes action=issued"* ]] || { echo "$output"; return 1; }
+    refute_app_password
+    assert_recorded docker 'principals.mjs list --tenant alpha_council'
+    assert_recorded docker 'principals.mjs issue --tenant alpha_council'
+    refute_recorded docker 'principals.mjs issue --tenant alpha_council --rotate'
+    run jq -e '.smtpServer | .host == "mail.example.org" and .port == "587" and .starttls == "true" and .auth == "true"
+               and .user == "kc-alpha_council@example.org" and .from == "kc-alpha_council@example.org"
+               and .password == "unit-app-password-1"' "${GREMION_ROOT}/kc/payload-alpha-council.json"
+    [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/kc/payload-alpha-council.json"; return 1; }
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    refute_app_password
+    refute_secret_in_argv
+}
+
+@test "realm-smtp --tenant, principal present and realm stamped: changed=no and no issue call" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local before; before="$(cat "${GREMION_ROOT}/kc/realm-alpha-council.json")"
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"changed=no action=none"* ]] || { echo "$output"; return 1; }
+    [ "$(issue_calls)" -eq 1 ] || { cat "$SHIM_LOG"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/kc/realm-alpha-council.json")" = "$before" ]
+}
+
+@test "realm-smtp --tenant, principal present but realm unstamped (crash between issue and stamp): issue --rotate, then stamp" {
+    shim_keycloak
+    write_state_env
+    touch "${GREMION_ROOT}/kc/principal-alpha_council"
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    [[ "$output" == *"changed=yes action=rotated"* ]] || { echo "$output"; return 1; }
+    assert_recorded docker 'principals.mjs issue --tenant alpha_council --rotate'
+    run jq -e '.smtpServer.user == "kc-alpha_council@example.org" and .smtpServer.password == "unit-app-password-1"' \
+        "${GREMION_ROOT}/kc/payload-alpha-council.json"
+    [ "$status" -eq 0 ]
+    refute_app_password
+}
+
+@test "realm-smtp --tenant --rotate replaces a stamped principal's password on purpose" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council --rotate
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"action=rotated"* ]]
+    run jq -e '.smtpServer.password == "unit-app-password-2"' "${GREMION_ROOT}/kc/payload-alpha-council.json"
+    [ "$status" -eq 0 ]
+    refute_app_password
+}
+
+@test "realm-smtp --tenant --revoke deletes the principal and blanks the realm sender; resume is a FRESH issue, never --rotate" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ]
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council --revoke
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    [[ "$output" == *"action=revoked"* ]] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/kc/principal-alpha_council" ]
+    run jq -e '(.user // "") == "" and (.from // "") == "" and (has("password") | not)' "${GREMION_ROOT}/kc/realm-alpha-council.json"
+    [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
+    : > "$SHIM_LOG"
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"action=issued"* ]] || { echo "$output"; return 1; }
+    refute_recorded docker 'principals.mjs issue --tenant alpha_council --rotate'
+    [ "$(tail -n 1 "${GREMION_ROOT}/kc/issue-log")" = no ]
+    refute_app_password
+}
+
+@test "realm-smtp --tenant fails (exit 1) when the realm reads back another user than it was stamped with, and prints no secret" {
+    shim_keycloak broken
+    write_state_env
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"read back"* ]]
+    refute_app_password
+}
+
+@test "realm-smtp --realm platform converges the ops realm onto system@ exactly like master (TASK-043 Q5)" {
+    shim_keycloak
+    write_state_env
+    run "$LAUNCHER" realm-smtp --realm platform
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"REALM-SMTP: realm=platform user=system@example.org changed=yes"* ]] || { echo "$output"; return 1; }
+    run jq -e '.smtpServer.user == "system@example.org" and .smtpServer.password == "unit-vendor-secret-value"' "${GREMION_ROOT}/kc/payload-platform.json"
+    [ "$status" -eq 0 ]
+    [ ! -e "${GREMION_ROOT}/kc/payload-master.json" ]
+    refute_recorded docker 'principals.mjs'
 }
 
 # ---------------------------------------------------------------------------

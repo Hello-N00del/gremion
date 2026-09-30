@@ -78,6 +78,10 @@ usage: gremion-vendor-mail <subcommand> [args...]
   check-secret-separation --host
   check-principals --host [--no-allowances]
   realm-smtp            (the operator realm `master` -> system@<PLATFORM_DOMAIN>)
+  realm-smtp --realm platform
+                        (the ops realm -> system@<PLATFORM_DOMAIN>)
+  realm-smtp --realm <r> --tenant <token> [--rotate|--revoke]
+                        (a customer realm -> its own kc-<token>@<PLATFORM_DOMAIN>)
   collect --out DIR
 EOF
 }
@@ -170,21 +174,160 @@ realm_smtp_fields() {   # <realm>
     printf '%s' "$out" | jq -c '(.smtpServer // {}) | {host, port, user, from, starttls}'
 }
 
-# realm-smtp — the operator realm `master` sends as system@<PLATFORM_DOMAIN>
-# through mail.<PLATFORM_DOMAIN>:587 with STARTTLS (TASK-015). Idempotent: the
-# payload is converged on every run and the non-secret fields are READ BACK;
-# the post-condition is the read-back, never kcadm's exit code.
+# The non-secret fields plus whether a password is set (Keycloak answers a set
+# smtpServer password as its mask, never the value), one canonical JSON line.
+realm_smtp_state() {   # <realm>
+    local out
+    out="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$1" --fields smtpServer)" || return 1
+    printf '%s' "$out" | jq -c '(.smtpServer // {}) | {host, port, user, from, starttls, pwset: ((.password // "") != "")}'
+}
+
+# A customer realm is its slug; its principal token is the slug with - -> _.
+REALM_RE='^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+TENANT_TOKEN_RE='^[a-z][a-z0-9_]{2,39}$'
+
+# realm-smtp — three arms and nothing else:
+#   realm-smtp                        master -> system@<PLATFORM_DOMAIN> (TASK-015)
+#   realm-smtp --realm platform       the ops realm -> system@<PLATFORM_DOMAIN>
+#                                     (TASK-043 Q5; allowances.json names it)
+#   realm-smtp --realm <r> --tenant <token> [--rotate|--revoke]
+#                                     a customer realm -> its OWN principal
+#                                     kc-<token>@<PLATFORM_DOMAIN> (TASK-043 G2)
+# `master` stays reachable only with no --realm and no --tenant, so a caller
+# cannot point a customer principal at a vendor realm by mistake.
 cmd_realm_smtp() {
-    local realm="master" a
-    for a in "$@"; do
-        case "$a" in
-            --realm|--tenant|--rotate|--revoke)
-                die "realm-smtp ${a} is reserved: per-customer realm senders are owned by TASK-043 (kc-<token>@ principals); this verb sets the vendor realm only" \
-                    "$GREMION_EXIT_USAGE" ;;
+    local realm="" tenant="" rotate=no revoke=no
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --realm)  [[ $# -ge 2 ]] || die "--realm requires a value" "$GREMION_EXIT_USAGE"; realm="$2"; shift 2 ;;
+            --tenant) [[ $# -ge 2 ]] || die "--tenant requires a value" "$GREMION_EXIT_USAGE"; tenant="$2"; shift 2 ;;
+            --rotate) rotate=yes; shift ;;
+            --revoke) revoke=yes; shift ;;
             -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
-            *) usage >&2; die "realm-smtp: unknown argument: ${a}" "$GREMION_EXIT_USAGE" ;;
+            *) usage >&2; die "realm-smtp: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
         esac
     done
+    [[ "$rotate$revoke" != yesyes ]] || die "realm-smtp: --rotate and --revoke exclude each other" "$GREMION_EXIT_USAGE"
+    if [[ -z "$tenant" ]]; then
+        [[ "$rotate" == no && "$revoke" == no ]] \
+            || die "realm-smtp: --rotate/--revoke act on a customer principal and need --realm <r> --tenant <token>" "$GREMION_EXIT_USAGE"
+        case "$realm" in
+            "")       vendor_realm_smtp master ;;
+            platform) vendor_realm_smtp platform ;;
+            master)   die "realm-smtp: master is the default arm; pass no --realm for it" "$GREMION_EXIT_USAGE" ;;
+            *)        die "realm-smtp --realm ${realm} needs --tenant <token>: only the ops realm platform takes no tenant" "$GREMION_EXIT_USAGE" ;;
+        esac
+        return
+    fi
+    [[ -n "$realm" ]] || die "realm-smtp --tenant needs --realm <customer realm>" "$GREMION_EXIT_USAGE"
+    [[ "$realm" != master && "$realm" != platform ]] \
+        || die "realm-smtp --tenant on ${realm}: a vendor realm sends as system@, never as a customer principal" "$GREMION_EXIT_USAGE"
+    [[ "$realm" =~ $REALM_RE && ${#realm} -ge 3 && ${#realm} -le 30 ]] \
+        || die "realm-smtp: realm ${realm} is not a customer slug" "$GREMION_EXIT_USAGE"
+    [[ "$tenant" =~ $TENANT_TOKEN_RE ]] || die "realm-smtp: tenant token ${tenant} does not match ${TENANT_TOKEN_RE}" "$GREMION_EXIT_USAGE"
+    [[ "${realm//-/_}" == "$tenant" ]] \
+        || die "realm-smtp: ${tenant} is not the token of realm ${realm} (the slug with - -> _)" "$GREMION_EXIT_USAGE"
+    customer_realm_smtp "$realm" "$tenant" "$rotate" "$revoke"
+}
+
+# kcadm_update_stdin <realm> — the payload arrives on OUR stdin and goes to
+# kcadm on ITS stdin; it is never an argument.
+kcadm_update_stdin() {
+    docker exec -i "$KC_CID" "$KCADM_BIN" update "realms/$1" -f - >/dev/null
+}
+
+# customer_realm_smtp <realm> <token> <rotate> <revoke> — the G2 algorithm:
+#   1. `principals list --tenant <token>` first;
+#   2. absent: `principals issue`, stamp the realm;
+#   3. present AND the realm reads back kc-<token>@, mail.<domain>, 587,
+#      STARTTLS with a password set: nothing to do (changed=no);
+#   4. present but the realm is not stamped (a crash between issue and stamp):
+#      `issue --rotate` (the password is unrecoverable by design), stamp;
+#   5. --revoke: `principals revoke` (it DELETEs the principal), then blank the
+#      realm's user, from and password and read that back; resume is therefore
+#      a fresh issue (step 2), never --rotate.
+# The app password leaves `principals issue` on its stdout (printed once), is
+# held in a shell variable of THIS process, reaches jq through $ENV and kcadm
+# on stdin: never a file, a log line or an argv.
+customer_realm_smtp() {
+    local realm="$1" token="$2" rotate="$3" revoke="$4"
+    [[ -n "${PLATFORM_DOMAIN:-}" ]] || die "PLATFORM_DOMAIN is empty in ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
+    local principal="kc-${token}@${PLATFORM_DOMAIN}"
+    kc_connect
+    local listed present=no
+    listed="$(run_node principals list --tenant "$token")" \
+        || die "principals list --tenant ${token} failed" "$GREMION_EXIT_ASSERT"
+    if printf '%s\n' "$listed" | grep -qxF -- "$principal"; then present=yes; fi
+
+    local state
+    if [[ "$revoke" == yes ]]; then
+        run_node principals revoke --tenant "$token" >/dev/null \
+            || die "principals revoke --tenant ${token} failed" "$GREMION_EXIT_ASSERT"
+        jq -nc --arg d "$PLATFORM_DOMAIN" \
+            '{smtpServer: {host: ("mail." + $d), port: "587", starttls: "true", ssl: "false", auth: "false",
+                           fromDisplayName: "Gremion", user: "", from: "", password: ""}}' \
+            | kcadm_update_stdin "$realm" \
+            || die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"
+        state="$(realm_smtp_state "$realm")" || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
+        if [[ "$(jq -r '(.user // "") + "|" + (.from // "") + "|" + (.pwset | tostring)' <<<"$state")" != "||false" ]]; then
+            bad "realms/${realm} smtpServer read back as ${state} after the revoke, expected no user, no from, no password"
+            exit "$GREMION_EXIT_ASSERT"
+        fi
+        listed="$(run_node principals list --tenant "$token")" \
+            || die "principals list --tenant ${token} failed after the revoke" "$GREMION_EXIT_ASSERT"
+        if printf '%s\n' "$listed" | grep -qxF -- "$principal"; then
+            bad "${principal} is still listed after the revoke"
+            exit "$GREMION_EXIT_ASSERT"
+        fi
+        ok "realms/${realm} has no sender; ${principal} is revoked"
+        printf 'REALM-SMTP: realm=%s user=%s changed=%s action=revoked\n' "$realm" "$principal" "$([[ "$present" == yes ]] && echo yes || echo no)"
+        return
+    fi
+
+    local want
+    want="$(jq -nc --arg d "$PLATFORM_DOMAIN" --arg p "$principal" \
+        '{host: ("mail." + $d), port: "587", user: $p, from: $p, starttls: "true"}')"
+    state="$(realm_smtp_state "$realm")" || die "kcadm could not read realms/${realm}" "$GREMION_EXIT_ASSERT"
+    local stamped=no
+    if [[ "$(jq -c -S 'del(.pwset)' <<<"$state")" == "$(jq -c -S . <<<"$want")" && "$(jq -r .pwset <<<"$state")" == true ]]; then
+        stamped=yes
+    fi
+    if [[ "$present" == yes && "$stamped" == yes && "$rotate" == no ]]; then
+        ok "realms/${realm} already sends as ${principal} via mail.${PLATFORM_DOMAIN}:587 STARTTLS"
+        printf 'REALM-SMTP: realm=%s user=%s changed=no action=none\n' "$realm" "$principal"
+        return
+    fi
+    local action=issued out pw payload
+    local -a issue_args=(issue --tenant "$token")
+    if [[ "$present" == yes ]]; then issue_args+=(--rotate); action=rotated; fi
+    out="$(run_node principals "${issue_args[@]}")" \
+        || die "principals ${issue_args[*]} failed" "$GREMION_EXIT_ASSERT"
+    pw="$(printf '%s\n' "$out" | sed -n 's/^APP-PASSWORD: //p')"
+    out=""
+    [[ -n "$pw" ]] || die "principals issue printed no APP-PASSWORD line for ${principal}" "$GREMION_EXIT_ASSERT"
+    payload="$(REALM_SMTP_PASSWORD="$pw" jq -nc --argjson w "$want" \
+        '{smtpServer: ($w + {ssl: "false", auth: "true", fromDisplayName: "Gremion",
+                             password: $ENV.REALM_SMTP_PASSWORD})}')"
+    pw=""
+    printf '%s' "$payload" | kcadm_update_stdin "$realm" \
+        || { payload=""; die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"; }
+    payload=""
+    state="$(realm_smtp_state "$realm")" || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
+    if [[ "$(jq -c -S 'del(.pwset)' <<<"$state")" != "$(jq -c -S . <<<"$want")" || "$(jq -r .pwset <<<"$state")" != true ]]; then
+        bad "realms/${realm} smtpServer read back as ${state}, expected ${want} with a password set"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    ok "realms/${realm} sends as ${principal} via mail.${PLATFORM_DOMAIN}:587 STARTTLS (${action})"
+    printf 'REALM-SMTP: realm=%s user=%s changed=yes action=%s\n' "$realm" "$principal" "$action"
+}
+
+# vendor_realm_smtp <master|platform> — a vendor realm sends as
+# system@<PLATFORM_DOMAIN> through mail.<PLATFORM_DOMAIN>:587 with STARTTLS
+# (TASK-015; the ops realm platform since TASK-043 Q5). Idempotent: the payload
+# is converged on every run and the non-secret fields are READ BACK; the
+# post-condition is the read-back, never kcadm's exit code.
+vendor_realm_smtp() {
+    local realm="$1"
     [[ -n "${VENDOR_SMTP_PASSWORD:-}" ]] || die "VENDOR_SMTP_PASSWORD is empty in ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
     [[ -n "${PLATFORM_DOMAIN:-}" ]] || die "PLATFORM_DOMAIN is empty in ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
     kc_connect

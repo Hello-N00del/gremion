@@ -47,7 +47,9 @@ names both paths.
 | Subcommand | What it does |
 |---|---|
 | `principals issue\|revoke\|list --tenant <token> [--rotate]` | the per-customer principal CLI; TASK-043's provisioning calls it through this launcher |
-| `realm-smtp` | `master` -> `system@` via `mail.<domain>:587` STARTTLS; password on stdin; read back. `--realm/--tenant/--rotate/--revoke` are reserved for TASK-043 and refused |
+| `realm-smtp` | `master` -> `system@` via `mail.<domain>:587` STARTTLS; password on stdin; read back |
+| `realm-smtp --realm platform` | the ops realm (TASK-043 Q5) -> `system@`, exactly like `master` |
+| `realm-smtp --realm <r> --tenant <token> [--rotate\|--revoke]` | TASK-043 G2: a customer realm sends as its OWN `kc-<token>@<domain>`. `principals list` first; absent -> `issue` and stamp; present and stamped -> nothing (`changed=no`); present but unstamped (a crash between issue and stamp) -> `issue --rotate` and stamp; `--revoke` -> `principals revoke` (DELETE) and the realm's user, from and password blanked, so a resume is a fresh `issue`, never `--rotate`. The app password is captured from `issue`'s stdout into a shell variable and handed to jq via `$ENV` and to kcadm on stdin: never a file, a log line or an argv. `master` stays reachable only with no `--realm`/`--tenant`; the token must be the realm's (slug with `-` -> `_`). `gremion-tenant create/suspend/resume/reconcile` is the caller |
 | `collect --out DIR` | principal names/emails/roles and every realm's smtp user, secrets stripped |
 | `check-identities` | alerts@ identity consistent across `mail.env` / `ops.env` |
 | `check-received --file F --receiver NAME \| --authserv-id ID` | a delivered message's headers prove an own-server, SPF/DKIM/DMARC-passing delivery at ONE named receiver: only its authserv-id is trusted, and the accepting hop (and every hop above it) must be `by` one of its hosts (`hostSuffixes` in `deliverability/receivers.json`, or the mandatory `--receiver-domain` with `--authserv-id`). In bring-up, set `RECEIVER`, or `RECEIVER_AUTHSERV_ID` together with `RECEIVER_DOMAIN` (never both forms); otherwise 6a/6b are BLOCKED |
