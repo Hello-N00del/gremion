@@ -1,6 +1,6 @@
 # Restore: three arms
 
-- Version: 1.0.0
+- Version: 2.0.0
 - Implements: TRD-200 (restore), TRD-174 and TRD-175 (the provider drill), TRD-170's timed restore, TRD-180 (the reboot measurement), FLOW-OPS-005
 
 Three separately testable arms, each with its own preconditions, steps and
@@ -266,4 +266,5 @@ export of its data, and both Beschluss texts say so.
 
 ## Changelog
 
+- 2.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). Arm B's post-condition lists only the restored stack's (`staging-*`) containers, counts them, and prints one `SMTP_HOST` line per container with `EXEC-FAILED` for an exec that failed, instead of an unscoped loop whose silenced errors let an empty or failing list pass. Arm C's sign-in read passes the Keycloak admin password as `KC_CLI_PASSWORD` by name (no `--password` on a command line), uses `--server` with the `/auth` relative path and removes kcadm's cached token. Major: post-conditions and a step changed (Q9).
 - 1.0.0 (2026-09-27): first version (TASK-037).

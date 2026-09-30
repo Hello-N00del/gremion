@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 2.0.0
+- Version: 3.0.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -390,5 +390,6 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). The post-condition's sign-in observation passes the Keycloak admin password to kcadm as `KC_CLI_PASSWORD` by name (no `--password` on any command line), uses `--server` with Keycloak's `/auth` relative path (the URL without it answered 404) and removes kcadm's cached token afterwards. Major: a post-condition changed (Q9).
 - 2.0.0 (2026-09-28): step 12 runs `gremion-render` as the deploy user before the state project's first `up`, links the ipcrypt key into the release tree, and observes both (TASK-037 review).
 - 1.0.0 (2026-09-27): first version (TASK-037).
