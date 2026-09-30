@@ -116,7 +116,7 @@ export function buildServicesOf(text, label) {
   // Shapes a line reader cannot follow are refused outright: a second YAML
   // document, a services: key in any spelling but the plain block, tabs.
   for (const [i, l] of lines.entries()) {
-    if (/^---/.test(l) && i > 0) throw new Error(`${label}:${i + 1}: a second YAML document -- this check cannot follow it`)
+    if (l.startsWith('---') && i > 0) throw new Error(`${label}:${i + 1}: a second YAML document -- this check cannot follow it`)
     if (/^["']services["']\s*:|^services\s*:\s*[^\s#]/.test(l)) throw new Error(`${label}:${i + 1}: services: is not a plain block: ${l.trim()}`)
     if (/^\s*\t/.test(l)) throw new Error(`${label}:${i + 1}: tab indentation`)
   }

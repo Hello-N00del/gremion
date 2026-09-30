@@ -16,7 +16,6 @@ import {
   PINS_FIXTURE_DIR,
   RENDER_ENV,
   planRenders,
-  judgeRenders,
   renderArm,
   dockerRender,
 } from './lib/render.mjs'
@@ -24,7 +23,9 @@ import { REPO_ROOT } from '../verify/census/render.mjs'
 
 const D = (c) => c.repeat(64)
 const FP = 'ghcr.io/hello-n00del'
-const codes = (ps) => [...new Set(ps.map((p) => p.code))].sort()
+/** Code-unit order, as the default sort, but explicit (require-array-sort-compare). */
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+const codes = (ps) => [...new Set(ps.map((p) => p.code))].sort(cmp)
 const TEMPLATES = ['app.env.tmpl', 'mail.env.tmpl', 'ops.env.tmpl', 'state.env.tmpl']
 const DERIVED = { state: ['legal', 'vector', 'fallback'], app: ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create'] }
 const derive = (p) => DERIVED[p]
@@ -63,8 +64,8 @@ const arm = (opts = {}) => renderArm({ listTemplates: () => TEMPLATES, derive, r
 test('the committed templates map: state, app (blue and green), ops, mail -- five renders', () => {
   const { plans, problems } = planRenders()
   assert.deepEqual(problems, [])
-  assert.deepEqual(plans.map((p) => p.id).sort(), ['app-blue', 'app-green', 'mail', 'ops', 'state'])
-  assert.deepEqual(Object.keys(TEMPLATE_MAP).sort(), ['app', 'mail', 'ops', 'state'])
+  assert.deepEqual(plans.map((p) => p.id).sort(cmp), ['app-blue', 'app-green', 'mail', 'ops', 'state'])
+  assert.deepEqual(Object.keys(TEMPLATE_MAP).sort(cmp), ['app', 'mail', 'ops', 'state'])
 })
 
 test('a clean set of renders passes', () => {
@@ -108,12 +109,14 @@ test('a derived build: service absent from its render fails (a profile left off 
   const res = arm({
     render: renderer((id, doc) => {
       if (!id.startsWith('app-')) return doc
-      const { migrate, 'tenant-create': tc, ...rest } = doc.services
+      const rest = { ...doc.services }
+      delete rest.migrate
+      delete rest['tenant-create']
       return { services: rest }
     }),
   })
   assert.deepEqual(codes(res.problems), ['derived-absent'])
-  assert.deepEqual(res.problems.map((p) => p.where).sort(), ['app-blue/migrate', 'app-blue/tenant-create', 'app-green/migrate', 'app-green/tenant-create'])
+  assert.deepEqual(res.problems.map((p) => p.where).sort(cmp), ['app-blue/migrate', 'app-blue/tenant-create', 'app-green/migrate', 'app-green/tenant-create'])
 })
 
 test('STATE PURITY: the state render carrying an app service fails, naming it', () => {
@@ -136,7 +139,7 @@ test('argv: -f per COMPOSE_FILE entry, pins slot replaced by the emitted fixture
     assert.deepEqual(p.argv.slice(-3), ['config', '--format', 'json'])
   }
   const pname = (p) => p.argv[p.argv.indexOf('--project-name') + 1]
-  assert.deepEqual(plans.map(pname).sort(), ['release-render-app-blue', 'release-render-app-green', 'release-render-mail', 'release-render-ops', 'release-render-state'])
+  assert.deepEqual(plans.map(pname).sort(cmp), ['release-render-app-blue', 'release-render-app-green', 'release-render-mail', 'release-render-ops', 'release-render-state'])
   assert.equal(byId.ops.argv[byId.ops.argv.indexOf('--project-directory') + 1], join(REPO_ROOT, 'infra/host/ops'))
   assert.equal(byId.mail.argv[byId.mail.argv.indexOf('--project-directory') + 1], join(REPO_ROOT, 'infra/host/mail'))
   // an override (the tag-pinned reference) swaps the slot's file, nothing else
@@ -166,7 +169,7 @@ test('env: no parent COMPOSE_* or interpolated variable, COMPOSE_PROFILES=*, COL
       assert.equal(p.env.COMPOSE_PROFILES, '*', p.id)
       for (const k of ['COMPOSE_FILE', 'COMPOSE_PROJECT_NAME', 'STACK', 'IMAGE_TAG']) assert.equal(p.env[k], undefined, `${p.id}: ${k} leaked`)
     }
-    const colours = plans.filter((p) => p.id.startsWith('app-')).map((p) => p.env.COLOUR).sort()
+    const colours = plans.filter((p) => p.id.startsWith('app-')).map((p) => p.env.COLOUR).sort(cmp)
     assert.deepEqual(colours, ['blue', 'green'])
     assert.equal(plans.find((p) => p.id === 'state').env.COLOUR, undefined)
   } finally {
