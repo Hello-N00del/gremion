@@ -389,7 +389,7 @@ export class KcProvisionApi {
     if (found?.attributes?.gremion_invited_at?.length) return { id, created, invited: false }
     const lifespan = spec.lifespanSeconds ?? 72 * 3600
     await this.realmReq(realm, 'PUT', `/users/${id}/execute-actions-email?lifespan=${lifespan}`, ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'])
-    await this.realmReq(realm, 'PUT', `/users/${id}`, { attributes: { ...(found?.attributes ?? {}), gremion_invited_at: [nowIso()] } })
+    await this.realmReq(realm, 'PUT', `/users/${id}`, { attributes: { ...found?.attributes, gremion_invited_at: [nowIso()] } })
     return { id, created, invited: true }
   }
 

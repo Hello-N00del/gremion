@@ -9,6 +9,12 @@ import { loadConfig, newCustomerDisabledReason, resolveOnPath } from '$lib/serve
 import { startCreate, validateNewCustomer, type NewCustomerInput } from '$lib/server/executor'
 import type { Actions, PageServerLoad } from './$types'
 
+/** A text field, trimmed; a file part or an absent field is the empty string (never "[object File]"). */
+function textField(form: FormData, key: string): string {
+  const v = form.get(key)
+  return typeof v === 'string' ? v.trim() : ''
+}
+
 export const load: PageServerLoad = () => {
   const r = loadConfig(env)
   if (!r.ok) error(503, 'the control panel is not configured')
@@ -24,12 +30,12 @@ export const actions: Actions = {
     if (disabled) return fail(409, { disabled, errors: {} as Record<string, string>, values: {} })
     const form = await request.formData()
     const input: NewCustomerInput = {
-      slug: String(form.get('slug') ?? '').trim(),
-      host: String(form.get('host') ?? '').trim().toLowerCase(),
-      itAdmin: String(form.get('itAdmin') ?? '').trim(),
-      councilAdmin: String(form.get('councilAdmin') ?? '').trim(),
-      enable: form.getAll('enable').map(String),
-      configFile: String(form.get('configFile') ?? '').trim(),
+      slug: textField(form, 'slug'),
+      host: textField(form, 'host').toLowerCase(),
+      itAdmin: textField(form, 'itAdmin'),
+      councilAdmin: textField(form, 'councilAdmin'),
+      enable: form.getAll('enable').filter((v): v is string => typeof v === 'string'),
+      configFile: textField(form, 'configFile'),
     }
     const errors = validateNewCustomer(input)
     if (!input.configFile.startsWith('/')) errors.configFile = 'Absoluter Pfad der Mandantenkonfiguration auf dem Host.'

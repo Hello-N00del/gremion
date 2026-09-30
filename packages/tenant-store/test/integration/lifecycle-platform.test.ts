@@ -113,7 +113,8 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
     }
     // the server's own admin role is never the platform owner
     const [me] = await admin<{ u: string }[]>`SELECT current_user AS u`
-    if (me!.u !== 'postgres') await expect(ensurePlatformDatabase(admin, { owner: me!.u, ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    // (when the admin IS postgres this repeats the 'postgres' case below; both refuse)
+    await expect(ensurePlatformDatabase(admin, { owner: me!.u, ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     await expect(ensurePlatformDatabase(admin, { owner: 'Bad-Name', ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     await expect(ensurePlatformDatabase(admin, { owner: 'postgres', ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })

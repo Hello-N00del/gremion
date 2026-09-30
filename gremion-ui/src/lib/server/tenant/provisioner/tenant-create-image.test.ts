@@ -38,7 +38,9 @@ describe('the tenant-create image (G4)', () => {
   it.each(modules)('module %s: its module.json is copied, and its migrations when it declares a database', (id) => {
     expect(copies).toContain(`modules/${id}/module.json`)
     const mj = JSON.parse(readFileSync(join(REPO, 'modules', id, 'module.json'), 'utf-8')) as { runtime: { database: { migrations: string } | null } }
-    if (mj.runtime.database) expect(copies).toContain(`modules/${id}/${mj.runtime.database.migrations}`)
+    // a module without a database needs no migrations COPY: expect exactly what it declares
+    const wanted = mj.runtime.database ? [`modules/${id}/${mj.runtime.database.migrations}`] : []
+    expect(copies).toEqual(expect.arrayContaining(wanted))
   })
 
   it('every workspace package @gremion/provisioning reaches is copied, manifest first and then source', () => {

@@ -5,7 +5,8 @@ import { KcProvisionApi, type KcTransport } from './kc-admin-api'
 
 type Call = { method: string; path: string; body?: unknown }
 
-function transportWith(routes: Record<string, unknown | ((call: Call) => unknown)>): { transport: KcTransport; calls: Call[] } {
+// A route is a canned response or a function of the call (both are `unknown`).
+function transportWith(routes: Record<string, unknown>): { transport: KcTransport; calls: Call[] } {
   const calls: Call[] = []
   const transport: KcTransport = async (method, path, body) => {
     const call = { method, path, body }

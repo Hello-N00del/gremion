@@ -378,15 +378,20 @@ test('real renders: the app project without its profiles lists no one-shot (up c
 // TASK-043 TDD 17 (Q12): the ops shell of each colour publishes no port, has no
 // Traefik route, sits on app + state only, and is hardened.
 test('real renders: blue and green control-panel publish no ports, carry traefik.enable=false, sit on the app and state networks only', () => {
-  for (const [project, colour] of [[PROJECTS[1], 'blue'], [PROJECTS[2], 'green']]) {
-    const svc = renderProject(project).services?.['control-panel']
+  const byName = (a, b) => a.localeCompare(b)
+  for (const { project, colour } of [
+    { project: PROJECTS[1], colour: 'blue' },
+    { project: PROJECTS[2], colour: 'green' },
+  ]) {
+    const render = renderProject(project)
+    const svc = render.services?.['control-panel']
     assert.ok(svc, `control-panel is not in the ${colour} render`)
     assert.deepEqual(svc.ports ?? [], [], `${colour} control-panel publishes a port`)
     assert.equal(String(svc.labels?.['traefik.enable']), 'false')
     assert.deepEqual(
-      Object.keys(svc.networks ?? {}).map((k) => renderProject(project).networks?.[k]?.name ?? k).sort(),
+      Object.keys(svc.networks ?? {}).map((k) => render.networks?.[k]?.name ?? k).sort(byName),
       // the fixture env files' STACK (test/host/fixtures/pooled-stack)
-      [`guardstack-app-${colour}_app`, 'guardstack_state'].sort(),
+      [`guardstack-app-${colour}_app`, 'guardstack_state'].sort(byName),
     )
     assert.equal(svc.read_only, true)
     assert.deepEqual(svc.cap_drop, ['ALL'])

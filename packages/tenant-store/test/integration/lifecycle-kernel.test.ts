@@ -171,10 +171,15 @@ describe('ensureKernelDatabase (TDD 5)', () => {
     const V = uuidv7()
     const had = (await server.admin`SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer_auth'`).length === 1
     try {
+      // Without the role the grant is reported skipped; a server that already
+      // has one (a shared scratch server) cannot show that half, so it is
+      // recorded as 'role-present' and asserted unconditionally.
+      let withoutRole: string = 'role-present'
       if (!had) {
-        expect((await ensureKernelDatabase(server, V, pwX)).pgbouncerGrant).toBe('skipped-no-role')
+        withoutRole = (await ensureKernelDatabase(server, V, pwX)).pgbouncerGrant
         await server.admin.unsafe('CREATE ROLE pgbouncer_auth NOLOGIN')
       }
+      expect(withoutRole).toBe(had ? 'role-present' : 'skipped-no-role')
       const r = await ensureKernelDatabase(server, V, pwX)
       expect(r.pgbouncerGrant).toBe('applied')
       const db = await server.open(kernelDbName(V))

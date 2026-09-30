@@ -18,6 +18,9 @@ const GOOD: Env = {
   CONTROL_DATABASE_URL: 'postgres://control:unit@postgres:5432/control',
 }
 
+/** The problems of a result, or [] when it parsed (keeps every expect unconditional). */
+const problemsOf = (r: ReturnType<typeof loadConfig>): string[] => (r.ok ? [] : r.problems)
+
 describe('loadConfig', () => {
   it('a complete contract parses; secrets come from the files', () => {
     const r = loadConfig(GOOD)
@@ -32,7 +35,7 @@ describe('loadConfig', () => {
   it('a customer realm as issuer is refused (TRD-048)', () => {
     const r = loadConfig({ ...GOOD, PANEL_OIDC_ISSUER: 'https://rat.musterstadt.example/auth/realms/musterstadt' })
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.problems.join('\n')).toMatch(/ops realm platform/)
+    expect(problemsOf(r).join('\n')).toMatch(/ops realm platform/)
   })
 
   it('an acr other than loa2 is refused', () => {
@@ -45,10 +48,8 @@ describe('loadConfig', () => {
     (key) => {
       const r = loadConfig({ ...GOOD, [key]: undefined })
       expect(r.ok).toBe(false)
-      if (!r.ok) {
-        expect(r.problems.join('\n')).toContain(key)
-        expect(r.problems.join('\n')).not.toMatch(/fixture-not-a-secret/)
-      }
+      expect(problemsOf(r).join('\n')).toContain(key)
+      expect(problemsOf(r).join('\n')).not.toMatch(/fixture-not-a-secret/)
     },
   )
 
@@ -70,7 +71,7 @@ describe('loadConfig', () => {
   it('a secret file that cannot be read is a named problem, never a value', () => {
     const r = loadConfig({ ...GOOD, AUTH_SECRET_FILE: join(FIX, 'absent') })
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.problems).toContain('AUTH_SECRET_FILE names a file that cannot be read')
+    expect(problemsOf(r)).toContain('AUTH_SECRET_FILE names a file that cannot be read')
   })
 
   it('an http issuer off the loopback is refused, an origin with a path is refused', () => {

@@ -99,7 +99,7 @@ function authorityOf(url: string, what: string): { scheme: string; hostPort: str
 /** The runtime DATABASE_URL goes through PgBouncer (the pooled stack: pgbouncer-<stack>:6432). */
 function isPooled(runtimeDatabaseUrl: string): boolean {
   const hostPort = authorityOf(runtimeDatabaseUrl, 'DATABASE_URL').hostPort
-  return /pgbouncer/i.test(hostPort) || /:6432$/.test(hostPort)
+  return /pgbouncer/i.test(hostPort) || hostPort.endsWith(':6432')
 }
 
 function dbUrl(base: string, user: string, password: string, db: string, extraQuery = ''): string {

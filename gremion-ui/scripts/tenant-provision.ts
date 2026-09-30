@@ -168,7 +168,7 @@ function writeSecretFile(hostPath: string, value: string): Promise<void> {
   try {
     chmodSync(hostPath, 0o600)
   } catch (err) {
-    log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : err})`)
+    log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
   }
   return Promise.resolve()
 }

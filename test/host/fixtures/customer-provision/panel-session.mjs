@@ -117,7 +117,7 @@ class Browser {
   }
   async request(url, init = {}) {
     const t = this.target(url)
-    const headers = { ...(init.headers ?? {}) }
+    const headers = { ...init.headers }
     // fetch() rewrites Host from the URL; node:http sends the one given.
     if (t.hostHeader) headers.host = t.hostHeader
     const jar = this.jar(t.jarKey)

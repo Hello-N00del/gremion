@@ -24,7 +24,7 @@ const NAME = `t043-${sha8}-pg`
 
 function moduleImage() {
   const lines = readFileSync(join(REPO, 'docker-compose.yml'), 'utf8').split('\n')
-  const start = lines.findIndex((l) => /^x-module-postgres:/.test(l))
+  const start = lines.findIndex((l) => l.startsWith('x-module-postgres:'))
   for (const l of lines.slice(start + 1)) {
     if (/^\S/.test(l)) break
     const m = /^\s+image:\s*(\S+)\s*$/.exec(l)
