@@ -9,8 +9,24 @@
 import http from 'node:http'
 import { Readable, pipeline } from 'node:stream'
 import { checkGuard, isHealthzPath } from './auth.js'
-import { createWebdavClient, NextcloudUpstreamError, type WebdavClient } from '../nextcloud/webdav-client.js'
+import {
+  createWebdavClient,
+  NextcloudUpstreamError,
+  WebdavAuthError,
+  type WebdavClient,
+} from '../nextcloud/webdav-client.js'
 import { sanitizeRelPath, WebdavPathError } from '../nextcloud/webdav-path.js'
+
+/** The ops that run AS the logged-in user (x-webdav-bearer required). */
+const BROWSER_OPS: ReadonlySet<string> = new Set([
+  '/api/v1/propfind',
+  '/api/v1/download',
+  '/api/v1/upload',
+  '/api/v1/mkcol',
+  '/api/v1/delete',
+  '/api/v1/move',
+  '/api/v1/copy',
+])
 
 export interface ServerOptions {
   /** Shared secret expected in x-internal-auth (INTERNAL_FILES_SECRET). */
@@ -69,6 +85,15 @@ export function createServer(opts: ServerOptions): http.Server {
     if (method !== 'POST') return sendJson(res, 405, { success: false, error: 'method not allowed' })
 
     const bearer = (req.headers['x-webdav-bearer'] as string | undefined) || undefined
+
+    // F1-FIX-03 / K5#3 + K5#32: a browser op runs AS the user or not at all. It
+    // used to fall back to the Nextcloud ADMIN credentials when the bearer was
+    // missing. Refused here before the body is read; the client enforces the
+    // same (WebdavAuthError) for any other caller. upload-chunk is the one
+    // system-scoped op and keeps the admin credentials.
+    if (BROWSER_OPS.has(path) && !bearer) {
+      return sendJson(res, 401, { success: false, error: 'missing x-webdav-bearer' })
+    }
 
     try {
       switch (path) {
@@ -154,6 +179,9 @@ export function createServer(opts: ServerOptions): http.Server {
     } catch (err) {
       if (err instanceof WebdavPathError) {
         return sendJson(res, 400, { success: false, error: err.message })
+      }
+      if (err instanceof WebdavAuthError) {
+        return sendJson(res, 401, { success: false, error: 'missing x-webdav-bearer' })
       }
       if (err instanceof NextcloudUpstreamError) {
         return sendJson(res, 502, { success: false, error: err.message })
