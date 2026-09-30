@@ -7,7 +7,7 @@
 // The leaf is a THIN proxy: it forwards the kernel-supplied webdav path + the
 // user's OIDC bearer (x-webdav-bearer) to Nextcloud and relays the result.
 import http from 'node:http'
-import { Readable } from 'node:stream'
+import { Readable, pipeline } from 'node:stream'
 import { checkGuard, isHealthzPath } from './auth.js'
 import { createWebdavClient, NextcloudUpstreamError, type WebdavClient } from '../nextcloud/webdav-client.js'
 import { sanitizeRelPath, WebdavPathError } from '../nextcloud/webdav-path.js'
@@ -84,7 +84,14 @@ export function createServer(opts: ServerOptions): http.Server {
             'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream',
           })
           if (upstream.body) {
-            Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream).pipe(res)
+            // F1-FIX-03 / S4#0 + K5#16: pipeline(), not .pipe(). .pipe() does not
+            // forward errors, so an upstream reset mid-body emitted 'error' on the
+            // Readable with no listener: an uncaught exception that killed the
+            // whole leaf. pipeline() handles both ends: on failure it destroys the
+            // response (the client sees an aborted download) and we log it.
+            pipeline(Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream), res, (err) => {
+              if (err) console.error('[files] download stream failed mid-body:', err.message)
+            })
           } else {
             res.end()
           }
