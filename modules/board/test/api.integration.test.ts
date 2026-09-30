@@ -1,32 +1,19 @@
-// services/board/test/api.integration.test.ts
+// modules/board/test/api.integration.test.ts
 //
-// Integration tests for services/board/src/http/routes.ts. Each test drives an
-// in-process node:http server backed by a REAL board leaf store on an EPHEMERAL,
-// isolated Postgres (BOARD_TEST_PG_URL). A fail-closed guard refuses to run
-// unless the host is localhost/127.0.0.1 — a test run can NEVER touch the live
-// staging stack. The test creates + drops its own board_test_api database.
+// Integration tests for src/http/routes.ts. Each test drives the leaf built by
+// the shipped factory buildApp(env), backed by a REAL (tenant, board) database
+// t_<hex32>__board of fixture tenant A on an EPHEMERAL, isolated Postgres
+// (BOARD_TEST_PG_URL), migrated with the one runner. A fail-closed guard refuses
+// to run unless the host is localhost/127.0.0.1 on a non-5432 port — a test run
+// can NEVER touch the live staging stack.
 import http from 'node:http'
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
-import postgres from 'postgres'
 import { buildApp, type BoardApp } from '../src/app.ts'
 import { createBoard, createStack, type Sql } from '../src/store/index.ts'
-import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { connectAdmin, dropScratchDb, provisionDb, scratchServerUrl, tenantBoardDb, type ScratchSql } from './support/scratch-pg.ts'
 import { TENANT_A } from './support/tenants.ts'
 
-// -- fail-closed guard --------------------------------------------------------
-
-const TEST_PG_URL = requireEphemeralTestPgUrl()
-const TEST_DB_PREFIX = 'board_test_'
-assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
-
-const TEST_DB = 'board_test_api'
 const TEST_SECRET = 'test-board-secret-123'
-
-function dbUrlFor(adminUrl: string, dbName: string): string {
-  const u = new URL(adminUrl)
-  u.pathname = '/' + dbName
-  return u.toString()
-}
 
 // -- HTTP helpers -------------------------------------------------------------
 
@@ -99,35 +86,31 @@ async function callServer(
 
 // -- setup --------------------------------------------------------------------
 
-let admin: Sql
+let admin: ScratchSql
 let sql: Sql
 let server: http.Server
 let app: BoardApp
 
-async function dropTestDb(pgSql: Sql): Promise<void> {
-  await pgSql
-    .unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${TEST_DB}' AND pid <> pg_backend_pid()`)
-    .catch(() => {})
-  await pgSql.unsafe(`DROP DATABASE IF EXISTS "${TEST_DB}"`)
-}
-
 beforeAll(async () => {
-  admin = postgres(TEST_PG_URL, { max: 1, prepare: false })
-  await dropTestDb(admin)
-  await admin.unsafe(`CREATE DATABASE "${TEST_DB}"`)
+  admin = connectAdmin()
+  await provisionDb(admin, tenantBoardDb(TENANT.id))
 
   // The leaf is built ONLY through the shipped factory; the suite seeds
   // through the exact store function buildApp hands to the routes.
-  app = buildApp({ BOARD_PG_URL: dbUrlFor(TEST_PG_URL, TEST_DB), INTERNAL_BOARD_SECRET: TEST_SECRET })
-  sql = await app.storeFor(TENANT)
+  app = buildApp({ GREMION_BOARD_PG_URL: scratchServerUrl(), INTERNAL_BOARD_SECRET: TEST_SECRET })
+  const r = await app.storeFor(TENANT)
+  if (typeof r !== 'function') throw new Error(`[api] app.storeFor(A) refused: ${JSON.stringify(r)}`)
+  sql = r
   server = app.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
 })
 
 afterAll(async () => {
-  await app.close()
-  await dropTestDb(admin)
-  await admin.end()
+  await app?.close()
+  if (admin) {
+    await dropScratchDb(admin, tenantBoardDb(TENANT.id))
+    await admin.end({ timeout: 5 })
+  }
 })
 
 beforeEach(async () => {

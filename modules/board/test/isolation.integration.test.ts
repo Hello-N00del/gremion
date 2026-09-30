@@ -14,19 +14,23 @@ import { randomUUID } from 'node:crypto'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { buildApp } from '../src/app.ts'
 import { createBoard, createCard, createStack, promoteActionItem, type Sql, type TenantRef } from '../src/store/index.ts'
-import { leafApi } from './isolation/leaf-api.ts'
+import { leafApi, leafRequest } from './isolation/leaf-api.ts'
 import { boardIsolationCase, type BoardRecord } from './isolation/case.ts'
 import { describeFailures, runIsolation } from './isolation/harness.ts'
 import type { BoardApi } from './isolation/api.ts'
 import {
   connectAdmin,
+  createEmptyDb,
+  databaseNames,
   dropScratchDb,
   provisionDb,
   scratchDbUrl,
   scratchServerUrl,
   tenantBoardDb,
+  userTableCount,
   type ScratchSql,
 } from './support/scratch-pg.ts'
+import { everyRouteCall } from './support/route-calls.ts'
 import { TENANT_A, TENANT_B, TENANT_C } from './support/tenants.ts'
 
 const SECRET = 'r29bk-isolation-secret'
@@ -79,6 +83,75 @@ afterAll(async () => {
     await admin.end({ timeout: 5 })
   }
 }, 60_000)
+
+/** A second leaf, built the same way, with its own gate (so no verdict cached by another case leaks in). */
+async function freshLeaf(): Promise<ReturnType<typeof buildApp>> {
+  const leaf = buildApp({
+    GREMION_BOARD_PG_URL: scratchServerUrl(),
+    BOARD_PG_URL: scratchDbUrl(DECOY_DB),
+    INTERNAL_BOARD_SECRET: SECRET,
+  })
+  await new Promise<void>((resolve) => leaf.server.listen(0, '127.0.0.1', resolve))
+  return leaf
+}
+
+describe('unprovisioned tenant: fail closed on every route (A3)', () => {
+  it('a valid v7 tenant with no t_<hex32>__board answers 404 tenant_not_provisioned on every route, creates nothing, is never cached', async () => {
+    const leaf = await freshLeaf()
+    try {
+      const dbC = tenantBoardDb(TENANT_C.id)
+      await dropScratchDb(admin, dbC)
+      const before = await databaseNames(admin)
+      expect(before).not.toContain(dbC)
+      for (const round of [1, 2]) {
+        for (const call of everyRouteCall()) {
+          const r = await leafRequest(leaf.server, SECRET, TENANT_C, call.method, call.path, call.body)
+          expect({ round, route: call.route, status: r.status, body: r.body }).toEqual({
+            round,
+            route: call.route,
+            status: 404,
+            body: { success: false, error: 'tenant_not_provisioned' },
+          })
+          expect(r.headers['cache-control'], call.route).toBe('no-store')
+        }
+      }
+      // no database was created, and nothing fell back to the decoy shared database
+      expect(await databaseNames(admin)).toEqual(before)
+      // never cached: the moment C's database exists and is current, C is served
+      await provisionDb(admin, dbC)
+      const ok = await leafRequest(leaf.server, SECRET, TENANT_C, 'GET', `/api/v1/boards?orgUnitId=${randomUUID()}`)
+      expect(ok.status).toBe(200)
+      expect(ok.body).toEqual({ data: [] })
+    } finally {
+      await leaf.close()
+      await dropScratchDb(admin, tenantBoardDb(TENANT_C.id))
+    }
+  })
+})
+
+describe('schema behind: no DDL on the request path (A4, B21)', () => {
+  it('a database with no ledger and no tables answers 503 schema_not_current with retry-after on every route and stays empty', async () => {
+    const leaf = await freshLeaf()
+    const dbC = tenantBoardDb(TENANT_C.id)
+    try {
+      await createEmptyDb(admin, dbC)
+      expect(await userTableCount(dbC)).toBe(0)
+      for (const call of everyRouteCall()) {
+        const r = await leafRequest(leaf.server, SECRET, TENANT_C, call.method, call.path, call.body)
+        expect({ route: call.route, status: r.status, body: r.body }).toEqual({
+          route: call.route,
+          status: 503,
+          body: { success: false, error: 'schema_not_current' },
+        })
+        expect(Number(r.headers['retry-after']), call.route).toBeGreaterThan(0)
+      }
+      expect(await userTableCount(dbC)).toBe(0)
+    } finally {
+      await leaf.close()
+      await dropScratchDb(admin, dbC)
+    }
+  })
+})
 
 describe('two-tenant isolation through the board routes (A7)', () => {
   it("as A, every §3.3 vector against B's ids is refused; controls pass first", async () => {

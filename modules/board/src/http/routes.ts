@@ -23,6 +23,7 @@
 import type http from 'node:http'
 import { z } from 'zod'
 import type { Sql, TenantRef } from '../store/index.js'
+import { isRefusal, type Refusal } from '../store/tenant-db.js'
 import type { Route, RouteContext } from './router.js'
 import {
   listBoardsForOrgUnits,
@@ -42,8 +43,19 @@ export interface ApiContext extends RouteContext {
 
 export type ApiHandler = (ctx: ApiContext) => Promise<void>
 
-/** Per-tenant store accessor (injected so tests can supply a pre-seeded pool). */
-export type StoreFn = (tenant: TenantRef) => Promise<Sql>
+/**
+ * Per-tenant store accessor: the tenant's (tenant, board) pool, or a
+ * tenant-level refusal (404 tenant_not_provisioned, 503 schema_not_current /
+ * tenant_unavailable). buildApp (src/app.ts) supplies it.
+ */
+export type StoreFn = (tenant: TenantRef) => Promise<Sql | Refusal>
+
+/** Thrown by a handler to answer a tenant-level refusal (caught by wrap()). */
+class RefusedError extends Error {
+  constructor(readonly refusal: Refusal) {
+    super(refusal.code)
+  }
+}
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown, extraHeaders?: Record<string, string>): void {
   res.writeHead(status, { 'content-type': 'application/json', ...extraHeaders })
@@ -52,6 +64,16 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown, extra
 
 function sendError(res: http.ServerResponse, status: number, error: string): void {
   sendJson(res, status, { success: false, error })
+}
+
+/** A refusal is about the tenant, not the resource: never cached by anyone downstream. */
+function sendRefusal(res: http.ServerResponse, refusal: Refusal): void {
+  sendJson(
+    res,
+    refusal.status,
+    { success: false, error: refusal.code },
+    { 'cache-control': 'no-store', ...(refusal.retryAfter !== undefined ? { 'retry-after': String(refusal.retryAfter) } : {}) },
+  )
 }
 
 async function readBody(req: http.IncomingMessage): Promise<unknown> {
@@ -109,7 +131,14 @@ const PromotedIdsSchema = z.object({
 
 // ── route builder ─────────────────────────────────────────────────────────────
 
-export function buildApiRoutes(storeFn: StoreFn): Route[] {
+export function buildApiRoutes(store: StoreFn): Route[] {
+  /** The tenant's pool, or a RefusedError that wrap() answers. */
+  const storeFn = async (tenant: TenantRef): Promise<Sql> => {
+    const r = await store(tenant)
+    if (isRefusal(r)) throw new RefusedError(r)
+    return r
+  }
+
   const wrap =
     (handler: ApiHandler): Route['handler'] =>
     async (ctx) => {
@@ -117,7 +146,9 @@ export function buildApiRoutes(storeFn: StoreFn): Route[] {
       try {
         await handler(extended)
       } catch (err) {
-        if (err instanceof z.ZodError) {
+        if (err instanceof RefusedError) {
+          sendRefusal(extended.res, err.refusal)
+        } else if (err instanceof z.ZodError) {
           sendError(extended.res, 400, err.issues.map((e) => e.message).join('; '))
         } else if (err instanceof SyntaxError || (err instanceof Error && err.message === 'invalid JSON body')) {
           sendError(extended.res, 400, 'invalid JSON body')
