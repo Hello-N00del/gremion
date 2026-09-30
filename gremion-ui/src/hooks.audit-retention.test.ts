@@ -104,18 +104,32 @@ let tick: () => unknown
 // preconditions instead and assert on them in a dedicated first test.
 let bootComplete: boolean | undefined
 let intervalCallFound: boolean
+// F1-FIX-03 / S1a#4: the one post-boot run.
+let bootRunDelay: unknown
+let bootRun: (() => unknown) | undefined
+let bootRunUnrefd: boolean | undefined
 
 beforeAll(async () => {
   // Boot needs the default tenant resolvable (control-plane sanity check).
   activeTenants.push({ id: 'tid-default', slug: 'default', status: 'active' })
   const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+  const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
   const mod = await import('./hooks.server')
   await mod.boot()
   bootComplete = mod.getBootStatus().complete
   const call = setIntervalSpy.mock.calls.find((c) => c[1] === DAY_MS)
   intervalCallFound = call !== undefined
   tick = call?.[0] as () => unknown
+  bootRunDelay = (mod as Record<string, unknown>).AUDIT_RETENTION_BOOT_DELAY_MS
+  const idx = setTimeoutSpy.mock.calls.findIndex((c) => typeof bootRunDelay === 'number' && c[1] === bootRunDelay)
+  if (idx >= 0) {
+    bootRun = setTimeoutSpy.mock.calls[idx][0] as () => unknown
+    const timer = setTimeoutSpy.mock.results[idx].value as ReturnType<typeof setTimeout>
+    bootRunUnrefd = !timer.hasRef()
+    clearTimeout(timer)
+  }
   setIntervalSpy.mockRestore()
+  setTimeoutSpy.mockRestore()
 })
 
 beforeEach(async () => {
@@ -144,6 +158,31 @@ describe('hooks.server audit-retention interval — P2.1b T4 fleet wrap', () => 
   it('boot completes and schedules the 24h retention interval', () => {
     expect(bootComplete).toBe(true)
     expect(intervalCallFound).toBe(true)
+  })
+
+  // F1-FIX-03 / S1a#4: the 24 h interval has no initial run, so a process that
+  // restarts more often than every 24 h (every deploy) never purges at all.
+  it('boot also schedules ONE unref-ed post-boot purge run within 5 minutes (S1a#4)', () => {
+    expect(typeof bootRunDelay).toBe('number')
+    expect(bootRunDelay as number).toBeGreaterThan(0)
+    expect(bootRunDelay as number).toBeLessThanOrEqual(5 * 60 * 1000)
+    expect(bootRun).toBeTypeOf('function')
+    expect(bootRunUnrefd).toBe(true)
+  })
+
+  it('the post-boot run purges every ACTIVE tenant, like the interval tick (S1a#4)', async () => {
+    activeTenants.push(
+      { id: 'tid-default', slug: 'default', status: 'active' },
+      { id: 'tid-beta', slug: 'beta', status: 'active' },
+    )
+    expect(bootRun).toBeTypeOf('function')
+    bootRun!()
+    await vi.waitFor(() =>
+      expect(purgeCalls).toEqual([
+        { scope: 'tid-default', days: 42 },
+        { scope: 'tid-beta', days: 42 },
+      ]),
+    )
   })
 
   it('purges per ACTIVE tenant under explicit contexts with the configured retention window', async () => {

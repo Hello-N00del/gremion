@@ -96,6 +96,28 @@ export const bootRuntime = {
   },
 }
 
+/**
+ * F1-FIX-03 / S1a#4: delays of the one post-boot run of each audit tick. The
+ * 24 h / 6 h intervals have no initial run, so a process restarted more often
+ * than that (every deploy) never purged or verified. The integrity run is
+ * scheduled after the retention run, so it normally checks the purged table.
+ */
+export const AUDIT_RETENTION_BOOT_DELAY_MS = 90_000
+export const AUDIT_INTEGRITY_BOOT_DELAY_MS = 150_000
+
+/**
+ * One unref'd run of a fleet tick after boot. The tick's per-tenant failures are
+ * handled inside forEachActiveTenant; anything that still escapes (listing the
+ * fleet) is logged here instead of becoming an unhandled rejection.
+ */
+function schedulePostBootRun(label: string, tick: () => Promise<unknown>, delayMs: number): void {
+  bootRuntime.schedule(() => {
+    tick().catch((err: unknown) => {
+      console.error(`[${label}] post-boot run failed:`, err)
+    })
+  }, delayMs)
+}
+
 function scheduleBootRetry(): void {
   if (_bootRetryPending) return
   _bootRetryPending = true
@@ -220,16 +242,18 @@ export function boot(): Promise<void> {
       // tenant) single-flight and per-tenant try/catch + structured log in the
       // helper. readConfig() resolves the CURRENT tenant from the ALS scope.
       const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000
-      setInterval(
-        () =>
-          forEachActiveTenant('audit-retention', async () => {
-            const cfg = readConfig()
-            const days = cfg.retention?.security_logs_days ?? 90
-            const { purged } = await purgeAuditLogsOlderThan(days)
-            if (purged > 0) console.info(`[audit-retention] purged ${purged} rows older than ${days}d`)
-          }),
-        PURGE_INTERVAL_MS,
-      ).unref()
+      const auditRetentionTick = () =>
+        forEachActiveTenant('audit-retention', async () => {
+          const cfg = readConfig()
+          const days = cfg.retention?.security_logs_days ?? 90
+          const { purged } = await purgeAuditLogsOlderThan(days)
+          if (purged > 0) console.info(`[audit-retention] purged ${purged} rows older than ${days}d`)
+        })
+      setInterval(auditRetentionTick, PURGE_INTERVAL_MS).unref()
+      // F1-FIX-03 / S1a#4: plus ONE run shortly after boot. The interval alone
+      // never fires in a process that restarts more often than every 24 h (every
+      // deploy), so retention would silently never run.
+      schedulePostBootRun('audit-retention', auditRetentionTick, AUDIT_RETENTION_BOOT_DELAY_MS)
 
       // gremion#22 finding 1 (governance integrity): the kernel carve lost the
       // periodic audit-chain-verification tick the full product wires from #320
@@ -248,18 +272,19 @@ export function boot(): Promise<void> {
       // operator alert, never an app-halting action. .unref() so it doesn't keep
       // the process alive during graceful shutdown / test teardown.
       const AUDIT_INTEGRITY_INTERVAL_MS = 6 * 60 * 60 * 1000
-      setInterval(
-        () =>
-          forEachActiveTenant('audit-integrity', async () => {
-            const r = await verifyAuditChain()
-            if (!r.ok) {
-              console.error(
-                `[audit-integrity] audit_log hash chain BROKEN at id ${r.brokenAtId}`,
-              )
-            }
-          }),
-        AUDIT_INTEGRITY_INTERVAL_MS,
-      ).unref()
+      const auditIntegrityTick = () =>
+        forEachActiveTenant('audit-integrity', async () => {
+          const r = await verifyAuditChain()
+          if (!r.ok) {
+            console.error(
+              `[audit-integrity] audit_log hash chain BROKEN at id ${r.brokenAtId}`,
+            )
+          }
+        })
+      setInterval(auditIntegrityTick, AUDIT_INTEGRITY_INTERVAL_MS).unref()
+      // F1-FIX-03 / S1a#4: plus ONE run after boot (scheduled after the
+      // retention run), for the same reason as above.
+      schedulePostBootRun('audit-integrity', auditIntegrityTick, AUDIT_INTEGRITY_BOOT_DELAY_MS)
 
       // (The Content Engine L2 per-minute content-publish drain is now a
       // module-registered server-init hook — see content/register.server.ts —

@@ -107,18 +107,34 @@ let tick: () => unknown
 // dedicated first test instead.
 let bootComplete: boolean | undefined
 let intervalCallFound: boolean
+// F1-FIX-03 / S1a#4: the one post-boot run.
+let bootRunDelay: unknown
+let retentionBootDelay: unknown
+let bootRun: (() => unknown) | undefined
+let bootRunUnrefd: boolean | undefined
 
 beforeAll(async () => {
   // Boot needs the default tenant resolvable (control-plane sanity check).
   activeTenants.push({ id: 'tid-default', slug: 'default', status: 'active' })
   const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+  const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
   const mod = await import('./hooks.server')
   await mod.boot()
   bootComplete = mod.getBootStatus().complete
   const call = setIntervalSpy.mock.calls.find((c) => c[1] === AUDIT_INTEGRITY_INTERVAL_MS)
   intervalCallFound = call !== undefined
   tick = call?.[0] as () => unknown
+  bootRunDelay = (mod as Record<string, unknown>).AUDIT_INTEGRITY_BOOT_DELAY_MS
+  retentionBootDelay = (mod as Record<string, unknown>).AUDIT_RETENTION_BOOT_DELAY_MS
+  const idx = setTimeoutSpy.mock.calls.findIndex((c) => typeof bootRunDelay === 'number' && c[1] === bootRunDelay)
+  if (idx >= 0) {
+    bootRun = setTimeoutSpy.mock.calls[idx][0] as () => unknown
+    const timer = setTimeoutSpy.mock.results[idx].value as ReturnType<typeof setTimeout>
+    bootRunUnrefd = !timer.hasRef()
+    clearTimeout(timer)
+  }
   setIntervalSpy.mockRestore()
+  setTimeoutSpy.mockRestore()
 })
 
 beforeEach(async () => {
@@ -145,6 +161,32 @@ describe('hooks.server audit-integrity interval (gremion#22 finding 1)', () => {
   it('boot completes and schedules the 6h audit-integrity interval', () => {
     expect(bootComplete).toBe(true)
     expect(intervalCallFound).toBe(true)
+  })
+
+  // F1-FIX-03 / S1a#4: the 6 h interval has no initial run, so a process that
+  // restarts more often than every 6 h never verifies the chain at all.
+  it('boot also schedules ONE unref-ed post-boot verify run, after the purge run, within 5 minutes (S1a#4)', () => {
+    expect(typeof bootRunDelay).toBe('number')
+    expect(bootRunDelay as number).toBeGreaterThan(retentionBootDelay as number)
+    expect(bootRunDelay as number).toBeLessThanOrEqual(5 * 60 * 1000)
+    expect(bootRun).toBeTypeOf('function')
+    expect(bootRunUnrefd).toBe(true)
+  })
+
+  it('the post-boot run verifies every ACTIVE tenant and logs a broken chain (S1a#4)', async () => {
+    activeTenants.push(
+      { id: 'tid-default', slug: 'default', status: 'active' },
+      { id: 'tid-beta', slug: 'beta', status: 'active' },
+    )
+    verifyResults.set('tid-beta', { ok: false, brokenAtId: 9 })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(bootRun).toBeTypeOf('function')
+    bootRun!()
+    await vi.waitFor(() => expect(verifyCalls).toEqual([{ scope: 'tid-default' }, { scope: 'tid-beta' }]))
+    await vi.waitFor(() =>
+      expect(errorSpy.mock.calls.map((c) => c.join(' ')).some((l) => l.includes('BROKEN') && l.includes('9'))).toBe(true),
+    )
+    errorSpy.mockRestore()
   })
 
   it('verifies the audit chain for EVERY ACTIVE tenant under its explicit context', async () => {
