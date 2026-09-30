@@ -44,7 +44,8 @@ describe('create (phases A, host, B)', () => {
     const done = w.mutations.filter((x) => x.startsWith('ledger:') && x.endsWith('=done')).map((x) => x.slice(7, -5))
     expect(done).toEqual(EXECUTION_ORDER)
     expect(w.control.get('musterstadt')?.status).toBe('active')
-    expect(w.config.get('musterstadt')).toEqual({ modules: ['calendar', 'vault'], setupComplete: true })
+    expect(w.config.get('musterstadt')).toEqual({ modules: [], setupComplete: true })
+    expect(w.mutations.indexOf('config:write musterstadt')).toBeLessThan(w.mutations.indexOf(`pg:migrate-kernel ${c.id}`))
     expect(w.kernel.get(c.id)).toMatchObject({ orgUnits: 1, committees: 0, seedRows: [], ledgerColumns: ['filename', 'applied_at'] })
     expect(w.groups.get('musterstadt')).toEqual(['council'])
     // TDD 7/8: calendar gets a NATS user, vault (NO_BROKER) does not

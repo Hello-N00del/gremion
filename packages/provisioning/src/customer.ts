@@ -105,7 +105,7 @@ export async function createPhaseA(spec: CreateSpec, deps: ProvisioningDeps): Pr
       realm_created: () => deps.realm.ensureRealm(c),
       database_created: async () => {
         await deps.kernel.ensureDatabase(c)
-        await deps.config.ensure(c, { modules: v.enable })
+        await deps.config.ensure(c)
         await deps.kernel.migrate(c)
         const pc = await deps.kernel.postCondition(c)
         if (JSON.stringify(pc.ledgerColumns) !== JSON.stringify(['filename', 'applied_at'])) {

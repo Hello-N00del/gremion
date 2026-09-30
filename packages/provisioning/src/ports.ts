@@ -47,8 +47,8 @@ export interface ControlPort {
 
 /** The tenant's config file (/data/<slug>/config.json), written before the kernel migration (Q21). */
 export interface ConfigPort {
-  /** Writes it when absent or different; returns whether it wrote. */
-  ensure(c: CustomerRef, input: { modules: readonly string[] }): Promise<boolean>
+  /** Writes the operator's --config (materialized, brand identity complete) when absent or different; returns whether it wrote. */
+  ensure(c: CustomerRef): Promise<boolean>
   /** Reads setup_complete. */
   setupComplete(c: CustomerRef): Promise<boolean>
   /** Sets setup_complete:true (phase B end). */

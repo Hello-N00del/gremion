@@ -98,11 +98,9 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
       },
     },
     config: {
-      async ensure(c, { modules }) {
-        const cur = w.config.get(c.slug)
-        const want = [...modules].sort()
-        if (cur && JSON.stringify(cur.modules) === JSON.stringify(want)) return false
-        w.config.set(c.slug, { modules: want, setupComplete: cur?.setupComplete ?? false })
+      async ensure(c) {
+        if (w.config.has(c.slug)) return false
+        w.config.set(c.slug, { modules: [], setupComplete: false })
         m(`config:write ${c.slug}`)
         return true
       },
