@@ -31,17 +31,24 @@ export const load: PageServerLoad = async ({ locals }) => {
   // silent `.catch(() => [])` made a genuine query fault indistinguishable from
   // "nothing to show" — an admin with challenges awaiting disposition would be
   // told there are none. Log a summary (never the raw error: postgres.js
-  // carries query + parameters on it, #458-2) before degrading.
+  // carries query + parameters on it, #458-2) before degrading. Each degraded
+  // load also sets an `…Unavailable` flag so the page can say "could not be
+  // loaded" instead of rendering the empty state as if there were nothing
+  // (R28 review: a log line alone never reaches the admin looking at the page).
+  let beschluesseUnavailable = false
   const beschluesse = await listBeschluesse().catch((err) => {
     console.error('[beschluesse] listBeschluesse failed, degrading to empty:', summarize(err))
+    beschluesseUnavailable = true
     return []
   })
+  let challengesUnavailable = false
   const challenges: readonly BeschlussChallengeRow[] = isAdmin
     ? await listChallengesForBeschluesse().catch((err) => {
         console.error('[beschluesse] listChallengesForBeschluesse failed, degrading to empty:', summarize(err))
+        challengesUnavailable = true
         return []
       })
     : []
 
-  return { beschluesse, isAdmin, challenges }
+  return { beschluesse, isAdmin, challenges, beschluesseUnavailable, challengesUnavailable }
 }

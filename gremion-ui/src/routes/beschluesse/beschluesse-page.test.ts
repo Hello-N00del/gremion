@@ -105,3 +105,42 @@ describe('#438 Beschlussbuch privacy gate', () => {
     spy.mockRestore()
   })
 })
+
+// R28 house review MEDIUM (silent-failure): a server log alone left the page
+// unable to tell "the query failed" from "there is nothing" — an admin was told
+// "Keine Einsprüche zu diesem Beschluss." while challenges awaited disposition.
+// The degraded load now carries a flag the page renders as an error line.
+describe('#439 degraded loads are flagged to the page, not only logged', () => {
+  type Flagged = Loaded & { challengesUnavailable: boolean; beschluesseUnavailable: boolean }
+  const runFlagged = async (roles: string[] | null) => (await load(evt(roles))) as unknown as Flagged
+
+  it('a failing challenge query sets challengesUnavailable for an admin', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.listChallengesForBeschluesse.mockRejectedValueOnce(new Error('db down'))
+    const data = await runFlagged(['council-admin'])
+    expect(data.challenges).toEqual([])
+    expect(data.challengesUnavailable).toBe(true)
+    expect(data.beschluesseUnavailable).toBe(false)
+    spy.mockRestore()
+  })
+
+  it('a failing register query sets beschluesseUnavailable', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.listBeschluesse.mockRejectedValueOnce(new Error('db down'))
+    const data = await runFlagged(['member'])
+    expect(data.beschluesse).toEqual([])
+    expect(data.beschluesseUnavailable).toBe(true)
+    spy.mockRestore()
+  })
+
+  it('healthy loads carry both flags false', async () => {
+    const data = await runFlagged(['council-admin'])
+    expect(data.challengesUnavailable).toBe(false)
+    expect(data.beschluesseUnavailable).toBe(false)
+  })
+
+  it('a non-admin never gets challengesUnavailable (the query is never run)', async () => {
+    const data = await runFlagged(['member'])
+    expect(data.challengesUnavailable).toBe(false)
+  })
+})

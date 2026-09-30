@@ -159,7 +159,15 @@
     </p>
   </header>
 
-  {#if beschluesse.length === 0}
+  {#if data.beschluesseUnavailable}
+    <!-- Degraded load (#439, R28 review): the register query failed. Say so —
+         the first-class empty state below would claim there are no Beschlüsse. -->
+    <div class="empty-state" role="alert">
+      <div class="glyph"><Icon name="clock" size={22} /></div>
+      <div class="ttl">Beschlüsse konnten nicht geladen werden</div>
+      <div class="sub">Bitte laden Sie die Seite später erneut.</div>
+    </div>
+  {:else if beschluesse.length === 0}
     <div class="empty-state">
       <div class="glyph"><Icon name="check" size={22} /></div>
       <div class="ttl">Noch keine Beschlüsse</div>
@@ -270,7 +278,9 @@
               {@const rowChallenges = challengesByResolution.get(b.id) ?? []}
               <div class="disposition">
                 <div class="detail-ttl">Einsprüche entscheiden</div>
-                {#if rowChallenges.length === 0}
+                {#if data.challengesUnavailable}
+                  <p class="form-error" role="alert">Einsprüche konnten nicht geladen werden.</p>
+                {:else if rowChallenges.length === 0}
                   <p class="detail-sub">Keine Einsprüche zu diesem Beschluss.</p>
                 {:else}
                   {#each rowChallenges as c (c.id)}
