@@ -26,9 +26,13 @@ function payloadOf(jwt: string | undefined): Record<string, unknown> | null {
 
 /**
  * The claims the gate reads, from the tokens of ONE authorization code
- * exchange (Auth.js validated the id token's signature, issuer and audience
- * against this realm's JWKS). The access token carries the realm roles and
- * the real subject; acr comes from either.
+ * exchange. Auth.js 0.41 checks the id token's iss, aud and exp but does NOT
+ * verify a signature against the JWKS (jwks_endpoint below is informational);
+ * the tokens are trusted because they come straight from the token endpoint
+ * over the internal back channel (OIDC Core 3.1.3.7 item 6), which config.ts
+ * restricts to https or the loopback / a compose service name (review A, r2).
+ * The access token carries the realm roles and the real subject; acr comes
+ * from either.
  */
 export function claimsFromTokens(accessToken?: string, idToken?: string): SessionClaims {
   const at = payloadOf(accessToken) ?? {}
@@ -50,7 +54,11 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
     secret: c.authSecret,
     trustHost: true,
     basePath: '/auth',
-    session: { strategy: 'jwt', maxAge: 8 * 3600 },
+    // Roles and acr are read at sign-in only (no refresh re-check yet): the
+    // session is bounded to one hour so a revoked operator or a killed
+    // Keycloak session loses the panel within the hour (review A, r2; the
+    // refresh-token re-check is a named residual).
+    session: { strategy: 'jwt', maxAge: 3600 },
     providers: [
       Keycloak({
         id: PROVIDER_ID,

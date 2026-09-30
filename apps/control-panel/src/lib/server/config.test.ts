@@ -52,6 +52,21 @@ describe('loadConfig', () => {
     },
   )
 
+  it('is parsed once per environment (review A, r2): a second call returns the same config without re-reading the secret files', () => {
+    const a = loadConfig({ ...GOOD })
+    const b = loadConfig({ ...GOOD })
+    expect(a.ok).toBe(true)
+    expect(b).toBe(a)
+    // a different environment is parsed afresh
+    expect(loadConfig({ ...GOOD, PANEL_EXECUTOR: 'gremion-tenant' })).not.toBe(a)
+  })
+
+  it('PANEL_OIDC_INTERNAL_BASE must be https off the compose network: a dotted host over http is refused (review A, r2)', () => {
+    expect(loadConfig({ ...GOOD, PANEL_OIDC_INTERNAL_BASE: 'http://keycloak.example.org:8080/auth' }).ok).toBe(false)
+    expect(loadConfig({ ...GOOD, PANEL_OIDC_INTERNAL_BASE: 'http://t043-kc:8080/auth' }).ok).toBe(true)
+    expect(loadConfig({ ...GOOD, PANEL_OIDC_INTERNAL_BASE: 'http://127.0.0.1:8080/auth' }).ok).toBe(true)
+  })
+
   it('a secret file that cannot be read is a named problem, never a value', () => {
     const r = loadConfig({ ...GOOD, AUTH_SECRET_FILE: join(FIX, 'absent') })
     expect(r.ok).toBe(false)

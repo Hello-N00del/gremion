@@ -92,6 +92,14 @@ function withSecurityHeaders(response: Response): Response {
   if ((response.headers.get('content-type') ?? '').startsWith('text/html')) {
     response.headers.set('Content-Security-Policy', PANEL_CSP)
   }
+  // Beyond gremion-ui's set, on every response (review A LOW, r2): the
+  // text/plain refusals echo request data, and an admin surface leaks no URL.
+  try {
+    response.headers.set('X-Content-Type-Options', 'nosniff')
+    response.headers.set('Referrer-Policy', 'no-referrer')
+  } catch {
+    // an immutable-header response (a fetch passthrough) keeps its own headers
+  }
   return response
 }
 
@@ -110,6 +118,12 @@ function hostRefusal(event: RequestEvent): Response | null {
   if (!r.ok) return refuse(503, 'the control panel is not configured')
   if (!hostAllowed(event.request.headers.get('host'), r.config.origin)) {
     return refuse(421, 'this panel answers only on its own host name (ORIGIN)')
+  }
+  // Auth.js (trustHost) builds redirect_uri and cookie flags from
+  // X-Forwarded-Host when present: it must name the same host (review A, r2).
+  const fwd = event.request.headers.get('x-forwarded-host')
+  if (fwd !== null && !hostAllowed(fwd.split(',')[0]!.trim(), r.config.origin)) {
+    return refuse(421, 'this panel answers only on its own host name (ORIGIN): X-Forwarded-Host differs')
   }
   return null
 }

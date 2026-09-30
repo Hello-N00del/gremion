@@ -51,7 +51,38 @@ function readSecret(env: Env, name: string, readFile: (p: string) => string, pro
   }
 }
 
-export function loadConfig(env: Env, readFile: (p: string) => string = (p) => readFileSync(p, 'utf8')): ConfigResult {
+// The environment keys the config reads: the memo key (review A, r2).
+const CONFIG_KEYS = [
+  'ORIGIN',
+  'PANEL_OIDC_ISSUER',
+  'PANEL_OIDC_INTERNAL_BASE',
+  'PANEL_OIDC_CLIENT_ID',
+  'PANEL_OIDC_CLIENT_SECRET_FILE',
+  'AUTH_SECRET_FILE',
+  'PANEL_REQUIRED_ACR',
+  'CONTROL_DATABASE_URL',
+  'PLATFORM_DATABASE_URL',
+  'PANEL_EXECUTOR',
+  'INTERNAL_PUSH_SECRET',
+] as const
+let memo: { key: string; result: ConfigResult } | null = null
+
+/**
+ * The config, parsed and validated ONCE per environment: the hooks, the gate
+ * and every load/action share one parse (the secret files are read once). A
+ * failed parse is not memoised, so a secret file that appears later is seen.
+ * An explicit `readFile` (tests) always parses afresh.
+ */
+export function loadConfig(env: Env, readFile?: (p: string) => string): ConfigResult {
+  if (readFile) return parseConfig(env, readFile)
+  const key = JSON.stringify(CONFIG_KEYS.map((k) => env[k] ?? null))
+  if (memo?.key === key) return memo.result
+  const result = parseConfig(env, (p) => readFileSync(p, 'utf8'))
+  if (result.ok) memo = { key, result }
+  return result
+}
+
+function parseConfig(env: Env, readFile: (p: string) => string): ConfigResult {
   const problems: string[] = []
   const origin = env.ORIGIN ?? ''
   if (!ORIGIN_RE.test(origin)) problems.push('ORIGIN is not an exact origin (scheme://host[:port])')
@@ -70,6 +101,16 @@ export function loadConfig(env: Env, readFile: (p: string) => string = (p) => re
 
   const internalBase = (env.PANEL_OIDC_INTERNAL_BASE ?? '').replace(/\/$/, '')
   if (!/^https?:\/\/[^/]+(\/.*)?$/.test(internalBase)) problems.push('PANEL_OIDC_INTERNAL_BASE is not a URL')
+  else {
+    // The operator's roles and acr are read from the token response of this
+    // back channel (review A, r2): plain http only to the loopback or a
+    // single-label compose service on the panel's own network, never to a
+    // routed (dotted) host.
+    const u = new URL(internalBase)
+    if (u.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname) && u.hostname.includes('.')) {
+      problems.push('PANEL_OIDC_INTERNAL_BASE over plain http is allowed to the loopback or a compose service name only; use https')
+    }
+  }
 
   const clientId = env.PANEL_OIDC_CLIENT_ID ?? ''
   if (!clientId) problems.push('PANEL_OIDC_CLIENT_ID is not set')
