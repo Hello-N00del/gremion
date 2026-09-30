@@ -11,6 +11,12 @@ RUN npm install -g corepack && corepack enable pnpm
 # Install workspace deps (cache-friendly: package manifests first)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/db/package.json ./packages/db/
+COPY packages/nats-auth/package.json ./packages/nats-auth/
+# The bin file must exist when pnpm installs, or pnpm cannot link
+# gremion-ui/node_modules/.bin/nats-auth and `pnpm exec nats-auth init` (the
+# tenant-create call in make nats-init, gremion-deploy, pooled-stack-proof)
+# fails "Command not found" (TASK-024 image.test.ts, scripts/image-check.sh).
+COPY packages/nats-auth/bin ./packages/nats-auth/bin/
 COPY packages/ports/package.json ./packages/ports/
 COPY packages/storage/package.json ./packages/storage/
 COPY packages/tokens/package.json ./packages/tokens/
@@ -19,6 +25,11 @@ RUN pnpm install --frozen-lockfile
 
 # Copy workspace package sources
 COPY packages/db ./packages/db/
+# @gremion/nats-auth is a gremion-ui DEVdependency (TASK-024 G5, Q11): the
+# builder stage -- the migrate/tenant-create image -- runs `nats-auth init` and
+# ensureTenantAccount; `deploy --prod` below leaves it out of the runner, so the
+# long-running gremion-ui cannot load it.
+COPY packages/nats-auth ./packages/nats-auth/
 COPY packages/ports ./packages/ports/
 COPY packages/storage ./packages/storage/
 COPY packages/tokens ./packages/tokens/

@@ -1,0 +1,34 @@
+{
+  "name": "@gremion/nats-auth",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Per-tenant NATS accounts and per-module nkey users for the Gremion broker (TASK-024, CAP-NATS-AUTH)",
+  "type": "module",
+  "private": true,
+  "files": ["src", "bin", "!src/**/*.test.ts"],
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "bin": {
+    "nats-auth": "./bin/nats-auth.mjs"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@gremion/ports": "workspace:*",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/nkeys": "^2.0.3",
+    "@nats-io/transport-node": "^3.4.0",
+    "tsx": "^4.23.13"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11"
+  }
+}

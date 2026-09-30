@@ -188,7 +188,12 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
     deploy user puts the same key into the tree (one inode, so an in-place key
     rotation reaches both names; see Known gaps). No program starts the state
     project; `gremion-deploy` only pulls it. The registry token is read at a
-    prompt and the login is removed again at once.
+    prompt and the login is removed again at once. Before the first up,
+    `nats-auth init` (TASK-024, Q12) writes the NATS SYS reload seed and the
+    SYS-only accounts file into the two nats volumes bootstrap created: the
+    broker's config includes that file and does not start without it. It runs
+    in the `tenant-create` one-shot of the blue colour, with no dependency
+    started, and is idempotent (`gremion-deploy` repeats it in its step 4).
 
 ```bash
 sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
@@ -198,6 +203,7 @@ stat -c '%i %U %n' /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcryp
 cd "$REL"
 read -rs GHCR_TOKEN
 printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u x-access-token --password-stdin
+docker compose --env-file /opt/gremion/etc/env/app-blue.env run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init   # [nats-auth] init: sys reload seed created; ... written
 docker compose --env-file /opt/gremion/etc/env/state.env up -d
 docker logout ghcr.io; unset GHCR_TOKEN
 docker compose --env-file /opt/gremion/etc/env/state.env ps

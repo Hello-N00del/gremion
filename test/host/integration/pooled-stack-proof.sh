@@ -375,7 +375,7 @@ phase_prepare() {
         || docker network create --ipv6 --subnet 10.231.1.0/24 --subnet fd5a:231:1::/64 "${STACK}_state" >/dev/null
     info "externals: networks ready"
     local vol
-    for vol in traefik_acme config_data tenant_config_data tenant_secrets mail_data; do
+    for vol in traefik_acme config_data tenant_config_data tenant_secrets mail_data nats_accounts nats_secrets; do
         docker volume inspect "${STACK}_${vol}" >/dev/null 2>&1 || docker volume create "${STACK}_${vol}" >/dev/null
     done
     info "externals: volumes ready"
@@ -410,13 +410,19 @@ phase_names() {
 phase_state_up() {
     require_scratch state-up
     [[ -f "$OUT/.names-ok" ]] || die "run the names phase first: no up before every rendered name is asserted"
+    # TASK-024 (Q12): nats-auth init BEFORE the first state up -- the SYS
+    # reload seed and a SYS-only accounts file, so nats boots with no
+    # anonymous user. Idempotent, no network (--no-deps).
+    compose app-blue run --rm --no-deps --pull never --entrypoint pnpm tenant-create exec nats-auth init \
+        > "$OUT/ledger/nats-auth-init.log" 2>&1 \
+        || { tail -15 "$OUT/ledger/nats-auth-init.log" >&2; die "nats-auth init failed"; }
     compose state up -d --pull never >/dev/null
     ok "state project up ($(docker ps -q --filter "label=com.docker.compose.project=${STACK}-state" | grep -c .) container(s))"
 }
 
 phase_state_wait() {
     local cid s
-    for s in postgres keycloak; do
+    for s in postgres keycloak nats; do
         cid="$(svc_cid state "$s")"; [[ -n "$cid" ]] || die "state/$s has no container"
         wait_health "$cid" 200 || die "state/$s did not become healthy"
     done
@@ -580,6 +586,7 @@ state_port() {
     case "$1" in
         postgres|*-postgres) echo 5432 ;;
         pgbouncer) echo 6432 ;;
+        nats) echo 4222 ;;
         keycloak) echo 8080 ;;
         gremion-ui|gremion-public) echo 3000 ;;
         mailpit) echo 1025 ;;
