@@ -31,8 +31,10 @@
 // was selected" are the same statement.
 //
 // NOTE: a separate file from internal-fetch.tenant.test.ts is required because
-// vi.mock('$env/dynamic/private') is module-hoisted — that file pins the
-// PUBLIC_BASE_URL fallback (INTERNAL_BASE_URL: undefined) and must keep doing so.
+// vi.mock('$env/dynamic/private') is module-hoisted — that file runs with
+// INTERNAL_BASE_URL unset. (F1-FIX-03 / S1a#24 removed the PUBLIC_BASE_URL
+// fallback: unset is refused in production, and a dev/test process targets
+// localhost; internal-fetch.test.ts pins both.)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // INTERNAL_BASE_URL = the in-container origin; PUBLIC_BASE_URL = the public apex.
