@@ -1,0 +1,117 @@
+// apps/control-panel/src/lib/server/auth.ts — Auth.js against the ops realm
+// ONLY (TRD-048). One provider, one realm: the issuer is PANEL_OIDC_ISSUER
+// (https://<platform domain>/auth/realms/platform), exact; the browser is sent
+// to the public authorization endpoint, the token, userinfo and JWKS calls go
+// to Keycloak's internal base. Every authorization request asks for acr loa2
+// (multi-factor); the gate refuses a session that did not get it.
+import { Auth, createActionURL, raw, skipCSRFCheck } from '@auth/core'
+import Keycloak from '@auth/core/providers/keycloak'
+import type { SvelteKitAuthConfig } from '@auth/sveltekit'
+import type { RequestEvent } from '@sveltejs/kit'
+import type { PanelConfig } from './config'
+import type { SessionClaims } from './gate'
+
+export const PROVIDER_ID = 'keycloak'
+
+function payloadOf(jwt: string | undefined): Record<string, unknown> | null {
+  if (!jwt) return null
+  const part = jwt.split('.')[1]
+  if (!part) return null
+  try {
+    return JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The claims the gate reads, from the tokens of ONE authorization code
+ * exchange (Auth.js validated the id token's signature, issuer and audience
+ * against this realm's JWKS). The access token carries the realm roles and
+ * the real subject; acr comes from either.
+ */
+export function claimsFromTokens(accessToken?: string, idToken?: string): SessionClaims {
+  const at = payloadOf(accessToken) ?? {}
+  const it = payloadOf(idToken) ?? {}
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
+  const realmRoles = (at.realm_access as { roles?: unknown } | undefined)?.roles
+  return {
+    iss: str(it.iss) ?? str(at.iss),
+    acr: str(at.acr) ?? str(it.acr),
+    uid: str(at.sub) ?? str(it.sub),
+    email: str(it.email) ?? str(at.email) ?? null,
+    roles: Array.isArray(realmRoles) ? realmRoles.filter((r): r is string => typeof r === 'string') : [],
+  }
+}
+
+export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
+  const internal = `${c.internalBase}/realms/${c.realm}/protocol/openid-connect`
+  return {
+    secret: c.authSecret,
+    trustHost: true,
+    basePath: '/auth',
+    session: { strategy: 'jwt', maxAge: 8 * 3600 },
+    providers: [
+      Keycloak({
+        id: PROVIDER_ID,
+        clientId: c.clientId,
+        clientSecret: c.clientSecret,
+        issuer: c.issuer,
+        authorization: {
+          url: `${c.issuer}/protocol/openid-connect/auth`,
+          params: { scope: 'openid email profile', acr_values: c.requiredAcr },
+        },
+        token: `${internal}/token`,
+        userinfo: `${internal}/userinfo`,
+        jwks_endpoint: `${internal}/certs`,
+      }),
+    ],
+    callbacks: {
+      jwt({ token, account }) {
+        if (account) {
+          const claims = claimsFromTokens(account.access_token, account.id_token)
+          token.opsIss = claims.iss
+          token.opsAcr = claims.acr
+          token.opsUid = claims.uid
+          token.opsEmail = claims.email
+          token.opsRoles = claims.roles
+        }
+        return token
+      },
+      session({ session, token }) {
+        ;(session as unknown as { claims: SessionClaims }).claims = {
+          iss: token.opsIss as string | undefined,
+          acr: token.opsAcr as string | undefined,
+          uid: token.opsUid as string | undefined,
+          email: (token.opsEmail as string | null | undefined) ?? null,
+          roles: (token.opsRoles as string[] | undefined) ?? [],
+        }
+        return session
+      },
+    },
+  }
+}
+
+/**
+ * Starts the authorization code flow at the ops realm and returns the
+ * Keycloak URL to redirect to (the state, PKCE and callback cookies are set on
+ * the event). The same request @auth/sveltekit's signIn builds, issued from
+ * the gate so an anonymous GET goes straight to the realm (302), and a step-up
+ * forces a fresh login (prompt=login) at loa2.
+ */
+export async function startSignIn(event: RequestEvent, config: SvelteKitAuthConfig, callbackUrl: string, stepUp: boolean, env: Record<string, string | undefined>): Promise<string> {
+  const headers = new Headers(event.request.headers)
+  const signInURL = createActionURL('signin', event.url.protocol, headers, env, config)
+  const params = new URLSearchParams(stepUp ? { prompt: 'login' } : {})
+  const url = `${signInURL}/${PROVIDER_ID}${params.size ? `?${params}` : ''}`
+  headers.set('Content-Type', 'application/x-www-form-urlencoded')
+  headers.delete('authorization')
+  const req = new Request(url, { method: 'POST', headers, body: new URLSearchParams({ callbackUrl }) })
+  // Server-initiated, exactly as @auth/sveltekit's own signIn (setEnvDefaults
+  // sets the same symbol): no form of the browser is being honoured here, and
+  // the callback itself is bound to this browser by the state and PKCE cookies.
+  const res = await Auth(req, { ...config, raw, skipCSRFCheck })
+  for (const cookie of res?.cookies ?? []) event.cookies.set(cookie.name, cookie.value, { path: '/', ...cookie.options })
+  if (!res?.redirect) throw new Error('Auth.js returned no authorization redirect')
+  return res.redirect
+}

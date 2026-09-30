@@ -1,0 +1,77 @@
+# compose/control-panel/standalone.yml — the ops control panel on a host WITHOUT
+# the pooled stack (TASK-043 section 11 (b), R29-I3: the netcup test env).
+#
+#   docker compose -p gremion-panel -f compose/control-panel/standalone.yml \
+#     --env-file <0600 env file, from standalone.env.tmpl> up -d
+#
+# One service. Published on the LOOPBACK only (127.0.0.1:${PANEL_PORT}); the
+# operator reaches it through `ssh -L 127.0.0.1:3043:127.0.0.1:3043 <host>`
+# (Q22). No Traefik route (traefik.enable=false; TRD-048 / TASK-118 forbid a
+# public one). It joins the existing Keycloak's network (PANEL_NETWORK, the
+# orchestrator re-measures it) to reach the internal OIDC endpoints. Secrets
+# are files mounted read-only; the root filesystem is read-only, every
+# capability dropped. It executes nothing (PANEL_EXECUTOR=none): "Neuer
+# Mandant" is disabled with its reason until TASK-038's re-init.
+#
+# Outside scripts/check-pooled-stack.mjs's projects by design (Q12).
+
+name: gremion-panel
+
+x-required-env:
+  image-tag: "${IMAGE_TAG:?IMAGE_TAG required}"
+  panel-network: "${PANEL_NETWORK:?PANEL_NETWORK required}"
+
+services:
+  control-panel:
+    image: ghcr.io/hello-n00del/gremion-control-panel:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: ../..
+      dockerfile: apps/control-panel/Dockerfile
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:${PANEL_PORT:-3043}:3000"
+    labels:
+      traefik.enable: "false"
+    environment:
+      ORIGIN: ${PANEL_ORIGIN:?PANEL_ORIGIN required}
+      PANEL_OIDC_ISSUER: ${PANEL_OIDC_ISSUER:?PANEL_OIDC_ISSUER required}
+      PANEL_OIDC_INTERNAL_BASE: ${PANEL_OIDC_INTERNAL_BASE:?PANEL_OIDC_INTERNAL_BASE required}
+      PANEL_OIDC_CLIENT_ID: control-panel
+      PANEL_OIDC_CLIENT_SECRET_FILE: /run/secrets/control-panel/client_secret
+      AUTH_SECRET_FILE: /run/secrets/control-panel/auth_secret
+      PANEL_REQUIRED_ACR: loa2
+      CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:?CONTROL_DATABASE_URL required}
+      PLATFORM_DATABASE_URL: ${PLATFORM_DATABASE_URL:-}
+      PANEL_EXECUTOR: ${PANEL_EXECUTOR:-none}
+      NODE_EXTRA_CA_CERTS: ${PANEL_NODE_EXTRA_CA_CERTS:-}
+    volumes:
+      - ${PANEL_SECRETS_DIR:?PANEL_SECRETS_DIR required}:/run/secrets/control-panel:ro
+    networks:
+      - panel
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    healthcheck:
+      # The process and a valid configuration only: never Keycloak or a database.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  panel:
+    external: true
+    name: ${PANEL_NETWORK:?PANEL_NETWORK required}

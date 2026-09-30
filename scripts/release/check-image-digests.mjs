@@ -82,6 +82,8 @@ export const PROJECT_ENV = Object.freeze({
   'docker-compose.app.dev.yml': 'infra/host/templates/env/app.env.tmpl',
   'infra/host/ops/docker-compose.yml': 'infra/host/templates/env/ops.env.tmpl',
   'infra/host/mail/docker-compose.yml': 'infra/host/templates/env/mail.env.tmpl',
+  // TASK-043 G11: the standalone control panel (a host without the pooled stack).
+  'compose/control-panel/standalone.yml': 'compose/control-panel/standalone.env.tmpl',
 })
 
 // <repo>[:tag]@sha256:<64 hex>, repo in docker reference grammar (lowercase

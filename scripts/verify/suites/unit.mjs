@@ -252,6 +252,11 @@ export const UNIT_PARTS = {
   provisioning: (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'provisioning'), testScript: 'test', root, label: '@gremion/provisioning vitest (test)' }),
   ],
+  // TASK-043 (G7): the ops control panel -- the TRD-048 gate through the real
+  // hook, the config contract, "Neuer Mandant" and the standalone compose render.
+  'control-panel': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'apps', 'control-panel'), testScript: 'test', root, label: 'control-panel vitest (test)' }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }
