@@ -32,6 +32,11 @@ const base = JSON.parse(
 const REALM = 'verein'
 const APEX = 'council.example'
 const HOST = 't2.council.example' // tenant subdomain host (D-ISSUER-HOST)
+/** TASK-043: the realm's own sender, kc-<token>@<platform domain>. */
+const SENDER = { platformDomain: 'platform.example', token: 'verein' }
+/** TASK-043 Q10: a seed-subject id and the template fixture usernames. */
+const SEED_SUBJECT = '00000000-0000-4000-8000-00000000d005'
+const FIXTURES = { ids: new Set([SEED_SUBJECT]), usernames: new Set(['dev.admin', 'anna.berger']) }
 
 /** The exact per-tenant gremion-ui URI set (apex host swapped for the tenant host,
  *  shapes preserved — never a wildcard), with localhost/foreign-host entries
@@ -54,6 +59,18 @@ function greenRoutes(): Record<string, unknown> {
       otpPolicyDigits: 6,
       otpPolicyPeriod: 30,
       attributes: { 'acr.loa.map': '{"loa1":1,"loa2":2}' },
+      // TASK-043 R-E5b: stamped by the host with the realm's OWN principal
+      // (Keycloak answers the set password as its mask).
+      smtpServer: {
+        host: `mail.${SENDER.platformDomain}`,
+        port: '587',
+        from: `kc-${SENDER.token}@${SENDER.platformDomain}`,
+        user: `kc-${SENDER.token}@${SENDER.platformDomain}`,
+        auth: 'true',
+        starttls: 'true',
+        ssl: 'false',
+        password: '**********',
+      },
     },
     // flows + subflows
     [`GET /admin/realms/${REALM}/authentication/flows`]: [{ alias: 'browser-stepup' }, { alias: 'browser' }],
@@ -123,7 +140,7 @@ function scriptedTransport(routes: Record<string, unknown>): {
   return { transport, calls }
 }
 
-const opts = { realm: REALM, tenantHost: HOST, apexDomain: APEX, base }
+const opts = { realm: REALM, tenantHost: HOST, apexDomain: APEX, base, sender: SENDER, fixtures: FIXTURES }
 
 describe('reconcileRealm — verify-only on a GREEN realm', () => {
   it('passes every named §4 contract check', async () => {
@@ -316,6 +333,69 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
   })
 })
 
+// TASK-043 TDD 11 / 12: the realm's own sender, and the narrowed fixture check.
+describe('(TASK-043) smtp-server and the narrowed no-fixture-users', () => {
+  const smtpOf = (routes: Record<string, unknown>) => (routes[`GET /admin/realms/${REALM}`] as any).smtpServer as Record<string, string>
+
+  it.each([
+    ['an unresolved sentinel', (s: Record<string, string>) => (s.user = '__SMTP_USER__'), /sentinel/],
+    ['the retired platform@ sender', (s: Record<string, string>) => ((s.user = 'platform@platform.example'), (s.from = 'platform@platform.example')), /retired shared sender/],
+    ['another customer\'s kc-* principal', (s: Record<string, string>) => (s.user = 'kc-other@platform.example'), /ANOTHER customer/],
+    ['a plaintext port', (s: Record<string, string>) => (s.port = '25'), /port/],
+    ['no STARTTLS', (s: Record<string, string>) => (s.starttls = 'false'), /starttls/],
+    ['no password', (s: Record<string, string>) => delete (s as any).password, /no password/],
+  ])('fails smtp-server ONLY on %s, marked repair: host', async (_what, mutate, re) => {
+    const routes = greenRoutes()
+    mutate(smtpOf(routes))
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const failed = report.checks.filter((c) => !c.ok)
+    expect(failed.map((c) => c.name)).toEqual(['smtp-server'])
+    expect(failed[0]!.detail).toMatch(re)
+    expect(failed[0]!.detail).toMatch(/repair: host/)
+    expect(report.repairHost).toEqual(['smtp-server'])
+    // in-process apply never touches the sender: no mutating call at all
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
+  it('a realm with no smtpServer at all fails smtp-server', async () => {
+    const routes = greenRoutes()
+    delete (routes[`GET /admin/realms/${REALM}`] as any).smtpServer
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.checks.find((c) => c.name === 'smtp-server')?.ok).toBe(false)
+  })
+
+  it('the first administrators (real users) pass no-fixture-users', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}/users?max=2000`] as any).push(
+      { id: '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33', username: 'it@verein.example' },
+      { id: '6c9f1b63-3a0a-4c57-8f4b-1c6d8a2b3e44', username: 'rat@verein.example' },
+    )
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.ok).toBe(true)
+  })
+
+  it('a user whose id is a seed subject fails no-fixture-users, whatever its username', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}/users?max=2000`] as any).push({ id: SEED_SUBJECT, username: 'harmless' })
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    const failed = report.checks.filter((c) => !c.ok)
+    expect(failed.map((c) => c.name)).toEqual(['no-fixture-users'])
+    expect(failed[0]!.detail).toMatch(/harmless/)
+  })
+
+  it('a template fixture username fails no-fixture-users', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}/users?max=2000`] as any).push({ id: '7da02c74-4b1b-4d68-9a5c-2d7e9b3c4f55', username: 'anna.berger' })
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.checks.filter((c) => !c.ok).map((c) => c.name)).toEqual(['no-fixture-users'])
+  })
+})
+
 // TASK-042 Q8 (RFC 9700 §2.1, exact redirect-URI matching): there is no
 // default-realm exception any more. Every realm, whatever its tenant's slug, is
 // held to the exact per-tenant URI set, so a localhost dev URI FAILS reconcile.
@@ -361,7 +441,7 @@ describe('(FIX3-B) reconcileRealm — realm segment is encodeURIComponent-encode
   // no query injection, no spaces) — matching KcProvisionApi.realmGet/realmReq.
   const EVIL_REALM = '../master?evil=1'
   const ENCODED = encodeURIComponent(EVIL_REALM) // '..%2Fmaster%3Fevil%3D1'
-  const evilOpts = { realm: EVIL_REALM, tenantHost: HOST, apexDomain: APEX, base }
+  const evilOpts = { realm: EVIL_REALM, tenantHost: HOST, apexDomain: APEX, base, sender: SENDER, fixtures: FIXTURES }
 
   it('every GET path encodes the realm segment (no raw `../`/`?`/space leaks through)', async () => {
     // Serve the realm rep + flows under the ENCODED key so verify doesn't NPE on a
@@ -566,12 +646,13 @@ describe('(C) isRealmBearing / REALM_BEARING_STATUSES', () => {
 })
 
 describe('(C) reconcileFleet — --all skips non-realm-bearing tenants and never aborts on one row', () => {
-  const okReport = (realm: string): ReconcileReport => ({ realm, ok: true, checks: [], applied: [] })
+  const okReport = (realm: string): ReconcileReport => ({ realm, ok: true, checks: [], applied: [], repairHost: [] })
   const failReport = (realm: string): ReconcileReport => ({
     realm,
     ok: false,
     checks: [{ name: 'ssl-required', ok: false, detail: 'drifted' }],
     applied: [],
+    repairHost: [],
   })
   const t = (slug: string, status: TenantStatus): FleetTenant => ({ slug, status, realmName: slug })
 
