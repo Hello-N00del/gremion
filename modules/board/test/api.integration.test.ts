@@ -12,6 +12,7 @@ import { createServer } from '../src/http/server.ts'
 import { buildApiRoutes } from '../src/http/routes.ts'
 import { runMigrations, createBoard, createStack, type Sql } from '../src/store/index.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { TENANT_A } from './support/tenants.ts'
 
 // -- fail-closed guard --------------------------------------------------------
 
@@ -30,7 +31,8 @@ function dbUrlFor(adminUrl: string, dbName: string): string {
 
 // -- HTTP helpers -------------------------------------------------------------
 
-const TENANT = { id: 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1', slug: 'boardtenant' }
+// A fixed canonical UUIDv7 fixture tenant: the guard refuses any other id shape.
+const TENANT = TENANT_A
 
 // org_unit_id / stack_id columns are UUID (mirrors the kernel 034 schema), so
 // fixtures MUST use real UUIDs, not readable slugs.

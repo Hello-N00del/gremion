@@ -10,8 +10,28 @@
  * Side-effect-free: both functions throw only when CALLED, never at import — so the
  * PG-free unit suite can import them for negative-proof tests without needing PG.
  */
+import { tenantModuleDbName } from '@gremion/tenant-store'
+import { FIXTURE_TENANTS } from './tenants.ts'
+
 const ENV_VAR = 'BOARD_TEST_PG_URL'
 const LABEL = 'board-test-guard'
+
+/**
+ * The only (tenant, board) databases a destructive suite may create, migrate,
+ * address or drop: t_<hex32>__board of the three fixed fixture tenants
+ * (R29-BOARD-STORE-K item 3). Anything else — another tenant's database, another
+ * module's, a kernel, platform or legacy name — is refused before any statement.
+ */
+export const SCRATCH_TENANT_DBS: ReadonlySet<string> = new Set(FIXTURE_TENANTS.map((t) => tenantModuleDbName(t.id, 'board')))
+
+export function assertScratchTenantDb(name: string): void {
+  if (typeof name !== 'string' || !SCRATCH_TENANT_DBS.has(name)) {
+    throw new Error(
+      `[${LABEL}] SAFETY VIOLATION: ${JSON.stringify(name)} is not one of the fixture tenant databases ` +
+        `(${[...SCRATCH_TENANT_DBS].join(', ')}) — refusing.`,
+    )
+  }
+}
 
 /**
  * Return the required, explicitly-configured throwaway Postgres URL.
