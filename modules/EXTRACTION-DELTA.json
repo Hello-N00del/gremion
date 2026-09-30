@@ -39,7 +39,7 @@
       "path": "modules/board/src/http/routes.ts",
       "reason": "R29-BOARD-STORE-K A5/A6/A8: StoreFn answers Sql | Refusal, create routes, foreign-id and query-time SQLSTATE mapping",
       "owner": "TASK-152",
-      "blob": "f7a02daf157a3b8220a6e8063de86bad3052de15"
+      "blob": "3711920491aa170635c56ac89c8e1244ff808dbb"
     },
     {
       "path": "modules/board/src/index.ts",
@@ -69,7 +69,7 @@
       "path": "modules/board/test/api.integration.test.ts",
       "reason": "R29-BOARD-STORE-K: builds the leaf through buildApp on a provisioned fixture tenant database; create-route and foreign-id cases",
       "owner": "TASK-152",
-      "blob": "5e083e972bdca41df57727c0a7ecd9a1530f6fab"
+      "blob": "66b62f8250e2a959c5f8c2fceae853ffc02e758f"
     },
     {
       "path": "modules/board/test/backfill.integration.test.ts",
@@ -93,7 +93,7 @@
       "path": "modules/board/test/isolation.integration.test.ts",
       "reason": "added by R29-BOARD-STORE-K A3/A4/A7: unprovisioned, schema behind, query-time drop and the two-tenant isolation run",
       "owner": "TASK-152",
-      "blob": "510045a46f93e74162575d38547881135b6395ba"
+      "blob": "263cb8060b4c06c9d93dc1606d8d94f614c2df97"
     },
     {
       "path": "modules/board/test/isolation/api.ts",
@@ -105,7 +105,7 @@
       "path": "modules/board/test/isolation/case.test.ts",
       "reason": "added by R29-BOARD-STORE-K A9: the case contract and harness rules, PG-free",
       "owner": "TASK-152",
-      "blob": "a957f6370d24f17e034d756dd8e634630197fa1c"
+      "blob": "c23c51e1ba8f96e1a02ad969d6526c4faea14b93"
     },
     {
       "path": "modules/board/test/isolation/case.ts",
@@ -117,7 +117,7 @@
       "path": "modules/board/test/isolation/harness.ts",
       "reason": "added by R29-BOARD-STORE-K A7: minimal runner with TASK-044 s1 rules (superseded by test/isolation/tenant/ once it exists)",
       "owner": "TASK-152",
-      "blob": "a71ec150176b1c112a5e08fa512530655fcb2015"
+      "blob": "24c24e7bce4c623e687a3acfb21bea7d55b43911"
     },
     {
       "path": "modules/board/test/isolation/leaf-api.ts",
@@ -159,7 +159,7 @@
       "path": "modules/board/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major, TASK-200): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string; then R29-BOARD-STORE-K item 3: SCRATCH_TENANT_DBS + assertScratchTenantDb",
       "owner": "TASK-152",
-      "blob": "2d3e281e69d9612d5841dea2cef643e725ec1d05"
+      "blob": "059eadbd563316d04d5ccd00030cd3bdc7ac3aba"
     },
     {
       "path": "modules/board/test/support/route-calls.ts",
@@ -183,7 +183,7 @@
       "path": "modules/board/vitest.integration.config.ts",
       "reason": "R29-BOARD-STORE-K: Vitest 4 dropped test.poolOptions; fileParallelism false keeps the suites serial on the shared scratch server",
       "owner": "TASK-152",
-      "blob": "7bf6d86d3b34ecdb0d427ecf1ebc209fd2ebc2d5"
+      "blob": "1b05bc246444823bb8dece7428c4560d72119ed8"
     },
     {
       "path": "modules/calendar/test/kernel-client.test.ts",
