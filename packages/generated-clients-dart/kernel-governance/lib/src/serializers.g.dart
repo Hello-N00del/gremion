@@ -33,6 +33,9 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(
           ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response.serializer)
       ..add(ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequest.serializer)
+      ..add(
+          ApiGovernanceCommitteesIdRolesRoleIdRevokePost200Response.serializer)
+      ..add(ApiGovernanceCommitteesIdRolesRoleIdRevokePostRequest.serializer)
       ..add(ApiGovernanceCommitteesPost201Response.serializer)
       ..add(ApiGovernanceCommitteesPost201ResponseData.serializer)
       ..add(ApiGovernanceCommitteesPostRequest.serializer)

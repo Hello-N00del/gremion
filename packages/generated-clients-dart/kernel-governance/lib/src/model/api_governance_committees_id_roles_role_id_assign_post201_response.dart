@@ -14,6 +14,7 @@ part 'api_governance_committees_id_roles_role_id_assign_post201_response.g.dart'
 /// Properties:
 /// * [success] 
 /// * [data] 
+/// * [groupsReconciled] - false when the assignment was stored but the auto-managed Keycloak groups of the incoming or outgoing holder could not be reconciled (the admin must check them)
 @BuiltValue()
 abstract class ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response implements Built<ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response, ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseBuilder> {
   @BuiltValueField(wireName: r'success')
@@ -21,6 +22,10 @@ abstract class ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response impleme
 
   @BuiltValueField(wireName: r'data')
   RoleAssignment get data;
+
+  /// false when the assignment was stored but the auto-managed Keycloak groups of the incoming or outgoing holder could not be reconciled (the admin must check them)
+  @BuiltValueField(wireName: r'groupsReconciled')
+  bool? get groupsReconciled;
 
   ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response._();
 
@@ -55,6 +60,13 @@ class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseSerializer impl
       object.data,
       specifiedType: const FullType(RoleAssignment),
     );
+    if (object.groupsReconciled != null) {
+      yield r'groupsReconciled';
+      yield serializers.serialize(
+        object.groupsReconciled,
+        specifiedType: const FullType(bool),
+      );
+    }
   }
 
   @override
@@ -91,6 +103,13 @@ class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseSerializer impl
             specifiedType: const FullType(RoleAssignment),
           ) as RoleAssignment;
           result.data.replace(valueDes);
+          break;
+        case r'groupsReconciled':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(bool),
+          ) as bool;
+          result.groupsReconciled = valueDes;
           break;
         default:
           unhandled.add(key);
