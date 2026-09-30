@@ -228,21 +228,23 @@ compose_file_basenames() {
 # split would add the app pins to the state project (phantom app services, and
 # legal/vector/fallback resolving by tag) or the state pins to a colour: the
 # repo declares one layering and the host would run another. Refused, exit 2,
-# before anything is verified or pulled; re-render the env files from
-# infra/host/templates/env.
+# before anything is verified or pulled. The remedy is the one-line edit of
+# docs/ops/runbook/upgrade.md step 2 (the COMPOSE_FILE line only), never a
+# re-render: gremion-init-secrets --force regenerates every live secret.
 require_split_pins_env() {
     local env="$ROOT/etc/env/state.env" names c
+    local fix="edit only its COMPOSE_FILE line as docs/ops/runbook/upgrade.md step 2 says; never gremion-init-secrets --force on a live host"
     names="$(compose_file_basenames "$env")"
     grep -qxF docker-compose.state-pins.yml <<< "$names" \
-        || die "stale $env: COMPOSE_FILE does not name docker-compose.state-pins.yml (re-render it from templates/env/state.env.tmpl)" 2
+        || die "stale $env: COMPOSE_FILE does not name docker-compose.state-pins.yml ($fix)" 2
     ! grep -qxF docker-compose.pins.yml <<< "$names" \
-        || die "stale $env: COMPOSE_FILE names the app layer docker-compose.pins.yml; the state project reads docker-compose.state-pins.yml only" 2
+        || die "stale $env: COMPOSE_FILE names the app layer docker-compose.pins.yml; the state project reads docker-compose.state-pins.yml only ($fix)" 2
     for c in blue green; do
         env="$ROOT/etc/env/app-${c}.env"
         [[ -e "$env" ]] || continue
         names="$(compose_file_basenames "$env")"
         ! grep -qxF docker-compose.state-pins.yml <<< "$names" \
-            || die "stale $env: COMPOSE_FILE names the state layer docker-compose.state-pins.yml" 2
+            || die "stale $env: COMPOSE_FILE names the state layer docker-compose.state-pins.yml ($fix)" 2
     done
     return 0
 }

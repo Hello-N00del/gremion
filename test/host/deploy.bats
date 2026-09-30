@@ -69,7 +69,12 @@ seed_trust_anchor() {
     # canonical pins matching a pattern (a pin compose does not show).
     cat > "${GREMION_ROOT}/.resolve-images" <<'RESOLVE'
 #!/usr/bin/env bash
-cat "$FIXTURE_RELEASE/docker-compose.pins.yml" "$FIXTURE_RELEASE/docker-compose.state-pins.yml" 2>/dev/null \
+# A missing layer fails here the way compose fails on a missing COMPOSE_FILE
+# entry: never a quietly smaller image set (R28 review LOW).
+for f in docker-compose.pins.yml docker-compose.state-pins.yml; do
+    [ -r "$FIXTURE_RELEASE/$f" ] || { echo "resolve-images shim: $FIXTURE_RELEASE/$f missing" >&2; exit 1; }
+done
+cat "$FIXTURE_RELEASE/docker-compose.pins.yml" "$FIXTURE_RELEASE/docker-compose.state-pins.yml" \
     | grep -E '^[[:space:]]*image:' \
     | sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//' \
     | { if [ -n "${RESOLVE_OMIT:-}" ]; then grep -v -- "$RESOLVE_OMIT" || true; else cat; fi; }
@@ -1269,6 +1274,11 @@ exit 0
         run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
         [ "$status" -eq 2 ] || { echo "accepted state COMPOSE_FILE=$bad"; echo "$output"; return 1; }
         [[ "$output" == *"state.env"*"docker-compose.state-pins.yml"* ]]
+        # R28 review MEDIUM: the refusal points at the one-line upgrade edit,
+        # never at a template re-render (gremion-init-secrets --force rotates
+        # every live secret on a running host)
+        [[ "$output" == *"docs/ops/runbook/upgrade.md"* ]] || { echo "$output"; return 1; }
+        [[ "$output" != *"re-render"* ]] || { echo "$output"; return 1; }
         [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
         [ "$(grep -c '^cosign' "$SHIM_LOG")" -eq 0 ]
     done
@@ -1280,6 +1290,7 @@ exit 0
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 2 ]
     [[ "$output" == *"app-green.env"*"docker-compose.state-pins.yml"* ]]
+    [[ "$output" == *"docs/ops/runbook/upgrade.md"* ]] || { echo "$output"; return 1; }
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
 
