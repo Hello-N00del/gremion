@@ -1,7 +1,7 @@
 // No seed in clear (TRD-442): a plaintext seed force-added under secrets/nats
 // fails check-sops; every path this package and its proof write is ignored by
 // git; no *.nk file is tracked.
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
@@ -31,8 +31,13 @@ describe('no seed in clear', () => {
     const f = 'secrets/nats/finance/tenant_x.nk'
     mkdirSync(path.join(TREE, 'secrets/nats/finance'), { recursive: true })
     writeFileSync(path.join(TREE, f), `${new TextDecoder().decode(createUser().getSeed())}\n`, { mode: 0o600 })
-    // the ignore rule holds: a plain add refuses it...
-    expect(() => git(TREE, 'add', f)).toThrow(/Command failed:.* add secrets\/nats\/finance\/tenant_x\.nk/)
+    // the ignore rule holds: a plain add refuses it BECAUSE it is ignored
+    // (git's own reason on stderr, not merely a failed command -- a missing
+    // file or a broken repo fails too, and proves nothing about the rule)...
+    const plain = spawnSync('git', ['-C', TREE, 'add', f], { encoding: 'utf8' })
+    expect(plain.status, plain.stderr).toBe(1)
+    expect(plain.stderr).toMatch(/paths are ignored by one of your \.gitignore files:\s+secrets\/?/)
+    expect(git(TREE, 'ls-files', f).trim(), 'the plain add staged the seed').toBe('')
     // ...a force-add is what check-sops must catch
     git(TREE, 'add', '-f', f)
     const after = runSopsCheck(TREE) as { problems: Problem[]; secretFiles: number }
