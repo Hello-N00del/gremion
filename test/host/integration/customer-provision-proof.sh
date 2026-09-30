@@ -407,8 +407,54 @@ accounts() { # the rendered NATS accounts file(s)
 dbs_kernel() { q postgres "SELECT datname FROM pg_database WHERE datname LIKE 't\\_%' ORDER BY 1"; }
 dbs_module() { qm "$1" "SELECT datname FROM pg_database WHERE datname LIKE 't\\_%' ORDER BY 1"; }
 edge_status() { # <host> -- the tenant host through the edge Traefik
-    local port; port="$(penv EDGE_HTTPS_PORT)"; port="${port:-443}"
-    curl -ksS -o /dev/null -w '%{http_code}' --max-time 20 --resolve "$1:${port}:127.0.0.1" "https://$1:${port}/" 2>/dev/null || echo 000
+    # ONE three-digit code, 000 for no answer. (`curl ... || echo 000` printed
+    # "404000" or "000000" whenever curl exited non-zero after -w, so a
+    # comparison against 000 could never match: r2 guard-efficacy finding.)
+    local port c; port="$(penv EDGE_HTTPS_PORT)"; port="${port:-443}"
+    c="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 20 --resolve "$1:${port}:127.0.0.1" "https://$1:${port}/" 2>/dev/null)" || true
+    [[ "$c" =~ ^[0-9]{3}$ ]] || c=000
+    printf '%s' "$c"
+}
+# The POSITIVE shape of a host gremion-ui serves (review C-HIGH, r2;
+# docs/runbooks/tenant-edge.md: "a bare Traefik 404 is a FALSE GREEN"): an
+# anonymous GET / is redirected (302/303) into the app's sign-in
+# (/auth/login?callbackUrl=..., relative or on the same host), or answers 200
+# carrying gremion-ui's Content-Security-Policy. 404 (router not loaded, host
+# unmatched), 000 (no answer: edge down, TLS or resolve failure), 503 and
+# anything else are NOT served. Sets EDGE_SHAPE for the message; returns 0
+# only when served. ONE helper for create, resume and Y-untouched.
+EDGE_SHAPE=""
+edge_served() { # <host>
+    local port hfile code loc csp host_re
+    port="$(penv EDGE_HTTPS_PORT)"; port="${port:-443}"
+    hfile="$OUT/ledger/edge-headers.$$.txt"
+    # the code curl received (it may still exit non-zero on an unclean close); 000 = no answer
+    code="$(curl -ksS -o /dev/null -D "$hfile" -w '%{http_code}' --max-time 20 --resolve "$1:${port}:127.0.0.1" "https://$1:${port}/" 2>/dev/null)" || true
+    [[ "$code" =~ ^[0-9]{3}$ ]] || code=000
+    loc="$(grep -i '^location:' "$hfile" 2>/dev/null | tail -n1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')" || loc=""
+    csp="$(grep -ci "^content-security-policy: default-src 'self'; " "$hfile" 2>/dev/null)" || csp=0
+    rm -f "$hfile"
+    EDGE_SHAPE="${code} ${loc:-no-Location}"
+    host_re="${1//./\\.}"
+    case "$code" in
+        302|303) [[ "$loc" =~ ^(https://${host_re}(:[0-9]+)?)?/auth/login(\?|$) ]] ;;
+        200) [[ "${csp:-0}" -ge 1 ]] ;;
+        *) return 1 ;;
+    esac
+}
+# gremion-vendor-mail principals list for a token, as tenant() runs the host
+# tools (review C MEDIUM, r2): prints the CLI's own KC-PRINCIPALS count and
+# returns 0 ONLY when the list exited 0 and printed that summary line -- a
+# failing list (no mail.env, wrong root, docker error) is never "0 principals".
+principal_count() { # <token>
+    local out rc=0 n
+    out="$(MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
+        bash "$ROOT/infra/host/bin/gremion-vendor-mail" principals list --tenant "$1" 2>"$OUT/ledger/principals-list.err")" || rc=$?
+    # diagnostics go to stderr: stdout is the count the caller captures
+    (( rc == 0 )) || { info "principals list --tenant $1 exited ${rc}: $(tail -n 3 "$OUT/ledger/principals-list.err" | tr '\n' ' ')" >&2; return 1; }
+    n="$(tr -d '\r' <<< "$out" | sed -n 's/^KC-PRINCIPALS: \([0-9][0-9]*\)$/\1/p' | tail -n1)"
+    [[ -n "$n" ]] || { info "principals list --tenant $1 printed no KC-PRINCIPALS summary" >&2; return 1; }
+    printf '%s' "$n"
 }
 customer_id() { q control "SELECT id FROM tenant WHERE slug = '$1'"; }
 host_of() { printf 'rat.%s.%s' "$1" "$(penv PLATFORM_DOMAIN)"; }
@@ -499,7 +545,8 @@ phase_customer_create() {
         ok "customer-create: the broker account holds kernel and calendar users, none for vault (no flow, Q4)"
     else bad "customer-create: the broker account's users are not kernel+calendar"; fi
     if grep -q "tenant-${X}-kc:" "$(croot)/etc/edge/tenant-${X}.yml" 2>/dev/null; then ok "customer-create: etc/edge/tenant-${X}.yml carries the realm router (Q16, Q17)"; else bad "customer-create: no router file with the realm router"; fi
-    if [[ "$(edge_status "$(host_of "$X")")" != 503 && "$(edge_status "$(host_of "$X")")" != 000 ]]; then ok "customer-create: $(host_of "$X") is served through the edge"; else bad "customer-create: $(host_of "$X") is not served"; fi
+    if edge_served "$(host_of "$X")"; then ok "customer-create: $(host_of "$X") is served by gremion-ui through the edge (${EDGE_SHAPE})"
+    else bad "customer-create: $(host_of "$X") is not served (${EDGE_SHAPE}; want 302/303 into /auth/login or 200 with gremion-ui's CSP)"; fi
 }
 
 phase_customer_rerun() {
@@ -512,7 +559,8 @@ phase_customer_rerun() {
         || { tail -n 25 "$OUT/ledger/rerun-x.log" >&2; bad "customer-rerun: the second create failed"; return; }
     after="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
     if [[ "$before" == "$after" ]]; then ok "customer-rerun: the ledger is unchanged (${after} rows)"; else bad "customer-rerun: the ledger grew ${before} -> ${after}"; fi
-    b="$(grep -h '^{"phase":"b"' "$OUT/ledger/rerun-x.log" | tail -n1)"
+    # `|| true`: a missing phase-B line must reach the bad() branch below, not abort under errexit/pipefail
+    b="$({ grep -h '^{"phase":"b"' "$OUT/ledger/rerun-x.log" || true; } | tail -n1)"
     if [[ "$(jq -c '[.reloaded, .ran]' <<< "${b:-{\}}")" == '[false,[]]' ]]; then ok "customer-rerun: phase B ran nothing and did not reload the broker"; else bad "customer-rerun: phase B was ${b:-silent}"; fi
     if [[ "$(grep -h '^{"phase":"a"' "$OUT/ledger/rerun-x.log" | tail -n1 | jq -c '.ran')" == '[]' ]]; then ok "customer-rerun: phase A ran nothing"; else bad "customer-rerun: phase A ran steps"; fi
 }
@@ -524,8 +572,11 @@ phase_customer_suspend() {
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == false ]]; then ok "customer-suspend: realm ${X} disabled (no sign-in, no token)"; else bad "customer-suspend: realm still enabled"; fi
     if [[ "$(edge_status "$(host_of "$X")")" == 503 ]]; then ok "customer-suspend: $(host_of "$X") answers 503 (no tenant content)"; else bad "customer-suspend: $(host_of "$X") answers $(edge_status "$(host_of "$X")")"; fi
     if grep -q '# calendar@' <<< "$(accounts)"; then bad "customer-suspend: the calendar broker user is still rendered"; else ok "customer-suspend: the module broker users are evicted"; fi
-    if [[ "$(bash "$ROOT/infra/host/bin/gremion-vendor-mail" principals list --tenant "$XT" 2>/dev/null | grep -c "kc-${XT}@" || true)" == 0 ]]; then ok "customer-suspend: the principal kc-${XT}@ is revoked (R-E5a)"; else bad "customer-suspend: the principal still exists"; fi
-    if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${Y}'")" == active && "$(edge_status "$(host_of "$Y")")" != 503 ]]; then ok "customer-suspend: ${Y} is untouched"; else bad "customer-suspend: ${Y} was affected"; fi
+    local n
+    if n="$(principal_count "$XT")" && [[ "$n" == 0 ]]; then ok "customer-suspend: the principal kc-${XT}@ is revoked (R-E5a; principals list rc 0, KC-PRINCIPALS: 0)"
+    else bad "customer-suspend: the principal is not provably revoked (principals list: ${n:-failed})"; fi
+    if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${Y}'")" == active ]] && edge_served "$(host_of "$Y")"; then ok "customer-suspend: ${Y} is untouched (active, served: ${EDGE_SHAPE})"
+    else bad "customer-suspend: ${Y} was affected (${EDGE_SHAPE})"; fi
 }
 
 phase_customer_resume() {
@@ -533,9 +584,12 @@ phase_customer_resume() {
     tenant resume "$X" > "$OUT/ledger/resume-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/resume-x.log" >&2; bad "customer-resume: resume failed"; return; }
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == active ]]; then ok "customer-resume: status active"; else bad "customer-resume: status"; fi
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == true ]]; then ok "customer-resume: realm enabled"; else bad "customer-resume: realm still disabled"; fi
-    if [[ "$(edge_status "$(host_of "$X")")" != 503 ]]; then ok "customer-resume: $(host_of "$X") serves again"; else bad "customer-resume: still 503"; fi
+    if edge_served "$(host_of "$X")"; then ok "customer-resume: $(host_of "$X") is served by gremion-ui again (${EDGE_SHAPE})"
+    else bad "customer-resume: $(host_of "$X") is not served (${EDGE_SHAPE})"; fi
     if grep -q '# calendar@' <<< "$(accounts)"; then ok "customer-resume: the calendar broker user is back"; else bad "customer-resume: no calendar broker user"; fi
-    if [[ "$(bash "$ROOT/infra/host/bin/gremion-vendor-mail" principals list --tenant "$XT" 2>/dev/null | grep -c "kc-${XT}@" || true)" == 1 ]]; then ok "customer-resume: a fresh principal kc-${XT}@ exists"; else bad "customer-resume: no principal"; fi
+    local n
+    if n="$(principal_count "$XT")" && [[ "$n" == 1 ]]; then ok "customer-resume: a fresh principal kc-${XT}@ exists (KC-PRINCIPALS: 1)"
+    else bad "customer-resume: no provable principal (principals list: ${n:-failed})"; fi
 }
 
 phase_customer_reconcile() {
