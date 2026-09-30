@@ -22,6 +22,11 @@ const CONTRACT: Record<string, string> = {
   DATABASE_URL: 'postgres://gremion:unit@pgbouncer-unitstack:6432/gremion',
   CONTROL_DATABASE_URL: 'postgres://control:unit@postgres-unitstack:5432/control',
   NATS_URL: 'nats://nats-unitstack:4222',
+  // review B2-HIGH (r2): these were read only AFTER the platform pool opened,
+  // so a missing one leaked the pool and hung the one-shot instead of exit 2
+  PLATFORM_DOMAIN: 'platform.example',
+  EDGE_BIND_IP: '192.0.2.10',
+  TENANT_PROVISIONER_SECRET_FILE: FIXTURE,
 }
 
 const FLAGS = [
@@ -79,6 +84,25 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
     const r = run(['phase-a', ...FLAGS], { ...CONTRACT, PLATFORM_DATABASE_URL: 'postgres://gremion_platform:unit@pgbouncer-unitstack:6432/gremion_platform' })
     expect(r.status, r.out).toBe(2)
     expect(r.out).toMatch(/PLATFORM_DATABASE_URL points at the pooler/)
+  }, 90_000)
+
+  it.each([
+    ['suspend', 'PLATFORM_DOMAIN', ['suspend', 'musterstadt', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+    ['resume', 'TENANT_EXPORT_DIR', ['resume', 'musterstadt', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+    ['record-step', 'TENANT_PROVISIONER_SECRET_FILE', ['record-step', 'musterstadt', 'mail_principal_issued', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+  ])('%s without %s: exit 2 naming it, before the platform pool opens (no hang, no connection error)', (_verb, missing, args) => {
+    const env = { ...CONTRACT }
+    delete env[missing as string]
+    const r = run(args as string[], env)
+    expect(r.status, r.out).toBe(2)
+    expect(r.out).toContain(missing as string)
+    expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
+  }, 90_000)
+
+  it('suspend with an operator that is not a uuid is refused (exit 2)', () => {
+    const r = run(['suspend', 'musterstadt', '--operator', 'root'], CONTRACT)
+    expect(r.status, r.out).toBe(2)
+    expect(r.out).toMatch(/--operator .*uuid/)
   }, 90_000)
 
   it('the retired provision verb names its replacement', () => {

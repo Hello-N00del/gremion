@@ -128,7 +128,7 @@ function modulePostgresIds(catalogue: readonly LifecycleModule[]): string[] {
 const envId = (id: string) => id.toUpperCase().replace(/-/g, '_')
 
 /** Every variable phase A/B and init read, checked BEFORE anything connects. */
-function assertCreateEnv(catalogue: readonly LifecycleModule[]): void {
+function assertCreateEnv(catalogue: readonly LifecycleModule[], opts: { needEdge: boolean }): void {
   directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL'))
   directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))
   for (const id of modulePostgresIds(catalogue)) {
@@ -141,6 +141,9 @@ function assertCreateEnv(catalogue: readonly LifecycleModule[]): void {
   reqEnv('DATABASE_URL')
   reqEnv('CONTROL_DATABASE_URL')
   reqEnv('NATS_URL')
+  reqEnv('PLATFORM_DOMAIN')
+  if (opts.needEdge) edgeAddresses()
+  readProvisionerCreds()
 }
 
 // ── the catalogue (modules/*/module.json, loadCatalogue's rule) ──────────────
@@ -196,9 +199,11 @@ const PROVISIONER_SECRET_FILE = process.env.TENANT_PROVISIONER_SECRET_FILE ?? jo
 
 function readProvisionerCreds(): { clientId: string; clientSecret: string } {
   if (!existsSync(PROVISIONER_SECRET_FILE)) {
-    throw new UsageError(`provisioner credential file ${PROVISIONER_SECRET_FILE} not found — run \`bootstrap-provisioner\` once first`)
+    throw new UsageError(`provisioner credential file ${PROVISIONER_SECRET_FILE} (TENANT_PROVISIONER_SECRET_FILE) not found — run \`bootstrap-provisioner\` once first`)
   }
-  return { clientId: process.env.TENANT_PROVISIONER_CLIENT_ID ?? 'tenant-provisioner', clientSecret: readFileSync(PROVISIONER_SECRET_FILE, 'utf-8').trim() }
+  const clientSecret = readFileSync(PROVISIONER_SECRET_FILE, 'utf-8').trim()
+  if (!clientSecret) throw new UsageError(`provisioner credential file ${PROVISIONER_SECRET_FILE} (TENANT_PROVISIONER_SECRET_FILE) is empty`)
+  return { clientId: process.env.TENANT_PROVISIONER_CLIENT_ID ?? 'tenant-provisioner', clientSecret }
 }
 
 async function kcToken(base: string, form: Record<string, string>): Promise<string> {
@@ -207,7 +212,18 @@ async function kcToken(base: string, form: Record<string, string>): Promise<stri
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(form).toString(),
   })
-  if (!res.ok) throw new Error(`Keycloak token fetch failed: ${res.status}`)
+  if (!res.ok) {
+    // The OAuth error fields carry no secret (invalid_client, unauthorized_client, ...)
+    // and tell a wrong provisioner secret from a missing SA or a disabled client.
+    let detail = ''
+    try {
+      const body = (await res.json()) as { error?: unknown; error_description?: unknown }
+      detail = [body.error, body.error_description].filter((x) => typeof x === 'string' && x).join(': ')
+    } catch {
+      detail = 'no OAuth error body'
+    }
+    throw new Error(`Keycloak token fetch failed: ${res.status}${detail ? ` (${detail})` : ''}`)
+  }
   return ((await res.json()) as { access_token: string }).access_token
 }
 
@@ -235,8 +251,7 @@ function transport(base: string, token: () => Promise<string>, refreshOnDenied: 
   }
 }
 
-function provisionerKc(): KcProvisionApi {
-  const creds = readProvisionerCreds()
+function provisionerKc(creds: { clientId: string; clientSecret: string } = readProvisionerCreds()): KcProvisionApi {
   return new KcProvisionApi(transport(kcAdminBase(), () => kcToken(kcAdminBase(), { grant_type: 'client_credentials', client_id: creds.clientId, client_secret: creds.clientSecret }), true))
 }
 function adminKcOrUndefined(): KcProvisionApi | undefined {
@@ -259,6 +274,7 @@ function reqFlag(name: string): string {
   if (!v) throw new UsageError(`${name} is required`)
   return v
 }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** Flags that take no value; every other --flag consumes the next argument. */
 const BOOLEAN_FLAGS = new Set(['--verify-only', '--all', '--realm-only', '--no-mail'])
 function positional(index = 0): string | undefined {
@@ -329,80 +345,105 @@ function moduleServerFor(adminUrl: string): ModuleServer & { close(): Promise<vo
   }
 }
 
-async function liveDeps(opts: { configFile?: string; bodyName?: string } = {}): Promise<Live> {
-  const catalogue = loadModules()
-  const platform = postgres(directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')), { max: 3, onnotice: () => {}, connect_timeout: 15 })
-  await assertPlatform(platform)
-  const servers = new Map<string, ReturnType<typeof moduleServerFor>>()
-  const serviceId = (service: string) => service.replace(/-postgres$/, '')
-  const kc = provisionerKc()
-  const adminKc = adminKcOrUndefined()
-  const adapters = customerAdapters({
+/**
+ * Every environment value, file and credential the live verbs read, resolved
+ * WITHOUT connecting to anything (review B2-HIGH, r2): a missing one is a named
+ * exit-2 failure before the platform pool exists, so no open socket can keep
+ * the one-shot alive after the error. `needEdge`: only phase A binds a domain
+ * (the DNS pre-flight); suspend/resume/record-step never read EDGE_BIND_IP.
+ */
+function resolveLiveEnv(needEdge: boolean) {
+  return {
+    platformUrl: directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')),
+    platformDomain: reqEnv('PLATFORM_DOMAIN'),
     apexDomain: apexDomain(),
-    kcInternalBase: kcInternalBase(),
-    tenantSecretsDir: tenantSecretsDir(),
     runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
     kernelAdminUrl: directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
-    configFile: opts.configFile ?? '/nonexistent',
-    bodyName: opts.bodyName ?? 'Rat',
-    edge: edgeAddresses(),
-    storageRoot: process.env.GREMION_STORAGE_ROOT ?? null,
-    manifests: MODULE_MANIFESTS,
-    loadBaseRealm: loadBaseRealmDoc,
-    genSecret,
-    writeSecretFile,
-    writeConfigFile,
-    makePrivateDir,
-    kc,
-    ...(adminKc ? { adminKc } : {}),
-    log,
-  })
-  const deps: ProvisioningDeps = {
-    platformDomain: reqEnv('PLATFORM_DOMAIN'),
-    ledger: pgLedger(platform),
-    attestations: pgAttestations(platform),
-    modules: pgModules({
-      platform,
-      catalogue,
-      lifecycle: {
-        server: (service) => {
-          const id = serviceId(service)
-          let s = servers.get(id)
-          if (!s) {
-            s = moduleServerFor(directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)))
-            servers.set(id, s)
-          }
-          return s
-        },
-        secrets: {
-          appPassword: (moduleId) => {
-            const m = catalogue.find((x) => x.id === moduleId)
-            const svc = m?.moduleJson.runtime.database?.postgresService
-            if (!svc) throw new Error(`module ${moduleId} declares no database`)
-            return reqFileEnv(`MODULE_APP_PASSWORD_${envId(serviceId(svc))}_FILE`)
-          },
-        },
-        exporter: {
-          dump: () => Promise.reject(new Error('tenant-create never disables a module (disable is not a create verb)')),
-          list: () => Promise.reject(new Error('tenant-create never disables a module')),
-        },
-        exportDir: reqEnv('TENANT_EXPORT_DIR'),
-        log,
-      },
-    }),
-    ...adapters,
-    log,
-  }
-  return {
-    deps,
-    async close() {
-      await Promise.all([...servers.values()].map((s) => s.close()))
-      await platform.end({ timeout: 5 })
-    },
+    exportDir: reqEnv('TENANT_EXPORT_DIR'),
+    edge: needEdge ? edgeAddresses() : null,
+    creds: readProvisionerCreds(),
   }
 }
 
-async function withLive<T>(opts: { configFile?: string; bodyName?: string }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
+async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean } = {}): Promise<Live> {
+  const catalogue = loadModules()
+  const env = resolveLiveEnv(opts.needEdge ?? false)
+  const kc = provisionerKc(env.creds)
+  const adminKc = adminKcOrUndefined()
+  const servers = new Map<string, ReturnType<typeof moduleServerFor>>()
+  // Opened only after every value above resolved; ended on ANY later throw.
+  const platform = postgres(env.platformUrl, { max: 3, onnotice: () => {}, connect_timeout: 15 })
+  const close = async () => {
+    await Promise.all([...servers.values()].map((s) => s.close()))
+    await platform.end({ timeout: 5 })
+  }
+  try {
+    await assertPlatform(platform)
+    const serviceId = (service: string) => service.replace(/-postgres$/, '')
+    const adapters = customerAdapters({
+      apexDomain: env.apexDomain,
+      kcInternalBase: kcInternalBase(),
+      tenantSecretsDir: tenantSecretsDir(),
+      runtimeDatabaseUrl: env.runtimeDatabaseUrl,
+      kernelAdminUrl: env.kernelAdminUrl,
+      configFile: opts.configFile ?? '/nonexistent',
+      bodyName: opts.bodyName ?? 'Rat',
+      edge: env.edge,
+      storageRoot: process.env.GREMION_STORAGE_ROOT ?? null,
+      manifests: MODULE_MANIFESTS,
+      loadBaseRealm: loadBaseRealmDoc,
+      genSecret,
+      writeSecretFile,
+      writeConfigFile,
+      makePrivateDir,
+      kc,
+      ...(adminKc ? { adminKc } : {}),
+      log,
+    })
+    const deps: ProvisioningDeps = {
+      platformDomain: env.platformDomain,
+      ledger: pgLedger(platform),
+      attestations: pgAttestations(platform),
+      modules: pgModules({
+        platform,
+        catalogue,
+        lifecycle: {
+          server: (service) => {
+            const id = serviceId(service)
+            let s = servers.get(id)
+            if (!s) {
+              s = moduleServerFor(directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)))
+              servers.set(id, s)
+            }
+            return s
+          },
+          secrets: {
+            appPassword: (moduleId) => {
+              const m = catalogue.find((x) => x.id === moduleId)
+              const svc = m?.moduleJson.runtime.database?.postgresService
+              if (!svc) throw new Error(`module ${moduleId} declares no database`)
+              return reqFileEnv(`MODULE_APP_PASSWORD_${envId(serviceId(svc))}_FILE`)
+            },
+          },
+          exporter: {
+            dump: () => Promise.reject(new Error('tenant-create never disables a module (disable is not a create verb)')),
+            list: () => Promise.reject(new Error('tenant-create never disables a module')),
+          },
+          exportDir: env.exportDir,
+          log,
+        },
+      }),
+      ...adapters,
+      log,
+    }
+    return { deps, close }
+  } catch (err) {
+    await close().catch((e: unknown) => log(`WARNING: closing the pools after a failed start also failed: ${e instanceof Error ? e.message : String(e)}`))
+    throw err
+  }
+}
+
+async function withLive<T>(opts: { configFile?: string; bodyName?: string; needEdge?: boolean }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
   const live = await liveDeps(opts)
   try {
     return await fn(live.deps)
@@ -480,7 +521,7 @@ async function cmdInit(): Promise<void> {
     return
   }
   const catalogue = loadModules()
-  assertCreateEnv(catalogue)
+  assertCreateEnv(catalogue, { needEdge: false })
   const platformUrl = new URL(reqEnv('PLATFORM_DATABASE_URL'))
   const kernelAdminUrl = directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))
   const kernelAdmin = postgres(kernelAdminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
@@ -505,8 +546,9 @@ async function cmdInit(): Promise<void> {
 async function cmdPhase(which: 'a' | 'b'): Promise<void> {
   const slug = slugArg(`phase-${which}`)
   const spec = createSpec(slug)
-  assertCreateEnv(loadModules())
-  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName }, async (deps) => {
+  assertCreateEnv(loadModules(), { needEdge: true })
+  // domain_bound (phase A) runs the DNS pre-flight: both create phases resolve EDGE_BIND_IP.
+  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName, needEdge: true }, async (deps) => {
     if (which === 'a') {
       const r = await createPhaseA(spec, deps)
       log(`phase A ${slug}: ran [${r.run.ran.join(', ')}], skipped [${r.run.skipped.join(', ')}]${r.registered ? ' (control row registered)' : ''}`)
@@ -550,11 +592,16 @@ async function cmdRenderRouter(): Promise<void> {
 
 async function cmdSuspendResume(which: 'suspend' | 'resume'): Promise<void> {
   const slug = slugArg(which)
-  reqFlag('--operator')
+  // The actor is validated and named on every line (review B2: presence-only
+  // before, the value discarded). The ledger has no suspend kind (SCHEMA §0.1),
+  // so the attribution is the stderr log line and the JSON result; a status
+  // audit row is TASK-079's (the event). STDOUT stays machine output only.
+  const operatorId = reqFlag('--operator')
+  if (!UUID_RE.test(operatorId)) throw new UsageError(`--operator must be the operator's ops-realm user id (a uuid), not ${JSON.stringify(operatorId)}`)
   await withLive({}, async (deps) => {
     const r = which === 'suspend' ? await suspendCustomer(slug, deps) : await resumeCustomer(slug, deps)
-    log(`${which} ${slug}: ${r.changed ? 'changed' : 'nothing to do'}`)
-    console.log(JSON.stringify({ verb: which, slug, changed: r.changed }))
+    log(`${which} ${slug} by operator ${operatorId}: ${r.changed ? 'changed' : 'nothing to do'}`)
+    console.log(JSON.stringify({ verb: which, slug, operatorId, changed: r.changed }))
   })
 }
 
@@ -809,9 +856,27 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  const usage = err instanceof UsageError || (err instanceof ProvisioningError && ['INVALID_INPUT', 'MODULE_UNKNOWN', 'MODULE_DENIED', 'PRECONDITION', 'NOT_FOUND'].includes(err.code))
-  tlog('error', '[tenant-create] FAILED', { err: err instanceof Error ? err.message : String(err) })
-  console.error(`[tenant-create] ${usage ? 'USAGE' : 'FAILED'}: ${err instanceof Error ? err.message : String(err)}`)
-  process.exitCode = usage ? 2 : 1
-})
+/**
+ * A one-shot ends with its exit code, always (review B2-HIGH, r2): a handle
+ * something leaked (a pool socket, a timer) must never turn a named exit 2
+ * into a container that hangs until the socket's max_lifetime. stdout and
+ * stderr are flushed first, so machine output is never cut short.
+ */
+function exitWithCode(): void {
+  const code = typeof process.exitCode === 'number' ? process.exitCode : 0
+  let pending = 2
+  const done = () => {
+    if (--pending === 0) process.exit(code)
+  }
+  process.stdout.write('', done)
+  process.stderr.write('', done)
+}
+
+main()
+  .catch((err) => {
+    const usage = err instanceof UsageError || (err instanceof ProvisioningError && ['INVALID_INPUT', 'MODULE_UNKNOWN', 'MODULE_DENIED', 'PRECONDITION', 'NOT_FOUND'].includes(err.code))
+    tlog('error', '[tenant-create] FAILED', { err: err instanceof Error ? err.message : String(err) })
+    console.error(`[tenant-create] ${usage ? 'USAGE' : 'FAILED'}: ${err instanceof Error ? err.message : String(err)}`)
+    process.exitCode = usage ? 2 : 1
+  })
+  .finally(exitWithCode)
