@@ -35,6 +35,9 @@ function statusFrom(err: unknown): number | null {
   return m ? Number(m[1]) : null
 }
 
+/** The user attribute that records a first administrator's invite (send-once). */
+export const INVITE_MARK = 'gremion_invited_at'
+
 export class KcProvisionApi {
   constructor(private readonly transport: KcTransport) {}
 
@@ -386,11 +389,47 @@ export class KcProvisionApi {
       if (!role) throw new Error(`ensureInvitedUser: realm role "${spec.realmRole}" not found in realm "${realm}"`)
       await this.realmReq(realm, 'POST', `/users/${id}/role-mappings/realm`, [role])
     }
-    if (found?.attributes?.gremion_invited_at?.length) return { id, created, invited: false }
+    if (found?.attributes?.[INVITE_MARK]?.length) return { id, created, invited: false }
+    // Before any mail: the mark must be able to persist (review B2 MEDIUM, r2).
+    await this.ensureInviteMarkDeclared(realm)
     const lifespan = spec.lifespanSeconds ?? 72 * 3600
     await this.realmReq(realm, 'PUT', `/users/${id}/execute-actions-email?lifespan=${lifespan}`, ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'])
-    await this.realmReq(realm, 'PUT', `/users/${id}`, { attributes: { ...found?.attributes, gremion_invited_at: [nowIso()] } })
+    // The FULL representation: on Keycloak 24+ a PUT carrying `attributes`
+    // replaces the user's attribute set, root attributes included.
+    const user = await this.realmGet<Record<string, unknown> & { attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
+    if (!user) throw new Error(`ensureInvitedUser: user ${email} vanished from realm "${realm}" after the invite`)
+    await this.realmReq(realm, 'PUT', `/users/${id}`, { ...user, attributes: { ...user.attributes, [INVITE_MARK]: [nowIso()] } })
+    const back = await this.realmGet<{ attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
+    if (!back?.attributes?.[INVITE_MARK]?.length) {
+      throw new Error(
+        `ensureInvitedUser: the invite mark ${INVITE_MARK} did not persist on ${email} in realm "${realm}" (is it declared in the user profile?); a rerun would invite again`,
+      )
+    }
     return { id, created, invited: true }
+  }
+
+  /**
+   * Declares the send-once invite mark in the realm's user profile, admin-only
+   * (view/edit: admin), so Keycloak 24+ keeps it: an undeclared attribute is
+   * dropped on write while unmanaged attributes are disabled (the default).
+   * Read-modify-write of the realm's own profile, every other attribute and
+   * group kept; no realm-wide unmanagedAttributePolicy is switched on. Returns
+   * whether it wrote. Refuses loudly when the profile cannot be read.
+   */
+  async ensureInviteMarkDeclared(realm: string): Promise<boolean> {
+    const profile = await this.realmGet<{ attributes?: Array<{ name?: string }> } & Record<string, unknown>>(realm, '/users/profile')
+    if (!profile || !Array.isArray(profile.attributes)) {
+      throw new Error(`ensureInviteMarkDeclared: the user profile of realm "${realm}" cannot be read; no invite is sent`)
+    }
+    if (profile.attributes.some((a) => a.name === INVITE_MARK)) return false
+    await this.realmReq(realm, 'PUT', '/users/profile', {
+      ...profile,
+      attributes: [
+        ...profile.attributes,
+        { name: INVITE_MARK, displayName: 'Gremion invitation sent', permissions: { view: ['admin'], edit: ['admin'] }, multivalued: false },
+      ],
+    })
+    return true
   }
 
   /**
