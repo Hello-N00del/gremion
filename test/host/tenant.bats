@@ -236,6 +236,98 @@ create() {
     refute_state_secrets
 }
 
+# shim_kcadm — `docker exec [-i] <kc> kcadm.sh ...` against a fake Keycloak
+# whose state is files under GREMION_ROOT; stdin of a create is kept.
+shim_kcadm() {
+    shim docker '
+case " $* " in
+  *" config credentials "*) exit 0 ;;
+  *" get realms/platform --fields attributes "*)
+    [ -f "$GREMION_ROOT/realm.json" ] || exit 1
+    jq "{attributes}" "$GREMION_ROOT/realm.json"; exit 0 ;;
+  *" get realms/platform "*)
+    [ -f "$GREMION_ROOT/realm.json" ] || [ -f "$GREMION_ROOT/realm-present" ] || exit 1
+    echo "{\"realm\":\"platform\"}"; exit 0 ;;
+  *" create realms -f - "*) cat > "$GREMION_ROOT/realm.json"; exit 0 ;;
+  *" get users -r platform "*)
+    if [ -f "$GREMION_ROOT/user.json" ]; then echo "[{\"id\":\"4f1c2a9e-0000-4000-8000-000000000001\"}]"; else echo "[]"; fi; exit 0 ;;
+  *" create users -r platform -f - "*) cat > "$GREMION_ROOT/user.json"; exit 0 ;;
+  *" add-roles "*) printf "%s\n" "$*" >> "$GREMION_ROOT/roles.log"; exit 0 ;;
+esac
+exit 0'
+}
+
+@test "init --realm-only --keycloak-container: the ops realm by kcadm on stdin, the client exact to --panel-origin, its secret 0600, never on an argv (R29-I3, R29-I11)" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    local f="${GREMION_ROOT}/etc/secrets/control-panel/client_secret" secret
+    [ -s "$f" ]
+    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    secret="$(tr -d '\n' < "$f")"
+    run jq -r '.clients[] | select(.clientId == "control-panel") | [.secret == $s, (.redirectUris | tostring), (.webOrigins | tostring)] | @tsv' --arg s "$secret" "${GREMION_ROOT}/realm.json"
+    [ "$output" = $'true\t["https://panel.fixture.example/*"]\t["https://panel.fixture.example"]' ] || { echo "$output"; return 1; }
+    ! grep -qF -- "$secret" "$SHIM_LOG" || { echo "client secret on an argv"; return 1; }
+    ! grep -qF -- unit-kc-admin-secret "$SHIM_LOG" || { echo "admin password on an argv"; return 1; }
+    # A rerun finds the realm equal and creates nothing.
+    : > "$SHIM_LOG"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    ! grep -q 'create realms' "$SHIM_LOG"
+    # Another origin is a DIFFERENT realm: refused, never overwritten.
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://other.fixture.example
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"differs"* ]]
+}
+
+@test "operator add --no-mail --keycloak-container: a platform user with a temporary password on stdin only, the operator role, printed once (Q23, R29-I3)" {
+    shim_kcadm
+    touch "${GREMION_ROOT}/realm-present"
+    rm -f "${GREMION_ROOT}/runtime/active-colour"   # the test env has no colours
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run --separate-stderr "$LAUNCHER" operator add ops@platform.example --no-mail --keycloak-container kc-fixture
+    [ "$status" -eq 0 ] || { echo "status=$status $output $stderr"; cat "$SHIM_LOG"; return 1; }
+    local pw
+    pw="$(jq -r '.credentials[0] | select(.type == "password" and .temporary == true) | .value' "${GREMION_ROOT}/user.json")"
+    [ -n "$pw" ] && [ "${#pw}" -ge 20 ]
+    run jq -c '[.username, .email, .enabled, (.requiredActions | sort)]' "${GREMION_ROOT}/user.json"
+    [ "$output" = '["ops@platform.example","ops@platform.example",true,["CONFIGURE_TOTP","UPDATE_PASSWORD"]]' ] || { echo "$output"; return 1; }
+    grep -q -- '--rolename operator' "${GREMION_ROOT}/roles.log"
+    ! grep -qF -- "$pw" "$SHIM_LOG" || { echo "temporary password on an argv"; return 1; }
+    ! grep -qF -- unit-kc-admin-secret "$SHIM_LOG" || { echo "admin password on an argv"; return 1; }
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run --separate-stderr "$LAUNCHER" operator add ops@platform.example --no-mail --keycloak-container kc-fixture
+    # A second run: the user exists, no password is set or printed.
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"TEMPORARY-PASSWORD"* ]]
+    [ "$(grep -c 'create users' "$SHIM_LOG")" -eq 1 ]
+}
+
+@test "operator add --no-mail --keycloak-container prints the temporary password exactly once, on stdout" {
+    shim_kcadm
+    touch "${GREMION_ROOT}/realm-present"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run --separate-stderr "$LAUNCHER" operator add ops@platform.example --no-mail --keycloak-container kc-fixture
+    [ "$status" -eq 0 ]
+    local pw
+    pw="$(jq -r '.credentials[0].value' "${GREMION_ROOT}/user.json")"
+    [ "$(grep -c "^TEMPORARY-PASSWORD: ${pw}$" <<< "$output")" -eq 1 ]
+    [[ "$stderr" != *"$pw"* ]]
+}
+
+@test "operator add --keycloak-container without --no-mail, or without the ops realm, is refused before any user" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=x run "$LAUNCHER" operator add ops@platform.example --keycloak-container kc-fixture
+    [ "$status" -eq 2 ] || { echo "$output"; return 1; }
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=x run "$LAUNCHER" operator add ops@platform.example --no-mail --keycloak-container kc-fixture
+    [ "$status" -eq 2 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"init --realm-only"* ]]
+    [ ! -e "${GREMION_ROOT}/user.json" ]
+}
+
 @test "init keeps an app password it already wrote (a rerun never rotates a module role)" {
     run "$LAUNCHER" init
     local before; before="$(cat "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_calendar")"

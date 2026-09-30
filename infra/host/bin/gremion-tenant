@@ -12,6 +12,7 @@ set -euo pipefail
 #   gremion-tenant status <slug>
 #   gremion-tenant panel
 #   gremion-tenant operator add <email> [--no-mail]
+#   gremion-tenant operator add <email> --no-mail --keycloak-container <name>
 #
 # Every mutating verb needs the operator's ops-realm user id: --operator <uuid>
 # or GREMION_OPERATOR_ID (it becomes actor_operator_id and enabled_by).
@@ -67,6 +68,7 @@ usage: gremion-tenant <verb> [args...]
   status <slug>
   panel
   operator add <email> [--no-mail]
+  operator add <email> --no-mail --keycloak-container <name>
   (mutating verbs: --operator <uuid> or GREMION_OPERATOR_ID)
 EOF
 }
@@ -217,11 +219,10 @@ render_panel_secrets() {
 # an EXISTING Keycloak (a host without the pooled stack, §11). Create
 # when absent, skip when equal (the template fingerprint on the realm),
 # fail when different; the client secret goes to a 0600 file, never stdout.
-init_realm_only_kcadm() {   # <container> <origin>
-    local kc="$1" origin="$2" tmpl fp have admin password secret secret_file
-    need_cmd docker jq openssl sha256sum
-    tmpl="${RELEASE_DIR}/docker/keycloak/realm-export.ops.json"
-    [[ -f "$tmpl" ]] || die "the ops realm template is absent: ${tmpl}" "$GREMION_EXIT_USAGE"
+# kcadm_login <container> — kcadm's master session in an EXISTING Keycloak
+# container; the admin password reaches it through a name-only -e.
+kcadm_login() {
+    local kc="$1" admin password
     admin="${KEYCLOAK_ADMIN:-}"
     password="${KEYCLOAK_ADMIN_PASSWORD:-}"
     [[ -n "$admin" && -n "$password" ]] || die "export KEYCLOAK_ADMIN and KEYCLOAK_ADMIN_PASSWORD for kcadm (they reach it through a name-only -e)" "$GREMION_EXIT_USAGE"
@@ -230,6 +231,14 @@ init_realm_only_kcadm() {   # <container> <origin>
         "$KCADM_BIN" "${KC_SERVER_URL:-$KC_SERVER}" "$admin" \
         || die "kcadm could not authenticate in container ${kc}" "$GREMION_EXIT_ASSERT"
     password=""
+}
+
+init_realm_only_kcadm() {   # <container> <origin>
+    local kc="$1" origin="$2" tmpl fp have secret secret_file
+    need_cmd docker jq openssl sha256sum
+    tmpl="${RELEASE_DIR}/docker/keycloak/realm-export.ops.json"
+    [[ -f "$tmpl" ]] || die "the ops realm template is absent: ${tmpl}" "$GREMION_EXIT_USAGE"
+    kcadm_login "$kc"
     fp="$( { cat "$tmpl"; printf '\n%s' "$origin"; } | sha256sum | cut -d' ' -f1)"
     if have="$(docker exec "$kc" "$KCADM_BIN" get realms/platform --fields attributes 2>/dev/null)"; then
         if [[ "$(jq -r '.attributes["gremion.ops-realm.sha256"] // ""' <<< "$have")" == "$fp" ]]; then
@@ -426,17 +435,71 @@ cmd_panel() {
     info "then open http://127.0.0.1:${port} (the panel's ORIGIN)"
 }
 
+# operator add <email> --no-mail --keycloak-container <c>: a host WITHOUT the
+# pooled stack and without vendor mail (the test env, section 11 step 3). The
+# user is created in `platform` by kcadm with UPDATE_PASSWORD + CONFIGURE_TOTP
+# and a generated TEMPORARY password (Q23), which reaches kcadm on stdin only
+# (jq $ENV payload, never an argv) and is printed ONCE, on stdout, to the
+# operator's terminal. The `operator` realm role is added. An existing user
+# gets the role and no password.
+operator_add_kcadm() {   # <container> <email>
+    local kc="$1" email found uid temporary
+    email="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+    need_cmd docker jq openssl
+    kcadm_login "$kc"
+    docker exec "$kc" "$KCADM_BIN" get realms/platform --fields realm >/dev/null 2>&1 \
+        || die "the ops realm platform does not exist in ${kc}: run gremion-tenant init --realm-only --keycloak-container ${kc} first" "$GREMION_EXIT_USAGE"
+    found="$(docker exec "$kc" "$KCADM_BIN" get users -r platform -q "email=${email}" -q exact=true --fields id)" \
+        || die "kcadm could not look the operator up" "$GREMION_EXIT_ASSERT"
+    uid="$(jq -r '.[0].id // ""' <<< "$found")"
+    if [[ -z "$uid" ]]; then
+        temporary="$(openssl rand -base64 24 | tr -d '\n=' | tr '/+' '_-')"
+        OPERATOR_TEMP_PASSWORD="$temporary" jq -n -c --arg email "$email" '{
+                username: $email, email: $email, enabled: true, emailVerified: true,
+                requiredActions: ["UPDATE_PASSWORD", "CONFIGURE_TOTP"],
+                credentials: [{type: "password", value: $ENV.OPERATOR_TEMP_PASSWORD, temporary: true}]}' \
+            | docker exec -i "$kc" "$KCADM_BIN" create users -r platform -f - >/dev/null \
+            || { temporary=""; die "kcadm refused to create the operator ${email}" "$GREMION_EXIT_ASSERT"; }
+        found="$(docker exec "$kc" "$KCADM_BIN" get users -r platform -q "email=${email}" -q exact=true --fields id)" \
+            || die "kcadm could not read the operator back" "$GREMION_EXIT_ASSERT"
+        uid="$(jq -r '.[0].id // ""' <<< "$found")"
+        [[ -n "$uid" ]] || die "the operator ${email} is absent after create" "$GREMION_EXIT_ASSERT"
+    else
+        info "operator ${email} already exists: no password is set or printed"
+    fi
+    docker exec "$kc" "$KCADM_BIN" add-roles -r platform --uid "$uid" --rolename operator >/dev/null \
+        || die "kcadm could not grant the operator role to ${email}" "$GREMION_EXIT_ASSERT"
+    if [[ -n "${temporary:-}" ]]; then
+        ok "operator ${email} created with a temporary password (Q23: no vendor mail on this host); it must be changed and TOTP configured at first sign-in"
+        printf 'TEMPORARY-PASSWORD: %s\n' "$temporary"
+        temporary=""
+    else
+        ok "operator ${email}: the operator role is held"
+    fi
+}
+
 cmd_operator() {
     local sub="${1:-}"; shift || true
-    [[ "$sub" == add ]] || { usage >&2; die "operator add <email> [--no-mail]" "$GREMION_EXIT_USAGE"; }
+    [[ "$sub" == add ]] || { usage >&2; die "operator add <email> [--no-mail] [--keycloak-container <name>]" "$GREMION_EXIT_USAGE"; }
     local email="${1:-}"; shift || true
     [[ "$email" =~ $EMAIL_RE ]] || die "operator add needs an <email>" "$GREMION_EXIT_USAGE"
-    local nomail=no
-    while [[ $# -gt 0 ]]; do case "$1" in --no-mail) nomail=yes; shift ;; *) die "operator add: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    local nomail=no kc=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-mail) nomail=yes; shift ;;
+            --keycloak-container) [[ $# -ge 2 ]] || die "--keycloak-container requires a value" "$GREMION_EXIT_USAGE"; kc="$2"; shift 2 ;;
+            *) die "operator add: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
     # Q23: a generated temporary password is the exception for a host WITHOUT
     # vendor mail; where mail.env exists, the execute-actions mail is required.
     if [[ "$nomail" == yes && -f "${ROOT}/etc/env/mail.env" ]]; then
         die "--no-mail is for a host without vendor mail (Q23); this host has mail.env, so the operator gets the execute-actions mail" "$GREMION_EXIT_USAGE"
+    fi
+    if [[ -n "$kc" ]]; then
+        [[ "$nomail" == yes ]] || die "--keycloak-container is the path of a host without the pooled stack and without vendor mail: pass --no-mail (a host with the pooled stack adds operators through tenant-create, execute-actions mail)" "$GREMION_EXIT_USAGE"
+        operator_add_kcadm "$kc" "$email"
+        return
     fi
     active_colour
     local -a args=(operator-add "$email")
