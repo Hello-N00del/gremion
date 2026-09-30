@@ -1,0 +1,7 @@
+state services=2 running=0
+app-blue services=2 running=0
+app-green services=2 running=0
+ops services=2 running=0
+mail services=2 running=0
+compose-ls 
+stack-containers 0
