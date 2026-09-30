@@ -392,18 +392,35 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(JSON.stringify(body))
 }
 
-/** Read + JSON-parse the request body (empty body → {}). */
+/** A request body that is not a JSON object (F1-FIX-05-K, K4#4). The server maps it
+ *  to 400 'invalid JSON body' before any store call. */
+export class BadJsonBodyError extends Error {
+  readonly httpStatus = 400
+  constructor(reason: string) {
+    super(`invalid JSON body: ${reason}`)
+    this.name = 'BadJsonBodyError'
+  }
+}
+
+/** Read + JSON-parse the request body. An empty body means {}; a malformed body or
+ *  a JSON value that is not an object (array, null, string, number) throws
+ *  BadJsonBodyError -- it used to become {}, so a truncated mutation ran as an empty
+ *  one (a sign request without its note still signed). */
 async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   for await (const chunk of req) chunks.push(chunk as Buffer)
   const raw = Buffer.concat(chunks).toString('utf8').trim()
   if (raw.length === 0) return {}
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+    parsed = JSON.parse(raw)
   } catch {
-    return {}
+    throw new BadJsonBodyError('not parseable')
   }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new BadJsonBodyError('not an object')
+  }
+  return parsed as Record<string, unknown>
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined)

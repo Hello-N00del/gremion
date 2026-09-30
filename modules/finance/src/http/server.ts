@@ -8,7 +8,7 @@
 import http from 'node:http'
 import { createRouter, type Route, type RouteContext } from './router.js'
 import { checkGuard, hasInternalSecret, isHealthzPath } from './guard.js'
-import { tenantHealthHandler, type TenantLister, type StoreFn } from './routes.js'
+import { BadJsonBodyError, tenantHealthHandler, type TenantLister, type StoreFn } from './routes.js'
 
 export interface ServerOptions {
   /** Shared secret expected in x-internal-auth (INTERNAL_FINANCE_SECRET). */
@@ -77,6 +77,14 @@ export function createServer(opts: ServerOptions): http.Server {
       return sendJson(res, 405, { success: false, error: 'method not allowed' }, { allow: [...m.allowed].join(', ') })
     }
     const ctx = { params: m.params, req, res, tenant: guard.tenant } as unknown as RouteContext
-    await m.handler(ctx)
+    try {
+      await m.handler(ctx)
+    } catch (err) {
+      // F1-FIX-05-K (K4#4): a malformed / non-object JSON body is the caller's error.
+      if (err instanceof BadJsonBodyError && !res.headersSent) {
+        return sendJson(res, 400, { success: false, error: err.message })
+      }
+      throw err
+    }
   }
 }
