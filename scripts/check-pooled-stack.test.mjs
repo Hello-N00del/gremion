@@ -61,7 +61,7 @@ function appRender(colour) {
       environment: { COLOUR: colour },
       networks: Object.fromEntries(row.networks.map((n) => [n, ['edge', 'state'].includes(n) ? { aliases: [`${name}-${colour}`] } : null])),
     }
-    if (name === 'gremion-ui' || name === 'gremion-public') svc.labels['gremion.evict'] = 'true'
+    if (name === 'gremion-ui' || name === 'gremion-public' || name === 'control-panel') svc.labels['gremion.evict'] = 'true'
     if (name === 'migrate' || name === 'tenant-create') {
       svc.profiles = [name]
       svc.restart = 'no'
@@ -371,7 +371,27 @@ test('real renders: the whole guard is clean over the repository, and it rendere
 
 test('real renders: the app project without its profiles lists no one-shot (up creates no migrate container)', () => {
   const blue = renderProject(PROJECTS[1], { env: { COMPOSE_PROFILES: 'production' } })
-  assert.deepEqual(Object.keys(blue.services ?? {}).sort(), ['gremion-public', 'gremion-ui'])
+  // TASK-043 Q12: the control panel is long-running like the two apps.
+  assert.deepEqual(Object.keys(blue.services ?? {}).sort(), ['control-panel', 'gremion-public', 'gremion-ui'])
+})
+
+// TASK-043 TDD 17 (Q12): the ops shell of each colour publishes no port, has no
+// Traefik route, sits on app + state only, and is hardened.
+test('real renders: blue and green control-panel publish no ports, carry traefik.enable=false, sit on the app and state networks only', () => {
+  for (const [project, colour] of [[PROJECTS[1], 'blue'], [PROJECTS[2], 'green']]) {
+    const svc = renderProject(project).services?.['control-panel']
+    assert.ok(svc, `control-panel is not in the ${colour} render`)
+    assert.deepEqual(svc.ports ?? [], [], `${colour} control-panel publishes a port`)
+    assert.equal(String(svc.labels?.['traefik.enable']), 'false')
+    assert.deepEqual(
+      Object.keys(svc.networks ?? {}).map((k) => renderProject(project).networks?.[k]?.name ?? k).sort(),
+      // the fixture env files' STACK (test/host/fixtures/pooled-stack)
+      [`guardstack-app-${colour}_app`, 'guardstack_state'].sort(),
+    )
+    assert.equal(svc.read_only, true)
+    assert.deepEqual(svc.cap_drop, ['ALL'])
+    assert.match(String(svc.image), /^ghcr\.io\/hello-n00del\/gremion-control-panel:/)
+  }
 })
 
 test('real renders: the two colours are one document modulo the colour token and the app subnet', () => {

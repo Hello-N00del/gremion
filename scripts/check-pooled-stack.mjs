@@ -58,8 +58,8 @@ export const PROJECTS = [
   { id: 'mail', envFile: `${FIXTURE_DIR}/mail.env`, cwd: 'infra/host/mail' },
 ]
 
-export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create']
-export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public']
+export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create']
+export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel']
 export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create' }
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault']
 /** The leaf services app.env.tmpl names (content-service ... vault-service). */
@@ -98,6 +98,8 @@ export const PLACEMENT = {
   app: {
     'gremion-ui': { class: 'council-app', networks: ['app', 'edge', 'state'] },
     'gremion-public': { class: 'council-app', networks: ['app', 'edge', 'state'] },
+    // TASK-043 Q12: no edge network, no published port, no Traefik route.
+    'control-panel': { class: 'council-app', networks: ['app', 'state'] },
     migrate: { class: 'council-oneshot', networks: ['state'] },
     'tenant-create': { class: 'council-oneshot', networks: ['edge', 'state'] },
   },

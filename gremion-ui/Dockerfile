@@ -20,6 +20,15 @@ COPY packages/nats-auth/bin ./packages/nats-auth/bin/
 COPY packages/ports/package.json ./packages/ports/
 COPY packages/storage/package.json ./packages/storage/
 COPY packages/tokens/package.json ./packages/tokens/
+# TASK-043 G4: the tenant-create verbs (gremion-tenant init/create/suspend/
+# resume/reconcile) run @gremion/provisioning over TASK-021's lifecycle, the
+# edge router render and the module catalogue -- devDependencies of
+# gremion-ui, so, like nats-auth, they live in this builder stage only.
+COPY packages/provisioning/package.json ./packages/provisioning/
+COPY packages/tenant-store/package.json ./packages/tenant-store/
+COPY packages/module-catalogue/package.json ./packages/module-catalogue/
+COPY packages/generated-clients/package.json ./packages/generated-clients/
+COPY packages/edge-routers/package.json ./packages/edge-routers/
 COPY gremion-ui/package.json ./gremion-ui/
 RUN pnpm install --frozen-lockfile
 
@@ -33,6 +42,32 @@ COPY packages/nats-auth ./packages/nats-auth/
 COPY packages/ports ./packages/ports/
 COPY packages/storage ./packages/storage/
 COPY packages/tokens ./packages/tokens/
+COPY packages/provisioning ./packages/provisioning/
+COPY packages/tenant-store ./packages/tenant-store/
+COPY packages/module-catalogue ./packages/module-catalogue/
+COPY packages/generated-clients ./packages/generated-clients/
+COPY packages/edge-routers ./packages/edge-routers/
+# TASK-043 G4: the module catalogue tenant-create enables from -- every
+# module.json (loadCatalogue's one-entry-per-directory rule) and the migration
+# directory of each module that declares a database. No module source, no
+# module package.json (they would become workspace projects of this install).
+COPY modules/board/module.json ./modules/board/
+COPY modules/board/migrations ./modules/board/migrations/
+COPY modules/calendar/module.json ./modules/calendar/
+COPY modules/calendar/migrations ./modules/calendar/migrations/
+COPY modules/content/module.json ./modules/content/
+COPY modules/content/migrations ./modules/content/migrations/
+COPY modules/finance/module.json ./modules/finance/
+COPY modules/finance/migrations ./modules/finance/migrations/
+COPY modules/publishing/module.json ./modules/publishing/
+COPY modules/publishing/migrations ./modules/publishing/migrations/
+COPY modules/vault/module.json ./modules/vault/
+COPY modules/vault/migrations ./modules/vault/migrations/
+COPY modules/elections/module.json ./modules/elections/
+COPY modules/files/module.json ./modules/files/
+COPY modules/handover/module.json ./modules/handover/
+COPY modules/messaging/module.json ./modules/messaging/
+COPY modules/votes/module.json ./modules/votes/
 COPY gremion-ui ./gremion-ui/
 
 # Build the SvelteKit app (@gremion/db + @gremion/ports bundled via ssr.noExternal)

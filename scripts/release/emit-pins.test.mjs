@@ -26,10 +26,14 @@ after(() => rmSync(TMP, { recursive: true, force: true }))
 
 const D = (c) => c.repeat(64)
 const FP = 'ghcr.io/hello-n00del'
-const SERVICES = ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create']
+// The app project's service set, EXACTLY: this list also guards against an
+// unplanned app service. control-panel is the planned one (TASK-043 Q12, the
+// ops shell per colour; its image is gremion-control-panel).
+const SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create']
 const LINES = [
   `gremion-ui=${FP}/gremion-ui@sha256:${D('1')}`,
   `gremion-public=${FP}/gremion-public@sha256:${D('2')}`,
+  `control-panel=${FP}/gremion-control-panel@sha256:${D('6')}`,
   `migrate=${FP}/gremion-migrate@sha256:${D('3')}`,
   `tenant-create=${FP}/gremion-migrate@sha256:${D('3')}`,
 ]
@@ -44,7 +48,7 @@ test('emitted from svc=repo@sha256 lines: the unchanged check-pins accepts it, a
   const out = emitPins(parsePinLines(LINES.join('\n')), SERVICES)
   assert.deepEqual(checkPins(out, { services: SERVICES }), [])
   const images = out.split('\n').filter((l) => re.imageLine.test(l))
-  assert.equal(images.length, 4)
+  assert.equal(images.length, SERVICES.length)
   for (const l of images) assert.ok(re.digest.test(l))
   for (const l of out.split('\n').filter((x) => re.buildLine.test(x))) assert.ok(re.buildReset.test(l), l)
 })
