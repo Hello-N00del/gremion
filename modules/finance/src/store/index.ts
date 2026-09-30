@@ -509,6 +509,45 @@ export class HeliosApprovalNotManuallySignable extends ApprovalWorkflowError {
   }
 }
 
+/** F1-FIX-05-K (H20): the approvable already has a pending approval. A repeated
+ *  "Genehmigung anfordern" (double click, retry) must not open a second one. */
+export class ApprovalAlreadyOpenError extends ApprovalWorkflowError {
+  override readonly name = 'ApprovalAlreadyOpenError'
+  readonly code = 'APPROVAL_ALREADY_OPEN'
+  readonly httpStatus = 409
+  constructor(type: string, approvableId: number) {
+    super(`${type} ${approvableId} already has a pending approval`)
+  }
+}
+
+/** F1-FIX-05-K (H20): an expense that is already approved or paid cannot open a
+ *  new approval (a second approval would finalise into a second payment_order). */
+export class ApprovableNotRequestableError extends ApprovalWorkflowError {
+  override readonly name = 'ApprovableNotRequestableError'
+  readonly code = 'APPROVABLE_NOT_REQUESTABLE'
+  readonly httpStatus = 409
+  constructor(type: string, approvableId: number, state: string) {
+    super(`${type} ${approvableId} is ${state}; it cannot open a new approval`)
+  }
+}
+
+/** F1-FIX-05-K (H20): finalising an expense approval when the expense already has a
+ *  live (non-voided) payment_order. One expense, one payment order. */
+export class PaymentOrderExistsError extends ApprovalWorkflowError {
+  override readonly name = 'PaymentOrderExistsError'
+  readonly code = 'PAYMENT_ORDER_EXISTS'
+  readonly httpStatus = 409
+  constructor(subject: string) {
+    super(`${subject} already has a live payment_order`)
+  }
+}
+
+/** True when `err` is a Postgres unique violation on the named index/constraint. */
+function isUniqueViolationOn(err: unknown, constraint: string): boolean {
+  const e = err as { code?: string; constraint_name?: string } | null
+  return e?.code === '23505' && e.constraint_name === constraint
+}
+
 /** Coerce a DATE column (postgres-js may hand back a Date, or a 'YYYY-MM-DD'
  *  string when the query casts ::text) to the bare YYYY-MM-DD the DTO contract
  *  wants (mirror of dto-map.ts date handling — no tz shift). */
@@ -1737,6 +1776,13 @@ async function voidPendingPaymentOrders(tx: Sql, expenseId: number): Promise<voi
 async function finaliseApproved(tx: Sql, approval: ApprovalRecord): Promise<void> {
   const stages = await stagesForApproval(tx, approval.id)
   if (approval.approvable_type === 'expense') {
+    // F1-FIX-05-K (H20): one expense, one live payment_order. The partial unique
+    // index payment_order_one_live_per_expense_idx is the backstop; this check turns
+    // the common case into a typed 409 instead of a constraint error.
+    const live = await tx<{ id: string }[]>`
+      SELECT id FROM finance.payment_order
+      WHERE expense_id = ${approval.approvable_id} AND state <> 'voided' LIMIT 1`
+    if (live.length > 0) throw new PaymentOrderExistsError(`expense ${approval.approvable_id}`)
     const order = await tx<{ id: string }[]>`
       INSERT INTO finance.payment_order
         (expense_id, anordnung_by, feststellung_sachlich_by, feststellung_rechnerisch_by)
@@ -1773,12 +1819,52 @@ export async function createApproval(
   actor: ActorContext,
   input: { approvableType: ApprovableType; approvableId: number; method?: ApprovalMethod },
 ): Promise<{ approval_id: number }> {
+  try {
+    return await openApprovalTx(sql, actor, input)
+  } catch (err) {
+    // Two requests that raced past the pending check (possible only where no row
+    // lock serialises them, e.g. a budget_plan) meet the partial unique index.
+    if (isUniqueViolationOn(err, 'approval_one_open_per_approvable_idx')) {
+      throw new ApprovalAlreadyOpenError(input.approvableType, input.approvableId)
+    }
+    throw err
+  }
+}
+
+/** Expense states from which no new approval may be opened (H20): an approved or
+ *  paid expense already has its payment_order. */
+const EXPENSE_STATES_CLOSED_FOR_APPROVAL = new Set(['approved', 'paid'])
+
+async function openApprovalTx(
+  sql: Sql,
+  actor: ActorContext,
+  input: { approvableType: ApprovableType; approvableId: number; method?: ApprovalMethod },
+): Promise<{ approval_id: number }> {
   return sql.begin(async (tx) => {
     const t = tx as unknown as Sql
     // §11 create-time write-scope guard — runs FIRST so an unauthorised actor never
-    // materialises an approval row.
+    // materialises an approval row. For an expense / project it also takes the
+    // approvable's row lock, which serialises concurrent requests for it.
     const orgUnitId = await resolveApprovableOrgUnit(t, input.approvableType, input.approvableId)
     assertOrgUnitWritable(actor, orgUnitId)
+
+    // F1-FIX-05-K (H20): one open approval per approvable, and no new approval for an
+    // expense that is already approved / paid. Checked under the row lock above; the
+    // partial unique index approval_one_open_per_approvable_idx is the backstop.
+    if (input.approvableType === 'expense') {
+      const st = await t<{ state: string }[]>`
+        SELECT state FROM finance.expense WHERE id = ${input.approvableId}`
+      const state = st[0]?.state
+      if (state !== undefined && EXPENSE_STATES_CLOSED_FOR_APPROVAL.has(state)) {
+        throw new ApprovableNotRequestableError('expense', input.approvableId, state)
+      }
+    }
+    const open = await t<{ id: string }[]>`
+      SELECT id FROM finance.approval
+      WHERE approvable_type = ${input.approvableType} AND approvable_id = ${input.approvableId}
+        AND status = 'pending'
+      LIMIT 1`
+    if (open.length > 0) throw new ApprovalAlreadyOpenError(input.approvableType, input.approvableId)
 
     const amountCents = await resolveApprovalAmount(t, input.approvableType, input.approvableId)
     const config = await getSignerConfig(t)
@@ -1808,6 +1894,23 @@ export async function createApproval(
  *  the next stage or — on the final stage — finalises the approvable. Returns the
  *  refreshed status ('pending' while stages remain, 'approved' once the final signs). */
 export async function signApproval(
+  sql: Sql,
+  actor: ActorContext,
+  approvalId: number,
+  opts: { note?: string } & ForwardedStepUp,
+): Promise<string> {
+  try {
+    return await signApprovalTx(sql, actor, approvalId, opts)
+  } catch (err) {
+    // Backstop for finaliseApproved's live-order check (a concurrent finalisation).
+    if (isUniqueViolationOn(err, 'payment_order_one_live_per_expense_idx')) {
+      throw new PaymentOrderExistsError(`the expense of approval ${approvalId}`)
+    }
+    throw err
+  }
+}
+
+async function signApprovalTx(
   sql: Sql,
   actor: ActorContext,
   approvalId: number,

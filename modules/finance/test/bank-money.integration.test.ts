@@ -437,10 +437,25 @@ describe('R2-C3 money ops — real Postgres round-trip', () => {
       VALUES ('FY2027', '2027-01-01', '2027-12-31') RETURNING id`
     const fiscalYearId2 = Number(fy2[0]!.id)
 
+    // F1-FIX-05-K (H20): one expense carries at most one live payment_order
+    // (payment_order_one_live_per_expense_idx), so the FY2 payout settles a
+    // SECOND expense of the same finance unit, not a second order on expenseA.
+    const exp2 = await sql<{ id: string; finance_unit_id: string }[]>`
+      INSERT INTO finance.expense (finance_unit_id, payee_name, payee_iban, payee_purpose, payment_method, state)
+      SELECT finance_unit_id, 'Druckerei Muster', 'DE89370400440532013000', 'Flyer 2027', 'bank_transfer', 'approved'
+      FROM finance.expense WHERE id = ${fx.expenseA}
+      RETURNING id, finance_unit_id`
+    const expense2 = Number(exp2[0]!.id)
+    const receipt2 = await sql<{ id: string }[]>`
+      INSERT INTO finance.receipt (expense_id, beleg_nr, beleg_date)
+      VALUES (${expense2}, 'B-2', '2027-01-02') RETURNING id`
+    await sql`
+      INSERT INTO finance.receipt_item (receipt_id, budget_titel_id, amount_cents)
+      VALUES (${Number(receipt2[0]!.id)}, ${fx.titelId}, 4500)`
     const po2 = await sql<{ id: string }[]>`
       INSERT INTO finance.payment_order
         (expense_id, anordnung_by, feststellung_sachlich_by, feststellung_rechnerisch_by, dual_signature_attested, state)
-      VALUES (${fx.expenseA}, 'u-anordnung', 'u-sachlich', 'u-rechnerisch', true, 'authorised')
+      VALUES (${expense2}, 'u-anordnung', 'u-sachlich', 'u-rechnerisch', true, 'authorised')
       RETURNING id`
     const result = await recordManualPayout(sql, ACTOR_A, {
       paymentOrderId: Number(po2[0]!.id), ledgerAccountId: fx.ledgerOwnA,
