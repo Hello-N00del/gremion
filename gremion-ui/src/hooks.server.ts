@@ -425,15 +425,53 @@ function matchesPublicPath(entry: string, path: string): boolean {
  * caller itself; this list only decides which requests the session guard may
  * hand over without a user.
  */
-export const INTERNAL_BEARER_ROUTES: readonly { method: string; pattern: RegExp }[] = [
+export interface InternalBearerRoute {
+  readonly method: 'PATCH'
+  readonly pattern: RegExp
+}
+
+// Round 2 (review LOW): every entry is frozen too, not only the array, so no
+// importer can re-point a pattern or method on this security allow-list.
+export const INTERNAL_BEARER_ROUTES: readonly InternalBearerRoute[] = Object.freeze([
   // news/[id]/edit page actions -> PATCH (body / publish / unpublish).
-  { method: 'PATCH', pattern: /^\/api\/news\/[0-9]{1,12}$/ },
+  Object.freeze({ method: 'PATCH', pattern: /^\/api\/news\/[0-9]{1,12}$/ } as const),
   // Content editor autosave -> PATCH (title / body / channel toggle).
-  { method: 'PATCH', pattern: /^\/api\/content\/posts\/[0-9A-Za-z-]{1,64}$/ },
-]
+  Object.freeze({ method: 'PATCH', pattern: /^\/api\/content\/posts\/[0-9A-Za-z-]{1,64}$/ } as const),
+])
 
 function isInternalBearerRoute(method: string, path: string): boolean {
   return INTERNAL_BEARER_ROUTES.some((r) => r.method === method && r.pattern.test(path))
+}
+
+/** The 401 reason for an internal Bearer the guard refused (never 'no_session'). */
+export const INTERNAL_BEARER_REJECTED_REASON = 'internal_bearer_not_allowed'
+
+interface InternalBearerRejection {
+  method: string
+  path: string
+  /** The resolver validated x-internal-host-trust (the request is on the internal hop). */
+  tenantSelectionTrusted: boolean
+  /** (method, path) is on INTERNAL_BEARER_ROUTES. */
+  allowListed: boolean
+  /** The Bearer constant-time-matched INTERNAL_PUSH_SECRET. */
+  secretMatches: boolean
+}
+
+/**
+ * F1-FIX-03 round 2 (review MEDIUM): leave a server-side trace of WHY an
+ * internal Bearer was refused. Only the request shape and the three verdicts
+ * are logged; the token never is.
+ */
+function logInternalBearerRejected(ctx: InternalBearerRejection): void {
+  console.warn('[authGuard] internal Bearer rejected', ctx)
+}
+
+function internalBearerRejected(ctx: InternalBearerRejection): Response {
+  logInternalBearerRejected(ctx)
+  return new Response(JSON.stringify({ error: 'Unauthenticated', reason: INTERNAL_BEARER_REJECTED_REASON }), {
+    status: 401,
+    headers: { 'content-type': 'application/json' },
+  })
 }
 
 export const authGuard: Handle = async ({ event, resolve }) => {
@@ -505,6 +543,10 @@ export const authGuard: Handle = async ({ event, resolve }) => {
     return resolve(event)
   }
 
+  // Set when an internalFetch-hop Bearer failed to authenticate (see below), so
+  // the no-session 401 carries the distinct 'internal_bearer_not_allowed' reason.
+  let internalBearerMismatch = false
+
   // For API routes, accept Bearer JWT from mobile/external clients as an
   // alternative to the Auth.js cookie session used by the web frontend.
   if (path.startsWith('/api/')) {
@@ -516,17 +558,28 @@ export const authGuard: Handle = async ({ event, resolve }) => {
       // x-internal-host-trust secret, so it never came through the edge), and
       // the Bearer constant-time-matches INTERNAL_PUSH_SECRET. No user is set:
       // the handler authorises the internal caller itself. The module-disable
-      // gate applies exactly as for every other caller. Anything else falls
-      // through to the JWT path below, where the secret is not a JWT, so a
-      // misplaced or forged secret ends in the no-session 401.
-      if (
-        event.locals.tenantSelectionTrusted === true &&
-        isInternalBearerRoute(event.request.method, path) &&
-        isInternalBearerRequest(event.request)
-      ) {
-        const internalModuleGate = moduleGateResponse(path)
-        if (internalModuleGate) return internalModuleGate
-        return resolve(event)
+      // gate applies exactly as for every other caller.
+      // Round 2 (review MEDIUM): the secret on a route off the allow-list or
+      // off the internal hop is refused HERE with a logged, distinct 401
+      // (internal_bearer_not_allowed). It used to fall through to the JWT path
+      // and end as an anonymous-looking 'no_session', which is exactly how H11
+      // stayed invisible.
+      const internalTrusted = event.locals.tenantSelectionTrusted === true
+      const internalAllowListed = isInternalBearerRoute(event.request.method, path)
+      const internalSecretMatches = isInternalBearerRequest(event.request)
+      if (internalSecretMatches) {
+        if (internalTrusted && internalAllowListed) {
+          const internalModuleGate = moduleGateResponse(path)
+          if (internalModuleGate) return internalModuleGate
+          return resolve(event)
+        }
+        return internalBearerRejected({
+          method: event.request.method,
+          path,
+          tenantSelectionTrusted: internalTrusted,
+          allowListed: internalAllowListed,
+          secretMatches: true,
+        })
       }
       const token = authHeader.slice(7)
       const payload = await verifyBearerJwt(token, event.locals.tenant)
@@ -553,6 +606,21 @@ export const authGuard: Handle = async ({ event, resolve }) => {
           return resolve(event)
         }
       }
+      // Round 2 (review MEDIUM): a Bearer that is neither the secret nor a
+      // verified JWT, on a request carrying the internalFetch hop marker
+      // (x-internal-host-trust, valid or not): an internal caller whose secret
+      // does not match this process. Logged, and the 401 below names it; the
+      // session fallback itself is unchanged.
+      if (event.request.headers.has('x-internal-host-trust')) {
+        internalBearerMismatch = true
+        logInternalBearerRejected({
+          method: event.request.method,
+          path,
+          tenantSelectionTrusted: internalTrusted,
+          allowListed: internalAllowListed,
+          secretMatches: false,
+        })
+      }
     }
   }
 
@@ -571,7 +639,11 @@ export const authGuard: Handle = async ({ event, resolve }) => {
       return new Response(
         JSON.stringify({
           error: 'Unauthenticated',
-          reason: tokenError ? 'token_refresh_failed' : 'no_session',
+          reason: tokenError
+            ? 'token_refresh_failed'
+            : internalBearerMismatch
+              ? INTERNAL_BEARER_REJECTED_REASON
+              : 'no_session',
         }),
         { status: 401, headers: { 'content-type': 'application/json' } }
       )

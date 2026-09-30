@@ -192,6 +192,21 @@ async function throughHandle(
   }
 }
 
+/**
+ * F1-FIX-03 round 2 (review MEDIUM): a rejected internal Bearer must leave a
+ * server-side trace (method, path, hop trust, allow-list verdict, secret match)
+ * and never the token itself.
+ */
+function expectRejectionLogged(
+  warn: { mock: { calls: unknown[][] } },
+  ctx: { method: string; path: string; tenantSelectionTrusted: boolean; allowListed: boolean; secretMatches: boolean },
+): void {
+  const hits = warn.mock.calls.filter((c) => String(c[0]).includes('internal Bearer rejected'))
+  expect(hits).toHaveLength(1)
+  expect(hits[0][1]).toEqual(ctx)
+  expect(JSON.stringify(warn.mock.calls)).not.toContain(SECRET)
+}
+
 const POST_ID = '3f2b8a4e-9c1d-4e5f-8a7b-0c1d2e3f4a5b'
 
 describe('authGuard: the internal Bearer (INTERNAL_PUSH_SECRET) through the real handle sequence (H11)', () => {
@@ -225,17 +240,52 @@ describe('authGuard: the internal Bearer (INTERNAL_PUSH_SECRET) through the real
     ['PATCH', '/api/settings/backup'],
   ] as const) {
     it(`the same secret on a path/method NOT on the allow-list (${method} ${path}) is a 401, no handler`, async () => {
-      const o = await throughHandle(method, path, `Bearer ${SECRET}`)
-      expect(o.reached).toBe(false)
-      expect(o.status).toBe(401)
-      expect(JSON.parse(o.body)).toEqual({ error: 'Unauthenticated', reason: 'no_session' })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const o = await throughHandle(method, path, `Bearer ${SECRET}`)
+        expect(o.reached).toBe(false)
+        expect(o.status).toBe(401)
+        // F1-FIX-03 round 2: a distinct reason, so a missing allow-list entry is
+        // not mistaken for an anonymous request (H11 hid behind 'no_session').
+        expect(JSON.parse(o.body)).toEqual({ error: 'Unauthenticated', reason: 'internal_bearer_not_allowed' })
+        expectRejectionLogged(warn, { method, path, tenantSelectionTrusted: true, allowListed: false, secretMatches: true })
+      } finally {
+        warn.mockRestore()
+      }
     })
   }
 
-  it('a forged Bearer (wrong secret) on an allow-listed path is a 401, no handler', async () => {
-    const o = await throughHandle('PATCH', '/api/news/42', 'Bearer f1-fix-03-internal-push-secret-0123456788')
-    expect(o.reached).toBe(false)
-    expect(o.status).toBe(401)
+  it('a forged Bearer (wrong secret) on an allow-listed path is a 401, no handler, logged as a mismatch', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const o = await throughHandle('PATCH', '/api/news/42', 'Bearer f1-fix-03-internal-push-secret-0123456788')
+      expect(o.reached).toBe(false)
+      expect(o.status).toBe(401)
+      expect(JSON.parse(o.body)).toEqual({ error: 'Unauthenticated', reason: 'internal_bearer_not_allowed' })
+      expectRejectionLogged(warn, {
+        method: 'PATCH',
+        path: '/api/news/42',
+        tenantSelectionTrusted: true,
+        allowListed: true,
+        secretMatches: false,
+      })
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('f1-fix-03-internal-push-secret-0123456788')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a garbage Bearer on an edge request (no internal hop header) stays an anonymous no_session 401 and logs nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const o = await throughHandle('PATCH', '/api/news/42', 'Bearer not-a-jwt', { internalHop: false })
+      expect(o.reached).toBe(false)
+      expect(o.status).toBe(401)
+      expect(JSON.parse(o.body)).toEqual({ error: 'Unauthenticated', reason: 'no_session' })
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('internal Bearer rejected'))).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('a foreign realm JWT on an allow-listed path is a 403 TenantMismatch, no handler', async () => {
@@ -252,9 +302,22 @@ describe('authGuard: the internal Bearer (INTERNAL_PUSH_SECRET) through the real
   })
 
   it('the internal Bearer is honoured only on the internalFetch hop (x-internal-host-trust), not on an edge request', async () => {
-    const o = await throughHandle('PATCH', '/api/news/42', `Bearer ${SECRET}`, { internalHop: false })
-    expect(o.reached).toBe(false)
-    expect(o.status).toBe(401)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const o = await throughHandle('PATCH', '/api/news/42', `Bearer ${SECRET}`, { internalHop: false })
+      expect(o.reached).toBe(false)
+      expect(o.status).toBe(401)
+      expect(JSON.parse(o.body)).toEqual({ error: 'Unauthenticated', reason: 'internal_bearer_not_allowed' })
+      expectRejectionLogged(warn, {
+        method: 'PATCH',
+        path: '/api/news/42',
+        tenantSelectionTrusted: false,
+        allowListed: true,
+        secretMatches: true,
+      })
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('the module-disable gate still applies to the internal caller', async () => {
