@@ -150,12 +150,27 @@ load_host_facts() {
 }
 
 # ── TRD-440: no container per customer ─────────────────────────────────────
+# Every measurement must SUCCEED (review C, r2): a failing `docker ps` or
+# `config --services` used to yield an empty field on both sides, which
+# compared equal. Each project renders from its own directory, as
+# scripts/check-pooled-stack.mjs does (ops and mail name COMPOSE_FILEs
+# relative to infra/host/ops and infra/host/mail).
 container_fingerprint() {
-    local n f svcs=""
-    n="$(docker ps -q | wc -l | tr -d ' ')"
-    for f in "${ROOT}"/etc/env/*.env; do
+    local n f name dir svcs="" out
+    out="$(docker ps -q)" || die "TRD-440: docker ps failed" "$GREMION_EXIT_ASSERT"
+    n="$(grep -c . <<< "$out" || true)"
+    for name in state app-blue app-green ops mail; do
+        f="${ROOT}/etc/env/${name}.env"
         [[ -f "$f" ]] || continue
-        svcs+="$(basename "$f"):$( (cd "$RELEASE_DIR" && docker compose --env-file "$f" config --services 2>/dev/null) | sort | tr '\n' ',');"
+        case "$name" in
+            ops)  dir="${RELEASE_DIR}/infra/host/ops" ;;
+            mail) dir="${RELEASE_DIR}/infra/host/mail" ;;
+            *)    dir="$RELEASE_DIR" ;;
+        esac
+        out="$(cd "$dir" && docker compose --env-file "$f" config --services)" \
+            || die "TRD-440: docker compose config --services failed for the ${name} project" "$GREMION_EXIT_ASSERT"
+        [[ -n "$out" ]] || die "TRD-440: the ${name} project renders no service" "$GREMION_EXIT_ASSERT"
+        svcs+="${name}:$(sort <<< "$out" | tr '\n' ',');"
     done
     printf 'containers=%s services=%s' "$n" "$svcs"
 }

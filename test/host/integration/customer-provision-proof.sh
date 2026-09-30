@@ -459,11 +459,17 @@ principal_count() { # <token>
 customer_id() { q control "SELECT id FROM tenant WHERE slug = '$1'"; }
 host_of() { printf 'rat.%s.%s' "$1" "$(penv PLATFORM_DOMAIN)"; }
 trd440() { # the container count and every project's service list
-    local p
-    printf 'running=%s\n' "$(docker ps -q | grep -c . || true)"
+    # every measurement must succeed (review C, r2): a failed render on both
+    # sides compared equal; each project renders from its own directory
+    local p dir out
+    out="$(docker ps -q)" || die "TRD-440: docker ps failed"
+    printf 'running=%s\n' "$(grep -c . <<< "$out" || true)"
     for p in state app-blue app-green ops mail; do
         [[ -f "$PENV/$p.env" ]] || continue
-        printf '%s: %s\n' "$p" "$( (cd "$ROOT" && docker compose --env-file "$(host_path "$PENV/$p.env")" config --services 2>/dev/null) | sort | tr '\n' ' ')"
+        case "$p" in ops) dir="$ROOT/infra/host/ops" ;; mail) dir="$ROOT/infra/host/mail" ;; *) dir="$ROOT" ;; esac
+        out="$(cd "$dir" && docker compose --env-file "$(host_path "$PENV/$p.env")" config --services)" || die "TRD-440: config --services failed for ${p}"
+        [[ -n "$out" ]] || die "TRD-440: ${p} renders no service"
+        printf '%s: %s\n' "$p" "$(sort <<< "$out" | tr '\n' ' ')"
     done
 }
 
