@@ -9,13 +9,13 @@
 //   GET   /api/v1/boards/:id           → Board | 404         (getBoard)
 //   GET   /api/v1/boards/:id/deck      → { board,stacks,cards } | 404 (deckFor)
 //   POST  /api/v1/boards/:id/stacks    → Stack (201) | 404   (createStack, R29-BOARD-STORE-K)
-//   POST  /api/v1/cards                → Card (201)          (createCard)
+//   POST  /api/v1/cards                → Card (201) | 404    (createCard)
 //   PATCH /api/v1/cards/:id/move       → Card | 404          (moveCard)
 //   POST  /api/v1/cards/promoted       → { data: string[] } (listPromotedActionItemIds, #384)
 //         body: { candidateIds: string[] } — a POST body (not repeated GET query
 //         params) so the candidate id list can exceed node:http's ~16KB header
 //         cap (~320 ids per committee); #387.
-//   POST  /api/v1/boards/:id/promote   → Card (201)          (promoteActionItem)
+//   POST  /api/v1/boards/:id/promote   → Card (201) | 404 | 409 (promoteActionItem)
 //
 // Entity-returning routes return the entity DIRECTLY (no {data} envelope) —
 // matching ServiceBoardClient's deserialize helpers, which read fields straight
@@ -23,11 +23,22 @@
 //
 // Error envelope: { success:false, error } — the house JSON shape. A tenant-level
 // refusal answers { success:false, error: <code> } with cache-control: no-store.
+//
+// Error mapping (R29-BOARD-STORE-K §3.2), in wrap():
+//   refusal from storeFn                → its status + code (404 / 503 + Retry-After)
+//   SQLSTATE 3D000 at QUERY time        → 404 tenant_not_provisioned (the database was
+//                                         dropped under a cached gate verdict — disable)
+//   57P01/57P02/57P03, a lost connection → re-classify the tenant: 404 when its database
+//                                         is gone, else 503 tenant_unavailable
+//   23503 on card→stack / stack→board   → 404 stack not found / board not found
+//   22P02 (a malformed id)              → the route's own 404 (stack / board not found)
+//   22021 (text Postgres refuses)       → 400 invalid text
+// Anything else is a 500 and is logged.
 
 import type http from 'node:http'
 import { z } from 'zod'
 import type { Sql, TenantRef } from '../store/index.js'
-import { isRefusal, sqlState, type Refusal } from '../store/tenant-db.js'
+import { CONNECTION_LOST, isRefusal, NOT_PROVISIONED, sqlState, unavailable, type Refusal } from '../store/tenant-db.js'
 import type { Route, RouteContext } from './router.js'
 import {
   listBoardsForOrgUnits,
@@ -37,6 +48,7 @@ import {
   createStack,
   createCard,
   moveCard,
+  stackExists,
   promoteActionItem,
   listPromotedActionItemIds,
 } from '../store/index.js'
@@ -104,6 +116,9 @@ async function readBody(req: http.IncomingMessage): Promise<unknown> {
 
 // ── Zod schemas ───────────────────────────────────────────────────────────────
 
+/** A row id as Postgres' uuid type accepts it in canonical form (any version: rows use gen_random_uuid). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 const CreateCardSchema = z.object({
   stackId: z.string().min(1),
   title: z.string().min(1).max(200),
@@ -123,7 +138,7 @@ const MoveCardSchema = z.object({
 
 const PromoteSchema = z.object({
   item: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(UUID, 'item.id must be a uuid'),
     text: z.string().min(1),
     assigneeKeycloakId: z.string().nullable(),
     dueDate: z.string().nullable(),
@@ -132,11 +147,8 @@ const PromoteSchema = z.object({
 })
 
 const PromotedIdsSchema = z.object({
-  candidateIds: z.array(z.string().min(1)),
+  candidateIds: z.array(z.string().regex(UUID, 'candidateIds must be uuids')),
 })
-
-/** A row id as Postgres' uuid type accepts it in canonical form (any version: rows use gen_random_uuid). */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // R29-BOARD-STORE-K A5 / Q10 input caps: name 1..120, stack name 1..60, at most 20 stacks.
 const CreateBoardSchema = z.object({
@@ -151,6 +163,12 @@ const CreateStackSchema = z.object({
   order: z.number().int().min(0),
 })
 
+/** The FK constraints of migrations/001_init.sql → what the caller named that is not there. */
+const FK_NOT_FOUND: Readonly<Record<string, string>> = {
+  card_stack_id_fkey: 'stack not found',
+  stack_board_id_fkey: 'board not found',
+}
+
 // ── route builder ─────────────────────────────────────────────────────────────
 
 export function buildApiRoutes(store: StoreFn): Route[] {
@@ -161,13 +179,30 @@ export function buildApiRoutes(store: StoreFn): Route[] {
     return r
   }
 
+  /** After a lost connection: is the tenant's database gone (404) or just unreachable (503)? */
+  const reclassify = async (tenant: TenantRef): Promise<Refusal> => {
+    try {
+      const r = await store(tenant)
+      if (isRefusal(r)) return r
+      await r`SELECT 1`
+      return unavailable()
+    } catch (err) {
+      return sqlState(err) === '3D000' ? NOT_PROVISIONED : unavailable()
+    }
+  }
+
+  /**
+   * @param badRef the route's 404 for a reference that is malformed (22P02) or
+   *   names a row this tenant's database does not have (23503 with no mapped constraint).
+   */
   const wrap =
-    (handler: ApiHandler): Route['handler'] =>
+    (handler: ApiHandler, badRef?: string): Route['handler'] =>
     async (ctx) => {
       const extended = ctx as unknown as ApiContext
       try {
         await handler(extended)
       } catch (err) {
+        const code = sqlState(err)
         if (err instanceof RefusedError) {
           sendRefusal(extended.res, err.refusal)
         } else if (err instanceof z.ZodError) {
@@ -178,7 +213,15 @@ export function buildApiRoutes(store: StoreFn): Route[] {
           sendError(extended.res, 404, err.message)
         } else if (err instanceof Error && err.message === 'board has no stacks') {
           sendError(extended.res, 409, err.message)
-        } else if (sqlState(err) === '22021') {
+        } else if (code === '3D000') {
+          sendRefusal(extended.res, NOT_PROVISIONED)
+        } else if (code !== undefined && CONNECTION_LOST.has(code)) {
+          sendRefusal(extended.res, await reclassify(extended.tenant))
+        } else if (code === '23503' && (FK_NOT_FOUND[(err as { constraint_name?: string }).constraint_name ?? ''] ?? badRef)) {
+          sendError(extended.res, 404, FK_NOT_FOUND[(err as { constraint_name?: string }).constraint_name ?? ''] ?? badRef!)
+        } else if (code === '22P02' && badRef) {
+          sendError(extended.res, 404, badRef)
+        } else if (code === '22021') {
           // text Postgres refuses to store (e.g. a NUL byte): the caller's input
           sendError(extended.res, 400, 'invalid text')
         } else {
@@ -196,6 +239,7 @@ export function buildApiRoutes(store: StoreFn): Route[] {
       handler: wrap(async ({ req, res, tenant }) => {
         const url = new URL(req.url ?? '/', 'http://internal')
         const orgUnitIds = url.searchParams.getAll('orgUnitId')
+        if (!orgUnitIds.every((id) => UUID.test(id))) return sendError(res, 400, 'orgUnitId must be a uuid')
         const sql = await storeFn(tenant)
         const boards = await listBoardsForOrgUnits(sql, orgUnitIds)
         sendJson(res, 200, { data: boards })
@@ -227,7 +271,7 @@ export function buildApiRoutes(store: StoreFn): Route[] {
         if (!UUID.test(boardId) || !(await getBoard(sql, boardId))) return sendError(res, 404, 'board not found')
         const stack = await createStack(sql, { boardId, name: body.name, order: body.order })
         sendJson(res, 201, stack)
-      }),
+      }, 'board not found'),
     },
 
     // ── GET /api/v1/boards/:id ───────────────────────────────────────────────
@@ -236,10 +280,11 @@ export function buildApiRoutes(store: StoreFn): Route[] {
       path: '/api/v1/boards/:id',
       handler: wrap(async ({ res, params, tenant }) => {
         const sql = await storeFn(tenant)
-        const board = await getBoard(sql, params['id']!)
+        const id = params['id']!
+        const board = UUID.test(id) ? await getBoard(sql, id) : null
         if (!board) return sendError(res, 404, 'not found')
         sendJson(res, 200, board)
-      }),
+      }, 'not found'),
     },
 
     // ── GET /api/v1/boards/:id/deck ──────────────────────────────────────────
@@ -248,13 +293,17 @@ export function buildApiRoutes(store: StoreFn): Route[] {
       path: '/api/v1/boards/:id/deck',
       handler: wrap(async ({ res, params, tenant }) => {
         const sql = await storeFn(tenant)
+        const id = params['id']!
+        if (!UUID.test(id)) return sendError(res, 404, 'board not found')
         // deckFor THROWS 'board not found' → the wrap() maps it to 404.
-        const deck = await deckFor(sql, params['id']!)
+        const deck = await deckFor(sql, id)
         sendJson(res, 200, deck)
-      }),
+      }, 'board not found'),
     },
 
     // ── POST /api/v1/cards ───────────────────────────────────────────────────
+    // A stackId this tenant's database does not have is refused by the FK
+    // (23503) or, when it is not a uuid, by the uuid type (22P02): both 404.
     {
       method: 'POST',
       path: '/api/v1/cards',
@@ -263,20 +312,25 @@ export function buildApiRoutes(store: StoreFn): Route[] {
         const sql = await storeFn(tenant)
         const card = await createCard(sql, body)
         sendJson(res, 201, card)
-      }),
+      }, 'stack not found'),
     },
 
     // ── PATCH /api/v1/cards/:id/move ─────────────────────────────────────────
+    // The target stack must exist in THIS tenant's database: checked explicitly
+    // on the same pool, so the refusal is a 404, not an FK accident.
     {
       method: 'PATCH',
       path: '/api/v1/cards/:id/move',
       handler: wrap(async ({ req, res, params, tenant }) => {
         const body = MoveCardSchema.parse(await readBody(req))
         const sql = await storeFn(tenant)
-        const card = await moveCard(sql, params['id']!, { stackId: body.stackId, order: body.order })
+        const cardId = params['id']!
+        if (!UUID.test(cardId)) return sendError(res, 404, 'not found')
+        if (!(await stackExists(sql, body.stackId))) return sendError(res, 404, 'stack not found')
+        const card = await moveCard(sql, cardId, { stackId: body.stackId, order: body.order })
         if (!card) return sendError(res, 404, 'not found')
         sendJson(res, 200, card)
-      }),
+      }, 'stack not found'),
     },
 
     // ── POST /api/v1/cards/promoted (#384, #387) ─────────────────────────────
@@ -304,10 +358,12 @@ export function buildApiRoutes(store: StoreFn): Route[] {
       handler: wrap(async ({ req, res, params, tenant }) => {
         const body = PromoteSchema.parse(await readBody(req))
         const sql = await storeFn(tenant)
+        const boardId = params['id']!
+        if (!UUID.test(boardId) || !(await getBoard(sql, boardId))) return sendError(res, 404, 'board not found')
         // promoteActionItem THROWS 'board has no stacks' → wrap() maps it to 409.
-        const card = await promoteActionItem(sql, params['id']!, body.item, body.createdBy)
+        const card = await promoteActionItem(sql, boardId, body.item, body.createdBy)
         sendJson(res, 201, card)
-      }),
+      }, 'board not found'),
     },
   ]
 }

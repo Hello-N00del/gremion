@@ -306,6 +306,73 @@ describe('POST /api/v1/cards/promoted', () => {
   })
 })
 
+// -- foreign and malformed ids are 404, never 500 (R29-BOARD-STORE-K A6) ----------
+
+describe('foreign ids', () => {
+  it("POST /api/v1/cards with a stackId that is not in this tenant: 404 'stack not found' (FK 23503), nothing written", async () => {
+    const r = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), { stackId: MISSING_UUID, title: 'x', createdBy: 'u1' })
+    expect(r.status).toBe(404)
+    expect(r.body).toEqual({ success: false, error: 'stack not found' })
+    const [n] = await sql<{ c: string }[]>`SELECT count(*) AS c FROM card`
+    expect(Number(n!.c)).toBe(0)
+  })
+
+  it("POST /api/v1/cards with a stackId that is not a uuid: 404 'stack not found' (22P02)", async () => {
+    const r = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), { stackId: 'not-a-uuid', title: 'x', createdBy: 'u1' })
+    expect(r.status).toBe(404)
+    expect(r.body).toEqual({ success: false, error: 'stack not found' })
+  })
+
+  it("PATCH /api/v1/cards/:id/move into a stack that is not in this tenant (or not a uuid): 404 'stack not found', card unmoved", async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const s1 = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const created = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), { stackId: s1.id, title: 'X', createdBy: 'u1' })
+    const cardId = (created.body as { id: string }).id
+    for (const stackId of [MISSING_UUID, 'not-a-uuid']) {
+      const r = await callServer(server, 'PATCH', `/api/v1/cards/${cardId}/move`, guardHeaders(), { stackId, order: 0 })
+      expect(r.status, stackId).toBe(404)
+      expect(r.body, stackId).toEqual({ success: false, error: 'stack not found' })
+    }
+    const [row] = await sql<{ stack_id: string }[]>`SELECT stack_id FROM card WHERE id = ${cardId}`
+    expect(row!.stack_id).toBe(s1.id)
+  })
+
+  it('a malformed :id is a 404 on every id route, never a 500', async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const s = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const item = { id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', text: 'x', assigneeKeycloakId: null, dueDate: null }
+    const cases: [string, string, unknown?][] = [
+      ['GET', '/api/v1/boards/b-42'],
+      ['GET', '/api/v1/boards/b-42/deck'],
+      ['PATCH', '/api/v1/cards/c-9/move', { stackId: s.id, order: 0 }],
+      ['POST', '/api/v1/boards/b-3/promote', { item, createdBy: 'u1' }],
+    ]
+    for (const [method, path, body] of cases) {
+      const r = await callServer(server, method, path, guardHeaders(), body)
+      expect(r.status, `${method} ${path}`).toBe(404)
+    }
+  })
+
+  it("POST /api/v1/boards/:id/promote on a board that is not in this tenant: 404 'board not found', nothing written", async () => {
+    const item = { id: 'ffffffff-ffff-ffff-ffff-ffffffffffff', text: 'x', assigneeKeycloakId: null, dueDate: null }
+    const r = await callServer(server, 'POST', `/api/v1/boards/${MISSING_UUID}/promote`, guardHeaders(), { item, createdBy: 'u1' })
+    expect(r.status).toBe(404)
+    expect(r.body).toEqual({ success: false, error: 'board not found' })
+  })
+
+  it('action-item ids must be uuids: promote and promoted answer 400, never 500', async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const promote = await callServer(server, 'POST', `/api/v1/boards/${b.id}/promote`, guardHeaders(), {
+      item: { id: 'not-a-uuid', text: 'x', assigneeKeycloakId: null, dueDate: null },
+      createdBy: 'u1',
+    })
+    expect(promote.status).toBe(400)
+    const promoted = await callServer(server, 'POST', '/api/v1/cards/promoted', guardHeaders(), { candidateIds: ['not-a-uuid'] })
+    expect(promoted.status).toBe(400)
+  })
+})
+
 // -- create routes (R29-BOARD-STORE-K A5) ----------------------------------------
 
 describe('POST /api/v1/boards', () => {

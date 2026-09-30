@@ -33,6 +33,34 @@ export interface Refusal {
 
 export const NOT_PROVISIONED: Refusal = Object.freeze({ status: 404, code: 'tenant_not_provisioned' })
 
+/** Retry-After for a 503 (the schema gate's default). */
+export const RETRY_AFTER_SECONDS = 30
+
+/** The tenant's database cannot be used right now (not a missing database). */
+export function unavailable(retryAfter = RETRY_AFTER_SECONDS): Refusal {
+  return { status: 503, code: 'tenant_unavailable', retryAfter }
+}
+
+/**
+ * Errors that mean "the connection went away under the query", not "the query
+ * was wrong": the server terminated the backend (57P01 admin shutdown — what
+ * DROP DATABASE ... WITH (FORCE) does to a disabled tenant's pool —, 57P02
+ * crash shutdown, 57P03 cannot connect now) or postgres-js lost the socket.
+ * The route re-classifies the tenant (404 when its database is gone, else 503).
+ */
+export const CONNECTION_LOST: ReadonlySet<string> = new Set([
+  '57P01',
+  '57P02',
+  '57P03',
+  'CONNECTION_CLOSED',
+  'CONNECTION_ENDED',
+  'CONNECTION_DESTROYED',
+  'CONNECT_TIMEOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EPIPE',
+])
+
 export function isRefusal(value: unknown): value is Refusal {
   return typeof value === 'object' && value !== null && 'status' in value && 'code' in value
 }
@@ -53,21 +81,19 @@ export interface BoardTenantDb {
 export function createBoardTenantDb({
   store,
   gate,
-  retryAfterSeconds = 30,
+  retryAfterSeconds = RETRY_AFTER_SECONDS,
 }: {
   store: TenantStore
   gate: SchemaGate
   retryAfterSeconds?: number
 }): BoardTenantDb {
-  const unavailable: Refusal = Object.freeze({ status: 503, code: 'tenant_unavailable', retryAfter: retryAfterSeconds })
-
   async function classify(tenantId: string): Promise<Refusal> {
     try {
       const sql = await store.openTenantDb(tenantId, MODULE_ID)
       await sql`SELECT 1`
-      return unavailable
+      return unavailable(retryAfterSeconds)
     } catch (err) {
-      return sqlState(err) === '3D000' ? NOT_PROVISIONED : unavailable
+      return sqlState(err) === '3D000' ? NOT_PROVISIONED : unavailable(retryAfterSeconds)
     }
   }
 

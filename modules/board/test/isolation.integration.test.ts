@@ -153,6 +153,48 @@ describe('schema behind: no DDL on the request path (A4, B21)', () => {
   })
 })
 
+describe('query-time mapping: a database dropped under a cached ok verdict (A8 at leaf level)', () => {
+  it('the very next request, no sleep, answers 404 tenant_not_provisioned on every route', async () => {
+    const leaf = await freshLeaf()
+    const dbC = tenantBoardDb(TENANT_C.id)
+    try {
+      await provisionDb(admin, dbC)
+      // warm: the gate caches C's ok verdict (5 s) and the store holds C's pool
+      const warm = await leafRequest(leaf.server, SECRET, TENANT_C, 'GET', `/api/v1/boards?orgUnitId=${randomUUID()}`)
+      expect(warm.status).toBe(200)
+      await dropScratchDb(admin, dbC) // WITH (FORCE): terminates the pool's backends, as disableModule does
+      for (const call of everyRouteCall()) {
+        const r = await leafRequest(leaf.server, SECRET, TENANT_C, call.method, call.path, call.body)
+        expect({ route: call.route, status: r.status, body: r.body }).toEqual({
+          route: call.route,
+          status: 404,
+          body: { success: false, error: 'tenant_not_provisioned' },
+        })
+      }
+    } finally {
+      await leaf.close()
+      await dropScratchDb(admin, dbC)
+    }
+  })
+
+  it("the tenant's backends terminated, database still there: the next request is never a 500", async () => {
+    const leaf = await freshLeaf()
+    const dbC = tenantBoardDb(TENANT_C.id)
+    try {
+      await provisionDb(admin, dbC)
+      const warm = await leafRequest(leaf.server, SECRET, TENANT_C, 'GET', `/api/v1/boards?orgUnitId=${randomUUID()}`)
+      expect(warm.status).toBe(200)
+      await admin`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${dbC} AND pid <> pg_backend_pid()`
+      const r = await leafRequest(leaf.server, SECRET, TENANT_C, 'GET', `/api/v1/boards?orgUnitId=${randomUUID()}`)
+      expect([200, 503], JSON.stringify(r.body)).toContain(r.status)
+      if (r.status === 503) expect(r.body).toEqual({ success: false, error: 'tenant_unavailable' })
+    } finally {
+      await leaf.close()
+      await dropScratchDb(admin, dbC)
+    }
+  })
+})
+
 describe('two-tenant isolation through the board routes (A7)', () => {
   it("as A, every §3.3 vector against B's ids is refused; controls pass first", async () => {
     const report = await runIsolation(boardIsolationCase(api, seed), { api, attacker: TENANT_A, victim: TENANT_B })
