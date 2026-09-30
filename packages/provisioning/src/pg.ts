@@ -18,22 +18,25 @@ import { INTERIM_GATE_BASIS } from './operator-gate.ts'
 import type { AttestationPort, CustomerRef, ModulesPort } from './ports.ts'
 
 export function pgAttestations(platform: Sql): AttestationPort {
+  // A closure, not `this` (review B1 LOW, r2): the port's methods may be passed detached.
+  const lookup: AttestationPort['lookup'] = async (customerId, moduleKey) => {
+    assertUuid(customerId, 'customer id')
+    const rows = await platform<{ id: string }[]>`
+      SELECT attestation_id::text AS id FROM plt.operator_enable_attestation
+       WHERE customer_id = ${customerId} AND module_key = ${moduleKey}`
+    return rows[0]?.id ?? null
+  }
   return {
-    async lookup(customerId, moduleKey) {
-      assertUuid(customerId, 'customer id')
-      const rows = await platform<{ id: string }[]>`
-        SELECT attestation_id::text AS id FROM plt.operator_enable_attestation
-         WHERE customer_id = ${customerId} AND module_key = ${moduleKey}`
-      return rows[0]?.id ?? null
-    },
+    lookup,
     async ensure(customerId, moduleKey, operatorId, enableList) {
       assertUuid(customerId, 'customer id')
       assertUuid(operatorId, 'operator id')
-      await platform`
+      const inserted = await platform<{ id: string }[]>`
         INSERT INTO plt.operator_enable_attestation (customer_id, module_key, operator_id, enable_list, basis)
         VALUES (${customerId}, ${moduleKey}, ${operatorId}, ${[...enableList]}, ${INTERIM_GATE_BASIS})
-        ON CONFLICT (customer_id, module_key) DO NOTHING`
-      const id = await this.lookup(customerId, moduleKey)
+        ON CONFLICT (customer_id, module_key) DO NOTHING
+        RETURNING attestation_id::text AS id`
+      const id = inserted[0]?.id ?? (await lookup(customerId, moduleKey))
       if (!id) throw new ProvisioningError('POSTCONDITION', `no attestation for (${customerId}, ${moduleKey}) after insert`)
       return id
     },

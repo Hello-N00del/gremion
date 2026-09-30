@@ -23,6 +23,8 @@ export const OWNING_CONTEXT_CODES: ReadonlySet<string> = new Set([
 
 const MODULE_KEY = /^[a-z][a-z_]{1,39}$/
 const RETENTION = /^rp-([a-z]+)-[a-z0-9-]+$/
+/** module_version_semver_check, restated (0002_plt_module.sql). */
+const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,40})?$/
 
 export interface CatalogueModule {
   id: string
@@ -39,6 +41,10 @@ export function planCatalogueRows(modules: readonly CatalogueModule[]): Catalogu
   for (const m of [...modules].sort((a, b) => a.id.localeCompare(b.id))) {
     if (!MODULE_KEY.test(m.id)) {
       plan.undecided.push({ moduleKey: m.id, reason: `module id does not fit plt.module.module_key ${MODULE_KEY.source}` })
+      continue
+    }
+    if (typeof m.moduleJson.runtime.version !== 'string' || !SEMVER.test(m.moduleJson.runtime.version)) {
+      plan.undecided.push({ moduleKey: m.id, reason: `runtime.version ${JSON.stringify(m.moduleJson.runtime.version)} does not fit plt.module_version.semver (module_version_semver_check)` })
       continue
     }
     const rp = m.moduleJson.runtime.export?.retentionProfile
