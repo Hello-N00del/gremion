@@ -85,9 +85,13 @@ const SECRET_LINE = /(PASSWORD|SECRET|TOKEN)\s*[:=]/i
  * uncaught exception that ends the panel process); the promise settles on
  * 'spawn' (running) or 'error' (ENOENT, EACCES: the action shows it);
  * stdout/stderr go line by line into the panel's log, tagged with the slug;
- * the exit code is logged, a non-zero one at error level. Detached, so the run
- * survives a panel restart; its output then ends with the panel, and a rerun
- * of `gremion-tenant create` resumes from the ledger.
+ * the exit code is logged, a non-zero one at error level. Detached (its own
+ * process group, so a signal to the panel's group does not reach it), but its
+ * stdout/stderr are PIPES into the panel: when the panel exits or restarts,
+ * the run dies on its next output line (EPIPE / SIGPIPE). That is recoverable
+ * by design, not survived: every step is in the ledger, and a rerun of
+ * `gremion-tenant create` resumes at the next step (review r2 LOW). The panel
+ * keeps no per-run log file because its root filesystem is read-only.
  */
 export function spawnDetached(cmd: string, argv: string[], tag: string, log: SpawnLog = consoleLog): Promise<Started> {
   return new Promise<Started>((resolve, reject) => {
