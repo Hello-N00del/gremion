@@ -1,0 +1,469 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-tenant — the host half of the customer lifecycle (TASK-043).
+#
+#   gremion-tenant init [--realm-only] [--panel-origin <origin>]
+#   gremion-tenant init --realm-only --keycloak-container <name> [--panel-origin <origin>]
+#   gremion-tenant create <slug> --host <host> --config <file> --it-admin <email>
+#                         --council-admin <email> [--enable a,b] [--body-name <name>]
+#   gremion-tenant suspend <slug> | resume <slug>
+#   gremion-tenant reconcile <slug> [--apply]
+#   gremion-tenant status <slug>
+#   gremion-tenant panel
+#   gremion-tenant operator add <email> [--no-mail]
+#
+# Every mutating verb needs the operator's ops-realm user id: --operator <uuid>
+# or GREMION_OPERATOR_ID (it becomes actor_operator_id and enabled_by).
+#
+# PHASES. `create` is container phase A (the tenant-create one-shot of the
+# ACTIVE colour: realm, kernel database, domain, storage prefix, first body,
+# broker account), then THIS host's mail step (gremion-vendor-mail realm-smtp
+# --realm <slug> --tenant <token>: the customer's own submission principal,
+# issued and stamped; tenant-create is not on the mail network, TRD-045),
+# then `record-step mail_principal_issued` (the container re-reads the stamp
+# over Keycloak), then container phase B (first administrators, the --enable
+# modules, active), then the router file, which the host writes (Q17: a
+# compose etc/edge mount is refused, hygiene j4). A failed step STOPS: nothing
+# after it runs, and a rerun resumes from the ledger.
+#
+# suspend: container first (status, realm disabled + notBefore + logout,
+# broker users evicted), then the principal revoked. resume: a FRESH
+# principal issued and stamped first, then the container (realm, broker,
+# status last).
+#
+# TRD-440: `create` counts the running containers and every project's
+# `config --services` before and after, and fails if either moved -- a
+# customer adds databases, a realm and accounts, never a container.
+#
+# SECRETS never reach an argv: the app passwords and admin URLs tenant-create
+# reads are 0600 files under etc/secrets/tenant-create (written by `init`),
+# the Keycloak admin password reaches kcadm through a name-only `-e`, and the
+# vendor mail principal's password never leaves gremion-vendor-mail.
+#
+# EXIT CODES: 0 ok - 1 a step or post-condition failed - 2 usage/precondition.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+umask 077
+
+SLUG_RE='^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+EMAIL_RE='^[^[:space:]@]+@[^[:space:]@]+\.[a-z]{2,}$'
+MODULE_SERVERS="board calendar content finance newsletter vault"
+KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
+KC_SERVER="http://127.0.0.1:8080/auth"
+
+usage() {
+    cat <<'EOF'
+usage: gremion-tenant <verb> [args...]
+  init [--realm-only] [--panel-origin <origin>]
+  init --realm-only --keycloak-container <name> [--panel-origin <origin>]
+  create <slug> --host <host> --config <file> --it-admin <email> --council-admin <email> [--enable a,b] [--body-name <name>]
+  suspend <slug> | resume <slug>
+  reconcile <slug> [--apply]
+  status <slug>
+  panel
+  operator add <email> [--no-mail]
+  (mutating verbs: --operator <uuid> or GREMION_OPERATOR_ID)
+EOF
+}
+
+ROOT=""
+RELEASE_DIR=""
+COLOUR=""
+OPERATOR_ID="${GREMION_OPERATOR_ID:-}"
+
+setup_paths() {
+    ROOT="$(gremion_root)"
+    RELEASE_DIR="${GREMION_RELEASE_DIR:-${ROOT}/current}"
+}
+
+# env_key <file> <key> — ONE key of an env file (the gremion-vendor-mail reader).
+env_key() {
+    local file="$1" key="$2" n v
+    [[ -f "$file" ]] || die "env file not found: ${file}" "$GREMION_EXIT_USAGE"
+    n="$(grep -c "^${key}=" "$file" || true)"
+    [[ "$n" -le 1 ]] || die "duplicate key ${key} in ${file}" "$GREMION_EXIT_USAGE"
+    v="$(sed -n "s/^${key}=//p" "$file")"
+    v="${v%$'\r'}"
+    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
+    printf '%s' "$v"
+}
+
+active_colour() {
+    local f="${ROOT}/runtime/active-colour" c=""
+    [[ -f "$f" ]] && c="$(tr -d '[:space:]' < "$f")"
+    case "$c" in
+        blue|green) COLOUR="$c" ;;
+        *) die "runtime/active-colour is '${c:-absent}', not blue or green: deploy a colour first (tenant-create runs in the active colour)" "$GREMION_EXIT_USAGE" ;;
+    esac
+}
+
+need_slug() {   # <slug>
+    [[ -n "${1:-}" ]] || { usage >&2; die "missing <slug>" "$GREMION_EXIT_USAGE"; }
+    [[ "$1" =~ $SLUG_RE && ${#1} -ge 3 && ${#1} -le 30 && "$1" != platform ]] \
+        || die "invalid customer slug '$1' (^[a-z][a-z0-9]*(-[a-z0-9]+)*$, 3-30, not platform)" "$GREMION_EXIT_USAGE"
+}
+
+need_operator() {
+    [[ -n "$OPERATOR_ID" ]] || die "no operator id: pass --operator <uuid> or export GREMION_OPERATOR_ID (the ops-realm user id)" "$GREMION_EXIT_USAGE"
+    [[ "$OPERATOR_ID" =~ $UUID_RE ]] || die "operator id '${OPERATOR_ID}' is not a lowercase uuid" "$GREMION_EXIT_USAGE"
+}
+
+token_of() { printf '%s' "${1//-/_}"; }
+
+# tc <args...> — the tenant-create one-shot of the ACTIVE colour, the one
+# shape a compose command takes on a host (N20): --env-file, no -f, no -p.
+# The optional TC_MOUNT is ONE extra read-only file mount (create's --config).
+TC_MOUNT=()
+tc() {
+    local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
+    [[ -f "$envfile" ]] || die "env file absent: ${envfile}" "$GREMION_EXIT_USAGE"
+    ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" run --rm -T \
+        -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT \
+        "${TC_MOUNT[@]}" tenant-create "$@" )
+}
+
+vendor_mail() { "${SCRIPT_DIR}/gremion-vendor-mail" "$@"; }
+
+load_host_facts() {
+    local state="${ROOT}/etc/env/state.env"
+    TRAEFIK_CERT_RESOLVER="$(env_key "$state" TRAEFIK_CERT_RESOLVER)"
+    [[ -n "$TRAEFIK_CERT_RESOLVER" ]] || die "TRAEFIK_CERT_RESOLVER is empty in ${state}" "$GREMION_EXIT_USAGE"
+    # The DNS pre-flight compares the customer's host with the edge's own
+    # public addresses (the state project's required EDGE_BIND_IP/_IP6).
+    EDGE_BIND_IP="$(env_key "$state" EDGE_BIND_IP)"
+    EDGE_BIND_IP6="$(env_key "$state" EDGE_BIND_IP6)"
+    [[ -n "$EDGE_BIND_IP" ]] || die "EDGE_BIND_IP is empty in ${state}" "$GREMION_EXIT_USAGE"
+    export TRAEFIK_CERT_RESOLVER EDGE_BIND_IP EDGE_BIND_IP6
+}
+
+# ── TRD-440: no container per customer ─────────────────────────────────────
+container_fingerprint() {
+    local n f svcs=""
+    n="$(docker ps -q | wc -l | tr -d ' ')"
+    for f in "${ROOT}"/etc/env/*.env; do
+        [[ -f "$f" ]] || continue
+        svcs+="$(basename "$f"):$( (cd "$RELEASE_DIR" && docker compose --env-file "$f" config --services 2>/dev/null) | sort | tr '\n' ',');"
+    done
+    printf 'containers=%s services=%s' "$n" "$svcs"
+}
+
+# ── the router file (Q17: the host writes emit.ts's contract) ─────────────
+write_router() {   # <slug>
+    local slug="$1" dir="${ROOT}/etc/edge" final tmp
+    final="${dir}/tenant-${slug}.yml"
+    [[ -d "$dir" ]] || die "etc/edge is absent: ${dir}" "$GREMION_EXIT_USAGE"
+    # The temp name does not end in .yml: Traefik's file provider never loads it.
+    tmp="$(mktemp "${dir}/.tenant-${slug}.XXXXXX.tmp")"
+    # shellcheck disable=SC2064  # expand $tmp now
+    trap "rm -f '${tmp}'" EXIT
+    tc render-router "$slug" > "$tmp" || die "render-router ${slug} failed" "$GREMION_EXIT_ASSERT"
+    [[ -s "$tmp" ]] && grep -q '^  routers:' "$tmp" \
+        || die "render-router ${slug} printed no router document" "$GREMION_EXIT_ASSERT"
+    grep -q "tenant-${slug}-kc:" "$tmp" || die "the router document of ${slug} carries no realm router (Q16)" "$GREMION_EXIT_ASSERT"
+    chmod 644 "$tmp"
+    sync "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$final" || die "could not move the router file into place: ${final}" "$GREMION_EXIT_ASSERT"
+    sync "$dir" 2>/dev/null || true
+    trap - EXIT
+    ok "router file ${final} written"
+}
+
+# ── init ───────────────────────────────────────────────────────────────────
+# write_secret <file> — stdin to a 0600 file, atomically; kept when present.
+write_secret() {
+    local f="$1"
+    if [[ -s "$f" ]]; then cat > /dev/null; return 0; fi
+    atomic_write "$f" 600
+}
+
+# The admin URLs and app passwords tenant-create reads (G3), from state.env.
+render_tenant_create_secrets() {
+    local dir="${ROOT}/etc/secrets/tenant-create" state="${ROOT}/etc/env/state.env" id up user pw
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    user="$(env_key "$state" POSTGRES_USER)"; user="${user:-postgres}"
+    pw="$(env_key "$state" POSTGRES_PASSWORD)"
+    [[ -n "$pw" ]] || die "POSTGRES_PASSWORD is empty in ${state}" "$GREMION_EXIT_USAGE"
+    rm -f "${dir}/kernel_pg_admin"
+    printf 'postgresql://%s:%s@postgres-%s:5432/postgres\n' "$user" "$pw" "$STACK" | write_secret "${dir}/kernel_pg_admin"
+    for id in $MODULE_SERVERS; do
+        up="$(printf '%s' "$id" | tr '[:lower:]' '[:upper:]')"
+        user="$(env_key "$state" "${up}_PG_USER")"; user="${user:-$id}"
+        pw="$(env_key "$state" "${up}_PG_PASSWORD")"
+        [[ -n "$pw" ]] || die "${up}_PG_PASSWORD is empty in ${state}" "$GREMION_EXIT_USAGE"
+        rm -f "${dir}/module_pg_admin_${id}"
+        # A module server has no stack alias: its service name resolves on ${STACK}_state.
+        printf 'postgresql://%s:%s@%s-postgres:5432/postgres\n' "$user" "$pw" "$id" | write_secret "${dir}/module_pg_admin_${id}"
+        openssl rand -hex 32 | write_secret "${dir}/module_app_password_${id}"
+    done
+    pw=""
+    ok "etc/secrets/tenant-create: kernel and $(wc -w <<< "$MODULE_SERVERS") module server credential file(s), 0600"
+}
+
+render_panel_secrets() {
+    local dir="${ROOT}/etc/secrets/control-panel"
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    openssl rand -hex 32 | write_secret "${dir}/auth_secret"
+}
+
+# init --realm-only --keycloak-container <c>: the ops realm imported into an
+# EXISTING Keycloak with kcadm (a host without the pooled stack, §11). Create
+# when absent, skip when equal (the template fingerprint on the realm),
+# fail when different; the client secret goes to a 0600 file, never stdout.
+init_realm_only_kcadm() {   # <container> <origin>
+    local kc="$1" origin="$2" tmpl fp have admin password secret secret_file
+    need_cmd docker jq openssl sha256sum
+    tmpl="${RELEASE_DIR}/docker/keycloak/realm-export.ops.json"
+    [[ -f "$tmpl" ]] || die "the ops realm template is absent: ${tmpl}" "$GREMION_EXIT_USAGE"
+    admin="${KEYCLOAK_ADMIN:-}"
+    password="${KEYCLOAK_ADMIN_PASSWORD:-}"
+    [[ -n "$admin" && -n "$password" ]] || die "export KEYCLOAK_ADMIN and KEYCLOAK_ADMIN_PASSWORD for kcadm (they reach it through a name-only -e)" "$GREMION_EXIT_USAGE"
+    KC_LOGIN_PASSWORD="$password" docker exec -e KC_LOGIN_PASSWORD "$kc" sh -c \
+        '"$0" config credentials --server "$1" --realm master --user "$2" --password "$KC_LOGIN_PASSWORD" >/dev/null' \
+        "$KCADM_BIN" "${KC_SERVER_URL:-$KC_SERVER}" "$admin" \
+        || die "kcadm could not authenticate in container ${kc}" "$GREMION_EXIT_ASSERT"
+    password=""
+    fp="$( { cat "$tmpl"; printf '\n%s' "$origin"; } | sha256sum | cut -d' ' -f1)"
+    if have="$(docker exec "$kc" "$KCADM_BIN" get realms/platform --fields attributes 2>/dev/null)"; then
+        if [[ "$(jq -r '.attributes["gremion.ops-realm.sha256"] // ""' <<< "$have")" == "$fp" ]]; then
+            ok "realm platform is present and equal to realm-export.ops.json for ${origin}"
+            return 0
+        fi
+        die "realm platform exists but differs from realm-export.ops.json for ${origin}: refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
+    fi
+    secret_file="${ROOT}/etc/secrets/control-panel/client_secret"
+    mkdir -p "$(dirname "$secret_file")"
+    chmod 700 "$(dirname "$secret_file")"
+    secret="$(openssl rand -hex 32)"
+    printf '%s\n' "$secret" | atomic_write "$secret_file" 600
+    OPS_CLIENT_SECRET="$secret" jq -c --arg origin "$origin" --arg fp "$fp" '
+        (.clients[] | select(.clientId == "control-panel")) |= (
+            .secret = $ENV.OPS_CLIENT_SECRET
+            | .redirectUris = [$origin + "/*"]
+            | .webOrigins = [$origin]
+            | .attributes["post.logout.redirect.uris"] = ($origin + "/*"))
+        | .attributes["gremion.ops-realm.sha256"] = $fp' "$tmpl" \
+        | docker exec -i "$kc" "$KCADM_BIN" create realms -f - >/dev/null \
+        || die "kcadm refused to create realm platform" "$GREMION_EXIT_ASSERT"
+    secret=""
+    docker exec "$kc" "$KCADM_BIN" get realms/platform --fields realm >/dev/null \
+        || die "realm platform is absent after create" "$GREMION_EXIT_ASSERT"
+    ok "realm platform created; the control-panel client secret is in ${secret_file} (0600)"
+}
+
+cmd_init() {
+    local realm_only=no origin="http://127.0.0.1:3043" kc=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --realm-only) realm_only=yes; shift ;;
+            --panel-origin) [[ $# -ge 2 ]] || die "--panel-origin requires a value" "$GREMION_EXIT_USAGE"; origin="$2"; shift 2 ;;
+            --keycloak-container) [[ $# -ge 2 ]] || die "--keycloak-container requires a value" "$GREMION_EXIT_USAGE"; kc="$2"; shift 2 ;;
+            *) usage >&2; die "init: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    [[ "$origin" =~ ^https?://[a-z0-9.-]+(:[0-9]+)?$ ]] || die "--panel-origin must be scheme://host[:port], no path, no wildcard" "$GREMION_EXIT_USAGE"
+    if [[ -n "$kc" ]]; then
+        [[ "$realm_only" == yes ]] || die "--keycloak-container is the --realm-only path (a host without the pooled stack)" "$GREMION_EXIT_USAGE"
+        init_realm_only_kcadm "$kc" "$origin"
+        return
+    fi
+    active_colour
+    local state="${ROOT}/etc/env/state.env"
+    STACK="$(env_key "$state" STACK)"
+    [[ -n "$STACK" ]] || die "STACK is empty in ${state}" "$GREMION_EXIT_USAGE"
+    render_panel_secrets
+    local -a args=(init --panel-origin "$origin")
+    if [[ "$realm_only" == yes ]]; then
+        args+=(--realm-only)
+    else
+        render_tenant_create_secrets
+    fi
+    tc "${args[@]}" || die "tenant-create ${args[*]} failed" "$GREMION_EXIT_ASSERT"
+    # The container wrote the control-panel client secret beside the tenant
+    # secrets; it moves to the panel's own directory, 0600.
+    local tsd src
+    tsd="$(env_key "${ROOT}/etc/env/app-${COLOUR}.env" TENANT_SECRETS_DIR)"
+    src="${tsd:-${RELEASE_DIR}/secrets/tenants}/platform_client_control-panel"
+    if [[ -s "$src" ]]; then
+        atomic_write "${ROOT}/etc/secrets/control-panel/client_secret" 600 < "$src"
+        rm -f "$src"
+    fi
+    if [[ -f "${ROOT}/etc/env/mail.env" ]]; then
+        vendor_mail realm-smtp --realm platform || die "the ops realm's sender could not be set (gremion-vendor-mail realm-smtp --realm platform)" "$GREMION_EXIT_ASSERT"
+    else
+        info "WARNING: no mail.env on this host: the ops realm has no sender; add operators with --no-mail (Q23)"
+    fi
+    ok "init done"
+}
+
+# ── create / suspend / resume / reconcile / status ─────────────────────────
+cmd_create() {
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    local host="" config="" it="" council="" enable="" body=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --host) host="${2:-}"; shift 2 ;;
+            --config) config="${2:-}"; shift 2 ;;
+            --it-admin) it="${2:-}"; shift 2 ;;
+            --council-admin) council="${2:-}"; shift 2 ;;
+            --enable) enable="${2:-}"; shift 2 ;;
+            --body-name) body="${2:-}"; shift 2 ;;
+            --operator) OPERATOR_ID="${2:-}"; shift 2 ;;
+            *) usage >&2; die "create: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    need_operator
+    [[ -n "$host" ]] || die "create needs --host <host>" "$GREMION_EXIT_USAGE"
+    [[ -f "$config" ]] || die "create needs --config <existing file>" "$GREMION_EXIT_USAGE"
+    [[ "$it" =~ $EMAIL_RE ]] || die "create needs --it-admin <email>" "$GREMION_EXIT_USAGE"
+    [[ "$council" =~ $EMAIL_RE ]] || die "create needs --council-admin <email>" "$GREMION_EXIT_USAGE"
+    [[ -z "$enable" || "$enable" =~ ^[a-z][a-z0-9_]*(,[a-z][a-z0-9_]*)*$ ]] || die "--enable takes a,b,c module ids" "$GREMION_EXIT_USAGE"
+    active_colour
+    load_host_facts
+    local token before after
+    token="$(token_of "$slug")"
+    before="$(container_fingerprint)"
+
+    local -a flags=("$slug" --host "$host" --config /run/gremion/tenant-config.json --operator "$OPERATOR_ID"
+                    --it-admin "$it" --council-admin "$council")
+    [[ -z "$enable" ]] || flags+=(--enable "$enable")
+    [[ -z "$body" ]] || flags+=(--body-name "$body")
+    TC_MOUNT=(-v "$(realpath "$config"):/run/gremion/tenant-config.json:ro")
+
+    info "phase A (container): realm, kernel database, domain, storage prefix, first body, broker account"
+    tc phase-a "${flags[@]}" || die "phase A of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
+    info "host: the customer's own submission principal kc-${token}@"
+    vendor_mail realm-smtp --realm "$slug" --tenant "$token" \
+        || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
+    TC_MOUNT=()
+    tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" \
+        || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
+    TC_MOUNT=(-v "$(realpath "$config"):/run/gremion/tenant-config.json:ro")
+    info "phase B (container): first administrators, modules, active"
+    tc phase-b "${flags[@]}" || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
+    TC_MOUNT=()
+    write_router "$slug"
+
+    after="$(container_fingerprint)"
+    if [[ "$before" != "$after" ]]; then
+        bad "TRD-440: the container set moved during create (before: ${before}; after: ${after})"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    ok "customer ${slug} created (TRD-440: container set unchanged)"
+}
+
+cmd_suspend() {
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    while [[ $# -gt 0 ]]; do case "$1" in --operator) OPERATOR_ID="${2:-}"; shift 2 ;; *) die "suspend: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    need_operator
+    active_colour
+    tc suspend "$slug" --operator "$OPERATOR_ID" || die "suspend of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    vendor_mail realm-smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
+        || die "the principal of ${slug} could not be revoked" "$GREMION_EXIT_ASSERT"
+    ok "customer ${slug} suspended"
+}
+
+cmd_resume() {
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    while [[ $# -gt 0 ]]; do case "$1" in --operator) OPERATOR_ID="${2:-}"; shift 2 ;; *) die "resume: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    need_operator
+    active_colour
+    vendor_mail realm-smtp --realm "$slug" --tenant "$(token_of "$slug")" \
+        || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
+    tc resume "$slug" --operator "$OPERATOR_ID" || die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    ok "customer ${slug} resumed"
+}
+
+cmd_reconcile() {
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    local apply=no report
+    while [[ $# -gt 0 ]]; do case "$1" in --apply) apply=yes; shift ;; *) die "reconcile: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    active_colour
+    if [[ "$apply" == no ]]; then
+        tc reconcile --verify-only "$slug"
+        return
+    fi
+    report="$(tc reconcile "$slug" || true)"
+    if jq -e '.repairHost | index("smtp-server")' <<< "$report" >/dev/null 2>&1; then
+        info "smtp-server is repair: host -- rotating the principal of ${slug}"
+        vendor_mail realm-smtp --realm "$slug" --tenant "$(token_of "$slug")" --rotate \
+            || die "the principal of ${slug} could not be rotated" "$GREMION_EXIT_ASSERT"
+    fi
+    tc reconcile --verify-only "$slug"
+}
+
+cmd_status() {
+    local slug="${1:-}"
+    need_slug "$slug"
+    active_colour
+    tc status "$slug"
+}
+
+# panel (Q12): the ssh -L line for the active colour's panel; nothing published.
+cmd_panel() {
+    active_colour
+    local state stack cid ip port="${PANEL_LOCAL_PORT:-3043}"
+    state="${ROOT}/etc/env/state.env"
+    stack="$(env_key "$state" STACK)"
+    [[ -f "${ROOT}/etc/edge/active.yml" ]] || die "etc/edge/active.yml is absent" "$GREMION_EXIT_USAGE"
+    cid="$(docker ps -q --filter "label=com.docker.compose.project=${stack}-app-${COLOUR}" --filter "label=com.docker.compose.service=control-panel")"
+    cid="${cid%%$'\n'*}"
+    [[ -n "$cid" ]] || die "no control-panel container runs in ${stack}-app-${COLOUR}" "$GREMION_EXIT_USAGE"
+    ip="$(docker inspect -f "{{with index .NetworkSettings.Networks \"${stack}-app-${COLOUR}_app\"}}{{.IPAddress}}{{end}}" "$cid")"
+    [[ "$ip" =~ ^[0-9.]+$ ]] || die "the panel has no address on ${stack}-app-${COLOUR}_app" "$GREMION_EXIT_ASSERT"
+    printf 'ssh -L 127.0.0.1:%s:%s:3000 <this host>\n' "$port" "$ip"
+    info "then open http://127.0.0.1:${port} (the panel's ORIGIN)"
+}
+
+cmd_operator() {
+    local sub="${1:-}"; shift || true
+    [[ "$sub" == add ]] || { usage >&2; die "operator add <email> [--no-mail]" "$GREMION_EXIT_USAGE"; }
+    local email="${1:-}"; shift || true
+    [[ "$email" =~ $EMAIL_RE ]] || die "operator add needs an <email>" "$GREMION_EXIT_USAGE"
+    local nomail=no
+    while [[ $# -gt 0 ]]; do case "$1" in --no-mail) nomail=yes; shift ;; *) die "operator add: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    # Q23: a generated temporary password is the exception for a host WITHOUT
+    # vendor mail; where mail.env exists, the execute-actions mail is required.
+    if [[ "$nomail" == yes && -f "${ROOT}/etc/env/mail.env" ]]; then
+        die "--no-mail is for a host without vendor mail (Q23); this host has mail.env, so the operator gets the execute-actions mail" "$GREMION_EXIT_USAGE"
+    fi
+    active_colour
+    local -a args=(operator-add "$email")
+    [[ "$nomail" == no ]] || args+=(--no-mail)
+    tc "${args[@]}"
+}
+
+main() {
+    [[ $# -ge 1 ]] || { usage >&2; exit "$GREMION_EXIT_USAGE"; }
+    local verb="$1"; shift
+    case "$verb" in
+        -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
+    esac
+    need_cmd docker jq sed grep tr mktemp realpath openssl
+    setup_paths
+    # --operator may come first for any verb.
+    if [[ "${1:-}" == --operator ]]; then OPERATOR_ID="${2:-}"; shift 2; fi
+    case "$verb" in
+        init)      cmd_init "$@" ;;
+        create)    cmd_create "$@" ;;
+        suspend)   cmd_suspend "$@" ;;
+        resume)    cmd_resume "$@" ;;
+        reconcile) cmd_reconcile "$@" ;;
+        status)    cmd_status "$@" ;;
+        panel)     cmd_panel "$@" ;;
+        operator)  cmd_operator "$@" ;;
+        *) usage >&2; die "unknown verb: ${verb}" "$GREMION_EXIT_USAGE" ;;
+    esac
+}
+
+main "$@"

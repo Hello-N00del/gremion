@@ -1,0 +1,245 @@
+#!/usr/bin/env bats
+# Tests for infra/host/bin/gremion-tenant (TASK-043 TDD 13), the host half of
+# the customer lifecycle. Unit only: docker is a recording shim that plays the
+# tenant-create one-shot, and the sibling gremion-vendor-mail is a recording
+# stub. The release is laid out the way <root>/current is on a host.
+# Run: bats test/host/tenant.bats
+
+load 'test_helper/host'
+
+OP='8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
+
+setup() {
+    setup_host_root
+    REL="${GREMION_ROOT}/current"
+    mkdir -p "${REL}/infra/host/bin" "${REL}/infra/host/lib" "${REL}/docker/keycloak"
+    cp "${HOST_SRC}/bin/gremion-tenant" "${REL}/infra/host/bin/"
+    cp "${HOST_SRC}/lib/common.sh" "${REL}/infra/host/lib/"
+    cp "${KERNEL_ROOT}/docker/keycloak/realm-export.ops.json" "${REL}/docker/keycloak/"
+    LAUNCHER="${REL}/infra/host/bin/gremion-tenant"
+    ORDER="${GREMION_ROOT}/order.log"
+    : > "$ORDER"
+    export ORDER
+    # The sibling vendor-mail launcher: records its arguments in the step order.
+    cat > "${REL}/infra/host/bin/gremion-vendor-mail" <<'STUB'
+#!/usr/bin/env bash
+printf 'vendor-mail %s\n' "$*" >> "$ORDER"
+[ -f "${GREMION_ROOT}/vendor-mail-fails" ] && exit 1
+exit 0
+STUB
+    chmod +x "${REL}/infra/host/bin/gremion-vendor-mail"
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
+    cat > "${GREMION_ROOT}/etc/env/state.env" <<'ENV'
+STACK=guardstack
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=unit-pg-root-secret
+BOARD_PG_PASSWORD=unit-board-secret
+CALENDAR_PG_PASSWORD=unit-calendar-secret
+CONTENT_PG_PASSWORD=unit-content-secret
+FINANCE_PG_PASSWORD=unit-finance-secret
+NEWSLETTER_PG_PASSWORD=unit-newsletter-secret
+VAULT_PG_PASSWORD=unit-vault-secret
+TRAEFIK_CERT_RESOLVER=le-http
+EDGE_BIND_IP=192.0.2.10
+EDGE_BIND_IP6=2001:db8::a
+ENV
+    printf 'STACK=guardstack\nCOLOUR=blue\nTENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf '{"brand":{"product":"Rat","org_short":"MS"}}\n' > "${GREMION_ROOT}/tenant-config.json"
+    shim_docker
+}
+
+teardown() {
+    teardown_host_root
+}
+
+# shim_docker — `docker compose ... run ... tenant-create <verb> ...` appends
+# `tc <verb> <slug>` to the step order and answers as the container would;
+# `ps -q` and `compose config --services` are stable unless a test says not.
+shim_docker() {
+    shim docker '
+case " $* " in
+  *" run "*" tenant-create "*)
+    all="$*"
+    rest="${all##* tenant-create }"
+    set -- $rest
+    verb="$1"; slug="${2:-}"
+    printf "tc %s %s\n" "$verb" "$slug" >> "$ORDER"
+    [ -f "$GREMION_ROOT/fail-$verb" ] && exit 1
+    case "$verb" in
+      render-router)
+        printf "# tenant-%s.yml\nhttp:\n  routers:\n    tenant-%s:\n      rule: \"Host(\`x\`)\"\n    tenant-%s-kc:\n      rule: \"x\"\n" "$slug" "$slug" "$slug" ;;
+      reconcile)
+        if [ -f "$GREMION_ROOT/smtp-drift" ] && [ "$2" != --verify-only ]; then echo "{\"repairHost\":[\"smtp-server\"]}"; else echo "{\"repairHost\":[]}"; fi ;;
+    esac
+    exit 0 ;;
+  *" ps -q "*)
+    n=3; [ -f "$GREMION_ROOT/extra-container" ] && [ -f "$GREMION_ROOT/after" ] && n=4
+    i=0; while [ "$i" -lt "$n" ]; do echo "c$i"; i=$((i + 1)); done; exit 0 ;;
+  *" config --services "*) echo gremion-ui; echo control-panel; exit 0 ;;
+esac
+exit 0'
+}
+
+steps() { cat "$ORDER"; }
+
+refute_state_secrets() {
+    local v
+    for v in unit-pg-root-secret unit-board-secret unit-calendar-secret unit-vault-secret; do
+        ! grep -qF -- "$v" "$SHIM_LOG" || { echo "secret ${v} on a docker argv"; cat "$SHIM_LOG"; return 1; }
+        [[ "$output" != *"$v"* ]] || { echo "secret ${v} printed"; return 1; }
+    done
+}
+
+create() {
+    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+        --it-admin it@alpha.example --council-admin rat@alpha.example --enable calendar,vault --operator "$OP"
+}
+
+@test "gremion-tenant exists and is executable" {
+    [ -x "${HOST_SRC}/bin/gremion-tenant" ]
+}
+
+@test "create runs phase A, the host mail step, record-step, phase B, then the router, in that order" {
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run steps
+    [ "${lines[0]}" = "tc phase-a alpha-rat" ]
+    [ "${lines[1]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
+    [ "${lines[2]}" = "tc record-step alpha-rat" ]
+    [ "${lines[3]}" = "tc phase-b alpha-rat" ]
+    [ "${lines[4]}" = "tc render-router alpha-rat" ]
+    [ "${#lines[@]}" -eq 5 ]
+    grep -q 'tenant-alpha-rat-kc:' "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml"
+    assert_recorded docker '--operator 8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
+    assert_recorded docker '--enable calendar,vault'
+    assert_recorded docker ':/run/gremion/tenant-config.json:ro'
+}
+
+@test "a failed host mail step stops before phase B and writes no router" {
+    touch "${GREMION_ROOT}/vendor-mail-fails"
+    create
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    run steps
+    [ "${lines[0]}" = "tc phase-a alpha-rat" ]
+    [[ "$output" != *"phase-b"* && "$output" != *"record-step"* && "$output" != *"render-router"* ]] || { steps; return 1; }
+    [ ! -e "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" ]
+}
+
+@test "a failed phase A stops everything after it" {
+    touch "${GREMION_ROOT}/fail-phase-a"
+    create
+    [ "$status" -eq 1 ]
+    run steps
+    [ "$output" = "tc phase-a alpha-rat" ]
+}
+
+@test "a kill between the temp file and the rename leaves no tenant-*.yml (and no temp file)" {
+    shim mv 'exit 137'
+    create
+    [ "$status" -ne 0 ]
+    run find "${GREMION_ROOT}/etc/edge" -name 'tenant-*.yml'
+    [ -z "$output" ] || { echo "left: $output"; return 1; }
+    run find "${GREMION_ROOT}/etc/edge" -name '.tenant-*'
+    [ -z "$output" ] || { echo "temp left: $output"; return 1; }
+}
+
+@test "TRD-440: a container that appears during create fails it" {
+    shim_docker
+    # the fingerprint after phase B sees one more container
+    shim mv 'touch "$GREMION_ROOT/after"; touch "$GREMION_ROOT/extra-container"; exec /bin/mv "$@"'
+    create
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"TRD-440"* ]]
+}
+
+@test "no secret reaches an argv or the output" {
+    create
+    [ "$status" -eq 0 ]
+    refute_state_secrets
+}
+
+@test "suspend: the container first, then the principal revoked" {
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run steps
+    [ "${lines[0]}" = "tc suspend alpha-rat" ]
+    [ "${lines[1]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat --revoke" ]
+}
+
+@test "resume: a fresh principal first (never --rotate), then the container" {
+    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run steps
+    [ "${lines[0]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
+    [ "${lines[1]}" = "tc resume alpha-rat" ]
+}
+
+@test "a failed revoke fails suspend" {
+    touch "${GREMION_ROOT}/vendor-mail-fails"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 1 ]
+}
+
+@test "reconcile --apply rotates on the host when smtp-server is repair: host, then re-verifies" {
+    touch "${GREMION_ROOT}/smtp-drift"
+    run "$LAUNCHER" reconcile alpha-rat --apply
+    [ "$status" -eq 0 ] || { echo "$output"; steps; return 1; }
+    run steps
+    [ "${lines[0]}" = "tc reconcile alpha-rat" ]
+    [ "${lines[1]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat --rotate" ]
+    [ "${lines[2]}" = "tc reconcile --verify-only" ]
+}
+
+@test "reconcile without --apply only verifies, and never rotates" {
+    touch "${GREMION_ROOT}/smtp-drift"
+    run "$LAUNCHER" reconcile alpha-rat
+    run steps
+    [[ "$output" != *"vendor-mail"* ]]
+}
+
+@test "usage: no operator, a bad slug, platform, and no active colour are exit 2" {
+    run "$LAUNCHER" suspend alpha-rat
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" suspend 1ab --operator "$OP"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" suspend platform --operator "$OP"
+    [ "$status" -eq 2 ]
+    rm -f "${GREMION_ROOT}/runtime/active-colour"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
+}
+
+@test "operator add --no-mail is refused on a host with vendor mail (Q23)" {
+    : > "${GREMION_ROOT}/etc/env/mail.env"
+    run "$LAUNCHER" operator add ops@platform.example --no-mail
+    [ "$status" -eq 2 ] || { echo "$output"; return 1; }
+    run steps
+    [ -z "$output" ]
+}
+
+@test "init renders the tenant-create credential files 0600 without an argv secret, then runs the container init" {
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    local d="${GREMION_ROOT}/etc/secrets/tenant-create" f
+    for f in kernel_pg_admin module_pg_admin_calendar module_pg_admin_newsletter module_app_password_vault; do
+        [ -s "${d}/${f}" ] || { echo "missing ${f}"; return 1; }
+    done
+    grep -qx 'postgresql://postgres:unit-pg-root-secret@postgres-guardstack:5432/postgres' "${d}/kernel_pg_admin"
+    grep -qx 'postgresql://calendar:unit-calendar-secret@calendar-postgres:5432/postgres' "${d}/module_pg_admin_calendar"
+    if [ "$(stat -c %a "${d}/kernel_pg_admin" 2>/dev/null)" != "" ]; then
+        [ "$(stat -c %a "${d}/kernel_pg_admin")" = 600 ]
+    fi
+    run steps
+    [ "${lines[0]}" = "tc init --panel-origin" ]
+    refute_state_secrets
+}
+
+@test "init keeps an app password it already wrote (a rerun never rotates a module role)" {
+    run "$LAUNCHER" init
+    local before; before="$(cat "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_calendar")"
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_calendar")" = "$before" ]
+}
