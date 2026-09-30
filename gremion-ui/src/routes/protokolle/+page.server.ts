@@ -5,6 +5,22 @@ import { hasRole, Role } from '$lib/auth'
 // Aggregates every committee's meeting minutes (see protocols-db.listProtocols).
 // DB unavailability degrades to an empty list → first-class empty state.
 //
+// #458-2: the degrade stays, the SILENCE does not. A bare `.catch(() => [])`
+// made a genuine query fault indistinguishable from "no protocols published" —
+// the page rendered its empty state and nothing was recorded anywhere. Log
+// before degrading.
+//
+// Log a SUMMARY, never the raw error object. postgres.js attaches the failing
+// `query` and its bound `parameters` to its Error, so `console.error(..., err)`
+// would put tenant ids and row filter values into the container log.
+// `name: message (code)`; the SQLSTATE is what tells an operator what broke.
+function summarize(err: unknown): string {
+  if (!(err instanceof Error)) return String(err)
+  const code = (err as { code?: unknown }).code
+  const suffix = typeof code === 'string' || typeof code === 'number' ? ` (code ${code})` : ''
+  return `${err.name}: ${err.message}${suffix}`
+}
+//
 // TASK-009 kernel lane (F1 drift): the product's own /protocols page had the
 // same defect and was fixed by threading isAdmin through (c33778d6) — the
 // kernel's /protokolle list drifted from that fix. isAdmin is gated on
@@ -15,7 +31,10 @@ import { hasRole, Role } from '$lib/auth'
 // access: a non-admin reaching the editor route directly still only gets the
 // read view that route already allows.
 export const load: PageServerLoad = async (event) => {
-  const protocols = await listProtocols().catch(() => [])
+  const protocols = await listProtocols().catch((err) => {
+    console.error('[protokolle] listProtocols failed, degrading to empty:', summarize(err))
+    return []
+  })
   const roles = event.locals?.user?.roles ?? []
   const isAdmin = hasRole(roles, Role.CouncilAdmin)
   return { protocols, isAdmin }

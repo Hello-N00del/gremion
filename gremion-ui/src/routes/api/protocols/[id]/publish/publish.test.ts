@@ -394,6 +394,72 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
     expect(res.status).toBe(200)
     expect(mockGetQuorumContext).not.toHaveBeenCalled() // gate skipped for a withdrawn-only protocol
   })
+  // ───────────────────────────────────────────────────────────────────────────
+  // INV-5 × acclamation franchise — quorum still gates acclamation resolutions
+  // at adoption. An acclamation-mode Beschluss carries NO tallies (collective
+  // attribution, no per-voter row → votes_yes/no/abstain are NULL), but it is
+  // every bit as binding as a counted vote. The publish gate keys off
+  // `result !== 'withdrawn'` — NOT off the presence of tallies — so these
+  // cases pin that a null-tally row (a) still trips the quorum gate, (b) flows
+  // through the publish tx (incl. recordResolutionAdoptions) without throwing,
+  // and (c) is exempt only when withdrawn, same as counted resolutions.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // An adopted acclamation resolution as listResolutions returns it: passed,
+  // with the tally columns NULL. `adoption_mode` rides along to document the mode
+  // (the real column name, migration 054); the gate must not depend on it (or on
+  // the tallies) to classify bindingness.
+  const acclamationPassed = {
+    id: 'r-acc-1',
+    result: 'passed',
+    adoption_mode: 'acclamation',
+    votes_yes: null,
+    votes_no: null,
+    votes_abstain: null,
+    required_majority: 'simple',
+  }
+
+  it('INV-5/acclamation: blocks publish (422 Nicht beschlussfähig) when the only resolution is a null-tally acclamation and the meeting was not quorate', async () => {
+    mockListResolutions.mockResolvedValue([acclamationPassed])
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 3, presentVotingCount: 1, quorate: false })
+
+    await expect(POST(makeEvent())).rejects.toMatchObject({
+      status: 422,
+      body: { message: expect.stringContaining('Nicht beschlussfähig') },
+    })
+    expect(mockGetQuorumContext).toHaveBeenCalled()
+    // fail-fast: no Nextcloud side-effect, no DB write for a non-quorate protocol
+    expect(mockPublishFile).not.toHaveBeenCalled()
+    expect(mockSetProtocolStatus).not.toHaveBeenCalled()
+  })
+
+  it('INV-5/acclamation: publishes (200) when quorate — the publish tx records the adoption over the null-tally row without throwing', async () => {
+    mockListResolutions.mockResolvedValue([acclamationPassed])
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 3, presentVotingCount: 2, quorate: true })
+
+    const res = await POST(makeEvent())
+    expect(res.status).toBe(200)
+
+    // The null-tally row went through the adoption recorder on the publish tx.
+    expect(mockRecordResolutionAdoptions).toHaveBeenCalledOnce()
+    const [userId, passedResolutions, tx] = mockRecordResolutionAdoptions.mock.calls[0]
+    expect(userId).toBe('u1')
+    expect(passedResolutions).toEqual([acclamationPassed])
+    expect(tx).toMatchObject({ __tx: true })
+    expect(mockSetProtocolStatus).toHaveBeenCalledOnce()
+  })
+
+  it('INV-5/acclamation: a withdrawn acclamation resolution needs no quorum (gate skipped, publish 200)', async () => {
+    mockListResolutions.mockResolvedValue([
+      { ...acclamationPassed, result: 'withdrawn' },
+    ])
+    mockGetQuorumContext.mockResolvedValue({ eligibleVotingCount: 3, presentVotingCount: 0, quorate: false })
+
+    const res = await POST(makeEvent())
+    expect(res.status).toBe(200)
+    expect(mockGetQuorumContext).not.toHaveBeenCalled()
+  })
+
 
   // boundary rule A3a-2 degradation: no ProtocolDocumentPort registered -> 503, before
   // any Collabora conversion or DB write.

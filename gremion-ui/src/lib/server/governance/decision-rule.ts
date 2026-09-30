@@ -63,6 +63,25 @@ export class InvalidDecisionRuleTallyError extends Error {
   }
 }
 
+/** True for the typed engine errors that a write route must answer with a 400:
+ *  they describe bad client input (an unknown rule id, a malformed tally or
+ *  malformed rule params), not a server fault. */
+export function isDecisionRuleInputError(
+  err: unknown,
+): err is UnknownDecisionRuleError | InvalidDecisionRuleParamsError | InvalidDecisionRuleTallyError {
+  return (
+    err instanceof UnknownDecisionRuleError ||
+    err instanceof InvalidDecisionRuleParamsError ||
+    err instanceof InvalidDecisionRuleTallyError
+  )
+}
+
+/** True iff `ruleId` is one of the five rule ids the protocol_resolutions
+ *  required_majority CHECK accepts (migration 0054). */
+export function isCoreDecisionRuleId(ruleId: unknown): ruleId is CoreDecisionRuleId {
+  return typeof ruleId === 'string' && (CORE_DECISION_RULE_IDS as readonly string[]).includes(ruleId)
+}
+
 const TALLY_KEYS = ['yes', 'no', 'abstain', 'eligible', 'present'] as const
 
 function assertValidTally(ruleId: string, ctx: DecisionRuleContext): void {

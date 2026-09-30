@@ -41,12 +41,14 @@ import {
   finishTenantMigrationRun,
 } from './registry'
 import { runMigrations, getDb } from '$lib/server/db'
+import { readConfig } from '$lib/server/config'
 import { currentTenantId } from './context'
 import { tenantResolveHandle } from './resolve'
 import {
   setTenantReadinessFromFleet,
   getTenantReadiness,
   getTenantReadinessError,
+  getTenantReadinessFailureKind,
   isFleetPopulated,
   triggerTenantMigrationRetry,
   _resetReadinessForTests,
@@ -77,6 +79,9 @@ beforeEach(() => {
   vi.mocked(startTenantMigrationRun).mockImplementation(async (tenantId: string) => `run-${tenantId}`)
   vi.mocked(finishTenantMigrationRun).mockResolvedValue(undefined)
   vi.mocked(runMigrations).mockResolvedValue(undefined)
+  // T07: a brand-specific case overrides readConfig's implementation, and
+  // vi.clearAllMocks() does not restore it; re-state the complete-brand default.
+  vi.mocked(readConfig).mockReturnValue({ brand: { product: 'GovOS', org_short: 'Stadt WR' } } as never)
   vi.mocked(getDb).mockReturnValue(
     (async () => [{ filename: '039_x.sql' }]) as unknown as ReturnType<typeof getDb>,
   )
@@ -100,6 +105,48 @@ describe('tenant readiness map (D-READY, plan T3)', () => {
     expect(getTenantReadinessError('tid-b')).toContain('schema drift')
     // A tenant the fleet never saw (e.g. registered after boot) stays pending.
     expect(getTenantReadiness('tid-unknown')).toBe('pending')
+  })
+
+  // T07 — the failure CLASS, not just the message. fleet.ts records a
+  // brand-identity assertion through the SAME `error` channel a migration
+  // failure uses, so a pilot realm's first boot ledgers "tenant X: MIGRATION
+  // FAILED" for a config gap and sends whoever debugs it into the migration
+  // runner, the manifest and the SQL — a subsystem that is working perfectly.
+  // Readiness must carry the class so the 503's diagnostics name the right one.
+  it('a freshly provisioned un-materialized tenant fails with the BRAND-IDENTITY class, not the migration class', async () => {
+    setTenantReadinessFromFleet(new Map([['tid-a', { ok: true }]])) // arms retries; tid-b pending
+    // Migrations themselves are perfectly healthy — only the brand is blank,
+    // which is exactly the state a just-provisioned, never-materialized tenant
+    // is in.
+    vi.mocked(runMigrations).mockResolvedValue(undefined)
+    vi.mocked(readConfig).mockReturnValue({
+      brand: { product: '', org_short: '' },
+    } as never)
+
+    await triggerTenantMigrationRetry({ id: 'tid-b', slug: 'beta' })
+
+    expect(getTenantReadiness('tid-b')).toBe('failed')
+    expect(getTenantReadinessFailureKind('tid-b')).toBe('brand-identity')
+    expect(getTenantReadinessFailureKind('tid-b')).not.toBe('migration')
+    expect(getTenantReadinessError('tid-b')).toMatch(/INCOMPLETE brand identity/i)
+    // The migration runner is NOT the culprit and must not be implicated.
+    expect(runMigrations).toHaveBeenCalledTimes(1)
+  })
+
+  it('a real migration failure still carries the MIGRATION class', async () => {
+    setTenantReadinessFromFleet(new Map([['tid-a', { ok: true }]]))
+    vi.mocked(runMigrations).mockRejectedValue(new Error('relation "org_units" does not exist'))
+
+    await triggerTenantMigrationRetry({ id: 'tid-b', slug: 'beta' })
+
+    expect(getTenantReadiness('tid-b')).toBe('failed')
+    expect(getTenantReadinessFailureKind('tid-b')).toBe('migration')
+    expect(getTenantReadinessError('tid-b')).toMatch(/org_units/)
+  })
+
+  it('a READY tenant carries no failure class at all', () => {
+    setTenantReadinessFromFleet(new Map([['tid-a', { ok: true }]]))
+    expect(getTenantReadinessFailureKind('tid-a')).toBeUndefined()
   })
 
   it('before the boot fleet populates the map, retry triggers are a NO-OP (boot owns the first attempt — no double migration during boot)', () => {
