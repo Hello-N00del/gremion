@@ -54,7 +54,7 @@ describe('malformed JSON bodies (K4#4)', () => {
       storeCalls = 0
       const res = await send('POST', '/api/v1/approvals/1/sign', body)
       expect(res.status).toBe(400)
-      expect((await res.json()).error).toMatch(/invalid JSON body/)
+      expect(((await res.json()) as { error: string }).error).toMatch(/invalid JSON body/)
       expect(storeCalls).toBe(0)
     })
   }
