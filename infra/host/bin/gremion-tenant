@@ -240,8 +240,10 @@ init_realm_only_kcadm() {   # <container> <origin>
     [[ -f "$tmpl" ]] || die "the ops realm template is absent: ${tmpl}" "$GREMION_EXIT_USAGE"
     kcadm_login "$kc"
     fp="$( { cat "$tmpl"; printf '\n%s' "$origin"; } | sha256sum | cut -d' ' -f1)"
-    if have="$(docker exec "$kc" "$KCADM_BIN" get realms/platform --fields attributes 2>/dev/null)"; then
-        if [[ "$(jq -r '.attributes["gremion.ops-realm.sha256"] // ""' <<< "$have")" == "$fp" ]]; then
+    # 'attributes(*)': a bare `--fields attributes` returns the map EMPTY
+    # (measured on Keycloak 26.6), so an equal realm would read as different.
+    if have="$(docker exec "$kc" "$KCADM_BIN" get realms/platform --fields 'attributes(*)' 2>/dev/null)"; then
+        if [[ "$(jq -r '.attributes["gremion.ops-realm.sha256"] // ""' <<< "$have" | tr -d '\r')" == "$fp" ]]; then
             ok "realm platform is present and equal to realm-export.ops.json for ${origin}"
             return 0
         fi
@@ -250,7 +252,7 @@ init_realm_only_kcadm() {   # <container> <origin>
     secret_file="${ROOT}/etc/secrets/control-panel/client_secret"
     mkdir -p "$(dirname "$secret_file")"
     chmod 700 "$(dirname "$secret_file")"
-    secret="$(openssl rand -hex 32)"
+    secret="$(openssl rand -hex 32 | tr -d '\r\n')"
     printf '%s\n' "$secret" | atomic_write "$secret_file" 600
     OPS_CLIENT_SECRET="$secret" jq -c --arg origin "$origin" --arg fp "$fp" '
         (.clients[] | select(.clientId == "control-panel")) |= (
@@ -451,9 +453,10 @@ operator_add_kcadm() {   # <container> <email>
         || die "the ops realm platform does not exist in ${kc}: run gremion-tenant init --realm-only --keycloak-container ${kc} first" "$GREMION_EXIT_USAGE"
     found="$(docker exec "$kc" "$KCADM_BIN" get users -r platform -q "email=${email}" -q exact=true --fields id)" \
         || die "kcadm could not look the operator up" "$GREMION_EXIT_ASSERT"
-    uid="$(jq -r '.[0].id // ""' <<< "$found")"
+    uid="$(jq -r '.[0].id // ""' <<< "$found" | tr -d '\r')"
     if [[ -z "$uid" ]]; then
-        temporary="$(openssl rand -base64 24 | tr -d '\n=' | tr '/+' '_-')"
+        # tr -d '\r': a Windows openssl ends its line with CRLF (the proof runs there).
+        temporary="$(openssl rand -base64 24 | tr -d '\r\n=' | tr '/+' '_-')"
         OPERATOR_TEMP_PASSWORD="$temporary" jq -n -c --arg email "$email" '{
                 username: $email, email: $email, enabled: true, emailVerified: true,
                 requiredActions: ["UPDATE_PASSWORD", "CONFIGURE_TOTP"],
@@ -462,7 +465,7 @@ operator_add_kcadm() {   # <container> <email>
             || { temporary=""; die "kcadm refused to create the operator ${email}" "$GREMION_EXIT_ASSERT"; }
         found="$(docker exec "$kc" "$KCADM_BIN" get users -r platform -q "email=${email}" -q exact=true --fields id)" \
             || die "kcadm could not read the operator back" "$GREMION_EXIT_ASSERT"
-        uid="$(jq -r '.[0].id // ""' <<< "$found")"
+        uid="$(jq -r '.[0].id // ""' <<< "$found" | tr -d '\r')"
         [[ -n "$uid" ]] || die "the operator ${email} is absent after create" "$GREMION_EXIT_ASSERT"
     else
         info "operator ${email} already exists: no password is set or printed"

@@ -242,9 +242,13 @@ shim_kcadm() {
     shim docker '
 case " $* " in
   *" config credentials "*) exit 0 ;;
-  *" get realms/platform --fields attributes "*)
+  *" get realms/platform --fields attributes(*) "*)
     [ -f "$GREMION_ROOT/realm.json" ] || exit 1
     jq "{attributes}" "$GREMION_ROOT/realm.json"; exit 0 ;;
+  *" get realms/platform --fields attributes "*)
+    # Keycloak 26.6: a bare --fields attributes answers the map EMPTY.
+    [ -f "$GREMION_ROOT/realm.json" ] || exit 1
+    echo "{\"attributes\":{}}"; exit 0 ;;
   *" get realms/platform "*)
     [ -f "$GREMION_ROOT/realm.json" ] || [ -f "$GREMION_ROOT/realm-present" ] || exit 1
     echo "{\"realm\":\"platform\"}"; exit 0 ;;

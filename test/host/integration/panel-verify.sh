@@ -26,13 +26,18 @@ set -euo pipefail
 
 BASE="${1:-}"
 if [[ ! "$BASE" =~ ^https?://[^/]+$ ]]; then
-    echo "usage: panel-verify.sh <base-url> [--loa1-cookie F] [--loa2-cookie F] [--client-json F] [--customer-issuer URL]" >&2
+    echo "usage: panel-verify.sh <base-url> [--host-header NAME] [--loa1-cookie F] [--loa2-cookie F] [--client-json F] [--customer-issuer URL]" >&2
     exit 2
 fi
 shift
 LOA1="" LOA2="" CLIENT_JSON="" CUSTOMER_ISS="https://customer.invalid/auth/realms/customer"
+# --host-header NAME: every probe carries Host: NAME (the panel's loopback port
+# on its host, where the edge is bypassed but the panel still answers its own
+# host name only, R29-I11).
+HOST_HDR=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --host-header) HOST_HDR=(-H "Host: ${2:-}"); shift 2 ;;
         --loa1-cookie) LOA1="${2:-}"; shift 2 ;;
         --loa2-cookie) LOA2="${2:-}"; shift 2 ;;
         --client-json) CLIENT_JSON="${2:-}"; shift 2 ;;
@@ -56,7 +61,7 @@ verdict() {   # <ok: 0|1> <message>
 
 # probe <curl args...> -> "<status> <redirect url>" on stdout ("000 " on a transport failure)
 probe() {
-    curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 "$@" || printf '000 '
+    curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 ${HOST_HDR[@]+"${HOST_HDR[@]}"} "$@" || printf '000 '
 }
 
 b64url() { printf '%s' "$1" | base64 | tr -d '=\n' | tr '/+' '_-'; }
@@ -84,12 +89,12 @@ ok=1; [[ "$code" == 403 ]] && ok=0
 verdict "$ok" "cross-origin \"Neuer Mandant\" POST -> ${code} (want 403)"
 
 # 5. a foreign Host (R29-I11): the panel answers on its own host name only
-read -r code _ < <(probe -H "Host: not-the-panel.invalid" "${BASE}/"; echo)
+read -r code _ < <(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -H "Host: not-the-panel.invalid" "${BASE}/" || printf '000'; echo)
 ok=1; [[ "$code" == 421 || "$code" == 404 ]] && ok=0
 verdict "$ok" "foreign Host header -> ${code} (want 421 from the panel or 404 from the edge)"
 
 # 6. health
-health="$(curl -sS --max-time 10 "${BASE}/healthz" || true)"
+health="$(curl -sS --max-time 10 ${HOST_HDR[@]+"${HOST_HDR[@]}"} "${BASE}/healthz" || true)"
 ok=1; [[ "$health" == *'"ok":true'* ]] && ok=0
 verdict "$ok" "/healthz -> ${health:0:120}"
 
@@ -108,7 +113,7 @@ if [[ -n "$LOA1" ]]; then
     verdict "$ok" "ops session at loa1 -> ${code} step-up (prompt=login)"
 fi
 if [[ -n "$LOA2" ]]; then
-    headers="$(curl -sS -o /dev/null -D - -w '%{http_code}' --max-time 20 -H @"$LOA2" "${BASE}/" | tr -d '\r' || true)"
+    headers="$(curl -sS -o /dev/null -D - -w '%{http_code}' --max-time 20 ${HOST_HDR[@]+"${HOST_HDR[@]}"} -H @"$LOA2" "${BASE}/" | tr -d '\r' || true)"
     code="${headers##*$'\n'}"
     ok=1; [[ "$code" == 200 ]] && ok=0
     verdict "$ok" "ops session at loa2 -> ${code} (want 200)"
