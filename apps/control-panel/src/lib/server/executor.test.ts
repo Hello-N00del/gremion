@@ -1,8 +1,10 @@
 // "Neuer Mandant" (Q6): the form is validated, board is refused by name, and
 // gremion-tenant create is started with an argv -- one element per value, no
-// shell -- as the signed-in operator.
+// shell -- as the signed-in operator. The start is WATCHED (review A-HIGH): a
+// spawn failure is reported to the action (never an uncaught 'error' event
+// that takes the panel down), and the child's output and exit code are logged.
 import { describe, expect, it } from 'vitest'
-import { createArgv, startCreate, validateNewCustomer, type NewCustomerInput } from './executor'
+import { createArgv, spawnDetached, startCreate, validateNewCustomer, type NewCustomerInput, type SpawnLog, type Spawner } from './executor'
 
 const OP = '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33'
 const good: NewCustomerInput = {
@@ -12,6 +14,11 @@ const good: NewCustomerInput = {
   councilAdmin: 'rat@musterstadt.example',
   enable: ['vault', 'calendar'],
   configFile: '/opt/gremion/etc/tenants/musterstadt.json',
+}
+
+function recorder(): SpawnLog & { lines: string[] } {
+  const lines: string[] = []
+  return { lines, info: (m) => void lines.push(`I ${m}`), error: (m) => void lines.push(`E ${m}`) }
 }
 
 describe('validateNewCustomer', () => {
@@ -57,11 +64,67 @@ describe('createArgv / startCreate', () => {
     expect(() => createArgv(good, 'root')).toThrow(/uuid/)
   })
 
-  it('starts gremion-tenant through the spawner, never a shell string', () => {
+  it('starts gremion-tenant through the spawner, never a shell string', async () => {
     const calls: [string, string[]][] = []
-    startCreate(good, OP, (cmd, argv) => void calls.push([cmd, argv]))
+    const spawner: Spawner = async (cmd, argv) => {
+      calls.push([cmd, argv])
+      return { pid: 1, exited: Promise.resolve(0) }
+    }
+    await startCreate(good, OP, { spawner })
     expect(calls).toHaveLength(1)
     expect(calls[0]![0]).toBe('gremion-tenant')
     expect(calls[0]![1][0]).toBe('create')
+  })
+
+  it('runs the resolved executable path when one is given', async () => {
+    const calls: string[] = []
+    await startCreate(good, OP, {
+      command: '/usr/local/bin/gremion-tenant',
+      spawner: async (cmd) => {
+        calls.push(cmd)
+        return { pid: 1, exited: Promise.resolve(0) }
+      },
+    })
+    expect(calls).toEqual(['/usr/local/bin/gremion-tenant'])
+  })
+
+  it('a spawner that fails makes startCreate reject, so the action can show it', async () => {
+    const spawner: Spawner = async () => {
+      throw Object.assign(new Error('spawn gremion-tenant ENOENT'), { code: 'ENOENT' })
+    }
+    await expect(startCreate(good, OP, { spawner })).rejects.toThrow(/ENOENT/)
+  })
+})
+
+describe('spawnDetached (the default spawner)', () => {
+  it('a command that does not exist rejects with ENOENT and logs it; the process survives', async () => {
+    const log = recorder()
+    await expect(spawnDetached('t043-no-such-gremion-tenant', ['create'], 'musterstadt', log)).rejects.toMatchObject({ code: 'ENOENT' })
+    // an unhandled 'error' event would surface as an uncaught exception here
+    await new Promise((r) => setTimeout(r, 50))
+    expect(log.lines.join('\n')).toMatch(/E .*musterstadt.*ENOENT/)
+  })
+
+  it('resolves once the child has started, keeps its output in the log and logs a non-zero exit code', async () => {
+    const log = recorder()
+    const started = await spawnDetached(
+      process.execPath,
+      ['-e', 'console.log("phase a: begin"); console.error("refused: slug taken"); process.exit(3)'],
+      'musterstadt',
+      log,
+    )
+    expect(started.pid).toBeGreaterThan(0)
+    expect(await started.exited).toBe(3)
+    const text = log.lines.join('\n')
+    expect(text).toMatch(/I .*musterstadt.*phase a: begin/)
+    expect(text).toMatch(/E .*musterstadt.*refused: slug taken/)
+    expect(text).toMatch(/E .*musterstadt.*exit code 3/)
+  })
+
+  it('never copies a secret-looking output line into the log', async () => {
+    const log = recorder()
+    const started = await spawnDetached(process.execPath, ['-e', 'console.log("TEMPORARY-PASSWORD: hunter2hunter2")'], 'musterstadt', log)
+    expect(await started.exited).toBe(0)
+    expect(log.lines.join('\n')).not.toContain('hunter2hunter2')
   })
 })

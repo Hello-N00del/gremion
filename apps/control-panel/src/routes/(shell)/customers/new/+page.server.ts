@@ -5,7 +5,7 @@
 // the status page shows the ledger filling.
 import { error, fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { loadConfig, newCustomerDisabledReason } from '$lib/server/config'
+import { loadConfig, newCustomerDisabledReason, resolveOnPath } from '$lib/server/config'
 import { startCreate, validateNewCustomer, type NewCustomerInput } from '$lib/server/executor'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -34,7 +34,21 @@ export const actions: Actions = {
     const errors = validateNewCustomer(input)
     if (!input.configFile.startsWith('/')) errors.configFile = 'Absoluter Pfad der Mandantenkonfiguration auf dem Host.'
     if (Object.keys(errors).length) return fail(400, { disabled: null, errors, values: input })
-    startCreate(input, locals.operator.id)
+    // newCustomerDisabledReason already required gremion-tenant on PATH; resolve it once more for the exact path.
+    const command = resolveOnPath('gremion-tenant')
+    if (command === null) return fail(409, { disabled: newCustomerDisabledReason(r.config), errors: {} as Record<string, string>, values: input })
+    try {
+      // resolves only once the child is running; a failed start (ENOENT, EACCES) rejects here
+      await startCreate(input, locals.operator.id, { command })
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? 'unbekannt'
+      console.error(`[control-panel] Neuer Mandant ${input.slug}: gremion-tenant could not be started (${code})`)
+      return fail(500, {
+        disabled: null,
+        errors: { form: `gremion-tenant konnte nicht gestartet werden (${code}); es wurde nichts angelegt. Details im Panel-Log.` } as Record<string, string>,
+        values: input,
+      })
+    }
     redirect(303, `/customers/${input.slug}`)
   },
 }

@@ -2,7 +2,8 @@
 // contract (README.md). Parsed and VALIDATED once; /healthz reports only
 // whether it is valid (never a value). Secrets are read from *_FILE paths,
 // never from the environment itself.
-import { readFileSync } from 'node:fs'
+import { accessSync, constants, readFileSync, statSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 
 export type Executor = 'gremion-tenant' | 'none'
 
@@ -106,9 +107,41 @@ export function loadConfig(env: Env, readFile: (p: string) => string = (p) => re
   }
 }
 
+/**
+ * The absolute path of an executable `name` on `pathEnv`, or null. POSIX: a
+ * regular file with an execute bit; Windows (dev only): `name` + a PATHEXT
+ * extension. A directory or a plain data file is never an executor.
+ */
+export function resolveOnPath(name: string, pathEnv: string = process.env.PATH ?? ''): string | null {
+  if (!name || name.includes('/') || name.includes('\\')) return null
+  const win = process.platform === 'win32'
+  const exts = win ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';').filter(Boolean) : ['']
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue
+    for (const ext of exts) {
+      const p = join(dir, name + ext)
+      try {
+        const st = statSync(p)
+        if (!st.isFile()) continue
+        if (!win) {
+          if ((st.mode & 0o111) === 0) continue
+          accessSync(p, constants.X_OK)
+        }
+        return p
+      } catch {
+        // absent or not executable: keep looking
+      }
+    }
+  }
+  return null
+}
+
 /** Why "Neuer Mandant" is disabled, or null when it is available (Q6, the long-lead rule). */
-export function newCustomerDisabledReason(c: PanelConfig): string | null {
+export function newCustomerDisabledReason(c: PanelConfig, resolve: (name: string) => string | null = (n) => resolveOnPath(n)): string | null {
   if (c.platformDatabaseUrl === null) return 'Keine Plattform-Datenbank konfiguriert (PLATFORM_DATABASE_URL): gremion-tenant init ist auf diesem Host noch nicht gelaufen.'
   if (c.executor === 'none') return 'Kein Ausführer konfiguriert (PANEL_EXECUTOR=none): Mandanten legt gremion-tenant create auf dem Host an.'
+  if (resolve('gremion-tenant') === null) {
+    return 'PANEL_EXECUTOR=gremion-tenant, aber gremion-tenant ist in dieser Umgebung nicht im PATH (das Panel-Image enthält es nicht): Mandanten legt gremion-tenant create auf dem Host an.'
+  }
   return null
 }

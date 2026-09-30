@@ -14,6 +14,8 @@
   const disabled = $derived(data.disabled ?? form?.disabled ?? null)
   const errors = $derived((form?.errors ?? {}) as Record<string, string>)
   const values = $derived((form?.values ?? {}) as Record<string, unknown>)
+  // a failed submit keeps the chosen modules (a resubmit must not drop them)
+  const checkedModules = $derived(Array.isArray(values.enable) ? (values.enable as unknown[]).map(String) : [])
 </script>
 
 <svelte:head><title>Neuer Mandant · Gremion Betrieb</title></svelte:head>
@@ -22,6 +24,9 @@
 
 {#if disabled}
   <p class="notice warn" role="status">Deaktiviert: {disabled}</p>
+{/if}
+{#if errors.form}
+  <p class="notice warn" role="alert">{errors.form}</p>
 {/if}
 
 <form method="POST" aria-describedby={disabled ? undefined : 'hint'}>
@@ -54,7 +59,7 @@
     <fieldset class="modules">
       <legend>Module (keine sind voreingestellt)</legend>
       {#each MODULES as m (m.id)}
-        <label class="check"><input type="checkbox" name="enable" value={m.id} /> {m.label} <code>{m.id}</code></label>
+        <label class="check"><input type="checkbox" name="enable" value={m.id} checked={checkedModules.includes(m.id)} /> {m.label} <code>{m.id}</code></label>
       {/each}
       <p class="muted">„board“ ist noch nicht mandantengetrennt und nicht wählbar.</p>
       {#if errors.enable}<span class="err">{errors.enable}</span>{/if}

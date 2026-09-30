@@ -4,7 +4,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { loadConfig, newCustomerDisabledReason, type Env } from './config'
+import { loadConfig, newCustomerDisabledReason, resolveOnPath, type Env } from './config'
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__')
 const GOOD: Env = {
@@ -75,6 +75,19 @@ describe('newCustomerDisabledReason (Q6: visibly disabled, never hidden)', () =>
     expect(newCustomerDisabledReason(withDb.config)).toMatch(/PANEL_EXECUTOR=none/)
     const both = loadConfig({ ...GOOD, PLATFORM_DATABASE_URL: 'postgres://p:u@postgres:5432/gremion_platform', PANEL_EXECUTOR: 'gremion-tenant' })
     if (!both.ok) throw new Error('fixture')
-    expect(newCustomerDisabledReason(both.config)).toBeNull()
+    expect(newCustomerDisabledReason(both.config, () => '/usr/local/bin/gremion-tenant')).toBeNull()
+  })
+
+  it('PANEL_EXECUTOR=gremion-tenant but no gremion-tenant on PATH (the runtime image ships none): disabled with that reason', () => {
+    const both = loadConfig({ ...GOOD, PLATFORM_DATABASE_URL: 'postgres://p:u@postgres:5432/gremion_platform', PANEL_EXECUTOR: 'gremion-tenant' })
+    if (!both.ok) throw new Error('fixture')
+    expect(newCustomerDisabledReason(both.config, () => null)).toMatch(/gremion-tenant.*PATH/)
+  })
+
+  it('resolveOnPath finds an executable file on PATH and nothing else', () => {
+    expect(resolveOnPath('t043-no-such-gremion-tenant', FIX)).toBeNull()
+    // a directory entry and a non-executable file are not an executor
+    expect(resolveOnPath('__fixtures__', dirname(FIX))).toBeNull()
+    expect(resolveOnPath('client_secret', FIX)).toBeNull()
   })
 })

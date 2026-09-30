@@ -56,15 +56,115 @@ export function createArgv(input: NewCustomerInput, operatorId: string): string[
   return argv
 }
 
-export type Spawner = (cmd: string, argv: string[]) => void
-
-const defaultSpawner: Spawner = (cmd, argv) => {
-  const child = spawn(cmd, argv, { stdio: 'ignore', detached: true, shell: false })
-  child.unref()
+export interface SpawnLog {
+  info(msg: string): void
+  error(msg: string): void
 }
 
-export function startCreate(input: NewCustomerInput, operatorId: string, spawner: Spawner = defaultSpawner): string[] {
+/** A started run: its pid and its exit code (null: killed by a signal or never started). */
+export interface Started {
+  pid: number
+  exited: Promise<number | null>
+}
+
+/** Starts `cmd argv` and resolves once the child is running; rejects when it cannot start. */
+export type Spawner = (cmd: string, argv: string[], tag: string) => Promise<Started>
+
+const consoleLog: SpawnLog = {
+  info: (m) => console.log(m),
+  error: (m) => console.error(m),
+}
+
+// A line that looks like it carries a credential is never copied into the
+// log (operator-add prints TEMPORARY-PASSWORD; create prints none today).
+const SECRET_LINE = /(PASSWORD|SECRET|TOKEN)\s*[:=]/i
+
+/**
+ * The default spawner (review A-HIGH). The run is WATCHED: 'error' has a
+ * listener from the start (an unhandled 'error' event on a ChildProcess is an
+ * uncaught exception that ends the panel process); the promise settles on
+ * 'spawn' (running) or 'error' (ENOENT, EACCES: the action shows it);
+ * stdout/stderr go line by line into the panel's log, tagged with the slug;
+ * the exit code is logged, a non-zero one at error level. Detached, so the run
+ * survives a panel restart; its output then ends with the panel, and a rerun
+ * of `gremion-tenant create` resumes from the ledger.
+ */
+export function spawnDetached(cmd: string, argv: string[], tag: string, log: SpawnLog = consoleLog): Promise<Started> {
+  return new Promise<Started>((resolve, reject) => {
+    const prefix = `[control-panel] gremion-tenant ${tag}:`
+    let settled = false
+    let finish: (code: number | null) => void = () => {}
+    const exited = new Promise<number | null>((r) => {
+      let done = false
+      finish = (code) => {
+        if (done) return
+        done = true
+        r(code)
+      }
+    })
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(cmd, argv, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, shell: false })
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException
+      log.error(`${prefix} could not be started: ${e.code ?? ''} ${e.message}`)
+      reject(err)
+      return
+    }
+    child.once('error', (err: NodeJS.ErrnoException) => {
+      log.error(`${prefix} could not be started or failed: ${err.code ?? ''} ${err.message}`)
+      finish(null)
+      if (!settled) {
+        settled = true
+        reject(err)
+      }
+    })
+    const pipe = (stream: NodeJS.ReadableStream | null, level: 'info' | 'error') => {
+      if (!stream) return
+      let buf = ''
+      const emit = (line: string) => {
+        if (!line) return
+        log[level](`${prefix} ${SECRET_LINE.test(line) ? '[a line carrying a credential was withheld]' : line}`)
+      }
+      stream.setEncoding('utf8')
+      stream.on('data', (chunk: string) => {
+        buf += chunk
+        let i: number
+        while ((i = buf.indexOf('\n')) >= 0) {
+          emit(buf.slice(0, i).replace(/\r$/, ''))
+          buf = buf.slice(i + 1)
+        }
+      })
+      stream.on('end', () => emit(buf))
+    }
+    pipe(child.stdout, 'info')
+    pipe(child.stderr, 'error')
+    child.once('spawn', () => {
+      log.info(`${prefix} started (pid ${child.pid})`)
+      if (!settled) {
+        settled = true
+        resolve({ pid: child.pid ?? 0, exited })
+      }
+    })
+    // 'close' fires after stdout/stderr ended, so every output line is logged first.
+    child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      if (code === 0) log.info(`${prefix} exit code 0`)
+      else log.error(`${prefix} exit code ${code ?? 'none'}${signal ? ` (signal ${signal})` : ''}`)
+      finish(code)
+    })
+  })
+}
+
+export interface StartOptions {
+  /** The resolved executable (config.resolveOnPath); default the bare name. */
+  command?: string
+  spawner?: Spawner
+}
+
+/** Starts `gremion-tenant create`; rejects when the executor cannot be started. */
+export async function startCreate(input: NewCustomerInput, operatorId: string, opts: StartOptions = {}): Promise<string[]> {
   const argv = createArgv(input, operatorId)
-  spawner('gremion-tenant', argv)
+  const spawner = opts.spawner ?? ((cmd, a, tag) => spawnDetached(cmd, a, tag))
+  await spawner(opts.command ?? 'gremion-tenant', argv, `create ${input.slug} (operator ${operatorId})`)
   return argv
 }
