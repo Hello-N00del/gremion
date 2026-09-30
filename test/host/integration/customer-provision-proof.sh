@@ -56,9 +56,12 @@
 #   customer-reconcile reconcile green; a planted platform@ sender fails
 #                    smtp-server; --apply repairs; check-principals --no-allowances
 #   customer-after   TRD-440: the container set and the services unchanged
-# The first-administrator sign-in through the execute-actions mail needs a
-# mailbox the proof can read on the vendor mail server; it is verified on the
-# host (TASK-038, a real browser), not here.
+# OPEN (brief section 1 "Admins sign in"): the first-administrator sign-in
+# through the execute-actions mail (read the link from Stalwart, password +
+# TOTP, code flow through https://<host>/auth/realms/<slug>, 200 on /) is NOT
+# implemented here yet. It needs a mailbox the proof can read on the vendor
+# mail server of a running pooled stack; no decision moves it to TASK-038 --
+# the orchestrator decides (named residual of TASK-043 round 3).
 #
 # Every assertion reads a post-condition (docker inspect, an HTTP status and
 # header, a database row, a Keycloak read-back), never an exit code alone.
