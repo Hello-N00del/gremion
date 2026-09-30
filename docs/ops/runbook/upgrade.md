@@ -92,11 +92,16 @@ docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
    `COMPOSE_FILE` line; do not re-render the env files: `gremion-init-secrets
    --force` regenerates every secret they hold. An `app-<colour>.env` never names
    `docker-compose.state-pins.yml`; if one does, remove that entry the same way.
+   The file holds secrets: run the edit as `gremion`, its owner (GNU `sed -i`
+   writes a new file that keeps the mode but takes the owner of whoever runs it),
+   and check owner and mode afterwards.
 
 ```bash
 f=/opt/gremion/etc/env/state.env
+stat -c '%U %a %n' "$f"            # gremion 600
 grep -n '^COMPOSE_FILE=' "$f"      # ...:docker-compose.pins.yml means rendered before the split
-sed -i '/^COMPOSE_FILE=/s/docker-compose\.pins\.yml/docker-compose.state-pins.yml/' "$f"
+sudo -u gremion sed -i '/^COMPOSE_FILE=/s/docker-compose\.pins\.yml/docker-compose.state-pins.yml/' "$f"
+stat -c '%U %a %n' "$f"            # still gremion 600
 grep -n '^COMPOSE_FILE=' "$f"      # docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml
 grep -n 'state-pins' /opt/gremion/etc/env/app-blue.env /opt/gremion/etc/env/app-green.env   # nothing
 ```
