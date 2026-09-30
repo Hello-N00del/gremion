@@ -32,6 +32,9 @@
 #                     (a probe that cannot tell ready from not ready)
 #   SHIM_REGISTER     fail: the tenant_domain registration writes no row
 #   SHIM_COMPOSE_CONFIG fail: `docker compose ... config` fails (names, counts)
+#   SHIM_PS           fail: every `docker ps` exits 1 with an engine error on
+#                     stderr (R29-MD-A: counts() must not read that as 0 containers)
+#   SHIM_COMPOSE_LS   fail: `docker compose ls` exits 1 (counts()' compose-ls reading)
 set -u
 S="${SHIM_STACK:?SHIM_STACK required}"
 D="${SHIM_DIR:?SHIM_DIR required}"
@@ -82,6 +85,10 @@ printf '%s\n' "$*" >> "$D/calls.log"
 args=" $* "
 case "$1" in
     ps)
+        if [[ "${SHIM_PS:-}" == fail ]]; then
+            echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+            exit 1
+        fi
         case "$args" in
             *"project=${S}-app-blue "*)
                 case "$args" in
@@ -175,7 +182,12 @@ case "$1" in
                     *) printf '{"name":"%s-%s","networks":{"default":{"name":"%s-%s_default"}},"volumes":{"data":{"name":"%s_data"}}}\n' \
                            "$S" "$proj" "$S" "$proj" "$S" ;;
                 esac ;;
-            ls) echo '[]' ;;
+            ls)
+                if [[ "${SHIM_COMPOSE_LS:-}" == fail ]]; then
+                    echo "shim-compose-ls-error: cannot list compose projects" >&2
+                    exit 1
+                fi
+                echo '[]' ;;
             *) echo "shim: unhandled compose call: $*" >&2; exit 1 ;;
         esac ;;
     *) echo "shim: unhandled docker call: $*" >&2; exit 1 ;;

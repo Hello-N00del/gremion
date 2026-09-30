@@ -297,7 +297,10 @@ COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
 COMPOSE_FILE=$(compose_file_abs)
 ENV
     )
-    ( cd "$driver" && bash scripts/backup.sh ) || die "kernel dump script failed" 1
+    # R29-MD-A: umask 077 here reaches the keycloak/gremion/control dumps of the
+    # kernel script copy this host already carries, before any release ships the
+    # script's own umask line. It runs with the deploy user's umask otherwise.
+    ( umask 077; cd "$driver" && bash scripts/backup.sh ) || die "kernel dump script failed" 1
     rm -rf "$scratch" "${driver}/.env"
     record_kernel_dumps
     ok "kernel dumps complete in ${DUMP_DIR}"
@@ -429,8 +432,11 @@ dump_database() {    # $1 = service, $2 = database
     dst="$(staged_dump_path "$1" "$2")"
     tmp="${dst}.part"
     rm -f "$tmp"
-    if ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
-            pg_dump -U "$POSTGRES_USER" "$2" </dev/null ) | gzip >"$tmp"; then
+    # R29-MD-A: the .part is created private from its first byte (umask 077 in
+    # the subshell that holds the redirect); mv keeps the mode. No global umask:
+    # this program also writes runtime/ files other readers use.
+    if ( umask 077; ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
+            pg_dump -U "$POSTGRES_USER" "$2" </dev/null ) | gzip >"$tmp" ); then
         mv -f "$tmp" "$dst"
     else
         rm -f "$tmp"
@@ -581,7 +587,14 @@ archive_volumes() {
 # the previous night's staged tree intact as a local restore source.
 reset_stage_dir() {
     rm -rf "$DUMP_DIR"
-    mkdir -p "$DUMP_DIR"
+    # R29-MD-A: the staged tree holds every database dump, i.e. personal data
+    # (GDPR Art. 32(1)(b)), and this program runs as the deploy user with umask
+    # 022. The directory is created private and its mode is read back, so a
+    # dump can never be staged into a tree other local accounts can list.
+    ( umask 077; mkdir -p "$DUMP_DIR" )
+    chmod 700 "$DUMP_DIR"
+    [ "$(stat -c %a "$DUMP_DIR")" = 700 ] \
+        || die "staged tree is not mode 700 after reset: ${DUMP_DIR}" 1
     # Post-condition read from the filesystem, not from rm's exit code. The
     # find is checked too: a guard whose own command failed would report an
     # empty tree for every tree there is.

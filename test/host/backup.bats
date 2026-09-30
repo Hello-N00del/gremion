@@ -1585,3 +1585,55 @@ exit 0'
     [ -s "${d}/pgkernel__t_pilot.sql.gz" ]
     [[ "$output" == *"every enumerated database has a non-empty dump (5)"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# R29-MD-A (A1b): the staged database dumps are personal data. The deploy user
+# runs gremion-backup with umask 022 and its own kernel script wrote the three
+# kernel dumps under it, so keycloak.sql.gz, gremion.sql.gz and control.sql.gz
+# were world-readable inside a 0755 stage tree. Every dump is now created
+# private (umask 077) and the stage directory is 0700 (GDPR Art. 32(1)(b)).
+# Modes are asserted after a run under an outer umask 022, on the files.
+# ---------------------------------------------------------------------------
+
+@test "the staged tree is 0700 and every staged database dump is 0600, the kernel three included" {
+    fs_carries_modes "$GREMION_ROOT" || skip "this filesystem does not store POSIX modes (proven in the bats runner)"
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    umask 022
+    run "$BACKUP" --class daily --label private-1
+    [ "$status" -eq 0 ]
+    local d="${GREMION_ROOT}/backups/current" f n=0
+    [ "$(stat -c %a "$d")" = 700 ] || { echo "the staged tree is mode $(stat -c %a "$d"), not 700" >&2; return 1; }
+    for f in keycloak gremion control; do
+        [ -s "${d}/${f}.sql.gz" ] || { echo "the kernel dump ${f}.sql.gz was not staged" >&2; return 1; }
+        [ "$(stat -c %a "${d}/${f}.sql.gz")" = 600 ] \
+            || { echo "${f}.sql.gz is mode $(stat -c %a "${d}/${f}.sql.gz"), not 600" >&2; return 1; }
+    done
+    for f in "$d"/postgres__*.sql.gz; do
+        [ -e "$f" ] || continue
+        n=$((n + 1))
+        [ "$(stat -c %a "$f")" = 600 ] || { echo "${f##*/} is mode $(stat -c %a "$f"), not 600" >&2; return 1; }
+    done
+    [ "$n" -ge 2 ] || { echo "expected dump_database's own outputs (postgres__*.sql.gz), found ${n}" >&2; return 1; }
+}
+
+@test "the real kernel scripts/backup.sh writes its three dumps 0600 under umask 022" {
+    fs_carries_modes "$GREMION_ROOT" || skip "this filesystem does not store POSIX modes (proven in the bats runner)"
+    # The real script in a scratch release tree: a docker shim answers pg_dump
+    # with bytes, and a failing restic stops the run at phase 2, after the dumps.
+    # The exit code is not asserted; the files are.
+    local t="${GREMION_ROOT}/kernel-tree"
+    mkdir -p "${t}/scripts"
+    cp "${PROJECT_ROOT}/scripts/backup.sh" "${t}/scripts/backup.sh"
+    printf 'POSTGRES_USER=postgres\nRESTIC_PASSWORD=scratch-not-a-secret\nBACKUP_DIR=%s/bk\n' "$t" > "${t}/.env"
+    shim docker 'case "$*" in *pg_dump*) printf "PGDUMP" ;; esac'
+    shim restic 'exit 1'
+    umask 022
+    run bash "${t}/scripts/backup.sh"
+    assert_recorded docker "pg_dump -U postgres keycloak"
+    local f
+    for f in keycloak gremion control; do
+        [ -s "${t}/bk/current/${f}.sql.gz" ] || { echo "${f}.sql.gz was not written: ${output}" >&2; return 1; }
+        [ "$(stat -c %a "${t}/bk/current/${f}.sql.gz")" = 600 ] \
+            || { echo "${f}.sql.gz is mode $(stat -c %a "${t}/bk/current/${f}.sql.gz"), not 600" >&2; return 1; }
+    done
+}

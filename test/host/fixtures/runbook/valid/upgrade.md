@@ -12,7 +12,14 @@ The TRD-206 pre-migration dump (R18-4), TRD-348 images, TRD-189 blue/green.
 
 ## Steps
 
-1. **Deploy the tag.**
+1. **Take the pre-migration dump.**
+
+```bash
+dump="${dumpdir}/pre-migration-${TAG}-${db}-$(date -u +%Y%m%dT%H%M%SZ).dump"
+( umask 077; set -o noclobber; docker compose --env-file /opt/gremion/etc/env/state.env exec -T "$svc" pg_dump -U postgres -Fc "$db" > "${dump}.part" ) && mv -- "${dump}.part" "$dump"
+```
+
+2. **Deploy the tag.**
 
 ```bash
 printf 'TOKEN %s\n' "$GHCR_TOKEN" | sudo -u gremion /opt/gremion/bin/gremion-deploy "$TAG"

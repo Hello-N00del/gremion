@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 2.0.0
+- Version: 3.0.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -360,10 +360,18 @@ step 17 runs): the customer's realm holds a `LOGIN` event.
 
 ```bash
 kc="$(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
-docker exec "$kc" /opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080 \
-  --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"
+KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$kc" /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://127.0.0.1:8080/auth --realm master --user "$KEYCLOAK_ADMIN"
 docker exec "$kc" /opt/keycloak/bin/kcadm.sh get events -r "<customer realm>" -q type=LOGIN -q max=1
+docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config
 ```
+
+The password reaches kcadm through `KC_CLI_PASSWORD`, handed to `docker exec` by
+name, so it is on no command line of the host (and, unlike `--password`, on none
+inside the container either). The `--server` URL carries Keycloak's relative
+path `/auth` (`KC_HTTP_RELATIVE_PATH` in `docker-compose.yml`); without it the
+login answers 404. The last command removes the token kcadm cached in the
+container.
 
 The two snapshot files of step 18 read PASS for every row:
 
@@ -388,5 +396,6 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). The post-condition's sign-in observation passes the Keycloak admin password to kcadm as `KC_CLI_PASSWORD` by name (no `--password` on any command line), uses `--server` with Keycloak's `/auth` relative path (the URL without it answered 404) and removes kcadm's cached token afterwards. Major: a post-condition changed (Q9).
 - 2.0.0 (2026-09-28): step 12 runs `gremion-render` as the deploy user before the state project's first `up`, links the ipcrypt key into the release tree, and observes both (TASK-037 review).
 - 1.0.0 (2026-09-27): first version (TASK-037).
