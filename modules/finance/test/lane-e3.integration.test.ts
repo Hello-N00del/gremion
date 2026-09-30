@@ -357,10 +357,12 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
             'fints.org/de/hersteller/produktregistrierung before enabling FinTS sync',
         ],
       })
-      const row = await sql<{ last_sync_status: string; last_sync_error: string }[]>`
-        SELECT last_sync_status, last_sync_error FROM finance.fints_config WHERE bank_account_id = ${bankAccountId}`
+      const row = await sql<{ last_sync_status: string; last_sync_error: string; last_sync_at: Date | null }[]>`
+        SELECT last_sync_status, last_sync_error, last_sync_at FROM finance.fints_config WHERE bank_account_id = ${bankAccountId}`
       expect(row[0]!.last_sync_status).toBe('failed')
       expect(row[0]!.last_sync_error).toMatch(/FINTS_PRODUCT_ID/)
+      // F1-FIX-05-K (K4#13): a failed sync leaves last_sync_at unchanged (it was never synced).
+      expect(row[0]!.last_sync_at).toBeNull()
       // and the Lane A status read reflects it
       const status = await (await fetch(`${base}/api/v1/bank-accounts/${bankAccountId}/fints`, { headers: scopeHeaders(AUDITOR) })).json()
       expect(status.last_sync_status).toBe('failed')
