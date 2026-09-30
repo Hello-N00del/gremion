@@ -33,6 +33,32 @@
 #                  read-only rootfs, no capability; the HEALTHCHECK stays
 #                  healthy with Keycloak and PostgreSQL stopped
 #   panel-down     everything panel-up created, by name
+#   (PROOF_STACK=t043-<sha8> names a panel run whose HEAD has moved since.)
+#
+# CUSTOMER (section 1): run against a RUNNING pooled stack -- this script
+# never brings one up. Either a scratch stack from pooled-stack-proof.sh
+# (POOLED_STACK + POOLED_ENV_DIR; customer-layout lays its GREMION_ROOT out
+# like a host's) or a host after TASK-038's re-init (PROOF_GREMION_ROOT=/opt/gremion,
+# POOLED_STACK=<stack>, POOLED_ENV_DIR=/opt/gremion/etc/env). The operator id
+# of every mutating verb is PROOF_OPERATOR_ID (a platform-realm user id).
+#   customer-layout  scratch only: etc/env, runtime/active-colour, etc/edge
+#   customer-before  TRD-440 baseline (running containers, every project's
+#                    config --services), pg_database lists, no gremion_platform
+#   customer-create  `--enable board` refused by name before any write; then
+#                    `gremion-tenant create proof-x --enable calendar,vault` and a
+#                    second customer proof-y; every section 1 "Create" line
+#   customer-rerun   a second create: phase A and B run nothing, the broker is
+#                    not reloaded, the ledger and the database lists unchanged
+#   customer-suspend suspend proof-x: status, realm disabled, the tenant host
+#                    503 through the edge, broker module users evicted, the
+#                    principal revoked; proof-y untouched
+#   customer-resume  every one of those restored (a fresh principal)
+#   customer-reconcile reconcile green; a planted platform@ sender fails
+#                    smtp-server; --apply repairs; check-principals --no-allowances
+#   customer-after   TRD-440: the container set and the services unchanged
+# The first-administrator sign-in through the execute-actions mail needs a
+# mailbox the proof can read on the vendor mail server; it is verified on the
+# host (TASK-038, a real browser), not here.
 #
 # Every assertion reads a post-condition (docker inspect, an HTTP status and
 # header, a database row, a Keycloak read-back), never an exit code alone.
@@ -343,8 +369,208 @@ phase_panel_down() {
     else bad "panel-down left resources (containers/networks: $left)"; fi
 }
 
+# ── customer (section 1), against a RUNNING pooled stack ───────────────────
+PSTACK="${POOLED_STACK:-}"
+PENV="${POOLED_ENV_DIR:-}"
+X=proof-x                 # the customer under proof
+Y=proof-y                 # the second customer (unaffected by X's suspend)
+XT="${X//-/_}"
+need_pooled() {
+    [[ -n "$PSTACK" && -d "$PENV" && -f "$PENV/state.env" ]] || die "set POOLED_STACK and POOLED_ENV_DIR (a running pooled stack's env files)"
+    [[ "${PROOF_OPERATOR_ID:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
+        || die "set PROOF_OPERATOR_ID (a platform-realm user id, lowercase uuid)"
+}
+penv() { sed -n "s/^$1=//p" "$PENV/state.env" | tr -d '"\r' | tail -n1; }
+croot() { if [[ -n "${PROOF_GREMION_ROOT:-}" ]]; then printf '%s' "$PROOF_GREMION_ROOT"; else penv GREMION_ROOT; fi; }
+svc() { docker ps -q --filter "label=com.docker.compose.project=${PSTACK}-$1" --filter "label=com.docker.compose.service=$2" | head -n1; }
+q() { # <database> <sql> -- one value per line from the state postgres
+    docker exec -i "$(svc state postgres)" psql -v ON_ERROR_STOP=1 -tAqU postgres -d "$1" -c "$2" | tr -d '\r'
+}
+qm() { # <module> <sql> -- the module's own server
+    docker exec -i "$(svc state "$1-postgres")" psql -v ON_ERROR_STOP=1 -tAqU "$1" -d postgres -c "$2" | tr -d '\r'
+}
+skc() { # kcadm in the state keycloak (the admin password by a name-only -e)
+    local cid; cid="$(svc state keycloak)"
+    KC_LOGIN_PASSWORD="$(penv KEYCLOAK_ADMIN_PASSWORD)" docker exec -e KC_LOGIN_PASSWORD "$cid" sh -c \
+        '/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user "$0" --password "$KC_LOGIN_PASSWORD" >/dev/null' \
+        "$(penv KEYCLOAK_ADMIN)"
+    docker exec "$cid" /opt/keycloak/bin/kcadm.sh "$@"
+}
+tenant() { # gremion-tenant against the laid-out root, as the operator
+    MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
+        GREMION_OPERATOR_ID="$PROOF_OPERATOR_ID" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
+        bash "$ROOT/infra/host/bin/gremion-tenant" "$@"
+}
+accounts() { # the rendered NATS accounts file(s)
+    docker run --rm --name "${STACK}-accounts" -v "${PSTACK}_nats_accounts:/a:ro" --entrypoint sh "$PG_IMAGE" -c 'cat /a/*' | tr -d '\r'
+}
+dbs_kernel() { q postgres "SELECT datname FROM pg_database WHERE datname LIKE 't\\_%' ORDER BY 1"; }
+dbs_module() { qm "$1" "SELECT datname FROM pg_database WHERE datname LIKE 't\\_%' ORDER BY 1"; }
+edge_status() { # <host> -- the tenant host through the edge Traefik
+    local port; port="$(penv EDGE_HTTPS_PORT)"; port="${port:-443}"
+    curl -ksS -o /dev/null -w '%{http_code}' --max-time 20 --resolve "$1:${port}:127.0.0.1" "https://$1:${port}/" 2>/dev/null || echo 000
+}
+customer_id() { q control "SELECT id FROM tenant WHERE slug = '$1'"; }
+host_of() { printf 'rat.%s.%s' "$1" "$(penv PLATFORM_DOMAIN)"; }
+trd440() { # the container count and every project's service list
+    local p
+    printf 'running=%s\n' "$(docker ps -q | grep -c . || true)"
+    for p in state app-blue app-green ops mail; do
+        [[ -f "$PENV/$p.env" ]] || continue
+        printf '%s: %s\n' "$p" "$( (cd "$ROOT" && docker compose --env-file "$(host_path "$PENV/$p.env")" config --services 2>/dev/null) | sort | tr '\n' ' ')"
+    done
+}
+
+phase_customer_layout() {
+    need_pooled
+    [[ -z "${PROOF_GREMION_ROOT:-}" ]] || die "customer-layout lays out a SCRATCH root; PROOF_GREMION_ROOT names a real one"
+    local r; r="$(croot)"; [[ -d "$r" ]] || die "the pooled stack's GREMION_ROOT ${r} is absent"
+    mkdir -p "$r/etc/env" "$r/runtime" "$r/etc/edge"
+    local f
+    for f in state app-blue app-green mail ops; do [[ -f "$PENV/$f.env" ]] && cp "$PENV/$f.env" "$r/etc/env/$f.env"; done
+    [[ -f "$r/runtime/active-colour" ]] || echo blue > "$r/runtime/active-colour"
+    ok "customer-layout: ${r} carries etc/env, runtime/active-colour ($(cat "$r/runtime/active-colour")) and etc/edge"
+}
+
+phase_customer_before() {
+    need_pooled
+    mkdir -p "$OUT/ledger"
+    trd440 > "$OUT/ledger/trd440-before.txt"
+    [[ "$(sed -n 's/^running=//p' "$OUT/ledger/trd440-before.txt")" -gt 0 ]] || die "no container runs: this is not a running pooled stack"
+    dbs_kernel > "$OUT/ledger/dbs-kernel-before.txt"
+    for m in calendar vault; do dbs_module "$m" > "$OUT/ledger/dbs-$m-before.txt"; done
+    if [[ -z "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]; then
+        ok "customer-before: no gremion_platform yet (Q15: create must bootstrap it)"
+    else
+        info "gremion_platform already exists (a rerun or a host after init): the bootstrap line is proven by the first run only"
+    fi
+    ok "customer-before: TRD-440 baseline and the database lists recorded"
+}
+
+phase_customer_create() {
+    need_pooled
+    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" out rc id kdb n
+    [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
+    # R29-I1: board is refused BY NAME, before any write.
+    rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "it@$(host_of "$X")" \
+        --council-admin "rat@$(host_of "$X")" --enable calendar,board 2>&1)" || rc=$?
+    if (( rc != 0 )) && [[ "$out" == *board* ]] && [[ -z "$(customer_id "$X")" ]]; then
+        ok "customer-create: --enable board refused by name (exit ${rc}), no control row written"
+    else bad "customer-create: --enable board was not refused before any write (exit ${rc})"; fi
+
+    tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "it@$(host_of "$X")" \
+        --council-admin "rat@$(host_of "$X")" --enable calendar,vault > "$OUT/ledger/create-x.log" 2>&1 \
+        || { tail -n 25 "$OUT/ledger/create-x.log" >&2; bad "customer-create: gremion-tenant create ${X} failed"; return; }
+    tenant create "$Y" --host "$(host_of "$Y")" --config "$cfg" --it-admin "it@$(host_of "$Y")" \
+        --council-admin "rat@$(host_of "$Y")" > "$OUT/ledger/create-y.log" 2>&1 \
+        || { tail -n 25 "$OUT/ledger/create-y.log" >&2; bad "customer-create: gremion-tenant create ${Y} failed"; return; }
+    ok "customer-create: gremion-tenant create ${X} (calendar, vault) and ${Y} exited 0"
+
+    if [[ -n "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]; then ok "customer-create: gremion_platform exists (bootstrapped, Q15)"; else bad "customer-create: no gremion_platform"; fi
+    n="$(q gremion_platform "SELECT count(*) FROM plt.module_version")"
+    if [[ "$n" -ge "$(find "$ROOT/modules" -maxdepth 2 -name module.json | grep -c .)" ]]; then ok "customer-create: ${n} plt.module_version row(s), one per catalogue module (Q20)"; else bad "customer-create: plt.module_version holds ${n} row(s)"; fi
+
+    local yid
+    id="$(customer_id "$X")"; kdb="t_${id//-/}__kernel"; yid="$(customer_id "$Y")"
+    [[ -n "$id" && -n "$yid" ]] || { bad "customer-create: no control row for ${X} or ${Y}"; return; }
+    # X's new databases (Y's kernel database is set aside: Y enabled nothing).
+    comm -13 "$OUT/ledger/dbs-kernel-before.txt" <(dbs_kernel) | grep -v "^t_${yid//-/}__" > "$OUT/ledger/dbs-kernel-new-x.txt" || true
+    if [[ "$(cat "$OUT/ledger/dbs-kernel-new-x.txt")" == "$kdb" ]]; then ok "customer-create: the kernel server gained exactly ${kdb}"
+    else bad "customer-create: the kernel server gained [$(tr '\n' ' ' < "$OUT/ledger/dbs-kernel-new-x.txt")], want ${kdb}"; fi
+    for m in calendar vault; do
+        if [[ "$(comm -13 "$OUT/ledger/dbs-$m-before.txt" <(dbs_module "$m"))" == "t_${id//-/}__${m}" ]]; then ok "customer-create: ${m}-postgres gained exactly t_…__${m}"
+        else bad "customer-create: ${m}-postgres did not gain exactly t_${id//-/}__${m}"; fi
+    done
+    # The kernel database: gremion-ui's own ledger shape, no seed, one body.
+    if [[ "$(q "$kdb" "SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_name = 'schema_migrations'")" == "applied_at,filename" ]]; then ok "customer-create: schema_migrations is gremion-ui's (filename, applied_at), no sha256 (Q3)"; else bad "customer-create: schema_migrations has another shape"; fi
+    if [[ "$(q "$kdb" "SELECT count(*) FROM schema_migrations WHERE filename LIKE '%seed%'")" == 0 ]]; then ok "customer-create: no *_seed.sql applied (GREMION_DISABLE_SEEDS)"; else bad "customer-create: a seed file was applied"; fi
+    if [[ "$(q "$kdb" "SELECT count(*) FROM org_units")/$(q "$kdb" "SELECT count(*) FROM committees")" == "1/0" ]]; then ok "customer-create: org_units = 1 (the council), committees = 0"; else bad "customer-create: org_units/committees are not 1/0"; fi
+    # The realm: one group, two administrators, the customer's own sender.
+    if [[ "$(skc get groups -r "$X" --fields name | jq 'length')" == 1 ]]; then ok "customer-create: realm ${X} holds one group (the first body)"; else bad "customer-create: realm ${X} group count"; fi
+    local users; users="$(skc get users -r "$X" --fields username,requiredActions | jq -c '[.[] | select(.username | startswith("service-account-") | not)] | length')"
+    if [[ "$users" == 2 ]]; then ok "customer-create: two administrators in ${X}"; else bad "customer-create: ${users} user(s) in ${X}, want 2"; fi
+    local smtp; smtp="$(skc get "realms/$X" --fields smtpServer | jq -c '.smtpServer | [.user, .from, .host, .port, .starttls]')"
+    if [[ "$smtp" == "[\"kc-${XT}@$(penv PLATFORM_DOMAIN)\",\"kc-${XT}@$(penv PLATFORM_DOMAIN)\",\"mail.$(penv PLATFORM_DOMAIN)\",\"587\",\"true\"]" ]]; then ok "customer-create: the realm sends as kc-${XT}@ through mail.<domain>:587 STARTTLS (R-E5b)"; else bad "customer-create: realm SMTP ${smtp}"; fi
+    # The control row, the ledger, the broker, the router.
+    if [[ "$(q control "SELECT count(*) FROM tenant_domain WHERE tenant_id = '${id}' AND is_primary")" == 1 ]]; then ok "customer-create: one primary tenant_domain row binds $(host_of "$X")"; else bad "customer-create: tenant_domain rows"; fi
+    if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "8/8" ]]; then ok "customer-create: eight done ledger rows, one per kind (Q2)"; else bad "customer-create: the ledger is not eight done rows"; fi
+    local acc; acc="$(accounts)"
+    if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# vault@' <<< "$acc"; then
+        ok "customer-create: the broker account holds kernel and calendar users, none for vault (no flow, Q4)"
+    else bad "customer-create: the broker account's users are not kernel+calendar"; fi
+    if grep -q "tenant-${X}-kc:" "$(croot)/etc/edge/tenant-${X}.yml" 2>/dev/null; then ok "customer-create: etc/edge/tenant-${X}.yml carries the realm router (Q16, Q17)"; else bad "customer-create: no router file with the realm router"; fi
+    if [[ "$(edge_status "$(host_of "$X")")" != 503 && "$(edge_status "$(host_of "$X")")" != 000 ]]; then ok "customer-create: $(host_of "$X") is served through the edge"; else bad "customer-create: $(host_of "$X") is not served"; fi
+}
+
+phase_customer_rerun() {
+    need_pooled
+    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" id before after b
+    id="$(customer_id "$X")"
+    before="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
+    tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "it@$(host_of "$X")" \
+        --council-admin "rat@$(host_of "$X")" --enable calendar,vault > "$OUT/ledger/rerun-x.log" 2>&1 \
+        || { tail -n 25 "$OUT/ledger/rerun-x.log" >&2; bad "customer-rerun: the second create failed"; return; }
+    after="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
+    if [[ "$before" == "$after" ]]; then ok "customer-rerun: the ledger is unchanged (${after} rows)"; else bad "customer-rerun: the ledger grew ${before} -> ${after}"; fi
+    b="$(grep -h '^{"phase":"b"' "$OUT/ledger/rerun-x.log" | tail -n1)"
+    if [[ "$(jq -c '[.reloaded, .ran]' <<< "${b:-{\}}")" == '[false,[]]' ]]; then ok "customer-rerun: phase B ran nothing and did not reload the broker"; else bad "customer-rerun: phase B was ${b:-silent}"; fi
+    if [[ "$(grep -h '^{"phase":"a"' "$OUT/ledger/rerun-x.log" | tail -n1 | jq -c '.ran')" == '[]' ]]; then ok "customer-rerun: phase A ran nothing"; else bad "customer-rerun: phase A ran steps"; fi
+}
+
+phase_customer_suspend() {
+    need_pooled
+    tenant suspend "$X" > "$OUT/ledger/suspend-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/suspend-x.log" >&2; bad "customer-suspend: suspend failed"; return; }
+    if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == suspended ]]; then ok "customer-suspend: status suspended"; else bad "customer-suspend: status"; fi
+    if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == false ]]; then ok "customer-suspend: realm ${X} disabled (no sign-in, no token)"; else bad "customer-suspend: realm still enabled"; fi
+    if [[ "$(edge_status "$(host_of "$X")")" == 503 ]]; then ok "customer-suspend: $(host_of "$X") answers 503 (no tenant content)"; else bad "customer-suspend: $(host_of "$X") answers $(edge_status "$(host_of "$X")")"; fi
+    if grep -q '# calendar@' <<< "$(accounts)"; then bad "customer-suspend: the calendar broker user is still rendered"; else ok "customer-suspend: the module broker users are evicted"; fi
+    if [[ "$(bash "$ROOT/infra/host/bin/gremion-vendor-mail" principals list --tenant "$XT" 2>/dev/null | grep -c "kc-${XT}@" || true)" == 0 ]]; then ok "customer-suspend: the principal kc-${XT}@ is revoked (R-E5a)"; else bad "customer-suspend: the principal still exists"; fi
+    if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${Y}'")" == active && "$(edge_status "$(host_of "$Y")")" != 503 ]]; then ok "customer-suspend: ${Y} is untouched"; else bad "customer-suspend: ${Y} was affected"; fi
+}
+
+phase_customer_resume() {
+    need_pooled
+    tenant resume "$X" > "$OUT/ledger/resume-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/resume-x.log" >&2; bad "customer-resume: resume failed"; return; }
+    if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == active ]]; then ok "customer-resume: status active"; else bad "customer-resume: status"; fi
+    if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == true ]]; then ok "customer-resume: realm enabled"; else bad "customer-resume: realm still disabled"; fi
+    if [[ "$(edge_status "$(host_of "$X")")" != 503 ]]; then ok "customer-resume: $(host_of "$X") serves again"; else bad "customer-resume: still 503"; fi
+    if grep -q '# calendar@' <<< "$(accounts)"; then ok "customer-resume: the calendar broker user is back"; else bad "customer-resume: no calendar broker user"; fi
+    if [[ "$(bash "$ROOT/infra/host/bin/gremion-vendor-mail" principals list --tenant "$XT" 2>/dev/null | grep -c "kc-${XT}@" || true)" == 1 ]]; then ok "customer-resume: a fresh principal kc-${XT}@ exists"; else bad "customer-resume: no principal"; fi
+}
+
+phase_customer_reconcile() {
+    need_pooled
+    if tenant reconcile "$X" > "$OUT/ledger/reconcile-1.log" 2>&1; then ok "customer-reconcile: ${X} reconciles green"
+    else tail -n 20 "$OUT/ledger/reconcile-1.log" >&2; bad "customer-reconcile: ${X} is not green"; fi
+    skc update "realms/$X" -s "smtpServer.from=platform@$(penv PLATFORM_DOMAIN)" >/dev/null
+    if tenant reconcile "$X" > "$OUT/ledger/reconcile-2.log" 2>&1; then bad "customer-reconcile: a platform@ sender passed"
+    elif grep -q 'smtp-server' "$OUT/ledger/reconcile-2.log"; then ok "customer-reconcile: a platform@ sender fails smtp-server"
+    else bad "customer-reconcile: the failure does not name smtp-server"; fi
+    if tenant reconcile "$X" --apply > "$OUT/ledger/reconcile-3.log" 2>&1; then ok "customer-reconcile: --apply repaired it by host rotation (Q7)"
+    else tail -n 20 "$OUT/ledger/reconcile-3.log" >&2; bad "customer-reconcile: --apply did not repair"; fi
+    if bash "$ROOT/infra/host/bin/gremion-vendor-mail" check-principals --host --no-allowances > "$OUT/ledger/check-principals.log" 2>&1; then
+        ok "customer-reconcile: check-principals --no-allowances is green over two customers (Q14)"
+    else bad "customer-reconcile: check-principals failed"; fi
+}
+
+phase_customer_after() {
+    need_pooled
+    trd440 > "$OUT/ledger/trd440-after.txt"
+    if diff -q "$OUT/ledger/trd440-before.txt" "$OUT/ledger/trd440-after.txt" >/dev/null; then
+        ok "customer-after: TRD-440 -- running containers and every project's services unchanged by two customers"
+    else bad "customer-after: TRD-440 moved: $(diff "$OUT/ledger/trd440-before.txt" "$OUT/ledger/trd440-after.txt" | tr '\n' ' ')"; fi
+}
+
 run_phase() {
     case "$1" in
+        customer-layout) phase_customer_layout ;;
+        customer-before) phase_customer_before ;;
+        customer-create) phase_customer_create ;;
+        customer-rerun) phase_customer_rerun ;;
+        customer-suspend) phase_customer_suspend ;;
+        customer-resume) phase_customer_resume ;;
+        customer-reconcile) phase_customer_reconcile ;;
+        customer-after) phase_customer_after ;;
         panel-image) phase_panel_image ;;
         panel-up) phase_panel_up ;;
         panel-realm) phase_panel_realm ;;
