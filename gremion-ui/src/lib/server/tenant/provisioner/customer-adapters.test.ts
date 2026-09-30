@@ -46,7 +46,8 @@ const C = { id: '0192f1a2-3b4c-7d5e-8f60-718293a4b5c6', slug: 'musterstadt', tok
 function kcFake(exists: boolean) {
   return {
     realmExists: vi.fn(async () => exists),
-    createRealm: vi.fn(async () => {}),
+    // typed with the parameter it receives, so mock.calls[0][0] type-checks (review B2-HIGH, r2)
+    createRealm: vi.fn(async (_doc: Record<string, unknown>) => {}),
     configureStepupFlow: vi.fn(async () => {}),
     assignServiceAccountRealmRoles: vi.fn(async () => {}),
   }
@@ -83,7 +84,7 @@ describe('customerAdapters.realm.ensureRealm', () => {
     const { a, written } = adapters(kc)
     await a.realm.ensureRealm(C)
     expect(kc.createRealm).toHaveBeenCalledOnce()
-    const doc = kc.createRealm.mock.calls[0]![0] as Record<string, unknown>
+    const doc = kc.createRealm.mock.calls[0]![0]
     expect(doc.realm).toBe('musterstadt')
     expect(doc).not.toHaveProperty('smtpServer')
     expect(JSON.stringify(doc)).not.toMatch(/__[A-Z_]+__/)
