@@ -118,7 +118,7 @@ describe('finance leaf -- one open approval and one live payment_order per appro
   it('a double click (two concurrent requests) opens exactly one approval', async () => {
     const expenseId = await makeExpense()
     const [a, b] = await Promise.all([requestApproval(expenseId), requestApproval(expenseId)])
-    expect([a.status, b.status].sort()).toEqual([200, 409])
+    expect([a.status, b.status].sort((x, y) => x - y)).toEqual([200, 409])
     expect(await count(sql<{ n: string }[]>`
       SELECT count(*)::text AS n FROM finance.approval
       WHERE approvable_type = 'expense' AND approvable_id = ${expenseId}`)).toBe(1)
