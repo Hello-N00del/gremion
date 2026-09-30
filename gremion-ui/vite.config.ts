@@ -16,7 +16,7 @@ const chromiumLaunch = {
   ...(process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : {}),
   ...(process.env.CHROMIUM_SHOW_SCROLLBARS === '1' ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {})
 }
-const BROWSER_TESTS = 'src/lib/components/layout/**/*.browser.test.ts'
+const BROWSER_TESTS = ['src/lib/components/**/*.browser.test.ts', 'src/routes/**/*.browser.test.ts']
 const DSF2_BROWSER_TESTS = 'src/lib/components/layout/**/*.dsf2.browser.test.ts'
 
 export default defineConfig({
@@ -83,7 +83,7 @@ export default defineConfig({
         resolve: { conditions: ['browser', 'development'] },
         test: {
           name: 'browser',
-          include: [BROWSER_TESTS],
+          include: BROWSER_TESTS,
           exclude: [...configDefaults.exclude, DSF2_BROWSER_TESTS],
           globals: true,
           fileParallelism: false,
