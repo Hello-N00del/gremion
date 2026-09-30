@@ -167,7 +167,7 @@ write_router() {   # <slug>
     if [[ ! -s "$tmp" ]] || ! grep -q '^  routers:' "$tmp"; then
         die "render-router ${slug} printed no router document" "$GREMION_EXIT_ASSERT"
     fi
-    grep -q "tenant-${slug}-kc:" "$tmp" || die "the router document of ${slug} carries no realm router (Q16)" "$GREMION_EXIT_ASSERT"
+    grep -qF "    tenant-${slug}.kc:" "$tmp" || die "the router document of ${slug} carries no realm router (Q16)" "$GREMION_EXIT_ASSERT"
     chmod 644 "$tmp"
     sync "$tmp" 2>/dev/null || true
     mv -f "$tmp" "$final" || die "could not move the router file into place: ${final}" "$GREMION_EXIT_ASSERT"

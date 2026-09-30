@@ -279,10 +279,15 @@ curl -sI https://not-bound.example.org
 
 Per-host Keycloak routing for a customer's primary host (its issuer host,
 `https://<host>/auth/realms/<slug>`) is in the customer's router file, not in
-the compose files: `tenant-<slug>-kc` routes `/auth/realms/<slug>/` and
+the compose files: `tenant-<slug>.kc` routes `/auth/realms/<slug>/` and
 `/auth/resources/` on that host to `keycloak@docker`, with the host's own pin
-first (TASK-043 Q16). Never `/auth/admin`, never another realm: the admin
-console stays on the apex behind its allowlist.
+first (TASK-043 Q16). The dot in the name is deliberate: no slug can spell it,
+so it never collides with customer `<slug>-kc`'s host router. Never
+`/auth/admin`, never another realm (the render refuses `master`, `platform`
+and any realm but the slug): the admin console stays on the apex behind its
+allowlist. That file is written by `gremion-tenant create` (render-router);
+`syncTenantRouters` does not co-manage it and refuses to rewrite or prune a
+file that carries the realm router.
 
 > **A bare Traefik 404 (no `Location`, no app/login redirect, no gremion-ui
 > marker) is a FALSE GREEN for a host you expected to serve.** Always follow

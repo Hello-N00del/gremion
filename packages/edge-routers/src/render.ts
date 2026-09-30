@@ -81,10 +81,18 @@ export const KEYCLOAK_SERVICE = 'keycloak@docker'
 /** Above the tenant app router (10) on the same host, like the apex Keycloak router. */
 export const KEYCLOAK_ROUTER_PRIORITY = 100
 
-/** `tenant-<slug>-kc`: never a `-<i>` host index, so it cannot collide with a host router. */
+/**
+ * `tenant-<slug>.kc`. The separator is a DOT, which the slug alphabet
+ * (^[a-z0-9-]{1,30}$) cannot spell: `tenant-<slug>-kc` collided with customer
+ * `<slug>-kc`'s host router (review B1, r2), and Traefik keeps one router of a
+ * name, silently dropping the other customer's app or issuer route.
+ */
 export function keycloakRouterName(slug: string): string {
-  return `${routerName(slug, 0)}-kc`
+  return `${routerName(slug, 0)}.kc`
 }
+
+/** Realms a customer host must never expose: Keycloak's own and the operators' (TRD-048). */
+export const RESERVED_REALMS: readonly string[] = Object.freeze(['master', 'platform'])
 
 /**
  * Why a host got no router. Machine-readable so a caller can tell a reserved
@@ -222,6 +230,10 @@ export function renderTenantRouter(input: RenderTenantRouterInput): RenderTenant
   let kcRealm = ''
   if (input.keycloak !== undefined) {
     const realm = assertSlug(input.keycloak?.realm, 'renderTenantRouter keycloak.realm')
+    // The contract, enforced here for every caller (review B1, r2): the tenant's
+    // OWN realm only -- never master, never the ops realm, never another realm.
+    if (RESERVED_REALMS.includes(realm)) throw new Error(`renderTenantRouter: keycloak.realm ${JSON.stringify(realm)} is a reserved realm and is never routed on a customer host`)
+    if (realm !== slug) throw new Error(`renderTenantRouter: keycloak.realm ${JSON.stringify(realm)} is not this tenant's realm (${slug})`)
     const kcHost = typeof input.keycloak.host === 'string' ? normaliseHost(input.keycloak.host) : null
     const owner = routers.find((r) => r.host === kcHost)
     if (!owner) {

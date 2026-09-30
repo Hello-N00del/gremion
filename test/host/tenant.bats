@@ -67,7 +67,7 @@ case " $* " in
     [ -f "$GREMION_ROOT/fail-$verb" ] && exit 1
     case "$verb" in
       render-router)
-        printf "# tenant-%s.yml\nhttp:\n  routers:\n    tenant-%s:\n      rule: \"Host(\`x\`)\"\n    tenant-%s-kc:\n      rule: \"x\"\n" "$slug" "$slug" "$slug" ;;
+        printf "# tenant-%s.yml\nhttp:\n  routers:\n    tenant-%s:\n      rule: \"Host(\`x\`)\"\n    tenant-%s.kc:\n      rule: \"x\"\n" "$slug" "$slug" "$slug" ;;
       reconcile)
         if [ -f "$GREMION_ROOT/smtp-drift" ] && [ "$2" != --verify-only ]; then echo "{\"repairHost\":[\"smtp-server\"]}"; else echo "{\"repairHost\":[]}"; fi ;;
     esac
@@ -109,7 +109,7 @@ create() {
     [ "${lines[3]}" = "tc phase-b alpha-rat" ]
     [ "${lines[4]}" = "tc render-router alpha-rat" ]
     [ "${#lines[@]}" -eq 5 ]
-    grep -q 'tenant-alpha-rat-kc:' "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml"
+    grep -qF '    tenant-alpha-rat.kc:' "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml"
     assert_recorded docker '--operator 8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
     assert_recorded docker '--enable calendar,vault'
     assert_recorded docker ':/run/gremion/tenant-config.json:ro'

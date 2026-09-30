@@ -37,7 +37,7 @@ describe('the realm router (TDD 18)', () => {
   })
 
   it('chains the SAME pin first and the same chain as the host router', () => {
-    const kc = block(yaml, 'tenant-musterstadt-kc')
+    const kc = block(yaml, 'tenant-musterstadt.kc')
     const mws = [...kc.matchAll(/^ {8}- "([^"]+)"$/gm)].map((m) => m[1])
     expect(mws).toEqual(['edge-hostpin-musterstadt@file', 'edge-hsts-custom@docker', 'edge-ratelimit-app@docker', 'edge-perip-musterstadt@file'])
     expect(r.keycloakRouter?.chain).toEqual(r.routers[0]!.chain)
@@ -59,6 +59,26 @@ describe('the realm router (TDD 18)', () => {
   it('refuses a Keycloak host the tenant does not route, and a realm that is not a slug', () => {
     expect(() => render(['rat.musterstadt.example'], { realm: 'musterstadt', host: 'other.example' })).toThrow(/not one of this tenant's routed hosts/)
     expect(() => render(['rat.musterstadt.example'], { realm: '../master', host: 'rat.musterstadt.example' })).toThrow(/invalid slug/)
+  })
+
+  it('refuses master, the ops realm platform, and any realm that is not the tenant slug (review B1, r2)', () => {
+    for (const realm of ['master', 'platform', 'othertenant']) {
+      expect(() => render(['rat.musterstadt.example'], { realm, host: 'rat.musterstadt.example' }), realm).toThrow(/realm/)
+    }
+    expect(() =>
+      renderTenantRouter({ slug: 'master', domains: [{ host: 'rat.master.example' }], ...deps, keycloak: { realm: 'master', host: 'rat.master.example' } }),
+    ).toThrow(/reserved realm/)
+  })
+
+  it("the realm router's name can collide with no other tenant's router: customers foo and foo-kc (review B1, r2)", () => {
+    const foo = renderTenantRouter({ slug: 'foo', domains: [{ host: 'rat.foo.example' }], ...deps, keycloak: { realm: 'foo', host: 'rat.foo.example' } })
+    const fooKc = renderTenantRouter({ slug: 'foo-kc', domains: [{ host: 'rat.foo-kc.example' }], ...deps, keycloak: { realm: 'foo-kc', host: 'rat.foo-kc.example' } })
+    const names = (y: string) => [...y.matchAll(/^ {4}([A-Za-z0-9_.-]+):\s*$/gm)].map((m) => m[1])
+    const a = new Set(names(foo.yaml!))
+    const clash = names(fooKc.yaml!).filter((n) => a.has(n))
+    expect(clash).toEqual([])
+    // no slug can spell it: the slug alphabet has no dot
+    expect(keycloakRouterName('foo')).not.toMatch(/^tenant-[a-z0-9-]{1,30}$/)
   })
 
   it('with two hosts, the realm router sits on the issuer host only', () => {

@@ -14,7 +14,7 @@ describe('renderCustomerRouter', () => {
   it('renders the app router and the realm router for the primary host', () => {
     const yaml = renderCustomerRouter({ slug: 'musterstadt', hosts: ['rat.musterstadt.example'], primaryHost: 'rat.musterstadt.example', ...policy })
     expect(yaml).toContain('tenant-musterstadt:')
-    expect(yaml).toContain('tenant-musterstadt-kc:')
+    expect(yaml).toContain('tenant-musterstadt.kc:')
     expect(yaml).toContain('PathPrefix(`/auth/realms/musterstadt/`) || PathPrefix(`/auth/resources/`)')
     expect(yaml).not.toMatch(/\/auth\/admin/)
   })
