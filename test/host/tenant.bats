@@ -68,6 +68,11 @@ case " $* " in
     case "$verb" in
       render-router)
         printf "# tenant-%s.yml\nhttp:\n  routers:\n    tenant-%s:\n      rule: \"Host(\`x\`)\"\n    tenant-%s.kc:\n      rule: \"x\"\n" "$slug" "$slug" "$slug" ;;
+      init)
+        # the container writes the ops client secret beside the tenant secrets (first run only)
+        mkdir -p "$GREMION_ROOT/tenant-secrets"
+        [ -s "$GREMION_ROOT/etc/secrets/control-panel/client_secret" ] || [ -f "$GREMION_ROOT/no-ops-secret" ] \
+          || echo unit-ops-client-secret > "$GREMION_ROOT/tenant-secrets/platform_client_control-panel" ;;
       reconcile)
         if [ -f "$GREMION_ROOT/smtp-drift" ] && [ "$2" != --verify-only ]; then echo "{\"repairHost\":[\"smtp-server\"]}"; else echo "{\"repairHost\":[]}"; fi ;;
     esac
@@ -193,6 +198,17 @@ create() {
 @test "reconcile without --apply only verifies, and never rotates" {
     touch "${GREMION_ROOT}/smtp-drift"
     run "$LAUNCHER" reconcile alpha-rat
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    run steps
+    [ "$output" = "tc reconcile --verify-only" ] || { echo "$output"; return 1; }
+    [[ "$output" != *"vendor-mail"* ]]
+}
+
+@test "reconcile --apply: a crashed apply (no report) fails loudly and never rotates (review C, r2)" {
+    touch "${GREMION_ROOT}/smtp-drift" "${GREMION_ROOT}/fail-reconcile"
+    run "$LAUNCHER" reconcile alpha-rat --apply
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"no parseable report"* ]] || { echo "$output"; return 1; }
     run steps
     [[ "$output" != *"vendor-mail"* ]]
 }
@@ -234,6 +250,16 @@ create() {
     run steps
     [ "${lines[0]}" = "tc init --panel-origin" ]
     refute_state_secrets
+    # the ops client secret moved into the panel's directory, 0600, and left the tenant secrets
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")" = unit-ops-client-secret ]
+    [ ! -e "${GREMION_ROOT}/tenant-secrets/platform_client_control-panel" ]
+}
+
+@test "init fails loudly when the ops client secret never arrives (review C, r2)" {
+    touch "${GREMION_ROOT}/no-ops-secret"
+    run "$LAUNCHER" init
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"control-panel client secret"* ]]
 }
 
 # shim_kcadm — `docker exec [-i] <kc> kcadm.sh ...` against a fake Keycloak
@@ -243,7 +269,8 @@ shim_kcadm() {
 case " $* " in
   *" config credentials "*) exit 0 ;;
   *" get realms/platform --fields attributes(*) "*)
-    [ -f "$GREMION_ROOT/realm.json" ] || exit 1
+    [ -f "$GREMION_ROOT/kc-500" ] && { echo "HTTP error - 500 Internal Server Error" >&2; exit 1; }
+    [ -f "$GREMION_ROOT/realm.json" ] || { echo "Resource not found for url: http://127.0.0.1:8080/auth/admin/realms/platform" >&2; exit 1; }
     jq "{attributes}" "$GREMION_ROOT/realm.json"; exit 0 ;;
   *" get realms/platform --fields attributes "*)
     # Keycloak 26.6: a bare --fields attributes answers the map EMPTY.
@@ -285,6 +312,19 @@ exit 0'
         run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://other.fixture.example
     [ "$status" -eq 1 ]
     [[ "$output" == *"differs"* ]]
+}
+
+@test "init --realm-only --keycloak-container: a transient kcadm error is never 'absent' -- no create, the client secret untouched (review C, r2)" {
+    shim_kcadm
+    mkdir -p "${GREMION_ROOT}/etc/secrets/control-panel"
+    printf 'the-working-secret\n' > "${GREMION_ROOT}/etc/secrets/control-panel/client_secret"
+    touch "${GREMION_ROOT}/kc-500"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"not known to be absent"* ]] || { echo "$output"; return 1; }
+    ! grep -q 'create realms' "$SHIM_LOG"
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")" = the-working-secret ]
 }
 
 @test "operator add --no-mail --keycloak-container: a platform user with a temporary password on stdin only, the operator role, printed once (Q23, R29-I3)" {

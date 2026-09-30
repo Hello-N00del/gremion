@@ -117,6 +117,12 @@ need_operator() {
 
 token_of() { printf '%s' "${1//-/_}"; }
 
+# need_value "$@" — the flag in $1 carries a value in $2 (usage exit 2, named),
+# never a bare `shift 2` failing under errexit with exit 1 and no message.
+need_value() {
+    [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "$1 requires a value" "$GREMION_EXIT_USAGE"
+}
+
 # tc <args...> — the tenant-create one-shot of the ACTIVE colour, the one
 # shape a compose command takes on a host (N20): --env-file, no -f, no -p.
 # The optional TC_MOUNT is ONE extra read-only file mount (create's --config).
@@ -242,18 +248,31 @@ init_realm_only_kcadm() {   # <container> <origin>
     fp="$( { cat "$tmpl"; printf '\n%s' "$origin"; } | sha256sum | cut -d' ' -f1)"
     # 'attributes(*)': a bare `--fields attributes` returns the map EMPTY
     # (measured on Keycloak 26.6), so an equal realm would read as different.
-    if have="$(docker exec "$kc" "$KCADM_BIN" get realms/platform --fields 'attributes(*)' 2>/dev/null)"; then
+    # Only a NOT-FOUND is "absent" (review C, r2): a transient Keycloak or
+    # network error, or an expired session, must never be read as absent --
+    # that path replaced the working client secret before create failed 409.
+    local err rc=0
+    err="$(mktemp)"
+    have="$(docker exec "$kc" "$KCADM_BIN" get realms/platform --fields 'attributes(*)' 2>"$err")" || rc=$?
+    if (( rc == 0 )); then
+        rm -f "$err"
         if [[ "$(jq -r '.attributes["gremion.ops-realm.sha256"] // ""' <<< "$have" | tr -d '\r')" == "$fp" ]]; then
+            [[ -s "${ROOT}/etc/secrets/control-panel/client_secret" ]] \
+                || die "realm platform is present and equal, but etc/secrets/control-panel/client_secret is missing: regenerate the control-panel client's secret in Keycloak and write it there (0600)" "$GREMION_EXIT_ASSERT"
             ok "realm platform is present and equal to realm-export.ops.json for ${origin}"
             return 0
         fi
         die "realm platform exists but differs from realm-export.ops.json for ${origin}: refusing to overwrite an ops realm" "$GREMION_EXIT_ASSERT"
     fi
+    if ! grep -qiE 'not found|404' "$err"; then
+        local why; why="$(tr -d '\r' < "$err" | tail -n 3 | tr '\n' ' ')"; rm -f "$err"
+        die "kcadm could not read realm platform (exit ${rc}: ${why:-no message}); it is not known to be absent, so nothing was created or rotated" "$GREMION_EXIT_ASSERT"
+    fi
+    rm -f "$err"
     secret_file="${ROOT}/etc/secrets/control-panel/client_secret"
     mkdir -p "$(dirname "$secret_file")"
     chmod 700 "$(dirname "$secret_file")"
     secret="$(openssl rand -hex 32 | tr -d '\r\n')"
-    printf '%s\n' "$secret" | atomic_write "$secret_file" 600
     OPS_CLIENT_SECRET="$secret" jq -c --arg origin "$origin" --arg fp "$fp" '
         (.clients[] | select(.clientId == "control-panel")) |= (
             .secret = $ENV.OPS_CLIENT_SECRET
@@ -262,10 +281,12 @@ init_realm_only_kcadm() {   # <container> <origin>
             | .attributes["post.logout.redirect.uris"] = ($origin + "/*"))
         | .attributes["gremion.ops-realm.sha256"] = $fp' "$tmpl" \
         | docker exec -i "$kc" "$KCADM_BIN" create realms -f - >/dev/null \
-        || die "kcadm refused to create realm platform" "$GREMION_EXIT_ASSERT"
-    secret=""
+        || { secret=""; die "kcadm refused to create realm platform (the client secret file was not touched)" "$GREMION_EXIT_ASSERT"; }
     docker exec "$kc" "$KCADM_BIN" get realms/platform --fields realm >/dev/null \
-        || die "realm platform is absent after create" "$GREMION_EXIT_ASSERT"
+        || { secret=""; die "realm platform is absent after create (the client secret file was not touched)" "$GREMION_EXIT_ASSERT"; }
+    # Written only now: after create AND the read-back succeeded.
+    printf '%s\n' "$secret" | atomic_write "$secret_file" 600
+    secret=""
     ok "realm platform created; the control-panel client secret is in ${secret_file} (0600)"
 }
 
@@ -301,11 +322,19 @@ cmd_init() {
     # secrets; it moves to the panel's own directory, 0600.
     local tsd src
     tsd="$(env_key "${ROOT}/etc/env/app-${COLOUR}.env" TENANT_SECRETS_DIR)"
-    src="${tsd:-${RELEASE_DIR}/secrets/tenants}/platform_client_control-panel"
+    tsd="${tsd:-${RELEASE_DIR}/secrets/tenants}"
+    # compose resolves a relative bind source against the project directory
+    # (the release), never the operator's cwd (review C, r2)
+    [[ "$tsd" == /* || "$tsd" =~ ^[A-Za-z]:[/\\] ]] || tsd="${RELEASE_DIR}/${tsd#./}"
+    src="${tsd}/platform_client_control-panel"
     if [[ -s "$src" ]]; then
         atomic_write "${ROOT}/etc/secrets/control-panel/client_secret" 600 < "$src"
         rm -f "$src"
     fi
+    # The post-condition, never silent: after init the ops realm exists, so
+    # the panel's client secret must be in place (moved now or on a past run).
+    [[ -s "${ROOT}/etc/secrets/control-panel/client_secret" ]] \
+        || die "init: the control-panel client secret is not at etc/secrets/control-panel/client_secret (looked for ${src}); the panel cannot sign in" "$GREMION_EXIT_ASSERT"
     if [[ -f "${ROOT}/etc/env/mail.env" ]]; then
         vendor_mail realm-smtp --realm platform || die "the ops realm's sender could not be set (gremion-vendor-mail realm-smtp --realm platform)" "$GREMION_EXIT_ASSERT"
     else
@@ -321,13 +350,13 @@ cmd_create() {
     local host="" config="" it="" council="" enable="" body=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --host) host="${2:-}"; shift 2 ;;
-            --config) config="${2:-}"; shift 2 ;;
-            --it-admin) it="${2:-}"; shift 2 ;;
-            --council-admin) council="${2:-}"; shift 2 ;;
-            --enable) enable="${2:-}"; shift 2 ;;
-            --body-name) body="${2:-}"; shift 2 ;;
-            --operator) OPERATOR_ID="${2:-}"; shift 2 ;;
+            --host) need_value "$@"; host="$2"; shift 2 ;;
+            --config) need_value "$@"; config="$2"; shift 2 ;;
+            --it-admin) need_value "$@"; it="$2"; shift 2 ;;
+            --council-admin) need_value "$@"; council="$2"; shift 2 ;;
+            --enable) need_value "$@"; enable="$2"; shift 2 ;;
+            --body-name) need_value "$@"; body="$2"; shift 2 ;;
+            --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;;
             *) usage >&2; die "create: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
         esac
     done
@@ -374,7 +403,7 @@ cmd_create() {
 cmd_suspend() {
     local slug="${1:-}"; shift || true
     need_slug "$slug"
-    while [[ $# -gt 0 ]]; do case "$1" in --operator) OPERATOR_ID="${2:-}"; shift 2 ;; *) die "suspend: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "suspend: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
     need_operator
     active_colour
     tc suspend "$slug" --operator "$OPERATOR_ID" || die "suspend of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
@@ -386,7 +415,7 @@ cmd_suspend() {
 cmd_resume() {
     local slug="${1:-}"; shift || true
     need_slug "$slug"
-    while [[ $# -gt 0 ]]; do case "$1" in --operator) OPERATOR_ID="${2:-}"; shift 2 ;; *) die "resume: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "resume: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
     need_operator
     active_colour
     vendor_mail realm-smtp --realm "$slug" --tenant "$(token_of "$slug")" \
@@ -405,8 +434,18 @@ cmd_reconcile() {
         tc reconcile --verify-only "$slug"
         return
     fi
-    report="$(tc reconcile "$slug" || true)"
-    if jq -e '.repairHost | index("smtp-server")' <<< "$report" >/dev/null 2>&1; then
+    # The apply exits 0 (green) or 1 (a check still fails: the drift --apply is
+    # for) and prints its report as ONE JSON line on stdout. A crash, a missing
+    # or unparseable report, or any other exit fails loudly here (review C, r2)
+    # instead of silently skipping the host rotation.
+    local out rc=0
+    out="$(tc reconcile "$slug")" || rc=$?
+    (( rc == 0 || rc == 1 )) || die "reconcile --apply of ${slug} failed in the container (exit ${rc})" "$GREMION_EXIT_ASSERT"
+    report="$(grep '^{' <<< "$out" | tail -n 1 || true)"
+    if [[ -z "$report" ]] || ! jq -e 'type == "object" and (.repairHost | type) == "array"' <<< "$report" >/dev/null 2>&1; then
+        die "reconcile --apply of ${slug} printed no parseable report (exit ${rc}); nothing was rotated" "$GREMION_EXIT_ASSERT"
+    fi
+    if jq -e '.repairHost | index("smtp-server")' <<< "$report" >/dev/null; then
         info "smtp-server is repair: host -- rotating the principal of ${slug}"
         vendor_mail realm-smtp --realm "$slug" --tenant "$(token_of "$slug")" --rotate \
             || die "the principal of ${slug} could not be rotated" "$GREMION_EXIT_ASSERT"
@@ -519,7 +558,7 @@ main() {
     need_cmd docker jq sed grep tr mktemp realpath openssl
     setup_paths
     # --operator may come first for any verb.
-    if [[ "${1:-}" == --operator ]]; then OPERATOR_ID="${2:-}"; shift 2; fi
+    if [[ "${1:-}" == --operator ]]; then need_value "$@"; OPERATOR_ID="$2"; shift 2; fi
     case "$verb" in
         init)      cmd_init "$@" ;;
         create)    cmd_create "$@" ;;
