@@ -73,6 +73,12 @@ describe('decide (TRD-048)', () => {
     expect(decide(input({ session: ops({ error: 'RefreshTokenExpired' }) }))).toEqual({ kind: 'sign-in', reason: 'expired' })
   })
 
+  it('an expiry marker (auth.ts replaced a session past its lifetime): GET re-signs in, POST is 403 and the cookie cleared', () => {
+    const marker: SessionClaims = { error: 'SessionExpired', roles: [] }
+    expect(decide(input({ session: marker, sessionCookie: true }))).toEqual({ kind: 'sign-in', reason: 'expired' })
+    expect(decide(input({ method: 'POST', session: marker, sessionCookie: true }))).toEqual({ kind: 'refuse', status: 403, reason: expect.stringMatching(/expired/), clearCookie: true })
+  })
+
   // Review r2 HIGH (ASVS 5.0 V7.3.2): Auth.js renews a JWT session on every
   // read, so maxAge alone is an idle timeout. The gate enforces an ABSOLUTE
   // lifetime from the sign-in time, however active the session stays.

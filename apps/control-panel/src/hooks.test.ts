@@ -126,6 +126,18 @@ describe('the gate hook (TDD 15)', () => {
     expect(r2.thrown?.status).toBe(302)
   })
 
+  it('the expiry marker auth.ts leaves for a session past its lifetime: GET goes to the ops realm, POST is 403 and cleared', async () => {
+    const marker = { claims: { error: 'SessionExpired', roles: [] } }
+    const g = await run(event({ session: marker, cookies: [{ name: 'authjs.session-token', value: 'x' }] }))
+    expect(g.resolve).not.toHaveBeenCalled()
+    expect(g.thrown?.status).toBe(302)
+    expect(`${new URL(g.thrown!.location).origin}${new URL(g.thrown!.location).pathname}`).toBe(`${OPS}/protocol/openid-connect/auth`)
+    const post = event({ method: 'POST', path: '/customers/new', session: marker, cookies: [{ name: 'authjs.session-token', value: 'x' }] })
+    const p = await run(post)
+    expect(p.res?.status).toBe(403)
+    expect(post.deleted).toEqual(['authjs.session-token'])
+  })
+
   it('a session decode that THROWS is logged (never the cookie value) and still fails closed', async () => {
     const logged: string[] = []
     vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => void logged.push(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')))

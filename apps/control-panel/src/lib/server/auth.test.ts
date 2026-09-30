@@ -63,20 +63,32 @@ describe('authConfig: absolute session lifetime', () => {
     expect(t!.opsAuthAt).toBe(NOW - 600)
   })
 
-  it('returns null once the sign-in is older than the absolute lifetime, so Auth.js clears the cookie', async () => {
-    expect(await callbacks.jwt({ token: { opsAuthAt: NOW - SESSION_ABSOLUTE_SECONDS - 1, opsIss: config.issuer } })).toBeNull()
-    expect(await callbacks.jwt({ token: { opsAuthAt: NOW - SESSION_ABSOLUTE_SECONDS, opsIss: config.issuer } })).not.toBeNull()
+  // Once past the lifetime the token is REPLACED by a bare expiry marker: every
+  // claim (issuer, roles, acr, subject) is gone, so nothing the session granted
+  // survives, and the gate tells "expired" (GET: back to the ops realm; else
+  // 403 and the cookie cleared) apart from a forged cookie. Returning null
+  // instead would make Auth.js drop the session, and an active operator would
+  // see "forged or stale" 403 on the next page (found on the running panel).
+  const EXPIRED = { opsError: 'SessionExpired' }
+
+  it('replaces a token older than the absolute lifetime with a bare expiry marker (no claim survives)', async () => {
+    const old = { opsAuthAt: NOW - SESSION_ABSOLUTE_SECONDS - 1, opsIss: config.issuer, opsAcr: 'loa2', opsUid: 'u1', opsRoles: ['operator'], sub: 'u1' }
+    expect(await callbacks.jwt({ token: old })).toEqual(EXPIRED)
+    expect(await callbacks.jwt({ token: { opsAuthAt: NOW - SESSION_ABSOLUTE_SECONDS, opsIss: config.issuer } })).toMatchObject({ opsIss: config.issuer })
   })
 
-  it('returns null for a token that carries no sign-in time, or a future one (fail closed)', async () => {
-    expect(await callbacks.jwt({ token: { opsIss: config.issuer } })).toBeNull()
-    expect(await callbacks.jwt({ token: { opsAuthAt: 'yesterday' as unknown as number } })).toBeNull()
-    expect(await callbacks.jwt({ token: { opsAuthAt: NOW + 3600 } })).toBeNull()
+  it('a token with no sign-in time, a malformed or a future one, or an earlier marker stays expired (fail closed)', async () => {
+    expect(await callbacks.jwt({ token: { opsIss: config.issuer } })).toEqual(EXPIRED)
+    expect(await callbacks.jwt({ token: { opsAuthAt: 'yesterday' as unknown as number } })).toEqual(EXPIRED)
+    expect(await callbacks.jwt({ token: { opsAuthAt: NOW + 3600 } })).toEqual(EXPIRED)
+    expect(await callbacks.jwt({ token: { ...EXPIRED } })).toEqual(EXPIRED)
   })
 
-  it('the session callback hands the sign-in time to the gate', async () => {
+  it('the session callback hands the sign-in time to the gate, and an expiry marker as an error with no claims', async () => {
     const s = (await callbacks.session({ session: {}, token: { opsIss: config.issuer, opsAuthAt: NOW - 5 } })) as { claims: { authAt?: number } }
     expect(s.claims.authAt).toBe(NOW - 5)
+    const e = (await callbacks.session({ session: {}, token: { ...EXPIRED } })) as { claims: Record<string, unknown> }
+    expect(e.claims).toEqual({ error: 'SessionExpired', roles: [] })
   })
 
   it('the cookie maxAge is no longer than the absolute lifetime', () => {

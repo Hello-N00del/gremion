@@ -13,6 +13,9 @@ import { SESSION_ABSOLUTE_SECONDS, sessionTooOld, type SessionClaims } from './g
 
 export const PROVIDER_ID = 'keycloak'
 
+/** The error a session past its absolute lifetime carries (the gate reads `error`). */
+export const SESSION_EXPIRED = 'SessionExpired'
+
 function payloadOf(jwt: string | undefined): Record<string, unknown> | null {
   if (!jwt) return null
   const part = jwt.split('.')[1]
@@ -57,9 +60,10 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
     // Roles and acr are read at sign-in only (no refresh re-check yet). Auth.js
     // renews a JWT session's expiry on EVERY read (@auth/core
     // lib/actions/session.js), so maxAge is only an idle timeout. The ABSOLUTE
-    // bound is the sign-in time stamped below: the jwt callback returns null
-    // (Auth.js clears the cookie) and the gate refuses once it is more than
-    // SESSION_ABSOLUTE_SECONDS old, however active the session stays (review
+    // bound is the sign-in time stamped below: the jwt callback replaces the
+    // token by a bare expiry marker (every claim dropped) and the gate refuses
+    // once it is more than SESSION_ABSOLUTE_SECONDS old, however active the
+    // session stays (review
     // r2 HIGH; ASVS 5.0 V7.3.2). A revoked operator therefore loses the panel
     // at most one hour after their last sign-in. The refresh-token re-check
     // against Keycloak (revocation within the hour) is a named residual.
@@ -93,11 +97,19 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
           token.opsAuthAt = now
           return token
         }
-        // null makes Auth.js clear the session cookie (session.js: token === null).
-        if (sessionTooOld(token.opsAuthAt, now)) return null
+        // Past the absolute lifetime (or never stamped): the token is REPLACED
+        // by a bare marker, so no claim survives, and the gate answers
+        // "expired" (GET: back to the ops realm; else 403, cookie cleared)
+        // rather than "forged" -- null would make Auth.js drop the session and
+        // an active operator would meet a forged-cookie 403 instead.
+        if (sessionTooOld(token.opsAuthAt, now)) return { opsError: SESSION_EXPIRED }
         return token
       },
       session({ session, token }) {
+        if (token.opsError !== undefined) {
+          ;(session as unknown as { claims: SessionClaims }).claims = { error: String(token.opsError), roles: [] }
+          return session
+        }
         ;(session as unknown as { claims: SessionClaims }).claims = {
           iss: token.opsIss as string | undefined,
           acr: token.opsAcr as string | undefined,

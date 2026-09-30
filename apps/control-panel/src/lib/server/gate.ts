@@ -122,7 +122,7 @@ export function decide(input: GateInput): GateDecision {
     if (input.sessionCookie) return refuse('the session cookie does not decode (forged or stale); it is cleared, sign in again', true)
     return read ? { kind: 'sign-in', reason: 'anonymous' } : refuse('not signed in')
   }
-  if (s.error) return read ? { kind: 'sign-in', reason: 'expired' } : refuse('the session has expired')
+  if (s.error) return read ? { kind: 'sign-in', reason: 'expired' } : refuse('the session has expired; sign in again', true)
   if (sessionTooOld(s.authAt, input.now)) {
     return read
       ? { kind: 'sign-in', reason: 'expired' }
