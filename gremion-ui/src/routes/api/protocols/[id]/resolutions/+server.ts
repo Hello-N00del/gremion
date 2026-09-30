@@ -5,7 +5,12 @@ import type { SessionUser } from '$lib/auth'
 import { getProtocol, addResolution } from '$lib/server/protocols/protocol-db'
 import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
-import { DEFAULT_MAJORITY } from '$lib/server/governance/decision-rule'
+import {
+  CORE_DECISION_RULE_IDS,
+  DEFAULT_MAJORITY,
+  isCoreDecisionRuleId,
+  isDecisionRuleInputError,
+} from '$lib/server/governance/decision-rule'
 
 function requireAdmin(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -37,10 +42,15 @@ export async function POST(event: RequestEvent) {
   }
 
   // Widened to the persisted 5-rule vocabulary; the value flows unchanged to both
-  // the live evaluator (decideResolution) and persistence (addResolution), so no
-  // per-call-site `as` narrowing is needed. INV-5 membership is enforced by the
-  // engine (UnknownDecisionRuleError) and the DB CHECK, not re-validated here.
-  const requiredMajority = (body.requiredMajority ?? DEFAULT_MAJORITY) as RequiredMajority
+  // the live evaluator (decideResolution) and persistence (addResolution).
+  // Validated here against the five ids the required_majority CHECK accepts
+  // (migration 0054), in BOTH modes: an unknown id is client input, a 400 —
+  // never an engine UnknownDecisionRuleError or a CHECK violation surfacing as 500.
+  const requestedRule: unknown = body.requiredMajority ?? DEFAULT_MAJORITY
+  if (!isCoreDecisionRuleId(requestedRule)) {
+    throw error(400, `Unbekannte Abstimmungsregel (erlaubt: ${CORE_DECISION_RULE_IDS.join(', ')})`)
+  }
+  const requiredMajority: RequiredMajority = requestedRule
   const decisionRuleParams: { fraction?: number } | null =
     body.decision_rule_params ?? body.decisionRuleParams ?? null
   // A parametrised rule must arrive WITH a VALID parameter: the rule is fixed at
@@ -89,6 +99,8 @@ export async function POST(event: RequestEvent) {
   // + tallies — never accepted free-hand from the client. Quorum is enforced AT
   // ADOPTION (protocol publish), not during draft data-entry, so this write path
   // does not block a not-yet-quorate meeting (enforceQuorum: false).
+  // A malformed tally (negative, fractional, non-numeric) is client input: the
+  // engine's typed errors become a 400 instead of escaping as a 500.
   const decision = await decideResolution({
     protocolId: protocol.id,
     votesYes,
@@ -102,6 +114,9 @@ export async function POST(event: RequestEvent) {
     params: decisionRuleParams ?? undefined,
     withdrawn: body.result === 'withdrawn',
     enforceQuorum: false,
+  }).catch((err: unknown) => {
+    if (isDecisionRuleInputError(err)) throw error(400, `Ungültige Abstimmungsdaten: ${err.message}`)
+    throw err
   })
 
   const resolution = await addResolution(protocol.id, {

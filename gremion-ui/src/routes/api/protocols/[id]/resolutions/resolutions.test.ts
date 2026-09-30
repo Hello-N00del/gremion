@@ -363,3 +363,50 @@ describe('PATCH /api/protocols/[id]/resolutions/[resId]', () => {
     await expect(PATCH(makePatchEvent({ text: 'X' }))).rejects.toMatchObject({ status: 404 })
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client-input errors from the decision-rule engine are 400s, never 500s
+// (R28 house review MEDIUM: UnknownDecisionRuleError / InvalidDecisionRuleTallyError
+// escaped both write routes as opaque 500s).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('resolution write routes — decision-rule input errors map to 400', () => {
+  it('(h) POST tally with an unknown requiredMajority → 400, nothing persisted', async () => {
+    await expect(
+      POST(makePostEvent({ text: 'X', requiredMajority: 'bogus', votesYes: 3, votesNo: 1, votesAbstain: 0 })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('(h) POST acclamation with an unknown requiredMajority → 400 (never reaches the DB CHECK)', async () => {
+    await expect(
+      POST(makePostEvent({ text: 'X', adoption_mode: 'acclamation', declared_result: 'passed', requiredMajority: 'bogus' })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['negative', { votesYes: -1, votesNo: 0, votesAbstain: 0 }],
+    ['non-integer', { votesYes: 1.5, votesNo: 0, votesAbstain: 0 }],
+    ['string', { votesYes: '3', votesNo: 0, votesAbstain: 0 }],
+  ] as const)('(h) POST tally with a %s tally → 400, nothing persisted', async (_label, votes) => {
+    await expect(POST(makePostEvent({ text: 'X', ...votes }))).rejects.toMatchObject({ status: 400 })
+    expect(mockAddResolution).not.toHaveBeenCalled()
+  })
+
+  it('(h) PATCH tally row with a negative tally → 400, nothing persisted', async () => {
+    mockSql.mockResolvedValue([storedTallyRow])
+    await expect(
+      PATCH(makePatchEvent({ votesYes: 3, votesNo: -2, votesAbstain: 0 })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('(h) PATCH on a row whose STORED rule is unknown → 400, nothing persisted', async () => {
+    mockSql.mockResolvedValue([{ ...storedTallyRow, required_majority: 'retired_rule' }])
+    await expect(
+      PATCH(makePatchEvent({ votesYes: 3, votesNo: 0, votesAbstain: 0 })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+})

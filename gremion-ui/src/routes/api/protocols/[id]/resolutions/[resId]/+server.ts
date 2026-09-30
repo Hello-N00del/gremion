@@ -6,6 +6,7 @@ import { updateResolution, deleteResolution } from '$lib/server/protocols/protoc
 import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
 import { getDb } from '$lib/server/db'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
+import { isDecisionRuleInputError } from '$lib/server/governance/decision-rule'
 
 function requireAdmin(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -111,6 +112,11 @@ export async function PATCH(event: RequestEvent) {
     params: current.decision_rule_params ?? undefined,
     withdrawn: body.result === 'withdrawn',
     enforceQuorum: false,
+  }).catch((err: unknown) => {
+    // A malformed patched tally, or a stored rule id the engine no longer
+    // knows, is answered with a 400 (mirror of the POST boundary), not a 500.
+    if (isDecisionRuleInputError(err)) throw error(400, `Ungültige Abstimmungsdaten: ${err.message}`)
+    throw err
   })
 
   const resolution = await updateResolution(event.params.resId!, {
