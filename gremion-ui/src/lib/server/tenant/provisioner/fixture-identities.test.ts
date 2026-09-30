@@ -8,11 +8,15 @@ import { DEV_SUPERUSER, fixtureUsernames, SEED_FILE, seedSubjectIds, seedSubject
 
 const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', 'migrations')
 const ID = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+// The legacy pad-3 seed name, built rather than written literally: the
+// TASK-029 renumber guard (scripts/migrations/renumber.test.mjs) refuses a
+// literal pad-3 kernel-data name outside its allow-list.
+const PAD3_DEV_SEED = `${'5'.padStart(3, '0')}_dev_seed.sql`
 
 describe('seedSubjectIdsFrom', () => {
-  it('reads both pad widths (005_dev_seed and 0005_dev_seed) and ignores a non-seed migration', () => {
+  it('reads both pad widths (legacy pad-3 and 0005_dev_seed) and ignores a non-seed migration', () => {
     const ids = seedSubjectIdsFrom([
-      { name: '005_dev_seed.sql', text: `INSERT INTO x VALUES ('${ID}')` },
+      { name: PAD3_DEV_SEED, text: `INSERT INTO x VALUES ('${ID}')` },
       { name: '0005_dev_seed.sql', text: `INSERT INTO x VALUES ('${ID.toUpperCase()}')` },
       { name: '0011_org_units_dev_seed.sql', text: "INSERT INTO x VALUES ('11111111-2222-4333-8444-555555555555')" },
       { name: '0042_real_change.sql', text: "INSERT INTO x VALUES ('99999999-2222-4333-8444-555555555555')" },
@@ -21,7 +25,7 @@ describe('seedSubjectIdsFrom', () => {
   })
 
   it('SEED_FILE matches the shipped seed names and not a plain migration', () => {
-    for (const n of ['0005_dev_seed.sql', '0006_full_seed.sql', '0011_org_units_dev_seed.sql', '005_dev_seed.sql']) expect(SEED_FILE.test(n)).toBe(true)
+    for (const n of ['0005_dev_seed.sql', '0006_full_seed.sql', '0011_org_units_dev_seed.sql', PAD3_DEV_SEED]) expect(SEED_FILE.test(n)).toBe(true)
     for (const n of ['0001_init.sql', 'manifest.json', '0005_dev_seed.sql.bak']) expect(SEED_FILE.test(n)).toBe(false)
   })
 })

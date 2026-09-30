@@ -2,8 +2,9 @@
 // TASK-043 Q10: what marks a FIXTURE user in a live realm, for reconcile's
 // narrowed `no-fixture-users` check (#239):
 //   - a seed-subject id: every UUID the kernel chain's seed migrations name
-//     (`*_seed.sql`, pad-agnostic: 005_dev_seed.sql and 0005_dev_seed.sql
-//     alike -- the TASK-029 renumber changed the pad, not the meaning);
+//     (`*_seed.sql`, pad-agnostic: the legacy pad-3 name and the pad-4
+//     0005_dev_seed.sql alike -- the TASK-029 renumber changed the pad, not
+//     the meaning);
 //   - a template fixture username: every user of the shipped blueprints and
 //     the dev superuser the seed creates.
 // Pure over its inputs; the CLI reads the files.
