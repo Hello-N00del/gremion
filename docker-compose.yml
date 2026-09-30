@@ -401,6 +401,13 @@ services:
       KC_HTTP_RELATIVE_PATH: /auth
       KC_HTTP_ENABLED:       "true"
       KC_HOSTNAME_STRICT:    "false"
+      # R29-RETENTION-30: event lines (LOGIN_ERROR with ipAddress and username)
+      # out of the size-only json-file container log, which has no time limit.
+      # The default jboss-logging listener writes every error event at WARN;
+      # raising its error level to debug leaves them off stdout at the default INFO
+      # root level. Events stay in the DB event store with the realm's
+      # eventsExpiration / adminEventsExpiration (29 d), the 30 d bound.
+      KC_SPI_EVENTS_LISTENER_JBOSS_LOGGING_ERROR_LEVEL: debug
     volumes:
       # PR 7 (T7.1): gremion login theme (design-refresh tokens).
       - ./docker/keycloak/themes:/opt/keycloak/themes:ro
