@@ -239,19 +239,34 @@ cat > "$WORK/pebble/pebble-config.json" <<EOF
 EOF
 
 # The PROOF-ONLY copy of the committed static file: the shipped file plus
-# certificatesDuration: 1 (so Traefik's renewal window is 20 minutes) and an
-# INFO log level (so the renewal is logged). Each insertion is asserted; the
-# markers stay in place for the container's own start-up render.
+# certificatesDuration: 1 (so Traefik's renewal window is 20 minutes), and its
+# shipped log: block edited (never duplicated: a second log: key would not load)
+# to INFO with no filePath. The shipped block writes ERROR-level JSON to
+# /logs/traefik.log (R29-RETENTION-30), which `docker logs` does not show; the
+# proof needs the renewal line on stdout, and Traefik logs to stdout when no
+# filePath is set. Each edit is asserted; the markers stay in place for the
+# container's own start-up render. test/edge-log-retention.bats runs this block.
+# BEGIN proof-copy
 PROOF_YML="$WORK/traefik.proof.yml"
-grep -q '^log:' docker/traefik/traefik.yml && precondition "docker/traefik/traefik.yml now has a log: block; adjust the proof copy"
-sed '/^      caServer: "@ACME_CA_SERVER@"$/a\      certificatesDuration: 1' docker/traefik/traefik.yml > "$PROOF_YML"
-printf '\nlog:\n  level: INFO\n' >> "$PROOF_YML"
+log_block="$(awk '/^log:/ { on = 1; next } /^[A-Za-z]/ { on = 0 } on' docker/traefik/traefik.yml)"
+if [[ $'\n'"$log_block" != *$'\n  level: ERROR'* || $'\n'"$log_block" != *$'\n  filePath: "/logs/traefik.log"'* ]]; then
+    precondition "the log: block of docker/traefik/traefik.yml changed (expected level: ERROR and filePath: \"/logs/traefik.log\"); adjust the proof copy"
+fi
+awk '
+    /^log:/ { inlog = 1; print; next }
+    /^[A-Za-z]/ { inlog = 0 }
+    inlog && $0 == "  level: ERROR" { print "  level: INFO"; next }
+    inlog && $0 == "  filePath: \"/logs/traefik.log\"" { next }
+    { print }
+    $0 == "      caServer: \"@ACME_CA_SERVER@\"" { print "      certificatesDuration: 1" }
+' docker/traefik/traefik.yml > "$PROOF_YML"
 [[ "$(grep -c '^      certificatesDuration: 1$' "$PROOF_YML")" == 1 ]] \
     || precondition "could not insert certificatesDuration into the proof copy (caServer line moved?)"
-if diff <(grep -v -e '^      certificatesDuration: 1$' -e '^log:$' -e '^  level: INFO$' "$PROOF_YML" | sed '/^$/d') \
-        <(sed '/^$/d' docker/traefik/traefik.yml) >/dev/null; then :; else
-    precondition "the proof copy differs from the shipped file by more than the two proof-only knobs"
+proof_delta="$(diff <(grep -v -e '^      certificatesDuration: 1$' "$PROOF_YML") docker/traefik/traefik.yml | grep '^[<>]' || true)"
+if [[ "$proof_delta" != $'< '"  level: INFO"$'\n> '"  level: ERROR"$'\n> '"  filePath: \"/logs/traefik.log\"" ]]; then
+    precondition "the proof copy differs from the shipped file by more than certificatesDuration and the log block's level/filePath"
 fi
+# END proof-copy
 
 # The router that must obtain a certificate, present before Traefik starts.
 cat > "$ROOT/etc/edge/issue.yml" <<EOF

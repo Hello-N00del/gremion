@@ -408,6 +408,15 @@ else
     # NOT create it: without it the resolver is dropped ("unable to get ACME
     # account") and no certificate is ever requested -- reproduce it here.
     mkdir -p "$WORK/letsencrypt" "$WORK/dynamic"
+    # The committed traefik.yml sends Traefik's own ERROR-level log to
+    # /logs/traefik.log (R29-RETENTION-30), not to container stdout. Read both, or
+    # the "ACME resolve is skipped" and "nonexistent certificate resolver"
+    # detectors below could never fire. `sh -c` keeps Git Bash from rewriting the
+    # path; the file is absent until Traefik writes its first line, hence `|| true`.
+    claim4_logs() {
+        docker logs "$NAME_C" > "$WORK/logs-c.txt" 2>&1 || true
+        docker exec "$NAME_C" sh -c 'cat /logs/traefik.log' >> "$WORK/logs-c.txt" 2>/dev/null || true
+    }
     # A router that NAMES le-http, so the resolver's acceptance is read back
     # positively from the API, not inferred from the absence of a log line.
     cat > "$WORK/dynamic/claim4.yml" <<'YAML'
@@ -437,7 +446,7 @@ YAML
     running=false
     for _ in $(seq 1 10); do
         state="$(docker inspect -f '{{.State.Running}}' "$NAME_C" 2>/dev/null || echo false)"
-        docker logs "$NAME_C" > "$WORK/logs-c.txt" 2>&1 || true
+        claim4_logs
         if [[ "$state" == "true" ]] && ! grep -q "Command error\|FATAL" "$WORK/logs-c.txt"; then
             running=true
         else
@@ -446,7 +455,7 @@ YAML
         fi
         sleep 1
     done
-    docker logs "$NAME_C" > "$WORK/logs-c.txt" 2>&1 || true
+    claim4_logs
 
     rendered_email="$(docker exec "$NAME_C" sh -c 'grep -m1 "email:" /tmp/traefik.yml' 2>/dev/null || echo '<unreadable>')"
     echo "        rendered acme email line: ${rendered_email}"
