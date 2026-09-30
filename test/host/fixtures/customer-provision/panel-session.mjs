@@ -15,7 +15,7 @@
 //     <base> with Host: <PANEL_HOST> (the loopback port of the standalone
 //     panel, as the edge would forward them).
 //
-//   mint   --secret-file F --cookie-name N --iss I --acr A --uid U [--roles r,s] --cookie-out F
+//   mint   --secret-file F --cookie-name N --iss I --acr A --uid U [--roles r,s] [--auth-at S] --cookie-out F
 //     An Auth.js session cookie signed with the panel's own AUTH secret, for
 //     the gate's cases a real sign-in cannot produce on demand (an ops session
 //     at loa1; a session whose iss is a customer realm). The panel decodes it
@@ -254,7 +254,11 @@ async function mint(o) {
     opsUid: need(o, 'uid'),
     opsEmail: o.email ?? null,
     opsRoles: (o.roles ?? '').split(',').filter(Boolean),
+    // the sign-in time the panel's absolute session lifetime counts from
+    // (review r2 HIGH); --auth-at <epoch seconds> mints an OLD session
+    opsAuthAt: o['auth-at'] === undefined ? Math.floor(Date.now() / 1000) : Number(o['auth-at']),
   }
+  if (!Number.isInteger(token.opsAuthAt)) throw new Error('--auth-at must be epoch seconds')
   const value = await encode({ token, secret: readSecret(need(o, 'secret-file')), salt: name, maxAge: 3600 })
   writePrivate(need(o, 'cookie-out'), `Cookie: ${name}=${value}\n`)
   console.log(JSON.stringify({ minted: name, iss: token.opsIss, acr: token.opsAcr }))

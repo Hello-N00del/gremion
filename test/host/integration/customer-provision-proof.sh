@@ -277,9 +277,10 @@ phase_panel_login() {
     state_set SESSION_COOKIE "$sname"
 }
 
-mint() { # <out file> <iss> <acr> <roles>
+mint() { # <out file> <iss> <acr> <roles> [sign-in epoch seconds; default now]
+    local -a at=(); [[ -n "${5:-}" ]] && at=(--auth-at "$5")
     session mint --secret-file "$(host_path "$SROOT/etc/secrets/control-panel/auth_secret")" \
-        --cookie-name "$(state_get SESSION_COOKIE)" --iss "$2" --acr "$3" --roles "$4" \
+        --cookie-name "$(state_get SESSION_COOKIE)" --iss "$2" --acr "$3" --roles "$4" ${at[@]+"${at[@]}"} \
         --uid 5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33 --cookie-out "$(host_path "$1")" >/dev/null
 }
 
@@ -327,6 +328,18 @@ phase_panel_gate() {
     code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -H "$host_h" -H @"$OUT/secrets/norole.cookie" "${base}/" || echo 000)"
     if [[ "$code" == 403 ]]; then ok "panel-gate: an ops session without the operator role -> 403"
     else bad "panel-gate: an ops session without the operator role -> ${code} (want 403)"; fi
+    # Absolute session lifetime (review r2 HIGH): a valid ops loa2 operator
+    # session signed in two hours ago is never served, however active it is --
+    # a GET is sent back to the ops realm, a form POST is 403 and the cookie cleared.
+    mint "$OUT/secrets/old.cookie" "http://127.0.0.1:${p_kc}/auth/realms/platform" loa2 operator "$(( $(date +%s) - 7200 ))"
+    local loc
+    loc="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 -H "$host_h" -H @"$OUT/secrets/old.cookie" "${base}/" 2>/dev/null || true)"
+    if [[ "$loc" =~ ^302\ .*/realms/platform/protocol/openid-connect/auth ]]; then ok "panel-gate: an ops loa2 session signed in 2 h ago -> GET 302 to the ops realm (absolute lifetime)"
+    else bad "panel-gate: an ops loa2 session signed in 2 h ago -> GET '${loc}' (want 302 to the ops realm)"; fi
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -X POST -H "$host_h" -H @"$OUT/secrets/old.cookie" \
+        -H "Origin: https://${PANEL_HOST}" -H 'Content-Type: application/x-www-form-urlencoded' --data 'slug=proof-x' "${base}/customers/new" 2>/dev/null || echo 000)"
+    if [[ "$code" == 403 ]]; then ok "panel-gate: an ops loa2 session signed in 2 h ago -> POST 403"
+    else bad "panel-gate: an ops loa2 session signed in 2 h ago -> POST ${code} (want 403)"; fi
     # The customer list the loa2 operator sees holds the fixture customer.
     if curl -sS --max-time 20 -H "$host_h" -H @"$OUT/secrets/loa2.cookie" "${base}/" | grep -q 'proof-rat'; then
         ok "panel-gate: the loa2 operator's customer list reads the control registry (fixture customer proof-rat shown)"
