@@ -1,11 +1,14 @@
-// services/board/src/http/routes.ts
+// modules/board/src/http/routes.ts
 //
 // All /api/v1/* route handlers for the board leaf service. Every route runs
-// under the guard (shared secret + tenant headers). The route set is exactly the
-// BoardBackendPort surface the kernel's ServiceBoardClient calls:
+// under the guard (shared secret + UUIDv7 tenant id + slug) and on the calling
+// tenant's OWN database (storeFn → t_<hex32>__board, or a tenant-level refusal).
+// The route set is the BoardBackendPort surface the kernel's board port calls:
 //   GET   /api/v1/boards?orgUnitId=…   → { data: Board[] }   (listBoardsForOrgUnits)
+//   POST  /api/v1/boards               → { board, stacks } (201) (createBoardWithStacks, R29-BOARD-STORE-K)
 //   GET   /api/v1/boards/:id           → Board | 404         (getBoard)
 //   GET   /api/v1/boards/:id/deck      → { board,stacks,cards } | 404 (deckFor)
+//   POST  /api/v1/boards/:id/stacks    → Stack (201) | 404   (createStack, R29-BOARD-STORE-K)
 //   POST  /api/v1/cards                → Card (201)          (createCard)
 //   PATCH /api/v1/cards/:id/move       → Card | 404          (moveCard)
 //   POST  /api/v1/cards/promoted       → { data: string[] } (listPromotedActionItemIds, #384)
@@ -18,17 +21,20 @@
 // matching ServiceBoardClient's deserialize helpers, which read fields straight
 // off the body. List routes wrap in { data: [...] }.
 //
-// Error envelope: { success:false, error } — the house JSON shape.
+// Error envelope: { success:false, error } — the house JSON shape. A tenant-level
+// refusal answers { success:false, error: <code> } with cache-control: no-store.
 
 import type http from 'node:http'
 import { z } from 'zod'
 import type { Sql, TenantRef } from '../store/index.js'
-import { isRefusal, type Refusal } from '../store/tenant-db.js'
+import { isRefusal, sqlState, type Refusal } from '../store/tenant-db.js'
 import type { Route, RouteContext } from './router.js'
 import {
   listBoardsForOrgUnits,
   getBoard,
   deckFor,
+  createBoardWithStacks,
+  createStack,
   createCard,
   moveCard,
   promoteActionItem,
@@ -129,6 +135,22 @@ const PromotedIdsSchema = z.object({
   candidateIds: z.array(z.string().min(1)),
 })
 
+/** A row id as Postgres' uuid type accepts it in canonical form (any version: rows use gen_random_uuid). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// R29-BOARD-STORE-K A5 / Q10 input caps: name 1..120, stack name 1..60, at most 20 stacks.
+const CreateBoardSchema = z.object({
+  orgUnitId: z.string().regex(UUID, 'orgUnitId must be a uuid'),
+  name: z.string().min(1).max(120),
+  archived: z.boolean().optional(),
+  stacks: z.array(z.string().min(1).max(60)).max(20).optional(),
+})
+
+const CreateStackSchema = z.object({
+  name: z.string().min(1).max(60),
+  order: z.number().int().min(0),
+})
+
 // ── route builder ─────────────────────────────────────────────────────────────
 
 export function buildApiRoutes(store: StoreFn): Route[] {
@@ -156,6 +178,9 @@ export function buildApiRoutes(store: StoreFn): Route[] {
           sendError(extended.res, 404, err.message)
         } else if (err instanceof Error && err.message === 'board has no stacks') {
           sendError(extended.res, 409, err.message)
+        } else if (sqlState(err) === '22021') {
+          // text Postgres refuses to store (e.g. a NUL byte): the caller's input
+          sendError(extended.res, 400, 'invalid text')
         } else {
           console.error('[board:api] unhandled route error', err)
           if (!extended.res.headersSent) sendError(extended.res, 500, 'internal error')
@@ -174,6 +199,34 @@ export function buildApiRoutes(store: StoreFn): Route[] {
         const sql = await storeFn(tenant)
         const boards = await listBoardsForOrgUnits(sql, orgUnitIds)
         sendJson(res, 200, { data: boards })
+      }),
+    },
+
+    // ── POST /api/v1/boards (R29-BOARD-STORE-K A5) ─────────────────────────────
+    // A board and its stacks in one transaction → 201 { board, stacks }.
+    {
+      method: 'POST',
+      path: '/api/v1/boards',
+      handler: wrap(async ({ req, res, tenant }) => {
+        const body = CreateBoardSchema.parse(await readBody(req))
+        const sql = await storeFn(tenant)
+        const created = await createBoardWithStacks(sql, body)
+        sendJson(res, 201, created)
+      }),
+    },
+
+    // ── POST /api/v1/boards/:id/stacks (R29-BOARD-STORE-K A5) ──────────────────
+    // → 201 Stack; 404 'board not found' unless the board is in THIS tenant.
+    {
+      method: 'POST',
+      path: '/api/v1/boards/:id/stacks',
+      handler: wrap(async ({ req, res, params, tenant }) => {
+        const body = CreateStackSchema.parse(await readBody(req))
+        const sql = await storeFn(tenant)
+        const boardId = params['id']!
+        if (!UUID.test(boardId) || !(await getBoard(sql, boardId))) return sendError(res, 404, 'board not found')
+        const stack = await createStack(sql, { boardId, name: body.name, order: body.order })
+        sendJson(res, 201, stack)
       }),
     },
 

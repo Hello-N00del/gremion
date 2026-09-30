@@ -70,6 +70,35 @@ export async function createBoard(
   return rows[0]!
 }
 
+/**
+ * R29-BOARD-STORE-K A5: a board and its stacks (sort_order = position) in ONE
+ * transaction, so a failing stack insert leaves no board. Same INSERTs as
+ * createBoard / createStack, run on the transaction handle.
+ */
+export async function createBoardWithStacks(
+  sql: Sql,
+  data: { orgUnitId: string; name: string; archived?: boolean; stacks?: readonly string[] },
+): Promise<{ board: Board; stacks: Stack[] }> {
+  return sql.begin(async (tx) => {
+    const [board] = await tx<Board[]>`
+      INSERT INTO board (org_unit_id, name, archived)
+      VALUES (${data.orgUnitId}, ${data.name}, ${data.archived ?? false}) RETURNING *`
+    const stacks: Stack[] = []
+    for (const [order, name] of (data.stacks ?? []).entries()) {
+      const [stack] = await tx<Stack[]>`
+        INSERT INTO stack (board_id, name, sort_order) VALUES (${board!.id}, ${name}, ${order}) RETURNING *`
+      stacks.push(stack!)
+    }
+    return { board: board!, stacks }
+  }) as Promise<{ board: Board; stacks: Stack[] }>
+}
+
+/** True when `id` is a stack in THIS tenant's database. */
+export async function stackExists(sql: Sql, id: string): Promise<boolean> {
+  const rows = await sql`SELECT 1 FROM stack WHERE id = ${id}`
+  return rows.length === 1
+}
+
 export async function listBoardsForOrgUnits(sql: Sql, orgUnitIds: readonly string[]): Promise<readonly Board[]> {
   if (orgUnitIds.length === 0) return []
   return sql<Board[]>`SELECT * FROM board WHERE org_unit_id IN ${sql(orgUnitIds as string[])} ORDER BY archived, name`

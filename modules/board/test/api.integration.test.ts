@@ -305,3 +305,103 @@ describe('POST /api/v1/cards/promoted', () => {
     expect(r.status).toBe(403)
   })
 })
+
+// -- create routes (R29-BOARD-STORE-K A5) ----------------------------------------
+
+describe('POST /api/v1/boards', () => {
+  it('creates a board and its stacks in order: 201 { board, stacks }', async () => {
+    const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), {
+      orgUnitId: OU1,
+      name: 'Vorstand',
+      stacks: ['To Do', 'Doing', 'Done'],
+    })
+    expect(r.status).toBe(201)
+    const body = r.body as { board: { id: string; org_unit_id: string; name: string; archived: boolean }; stacks: { board_id: string; name: string; sort_order: number }[] }
+    expect(body.board).toMatchObject({ org_unit_id: OU1, name: 'Vorstand', archived: false })
+    expect(body.stacks.map((s) => [s.name, s.sort_order, s.board_id])).toEqual([
+      ['To Do', 0, body.board.id],
+      ['Doing', 1, body.board.id],
+      ['Done', 2, body.board.id],
+    ])
+    const deck = await callServer(server, 'GET', `/api/v1/boards/${body.board.id}/deck`, guardHeaders())
+    expect(deck.status).toBe(200)
+    expect((deck.body as { stacks: unknown[] }).stacks).toHaveLength(3)
+  })
+
+  it('creates an archived board with no stacks when stacks is omitted', async () => {
+    const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), { orgUnitId: OU2, name: 'Alt', archived: true })
+    expect(r.status).toBe(201)
+    expect(r.body).toMatchObject({ board: { org_unit_id: OU2, name: 'Alt', archived: true }, stacks: [] })
+  })
+
+  it('400s on bad input (Q10 caps) and writes nothing', async () => {
+    const bad: unknown[] = [
+      {},
+      { orgUnitId: 'not-a-uuid', name: 'x' },
+      { orgUnitId: OU1, name: '' },
+      { orgUnitId: OU1, name: 'x'.repeat(121) },
+      { orgUnitId: OU1, name: 'x', archived: 'yes' },
+      { orgUnitId: OU1, name: 'x', stacks: Array.from({ length: 21 }, (_, i) => `s${i}`) },
+      { orgUnitId: OU1, name: 'x', stacks: ['ok', ''] },
+      { orgUnitId: OU1, name: 'x', stacks: ['ok', 'y'.repeat(61)] },
+    ]
+    for (const body of bad) {
+      const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), body)
+      expect(r.status, JSON.stringify(body).slice(0, 80)).toBe(400)
+    }
+    const [n] = await sql<{ c: string }[]>`SELECT count(*) AS c FROM board`
+    expect(Number(n!.c)).toBe(0)
+  })
+
+  it('accepts exactly the caps: name 120, 20 stacks of 60', async () => {
+    const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), {
+      orgUnitId: OU1,
+      name: 'n'.repeat(120),
+      stacks: Array.from({ length: 20 }, (_, i) => `${i}`.padEnd(60, 's')),
+    })
+    expect(r.status).toBe(201)
+    expect((r.body as { stacks: unknown[] }).stacks).toHaveLength(20)
+  })
+
+  it('writes the board and its stacks in ONE transaction: a failing second stack leaves no board', async () => {
+    // Postgres refuses a NUL byte in text (22021) — past validation, on the second
+    // stack insert, after the board row was inserted in the same transaction.
+    const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), {
+      orgUnitId: OU1,
+      name: 'Rollback',
+      stacks: ['To Do', 'bad\u0000stack'],
+    })
+    expect(r.status).toBe(400)
+    expect(r.body).toEqual({ success: false, error: 'invalid text' })
+    const boards = await sql<{ c: string }[]>`SELECT count(*) AS c FROM board`
+    const stacks = await sql<{ c: string }[]>`SELECT count(*) AS c FROM stack`
+    expect([Number(boards[0]!.c), Number(stacks[0]!.c)]).toEqual([0, 0])
+  })
+})
+
+describe('POST /api/v1/boards/:id/stacks', () => {
+  it('adds a stack to a board of this tenant: 201 Stack', async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const r = await callServer(server, 'POST', `/api/v1/boards/${b.id}/stacks`, guardHeaders(), { name: 'Review', order: 3 })
+    expect(r.status).toBe(201)
+    expect(r.body).toMatchObject({ board_id: b.id, name: 'Review', sort_order: 3 })
+  })
+
+  it("404 'board not found' for a board that is not in this tenant (unknown uuid, or not a uuid)", async () => {
+    for (const id of [MISSING_UUID, 'b-42']) {
+      const r = await callServer(server, 'POST', `/api/v1/boards/${id}/stacks`, guardHeaders(), { name: 'X', order: 0 })
+      expect(r.status, id).toBe(404)
+      expect(r.body, id).toEqual({ success: false, error: 'board not found' })
+    }
+    const [n] = await sql<{ c: string }[]>`SELECT count(*) AS c FROM stack`
+    expect(Number(n!.c)).toBe(0)
+  })
+
+  it('400s on bad input', async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    for (const body of [{}, { name: '', order: 0 }, { name: 'x'.repeat(61), order: 0 }, { name: 'x', order: -1 }, { name: 'x', order: 1.5 }, { name: 'x' }]) {
+      const r = await callServer(server, 'POST', `/api/v1/boards/${b.id}/stacks`, guardHeaders(), body)
+      expect(r.status, JSON.stringify(body)).toBe(400)
+    }
+  })
+})
