@@ -38,7 +38,10 @@ function goodRender(id) {
         legal: svc(`${FP}/gremion-legal@sha256:${D('7')}`),
         vector: svc(`${FP}/gremion-vector@sha256:${D('8')}`),
         fallback: svc(`${FP}/gremion-fallback@sha256:${D('9')}`),
-        postgres: svc(`postgres:18-alpine@sha256:${D('a')}`),
+        // a third-party service beside the first-party ones; deliberately NOT a
+        // postgres literal: check-postgres-major scans every tracked text file
+        // and a fake digest here reads as digest drift / a split pin.
+        nats: svc(`docker.io/library/nats:2.12@sha256:${D('a')}`),
       },
     }
   }
