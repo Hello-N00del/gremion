@@ -9,7 +9,6 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import type { AddressInfo } from 'node:net'
-import postgres from 'postgres'
 import { createServer } from '../src/http/server.ts'
 import { buildApiRoutes } from '../src/http/routes.ts'
 import { storeFor, _resetTenantStoreForTests, type TenantRef, type Sql } from '../src/tenant-store.ts'
@@ -177,37 +176,26 @@ describe('finance leaf -- one open approval and one live payment_order per appro
     expect((await requestApproval(expenseId)).status).toBe(200)
   })
 
-  it('the migration refuses to build the indexes over existing duplicates, loudly, and keeps every row', async () => {
-    const expenseId = await makeExpense()
+  // Migration 006 over existing duplicates. ONE arm per case: with both arms seeded
+  // at once, a regression that silently DELETEs the surplus approvals stayed green,
+  // because the payment_order arm's RAISE rolled the DELETE back (verifier, r1).
+  //
+  // The boot is re-run through storeFor() under a second tenant id that shares the
+  // slug (so the same tenant DB): the pool map is keyed by id, so this opens a FRESH
+  // pool and runs every migration exactly as a leaf's first contact does, while the
+  // suite's `sql` pool on TENANT stays open to read and repair the rows. No direct
+  // driver connection in this file (kernel lint-tenant-db-access).
+  const REBOOT: TenantRef = { id: 'f105f105-0000-4000-8000-f105f105f106', slug: TENANT.slug }
+  const reboot = () => storeFor(REBOOT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
+
+  async function dropSingleOpenIndexes(): Promise<void> {
     await sql`DROP INDEX IF EXISTS finance.approval_one_open_per_approvable_idx`
     await sql`DROP INDEX IF EXISTS finance.payment_order_one_live_per_expense_idx`
-    await sql`INSERT INTO finance.approval (approvable_type, approvable_id, created_by)
-              VALUES ('expense', ${expenseId}, 'dup-1'), ('expense', ${expenseId}, 'dup-2')`
-    await sql`INSERT INTO finance.payment_order (expense_id, anordnung_by, feststellung_sachlich_by, feststellung_rechnerisch_by)
-              VALUES (${expenseId}, 'a', 'b', 'b'), (${expenseId}, 'a', 'b', 'b')`
+  }
 
-    // Re-run the migrations exactly as a leaf boot does (fresh pool, first contact).
+  async function expectIndexesRebuiltAfterRepair(): Promise<void> {
+    // The repaired DB boots under the real tenant again and carries both indexes.
     await _resetTenantStoreForTests()
-    await expect(storeFor(TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })).rejects.toThrow(
-      /duplicate/i,
-    )
-
-    // Nothing was dropped: read the tenant DB directly (the store refused to open).
-    const u = new URL(TEST_PG_URL)
-    u.pathname = `/${TEST_DB_PREFIX}${TENANT.slug}`
-    const direct = postgres(u.toString(), { max: 1 })
-    try {
-      expect(await count(direct<{ n: string }[]>`
-        SELECT count(*)::text AS n FROM finance.approval WHERE approvable_id = ${expenseId}`)).toBe(2)
-      expect(await count(direct<{ n: string }[]>`
-        SELECT count(*)::text AS n FROM finance.payment_order WHERE expense_id = ${expenseId}`)).toBe(2)
-      // Operator repair (by hand, never by the migration), then the boot succeeds.
-      await direct`DELETE FROM finance.approval WHERE created_by = 'dup-2'`
-      await direct`UPDATE finance.payment_order SET state = 'voided'
-                   WHERE id = (SELECT max(id) FROM finance.payment_order WHERE expense_id = ${expenseId})`
-    } finally {
-      await direct.end()
-    }
     sql = await storeFor(TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
     const idx = await sql<{ indexname: string }[]>`
       SELECT indexname FROM pg_indexes WHERE schemaname = 'finance'
@@ -216,5 +204,54 @@ describe('finance leaf -- one open approval and one live payment_order per appro
     expect(idx.map((r) => r.indexname)).toEqual([
       'approval_one_open_per_approvable_idx', 'payment_order_one_live_per_expense_idx',
     ])
+  }
+
+  it('migration 006 refuses to boot over duplicate pending approvals ALONE, loudly, and keeps every row', async () => {
+    const expenseId = await makeExpense()
+    await dropSingleOpenIndexes()
+    await sql`INSERT INTO finance.approval (approvable_type, approvable_id, created_by)
+              VALUES ('expense', ${expenseId}, 'dup-1'), ('expense', ${expenseId}, 'dup-2')`
+
+    await expect(reboot()).rejects.toThrow(/migration 006: duplicate pending approvals exist for expense#/)
+
+    // Nothing was dropped, rejected or rewritten.
+    const rows = await sql<{ created_by: string; status: string }[]>`
+      SELECT created_by, status FROM finance.approval WHERE approvable_id = ${expenseId} ORDER BY created_by`
+    expect(rows.map((r) => `${r.created_by}:${r.status}`)).toEqual(['dup-1:pending', 'dup-2:pending'])
+    expect(await count(sql<{ n: string }[]>`
+      SELECT count(*)::text AS n FROM pg_indexes WHERE schemaname = 'finance'
+        AND indexname = 'approval_one_open_per_approvable_idx'`)).toBe(0)
+
+    // Operator repair (by hand, never by the migration): reject the surplus approval.
+    await sql`UPDATE finance.approval SET status = 'rejected', rejection_reason = 'duplicate (006 repair)'
+              WHERE approvable_id = ${expenseId} AND created_by = 'dup-2'`
+    await expectIndexesRebuiltAfterRepair()
+    expect(await count(sql<{ n: string }[]>`
+      SELECT count(*)::text AS n FROM finance.approval WHERE approvable_id = ${expenseId}`)).toBe(2)
+  })
+
+  it('migration 006 refuses to boot over duplicate live payment_orders ALONE, loudly, and keeps every row', async () => {
+    const expenseId = await makeExpense()
+    await dropSingleOpenIndexes()
+    await sql`INSERT INTO finance.payment_order (expense_id, anordnung_by, feststellung_sachlich_by, feststellung_rechnerisch_by)
+              VALUES (${expenseId}, 'a', 'b', 'b'), (${expenseId}, 'a', 'b', 'b')`
+
+    await expect(reboot()).rejects.toThrow(/migration 006: duplicate live payment_orders exist for expense#/)
+
+    // Nothing was dropped or voided.
+    const states = await sql<{ state: string }[]>`
+      SELECT state FROM finance.payment_order WHERE expense_id = ${expenseId} ORDER BY id`
+    expect(states).toHaveLength(2)
+    expect(states.every((r) => r.state !== 'voided')).toBe(true)
+    expect(await count(sql<{ n: string }[]>`
+      SELECT count(*)::text AS n FROM pg_indexes WHERE schemaname = 'finance'
+        AND indexname = 'payment_order_one_live_per_expense_idx'`)).toBe(0)
+
+    // Operator repair (by hand, never by the migration): void the surplus order.
+    await sql`UPDATE finance.payment_order SET state = 'voided'
+              WHERE id = (SELECT max(id) FROM finance.payment_order WHERE expense_id = ${expenseId})`
+    await expectIndexesRebuiltAfterRepair()
+    expect(await count(sql<{ n: string }[]>`
+      SELECT count(*)::text AS n FROM finance.payment_order WHERE expense_id = ${expenseId}`)).toBe(2)
   })
 })
