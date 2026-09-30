@@ -44,6 +44,7 @@ import { existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { REPO_ROOT, readEnvFile, renderState } from './compose-edge.mjs'
+import { appTierServiceNames, renderColourViolations } from './verify/render/colour-suffix.mjs'
 
 export { REPO_ROOT }
 
@@ -244,26 +245,13 @@ export function appShapeViolations(render, colour, stack, label = `app-${colour}
 // ── COLOUR SUFFIX ──────────────────────────────────────────────────────────
 
 export function colourSuffixViolations(render, colour, label = `app-${colour}`) {
-  const out = []
-  const firstParty = [...APP_SERVICES, ...LEAF_SERVICES]
-  for (const [svcName, svc] of services(render)) {
-    for (const [key, raw] of Object.entries(svc.environment ?? {})) {
-      const value = String(raw ?? '')
-      // A HOST token only: a URL authority (after // or user@), or the whole
-      // value of a *_HOST key. A bare value elsewhere is a name, not a host --
-      // AUTH_KEYCLOAK_ID=gremion-ui is the OIDC client id, which no colour owns.
-      const hostKey = key.endsWith('HOST')
-      for (const name of firstParty) {
-        const re = hostKey
-          ? new RegExp(`(?:^|//|@)${name}(-[a-z0-9-]+)?(?=$|[^a-z0-9-])`, 'g')
-          : new RegExp(`(?://|@)${name}(-[a-z0-9-]+)?(?=$|[^a-z0-9-])`, 'g')
-        for (const m of value.matchAll(re)) {
-          if (m[1] !== `-${colour}`) out.push(`${label}/${svcName}: environment.${key} names ${name} without the -${colour} suffix: ${value}`)
-        }
-      }
-    }
-  }
-  return out
+  // TASK-053 G2: the ONE reference predicate lives in
+  // scripts/verify/render/colour-suffix.mjs. Its name set is the union of this
+  // list, the render's first-party-image services and app.env.tmpl's
+  // -${COLOUR} hosts (a strict superset of the list-bound scan this replaced);
+  // HOST tokens only (URL authority, whole *HOST value), longest name first.
+  const names = appTierServiceNames({ renders: [render], extra: [...APP_SERVICES, ...LEAF_SERVICES] })
+  return renderColourViolations(render, colour, names, label)
 }
 
 // ── ISOLATION (TRD-045) ────────────────────────────────────────────────────

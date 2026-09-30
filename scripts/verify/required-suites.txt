@@ -20,4 +20,6 @@ migration-hash
 carve-lint
 isolation
 census
+render-guards
+boundary-lint
 vendor-mail
