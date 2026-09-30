@@ -197,3 +197,24 @@ shows the challenge form to guests, who get a 403 on submit (no member flag in
 the page data); the revoke `reason` bound (4000) is only in the contract's
 description (a `maxLength` would be a breaking change against the branch
 head for the staged-spec gate).
+
+## 206-A house review r1 (APPROVE, MEDIUM/LOW only): MEDIUM fixes, fixer round 2
+
+Kernel main 535aae89 merged into the unit branch first (no rebase, no conflict).
+
+| Finding | Fix | Guard | RED before the fix | GREEN |
+|---|---|---|---|---|
+| MEDIUM (quality, silent-failure): an unknown `requiredMajority`, a negative/fractional/non-numeric tally, or an unknown stored rule escaped POST/PATCH as a 500 | POST validates the rule against the five CHECK-accepted ids in both modes; POST and PATCH map the engine's typed input errors to 400 (`isDecisionRuleInputError`, `isCoreDecisionRuleId` in `decision-rule.ts`) | `resolutions.test.ts` (h) | 7 failed / 27 passed (`expected UnknownDecisionRuleError ... to match object { status: 400 }`) | 34/34 |
+| MEDIUM (security): PATCH had no published/adopted guard; the acclamation branch let an admin flip an adopted result with no audit record | PATCH and DELETE load the row joined to its protocol: 404 when unknown or under another protocol, 403 once published or `decided_at` is set | `resolutions.test.ts` (i) | 6 failed / 36 passed | 42/42 |
+| MEDIUM (quality; security LOW): a member could challenge an adopted REJECTED resolution that no admin surface lists | `fileChallenge` requires `result = 'passed'` besides `decided_at` (review option a; `ResolutionNotAdoptedError`, route 403) | `resolution-challenges-audit.integration.test.ts` (0b) rejected / withdrawn | 2 failed / 6 passed (`promise resolved ... instead of rejecting`) | 3 challenge files 17/17 |
+| MEDIUM (silent-failure): `/beschluesse` told an admin "Keine Einsprüche" when the challenge query had failed | the loader returns `beschluesseUnavailable` / `challengesUnavailable`; the page renders an alert line instead of the empty state | `beschluesse-page.test.ts` flag cases | 4 failed / 8 passed | 12/12 |
+| MEDIUM x2 (svelte): ResolutionRow never passed the support_threshold fraction; acclamation rows rendered an empty tally and an inert rule label | optional `adoption_mode` / `decision_rule_params` on the row type, fraction passed, "per Akklamation" in both views, the null-verdict cause named | `ResolutionRow.test.ts` Phase-2 cases | 4 failed / 2 passed | 6/6 |
+
+This closes the 206-A residuals "Resolution PATCH/DELETE carry no publish lock"
+and "ResolutionRow ... shows empty tallies for an acclamation row". Still open
+(LOW, named): the row type keeps the three-rule `required_majority` union and
+non-null tallies (widening it changes the protocol page's type, a K1 file);
+the Anfechten affordance is shown to guests; the recall dialog shows the
+route's English validation messages; reconcile calls Keycloak even when no
+resolver is registered; assign does not validate `userKeycloakId` as a UUID;
+`financeRoleLabelsForTenant` tolerates a missing tenant context.
