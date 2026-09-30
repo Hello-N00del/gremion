@@ -15,11 +15,12 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const moduleRoot = path.resolve(here, '..')
 const harness = path.join(here, 'fixtures', 'stream-harness.ts')
 
-let child: ChildProcess | null = null
+const children: ChildProcess[] = []
 
 afterEach(() => {
-  if (child && child.exitCode === null) child.kill()
-  child = null
+  for (const c of children.splice(0)) {
+    if (c.exitCode === null) c.kill()
+  }
 })
 
 function startHarness(): Promise<{ port: number; proc: ChildProcess; stderr: () => string }> {
@@ -28,7 +29,7 @@ function startHarness(): Promise<{ port: number; proc: ChildProcess; stderr: () 
       cwd: moduleRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    child = proc
+    children.push(proc)
     let out = ''
     let err = ''
     proc.stderr!.on('data', (d: Buffer) => {
