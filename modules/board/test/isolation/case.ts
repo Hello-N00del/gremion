@@ -159,6 +159,13 @@ export function boardAttempts(): Attempt[] {
         }),
     },
     {
+      vector: '8',
+      route: 'POST /api/v1/boards/:id/stacks',
+      kind: 'write',
+      what: "a stack onto B's board",
+      run: ({ api, attacker, victim }) => api.createStack(attacker, victim.boardId, { name: 'intrusion-8', order: 9 }),
+    },
+    {
       vector: 'H',
       route: 'GET /api/v1/boards/:id/deck',
       kind: 'read',
@@ -176,9 +183,35 @@ export function boardAttempts(): Attempt[] {
   ]
 }
 
-/** Case-specific positive controls. */
+/**
+ * Case-specific positive controls. Vector 9 is a CONTROL, not an attempt (§3.3):
+ * a board carries only an org_unit_id, so A may legitimately create a board on
+ * any uuid in its own database — a 201 is right, and TASK-044's write rule ("a
+ * write fails on any 2xx") would misjudge it. As a control it asserts what
+ * matters: the write lands in A's database only.
+ */
 export function boardControls(): Control[] {
   return [
+    {
+      vector: '9',
+      route: 'POST /api/v1/boards',
+      what: "A creates a board on B's org-unit id: 201, readable as A, B's list and fingerprint unchanged",
+      async run({ api, attacker, victim, fingerprint }) {
+        const listBefore = await api.listBoards(victim.tenant, [victim.orgUnitId])
+        const fpBefore = await fingerprint(victim.tenant, victim)
+        const r = await api.createBoard(attacker, { orgUnitId: victim.orgUnitId, name: `control-9-${randomUUID()}`, stacks: ['To Do'] })
+        if (r.status !== 201) return { ok: false, detail: `create answered ${r.status}: ${JSON.stringify(r.body).slice(0, 200)}` }
+        const id = (r.body as { board: { id: string } }).board.id
+        const mine = await api.getBoard(attacker, id)
+        const listAfter = await api.listBoards(victim.tenant, [victim.orgUnitId])
+        const fpAfter = await fingerprint(victim.tenant, victim)
+        const why: string[] = []
+        if (mine.status !== 200) why.push(`A cannot read its new board (${mine.status})`)
+        if (JSON.stringify(listBefore.body) !== JSON.stringify(listAfter.body)) why.push("B's list for that org unit changed")
+        if (fpBefore !== fpAfter) why.push("B's fingerprint changed")
+        return { ok: why.length === 0, detail: why.length ? why.join('; ') : "201, readable as A, B unchanged" }
+      },
+    },
     {
       vector: 'H',
       route: 'GET /api/v1/boards/:id/deck',
