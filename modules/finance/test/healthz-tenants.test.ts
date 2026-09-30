@@ -32,7 +32,7 @@ describe('/healthz/tenants (K4#32)', () => {
       healthz: {
         listTenants: async () => tenants,
         storeFn: async (t) => {
-          if (t.id === T_BAD.id) throw new Error('connect ECONNREFUSED 10.0.0.9:5432 password=hunter2')
+          if (t.id === T_BAD.id) throw new Error('connect ECONNREFUSED leak-marker-host detail=leak-marker-detail')
           return okSql()
         },
       },
@@ -73,7 +73,7 @@ describe('/healthz/tenants (K4#32)', () => {
       expect(res.status).toBe(503)
       const text = await res.text()
       expect(JSON.parse(text)).toEqual({ success: false, db_ok: false })
-      expect(text).not.toMatch(/ECONNREFUSED|hunter2|broken|bbbbbbbb/)
+      expect(text).not.toMatch(/ECONNREFUSED|leak-marker|broken|bbbbbbbb/)
       expect(spy.mock.calls.flat().join(' ')).toContain(T_BAD.id)
     } finally {
       spy.mockRestore()
