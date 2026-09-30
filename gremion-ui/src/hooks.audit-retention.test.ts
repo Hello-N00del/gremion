@@ -105,7 +105,8 @@ let tick: () => unknown
 let bootComplete: boolean | undefined
 let intervalCallFound: boolean
 // F1-FIX-03 / S1a#4: the one post-boot run.
-let bootRunDelay: unknown
+// NaN until beforeAll reads the real export: every comparison on it fails.
+let bootRunDelay = Number.NaN
 let bootRun: (() => unknown) | undefined
 let bootRunUnrefd: boolean | undefined
 
@@ -120,8 +121,9 @@ beforeAll(async () => {
   const call = setIntervalSpy.mock.calls.find((c) => c[1] === DAY_MS)
   intervalCallFound = call !== undefined
   tick = call?.[0] as () => unknown
-  bootRunDelay = (mod as Record<string, unknown>).AUDIT_RETENTION_BOOT_DELAY_MS
-  const idx = setTimeoutSpy.mock.calls.findIndex((c) => typeof bootRunDelay === 'number' && c[1] === bootRunDelay)
+  // Typed read (round 2, review LOW): a renamed export is a compile error.
+  bootRunDelay = mod.AUDIT_RETENTION_BOOT_DELAY_MS
+  const idx = setTimeoutSpy.mock.calls.findIndex((c) => c[1] === bootRunDelay)
   if (idx >= 0) {
     bootRun = setTimeoutSpy.mock.calls[idx][0] as () => unknown
     const timer = setTimeoutSpy.mock.results[idx].value as ReturnType<typeof setTimeout>
@@ -163,9 +165,8 @@ describe('hooks.server audit-retention interval — P2.1b T4 fleet wrap', () => 
   // F1-FIX-03 / S1a#4: the 24 h interval has no initial run, so a process that
   // restarts more often than every 24 h (every deploy) never purges at all.
   it('boot also schedules ONE unref-ed post-boot purge run within 5 minutes (S1a#4)', () => {
-    expect(typeof bootRunDelay).toBe('number')
-    expect(bootRunDelay as number).toBeGreaterThan(0)
-    expect(bootRunDelay as number).toBeLessThanOrEqual(5 * 60 * 1000)
+    expect(bootRunDelay).toBeGreaterThan(0)
+    expect(bootRunDelay).toBeLessThanOrEqual(5 * 60 * 1000)
     expect(bootRun).toBeTypeOf('function')
     expect(bootRunUnrefd).toBe(true)
   })
