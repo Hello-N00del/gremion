@@ -323,6 +323,23 @@ describe('foreign ids', () => {
     expect(r.body).toEqual({ success: false, error: 'stack not found' })
   })
 
+  it("POST /api/v1/cards with a real stack but a malformed protocolActionItemId: 400, never 404 'stack not found', nothing written", async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const s1 = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const r = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), {
+      stackId: s1.id,
+      title: 'x',
+      protocolActionItemId: 'not-a-uuid',
+      createdBy: 'u1',
+    })
+    expect({ status: r.status, body: r.body }).toEqual({
+      status: 400,
+      body: { success: false, error: 'protocolActionItemId must be a uuid' },
+    })
+    const [n] = await sql<{ c: string }[]>`SELECT count(*) AS c FROM card`
+    expect(Number(n!.c)).toBe(0)
+  })
+
   it("PATCH /api/v1/cards/:id/move into a stack that is not in this tenant (or not a uuid): 404 'stack not found', card unmoved", async () => {
     const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
     const s1 = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })

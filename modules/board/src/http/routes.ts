@@ -127,7 +127,9 @@ const CreateCardSchema = z.object({
   dueDate: z.string().nullable().optional(),
   label: z.string().nullable().optional(),
   order: z.number().int().min(0).optional(),
-  protocolActionItemId: z.string().nullable().optional(),
+  // A uuid column: validated here so a malformed value is a 400, and the route's
+  // 22P02 → 404 'stack not found' mapping can only ever be about stackId.
+  protocolActionItemId: z.string().regex(UUID, 'protocolActionItemId must be a uuid').nullable().optional(),
   createdBy: z.string().nullable().optional(),
 })
 
