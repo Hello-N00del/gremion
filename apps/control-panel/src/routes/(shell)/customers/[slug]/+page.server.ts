@@ -12,8 +12,10 @@ export const load: PageServerLoad = async ({ params }) => {
   if (!SLUG.test(params.slug) || params.slug.length > 30) error(404, 'no such customer')
   const r = loadConfig(env)
   if (!r.ok) error(503, 'the control panel is not configured')
-  const status = await customerStatus(r.config, params.slug).catch(() => {
-    error(503, 'the control registry is not reachable')
+  const status = await customerStatus(r.config, params.slug).catch((err: unknown) => {
+    const e = err as { code?: string; message?: string }
+    console.error(`[control-panel] customer status ${params.slug} failed: ${e?.code ?? 'no-sqlstate'}: ${e?.message ?? String(err)}`)
+    error(503, 'the control registry or the platform ledger is not reachable (see the panel log)')
   })
   if (!status) return { slug: params.slug, status: null }
   return { slug: params.slug, status }

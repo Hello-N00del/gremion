@@ -40,7 +40,12 @@ export const gate: Handle = async ({ event, resolve }) => {
   try {
     const session = await event.locals.auth()
     claims = (session as unknown as { claims?: SessionClaims } | null)?.claims ?? null
-  } catch {
+  } catch (err) {
+    // Fail closed, but never silently: a rotated AUTH_SECRET, a misconfiguration
+    // or a callback bug must be told apart from a forged cookie in the log.
+    // The cookie value is never logged.
+    const e = err as { name?: string; message?: string }
+    console.error(`[control-panel] session decode failed on ${event.url.pathname}: ${e?.name ?? 'Error'}: ${e?.message ?? String(err)}`)
     claims = null
   }
   const cookies = event.cookies.getAll().filter((k) => SESSION_COOKIE.test(k.name))

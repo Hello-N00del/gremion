@@ -113,6 +113,22 @@ describe('the gate hook (TDD 15)', () => {
     expect(e.locals.operator).toMatchObject({ id: '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33', acr: 'loa2', iss: OPS })
   })
 
+  it('a session decode that THROWS is logged (never the cookie value) and still fails closed', async () => {
+    const logged: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => void logged.push(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')))
+    const e = event({ path: '/api/customers', cookies: [{ name: 'authjs.session-token', value: 'cookie-value-t043' }] })
+    e.locals.auth = async () => {
+      throw new Error('JWEDecryptionFailed: decryption operation failed')
+    }
+    const { res, resolve } = await run(e)
+    expect(res?.status).toBe(403)
+    expect(resolve).not.toHaveBeenCalled()
+    const text = logged.join('\n')
+    expect(text).toMatch(/session decode failed/)
+    expect(text).toMatch(/JWEDecryptionFailed/)
+    expect(text).not.toContain('cookie-value-t043')
+  })
+
   it('the probes are not gated', async () => {
     for (const path of ['/healthz', '/api/internal/evict']) {
       const { resolve } = await run(event({ path }))
