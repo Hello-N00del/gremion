@@ -140,15 +140,25 @@ fi
 rm -rf "$SCRATCH"
 mkdir -p "$SCRATCH/secrets/nats" "$SCRATCH/accounts"
 
+# Git Bash on Windows rewrites container paths (-c /etc/nats/..., /data) into
+# host paths; `docker run` gets MSYS_NO_PATHCONV=1 and its bind sources in
+# the drive form Docker Desktop reads (C:/...). A no-op on Linux.
+hostpath() {
+  case "${OSTYPE:-}" in
+    msys*|cygwin*) if [[ "$1" =~ ^/([a-zA-Z])/(.*)$ ]]; then printf '%s:/%s' "${BASH_REMATCH[1]^^}" "${BASH_REMATCH[2]}"; return; fi ;;
+  esac
+  printf '%s' "$1"
+}
+
 export NATS_SECRETS_DIR="$SCRATCH/secrets/nats" NATS_ACCOUNTS_DIR="$SCRATCH/accounts"
 if [ "$MODE" = auth ]; then
   node "$ROOT/packages/nats-auth/bin/nats-auth.mjs" init
-  docker run -d --name "$CONTAINER" -p 127.0.0.1::4222 \
-    -v "$ROOT/docker/nats/nats.conf:/etc/nats/nats.conf:ro" \
-    -v "$SCRATCH/accounts:/etc/nats/accounts:ro" \
+  MSYS_NO_PATHCONV=1 docker run -d --name "$CONTAINER" -p 127.0.0.1::4222 \
+    -v "$(hostpath "$ROOT/docker/nats/nats.conf"):/etc/nats/nats.conf:ro" \
+    -v "$(hostpath "$SCRATCH/accounts"):/etc/nats/accounts:ro" \
     "$IMAGE" -c /etc/nats/nats.conf >/dev/null
 else
-  docker run -d --name "$CONTAINER" -p 127.0.0.1::4222 "$IMAGE" -js --store_dir /data -m 8222 >/dev/null
+  MSYS_NO_PATHCONV=1 docker run -d --name "$CONTAINER" -p 127.0.0.1::4222 "$IMAGE" -js --store_dir /data -m 8222 >/dev/null
 fi
 started=1
 

@@ -220,8 +220,8 @@ describe('A3 no cross-module access (publishing vs content, tenant A)', () => {
   })
 })
 
-/** Boots consumer then producer as the callers do; returns the consumer's deliveries of the one event (exactly one, asserted). */
-async function flow(producer: string, consumer: string, stream: keyof typeof STREAMS, subject: string, eventType: string): Promise<string[]> {
+/** Boots consumer then producer as the callers do; asserts the consumer received the one event exactly once. */
+async function flow(producer: string, consumer: string, stream: keyof typeof STREAMS, subject: string, eventType: string): Promise<void> {
   const d = STREAMS[stream]
   const sub = await bootBroker(A, consumer, stream)
   const got: string[] = []
@@ -237,21 +237,20 @@ async function flow(producer: string, consumer: string, stream: keyof typeof STR
   const delivered = got.filter((id) => id === e.eventId)
   expect(delivered, `${consumer} did not receive ${producer}'s ${e.eventId}`).toEqual([e.eventId])
   s.unsubscribe()
-  return delivered
 }
 
 describe('F the current flows deliver, as the callers boot', () => {
   test('F1 kernel -> ORGUNIT -> finance', async () => {
-    expect(await flow('kernel', 'finance', 'ORGUNIT', orgUnitSubject(A, 'upserted'), 'upserted')).toHaveLength(1)
+    await flow('kernel', 'finance', 'ORGUNIT', orgUnitSubject(A, 'upserted'), 'upserted')
   })
   test('F2 publishing -> NEWSLETTER -> kernel', async () => {
-    expect(await flow('publishing', 'kernel', 'NEWSLETTER', newsletterSubject(A, 'send.succeeded'), 'send.succeeded')).toHaveLength(1)
+    await flow('publishing', 'kernel', 'NEWSLETTER', newsletterSubject(A, 'send.succeeded'), 'send.succeeded')
   })
   test('F3 content -> CONTENT -> kernel', async () => {
-    expect(await flow('content', 'kernel', 'CONTENT', contentSubject(A, 'publish.succeeded'), 'publish.succeeded')).toHaveLength(1)
+    await flow('content', 'kernel', 'CONTENT', contentSubject(A, 'publish.succeeded'), 'publish.succeeded')
   })
   test('F4 calendar -> CALENDAR -> kernel', async () => {
-    expect(await flow('calendar', 'kernel', 'CALENDAR', calendarSubject(A, 'event.created'), 'event.created')).toHaveLength(1)
+    await flow('calendar', 'kernel', 'CALENDAR', calendarSubject(A, 'event.created'), 'event.created')
   })
 })
 
