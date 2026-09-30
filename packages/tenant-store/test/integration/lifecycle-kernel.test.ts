@@ -177,7 +177,7 @@ describe('ensureKernelDatabase (TDD 5)', () => {
       }
       const r = await ensureKernelDatabase(server, V, pwX)
       expect(r.pgbouncerGrant).toBe('applied')
-      const db = server.open(kernelDbName(V))
+      const db = await server.open(kernelDbName(V))
       try {
         const [p] = await db<{ ok: boolean }[]>`SELECT has_function_privilege('pgbouncer_auth', 'pgbouncer.get_auth(text)', 'EXECUTE') AS ok`
         expect(p?.ok).toBe(true)

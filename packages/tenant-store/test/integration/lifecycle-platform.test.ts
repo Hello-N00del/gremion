@@ -98,7 +98,22 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
 
   it('refuses a gremion_platform owned by another role, and a role name that is not plain', async () => {
     await expect(ensurePlatformDatabase(admin, { owner: 't043_other_owner', ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'DATABASE_FOREIGN_OWNER' })
+    // refused BEFORE any role is touched (review B1, r2): nothing was created
+    expect((await admin`SELECT 1 FROM pg_roles WHERE rolname = 't043_other_owner'`).length).toBe(0)
     await admin.unsafe('DROP ROLE IF EXISTS t043_other_owner')
+    // an existing role of another purpose is never demoted or re-passworded
+    await admin.unsafe('DROP ROLE IF EXISTS t043_unrelated')
+    await admin.unsafe('CREATE ROLE t043_unrelated NOLOGIN CREATEDB')
+    try {
+      await expect(ensurePlatformDatabase(admin, { owner: 't043_unrelated', ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'DATABASE_FOREIGN_OWNER' })
+      const [r] = await admin<{ createdb: boolean; login: boolean }[]>`SELECT rolcreatedb AS createdb, rolcanlogin AS login FROM pg_roles WHERE rolname = 't043_unrelated'`
+      expect(r).toEqual({ createdb: true, login: false })
+    } finally {
+      await admin.unsafe('DROP ROLE IF EXISTS t043_unrelated')
+    }
+    // the server's own admin role is never the platform owner
+    const [me] = await admin<{ u: string }[]>`SELECT current_user AS u`
+    if (me!.u !== 'postgres') await expect(ensurePlatformDatabase(admin, { owner: me!.u, ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     await expect(ensurePlatformDatabase(admin, { owner: 'Bad-Name', ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     await expect(ensurePlatformDatabase(admin, { owner: 'postgres', ownerPassword: PASSWORD })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
