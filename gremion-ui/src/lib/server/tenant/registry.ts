@@ -393,8 +393,37 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
  * Callers MUST have already confirmed row.status === 'active'.
  */
 async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<TenantContext> {
-  const slug = row.slug
-  const dbUrl = resolveSecret(row.dbConnRef)
+  const ctx = await buildTenantContext(row)
+  // HARDENING-1: an eviction that landed while this resolution was in flight
+  // must not be undone by its cache write.
+  if (_evictionEpoch === epoch) {
+    _resolutionCache.set(row.slug, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  }
+  return ctx
+}
+
+/**
+ * TASK-043 Q21: the context of a customer that is still `provisioning`, for
+ * the one thing that must run inside it before the row may become `active`:
+ * the kernel migration (gremion-ui's db.ts runMigrations() inside
+ * runWithTenant), then the first body. resolveTenantBySlug / migrateTenant
+ * resolve `active` rows only, so they cannot be used; setting the row
+ * `active` first would serve a half-made tenant. NEVER cached (the resolution
+ * cache holds active tenants only) and refused for any other status.
+ * `dbUrl` overrides the row's db secret for this context only (the migration
+ * runs DIRECT and as the database owner, TASK-043 Q3); the caller evicts the
+ * tenant's pool around its use, because pools are keyed by tenant id.
+ */
+export async function contextForProvisioningTenant(row: Tenant, opts: { dbUrl?: string } = {}): Promise<TenantContext> {
+  if (row.status !== 'provisioning') {
+    throw new Error(`contextForProvisioningTenant: tenant ${row.slug} is ${row.status}, not provisioning`)
+  }
+  return buildTenantContext(row, opts.dbUrl)
+}
+
+/** The context of one registry row (no cache write, no status check). */
+async function buildTenantContext(row: Tenant, dbUrlOverride?: string): Promise<TenantContext> {
+  const dbUrl = dbUrlOverride ?? resolveSecret(row.dbConnRef)
   const conn = row.connProfile as { perTenantMax?: number; prepare?: boolean }
   const dbMax = typeof conn.perTenantMax === 'number' ? conn.perTenantMax : 4
   const dbPrepare = conn.prepare ?? true
@@ -492,11 +521,6 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
       // undefined ⇒ tenant-mail falls back to config.smtp + auth-less.
       smtp: domainProfile.smtp,
     },
-  }
-  // HARDENING-1: an eviction that landed while this resolution was in flight
-  // must not be undone by its cache write.
-  if (_evictionEpoch === epoch) {
-    _resolutionCache.set(slug, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
   }
   return ctx
 }
