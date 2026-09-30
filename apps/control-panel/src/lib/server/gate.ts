@@ -7,6 +7,8 @@
 //   - an Authorization header             -> 403 (the panel accepts no bearer token)
 //   - a session cookie that does not decode -> 403, the cookie is cleared (forged or stale)
 //   - no session                          -> GET: sign-in at the ops realm (acr loa2); else 403
+//   - a session signed in more than SESSION_ABSOLUTE_SECONDS ago (or with no
+//     sign-in time)                       -> GET: sign-in; else 403, the cookie is cleared
 //   - a session whose iss is not the ops issuer (a customer realm) -> 403
 //   - no `operator` realm role            -> 403
 //   - acr below the required loa2         -> GET: step-up sign-in; else 403
@@ -25,7 +27,28 @@ export interface SessionClaims {
   uid?: string
   email?: string | null
   roles?: string[]
+  /** Epoch seconds of the authorization code exchange that made this session. */
+  authAt?: number
   error?: string
+}
+
+/**
+ * ABSOLUTE session lifetime (ASVS 5.0 V7.3.2), counted from the sign-in, never
+ * from the last request: Auth.js renews a JWT session's expiry on every read,
+ * so its maxAge alone is only an idle timeout (review r2 HIGH). Roles and acr
+ * are read at sign-in only, so this is also the bound on how long a revoked
+ * operator keeps the panel.
+ */
+export const SESSION_ABSOLUTE_SECONDS = 3600
+
+/** Clock skew tolerated on a sign-in time that lies in the future. */
+const FUTURE_SKEW_SECONDS = 60
+
+/** True when a sign-in time is missing, malformed, in the future or too old. */
+export function sessionTooOld(authAt: unknown, now: number): boolean {
+  if (typeof authAt !== 'number' || !Number.isFinite(authAt)) return true
+  if (authAt > now + FUTURE_SKEW_SECONDS) return true
+  return now - authAt > SESSION_ABSOLUTE_SECONDS
 }
 
 export type GateDecision =
@@ -42,6 +65,8 @@ export interface GateInput {
   authorization: string | null
   issuer: string
   requiredAcr: string
+  /** Epoch seconds, now. */
+  now: number
 }
 
 export const OPERATOR_ROLE = 'operator'
@@ -98,6 +123,11 @@ export function decide(input: GateInput): GateDecision {
     return read ? { kind: 'sign-in', reason: 'anonymous' } : refuse('not signed in')
   }
   if (s.error) return read ? { kind: 'sign-in', reason: 'expired' } : refuse('the session has expired')
+  if (sessionTooOld(s.authAt, input.now)) {
+    return read
+      ? { kind: 'sign-in', reason: 'expired' }
+      : refuse(`the session is past its absolute session lifetime (${SESSION_ABSOLUTE_SECONDS} s since sign-in); sign in again`, true)
+  }
   if (s.iss !== input.issuer) return refuse(`a session of ${s.iss ?? 'no issuer'} is not accepted: the panel serves the ops realm only`)
   if (!(s.roles ?? []).includes(OPERATOR_ROLE)) return refuse('the account holds no operator role')
   if (!s.uid) return refuse('the session carries no subject')

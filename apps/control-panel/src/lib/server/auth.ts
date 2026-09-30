@@ -9,7 +9,7 @@ import Keycloak from '@auth/core/providers/keycloak'
 import type { SvelteKitAuthConfig } from '@auth/sveltekit'
 import type { RequestEvent } from '@sveltejs/kit'
 import type { PanelConfig } from './config'
-import type { SessionClaims } from './gate'
+import { SESSION_ABSOLUTE_SECONDS, sessionTooOld, type SessionClaims } from './gate'
 
 export const PROVIDER_ID = 'keycloak'
 
@@ -54,11 +54,16 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
     secret: c.authSecret,
     trustHost: true,
     basePath: '/auth',
-    // Roles and acr are read at sign-in only (no refresh re-check yet): the
-    // session is bounded to one hour so a revoked operator or a killed
-    // Keycloak session loses the panel within the hour (review A, r2; the
-    // refresh-token re-check is a named residual).
-    session: { strategy: 'jwt', maxAge: 3600 },
+    // Roles and acr are read at sign-in only (no refresh re-check yet). Auth.js
+    // renews a JWT session's expiry on EVERY read (@auth/core
+    // lib/actions/session.js), so maxAge is only an idle timeout. The ABSOLUTE
+    // bound is the sign-in time stamped below: the jwt callback returns null
+    // (Auth.js clears the cookie) and the gate refuses once it is more than
+    // SESSION_ABSOLUTE_SECONDS old, however active the session stays (review
+    // r2 HIGH; ASVS 5.0 V7.3.2). A revoked operator therefore loses the panel
+    // at most one hour after their last sign-in. The refresh-token re-check
+    // against Keycloak (revocation within the hour) is a named residual.
+    session: { strategy: 'jwt', maxAge: SESSION_ABSOLUTE_SECONDS },
     providers: [
       Keycloak({
         id: PROVIDER_ID,
@@ -76,6 +81,7 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
     ],
     callbacks: {
       jwt({ token, account }) {
+        const now = Math.floor(Date.now() / 1000)
         if (account) {
           const claims = claimsFromTokens(account.access_token, account.id_token)
           token.opsIss = claims.iss
@@ -83,7 +89,12 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
           token.opsUid = claims.uid
           token.opsEmail = claims.email
           token.opsRoles = claims.roles
+          // Stamped ONCE, at the code exchange; a renewal never moves it.
+          token.opsAuthAt = now
+          return token
         }
+        // null makes Auth.js clear the session cookie (session.js: token === null).
+        if (sessionTooOld(token.opsAuthAt, now)) return null
         return token
       },
       session({ session, token }) {
@@ -93,6 +104,7 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
           uid: token.opsUid as string | undefined,
           email: (token.opsEmail as string | null | undefined) ?? null,
           roles: (token.opsRoles as string[] | undefined) ?? [],
+          authAt: typeof token.opsAuthAt === 'number' ? token.opsAuthAt : undefined,
         }
         return session
       },

@@ -2,16 +2,17 @@
 // page, an action and a +server endpoint alike; a forged cookie is refused and
 // cleared; the ops realm without loa2 is sent to step-up; loa2 is allowed.
 import { describe, expect, it } from 'vitest'
-import { decide, isExempt, type GateInput, type SessionClaims } from './gate'
+import { decide, isExempt, SESSION_ABSOLUTE_SECONDS, type GateInput, type SessionClaims } from './gate'
 
 const OPS = 'https://platform.example/auth/realms/platform'
 const CUSTOMER = 'https://rat.musterstadt.example/auth/realms/musterstadt'
 const OPERATOR_ID = '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33'
+const NOW = 1_790_000_000
 
-const ops = (over: Partial<SessionClaims> = {}): SessionClaims => ({ iss: OPS, acr: 'loa2', uid: OPERATOR_ID, email: 'ops@platform.example', roles: ['operator'], ...over })
+const ops = (over: Partial<SessionClaims> = {}): SessionClaims => ({ iss: OPS, acr: 'loa2', uid: OPERATOR_ID, email: 'ops@platform.example', roles: ['operator'], authAt: NOW - 60, ...over })
 
 function input(over: Partial<GateInput>): GateInput {
-  return { method: 'GET', path: '/', session: null, sessionCookie: false, authorization: null, issuer: OPS, requiredAcr: 'loa2', ...over }
+  return { method: 'GET', path: '/', session: null, sessionCookie: false, authorization: null, issuer: OPS, requiredAcr: 'loa2', now: NOW, ...over }
 }
 
 function jwt(payload: object): string {
@@ -70,6 +71,35 @@ describe('decide (TRD-048)', () => {
 
   it('an errored session (expired refresh) is sent to sign-in on GET', () => {
     expect(decide(input({ session: ops({ error: 'RefreshTokenExpired' }) }))).toEqual({ kind: 'sign-in', reason: 'expired' })
+  })
+
+  // Review r2 HIGH (ASVS 5.0 V7.3.2): Auth.js renews a JWT session on every
+  // read, so maxAge alone is an idle timeout. The gate enforces an ABSOLUTE
+  // lifetime from the sign-in time, however active the session stays.
+  it('a session signed in more than the absolute lifetime ago is expired: GET re-signs in, POST is 403 and cleared', () => {
+    const old = ops({ authAt: NOW - SESSION_ABSOLUTE_SECONDS - 1 })
+    expect(decide(input({ session: old, sessionCookie: true }))).toEqual({ kind: 'sign-in', reason: 'expired' })
+    expect(decide(input({ method: 'POST', path: '/customers/new', session: old, sessionCookie: true }))).toEqual({
+      kind: 'refuse',
+      status: 403,
+      reason: expect.stringMatching(/absolute session lifetime/),
+      clearCookie: true,
+    })
+  })
+
+  it('a session exactly at the absolute lifetime is still allowed; one second later it is not', () => {
+    expect(decide(input({ session: ops({ authAt: NOW - SESSION_ABSOLUTE_SECONDS }) })).kind).toBe('allow')
+    expect(decide(input({ session: ops({ authAt: NOW - SESSION_ABSOLUTE_SECONDS - 1 }) })).kind).toBe('sign-in')
+  })
+
+  it('a session without a sign-in time, or one stamped in the future, is expired (fail closed)', () => {
+    expect(decide(input({ session: ops({ authAt: undefined }) }))).toEqual({ kind: 'sign-in', reason: 'expired' })
+    expect(decide(input({ session: ops({ authAt: NOW + 3600 }) }))).toEqual({ kind: 'sign-in', reason: 'expired' })
+    expect(decide(input({ method: 'POST', session: ops({ authAt: undefined }) })).kind).toBe('refuse')
+  })
+
+  it('the absolute lifetime is one hour', () => {
+    expect(SESSION_ABSOLUTE_SECONDS).toBe(3600)
   })
 })
 

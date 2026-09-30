@@ -48,7 +48,8 @@ function event(opts: { method?: string; path?: string; session?: unknown; cookie
   }
 }
 
-const claims = (over: Record<string, unknown> = {}) => ({ claims: { iss: OPS, acr: 'loa2', uid: '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33', email: 'ops@platform.example', roles: ['operator'], ...over } })
+const nowSec = () => Math.floor(Date.now() / 1000)
+const claims = (over: Record<string, unknown> = {}) => ({ claims: { iss: OPS, acr: 'loa2', uid: '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33', email: 'ops@platform.example', roles: ['operator'], authAt: nowSec() - 60, ...over } })
 
 async function run(e: ReturnType<typeof event>) {
   const resolve = vi.fn(async () => new Response('RESOLVED'))
@@ -111,6 +112,18 @@ describe('the gate hook (TDD 15)', () => {
     expect(await res?.text()).toBe('RESOLVED')
     expect(resolve).toHaveBeenCalledOnce()
     expect(e.locals.operator).toMatchObject({ id: '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33', acr: 'loa2', iss: OPS })
+  })
+
+  it('an active ops loa2 session signed in over an hour ago never resolves: POST is 403 and cleared, GET re-signs in', async () => {
+    const old = claims({ authAt: nowSec() - 7200 })
+    const post = event({ method: 'POST', path: '/customers/new', session: old, cookies: [{ name: 'authjs.session-token', value: 'x' }] })
+    const r1 = await run(post)
+    expect(r1.res?.status).toBe(403)
+    expect(post.deleted).toEqual(['authjs.session-token'])
+    expect(r1.resolve).not.toHaveBeenCalled()
+    const r2 = await run(event({ session: old, cookies: [{ name: 'authjs.session-token', value: 'x' }] }))
+    expect(r2.resolve).not.toHaveBeenCalled()
+    expect(r2.thrown?.status).toBe(302)
   })
 
   it('a session decode that THROWS is logged (never the cookie value) and still fails closed', async () => {

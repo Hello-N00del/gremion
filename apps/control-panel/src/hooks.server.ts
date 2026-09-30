@@ -57,6 +57,7 @@ export const gate: Handle = async ({ event, resolve }) => {
     authorization: event.request.headers.get('authorization'),
     issuer: c.issuer,
     requiredAcr: c.requiredAcr,
+    now: Math.floor(Date.now() / 1000),
   })
   if (d.kind === 'allow') {
     event.locals.operator = d.operator
