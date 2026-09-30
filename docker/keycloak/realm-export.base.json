@@ -40,7 +40,7 @@
   "defaultLocale": "de",
   "loginTheme": "gremion",
   "eventsEnabled": true,
-  "eventsExpiration": 7776000,
+  "eventsExpiration": 2505600,
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": true,
   "enabledEventTypes": [
@@ -612,6 +612,7 @@
   "otpPolicyLookAheadWindow": 1,
   "otpPolicyInitialCounter": 0,
   "attributes": {
-    "acr.loa.map": "{\"loa1\":1,\"loa2\":2}"
+    "acr.loa.map": "{\"loa1\":1,\"loa2\":2}",
+    "adminEventsExpiration": "2505600"
   }
 }
