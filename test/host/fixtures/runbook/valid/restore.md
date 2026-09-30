@@ -46,6 +46,10 @@ sudo -u gremion /opt/gremion/bin/gremion-restore-into --stack staging --snapshot
 
 ```bash
 jq -e '.ok == true' /opt/gremion/runtime/last-restore.json
+docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}' | awk '$1 ~ /^staging-/' | wc -l
+for c in $(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}' | awk '$1 ~ /^staging-/ {print $2}'); do
+  v="$(docker exec "$c" sh -c 'printenv SMTP_HOST || true' 2>&1)" || v="EXEC-FAILED ${v}"; printf '%s SMTP_HOST=%s\n' "$c" "${v:-<unset>}"
+done
 ```
 
 ## Arm C — reboot measurement (TRD-180)

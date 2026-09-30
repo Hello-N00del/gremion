@@ -1,0 +1,8 @@
+Authentication-Results: mx.example.net;
+       dkim=pass header.d=example.org; spf=pass smtp.mailfrom=system@example.org;
+       dmarc=pass header.from=example.org
+Received: from gw.example.com (gw.example.com. [198.51.100.9])
+        by mx-in-2.example.net with ESMTPS id c3si300; Mon, 28 Sep 2026 10:00:01 -0700
+From: system@example.org
+
+The operator's mail server is 192.0.2.25, but this message never came from it.

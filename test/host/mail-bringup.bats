@@ -65,16 +65,39 @@ STALWART_ADMIN_URL=http://127.0.0.1:8086
 STALWART_ADMIN_USER=admin
 STALWART_ADMIN_PASSWORD=unit-test-admin-password
 STALWART_API_KEY=unit-test-api-key
+VENDOR_SMTP_PASSWORD=unit-test-vendor-password
+ALERT_SMTP_PASSWORD=unit-test-alert-password
 PLATFORM_SMTP_PASSWORD=unit-test-platform-password
 ROLES_IMAP_PASSWORD=unit-test-roles-password
 MAIL_DNS_RESOLVER=203.0.113.53
-KEYCLOAK_PROBE_REALM=platform
+KEYCLOAK_PROBE_REALM=master
 KEYCLOAK_PROBE_USER=operator
 EOF
 }
 
+# The vendor mail launcher as bringup calls it (VENDOR_MAIL_BIN). realm-smtp
+# is the REAL launcher (it only drives docker, which each test shims); the node
+# checks run in a pinned container on a host; here check-identities answers
+# from VM_CHECK_IDENTITIES (default 0) and check-received runs the REAL
+# ops/vendor-mail/check-received.mjs with node unless VM_CHECK_RECEIVED forces
+# an exit code.
+shim_vendor_mail() {
+    shim gremion-vendor-mail '
+case "$1" in
+  realm-smtp) exec "'"${PROJECT_ROOT}"'/infra/host/bin/gremion-vendor-mail" "$@" ;;
+  check-identities) exit "${VM_CHECK_IDENTITIES:-0}" ;;
+  check-received)
+    [ -z "${VM_CHECK_RECEIVED:-}" ] || exit "$VM_CHECK_RECEIVED"
+    shift
+    exec node "'"${PROJECT_ROOT}"'/ops/vendor-mail/check-received.mjs" --mail-env "'"${GREMION_ROOT}"'/etc/env/mail.env" "$@" ;;
+esac
+exit 0'
+    export VENDOR_MAIL_BIN="${SHIM_DIR}/gremion-vendor-mail"
+}
+
 setup() {
     setup_host_root
+    shim_vendor_mail
     write_mail_env
     # --render-config now ends in the executable bind check (--check-binds), so
     # every render path needs a docker that can answer `compose … config`. The
@@ -586,46 +609,197 @@ exit 0'
     [[ "$output" == *"--external-to"* ]]
 }
 
-@test "assert 6a requires an app-tier network to send from" {
+@test "assert 6a requires the ACTIVE colour's app-tier network to send from" {
     shim_dns_check_ok
+    echo green > "${GREMION_ROOT}/runtime/active-colour"
     shim docker 'exit 1'
     run "$BRINGUP" --assert 6a --external-to probe@example.net
     [ "$status" -eq 2 ]
-    [[ "$output" == *"staging-app-blue_app"* ]]
+    [[ "$output" == *"staging-app-green_app"* ]] || { echo "$output"; return 1; }
 }
 
-@test "assert 6a sends from an app-subnet container and then blocks on the header" {
+@test "assert 6a with no active colour (none or absent) is a named precondition failure" {
     shim_dns_check_ok
     shim docker 'exit 0'
+    rm -f "${GREMION_ROOT}/runtime/active-colour"
     run "$BRINGUP" --assert 6a --external-to probe@example.net
-    [ "$status" -eq 3 ]
-    assert_recorded docker "--network staging-app-blue_app"
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"runtime/active-colour"* ]]
+    echo none > "${GREMION_ROOT}/runtime/active-colour"
+    run "$BRINGUP" --assert 6a --external-to probe@example.net
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"runtime/active-colour"* ]]
+    refute_recorded docker 'run'
+}
+
+# shim_app_colours <up colour> — only that colour's app network exists; every
+# `docker run` stdin (the probe script) is kept in $GREMION_ROOT/probe-<n>.sh.
+shim_app_colours() {
+    shim docker '
+case "$1 $2" in
+  "network inspect") [ "$3" = "staging-app-'"$1"'_app" ] && exit 0; echo "Error: network $3 not found" >&2; exit 1 ;;
+esac
+if [ "$1" = run ]; then n=$(ls "'"${GREMION_ROOT}"'"/probe-*.sh 2>/dev/null | wc -l); cat > "'"${GREMION_ROOT}"'/probe-${n}.sh"; fi
+exit 0'
+}
+
+@test "assert 6a sends from the live green colour while blue is stopped, as system@, then blocks on the header" {
+    shim_dns_check_ok
+    echo green > "${GREMION_ROOT}/runtime/active-colour"
+    shim_app_colours green
+    run "$BRINGUP" --assert 6a --external-to probe@example.net
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded docker "--network staging-app-green_app"
+    refute_recorded docker "staging-app-blue_app"
     [[ "$output" == *"6a=BLOCKED"* ]]
     [[ "$output" == *"MX-PUBLICATION: HOLD"* ]]
+    local probe="${GREMION_ROOT}/probe-0.sh"
+    [ -s "$probe" ] || { echo "no probe script reached docker run"; return 1; }
+    grep -qx 'From: system@example.org' "$probe" || { cat "$probe"; return 1; }
+    grep -qx 'mail-from = "system@example.org"' "$probe" || { cat "$probe"; return 1; }
+    grep -qx 'user = "system@example.org:unit-test-vendor-password"' "$probe" || { cat "$probe"; return 1; }
+    ! grep -q 'platform@\|no-reply@\|unit-test-platform-password' "$probe" || { echo "6a still submits as the platform identity"; cat "$probe"; return 1; }
+    [[ "$output" != *"unit-test-vendor-password"* ]]
+}
+
+@test "assert 3 fails on an inconsistent alerts@ identity before anything is submitted (TASK-015)" {
+    shim_dns_check_ok
+    shim dig 'exit 0'
+    shim curl 'exit 0'
+    export VM_CHECK_IDENTITIES=1
+    run "$BRINGUP" --assert 3
+    unset VM_CHECK_IDENTITIES
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded gremion-vendor-mail 'check-identities'
+    refute_recorded curl 'smtp://'
+    [[ "$output" == *"3=FAIL"* ]]
+    [[ "$output" == *"alerts@"* ]]
+}
+
+@test "assert 3's loopback probe submits as system@ with the vendor password (TASK-015)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail"
+    openssl genrsa -out "${GREMION_ROOT}/etc/secrets/mail/g2026a.private" 2048 2>/dev/null
+    local pub
+    pub="$(openssl rsa -in "${GREMION_ROOT}/etc/secrets/mail/g2026a.private" \
+           -pubout -outform DER 2>/dev/null | openssl base64 -A)"
+    shim dig "case \"\$*\" in
+      *\"TXT g2026a._domainkey.example.org\"*) echo '\"v=DKIM1; k=rsa; p=${pub}\"' ;;
+    esac
+    exit 0"
+    shim curl '
+while [ "$#" -gt 0 ]; do case "$1" in -K) cp "$2" "'"${GREMION_ROOT}"'/probe.curl"; shift 2 ;; *) shift ;; esac; done
+exit 1'
+    run "$BRINGUP" --assert 3
+    [ -s "${GREMION_ROOT}/probe.curl" ] || { echo "the loopback probe never reached curl: $output"; return 1; }
+    grep -qx 'mail-from = "system@example.org"' "${GREMION_ROOT}/probe.curl"
+    grep -qx 'user = "system@example.org:unit-test-vendor-password"' "${GREMION_ROOT}/probe.curl"
 }
 
 @test "assert 6a passes when the pasted header shows all three verdicts and IP-B" {
     shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
     shim docker 'exit 0'
     cat > "${GREMION_ROOT}/results.txt" <<'EOF'
 Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=example.org; dmarc=pass header.from=example.org
 Received: from mail.example.org (mail.example.org. [203.0.113.25]) by mx.example.net
 EOF
-    run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
+        run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"6a=ok"* ]]
+    assert_recorded gremion-vendor-mail "check-received --file ${GREMION_ROOT}/results.txt --authserv-id mx.example.net"
+}
+
+@test "assert 6a refuses a relayed (third-party API) header block the old substring greps passed (TASK-015)" {
+    shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker 'exit 0'
+    # Every string the old greps looked for is present -- the verdicts, and
+    # 203.0.113.25 in the body -- yet the mail was signed and sent by a relay.
+    cat > "${GREMION_ROOT}/results.txt" <<'EOF'
+Authentication-Results: mx.example.net; dkim=pass header.d=sendgrid.net; spf=pass smtp.mailfrom=em.example.org; dmarc=pass header.from=example.org
+Received: from o1.sendgrid.net (o1.sendgrid.net. [198.51.100.77]) by mx.example.net
+
+sent on behalf of 203.0.113.25
+EOF
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
+        run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"sendgrid.net"* ]]
+    [[ "$output" == *"6a=FAIL"* ]]
 }
 
 @test "assert 6a fails when the delivering source is not IP-B" {
     shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
     shim docker 'exit 0'
     cat > "${GREMION_ROOT}/results.txt" <<'EOF'
 Authentication-Results: mx.example.net; dkim=pass; spf=pass; dmarc=pass
 Received: from mail.example.org (mail.example.org. [203.0.113.10]) by mx.example.net
 EOF
-    run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
+        run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
     [ "$status" -eq 1 ]
     [[ "$output" == *"203.0.113.25"* ]]
+}
+
+@test "the 6a header verdict is BLOCKED until the receiving provider is named (TASK-015 review)" {
+    shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker 'exit 0'
+    printf 'Authentication-Results: mx.example.net; dkim=pass header.d=example.org\n' > "${GREMION_ROOT}/results.txt"
+    run env -u RECEIVER -u RECEIVER_AUTHSERV_ID "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"BLOCKED:"*"RECEIVER_AUTHSERV_ID"* ]]
+    refute_recorded gremion-vendor-mail 'check-received'
+}
+
+@test "the 6a header verdict is BLOCKED for an authserv-id without its domain, or two named receivers (round 2)" {
+    shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker 'exit 0'
+    printf 'x: y\n' > "${GREMION_ROOT}/results.txt"
+    run env -u RECEIVER -u RECEIVER_DOMAIN RECEIVER_AUTHSERV_ID=mx.example.net "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"RECEIVER_DOMAIN"* ]]
+    run env RECEIVER=google RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    refute_recorded gremion-vendor-mail 'check-received'
+}
+
+@test "RECEIVER=<name> is passed to check-received as --receiver (TASK-015 review)" {
+    shim_dns_check_ok
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
+    shim docker 'exit 0'
+    printf 'x: y\n' > "${GREMION_ROOT}/results.txt"
+    VM_CHECK_RECEIVED=0 RECEIVER=google run "$BRINGUP" --assert 6a --external-to probe@example.net --results-file "${GREMION_ROOT}/results.txt"
+    assert_recorded gremion-vendor-mail "check-received --file ${GREMION_ROOT}/results.txt --receiver google"
+}
+
+@test "assert 6b is BLOCKED for a probe realm other than master: realm-smtp converges master only (TASK-015 review)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
+       "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
+    shim_keycloak_labels
+    sed -i 's/^KEYCLOAK_PROBE_REALM=.*/KEYCLOAK_PROBE_REALM=platform/' "${GREMION_ROOT}/etc/env/mail.env"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password \
+        run "$BRINGUP" --assert 6b
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"BLOCKED:"*"platform"*"TASK-043"* ]]
+    [ ! -f "${GREMION_ROOT}/kc/actions.json" ] || { echo "a reset was sent from a realm realm-smtp never converged"; return 1; }
+}
+
+@test "assert 3 reports a launcher precondition as one, not as an identity mismatch (TASK-015 review)" {
+    shim_dns_check_ok
+    shim dig 'exit 0'
+    export VM_CHECK_IDENTITIES=2
+    run "$BRINGUP" --assert 3
+    unset VM_CHECK_IDENTITIES
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"could not run check-identities"* ]]
+    [[ "$output" != *"identity is inconsistent"* ]]
 }
 
 @test "assert 6b is BLOCKED while the realm export has no smtpServer (spec B)" {
@@ -653,27 +827,151 @@ EOF
         || { echo "$output"; return 1; }
 }
 
+# shim_keycloak_labels — a docker that knows the state keycloak ONLY by its
+# compose labels: the real container is <stack>-state-keycloak-1 (only the mail
+# project sets container_name), so `docker inspect <stack>-state-keycloak`
+# answers "No such object"; and its kcadm serves only under /auth
+# (KC_HTTP_RELATIVE_PATH). Rewritten from the name-matching shim (TASK-015):
+# that shim answered any name, which is how assert 6b stayed green here while
+# it could never reach a real Keycloak.
+shim_keycloak_labels() {
+    mkdir -p "${GREMION_ROOT}/kc"
+    shim docker '
+ST="'"${GREMION_ROOT}"'/kc"; KC=kc0a1b2c3d4e
+case "$1" in
+  ps)
+    case " $* " in
+      *"label=com.docker.compose.project=staging-state "*"label=com.docker.compose.service=keycloak "*) echo "$KC" ;;
+    esac
+    exit 0 ;;
+  inspect) echo "Error: No such object: $2" >&2; exit 1 ;;
+  exec) shift ;;
+  *) exit 0 ;;
+esac
+while :; do case "$1" in -i) shift ;; -e) shift 2 ;; *) break ;; esac; done
+cid="$1"; shift
+[ "$cid" = "$KC" ] || { echo "Error response from daemon: No such container: $cid" >&2; exit 1; }
+case " $* " in
+  *"config credentials"*)
+    case " $* " in *" http://127.0.0.1:8080/auth "*) ;; *) echo "HTTP 404 (no /auth)" >&2; exit 1 ;; esac
+    [ "${KC_LOGIN_PASSWORD:-}" = "unit-test-kc-password" ] || { echo "invalid_grant" >&2; exit 1; }
+    touch "$ST/logged-in"; exit 0 ;;
+esac
+[ -f "$ST/logged-in" ] || { echo "not logged in" >&2; exit 1; }
+realm=""
+for a in "$@"; do case "$a" in realms/*) realm="${a#realms/}" ;; esac; done
+case " $* " in
+  *" update realms/"*" -f - "*)
+    jq -c ".smtpServer | del(.password)" > "$ST/realm-$realm.json"; exit 0 ;;
+  *" get realms/"*" --fields smtpServer "*)
+    if [ -f "$ST/realm-$realm.json" ]; then jq -c "{smtpServer: .}" "$ST/realm-$realm.json"; else echo "{}"; fi
+    exit 0 ;;
+  *" get users "*) printf "0d1f2e3a-0000-4000-8000-000000000001\n"; exit 0 ;;
+  *"execute-actions-email"*) cat > "$ST/actions.json"; exit 0 ;;
+esac
+echo "unexpected kcadm call: $*" >&2; exit 1'
+}
+
 @test "assert 6b dispatches the reset mail and passes on pasted dkim/spf/dmarc headers (B2)" {
     shim_dns_check_ok
     mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
     cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
        "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
-    # kcadm: config credentials succeeds, `get users` yields one id, the
-    # execute-actions-email update succeeds.
-    shim docker '
-case " $* " in
-  *" get users "*) printf "0d1f2e3a-0000-4000-8000-000000000001\n"; exit 0 ;;
-esac
-exit 0'
+    shim_keycloak_labels
     cat > "${GREMION_ROOT}/results.txt" <<EOF
-Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass; dmarc=pass
-Received: from mail.example.org (mail.example.org [203.0.113.25])
+Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=system@example.org; dmarc=pass header.from=example.org
+Received: from mail.example.org (mail.example.org [203.0.113.25]) by mx.example.net
 EOF
-    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password \
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
         run "$BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
-    [ "$status" -eq 0 ] || { echo "status=${status}"; echo "$output"; return 1; }
-    [[ "$output" == *"Keycloak reset mail dispatched"* ]]
-    [[ "$output" == *"dkim=pass spf=pass dmarc=pass from 203.0.113.25"* ]]
+    [[ "$output" == *"Keycloak reset mail dispatched"* ]] || { echo "status=${status}"; echo "$output"; return 1; }
+    [ -f "${GREMION_ROOT}/kc/actions.json" ] || { echo "execute-actions-email never reached kcadm"; return 1; }
+    refute_recorded docker 'staging-state-keycloak'
+    [[ "$output" != *"unit-test-kc-password"* ]]
+    ! grep -qF 'unit-test-kc-password' "$SHIM_LOG" || { echo "kc admin password on a docker argv"; return 1; }
+    assert_recorded gremion-vendor-mail "check-received --file ${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+}
+
+@test "assert 6b refuses a reset mail whose DKIM signer is not the vendor domain (TASK-015)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
+       "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
+    shim_keycloak_labels
+    cat > "${GREMION_ROOT}/results.txt" <<EOF
+Authentication-Results: mx.example.net; dkim=pass header.d=mailer.example.com; spf=pass smtp.mailfrom=system@example.org; dmarc=pass header.from=example.org
+Received: from mail.example.org (mail.example.org [203.0.113.25]) by mx.example.net
+EOF
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
+        run "$BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"no dkim=pass with header.d=example.org"* ]]
+}
+
+@test "assert 6b runs realm-smtp first: master sends as system@ before the reset is triggered (TASK-015)" {
+    shim_dns_check_ok
+    mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" \
+       "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
+    shim_keycloak_labels
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password \
+        run "$BRINGUP" --assert 6b
+    [[ "$output" == *"REALM-SMTP: realm=master user=system@example.org"* ]] || { echo "$output"; return 1; }
+    run jq -e '.user == "system@example.org" and .from == "system@example.org" and .host == "mail.example.org"' \
+        "${GREMION_ROOT}/kc/realm-master.json"
+    [ "$status" -eq 0 ]
+}
+
+# install_bringup_into_root_bin — the layout of docs/ops/runbook/install.md:
+# every infra/host/bin/* in <root>/bin, lib/common.sh in <root>/lib, the release
+# clone at <root>/current. The go-live gate (G4-MAIL) runs a bare
+# `gremion-mail-bringup` from there, so VENDOR_MAIL_BIN is NOT overridden: the
+# bring-up calls its installed sibling, the REAL launcher.
+install_bringup_into_root_bin() {
+    unset VENDOR_MAIL_BIN
+    mkdir -p "${GREMION_ROOT}/bin" "${GREMION_ROOT}/lib" \
+             "${GREMION_ROOT}/current/ops/vendor-mail" \
+             "${GREMION_ROOT}/current/infra/host/templates/env" \
+             "${GREMION_ROOT}/current/docker/keycloak"
+    cp "${PROJECT_ROOT}/infra/host/bin/gremion-mail-bringup" \
+       "${PROJECT_ROOT}/infra/host/bin/gremion-vendor-mail" "${GREMION_ROOT}/bin/"
+    cp "${PROJECT_ROOT}/infra/host/lib/common.sh" "${GREMION_ROOT}/lib/"
+    cp "${PROJECT_ROOT}/infra/host/templates/env/"*.tmpl "${GREMION_ROOT}/current/infra/host/templates/env/"
+    cp "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json" "${GREMION_ROOT}/current/docker/keycloak/"
+    : > "${GREMION_ROOT}/current/ops/vendor-mail/check-identities.mjs"
+    : > "${GREMION_ROOT}/current/ops/vendor-mail/check-received.mjs"
+    : > "${GREMION_ROOT}/etc/env/ops.env"
+    printf 'VENDOR_MAIL_NODE_IMAGE=docker.io/library/node@sha256:%s\n' \
+        3333333333333333333333333333333333333333333333333333333333333333 >> "${GREMION_ROOT}/etc/env/mail.env"
+    INSTALLED_BRINGUP="${GREMION_ROOT}/bin/gremion-mail-bringup"
+}
+
+@test "installed into <root>/bin, assert 3 runs check-identities from the live release (fix round 2)" {
+    install_bringup_into_root_bin
+    shim_dns_check_ok
+    shim dig 'exit 0'
+    run "$INSTALLED_BRINGUP" --assert 3
+    [[ "$output" != *"could not run check-identities"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"ops/vendor-mail not found"* ]] || { echo "$output"; return 1; }
+    assert_recorded docker "${GREMION_ROOT}/current/ops/vendor-mail:/release/ops/vendor-mail:ro"
+    assert_recorded docker 'node /release/ops/vendor-mail/check-identities.mjs'
+}
+
+@test "installed into <root>/bin, assert 6b converges realm-smtp and checks the headers (fix round 2)" {
+    install_bringup_into_root_bin
+    shim_dns_check_ok
+    shim_keycloak_labels
+    cat > "${GREMION_ROOT}/results.txt" <<EOF
+Authentication-Results: mx.example.net; dkim=pass header.d=example.org; spf=pass smtp.mailfrom=system@example.org; dmarc=pass header.from=example.org
+Received: from mail.example.org (mail.example.org [203.0.113.25]) by mx.example.net
+EOF
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-test-kc-password RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net \
+        run "$INSTALLED_BRINGUP" --assert 6b --results-file "${GREMION_ROOT}/results.txt"
+    [[ "$output" == *"REALM-SMTP: realm=master user=system@example.org"* ]] || { echo "status=$status $output"; return 1; }
+    [[ "$output" != *"did not converge"* ]] || { echo "$output"; return 1; }
+    assert_recorded docker 'node /release/ops/vendor-mail/check-received.mjs'
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
 }
 
 @test "MX-PUBLICATION stays HOLD while any assert is not ok" {
@@ -692,6 +990,7 @@ EOF
     mkdir -p "${GREMION_ROOT}/current/docker/keycloak"
     echo '{"realm":"platform"}' > "${GREMION_ROOT}/current/docker/keycloak/realm-export.base.json"
     shim dig 'exit 0'; shim openssl 'exit 0'; shim curl 'exit 1'; shim docker 'exit 0'
+    echo blue > "${GREMION_ROOT}/runtime/active-colour"
     run "$BRINGUP" --assert all --external-to probe@example.net
     [[ "$output" =~ MAIL-BRINGUP:\ 1=[a-zA-Z]+\ 2=[a-zA-Z]+\ 3=[a-zA-Z]+\ 4=[a-zA-Z]+\ 5=[a-zA-Z]+\ 6a=[a-zA-Z]+\ 6b=[a-zA-Z]+ ]]
 }
@@ -722,10 +1021,13 @@ while [ "$#" -gt 0 ]; do
     -o) out="$2"; shift 2 ;;
     -X) method="$2"; shift 2 ;;
     --data-binary) body="$2"; shift 2 ;;
+    -K) cat "$2" > "'"${GREMION_ROOT}"'/api/curl-config"; shift 2 ;;
     http*) path="${1#*8086}"; shift ;;
     *) shift ;;
   esac
 done
+[ "$body" = "@-" ] && body="$(cat)"
+[ -z "$body" ] || printf "%s %s\n" "$method" "$body" >> "$API/requests.log"
 name="${path#/api/principal/}"
 notfound() { printf "{\"error\":\"notFound\",\"item\":\"%s\"}" "$1" > "$out"; exit 0; }
 case "$method:$path" in
@@ -753,10 +1055,10 @@ case "$method" in
     printf "{\"data\":2}" > "$out" ;;
   PATCH)
     if [ ! -f "$API/$name.json" ]; then notfound "$name"; fi
-    f=$(printf "%s" "$body" | sed -n "s/.*\"field\":\"\([^\"]*\)\".*/\1/p")
-    v=$(printf "%s" "$body" | sed -n "s/.*\"value\":\"\([^\"]*\)\".*/\1/p")
     tmp=$(mktemp)
-    jq --arg f "$f" --arg v "$v" ".data[\$f] += [\$v]" "$API/$name.json" > "$tmp" && mv "$tmp" "$API/$name.json"
+    printf "%s" "$body" > "$tmp.body"
+    jq --slurpfile ops "$tmp.body" "reduce \$ops[0][] as \$o (.; if \$o.action == \"set\" then .data[\$o.field] = \$o.value else .data[\$o.field] += [\$o.value] end)" \
+        "$API/$name.json" > "$tmp" && mv "$tmp" "$API/$name.json"; rm -f "$tmp.body"
     printf "{\"data\":null}" > "$out" ;;
 esac
 exit 0'
@@ -773,7 +1075,8 @@ exit 0'
     [ -f "${GREMION_ROOT}/api/example.org.json" ] \
         || { echo "the platform domain principal was never created"; return 1; }
     local first_post
-    first_post="$(grep -F -- '-X POST' "$SHIM_LOG" | sed -n '1p')"
+    # bodies travel on stdin now (TASK-015): the shim keeps them in requests.log
+    first_post="$(grep '^POST ' "${GREMION_ROOT}/api/requests.log" | sed -n '1p')"
     [[ "$first_post" == *'"type":"domain"'* ]] \
         || { echo "the first principal created was not the domain: ${first_post}"; return 1; }
 }
@@ -918,6 +1221,62 @@ exit 0'
         || { echo "the roles secret is not the representation verify_secret accepts"; return 1; }
 }
 
+@test "provision-roles.sh creates system@ and alerts@, each with its own app password (TASK-015)" {
+    shim_stalwart_api yes
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local p
+    for p in system alerts platform roles; do
+        run jq -e --arg n "${p}@example.org" '.data.name == $n and ((.data.roles // []) | index("user") != null)' \
+            "${GREMION_ROOT}/api/${p}@example.org.json"
+        [ "$status" -eq 0 ] || { echo "${p}@example.org missing, misnamed or without the login role"; return 1; }
+    done
+    run jq -e --arg s '$app$gremion-vendor$unit-test-vendor-password' '.data.secrets == [$s]' \
+        "${GREMION_ROOT}/api/system@example.org.json"
+    [ "$status" -eq 0 ] || { echo "system@ does not hold exactly the vendor_smtp secret"; return 1; }
+    run jq -e --arg s '$app$gremion-alerts$unit-test-alert-password' '.data.secrets == [$s]' \
+        "${GREMION_ROOT}/api/alerts@example.org.json"
+    [ "$status" -eq 0 ] || { echo "alerts@ does not hold exactly the alert_smtp secret"; return 1; }
+    run jq -e --arg s '$app$gremion-platform$unit-test-platform-password' '.data.secrets == [$s]' \
+        "${GREMION_ROOT}/api/platform@example.org.json"
+    [ "$status" -eq 0 ] || { echo "platform@ does not hold exactly the platform_smtp secret"; return 1; }
+}
+
+@test "provision-roles.sh refuses two identities sharing one password, printing neither (TASK-015)" {
+    shim_stalwart_api yes
+    sed -i 's/^ALERT_SMTP_PASSWORD=.*/ALERT_SMTP_PASSWORD=unit-test-vendor-password/' "${GREMION_ROOT}/etc/env/mail.env"
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 2 ] || { echo "status=$status: $output"; return 1; }
+    [[ "$output" == *"VENDOR_SMTP_PASSWORD"*"ALERT_SMTP_PASSWORD"* ]]
+    [[ "$output" != *"unit-test-vendor-password"* ]]
+    ! grep -q -- '-X POST' "$SHIM_LOG" || { echo "it created principals before refusing"; return 1; }
+}
+
+@test "provision-roles.sh keeps every password off the argv of curl and jq (TASK-015 review B1)" {
+    shim_stalwart_api yes
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local v
+    for v in unit-test-admin-password unit-test-vendor-password unit-test-alert-password unit-test-platform-password unit-test-roles-password; do
+        ! grep -qF -- "$v" "$SHIM_LOG" || { echo "${v} on a recorded argv"; grep -F -- "$v" "$SHIM_LOG" | head -3; return 1; }
+    done
+    # the admin credential reached curl through a -K config, not -u
+    grep -qF 'user = "admin:unit-test-admin-password"' "${GREMION_ROOT}/api/curl-config"
+    # and jq never receives a secret as an --arg (static: jq runs unshimmed)
+    assert_absent '--arg[[:space:]]+[a-z]+[[:space:]]+"\$(secret|pw|STALWART_ADMIN_PASSWORD)"' "$PROVISION"
+}
+
+@test "provision-roles.sh replaces a rotated app password: exactly the new one remains (TASK-015 review B9/C9)" {
+    shim_stalwart_api yes
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    sed -i 's/^VENDOR_SMTP_PASSWORD=.*/VENDOR_SMTP_PASSWORD=unit-test-vendor-rotated/' "${GREMION_ROOT}/etc/env/mail.env"
+    run "$PROVISION" --env "${GREMION_ROOT}/etc/env/mail.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run jq -e --arg s '$app$gremion-vendor$unit-test-vendor-rotated' '.data.secrets == [$s]' "${GREMION_ROOT}/api/system@example.org.json"
+    [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/api/system@example.org.json"; return 1; }
+}
+
 # ---------------------------------------------------------------------------
 # --check-binds — the anti-0.0.0.0 guard as an executable step
 # ---------------------------------------------------------------------------
@@ -987,6 +1346,27 @@ exit 0'
 # ---------------------------------------------------------------------------
 # Log sinks: exactly one, and it is the one the compose driver bounds
 # ---------------------------------------------------------------------------
+
+@test "authenticated mail must carry the authenticated sender as its only From (TASK-015, TRD-253)" {
+    # must-match-sender checks the ENVELOPE only: measured on the pinned build
+    # (2026-09-28), kc-alpha@ authenticated, MAIL FROM:<kc-alpha@> and header
+    # `From: system@<domain>` was queued 250 -- a customer credential sending
+    # as the vendor, and DMARC-aligned (d= and the envelope are the vendor
+    # domain). A trusted Sieve script at DATA refuses every From that is not
+    # exactly the envelope sender.
+    local sieve="${PROJECT_ROOT}/infra/host/mail/from-align.sieve"
+    assert_present '^\[sieve\.trusted\.scripts\."from-align"\]$' "${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
+    assert_present '^contents = "%\{file:/opt/stalwart/etc/sieve/from-align\.sieve\}%"$' "${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
+    assert_present '^\[session\.data\]$' "${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
+    assert_present "^script = \[ \{ if = \"!is_empty\(authenticated_as\)\", then = \"'from-align'\" \},$" "${PROJECT_ROOT}/infra/host/mail/config.toml.tmpl"
+    assert_present 'address :all :value "ne" "from" "\$\{envelope\.from\}"' "$sieve"
+    assert_present 'not address :all :is "from" "\$\{envelope\.from\}"' "$sieve"
+    assert_present 'not exists "from"' "$sieve"
+    # an address in the DISPLAY NAME ("system@<domain> Gremion" <kc-a@...>)
+    # is refused too (review B11)
+    assert_present 'header :matches "from" "\*@\*<\*"' "$sieve"
+    assert_present '^      - \./from-align\.sieve:/opt/stalwart/etc/sieve/from-align\.sieve:ro$' "${PROJECT_ROOT}/infra/host/mail/docker-compose.yml"
+}
 
 @test "config template declares no file-log tracer, whose directory nothing creates" {
     # A `[tracer.<id>] type = "log"` sink writes <STALWART_PATH>/logs/<prefix>.<date>.

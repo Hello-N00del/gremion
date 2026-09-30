@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 #
-# provision-roles.sh — create the §I role addresses and the platform sending
-# identity in Stalwart through its management API. Idempotent: re-running
+# provision-roles.sh — create the §I role addresses and the vendor's sending
+# identities in Stalwart through its management API. Idempotent: re-running
 # converges and exits 0, which is how the control plane (spec C) will call it.
+#
+# THREE SENDING IDENTITIES, THREE SECRETS (TASK-015, TRD-251, TRD-049):
+#   system@<domain>    VENDOR_SMTP_PASSWORD   the vendor's own mail: operator
+#                                             realm resets, vendor news, invoices
+#   alerts@<domain>    ALERT_SMTP_PASSWORD    Alertmanager (ops.env holds the
+#                                             same alert_smtp value)
+#   platform@<domain>  PLATFORM_SMTP_PASSWORD TRANSITIONAL app-tier sender until
+#                                             TASK-043 gives every realm its own
+#                                             kc-<token>@ principal
+# Two of them sharing one value would make the separation a naming convention
+# only, so equal values are refused before anything is created. Per-customer
+# kc-<token>@ principals are NOT made here: ops/vendor-mail/principals.mjs
+# issues them (through infra/host/bin/gremion-vendor-mail), one per realm.
 #
 # The thirteen role addresses are aliases on ONE mailbox, `roles`, because the
 # operator reads them all. no-reply@ is an alias too: its auto-reply is a
@@ -87,16 +100,31 @@ parse_args() {
 }
 
 # api <method> <path> [json-body] — response body in $API_OUT.
+#
+# NO SECRET ON AN ARGV (TASK-015): the admin credential reaches curl as a -K
+# config on a process-substitution descriptor, and a body -- which carries an
+# app password for the secret calls -- on stdin (--data-binary @-). Both used
+# to be curl arguments, readable by any local user in `ps` while provisioning
+# ran; with system@ and alerts@ that is the vendor's own sender.
 api() {
-    local method="$1" path="$2" body="${3:-}"
+    local method="$1" path="$2" body="${3:-}" u p
+    u="${STALWART_ADMIN_USER//\\/\\\\}"; u="${u//\"/\\\"}"
+    p="${STALWART_ADMIN_PASSWORD//\\/\\\\}"; p="${p//\"/\\\"}"
     local args=(-sS -o "$API_OUT" -X "$method"
-                -u "${STALWART_ADMIN_USER}:${STALWART_ADMIN_PASSWORD}"
                 -H 'Content-Type: application/json'
                 "${STALWART_ADMIN_URL}${path}")
-    [ -z "$body" ] || args+=(--data-binary "$body")
-    curl "${args[@]}" \
-        || die "the management API at ${STALWART_ADMIN_URL} did not answer ${method} ${path}" \
-               "$GREMION_EXIT_USAGE"
+    # The <( ) sits on the curl command line itself: in an array assignment
+    # its descriptor is closed again before the next command runs.
+    if [ -n "$body" ]; then
+        printf '%s' "$body" \
+            | curl -K <(printf 'user = "%s:%s"\n' "$u" "$p") "${args[@]}" --data-binary @- \
+            || die "the management API at ${STALWART_ADMIN_URL} did not answer ${method} ${path}" \
+                   "$GREMION_EXIT_USAGE"
+    else
+        curl -K <(printf 'user = "%s:%s"\n' "$u" "$p") "${args[@]}" \
+            || die "the management API at ${STALWART_ADMIN_URL} did not answer ${method} ${path}" \
+                   "$GREMION_EXIT_USAGE"
+    fi
 }
 
 # The last response carried a data payload, i.e. the call did what was asked.
@@ -178,24 +206,28 @@ ensure_alias() {   # <principal> <address>
     ok "alias ${addr} -> ${p}"
 }
 
+# Converges the principal to EXACTLY this one app password. `addItem` left a
+# rotated-away password valid beside the new one (TASK-015 review); `set`
+# replaces the whole field, and the read-back demands the one secret.
+# The secret reaches jq through its environment ($ENV), never an --arg.
 ensure_secret() {   # <principal> <app-name> <password>
-    local p="$1" app="$2" pw="$3" secret
+    local p="$1" app="$2" pw="$3"
     [ -n "$pw" ] || die "the password for ${p}/${app} is empty in the mail env file" "$GREMION_EXIT_USAGE"
     # The representation verify_secret accepts; see item 3 of the header note.
-    secret="\$app\$${app}\$${pw}"
+    local -x PROVISION_SECRET="\$app\$${app}\$${pw}"
     api GET "/api/principal/${p}"
     api_ok || die "principal ${p} missing: $(api_error)" "$GREMION_EXIT_ASSERT"
-    if jq -e --arg s "$secret" '(.data.secrets // []) | index($s)' "$API_OUT" >/dev/null 2>&1; then
-        ok "${p}: app password ${app} already set"
+    if jq -e '(.data.secrets // []) == [$ENV.PROVISION_SECRET]' "$API_OUT" >/dev/null 2>&1; then
+        ok "${p}: app password ${app} already set (and the only one)"
         return 0
     fi
     api PATCH "/api/principal/${p}" \
-        "$(jq -nc --arg s "$secret" '[{action:"addItem", field:"secrets", value:$s}]')"
+        "$(jq -nc '[{action:"set", field:"secrets", value:[$ENV.PROVISION_SECRET]}]')"
     api_ok || die "setting ${p}/${app} failed: $(api_error)" "$GREMION_EXIT_ASSERT"
     api GET "/api/principal/${p}"
-    jq -e --arg s "$secret" '(.data.secrets // []) | index($s)' "$API_OUT" >/dev/null 2>&1 \
-        || die "app password ${app} absent on ${p} after PATCH" "$GREMION_EXIT_ASSERT"
-    ok "${p}: app password ${app} set"
+    jq -e '(.data.secrets // []) == [$ENV.PROVISION_SECRET]' "$API_OUT" >/dev/null 2>&1 \
+        || die "${p} does not hold exactly the app password ${app} after PATCH" "$GREMION_EXIT_ASSERT"
+    ok "${p}: app password ${app} set (the only one)"
 }
 
 # §I wants the platform app password usable only from the app-tier subnets.
@@ -233,11 +265,30 @@ ensure_source_restriction() {   # <principal>
     SOURCE_RESTRICTION="enforced"
 }
 
+# Three identities with one value are one identity. Compared here, before the
+# API is touched; the message names the keys and never a value.
+refuse_shared_passwords() {
+    local -a keys=(VENDOR_SMTP_PASSWORD ALERT_SMTP_PASSWORD PLATFORM_SMTP_PASSWORD ROLES_IMAP_PASSWORD)
+    local i j a b
+    for a in "${keys[@]}"; do
+        [ -n "${!a:-}" ] || die "${a} is empty in the mail env file" "$GREMION_EXIT_USAGE"
+    done
+    for ((i = 0; i < ${#keys[@]}; i++)); do
+        for ((j = i + 1; j < ${#keys[@]}; j++)); do
+            a="${keys[i]}"; b="${keys[j]}"
+            [ "${!a}" != "${!b}" ] \
+                || die "${a} and ${b} hold the same value: each sending identity needs its own secret (TRD-251)" \
+                       "$GREMION_EXIT_USAGE"
+        done
+    done
+}
+
 main() {
     parse_args "$@"
     # mktemp/tail: assert() captures the wrapped command's output through them.
     need_cmd curl jq mktemp tail
     load_env "${ENV_FILE:-$(gremion_root)/etc/env/mail.env}"
+    refuse_shared_passwords
     API_OUT="$(mktemp)"
     trap 'rm -f "$API_OUT"' EXIT
 
@@ -246,25 +297,29 @@ main() {
 
     ensure_domain "$PLATFORM_DOMAIN"
 
-    # Both principals are NAMED by their address: the internal directory
+    # Every principal is NAMED by its address: the internal directory
     # authenticates the login NAME, not the emails array (header, item 1).
     local roles_p="roles@${PLATFORM_DOMAIN}" platform_p="platform@${PLATFORM_DOMAIN}"
+    local system_p="system@${PLATFORM_DOMAIN}" alerts_p="alerts@${PLATFORM_DOMAIN}"
 
-    ensure_principal "$roles_p"    individual "$roles_p"
-    ensure_principal "$platform_p" individual "$platform_p"
-    ensure_login_role "$roles_p"
-    ensure_login_role "$platform_p"
+    local p
+    for p in "$roles_p" "$system_p" "$alerts_p" "$platform_p"; do
+        ensure_principal "$p" individual "$p"
+        ensure_login_role "$p"
+    done
 
     local r
     for r in "${ROLE_ALIASES[@]}"; do
         ensure_alias "$roles_p" "${r}@${PLATFORM_DOMAIN}"
     done
 
+    ensure_secret "$system_p"   gremion-vendor     "$VENDOR_SMTP_PASSWORD"
+    ensure_secret "$alerts_p"   gremion-alerts     "$ALERT_SMTP_PASSWORD"
     ensure_secret "$platform_p" gremion-platform   "$PLATFORM_SMTP_PASSWORD"
     ensure_secret "$roles_p"    gremion-roles-imap "$ROLES_IMAP_PASSWORD"
     ensure_source_restriction "$platform_p"
 
-    printf 'MAIL-ROLES: aliases=%d platform-app-password=ok source-restriction=%s\n' \
+    printf 'MAIL-ROLES: aliases=%d vendor-app-password=ok alerts-app-password=ok platform-app-password=ok source-restriction=%s\n' \
         "${#ROLE_ALIASES[@]}" "$SOURCE_RESTRICTION"
 }
 

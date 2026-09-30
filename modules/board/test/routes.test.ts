@@ -17,19 +17,37 @@ const routes = buildApiRoutes(storeThatThrows)
 const router = createRouter(routes)
 
 describe('board leaf route table — exact endpoint set', () => {
-  it('registers exactly the seven BoardBackendPort endpoints', () => {
+  it('registers exactly the nine BoardBackendPort endpoints (seven + the two create routes, R29-BOARD-STORE-K A5)', () => {
     const set = routes.map((r) => `${r.method} ${r.path}`).sort()
     expect(set).toEqual(
       [
         'GET /api/v1/boards',
+        'POST /api/v1/boards',
         'GET /api/v1/boards/:id',
         'GET /api/v1/boards/:id/deck',
+        'POST /api/v1/boards/:id/stacks',
         'POST /api/v1/cards',
         'PATCH /api/v1/cards/:id/move',
         'POST /api/v1/cards/promoted',
         'POST /api/v1/boards/:id/promote',
       ].sort(),
     )
+  })
+})
+
+describe('board leaf create routes', () => {
+  it('matches POST /api/v1/boards (create a board with its stacks)', () => {
+    const m = router.match('POST', '/api/v1/boards')
+    expect(m.type).toBe('matched')
+    if (m.type !== 'matched') throw new Error('unreachable')
+    expect(m.params).toEqual({})
+  })
+
+  it('extracts :id for POST /api/v1/boards/:id/stacks', () => {
+    const m = router.match('POST', '/api/v1/boards/b-5/stacks')
+    expect(m.type).toBe('matched')
+    if (m.type !== 'matched') throw new Error('unreachable')
+    expect(m.params).toEqual({ id: 'b-5' })
   })
 })
 
@@ -81,11 +99,11 @@ describe('board leaf router — path-param matching', () => {
     expect(create.type).toBe('matched')
   })
 
-  it('returns method-not-allowed for POST on the list path', () => {
-    const m = router.match('POST', '/api/v1/boards')
+  it('returns method-not-allowed for DELETE on the list path (GET and POST only)', () => {
+    const m = router.match('DELETE', '/api/v1/boards')
     expect(m.type).toBe('method-not-allowed')
     if (m.type !== 'method-not-allowed') throw new Error('unreachable')
-    expect(m.allowed).toContain('GET')
+    expect([...m.allowed].sort()).toEqual(['GET', 'POST'])
   })
 
   it('returns not-found for an unregistered path', () => {

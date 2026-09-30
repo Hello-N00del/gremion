@@ -84,6 +84,9 @@ export const PLACEMENT = {
     postgres: store,
     ...Object.fromEntries(MODULE_POSTGRES_IDS.map((id) => [`${id}-postgres`, store])),
     pgbouncer: store,
+    // TASK-024: the NATS broker is state-tier data (JetStream store) reached
+    // only over ${STACK}_state by name, like the databases.
+    nats: store,
     keycloak: { class: 'council', networks: ['edge', 'state'] },
     legal: { class: 'council-edge', networks: ['edge'] },
     fallback: { class: 'council-edge', networks: ['edge'] },

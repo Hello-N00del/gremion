@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 2.0.0
+- Version: 3.0.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -96,18 +96,25 @@ done
 3. **Take the pre-migration dump (TRD-206, R18-4).** Only when `migrations` is
    not empty: one dump of each database the migration alters, kept until the
    switch has succeeded and not a day longer. This is the interim form, taken by
-   hand, until the migration runner takes it itself (see Known gaps).
+   hand, until the migration runner takes it itself (see Known gaps). The dump
+   is personal data, so its file is created private (`umask 077`) and is only
+   ever written under a `.part` name: it takes its final name when `pg_dump` has
+   finished, so a failed dump leaves no file that looks restorable. Every
+   attempt writes its own file, named by the UTC second it started. A
+   `pre-migration-${TAG}-${db}-*.dump` from an earlier attempt is the state the
+   old colour was serving when that attempt began: keep it. No step here removes
+   or overwrites one (`noclobber` refuses a `.part` of the same second), and step
+   5 deletes them only after a switch has succeeded.
 
 ```bash
 db="<the database the migration alters>"
 svc="postgres"          # the state project's server holding it: postgres (kernel) or <id>-postgres (module)
 dumpdir=/opt/gremion/backups
-dump="${dumpdir}/pre-migration-${TAG}-${db}.dump"
+dump="${dumpdir}/pre-migration-${TAG}-${db}-$(date -u +%Y%m%dT%H%M%SZ).dump"
 cd /opt/gremion/current
-docker compose --env-file /opt/gremion/etc/env/state.env exec -T "$svc" \
-  pg_dump -U postgres -Fc "$db" > "$dump"
-chmod 600 "$dump" && sha256sum "$dump"
-logger -t premigration-dump "taken ${dump} before ${TAG}"
+( umask 077; set -o noclobber; docker compose --env-file /opt/gremion/etc/env/state.env exec -T "$svc" \
+  pg_dump -U postgres -Fc "$db" > "${dump}.part" ) && mv -- "${dump}.part" "$dump" && sha256sum "$dump"
+stat -c '%a %U' "$dump" && logger -t premigration-dump "taken ${dump} before ${TAG}"   # 600 root; logged only for a dump that exists
 ```
 
 4. **Deploy.** The token goes to the program on standard input; the program logs
@@ -120,16 +127,17 @@ printf 'TOKEN %s\n' "$GHCR_TOKEN" | sudo -u gremion /opt/gremion/bin/gremion-dep
 unset GHCR_TOKEN
 ```
 
-5. **Delete the dump once the switch has succeeded, and log it.** The switch
+5. **Delete the dumps once the switch has succeeded, and log each.** The switch
    succeeded when `runtime/current-tag` names the new tag and the last deploy
-   line is `STEP 12 record ok`. If it did not, keep the dump and follow the
-   failure path below.
+   line is `STEP 12 record ok`. It deletes every `pre-migration-${TAG}-*.dump`
+   and `.dump.part` of this tag: the dump of this attempt and those of earlier
+   attempts, whose state the switch has now made obsolete. If the switch did
+   not succeed, keep them all and follow the failure path below.
 
 ```bash
 tail -n 1 /opt/gremion/runtime/deploy.log
 if grep -Fxq "$TAG" /opt/gremion/runtime/current-tag; then
-  rm -f -- "$dump"
-  logger -t premigration-dump "deleted ${dump} after the switch to ${TAG} succeeded"
+  for f in "${dumpdir}"/pre-migration-"${TAG}"-*; do [ -e "$f" ] || continue; rm -f -- "$f"; logger -t premigration-dump "deleted ${f} after the switch to ${TAG} succeeded"; done
 fi
 ```
 
@@ -149,7 +157,7 @@ tail -n 12 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+ [a-z-]+ fail
 jq -r '.ts, .ok, (.failures | length)' /opt/gremion/runtime/last-verify.json        # now, true, 0
 curl -s -o /dev/null -w '%{http_code}\n' "https://${host}/api/health"               # 200
 find /opt/gremion/backups -maxdepth 1 -name 'pre-migration-*' | wc -l               # 0
-journalctl -t premigration-dump --since today                                       # one taken and one deleted line per dump
+journalctl -t premigration-dump --since today                                       # one taken line per attempt, one deleted line per file
 for f in /root/.docker/config.json /home/gremion/.docker/config.json; do
   [ -f "$f" ] && jq -e '(.auths // {}) | length == 0' "$f"                          # no registry credential left
 done
@@ -159,19 +167,23 @@ done
 
 When the deploy stopped before or at the switch, traffic is still on the old
 colour or `gremion-rollback` returns it there (`gremion-rollback`, section 4 of
-[host-tooling.md](../host-tooling.md)). The dump is kept. Where the migration
+[host-tooling.md](../host-tooling.md)). The dumps are kept. Where the migration
 left its database unusable for the old colour, restore that database from the
-dump, then run the verification contract:
+dump the failing attempt took (`$dump` of its step 3): that file is the state
+the old colour was serving when the attempt began. Dumps of earlier attempts are
+kept as well; `ls` lists them all, oldest first. Then run the verification
+contract:
 
 ```bash
 cd /opt/gremion/current
+ls -1 "${dumpdir}"/pre-migration-"${TAG}"-"${db}"-*.dump    # every attempt's dump, oldest first; $dump is the failing attempt's
 docker compose --env-file /opt/gremion/etc/env/state.env exec -T "$svc" \
   pg_restore -U postgres --clean --if-exists -d "$db" < "$dump"
 sudo -u gremion /opt/gremion/bin/gremion-verify
 jq -e '.ok == true' /opt/gremion/runtime/last-verify.json
 ```
 
-The dump is deleted, and the deletion logged as in step 5, only after a later
+The dumps are deleted, and each deletion logged as in step 5, only after a later
 switch has succeeded.
 
 ## Known gaps
@@ -185,5 +197,6 @@ switch has succeeded.
 
 ## Changelog
 
+- 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). Step 3 creates the pre-migration dump private from its first byte (`umask 077` in the subshell that holds the redirect, `.part` then `mv`) and writes one UTC-stamped file per attempt, so no attempt overwrites the dump an earlier one took; step 5 deletes every dump of the tag after the success check, one logged line per file; the failure path restores the dump the failing attempt took. Major: a step and the post-condition changed (Q9).
 - 2.0.0 (2026-09-28): the migration register landed (TASK-029). Step 1 compares the running and the new release's `applied.lock.json` and reads the kernel ledger's naming; the post-condition compares the previous and the serving release's locks. Preconditions and Known gaps (d), (e) describe the landed register instead of a PENDING one. Major: a step and the post-condition changed (Q8).
 - 1.0.0 (2026-09-27): first version, provisional (TASK-037).

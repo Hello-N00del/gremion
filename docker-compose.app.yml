@@ -326,9 +326,18 @@ services:
       CONFIG_PATH: /app/config/config.json
       INTERNAL_BASE_URL: http://gremion-ui-${COLOUR:?COLOUR required}:3000
       INTERNAL_PUSH_SECRET: ${INTERNAL_PUSH_SECRET:-}
+      # TASK-024: the broker, for ensureTenantAccount's reload and stream
+      # ensure. No depends_on (the state project's nats is not in this
+      # project): the connection retries itself, bounded, then fails loudly.
+      NATS_URL: nats://nats-${STACK:?STACK required}:4222
     volumes:
       - config-data:/app/config
       - tenant-config-data:/data
+      # TASK-024 (Q4): the NATS seeds (rw) -- ONLY this service mounts them;
+      # gremion-ui, gremion-public and migrate mount none -- and the rendered
+      # accounts file the state project's nats reads.
+      - nats-secrets:/run/secrets/nats
+      - nats-accounts:/etc/nats/accounts
       # The provisioner WRITES the tenant's secret files here (the long-running
       # gremion-ui mounts the same directory read-only).
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants
@@ -381,3 +390,11 @@ volumes:
   tenant-config-data:
     external: true
     name: ${STACK:?STACK required}_tenant_config_data
+  # TASK-024: tenant-create only. Seeds (0600, per-module subtree) and the
+  # public-key accounts file; both created by bootstrap.sh stage_networks.
+  nats-accounts:
+    external: true
+    name: ${STACK:?STACK required}_nats_accounts
+  nats-secrets:
+    external: true
+    name: ${STACK:?STACK required}_nats_secrets

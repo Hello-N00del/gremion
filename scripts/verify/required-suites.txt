@@ -20,3 +20,4 @@ migration-hash
 carve-lint
 isolation
 census
+vendor-mail

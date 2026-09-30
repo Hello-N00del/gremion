@@ -131,7 +131,8 @@ render_targets() {
 
 render_stalwart_key() {
     # STALWART_API_KEY is Task 1's ops.env key, sharing the stalwart_api
-    # sentinel group with state.env and mail.env so all three carry one value.
+    # sentinel group with mail.env so both carry one value (TASK-015 removed
+    # the reader-less copy from state.env).
     local key="${STALWART_API_KEY:-}"
     if [[ -z "$key" || "$key" == CHANGE_ME_* ]]; then
         key="unset"
@@ -143,8 +144,9 @@ render_stalwart_key() {
 }
 
 render_alertmanager() {
-    # ALERT_SMTP_PASSWORD is Task 1's ops.env key (sentinel group platform_smtp,
-    # shared with mail.env). It is NOT called PLATFORM_SMTP_PASSWORD here.
+    # ALERT_SMTP_PASSWORD is Task 1's ops.env key (sentinel group alert_smtp,
+    # shared with mail.env only: the alerts@ principal, TASK-015). It is NOT
+    # called PLATFORM_SMTP_PASSWORD here, and it is not the app tier's value.
     local email_to="${ALERT_EMAIL_TO:-}" password="${ALERT_SMTP_PASSWORD:-}"
     # A freshly rendered ops.env still carries ALERT_EMAIL_TO's operator
     # sentinel. "Not configured yet" is not "configured wrongly": rendering the
