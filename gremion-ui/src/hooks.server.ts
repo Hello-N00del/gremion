@@ -14,6 +14,7 @@ import { waitForDbReady, isTransientDbStartupError } from '$lib/server/db'
 import { isBootAndResolveExempt } from '$lib/server/boot-exempt'
 import { startProvisioningWorker } from '$lib/server/governance/provisioning/worker'
 import { verifyBearerJwt } from '$lib/server/jwt-verify'
+import { isInternalBearerRequest } from '$lib/server/internal-fetch'
 import { purgeAuditLogsOlderThan, verifyAuditChain } from '$lib/server/audit-db'
 import { generateErrId } from '$lib/server/err-id'
 import { assertIssMatch } from '$lib/server/tenant/iss-match'
@@ -360,6 +361,31 @@ function tenantMismatchResponse(path: string): Response {
  */
 export const PUBLIC_PATHS: readonly string[] = ['/auth/', '/legal/', '/api/setup/seed', '/api/health', '/api/public/protocols/']
 
+/**
+ * F1-FIX-03 / H11: the exact (method, path) pairs whose handlers accept the
+ * internalFetch Bearer (`Authorization: Bearer <INTERNAL_PUSH_SECRET>`, G-075)
+ * in place of a session. The guard used to verify every /api Bearer as a
+ * Keycloak JWT, so each internalFetch self-call got a 401 here before the
+ * handler's own isInternalBearerRequest() branch could run.
+ *
+ * Kept exact on purpose: one method, one anchored pattern per route, the id
+ * restricted to the characters the route really uses (an encoded `%2F..` id can
+ * never match). A new internal consumer is added here together with its
+ * handler's own isInternalBearerRequest() check. The route still authorises the
+ * caller itself; this list only decides which requests the session guard may
+ * hand over without a user.
+ */
+export const INTERNAL_BEARER_ROUTES: readonly { method: string; pattern: RegExp }[] = [
+  // news/[id]/edit page actions -> PATCH (body / publish / unpublish).
+  { method: 'PATCH', pattern: /^\/api\/news\/[0-9]{1,12}$/ },
+  // Content editor autosave -> PATCH (title / body / channel toggle).
+  { method: 'PATCH', pattern: /^\/api\/content\/posts\/[0-9A-Za-z-]{1,64}$/ },
+]
+
+function isInternalBearerRoute(method: string, path: string): boolean {
+  return INTERNAL_BEARER_ROUTES.some((r) => r.method === method && r.pattern.test(path))
+}
+
 export const authGuard: Handle = async ({ event, resolve }) => {
   const path = event.url.pathname
 
@@ -436,6 +462,24 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   if (path.startsWith('/api/')) {
     const authHeader = event.request.headers.get('Authorization')
     if (authHeader?.startsWith('Bearer ')) {
+      // F1-FIX-03 / H11: an internalFetch self-call. Honoured only when all of
+      // these hold: the (method, path) is on the exact allow-list, the request
+      // arrived on the internal hop (the resolver validated its
+      // x-internal-host-trust secret, so it never came through the edge), and
+      // the Bearer constant-time-matches INTERNAL_PUSH_SECRET. No user is set:
+      // the handler authorises the internal caller itself. The module-disable
+      // gate applies exactly as for every other caller. Anything else falls
+      // through to the JWT path below, where the secret is not a JWT, so a
+      // misplaced or forged secret ends in the no-session 401.
+      if (
+        event.locals.tenantSelectionTrusted === true &&
+        isInternalBearerRoute(event.request.method, path) &&
+        isInternalBearerRequest(event.request)
+      ) {
+        const internalModuleGate = moduleGateResponse(path)
+        if (internalModuleGate) return internalModuleGate
+        return resolve(event)
+      }
       const token = authHeader.slice(7)
       const payload = await verifyBearerJwt(token, event.locals.tenant)
       if (payload) {
