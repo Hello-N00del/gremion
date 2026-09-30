@@ -5,6 +5,11 @@
 > reading and is re-dated when those answers arrive [D R21-6, D R21-24]. Nothing here is
 > legal advice, and no window with a period here may be configured until its row is marked
 > derived in `ops.retention_window` (on-event, cache-TTL and never-deleted rows: see §1.4).
+>
+> **Change note 2026-09-30 (R29-RETENTION-30):** operator decision [D R29-I6] caps every log
+> class at 30 days, pseudonymised logs included. RC-LOG-APP/SEC/FIN/AUD caps are now 30 d and
+> regular windows at most 30 d; the security window is 27 d / 30 d; G5 is closed (bound
+> 29 d + 2 h 5 min) and G8 reads 29 d (2505600). The documented tier [A-D8] is replaced.
 
 | | |
 |---|---|
@@ -88,9 +93,9 @@ written reason in the row.
 | 24 hours | Short-lived sessions and transient working copies |
 | 7 days | Transient plumbing; traces (regular) |
 | 14 days | Access logs (regular); traces (cap) |
-| 30 days | The standard grace after a purpose ends; access logs (cap); application logs (regular) |
-| 90 days | Application logs (cap); security, finance and audit/operator-access logs (regular) |
-| 180 days | Security, finance and audit/operator-access logs (cap) |
+| 30 days | The standard grace after a purpose ends; every log class (cap, [D R29-I6]); application logs (regular) |
+| 27 days | Security, finance and audit/operator-access logs (regular, as configured; [D R29-I6]) |
+| 29 days | Identity-provider event and admin-event expiry (2505600 s; [D R29-I6]) |
 | 1 year | Evidence whose challenge period is short or unset |
 | 2 years | Handover material (two successor terms) |
 | 3 years, from the end of the calendar year | Accountability evidence (the "audit window", §2.2) |
@@ -163,10 +168,10 @@ The K classes are the mechanics that execute a derived period (DB-OPS-RETENTION-
 | **record period** | 10 years from the end of the calendar year of the meeting or decision, then the archive offer | Minutes and resolutions authorise spending and are the council's official record; they outlive the finance vouchers they authorise (8 or 10 years, §7), and the archive duty decides what happens after [A-L1, A-L3] |
 | **finance hold** | 10 years (books, annual accounts, Haushaltsrechnung) or 8 years (vouchers) from the end of the budget year | LHO/Finanzordnung under the current reading, with HGB/AO periods as the reference values until the LHO period is confirmed; if the confirmed LHO period is shorter and HGB/AO do not bind, the shorter applies [A-L1, A-L2] |
 | **challenge window** | as the customer's Wahlordnung or Geschäftsordnung sets it; default 1 month after the result is announced | An election or vote can be contested only within that period; after it, the individual ballot data has no purpose [A-L4] |
-| **security window** | 90 days regular, 180 days cap | §4.1, row RC-LOG-SEC |
+| **security window** | 27 days regular, 30 days cap [D R29-I6] | §4.1, row RC-LOG-SEC |
 
 *Audit window* (3 years, accountability evidence) is not the *audit/operator-access log
-class* (90 d / 180 d, RC-LOG-AUD). Where a schema comment says 'security/audit window'
+class* (27 d / 30 d, RC-LOG-AUD). Where a schema comment says 'security/audit window'
 (`ops.incident`), this catalogue reads the audit window; where it says 'audit log class'
 (`gov.integrity_check`), it reads RC-LOG-AUD.
 
@@ -186,7 +191,7 @@ wait (TASK-016 acceptance).
 | Q4 — which Art. 35(4) list applies to the council | Indirect: a DPIA duty for a module can tighten that module's rows | No row changes; the DPIA decisions are L7-03's [A-D4] |
 | Q6 — the pilot runs without backups after one verification | §6 in full | The deviation stands as decided [D R15-1] and is disclosed [A-D6] |
 | Q7 — retention of minutes, resolutions and finance records (LHO/Finanzordnung, HGB/AO) | RC-GOV-*, RC-FIN-*, RC-LOG-FIN, the record period and the finance hold | §2.2 values [A-L1, A-L2] |
-| Q8 — university defaults for server and access logs | RC-LOG-* | The documented tier (§4.1) [A-D8] |
+| Q8 — university defaults for server and access logs | RC-LOG-* | Replaced by the operator decision [D R29-I6]: 30 days for every log class (§4.1) |
 | Q9 — erasure against approved minutes, finance-relevant names | §8 | Redaction layer, finance names legible for the hold [A-L5] |
 | Q11 — newsletter consent evidence | RC-NWS-* | §7.11 values [A-D11] |
 | Legal question 17 (in part DPO question 7) — archive offer duty | Every K3 and K6 row at the end of its period | The offer step is modelled (§8.4) but its applicability is open [A-L3] |
@@ -211,11 +216,11 @@ is enforced at its cap independent of any administrator-set value (TRD-143).
 
 | Row | Class | Purpose | Legal basis and periods relied on | Regular / cap | Reading |
 |---|---|---|---|---|---|
-| RC-LOG-ACC | Access (Zugriffsprotokolle) | Abuse and rate-limit detection, short-term attack forensics on pseudonymised addresses | Art. 5(1)(e), 5(1)(c), 32(1); no statutory duty | **14 d / 30 d** | [A-D8] The documented tier; two weekly review cycles cover the purpose. Kept only because the derivation yields it [D R15-5] |
-| RC-LOG-APP | Application (Anwendungsprotokolle) | Fault diagnosis; covers one monthly release-and-review cycle plus the time to find a slow-surfacing fault | Art. 5(1)(e), 6(1)(e) or (f); no statutory duty | **30 d / 90 d** | [A-D8] |
-| RC-LOG-SEC | Security (Sicherheitsprotokolle), including identity-provider login and admin events | Detection of attacks whose dwell time exceeds a month; incident reconstruction | Art. 5(1)(e), 32(1)(d), 33(5); BSI minimum standard v2.1 ~90 d (orientation only) | **90 d / 180 d** | [A-D8] |
-| RC-LOG-FIN | Finance (Finanzprotokolle) | Misuse detection and incident reconstruction for finance actions; who released and who paid is kept in the finance records themselves (K4), not in this log | Art. 5(1)(e); the HGB/AO/LHO duties attach to the **finance records themselves** (K4, §7.13), not to log lines; a log kept for the finance hold would be a shadow ledger (Art. 5(1)(c)) | **90 d / 180 d** | [A-L1, A-F1] New derivation on 2026-09-25: the security window, because the log's only independent purpose is misuse detection. Re-check against the head-of-finance answers (TASK-073) |
-| RC-LOG-AUD | Audit / operator access (Audit- und Betreiberzugriffsprotokolle) | Evidence of vendor and operator access to a council's data (TRD-092 §4); `rp-oac-access` | Art. 5(1)(e), 5(2), 28(3)(h); TRD-191: **never shorter than the security window** | **90 d / 180 d**, bound to RC-LOG-SEC | [A-D8] Outlives a customer's erasure; purged from the oldest entry only |
+| RC-LOG-ACC | Access (Zugriffsprotokolle) | Abuse and rate-limit detection, short-term attack forensics on pseudonymised addresses | Art. 5(1)(e), 5(1)(c), 32(1); no statutory duty | **14 d / 30 d** | [D R29-I6] Cap 30 d for every log class; two weekly review cycles cover the purpose. Kept only because the derivation yields it [D R15-5] |
+| RC-LOG-APP | Application (Anwendungsprotokolle) | Fault diagnosis; covers one monthly release-and-review cycle plus the time to find a slow-surfacing fault | Art. 5(1)(e), 6(1)(e) or (f); no statutory duty | **30 d / 30 d** | [D R29-I6] Cap lowered from 90 d to 30 d |
+| RC-LOG-SEC | Security (Sicherheitsprotokolle), including identity-provider login and admin events | Detection of attacks whose dwell time exceeds a month; incident reconstruction | Art. 5(1)(e), 32(1)(d), 33(5); BSI minimum standard v2.1 ~90 d (orientation only; not adopted, [D R29-I6]) | **27 d / 30 d** | [D R29-I6] Pseudonymised logs included; 27 d configured, worst case 29 d + 2 h 5 min |
+| RC-LOG-FIN | Finance (Finanzprotokolle) | Misuse detection and incident reconstruction for finance actions; who released and who paid is kept in the finance records themselves (K4), not in this log | Art. 5(1)(e); the HGB/AO/LHO duties attach to the **finance records themselves** (K4, §7.13), not to log lines; a log kept for the finance hold would be a shadow ledger (Art. 5(1)(c)) | **27 d / 30 d** | [D R29-I6, A-L1, A-F1] New derivation on 2026-09-25: the security window, because the log's only independent purpose is misuse detection. Re-check against the head-of-finance answers (TASK-073) |
+| RC-LOG-AUD | Audit / operator access (Audit- und Betreiberzugriffsprotokolle) | Evidence of vendor and operator access to a council's data (TRD-092 §4); `rp-oac-access` | Art. 5(1)(e), 5(2), 28(3)(h); TRD-191: **never shorter than the security window** | **27 d / 30 d**, bound to RC-LOG-SEC | [D R29-I6] Outlives a customer's erasure; purged from the oldest entry only |
 | RC-LOG-TRC | Trace (trace store) | Latency and fault analysis of individual requests; span attributes carry user ids, so the store is personal data [D R19-D27] | Art. 5(1)(e), 5(1)(c); no statutory duty | **7 d / 14 d** | [A] New derivation on 2026-09-25: stricter than the application class, because traces hold per-request user ids and the application log already covers forensic needs beyond a week |
 
 A value above a cap clamps to the cap; a record older than its class window is absent from
@@ -340,7 +345,7 @@ Profiles and start events are those of the schema's table comments (`<DB-id> | <
 | RC-GOV-CORRQ | Correction requests on protocols (`rp-gov-correction`) | protocol approved | Art. 5(1)(e) | **grace** | [A-G] |
 | RC-GOV-SUBM | Public submitters of motions (`rp-gov-public-submitter`) | motion decided or withdrawn, or granted erasure | Art. 5(1)(e), 17 | **grace** | [A-G] |
 | RC-GOV-PROJ | Body and member projections, body settings, number counters (`rp-gov-projection`, `rp-gov-body-config`) | body archived; term ended or person erased | Art. 5(1)(e) | **grace** | [A-G] |
-| RC-GOV-INTEG | Integrity-check results (`rp-gov-integrity-log`, K5) | check run | Art. 5(2), 32(1)(d) | **security window** (with the audit/operator-access class, RC-LOG-AUD) | [A-D8] |
+| RC-GOV-INTEG | Integrity-check results (`rp-gov-integrity-log`, K5) | check run | Art. 5(2), 32(1)(d) | **security window** (with the audit/operator-access class, RC-LOG-AUD; now 27 d / 30 d) | [D R29-I6] |
 
 ### 7.4 Handover (hnd)
 
@@ -432,7 +437,7 @@ content tables belong to module repositories, which cite these rows.
 | RC-OPS-DPIA | DPIA decisions (`rp-ops-dpia-decision`) | superseded for the (customer, module) pair | Art. 5(2), 35 | **audit window** | [A-G] |
 | RC-OPS-INC | Incident log (`rp-ops-incident-log`) | confirmed | Art. 33(5), 5(2) | **audit window** (the schema's "security/audit window", §2.2) | [A-G] |
 | RC-OPS-RET | Superseded retention windows (`rp-ops-retention-evidence`) | superseded | Art. 5(2) | **audit window**; the current row is never deleted | [A-G] |
-| RC-OPS-RUN | Runbook evidence (`rp-ops-runbook-evidence`), provisioning steps and job runs (`rp-plt-provisioning-log`, `rp-plt-job-run-log`) | finished | Art. 5(2), 32(1)(d) | runbook evidence **audit window**; provisioning steps and job runs with RC-LOG-APP | [A-G, A-D8] |
+| RC-OPS-RUN | Runbook evidence (`rp-ops-runbook-evidence`), provisioning steps and job runs (`rp-plt-provisioning-log`, `rp-plt-job-run-log`) | finished | Art. 5(2), 32(1)(d) | runbook evidence **audit window**; provisioning steps and job runs with RC-LOG-APP | [A-G, D R29-I6] |
 | RC-OPS-EXP | Export requests and manifests (`rp-ops-export-request`, `rp-ops-export-manifest`) | delivered, or the 30-day bound elapsed | Art. 5(1)(e), 20 | **on event** | settled |
 | RC-OPS-DOCS | Generated Löschkonzepte (`rp-ops-deletion-concept`), release and test records (`rp-ops-release-record`), sub-processor notices (`rp-ops-subprocessor-notice`), continuity disclosures (`rp-ops-continuity-disclosure`), retention catalogue versions (`rp-ops-retention-catalogue`) | superseded; relationship ends | Art. 5(2), 28 | superseded versions kept as history while referenced; sub-processor notices **audit window** after the relationship ends | [A-G] |
 | RC-OAC-OPER | Operator identities (`rp-oac-operator`) | engagement ends | Art. 5(1)(e), 5(2) | deferred until the last access entry naming the operator passes RC-LOG-AUD | settled |
@@ -502,10 +507,10 @@ owner named.
 | G2 | Backup retention figures in config and scripts (30 d, floor 7; 30 d; 14/8/6 generations; 30/365/3650 d) have no derivation | `config.ts`, `scripts/backup.sh`, `scripts/tenant-backup.sh`, `infra/host/templates/env/state.env.tmpl`, `infra/hardening/values.yaml` (30/365/3650), `k8s/base/backup/cronjob.yaml`; restated in `docs/compliance.md`, `docs/compliance/controller-processor-split.md`, `docs/OPERATIONS.md`, `docs/ops/host-tooling.md` | Must not be cited (TRD-172); in the pilot the jobs are disabled |
 | G3 | The per-tenant retention config knows four tiers (access, app, security, security without personal data); it has no finance class, no audit/operator-access class and no trace class | `GremionConfig.retention` in `config.ts` | TRD-143's six classes are not yet configurable; L3-15 adds them |
 | G4 | The "security without personal data" tier (90 d, cap 365 d) is not a category of this catalogue | `config.ts`, generator row 4 | Data proven free of personal data is outside the Löschkonzept; anything else falls under RC-LOG-SEC. The 365-day cap must not apply to entries that name a person |
-| G5 | The processed security log and the date-partitioned retention sink age out after 31 days | `docker/vector/logrotate.conf` (`maxage 31`) | Exceeds the 30-day access cap by one day if those files are access-class; align with RC-LOG-ACC |
+| G5 | **Closed by R28 + R29 (R29-RETENTION-30).** Formerly: the processed security log and the date-partitioned retention sink aged out after 31 days | `docker/vector/logrotate.conf` | Edge logrotate now keeps access and Traefik logs 14 d, the pseudonymised security log and `retained-*` 27 d (plus `prune-retained.sh`); the worst case across all rules is 29 d + 2 h 5 min (`test-edge-retention-bound.sh`), inside the 30-day cap [D R29-I6] |
 | G6 | The kernel's hash-chained `audit_log` table is purged every 24 h at the security window, while `docs/log-retention-policy.md` states it is never auto-expired | `gremion-ui/src/hooks.server.ts` (audit-retention tick), `audit-db.ts` `purgeAuditLogsOlderThan` | The two statements contradict each other. Under this catalogue a governance record chain is K3 (RC-GOV-CHAIN), and an access/audit log is K5 (RC-LOG-AUD); L3-15 must decide which the table is and align the code and the policy |
 | G7 | The generator cites a single fixed legal basis per log tier (a Bavarian DPA recommendation, the BSI minimum standard) instead of the derivation | `loeschkonzept.ts` §3 | TRD-145 requires the derivation (category, basis, duty, window) per row; this catalogue supplies it |
-| G8 | No log store or trace store is configured in this repository yet; identity-provider events expire at 90 d (`eventsExpiration: 7776000`) | `docker/keycloak/realm-export.base.json` | 90 d matches RC-LOG-SEC; the streams themselves arrive with L1-20 and L3-15 |
+| G8 | No log store or trace store is configured in this repository yet; identity-provider events expire at 29 d (`eventsExpiration` and `attributes.adminEventsExpiration`: 2505600 s; formerly 7776000 = 90 d, with no admin-event expiry) | `docker/keycloak/realm-export.base.json` | 29 d sits inside the 30-day cap of RC-LOG-SEC [D R29-I6]; Keycloak event lines are off container stdout; the other log streams arrive with L1-20 and L3-15 |
 
 ---
 
@@ -523,7 +528,7 @@ owner named.
 | A-D4 | No catalogue row changes for DPIA reasons | DPO question 4 |
 | A-D6 | The pilot's no-backup posture is compatible with Art. 32(1)(b)(c) when the council adopts it knowingly | DPO question 6 |
 | A-F1 | The finance log needs only the security window | Head-of-finance answers (TASK-073) |
-| A-D8 | The documented log tier (14/30, 30/90, 90/180) | DPO question 8 |
+| A-D8 | Superseded by [D R29-I6]: 30 days for every log class, pseudonymised logs included (formerly the documented tier 14/30, 30/90, 90/180) | DPO question 8 |
 | A-D11 | Newsletter consent evidence kept for the audit window | DPO question 11 |
 | A | Unlabelled [A] rows (trace, cache TTL, plumbing, working sessions, drafts, import rows, unread notifications, contact forms, verification-artefact deletion) | Operator confirmation; re-dated with the rest |
 
