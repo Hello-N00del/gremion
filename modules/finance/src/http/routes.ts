@@ -44,6 +44,7 @@ import {
   deleteFinanceUnitForSubOrg,
   countOrgUnitFinanceRefs,
   assertSubOrgCreateAllowed,
+  assertCentralScopeWritable,
   assertFinanceUnitWritable,
   assertBankAccountWritable,
   FinanceValidationError,
@@ -558,7 +559,7 @@ function createSubOrgHandler(storeFn: StoreFn): RouteHandler {
     await runStore(res, async () => {
       const sql = await storeFn(tenant)
       // F1-FIX-05-K (H15): the write actor must be able to write the parent org unit.
-      await assertSubOrgCreateAllowed(sql, actorFromHeaders(req), str(body.parent_org_unit_id))
+      await assertSubOrgCreateAllowed(sql, actorFromHeaders(req), orgUnitId, str(body.parent_org_unit_id))
       const fu = await insertFinanceUnit(sql, {
         orgUnitId,
         kind: str(body.kind),
@@ -658,6 +659,7 @@ function createFiscalYearHandler(storeFn: StoreFn): RouteHandler {
     }
     await runStore(res, async () => {
       const sql = await storeFn(tenant)
+      await assertCentralOrConfigAdmin(sql, actorFromHeaders(req))
       sendJson(res, 200, await createFiscalYear(sql, { name, startDate, endDate }))
     })
   }
@@ -673,6 +675,7 @@ function updateFiscalYearHandler(storeFn: StoreFn): RouteHandler {
     if (typeof body.end_date === 'string') patch.endDate = body.end_date
     await runStore(res, async () => {
       const sql = await storeFn(tenant)
+      await assertCentralOrConfigAdmin(sql, actorFromHeaders(req))
       const fy = await updateFiscalYear(sql, params.id!, patch)
       if (!fy) return sendJson(res, 404, { success: false, error: 'fiscal_year not found' })
       sendJson(res, 200, fy)
@@ -1427,6 +1430,7 @@ function createSubOrgTypeHandler(storeFn: StoreFn): RouteHandler {
     if (!name) return sendJson(res, 400, { success: false, error: 'name (string) is required' })
     await runStore(res, async () => {
       const sql = await storeFn(tenant)
+      await assertCentralOrConfigAdmin(sql, actorFromHeaders(req))
       sendJson(res, 200, await createSubOrgType(sql, { name, description: str(body.description) ?? null }))
     })
   }
@@ -1434,11 +1438,24 @@ function createSubOrgTypeHandler(storeFn: StoreFn): RouteHandler {
 
 function deleteSubOrgTypeHandler(storeFn: StoreFn): RouteHandler {
   return async (ctx: RouteContext): Promise<void> => {
-    const { res, tenant, params } = ctx as ApiContext
-    const sql = await storeFn(tenant)
-    await deleteSubOrgType(sql, params.id!)
-    sendJson(res, 200, { success: true })
+    const { req, res, tenant, params } = ctx as ApiContext
+    await runStore(res, async () => {
+      const sql = await storeFn(tenant)
+      await assertCentralOrConfigAdmin(sql, actorFromHeaders(req))
+      await deleteSubOrgType(sql, params.id!)
+      sendJson(res, 200, { success: true })
+    })
   }
+}
+
+/** F1-FIX-05-K r2 (K4#34 remainder): tenant-wide finance configuration -- fiscal
+ *  years and sub-org types -- needs the central/admin scope, as the ledger fix asks:
+ *  the admin / it-admin config groups (the updateSignerConfig gate below), else the
+ *  central finance_unit's org unit (auditor refused, runtime superuser passes). These
+ *  handlers used to run with no actor at all. Throws AccessDeniedError -> 403. */
+async function assertCentralOrConfigAdmin(sql: Sql, actor: ActorContext): Promise<void> {
+  if (isFinanceConfigAdmin(actor.groups)) return
+  await assertCentralScopeWritable(sql, actor)
 }
 
 // ── LIVE finanzordnung config handlers (TASK-009 lane C / R23-6) ─────────────

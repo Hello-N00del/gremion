@@ -3964,23 +3964,44 @@ async function assertBankTransactionOwnScopeWritable(
 // transactions into any bank account. The actor rides the ACL headers like every
 // other write op; an absent actor is the fail-closed deny scope.
 
+const MIRROR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Central-scope gate: the actor must be able to write the central finance_unit's
+ *  org unit (auditor refused, superuser passes). No central finance_unit -> only a
+ *  superuser passes. Used for the sub-org create fallback and, r2 (K4#34 remainder),
+ *  for the tenant-wide fiscal-year and sub-org-type mutations. */
+export async function assertCentralScopeWritable(sql: Sql, actor: ActorContext): Promise<void> {
+  if (actor.isSuperuser) return
+  const rows = await sql<{ org_unit_id: string }[]>`
+    SELECT org_unit_id FROM finance.finance_unit WHERE kind = 'central' ORDER BY id LIMIT 1`
+  const central = rows[0]?.org_unit_id
+  if (central === undefined) throw new AccessDeniedError(actor.userId, 'central')
+  assertOrgUnitWritable(actor, central)
+}
+
 /** Create gate (native parity: services/write/sub-org.ts gates createSubOrg on the
  *  PARENT org unit, since the new sub-org has no id yet). The parent is the explicit
- *  `parentOrgUnitId` when the caller sends one, else the central finance_unit's org
- *  unit (every StuFis-era sub-org is parented under central, which is what the
- *  service-mode saga does). No resolvable parent -> only a superuser may create. */
+ *  `parentOrgUnitId` ONLY when the leaf's org-unit mirror confirms it is the new
+ *  unit's live parent (r2: a bare body claim let a caller name any parent it can
+ *  write); otherwise the central finance_unit's org unit (every StuFis-era sub-org is
+ *  parented under central, which is what the service-mode saga does). No resolvable
+ *  parent -> only a superuser may create. */
 export async function assertSubOrgCreateAllowed(
-  sql: Sql, actor: ActorContext, parentOrgUnitId: string | undefined,
+  sql: Sql, actor: ActorContext, orgUnitId: string, parentOrgUnitId: string | undefined,
 ): Promise<void> {
   if (actor.isSuperuser) return
-  let parent = parentOrgUnitId
-  if (parent === undefined) {
-    const rows = await sql<{ org_unit_id: string }[]>`
-      SELECT org_unit_id FROM finance.finance_unit WHERE kind = 'central' LIMIT 1`
-    parent = rows[0]?.org_unit_id
+  // Only a UUID pair can be looked up (the mirror's ids are UUID; anything else would
+  // be a 22P02 500 instead of a scope answer) -- a malformed claim is simply unconfirmed.
+  if (parentOrgUnitId !== undefined && MIRROR_UUID.test(orgUnitId) && MIRROR_UUID.test(parentOrgUnitId)) {
+    const confirmed = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM finance.org_unit_mirror
+      WHERE id = ${orgUnitId} AND parent_id = ${parentOrgUnitId} AND NOT deleted`
+    if ((confirmed[0]?.n ?? 0) > 0) {
+      assertOrgUnitWritable(actor, parentOrgUnitId)
+      return
+    }
   }
-  if (parent === undefined) throw new AccessDeniedError(actor.userId, 'central')
-  assertOrgUnitWritable(actor, parent)
+  await assertCentralScopeWritable(sql, actor)
 }
 
 /** Update / delete gate (native parity: updateSubOrg / deleteSubOrg gate on the
