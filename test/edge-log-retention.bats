@@ -221,3 +221,68 @@ bound_in_scratch() {
     [[ $'\n'"$output" == *$'\n  format: json'* ]]
     [[ $'\n'"$output" == *$'\n  filePath: "/logs/traefik.log"'* ]]
 }
+
+# --- round 2: Traefik's own writer must never rotate by itself ---------------------
+# With log.filePath set, Traefik 3.7.1 writes through a size-rotating writer
+# (lumberjack): maxSize 0 means 100 MB, maxBackups 0 keeps every backup for ever, and
+# its size counter ignores logrotate's copytruncate. Cumulative output past the cap
+# renames the live file to traefik-<timestamp>.log, a name no logrotate rule matches.
+# A cap no volume can reach removes that path, so logrotate is the only rotator.
+
+@test "traefik.yml: the log block sets maxSize so large that Traefik never rotates by itself" {
+    run awk '/^log:/ { on = 1; next } /^[A-Za-z]/ { on = 0 } on && $1 == "maxSize:" { print $2 }' "$TRAEFIK_YML"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]+$ ]]
+    [ "$output" -ge 1000000 ]
+}
+
+@test "bound model: log.maxSize removed from traefik.yml is refused" {
+    scratch
+    sed -i '/^log:/,/^[A-Za-z]/{/maxSize/d}' "$S/traefik.yml"
+    bound_in_scratch
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"log.maxSize"* ]]
+}
+
+@test "bound model: a log.maxSize Traefik can reach (100 MB) is refused" {
+    scratch
+    sed -i '/^log:/,/^[A-Za-z]/s/maxSize: .*/maxSize: 100/' "$S/traefik.yml"
+    bound_in_scratch
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"log.maxSize"* ]]
+}
+
+@test "bound model: a comment quoting the logrotate state path does not hide its removal" {
+    scratch
+    sed -i 's# -s /logs/processed/.logrotate.status##' "$S/vector/entrypoint.sh"
+    sed -i '1a # was: logrotate -s /logs/processed/.logrotate.status /etc/logrotate.d/vector-logs' "$S/vector/entrypoint.sh"
+    bound_in_scratch
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"state file"* ]]
+}
+
+# --- round 2: the two scripts that read Traefik's log follow it into the file ---------
+
+@test "edge-static.sh: the proof copy edits the shipped log block (INFO, no filePath) instead of adding a second log: key" {
+    local block
+    block="$(awk '$0 == "# BEGIN proof-copy" { on = 1; next } $0 == "# END proof-copy" { on = 0 } on' "${PROJECT_ROOT}/test/host/integration/edge-static.sh")"
+    [ -n "$block" ]
+    cd "$PROJECT_ROOT"
+    run bash -c 'precondition() { echo "PRECONDITION: $*" >&2; exit 2; }; WORK="$1"; '"$block" _ "$BATS_TEST_TMPDIR"
+    [ "$status" -eq 0 ]
+    local proof="$BATS_TEST_TMPDIR/traefik.proof.yml"
+    [ "$(grep -c '^log:' "$proof")" -eq 1 ]
+    [ "$(grep -c '^      certificatesDuration: 1$' "$proof")" -eq 1 ]
+    # Traefik logs to stdout at INFO (so `docker logs` shows the renewal): no filePath in the log block.
+    run awk '/^log:/ { on = 1; next } /^[A-Za-z]/ { on = 0 } on' "$proof"
+    [[ $'\n'"$output" == *$'\n  level: INFO'* ]]
+    [[ "$output" != *"level: ERROR"* ]]
+    [[ "$output" != *"filePath"* ]]
+    # The access log keeps its file.
+    grep -q '^  filePath: "/logs/access.log"$' "$proof"
+}
+
+@test "verify-traefik-acme-wiring.sh: CLAIM 4 reads Traefik's own log file as well as docker logs" {
+    run awk '/^echo "CLAIM 4/ { on = 1 } /^echo "CLAIM 5/ { on = 0 } on && /cat \/logs\/traefik\.log/ { n++ } END { print n + 0 }' "${PROJECT_ROOT}/scripts/verify-traefik-acme-wiring.sh"
+    [ "$output" -ge 1 ]
+}

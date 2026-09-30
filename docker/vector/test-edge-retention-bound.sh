@@ -35,6 +35,9 @@ PRUNE="$VEC/prune-retained.sh"
 B=2592000
 DAY=86400
 R=300
+# Smallest traefik.yml log.maxSize (MB) that counts as "Traefik never rotates by
+# itself": 1000000 MB = 1 TB of cumulative ERROR output, which no volume reaches.
+TRAEFIK_MAXSIZE_MIN_MB=1000000
 fail=0
 
 bad() {
@@ -119,6 +122,9 @@ done
 # ---------------------------------------------------------------------------
 STATE_PATH=""
 while IFS= read -r line; do
+  # A comment quoting the command must not stand in for it.
+  trimmed="${line#"${line%%[![:space:]]*}"}"
+  case "$trimmed" in "#"*) continue ;; esac
   case "$line" in
     *"logrotate -s /logs/processed/"*)
       rest="${line#*logrotate -s }"
@@ -184,6 +190,7 @@ while IFS=$'\t' read -r sect fp; do
 done < <(awk '
   /^[A-Za-z]/ { sect = $1; sub(/:.*/, "", sect) }
   (sect == "accessLog" || sect == "log") && $1 == "filePath:" { v = $2; gsub(/"/, "", v); print sect "\t" v }
+  sect == "log" && $1 == "maxSize:" { v = $2; gsub(/"/, "", v); print "logMaxSize\t" v }
 ' "$TRAEFIK_YML")
 
 vec_path() {
@@ -209,6 +216,19 @@ else
   vec_path "${TPATH[log]}"
   TRAEFIK_RULE="$VP"
   [ -n "$TRAEFIK_RULE" ] || bad "traefik.yml: log.filePath '${TPATH[log]}' is not directly under /logs"
+  # With log.filePath set, Traefik writes through a size-rotating writer (lumberjack):
+  # maxSize 0 means 100 MB, maxBackups 0 keeps every backup for ever, and its size
+  # counter ignores logrotate's copytruncate. Cumulative output past the cap renames
+  # the live file to traefik-<timestamp>.log, a name no rule above matches, so it
+  # would never be deleted. A cap no volume can reach leaves logrotate as the only
+  # rotator, which is what the per-family bound below assumes.
+  case "${TPATH[logMaxSize]:-}" in
+    '' | *[!0-9]*) bad "traefik.yml: log.maxSize is missing or not an integer (Traefik's own rotation, default 100 MB, would leave traefik-<timestamp>.log files no logrotate rule deletes)" ;;
+    *)
+      [ "${TPATH[logMaxSize]}" -ge "$TRAEFIK_MAXSIZE_MIN_MB" ] \
+        || bad "traefik.yml: log.maxSize ${TPATH[logMaxSize]} MB is reachable; need >= $TRAEFIK_MAXSIZE_MIN_MB so Traefik never rotates by itself"
+      ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------

@@ -141,10 +141,17 @@ providers:
 # at 14 days by the vector container's logrotate loop
 # (docker/vector/logrotate.conf, /logs/traefik/traefik.log), so the 30-day bound
 # holds structurally. Read it with `docker exec <vector> cat /logs/traefik/traefik.log`.
+# maxSize: with filePath set, Traefik writes through its own size-rotating writer
+# (0 = 100 MB, every backup kept for ever, and its size counter ignores logrotate's
+# copytruncate). Past the cap it would rename the live file to
+# traefik-<timestamp>.log, a name no logrotate rule matches and nothing deletes.
+# 1000000 MB (1 TB) is a cap no volume reaches, so logrotate is the only rotator;
+# docker/vector/test-edge-retention-bound.sh refuses anything reachable.
 log:
   level: ERROR
   format: json
   filePath: "/logs/traefik.log"
+  maxSize: 1000000
 
 # JSON access log to shared volume -- Vector tails this file.
 # Drop ClientUsername (never useful, reduces PII surface).
