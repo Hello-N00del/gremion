@@ -6,6 +6,7 @@ import { connect } from '@nats-io/transport-node'
 import type { NatsConnection } from '@nats-io/nats-core'
 import { fromSeed } from '@nats-io/nkeys'
 import { expect } from 'vitest'
+import { describeError } from './describe-error.ts'
 
 export const MODE = (process.env.NATS_AUTH_PROOF ?? '') as 'open' | 'auth'
 export const URL = process.env.NATS_AUTH_URL ?? ''
@@ -39,12 +40,15 @@ export interface Conn {
 export async function open(opts: Record<string, unknown> = {}): Promise<Conn> {
   const nc = await connect({ servers: URL, reconnect: false, timeout: 5_000, ...opts })
   const errors: string[] = []
+  // Floating on purpose (it lives as long as the connection); describeError
+  // never throws, and should the iterator itself fail, that failure is
+  // RECORDED -- a refusal check then sees it, never a silent empty list.
   void (async () => {
     for await (const s of nc.status()) {
       const e = (s as { error?: unknown }).error
-      if (s.type === 'error' && e) errors.push(e instanceof Error ? e.message : typeof e === 'string' ? e : JSON.stringify(e))
+      if (s.type === 'error' && e) errors.push(describeError(e))
     }
-  })()
+  })().catch((err: unknown) => errors.push(`status loop failed: ${describeError(err)}`))
   return { nc, errors }
 }
 
