@@ -58,7 +58,8 @@ function greenRoutes(): Record<string, unknown> {
       otpPolicyAlgorithm: 'HmacSHA1',
       otpPolicyDigits: 6,
       otpPolicyPeriod: 30,
-      attributes: { 'acr.loa.map': '{"loa1":1,"loa2":2}' },
+      // TASK-043 r4: the customer's own host (realm-doc.ts (2d))
+      attributes: { 'acr.loa.map': '{"loa1":1,"loa2":2}', frontendUrl: `https://${HOST}/auth` },
       // TASK-043 R-E5b: stamped by the host with the realm's OWN principal
       // (Keycloak answers the set password as its mask).
       smtpServer: {
@@ -185,9 +186,24 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
 
   it('missing acr.loa.map -> only acr-loa-map fails', async () => {
     const failed = await failedNames((r) => {
-      ;(r[`GET /admin/realms/${REALM}`] as any).attributes = {}
+      ;(r[`GET /admin/realms/${REALM}`] as any).attributes = { frontendUrl: `https://${HOST}/auth` }
     })
     expect(failed).toEqual(['acr-loa-map'])
+  })
+
+  // TASK-043 r4: with no frontendUrl, Keycloak (no --hostname) builds every
+  // mailed link from the ADMIN call's address (measured: the internal one).
+  it.each([
+    ['absent', undefined],
+    ['the internal address', 'https://keycloak:8443/auth'],
+    ['the apex', `https://${APEX}/auth`],
+  ])('a frontendUrl that is %s -> only frontend-url fails', async (_w, value) => {
+    const failed = await failedNames((r) => {
+      const a = (r[`GET /admin/realms/${REALM}`] as any).attributes
+      if (value === undefined) delete a.frontendUrl
+      else a.frontendUrl = value
+    })
+    expect(failed).toEqual(['frontend-url'])
   })
 
   it('wrong otpPolicy digits -> only otp-policy fails', async () => {
@@ -424,6 +440,7 @@ describe('(Q8) reconcileRealm — every realm is held to the exact per-tenant UR
       const ui = (routes[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] as any)[0]
       ui.redirectUris = ui.redirectUris.map((u: string) => u.split(HOST).join(host))
       ui.webOrigins = ui.webOrigins.map((u: string) => u.split(HOST).join(host))
+      ;(routes[`GET /admin/realms/${REALM}`] as any).attributes.frontendUrl = `https://${host}/auth`
       const { transport } = scriptedTransport(routes)
       const r = await reconcileRealm(transport, { ...opts, tenantHost: host, verifyOnly: true })
       return JSON.parse(JSON.stringify(r).split(host).join('<host>'))
@@ -564,6 +581,18 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
     expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/protocol-mappers/models'))).toBe(false)
     // after apply the report records the repair attempt for ssl-required
     expect(report.applied).toContain('ssl-required')
+  })
+
+  it('a frontendUrl on the internal address -> apply issues ONE partial realm PUT that sets the customer host and keeps acr.loa.map', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}`] as any).attributes.frontendUrl = 'https://keycloak:8443/auth'
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const puts = calls.filter((c) => c.method === 'PUT' && c.path === `/admin/realms/${REALM}`)
+    expect(puts).toHaveLength(1)
+    expect((puts[0]!.body as any).attributes.frontendUrl).toBe(`https://${HOST}/auth`)
+    expect((puts[0]!.body as any).attributes['acr.loa.map']).toBe('{"loa1":1,"loa2":2}')
+    expect(report.applied).toContain('frontend-url')
   })
 
   it('drifted browserFlow only -> apply replays the §4-2 step-up sequence (flow-exists guard; PUT after flow exists)', async () => {

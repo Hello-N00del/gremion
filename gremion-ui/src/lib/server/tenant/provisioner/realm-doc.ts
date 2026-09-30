@@ -87,6 +87,16 @@ export type ProvisionerSecretClient = (typeof PROVISIONER_SECRET_CLIENTS)[number
  * `tenant_domain.host` form (normaliseHost); anything else is refused, so the
  * issuer and the tenant's primary `tenant_domain` row can never disagree.
  */
+/**
+ * TASK-043 r4: the realm attribute `frontendUrl` -- the `/auth` base of
+ * issuerForTenant(host, realm), so the issuer and every link Keycloak mails
+ * name the customer's own host whatever address the admin call used.
+ */
+export function frontendUrlFor(host: string, realmName: string): string {
+  const issuer = issuerForTenant(host, realmName)
+  return issuer.slice(0, issuer.length - `/realms/${realmName}`.length)
+}
+
 export function issuerForTenant(host: string, realmName: string): string {
   const canonical = normaliseHost(host)
   if (!canonical || canonical !== host) {
@@ -459,6 +469,18 @@ export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
     restrictClientUris(client, tenantHost)
     // TASK-043 Q11: the native client's ONE redirect, the reversed platform domain.
     if (client.clientId === 'gremion-mobile') client.redirectUris = [mobileRedirectUri(apexDomain)]
+  }
+
+  // (2d) TASK-043 r4 (PRD-IDN-005, Q16): the realm's frontendUrl is the
+  // customer's own host. Keycloak runs with no --hostname, so without it every
+  // link it mails (the first administrators' execute-actions invitation) is
+  // built from the address the ADMIN call used -- https://keycloak:8443, which
+  // no administrator can open (measured on keycloak 26.6.1). Derived from the
+  // issuer, so the two can never disagree.
+  const attrs = (hostSwapped as Record<string, unknown>).attributes
+  ;(hostSwapped as Record<string, unknown>).attributes = {
+    ...(attrs && typeof attrs === 'object' ? (attrs as Record<string, unknown>) : {}),
+    frontendUrl: frontendUrlFor(tenantHost, realmName),
   }
 
   // (3) inject the generated per-client secrets in place of the `__*__`

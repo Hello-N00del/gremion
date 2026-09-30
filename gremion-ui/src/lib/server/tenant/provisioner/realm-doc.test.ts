@@ -128,6 +128,21 @@ describe('buildTenantRealmDoc (§4 realm contract)', () => {
     expect(JSON.stringify(doc)).not.toContain('__SSL_REQUIRED__')
   })
 
+  // TASK-043 r4 (PRD-IDN-005, Q16). Keycloak on the pooled stack has no
+  // --hostname: without the realm's frontendUrl every link it mails is built
+  // from the address the ADMIN call used. Measured on keycloak 26.6.1
+  // (KC_HOSTNAME_STRICT=false, KC_PROXY_HEADERS=xforwarded): the
+  // execute-actions link was http://127.0.0.1:8080/auth/realms/r/login-actions/
+  // ... (the internal address), and https://rat.proof.test/auth/realms/r/...
+  // once attributes.frontendUrl was set -- so the first administrators'
+  // invitation pointed at https://keycloak:8443 and could never be opened.
+  it("pins the realm's frontendUrl to the customer's host, so mailed links and the issuer never carry the internal address", () => {
+    const doc = build(cfgOff)
+    const attrs = (doc as { attributes?: Record<string, unknown> }).attributes ?? {}
+    expect(attrs.frontendUrl).toBe('https://t2.council.example/auth')
+    expect(`${attrs.frontendUrl as string}/realms/verein`).toBe(issuerForTenant('t2.council.example', 'verein'))
+  })
+
   it('strips hardcoded ids from authenticationFlows + authenticatorConfig so KC mints fresh per-realm ids (cross-realm collision)', () => {
     // The base template pins explicit ids for the #164 step-up flows + the
     // stepup-loa1/-loa2 authenticatorConfigs. Those ids are GLOBALLY unique in

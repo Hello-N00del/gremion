@@ -21,6 +21,7 @@
 // re-import is the operator's answer.
 import { KcProvisionApi, realmSeg, type KcTransport } from './kc-admin-api'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
+import { frontendUrlFor } from './realm-doc'
 import type { TenantStatus } from '../registry'
 
 /** The exact, ordered set of named checks reconcile runs (the §4 contract). */
@@ -40,6 +41,7 @@ export const RECONCILE_CHECK_NAMES = [
   'gremion-admin-sa-roles', // (A)   gremion-admin SA holds the realm-management role(s)
   'no-fixture-users', // #239   no seed-subject id and no template fixture username (TASK-043 Q10)
   'smtp-server', // TASK-043 R-E5b: the realm sends as its OWN kc-<token>@ principal, no sentinel
+  'frontend-url', // TASK-043 r4: attributes.frontendUrl == https://<tenant host>/auth (mailed links, iss)
 ] as const
 
 /** Failed checks only the HOST can repair (TASK-043 Q7): the realm's sender is
@@ -489,6 +491,13 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   if (smtp.length === 0) pass('smtp-server')
   else fail('smtp-server', `${smtp.join('; ')} (repair: host -- gremion-vendor-mail realm-smtp --realm ${realm} --tenant ${opts.sender.token} --rotate)`)
 
+  // ── TASK-043 r4: the realm's frontendUrl is the customer's own host ─────────
+  // Keycloak has no --hostname: without it every link Keycloak mails is built
+  // from the address the admin call used (the internal https://keycloak:8443).
+  const wantFrontend = frontendUrlFor(tenantHost, realm)
+  if (realmRep.attributes?.frontendUrl === wantFrontend) pass('frontend-url')
+  else fail('frontend-url', `attributes.frontendUrl is ${JSON.stringify(realmRep.attributes?.frontendUrl)} (expected ${wantFrontend}: mailed links would name another address)`)
+
   // ── (A) gremion-admin SA realm-management roles ───────────────────────────────
   // KC 26's import does NOT carry service-account role mappings reliably, so a
   // provisioned realm's gremion-admin SA can do client_credentials but every Admin
@@ -531,15 +540,17 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
 
   // sslRequired is repaired by a localized partial realm PUT that MERGES the
   // existing attributes (a full round-tripped realm rep 500s on KC 26).
-  if (failedNames.has('ssl-required')) {
+  // The frontendUrl rides on the same partial PUT (one realm write).
+  if (failedNames.has('ssl-required') || failedNames.has('frontend-url')) {
     const fresh = await get<RealmRep>('')
     // (FIX3-B) encode the realm path segment via the shared helper (matches get()).
     await transport('PUT', `/admin/realms/${realmSeg(realm)}`, {
       realm,
       sslRequired: 'all',
-      attributes: { ...fresh.attributes, 'acr.loa.map': ACR_LOA_MAP },
+      attributes: { ...fresh.attributes, 'acr.loa.map': ACR_LOA_MAP, frontendUrl: frontendUrlFor(tenantHost, realm) },
     })
-    applied.push('ssl-required')
+    if (failedNames.has('ssl-required')) applied.push('ssl-required')
+    if (failedNames.has('frontend-url')) applied.push('frontend-url')
   }
 
   // (A) The gremion-admin SA realm-management grant is mechanically repairable: the
