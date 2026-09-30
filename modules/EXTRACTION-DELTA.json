@@ -129,7 +129,7 @@
       "path": "modules/board/test/lifecycle.integration.test.ts",
       "reason": "added by R29-BOARD-STORE-K A8: enableModule / disableModule round trip, role proof, no-sleep refusal",
       "owner": "TASK-152",
-      "blob": "b134d42e1126a82fd74a497041f612fad139473b"
+      "blob": "0b479373af1a18afea75d4a8b99d115102ed6a2c"
     },
     {
       "path": "modules/board/test/no-phantom-stura-db.test.ts",

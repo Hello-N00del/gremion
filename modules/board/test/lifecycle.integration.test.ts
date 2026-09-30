@@ -57,7 +57,8 @@ const OPERATOR = { kind: 'operator' as const, id: randomUUID() }
 const GATE_TTL_MS = 5000
 
 const BOARD_DIR = fileURLToPath(new URL('../', import.meta.url))
-const EXPORT_DIR = fileURLToPath(new URL(`../../../.scratch/r29bk/exports/${process.pid}/`, import.meta.url))
+/** Inside the module (the module-source scan refuses a path leaving it); .scratch/ is gitignored. */
+const EXPORT_DIR = fileURLToPath(new URL(`../.scratch/exports/${process.pid}/`, import.meta.url))
 
 /** pg_dump / pg_restore run INSIDE the scratch container (PostgreSQL 18, the server's own major). */
 function scratchContainer(): string {
