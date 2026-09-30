@@ -36,6 +36,8 @@ vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({ provisionOr
 vi.mock('$lib/server/governance/provisioning/subsystems/keycloak', () => ({ createKeycloakSubsystem: vi.fn() }))
 vi.mock('$lib/server/tenant/context', () => ({ runWithTenant: vi.fn(), getTenant: vi.fn() }))
 vi.mock('@gremion/nats-auth', () => ({ ensureTenantAccount: vi.fn() }))
+const lc = vi.hoisted(() => ({ ensureKernelDatabase: vi.fn() }))
+vi.mock('@gremion/tenant-store/lifecycle', async (orig) => ({ ...(await orig<Record<string, unknown>>()), ensureKernelDatabase: lc.ensureKernelDatabase }))
 
 const { customerAdapters } = await import('./customer-adapters')
 
@@ -111,6 +113,34 @@ describe('customerAdapters.realm.ensureRealm', () => {
     expect(written).toEqual([])
     expect(kc.configureStepupFlow).toHaveBeenCalledWith('musterstadt')
     expect(kc.assignServiceAccountRealmRoles).toHaveBeenCalledOnce()
+  })
+})
+
+describe('customerAdapters.kernel.ensureDatabase: the PgBouncer grant (review B1, r2)', () => {
+  beforeEach(() => vi.clearAllMocks())
+  const made = (grant: 'applied' | 'skipped-no-role') => ({
+    dbName: 't_0192f1a23b4c7d5e8f60718293a4b5c6__kernel',
+    created: true,
+    owner: 'k_x_owner',
+    app: 'k_x_app',
+    purger: 'k_x_purger',
+    pgbouncerGrant: grant,
+  })
+
+  it('on a pooled host (DATABASE_URL is PgBouncer) a missing pgbouncer_auth role FAILS the step loudly, before the db secret is written', async () => {
+    lc.ensureKernelDatabase.mockResolvedValueOnce(made('skipped-no-role'))
+    const { a, written } = adapters(kcFake(true))
+    await expect(a.kernel.ensureDatabase(C)).rejects.toThrow(/pgbouncer_auth/)
+    expect(written).toEqual([])
+    expect(reg.markTenantResourceOk).not.toHaveBeenCalled()
+  })
+
+  it('with the grant applied the step completes and records the database', async () => {
+    lc.ensureKernelDatabase.mockResolvedValueOnce(made('applied'))
+    const { a, written } = adapters(kcFake(true))
+    await a.kernel.ensureDatabase(C)
+    expect(written.some((p) => p.endsWith('tenant_musterstadt_db'))).toBe(true)
+    expect(reg.markTenantResourceOk).toHaveBeenCalledWith(C.id, 'db', 't_0192f1a23b4c7d5e8f60718293a4b5c6__kernel')
   })
 })
 

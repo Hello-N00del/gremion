@@ -96,6 +96,12 @@ function authorityOf(url: string, what: string): { scheme: string; hostPort: str
   return { scheme: m[1]!, hostPort: m[2]!, query: m[3] ?? '' }
 }
 
+/** The runtime DATABASE_URL goes through PgBouncer (the pooled stack: pgbouncer-<stack>:6432). */
+function isPooled(runtimeDatabaseUrl: string): boolean {
+  const hostPort = authorityOf(runtimeDatabaseUrl, 'DATABASE_URL').hostPort
+  return /pgbouncer/i.test(hostPort) || /:6432$/.test(hostPort)
+}
+
 function dbUrl(base: string, user: string, password: string, db: string, extraQuery = ''): string {
   const a = authorityOf(base, 'database url')
   const q = [a.query.replace(/^\?/, ''), extraQuery].filter(Boolean).join('&')
@@ -264,6 +270,18 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         const server = kernelServer(o.kernelAdminUrl)
         try {
           const r = await ensureKernelDatabase(server, c.id, appPassword)
+          // Behind PgBouncer the tenant's app role is resolved through
+          // pgbouncer.get_auth as pgbouncer_auth; without that role every pooled
+          // connection fails at runtime, far from here. Fail the step instead
+          // (the ledger keeps it not-done, so a rerun re-applies the grants).
+          if (r.pgbouncerGrant !== 'applied') {
+            if (isPooled(o.runtimeDatabaseUrl)) {
+              throw new Error(
+                `the kernel server has no pgbouncer_auth role, so PgBouncer cannot resolve ${r.app} for ${r.dbName}: create it (docs/runbooks/pgbouncer.md) and rerun create`,
+              )
+            }
+            log(`kernel database ${r.dbName}: no pgbouncer_auth role on the kernel server (the runtime DATABASE_URL is direct, so none is needed)`)
+          }
           if (!dbSecret) {
             await o.writeSecretFile(hostPath(secretName.db(c.slug)), dbUrl(o.runtimeDatabaseUrl, r.app, appPassword, r.dbName))
           }

@@ -40,6 +40,14 @@ export interface EnsureKernelResult extends KernelRoles {
   dbName: string
   /** true when this call created the database. */
   created: boolean
+  /**
+   * Whether PgBouncer's auth role got USAGE on schema pgbouncer and EXECUTE on
+   * get_auth. 'skipped-no-role': the server has no pgbouncer_auth role, which
+   * is fine for a direct-only server and FATAL behind PgBouncer (auth_query
+   * cannot resolve the app role): the caller, which knows whether the tenant
+   * runtime is pooled, must fail on it (review B1, r2; never silent).
+   */
+  pgbouncerGrant: 'applied' | 'skipped-no-role'
 }
 
 function assertTenant(tenantId: string): string {
@@ -139,6 +147,7 @@ export async function ensureKernelDatabase(server: ModuleServer, tenantId: strin
   await execFormatted(server.admin, 'ALTER DATABASE %I SET timezone TO %L', [dbName, 'UTC'])
 
   const db = await server.open(dbName)
+  let pgbouncerGrant: EnsureKernelResult['pgbouncerGrant'] = 'skipped-no-role'
   try {
     const [who] = await db<{ db: string }[]>`SELECT current_database() AS db`
     if (who?.db !== dbName) throw new LifecycleError('TARGET_REFUSED', `the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
@@ -148,11 +157,12 @@ export async function ensureKernelDatabase(server: ModuleServer, tenantId: strin
     if (auth?.present) {
       await db.unsafe('GRANT USAGE ON SCHEMA pgbouncer TO pgbouncer_auth')
       await db.unsafe('GRANT EXECUTE ON FUNCTION pgbouncer.get_auth(text) TO pgbouncer_auth')
+      pgbouncerGrant = 'applied'
     }
   } finally {
     await db.end({ timeout: 5 })
   }
-  return { dbName, created, ...roles }
+  return { dbName, created, ...roles, pgbouncerGrant }
 }
 
 /** The inverse, for delete: DROP DATABASE ... WITH (FORCE), then the three roles. Idempotent. */

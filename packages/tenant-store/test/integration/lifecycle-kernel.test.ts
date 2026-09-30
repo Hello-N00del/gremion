@@ -57,8 +57,9 @@ describe('ensureKernelDatabase (TDD 5)', () => {
   })
 
   afterAll(async () => {
-    await dropKernelDatabase(server, X).catch(() => {})
-    await dropKernelDatabase(server, Y).catch(() => {})
+    // logged, never swallowed: a leftover kernel db or role on the shared harness server must be visible (review B1 LOW, r2)
+    await dropKernelDatabase(server, X).catch((e: unknown) => console.error('[t043] teardown left the kernel db of', X, e))
+    await dropKernelDatabase(server, Y).catch((e: unknown) => console.error('[t043] teardown left the kernel db of', Y, e))
     await server.admin.unsafe('DROP ROLE IF EXISTS t043_probe')
     await server.close()
   })
@@ -163,6 +164,29 @@ describe('ensureKernelDatabase (TDD 5)', () => {
     } finally {
       await server.admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
       for (const role of Object.values(kernelRoles(Z))) await server.admin.unsafe(`DROP ROLE IF EXISTS ${role}`)
+    }
+  })
+
+  it('reports the PgBouncer grant: skipped without a pgbouncer_auth role, applied (EXECUTE on get_auth) with one (review B1, r2)', async () => {
+    const V = uuidv7()
+    const had = (await server.admin`SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer_auth'`).length === 1
+    try {
+      if (!had) {
+        expect((await ensureKernelDatabase(server, V, pwX)).pgbouncerGrant).toBe('skipped-no-role')
+        await server.admin.unsafe('CREATE ROLE pgbouncer_auth NOLOGIN')
+      }
+      const r = await ensureKernelDatabase(server, V, pwX)
+      expect(r.pgbouncerGrant).toBe('applied')
+      const db = server.open(kernelDbName(V))
+      try {
+        const [p] = await db<{ ok: boolean }[]>`SELECT has_function_privilege('pgbouncer_auth', 'pgbouncer.get_auth(text)', 'EXECUTE') AS ok`
+        expect(p?.ok).toBe(true)
+      } finally {
+        await db.end({ timeout: 5 })
+      }
+    } finally {
+      await dropKernelDatabase(server, V).catch((e: unknown) => console.error('[t043] teardown left the kernel db of', V, e))
+      if (!had) await server.admin.unsafe('DROP ROLE IF EXISTS pgbouncer_auth')
     }
   })
 
