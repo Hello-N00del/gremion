@@ -52,7 +52,7 @@ import {
 } from '@gremion/provisioning'
 import { assertPlatform, dropKernelDatabase, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
-import { validateSlug } from '../src/lib/server/tenant/slug'
+import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
 import { normaliseHost } from '../src/lib/server/tenant/host'
 import { isReservedPlatformHost } from '../src/lib/server/tenant/reserved-hosts'
 import {
@@ -340,7 +340,7 @@ function moduleServerFor(adminUrl: string): ModuleServer & { close(): Promise<vo
       return sql
     },
     async close() {
-      await Promise.all([admin, ...pools].map((s) => s.end({ timeout: 5 }).catch(() => {})))
+      await Promise.all([admin, ...pools].map((s) => s.end({ timeout: 5 }).catch((e: unknown) => log(`WARNING: a module server pool did not close: ${e instanceof Error ? e.message : String(e)}`))))
     },
   }
 }
@@ -487,7 +487,13 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
   if (await kc.realmExists(OPS_REALM)) {
     const rep = (await raw('GET', `/admin/realms/${OPS_REALM}`)) as { attributes?: Record<string, string> }
     const have = rep?.attributes?.[OPS_FINGERPRINT_ATTR]
-    if (have === fingerprint) return { created: false }
+    if (have === fingerprint) {
+      // Idempotent and re-asserted on every init (review B2, r2): a step-up
+      // setup that failed after createRealm must not stay missing because the
+      // fingerprint (imported with the realm) already matches.
+      await kc.configureStepupFlow(OPS_REALM)
+      return { created: false }
+    }
     throw new ProvisioningError('PRECONDITION', `realm ${OPS_REALM} exists but differs from realm-export.ops.json for panel origin ${origin} (fingerprint ${have ?? 'absent'}): refusing to overwrite an ops realm by hand`)
   }
   const secretPath = process.env.OPS_CLIENT_SECRET_FILE ?? join(tenantSecretsDir(), 'platform_client_control-panel')
@@ -496,7 +502,8 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
     clients: Array<Record<string, unknown>>
     attributes?: Record<string, string>
   }
-  const client = doc.clients.find((c) => c.clientId === 'control-panel')!
+  const client = doc.clients.find((c) => c.clientId === 'control-panel')
+  if (!client) throw new ProvisioningError('PRECONDITION', 'realm-export.ops.json carries no control-panel client')
   client.redirectUris = [`${origin}/*`]
   client.webOrigins = [origin]
   client.attributes = { ...(client.attributes as Record<string, string>), 'post.logout.redirect.uris': `${origin}/*` }
@@ -651,9 +658,20 @@ async function cmdOperatorAdd(): Promise<void> {
   // with a generated TEMPORARY password (UPDATE_PASSWORD + CONFIGURE_TOTP stay
   // required), handed to Keycloak in the request body, printed ONCE on stdout.
   const raw = rawProvisionerTransport()
-  const found = ((await raw('GET', `/admin/realms/${OPS_REALM}/users?email=${encodeURIComponent(email.toLowerCase())}&exact=true`)) as Array<{ id: string }>) ?? []
+  const found = ((await raw('GET', `/admin/realms/${OPS_REALM}/users?email=${encodeURIComponent(email.toLowerCase())}&exact=true`)) as Array<{ id: string; requiredActions?: string[] }>) ?? []
   if (found.length) {
-    log(`operator ${email} already exists: no password is set or printed`)
+    // A rerun re-asserts the role (idempotent) -- a first run that died after
+    // the create left a user without it (review B2, r2) -- and never exits 0
+    // for a user nobody can sign in as: a pending UPDATE_PASSWORD means the
+    // printed temporary password may be lost.
+    const role = await raw('GET', `/admin/realms/${OPS_REALM}/roles/operator`)
+    await raw('POST', `/admin/realms/${OPS_REALM}/users/${found[0]!.id}/role-mappings/realm`, [role])
+    if ((found[0]!.requiredActions ?? []).includes('UPDATE_PASSWORD')) {
+      throw new Error(
+        `operator ${email} exists (operator role re-asserted) but has never set a password: if the temporary password was not received, reset it in Keycloak (Credentials, temporary) or delete the user and rerun operator-add`,
+      )
+    }
+    log(`operator ${email} already exists: the operator role is held; no password is set or printed`)
     return
   }
   const temporary = randomBytes(18).toString('base64url')
@@ -755,7 +773,38 @@ async function cmdDelete(): Promise<void> {
   const slug = slugArg('delete')
   const kc = provisionerKc()
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
+  // Never report DELETED while the customer's data survives (review B2, r2).
+  // Refused BEFORE anything is shredded: a pre-TASK-043 t_<slug> database
+  // (dropKernelDatabase only knows t_<hex32>__kernel), and live per-customer
+  // module databases (delete has no module drop yet: the disable verb is
+  // TASK-044/077's). Both are named residuals, never silent.
+  const tenant = await getTenantBySlug(slug)
+  if (tenant && tenant.status !== 'deleted') {
+    try {
+      const legacy = dbNameForSlug(slug)
+      if ((await server.admin`SELECT 1 FROM pg_database WHERE datname = ${legacy}`).length) {
+        throw new UsageError(`${slug} still has the pre-TASK-043 database ${legacy}; delete does not drop it -- drop it (and its role) by hand first, then rerun delete`)
+      }
+      const platformUrl = process.env.PLATFORM_DATABASE_URL
+      if (!platformUrl) throw new UsageError('delete needs PLATFORM_DATABASE_URL to prove the customer has no enabled module database left')
+      const platform = postgres(directPostgresUrl('PLATFORM_DATABASE_URL', platformUrl), { max: 1, onnotice: () => {}, connect_timeout: 15 })
+      try {
+        const live = await platform<{ module_key: string }[]>`
+          SELECT m.module_key FROM plt.module_database d JOIN plt.module m USING (module_id)
+           WHERE d.customer_id = ${tenant.id} AND d.state <> 'dropped' ORDER BY 1`
+        if (live.length) {
+          throw new UsageError(`${slug} has module(s) ${live.map((r) => r.module_key).join(', ')} enabled with their own databases; delete does not drop module databases yet -- disable them first (TASK-044/077), then rerun delete`)
+        }
+      } finally {
+        await platform.end({ timeout: 5 })
+      }
+    } catch (err) {
+      await server.close()
+      throw err
+    }
+  }
   const leaf = makeLeafShredExecutor()
+  const kernelDb: { dropped: boolean | null } = { dropped: null }
   const deps: DeleteDeps = {
     shredSecretFiles: (paths) => {
       for (const p of paths) if (existsSync(p)) rmSync(p, { force: true })
@@ -763,7 +812,7 @@ async function cmdDelete(): Promise<void> {
     },
     db: {
       dropKernelDatabase: async (tenantId) => {
-        await dropKernelDatabase(server, tenantId)
+        kernelDb.dropped = (await dropKernelDatabase(server, tenantId)).dropped
       },
     },
     kc: { deleteRealm: (realm) => kc.deleteRealm(realm) },
@@ -773,7 +822,8 @@ async function cmdDelete(): Promise<void> {
   }
   try {
     const result = await deleteTenant(slug, deps)
-    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, kernel database and realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
+    const kernel = kernelDb.dropped === true ? 'kernel database dropped' : kernelDb.dropped === false ? 'no kernel database was present' : 'kernel database not touched'
+    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
   } finally {
     await server.close()
   }
