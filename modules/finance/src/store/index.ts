@@ -3966,6 +3966,61 @@ async function assertBankTransactionOwnScopeWritable(
   throw lastDenial ?? new Error(`bank_account#${bankAccountId}: no writable org unit`)
 }
 
+// ── F1-FIX-05-K: write scope for the sub-org sagas and the bank-account ops ──────
+// (H15 / S1b#27; H14 leaf twin / K4#34). These handlers used to run with no actor at
+// all: any caller holding the internal secret -- i.e. any Finance user behind the ACL
+// -- could create / rename / delete any sub-org and reconfigure, sync or inject CSV
+// transactions into any bank account. The actor rides the ACL headers like every
+// other write op; an absent actor is the fail-closed deny scope.
+
+/** Create gate (native parity: services/write/sub-org.ts gates createSubOrg on the
+ *  PARENT org unit, since the new sub-org has no id yet). The parent is the explicit
+ *  `parentOrgUnitId` when the caller sends one, else the central finance_unit's org
+ *  unit (every StuFis-era sub-org is parented under central, which is what the
+ *  service-mode saga does). No resolvable parent -> only a superuser may create. */
+export async function assertSubOrgCreateAllowed(
+  sql: Sql, actor: ActorContext, parentOrgUnitId: string | undefined,
+): Promise<void> {
+  if (actor.isSuperuser) return
+  let parent = parentOrgUnitId
+  if (parent === undefined) {
+    const rows = await sql<{ org_unit_id: string }[]>`
+      SELECT org_unit_id FROM finance.finance_unit WHERE kind = 'central' LIMIT 1`
+    parent = rows[0]?.org_unit_id
+  }
+  if (parent === undefined) throw new AccessDeniedError(actor.userId, 'central')
+  assertOrgUnitWritable(actor, parent)
+}
+
+/** Update / delete gate (native parity: updateSubOrg / deleteSubOrg gate on the
+ *  sub-org's OWN org unit). Returns false when the finance_unit does not exist (the
+ *  handler keeps its 404); throws AccessDeniedError (403) on a scope denial. */
+export async function assertFinanceUnitWritable(
+  sql: Sql, actor: ActorContext, financeUnitId: string | number,
+): Promise<boolean> {
+  const rows = await sql<{ org_unit_id: string }[]>`
+    SELECT org_unit_id FROM finance.finance_unit WHERE id = ${financeUnitId}`
+  if (rows.length === 0) return false
+  assertOrgUnitWritable(actor, rows[0]!.org_unit_id)
+  return true
+}
+
+/** configureFints / syncFints / csvImport gate: the actor must be able to write at
+ *  least one finance_unit whose ledger_account is backed by the bank account (the
+ *  same ANY-of predicate the split allocation uses; native read/fints.ts shape). A
+ *  superuser passes; an account no ledger backs is refused for everyone else (so an
+ *  unknown id is indistinguishable from an out-of-scope one). */
+export async function assertBankAccountWritable(
+  sql: Sql, actor: ActorContext, bankAccountId: string | number,
+): Promise<void> {
+  if (actor.isSuperuser) return
+  if (actor.isAuditor) throw new AccessDeniedError(actor.userId, `bank_account#${bankAccountId}`)
+  const rows = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM finance.ledger_account WHERE bank_account_id = ${bankAccountId}`
+  if ((rows[0]?.n ?? 0) === 0) throw new AccessDeniedError(actor.userId, `bank_account#${bankAccountId}`)
+  await assertBankTransactionOwnScopeWritable(sql, actor, String(bankAccountId))
+}
+
 /** TASK-009 verifier item 5b: lock a payment_order FOR UPDATE and assert the
  *  actor may write its owning org unit (PO -> expense -> finance_unit) BEFORE
  *  anything about it — existence, state, expense link — is revealed. A

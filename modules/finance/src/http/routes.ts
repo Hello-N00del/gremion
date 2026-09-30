@@ -44,6 +44,9 @@ import {
   updateFinanceUnitById,
   deleteFinanceUnitForSubOrg,
   countOrgUnitFinanceRefs,
+  assertSubOrgCreateAllowed,
+  assertFinanceUnitWritable,
+  assertBankAccountWritable,
   FinanceValidationError,
   AccessDeniedError,
   ApprovalWorkflowError,
@@ -536,14 +539,18 @@ function createSubOrgHandler(storeFn: StoreFn): RouteHandler {
     const body = await readJsonBody(req)
     const orgUnitId = str(body.org_unit_id)
     if (!orgUnitId) return sendJson(res, 400, { success: false, error: 'org_unit_id (string) is required' })
-    const sql = await storeFn(tenant)
-    const fu = await insertFinanceUnit(sql, {
-      orgUnitId,
-      kind: str(body.kind),
-      bookkeepingMode: str(body.bookkeeping_mode),
-      carryOverRule: str(body.carry_over_rule),
+    await runStore(res, async () => {
+      const sql = await storeFn(tenant)
+      // F1-FIX-05-K (H15): the write actor must be able to write the parent org unit.
+      await assertSubOrgCreateAllowed(sql, actorFromHeaders(req), str(body.parent_org_unit_id))
+      const fu = await insertFinanceUnit(sql, {
+        orgUnitId,
+        kind: str(body.kind),
+        bookkeepingMode: str(body.bookkeeping_mode),
+        carryOverRule: str(body.carry_over_rule),
+      })
+      sendJson(res, 200, fu)
     })
-    sendJson(res, 200, fu)
   }
 }
 
@@ -561,30 +568,42 @@ function updateSubOrgHandler(storeFn: StoreFn): RouteHandler {
   return async (ctx: RouteContext): Promise<void> => {
     const { req, res, tenant, params } = ctx as ApiContext
     const body = await readJsonBody(req)
-    const sql = await storeFn(tenant)
-    const fu = await updateFinanceUnitById(sql, params.id!, {
-      bookkeepingMode: str(body.bookkeeping_mode),
-      carryOverRule: str(body.carry_over_rule),
+    await runStore(res, async () => {
+      const sql = await storeFn(tenant)
+      // F1-FIX-05-K (H15): the write actor must be able to write the sub-org itself.
+      if (!(await assertFinanceUnitWritable(sql, actorFromHeaders(req), params.id!))) {
+        return sendJson(res, 404, { success: false, error: 'sub-org not found' })
+      }
+      const fu = await updateFinanceUnitById(sql, params.id!, {
+        bookkeepingMode: str(body.bookkeeping_mode),
+        carryOverRule: str(body.carry_over_rule),
+      })
+      if (!fu) return sendJson(res, 404, { success: false, error: 'sub-org not found' })
+      sendJson(res, 200, fu)
     })
-    if (!fu) return sendJson(res, 404, { success: false, error: 'sub-org not found' })
-    sendJson(res, 200, fu)
   }
 }
 
 function deleteSubOrgHandler(storeFn: StoreFn): RouteHandler {
   return async (ctx: RouteContext): Promise<void> => {
-    const { res, tenant, params } = ctx as ApiContext
-    const sql = await storeFn(tenant)
-    const result = await deleteFinanceUnitForSubOrg(sql, params.id!)
-    if (result.status === 'not_found') return sendJson(res, 404, { success: false, error: 'sub-org not found' })
-    if (result.status === 'blocked') {
-      return sendJson(res, 409, {
-        success: false,
-        error: 'sub-org still referenced by finance rows (RESTRICT)',
-        counts: result.counts,
-      })
-    }
-    sendJson(res, 200, { org_unit_id: result.orgUnitId })
+    const { req, res, tenant, params } = ctx as ApiContext
+    await runStore(res, async () => {
+      const sql = await storeFn(tenant)
+      // F1-FIX-05-K (H15): the write actor must be able to write the sub-org itself.
+      if (!(await assertFinanceUnitWritable(sql, actorFromHeaders(req), params.id!))) {
+        return sendJson(res, 404, { success: false, error: 'sub-org not found' })
+      }
+      const result = await deleteFinanceUnitForSubOrg(sql, params.id!)
+      if (result.status === 'not_found') return sendJson(res, 404, { success: false, error: 'sub-org not found' })
+      if (result.status === 'blocked') {
+        return sendJson(res, 409, {
+          success: false,
+          error: 'sub-org still referenced by finance rows (RESTRICT)',
+          counts: result.counts,
+        })
+      }
+      sendJson(res, 200, { org_unit_id: result.orgUnitId })
+    })
   }
 }
 
@@ -1126,6 +1145,8 @@ function csvImportHandler(storeFn: StoreFn): RouteHandler {
     const csvOrderReversed = parts.find((p) => p.name === 'csv_order_reversed')?.data.toString('utf8') === 'true'
     try {
       const sql = await storeFn(tenant)
+      // F1-FIX-05-K (K4#34): only an actor who may write a unit backed by this account.
+      await assertBankAccountWritable(sql, actorFromHeaders(req), Number(params.id))
       const result = await importCsv(sql, Number(params.id), file.data.toString('utf8'), mapping, csvOrderReversed)
       sendJson(res, 200, result)
     } catch (err) {
@@ -1134,6 +1155,9 @@ function csvImportHandler(storeFn: StoreFn): RouteHandler {
       }
       if (err instanceof BankAccountNotFoundError) {
         return sendJson(res, 404, { success: false, error: err.message })
+      }
+      if (err instanceof AccessDeniedError) {
+        return sendJson(res, 403, { success: false, error: err.message, code: 'ACCESS_DENIED' })
       }
       throw err
     }
@@ -1156,6 +1180,8 @@ function configureFintsHandler(storeFn: StoreFn): RouteHandler {
     }
     try {
       const sql = await storeFn(tenant)
+      // F1-FIX-05-K (K4#34): only an actor who may write a unit backed by this account.
+      await assertBankAccountWritable(sql, actorFromHeaders(req), Number(params.id))
       const config = await configureFints(sql, Number(params.id), {
         fints_url: fintsUrl,
         bank_code: bankCode,
@@ -1167,6 +1193,9 @@ function configureFintsHandler(storeFn: StoreFn): RouteHandler {
       if (err instanceof FintsConfigValidationError) {
         return sendJson(res, 400, { success: false, error: err.message })
       }
+      if (err instanceof AccessDeniedError) {
+        return sendJson(res, 403, { success: false, error: err.message, code: 'ACCESS_DENIED' })
+      }
       throw err // incl. a missing FINANCE_FINTS_PASSWORD_KEY → 500 (native parity)
     }
   }
@@ -1174,13 +1203,18 @@ function configureFintsHandler(storeFn: StoreFn): RouteHandler {
 
 function syncFintsHandler(storeFn: StoreFn): RouteHandler {
   return async (ctx: RouteContext): Promise<void> => {
-    const { res, tenant, params } = ctx as ApiContext
+    const { req, res, tenant, params } = ctx as ApiContext
     try {
       const sql = await storeFn(tenant)
+      // F1-FIX-05-K (K4#34): only an actor who may write a unit backed by this account.
+      await assertBankAccountWritable(sql, actorFromHeaders(req), Number(params.id))
       sendJson(res, 200, await syncFints(sql, Number(params.id)))
     } catch (err) {
       if (err instanceof FintsSyncNotFoundError) {
         return sendJson(res, 404, { success: false, error: err.message })
+      }
+      if (err instanceof AccessDeniedError) {
+        return sendJson(res, 403, { success: false, error: err.message, code: 'ACCESS_DENIED' })
       }
       throw err
     }

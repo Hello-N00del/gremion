@@ -133,6 +133,11 @@ const SAGA_HEADERS = {
   'x-tenant-id': SAGA_TENANT.id,
   'x-tenant-slug': SAGA_TENANT.slug,
   'content-type': 'application/json',
+  // F1-FIX-05-K (H15): the sub-org sagas carry the write actor; these saga-mechanics
+  // tests run as a runtime superuser (the scope matrix is leaf-write-scope.integration).
+  'x-finance-user-id': 'saga-su',
+  'x-finance-is-auditor': 'false',
+  'x-finance-is-superuser': 'true',
 }
 const OU_A = '11111111-aaaa-4aaa-8aaa-111111111111'
 const OU_B = '22222222-bbbb-4bbb-8bbb-222222222222'

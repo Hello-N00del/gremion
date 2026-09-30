@@ -50,8 +50,18 @@ const BASE_HEADERS = {
   'x-tenant-id': TENANT.id,
   'x-tenant-slug': TENANT.slug,
 }
-const JSON_HEADERS = { ...BASE_HEADERS, 'content-type': 'application/json' }
 const OU_1 = 'e1111111-aaaa-4aaa-8aaa-e11111111111'
+// F1-FIX-05-K (K4#34): csvImport / configureFints / syncFints carry the write actor.
+// WRITER_1 may write OU_1, whose ledger the bank account backs; SUPER is the runtime
+// see-all (used where a test targets an account no ledger backs, to reach the 404).
+const WRITER_1 = {
+  'x-finance-user-id': 'fin-1', 'x-finance-is-auditor': 'false', 'x-finance-is-superuser': 'false',
+  'x-finance-scoped-org-units': OU_1,
+}
+const SUPER = { 'x-finance-user-id': 'su', 'x-finance-is-auditor': 'false', 'x-finance-is-superuser': 'true' }
+const WRITER_HEADERS = { ...BASE_HEADERS, ...WRITER_1 }
+const JSON_HEADERS = { ...BASE_HEADERS, 'content-type': 'application/json', ...WRITER_1 }
+const SUPER_JSON_HEADERS = { ...BASE_HEADERS, 'content-type': 'application/json', ...SUPER }
 const OU_2 = 'e2222222-bbbb-4bbb-8bbb-e22222222222'
 
 type Scope = { isAuditor: boolean; isSuperuser: boolean; orgUnits: string[] }
@@ -228,8 +238,8 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
       f.append('csv_order_reversed', String(reversed))
       return f
     }
-    const post = (accountId: string | number, body: FormData) =>
-      fetch(`${base}/api/v1/bank-accounts/${accountId}/csv-import`, { method: 'POST', headers: BASE_HEADERS, body })
+    const post = (accountId: string | number, body: FormData, headers: Record<string, string> = WRITER_HEADERS) =>
+      fetch(`${base}/api/v1/bank-accounts/${accountId}/csv-import`, { method: 'POST', headers, body })
 
     it('imports both rows and persists the canonical columns', async () => {
       const res = await post(bankAccountId, form(CSV, MAPPING, false))
@@ -265,7 +275,7 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
     })
 
     it('unknown bank account → 404', async () => {
-      const res = await post(999999, form(CSV, MAPPING, false))
+      const res = await post(999999, form(CSV, MAPPING, false), { ...BASE_HEADERS, ...SUPER })
       expect(res.status).toBe(404)
     })
 
@@ -359,7 +369,7 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
     it('an account without a fints_config → 404 (native missing-config throw)', async () => {
       const bare = (await sql<{ id: string }[]>`
         INSERT INTO finance.bank_account (name, iban) VALUES ('Ohne FinTS', 'DE02100100100006820101') RETURNING id`)[0]!.id
-      const res = await fetch(`${base}/api/v1/bank-accounts/${bare}/fints/sync`, { method: 'POST', headers: JSON_HEADERS })
+      const res = await fetch(`${base}/api/v1/bank-accounts/${bare}/fints/sync`, { method: 'POST', headers: SUPER_JSON_HEADERS })
       expect(res.status).toBe(404)
     })
   })
