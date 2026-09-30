@@ -4086,6 +4086,50 @@ async function lockMoneyPaymentOrderInScope(
   return { po, exp: expRows[0]! }
 }
 
+/** F1-FIX-05-K (K4#35): a booking's Titel must be one the actor may write (Titel ->
+ *  group -> section -> finance_unit -> org_unit) and must belong to the plan of the
+ *  booked fiscal year. Before this, payout and split bookings accepted any Titel id
+ *  and any fiscal year id, so a writer of unit A could charge unit B's budget or book
+ *  into a year the Titel does not belong to. Unknown Titel -> 422. */
+async function assertTitelBookable(
+  tx: Sql, actor: ActorContext, budgetTitelId: number, fiscalYearId: number,
+): Promise<void> {
+  const rows = await tx<{ org_unit_id: string; fiscal_year_id: string }[]>`
+    SELECT fu.org_unit_id, bp.fiscal_year_id
+    FROM finance.budget_titel bt
+    JOIN finance.budget_group bg ON bg.id = bt.budget_group_id
+    JOIN finance.budget_section bs ON bs.id = bg.budget_section_id
+    JOIN finance.budget_plan bp ON bp.id = bs.budget_plan_id
+    JOIN finance.finance_unit fu ON fu.id = bs.finance_unit_id
+    WHERE bt.id = ${budgetTitelId}`
+  if (rows.length === 0) throw new FinanceUnprocessableError(`budget_titel#${budgetTitelId} not found`)
+  assertOrgUnitWritable(actor, rows[0]!.org_unit_id)
+  if (Number(rows[0]!.fiscal_year_id) !== fiscalYearId) {
+    throw new FinanceUnprocessableError(
+      `budget_titel#${budgetTitelId} belongs to fiscal_year#${rows[0]!.fiscal_year_id}, not fiscal_year#${fiscalYearId}`,
+    )
+  }
+}
+
+/** F1-FIX-05-K (K4#17): the amount a payment order authorises -- the amount snapshot
+ *  of the expense's latest APPROVED approval (what the Vier-Augen signers signed off),
+ *  else the sum of the expense's receipt items (a payment order created outside the
+ *  approval workflow, e.g. migrated data). */
+async function authorisedPayoutCents(tx: Sql, expenseId: number): Promise<number> {
+  const snap = await tx<{ amount_cents: string | null }[]>`
+    SELECT amount_cents FROM finance.approval
+    WHERE approvable_type = 'expense' AND approvable_id = ${expenseId} AND status = 'approved'
+      AND amount_cents IS NOT NULL
+    ORDER BY id DESC LIMIT 1`
+  if (snap.length > 0 && snap[0]!.amount_cents !== null) return Number(snap[0]!.amount_cents)
+  const sum = await tx<{ total: string }[]>`
+    SELECT COALESCE(SUM(ri.amount_cents), 0)::text AS total
+    FROM finance.receipt_item ri
+    JOIN finance.receipt r ON r.id = ri.receipt_id
+    WHERE r.expense_id = ${expenseId}`
+  return Number(sum[0]?.total ?? 0)
+}
+
 interface RecordPayoutParams {
   paymentOrderId: number
   ledgerAccountId: number
@@ -4123,6 +4167,16 @@ async function doRecordPayout(
   }
   if (!p.enforceCashBox && ledger.type === 'cash_box') {
     throw new FinanceStateError('ledger_account: cash_box -> manual-payout is not a valid transition')
+  }
+
+  // F1-FIX-05-K (K4#35, K4#17): the Titel is in scope and in the booked year, and the
+  // payout moves exactly the authorised amount (never a caller-chosen one).
+  await assertTitelBookable(tx, actor, p.budgetTitelId, p.fiscalYearId)
+  const authorised = await authorisedPayoutCents(tx, po.expense_id)
+  if (p.amountCents !== authorised) {
+    throw new FinanceUnprocessableError(
+      `payment_order#${p.paymentOrderId}: payout amount does not match the authorised amount`,
+    )
   }
 
   const receiptRows = await tx<{ id: string }[]>`
@@ -4287,6 +4341,8 @@ export async function allocateSplit(
           `ledger_account#${part.ledgerAccountId}: bank_account mismatch -> split-allocation is not a valid transition`,
         )
       }
+      // F1-FIX-05-K (K4#35): each part's Titel is in scope and in the part's year.
+      await assertTitelBookable(tx, actor, part.budgetTitelId, part.fiscalYearId)
     }
 
     const dateRows = await tx<{ booking_date: Date | string }[]>`

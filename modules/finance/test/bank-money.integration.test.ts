@@ -247,6 +247,106 @@ describe('R2-C3 money ops — real Postgres round-trip', () => {
     })
   })
 
+  // F1-FIX-05-K (K4#35, K4#17): the payout amount is the authorised amount, and the
+  // booked Titel must be writable by the actor and belong to the booked fiscal year.
+  describe('payout amount + Titel scope (F1-FIX-05-K)', () => {
+    /** A Titel in unit B's section of the same plan (outside ACTOR_A's scope). */
+    async function titelOfUnitB(): Promise<number> {
+      const plan = await sql<{ budget_plan_id: string }[]>`
+        SELECT bs.budget_plan_id FROM finance.budget_titel bt
+        JOIN finance.budget_group bg ON bg.id = bt.budget_group_id
+        JOIN finance.budget_section bs ON bs.id = bg.budget_section_id WHERE bt.id = ${fx.titelId}`
+      const sec = await sql<{ id: string }[]>`
+        INSERT INTO finance.budget_section (budget_plan_id, finance_unit_id, preparation_state)
+        VALUES (${Number(plan[0]!.budget_plan_id)}, ${fx.financeUnitB}, 'submitted_to_central') RETURNING id`
+      const grp = await sql<{ id: string }[]>`
+        INSERT INTO finance.budget_group (budget_section_id, name, budget_type)
+        VALUES (${Number(sec[0]!.id)}, 'GB', 'expense') RETURNING id`
+      const t = await sql<{ id: string }[]>`
+        INSERT INTO finance.budget_titel (budget_group_id, titel_nr, titel_name, planned_cents, deckungsfaehig)
+        VALUES (${Number(grp[0]!.id)}, '002', 'TB', 1000, false) RETURNING id`
+      return Number(t[0]!.id)
+    }
+    const bookingsCount = async () =>
+      Number((await sql<{ n: string }[]>`SELECT count(*)::text AS n FROM finance.booking`)[0]!.n)
+
+    it('a payout amount that differs from the authorised amount is refused (422) and nothing is booked', async () => {
+      await expect(
+        recordManualPayout(sql, ACTOR_A, {
+          paymentOrderId: fx.paymentOrderId, ledgerAccountId: fx.ledgerOwnA,
+          budgetTitelId: fx.titelId, fiscalYearId: fx.fiscalYearId,
+          amountCents: 999999, paidAt: '2026-06-15', reference: 'ref',
+        }),
+      ).rejects.toBeInstanceOf(FinanceUnprocessableError)
+      await expect(
+        recordCashPayout(sql, ACTOR_A, {
+          paymentOrderId: fx.paymentOrderId, cashBoxLedgerId: fx.ledgerCashA,
+          budgetTitelId: fx.titelId, fiscalYearId: fx.fiscalYearId,
+          amountCents: 1, paidAt: '2026-06-15',
+        }),
+      ).rejects.toBeInstanceOf(FinanceUnprocessableError)
+      expect(await bookingsCount()).toBe(0)
+      const po = await sql<{ state: string }[]>`SELECT state FROM finance.payment_order WHERE id = ${fx.paymentOrderId}`
+      expect(po[0]!.state).toBe('authorised')
+    })
+
+    it("the approved approval's amount snapshot is the authorised amount when one exists", async () => {
+      await sql`INSERT INTO finance.approval (approvable_type, approvable_id, created_by, amount_cents, status, decided_at)
+                VALUES ('expense', ${fx.expenseA}, 'creator', 4000, 'approved', now())`
+      await expect(
+        recordManualPayout(sql, ACTOR_A, {
+          paymentOrderId: fx.paymentOrderId, ledgerAccountId: fx.ledgerOwnA,
+          budgetTitelId: fx.titelId, fiscalYearId: fx.fiscalYearId,
+          amountCents: 4500, paidAt: '2026-06-15', reference: 'ref',
+        }),
+      ).rejects.toBeInstanceOf(FinanceUnprocessableError)
+      const ok = await recordManualPayout(sql, ACTOR_A, {
+        paymentOrderId: fx.paymentOrderId, ledgerAccountId: fx.ledgerOwnA,
+        budgetTitelId: fx.titelId, fiscalYearId: fx.fiscalYearId,
+        amountCents: 4000, paidAt: '2026-06-15', reference: 'ref',
+      })
+      expect(ok.booking.amount_cents).toBe(4000)
+    })
+
+    it("a Titel outside the actor's scope is refused (403) and nothing is booked", async () => {
+      const foreignTitel = await titelOfUnitB()
+      await expect(
+        recordManualPayout(sql, ACTOR_A, {
+          paymentOrderId: fx.paymentOrderId, ledgerAccountId: fx.ledgerOwnA,
+          budgetTitelId: foreignTitel, fiscalYearId: fx.fiscalYearId,
+          amountCents: 4500, paidAt: '2026-06-15', reference: 'ref',
+        }),
+      ).rejects.toBeInstanceOf(AccessDeniedError)
+      await expect(
+        allocateSplit(sql, ACTOR_A, {
+          bankTransactionId: fx.bankTransactionId,
+          parts: [{ ledgerAccountId: fx.ledgerOwnA, budgetTitelId: foreignTitel, fiscalYearId: fx.fiscalYearId, amountCents: 4500 }],
+        }),
+      ).rejects.toBeInstanceOf(AccessDeniedError)
+      expect(await bookingsCount()).toBe(0)
+    })
+
+    it("a fiscal year other than the Titel's plan year is refused (422)", async () => {
+      const fy2 = await sql<{ id: string }[]>`
+        INSERT INTO finance.fiscal_year (name, start_date, end_date)
+        VALUES ('FY2027', '2027-01-01', '2027-12-31') RETURNING id`
+      await expect(
+        recordManualPayout(sql, ACTOR_A, {
+          paymentOrderId: fx.paymentOrderId, ledgerAccountId: fx.ledgerOwnA,
+          budgetTitelId: fx.titelId, fiscalYearId: Number(fy2[0]!.id),
+          amountCents: 4500, paidAt: '2027-01-15', reference: 'ref',
+        }),
+      ).rejects.toBeInstanceOf(FinanceUnprocessableError)
+      await expect(
+        allocateSplit(sql, ACTOR_A, {
+          bankTransactionId: fx.bankTransactionId,
+          parts: [{ ledgerAccountId: fx.ledgerOwnA, budgetTitelId: fx.titelId, fiscalYearId: Number(fy2[0]!.id), amountCents: 4500 }],
+        }),
+      ).rejects.toBeInstanceOf(FinanceUnprocessableError)
+      expect(await bookingsCount()).toBe(0)
+    })
+  })
+
   describe('recordCashPayout', () => {
     it('happy path: posts against the real cash_box ledger', async () => {
       const result = await recordCashPayout(sql, ACTOR_A, {
@@ -436,6 +536,21 @@ describe('R2-C3 money ops — real Postgres round-trip', () => {
       INSERT INTO finance.fiscal_year (name, start_date, end_date)
       VALUES ('FY2027', '2027-01-01', '2027-12-31') RETURNING id`
     const fiscalYearId2 = Number(fy2[0]!.id)
+    // F1-FIX-05-K (K4#35): a booking's Titel must belong to the booked fiscal year,
+    // so the FY2 payout books a Titel of an FY2 plan (unit A's section).
+    const plan2 = await sql<{ id: string }[]>`
+      INSERT INTO finance.budget_plan (fiscal_year_id, name, state)
+      VALUES (${fiscalYearId2}, 'P2', 'active') RETURNING id`
+    const section2 = await sql<{ id: string }[]>`
+      INSERT INTO finance.budget_section (budget_plan_id, finance_unit_id, preparation_state)
+      VALUES (${Number(plan2[0]!.id)}, ${fx.financeUnitA}, 'submitted_to_central') RETURNING id`
+    const group2 = await sql<{ id: string }[]>`
+      INSERT INTO finance.budget_group (budget_section_id, name, budget_type)
+      VALUES (${Number(section2[0]!.id)}, 'G2', 'expense') RETURNING id`
+    const titel2 = await sql<{ id: string }[]>`
+      INSERT INTO finance.budget_titel (budget_group_id, titel_nr, titel_name, planned_cents, deckungsfaehig)
+      VALUES (${Number(group2[0]!.id)}, '001', 'T2', 1000000, false) RETURNING id`
+    const titelId2 = Number(titel2[0]!.id)
 
     // F1-FIX-05-K (H20): one expense carries at most one live payment_order
     // (payment_order_one_live_per_expense_idx), so the FY2 payout settles a
@@ -451,7 +566,7 @@ describe('R2-C3 money ops — real Postgres round-trip', () => {
       VALUES (${expense2}, 'B-2', '2027-01-02') RETURNING id`
     await sql`
       INSERT INTO finance.receipt_item (receipt_id, budget_titel_id, amount_cents)
-      VALUES (${Number(receipt2[0]!.id)}, ${fx.titelId}, 4500)`
+      VALUES (${Number(receipt2[0]!.id)}, ${titelId2}, 4500)`
     const po2 = await sql<{ id: string }[]>`
       INSERT INTO finance.payment_order
         (expense_id, anordnung_by, feststellung_sachlich_by, feststellung_rechnerisch_by, dual_signature_attested, state)
@@ -459,7 +574,7 @@ describe('R2-C3 money ops — real Postgres round-trip', () => {
       RETURNING id`
     const result = await recordManualPayout(sql, ACTOR_A, {
       paymentOrderId: Number(po2[0]!.id), ledgerAccountId: fx.ledgerOwnA,
-      budgetTitelId: fx.titelId, fiscalYearId: fiscalYearId2,
+      budgetTitelId: titelId2, fiscalYearId: fiscalYearId2,
       amountCents: 4500, paidAt: '2027-01-15', reference: 'ref',
     })
     expect(result.booking.running_no).toBe(1) // NOT a 23505 against the old global-per-ledger index
