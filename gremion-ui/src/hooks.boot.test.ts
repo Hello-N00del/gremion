@@ -859,15 +859,45 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/auth/', path: '/auth/signout' },
     { entry: '/legal/', path: '/legal/imprint' },
     { entry: '/api/setup/seed', path: '/api/setup/seed' },
-    { entry: '/api/setup/seed', path: '/api/setup/seed/status' },
     { entry: '/api/health', path: '/api/health' },
-    { entry: '/api/health', path: '/api/health/db' },
-    { entry: '/api/public/protocols/', path: '/api/public/protocols/42/pdf' },
+    { entry: '/api/public/protocols/*/pdf', path: '/api/public/protocols/42/pdf' },
   ] as const
 
   // TASK-042 TDD 5 (Q1): the first-run wizard is gone, so '/setup' is no
   // longer public. The pin reads the SHIPPED list, not a copy of it.
-  const FIVE = ['/api/health', '/api/public/protocols/', '/api/setup/seed', '/auth/', '/legal/']
+  // F1-FIX-03 / S1a#28: the /api entries are EXACT routes now, not subtrees;
+  // only the two page trees '/auth/' and '/legal/' stay prefixes.
+  const FIVE = ['/api/health', '/api/public/protocols/*/pdf', '/api/setup/seed', '/auth/', '/legal/']
+
+  // F1-FIX-03 / S1a#28: a path BELOW or BESIDE a public /api route is not public.
+  // A route the kernel later adds there must not be served unauthenticated just
+  // because it shares a prefix with a public one.
+  for (const path of [
+    '/api/health/db',
+    '/api/setup/seed/status',
+    '/api/public/protocols/42',
+    '/api/public/protocols/42/pdf/extra',
+    '/api/public/protocols/42/attachments',
+    '/api/public/protocols/',
+    '/api/public/protocols//pdf',
+  ]) {
+    it(`does NOT treat '${path}' as public (S1a#28): an unauthenticated call is a 401`, async () => {
+      const mod = await import('./hooks.server')
+      await mod.boot()
+      const event = makeFakeEvent(path)
+      event.locals.auth = async () => null
+      let resolveCalled = false
+      const res = (await mod.authGuard({
+        event: event as never,
+        resolve: async () => {
+          resolveCalled = true
+          return new Response('public-short-circuit', { status: 200 })
+        },
+      } as never)) as Response
+      expect(resolveCalled).toBe(false)
+      expect(res.status).toBe(401)
+    })
+  }
 
   it('the shipped publicPaths list is exactly the five entries (no /setup)', async () => {
     const mod = await import('./hooks.server')

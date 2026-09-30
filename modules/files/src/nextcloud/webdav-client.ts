@@ -9,7 +9,14 @@
 // the kernel forwards (x-webdav-bearer → `Bearer <token>`, WI-5b). The chunked
 // upload uses the leaf's own Nextcloud admin Basic creds (the kernel's
 // upload-chunk route does the same — admin-credentialed DAV upload session).
+//
+// F1-FIX-03 (K5#3 / K5#32): the admin fallback for browser ops is GONE. A browser
+// op without the user's bearer throws WebdavAuthError (-> HTTP 401); only the
+// system-scoped uploadChunk uses the admin credentials. Every path, and every
+// move/copy destination, goes through toUpstreamDavPath (validated, and each
+// segment encoded once: K5#2 / S4#24).
 import { DOMParser } from '@xmldom/xmldom'
+import { encodeRelPath, sanitizeRelPath, toUpstreamDavPath } from './webdav-path.js'
 
 /** Body payloads the leaf forwards to Nextcloud. The leaf buffers request bodies
  *  (server.ts readBody → Buffer) and builds XML strings; a broad `BodyInit`
@@ -34,6 +41,24 @@ export class NextcloudUpstreamError extends Error {
     super(`Nextcloud ${method} ${path} → ${status}: ${snippet}`)
     this.name = 'NextcloudUpstreamError'
     this.status = status
+  }
+}
+
+/** A browser op arrived without the user's OIDC bearer. The server maps it to
+ *  401; it is never retried with the admin credentials. */
+export class WebdavAuthError extends Error {
+  constructor() {
+    super('missing x-webdav-bearer: browser ops run as the user, never as the Nextcloud admin')
+    this.name = 'WebdavAuthError'
+  }
+}
+
+/** Decode for comparison only; a malformed escape compares as itself. */
+function decodeForCompare(p: string): string {
+  try {
+    return decodeURIComponent(p).replace(/\/+$/, '')
+  } catch {
+    return p.replace(/\/+$/, '')
   }
 }
 
@@ -62,10 +87,12 @@ export class WebdavClient {
     return 'Basic ' + Buffer.from(`${this.adminUser}:${this.adminPassword}`).toString('base64')
   }
 
-  /** Per-request auth header: prefer the forwarded user bearer (WI-5b), else the
-   *  admin Basic fallback (system contexts). */
+  /** Per-request auth header for a browser op: the forwarded user bearer (WI-5b)
+   *  and nothing else. The former admin Basic fallback ran any bearer-less
+   *  request with the admin's rights (K5#3 / K5#32). */
   private auth(bearer: string | undefined): string {
-    return bearer ? `Bearer ${bearer}` : this.adminAuth()
+    if (!bearer) throw new WebdavAuthError()
+    return `Bearer ${bearer}`
   }
 
   private async request(
@@ -74,16 +101,18 @@ export class WebdavClient {
     bearer: string | undefined,
     opts: { headers?: Record<string, string>; body?: WebdavBody } = {},
   ): Promise<Response> {
-    const res = await fetch(this.baseUrl + path, {
+    const authorization = this.auth(bearer)
+    const wire = toUpstreamDavPath(path)
+    const res = await fetch(this.baseUrl + wire, {
       method,
       headers: {
-        Authorization: this.auth(bearer),
+        Authorization: authorization,
         'OCS-APIRequest': 'true',
         ...opts.headers,
       },
       body: opts.body,
     })
-    if (!res.ok) throw new NextcloudUpstreamError(method, path, res.status, await snippetOf(res))
+    if (!res.ok) throw new NextcloudUpstreamError(method, wire, res.status, await snippetOf(res))
     return res
   }
 
@@ -107,9 +136,13 @@ export class WebdavClient {
     const doc = new DOMParser().parseFromString(xml, 'text/xml')
     const responses = Array.from(doc.getElementsByTagNameNS('DAV:', 'response'))
     const entries: DavEntry[] = []
+    // Skip the collection's own entry. Nextcloud returns hrefs percent-encoded
+    // (its own encoding rules), so compare decoded forms, trailing '/' ignored.
+    const self = decodeForCompare(toUpstreamDavPath(path))
     for (const resp of responses) {
       const href = resp.getElementsByTagNameNS('DAV:', 'href')[0]?.textContent ?? ''
-      if (href === path || href === path + '/' || href.endsWith(path)) continue
+      const hrefDecoded = decodeForCompare(href)
+      if (hrefDecoded === self || hrefDecoded.endsWith(self)) continue
       const propstat = resp.getElementsByTagNameNS('DAV:', 'propstat')[0]
       const prop = propstat?.getElementsByTagNameNS('DAV:', 'prop')[0]
       const resourcetype = prop?.getElementsByTagNameNS('DAV:', 'resourcetype')[0]
@@ -144,15 +177,19 @@ export class WebdavClient {
     await this.request('DELETE', path, bearer)
   }
 
+  // The Destination is validated and encoded exactly like the source path:
+  // it was a raw concatenation of whatever the caller sent (K5#2 / K5#32).
   async move(fromPath: string, toPath: string, bearer: string | undefined): Promise<void> {
+    const destination = this.baseUrl + toUpstreamDavPath(toPath)
     await this.request('MOVE', fromPath, bearer, {
-      headers: { Destination: this.baseUrl + toPath, Overwrite: 'F' },
+      headers: { Destination: destination, Overwrite: 'F' },
     })
   }
 
   async copy(fromPath: string, toPath: string, bearer: string | undefined): Promise<void> {
+    const destination = this.baseUrl + toUpstreamDavPath(toPath)
     await this.request('COPY', fromPath, bearer, {
-      headers: { Destination: this.baseUrl + toPath, Overwrite: 'F' },
+      headers: { Destination: destination, Overwrite: 'F' },
     })
   }
 
@@ -184,7 +221,11 @@ export class WebdavClient {
     const isLast = input.chunkIndex === input.totalChunks - 1
     if (isLast) {
       const sourceUrl = `${this.baseUrl}/remote.php/dav/uploads/${encodeURIComponent(userId)}/${encodeURIComponent(input.uploadId)}/.file`
-      const destUrl = `${this.baseUrl}/remote.php/dav/files/${encodeURIComponent(userId)}/${input.sanitizedPath}`
+      // K5#2 / S4#24: each segment encoded once. The decoded path went out raw,
+      // so '#'/'?' cut the name and a non-Latin-1 character made the
+      // Destination an illegal header value. sanitizeRelPath is idempotent on
+      // an already-sanitised path and keeps this method safe for any caller.
+      const destUrl = `${this.baseUrl}/remote.php/dav/files/${encodeURIComponent(userId)}/${encodeRelPath(sanitizeRelPath(input.sanitizedPath))}`
       const moveHeaders: Record<string, string> = {
         Authorization: authHeader,
         'OCS-APIRequest': 'true',

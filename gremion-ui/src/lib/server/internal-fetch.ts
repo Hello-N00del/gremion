@@ -11,8 +11,8 @@
 //      is technically attacker-controllable (DNS-rebinding-adjacent).
 //
 // New contract:
-//   - Base URL comes from a server-side env var (PUBLIC_BASE_URL — the
-//     same allowlisted origin the rest of the app already trusts).
+//   - Base URL comes from a server-side env var (INTERNAL_BASE_URL — the
+//     in-container origin; never the public edge, see resolveInternalBaseUrl).
 //   - Authorisation is `Bearer ${INTERNAL_PUSH_SECRET}` (per-process
 //     shared secret), never the caller's cookie.
 //   - The consumer route uses `constantTimeEqual` to compare the supplied
@@ -75,16 +75,26 @@ export function constantTimeEqual(a: string, b: string): boolean {
 }
 
 /**
- * Resolve the base URL for an internal call. Prefers an explicit
- * INTERNAL_BASE_URL override (used when an internal-only DNS name is
- * different from the public one) and falls back to PUBLIC_BASE_URL.
+ * Resolve the base URL for an internal call: INTERNAL_BASE_URL, the
+ * in-container origin (`http://gremion-ui:3000`, set by the compose files).
+ *
+ * F1-FIX-03 / S1a#24: there is no PUBLIC_BASE_URL fallback any more. That
+ * fallback sent the internal trust secret (Bearer + x-internal-host-trust)
+ * through the public edge, where the edge, not this process, decides the
+ * forwarded host and therefore the tenant. Unset in production is a
+ * configuration error and fails closed (throws before any request is made);
+ * a dev or test process targets the local dev server on :3000.
  */
 function resolveInternalBaseUrl(): string {
   const internal = readEnv('INTERNAL_BASE_URL')?.trim()
   if (internal) return internal.replace(/\/$/, '')
-  const pub = readEnv('PUBLIC_BASE_URL')?.trim()
-  if (pub) return pub.replace(/\/$/, '')
-  // Last-resort default for local dev: SvelteKit listens on :3000.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'internalFetch: INTERNAL_BASE_URL is not configured. Set it to the in-container ' +
+        'origin (e.g. http://gremion-ui:3000); the internal call is refused rather than ' +
+        'sent through the public edge.',
+    )
+  }
   return 'http://localhost:3000'
 }
 

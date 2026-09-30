@@ -98,9 +98,31 @@ describe('internalFetch', () => {
     expect(headers.cookie).toBeUndefined()
   })
 
-  it('uses PUBLIC_BASE_URL when INTERNAL_BASE_URL is unset (mocked)', async () => {
-    await internalFetch('/api/calendar/automations/minutes', { method: 'POST', body: '{}' })
-    expect(lastCall!.url).toBe('http://stura.test:3000/api/calendar/automations/minutes')
+  // F1-FIX-03 / S1a#24: the PUBLIC_BASE_URL fallback sent the internal trust
+  // secret through the public edge (and the edge picks the tenant there). With
+  // INTERNAL_BASE_URL unset, a production process now refuses the call; a dev
+  // or test process targets the local dev server. PUBLIC_BASE_URL is never used.
+  it('in production, refuses to call when INTERNAL_BASE_URL is unset, and sends nothing', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      await expect(
+        internalFetch('/api/news/1', { method: 'PATCH', body: '{}' }),
+      ).rejects.toThrow(/INTERNAL_BASE_URL/)
+      expect(lastCall).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('outside production, falls back to the local dev server, never to PUBLIC_BASE_URL', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    try {
+      await internalFetch('/api/news/1', { method: 'PATCH', body: '{}' })
+      expect(lastCall!.url).toBe('http://localhost:3000/api/news/1')
+      expect(lastCall!.url).not.toContain('stura.test')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 

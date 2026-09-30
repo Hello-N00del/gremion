@@ -7,10 +7,26 @@
 // The leaf is a THIN proxy: it forwards the kernel-supplied webdav path + the
 // user's OIDC bearer (x-webdav-bearer) to Nextcloud and relays the result.
 import http from 'node:http'
-import { Readable } from 'node:stream'
+import { Readable, pipeline } from 'node:stream'
 import { checkGuard, isHealthzPath } from './auth.js'
-import { createWebdavClient, NextcloudUpstreamError, type WebdavClient } from '../nextcloud/webdav-client.js'
+import {
+  createWebdavClient,
+  NextcloudUpstreamError,
+  WebdavAuthError,
+  type WebdavClient,
+} from '../nextcloud/webdav-client.js'
 import { sanitizeRelPath, WebdavPathError } from '../nextcloud/webdav-path.js'
+
+/** The ops that run AS the logged-in user (x-webdav-bearer required). */
+const BROWSER_OPS: ReadonlySet<string> = new Set([
+  '/api/v1/propfind',
+  '/api/v1/download',
+  '/api/v1/upload',
+  '/api/v1/mkcol',
+  '/api/v1/delete',
+  '/api/v1/move',
+  '/api/v1/copy',
+])
 
 export interface ServerOptions {
   /** Shared secret expected in x-internal-auth (INTERNAL_FILES_SECRET). */
@@ -36,6 +52,28 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
 async function readJson<T>(req: http.IncomingMessage): Promise<T> {
   const buf = await readBody(req)
   return JSON.parse(buf.toString('utf8') || '{}') as T
+}
+
+/** A path fit for one log line: control characters replaced, length capped. */
+function loggablePath(p: unknown): string {
+  // eslint-disable-next-line no-control-regex
+  return String(p).replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 512)
+}
+
+/**
+ * F1-FIX-03 round 2 (review LOWs): a failed download pipeline, logged with the
+ * error code, the tenant and the requested path so a real upstream reset can
+ * be traced. ERR_STREAM_PREMATURE_CLOSE means the response closed before the
+ * body finished, i.e. the client went away (a cancelled download): info level,
+ * so it is not mistaken for a Nextcloud failure. Never logs the bearer.
+ */
+function logDownloadStreamError(err: NodeJS.ErrnoException, tenantId: string, p: unknown): void {
+  const ctx = { code: err.code ?? null, tenant: tenantId, path: loggablePath(p) }
+  if (err.code === 'ERR_STREAM_PREMATURE_CLOSE') {
+    console.info('[files] download aborted by the client', ctx)
+    return
+  }
+  console.error('[files] download stream failed mid-body', ctx, err)
 }
 
 export function createServer(opts: ServerOptions): http.Server {
@@ -70,6 +108,15 @@ export function createServer(opts: ServerOptions): http.Server {
 
     const bearer = (req.headers['x-webdav-bearer'] as string | undefined) || undefined
 
+    // F1-FIX-03 / K5#3 + K5#32: a browser op runs AS the user or not at all. It
+    // used to fall back to the Nextcloud ADMIN credentials when the bearer was
+    // missing. Refused here before the body is read; the client enforces the
+    // same (WebdavAuthError) for any other caller. upload-chunk is the one
+    // system-scoped op and keeps the admin credentials.
+    if (BROWSER_OPS.has(path) && !bearer) {
+      return sendJson(res, 401, { success: false, error: 'missing x-webdav-bearer' })
+    }
+
     try {
       switch (path) {
         case '/api/v1/propfind': {
@@ -84,7 +131,15 @@ export function createServer(opts: ServerOptions): http.Server {
             'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream',
           })
           if (upstream.body) {
-            Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream).pipe(res)
+            // F1-FIX-03 / S4#0 + K5#16: pipeline(), not .pipe(). .pipe() does not
+            // forward errors, so an upstream reset mid-body emitted 'error' on the
+            // Readable with no listener: an uncaught exception that killed the
+            // whole leaf. pipeline() handles both ends: on failure it destroys the
+            // response (the client sees an aborted download) and we log it.
+            const tenantId = guard.tenant.id
+            pipeline(Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream), res, (err) => {
+              if (err) logDownloadStreamError(err, tenantId, p)
+            })
           } else {
             res.end()
           }
@@ -147,6 +202,9 @@ export function createServer(opts: ServerOptions): http.Server {
     } catch (err) {
       if (err instanceof WebdavPathError) {
         return sendJson(res, 400, { success: false, error: err.message })
+      }
+      if (err instanceof WebdavAuthError) {
+        return sendJson(res, 401, { success: false, error: 'missing x-webdav-bearer' })
       }
       if (err instanceof NextcloudUpstreamError) {
         return sendJson(res, 502, { success: false, error: err.message })
