@@ -148,6 +148,44 @@ describe('finance leaf — Lane E2 receipts trio (real PG)', () => {
         await expect(getStorage().read(handle)).rejects.toBeTruthy() // object removed
       })
 
+      it('F1-FIX-05-K: same-name uploads keep both byte sets; deleting one keeps the published twin', async () => {
+        const upload = async (bytes: Uint8Array, name = 'beleg.pdf') => {
+          const r = await fetch(`${base}/api/v1/expenses/${expenseA}/receipts`, {
+            method: 'POST', headers: writer([OU_1]), body: receiptForm(bytes, name, 'application/pdf'),
+          })
+          expect(r.status, await r.clone().text()).toBe(200)
+          return (await r.json()) as { id: number; filename: string }
+        }
+        const first = new Uint8Array([0x25, 0x50, 0x44, 0x46, 1, 1, 1])
+        const second = new Uint8Array([0x25, 0x50, 0x44, 0x46, 2, 2, 2])
+        const a = await upload(first)
+        // publish the first: it is now part of the immutable audit trail
+        const pub = await fetch(`${base}/api/v1/expenses/${expenseA}/receipts/${a.id}/publish`, {
+          method: 'POST', headers: writer([OU_1]),
+        })
+        expect(pub.status).toBe(200)
+        const b = await upload(second)
+        const pathA = await storagePathOf(a.id)
+        const pathB = await storagePathOf(b.id)
+        expect(pathA).not.toBe(pathB)
+        expect(pathA).toContain(TENANT.id)
+        expect(Buffer.from(await getStorage().read(pathA))).toEqual(Buffer.from(first))
+        expect(Buffer.from(await getStorage().read(pathB))).toEqual(Buffer.from(second))
+
+        const del = await fetch(`${base}/api/v1/expenses/${expenseA}/receipts/${b.id}`, {
+          method: 'DELETE', headers: writer([OU_1]),
+        })
+        expect(del.status).toBe(200)
+        expect(Buffer.from(await getStorage().read(pathA))).toEqual(Buffer.from(first))
+
+        // a traversal filename is stored under a server key and a basename display name
+        const t = await upload(first, '../2/x.pdf')
+        expect(t.filename).toBe('x.pdf')
+        const pathT = (await storagePathOf(t.id)).replace(/\\/g, '/') // local handle on Windows
+        expect(pathT).not.toContain('..')
+        expect(pathT).toContain(`/expense/${expenseA}/`)
+      })
+
       it('publish stamps published_at (idempotent) and then delete is refused (409)', async () => {
         const up = await fetch(`${base}/api/v1/expenses/${expenseA}/receipts`, {
           method: 'POST', headers: writer([OU_1]), body: receiptForm(PDF_BYTES, 'q.png', 'image/png'),

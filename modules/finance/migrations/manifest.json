@@ -3,5 +3,6 @@
   "002_org_unit_mirror.sql": "2c30fc1c5f3d823d90f6094e86b81ce60880d2fdc13cd6bea2f403d31bf1b1fd",
   "003_money_running_no_fiscal_year_idx.sql": "328601b96bb3ad0b6673a3d3d13fd52ad05a6332856ec3703ffdd2dc98a02e34",
   "004_money_fk_indexes.sql": "edb36391d8546cc402309e6e7a99bd490f2fb208317b8fce620259c94fd655ee",
-  "005_unwrap_double_encoded_jsonb.sql": "59508f3a9f924c9a75278a30f9d6630658ad5152b4e85c104eff4093d4bd2f99"
+  "005_unwrap_double_encoded_jsonb.sql": "59508f3a9f924c9a75278a30f9d6630658ad5152b4e85c104eff4093d4bd2f99",
+  "006_approval_single_open.sql": "ab5b02284c798317dce7bcd9d46bb31e46a0610c3a1685ae49a90641dd0ab380"
 }

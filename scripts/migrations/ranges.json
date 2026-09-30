@@ -128,7 +128,7 @@
         "modules/finance/migrations"
       ],
       "padWidth": 3,
-      "highWater": 5,
+      "highWater": 6,
       "legacyFloor": 0,
       "legacy": []
     },
