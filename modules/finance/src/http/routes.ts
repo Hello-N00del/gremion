@@ -60,6 +60,7 @@ import {
   ReceiptMimeError,
   ReceiptNotFoundError,
   ReceiptImmutableError,
+  InvalidReceiptFilenameError,
   type ReceiptUpload,
   listExpenses,
   getExpense,
@@ -1206,7 +1207,8 @@ async function runReceipt(res: http.ServerResponse, fn: () => Promise<void>): Pr
       err instanceof ReceiptTooLargeError ||
       err instanceof ReceiptMimeError ||
       err instanceof ReceiptNotFoundError ||
-      err instanceof ReceiptImmutableError
+      err instanceof ReceiptImmutableError ||
+      err instanceof InvalidReceiptFilenameError
     ) {
       return sendJson(res, err.httpStatus, { success: false, error: err.message })
     }
@@ -1237,7 +1239,9 @@ function uploadReceiptHandler(storeFn: StoreFn): RouteHandler {
     }
     await runReceipt(res, async () => {
       const sql = await storeFn(tenant)
-      const receipt = await uploadReceipt(sql, actorFromHeaders(req), Number(params.id), upload, getStorage())
+      const receipt = await uploadReceipt(
+        sql, actorFromHeaders(req), Number(params.id), upload, getStorage(), tenant.id,
+      )
       sendJson(res, 200, receipt)
     })
   }

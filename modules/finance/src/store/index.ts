@@ -17,6 +17,7 @@
 // year-end closeBudget (FIN-52) was the last kernel-coupling residual, now ported
 // LEAF-LOCAL (see http/routes.ts LIVE_OPS; KERNEL_COUPLING_EXCEPTIONS is now empty).
 
+import { randomUUID } from 'node:crypto'
 import type { Sql } from '../tenant-store.js'
 import type { StorageBackend } from '../storage/index.js'
 
@@ -932,6 +933,16 @@ export class ReceiptImmutableError extends Error {
   }
 }
 
+/** A receipt filename that carries no usable basename ('', '.', '..', a bare path)
+ *  or a control character. Route -> 400. F1-FIX-05-K (H05). */
+export class InvalidReceiptFilenameError extends Error {
+  readonly httpStatus = 400
+  constructor(filename: string) {
+    super(`receipt: filename ${JSON.stringify(filename)} has no usable basename`)
+    this.name = 'InvalidReceiptFilenameError'
+  }
+}
+
 /** The parsed multipart upload the leaf hands the store (the leaf never sees a `File`;
  *  the multipart parser yields the exact-size bytes + the part's filename / mime). */
 export interface ReceiptUpload {
@@ -944,6 +955,47 @@ export interface ReceiptUpload {
  *  extra storage_path/kind the DTO drops). toReceiptDto maps it to the Receipt DTO. */
 interface RawAttachmentRow extends RawReceiptRow {
   storage_path: string
+}
+
+/** Storage extension per allow-listed mime (the key never carries client text). */
+const RECEIPT_EXT: Record<(typeof RECEIPT_ALLOWED_MIME)[number], string> = {
+  'application/pdf': '.pdf',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+}
+
+/** A tenant id may enter a storage key only as one plain segment. */
+const TENANT_KEY_SEGMENT = /^[A-Za-z0-9-]{1,64}$/
+
+/** The display name kept in expense_attachment.filename: the client filename's
+ *  basename (either separator), never a path. Refuses a name with no usable
+ *  basename or with a control character. It is NEVER part of the storage key. */
+export function receiptDisplayName(filename: string): string {
+  const base = filename.split(/[/\\]/).pop() ?? ''
+  // eslint-disable-next-line no-control-regex
+  if (base === '' || base === '.' || base === '..' || /[\u0000-\u001f\u007f]/.test(base)) {
+    throw new InvalidReceiptFilenameError(filename)
+  }
+  return base
+}
+
+/** F1-FIX-05-K (H05 leaf, K4#2 / K4#29): the storage key is built from
+ *  server-controlled parts only -- finance/<tenantId>/expense/<expenseId>/<uuid><ext>.
+ *  The tenant segment separates tenants on the shared Nextcloud / local root, the
+ *  UUID makes every upload its own object (a same-name upload can no longer
+ *  overwrite, and deleting one can no longer delete, another receipt's bytes), and
+ *  no client text reaches the key (no '../' traversal across expense folders).
+ *  Receipts written under the old key stay readable: read/delete act on the
+ *  stored storage_path handle, which is never recomputed. */
+export function receiptStorageKey(tenantId: string, expenseId: number, mimeType: string): string {
+  if (!TENANT_KEY_SEGMENT.test(tenantId)) {
+    throw new Error(`receipt: tenant id ${JSON.stringify(tenantId)} is not a plain key segment`)
+  }
+  if (!Number.isSafeInteger(expenseId) || expenseId <= 0) {
+    throw new ReceiptNotFoundError(`expense ${expenseId} not found`)
+  }
+  const ext = RECEIPT_EXT[mimeType as (typeof RECEIPT_ALLOWED_MIME)[number]] ?? ''
+  return `finance/${tenantId}/expense/${expenseId}/${randomUUID()}${ext}`
 }
 
 function assertReceiptAllowed(upload: ReceiptUpload): void {
@@ -989,14 +1041,22 @@ export async function uploadReceipt(
   expenseId: number,
   upload: ReceiptUpload,
   storage: StorageBackend,
+  tenantId: string,
 ): Promise<ReceiptDto> {
   assertReceiptAllowed(upload)
+  const displayName = receiptDisplayName(upload.filename)
+  if (!TENANT_KEY_SEGMENT.test(tenantId)) {
+    throw new Error(`receipt: tenant id ${JSON.stringify(tenantId)} is not a plain key segment`)
+  }
 
   // Pre-flight access check OUTSIDE the storage write so we don't waste storage on
   // requests we're going to reject.
   await assertExpenseWritable(sql, actor, expenseId, false)
 
-  const storagePath = await storage.put(`finance/expense/${expenseId}/${upload.filename}`, upload.bytes)
+  const storagePath = await storage.put(
+    receiptStorageKey(tenantId, expenseId, upload.mimeType ?? ''),
+    upload.bytes,
+  )
 
   return sql.begin(async (tx) => {
     const t = tx as unknown as Sql
@@ -1005,7 +1065,7 @@ export async function uploadReceipt(
     const rows = await t<RawAttachmentRow[]>`
       INSERT INTO finance.expense_attachment
         (expense_id, kind, filename, mime_type, storage_path, nextcloud_path, uploaded_by)
-      VALUES (${expenseId}, 'beleg', ${upload.filename}, ${upload.mimeType},
+      VALUES (${expenseId}, 'beleg', ${displayName}, ${upload.mimeType},
               ${storagePath}, ${null}, ${actor.userId})
       RETURNING *`
     return toReceiptDto(rows[0]!)

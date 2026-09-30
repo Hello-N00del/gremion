@@ -46,6 +46,13 @@ describe('LocalStorageBackend', () => {
     const be = new LocalStorageBackend(freshRoot())
     await expect(be.put('../../etc/passwd', new Uint8Array([1]))).rejects.toThrow(/escapes root/)
   })
+
+  it('F1-FIX-05-K: put() refuses to overwrite an existing object (the first bytes survive)', async () => {
+    const be = new LocalStorageBackend(freshRoot())
+    const handle = await be.put('finance/t/expense/1/x.pdf', new Uint8Array([1, 1]))
+    await expect(be.put('finance/t/expense/1/x.pdf', new Uint8Array([2, 2]))).rejects.toThrow(/exists/)
+    expect(await be.read(handle)).toEqual(new Uint8Array([1, 1]))
+  })
 })
 
 // ── NextcloudStorageBackend (mock WebDAV client) ─────────────────────────────
