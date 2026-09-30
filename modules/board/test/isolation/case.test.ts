@@ -143,12 +143,31 @@ function stubCase(opts: {
 
 const read = (run: () => ApiResult): Attempt => ({ vector: 'r', route: 'GET /api/v1/boards/:id', kind: 'read', what: 'stub read', run: async () => run() })
 
+describe('runIsolation — validateCase at load (TRD-061)', () => {
+  it('refuses a structurally incomplete case before any seed, control or attempt', async () => {
+    // boardCase's seeder rejects 'not called': reaching it means the case was not refused at load
+    const incomplete: IsolationCase<BoardRecord> = {
+      ...boardCase,
+      attempts: boardCase.attempts.filter((a) => a.route !== 'POST /api/v1/boards/:id/stacks'),
+    }
+    const r = await runIsolation(incomplete, { api, attacker: TENANT_A, victim: TENANT_B, routes: BOARD_ROUTE_KINDS })
+    expect(r.ok).toBe(false)
+    expect(r.aborted).toMatch(/^case refused at load: .*POST \/api\/v1\/boards\/:id\/stacks has no write attempt/)
+    expect({ controls: r.controls, attempts: r.attempts }).toEqual({ controls: [], attempts: [] })
+  })
+})
+
+/** The route table a stub case claims to cover: exactly the routes of its attempts. */
+const routesOf = (c: IsolationCase<BoardRecord>): ReadonlyMap<string, 'read' | 'write' | 'control'> =>
+  new Map(c.attempts.map((a) => [a.route, a.kind]))
+
 describe('runIsolation — controls first, harness-owned verdicts, vacuity', () => {
-  const opts = { api, attacker: TENANT_A, victim: TENANT_B }
+  const base = { api, attacker: TENANT_A, victim: TENANT_B }
+  const optsFor = (c: IsolationCase<BoardRecord>) => ({ ...base, routes: routesOf(c) })
 
   it('a failed positive control aborts the run and judges no attempt', async () => {
     const { c } = stubCase({ readOwn: (as) => (as.id === TENANT_B.id ? { status: 404, body: {} } : { status: 200, body: { canary: 'canary-tenant-a' } }), attempts: [read(() => ({ status: 404, body: {} }))] })
-    const r = await runIsolation(c, opts)
+    const r = await runIsolation(c, optsFor(c))
     expect(r.ok).toBe(false)
     expect(r.aborted).toMatch(/positive control failed/)
     expect(r.attempts).toEqual([])
@@ -157,13 +176,14 @@ describe('runIsolation — controls first, harness-owned verdicts, vacuity', () 
   it("A's own write must change A's fingerprint (a write control that changes nothing fails)", async () => {
     const { c } = stubCase({ attempts: [read(() => ({ status: 404, body: {} }))] })
     c.write = async () => ({ status: 201, body: {} })
-    const r = await runIsolation(c, opts)
+    const r = await runIsolation(c, optsFor(c))
     expect(r.aborted).toMatch(/positive control failed/)
     expect(r.controls.find((x) => x.name === 'A writes its own record')?.ok).toBe(false)
   })
 
   it('zero attempts: the run is vacuous and fails', async () => {
-    const r = await runIsolation(stubCase({}).c, opts)
+    const { c } = stubCase({})
+    const r = await runIsolation(c, optsFor(c))
     expect(r.ok).toBe(false)
     expect(r.aborted).toMatch(/zero attempts/)
   })
@@ -177,7 +197,7 @@ describe('runIsolation — controls first, harness-owned verdicts, vacuity', () 
         read(() => ({ status: 404, body: { name: 'canary-tenant-b' } })),
       ],
     })
-    const r = await runIsolation(c, opts)
+    const r = await runIsolation(c, optsFor(c))
     expect(r.attempts.map((a) => a.passed)).toEqual([false, false, true, true])
     expect(r.ok).toBe(false)
   })
@@ -198,12 +218,13 @@ describe('runIsolation — controls first, harness-owned verdicts, vacuity', () 
       },
       { vector: 'w', route: 'POST /api/v1/cards', kind: 'write', what: 'refused, nothing changed', run: async () => ({ status: 404, body: {} }) },
     ]
-    const r = await runIsolation(c, opts)
+    const r = await runIsolation(c, optsFor(c))
     expect(r.attempts.map((a) => a.passed)).toEqual([false, false, true])
   })
 
   it('a clean case passes', async () => {
-    const r = await runIsolation(stubCase({ attempts: [read(() => ({ status: 404, body: {} }))] }).c, opts)
+    const { c } = stubCase({ attempts: [read(() => ({ status: 404, body: {} }))] })
+    const r = await runIsolation(c, optsFor(c))
     expect(r.ok).toBe(true)
     expect(r.controls.every((x) => x.ok)).toBe(true)
     expect(r.controls.length).toBe(3)

@@ -15,7 +15,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { buildApp } from '../src/app.ts'
 import { createBoard, createCard, createStack, promoteActionItem, type Sql, type TenantRef } from '../src/store/index.ts'
 import { leafApi, leafRequest } from './isolation/leaf-api.ts'
-import { boardIsolationCase, type BoardRecord } from './isolation/case.ts'
+import { BOARD_ROUTE_KINDS, boardIsolationCase, type BoardRecord } from './isolation/case.ts'
 import { describeFailures, runIsolation } from './isolation/harness.ts'
 import type { BoardApi } from './isolation/api.ts'
 import {
@@ -201,7 +201,12 @@ describe('query-time mapping: a database dropped under a cached ok verdict (A8 a
 
 describe('two-tenant isolation through the board routes (A7)', () => {
   it("as A, every §3.3 vector against B's ids is refused; controls pass first", async () => {
-    const report = await runIsolation(boardIsolationCase(api, seed), { api, attacker: TENANT_A, victim: TENANT_B })
+    const report = await runIsolation(boardIsolationCase(api, seed), {
+      api,
+      attacker: TENANT_A,
+      victim: TENANT_B,
+      routes: BOARD_ROUTE_KINDS,
+    })
     expect(report.controls.length, 'no positive control ran').toBeGreaterThan(0)
     expect(report.aborted, describeFailures(report)).toBeUndefined()
     expect(report.attempts.length, 'zero attempts: vacuous').toBeGreaterThan(0)

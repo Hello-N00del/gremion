@@ -86,13 +86,20 @@ export function validateCase<R>(c: IsolationCase<R>, routes: ReadonlyMap<string,
   return problems
 }
 
+/**
+ * Run a case. `routes` is the route table the case must cover (BOARD_ROUTE_KINDS
+ * for the leaf): validateCase runs first, and a structurally incomplete case is
+ * refused at load, before any seed, control or attempt (TRD-061).
+ */
 export async function runIsolation<R>(
   c: IsolationCase<R> & { attempts: readonly Attempt[] },
-  opts: { api: BoardApi; attacker: TenantRef; victim: TenantRef },
-): Promise<IsolationReport & { own: R; victimRecord: R }> {
+  opts: { api: BoardApi; attacker: TenantRef; victim: TenantRef; routes: ReadonlyMap<string, 'read' | 'write' | 'control'> },
+): Promise<IsolationReport & { own?: R; victimRecord?: R }> {
   const { api, attacker, victim } = opts
   const controls: ControlResult[] = []
   const attempts: AttemptResult[] = []
+  const problems = validateCase(c, opts.routes)
+  if (problems.length > 0) return { ok: false, aborted: `case refused at load: ${problems.join('; ')}`, controls, attempts }
   const own = await c.seed(attacker)
   const vic = await c.seed(victim)
   const done = (extra: Partial<IsolationReport>) => ({
