@@ -20,7 +20,7 @@ import { runMigrations } from '$lib/server/db'
 import { createOrgUnit, type OrgUnit } from '$lib/server/governance/org-units-db'
 import { provisionOrgUnit } from '$lib/server/governance/provisioning/orchestrator'
 import { createKeycloakSubsystem } from '$lib/server/governance/provisioning/subsystems/keycloak'
-import type { Adapters } from '$lib/server/governance/provisioning/types'
+import type { Adapters, ProvisioningSubsystem } from '$lib/server/governance/provisioning/types'
 import { runWithTenant, getTenant } from '$lib/server/tenant/context'
 import {
   addTenantDomain,
@@ -145,6 +145,20 @@ async function inProvisioningContext<T>(c: CustomerRef, fn: () => Promise<T>, op
   } finally {
     evictTenantRuntime(c.id)
   }
+}
+
+/**
+ * The adapters of the first-body projection (Q8): Keycloak only. The body is
+ * created with wantsMatrixRoom and wantsNextcloudFolder false, so the
+ * orchestrator never calls the other two; should it ever, they refuse BY NAME
+ * instead of failing on an undefined adapter (review B2, r2).
+ */
+export function firstBodyAdapters(keycloak: ProvisioningSubsystem): Adapters {
+  const notWanted = (name: 'matrix' | 'nextcloud'): ProvisioningSubsystem => {
+    const refuse = (): Promise<never> => Promise.reject(new Error(`the first body wants no ${name} resource: the ${name} adapter must not be called`))
+    return { name, ensureResource: refuse, removeResource: refuse, addMember: refuse, removeMember: refuse, reconcileMembers: refuse }
+  }
+  return { keycloak, matrix: notWanted('matrix'), nextcloud: notWanted('nextcloud') }
 }
 
 export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDeps, 'control' | 'config' | 'realm' | 'kernel' | 'domain' | 'storage' | 'firstBody' | 'broker'> {
@@ -378,7 +392,7 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
             }))
           // Q8: the Keycloak group through the org-unit projection (the same
           // ledger + adapter the provisioning worker uses), never KC Organizations.
-          const report = await provisionOrgUnit(unit.id, { keycloak: createKeycloakSubsystem(ctx.kcAdminClient) } as unknown as Adapters)
+          const report = await provisionOrgUnit(unit.id, firstBodyAdapters(createKeycloakSubsystem(ctx.kcAdminClient)))
           if (report.overall === 'failed') {
             throw new Error(`the Keycloak group of ${unit.name} was not provisioned: ${report.subsystems.map((s) => `${s.subsystem}=${s.status}${s.error ? ` (${s.error})` : ''}`).join(', ')}`)
           }

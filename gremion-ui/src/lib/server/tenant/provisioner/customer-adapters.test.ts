@@ -78,6 +78,27 @@ function adapters(kc: ReturnType<typeof kcFake>, adminKc?: { assignServiceAccoun
   return { a, written }
 }
 
+// Review B2 MEDIUM (r2): the first-body projection passed `{keycloak} as
+// unknown as Adapters`, so an orchestrator call into matrix or nextcloud was a
+// TypeError on undefined. firstBodyAdapters is a complete Adapters whose two
+// unwanted subsystems refuse BY NAME.
+describe('firstBodyAdapters', () => {
+  it('carries the given keycloak subsystem and refuses matrix and nextcloud by name, on every method', async () => {
+    const { firstBodyAdapters } = await import('./customer-adapters')
+    const keycloak = { name: 'keycloak' } as never
+    const a = firstBodyAdapters(keycloak)
+    expect(a.keycloak).toBe(keycloak)
+    for (const s of [a.matrix, a.nextcloud]) {
+      expect(['matrix', 'nextcloud']).toContain(s.name)
+      await expect(s.ensureResource({} as never, { parentKeycloakGroupId: null }, null)).rejects.toThrow(new RegExp(`first body wants no ${s.name}`))
+      await expect(s.removeResource('x')).rejects.toThrow(/first body wants no/)
+      await expect(s.addMember('x', 'u')).rejects.toThrow(/first body wants no/)
+      await expect(s.removeMember('x', 'u')).rejects.toThrow(/first body wants no/)
+      await expect(s.reconcileMembers('x', [])).rejects.toThrow(/first body wants no/)
+    }
+  })
+})
+
 describe('customerAdapters.realm.ensureRealm', () => {
   beforeEach(() => vi.clearAllMocks())
 
