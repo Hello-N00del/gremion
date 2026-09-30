@@ -57,17 +57,26 @@ type RealmDoc = Record<string, unknown> & {
 }
 
 // The confidential clients in the base template whose `__*__OIDC_CLIENT_SECRET__`
-// placeholder a provisioned realm must replace with a generated secret. The
-// public PKCE client (gremion-mobile) has no secret; gremion-admin DOES (service
-// account). Pinned against the base template's placeholders.
-export const PROVISIONER_SECRET_CLIENTS = [
-  'nextcloud',
-  'gremion-ui',
-  'gremion-admin',
-  'helios',
-  'helios-voter',
-  'synapse',
-] as const
+// placeholder a provisioned realm must replace with a generated secret: EXACTLY
+// the base template's placeholders (TASK-043 Q11 shrank it from six names, four
+// of which no template carried -- a secret file per phantom client). The public
+// PKCE client (gremion-mobile) has no secret; gremion-admin DOES (service
+// account). realm-doc.test.ts pins this list against the template.
+export const PROVISIONER_SECRET_CLIENTS = ['gremion-ui', 'gremion-admin', 'synapse'] as const
+
+/**
+ * TASK-043 Q11 (RFC 8252 §7.1): the native app's private-use URI scheme is the
+ * platform domain reversed, `<reversed domain>.app:/oauthredirect` -- e.g.
+ * `example.council.app:/oauthredirect` for `council.example`. Set per realm here
+ * (the base template carries no sentinel for it).
+ */
+export function mobileRedirectUri(platformDomain: string): string {
+  const labels = platformDomain.toLowerCase().split('.').filter(Boolean)
+  if (labels.length < 2 || !labels.every((l) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(l))) {
+    throw new Error(`realm-doc: platform domain ${JSON.stringify(platformDomain)} is not a DNS name`)
+  }
+  return `${labels.reverse().join('.')}.app:/oauthredirect`
+}
 
 export type ProvisionerSecretClient = (typeof PROVISIONER_SECRET_CLIENTS)[number]
 
@@ -150,10 +159,14 @@ export interface BuildTenantRealmDocInput {
   apexDomain: string
   /** Generated per-client secrets keyed by clientId (PROVISIONER_SECRET_CLIENTS). */
   clientSecrets: Record<string, string>
-  /** The platform's authenticating SMTP sender. REQUIRED: the template's
-   *  __SMTP_*__ sentinels have no other filler now that the Keycloak boot
-   *  import is gone (spec B §T.4, gremion#6). */
-  smtp: RealmSmtpSettings
+  /** The realm's authenticating SMTP sender. `null` (TASK-043, every customer
+   *  realm): the realm is created with NO sender at all -- the template's
+   *  smtpServer block is removed -- and the host phase stamps the customer's
+   *  OWN submission principal (gremion-vendor-mail realm-smtp --tenant) before
+   *  any user exists; reconcile's smtp-server check guards it from then on. A
+   *  settings object keeps the pre-TASK-043 shape (the template sentinels
+   *  filled from it) for the callers that still compose a full realm. */
+  smtp: RealmSmtpSettings | null
 }
 
 /** Recursively replace every `https://<apexDomain>` occurrence with the tenant
@@ -413,14 +426,19 @@ export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
   // so every __…__ sentinel is filled HERE, in the same pass that swaps the realm
   // name and the authority. __APEX_DOMAIN__ is resolved BEFORE swapHost so the
   // apex authority is real by the time the tenant-host swap runs.
-  assertSmtpConfiguredForEmailLogin(composed, smtp)
+  if (smtp === null) {
+    // TASK-043: no sender until the host stamps the customer's own principal.
+    delete (composed as Record<string, unknown>).smtpServer
+  } else {
+    assertSmtpConfiguredForEmailLogin(composed, smtp)
+  }
   const resolved = substituteSentinels(composed, {
     __APEX_DOMAIN__: apexDomain,
-    ...Object.fromEntries(
-      Object.entries(smtpServerBlock(smtp)).map(([k, v]) => [`__SMTP_${k.toUpperCase()}__`, v]),
-    ),
+    ...(smtp === null
+      ? {}
+      : Object.fromEntries(Object.entries(smtpServerBlock(smtp)).map(([k, v]) => [`__SMTP_${k.toUpperCase()}__`, v]))),
   }) as RealmDoc
-  resolved.smtpServer = smtpServerBlock(smtp)
+  if (smtp !== null) resolved.smtpServer = smtpServerBlock(smtp)
 
   // (2) per-tenant realm identity + sslRequired:'all' literal (#139).
   resolved.realm = realmName
@@ -439,6 +457,8 @@ export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
   // and localhost dev URI from every client. Custom mobile schemes survive.
   for (const client of (hostSwapped.clients ?? []) as Array<Record<string, unknown>>) {
     restrictClientUris(client, tenantHost)
+    // TASK-043 Q11: the native client's ONE redirect, the reversed platform domain.
+    if (client.clientId === 'gremion-mobile') client.redirectUris = [mobileRedirectUri(apexDomain)]
   }
 
   // (3) inject the generated per-client secrets in place of the `__*__`
