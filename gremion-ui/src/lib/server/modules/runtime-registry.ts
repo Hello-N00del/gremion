@@ -263,18 +263,17 @@ export function getProtocolDocumentPort(): ProtocolDocumentPort | undefined {
 }
 
 // ── 6. Setup-wizard health probes ────────────────────────────────────────────
-// A3c S2: the setup-wizard health route (/api/setup/health) credential-probes
-// each module's admin client to predict provisioning success (#191). Those
-// clients live in the FEATURE modules (messages → synapse-admin, files →
-// nextcloud-client), so the route used to statically import them. Each such
-// module now self-registers ONE named credential probe here (in its
-// register.server.ts); the route iterates getSetupHealthProbes() and reports
-// each result under its `service` key, so it imports no module internals. The
-// KERNEL admin clients (keycloak-admin) stay inline in the route — only the
-// feature-module clients are inverted. A list (not a keyed map) preserving
-// registration order; an unregistered module simply contributes no probe (the
-// route's credential check for that service degrades to "invalid", matching the
-// other absent-module seams).
+// A3c S2: each feature module that owns an admin client (messages →
+// synapse-admin, files → nextcloud-client) self-registers ONE named credential
+// probe here in its register.server.ts. A list (not a keyed map) preserving
+// registration order; an unregistered module simply contributes no probe.
+//
+// No reader since TASK-042: the setup-wizard health route (/api/setup/health)
+// that was meant to iterate getSetupHealthProbes() is deleted with the wizard
+// (Q1). The API stays (TASK-042 Q10): it is a published module seam with
+// callers in the out-of-tree module repo and the pilot app, and removing it is a major change
+// (SemVer 2.0 §8). Residual for TASK-043: its pre-provision credential checks
+// consume these probes, or the seam is retired in a major release.
 
 /** One module's setup-wizard credential probe, reported under `service`. */
 export interface SetupHealthProbe {

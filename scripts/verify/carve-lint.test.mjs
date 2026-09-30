@@ -41,3 +41,15 @@ test('carve-lint pins a frozen-lockfile check (the release-1 gate ran pnpm insta
   assert.deepEqual(t.args.slice(0, 2), ['install', '--frozen-lockfile'])
   assert.ok(t.args.includes('--lockfile-only'), 'the lockfile check must not touch node_modules')
 })
+
+// TASK-048 (G4): the digest/object-storage guard is pinned in BOTH places a
+// Makefile merge could drop it -- the `lint` aggregate and carve-lint -- and
+// the target it names must exist.
+test('lint-image-digests (TASK-048) is a make lint prerequisite, a Makefile target, and a carve-lint target', () => {
+  const m = MAKEFILE.match(/^lint:([^\n]*)$/m)
+  assert.ok(m, 'the Makefile has no lint: aggregate')
+  assert.ok(m[1].trim().split(/\s+/).includes('lint-image-digests'), 'lint-image-digests is not a prerequisite of make lint')
+  assert.match(MAKEFILE, /^lint-image-digests:/m, 'the Makefile defines no lint-image-digests target')
+  const t = CARVE_LINT_TARGETS.find((x) => x.name === 'lint-image-digests')
+  assert.deepEqual(t, { name: 'lint-image-digests', kind: 'make', target: 'lint-image-digests', tool: 'docker' })
+})

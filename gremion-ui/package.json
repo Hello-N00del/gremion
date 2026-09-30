@@ -20,6 +20,7 @@
     "coverage": "vitest run --project unit --coverage",
     "migrate": "tsx scripts/run-migrations-verified.mjs",
     "migrate:control": "tsx scripts/run-control-migrations.mjs",
+    "migrate:test-fixture": "tsx scripts/migrate-test-fixture.mjs",
     "provision": "tsx scripts/tenant-provision.mjs"
   },
   "devDependencies": {

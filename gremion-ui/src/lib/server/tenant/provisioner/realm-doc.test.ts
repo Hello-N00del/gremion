@@ -47,10 +47,22 @@ const TEST_SMTP: RealmSmtpSettings = {
 
 describe('issuer / kc-internal derivation (D-ISSUER-HOST)', () => {
   it('builds the per-tenant subdomain issuer', () => {
-    expect(issuerForTenant('t2', 'verein', 'council.example')).toBe(
+    expect(issuerForTenant('t2.council.example', 'verein')).toBe(
       'https://t2.council.example/auth/realms/verein',
     )
   })
+
+  // TASK-042 TDD 9 (Q2): the supplied host is used VERBATIM (no slug.apex synthesis).
+  it('issuerForTenant mints the issuer from the supplied host verbatim', () => {
+    expect(issuerForTenant('stura-example.de', 'stura')).toBe('https://stura-example.de/auth/realms/stura')
+  })
+
+  it.each(['', 'Stura-Example.de', 'stura example.de', 'a.de,b.de', 'https://stura-example.de', 'stura-example.de/x', '*.example.de'])(
+    'issuerForTenant refuses the host %j',
+    (host) => {
+      expect(() => issuerForTenant(host, 'stura')).toThrow(/tenant: host is not a valid hostname/)
+    },
+  )
 
   it('(A) #139/G-080: kcInternalForTenant returns an internal-TLS URL by default (https, not plaintext :8080)', () => {
     const url = kcInternalForTenant('verein')

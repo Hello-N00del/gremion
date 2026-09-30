@@ -1,10 +1,10 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f2 -> d0c656d0b266f3a1741f34454e0061bc5078c3f4; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: c653ef85085fee7106c88a40379c85afebfb66f9
+kernel: 2c8c82cf4e4428ba548dddf35873194aee9824ba
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f2: 42 files, 0 differ (0 listed, 0 unlisted)
-set B — services/** at extraction-source-f2: 383 files, 23 differ (23 listed, 0 unlisted)
+set B — services/** at extraction-source-f2: 383 files, 25 differ (25 listed, 0 unlisted)
   listed   modules/board/migrations/manifest.json  tag=a6c5997f4e48b3a501b016c9935745af6c2cb8bc kernel=d9f35ed80842e07e55851c97c61979ab662d8d55
   listed   modules/board/test/support/pg-test-guard.ts  tag=6d7e3d226918071816e91af257d22a10c108afa0 kernel=0719eac1bc578fec4536f94112cfad29284f11de
   listed   modules/calendar/test/kernel-client.test.ts  tag=c3263f61bda3e2e8d2bb437b3a420c39ff43644d kernel=16e00150ac28e7541a8150d1fa513c37db8eb228
@@ -20,6 +20,8 @@ set B — services/** at extraction-source-f2: 383 files, 23 differ (23 listed, 
   listed   modules/finance/test/org-unit-mirror.integration.test.ts  tag=0f43978db14ee058c1c97788c7ad59d62045f322 kernel=6578e97a47f0aa10efe0d227c37ef48eae7fe485
   listed   modules/finance/test/tenant-store.init-retry.test.ts  tag=6bd8d0a0796eeb577734e2f9e3d7c86e164b0f4d kernel=f2b8186c41e7ec620abcba6f9db62d57d8958461
   listed   modules/finance/tsconfig.test.json  tag=087a68c8d4a342b80562455a9337f3a4354810da kernel=191a604d7a7a062687191aaf40d66eb867af485a
+  listed   modules/messaging/src/livekit/livekit-client.ts  tag=de5cbedd5c55c4e8177cc9d3c9e207cdc4767098 kernel=bb948a0b637ab2bd8786a71153dfd0509bf2348c
+  listed   modules/messaging/test/forwarding.test.ts  tag=7c2dd50cbf21af0c858c007923dd2404e023e93c kernel=5302e71fcfe0244c9c151d690e0c640a2110320e
   listed   modules/publishing/src/dispatch.ts  tag=ca2e8cf414c67f480fca8c7d25294d582faa16a1 kernel=0d5d13733a8ddfe8a4f4aeece997a7cfdf938df8
   listed   modules/publishing/test/guard.test.ts  tag=8260df8df3d7a89fb0d719daa39bd7500e83e688 kernel=43536182a2bb433675becbf037c1f53e9d6e5f8f
   listed   modules/publishing/test/kernel-client.test.ts  tag=cf8cabdcd28e8f139eee28a9f4ac705868783dfc kernel=7296832e4ef7f282110871002579c9eaecfa3903
@@ -28,9 +30,10 @@ set B — services/** at extraction-source-f2: 383 files, 23 differ (23 listed, 
   listed   modules/publishing/test/tenant-store.init-retry.test.ts  tag=04b31d34572505d819865eb533b672739f939526 kernel=40501dbdfcc2ff9a3e1c86a4566e465dcefc0358
   listed   modules/publishing/tsconfig.test.json  tag=162ccce93b621baa201143a411889e43014cdd66 kernel=8ae42549a76ff483e918787cb1796d89d1a6aa1c
   listed   modules/vault/test/support/pg-test-guard.ts  tag=f6ce9a1592b6c8311d736252df46ac076bec2649 kernel=3b454ab23dfbd00fe99c8c8ab91a5b614553380f
-set C — content UI half (gremion-ui/src -> modules/content/app): 96 files, 3 differ (3 listed, 0 unlisted)
+set C — content UI half (gremion-ui/src -> modules/content/app): 96 files, 4 differ (4 listed, 0 unlisted)
   listed   modules/content/app/lib/server/content/caption.ts  tag=76a72f5ab0b838a70b48dc916f188907eb451e57 kernel=5cd14c9d2f865e0169842b029de6bf9c6e1b1c0c
   listed   modules/content/app/lib/server/content/channels/instagram-renderer.ts  tag=d089942af62aba7786b623892646228835a6f15a kernel=fd9d2cbb6c5722b0e5c620ccc41eabb456852989
+  listed   modules/content/app/lib/server/content/register.server.ts  tag=71222cad35ca5588cd62045c38a7d01a9f69a8ad kernel=6d912e98c4d7e866f13b37b09d420ddbd9f3877b
   listed   modules/content/app/lib/server/content/segment.ts  tag=1401366d3c1bf026fc8da487d42ccd9c1112c45d kernel=b9b048a3e3d1fda70970fb3629d01dbcefb26505
 extras — kernel files in a mapped module directory that no tag path maps to: 5 (5 listed)
   listed   modules/content/app/lib/server/content/jsdom-shim.d.ts
@@ -38,6 +41,6 @@ extras — kernel files in a mapped module directory that no tag path maps to: 5
   listed   modules/content/app/migrations/1201_news_posts_public_reader_columns.sql
   listed   modules/content/app/scripts/news-posts-public-grant-proof.sh
   listed   modules/content/app/scripts/news-posts-public-grant-proof.test.mjs
-delta entries: 31
+delta entries: 34
 
 RESULT: OK

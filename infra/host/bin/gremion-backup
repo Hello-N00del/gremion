@@ -3,8 +3,8 @@
 # gremion-backup — §J of the netcup distribution-host design.
 #
 # Enumerates the artefact set FROM THE RUNNING SYSTEM (databases, state- and
-# mail-project volumes, object-storage buckets, /opt/gremion/etc minus the
-# per-tenant backup keys), stages it under $(gremion_root)/backups/current,
+# mail-project volumes, /opt/gremion/etc minus the per-tenant backup keys;
+# no object storage, TRD-066/354), stages it under $(gremion_root)/backups/current,
 # writes one restic snapshot, mirrors the repository off-site, verifies the
 # off-site copy by reading it back, writes runtime/last-backup.json and
 # reports to the alert channel on BOTH outcomes.
@@ -71,7 +71,6 @@ OK=false
 OFFSITE=false
 DB_COUNT=0
 VOLUME_COUNT=0
-BUCKET_COUNT=0
 REPO_BYTES=0
 ARCHIVE_IMAGE_DIGEST=""
 DATABASES=""
@@ -128,6 +127,19 @@ load_state_env() {
     STATE_ENV="$(gremion_root)/etc/env/state.env"
     [ -f "$STATE_ENV" ] || die "missing ${STATE_ENV}" 2
     load_env "$STATE_ENV"
+}
+
+# TRD-066/354 (TASK-048, Q8): the pilot runs no object storage and this script
+# no longer mirrors buckets. A MINIO_* or *_S3_* key left in state.env is
+# configuration for data nothing backs up, so it is REFUSED (exit 2), never
+# ignored: silently skipping it is how bucket data would drop out of the
+# backup set unnoticed. Key names only are printed, never values.
+refuse_object_storage_config() {
+    local keys rc=0
+    keys="$(grep -oE '^[[:space:]]*(export[[:space:]]+)?(MINIO|([A-Za-z0-9_]*_)?S3)_[A-Za-z0-9_]*=' "$STATE_ENV")" || rc=$?
+    [ "$rc" -le 1 ] || die "cannot read ${STATE_ENV}" 2
+    [ -z "$keys" ] || die "object-storage key(s) in ${STATE_ENV}: $(printf '%s\n' "$keys" \
+        | sed -E 's/^[[:space:]]*(export[[:space:]]+)?//; s/=$//' | tr '\n' ' ')- the pilot runs no object storage (TRD-066) and gremion-backup mirrors no buckets (TRD-354); remove them" 2
 }
 
 # The five RCLONE_CONFIG_BACKUP_* keys are rclone's own env convention for the
@@ -529,7 +541,7 @@ assert_dump_coverage() {
 
 archive_volumes() {
     local v img
-    img="${BACKUP_ARCHIVE_IMAGE:-alpine:3.22}"
+    img="${BACKUP_ARCHIVE_IMAGE:-alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}"
     mkdir -p "${DUMP_DIR}/volumes"
     docker pull --quiet "$img" >/dev/null 2>&1 \
         || die "cannot pull archive image ${img}" 1
@@ -550,43 +562,6 @@ archive_volumes() {
         VOLUME_COUNT=$(( VOLUME_COUNT + 1 ))
     done 3<<<"$VOLUMES"
     ok "archived ${VOLUME_COUNT} volume(s) with ${ARCHIVE_IMAGE_DIGEST}"
-}
-
-# MINIO_ENDPOINT is the host-reachable (loopback-published) endpoint; the mc
-# container runs on the host network so both tools use the same address.
-mirror_buckets() {
-    local k mc_host buckets b
-    BUCKET_COUNT=0
-    if [ -z "${MINIO_ENDPOINT:-}" ]; then
-        info "MINIO_ENDPOINT unset: object storage not in use (N11); file data is covered by the volume class (§J)"
-        return 0
-    fi
-    for k in BACKUP_MC_IMAGE MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
-        [ -n "${!k:-}" ] || die "MINIO_ENDPOINT is set but ${k} is not" 2
-    done
-    mc_host="MC_HOST_gremion=${MINIO_ENDPOINT%%://*}://${MINIO_ACCESS_KEY}:${MINIO_SECRET_KEY}@${MINIO_ENDPOINT#*://}"
-    # Guarded assignment: an enumeration that FAILS must say so, not exit the
-    # program silently on the assignment's own status under `set -e`.
-    buckets="$(docker run --rm --network host -e "$mc_host" \
-        "${BACKUP_MC_IMAGE}" ls gremion --json 2>/dev/null \
-        | jq -r 'select(.type == "folder") | .key' | tr -d '/' | sed '/^[[:space:]]*$/d')" \
-        || die "bucket enumeration failed against ${MINIO_ENDPOINT}" 1
-    [ -n "$buckets" ] \
-        || die "MINIO_ENDPOINT is set but bucket enumeration returned nothing" 1
-    mkdir -p "${DUMP_DIR}/buckets"
-    while read -r b <&3; do
-        [ -n "$b" ] || continue
-        RCLONE_CONFIG_MINIO_TYPE=s3 \
-        RCLONE_CONFIG_MINIO_PROVIDER=Minio \
-        RCLONE_CONFIG_MINIO_ENDPOINT="${MINIO_ENDPOINT}" \
-        RCLONE_CONFIG_MINIO_ACCESS_KEY_ID="${MINIO_ACCESS_KEY}" \
-        RCLONE_CONFIG_MINIO_SECRET_ACCESS_KEY="${MINIO_SECRET_KEY}" \
-        rclone sync "minio:${b}" "${DUMP_DIR}/buckets/${b}" \
-            --transfers 4 --checkers 8 --quiet \
-            || die "bucket mirror failed: ${b}" 1
-        BUCKET_COUNT=$(( BUCKET_COUNT + 1 ))
-    done 3<<<"$buckets"
-    ok "mirrored ${BUCKET_COUNT} bucket(s)"
 }
 
 # TASK 9, review round 3: $(gremion_root)/backups/current is a PERSISTENT host
@@ -761,7 +736,7 @@ write_report() {
        --arg     class     "$CLASS" \
        --argjson databases "$DB_COUNT" \
        --argjson volumes   "$VOLUME_COUNT" \
-       --argjson buckets   "$BUCKET_COUNT" \
+       --argjson buckets   0 \
        --argjson offsite   "$OFFSITE" \
        --argjson bytes     "$REPO_BYTES" \
        '{ts:$ts, ok:$ok, label:$lbl, class:$class,
@@ -840,6 +815,9 @@ main() {
     # From here every exit path reports: §J requires a report on BOTH outcomes,
     # and an unreachable remote is the failure most worth hearing about.
     trap on_exit EXIT
+    # After the trap (TASK-048 review): a stale object-storage key stops every
+    # nightly, so it is reported and alerted like any other failed run.
+    refuse_object_storage_config
     RELEASE_DIR="${GREMION_RELEASE_DIR:-$(gremion_root)/current}"
     [ -d "$RELEASE_DIR" ] || die "release tree absent: ${RELEASE_DIR}" 2
     # BACKUP_DIR for the kernel dump script; DUMP_DIR is the staged tree that
@@ -855,7 +833,6 @@ main() {
     dump_remaining_databases
     assert_dump_coverage
     archive_volumes
-    mirror_buckets
     copy_etc
     restic_init_if_absent
     SNAP_BEFORE="$(snapshot_ids_of_class snapshot)"
@@ -865,8 +842,11 @@ main() {
     restic_check
     warn_snapshot_class_accumulation
     mirror_offsite
-    printf 'BACKUP: label=%s class=%s databases=%s volumes=%s buckets=%s offsite=%s ok=true\n' \
-        "$LABEL" "$CLASS" "$DB_COUNT" "$VOLUME_COUNT" "$BUCKET_COUNT" "$OFFSITE"
+    # buckets=0 is a literal (Q7), in this line and in last-backup.json: the
+    # field stays because gremion-snapshot compares artefact classes against
+    # it; TASK-089 owns the report shape.
+    printf 'BACKUP: label=%s class=%s databases=%s volumes=%s buckets=0 offsite=%s ok=true\n' \
+        "$LABEL" "$CLASS" "$DB_COUNT" "$VOLUME_COUNT" "$OFFSITE"
 }
 
 main "$@"

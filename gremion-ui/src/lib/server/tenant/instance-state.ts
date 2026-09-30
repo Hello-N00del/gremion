@@ -43,8 +43,8 @@ const RESOURCE_TO_SERVICE_STATUS: Record<ResourceStatus, ServiceStatus> = {
 /**
  * CHEAP overall state for the shell badge/banner — in-memory readiness only, no
  * DB read. Fail-safe to 'ready' (a status glitch must never block or noise-up the
- * shell). The DEFAULT tenant is migrated at boot → 'ready', so the badge/banner
- * stay hidden in the normal case.
+ * shell). Every active tenant is migrated at boot (or lazily on first request)
+ * → 'ready', so the badge/banner stay hidden in the normal case.
  */
 export function instanceStateForTenant(
   tenant: Pick<TenantContext, 'id'> | null | undefined,
@@ -69,7 +69,7 @@ export interface InstanceStatusDetail {
  * ledger (tenant_provisioning_resource) onto the snapshot and derive the overall
  * state from it when the ledger is complete. Falls back to the readiness-derived
  * state (no overrides → the snapshot renders) when the tenant has no/partial
- * ledger rows (e.g. the originator default tenant, which has none). Fail-safe.
+ * ledger rows (e.g. a hand-bound tenant, which has none). Fail-safe.
  */
 export async function instanceStatusDetail(
   tenant: Pick<TenantContext, 'id'>,

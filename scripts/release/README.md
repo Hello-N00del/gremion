@@ -17,6 +17,9 @@ verified against the host's pinned public key (D R20-D18).
 | `check-runner-scope.mjs --live` | operator, dated | GitHub API view of both repos: Actions on ⇒ no key-class secret, no self-hosted runner |
 | `check-dependabot-dockerfiles.mjs`, `check-lockfile-committed.mjs`, `check-pins.mjs` | `verify` | Release-1 B35 adapts |
 | `lint-release.sh` | lint | runs every suite here and in `scripts/verify/sbom/`, asserts collected == declared tests, shellchecks `*.sh` |
+| `check-image-digests.mjs` (TASK-048) | `make lint-image-digests`, verify carve-lint | every `image:`, `*_IMAGE=` and `${*_IMAGE:-d}` in the discovered scan set (root-anchored `git ls-files` pathspecs; exclusions in `image-scan-exclusions.json`, reason required, stale = fail) is `<repo>[:tag]@sha256:<64 hex>`, bar first-party `${IMAGE_TAG:-dev}`/`${IMAGE_TAG:?}` on a `build:` service; no `latest` default; no object-storage image, profile, `MINIO_*`/`*_S3_*` key or S3 client in the lockfile (TRD-350/066/354). `--third-party-list` prints the host's `etc/third-party-images` |
+| `emit-pins.mjs` (TASK-048) | operator workstation, release | writes the app layer of `docker-compose.pins.yml` from `svc=<repo>@sha256:…` lines; refuses anything `check-pins.mjs` refuses |
+| `release-signing.rehearsal.test.mjs` (TASK-048) | lint (`lint-release.sh`) | the `docs/ops/release-signing.md` sequence on throwaway material with a stub check record: signs, verifies with the rehearsal key, no tlog, another key fails |
 
 Tool pins live in `lib/tools.mjs` (registry, syft and grype by digest; cosign by
 release-asset sha256). `bootstrap.sh` and `sign-release.sh` repeat the cosign

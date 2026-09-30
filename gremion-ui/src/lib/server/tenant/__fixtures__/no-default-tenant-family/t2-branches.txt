@@ -1,0 +1,9 @@
+return slug === 'default' ? a : b
+if (tenant.id === "default") return
+const p = tenantSlug !== 'default' ? `t.${tenantSlug}.` : ''
+if (slug == 'default') {}
+const ctx = await resolveTenantBySlug('default')
+const row = await getTenantBySlug( "default" )
+const DEFAULT_SLUG = 'default'
+isDefault: tenant.slug === x,
+realm: tenant?.slug ?? 'default'

@@ -13,7 +13,7 @@
  *     DB. The deselection lane must NOT truncate anything — it boots into a
  *     fresh, empty, finance-OFF database and only asserts absence.
  *
- * Both setup files must wire the default-tenant ALS context (P2.1a): getDb()
+ * Both setup files must wire a tenant ALS context (P2.1a): getDb()
  * and runMigrations() are fail-closed and throw "No tenant context" when called
  * outside runWithTenant(). municipal-acceptance.integration.test.ts (the
  * remaining consumer of this lane — see tests/integration/README.md) calls
@@ -32,19 +32,19 @@ assertNonProductionDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
 // The pool-registry keys on tenant.id and connects via tenant.dbUrl.
 // Snapshot process.env.DATABASE_URL here (module-import time) so the context
 // carries the URL the operator set before starting the vitest process — exactly
-// the same pattern as setup.ts's DEFAULT_TEST_TENANT.dbUrl.
+// the same pattern as setup.ts's FIXTURE_TEST_TENANT.dbUrl.
 const DESELECTION_TEST_TENANT = {
-  id: 'default',
-  // P2.1b T7: per-tenant service singletons branch on slug === 'default'
-  // (tenant #1 stays on env-derived values byte-identically).
-  slug: 'default',
+  // TASK-042: there is no default tenant; this lane's tenant is a plain fixture
+  // with a UUID id like every registry tenant (storage refuses anything else).
+  id: '01920000-0000-7000-8000-00000000d5e1',
+  slug: 'deselection',
   // §8.1 / D-CONFIGPATH: readConfig() reads tenant.configPath UNCONDITIONALLY
   // (config.ts getConfigPath no longer re-reads env). runMigrations() →
   // readConfig() drives the disabled-module migration skip-set, so the
   // finance-OFF proof MUST carry the operator's CONFIG_PATH here, or readConfig
   // falls back to the finance-ON DEFAULT_CONFIG and the finance migrations run
   // anyway (defeating the deselection / municipal-acceptance proof). Mirrors
-  // setup.ts's DEFAULT_TEST_TENANT.configPath.
+  // the per-tenant config file setup.ts's FIXTURE_TEST_TENANT carries.
   configPath: process.env.CONFIG_PATH ?? '/app/config/config.json',
   dbUrl: process.env.DATABASE_URL,
   dbMax: 5,

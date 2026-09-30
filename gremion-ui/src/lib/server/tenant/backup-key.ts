@@ -16,11 +16,11 @@ import { tenantSecretHostPath } from './secrets'
  * The single canonical location a `backup_key_ref` resolves to.
  * - `file`: a host filesystem path (per-tenant secret under the D-SECMOUNT mount)
  *   — the crypto-shred target. `path` is the exactly-one location.
- * - `env`: the DEFAULT tenant's `env:BACKUP_KEY` — key material lives in the
- *   operator root secret (`.env`/KMS), NOT in any tenant-keyed file. There is
- *   therefore NO per-tenant file to crypto-shred (and nothing for the registry
- *   backup to leak): the default tenant's key is the bootstrap root key, backed
- *   up independently of any tenant lifecycle (design §3 bootstrap caveat).
+ * - `env`: an `env:<VAR>` ref (the retired env-derived tenant used
+ *   `env:BACKUP_KEY`; since TASK-042 only test fixtures write one) — key
+ *   material lives in the operator root secret (`.env`/KMS), NOT in any
+ *   tenant-keyed file. There is therefore NO per-tenant file to crypto-shred
+ *   (and nothing for the registry backup to leak).
  */
 export type BackupKeyLocation =
   | { readonly kind: 'file'; readonly hostPath: string }
