@@ -258,6 +258,9 @@ case " $* " in
     cat > "$ST/payload-$realm.json"
     # Keycloak answers a set smtpServer password as its mask, never the value.
     mask="if ((.password // \"\") != \"\") then .password = \"**********\" else del(.password) end"
+    # maskempty: a Keycloak that masks the key whenever it is PRESENT, an empty
+    # string included (review C, r2: the revoke read-back must not depend on it).
+    [ "$(cat "$ST/mode")" = maskempty ] && mask="if has(\"password\") then .password = \"**********\" else . end"
     if [ "$(cat "$ST/mode")" = broken ]; then
       jq -c ".smtpServer | $mask | .user = \"someone-else@example.org\"" "$ST/payload-$realm.json" > "$ST/realm-$realm.json"
     else
@@ -423,6 +426,19 @@ issue_calls() { grep -c 'principals.mjs issue' "$SHIM_LOG" || true; }
     [[ "$output" == *"action=issued"* ]] || { echo "$output"; return 1; }
     refute_recorded docker 'principals.mjs issue --tenant alpha_council --rotate'
     [ "$(tail -n 1 "${GREMION_ROOT}/kc/issue-log")" = no ]
+    refute_app_password
+}
+
+@test "realm-smtp --tenant --revoke passes on a Keycloak that masks even an EMPTY password: the post-condition is no user, no from, auth off (review C, r2)" {
+    shim_keycloak maskempty
+    write_state_env
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council --revoke
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
+    [[ "$output" == *"action=revoked"* ]]
+    run jq -e '.user == "" and .from == "" and .auth == "false"' "${GREMION_ROOT}/kc/realm-alpha-council.json"
+    [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
     refute_app_password
 }
 

@@ -268,9 +268,17 @@ customer_realm_smtp() {
                            fromDisplayName: "Gremion", user: "", from: "", password: ""}}' \
             | kcadm_update_stdin "$realm" \
             || die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"
-        state="$(realm_smtp_state "$realm")" || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
-        if [[ "$(jq -r '(.user // "") + "|" + (.from // "") + "|" + (.pwset | tostring)' <<<"$state")" != "||false" ]]; then
-            bad "realms/${realm} smtpServer read back as ${state} after the revoke, expected no user, no from, no password"
+        # The post-condition does NOT read the password: Keycloak may answer an
+        # empty one as its mask (review C, r2). No user, no from and SMTP auth
+        # off mean the realm cannot authenticate as anyone; the principal
+        # itself is proven gone by the listing below.
+        local raw
+        raw="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$realm" --fields smtpServer)" \
+            || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
+        state="$(jq -c '(.smtpServer // {}) | {user: (.user // ""), from: (.from // ""), auth: ((.auth // "") | tostring)}' <<<"$raw")" \
+            || die "realms/${realm} read back as no JSON" "$GREMION_EXIT_ASSERT"
+        if [[ "$(jq -r '.user + "|" + .from + "|" + .auth' <<<"$state")" != "||false" ]]; then
+            bad "realms/${realm} smtpServer read back as ${state} after the revoke, expected no user, no from, auth false"
             exit "$GREMION_EXIT_ASSERT"
         fi
         listed="$(run_node principals list --tenant "$token")" \
