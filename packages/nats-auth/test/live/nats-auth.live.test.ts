@@ -220,8 +220,12 @@ describe('A3 no cross-module access (publishing vs content, tenant A)', () => {
   })
 })
 
-/** Boots consumer then producer as the callers do; asserts the consumer received the one event exactly once. */
-async function flow(producer: string, consumer: string, stream: keyof typeof STREAMS, subject: string, eventType: string): Promise<void> {
+/**
+ * Boots consumer then producer as the callers do; returns the consumer's
+ * deliveries of the one event and that event's id. The test body makes the
+ * one assertion: delivered exactly once.
+ */
+async function flow(producer: string, consumer: string, stream: keyof typeof STREAMS, subject: string, eventType: string): Promise<{ delivered: string[]; want: string[]; why: string }> {
   const d = STREAMS[stream]
   const sub = await bootBroker(A, consumer, stream)
   const got: string[] = []
@@ -235,22 +239,26 @@ async function flow(producer: string, consumer: string, stream: keyof typeof STR
   await pub.publish(subject, e)
   for (let i = 0; i < 100 && !got.includes(e.eventId); i++) await sleep(50)
   const delivered = got.filter((id) => id === e.eventId)
-  expect(delivered, `${consumer} did not receive ${producer}'s ${e.eventId}`).toEqual([e.eventId])
   s.unsubscribe()
+  return { delivered, want: [e.eventId], why: `${consumer} did not receive ${producer}'s ${e.eventId} exactly once` }
 }
 
 describe('F the current flows deliver, as the callers boot', () => {
   test('F1 kernel -> ORGUNIT -> finance', async () => {
-    await flow('kernel', 'finance', 'ORGUNIT', orgUnitSubject(A, 'upserted'), 'upserted')
+    const r = await flow('kernel', 'finance', 'ORGUNIT', orgUnitSubject(A, 'upserted'), 'upserted')
+    expect(r.delivered, r.why).toEqual(r.want)
   })
   test('F2 publishing -> NEWSLETTER -> kernel', async () => {
-    await flow('publishing', 'kernel', 'NEWSLETTER', newsletterSubject(A, 'send.succeeded'), 'send.succeeded')
+    const r = await flow('publishing', 'kernel', 'NEWSLETTER', newsletterSubject(A, 'send.succeeded'), 'send.succeeded')
+    expect(r.delivered, r.why).toEqual(r.want)
   })
   test('F3 content -> CONTENT -> kernel', async () => {
-    await flow('content', 'kernel', 'CONTENT', contentSubject(A, 'publish.succeeded'), 'publish.succeeded')
+    const r = await flow('content', 'kernel', 'CONTENT', contentSubject(A, 'publish.succeeded'), 'publish.succeeded')
+    expect(r.delivered, r.why).toEqual(r.want)
   })
   test('F4 calendar -> CALENDAR -> kernel', async () => {
-    await flow('calendar', 'kernel', 'CALENDAR', calendarSubject(A, 'event.created'), 'event.created')
+    const r = await flow('calendar', 'kernel', 'CALENDAR', calendarSubject(A, 'event.created'), 'event.created')
+    expect(r.delivered, r.why).toEqual(r.want)
   })
 })
 
