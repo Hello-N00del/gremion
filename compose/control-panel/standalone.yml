@@ -4,12 +4,20 @@
 #   docker compose -p gremion-panel -f compose/control-panel/standalone.yml \
 #     --env-file <0600 env file, from standalone.env.tmpl> up -d
 #
-# One service. Published on the LOOPBACK only (127.0.0.1:${PANEL_PORT}); the
-# operator reaches it through `ssh -L 127.0.0.1:3043:127.0.0.1:3043 <host>`
-# (Q22). No Traefik route (traefik.enable=false; TRD-048 / TASK-118 forbid a
-# public one). It joins the existing Keycloak's network (PANEL_NETWORK, the
-# orchestrator re-measures it) to reach the internal OIDC endpoints. Secrets
-# are files mounted read-only; the root filesystem is read-only, every
+# One service. [D R29-I11] (supersedes the Q22 ssh -L default): the host's
+# existing edge Traefik routes ONE operator-supplied host name (PANEL_HOST,
+# env only -- no literal host in the repo) to it, TLS through the operator's
+# named certificate resolver, with gremion-ui's HSTS (one year,
+# includeSubDomains, never preload); the app sends gremion-ui's CSP and
+# refuses (421) every request whose Host is not PANEL_HOST (ORIGIN is
+# https://${PANEL_HOST}). Access stays the ops realm with multi-factor sign-in
+# (TRD-048): a customer-realm session is refused at the shell.
+#
+# The one published port binds the LOOPBACK only, for on-host diagnostics
+# (a request there must still carry Host: ${PANEL_HOST}). PANEL_NETWORK must be
+# shared by the edge Traefik (traefik.docker.network) and Keycloak's internal
+# endpoints (PANEL_OIDC_INTERNAL_BASE); the orchestrator re-measures it.
+# Secrets are files mounted read-only; the root filesystem is read-only, every
 # capability dropped. It executes nothing (PANEL_EXECUTOR=none): "Neuer
 # Mandant" is disabled with its reason until TASK-038's re-init.
 #
@@ -20,6 +28,9 @@ name: gremion-panel
 x-required-env:
   image-tag: "${IMAGE_TAG:?IMAGE_TAG required}"
   panel-network: "${PANEL_NETWORK:?PANEL_NETWORK required}"
+  panel-host: "${PANEL_HOST:?PANEL_HOST required}"
+  panel-entrypoint: "${PANEL_TRAEFIK_ENTRYPOINT:?PANEL_TRAEFIK_ENTRYPOINT required}"
+  panel-resolver: "${PANEL_CERT_RESOLVER:?PANEL_CERT_RESOLVER required}"
 
 services:
   control-panel:
@@ -36,9 +47,22 @@ services:
     ports:
       - "127.0.0.1:${PANEL_PORT:-3043}:3000"
     labels:
-      traefik.enable: "false"
+      traefik.enable: "true"
+      traefik.docker.network: "${PANEL_NETWORK:?PANEL_NETWORK required}"
+      traefik.http.routers.gremion-panel.rule: "Host(`${PANEL_HOST:?PANEL_HOST required}`)"
+      traefik.http.routers.gremion-panel.entrypoints: "${PANEL_TRAEFIK_ENTRYPOINT:?PANEL_TRAEFIK_ENTRYPOINT required}"
+      traefik.http.routers.gremion-panel.tls: "true"
+      traefik.http.routers.gremion-panel.tls.certresolver: "${PANEL_CERT_RESOLVER:?PANEL_CERT_RESOLVER required}"
+      traefik.http.routers.gremion-panel.middlewares: "gremion-panel-hsts"
+      traefik.http.routers.gremion-panel.service: "gremion-panel"
+      traefik.http.services.gremion-panel.loadbalancer.server.port: "3000"
+      # gremion-ui's HSTS on the same edge: one year, includeSubDomains, no preload.
+      # Declared on this container: the router and its middleware live and die together.
+      traefik.http.middlewares.gremion-panel-hsts.headers.stsseconds: "31536000"
+      traefik.http.middlewares.gremion-panel-hsts.headers.stsincludesubdomains: "true"
+      traefik.http.middlewares.gremion-panel-hsts.headers.stspreload: "false"
     environment:
-      ORIGIN: ${PANEL_ORIGIN:?PANEL_ORIGIN required}
+      ORIGIN: https://${PANEL_HOST:?PANEL_HOST required}
       PANEL_OIDC_ISSUER: ${PANEL_OIDC_ISSUER:?PANEL_OIDC_ISSUER required}
       PANEL_OIDC_INTERNAL_BASE: ${PANEL_OIDC_INTERNAL_BASE:?PANEL_OIDC_INTERNAL_BASE required}
       PANEL_OIDC_CLIENT_ID: control-panel

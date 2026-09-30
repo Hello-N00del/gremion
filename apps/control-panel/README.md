@@ -7,7 +7,12 @@ customers of the control registry, shows each customer's provisioning ledger
 
 ## Who may use it (TRD-048)
 
-`hooks.server.ts` runs the gate (`src/lib/server/gate.ts`) on **every**
+First, the host (R29-I11): every request whose `Host` is not the host of
+`ORIGIN` is refused with **421** before Auth.js or the gate run (only
+`/healthz` and the bearer-checked `/api/internal/evict` answer on any Host).
+Every HTML response carries gremion-ui's Content-Security-Policy, verbatim.
+
+Then `hooks.server.ts` runs the gate (`src/lib/server/gate.ts`) on **every**
 request except `/healthz`, `/api/internal/evict` and Auth.js's own `/auth/*`,
 before SvelteKit resolves a page, a form action or a `+server` endpoint:
 
@@ -31,7 +36,7 @@ without vendor mail, `--no-mail` (a temporary password printed once; Q23).
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `ORIGIN` | yes | the browser origin, e.g. `http://127.0.0.1:3043`; SvelteKit's CSRF check answers **403** to a form POST from any other origin, so behind `ssh -L` it must be the tunnel's local origin |
+| `ORIGIN` | yes | the browser origin: `https://<PANEL_HOST>` behind an edge (the standalone file sets it), or `http://127.0.0.1:<p>` behind `ssh -L`. Its host is the ONLY `Host` the panel answers on (421 otherwise), and SvelteKit's CSRF check answers **403** to a form POST from any other origin |
 | `PANEL_OIDC_ISSUER` | yes | the ops realm's PUBLIC issuer, exact (`https://<platform domain>/auth/realms/platform`); any other realm is refused at startup |
 | `PANEL_OIDC_INTERNAL_BASE` | yes | Keycloak's internal `/auth` base for the token, userinfo and JWKS calls |
 | `NODE_EXTRA_CA_CERTS` | when the internal base is https with an internal CA | the CA bundle |
@@ -54,8 +59,13 @@ database, so the panel is healthy before `gremion-tenant init`.
   published port, no Traefik route; `gremion-tenant panel` prints the
   `ssh -L 127.0.0.1:<p>:<ip>:3000` line.
 - **A host without the pooled stack** (`compose/control-panel/standalone.yml`,
-  section 11): published on `127.0.0.1` only, reached with
-  `ssh -L 127.0.0.1:3043:127.0.0.1:3043 <host>`.
+  section 11, [D R29-I11]): routed by the host's existing edge Traefik on ONE
+  operator-supplied host name (`PANEL_HOST`, env only), TLS by the named
+  resolver (`PANEL_CERT_RESOLVER`), gremion-ui's HSTS; `ORIGIN` is
+  `https://<PANEL_HOST>`. The ops realm's `control-panel` client must name
+  that origin exactly: `gremion-tenant init --realm-only --panel-origin
+  https://<PANEL_HOST>`. A loopback port (`127.0.0.1:${PANEL_PORT}`) stays for
+  on-host diagnostics; a request there still needs `Host: <PANEL_HOST>`.
 
 Verify either with `test/host/integration/panel-verify.sh <base-url>`.
 

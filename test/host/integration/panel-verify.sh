@@ -3,17 +3,21 @@ set -euo pipefail
 #
 # panel-verify.sh <base-url> — the TRD-048 gate of the control panel, probed
 # from outside against ANY running panel (TASK-043 TDD 22, section 11 (f)):
-# the scratch standalone panel of the proof, or the netcup test env's through
-# `ssh -L` (panel-verify.sh http://127.0.0.1:3043).
+# the scratch standalone panel of the proof, or the test env's on its public
+# host name ([D R29-I11]: panel-verify.sh https://<PANEL_HOST>).
 #
 #   anonymous GET /                     -> 302 to .../realms/platform/... with acr_values=loa2
 #   a customer-realm bearer token       -> 403
 #   a forged session cookie             -> 403
 #   a cross-origin "Neuer Mandant" POST -> 403 (ORIGIN must equal the browser origin)
+#   a foreign Host header               -> refused (421 from the panel, 404 from an edge
+#                                          that routes the panel's name only), never 2xx/3xx
 #   /healthz                            -> {"ok":true}
+#   an https base                       -> Strict-Transport-Security max-age=31536000 (gremion-ui's)
 # and, when given:
 #   --loa1-cookie <file>  a header line "Cookie: ..." of an ops login at loa1 -> 302 step-up (prompt=login)
-#   --loa2-cookie <file>  a header line "Cookie: ..." of an ops login at loa2 -> 200 on /
+#   --loa2-cookie <file>  a header line "Cookie: ..." of an ops login at loa2 -> 200 on /,
+#                         carrying gremion-ui's Content-Security-Policy
 #   --client-json <file>  `kcadm get clients -r platform -q clientId=control-panel` output:
 #                         redirectUris / webOrigins / post-logout URIs name exact hosts (no wildcard host)
 #
@@ -79,12 +83,24 @@ read -r code _ < <(probe -X POST -H "Origin: https://not-the-panel.invalid" -H "
 ok=1; [[ "$code" == 403 ]] && ok=0
 verdict "$ok" "cross-origin \"Neuer Mandant\" POST -> ${code} (want 403)"
 
-# 5. health
+# 5. a foreign Host (R29-I11): the panel answers on its own host name only
+read -r code _ < <(probe -H "Host: not-the-panel.invalid" "${BASE}/"; echo)
+ok=1; [[ "$code" == 421 || "$code" == 404 ]] && ok=0
+verdict "$ok" "foreign Host header -> ${code} (want 421 from the panel or 404 from the edge)"
+
+# 6. health
 health="$(curl -sS --max-time 10 "${BASE}/healthz" || true)"
 ok=1; [[ "$health" == *'"ok":true'* ]] && ok=0
 verdict "$ok" "/healthz -> ${health:0:120}"
 
-# 6./7. real sessions, when given (cookie files, never argv values)
+# 7. HSTS on an https base (gremion-ui's: one year)
+if [[ "$BASE" == https://* ]]; then
+    hsts="$(curl -sS -o /dev/null -D - --max-time 20 "${BASE}/" | tr -d '\r' | grep -i '^strict-transport-security:' || true)"
+    ok=1; [[ "$hsts" == *max-age=31536000* ]] && ok=0
+    verdict "$ok" "Strict-Transport-Security on ${BASE} -> ${hsts:-absent}"
+fi
+
+# 8./9. real sessions, when given (cookie files, never argv values)
 if [[ -n "$LOA1" ]]; then
     read -r code location < <(probe -H @"$LOA1" "${BASE}/"; echo)
     ok=1
@@ -92,12 +108,15 @@ if [[ -n "$LOA1" ]]; then
     verdict "$ok" "ops session at loa1 -> ${code} step-up (prompt=login)"
 fi
 if [[ -n "$LOA2" ]]; then
-    read -r code _ < <(probe -H @"$LOA2" "${BASE}/"; echo)
+    headers="$(curl -sS -o /dev/null -D - -w '%{http_code}' --max-time 20 -H @"$LOA2" "${BASE}/" | tr -d '\r' || true)"
+    code="${headers##*$'\n'}"
     ok=1; [[ "$code" == 200 ]] && ok=0
     verdict "$ok" "ops session at loa2 -> ${code} (want 200)"
+    ok=1; grep -qi "^content-security-policy: default-src 'self'; " <<< "$headers" && ok=0
+    verdict "$ok" "the loa2 page carries gremion-ui's Content-Security-Policy"
 fi
 
-# 8. the client's redirect URIs and web origins: exact hosts, no wildcard host
+# 10. the client's redirect URIs and web origins: exact hosts, no wildcard host
 if [[ -n "$CLIENT_JSON" ]]; then
     ok=1
     if command -v jq >/dev/null && jq -e '
