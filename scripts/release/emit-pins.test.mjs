@@ -176,3 +176,21 @@ test('048b: the unpinned fixture state layer carries a tag-only state image that
   const ps = checkPins(text, { services: derivedServices('state') })
   assert.ok(ps.some((p) => p.code === 'unpinned' && /gremion-legal:dist-v1\.2\.3/.test(p.message)), JSON.stringify(ps))
 })
+
+// ── R28 review LOWs (fix round 2) ─────────────────────────────────────────
+
+test('r2: a prototype-key project is an unknown project in selectProject and emitPins, not a TypeError', () => {
+  const all = parsePinLines([...LINES, ...STATE_LINES].join('\n'))
+  for (const p of ['constructor', 'toString', '__proto__']) {
+    assert.throws(() => selectProject(all, p), /unknown project/, p)
+    assert.throws(() => emitPins(parsePinLines(STATE_LINES.join('\n')), derivedServices('state'), { project: p }), /unknown project/, p)
+  }
+})
+
+test('r2: emitPins without a project never names the app layer in its header (no silent app default)', () => {
+  const out = emitPins(parsePinLines(STATE_LINES.join('\n')), derivedServices('state'))
+  assert.doesNotMatch(out.split('\n')[0], /docker-compose\.pins\.yml|app services/)
+  assert.deepEqual(checkPins(out, { services: derivedServices('state') }), [])
+  // with a project, the header names that project's file
+  assert.match(emitPins(parsePinLines(LINES.join('\n')), SERVICES, { project: 'app' }).split('\n')[0], /^# docker-compose\.pins\.yml: .*\(app services\)/)
+})

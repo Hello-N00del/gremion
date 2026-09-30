@@ -76,16 +76,23 @@ export const FIRST_PARTY_PREFIX = 'ghcr.io/hello-n00del/'
  * refused (it would be silently dropped otherwise).
  */
 export function selectProject(pins, project, { derive = derivedServices } = {}) {
+  // own keys only: a prototype member (`constructor`, ...) is not a project
+  if (!Object.hasOwn(PROJECT_TEMPLATES, project)) throw new Error(`unknown project ${project} (want ${Object.keys(PROJECT_TEMPLATES).join('|')})`)
   const sets = Object.fromEntries(Object.keys(PROJECT_TEMPLATES).map((p) => [p, derive(p)]))
-  if (!sets[project]) throw new Error(`unknown project ${project} (want ${Object.keys(sets).join('|')})`)
   for (const svc of pins.keys()) {
     if (!Object.values(sets).some((set) => set.includes(svc))) throw new Error(`${svc} is in no release project (${Object.keys(sets).join(', ')})`)
   }
   return new Map([...pins].filter(([svc]) => sets[project].includes(svc)))
 }
 
-/** The pins layer text, in the expected service order; throws unless check-pins passes it. */
-export function emitPins(pins, services, { firstPartyPrefix = FIRST_PARTY_PREFIX, project = 'app' } = {}) {
+/**
+ * The pins layer text, in the expected service order; throws unless check-pins
+ * passes it. `project` (state|app) names the layer's file in the header; there
+ * is no default, so a caller that leaves it out gets a header naming no layer
+ * rather than the app layer's.
+ */
+export function emitPins(pins, services, { firstPartyPrefix = FIRST_PARTY_PREFIX, project } = {}) {
+  if (project !== undefined && !Object.hasOwn(PINS_FILES, project)) throw new Error(`unknown project ${project} (want ${Object.keys(PINS_FILES).join('|')})`)
   // The app layer is first-party only: a pin outside the prefix is not
   // signature-verified by gremion-deploy, it is looked up as third-party.
   for (const [svc, ref] of pins) {
@@ -93,9 +100,8 @@ export function emitPins(pins, services, { firstPartyPrefix = FIRST_PARTY_PREFIX
   }
   const order = [...services.filter((s) => pins.has(s)), ...[...pins.keys()].filter((s) => !services.includes(s))]
   const body = order.map((s) => `  ${s}:\n    build: !reset null\n    image: ${pins.get(s)}\n`).join('')
-  if (!PINS_FILES[project]) throw new Error(`unknown project ${project}`)
   const text =
-    `# ${PINS_FILES[project]}: the release pins layer (${project} services), written by\n` +
+    (project === undefined ? '# a release pins layer, written by\n' : `# ${PINS_FILES[project]}: the release pins layer (${project} services), written by\n`) +
     '# scripts/release/emit-pins.mjs and judged by scripts/release/check-pins.mjs.\n' +
     `services:\n${body}`
   const problems = checkPins(text, { services })

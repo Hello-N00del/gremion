@@ -174,8 +174,9 @@ export function buildServicesOf(text, label) {
  * without COMPOSE_FILE throw.
  */
 export function derivedServices(project, { root = REPO_ROOT, readText = (p) => readFileSync(p, 'utf8') } = {}) {
+  // own keys only: `constructor`, `toString`, ... are truthy prototype members
+  if (!Object.hasOwn(PROJECT_TEMPLATES, project)) throw new Error(`unknown project ${project} (want ${Object.keys(PROJECT_TEMPLATES).join('|')})`)
   const tmpl = PROJECT_TEMPLATES[project]
-  if (!tmpl) throw new Error(`unknown project ${project} (want ${Object.keys(PROJECT_TEMPLATES).join('|')})`)
   const composeFile = readEnvKey(readText(join(root, tmpl)), 'COMPOSE_FILE')
   if (!composeFile) throw new Error(`${tmpl} declares no COMPOSE_FILE`)
   const builds = new Map()
@@ -233,13 +234,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     return i > 0 ? process.argv[i + 1] : undefined
   }
   const pins = process.argv[2]
-  if (!pins || pins.startsWith('--')) {
+  // --project and --services are alternatives: both given is a usage error
+  // (exit 2), never one silently dropped (emit-pins refuses its mix the same way)
+  if (!pins || pins.startsWith('--') || (process.argv.includes('--project') && process.argv.includes('--services'))) {
     console.error('usage: check-pins.mjs <pins.yml> (--project state|app | --services a,b,c)')
     process.exit(2)
   }
   let services
   try {
-    services = arg('--project') ? derivedServices(arg('--project')) : arg('--services')?.split(',').filter(Boolean)
+    services = process.argv.includes('--project') ? derivedServices(arg('--project')) : arg('--services')?.split(',').filter(Boolean)
   } catch (err) {
     console.error(`check-pins: FAIL derive: ${err.message}`)
     process.exit(1)

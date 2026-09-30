@@ -261,3 +261,24 @@ test('derive r1: a COMPOSE_FILE entry shaped like a pins slot but not one of the
   const r = tree({ [PROJECT_TEMPLATES.state]: STATE_TMPL('a.yml:docker-compose.extra-pins.yml'), 'a.yml': 'services:\n  legal:\n    build: .\n' })
   assert.throws(() => derivedServices('state', { root: r }), /docker-compose\.extra-pins\.yml is not a release pins layer/)
 })
+
+// ── R28 review LOWs (fix round 2) ─────────────────────────────────────────
+
+test('r2: a project name that is an Object.prototype key is an unknown project, not a TypeError', () => {
+  for (const p of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    assert.throws(() => derivedServices(p), /unknown project/, p)
+  }
+})
+
+test('r2: check-pins CLI refuses --project together with --services (usage, exit 2), as emit-pins refuses its mix', () => {
+  const cli = join(REPO_ROOT, 'scripts/release/check-pins.mjs')
+  const layer = join(REPO_ROOT, 'test/host/fixtures/release/valid/docker-compose.state-pins.yml')
+  const both = sh(process.execPath, [cli, layer, '--project', 'state', '--services', 'legal'])
+  assert.equal(both.status, 2, both.stdout + both.stderr)
+  assert.match(both.stderr, /usage/)
+  const ok = sh(process.execPath, [cli, layer, '--project', 'state'])
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr)
+  const unknown = sh(process.execPath, [cli, layer, '--project', 'constructor'])
+  assert.equal(unknown.status, 1, unknown.stdout + unknown.stderr)
+  assert.match(unknown.stderr, /unknown project constructor/)
+})
