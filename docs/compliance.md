@@ -68,6 +68,11 @@ beyond policy.
 | `security_logs_days` | 90 | **180** | BSI Mindeststandard Protokollierung v2.1 | `purgeAuditLogsOlderThan` (see §2.1) |
 | `security_nopii_logs_days` | 90 | **365** | BSI Mindeststandard exception (no PII) | Vector retention filter |
 
+Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. The
+edge and identity-provider logs already obey it: raw access and Traefik logs 14 d,
+pseudonymised security and retained logs at most 29 d 2 h 5 min, Keycloak login and
+admin events 29 d (`docs/log-retention-policy.md`, "Upper bound").
+
 ### 2.1 `audit_log` (Postgres) — security-log retention
 
 The Postgres `audit_log` is the global, tamper-**evident** governance audit
@@ -213,6 +218,9 @@ mergedRetention.app_logs_days            = Math.min(..., 90)
 mergedRetention.security_logs_days       = Math.min(..., 180)  // BSI v2.1
 mergedRetention.security_nopii_logs_days = Math.min(..., 365)
 ```
+
+These caps are the code's current values. Operator ceiling 30 d [D R29-I6]; the
+application tiers change with TASK-033.
 
 Additional non-retention hard limits enforced in the same function:
 

@@ -20,12 +20,23 @@ Docker `json-file` log driver and access-log retention is enforced by a dedicate
 Vector pipeline. Personal data in access logs is pseudonymised before it is ever
 persisted, and all retention windows are bounded by server-side hard caps.
 
+**Operator ceiling [D R29-I6] (2026-09-30, R29-RETENTION-30):** no log class the
+edge or the identity provider keeps is older than **30 days**, the pseudonymised
+security and retained logs included. The edge files, Traefik's own log and the
+Keycloak event store are held to it by configuration and proven by
+`docker/vector/test-edge-retention-bound.sh`, the 60-day simulation
+`docker/vector/test-edge-retention-sim.sh` and `test/edge-log-retention.bats`
+(see "Upper bound"). The application-level tiers in "Retention Configuration"
+change with TASK-033.
+
 ---
 
 ## Architecture
 
 ```
  Traefik (edge, production)
+   ├─ writes its own ERROR log ────────────────► traefik-logs volume
+   │    (/logs/traefik.log, not stdout)               │ (rotated in place by the loop)
    └─ writes raw JSON access log ─────────────► traefik-logs volume
                                                        │
  vector container                                      │ tails
@@ -38,8 +49,9 @@ persisted, and all retention windows are bounded by server-side hard caps.
    │     • drops events older than LOG_RETENTION_SECONDS
    │     └─ writes date-partitioned /logs/processed/retained-YYYY-MM-DD.log
    └─ rotation loop     (hourly: logrotate rotates + compresses + ages out the
-                          two live logs; prune-retained.sh deletes retained
-                          day files by the date in their name)
+                          live logs, state file on the processed-logs volume;
+                          prune-retained.sh deletes retained day files by the
+                          date in their name)
 ```
 
 Source: `docker/vector/` (`process-logs.sh`, `vector.toml`, `logrotate.conf`,
@@ -55,11 +67,15 @@ Traefik access log to process.
 
 | Data | Retention | Deletion mechanism |
 |------|-----------|-------------------|
-| stdout/stderr application logs (postgres, keycloak, gremion-ui, gremion-public, legal, vector, mailpit, traefik) | Bounded by the log driver | Docker `json-file` driver with `max-size: 50m`, `max-file: 5` on every service in `docker-compose.yml` — old chunks are rotated out automatically |
+| stdout/stderr application logs (postgres, gremion-ui, gremion-public, legal, vector, mailpit and the other services) | Bounded by **size**, not by time | Docker `json-file` driver with `max-size: 50m`, `max-file: 5` on every service in `docker-compose.yml` — old chunks are rotated out by size only, so a quiet service can keep a line for longer than 30 days. **Named residual [R29-RETENTION-30, Q17]:** these are application logs (TASK-033's classes), not edge or identity-provider logs; the durable time bound is the log shipper TASK-033 builds |
+| Keycloak stdout | No event lines | `KC_SPI_EVENTS_LISTENER_JBOSS_LOGGING_ERROR_LEVEL: debug` on the keycloak service: the default `jboss-logging` listener would write every error event (`LOGIN_ERROR` with `ipAddress` and `username`) to stdout at WARN; at debug it stays off stdout at the default INFO root level. Events stay in the event store, see "Keycloak" |
+| Traefik stdout | Start-up lines only | `docker/traefik/traefik.yml` `log:` writes Traefik's own ERROR-level JSON log to `/logs/traefik.log` on the `traefik-logs` volume, rotated by the vector loop (14 days, see "Traefik access logs"). Read it with `docker exec <vector container> cat /logs/traefik/traefik.log`; `docker logs` of Traefik no longer shows runtime errors |
 
-Application logs are operational, not audit records. The kernel does not log full
-client IP addresses in application stdout; auth-related errors log user/tenant
-identifiers only.
+Application logs are operational, not audit records. The two sources of client
+addresses in the edge and identity-provider containers' stdout are closed:
+Traefik's runtime log goes to a rotated file, and Keycloak's event lines are off
+stdout (both above). Raising `KC_LOG_LEVEL` to debug would bring Keycloak's event
+lines back.
 
 ---
 
@@ -67,28 +83,55 @@ identifiers only.
 
 | Data | Retention | Deletion mechanism |
 |------|-----------|-------------------|
-| Raw JSON access log (`/logs/traefik/access.log`, contains `ClientHost`) | 14 days on disk | `logrotate.conf` rule: `daily`, `maxage 14`, `rotate 14`, `compress`, `copytruncate`. Vector only **tails** this file; it is rotated in place so the writing process keeps the same FD |
-| Pseudonymised security log (`/logs/processed/security.log`) | 31 days on disk | `logrotate.conf` rule: `daily`, `maxage 31`, `rotate 31`, `compress`, `copytruncate` |
-| Date-partitioned retention sink (`/logs/processed/retained-YYYY-MM-DD.log`) | 31 days by the date in the file name (today − 31 … today, UTC) | Vector's `enforce_retention` transform drops events older than `LOG_RETENTION_SECONDS` on ingest; `prune-retained.sh`, run hourly by the loop in `entrypoint.sh`, deletes every form of a day file (base, `.log.N`, `.log.N.gz`) dated before today − 31 (`RETAINED_RETENTION_DAYS`, default 31). logrotate's `maxage` cannot do this: it is checked only on a rotation, and `notifempty` stops a day file's rotations after the first |
+| Raw JSON access log (`/logs/traefik/access.log`, contains `ClientHost`) | 14 days on disk | `logrotate.conf` rule: `daily`, `maxage 14`, `rotate 14`, `compress`, `ifempty`, `copytruncate`. Vector only **tails** this file; it is rotated in place so the writing process keeps the same FD |
+| Traefik's own log (`/logs/traefik/traefik.log`, ERROR level; may name a client address) | 14 days on disk | Same rule numbers as the access log. Written by Traefik itself (`docker/traefik/traefik.yml` `log.filePath`) instead of container stdout |
+| Pseudonymised security log (`/logs/processed/security.log`) | 27 days configured, at most 29 d 2 h 5 min on disk | `logrotate.conf` rule: `daily`, `maxage 27`, `rotate 27`, `compress`, `ifempty`, `copytruncate` |
+| Date-partitioned retention sink (`/logs/processed/retained-YYYY-MM-DD.log`) | 27 days by the date in the file name (today − 27 … today, UTC) | Vector's `enforce_retention` transform drops events older than `LOG_RETENTION_SECONDS` on ingest; `prune-retained.sh`, run hourly by the loop in `entrypoint.sh`, deletes every form of a day file (base, `.log.N`, `.log.N.gz`) dated before today − 27 (`RETAINED_RETENTION_DAYS`, default 27). logrotate's `maxage` cannot do this: it is checked only on a rotation, and `notifempty` stops a day file's rotations after the first |
+| logrotate state (`/logs/processed/.logrotate.status`) | Kept | `logrotate -s` in the loop: on the processed-logs volume, so a container re-create does not restart every live file's first-sighting day |
 
 #### Upper bound
 
-After R28-VECTOR-RETENTION the oldest record of any kind the edge keeps on disk
-is at most **D = 33 days** old (exactly: 32 days + one loop interval, 1 h by
-default, rounded up to whole days). Per rule, with the loop running every
-`LOGROTATE_INTERVAL` (3600 s) and the container clock on UTC:
+**B = 30 days** [D R29-I6]: no record any edge file keeps is older than
+2592000 s. The arithmetic lives in one place, `docker/vector/test-edge-retention-bound.sh`
+(static: it reads `logrotate.conf`, the prune default, the entrypoint's interval
+clamp and `docker/traefik/traefik.yml`), and its printed table is:
 
-| File | Kept | Oldest record at most |
-|------|------|-----------------------|
-| Raw `access.log` | live day + 14 rotated generations | 15 days + 1 h |
-| `security.log` | live day + 31 rotated generations | 32 days + 1 h |
-| `retained-YYYY-MM-DD.log*` | day files today − 31 … today (32 calendar days) | 32 days + 1 h (the today − 32 file goes at the first loop run after UTC midnight) |
+```
+Edge retention bound: B = 2592000 s (30d 0h 0m); I = 3600 s, R = 300 s, L = 90000 s
+family           formula                          seconds  duration
+access.log       (14+1) d + I + R                 1299900  15d 1h 5m  ok
+traefik.log      (14+1) d + I + R                 1299900  15d 1h 5m  ok
+security.log     (27+1) d + I + R + L             2513100  29d 2h 5m  ok
+retained-*.log   (27+1) d + I + R + L (W=27)      2513100  29d 2h 5m  ok
+```
 
-The two logrotate bounds assume a rotation on every day: `notifempty` skips a
-day on which the live file stayed empty, and `maxage` is checked only on a
-rotation, so a stretch of days with no traffic at all lengthens them. Any
-period the vector container is stopped also pauses deletion; the loop catches
-up on its first run after start.
+`I` is the loop interval, clamped by the entrypoint to 60 … 3600 s (an operator
+value outside that range, or a non-integer, is replaced by 3600 with one stderr
+line). `R` = 300 s is the allowance for one loop run (logrotate + compress +
+prune); the simulation fails if a run takes longer. `L` is the ingest lag of a
+record replayed by `process-logs.sh`'s `tail -F` after a container restart (it
+re-reads the last 10 raw lines, at most 1 d + `I` old) and applies to
+`security.log` and the retained family only. That is why 27 days are configured,
+not 28: with 28 the replay case reaches 30 d + 2 h 5 min, above B.
+
+Every rule is `daily` and its `maxage` equals its `rotate`. **No live log carries
+`notifempty`**: with it a day without traffic skipped the rotation, and `maxage`
+is checked only on a rotation, so a quiet stretch (or a container stop) stretched
+the live file past any bound. Each quiet day now adds one tiny empty `.gz`, which
+`rotate` bounds. `docker/vector/test-edge-retention-sim.sh` runs the shipped
+`logrotate.conf` and `prune-retained.sh` through the real logrotate in the built
+image for 60 simulated days (20 with traffic, 20 without, 20 with) and checks
+every surviving record on every day; `test/edge-log-retention.bats` runs the
+static model and its mutation guards under `verify`.
+
+Residuals, named: while the vector container is stopped nothing is rotated or
+pruned and Traefik keeps appending, so the bound holds only while the container
+runs (the first loop after a start deletes what has aged out; the container-down
+alert is TASK-039's). `tail -F` duplicates up to 10 records into `security.log`
+on each restart (covered by `L`; the `tail -n 0 -F` fix belongs to TASK-033, which
+owns `process-logs.sh`). A lost `vector-processed-logs` volume takes the security
+and retained files with it and the Traefik files then span one extra day (still
+under B).
 
 **IP pseudonymisation:** `process-logs.sh` runs the client IP through `ipcrypt`
 (`nd-encrypt`, format-preserving, keyed by the `ipcrypt_key` Docker secret) before
@@ -112,10 +155,15 @@ and never persisted anywhere.
 
 | Data | Retention | Deletion mechanism |
 |------|-----------|-------------------|
-| Application logs | Bounded by the log driver | Ephemeral stdout, rotated by the Docker `json-file` driver |
-| Login/auth events (`EVENT_ENTITY`, may store login IP) | 90 days | `eventsExpiration: 7776000` in `docker/keycloak/realm-export.json` — Keycloak purges expired events automatically |
-| Admin/audit events (`ADMIN_EVENT_ENTITY`) | 90 days | Same `eventsExpiration` setting (`adminEventsEnabled: true`) |
+| Application logs | No event lines; otherwise bounded by size | Ephemeral stdout, rotated by the Docker `json-file` driver (size only). Event lines (`LOGIN_ERROR` etc.) are kept off stdout by `KC_SPI_EVENTS_LISTENER_JBOSS_LOGGING_ERROR_LEVEL: debug` (compose, keycloak service); the old container log goes with the re-create at rollout |
+| Login/auth events (`EVENT_ENTITY`, may store login IP) | 29 days (worst case 29 d + 15 min) | `eventsExpiration: 2505600` in `docker/keycloak/realm-export.base.json` — Keycloak's scheduler (900 s by default) purges expired events automatically |
+| Admin/audit events (`ADMIN_EVENT_ENTITY`) | 29 days (worst case 29 d + 15 min) | The realm attribute `adminEventsExpiration: "2505600"` (top-level `attributes`, beside `acr.loa.map`, `adminEventsEnabled: true`). Since Keycloak 23 the admin-event purge reads this attribute, **not** `eventsExpiration`; both are set. Proven against the pinned 26.6.1 image: the attribute name is read by `JpaEventStoreProvider`, and events already stored (created before the expiry was lowered) are purged too |
 | User sessions | `ssoSessionIdleTimeout: 7200s` / `ssoSessionMaxLifespan: 86400s` | Keycloak expires idle and over-age sessions automatically; Auth.js cookies in gremion-ui expire with the session |
+
+The realm file applies when a tenant realm is created. Realms that already exist
+keep the values they were created with; converging their `eventsExpiration` and
+`adminEventsExpiration` (attributes merged, `acr.loa.map` untouched) is a
+follow-up in gremion-ui's realm reconcile, owned by TASK-033's amendment.
 
 ---
 
@@ -146,6 +194,10 @@ Values are in seconds (days × 86400) and are bounded by server-side hard caps:
 | `LOG_SECURITY_RETENTION_SECONDS` | 90 days (7776000) | 180 days (15552000) |
 | `LOG_SECURITY_NOPII_RETENTION_SECONDS` | 90 days (7776000) | 365 days (31536000) |
 
+Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. Until
+then every figure in this table above 30 days is the code's current value, not the
+policy: the edge files and Keycloak's event store above already obey the ceiling.
+
 The Vector container receives `LOG_RETENTION_SECONDS` (derived from
 `LOG_ACCESS_RETENTION_SECONDS`) and enforces it in the `enforce_retention`
 transform. The `IPCRYPT_KEY_FILE` / `IPCRYPT_KEY_EPOCH` and `RAW_LOG_PATH` /
@@ -161,8 +213,10 @@ transform. The `IPCRYPT_KEY_FILE` / `IPCRYPT_KEY_EPOCH` and `RAW_LOG_PATH` /
   Query strings (which may carry codes/tokens) are redacted. Non-security request
   paths are dropped entirely.
 - **Storage limitation (Art. 5(1)(e)):** access-log retention defaults to 14 days
-  and is hard-capped at 30 days; Keycloak event retention is 90 days. Every window
-  has a server-enforced upper bound.
+  and is hard-capped at 30 days; the pseudonymised security and retained logs are
+  held to at most 29 d 2 h 5 min and Keycloak login and admin events to 29 days
+  (operator ceiling 30 d [D R29-I6]). Every window has a server-enforced upper
+  bound. The application-level tiers above 30 days change with TASK-033.
 - **Integrity (Art. 5(1)(f) / hash chain):** the INV-1 governance audit log is
   append-only and excluded from automated deletion by design.
 - **Breach notification:** in the event of a personal-data breach, the operator
