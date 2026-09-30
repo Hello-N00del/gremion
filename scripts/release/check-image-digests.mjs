@@ -39,6 +39,12 @@
 //        node scripts/release/check-image-digests.mjs --third-party-list
 //          (prints the canonical non-first-party repositories, one per line,
 //          for the host's $ROOT/etc/third-party-images; refuses on a RED tree)
+//        node scripts/release/check-image-digests.mjs --render [--render-pins SLOT=FILE ...]
+//          (RENDER ARM, TASK-048b: renders state, app-blue, app-green, ops and
+//          mail from their env templates with the emitted release pins in the
+//          pins slots and judges the rendered images; scripts/release/lib/
+//          render.mjs. --render-pins swaps one slot's file, e.g. the app
+//          layer into the state slot: the tag-pinned RED reference.)
 // Test:  node --test scripts/release/check-image-digests.test.mjs
 // Make:  make lint-image-digests
 
@@ -336,7 +342,8 @@ export function checkTree(root) {
       const m = /^\s*(?:export\s+)?COMPOSE_FILE=(.*)$/.exec(line)
       if (!m) continue
       for (const c of unquote(m[1].replace(/\s+#.*$/, '')).split(':').filter(Boolean)) {
-        if (c.split('/').pop() === 'docker-compose.pins.yml') continue
+        // the release pins layers (TASK-048b: app and state) are release outputs, judged by --render
+        if (['docker-compose.pins.yml', 'docker-compose.state-pins.yml'].includes(c.split('/').pop())) continue
         const p = posix.normalize(posix.join(tmplDirs.get(f) ?? '.', c))
         if (!files.includes(p)) add('compose-file-unscanned', `${f}:${i + 1}`, `COMPOSE_FILE names ${c} (${p}), which the scan set does not discover`)
       }
@@ -451,6 +458,35 @@ export function thirdPartyList(root) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const argv = process.argv.slice(2)
+  if (argv.includes('--render')) {
+    // RENDER ARM (TASK-048b): every rendered image by digest, layering intact.
+    const pinsOverride = {}
+    let bad = false
+    for (let j = 0; j < argv.length; j += 1) {
+      if (argv[j] === '--render') continue
+      const m = argv[j] === '--render-pins' ? /^([^=/]+)=(.+)$/.exec(argv[j + 1] ?? '') : null
+      if (!m) {
+        bad = true
+        break
+      }
+      pinsOverride[m[1]] = m[2]
+      j += 1
+    }
+    if (bad) {
+      console.error('usage: check-image-digests.mjs --render [--render-pins SLOT=FILE ...]')
+      process.exit(2)
+    }
+    const { renderArm } = await import('./lib/render.mjs')
+    const res = renderArm({ pinsOverride })
+    for (const p of res.problems) console.error(`check-image-digests --render: FAIL ${p.code}: ${p.where}: ${p.message}`)
+    const summary = `check-image-digests --render: ${res.renders} render(s), ${res.services} service(s), ${res.problems.length} problem(s)`
+    if (res.problems.length) {
+      console.error(summary)
+      process.exit(1)
+    }
+    console.log(summary)
+    process.exit(0)
+  }
   const i = argv.indexOf('--root')
   const root = i >= 0 ? argv[i + 1] : fileURLToPath(new URL('../..', import.meta.url))
   if (!root || argv.some((a) => a.startsWith('--') && !['--root', '--third-party-list'].includes(a))) {

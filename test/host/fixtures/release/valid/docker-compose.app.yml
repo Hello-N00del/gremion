@@ -29,6 +29,13 @@ services:
       traefik.enable: "false"
     networks:
       state: {}
+  tenant-create:
+    environment:
+      COLOUR: ${COLOUR}
+    labels:
+      traefik.enable: "false"
+    networks:
+      state: {}
 networks:
   edge:
     external: true

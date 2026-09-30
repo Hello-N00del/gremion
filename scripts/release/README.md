@@ -18,7 +18,9 @@ verified against the host's pinned public key (D R20-D18).
 | `check-dependabot-dockerfiles.mjs`, `check-lockfile-committed.mjs`, `check-pins.mjs` | `verify` | Release-1 B35 adapts |
 | `lint-release.sh` | lint | runs every suite here and in `scripts/verify/sbom/`, asserts collected == declared tests, shellchecks `*.sh` |
 | `check-image-digests.mjs` (TASK-048) | `make lint-image-digests`, verify carve-lint | every `image:`, `*_IMAGE=` and `${*_IMAGE:-d}` in the discovered scan set (root-anchored `git ls-files` pathspecs; exclusions in `image-scan-exclusions.json`, reason required, stale = fail) is `<repo>[:tag]@sha256:<64 hex>`, bar first-party `${IMAGE_TAG:-dev}`/`${IMAGE_TAG:?}` on a `build:` service; no `latest` default; no object-storage image, profile, `MINIO_*`/`*_S3_*` key or S3 client in the lockfile (TRD-350/066/354). `--third-party-list` prints the host's `etc/third-party-images` |
-| `emit-pins.mjs` (TASK-048) | operator workstation, release | writes the app layer of `docker-compose.pins.yml` from `svc=<repo>@sha256:…` lines; refuses anything `check-pins.mjs` refuses |
+| `emit-pins.mjs` (TASK-048, TASK-048b) | operator workstation, release | `--project state\|app` writes `docker-compose.state-pins.yml` / `docker-compose.pins.yml` from the release's one `svc=<repo>@sha256:…` record, partitioned by the derived sets; refuses anything `check-pins.mjs` refuses |
+| `check-pins.mjs --project state\|app` (TASK-048b) | `verify`, release | the expected set is derived from every `build:` service in the project's template `COMPOSE_FILE` files (pins slot excluded), never listed |
+| `check-image-digests.mjs --render` (TASK-048b) | `make lint-image-digests` | the rendered release: state, app-blue, app-green, ops and mail rendered from their templates with the emitted pins (`test/host/fixtures/release/valid`); every image `@sha256:`, no kept `build`, every derived service rendered, STATE PURITY on the state render (`lib/render.mjs`) |
 | `release-signing.rehearsal.test.mjs` (TASK-048) | lint (`lint-release.sh`) | the `docs/ops/release-signing.md` sequence on throwaway material with a stub check record: signs, verifies with the rehearsal key, no tlog, another key fails |
 
 Tool pins live in `lib/tools.mjs` (registry, syft and grype by digest; cosign by
@@ -40,7 +42,8 @@ failure is expected, and nothing here signs with a real key before it.
 3. **Host third-party list.** Step 2 verifies every image that
    `docker compose config --images` resolves for the state project and both
    colours, with every profile turned on (so the `migrate` service is
-   included), plus every canonical pin in `docker-compose.pins.yml`. An image
+   included), plus every canonical pin in `docker-compose.pins.yml` and
+   `docker-compose.state-pins.yml`. An image
    outside `<registry>/hello-n00del/` is refused unless its repository is
    listed, one per line with no tag or digest, in
    `$ROOT/etc/third-party-images`. That file lives on the host and is never

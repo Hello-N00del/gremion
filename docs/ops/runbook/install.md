@@ -18,7 +18,7 @@ one stack per host, five compose projects, each named by its own env file under
 
 | Env file | Project | Compose files (from the env file's `COMPOSE_FILE`) | Started by |
 |---|---|---|---|
-| `state.env` | `${STACK}-state`: every database and volume, keycloak, the edge | `docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.pins.yml` | step 12 |
+| `state.env` | `${STACK}-state`: every database and volume, keycloak, the edge | `docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.state-pins.yml` | step 12 |
 | `app-blue.env`, `app-green.env` | `${STACK}-app-blue`, `${STACK}-app-green`: gremion-ui, gremion-public and the `migrate` one-shot, one colour serving at a time | `docker-compose.app.yml`, `docker-compose.pins.yml` | `gremion-deploy`, step 14 (the first deploy starts blue) |
 | `ops.env` | `${STACK}-ops`: on-box monitoring, non-council | `infra/host/ops/docker-compose.yml` | step 15 |
 | `mail.env` | `${STACK}-mail`: the platform mail server, non-council | `infra/host/mail/docker-compose.yml` | the go-live gate (see Known gaps) |
@@ -38,7 +38,8 @@ export PATH="/opt/gremion/bin:$PATH"
   (FLOW-OPS-002, "F1 behoben").
 - The tag exists and its tree carries the contracts `gremion-deploy` checks at
   its step 2: `release.json` (the tag, a boolean `overlap`, a `migrations`
-  array, a manifest digest), `docker-compose.pins.yml` and
+  array, a manifest digest), both pins layers (`docker-compose.pins.yml` for
+  the colours, `docker-compose.state-pins.yml` for the state project) and
   `docs/ops/release-1-waivers.md`.
 - The administrator holds, on their own machine: the provider panel login, the
   registrar login, an SSH key the rebuilt server will accept for root, a

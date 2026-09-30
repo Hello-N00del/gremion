@@ -627,6 +627,7 @@ lint-image-digests:
 	 fi; \
 	 echo "[image-digests] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/release/check-image-digests.mjs
+	@node scripts/release/check-image-digests.mjs --render
 
 lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests
 	@echo "All linters passed."

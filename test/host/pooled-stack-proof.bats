@@ -203,7 +203,7 @@ assert_env_files_resolve() {
     [ "$status" -eq 0 ]
     assert_env_files_resolve
     local rel=".scratch/pooled-stack-proof/t040-shim-bats-${BATS_TEST_NUMBER}-$$"
-    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:docker-compose.prod.yml:test/host/fixtures/pooled-stack/docker-compose.pins.yml:${rel}/state.proof.yml\"" "${POOLED_OUT}/env/state.env"
+    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:docker-compose.prod.yml:test/host/fixtures/pooled-stack/docker-compose.state-pins.yml:${rel}/state.proof.yml\"" "${POOLED_OUT}/env/state.env"
     grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../../${rel}/ops.proof.yml\"" "${POOLED_OUT}/env/ops.env"
     grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../../${rel}/mail.proof.yml\"" "${POOLED_OUT}/env/mail.env"
 }

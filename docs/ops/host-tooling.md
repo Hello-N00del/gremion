@@ -175,8 +175,8 @@ GREMION_WAIVER_LEDGER=/opt/gremion/releases/<tag>/docs/ops/release-1-waivers.md 
 ### The same ledger in `gremion-deploy` and `gremion-rollback`
 
 `gremion-deploy` treats the ledger as a **release-tree contract**, checked at
-step 2 beside `docker-compose.app.yml`, `docker-compose.pins.yml` and
-`release.json`. A tag whose tree carries no ledger is refused there:
+step 2 beside `docker-compose.app.yml`, `docker-compose.pins.yml`,
+`docker-compose.state-pins.yml` and `release.json`. A tag whose tree carries no ledger is refused there:
 
 ```
 BLOCKED: docs/ops/release-1-waivers.md absent (spec B): /opt/gremion/releases/<tag>/docs/ops/release-1-waivers.md
@@ -256,7 +256,9 @@ single-flight per target, and runs in a GitHub environment that requires a
 reviewer. Before it opens SSH it proves the tag is annotated, matches
 `dist-vX.Y.Z`, and carries a `release.json` naming that same tag with an
 explicit boolean `overlap`, an array of `migrations` and a `sha256:` manifest
-digest, plus a `docker-compose.pins.yml`, at its tree root.
+digest, plus a `docker-compose.pins.yml`, at its tree root. (`gremion-deploy`
+itself also requires the state layer `docker-compose.state-pins.yml` at its
+step 2; `deploy.yml` checks only the app layer, a dormant residual.)
 
 ### What the operator must create before the first dispatch
 

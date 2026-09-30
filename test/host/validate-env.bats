@@ -32,7 +32,8 @@ render_filled() {
         ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME_' "$f" || { echo "sentinel left in $f"; return 1; }
     done
     touch "$RELEASE"/docker-compose.yml "$RELEASE"/docker-compose.prod.yml \
-          "$RELEASE"/docker-compose.pins.yml "$RELEASE"/docker-compose.app.yml
+          "$RELEASE"/docker-compose.pins.yml "$RELEASE"/docker-compose.app.yml \
+          "$RELEASE"/docker-compose.state-pins.yml
 }
 
 value_of() {
@@ -97,8 +98,12 @@ refute_secrets_printed() {
 
 @test "a missing COMPOSE_FILE entry exits 1 and names the file" {
     render_filled
-    rm "$RELEASE/docker-compose.pins.yml"
+    rm "$RELEASE/docker-compose.state-pins.yml"
     run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"docker-compose.state-pins.yml"* ]]
+    rm "$RELEASE/docker-compose.pins.yml"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
     [ "$status" -eq 1 ]
     [[ "$output" == *"docker-compose.pins.yml"* ]]
 }

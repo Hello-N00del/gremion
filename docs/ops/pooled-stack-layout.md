@@ -10,7 +10,7 @@ is `test/host/integration/pooled-stack-proof.sh`.
 
 | Project | Compose files | What it holds |
 |---|---|---|
-| `${STACK}-state` | `docker-compose.yml` + `docker-compose.prod.yml` + pins | every database and volume, keycloak, the edge (traefik, its socket proxy, fallback, legal), vector |
+| `${STACK}-state` | `docker-compose.yml` + `docker-compose.prod.yml` + state pins (`docker-compose.state-pins.yml`) | every database and volume, keycloak, the edge (traefik, its socket proxy, fallback, legal), vector |
 | `${STACK}-app-blue` | `docker-compose.app.yml` + pins, `COLOUR=blue` | gremion-ui, gremion-public (+ the `migrate` / `tenant-create` one-shots) |
 | `${STACK}-app-green` | the same file, `COLOUR=green` | the same four services, other colour |
 | `${STACK}-ops` | `infra/host/ops/docker-compose.yml` | prometheus, alertmanager, node-exporter, cadvisor, blackbox (**non-council**) |

@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 3.0.0
+- Version: 4.0.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -35,8 +35,8 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
   one verification run of [backup.md](backup.md)); `gremion-deploy` sizes its
   free-space check from it and refuses without it.
 - The new tag's tree carries `release.json` (the tag, a boolean `overlap`, the
-  `migrations` array, a manifest digest), `docker-compose.pins.yml` with every
-  image pinned by digest, and `docs/ops/release-1-waivers.md`. A missing contract
+  `migrations` array, a manifest digest), `docker-compose.pins.yml` and
+  `docker-compose.state-pins.yml` with every image pinned by digest, and `docs/ops/release-1-waivers.md`. A missing contract
   stops the deploy at STEP 2, before any colour is touched.
 - Every migration in the release is expand/contract (TRD-361): the colour still
   serving can run against the migrated schema.
@@ -85,7 +85,28 @@ docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
   psql -U postgres -d "$kdb" -tAc "SELECT count(*) FROM schema_migrations WHERE filename = '0001_governance_schema.sql'"   # 1
 ```
 
-2. **Validate the env files against the new tree (E1).**
+2. **Validate the env files against the new tree (E1).** Once per host, first:
+   a `state.env` rendered before the pins layer was split per project (TASK-048b)
+   still layers the app pins `docker-compose.pins.yml` onto the state project.
+   `gremion-deploy` refuses it at STEP 2 (exit 2, nothing pulled). Edit only the
+   `COMPOSE_FILE` line; do not re-render the env files: `gremion-init-secrets
+   --force` regenerates every secret they hold. An `app-<colour>.env` never names
+   `docker-compose.state-pins.yml`; if one does, remove that entry the same way.
+   The file holds secrets: run the edit as `gremion`, its owner (GNU `sed -i`
+   writes a new file that keeps the mode but takes the owner of whoever runs it),
+   and check owner and mode afterwards.
+
+```bash
+f=/opt/gremion/etc/env/state.env
+stat -c '%U %a %n' "$f"            # gremion 600
+grep -n '^COMPOSE_FILE=' "$f"      # ...:docker-compose.pins.yml means rendered before the split
+sudo -u gremion sed -i '/^COMPOSE_FILE=/s/docker-compose\.pins\.yml/docker-compose.state-pins.yml/' "$f"
+stat -c '%U %a %n' "$f"            # still gremion 600
+grep -n '^COMPOSE_FILE=' "$f"      # docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml
+grep -n 'state-pins' /opt/gremion/etc/env/app-blue.env /opt/gremion/etc/env/app-green.env   # nothing
+```
+
+   Then validate:
 
 ```bash
 for p in state app-blue app-green; do
@@ -197,6 +218,7 @@ switch has succeeded.
 
 ## Changelog
 
+- 4.0.0 (2026-09-30): TASK-048b. Step 2 first moves a `state.env` rendered before the pins layer split onto `docker-compose.state-pins.yml` by editing its `COMPOSE_FILE` line only (never `gremion-init-secrets --force`, which rotates every live secret); `gremion-deploy` STEP 2 refuses the old layering and names this step. Major: a step changed.
 - 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). Step 3 creates the pre-migration dump private from its first byte (`umask 077` in the subshell that holds the redirect, `.part` then `mv`) and writes one UTC-stamped file per attempt, so no attempt overwrites the dump an earlier one took; step 5 deletes every dump of the tag after the success check, one logged line per file; the failure path restores the dump the failing attempt took. Major: a step and the post-condition changed (Q9).
 - 2.0.0 (2026-09-28): the migration register landed (TASK-029). Step 1 compares the running and the new release's `applied.lock.json` and reads the kernel ledger's naming; the post-condition compares the previous and the serving release's locks. Preconditions and Known gaps (d), (e) describe the landed register instead of a PENDING one. Major: a step and the post-condition changed (Q8).
 - 1.0.0 (2026-09-27): first version, provisional (TASK-037).

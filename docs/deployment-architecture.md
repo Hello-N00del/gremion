@@ -72,7 +72,8 @@ A release is a directory checked out at its tag, carrying:
 | Artefact | Contract |
 |---|---|
 | `release.json` | `{tag, overlap, migrations, distManifestDigest}`; the digest is `"sha256:" + 64 lowercase hex` of the manifest bytes as read — the bare hex form is rejected at both ends |
-| `docker-compose.pins.yml` | every first-party service `build: !reset null` plus `image: …@sha256:` |
+| `docker-compose.pins.yml` | the app layer: every first-party app-tier service `build: !reset null` plus `image: …@sha256:` (the colour projects' pins) |
+| `docker-compose.state-pins.yml` | the state layer: the same for every first-party state service (legal, vector, fallback), layered only onto the state project |
 | `docker-compose.app.yml` | the colour project's app-tier services |
 | `pnpm-lock.yaml` | the assembled lockfile, committed next to the pins, so `--frozen-lockfile` holds inside the image build |
 
