@@ -1,0 +1,8 @@
+[
+  { "name": "roles@example.org", "type": "individual", "emails": ["roles@example.org", "no-reply@example.org"], "roles": ["user"] },
+  { "name": "system@example.org", "type": "individual", "emails": ["system@example.org"], "roles": ["user"] },
+  { "name": "alerts@example.org", "type": "individual", "emails": ["alerts@example.org"], "roles": ["user"] },
+  { "name": "platform@example.org", "type": "individual", "emails": ["platform@example.org"], "roles": ["user"] },
+  { "name": "kc-alpha_council@example.org", "type": "individual", "emails": ["kc-alpha_council@example.org"], "roles": ["user"] },
+  { "name": "kc-beta_council@example.org", "type": "individual", "emails": ["kc-beta_council@example.org"], "roles": ["user"] }
+]

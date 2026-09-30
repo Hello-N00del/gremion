@@ -375,7 +375,7 @@ phase_prepare() {
         || docker network create --ipv6 --subnet 10.231.1.0/24 --subnet fd5a:231:1::/64 "${STACK}_state" >/dev/null
     info "externals: networks ready"
     local vol
-    for vol in traefik_acme config_data tenant_config_data tenant_secrets mail_data; do
+    for vol in traefik_acme config_data tenant_config_data tenant_secrets mail_data nats_accounts nats_secrets; do
         docker volume inspect "${STACK}_${vol}" >/dev/null 2>&1 || docker volume create "${STACK}_${vol}" >/dev/null
     done
     info "externals: volumes ready"
@@ -410,13 +410,19 @@ phase_names() {
 phase_state_up() {
     require_scratch state-up
     [[ -f "$OUT/.names-ok" ]] || die "run the names phase first: no up before every rendered name is asserted"
+    # TASK-024 (Q12): nats-auth init BEFORE the first state up -- the SYS
+    # reload seed and a SYS-only accounts file, so nats boots with no
+    # anonymous user. Idempotent, no network (--no-deps).
+    compose app-blue run --rm --no-deps --pull never --entrypoint pnpm tenant-create exec nats-auth init \
+        > "$OUT/ledger/nats-auth-init.log" 2>&1 \
+        || { tail -15 "$OUT/ledger/nats-auth-init.log" >&2; die "nats-auth init failed"; }
     compose state up -d --pull never >/dev/null
     ok "state project up ($(docker ps -q --filter "label=com.docker.compose.project=${STACK}-state" | grep -c .) container(s))"
 }
 
 phase_state_wait() {
     local cid s
-    for s in postgres keycloak; do
+    for s in postgres keycloak nats; do
         cid="$(svc_cid state "$s")"; [[ -n "$cid" ]] || die "state/$s has no container"
         wait_health "$cid" 200 || die "state/$s did not become healthy"
     done
@@ -580,6 +586,7 @@ state_port() {
     case "$1" in
         postgres|*-postgres) echo 5432 ;;
         pgbouncer) echo 6432 ;;
+        nats) echo 4222 ;;
         keycloak) echo 8080 ;;
         gremion-ui|gremion-public) echo 3000 ;;
         mailpit) echo 1025 ;;
@@ -678,19 +685,34 @@ phase_probes() {
 }
 
 # ── TRD-440 ────────────────────────────────────────────────────────────────
+#
+# Every reading is captured into a local FIRST and dies (exit 2) when its command
+# failed: a docker engine that is down, or a `compose ls` that errors, used to
+# come out of the printf-argument substitutions as running=0, an empty
+# compose-ls and stack-containers 0 on BOTH sides, so TRD-440 read "unchanged"
+# on a dead engine (R29-MD-A, review r3). Counting is awk, not `grep -c .`:
+# grep exits 1 on zero lines, which under pipefail would abort a legitimate 0.
 counts() {
-    local p svcs
+    local p svcs running lsj names allps
     for p in state app-blue app-green ops mail; do
         # a render error is FATAL here, never services=0 on both sides of TRD-440
         svcs="$(compose_config "$p" --services)" || exit $?
+        running="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-$p")" \
+            || die "the running= reading failed for ${STACK}-$p (docker ps)"
         printf '%s services=%s running=%s\n' "$p" \
-            "$(printf '%s\n' "$svcs" | grep -c .)" \
-            "$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-$p" | grep -c .)"
+            "$(printf '%s\n' "$svcs" | awk 'NF{n++} END{print n+0}')" \
+            "$(printf '%s\n' "$running" | awk 'NF{n++} END{print n+0}')"
     done
-    printf 'compose-ls %s\n' "$(docker compose ls -a --format json | jq -r --arg p "${STACK}-" '[.[] | select(.Name | startswith($p)) | .Name] | sort | join(",")')"
+    lsj="$(docker compose ls -a --format json)" \
+        || die "the compose-ls reading failed (docker compose ls)"
+    names="$(printf '%s\n' "$lsj" | jq -r --arg p "${STACK}-" '[.[] | select(.Name | startswith($p)) | .Name] | sort | join(",")')" \
+        || die "the compose-ls reading failed (jq could not read docker compose ls)"
+    printf 'compose-ls %s\n' "$names"
     # Stack-scoped: every container whose compose project or name carries the
     # ${STACK} prefix (the whole engine's count moves with unrelated work).
-    printf 'stack-containers %s\n' "$(docker ps -a --format '{{.Names}} {{.Label "com.docker.compose.project"}}' | tr -d '\r' | awk -v p="${STACK}" 'index($1, p) == 1 || index($2, p) == 1' | grep -c .)"
+    allps="$(docker ps -a --format '{{.Names}} {{.Label "com.docker.compose.project"}}')" \
+        || die "the stack-containers reading failed (docker ps -a)"
+    printf 'stack-containers %s\n' "$(printf '%s\n' "$allps" | tr -d '\r' | awk -v p="${STACK}" '(index($1, p) == 1 || index($2, p) == 1) {n++} END{print n+0}')"
 }
 phase_tenant() {
     require_scratch tenant
@@ -722,9 +744,13 @@ phase_tenant() {
 
 # Split so no call outlives a time box: each compose render is ~10 s here.
 phase_tenant_before() {
-    # via .part: a counts that dies half-way must not leave a baseline behind
-    counts > "$OUT/ledger/trd440-before.txt.part"
-    mv -f "$OUT/ledger/trd440-before.txt.part" "$OUT/ledger/trd440-before.txt"
+    # The counts are captured BEFORE any file is created: a counts that dies
+    # (docker error, render error) leaves neither a baseline nor a .part behind,
+    # and an earlier baseline is removed first so a failed re-run can never leave
+    # the previous run's numbers for the tenant phase to accept (R29-MD-A).
+    rm -f "$OUT/ledger/trd440-before.txt" "$OUT/ledger/trd440-before.txt.part"
+    local b; b="$(counts)" || exit $?
+    printf '%s\n' "$b" > "$OUT/ledger/trd440-before.txt.part" && mv -f "$OUT/ledger/trd440-before.txt.part" "$OUT/ledger/trd440-before.txt"
     [[ -s "$OUT/ledger/trd440-before.txt" ]] || die "empty TRD-440 baseline"
     ok "tenant-before: baseline recorded"
 }
@@ -741,7 +767,11 @@ phase_tenant_after() {
     cid="$(svc_cid state postgres)"
     db="$(docker exec "$cid" psql -tAqU postgres -c "SELECT datname FROM pg_database WHERE datname IN ('t_${TENANT_SLUG//-/_}', 't_${TENANT_SLUG}')" | tr -d '\r')"
     if [[ -n "$db" ]]; then ok "TRD-440: tenant database $db exists"; else bad "TRD-440: no tenant database for $TENANT_SLUG"; fi
-    realm="$(docker exec "$(svc_cid state keycloak)" sh -c "/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user '${KEYCLOAK_ADMIN}' --password '${KEYCLOAK_ADMIN_PASSWORD}' >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${TENANT_SLUG} --fields realm" 2>/dev/null | tr -d '\r' || true)"
+    # The admin password reaches kcadm as KC_CLI_PASSWORD, handed to `docker exec`
+    # by NAME (the value comes from this shell's environment), so it is on no argv,
+    # neither this host's nor the container's (R29-MD-A, probed on the pinned
+    # Keycloak image). kcadm's cached token is removed after the read.
+    realm="$(KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$(svc_cid state keycloak)" sh -c "/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user '${KEYCLOAK_ADMIN}' >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${TENANT_SLUG} --fields realm; rm -f /opt/keycloak/.keycloak/kcadm.config" 2>/dev/null | tr -d '\r' || true)"
     if [[ "$realm" == *"\"${TENANT_SLUG}\""* ]]; then ok "TRD-440: realm $TENANT_SLUG exists"; else bad "TRD-440: realm $TENANT_SLUG absent"; fi
     printf '%s db=%s realm=%s\n' "$(now)" "${db:-none}" "$(echo "$realm" | tr -d ' \n')" | ledger trd440.log
 }

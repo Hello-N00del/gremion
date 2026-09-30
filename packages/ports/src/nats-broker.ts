@@ -54,8 +54,12 @@
 //      max_age:     7 days (nanoseconds)
 //      max_msgs:    50_000
 //      duplicate_window: 2 minutes (nanoseconds)
-//    If the stream already exists it refreshes those limits, but REFUSES to
-//    move an existing subject filter unless explicitly told to.
+//    If the stream already exists it refreshes those limits only when they
+//    drifted (an equal config is read, never written -- TASK-024 G2), and
+//    REFUSES to move an existing subject filter unless explicitly told to.
+//  - connect(url, stream, opts?): opts carries the nkey identity of the
+//    authenticated broker (authenticator, inboxPrefix, name); see
+//    @gremion/nats-auth natsConnectOptionsFor().
 //
 // SERVER TRUTH. Every cover check in this file is answered from what
 // `jsm.streams.info()` reports for the bound stream — never from the STREAMS
@@ -148,7 +152,7 @@
 
 import { connect } from '@nats-io/transport-node'
 import { headers, ClosedConnectionError, RequestError, TimeoutError } from '@nats-io/nats-core'
-import type { NatsConnection } from '@nats-io/nats-core'
+import type { Authenticator, NatsConnection } from '@nats-io/nats-core'
 import {
   jetstream,
   jetstreamManager,
@@ -248,6 +252,13 @@ export interface EnsureStreamOptions {
   repointSubjects?: boolean
 }
 
+/** NatsBroker.connect()'s optional client identity (TASK-024 G2). */
+export interface NatsConnectOptions {
+  authenticator?: Authenticator
+  inboxPrefix?: string
+  name?: string
+}
+
 /** The two bounds NatsBroker enforces itself. Defaults are the port's
  *  SETUP_TIMEOUT_MS / CLOSE_TIMEOUT_MS; the doubles suite shortens them. */
 export interface BrokerTimeouts {
@@ -284,6 +295,25 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 
 const sameFilters = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && [...a].sort().every((s, i) => s === [...b].sort()[i])
+
+/** The fields ensureStream() writes, compared with what the server reports.
+ *  Everything else in the server's config is a server default this code never
+ *  sets, so it cannot be drift this code would correct. */
+function sameStreamConfig(
+  server: Record<string, unknown> | undefined,
+  built: { subjects: string[]; storage: unknown; max_age: number; max_msgs: number; duplicate_window: number; retention: unknown },
+): boolean {
+  if (!server) return false
+  const subjects = Array.isArray(server.subjects) ? (server.subjects as string[]) : []
+  return (
+    sameFilters(subjects, built.subjects) &&
+    server.storage === built.storage &&
+    server.max_age === built.max_age &&
+    server.max_msgs === built.max_msgs &&
+    server.duplicate_window === built.duplicate_window &&
+    server.retention === built.retention
+  )
+}
 
 /** Is this publish failure one a second attempt could survive — a request
  *  timeout, a "no responders" answer (which @nats-io/jetstream reports as
@@ -335,9 +365,20 @@ export class NatsBroker implements BrokerPort {
     this.timeouts = { setupMs: timeouts.setupMs ?? SETUP_TIMEOUT_MS, closeMs: timeouts.closeMs ?? CLOSE_TIMEOUT_MS }
   }
 
-  /** Static factory — awaits NATS connection before returning. */
-  static async connect(natsUrl: string, streamName = DEFAULT_STREAM): Promise<NatsBroker> {
-    const nc = await connect({ servers: natsUrl })
+  /** Static factory — awaits NATS connection before returning.
+   *
+   *  `opts` (TASK-024 G2) carries a client identity for a broker that admits
+   *  clients only by nkey: an `authenticator` (nkeyAuthenticator(seed)), the
+   *  connection's own `inboxPrefix` (the server grants each identity its own
+   *  _INBOX_<module>_<tenant>, never the shared _INBOX) and a connection
+   *  `name`. @gremion/nats-auth's natsConnectOptionsFor() builds it. Without
+   *  opts the connect call is exactly the pre-G2 `{ servers }`. */
+  static async connect(natsUrl: string, streamName = DEFAULT_STREAM, opts?: NatsConnectOptions): Promise<NatsBroker> {
+    const extra: NatsConnectOptions = {}
+    if (opts?.authenticator !== undefined) extra.authenticator = opts.authenticator
+    if (opts?.inboxPrefix !== undefined) extra.inboxPrefix = opts.inboxPrefix
+    if (opts?.name !== undefined) extra.name = opts.name
+    const nc = await connect({ servers: natsUrl, ...extra })
     // nats 2.x: nc.jetstream() / nc.jetstreamManager() (methods on the
     // connection). @nats-io/jetstream: free functions taking the connection.
     const js = jetstream(nc)
@@ -398,7 +439,12 @@ export class NatsBroker implements BrokerPort {
 
   /**
    * Idempotent stream bootstrap. Creates the stream if it does not exist;
-   * refreshes its limits if it does.
+   * refreshes its limits if they drifted, and writes NOTHING when the server's
+   * {subjects, storage, max_age, max_msgs, duplicate_window, retention} already
+   * equal the config below (TASK-024 G2: on the authenticated broker only the
+   * tenant admin may create or update a stream; a module key reads its info,
+   * and a module key hitting drift fails loudly with the server's
+   * Permissions Violation -- the tenant-create rerun, as admin, corrects it).
    *
    * The `subjects` default is READ FROM the STREAMS topology in ./broker.ts (the
    * single source of truth) rather than repeated as a literal, so renaming the
@@ -438,9 +484,9 @@ export class NatsBroker implements BrokerPort {
       retention: RetentionPolicy.Limits,
     }
 
-    let existing: { config?: { subjects?: string[] } } | undefined
+    let existing: { config?: { subjects?: string[] } & Record<string, unknown> } | undefined
     try {
-      existing = (await this.jsm.streams.info(name)) as { config?: { subjects?: string[] } }
+      existing = (await this.jsm.streams.info(name)) as { config?: { subjects?: string[] } & Record<string, unknown> }
     } catch (err) {
       // ONLY a genuine "stream not found" means "create it". Anything else —
       // permissions, no JetStream on the account, a dead connection — used to
@@ -466,7 +512,16 @@ export class NatsBroker implements BrokerPort {
           '("Migrating the wire-subject root").',
       )
     }
-    // Filter unchanged (or an explicit repoint) — refresh limits.
+    // TASK-024 G2: write ONLY on drift. A module's nkey may read its stream's
+    // info but never update it (only the tenant admin may -- the unconditional
+    // update used to run on every boot), so a server config already equal to
+    // the one this call would write is left alone. The cache is still dropped:
+    // the server was just asked, and publish() re-reads after an ensureStream().
+    if (!moved && sameStreamConfig(existing?.config, streamCfg)) {
+      if (name === this.streamName) this.invalidateSubjects()
+      return
+    }
+    // Drift in a limit (or an explicit repoint) — write the config.
     await this.jsm.streams.update(name, streamCfg)
     // publish()'s cached filter is about THIS stream; whatever it held, the
     // server was just written to, so the next publish re-reads.

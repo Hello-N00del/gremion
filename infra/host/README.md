@@ -54,12 +54,12 @@ No `-f`, no `--profile`, no `-p`. Each env file sets its own
 `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE` and `COMPOSE_PROFILES`, which is what
 makes that one flag sufficient.
 
-| File | Project |
+| File (under `/opt/gremion`) | Project |
 |---|---|
-| `state.env` | `${STACK}-state` |
-| `app-blue.env` / `app-green.env` | `${STACK}-app-blue` / `${STACK}-app-green` |
-| `mail.env` | `${STACK}-mail` |
-| `ops.env` | `${STACK}-ops` |
+| `etc/env/state.env` | `${STACK}-state` |
+| `etc/env/app-blue.env` / `etc/env/app-green.env` | `${STACK}-app-blue` / `${STACK}-app-green` |
+| `etc/env/mail.env` | `${STACK}-mail` |
+| `etc/env/ops.env` | `${STACK}-ops` |
 
 `STACK` is `gremion` on the production host and `staging` anywhere else. It is
 the prefix of every shared external network and volume, so two units on one
@@ -87,9 +87,12 @@ post-conditions — it would ship to production unfilled and silently.
 
 Every key that names the same `<group>` gets the same generated value, in every
 template. That is how the aliased OIDC secrets, the Stalwart API key shared by
-`state.env`, `mail.env` and `ops.env`, the platform SMTP password shared by four
-files, and the password embedded inside `GREMION_PUBLIC_DB_URL` stay equal
-without a reconciliation step.
+`mail.env` and `ops.env`, the `alerts@` password (`alert_smtp`) shared by
+`mail.env` and `ops.env`, the transitional `platform@` password
+(`platform_smtp`) shared by `mail.env` and the app tier, and the password
+embedded inside `GREMION_PUBLIC_DB_URL` stay equal without a reconciliation
+step. The vendor's own `system@` password (`vendor_smtp`) is in `mail.env`
+only (TASK-015; `ops/vendor-mail/RUNBOOK.md`).
 
 `load_env` refuses to load any file that still holds a `CHANGE_ME_` value unless
 `ALLOW_SENTINELS=1`.

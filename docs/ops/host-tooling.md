@@ -98,7 +98,11 @@ list of keys still to fill. The non-secret set, with generic examples:
 
 Secret keys are every `CHANGE_ME_` key of `.env.example` plus
 `RESTIC_PASSWORD`, `RCLONE_CONFIG_BACKUP_*`, `INTERNAL_PUSH_SECRET`,
-`STALWART_ADMIN_PASSWORD`, `STALWART_API_KEY` and `PLATFORM_SMTP_PASSWORD`.
+`STALWART_ADMIN_PASSWORD`, `STALWART_API_KEY` (both `mail.env`; the API key
+also `ops.env`), `VENDOR_SMTP_PASSWORD` (`system@`, `mail.env` only),
+`ALERT_SMTP_PASSWORD` (`alerts@`, `mail.env` and `ops.env`) and the transitional
+`PLATFORM_SMTP_PASSWORD` (`platform@`, `mail.env` and the app tier) -- three
+generator groups, never one (TASK-015, TRD-251).
 `app-blue.env` and `app-green.env` additionally set `COLOUR` and the
 colour-suffixed service URLs (`INTERNAL_BASE_URL`, `KERNEL_BASE_URL`,
 `<LEAF>_SERVICE_URL`); no app-tier URL names a bare service name.
@@ -131,6 +135,7 @@ than exit codes.
 | `gremion-hostd --socket \| --ssh` | the restricted agent of section 5 |
 | `gremion-dns-check --domain D --edge-ip A --mail-ip B [--edit N]` | verify the published record set for one edit of the DNS table, one line per record |
 | `gremion-mail-bringup [--assert N\|all]` | the mail asserts in their required order, refusing to run out of order |
+| `gremion-vendor-mail <subcommand>` | the vendor mail tooling of `ops/vendor-mail` (TASK-015): `principals issue\|revoke\|list`, `realm-smtp`, `collect` and the vendor-mail checks, each `.mjs` run as `docker run --rm` of the digest-pinned `VENDOR_MAIL_NODE_IMAGE` (the host carries no Node). Runs from `current/infra/host/bin` or installed in `<root>/bin`, where it takes `ops/vendor-mail` from `<root>/current`; see `ops/vendor-mail/RUNBOOK.md` |
 | `gremion-verify [--colour c] [--hosts FILE] [--reboot]` | the verification contract: enumerate every router from the Traefik API, classify it, assert certificates, health, the host pin and the ACME path; print the six P4 waivers of `docs/ops/release-1-waivers.md` as `WAIVED`; writes `runtime/last-verify.json`. **Refuses to run without that ledger** — see below |
 | `gremion-switch <colour> [--no-evict]` | fan the eviction out, rewrite `etc/edge/active.yml` atomically, wait for Traefik to serve the new target, record `runtime/active-colour` |
 | `gremion-deploy <tag>` | the release procedure, twelve steps, token on stdin; logs `STEP n <name> ok\|fail` to `runtime/deploy.log` |

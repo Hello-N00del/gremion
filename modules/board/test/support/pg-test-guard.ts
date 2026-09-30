@@ -10,8 +10,34 @@
  * Side-effect-free: both functions throw only when CALLED, never at import — so the
  * PG-free unit suite can import them for negative-proof tests without needing PG.
  */
+import { tenantModuleDbName } from '@gremion/tenant-store'
+import { FIXTURE_TENANTS } from './tenants.ts'
+
 const ENV_VAR = 'BOARD_TEST_PG_URL'
+/**
+ * The name of the scratch container that runs BOARD_TEST_PG_URL. Required by
+ * test/lifecycle.integration.test.ts only: disableModule exports with pg_dump, and
+ * the suite runs pg_dump/pg_restore inside that container (the server's own major).
+ */
+export const CONTAINER_ENV_VAR = 'BOARD_TEST_PG_CONTAINER'
 const LABEL = 'board-test-guard'
+
+/**
+ * The only (tenant, board) databases a destructive suite may create, migrate,
+ * address or drop: t_<hex32>__board of the three fixed fixture tenants
+ * (R29-BOARD-STORE-K item 3). Anything else — another tenant's database, another
+ * module's, a kernel, platform or legacy name — is refused before any statement.
+ */
+export const SCRATCH_TENANT_DBS: ReadonlySet<string> = new Set(FIXTURE_TENANTS.map((t) => tenantModuleDbName(t.id, 'board')))
+
+export function assertScratchTenantDb(name: string): void {
+  if (typeof name !== 'string' || !SCRATCH_TENANT_DBS.has(name)) {
+    throw new Error(
+      `[${LABEL}] SAFETY VIOLATION: ${JSON.stringify(name)} is not one of the fixture tenant databases ` +
+        `(${[...SCRATCH_TENANT_DBS].join(', ')}) — refusing.`,
+    )
+  }
+}
 
 /**
  * Return the required, explicitly-configured throwaway Postgres URL.
@@ -27,7 +53,8 @@ export function requireEphemeralTestPgUrl(): string {
         'would CREATE/DROP/TRUNCATE against). Start an ephemeral throwaway container on a ' +
         'NON-5432 port and export the URL, e.g.:\n' +
         '  docker run --rm -d --name board-test-pg -p 127.0.0.1:55434:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18-alpine\n' +
-        `  export ${ENV_VAR}=postgres://postgres@localhost:55434/postgres`,
+        `  export ${ENV_VAR}=postgres://postgres@localhost:55434/postgres\n` +
+        `  export ${CONTAINER_ENV_VAR}=board-test-pg   # lifecycle suite (A8): disableModule runs pg_dump inside it`,
     )
   }
   return url

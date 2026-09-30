@@ -1,12 +1,26 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f2 -> d0c656d0b266f3a1741f34454e0061bc5078c3f4; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: 2c8c82cf4e4428ba548dddf35873194aee9824ba
+kernel: 9cc1cbc18385ef5e38a4d77f9d7a54740736d769
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f2: 42 files, 0 differ (0 listed, 0 unlisted)
-set B — services/** at extraction-source-f2: 383 files, 25 differ (25 listed, 0 unlisted)
+set B — services/** at extraction-source-f2: 383 files, 39 differ (39 listed, 0 unlisted)
   listed   modules/board/migrations/manifest.json  tag=a6c5997f4e48b3a501b016c9935745af6c2cb8bc kernel=d9f35ed80842e07e55851c97c61979ab662d8d55
-  listed   modules/board/test/support/pg-test-guard.ts  tag=6d7e3d226918071816e91af257d22a10c108afa0 kernel=0719eac1bc578fec4536f94112cfad29284f11de
+  listed   modules/board/package.json  tag=5beb993e71595aadb3e26b708a92af2d204b066d kernel=8704df34f2be6a22f183aaba31900f9984305427
+  listed   modules/board/scripts/backfill.ts  tag=9a1bc6c298d987a101aa757ab6bc46cc23ebf786 kernel=absent
+  listed   modules/board/src/http/guard.ts  tag=ac70f21cd49c39773a1c5b3e6097ac1e30420e8c kernel=8209c8af2e336d3fd45aa11a0c52c0cb6ca097c2
+  listed   modules/board/src/http/routes.ts  tag=900d59ee87eb1bfa48b247161c9f353eb9074114 kernel=3711920491aa170635c56ac89c8e1244ff808dbb
+  listed   modules/board/src/index.ts  tag=8bf2d6df807863dcba1d053803e3d64a215d364e kernel=a8cfa0843c6857b2ea9af70c8cdb09a6da352e59
+  listed   modules/board/src/migrations.ts  tag=a2b9097fa0960ae0b33397081c375e6019db8b9a kernel=absent
+  listed   modules/board/src/store/index.ts  tag=5ce7b68aaf5398141a6afff28e29d7d90b8dae92 kernel=8ea91206446ce142bb01bb54300b71cb7ccd9f41
+  listed   modules/board/test/api.integration.test.ts  tag=2322e571b155a6217fe579ed31ddce55cfa8205c kernel=66b62f8250e2a959c5f8c2fceae853ffc02e758f
+  listed   modules/board/test/backfill.integration.test.ts  tag=d6effdbc6af00ce1614f8e1f78db4a675a8cc966 kernel=absent
+  listed   modules/board/test/guard.test.ts  tag=79faf7c94419bf3e2a50bc9830ec3bded305d5c5 kernel=db9915ae2e62c1a01d4867094a1178282ce376df
+  listed   modules/board/test/no-phantom-stura-db.test.ts  tag=af3be3101c3e1afbe46b16b7187031b83be8d363 kernel=78173c0a0295ca117bcf8a4cd4c1231e174deb35
+  listed   modules/board/test/pg-test-guard.test.ts  tag=cc8f042bf084eef9edf010e853d1275bac66827d kernel=95b8de5a796c2bb41b86887cf48b50ff5dea7b65
+  listed   modules/board/test/routes.test.ts  tag=4d0b14590d643c917f172b0dd0188bfcc8257883 kernel=d550a49e4509b000067498c949fcd47921b5cda5
+  listed   modules/board/test/support/pg-test-guard.ts  tag=6d7e3d226918071816e91af257d22a10c108afa0 kernel=059eadbd563316d04d5ccd00030cd3bdc7ac3aba
+  listed   modules/board/vitest.integration.config.ts  tag=0601686d0a14f2b5d2fec24199a974e49b4148ae kernel=1b05bc246444823bb8dece7428c4560d72119ed8
   listed   modules/calendar/test/kernel-client.test.ts  tag=c3263f61bda3e2e8d2bb437b3a420c39ff43644d kernel=16e00150ac28e7541a8150d1fa513c37db8eb228
   listed   modules/calendar/test/support/pg-test-guard.ts  tag=d47b5d8015fb07be77586d362083d9316e0aecf2 kernel=e8001d9539f6ed68805a07418052bf8767417a21
   listed   modules/calendar/test/tenant-store.init-retry.test.ts  tag=400fb059c6f21e3cb5d978a43323305b7b719d01 kernel=9aeeeb41fce47402c261bad800dfbf0ae5552bdd
@@ -35,12 +49,48 @@ set C — content UI half (gremion-ui/src -> modules/content/app): 96 files, 4 d
   listed   modules/content/app/lib/server/content/channels/instagram-renderer.ts  tag=d089942af62aba7786b623892646228835a6f15a kernel=fd9d2cbb6c5722b0e5c620ccc41eabb456852989
   listed   modules/content/app/lib/server/content/register.server.ts  tag=71222cad35ca5588cd62045c38a7d01a9f69a8ad kernel=6d912e98c4d7e866f13b37b09d420ddbd9f3877b
   listed   modules/content/app/lib/server/content/segment.ts  tag=1401366d3c1bf026fc8da487d42ccd9c1112c45d kernel=b9b048a3e3d1fda70970fb3629d01dbcefb26505
-extras — kernel files in a mapped module directory that no tag path maps to: 5 (5 listed)
+extras — kernel files in a mapped module directory that no tag path maps to: 28 (19 listed)
+  UNLISTED modules/board/module.json
+  listed   modules/board/src/app.ts
+  listed   modules/board/src/store/tenant-db.ts
+  listed   modules/board/test/bundle-smoke.mjs
+  listed   modules/board/test/isolation.integration.test.ts
+  listed   modules/board/test/isolation/api.ts
+  listed   modules/board/test/isolation/case.test.ts
+  listed   modules/board/test/isolation/case.ts
+  listed   modules/board/test/isolation/harness.ts
+  listed   modules/board/test/isolation/leaf-api.ts
+  listed   modules/board/test/lifecycle.integration.test.ts
+  listed   modules/board/test/store-seam.test.ts
+  listed   modules/board/test/support/route-calls.ts
+  listed   modules/board/test/support/scratch-pg.ts
+  listed   modules/board/test/support/tenants.ts
+  UNLISTED modules/calendar/module.json
   listed   modules/content/app/lib/server/content/jsdom-shim.d.ts
   listed   modules/content/app/migrations/1200_content_news_posts.sql
   listed   modules/content/app/migrations/1201_news_posts_public_reader_columns.sql
   listed   modules/content/app/scripts/news-posts-public-grant-proof.sh
   listed   modules/content/app/scripts/news-posts-public-grant-proof.test.mjs
-delta entries: 34
+  UNLISTED modules/content/module.json
+  UNLISTED modules/files/module.json
+  UNLISTED modules/finance/module.json
+  UNLISTED modules/messaging/module.json
+  UNLISTED modules/publishing/module.json
+  UNLISTED modules/vault/module.json
+  UNLISTED modules/votes/module.json
+delta entries: 62
 
-RESULT: OK
+RESULT: FAIL — 13 problem(s)
+  x modules/elections/module.json is in modules/elections/, which no StuRa service maps to — an unknown module directory
+  x modules/elections/package.json is in modules/elections/, which no StuRa service maps to — an unknown module directory
+  x modules/handover/module.json is in modules/handover/, which no StuRa service maps to — an unknown module directory
+  x modules/handover/package.json is in modules/handover/, which no StuRa service maps to — an unknown module directory
+  x extra: modules/board/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it
+  x extra: modules/calendar/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it
+  x extra: modules/content/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it
+  x extra: modules/files/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it
+  x extra: modules/finance/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it
+  x extra: modules/messaging/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it
+  x extra: modules/publishing/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it
+  x extra: modules/vault/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it
+  x extra: modules/votes/module.json is in a module directory but no extraction-source-f2 path maps to it and modules/EXTRACTION-DELTA.json does not list it

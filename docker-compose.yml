@@ -3,9 +3,9 @@
 #
 # One pooled stack per host (PRD-PLAT-005, TRD-440): this file (+ the prod
 # overlay and the release pins layer) is the ${STACK}-state project --
-# postgres, the six profile-gated <id>-postgres, keycloak, legal, vector,
-# and in the production profile traefik, docker-socket-proxy, pgbouncer and
-# fallback. mailpit is dev-only (profiles: [dev]).
+# postgres, the six profile-gated <id>-postgres, nats, keycloak, legal,
+# vector, and in the production profile traefik, docker-socket-proxy,
+# pgbouncer and fallback. mailpit is dev-only (profiles: [dev]).
 #
 # The app tier (gremion-ui, gremion-public, the migrate and tenant-create
 # one-shots) is NOT here: it is docker-compose.app.yml, instantiated twice as
@@ -242,6 +242,46 @@ services:
       POSTGRES_PASSWORD: ${VAULT_PG_PASSWORD}
     volumes:
       - vault-pg-data:/var/lib/postgresql
+
+  # ============================================================
+  # NATS JetStream — the event broker (TASK-024, CAP-NATS-AUTH; D12, TRD-419)
+  # ============================================================
+  # Admits a client only by nkey, into its tenant's account (T_<tenant>): one
+  # account per tenant, one user per module, no anonymous user
+  # (docker/nats/nats.conf). The accounts file is RENDERED by
+  # @gremion/nats-auth (tenant-create; `nats-auth init` before the first state
+  # up) into the external ${STACK}_nats_accounts volume, mounted here
+  # read-only; a tenant add reloads the server over the network, never
+  # restarts it (TRD-440). The seeds live in ${STACK}_nats_secrets, which only
+  # tenant-create mounts. On ${STACK}_state only; no host port (clients reach
+  # nats-${STACK}:4222); the monitor listens on the container loopback.
+  nats:
+    image: nats:2.12.15-alpine@sha256:b270f5e2428354c0335612694d7dd2fb588148e567a5757fdff325ef9c9332e6
+    command: ["-c", "/etc/nats/nats.conf"]
+    restart: unless-stopped
+    deploy: *limits-m
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    environment:
+      # Go runtime soft limit under the 512M container limit (TRD-177 [A]).
+      GOMEMLIMIT: 400MiB
+    volumes:
+      - ./docker/nats/nats.conf:/etc/nats/nats.conf:ro
+      - nats-accounts:/etc/nats/accounts:ro
+      - nats-data:/data
+    networks:
+      state:
+        # the postgres idiom: gremion-deploy evict_alias reads <service>-<stack>
+        aliases: ["nats-${STACK:?STACK required}"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # ============================================================
   # Mailpit — SMTP catcher for staging / local dev (#162)
@@ -625,6 +665,15 @@ volumes:
   finance-pg-data:
   newsletter-pg-data:
   vault-pg-data:
+  # JetStream's store: project-scoped like pg-data (${STACK}-state_nats-data),
+  # backed up by project label with the rest of the state volumes.
+  nats-data:
+  # The rendered accounts file (public keys only): written by tenant-create,
+  # read by nats. External, created by bootstrap.sh stage_networks (and by
+  # `make dev-networks`), so no `down -v` of either project can take it.
+  nats-accounts:
+    name: ${STACK}_nats_accounts
+    external: true
   mailpit-data:
   traefik-logs:
   # Created by infra/host/bootstrap.sh (stage_networks) and never by compose,

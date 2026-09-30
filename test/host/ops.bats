@@ -211,7 +211,7 @@ ALERT_WEBHOOK_URL=http://127.0.0.1:9099/hook
 ALERT_EMAIL_TO=${1:-}
 ALERT_EMAIL_FROM=alerts@example.org
 ALERT_SMTP_USER=alerts@example.org
-ALERT_SMTP_PASSWORD=${2:-CHANGE_ME_GEN_alnum32_platform_smtp}
+ALERT_SMTP_PASSWORD=${2:-CHANGE_ME_GEN_alnum32_alert_smtp}
 STALWART_API_KEY=CHANGE_ME_GEN_hex32_stalwart_api
 OPS_TENANT_HOSTS_FILE=${GREMION_ROOT}/etc/tenant-hosts.txt
 EOF
@@ -292,10 +292,10 @@ EOF
 }
 
 @test "render-ops is BLOCKED when e-mail alerting has no app password" {
-    # ALERT_SMTP_PASSWORD is Task 1's key, in the platform_smtp sentinel group
-    # shared with mail.env. Before the Stalwart bring-up it legitimately still
+    # ALERT_SMTP_PASSWORD is Task 1's key, in the alert_smtp sentinel group
+    # shared with mail.env (TASK-015). Before the Stalwart bring-up it legitimately still
     # carries its sentinel, and this is the one place that must say so exactly.
-    write_ops_env "ops@example.org" "CHANGE_ME_GEN_alnum32_platform_smtp"
+    write_ops_env "ops@example.org" "CHANGE_ME_GEN_alnum32_alert_smtp"
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 3 ]
     [[ "$output" == *"BLOCKED: ALERT_SMTP_PASSWORD not provisioned (Stalwart app password, §I)"* ]]

@@ -66,7 +66,12 @@ echo '{}' > "$T1/keep-2026-01-01.log"
 # mtime must NOT drive the decision: make an old-by-name file look brand new and
 # a kept-by-name file look ancient.
 touch "$T1/retained-2026-01-21.log.1"
-touch -d '2000-01-01 00:00:00' "$T1/retained-2026-03-01.log.1" 2>/dev/null || true
+touch -d '2000-06-15 12:00:00' "$T1/retained-2026-03-01.log.1"
+# A touch without -d support (or a failed backdate) must not pass silently: the
+# "mtime must NOT drive the decision" claim below is only proven if the mtime
+# really is ancient. Mid-year, local-to-local: no timezone can move the year.
+[ "$(date -r "$T1/retained-2026-03-01.log.1" +%Y)" = 2000 ]
+check $? "precondition: touch -d backdated retained-2026-03-01.log.1 to year 2000 (else the mtime-independence check is vacuous)"
 
 run_prune "$T1" RETAINED_TODAY=2026-03-02 RETAINED_RETENTION_DAYS=31
 check $? "prune exits 0 on a valid run"

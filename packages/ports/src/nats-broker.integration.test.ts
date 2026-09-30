@@ -498,8 +498,8 @@ describeIf('NatsBroker integration (@nats-io/* against a real JetStream server)'
     expect(await serverFilter(broker, STREAM_NAME)).toEqual(STREAM_SUBJECTS)
   })
 
-  // ── ensureStream() path 2 of 4: REFRESH with an unchanged filter. ──
-  it('ensureStream() with an unchanged filter refreshes the stream and a covered subscribe() still goes live', async () => {
+  // ── ensureStream() path 2 of 4: an unchanged filter and limits -- no write. ──
+  it('ensureStream() with an unchanged filter skips the update (read-only on an equal config, TASK-024 G2) and a covered subscribe() still goes live', async () => {
     await broker.ensureStream(STREAM_NAME, STREAM_SUBJECTS)
     expect(await serverFilter(broker, STREAM_NAME)).toEqual(STREAM_SUBJECTS)
 

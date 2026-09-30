@@ -36,6 +36,7 @@ and that code is the authoritative copy.
 | Service | Class | Project | Networks |
 |---|---|---|---|
 | postgres, 6 × `<id>-postgres`, pgbouncer | council store | state | `_state` |
+| nats (TASK-024: nkey auth, one account per tenant) | council store | state | `_state` |
 | keycloak | council | state | `_state`, `_edge` |
 | legal, fallback | council (edge) | state | `_edge` |
 | traefik | council (edge) | state | `_edge`, `socket` |
@@ -74,6 +75,7 @@ limit.
 | state | postgres | 1G | 1.0 | 0 |
 | state | 6 × `<id>-postgres` (profile-gated, only enabled modules start) | 6 × 256M | 6 × 0.25 | 0 |
 | state | pgbouncer | 256M | 0.25 | 0 |
+| state | nats | 512M | 0.5 | 0 |
 | state | keycloak | 1.5G | 1.0 | 0 |
 | state | legal | 256M | 0.25 | 0 |
 | state | fallback | 256M | 0.25 | 0 |
@@ -94,13 +96,13 @@ limit.
 
 | Situation | Memory ceiling | CPU ceiling |
 |---|---|---|
-| state, no module Postgres | 4.5G | 4.0 |
-| state, all six module Postgres | 6.0G | 5.5 |
+| state, no module Postgres | 5.0G | 4.5 |
+| state, all six module Postgres | 6.5G | 6.0 |
 | one app colour (steady state) | 1.5G | 1.5 |
 | ops | 2.25G | 2.25 |
 | mail | 0.5G | 0.5 |
-| **steady state** (state with all modules + one colour + ops + mail) | **10.25G** | **9.75** |
-| **deploy window** (+ the second colour + migrate) | **12.75G** | **12.25** |
+| **steady state** (state with all modules + one colour + ops + mail) | **10.75G** | **10.25** |
+| **deploy window** (+ the second colour + migrate) | **13.25G** | **12.75** |
 
 These are ceilings, not usage. A CPU limit caps each container and reserves
 nothing, so a CPU sum above the host's core count means contention under load,
@@ -218,7 +220,11 @@ Left open by TASK-040, each with its owner:
   deletion. It is outside this unit's files and stays until its owner removes
   it.
 - **gremion-public `/healthz`** carries no colour field (gremion-ui's does).
-- **NATS account per tenant** (TRD-440 lists it): TASK-024 / TASK-043.
+- **NATS account per tenant** (TRD-440 lists it): closed by TASK-024. The
+  state project's `nats` admits clients only by per-module nkey inside one
+  account per tenant (`packages/nats-auth`); a tenant add reloads it, never
+  adds a container. TASK-043 drops its publishing -> newsletter alias; the
+  live host re-runs the proof under TASK-038.
 - **Dev loop proof (Q6; orchestrator or operator).** `make up` serving
   `127.0.0.1:3001` / `:3002` has not been run and recorded; only the dev
   render is guarded (loopback-only binds). `make up` brings up the base

@@ -1,0 +1,13 @@
+Authentication-Results: mx.example.net;
+       dkim=pass header.d=example.org header.s=g2026a;
+       spf=pass smtp.mailfrom=system@example.org;
+       dmarc=pass header.from=example.org
+Received: from smarthost.example.com (smarthost.example.com. [198.51.100.40])
+        by mx-in-2.example.net with ESMTPS id q1; Mon, 28 Sep 2026 10:00:02 -0700
+Received: from mail.example.org (mail.example.org. [192.0.2.25])
+        by smarthost.example.com with ESMTPS id q0; Mon, 28 Sep 2026 10:00:01 -0700
+Received: from [10.90.3.7] (unknown [10.90.3.7])
+	by mail.example.org (Stalwart SMTP) with ESMTPSA id 4F2A; Mon, 28 Sep 2026 17:00:00 +0000
+From: system@example.org
+
+body

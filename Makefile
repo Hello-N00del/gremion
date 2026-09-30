@@ -2,7 +2,7 @@
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
-        test test-unit test-host-docker test-integration test-all test-ports-nats \
+        test test-unit test-host-docker test-integration test-all test-ports-nats test-nats-auth nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
@@ -28,12 +28,18 @@ dev-networks:
 	@for n in edge state; do \
 	   docker network inspect $(DEV_STACK)_$$n >/dev/null 2>&1 || docker network create $(DEV_STACK)_$$n >/dev/null; \
 	 done
-	@for v in traefik_acme config_data tenant_config_data; do \
+	@for v in traefik_acme config_data tenant_config_data nats_accounts nats_secrets; do \
 	   docker volume inspect $(DEV_STACK)_$$v >/dev/null 2>&1 || docker volume create $(DEV_STACK)_$$v >/dev/null; \
 	 done
 
+# TASK-024 (Q12): the NATS SYS reload seed and a SYS-only accounts file on
+# the external volumes BEFORE nats first starts (it admits no anonymous
+# client). Idempotent, no network; the same one-shot a host runs.
+nats-init: dev-networks
+	$(DEV_APP) run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init
+
 # Start all services: state first, then the blue app colour
-up: dev-networks
+up: dev-networks nats-init
 	$(DEV_STATE) up -d
 	$(DEV_APP) up -d
 
@@ -47,8 +53,8 @@ build:
 	$(DEV_STATE) build
 	$(DEV_APP) build
 
-# Rebuild and restart
-rebuild: build dev-networks
+# Rebuild and restart (nats-init: fresh volumes need the accounts file first)
+rebuild: build dev-networks nats-init
 	$(DEV_STATE) up -d --force-recreate
 	$(DEV_APP) up -d --force-recreate
 
@@ -185,7 +191,18 @@ test: test-unit
 # Run all tests including integration (alias). test-ports-nats is IN here on
 # purpose: a target nothing aggregates is a target nobody runs, which is how the
 # JetStream proofs went unexecuted in the first place (integration defect D8).
-test-all: test-unit test-integration test-ports-nats
+test-all: test-unit test-integration test-ports-nats test-nats-auth
+
+# @gremion/nats-auth (TASK-024): the unit suite, then the acceptance against a
+# REAL broker -- packages/nats-auth/scripts/proof.sh --auth starts the state
+# image with docker/nats/nats.conf, asserts its own post-condition (a minimum
+# of passing live cases, none skipped) and removes the container by name.
+# Last, image-check.sh builds the migrate image's builder stage and runs the
+# call every site makes in it (`pnpm exec nats-auth init|render`).
+test-nats-auth:
+	@pnpm --filter @gremion/nats-auth test
+	@bash packages/nats-auth/scripts/proof.sh --auth
+	@bash packages/nats-auth/scripts/image-check.sh
 
 # @gremion/ports against a REAL NATS JetStream server. Starts a throwaway
 # container, runs the suite against it, tears it down, and ASSERTS the
@@ -236,7 +253,7 @@ test-ports-nats:
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
+	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
 		[ -e "$$f" ] || continue; \

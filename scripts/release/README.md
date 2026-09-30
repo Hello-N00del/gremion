@@ -52,12 +52,13 @@ failure is expected, and nothing here signs with a real key before it.
    digest is what is pulled), and Docker Hub names are compared in canonical
    form, so the pin `redis:7-alpine@sha256:…` matches either
    `docker.io/library/redis` or `redis` in the list.
-4. **age recipient.** Generate the age identity (the private half goes to the
-   vault and the recovery kit), then replace the
+4. **age recipient.** DONE (bcfcf054, 2026-09-26): the operator's `age1…`
+   public recipient replaced the
    `<OPERATOR_AGE_PUBLIC_KEY_REPLACE_VIA_BOOTSTRAP_SOPS_SH>` sentinel in
-   `/.sops.yaml` with the `age1…` public recipient. Until then
-   `node scripts/release/check-sops.mjs` fails with `sentinel-recipient`, and
-   only with that.
+   `/.sops.yaml` (the private half is in the vault and the recovery kit), and
+   `node scripts/release/check-sops.mjs` reports zero problems. A sentinel
+   back in `/.sops.yaml` fails with `sentinel-recipient`
+   (`check-sops.test.mjs` proves the refusal on a fixture).
 5. **Grype DB.** On the workstation that runs `verify`, allow `grype db update`
    to reach the Anchore DB host, or `check-sbom` fails with `grype-db`.
 6. **Runner scope evidence.** With a token that can read Actions settings on
