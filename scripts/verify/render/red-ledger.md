@@ -25,8 +25,9 @@ strings unchanged); G3 gremion-ui `scripts/boundary-lint.ts` (`collectAll(root)`
 - B32 parts not taken: router contract and middleware (TASK-034); HostRegexp and
   X-Forwarded-Host (TASK-041, landed); the N20 flag guard and `ci.yml` (D17); B34's second
   `--all` (TASK-125).
-- `Makefile:276` still says "TASK-053 wires `verify`", but `lint-pooled-stack` has been in
-  `verify` since 14c02f63. The Makefile is not this unit's file; the note goes to its owner.
+- `Makefile:293` (was `:276` before main 535aae89) still says "TASK-053 wires `verify`", but
+  `lint-pooled-stack` has been in `verify` since 14c02f63. The Makefile is not this unit's
+  file; the note goes to its owner.
 - Seeded-regression chronology: the rescued WIP commit 0afbf0a9 (orchestrator, R28) already
   held a G2 body when this lane resumed. It had no import, so it threw a ReferenceError on
   every app render. The section 1 seed was therefore run at the guard commit 0b72442e (G2 not
@@ -37,6 +38,16 @@ strings unchanged); G3 gremion-ui `scripts/boundary-lint.ts` (`collectAll(root)`
 - Allowances (brief Q4): `render/allowances.json` carries dated rows for `tenant-create` (app)
   and `legal`, `vector`, `fallback` (state), all retiring with TASK-048b. X-053 goes to
   TASK-048b through the orchestrator.
+- r4 merge order (2026-09-30, merge 54d33da8 of kernel `main` 535aae89): TASK-048 landed
+  before this unit, against the brief's Q10 order. It pinned third-party images by digest and
+  moved the first-party `:-latest` defaults to `:-dev`, but it shipped no state-pins release
+  fixture and left `test/host/fixtures/release/valid/docker-compose.pins.yml` unchanged: the
+  Q2 split is TASK-048b's. So `SWAP_PINS` stays app-only and all four allowance rows stay,
+  each still asserted by the real render on the merged tree (state: judged 0, allowance 3;
+  app-blue/app-green: judged 3, allowance 1). State now renders 16 services (TASK-024's
+  third-party `nats` joined); no derived name changed (13). TASK-048's own
+  `check-image-digests.mjs` passes over the merged tree (31 files, 0 problems). X-053
+  (i)-(iii) is unchanged and still owed by TASK-048b.
 
 ## G-053-harness
 
