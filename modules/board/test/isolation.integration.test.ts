@@ -186,8 +186,12 @@ describe('query-time mapping: a database dropped under a cached ok verdict (A8 a
       expect(warm.status).toBe(200)
       await admin`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${dbC} AND pid <> pg_backend_pid()`
       const r = await leafRequest(leaf.server, SECRET, TENANT_C, 'GET', `/api/v1/boards?orgUnitId=${randomUUID()}`)
-      expect([200, 503], JSON.stringify(r.body)).toContain(r.status)
-      if (r.status === 503) expect(r.body).toEqual({ success: false, error: 'tenant_unavailable' })
+      // either the pool reconnected (200) or the leaf refused cleanly (503 tenant_unavailable);
+      // one unconditional assertion (vitest/no-conditional-expect, lint-js ratchet)
+      const outcome = r.status === 200 ? { status: 200 } : { status: r.status, body: r.body }
+      expect([{ status: 200 }, { status: 503, body: { success: false, error: 'tenant_unavailable' } }]).toContainEqual(
+        outcome,
+      )
     } finally {
       await leaf.close()
       await dropScratchDb(admin, dbC)
