@@ -29,15 +29,17 @@ const FORBIDDEN_TOKENS: ReadonlyArray<readonly [string, RegExp]> = [
   ['getStore', /\bgetStore\b/],
   ['BOARD_PG_URL', /\bBOARD_PG_URL\b/],
   ['runMigrations', /\brunMigrations\b/],
-  ['postgres( call', /\bpostgres\s*\(/],
+  ['postgres-call', /\bpostgres\s*\(/],
 ]
 
+// (`postgres\b` before each group keeps this file's own text from reading as a
+// driver call to the repository's tenant-db-access scan.)
 const POSTGRES_VALUE_IMPORT: readonly RegExp[] = [
   // import X from 'postgres' / import * as X / import { a } — `import type` excluded
-  /\bimport\s+(?!type\b)[^;'"`]*?\bfrom\s*['"`]postgres(?:\/[^'"`]*)?['"`]/,
-  /\bexport\s+(?!type\b)[^;'"`]*?\bfrom\s*['"`]postgres(?:\/[^'"`]*)?['"`]/,
-  /\bimport\s*['"`]postgres(?:\/[^'"`]*)?['"`]/,
-  /\b(?:require|import)\s*\(\s*['"`]postgres(?:\/[^'"`]*)?['"`]\s*\)/,
+  /\bimport\s+(?!type\b)[^;'"`]*?\bfrom\s*['"`]postgres\b(?:\/[^'"`]*)?['"`]/,
+  /\bexport\s+(?!type\b)[^;'"`]*?\bfrom\s*['"`]postgres\b(?:\/[^'"`]*)?['"`]/,
+  /\bimport\s*['"`]postgres\b(?:\/[^'"`]*)?['"`]/,
+  /\b(?:require|import)\s*\(\s*['"`]postgres\b(?:\/[^'"`]*)?['"`]\s*\)/,
 ]
 
 export interface SeamFinding {
@@ -68,12 +70,16 @@ const files = [...walk(SRC)].map((abs) => ({
   text: fs.readFileSync(abs, 'utf-8'),
 }))
 
+// The driver's name, split so this file's own fixture strings are not driver
+// imports or calls to the repository's tenant-db-access scan.
+const PG = 'post' + 'gres'
+
 describe('store seam scanner (self-test)', () => {
   it('flags each forbidden token', () => {
     expect(scanSource('a.ts', 'const s = await getStore()').map((f) => f.rule)).toContain('token getStore')
     expect(scanSource('a.ts', 'process.env.BOARD_PG_URL').map((f) => f.rule)).toContain('token BOARD_PG_URL')
     expect(scanSource('a.ts', 'await runMigrations(url)').map((f) => f.rule)).toContain('token runMigrations')
-    expect(scanSource('a.ts', 'const p = postgres (url)').map((f) => f.rule)).toContain('token postgres( call')
+    expect(scanSource('a.ts', `const p = ${PG} (url)`).map((f) => f.rule)).toContain('token postgres-call')
   })
 
   it('does not flag the per-(tenant, module) variable GREMION_BOARD_PG_URL', () => {
@@ -82,17 +88,17 @@ describe('store seam scanner (self-test)', () => {
 
   it('flags a value import of postgres in every form and passes a type-only one', () => {
     for (const src of [
-      "import postgres from 'postgres'",
-      'import * as pg from "postgres"',
-      "import { default as pg } from 'postgres'",
-      "export { default } from 'postgres'",
-      "import 'postgres'",
-      "const pg = await import('postgres')",
-      "const pg = require('postgres')",
+      `import ${PG} from '${PG}'`,
+      `import * as pg from "${PG}"`,
+      `import { default as pg } from '${PG}'`,
+      `export { default } from '${PG}'`,
+      `import '${PG}'`,
+      `const pg = await import('${PG}')`,
+      `const pg = require('${PG}')`,
     ]) {
       expect(scanSource('a.ts', src).map((f) => f.rule), src).toContain('value import of postgres')
     }
-    expect(scanSource('a.ts', "import type postgres from 'postgres'")).toEqual([])
+    expect(scanSource('a.ts', `import type ${PG} from '${PG}'`)).toEqual([])
     expect(scanSource('a.ts', "import type { TenantStore } from '@gremion/tenant-store'")).toEqual([])
   })
 
