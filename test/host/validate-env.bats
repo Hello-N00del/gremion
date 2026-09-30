@@ -150,6 +150,44 @@ refute_secrets_printed() {
     refute_secrets_printed "${HOST_SRC}/templates/env/app.env.tmpl" "$f"
 }
 
+# set_key <file> <key> <value> -- replace a key's line, or append it.
+set_key() {
+    if grep -q "^$2=" "$1"; then
+        sed -i "s|^$2=.*|$2=$3|" "$1"
+    else
+        printf '%s=%s\n' "$2" "$3" >> "$1"
+    fi
+}
+
+# TASK-015 (G2): the alert_smtp group spans TWO files -- mail.env (for
+# provision-roles.sh, which sets alerts@'s password) and ops.env (Alertmanager
+# authenticates with it). gremion-validate-env judges alias equality WITHIN one
+# file (its header says so), so the cross-file drift guard is check-identities
+# (gremion-mail-bringup assert 3). This pins that guard on a REAL init-secrets
+# render: equal after rendering, exit 1 naming the key after drift, no value
+# printed. VENDOR_MAIL_SRC points a drill at a mutilated copy.
+@test "alert_smtp drift between mail.env and ops.env exits 1, naming the key and printing no value (TASK-015)" {
+    command -v node >/dev/null || { echo "node is part of the bats runner image; missing here"; return 1; }
+    local check="${VENDOR_MAIL_SRC:-${KERNEL_ROOT}/ops/vendor-mail}/check-identities.mjs"
+    render_filled
+    local mail="${ENV_DIR}/mail.env" ops="${ENV_DIR}/ops.env"
+    [ -f "$mail" ] && [ -f "$ops" ] || { echo "init-secrets rendered no mail.env/ops.env"; return 1; }
+    set_key "$mail" PLATFORM_DOMAIN example.org
+    set_key "$ops" PLATFORM_DOMAIN example.org
+    set_key "$ops" ALERT_SMTP_USER alerts@example.org
+    set_key "$ops" ALERT_EMAIL_FROM alerts@example.org
+    set_key "$ops" ALERT_SMTP_HOST mail.example.org
+    [ -n "$(value_of "$mail" ALERT_SMTP_PASSWORD)" ] || { echo "mail.env has no ALERT_SMTP_PASSWORD"; return 1; }
+    run node "$check" --mail-env "$mail" --ops-env "$ops"
+    [ "$status" -eq 0 ] || { echo "the fresh render is not consistent: status=$status $output"; return 1; }
+    set_key "$ops" ALERT_SMTP_PASSWORD "$(printf 'z%.0s' {1..32})"
+    run node "$check" --mail-env "$mail" --ops-env "$ops"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"ALERT_SMTP_PASSWORD differs between mail.env and ops.env"* ]] || { echo "$output"; return 1; }
+    refute_secrets_printed "${HOST_SRC}/templates/env/mail.env.tmpl" "$mail"
+    refute_secrets_printed "${HOST_SRC}/templates/env/ops.env.tmpl" "$ops"
+}
+
 @test "load_env's refusals pass through with exit 2 (an operator sentinel left in place)" {
     render_filled
     sed -i 's/^ACME_EMAIL=.*/ACME_EMAIL=CHANGE_ME_OPERATOR_acme_email/' "${ENV_DIR}/state.env"

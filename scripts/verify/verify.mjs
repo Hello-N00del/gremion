@@ -32,6 +32,7 @@ import { runIsolationSuite } from './suites/isolation.mjs'
 import { runMigrationHashSuite } from './suites/migration-hash.mjs'
 import { runTypecheckSuite } from './suites/typecheck.mjs'
 import { runUnitSuite, UNIT_PARTS } from './suites/unit.mjs'
+import { run, tail } from './lib/proc.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
 export const REQUIRED_SUITES_PATH = path.join(import.meta.dirname, 'required-suites.txt')
@@ -73,6 +74,23 @@ export const SUITE_REGISTRY = {
   // scanned-file floor. See render/suite.mjs and boundary-lint/suite.mjs.
   'render-guards': () => runRenderGuardsSuite(),
   'boundary-lint': () => runBoundaryLintSuite({ root: REPO_ROOT }),
+  // TASK-015 (TRD-251/252/253, L3-11): the vendor mail guards and their tests,
+  // run as their own process (ops/vendor-mail/suite-cli.mjs, which calls
+  // runVendorMailSuite) and never imported: scripts/verify must load from a
+  // copy of itself alone, and a missing ops/ tree is this suite's FAIL.
+  'vendor-mail': () => {
+    const res = run(process.execPath, [path.join(REPO_ROOT, 'ops', 'vendor-mail', 'suite-cli.mjs')], { cwd: REPO_ROOT })
+    const prefix = 'VENDOR-MAIL-SUITE '
+    const line = res.stdout.split(/\r?\n/).findLast((l) => l.startsWith(prefix))
+    if (res.code === 0 && line) {
+      try {
+        return JSON.parse(line.slice(prefix.length))
+      } catch {
+        // an unparseable result line is judged below, like no line at all
+      }
+    }
+    return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `ops/vendor-mail/suite-cli.mjs: exit ${String(res.code ?? res.signal)} without a result line\n${tail(String(res.stdout) + String(res.stderr))}` }
+  },
   ...UNIT_PART_ENTRIES,
   ...INTEGRATION_PART_ENTRIES,
   __fixture_node_zero__: runFixtureNodeZero,

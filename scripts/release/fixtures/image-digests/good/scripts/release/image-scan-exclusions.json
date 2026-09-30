@@ -1,0 +1,5 @@
+{
+  "exclusions": [
+    { "glob": "infra/host/bin/gremion-legacy", "reason": "fixture: proves an excluded file is not scanned by the raw arm" }
+  ]
+}

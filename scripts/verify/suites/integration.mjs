@@ -119,12 +119,12 @@ export function integrationVitestEnv({ baseEnv, db, uiDir }) {
     DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/gremion`,
     CONTROL_DATABASE_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/control`,
     GREMION_PRODUCTION_STACK: 'none',
-    CONFIG_PATH: path.join(uiDir, 'tests', 'integration', 'fixtures', 'default-config.json'),
+    // TASK-042: every tenant's config is TENANT_DATA_ROOT/<slug>/config.json; the
+    // harness fixture tenant's lives in this committed tree.
+    TENANT_DATA_ROOT: path.join(uiDir, 'tests', 'integration', 'fixtures', 'tenant-data'),
     GREMION_DISABLE_SEEDS: 'true',
     KEYCLOAK_ADMIN_CLIENT_SECRET: 'test-kc-admin-secret',
     AUTH_KEYCLOAK_SECRET: 'test-ui-client-secret',
-    AUTH_KEYCLOAK_ISSUER: 'https://council.example/auth/realms/gremion',
-    AUTH_KEYCLOAK_BASE: 'https://council.example/auth/realms/gremion',
   }
   delete env.POSTGRES_PASSWORD
   delete env.PGPASSWORD
@@ -161,10 +161,12 @@ function vitestPart({ root }) {
 
     const env = integrationVitestEnv({ baseEnv: process.env, db, uiDir })
 
-    const migrate = run('pnpm', ['run', 'migrate'], { cwd: uiDir, env })
+    // TASK-042 (G2): boot and `migrate` register no tenant; the harness creates
+    // and migrates its fixture tenant (scripts/migrate-test-fixture.mjs).
+    const migrate = run('pnpm', ['run', 'migrate:test-fixture'], { cwd: uiDir, env })
     if (spawnMissing(migrate)) return { label, toolMissing: 'pnpm' }
     if (migrate.code !== 0) {
-      return { label, unparseable: true, detail: `pnpm migrate failed: ${tail(migrate.stdout + migrate.stderr)}` }
+      return { label, unparseable: true, detail: `pnpm migrate:test-fixture failed: ${tail(migrate.stdout + migrate.stderr)}` }
     }
     return runVitestJson({ label, cwd: uiDir, cmd: 'pnpm', args: ['run', 'test:integration'], env, root })
   } finally {
@@ -191,6 +193,41 @@ export function judgeNatsTest(res) {
     return { label, unparseable: true, detail: `exit 0 but no "[nats-test] N passing tests" + "[nats-test] OK" post-condition lines -- untrusted\n${tail(out)}` }
   }
   const n = Number(count[1])
+  return { label, collected: n, passed: n, failed: 0, skipped: 0 }
+}
+
+/**
+ * `make test-nats-auth` (TASK-024): @gremion/nats-auth's unit suite, then
+ * packages/nats-auth/scripts/proof.sh --auth against a real broker. Judged
+ * like judgeNatsTest: exit 0 counts only with the unit run's all-passed
+ * summary AND the proof's own "[nats-auth-proof] N passing" and OK lines;
+ * collected is the unit count plus N.
+ */
+export const NATS_AUTH_MIN_PROOFS = 25
+
+export function judgeNatsAuthTest(res) {
+  const label = 'make test-nats-auth'
+  const out = `${res.stdout}\n${res.stderr}`
+  // The unit run prints BEFORE the proof starts; the proof echoes its own
+  // live-suite summary, which must not stand in for the unit one.
+  const unit = out.split(/^\[nats-auth-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
+  // The floor is proof.sh's own (25 live cases); a log claiming a lower one
+  // did not run the proof this judge vouches for.
+  const count = out.match(/^\[nats-auth-proof\] (\d+) passing \(minimum (\d+)\)\s*$/m)
+  const floorOk = count !== null && Number(count[2]) >= NATS_AUTH_MIN_PROOFS && Number(count[1]) >= Number(count[2])
+  const ok = /^\[nats-auth-proof\] OK -- the authenticated broker admits and refuses as specified\s*$/m.test(out)
+  if (res.code !== 0) {
+    const n = Math.max(1, (unit ? Number(unit[1]) : 0) + (count ? Number(count[1]) : 0))
+    return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
+  }
+  if (!unit || !count || !ok || !floorOk) {
+    return {
+      label,
+      unparseable: true,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, "[nats-auth-proof] N passing (minimum >= 25)" and "[nats-auth-proof] OK" lines -- untrusted\n${tail(out)}`,
+    }
+  }
+  const n = Number(unit[1]) + Number(count[1])
   return { label, collected: n, passed: n, failed: 0, skipped: 0 }
 }
 
@@ -226,6 +263,7 @@ export const INTEGRATION_PARTS = {
   vitest: (root) => vitestPart({ root }),
   'fresh-init': (root) => makePart('fresh-init-proof', judgeFreshInit, root),
   nats: (root) => makePart('test-ports-nats', judgeNatsTest, root),
+  'nats-auth': (root) => makePart('test-nats-auth', judgeNatsAuthTest, root),
 }
 
 export function runIntegrationSuite({ root = REPO_ROOT, only } = {}) {

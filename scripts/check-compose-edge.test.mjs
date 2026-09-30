@@ -289,7 +289,7 @@ test('guard 3: the healthcheck probes the ping entrypoint (TRD-178)', () => {
 
 test('guard 3: Traefik runs from the rendered /tmp copy of the read-only committed file, on the pinned image', () => {
   const svc = traefik()
-  assert.equal(svc.image, 'traefik:v3.7.1')
+  assert.match(svc.image, /^traefik:v3\.7\.1@sha256:[0-9a-f]{64}$/)
   const cmd = commandText(svc)
   assert.match(cmd, /\/etc\/traefik\/traefik\.yml > \/tmp\/traefik\.yml/)
   assert.match(cmd, /exec \/entrypoint\.sh traefik --configFile=\/tmp\/traefik\.yml/)

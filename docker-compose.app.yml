@@ -265,23 +265,14 @@ services:
       # Migrations run DIRECT on postgres, never through the transaction pooler.
       DATABASE_URL: postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${GREMION_DB_NAME:-gremion}
       CONTROL_DATABASE_URL: postgresql://${CONTROL_DB_USER:-control}:${CONTROL_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
-      # run-migrations-verified mirrors boot(): control migrations, then
-      # registerDefaultTenant, then the fleet. The default tenant's row is
-      # derived from the same OIDC settings gremion-ui reads, so the one-shot
-      # needs them too (measured on the scratch proof: without the issuer the
-      # job dies "registerDefaultTenant: AUTH_KEYCLOAK_ISSUER is not set").
-      AUTH_KEYCLOAK_ISSUER:     ${AUTH_KEYCLOAK_ISSUER:-}
-      AUTH_KEYCLOAK_INTERNAL:   https://keycloak:8443/auth/realms/gremion
-      AUTH_KEYCLOAK_ID:         ${AUTH_KEYCLOAK_ID:-gremion-ui}
-      AUTH_KEYCLOAK_SECRET:     ${AUTH_KEYCLOAK_SECRET}
-      # The fleet resolves the default tenant's secret refs before it
-      # migrates it (measured: "secret ref env:KEYCLOAK_ADMIN_CLIENT_SECRET is
-      # unset" failed the fleet).
-      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
-      CONFIG_PATH:              /app/config/config.json
+      # TASK-042 (zero-tenant boot, PRD-PLAT-012): run-migrations-verified
+      # mirrors boot(): control migrations, then the fleet of ACTIVE registry
+      # tenants. It registers no tenant, so it reads no OIDC setting and no
+      # deployment config file: every provisioned tenant's secret refs are
+      # file: refs (the mount below) and its config is /data/<slug>. On an
+      # empty registry it migrates the control plane only and says so.
       GREMION_DISABLE_SEEDS:    "true"
     volumes:
-      - config-data:/app/config
       # Every provisioned tenant's database credential is a file: ref under
       # /run/secrets/tenants, and the fleet opens it before it migrates that
       # tenant. Measured once a second tenant existed: "FAILED: ENOENT ...
@@ -335,9 +326,18 @@ services:
       CONFIG_PATH: /app/config/config.json
       INTERNAL_BASE_URL: http://gremion-ui-${COLOUR:?COLOUR required}:3000
       INTERNAL_PUSH_SECRET: ${INTERNAL_PUSH_SECRET:-}
+      # TASK-024: the broker, for ensureTenantAccount's reload and stream
+      # ensure. No depends_on (the state project's nats is not in this
+      # project): the connection retries itself, bounded, then fails loudly.
+      NATS_URL: nats://nats-${STACK:?STACK required}:4222
     volumes:
       - config-data:/app/config
       - tenant-config-data:/data
+      # TASK-024 (Q4): the NATS seeds (rw) -- ONLY this service mounts them;
+      # gremion-ui, gremion-public and migrate mount none -- and the rendered
+      # accounts file the state project's nats reads.
+      - nats-secrets:/run/secrets/nats
+      - nats-accounts:/etc/nats/accounts
       # The provisioner WRITES the tenant's secret files here (the long-running
       # gremion-ui mounts the same directory read-only).
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants
@@ -390,3 +390,11 @@ volumes:
   tenant-config-data:
     external: true
     name: ${STACK:?STACK required}_tenant_config_data
+  # TASK-024: tenant-create only. Seeds (0600, per-module subtree) and the
+  # public-key accounts file; both created by bootstrap.sh stage_networks.
+  nats-accounts:
+    external: true
+    name: ${STACK:?STACK required}_nats_accounts
+  nats-secrets:
+    external: true
+    name: ${STACK:?STACK required}_nats_secrets

@@ -130,6 +130,14 @@ minio/minio-mc references). Nothing carries forward for the pilot; the per-servi
 scoping idea (root pair only for init and restore) is recorded as north-star input for later object
 storage, owned by TASK-048 as a note, not a build task.
 
+- **2026-09-28 — B24 closed in the kernel tree (TASK-048).** PRD §17.1 P5/B-13 KEEP: the storage
+  seam stays (the object-store contract, TASK-117 `ccd5727`); the dormant minio/minio-mc plumbing is
+  removed per TRD-354 (`gremion-backup` `mirror_buckets`, `gremion-restore-into` `restore_buckets`
+  and `MC_IMAGE`; a leftover `MINIO_*`/`*_S3_*` key or a `buckets/` snapshot is refused, not
+  skipped), and `make lint-image-digests` fails on any object-storage image, profile or key, and on
+  `minio` or `@aws-sdk/client-s3` in `pnpm-lock.yaml`, a pilot-scoped proxy until the TRD-223
+  evaluation retires or excludes it.
+
 ## 5. Waiver ledger amendment (PRD §17.1 P4, PRD-REC-006)
 
 `docs/ops/release-1-waivers.md` is amended today; see that file's own change log for the row-level

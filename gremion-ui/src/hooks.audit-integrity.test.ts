@@ -76,7 +76,6 @@ vi.mock('$lib/server/tenant/resolve', () => ({
   tenantForwardFetch: vi.fn(),
 }))
 vi.mock('$lib/server/tenant/control-migrations', () => ({ runControlMigrations: vi.fn(async () => {}) }))
-vi.mock('$lib/server/tenant/register-default', () => ({ registerDefaultTenant: vi.fn(async () => ({ id: 'tid-default' })) }))
 
 // TWO active tenants — the interval must verify BOTH (steerable per test).
 const activeTenants: Array<{ id: string; slug: string; status: string }> = []
@@ -92,9 +91,6 @@ vi.mock('$lib/server/tenant/registry', () => ({
 }))
 
 // NOTE: '$lib/server/tenant/context' is NOT mocked — the real ALS is the point.
-vi.mock('$lib/server/tenant/default-tenant', () => ({
-  DEFAULT_TENANT: { id: 'default', configPath: '/tmp/config.json' },
-}))
 
 vi.mock('./auth', () => ({
   handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) =>

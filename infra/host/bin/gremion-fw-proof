@@ -36,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$SCRIPT_DIR/../lib/common.sh"
 
-PROBE_IMAGE="${FW_PROOF_IMAGE:-alpine:3.22}"
+PROBE_IMAGE="${FW_PROOF_IMAGE:-alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}"
 PROOF_V4_SUBNET="${FW_PROOF_V4_SUBNET:-10.90.250.0/24}"
 PROOF_V6_SUBNET="${FW_PROOF_V6_SUBNET:-fd5a:fa::/64}"
 

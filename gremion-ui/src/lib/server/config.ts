@@ -37,8 +37,8 @@ export interface GremionConfig {
   // name + domain; these complete the handoff BRAND model. P2.1c (T15,
   // §6-P2.2): the DEFAULT_CONFIG values below are NEUTRAL placeholders — the
   // real per-tenant identity lives only in each tenant's materialized
-  // config.json (the default tenant's is written by
-  // `tenant-provision materialize-config`). resolveBrand()/requireBrand() read
+  // config.json (written by `tenant-provision materialize-config <slug>`).
+  // resolveBrand()/requireBrand() read
   // them; no institution literal is hardcoded in source.
   brand: {
     product: string           // e.g. 'Musterrat' (per-tenant; neutral default)
@@ -76,14 +76,6 @@ export interface GremionConfig {
   // today. Consumed via $lib/server/tenant/role-vocabulary.ts; P2.3's
   // municipal blueprint supplies real overrides. No storage change.
   roles?: string[]
-  // P2.1c (D-WIZARD/D2): deployment mode chosen in the setup wizard. `single` =
-  // this deployment serves one organisation; `multi` = it hosts multiple
-  // tenants. Default `'single'`, back-filled by mergeStored so every config
-  // persisted before T12 surfaces `single` on read (byte-identical rendering).
-  // The provisioning script (T10 D-WIZARD gate) REFUSES to provision a second
-  // tenant while the default tenant's config says `single`. Tenant creation
-  // stays an operator command — this toggle is the only self-serve wizard add.
-  deployment: { mode: 'single' | 'multi' }
   admin_accounts: { it_admin_created: boolean; council_admin_created: boolean }
   smtp: { configured: boolean; host: string; port: number; from_address: string; from_name: string }
   // WP3-modules-dynamic: a DYNAMIC open record so a net-new toggleable module
@@ -200,7 +192,6 @@ const DEFAULT_CONFIG: GremionConfig = {
     palette: null,
     logo_url: null,
   },
-  deployment: { mode: 'single' },
   admin_accounts: { it_admin_created: false, council_admin_created: false },
   smtp: { configured: false, host: '', port: 587, from_address: '', from_name: '' },
   // WP3-modules-dynamic: derive the default toggle map from the manifests so a
@@ -295,16 +286,10 @@ const wizardStepsSchema = z
   })
   .partial()
 
-// P2.1c (D-WIZARD/D2): deployment mode is a closed two-value enum — `single`
-// (the default) or `multi`. `.partial()` keeps the whole `deployment` object
-// optional for back-fill, but a present `mode` MUST be one of the two values
-// (the validator rejects e.g. `'cluster'`), so a hand-edited or drifted config
-// falls back to defaults via readConfig's safeParse path.
-const deploymentSchema = z
-  .object({
-    mode: z.enum(['single', 'multi']),
-  })
-  .partial()
+// TASK-042: the P2.1c single/multi deployment toggle (the D-WIZARD gate) is
+// gone with the default tenant. A stored `deployment` key is dropped on
+// read (the read schema strips unknown keys) and REFUSED on write (the strict
+// update schema below).
 
 const adminAccountsSchema = z
   .object({
@@ -387,9 +372,6 @@ export const gremionConfigSchema = z
     // explicit-`.optional()` convention as `terms`: absent means "default
     // vocabulary", never `[]`. Known to the `.strict()` update schema below.
     roles: z.array(z.string()).optional(),
-    // P2.1c (D-WIZARD/D2): deployment mode toggle. Known to `.strict()` below
-    // so the setup endpoint accepts `{ deployment: { mode: 'multi' } }`.
-    deployment: deploymentSchema,
     admin_accounts: adminAccountsSchema,
     smtp: smtpSchema,
     modules: modulesSchema,
@@ -409,7 +391,7 @@ export const gremionConfigSchema = z
  * Mirrors the `ConfigUpdate` TS type below — keep them in sync. The
  * setup wizard posts exactly the shapes covered here:
  *   Step1 → `{ wizard_steps: {...} }`
- *   Step2 → `{ org: {...}, deployment: {...}, wizard_steps: {...} }`
+ *   Step2 → `{ org: {...}, wizard_steps: {...} }`
  *   Step3 → `{ admin_accounts: {...}, wizard_steps: {...} }`
  *   Step4 → `{ smtp: {...}, wizard_steps: {...} }`
  *   Step5 → `{ setup_complete: true }`
@@ -419,11 +401,10 @@ export const gremionConfigSchema = z
 export const configUpdateSchema = gremionConfigSchema.strict()
 
 function getConfigPath(tenant: ConfigTenant): string {
-  // §8.1 / D-CONFIGPATH: trust tenant.configPath UNCONDITIONALLY — the default
-  // row rides the same path as every other tenant. The slug→path derivation
-  // lives once in registry.ts (configPathForTenant), which already maps the
-  // `default` slug to the CONFIG_PATH env; config.ts no longer special-cases the
-  // default id or re-reads env (the second derivation that this removes).
+  // §8.1 / D-CONFIGPATH: trust tenant.configPath UNCONDITIONALLY. The slug→path
+  // derivation lives once in registry.ts (configPathForTenant:
+  // TENANT_DATA_ROOT/<slug>/config.json for EVERY slug, TASK-042); config.ts
+  // special-cases no id and reads no env.
   return tenant.configPath
 }
 
@@ -486,14 +467,6 @@ function mergeStored(stored: StoredConfig): GremionConfig {
     // palette/logo_url to null so the rest of the system only ever sees
     // `string | null`.
     brand: mergeStoredBrand(stored.brand),
-    // P2.1c (D-WIZARD/D2): back-fill the deployment mode so a config persisted
-    // before T12 (no `deployment` key) surfaces the default `single` on read —
-    // byte-identical to today's single-tenant rendering. A present-but-partial
-    // `deployment` (no `mode`) also resolves to `single`.
-    deployment: {
-      ...DEFAULT_CONFIG.deployment,
-      ...stored.deployment,
-    },
     admin_accounts: { ...DEFAULT_CONFIG.admin_accounts, ...stored.admin_accounts },
     smtp: { ...DEFAULT_CONFIG.smtp, ...stored.smtp },
     modules: { ...DEFAULT_CONFIG.modules, ...stored.modules },
@@ -519,8 +492,8 @@ export function parseConfig(raw: unknown): GremionConfig {
 }
 
 // Per-tenant readConfig — reads tenant.configPath unconditionally (§8.1 /
-// D-CONFIGPATH; the default row's configPath is registry-derived from the CONFIG_PATH
-// env, byte-identical). Composed with P0.2's mergeStored/parseConfig extraction.
+// D-CONFIGPATH; registry-derived for every slug alike, TASK-042). Composed with
+// P0.2's mergeStored/parseConfig extraction.
 export function readConfig(tenant: ConfigTenant = requireTenant()): GremionConfig {
   const path = getConfigPath(tenant)
   if (!existsSync(path)) return { ...DEFAULT_CONFIG }
@@ -644,10 +617,6 @@ export function writeConfig(update: ConfigUpdate, tenant: ConfigTenant = require
     // tenant #1 = the Role enum).
     roles: (update.roles ?? current.roles) as GremionConfig['roles'],
     smtp: { ...current.smtp, ...update.smtp },
-    // P2.1c (D-WIZARD/D2): shallow-merge the single-field deployment object so a
-    // partial update keeps the current mode when absent (current always carries
-    // a mode via readConfig's back-fill).
-    deployment: { ...current.deployment, ...update.deployment } as GremionConfig['deployment'],
     legal: { ...current.legal, ...update.legal },
     modules: mergedModules as GremionConfig['modules'],
     backups: mergedBackups,

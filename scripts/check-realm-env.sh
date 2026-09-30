@@ -7,11 +7,11 @@
 #                             Keycloak Admin API (scripts/dev-configure.sh,
 #                             scripts/configure-keycloak-clients.sh, and the
 #                             CI job that creates the realm under test).
-#   AUTH_KEYCLOAK_ISSUER    — the OIDC issuer gremion-ui authenticates against.
-#                             Keycloak issuers end in `/realms/<name>`, and
-#                             registerDefaultTenant derives tenant #1's
-#                             realm_name from exactly that segment
-#                             (gremion-ui/src/lib/server/tenant/register-default.ts).
+#   AUTH_KEYCLOAK_ISSUER    — the OIDC issuer the dev stack authenticates
+#                             against. Keycloak issuers end in `/realms/<name>`.
+#                             (Since TASK-042 no shipped gremion-ui code reads
+#                             it: every tenant carries its own issuer in the
+#                             registry. Retiring the env template is TASK-043.)
 #
 # B-01 deleted the boot import and started shipping KEYCLOAK_REALM SET in
 # .env.example. Nothing compared the two, so an operator who renames the realm
@@ -27,8 +27,7 @@
 #
 # Exit 0 (nothing to compare) when:
 #   - KEYCLOAK_REALM is unset or empty  → the issuer is the only source of truth
-#   - AUTH_KEYCLOAK_ISSUER is unset     → registerDefaultTenant already refuses
-#                                         to boot, loudly, on that
+#   - AUTH_KEYCLOAK_ISSUER is unset     → there is no issuer to compare
 #   - the issuer carries no `/realms/<name>` segment → it is not Keycloak-
 #     shaped, so KEYCLOAK_REALM is a legitimate override rather than a copy
 # Exit 1 when both name a realm and the two names differ.

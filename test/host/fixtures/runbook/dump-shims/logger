@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Shim for runbook.bats (R29-MD-A): logger records its argv instead of writing to a journal.
+printf '%s\n' "$*" >> "${LOGGER_LOG:-/dev/null}"

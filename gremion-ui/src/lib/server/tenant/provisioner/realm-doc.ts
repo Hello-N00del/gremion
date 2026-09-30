@@ -17,7 +17,7 @@
 // PROVISIONED-REALM HARDENING (FIX-REALM):
 //   (A) #139/G-080 — kcInternalForTenant returns an internal-TLS URL
 //       (`https://keycloak:8443/auth/realms/<realm>` by default, or the
-//       env-derived AUTH_KEYCLOAK_INTERNAL base the default tenant uses), NOT a
+//       base the CLI derives from AUTH_KEYCLOAK_INTERNAL), NOT a
 //       plaintext `http://keycloak:8080` URL. A realm stamped `sslRequired:'all'`
 //       MUST be reached by its admin client over TLS or every provisioned-tenant
 //       OIDC/admin call breaks.
@@ -37,6 +37,7 @@
 //       only a vocabulary that is a SUBSET of the carried realm roles may be
 //       provisioned.
 import { composeRealm } from '$lib/modules/realm'
+import { normaliseHost } from '$lib/server/tenant/host'
 import type { ModuleManifest } from '$lib/modules/types'
 
 type ModulesConfig = {
@@ -70,9 +71,19 @@ export const PROVISIONER_SECRET_CLIENTS = [
 
 export type ProvisionerSecretClient = (typeof PROVISIONER_SECRET_CLIENTS)[number]
 
-/** D-ISSUER-HOST: NEW tenants get a tenant-subdomain issuer. */
-export function issuerForTenant(slug: string, realmName: string, apexDomain: string): string {
-  return `https://${slug}.${apexDomain}/auth/realms/${realmName}`
+/**
+ * TASK-042 Q2 (TRD-075, spec B §T.2): a tenant's issuer is minted from the host
+ * the OPERATOR supplied for it, used verbatim — never synthesised from the slug
+ * and the platform apex. The host must already be the canonical lower-case
+ * `tenant_domain.host` form (normaliseHost); anything else is refused, so the
+ * issuer and the tenant's primary `tenant_domain` row can never disagree.
+ */
+export function issuerForTenant(host: string, realmName: string): string {
+  const canonical = normaliseHost(host)
+  if (!canonical || canonical !== host) {
+    throw new Error(`tenant: host is not a valid hostname (${JSON.stringify(host)})`)
+  }
+  return `https://${host}/auth/realms/${realmName}`
 }
 
 /**
@@ -83,9 +94,8 @@ export function issuerForTenant(slug: string, realmName: string, apexDomain: str
  * ([[keycloak-sslrequired-all-scopes-to-plaintext-callers]]).
  *
  * `kcInternalBase` is the scheme+authority+`/auth` prefix (NO trailing
- * `/realms/...`) — derived by the CLI from `AUTH_KEYCLOAK_INTERNAL` exactly the
- * way the DEFAULT tenant does (register-default.ts), with a TLS default matching
- * the live internal posture (`docker-compose.yml` `https://keycloak:8443/auth`,
+ * `/realms/...`) — derived by the CLI from `AUTH_KEYCLOAK_INTERNAL`, with a TLS
+ * default matching the live internal posture (`https://keycloak:8443/auth`,
  * #139). Any realm suffix on the supplied base is stripped so a realm-scoped
  * AUTH_KEYCLOAK_INTERNAL (e.g. `.../auth/realms/<tenant-slug>`) still yields the right
  * per-tenant URL.

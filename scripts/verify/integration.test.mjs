@@ -3,7 +3,7 @@
 // counts come from what the target says it proved, not a fixed 1.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { integrationVitestEnv, judgeFreshInit, judgeNatsTest } from './suites/integration.mjs'
+import { INTEGRATION_PARTS, integrationVitestEnv, judgeFreshInit, judgeNatsAuthTest, judgeNatsTest } from './suites/integration.mjs'
 
 const NATS_OK =
   '[nats-test] running the ports suite against nats://127.0.0.1:4222\n' +
@@ -27,6 +27,49 @@ test('test-ports-nats: a non-zero exit is a failure', () => {
   const p = judgeNatsTest({ code: 1, stdout: '[nats-test] FAILED: ports suite exited 1\n', stderr: '' })
   assert.ok(p.failed > 0 || p.unparseable, JSON.stringify(p))
   assert.notEqual(p.unparseable === false && p.failed === 0, true)
+})
+
+// TASK-024: make test-nats-auth -- the package's unit suite, then
+// packages/nats-auth/scripts/proof.sh --auth against a real broker.
+const NATS_AUTH_OK =
+  '      Tests  69 passed (69)\n' +
+  '[nats-auth-proof] auth broker t024-0123abcd-nats-auth on 127.0.0.1:32768\n' +
+  '      Tests  25 passed (25)\n' +
+  '[nats-auth-proof] 25 passing (minimum 25)\n' +
+  '[nats-auth-proof] OK -- the authenticated broker admits and refuses as specified\n'
+
+test('test-nats-auth: exit 0 plus the unit summary and both proof lines passes, counting unit + live cases', () => {
+  const p = judgeNatsAuthTest({ code: 0, stdout: NATS_AUTH_OK, stderr: '' })
+  assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
+  assert.equal(p.collected, 94)
+  assert.equal(p.passed, 94)
+  assert.equal(p.failed, 0)
+})
+
+for (const [missing, drop] of [
+  ['the "N passing" line', /^\[nats-auth-proof\] \d+ passing.*\n/m],
+  ['the OK line', /^\[nats-auth-proof\] OK.*\n/m],
+  ['the unit summary', /^\s+Tests  69 passed \(69\)\n/m],
+]) {
+  test(`test-nats-auth: exit 0 without ${missing} is untrusted, never a pass`, () => {
+    const p = judgeNatsAuthTest({ code: 0, stdout: NATS_AUTH_OK.replace(drop, ''), stderr: '' })
+    assert.equal(p.unparseable, true, JSON.stringify(p))
+  })
+}
+
+test('test-nats-auth: a proof run with its floor lowered below 25 is untrusted', () => {
+  const p = judgeNatsAuthTest({ code: 0, stdout: NATS_AUTH_OK.replace('25 passing (minimum 25)', '3 passing (minimum 3)'), stderr: '' })
+  assert.equal(p.unparseable, true, JSON.stringify(p))
+})
+
+test('test-nats-auth: a non-zero exit is a failure', () => {
+  const p = judgeNatsAuthTest({ code: 1, stdout: '[nats-auth-proof] FAILED: the live suite exited 1\n', stderr: '' })
+  assert.ok(p.failed > 0 && !p.unparseable, JSON.stringify(p))
+})
+
+test('the nats-auth part is registered beside nats', () => {
+  assert.equal(typeof INTEGRATION_PARTS['nats-auth'], 'function')
+  assert.deepEqual(Object.keys(INTEGRATION_PARTS).slice(-2), ['nats', 'nats-auth'])
 })
 
 const FRESH_OK = '  ok tables exist\n  ok column present\n  ok check definition\n[fresh-init] all post-conditions hold\n'

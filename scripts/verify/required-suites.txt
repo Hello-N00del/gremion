@@ -22,3 +22,4 @@ isolation
 census
 render-guards
 boundary-lint
+vendor-mail

@@ -2,17 +2,18 @@ import { redirect } from '@sveltejs/kit'
 import type { LayoutServerLoad } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
 import { generateLoeschkonzept } from '$lib/server/loeschkonzept'
 import { getDataProvider } from '$lib/server/modules/runtime-registry'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
+import type { TenantContext } from '$lib/server/tenant/context'
 
 // Keycloak account console for the "Profil in Keycloak" handoff. Derived from
-// the issuer ({base}/realms/<realm> → {…}/account). Server-side env only, so we
-// surface a ready-made absolute URL (or null when unconfigured) to the page.
-function keycloakAccountUrl(): string | null {
-  const issuer = (defaultTenantEnv('AUTH_KEYCLOAK_BASE') ?? defaultTenantEnv('AUTH_KEYCLOAK_ISSUER') ?? '').replace(/\/$/, '')
-  return issuer ? `${issuer}/account` : null
+// the REQUEST tenant's Auth.js external base ({base}/realms/<realm> →
+// {…}/account; TASK-042: per tenant, never a deployment-global env), surfaced
+// as a ready-made absolute URL (or null when there is no resolved tenant).
+function keycloakAccountUrl(tenant: Pick<TenantContext, 'authExternalBase'> | null | undefined): string | null {
+  const base = (tenant?.authExternalBase ?? '').replace(/\/$/, '')
+  return base ? `${base}/account` : null
 }
 
 export const load: LayoutServerLoad = async ({ locals, fetch }) => {
@@ -69,7 +70,7 @@ export const load: LayoutServerLoad = async ({ locals, fetch }) => {
     loeschkonzept: isITAdmin && config ? generateLoeschkonzept(config) : null,
     // Minimal user projection for the settings profile card (no tokens).
     user: { name: user.name, email: user.email, groups: user.groups },
-    accountUrl: keycloakAccountUrl(),
+    accountUrl: keycloakAccountUrl(locals.tenant),
     // #164: 2FA enrollment state (null = lookup skipped or failed → chip hidden).
     mfaEnrolled,
     stepUpEnforced,
