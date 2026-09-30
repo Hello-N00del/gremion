@@ -8,9 +8,8 @@
 import http from 'node:http'
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
-import { createServer } from '../src/http/server.ts'
-import { buildApiRoutes } from '../src/http/routes.ts'
-import { runMigrations, createBoard, createStack, type Sql } from '../src/store/index.ts'
+import { buildApp, type BoardApp } from '../src/app.ts'
+import { createBoard, createStack, type Sql } from '../src/store/index.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
 import { TENANT_A } from './support/tenants.ts'
 
@@ -103,6 +102,7 @@ async function callServer(
 let admin: Sql
 let sql: Sql
 let server: http.Server
+let app: BoardApp
 
 async function dropTestDb(pgSql: Sql): Promise<void> {
   await pgSql
@@ -116,18 +116,16 @@ beforeAll(async () => {
   await dropTestDb(admin)
   await admin.unsafe(`CREATE DATABASE "${TEST_DB}"`)
 
-  const testUrl = dbUrlFor(TEST_PG_URL, TEST_DB)
-  await runMigrations(testUrl)
-  sql = postgres(testUrl, { max: 4, prepare: true })
-
-  const routes = buildApiRoutes(() => Promise.resolve(sql))
-  server = createServer({ secret: TEST_SECRET, routes })
+  // The leaf is built ONLY through the shipped factory; the suite seeds
+  // through the exact store function buildApp hands to the routes.
+  app = buildApp({ BOARD_PG_URL: dbUrlFor(TEST_PG_URL, TEST_DB), INTERNAL_BOARD_SECRET: TEST_SECRET })
+  sql = await app.storeFor(TENANT)
+  server = app.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
 })
 
 afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  await sql.end().catch(() => {})
+  await app.close()
   await dropTestDb(admin)
   await admin.end()
 })
