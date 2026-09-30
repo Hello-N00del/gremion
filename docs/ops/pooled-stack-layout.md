@@ -11,15 +11,34 @@ is `test/host/integration/pooled-stack-proof.sh`.
 | Project | Compose files | What it holds |
 |---|---|---|
 | `${STACK}-state` | `docker-compose.yml` + `docker-compose.prod.yml` + pins | every database and volume, keycloak, the edge (traefik, its socket proxy, fallback, legal), vector |
-| `${STACK}-app-blue` | `docker-compose.app.yml` + pins, `COLOUR=blue` | gremion-ui, gremion-public (+ the `migrate` / `tenant-create` one-shots) |
-| `${STACK}-app-green` | the same file, `COLOUR=green` | the same four services, other colour |
+| `${STACK}-app-blue` | `docker-compose.app.yml` + pins, `COLOUR=blue` | gremion-ui, gremion-public, control-panel (+ the `migrate` / `tenant-create` one-shots) |
+| `${STACK}-app-green` | the same file, `COLOUR=green` | the same five services, other colour |
 | `${STACK}-ops` | `infra/host/ops/docker-compose.yml` | prometheus, alertmanager, node-exporter, cadvisor, blackbox (**non-council**) |
 | `${STACK}-mail` | `infra/host/mail/docker-compose.yml` | stalwart, the platform mail server (**non-council**) |
 
-**Tenants cost no containers (TRD-440).** A second tenant adds databases, a
-Keycloak realm and an account (`tenant-provision provision <slug>`). It adds no
-container and no compose project. The per-tenant column below is 0 on every
-row.
+**Tenants cost no containers (TRD-440).** A customer adds databases (its
+kernel database and one per enabled module), a Keycloak realm, a broker
+account and its first accounts (`gremion-tenant create <slug> ...`, TASK-043).
+It adds no container and no compose project, and `create` fails if the
+container count or any project's `config --services` moved. The per-tenant
+column below is 0 on every row.
+
+**The tenant-create environment contract (TASK-043 G3).** Every variable is
+checked before the one-shot connects anywhere, and a missing one is a named
+exit-2 failure, never a default:
+
+| Variable | Value | Why |
+|---|---|---|
+| `PLATFORM_DATABASE_URL` | direct `postgres-${STACK}:5432/gremion_platform`, as `PLATFORM_DB_USER` (the platform owner) | `assertPlatform` / `migratePlatform`; the one runner refuses the pooler |
+| `KERNEL_PG_ADMIN_FILE` | `etc/secrets/tenant-create/kernel_pg_admin` (the kernel server's `POSTGRES_USER` URL) | `ensureKernelDatabase` needs CREATEDB, CREATEROLE and the `pg_shadow` read of `pgbouncer.get_auth` |
+| `MODULE_PG_ADMIN_<ID>_FILE` | one per module server (`MODULE_POSTGRES_IDS`), `etc/secrets/tenant-create/module_pg_admin_<id>` | `ModuleServer.admin` of `enableModule` |
+| `MODULE_APP_PASSWORD_<ID>_FILE` | one per module server, generated once by `gremion-tenant init` | the module's app role password (`secrets.appPassword`) |
+| `TENANT_EXPORT_DIR` | `/var/lib/gremion/exports` | `enableModule`'s export target (tenant-create never exports) |
+| `GREMION_DISABLE_SEEDS` | `"true"` | the kernel migration tenant-create runs must never apply a `*_seed.sql` |
+
+`gremion-tenant init` writes the `etc/secrets/tenant-create` files (0600) from
+`state.env`; the compose file mounts that directory read-only into
+`tenant-create` only.
 
 **A colour owns no data (TRD-038).** The only volumes an app colour mounts are
 the two stack-scoped externals `${STACK}_config_data` and
@@ -44,6 +63,7 @@ and that code is the authoritative copy.
 | vector | council (logs) | state | `network_mode: none` |
 | mailpit | dev only | state, `profiles: [dev]` | `_state` |
 | gremion-ui, gremion-public | council app | app-`<colour>` | `_edge`, `_state`, `app` |
+| control-panel (TASK-043 Q12: no port, no Traefik route; `gremion-tenant panel` prints the `ssh -L` line) | council app | app-`<colour>` | `_state`, `app` |
 | migrate / tenant-create | council one-shot | app-`<colour>` | `_state` / `_state` + `_edge` |
 | prometheus, alertmanager, node-exporter, cadvisor, blackbox | **non-council** | ops | `ops` |
 | stalwart | **non-council** | mail | `mail` |
@@ -85,6 +105,7 @@ limit.
 | state | mailpit (dev only, not on a host) | 256M | 0.25 | 0 |
 | app-`<colour>` | gremion-ui | 1G | 1.0 | 0 |
 | app-`<colour>` | gremion-public | 512M | 0.5 | 0 |
+| app-`<colour>` | control-panel | 512M | 0.5 | 0 |
 | app-`<colour>` | migrate (one-shot) | 1G | 1.0 | 0 |
 | app-`<colour>` | tenant-create (one-shot) | 512M | 0.5 | 0 |
 | ops | prometheus | 1G | 1.0 | 0 |
@@ -98,11 +119,11 @@ limit.
 |---|---|---|
 | state, no module Postgres | 5.0G | 4.5 |
 | state, all six module Postgres | 6.5G | 6.0 |
-| one app colour (steady state) | 1.5G | 1.5 |
+| one app colour (steady state, with the control panel since TASK-043) | 2.0G | 2.0 |
 | ops | 2.25G | 2.25 |
 | mail | 0.5G | 0.5 |
-| **steady state** (state with all modules + one colour + ops + mail) | **10.75G** | **10.25** |
-| **deploy window** (+ the second colour + migrate) | **13.25G** | **12.75** |
+| **steady state** (state with all modules + one colour + ops + mail) | **11.25G** | **10.75** |
+| **deploy window** (+ the second colour + migrate) | **14.25G** | **13.75** |
 
 These are ceilings, not usage. A CPU limit caps each container and reserves
 nothing, so a CPU sum above the host's core count means contention under load,
