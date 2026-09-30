@@ -1,17 +1,20 @@
 // apps/control-panel/src/hooks.server.ts — the TRD-048 gate on EVERY request.
 //
+// Order: securityHeaders (gremion-ui's CSP on every HTML response), then
+// hostGuard (R29-I11: ORIGIN's host name only), then Auth.js and the gate.
+//
 // The two probes (/healthz: the process and a valid config only, so the
 // panel is healthy before `gremion-tenant init`; /api/internal/evict: the
 // switch's bearer-checked fan-out) bypass Auth.js entirely. Everything else
 // goes through Auth.js (its own /auth/* routes) and then the gate, which
 // decides before any page, form action or +server endpoint runs.
 import { SvelteKitAuth } from '@auth/sveltekit'
-import { redirect, type Handle } from '@sveltejs/kit'
+import { redirect, type Handle, type RequestEvent } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { env } from '$env/dynamic/private'
 import { authConfig, startSignIn } from '$lib/server/auth'
 import { loadConfig } from '$lib/server/config'
-import { decide, isExempt, type SessionClaims } from '$lib/server/gate'
+import { decide, hostAllowed, isExempt, type SessionClaims } from '$lib/server/gate'
 
 const SESSION_COOKIE = /^(__Secure-|__Host-)?authjs\.session-token(\.\d+)?$/
 
@@ -63,8 +66,57 @@ export const gate: Handle = async ({ event, resolve }) => {
   return refuse(d.status, d.reason)
 }
 
+// [D R29-I11] The Content-Security-Policy gremion-ui sends (its cspGuard,
+// hooks.server.ts CSP_HEADER_VALUE), verbatim: hooks.test.ts compares the two.
+// The panel needs a subset of what it allows; "equal" is the operator's rule.
+export const PANEL_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https: wss:",
+  "frame-src 'self'",
+  "frame-ancestors 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join('; ')
+
+function withSecurityHeaders(response: Response): Response {
+  if ((response.headers.get('content-type') ?? '').startsWith('text/html')) {
+    response.headers.set('Content-Security-Policy', PANEL_CSP)
+  }
+  return response
+}
+
+export const securityHeaders: Handle = async ({ event, resolve }) => withSecurityHeaders(await resolve(event))
+
+const isProbe = (path: string) => path === '/healthz' || path === '/api/internal/evict'
+
+// [D R29-I11] ONE host name: every request whose Host is not ORIGIN's host is
+// refused (421 Misdirected Request) before Auth.js or the gate see it. The
+// probes are exempt: the container HEALTHCHECK calls 127.0.0.1:3000/healthz
+// (which reports only {ok, colour}), and the evict fan-out is bearer-checked
+// and refuses everything without INTERNAL_PUSH_SECRET.
+function hostRefusal(event: RequestEvent): Response | null {
+  if (isProbe(event.url.pathname)) return null
+  const r = loadConfig(env)
+  if (!r.ok) return refuse(503, 'the control panel is not configured')
+  if (!hostAllowed(event.request.headers.get('host'), r.config.origin)) {
+    return refuse(421, 'this panel answers only on its own host name (ORIGIN)')
+  }
+  return null
+}
+
+export const hostGuard: Handle = async ({ event, resolve }) => hostRefusal(event) ?? resolve(event)
+
+// Not sequence(): the host guard and the headers wrap the Auth.js + gate
+// sequence explicitly, so a refused Host provably never reaches Auth.js.
 export const handle: Handle = async (input) => {
+  const refused = hostRefusal(input.event)
+  if (refused) return withSecurityHeaders(refused)
   // The probes never touch Auth.js (a missing secret must not fail /healthz).
-  if (input.event.url.pathname === '/healthz' || input.event.url.pathname === '/api/internal/evict') return input.resolve(input.event)
-  return sequence(auth.handle, gate)(input)
+  if (isProbe(input.event.url.pathname)) return withSecurityHeaders(await input.resolve(input.event))
+  return withSecurityHeaders(await sequence(auth.handle, gate)(input))
 }

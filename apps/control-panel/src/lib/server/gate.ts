@@ -51,6 +51,23 @@ export function isExempt(path: string): boolean {
   return path === '/healthz' || path === '/api/internal/evict' || path === '/auth' || path.startsWith('/auth/')
 }
 
+/**
+ * [D R29-I11] The panel answers on ONE host name, the host of its ORIGIN (the
+ * operator-supplied name behind the edge, or 127.0.0.1:<port> behind `ssh -L`).
+ * The comparison is exact up to case (host names are case-insensitive): no
+ * suffix, no subdomain, no port that ORIGIN does not carry.
+ */
+export function hostAllowed(hostHeader: string | null, origin: string): boolean {
+  if (!hostHeader) return false
+  let want: string
+  try {
+    want = new URL(origin).host
+  } catch {
+    return false
+  }
+  return want !== '' && hostHeader.toLowerCase() === want.toLowerCase()
+}
+
 /** The unverified `iss` of a bearer token, for the refusal message only. */
 function bearerIss(authorization: string): string | null {
   const m = /^Bearer\s+([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\./.exec(authorization)
