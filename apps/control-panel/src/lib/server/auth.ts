@@ -107,7 +107,8 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
       },
       session({ session, token }) {
         if (token.opsError !== undefined) {
-          ;(session as unknown as { claims: SessionClaims }).claims = { error: String(token.opsError), roles: [] }
+          // any marker value is an expired session; the claim is the fixed name
+          ;(session as unknown as { claims: SessionClaims }).claims = { error: SESSION_EXPIRED, roles: [] }
           return session
         }
         ;(session as unknown as { claims: SessionClaims }).claims = {
