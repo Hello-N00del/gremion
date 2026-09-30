@@ -57,7 +57,7 @@ const { mockSql, mockGetDb } = vi.hoisted(() => {
 vi.mock('$lib/server/db', () => ({ getDb: mockGetDb }))
 
 import { POST } from './+server'
-import { PATCH } from './[resId]/+server'
+import { PATCH, DELETE } from './[resId]/+server'
 
 const draftProtocol = { id: 'p1', committee_id: 'c1', status: 'draft' }
 
@@ -408,5 +408,68 @@ describe('resolution write routes — decision-rule input errors map to 400', ()
       PATCH(makePatchEvent({ votesYes: 3, votesNo: 0, votesAbstain: 0 })),
     ).rejects.toMatchObject({ status: 400 })
     expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// An adopted resolution is immutable through PATCH/DELETE (R28 house review
+// MEDIUM, security): publish IS adoption, so after it the binding result may
+// change only through the recorded challenge channel — never a silent edit. The
+// row must also belong to the protocol named in the URL.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('resolution PATCH/DELETE — adopted rows and foreign protocols are refused', () => {
+  const publishedAcclamationRow = {
+    ...storedAcclamationRow, result: 'passed', protocol_status: 'published', decided_at: '2026-09-01T10:00:00Z',
+  }
+
+  it('(i) PATCH declared_result on an acclamation row of a PUBLISHED protocol → 403, nothing persisted', async () => {
+    mockSql.mockResolvedValue([publishedAcclamationRow])
+    await expect(PATCH(makePatchEvent({ declared_result: 'rejected' }))).rejects.toMatchObject({ status: 403 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('(i) PATCH tallies on an ADOPTED tally row (decided_at set) → 403, nothing persisted', async () => {
+    mockSql.mockResolvedValue([{ ...storedTallyRow, protocol_status: 'submitted', decided_at: '2026-09-01T10:00:00Z' }])
+    await expect(PATCH(makePatchEvent({ votesYes: 0, votesNo: 5, votesAbstain: 0 }))).rejects.toMatchObject({ status: 403 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('(i) PATCH on a resolution of ANOTHER protocol than the URL names → 404, nothing persisted', async () => {
+    mockSql.mockResolvedValue([{ ...storedTallyRow, protocol_id: 'p-other', protocol_status: 'draft', decided_at: null }])
+    await expect(PATCH(makePatchEvent({ text: 'X' }))).rejects.toMatchObject({ status: 404 })
+    expect(mockUpdateResolution).not.toHaveBeenCalled()
+  })
+
+  it('(i) PATCH on a draft protocol still works', async () => {
+    mockSql.mockResolvedValue([{ ...storedTallyRow, protocol_status: 'draft', decided_at: null }])
+    const res = await PATCH(makePatchEvent({ text: 'Neu' }))
+    expect(res.status).toBe(200)
+    expect(mockUpdateResolution).toHaveBeenCalledOnce()
+  })
+
+  it('(i) DELETE on a resolution of a PUBLISHED protocol → 403, nothing deleted', async () => {
+    mockSql.mockResolvedValue([publishedAcclamationRow])
+    await expect(DELETE(makePatchEvent(undefined))).rejects.toMatchObject({ status: 403 })
+    expect(mockDeleteResolution).not.toHaveBeenCalled()
+  })
+
+  it('(i) DELETE on a resolution of ANOTHER protocol → 404, nothing deleted', async () => {
+    mockSql.mockResolvedValue([{ ...storedTallyRow, protocol_id: 'p-other', protocol_status: 'draft', decided_at: null }])
+    await expect(DELETE(makePatchEvent(undefined))).rejects.toMatchObject({ status: 404 })
+    expect(mockDeleteResolution).not.toHaveBeenCalled()
+  })
+
+  it('(i) DELETE on an unknown resolution → 404', async () => {
+    mockSql.mockResolvedValue([])
+    await expect(DELETE(makePatchEvent(undefined))).rejects.toMatchObject({ status: 404 })
+    expect(mockDeleteResolution).not.toHaveBeenCalled()
+  })
+
+  it('(i) DELETE on a draft protocol → 204', async () => {
+    mockSql.mockResolvedValue([{ ...storedTallyRow, protocol_status: 'draft', decided_at: null }])
+    const res = await DELETE(makePatchEvent(undefined))
+    expect(res.status).toBe(204)
+    expect(mockDeleteResolution).toHaveBeenCalledWith('r1')
   })
 })

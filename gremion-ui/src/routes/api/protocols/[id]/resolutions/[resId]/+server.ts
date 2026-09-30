@@ -15,21 +15,46 @@ function requireAdmin(event: RequestEvent): SessionUser {
   return user
 }
 
+interface EditableResolutionRow {
+  protocol_id: string
+  protocol_status: string
+  decided_at: string | null
+  votes_yes: number | null
+  votes_no: number | null
+  votes_abstain: number | null
+  required_majority: RequiredMajority
+  adoption_mode: AdoptionMode
+  decision_rule_params: { fraction?: number } | null
+}
+
+/**
+ * Load the resolution named in the URL and refuse every edit that is not a
+ * draft-time correction. 404 when the row is unknown or belongs to another
+ * protocol than `params.id`; 403 once the parent protocol is published or the
+ * row carries `decided_at` — publish IS adoption, and after it the binding
+ * result may change only through the recorded challenge channel, never through
+ * an unaudited PATCH/DELETE (mirror of POST's published-protocol refusal).
+ */
+async function loadEditableResolution(event: RequestEvent): Promise<EditableResolutionRow> {
+  const sql = getDb()
+  const [current] = await sql<EditableResolutionRow[]>`
+    SELECT r.protocol_id, p.status AS protocol_status, r.decided_at,
+           r.votes_yes, r.votes_no, r.votes_abstain, r.required_majority,
+           r.adoption_mode, r.decision_rule_params
+    FROM protocol_resolutions r
+    JOIN protocols p ON p.id = r.protocol_id
+    WHERE r.id = ${event.params.resId!}`
+  if (!current || current.protocol_id !== event.params.id) throw error(404, 'Beschluss nicht gefunden')
+  if (current.protocol_status === 'published' || current.decided_at != null) {
+    throw error(403, 'Angenommene Beschlüsse sind nicht bearbeitbar (Einspruch statt Änderung)')
+  }
+  return current
+}
+
 export async function PATCH(event: RequestEvent) {
   requireAdmin(event)
   const body = await event.request.json()
-  const sql = getDb()
-  const [current] = await sql<{
-    protocol_id: string
-    votes_yes: number | null
-    votes_no: number | null
-    votes_abstain: number | null
-    required_majority: RequiredMajority
-    adoption_mode: AdoptionMode
-    decision_rule_params: { fraction?: number } | null
-  }[]>`SELECT protocol_id, votes_yes, votes_no, votes_abstain, required_majority, adoption_mode, decision_rule_params
-       FROM protocol_resolutions WHERE id = ${event.params.resId!}`
-  if (!current) throw error(404, 'Beschluss nicht gefunden')
+  const current = await loadEditableResolution(event)
 
   // INV-5 (T4, mirror of the POST gate): the binding result is never accepted
   // free-hand on an edit either — an acclamation edit uses declared_result;
@@ -132,6 +157,7 @@ export async function PATCH(event: RequestEvent) {
 
 export async function DELETE(event: RequestEvent) {
   requireAdmin(event)
+  await loadEditableResolution(event)
   await deleteResolution(event.params.resId!)
   return new Response(null, { status: 204 })
 }
