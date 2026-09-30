@@ -80,3 +80,60 @@ describe('ResolutionRow — INV-5 display contract', () => {
     expect(queryByText(/Bei Erstellung festgelegt/)).toBeTruthy()
   })
 })
+
+// R28 house review MEDIUM (svelte lens, x2): rows that the API creates in the
+// Phase-2 shapes rendered wrongly. A support_threshold row never passed its
+// stored fraction to computeResult, so a complete tally previewed as
+// "nicht berechenbar (Stimmen unvollständig)"; an acclamation row (NULL
+// tallies) rendered " Ja /  Nein /  Enthal." plus an inert rule label.
+describe('ResolutionRow — Phase-2 row shapes from the API', () => {
+  function renderRow(resolution: Record<string, unknown>, eligibleVotingCount = 0) {
+    return render(ResolutionRow, {
+      props: {
+        resolution: { ...baseResolution, ...resolution } as never,
+        isAdmin: true,
+        protocolId: 'p-1',
+        eligibleVotingCount,
+        onSave: noopSave,
+        onDelete: noopDelete,
+      },
+    })
+  }
+
+  test('support_threshold preview uses the STORED fraction: a complete tally is computed, not "unvollständig"', async () => {
+    // eligible 4, fraction 0.5 -> threshold 2; yes 2 passes.
+    const { getByText, queryByText } = renderRow(
+      { required_majority: 'support_threshold', decision_rule_params: { fraction: 0.5 }, votes_yes: 2, votes_no: 1 },
+      4,
+    )
+    await enterEditMode(getByText)
+    expect(queryByText(/nicht berechenbar/)).toBeNull()
+    expect(getByText(/Angenommen/)).toBeTruthy()
+    expect(getByText(/berechnet/)).toBeTruthy()
+  })
+
+  test('support_threshold row with no stored fraction names the missing rule parameter, not the votes', async () => {
+    const { getByText, queryByText } = renderRow({ required_majority: 'support_threshold', votes_yes: 2, votes_no: 1 }, 4)
+    await enterEditMode(getByText)
+    expect(queryByText(/Stimmen unvollständig/)).toBeNull()
+    expect(getByText(/Regel unvollständig/)).toBeTruthy()
+  })
+
+  test('acclamation row, read view: "per Akklamation" instead of an empty tally and the inert rule label', () => {
+    const { container, getByText } = renderRow({
+      adoption_mode: 'acclamation', votes_yes: null, votes_no: null, votes_abstain: null,
+    })
+    expect(getByText(/per Akklamation/)).toBeTruthy()
+    expect(container.textContent).not.toMatch(/Ja \//)
+    expect(container.textContent).not.toMatch(/Einfache Mehrheit/)
+  })
+
+  test('acclamation row, edit preview: the declared result, never "Stimmen unvollständig"', async () => {
+    const { getByText, queryByText } = renderRow({
+      adoption_mode: 'acclamation', result: 'passed', votes_yes: null, votes_no: null, votes_abstain: null,
+    })
+    await enterEditMode(getByText)
+    expect(queryByText(/Stimmen unvollständig/)).toBeNull()
+    expect(getByText(/per Akklamation festgestellt/)).toBeTruthy()
+  })
+})
