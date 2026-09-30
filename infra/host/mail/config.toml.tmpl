@@ -129,6 +129,17 @@ must-match-sender = true
 mechanisms = [ { if = "is_tls", then = "[plain, login]" },
                { else = "[]" } ]
 
+# TASK-015 (TRD-253): must-match-sender above binds the ENVELOPE sender to
+# the authenticated principal; this binds the HEADER From to it too, for every
+# authenticated session. The script is from-align.sieve beside this template,
+# mounted read-only by docker-compose.yml.
+[sieve.trusted.scripts."from-align"]
+contents = "%{file:/opt/stalwart/etc/sieve/from-align.sieve}%"
+
+[session.data]
+script = [ { if = "!is_empty(authenticated_as)", then = "'from-align'" },
+           { else = false } ]
+
 [session.throttle."remote-rcpt"]
 key = ["remote_ip"]
 rate = "${MAIL_RATE_LIMIT_RCPT}"

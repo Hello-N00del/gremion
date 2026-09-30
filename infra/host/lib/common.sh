@@ -361,3 +361,23 @@ load_env() {
         export "${key}=${value}"
     done < "$file"
 }
+
+# state_kc_cid <stack> -> the id of the ONE running Keycloak container of the
+# <stack>-state compose project (TASK-015, Q12). Found by its compose labels,
+# never by a name: only the mail project sets container_name, so the real name
+# is <stack>-state-keycloak-1 and every `docker inspect <stack>-state-keycloak`
+# answered "no such object". Its kcadm serves under the /auth relative path
+# (docker-compose.yml KC_HTTP_RELATIVE_PATH), so callers use
+# --server http://127.0.0.1:8080/auth. Returns 1 with no output when none, or
+# more than one, is running; 2 when docker itself could not be asked.
+# Used by gremion-mail-bringup, gremion-neuter and gremion-vendor-mail.
+state_kc_cid() {
+    # Not named `stack`: every program that sources this library reads the
+    # env's STACK, and shellcheck (SC2153) reads a lowercase twin as a typo.
+    local kc_stack="$1" ids n
+    ids="$(docker ps -q --filter "label=com.docker.compose.project=${kc_stack}-state" \
+                        --filter "label=com.docker.compose.service=keycloak")" || return 2
+    n="$(printf '%s\n' "$ids" | sed '/^[[:space:]]*$/d' | wc -l)"
+    [[ "$n" -eq 1 ]] || return 1
+    printf '%s\n' "${ids//[[:space:]]/}"
+}

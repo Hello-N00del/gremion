@@ -1,0 +1,13 @@
+Received: from o1.ptr1234.sendgrid.net (o1.ptr1234.sendgrid.net. [198.51.100.77])
+        by mx-in-2.example.net with ESMTPS id z9si900
+        for <probe@example.net>; Mon, 28 Sep 2026 10:00:01 -0700 (PDT)
+Authentication-Results: mx.example.net;
+       dkim=pass header.i=@sendgrid.net header.s=smtpapi header.b=Zz;
+       spf=pass (example.net: domain of bounces+1@em.example.org designates 198.51.100.77 as permitted sender) smtp.mailfrom="bounces+1@em.example.org";
+       dmarc=pass (p=NONE) header.from=example.org
+X-SG-EID: fixture
+From: system@example.org
+To: probe@example.net
+Subject: Password reset
+
+Reset your password. Relayed for a sender whose server is 192.0.2.25.

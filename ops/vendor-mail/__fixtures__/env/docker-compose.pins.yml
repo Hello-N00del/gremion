@@ -1,0 +1,7 @@
+# ops/vendor-mail/__fixtures__/env/docker-compose.pins.yml
+#
+# A stand-in for the release pins layer (docker-compose.pins.yml is written by
+# the release workflow and never committed). EMPTY on purpose: a pins layer
+# only swaps image references and resets build:, neither of which changes a
+# service's environment, which is all the TRD-251 separation guard reads.
+services: {}

@@ -63,6 +63,9 @@ services:
       - mail_data:/opt/stalwart
       - ${GREMION_ROOT:-/opt/gremion}/etc/mail/config.toml:/opt/stalwart/etc/config.toml:ro
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/mail:/opt/stalwart/etc/dkim:ro
+      # TASK-015: the header-From alignment script config.toml.tmpl loads at
+      # DATA. Release content, not a secret: mounted from the release tree.
+      - ./from-align.sieve:/opt/stalwart/etc/sieve/from-align.sieve:ro
     networks:
       mail:
     healthcheck:

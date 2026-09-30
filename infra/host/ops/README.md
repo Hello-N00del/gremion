@@ -30,7 +30,8 @@ The keys it reads live in `ops.env`, not `state.env`: `PLATFORM_DOMAIN`,
 `GREMION_ROOT_DIR`, `PROM_RETENTION_TIME`, `ALERT_WEBHOOK_URL`,
 `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `ALERT_SMTP_USER`, `ALERT_SMTP_PASSWORD`,
 `STALWART_API_KEY`, `OPS_TENANT_HOSTS_FILE`. `ALERT_SMTP_PASSWORD` is the
-Stalwart app password of §I and shares its generated value with `mail.env`;
+Stalwart app password of the `alerts@` principal (sentinel group `alert_smtp`,
+TASK-015) and shares its generated value with `mail.env` only;
 with `ALERT_EMAIL_TO` set to a real address and that password still a
 `CHANGE_ME_` sentinel, `render-ops.sh` exits 3 rather than rendering an
 Alertmanager that cannot send. While `ALERT_EMAIL_TO` itself is still its

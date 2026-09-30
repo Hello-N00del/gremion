@@ -1,0 +1,8 @@
+Authentication-Results: mx.attacker.example;
+       dkim=pass header.d=example.org; spf=pass smtp.mailfrom=system@example.org;
+       dmarc=pass header.from=example.org
+Received: from mail.example.org (mail.example.org. [192.0.2.25])
+        by mx-in-2.example.net with ESMTPS id c3si300; Mon, 28 Sep 2026 10:00:01 -0700
+From: system@example.org
+
+body
