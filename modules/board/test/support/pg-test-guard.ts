@@ -14,6 +14,12 @@ import { tenantModuleDbName } from '@gremion/tenant-store'
 import { FIXTURE_TENANTS } from './tenants.ts'
 
 const ENV_VAR = 'BOARD_TEST_PG_URL'
+/**
+ * The name of the scratch container that runs BOARD_TEST_PG_URL. Required by
+ * test/lifecycle.integration.test.ts only: disableModule exports with pg_dump, and
+ * the suite runs pg_dump/pg_restore inside that container (the server's own major).
+ */
+export const CONTAINER_ENV_VAR = 'BOARD_TEST_PG_CONTAINER'
 const LABEL = 'board-test-guard'
 
 /**
@@ -47,7 +53,8 @@ export function requireEphemeralTestPgUrl(): string {
         'would CREATE/DROP/TRUNCATE against). Start an ephemeral throwaway container on a ' +
         'NON-5432 port and export the URL, e.g.:\n' +
         '  docker run --rm -d --name board-test-pg -p 127.0.0.1:55434:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18-alpine\n' +
-        `  export ${ENV_VAR}=postgres://postgres@localhost:55434/postgres`,
+        `  export ${ENV_VAR}=postgres://postgres@localhost:55434/postgres\n` +
+        `  export ${CONTAINER_ENV_VAR}=board-test-pg   # lifecycle suite (A8): disableModule runs pg_dump inside it`,
     )
   }
   return url
