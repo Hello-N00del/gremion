@@ -284,19 +284,21 @@ test('real tree: kernel-data holds the 31 legacy files (floor 58) plus the conte
   assert.equal(s.slugs.slugs.length, 29)
 })
 
-test('real tree: the platform chain holds TASK-021 plt migrations 0001-0003 (gremion_platform, pad 4, floor 3), locked, next claim 0004', () => {
+test('real tree: the platform chain holds TASK-021 plt migrations 0001-0003 (legacy, floor 3) and TASK-043 0004 (Q18 claim), locked, next claim 0005', () => {
   const s = treeState()
   const c = s.register.chains.find((x) => x.id === 'platform')
   assert.ok(c, 'ranges.json declares no platform chain (TASK-077 precondition, TASK-043 Q18)')
   const dir = 'packages/tenant-store/src/lifecycle/platform-migrations'
-  const names = ['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql']
+  const legacy = ['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql']
+  const names = [...legacy, '0004_plt_provisioning_step.sql']
   assert.equal(c.database, 'gremion_platform')
   assert.deepEqual(c.dirs, [dir])
   assert.deepEqual(c.manifestDirs, [dir])
   assert.equal(c.padWidth, 4)
   assert.equal(c.legacyFloor, 3)
-  assert.deepEqual([...c.legacy].sort(byName), names)
+  assert.equal(c.highWater, 4)
+  assert.deepEqual([...c.legacy].sort(byName), legacy)
   assert.deepEqual(s.files.filter((f) => f.path.startsWith(`${dir}/`)).map((f) => f.path.slice(dir.length + 1)), names)
   assert.deepEqual(Object.keys(s.lock.chains.platform?.files ?? {}), names)
-  assert.equal(claim({ register: s.register, files: s.files.map((f) => f.path), chain: 'platform', name: 'next' }).filename, '0004_next.sql')
+  assert.equal(claim({ register: s.register, files: s.files.map((f) => f.path), chain: 'platform', name: 'next' }).filename, '0005_next.sql')
 })

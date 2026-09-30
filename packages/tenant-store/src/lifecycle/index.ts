@@ -16,7 +16,18 @@ export {
 export type { LifecycleErrorCode } from './guards.js'
 export { inspectTenantDatabases } from './inspect.js'
 export type { InspectionReport, InspectRegistry, InspectServer, ServerReport } from './inspect.js'
-export { assertPlatform, migratePlatform, PLATFORM_DATABASE, PLATFORM_MIGRATIONS_DIR } from './platform.js'
+// TASK-043 G1: the customer's kernel database (never migrated here, Q3) and the platform bootstrap (Q15).
+export { dropKernelDatabase, ensureKernelDatabase, ensureKernelRoles, KERNEL_MODULE, kernelDbName, kernelRoles } from './kernel.js'
+export type { EnsureKernelResult, KernelRoles } from './kernel.js'
+export {
+  assertPlatform,
+  ensurePlatformDatabase,
+  lookupModuleVersion,
+  migratePlatform,
+  PLATFORM_DATABASE,
+  PLATFORM_MIGRATIONS_DIR,
+} from './platform.js'
+export type { EnsurePlatformResult } from './platform.js'
 export { scramSha256Verifier } from './scram.js'
 export type {
   Actor,
