@@ -13,3 +13,35 @@ export { openLedger, runPhase } from './machine.ts'
 export type { RunPhaseOptions, RunPhaseResult, StepFns } from './machine.ts'
 export { assertEnableList, DEFAULT_DENY, INTERIM_GATE_BASIS, operatorAllowGate } from './operator-gate.ts'
 export type { AttestationLookup } from './operator-gate.ts'
+export {
+  assertAdmins,
+  assertHost,
+  assertSmtpStamped,
+  createPhaseA,
+  createPhaseB,
+  provisioningStatus,
+  recordHostStep,
+  resumeCustomer,
+  suspendCustomer,
+  validateCreate,
+} from './customer.ts'
+export type { CreateSpec, PhaseOutcome, ProvisioningStatus } from './customer.ts'
+export type {
+  AdminSpec,
+  AttestationPort,
+  BrokerPort,
+  ConfigPort,
+  ControlPort,
+  ControlRow,
+  CustomerRef,
+  CustomerStatus,
+  DomainPort,
+  FirstBodyPort,
+  KernelDbPort,
+  KernelPostCondition,
+  ModulesPort,
+  ProvisioningDeps,
+  RealmPort,
+  SmtpReadBack,
+  StoragePort,
+} from './ports.ts'
