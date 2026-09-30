@@ -665,8 +665,46 @@ export const CSP_HEADER_VALUE = [
 // for the per-tenant accent tag — both survive sequence() (brief §4).
 export const i18nHandle: Handle = createI18nHandle((locals) => locals.tenant?.id ?? null)
 
+/**
+ * A Response whose headers can be written. A Response from fetch() or
+ * Response.redirect()/error() has an immutable header guard, and set() throws
+ * a TypeError on it; such a response is re-wrapped once (same body stream,
+ * status and headers) instead of losing its security headers.
+ */
+function withWritableHeaders(response: Response): Response {
+  try {
+    response.headers.set('X-Content-Type-Options', 'nosniff')
+    return response
+  } catch {
+    // Response.error() (status 0) cannot be re-wrapped; it carries no body a
+    // browser would render, so it passes through as it is.
+    if (response.status < 200 || response.status > 599) return response
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    })
+  }
+}
+
+/**
+ * F1-FIX-03 / S1a#17: sits right after correlationHandle (position 1), so it
+ * wraps EVERY downstream response, the early returns included (tenant
+ * 404/429/503, authGuard 401/403/503, the module gate). It used to be the
+ * innermost handle, which those returns never passed through.
+ *
+ * nosniff goes on every response: MIME sniffing matters most on the non-HTML
+ * ones (attachments, file downloads, JSON). Referrer-Policy is the browser
+ * default, set only when the handler did not choose one. The CSP stays scoped
+ * to text/html (see CSP_HEADER_VALUE).
+ */
 export const cspGuard: Handle = async ({ event, resolve }) => {
-  const response = await resolve(event)
+  const response = withWritableHeaders(await resolve(event))
+  if (response.status < 200 || response.status > 599) return response
+  response.headers.set('X-Content-Type-Options', 'nosniff')
+  if (!response.headers.has('referrer-policy')) {
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  }
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.startsWith('text/html')) {
     response.headers.set('Content-Security-Policy', CSP_HEADER_VALUE)
@@ -741,15 +779,17 @@ export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
 // correlationHandle is element 0: it mints/validates the correlation id BEFORE
 // tenant resolution, auth, or any data-plane query so every downstream handle
 // (including tenantResolveHandle's ALS scope) can read event.locals.correlationId.
-// tenantResolveHandle remains element 1 (establishes TenantContext + ALS).
+// cspGuard is element 1 (F1-FIX-03 / S1a#17): it wraps every later handle, so
+// their early returns carry the security headers too. It reads no tenant state.
+// tenantResolveHandle follows it (establishes TenantContext + ALS).
 export const handle = sequence(
   correlationHandle,
+  cspGuard,
   tenantResolveHandle,
   tenantBrandStyleHandle,
   authHandleUnlessExempt,
   authGuard,
   i18nHandle,
-  cspGuard,
 )
 
 /**

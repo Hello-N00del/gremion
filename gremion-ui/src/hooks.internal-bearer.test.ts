@@ -133,6 +133,7 @@ interface Outcome {
   handlerSawInternal: boolean
   handlerUser: unknown
   body: string
+  headers: Headers
 }
 
 /** One request through the REAL handle sequence, shaped like internalFetch's hop. */
@@ -140,11 +141,11 @@ async function throughHandle(
   method: string,
   path: string,
   authorization: string | null,
-  opts: { internalHop?: boolean } = {},
+  opts: { internalHop?: boolean; host?: string; respond?: () => Response } = {},
 ): Promise<Outcome> {
   const internalHop = opts.internalHop ?? true
   const url = new URL(`http://gremion-ui:3000${path}`)
-  const headers: Record<string, string> = { 'x-forwarded-host': TENANT.primaryHost }
+  const headers: Record<string, string> = { 'x-forwarded-host': opts.host ?? TENANT.primaryHost }
   if (internalHop) headers['x-internal-host-trust'] = SECRET
   if (authorization) headers.Authorization = authorization
   const hasBody = method !== 'GET' && method !== 'DELETE'
@@ -176,11 +177,19 @@ async function throughHandle(
         // guard must hand the request over with the header intact.
         handlerSawInternal = isInternalBearerRequest(e.request)
         handlerUser = e.locals.user
+        if (opts.respond) return opts.respond()
         return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } })
       },
     } as never),
   )) as Response
-  return { status: res.status, reached, handlerSawInternal, handlerUser, body: await res.text() }
+  return {
+    status: res.status,
+    reached,
+    handlerSawInternal,
+    handlerUser,
+    body: await res.text(),
+    headers: res.headers,
+  }
 }
 
 const POST_ID = '3f2b8a4e-9c1d-4e5f-8a7b-0c1d2e3f4a5b'
@@ -253,6 +262,55 @@ describe('authGuard: the internal Bearer (INTERNAL_PUSH_SECRET) through the real
     const o = await throughHandle('PATCH', `/api/content/posts/${POST_ID}`, `Bearer ${SECRET}`)
     expect(o.reached).toBe(false)
     expect(o.status).toBe(403)
+  })
+})
+
+// F1-FIX-03 / S1a#17: cspGuard was the INNERMOST handle, so every early return
+// (tenant 404/429/503, authGuard 401/403/503, module gate) left the pipeline
+// without the security headers, and the kernel set no nosniff at all. It now
+// wraps everything after the correlation handle.
+describe('security headers on every response, early returns included (S1a#17)', () => {
+  it('a tenant-resolver 404 (unbound host) carries X-Content-Type-Options: nosniff', async () => {
+    const o = await throughHandle('GET', '/api/members', null, { host: 'unbound.example', internalHop: false })
+    expect(o.reached).toBe(false)
+    expect(o.status).toBe(404)
+    expect(o.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
+  it('an authGuard 401 carries nosniff and a Referrer-Policy', async () => {
+    const o = await throughHandle('GET', '/api/members', null)
+    expect(o.status).toBe(401)
+    expect(o.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(o.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin')
+  })
+
+  it('a module-gate 403 carries nosniff', async () => {
+    disabledModules.add('content')
+    const o = await throughHandle('PATCH', `/api/content/posts/${POST_ID}`, `Bearer ${SECRET}`)
+    expect(o.status).toBe(403)
+    expect(o.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
+  it('a handler response with IMMUTABLE headers (a proxied fetch/redirect Response) still gets nosniff, body and status intact', async () => {
+    const o = await throughHandle('PATCH', '/api/news/42', `Bearer ${SECRET}`, {
+      respond: () => Response.redirect('http://gremion-ui:3000/elsewhere', 302),
+    })
+    expect(o.status).toBe(302)
+    expect(o.headers.get('location')).toBe('http://gremion-ui:3000/elsewhere')
+    expect(o.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
+  it('text/html still gets the CSP; a handler-set Referrer-Policy is kept', async () => {
+    const o = await throughHandle('PATCH', '/api/news/42', `Bearer ${SECRET}`, {
+      respond: () =>
+        new Response('<html></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8', 'referrer-policy': 'no-referrer' },
+        }),
+    })
+    expect(o.headers.get('content-security-policy')).toBe(mod.CSP_HEADER_VALUE)
+    expect(o.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(o.headers.get('x-content-type-options')).toBe('nosniff')
   })
 })
 
