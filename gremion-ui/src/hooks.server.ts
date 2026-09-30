@@ -359,7 +359,32 @@ function tenantMismatchResponse(path: string): Response {
  * The session guard's public allow-list (see authGuard). Exported so the pin in
  * hooks.boot.test.ts reads the shipped list, not a copy of it.
  */
-export const PUBLIC_PATHS: readonly string[] = ['/auth/', '/legal/', '/api/setup/seed', '/api/health', '/api/public/protocols/']
+export const PUBLIC_PATHS: readonly string[] = [
+  '/auth/',
+  '/legal/',
+  '/api/setup/seed',
+  '/api/health',
+  '/api/public/protocols/*/pdf',
+]
+
+/**
+ * F1-FIX-03 / S1a#28: how a PUBLIC_PATHS entry matches.
+ *   - ends in '/'  -> a PAGE subtree ('/auth/' holds the Auth.js endpoints,
+ *                     '/legal/' the legal pages); never used for /api.
+ *   - contains '*' -> an exact route whose '*' is ONE non-empty segment.
+ *   - otherwise    -> an exact route, nothing below it.
+ * The /api entries used to be subtrees (and '/api/health' also matched
+ * '/api/health/<anything>'), so any route later added below a public one was
+ * served without a session.
+ */
+function matchesPublicPath(entry: string, path: string): boolean {
+  if (entry.endsWith('/')) return path.startsWith(entry)
+  if (!entry.includes('*')) return path === entry
+  const want = entry.split('/')
+  const got = path.split('/')
+  if (want.length !== got.length) return false
+  return want.every((seg, i) => (seg === '*' ? got[i].length > 0 : seg === got[i]))
+}
 
 /**
  * F1-FIX-03 / H11: the exact (method, path) pairs whose handlers accept the
@@ -447,13 +472,11 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // public portal (gremion-public) redirects the browser to — it self-enforces
   // status='published' + public org-unit visibility, so the session guard is
   // skipped here. The tenant resolver (element 0) still runs.
-  const publicPaths = PUBLIC_PATHS
-  // Match on a SEGMENT boundary, not a bare prefix: a plain startsWith(p) also
-  // matched every path that merely EXTENDS an entry ('/setupmalicious' extends
-  // '/setup', '/api/healthz' extends '/api/health'), which would serve such a
-  // route unauthenticated. An entry is public only on an exact hit or a
-  // '/'-delimited descendant.
-  if (publicPaths.some((p) => path === p || path.startsWith(p.endsWith('/') ? p : p + '/'))) {
+  // Never a bare prefix: a plain startsWith(p) also matched every path that
+  // merely EXTENDS an entry ('/api/healthz' extends '/api/health'), and a
+  // '/'-delimited descendant rule made every /api entry a whole subtree
+  // (S1a#28). See matchesPublicPath for the three entry shapes.
+  if (PUBLIC_PATHS.some((p) => matchesPublicPath(p, path))) {
     return resolve(event)
   }
 
