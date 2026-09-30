@@ -12,6 +12,7 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:integration": "node test/integration/run.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

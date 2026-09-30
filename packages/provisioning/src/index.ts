@@ -26,6 +26,10 @@ export {
   validateCreate,
 } from './customer.ts'
 export type { CreateSpec, PhaseOutcome, ProvisioningStatus } from './customer.ts'
+export { loadCatalogueRows, OWNING_CONTEXT_CODES, planCatalogueRows } from './catalogue-rows.ts'
+export type { CatalogueModule, CatalogueRowPlan, CatalogueRowsResult } from './catalogue-rows.ts'
+export { bootstrapPlatform, pgAttestations, pgModules } from './pg.ts'
+export type { BootstrapDeps, BootstrapResult } from './pg.ts'
 export type {
   AdminSpec,
   AttestationPort,

@@ -6,6 +6,8 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
+    // The scratch-database specs run through test/integration/run.mjs only.
+    exclude: ['test/integration/**'],
     environment: 'node',
   },
 })
