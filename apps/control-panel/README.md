@@ -69,6 +69,28 @@ database, so the panel is healthy before `gremion-tenant init`.
 
 Verify either with `test/host/integration/panel-verify.sh <base-url>`.
 
+### Rollout on a host without the pooled stack (section 11, R29-I11)
+
+The commands the scratch proof (`test/host/integration/customer-provision-proof.sh
+panel-*`) runs, in the order a host needs them; `<kc>` is the host's Keycloak
+container, `<host>` the operator's panel host name:
+
+1. The host's edge already routes `/auth/realms/platform` to that Keycloak
+   (the issuer is `https://<platform domain>/auth/realms/platform`).
+2. `KEYCLOAK_ADMIN=... KEYCLOAK_ADMIN_PASSWORD=... gremion-tenant init --realm-only
+   --keycloak-container <kc> --panel-origin https://<host>` -- the ops realm, its
+   client exact to the origin, the client secret in
+   `etc/secrets/control-panel/client_secret` (0600). A rerun is a no-op; a realm
+   that differs is refused, never overwritten.
+3. `gremion-tenant operator add <email> --no-mail --keycloak-container <kc>` --
+   prints `TEMPORARY-PASSWORD:` once; the operator changes it and enrols TOTP at
+   the first sign-in (Q23).
+4. `openssl rand -hex 32 > etc/secrets/control-panel/auth_secret` (0600); the env
+   file from `compose/control-panel/standalone.env.tmpl`; then
+   `docker compose -p gremion-panel -f compose/control-panel/standalone.yml --env-file <env> up -d`.
+5. `panel-verify.sh https://<host>` (adds the HSTS check on https), then a real
+   browser: operator + TOTP -> 200, a customer-realm user -> 403.
+
 ## Develop
 
 ```sh

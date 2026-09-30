@@ -268,7 +268,7 @@ phase_panel_login() {
         || { cat "$OUT/ledger/panel-login.err" >&2; bad "panel-login: the operator's real sign-in failed"; return; }
     printf '%s %s\n' "$(now)" "$out" | ledger panel-login.log
     if [[ "$(jq -r .status <<< "$out")" == 200 && "$(jq -r .path <<< "$out")" == / ]]; then
-        ok "panel-login: the operator signed in (password change + TOTP enrolment + OTP) and / answered 200"
+        ok "panel-login: the operator signed in (temporary password, UPDATE_PASSWORD, CONFIGURE_TOTP, profile) and / answered 200 (the gate admits only iss=ops, acr=loa2, operator)"
     else
         bad "panel-login: the sign-in ended at $(jq -r .path <<< "$out") with $(jq -r .status <<< "$out")"
     fi
