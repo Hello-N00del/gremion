@@ -66,6 +66,24 @@ export interface RenderTenantRouterInput extends HostPolicy {
   readonly domains: readonly TenantDomain[]
   /** TRAEFIK_CERT_RESOLVER. Mandatory: an emitted router without one fails verify. */
   readonly certResolver: string
+  /**
+   * TASK-043 Q16 (G9): the customer's issuer is https://<host>/auth/realms/<realm>
+   * on its OWN primary host, so that host also needs a Keycloak router — for
+   * that realm's namespace and the shared static resources ONLY, never
+   * /auth/admin, never another realm. Omitted: no Keycloak router (the
+   * TASK-034 shape, byte for byte).
+   */
+  readonly keycloak?: { readonly realm: string; readonly host: string }
+}
+
+/** The service the apex Keycloak router uses (docker-compose.prod.yml `keycloak` router). */
+export const KEYCLOAK_SERVICE = 'keycloak@docker'
+/** Above the tenant app router (10) on the same host, like the apex Keycloak router. */
+export const KEYCLOAK_ROUTER_PRIORITY = 100
+
+/** `tenant-<slug>-kc`: never a `-<i>` host index, so it cannot collide with a host router. */
+export function keycloakRouterName(slug: string): string {
+  return `${routerName(slug, 0)}-kc`
 }
 
 /**
@@ -96,6 +114,8 @@ export interface RenderTenantRouterResult {
   readonly routers: readonly EmittedRouter[]
   /** Hosts deliberately not routed. The caller MUST surface these. */
   readonly skipped: readonly RouterSkip[]
+  /** TASK-043 Q16: the realm router on the issuer host, or null when not asked for. */
+  readonly keycloakRouter?: EmittedRouter | null
 }
 
 /** A Traefik resolver name: what the compose labels accept, nothing else. */
@@ -198,6 +218,19 @@ export function renderTenantRouter(input: RenderTenantRouterInput): RenderTenant
     }
   })
 
+  let kc: EmittedRouter | null = null
+  let kcRealm = ''
+  if (input.keycloak !== undefined) {
+    const realm = assertSlug(input.keycloak?.realm, 'renderTenantRouter keycloak.realm')
+    const kcHost = typeof input.keycloak.host === 'string' ? normaliseHost(input.keycloak.host) : null
+    const owner = routers.find((r) => r.host === kcHost)
+    if (!owner) {
+      throw new Error(`renderTenantRouter: keycloak.host ${JSON.stringify(input.keycloak.host)} is not one of this tenant's routed hosts [${hosts.join(', ')}]`)
+    }
+    kc = { name: keycloakRouterName(slug), host: owner.host, pin: owner.pin, chain: owner.chain }
+    kcRealm = realm
+  }
+
   const out: string[] = [HEADER.trimEnd(), 'http:', '  routers:']
   for (const r of routers) {
     out.push(
@@ -208,6 +241,19 @@ export function renderTenantRouter(input: RenderTenantRouterInput): RenderTenant
       `      priority: ${TENANT_ROUTER_PRIORITY}`,
       '      middlewares:',
       ...r.chain.map((m) => `        - "${m}"`),
+      '      tls:',
+      `        certResolver: "${certResolver}"`,
+    )
+  }
+  if (kc) {
+    out.push(
+      `    ${kc.name}:`,
+      '      entryPoints: ["websecure"]',
+      `      rule: "Host(\`${kc.host}\`) && (PathPrefix(\`/auth/realms/${kcRealm}/\`) || PathPrefix(\`/auth/resources/\`))"`,
+      `      service: "${KEYCLOAK_SERVICE}"`,
+      `      priority: ${KEYCLOAK_ROUTER_PRIORITY}`,
+      '      middlewares:',
+      ...kc.chain.map((m) => `        - "${m}"`),
       '      tls:',
       `        certResolver: "${certResolver}"`,
     )
@@ -230,5 +276,5 @@ export function renderTenantRouter(input: RenderTenantRouterInput): RenderTenant
     '            depth: 0',
     '',
   )
-  return { yaml: out.join('\n'), hosts, routers, skipped }
+  return { yaml: out.join('\n'), hosts, routers, skipped, keycloakRouter: kc }
 }
