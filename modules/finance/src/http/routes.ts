@@ -38,7 +38,6 @@ import type http from 'node:http'
 import type { HttpMethod, Route, RouteContext, RouteHandler } from './router.js'
 import type { TenantRef, Sql } from '../tenant-store.js'
 import {
-  tableCount,
   insertFinanceUnit,
   getFinanceUnitById,
   updateFinanceUnitById,
@@ -1926,18 +1925,11 @@ export function buildApiRoutes(storeFn?: StoreFn): Route[] {
 }
 
 // ── /healthz/tenants handler ──────────────────────────────────────────────────
-// Guard-EXEMPT (served from the /healthz* path in server.ts). Returns a per-tenant
-// DB ping + a couple of finance counts, so an operator can confirm the leaf's own
-// PG is reachable and migrated for every tenant before a cutover.
-
-export interface TenantHealth {
-  tenant_id: string
-  tenant_slug: string
-  db_ok: boolean
-  bank_accounts?: number
-  bookings?: number
-  error?: string
-}
+// Served from the /healthz* path in server.ts, which requires the internal secret
+// for this sub-path (F1-FIX-05-K, K4#32). An operator confirms the leaf's own PG is
+// reachable and migrated for every tenant. The response carries booleans ONLY: no
+// tenant ids or slugs, no finance counts, no DB error text (those went to any
+// unauthenticated caller before). The per-tenant detail is logged server-side.
 
 export async function tenantHealthHandler(
   res: http.ServerResponse,
@@ -1948,31 +1940,24 @@ export async function tenantHealthHandler(
   try {
     tenants = await listTenants()
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    sendJson(res, 503, { success: false, error: `tenant listing failed: ${msg}` })
+    console.error('[finance] /healthz/tenants: tenant listing failed', err)
+    sendJson(res, 503, { success: false, db_ok: false })
     return
   }
 
-  const results: TenantHealth[] = await Promise.all(
-    tenants.map(async (t): Promise<TenantHealth> => {
+  const results = await Promise.all(
+    tenants.map(async (t): Promise<boolean> => {
       try {
         const sql = await storeFn(t)
-        const [bankAccounts, bookings] = await Promise.all([
-          tableCount(sql, 'bank_account'),
-          tableCount(sql, 'booking'),
-        ])
-        return { tenant_id: t.id, tenant_slug: t.slug, db_ok: true, bank_accounts: bankAccounts, bookings }
+        await sql`SELECT 1`
+        return true
       } catch (err) {
-        return {
-          tenant_id: t.id,
-          tenant_slug: t.slug,
-          db_ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }
+        console.error(`[finance] /healthz/tenants: tenant ${t.id} (${t.slug}) DB probe failed`, err)
+        return false
       }
     }),
   )
 
-  const allOk = results.every((r) => r.db_ok)
-  sendJson(res, allOk ? 200 : 503, { success: allOk, data: results })
+  const allOk = results.every((ok) => ok)
+  sendJson(res, allOk ? 200 : 503, { success: allOk, db_ok: allOk })
 }

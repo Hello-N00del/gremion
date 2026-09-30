@@ -12,8 +12,7 @@
 // expense_attachment bytes ride the injected StorageBackend), expense
 // read/write, pending-approval, budget / statement / booking reads, project
 // state-machine + CRUD, and sub-org reads + sub_org_type catalog writes —
-// alongside the #369 sub-org saga ops and the /healthz/tenants liveness helper
-// (tableCount). All 52 LIVE ops run against the leaf's own `finance` schema — the
+// alongside the #369 sub-org saga ops. All 52 LIVE ops run against the leaf's own `finance` schema — the
 // year-end closeBudget (FIN-52) was the last kernel-coupling residual, now ported
 // LEAF-LOCAL (see http/routes.ts LIVE_OPS; KERNEL_COUPLING_EXCEPTIONS is now empty).
 
@@ -257,14 +256,6 @@ export const CHECKSUM_COLUMN: Partial<Record<FinanceTable, string>> = {
   fiscal_year: 'name',
   project: 'name',
   expense: 'payee_name',
-}
-
-// ── health helper ──────────────────────────────────────────────────────────────
-
-/** Count rows in a finance table (schema-qualified) — used by /healthz/tenants. */
-export async function tableCount(sql: Sql, table: FinanceTable): Promise<number> {
-  const rows = await sql<{ c: string }[]>`SELECT COUNT(*) AS c FROM ${sql(`${FINANCE_SCHEMA}.${table}`)}`
-  return Number(rows[0]!.c)
 }
 
 // ── sub-org saga store ops (#369 slice 3) ───────────────────────────────────────
