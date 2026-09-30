@@ -41,6 +41,22 @@
       "reason": "TASK-043 tenant-create adapters: the kernel server's POSTGRES_USER as the injected ModuleServer of ensureKernelDatabase, and a read-only post-condition read of the new kernel database's ledger and counts; no tenant data-plane pool (the kernel migration runs inside runWithTenant on the provisioning context)"
     },
     {
+      "path": "apps/control-panel/src/lib/server/customers.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-30",
+      "reason": "TASK-043 control panel: two READ pools of the control plane, never a tenant database -- the control registry (tenant, tenant_domain) as a SELECT-only role and, when configured, gremion_platform's provisioning ledger; the registry (TASK-077) takes them over like gremion-ui's control-db.ts"
+    },
+    {
+      "path": "apps/control-panel/src/lib/server/config.ts",
+      "calls": 2,
+      "imports": 0,
+      "adoptedBy": "TASK-043",
+      "since": "2026-09-30",
+      "reason": "not a connection: the URL-shape checks of CONTROL_DATABASE_URL and PLATFORM_DATABASE_URL (the regex /^postgres(ql)?:\\/\\//) match the call pattern; stays while the checks do"
+    },
+    {
       "path": "packages/provisioning/test/integration/platform.int.test.ts",
       "calls": 2,
       "imports": 1,
