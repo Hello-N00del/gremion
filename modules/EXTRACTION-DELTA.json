@@ -12,10 +12,178 @@
       "blob": "d9f35ed80842e07e55851c97c61979ab662d8d55"
     },
     {
+      "path": "modules/board/package.json",
+      "reason": "R29-BOARD-STORE-K (operator R29-I1, per-tenant board store): @gremion/tenant-store dependency, test:bundle script, description no longer says single PG",
+      "owner": "TASK-152",
+      "blob": "8704df34f2be6a22f183aaba31900f9984305427"
+    },
+    {
+      "path": "modules/board/scripts/backfill.ts",
+      "reason": "R29-BOARD-STORE-K Q4: removed, the one-shot StuRa kernel-to-leaf backfill is dead under the from-zero re-init (StuRaOS keeps its copy)",
+      "owner": "TASK-152",
+      "blob": null
+    },
+    {
+      "path": "modules/board/src/app.ts",
+      "reason": "added by R29-BOARD-STORE-K: buildApp(env), the one construction path; createTenantStore + one schemaGate; MIGRATIONS_DIR at depth 1",
+      "owner": "TASK-152",
+      "blob": "a497e92d723f4b312a4190667335d17f05d493e5"
+    },
+    {
+      "path": "modules/board/src/http/guard.ts",
+      "reason": "R29-BOARD-STORE-K A2: x-tenant-id must be a canonical lowercase UUIDv7",
+      "owner": "TASK-152",
+      "blob": "8209c8af2e336d3fd45aa11a0c52c0cb6ca097c2"
+    },
+    {
+      "path": "modules/board/src/http/routes.ts",
+      "reason": "R29-BOARD-STORE-K A5/A6/A8: StoreFn answers Sql | Refusal, create routes, foreign-id and query-time SQLSTATE mapping",
+      "owner": "TASK-152",
+      "blob": "f7a02daf157a3b8220a6e8063de86bad3052de15"
+    },
+    {
+      "path": "modules/board/src/index.ts",
+      "reason": "R29-BOARD-STORE-K: boots through buildApp; a refused build logs one line and exits 1",
+      "owner": "TASK-152",
+      "blob": "a8cfa0843c6857b2ea9af70c8cdb09a6da352e59"
+    },
+    {
+      "path": "modules/board/src/migrations.ts",
+      "reason": "R29-BOARD-STORE-K Q4: removed, the ledger-less runner; enableModule migrates with the one tenant-store runner (B21); its bundle-depth rationale moved to src/app.ts",
+      "owner": "TASK-152",
+      "blob": null
+    },
+    {
+      "path": "modules/board/src/store/index.ts",
+      "reason": "R29-BOARD-STORE-K A1: single-DB accessor and postgres value import removed, Sql typed from @gremion/tenant-store, createBoardWithStacks and stackExists added",
+      "owner": "TASK-152",
+      "blob": "8ea91206446ce142bb01bb54300b71cb7ccd9f41"
+    },
+    {
+      "path": "modules/board/src/store/tenant-db.ts",
+      "reason": "added by R29-BOARD-STORE-K: the per-(tenant, board) resolve behind the schema gate, fail-closed classification",
+      "owner": "TASK-152",
+      "blob": "d92b719c61fe1a222954f12dede6f1bf198762e3"
+    },
+    {
+      "path": "modules/board/test/api.integration.test.ts",
+      "reason": "R29-BOARD-STORE-K: builds the leaf through buildApp on a provisioned fixture tenant database; create-route and foreign-id cases",
+      "owner": "TASK-152",
+      "blob": "5e083e972bdca41df57727c0a7ecd9a1530f6fab"
+    },
+    {
+      "path": "modules/board/test/backfill.integration.test.ts",
+      "reason": "R29-BOARD-STORE-K Q4: removed with scripts/backfill.ts",
+      "owner": "TASK-152",
+      "blob": null
+    },
+    {
+      "path": "modules/board/test/bundle-smoke.mjs",
+      "reason": "added by R29-BOARD-STORE-K A10: boots dist/index.js, refuses to boot without GREMION_BOARD_PG_URL",
+      "owner": "TASK-152",
+      "blob": "33dce17a73310b7fffd06e91d1d707df9925650f"
+    },
+    {
+      "path": "modules/board/test/guard.test.ts",
+      "reason": "R29-BOARD-STORE-K A2: v7 fixture id, v4/uppercase/braced/empty ids refused",
+      "owner": "TASK-152",
+      "blob": "db9915ae2e62c1a01d4867094a1178282ce376df"
+    },
+    {
+      "path": "modules/board/test/isolation.integration.test.ts",
+      "reason": "added by R29-BOARD-STORE-K A3/A4/A7: unprovisioned, schema behind, query-time drop and the two-tenant isolation run",
+      "owner": "TASK-152",
+      "blob": "510045a46f93e74162575d38547881135b6395ba"
+    },
+    {
+      "path": "modules/board/test/isolation/api.ts",
+      "reason": "added by R29-BOARD-STORE-K A9: the BoardApi the isolation case runs over",
+      "owner": "TASK-152",
+      "blob": "d9a7e8b87123a36cf6412f6c43cdf38dd0b6f2c2"
+    },
+    {
+      "path": "modules/board/test/isolation/case.test.ts",
+      "reason": "added by R29-BOARD-STORE-K A9: the case contract and harness rules, PG-free",
+      "owner": "TASK-152",
+      "blob": "a957f6370d24f17e034d756dd8e634630197fa1c"
+    },
+    {
+      "path": "modules/board/test/isolation/case.ts",
+      "reason": "added by R29-BOARD-STORE-K A9: boardIsolationCase in TASK-044's contract shape, attempts and controls",
+      "owner": "TASK-152",
+      "blob": "e8b052c526680d0dac2ac5f2e015868149f6f08a"
+    },
+    {
+      "path": "modules/board/test/isolation/harness.ts",
+      "reason": "added by R29-BOARD-STORE-K A7: minimal runner with TASK-044 s1 rules (superseded by test/isolation/tenant/ once it exists)",
+      "owner": "TASK-152",
+      "blob": "a71ec150176b1c112a5e08fa512530655fcb2015"
+    },
+    {
+      "path": "modules/board/test/isolation/leaf-api.ts",
+      "reason": "added by R29-BOARD-STORE-K A9: the leaf adapter (internal headers transport)",
+      "owner": "TASK-152",
+      "blob": "7736dda794c6ad3660365f995a46cff7ed82121c"
+    },
+    {
+      "path": "modules/board/test/lifecycle.integration.test.ts",
+      "reason": "added by R29-BOARD-STORE-K A8: enableModule / disableModule round trip, role proof, no-sleep refusal",
+      "owner": "TASK-152",
+      "blob": "b134d42e1126a82fd74a497041f612fad139473b"
+    },
+    {
+      "path": "modules/board/test/no-phantom-stura-db.test.ts",
+      "reason": "R29-BOARD-STORE-K: allows exactly @gremion/tenant-store; still refuses a direct @gremion/db and every other @gremion/*",
+      "owner": "TASK-152",
+      "blob": "78173c0a0295ca117bcf8a4cd4c1231e174deb35"
+    },
+    {
+      "path": "modules/board/test/pg-test-guard.test.ts",
+      "reason": "R29-BOARD-STORE-K item 3: assertScratchTenantDb negative tests",
+      "owner": "TASK-152",
+      "blob": "95b8de5a796c2bb41b86887cf48b50ff5dea7b65"
+    },
+    {
+      "path": "modules/board/test/routes.test.ts",
+      "reason": "R29-BOARD-STORE-K A5: pins nine endpoints",
+      "owner": "TASK-152",
+      "blob": "d550a49e4509b000067498c949fcd47921b5cda5"
+    },
+    {
+      "path": "modules/board/test/store-seam.test.ts",
+      "reason": "added by R29-BOARD-STORE-K A1: source scan for the tenant-store seam",
+      "owner": "TASK-152",
+      "blob": "353d019c734f3e82268ea8a5971f2b531b5333a0"
+    },
+    {
       "path": "modules/board/test/support/pg-test-guard.ts",
-      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
-      "owner": "TASK-200",
-      "blob": "0719eac1bc578fec4536f94112cfad29284f11de"
+      "reason": "postgres major pin (lint-postgres-major, TASK-200): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string; then R29-BOARD-STORE-K item 3: SCRATCH_TENANT_DBS + assertScratchTenantDb",
+      "owner": "TASK-152",
+      "blob": "2d3e281e69d9612d5841dea2cef643e725ec1d05"
+    },
+    {
+      "path": "modules/board/test/support/route-calls.ts",
+      "reason": "added by R29-BOARD-STORE-K: one well-formed request per route for the refusal cases",
+      "owner": "TASK-152",
+      "blob": "c15f1f778b7d922c60127fa2c5b17aa48caa64dc"
+    },
+    {
+      "path": "modules/board/test/support/scratch-pg.ts",
+      "reason": "added by R29-BOARD-STORE-K: the suites' one direct scratch-server connection file (allow-listed in tenant-db-access.allow.json)",
+      "owner": "TASK-152",
+      "blob": "cf5e4c2214b5e567d1cc036b3021f139222ef755"
+    },
+    {
+      "path": "modules/board/test/support/tenants.ts",
+      "reason": "added by R29-BOARD-STORE-K item 3: fixed UUIDv7 fixture tenants",
+      "owner": "TASK-152",
+      "blob": "27e616bd477cebdf83332747a48bd3d6075ea778"
+    },
+    {
+      "path": "modules/board/vitest.integration.config.ts",
+      "reason": "R29-BOARD-STORE-K: Vitest 4 dropped test.poolOptions; fileParallelism false keeps the suites serial on the shared scratch server",
+      "owner": "TASK-152",
+      "blob": "7bf6d86d3b34ecdb0d427ecf1ebc209fd2ebc2d5"
     },
     {
       "path": "modules/calendar/test/kernel-client.test.ts",
