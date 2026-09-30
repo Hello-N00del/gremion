@@ -87,6 +87,10 @@ RUN_ID="backup-${DATE}"
 
 export RESTIC_REPOSITORY
 
+# R29-MD-A (GDPR Art. 32(1)(b)): the dumps below are personal data. umask 077
+# before the first mkdir makes the dump directory 0700 and every dump 0600 from
+# its first byte. Script-wide on purpose: it writes only dumps and its own logs.
+umask 077
 mkdir -p "$DUMP_DIR" "$LOG_DIR"
 
 # ── Step timing helpers ───────────────────────────────────────
