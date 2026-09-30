@@ -54,6 +54,28 @@ async function readJson<T>(req: http.IncomingMessage): Promise<T> {
   return JSON.parse(buf.toString('utf8') || '{}') as T
 }
 
+/** A path fit for one log line: control characters replaced, length capped. */
+function loggablePath(p: unknown): string {
+  // eslint-disable-next-line no-control-regex
+  return String(p).replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 512)
+}
+
+/**
+ * F1-FIX-03 round 2 (review LOWs): a failed download pipeline, logged with the
+ * error code, the tenant and the requested path so a real upstream reset can
+ * be traced. ERR_STREAM_PREMATURE_CLOSE means the response closed before the
+ * body finished, i.e. the client went away (a cancelled download): info level,
+ * so it is not mistaken for a Nextcloud failure. Never logs the bearer.
+ */
+function logDownloadStreamError(err: NodeJS.ErrnoException, tenantId: string, p: unknown): void {
+  const ctx = { code: err.code ?? null, tenant: tenantId, path: loggablePath(p) }
+  if (err.code === 'ERR_STREAM_PREMATURE_CLOSE') {
+    console.info('[files] download aborted by the client', ctx)
+    return
+  }
+  console.error('[files] download stream failed mid-body', ctx, err)
+}
+
 export function createServer(opts: ServerOptions): http.Server {
   const client = opts.client ?? createWebdavClient()
 
@@ -114,8 +136,9 @@ export function createServer(opts: ServerOptions): http.Server {
             // Readable with no listener: an uncaught exception that killed the
             // whole leaf. pipeline() handles both ends: on failure it destroys the
             // response (the client sees an aborted download) and we log it.
+            const tenantId = guard.tenant.id
             pipeline(Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream), res, (err) => {
-              if (err) console.error('[files] download stream failed mid-body:', err.message)
+              if (err) logDownloadStreamError(err, tenantId, p)
             })
           } else {
             res.end()
