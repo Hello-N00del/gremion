@@ -187,6 +187,18 @@ test('r2: a prototype-key project is an unknown project in selectProject and emi
   }
 })
 
+test('r2: the release-signing procedure emits, checks and sbom-checks BOTH layers by --project (R28 review MEDIUM)', () => {
+  const doc = readFileSync(join(REPO_ROOT, 'docs/ops/release-signing.md'), 'utf8')
+  const oneLine = doc.replace(/\\\r?\n\s*/g, '')
+  for (const [project, file] of [['state', 'docker-compose.state-pins.yml'], ['app', 'docker-compose.pins.yml']]) {
+    assert.match(oneLine, new RegExp(`emit-pins\\.mjs --project ${project} --in pins\\.txt --out ${file.replace(/\./g, '\\.')}`), `emit ${project}`)
+    assert.match(oneLine, new RegExp(`check-pins\\.mjs ${file.replace(/\./g, '\\.')} --project ${project}`), `check ${project}`)
+  }
+  assert.match(oneLine, /check-sbom\.mjs --pins docker-compose\.state-pins\.yml --pins docker-compose\.pins\.yml/)
+  // check-pins has no --app-compose; the hand list is gone from the procedure
+  assert.doesNotMatch(doc, /check-pins\.mjs[^\n]*--app-compose|--services gremion-ui/)
+})
+
 test('r2: emitPins without a project never names the app layer in its header (no silent app default)', () => {
   const out = emitPins(parsePinLines(STATE_LINES.join('\n')), derivedServices('state'))
   assert.doesNotMatch(out.split('\n')[0], /docker-compose\.pins\.yml|app services/)

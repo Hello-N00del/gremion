@@ -36,9 +36,14 @@ Each step is a precondition of the next; stop at the first failure.
    docker buildx build --push -t ghcr.io/hello-n00del/gremion-ui:<tag> -f gremion-ui/Dockerfile .
    ```
 
-   (one per `build:` service of `docker-compose.app.yml`; the state-project
-   images are TASK-048b's). Record each pushed digest from the registry, not
-   the local store:
+   One image per `build:` service of BOTH release projects (TASK-048b splits
+   the pins layer per project): the state project's `legal`, `vector` and
+   `fallback` (built from `docker-compose.yml` and `docker-compose.prod.yml`)
+   and the app project's `gremion-ui`, `gremion-public`, `migrate` and
+   `tenant-create` (`docker-compose.app.yml`; `migrate` and `tenant-create`
+   share the `gremion-migrate` image). The sets are derived from `build:`, not
+   listed: step 4 fails on a service this list misses. Record each pushed
+   digest from the registry, not the local store:
 
    ```sh
    docker buildx imagetools inspect --format '{{json .Manifest}}' \
@@ -46,28 +51,33 @@ Each step is a precondition of the next; stop at the first failure.
    ```
 
    (buildx 0.31 ignores the older `--format '{{ .Manifest.Digest }}'`.)
-3. **Emit the pins layer** from one `service=<repo>@sha256:<64 hex>` line per
-   app service:
+3. **Emit both pins layers** from ONE record, `pins.txt`, holding one
+   `service=<repo>@sha256:<64 hex>` line for every service of both projects:
 
    ```sh
-   node scripts/release/emit-pins.mjs --app-compose docker-compose.app.yml \
+   node scripts/release/emit-pins.mjs --project state \
+     --in pins.txt --out docker-compose.state-pins.yml
+   node scripts/release/emit-pins.mjs --project app \
      --in pins.txt --out docker-compose.pins.yml
    ```
 
-   It refuses (exit 1, nothing written) a missing, extra, duplicate or tag ref.
-4. **Check the pins layer** with the same assertions `gremion-deploy` makes:
+   Each run takes its project's services out of the record and refuses (exit 1,
+   nothing written) a missing, extra, duplicate or tag ref, and a line whose
+   service is in neither project. `gremion-deploy` blocks a tree without either
+   file at STEP 2 (exit 3).
+4. **Check each pins layer** with the same assertions `gremion-deploy` makes,
+   against its project's derived set:
 
    ```sh
-   node scripts/release/check-pins.mjs docker-compose.pins.yml \
-     --services gremion-ui,gremion-public,migrate,tenant-create
+   node scripts/release/check-pins.mjs docker-compose.state-pins.yml --project state
+   node scripts/release/check-pins.mjs docker-compose.pins.yml --project app
    ```
-
-   Pass `--services` explicitly: `--app-compose` currently reads non-service
-   keys of `docker-compose.app.yml` as services (TASK-048b).
-5. **Sign** every first-party digest with the vault key:
+5. **Sign** every first-party digest of both layers with the vault key
+   (`gremion-deploy` step 2 verifies the state images as well as the app ones):
 
    ```sh
    COSIGN_PASSWORD=… scripts/release/sign-release.sh --key <vault>/cosign.key \
+     ghcr.io/hello-n00del/gremion-legal@sha256:<64 hex> … \
      ghcr.io/hello-n00del/gremion-ui@sha256:<64 hex> …
    ```
 
@@ -85,7 +95,14 @@ Each step is a precondition of the next; stop at the first failure.
    public key". The same command with any other public key must fail. To show
    there is no tlog entry, `cosign download signature <ref>` must print
    `"Bundle":null` for every signature (`--insecure-ignore-tlog` only skips the
-   check, so verify output alone cannot show it).
+   check, so verify output alone cannot show it). The attested SBOMs of both
+   layers are then judged in one run (`--pins` repeats; a layer with no
+   first-party ref fails by name):
+
+   ```sh
+   node scripts/verify/sbom/check-sbom.mjs --pins docker-compose.state-pins.yml \
+     --pins docker-compose.pins.yml --key cosign.pub
+   ```
 
 The host's third-party allow-list comes from the same tree:
 `node scripts/release/check-image-digests.mjs --third-party-list` prints the
