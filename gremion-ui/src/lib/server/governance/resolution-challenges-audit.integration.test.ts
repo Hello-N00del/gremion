@@ -116,6 +116,32 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
     expect(await auditRows('resolution_challenge.raised')).toHaveLength(0)
   })
 
+  it.each(['rejected', 'withdrawn'] as const)(
+    "(0b) filing against an adopted but '%s' resolution is refused and writes NOTHING",
+    async (result) => {
+      // R28 house review MEDIUM: the admin disposition surface
+      // (listChallengesForBeschluesse) and the Beschlussbuch list only PASSED
+      // resolutions. A challenge filed against a rejected/withdrawn row would be
+      // an open challenge plus a tamper-evident 'raised' entry that no admin can
+      // ever see or decide. Contestability is scoped to binding decisions.
+      const resolution = await seedResolution()
+      const sql = getDb()
+      await sql`UPDATE protocol_resolutions SET result = ${result} WHERE id = ${resolution.id}`
+
+      await expect(
+        fileChallenge({
+          resolutionId: resolution.id,
+          raisedBy: 'member-1',
+          grounds: 'Verstoß gegen §7 der Geschäftsordnung',
+        }),
+      ).rejects.toMatchObject({ name: 'ResolutionNotAdoptedError' })
+
+      const [{ count }] = await sql<{ count: string }[]>`SELECT count(*) FROM resolution_challenges`
+      expect(Number(count)).toBe(0)
+      expect(await auditRows('resolution_challenge.raised')).toHaveLength(0)
+    },
+  )
+
   it("(1) filing commits the challenge row + a 'resolution_challenge.raised' audit row together", async () => {
     const resolution = await seedResolution()
 

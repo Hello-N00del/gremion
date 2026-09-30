@@ -50,7 +50,9 @@ export class ResolutionNotFoundError extends Error {
  * contesting an ADOPTED resolution: publish IS adoption, and `decided_at` is
  * stamped only inside the publish transaction. Filing against a non-adopted
  * row would write a tamper-evident audit record for an act that was never a
- * binding decision.
+ * binding decision. Also thrown for an adopted row whose result is not
+ * 'passed' ("nicht angenommen" covers both): a rejected or withdrawn motion is
+ * not a Beschluss on the register, so there is nothing binding to contest.
  */
 export class ResolutionNotAdoptedError extends Error {
   constructor(resolutionId: string) {
@@ -94,11 +96,19 @@ export async function fileChallenge(input: {
       // recordResolutionAdoptions inside the publish tx, so NULL here means the
       // parent protocol is still draft/submitted. Read inside the tx so the
       // check and the INSERT see the same snapshot.
-      const [resolution] = await tx<{ decided_at: string | null }[]>`
-        SELECT decided_at FROM protocol_resolutions WHERE id = ${input.resolutionId}
+      //
+      // Only a PASSED adopted resolution is a binding decision to contest: the
+      // Beschlussbuch and the admin disposition list (listChallengesForBeschluesse)
+      // both show `result = 'passed'` rows only, so a challenge against a
+      // rejected/withdrawn row would be an open challenge with a tamper-evident
+      // 'raised' entry that no admin could ever see or decide (R28 review).
+      const [resolution] = await tx<{ decided_at: string | null; result: string }[]>`
+        SELECT decided_at, result FROM protocol_resolutions WHERE id = ${input.resolutionId}
       `
       if (!resolution) throw new ResolutionNotFoundError(input.resolutionId)
-      if (resolution.decided_at === null) throw new ResolutionNotAdoptedError(input.resolutionId)
+      if (resolution.decided_at === null || resolution.result !== 'passed') {
+        throw new ResolutionNotAdoptedError(input.resolutionId)
+      }
 
       const [challenge] = await tx<ResolutionChallenge[]>`
         INSERT INTO resolution_challenges (resolution_id, raised_by, grounds)
