@@ -789,13 +789,16 @@ export const i18nHandle: Handle = createI18nHandle((locals) => locals.tenant?.id
  * A Response whose headers can be written. A Response from fetch() or
  * Response.redirect()/error() has an immutable header guard, and set() throws
  * a TypeError on it; such a response is re-wrapped once (same body stream,
- * status and headers) instead of losing its security headers.
+ * status and headers) instead of losing its security headers. The writability
+ * probe IS the nosniff write (cspGuard sets it again, idempotently). Any other
+ * error is a real fault and propagates (round 2, review LOW).
  */
 function withWritableHeaders(response: Response): Response {
   try {
     response.headers.set('X-Content-Type-Options', 'nosniff')
     return response
-  } catch {
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err
     // Response.error() (status 0) cannot be re-wrapped; it carries no body a
     // browser would render, so it passes through as it is.
     if (response.status < 200 || response.status > 599) return response

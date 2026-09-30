@@ -363,6 +363,22 @@ describe('security headers on every response, early returns included (S1a#17)', 
     expect(o.headers.get('x-content-type-options')).toBe('nosniff')
   })
 
+  it('an error from headers.set that is NOT the immutable-guard TypeError propagates instead of being swallowed', async () => {
+    await expect(
+      throughHandle('PATCH', '/api/news/42', `Bearer ${SECRET}`, {
+        respond: () => {
+          const res = new Response('x', { status: 200 })
+          const headers = new Headers()
+          headers.set = () => {
+            throw new RangeError('f1-fix-03 headers.set boom')
+          }
+          Object.defineProperty(res, 'headers', { value: headers })
+          return res
+        },
+      }),
+    ).rejects.toThrow(RangeError)
+  })
+
   it('text/html still gets the CSP; a handler-set Referrer-Policy is kept', async () => {
     const o = await throughHandle('PATCH', '/api/news/42', `Bearer ${SECRET}`, {
       respond: () =>
@@ -385,5 +401,10 @@ describe('the internal-bearer allow-list is exact', () => {
         String.raw`PATCH ^\/api\/news\/[0-9]{1,12}$`,
       ].sort(),
     )
+  })
+
+  it('the list and every entry are frozen (no importer can re-point a pattern)', () => {
+    expect(Object.isFrozen(mod.INTERNAL_BEARER_ROUTES)).toBe(true)
+    for (const r of mod.INTERNAL_BEARER_ROUTES) expect(Object.isFrozen(r)).toBe(true)
   })
 })
