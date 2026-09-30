@@ -70,6 +70,42 @@ describe('runPhase', () => {
     expect(rows.every((r) => r.operatorId === OPERATOR)).toBe(true)
   })
 
+  it('a step error survives a failed-row append that also throws (review B1, r2): the original error is the primary one', async () => {
+    const inner = memoryLedger()
+    const ledger = {
+      rows: (c: string) => inner.rows(c),
+      append: async (c: string, k: StepKind, s: Parameters<typeof inner.append>[2], o: string | null) => {
+        if (s === 'failed') throw new Error('platform pool closed')
+        return inner.append(c, k, s, o)
+      },
+    }
+    const lines: string[] = []
+    await openLedger(ledger, CUSTOMER, OPERATOR)
+    const stepErr = new Error('seed file(s) 0005_dev_seed.sql applied: GREMION_DISABLE_SEEDS was not true')
+    const err = await runPhase('a', {
+      customerId: CUSTOMER,
+      operatorId: OPERATOR,
+      ledger,
+      steps: recordingSteps([], { realm_created: stepErr }),
+      log: (l) => void lines.push(l),
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(AggregateError)
+    expect((err as AggregateError).cause).toBe(stepErr)
+    expect((err as AggregateError).errors).toEqual([stepErr, expect.objectContaining({ message: 'platform pool closed' })])
+    expect((err as Error).message).toMatch(/realm_created.*seed file/)
+    expect(lines.join('\n')).toMatch(/realm_created: FAILED.*seed file.*failed row could not be recorded.*platform pool closed/)
+  })
+
+  it('a failed step logs its error message', async () => {
+    const lines: string[] = []
+    const ledger = memoryLedger()
+    await openLedger(ledger, CUSTOMER, OPERATOR)
+    await expect(
+      runPhase('a', { customerId: CUSTOMER, operatorId: OPERATOR, ledger, steps: recordingSteps([], { realm_created: new Error('keycloak 503') }), log: (l) => void lines.push(l) }),
+    ).rejects.toThrow('keycloak 503')
+    expect(lines).toContain('step realm_created: FAILED: keycloak 503')
+  })
+
   it('a rerun of a completed customer calls no step and appends no row', async () => {
     const ledger = memoryLedger()
     await runAll(ledger, recordingSteps([]))

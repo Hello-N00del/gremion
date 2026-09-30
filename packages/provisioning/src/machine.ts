@@ -72,8 +72,18 @@ export async function runPhase(phase: Phase, opts: RunPhaseOptions): Promise<Run
     try {
       await fn()
     } catch (err) {
-      await ledger.append(customerId, kind, 'failed', operatorId)
-      log(`step ${kind}: FAILED`)
+      // The step's error stays the primary one (review B1, r2): a failed-row
+      // append that also throws (pool closed, connection reset) must not
+      // replace the seed post-condition or the Keycloak 5xx the operator needs.
+      const msg = err instanceof Error ? err.message : String(err)
+      try {
+        await ledger.append(customerId, kind, 'failed', operatorId)
+      } catch (appendErr) {
+        const amsg = appendErr instanceof Error ? appendErr.message : String(appendErr)
+        log(`step ${kind}: FAILED: ${msg}; the failed row could not be recorded: ${amsg}`)
+        throw new AggregateError([err, appendErr], `step ${kind} failed: ${msg} (and its failed ledger row could not be recorded: ${amsg})`, { cause: err })
+      }
+      log(`step ${kind}: FAILED: ${msg}`)
       throw err
     }
     try {
