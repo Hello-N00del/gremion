@@ -62,13 +62,13 @@ const PROBE_TENANT = '00000000-0000-7000-8000-000000000000'
 export function buildApp(env: BoardEnv, opts: BuildAppOptions = {}): BoardApp {
   const variable = moduleUrlVariable(MODULE_ID)
   if (!env[variable]) {
-    throw new Error(`[board] ${variable} is not set: refusing to start (the leaf opens t_<tenant>__board on that server; there is no default)`)
+    throw new Error(`${variable} is not set: refusing to start (the leaf opens t_<tenant>__board on that server; there is no default)`)
   }
   const resolveTarget = envResolveTarget(env)
   try {
     resolveTarget(PROBE_TENANT, MODULE_ID)
   } catch (err) {
-    throw new Error(`[board] ${variable} is unusable: ${(err as Error).message}`)
+    throw new Error(`${variable} is unusable: ${(err as Error).message}`)
   }
   const store = createTenantStore({ resolveTarget, maxPools: 64 })
   const gate = schemaGate({

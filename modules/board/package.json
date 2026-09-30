@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "StuRaOS board leaf service (Deck task board extraction, T1) — node:http, single PG, byte-identical behind BOARD_BACKEND",
+  "description": "Board leaf service (Deck task board extraction, T1) — node:http, one database per (tenant, board) through @gremion/tenant-store",
   "main": "dist/index.js",
   "scripts": {
     "build:manifest": "node scripts/build-migration-manifest.mjs",
@@ -13,6 +13,7 @@
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:bundle": "pnpm build && node test/bundle-smoke.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

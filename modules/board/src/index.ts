@@ -51,7 +51,9 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'))
 }
 
-main().catch((err) => {
-  console.error('[board] fatal boot error:', err)
+main().catch((err: unknown) => {
+  // buildApp refuses with one line naming the variable (GREMION_BOARD_PG_URL,
+  // the migrations manifest): log that line, exit 1, never listen.
+  console.error(`[board] fatal boot error: ${err instanceof Error ? err.message : String(err)}`)
   process.exit(1)
 })
