@@ -6,6 +6,8 @@ export type ProvisioningErrorCode =
   | 'INVALID_INPUT'
   | 'MODULE_UNKNOWN'
   | 'MODULE_DENIED'
+  /** In the catalogue, but `init` loaded no plt.module_version for it (Q20). */
+  | 'MODULE_NOT_LOADED'
   | 'STEP_OUT_OF_ORDER'
   | 'STEP_FAILED'
   | 'CUSTOMER_STATE'

@@ -104,11 +104,28 @@ describe('create (phases A, host, B)', () => {
     expect(w.control.size).toBe(0)
   })
 
-  it('no module is enabled by default; votes gets an enablement and no broker user', async () => {
+  it('a module whose plt.module_version init did not load (votes: undecided, Q20) is refused BEFORE any write -- no realm, no invite (review B1, r2)', async () => {
     const w = world()
     const d = deps(w)
-    const { b } = await createAll(w, d, spec({ enable: ['votes'] }))
-    expect(b.enabled).toEqual(['votes'])
+    await expect(createPhaseA(spec({ enable: ['calendar', 'votes'] }), d)).rejects.toMatchObject({ code: 'MODULE_NOT_LOADED' })
+    expect(w.mutations).toEqual([])
+    expect(w.control.size).toBe(0)
+    // phase B checks it too (a resume after an operator edited --enable)
+    const w2 = world()
+    const d2 = deps(w2)
+    await createPhaseA(spec({ enable: ['calendar'] }), d2)
+    hostStamp(w2, { realm: 'musterstadt', token: 'musterstadt' })
+    await recordHostStep('musterstadt', 'mail_principal_issued', OPERATOR, d2)
+    const mails = w2.realms.get('musterstadt')!.mails.length
+    await expect(createPhaseB(spec({ enable: ['calendar', 'votes'] }), d2)).rejects.toMatchObject({ code: 'MODULE_NOT_LOADED' })
+    expect(w2.realms.get('musterstadt')!.mails.length).toBe(mails)
+  })
+
+  it('no module is enabled by default; vault gets an enablement and no broker user', async () => {
+    const w = world()
+    const d = deps(w)
+    const { b } = await createAll(w, d, spec({ enable: ['vault'] }))
+    expect(b.enabled).toEqual(['vault'])
     expect(w.broker.get('musterstadt')).toEqual(['kernel'])
     const w2 = world()
     const { b: b2 } = await createAll(w2, deps(w2), spec({ enable: [] }))

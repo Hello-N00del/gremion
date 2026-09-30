@@ -6,6 +6,7 @@ import {
   assertPlatform,
   enableModule,
   ensurePlatformDatabase,
+  lookupModuleVersion,
   migratePlatform,
   type EnableGate,
   type LifecycleDeps,
@@ -55,6 +56,16 @@ export function pgModules(opts: { platform: Sql; catalogue: readonly LifecycleMo
   const byId = new Map(opts.catalogue.map((m) => [m.id, m]))
   return {
     catalogueIds: () => [...byId.keys()].sort(),
+    async unloaded(ids) {
+      const missing: string[] = []
+      for (const id of ids) {
+        const module = byId.get(id)
+        // an id outside the catalogue is MODULE_UNKNOWN's (assertEnableList), not this check's
+        if (!module) continue
+        if (!(await lookupModuleVersion(opts.platform, id, module.moduleJson.runtime.version))) missing.push(id)
+      }
+      return missing
+    },
     async enable(c: CustomerRef, moduleId: string, gate: EnableGate, operatorId: string) {
       const module = byId.get(moduleId)
       if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)

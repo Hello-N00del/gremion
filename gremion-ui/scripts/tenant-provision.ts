@@ -874,7 +874,7 @@ function exitWithCode(): void {
 
 main()
   .catch((err) => {
-    const usage = err instanceof UsageError || (err instanceof ProvisioningError && ['INVALID_INPUT', 'MODULE_UNKNOWN', 'MODULE_DENIED', 'PRECONDITION', 'NOT_FOUND'].includes(err.code))
+    const usage = err instanceof UsageError || (err instanceof ProvisioningError && ['INVALID_INPUT', 'MODULE_UNKNOWN', 'MODULE_DENIED', 'MODULE_NOT_LOADED', 'PRECONDITION', 'NOT_FOUND'].includes(err.code))
     tlog('error', '[tenant-create] FAILED', { err: err instanceof Error ? err.message : String(err) })
     console.error(`[tenant-create] ${usage ? 'USAGE' : 'FAILED'}: ${err instanceof Error ? err.message : String(err)}`)
     process.exitCode = usage ? 2 : 1

@@ -35,6 +35,13 @@ export interface World {
   attestations: Map<string, { id: string; operatorId: string; enableList: string[]; createdAt: Date }>
   /** Test knobs. */
   knobs: { seedsOn: boolean; runnerShape: 'gremion-ui' | 'tenant-store'; dnsFails: boolean }
+  /**
+   * Catalogue modules with NO plt.module_version row: what `init` leaves
+   * undecided under Q20 (no retention profile declared), so enableModule would
+   * throw MODULE_VERSION_UNKNOWN for them (review B1 LOW, r2: the fake used to
+   * enable them happily).
+   */
+  unloaded: Set<string>
 }
 
 export function world(): World {
@@ -50,6 +57,7 @@ export function world(): World {
     enabled: new Map(),
     attestations: new Map(),
     knobs: { seedsOn: false, runnerShape: 'gremion-ui', dnsFails: false },
+    unloaded: new Set(['elections', 'files', 'handover', 'messaging', 'votes']),
   }
 }
 
@@ -216,9 +224,13 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
     },
     modules: {
       catalogueIds: () => catalogue,
+      async unloaded(ids) {
+        return ids.filter((id) => w.unloaded.has(id))
+      },
       async enable(c, moduleId, gate: EnableGate, operatorId) {
         const mine = w.enabled.get(c.id) ?? new Map()
         if (mine.has(moduleId)) return { noop: true, database: null }
+        if (w.unloaded.has(moduleId)) throw Object.assign(new Error(`module ${moduleId} has no plt.module_version`), { code: 'MODULE_VERSION_UNKNOWN' })
         const g = await gate(c.id, moduleId)
         if (!g) throw Object.assign(new Error(`the enable gate refused (${c.id}, ${moduleId})`), { code: 'GATE_REFUSED' })
         mine.set(moduleId, { gateRefs: [g.isolationTestResultId, g.dpiaDecisionId], by: operatorId })

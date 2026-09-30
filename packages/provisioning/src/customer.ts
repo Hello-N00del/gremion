@@ -70,6 +70,23 @@ export function validateCreate(spec: CreateSpec, catalogueIds: readonly string[]
   return { slug, host, token, enable, admins }
 }
 
+/**
+ * Every --enable id must have the plt.module_version row `init` loads (Q20),
+ * checked BEFORE any write (review B1, r2): otherwise enableModule refuses it
+ * MODULE_VERSION_UNKNOWN in phase B, after the realm exists and both
+ * administrators were invited, and the customer is stuck in `provisioning`.
+ */
+async function assertEnableLoaded(enable: readonly string[], deps: ProvisioningDeps): Promise<void> {
+  if (!enable.length) return
+  const missing = await deps.modules.unloaded(enable)
+  if (missing.length) {
+    throw new ProvisioningError(
+      'MODULE_NOT_LOADED',
+      `module(s) ${missing.join(', ')} cannot be enabled: gremion-tenant init loaded no plt.module_version for them (undecided under Q20, e.g. no retention profile declared); nothing was written`,
+    )
+  }
+}
+
 /** The control row for `slug`, created `provisioning` with its primary host if absent. */
 async function ensureControlRow(deps: ProvisioningDeps, slug: string, host: string): Promise<{ row: ControlRow; created: boolean }> {
   const existing = await deps.control.getBySlug(slug)
@@ -92,6 +109,7 @@ export interface PhaseOutcome {
 
 export async function createPhaseA(spec: CreateSpec, deps: ProvisioningDeps): Promise<PhaseOutcome & { registered: boolean }> {
   const v = validateCreate(spec, deps.modules.catalogueIds())
+  await assertEnableLoaded(v.enable, deps)
   const { row, created } = await ensureControlRow(deps, v.slug, v.host)
   const c = refOf(row, v.host)
   await openLedger(deps.ledger, c.id, spec.operatorId)
@@ -173,6 +191,7 @@ export async function assertSmtpStamped(c: CustomerRef, deps: ProvisioningDeps):
 
 export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Promise<PhaseOutcome & { enabled: string[]; reloaded: boolean; activated: boolean }> {
   const v = validateCreate(spec, deps.modules.catalogueIds())
+  await assertEnableLoaded(v.enable, deps)
   const c = await requireCustomer(deps, v.slug)
   if (c.host !== v.host) throw new ProvisioningError('CUSTOMER_STATE', `customer ${v.slug} is bound to ${c.host}, not ${v.host}`)
   if (c.status !== 'provisioning' && c.status !== 'active') throw new ProvisioningError('CUSTOMER_STATE', `customer ${v.slug} is ${c.status}; resume it instead`)

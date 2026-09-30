@@ -120,6 +120,12 @@ export interface BrokerPort {
 export interface ModulesPort {
   /** Catalogue ids (loadCatalogue). */
   catalogueIds(): readonly string[]
+  /**
+   * The ids among `ids` with NO plt.module_version row for their catalogue
+   * version (what `init` left undecided, Q20): enableModule would refuse them
+   * MODULE_VERSION_UNKNOWN, so create refuses them before any write.
+   */
+  unloaded(ids: readonly string[]): Promise<string[]>
   /** enableModule with the given gate; returns whether it was a no-op. */
   enable(c: CustomerRef, moduleId: string, gate: import('@gremion/tenant-store/lifecycle').EnableGate, operatorId: string): Promise<{ noop: boolean; database: string | null }>
   /** Module keys with an `enabled` plt.module_enablement row for the customer. */
