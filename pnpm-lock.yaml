@@ -229,6 +229,9 @@ importers:
 
   modules/board:
     dependencies:
+      '@gremion/tenant-store':
+        specifier: workspace:*
+        version: link:../../packages/tenant-store
       postgres:
         specifier: ^3.4.4
         version: 3.4.9
