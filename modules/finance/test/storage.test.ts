@@ -6,13 +6,13 @@
 //     lazy MKCOL parent creation (405/409 swallowed), read round-trip, delete swallows 404.
 //   - getStorage() env selection (local default / nextcloud / unknown → throw).
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LocalStorageBackend } from '../src/storage/local.ts'
 import { NextcloudStorageBackend, type StorageWebdavClient } from '../src/storage/nextcloud.ts'
-import { FinanceWebdavError } from '../src/nextcloud/webdav-client.ts'
+import { FinanceWebdavError, FinanceWebdavClient } from '../src/nextcloud/webdav-client.ts'
 import { getStorage, resetStorageForTest } from '../src/storage/index.ts'
 
 // ── LocalStorageBackend ─────────────────────────────────────────────────────
@@ -138,6 +138,44 @@ describe('NextcloudStorageBackend (handle parity + idempotency)', () => {
     const be = new NextcloudStorageBackend(client, 'svc@stura')
     const handle = await be.put('finance/expense/1/a.pdf', new Uint8Array([0]))
     expect(handle).toBe('/remote.php/dav/files/svc%40stura/finance/expense/1/a.pdf')
+  })
+
+  // F1-FIX-05-K r2 (verifier LOW, defence in depth): LocalStorageBackend.put refuses to
+  // overwrite ('wx'); the Nextcloud backend -- the one the test env runs -- overwrote
+  // silently. It now asks for a create-only PUT, which the server refuses with 412.
+  it('put() asks for a create-only upload, so an existing object is never overwritten', async () => {
+    const files = new Map<string, Uint8Array>()
+    const client: StorageWebdavClient = {
+      async upload(path, _user, body, _ct, opts) {
+        // Server semantics of If-None-Match: * -- 412 when the target exists.
+        if (opts?.createOnly && files.has(path)) throw new FinanceWebdavError('PUT', path, 412, 'exists')
+        files.set(path, new Uint8Array(await body.arrayBuffer()))
+      },
+      async download(path) { return new Response(files.get(path)!) },
+      async delete(path) { files.delete(path) },
+      async mkcol() { throw new FinanceWebdavError('MKCOL', '/', 405, 'exists') },
+    }
+    const be = new NextcloudStorageBackend(client, 'admin')
+    const handle = await be.put('finance/t/expense/1/x.pdf', new Uint8Array([1, 1]))
+    await expect(be.put('finance/t/expense/1/x.pdf', new Uint8Array([2, 2]))).rejects.toMatchObject({ status: 412 })
+    expect(await be.read(handle)).toEqual(new Uint8Array([1, 1]))
+  })
+})
+
+describe('FinanceWebdavClient.upload (create-only)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('sends If-None-Match: * on a create-only PUT, and not otherwise', async () => {
+    const seen: Array<Record<string, string>> = []
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      seen.push({ ...(init.headers as Record<string, string>) })
+      return new Response(null, { status: 201 })
+    })
+    const c = new FinanceWebdavClient({ baseUrl: 'http://nc.invalid', adminUser: 'a', adminPassword: 'p' })
+    await c.upload('/remote.php/dav/files/a/x.pdf', 'a', new Blob([new Uint8Array([1])]), 'application/octet-stream', { createOnly: true })
+    await c.upload('/remote.php/dav/files/a/y.pdf', 'a', new Blob([new Uint8Array([1])]), 'application/octet-stream')
+    expect(seen[0]!['If-None-Match']).toBe('*')
+    expect(seen[1]!['If-None-Match']).toBeUndefined()
   })
 })
 
