@@ -822,13 +822,97 @@ check_private_dumps() {
     return "$bad"
 }
 
+# R29-MD-A (OWASP ASVS 5.0 V13, CWE-214): no secret on a host's process list. A
+# `--password "$X"` on a docker exec argv is visible to every local account in
+# `ps` and /proc/<pid>/cmdline for as long as kcadm runs. The channel the
+# runbook uses instead (probed on the pinned Keycloak image, R29-MD-A Q3) is
+# KC_CLI_PASSWORD, handed to `docker exec` by NAME only (`-e KC_CLI_PASSWORD`,
+# the value comes from the caller's environment). The one `--password` the check
+# still allows is the TASK-015 pattern: `--password "$NAME"` inside a
+# SINGLE-quoted `sh -c` on a line that also passes `-e NAME` name-only, where
+# the container's own shell expands it.
+check_no_argv_secret() {
+    local f line name sq="'" re bad=0
+    for f in "${RUNBOOK_FILES[@]}"; do
+        while IFS= read -r line; do
+            [ "$line" = __BLOCK__ ] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            grep -qE -- "--password([[:space:]]+|=)[\"']?\\$" <<<"$line" || continue
+            name="$(sed -nE 's/.*--password[[:space:]=]+["'"'"']?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?.*/\1/p' <<<"$line" | head -n 1)"
+            if [ -n "$name" ]; then
+                re="sh -c ${sq}[^${sq}]*--password[[:space:]]+\"\\\$\\{?${name}\\}?\"[^${sq}]*${sq}"
+                if grep -qE -- "$re" <<<"$line" && grep -qE -- "(^|[[:space:]])-e ${name}([[:space:]]|\$)" <<<"$line"; then
+                    continue
+                fi
+            fi
+            echo "${f}.md: a --password expansion on a command line (visible in ps and /proc for as long as it runs): ${line}" >&2; bad=1
+        done < <(bash_blocks < "$1/$f.md")
+    done
+    return "$bad"
+}
+
+# The relative path Keycloak serves under, read from docker-compose.yml's
+# keycloak service (KC_HTTP_RELATIVE_PATH), never hard-coded here: a kcadm
+# `--server` without it answers 404 and the sign-in observation never runs.
+keycloak_relative_path() {
+    tr -d '\r' < "${TREE_ROOT}/docker-compose.yml" | awk '
+        /^  keycloak:/ { s = 1; next }
+        s && /^  [A-Za-z0-9_-]+:/ { s = 0 }
+        s && /^[[:space:]]+KC_HTTP_RELATIVE_PATH:/ { v = $2; gsub(/["'"'"']/, "", v); print v; exit }'
+}
+
+check_kc_server_path() {
+    local f line url path rel seen=0 bad=0
+    rel="$(keycloak_relative_path)"
+    [ -n "$rel" ] || { echo "no KC_HTTP_RELATIVE_PATH found for the keycloak service in docker-compose.yml" >&2; return 1; }
+    for f in "${RUNBOOK_FILES[@]}"; do
+        while IFS= read -r line; do
+            [ "$line" = __BLOCK__ ] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ "$line" == *kcadm.sh* ]] || continue
+            [[ "$line" =~ --server[[:space:]]+([^[:space:]]+) ]] || continue
+            seen=$((seen + 1))
+            url="${BASH_REMATCH[1]//[\"\']/}"
+            path="$(sed -E 's#^[A-Za-z]+://[^/]*##; s#/$##' <<<"$url")"
+            if [ "$path" != "$rel" ]; then
+                echo "${f}.md: kcadm --server ${url} does not end in Keycloak's relative path '${rel}' (docker-compose.yml): ${line}" >&2; bad=1
+            fi
+        done < <(bash_blocks < "$1/$f.md")
+    done
+    [ "$seen" -gt 0 ] || { echo "no kcadm.sh --server line found in any bash block: the extractor is reading nothing" >&2; bad=1; }
+    return "$bad"
+}
+
+# R29-MD-A: a post-condition that cannot fail is not one. Two shapes did that:
+# `2>/dev/null | grep` (a failing command and a clean one both read as no
+# output) and a loop over an unscoped `docker ps` (an empty or failing list
+# passes, and on a shared host it walks the production containers too).
+check_postcondition_scope() {
+    local u line bad=0
+    for u in "${UNITS[@]}"; do
+        while IFS= read -r line; do
+            [ "$line" = __BLOCK__ ] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            if [[ "$line" == *'2>/dev/null'* ]] && grep -qE '(^|[|;&[:space:]])grep([[:space:]]|$)' <<<"$line"; then
+                echo "${u}: a Post-condition discards stderr and filters through grep (a failing command reads as an empty result): ${line}" >&2; bad=1
+            fi
+            if grep -qE 'for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]]+\$\(docker ps' <<<"$line" \
+                && ! grep -qE -- '--filter|\|[[:space:]]*(awk|grep)[[:space:]]' <<<"$line"; then
+                echo "${u}: a Post-condition loops over an unscoped docker ps (every container on the host, not this stack's): ${line}" >&2; bad=1
+            fi
+        done < <(postcondition_blocks "$1" "$u")
+    done
+    return "$bad"
+}
+
 ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_list
             check_operator_phrase check_commands check_repo_paths check_host_paths
             check_postconditions check_required check_forbidden check_restore_target
             check_install_tail check_run_record check_floor check_artefacts
             check_deploy_log check_reboot_gate check_deploy_user check_registry_creds
             check_post_vars check_render_first check_pending_backed
-            check_private_dumps)
+            check_private_dumps check_no_argv_secret check_kc_server_path
+            check_postcondition_scope)
 
 # ---------------------------------------------------------------------------
 # The pre-migration dump, run for real (R29-MD-A). upgrade.md's step 3 is
@@ -1255,6 +1339,48 @@ run_dump_step() {                                # <scratch root>
     for f in "$d"/*.md; do grep -v '^[[:space:]]*```' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
     run check_private_dumps "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"no bash block read at all"* ]]
+}
+
+@test "no runbook command line carries the Keycloak admin password (ps and /proc)" {
+    d="$(real_dir)"; check_no_argv_secret "$d"
+    d="$(fixture valid)"; check_no_argv_secret "$d"
+    d="$(fixture_snippet "${FIX}/snippets/argv-password.md" install)"
+    run check_no_argv_secret "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *'install.md: a --password expansion on a command line'* ]]
+    [[ "$output" == *'--password "$KEYCLOAK_ADMIN_PASSWORD"'* ]]
+    # The TASK-015 pattern stays legal: name-only -e, expanded by the container's own single-quoted sh -c.
+    d="$(fixture valid)"
+    printf '\n```bash\ndocker exec -e KC_LOGIN_PASSWORD "$kc" sh -c '"'"'kcadm.sh config credentials --user admin --password "$KC_LOGIN_PASSWORD"'"'"'\n```\n' >> "$d/install.md"
+    check_no_argv_secret "$d"
+    # ... but a value handed by -e NAME=value, or a double-quoted sh -c, is not.
+    d="$(fixture valid)"
+    printf '\n```bash\ndocker exec -e KC_LOGIN_PASSWORD="$X" "$kc" sh -c '"'"'kcadm.sh config credentials --password "$KC_LOGIN_PASSWORD"'"'"'\n```\n' >> "$d/install.md"
+    run check_no_argv_secret "$d"
+    [ "$status" -ne 0 ]
+}
+
+@test "every kcadm --server in the runbook ends in the relative path docker-compose.yml gives Keycloak" {
+    [ "$(keycloak_relative_path)" = /auth ]
+    d="$(real_dir)"; check_kc_server_path "$d"
+    d="$(fixture valid)"; check_kc_server_path "$d"
+    d="$(fixture_snippet "${FIX}/snippets/kc-server-no-relpath.md" install)"
+    run check_kc_server_path "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"install.md: kcadm --server http://127.0.0.1:8080 does not end in Keycloak's relative path '/auth'"* ]]
+}
+
+@test "a post-condition cannot pass on an empty result: no silenced grep, no unscoped docker ps loop" {
+    d="$(real_dir)"; check_postcondition_scope "$d"
+    d="$(fixture valid)"; check_postcondition_scope "$d"
+    d="$(fixture_snippet "${FIX}/snippets/grep-silenced-post.md" install)"
+    run check_postcondition_scope "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"install: a Post-condition discards stderr and filters through grep"* ]]
+    d="$(fixture_snippet "${FIX}/snippets/unscoped-ps-loop.md" install)"
+    run check_postcondition_scope "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"install: a Post-condition loops over an unscoped docker ps"* ]]
+    # `2>/dev/null` without a grep (install.md's openssl | openssl x509) stays legal.
+    d="$(fixture valid)"
+    printf '\n## Post-condition\n\n```bash\nopenssl s_client -connect example.org:443 2>/dev/null | openssl x509 -noout -subject\n```\n' >> "$d/install.md"
+    check_postcondition_scope "$d"
 }
 
 @test "positive control: the valid fixture passes every check" {

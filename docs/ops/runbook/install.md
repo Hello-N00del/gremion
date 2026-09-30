@@ -354,10 +354,18 @@ step 17 runs): the customer's realm holds a `LOGIN` event.
 
 ```bash
 kc="$(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
-docker exec "$kc" /opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080 \
-  --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"
+KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$kc" /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://127.0.0.1:8080/auth --realm master --user "$KEYCLOAK_ADMIN"
 docker exec "$kc" /opt/keycloak/bin/kcadm.sh get events -r "<customer realm>" -q type=LOGIN -q max=1
+docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config
 ```
+
+The password reaches kcadm through `KC_CLI_PASSWORD`, handed to `docker exec` by
+name, so it is on no command line of the host (and, unlike `--password`, on none
+inside the container either). The `--server` URL carries Keycloak's relative
+path `/auth` (`KC_HTTP_RELATIVE_PATH` in `docker-compose.yml`); without it the
+login answers 404. The last command removes the token kcadm cached in the
+container.
 
 The two snapshot files of step 18 read PASS for every row:
 

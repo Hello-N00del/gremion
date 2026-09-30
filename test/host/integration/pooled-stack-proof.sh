@@ -760,7 +760,11 @@ phase_tenant_after() {
     cid="$(svc_cid state postgres)"
     db="$(docker exec "$cid" psql -tAqU postgres -c "SELECT datname FROM pg_database WHERE datname IN ('t_${TENANT_SLUG//-/_}', 't_${TENANT_SLUG}')" | tr -d '\r')"
     if [[ -n "$db" ]]; then ok "TRD-440: tenant database $db exists"; else bad "TRD-440: no tenant database for $TENANT_SLUG"; fi
-    realm="$(docker exec "$(svc_cid state keycloak)" sh -c "/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user '${KEYCLOAK_ADMIN}' --password '${KEYCLOAK_ADMIN_PASSWORD}' >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${TENANT_SLUG} --fields realm" 2>/dev/null | tr -d '\r' || true)"
+    # The admin password reaches kcadm as KC_CLI_PASSWORD, handed to `docker exec`
+    # by NAME (the value comes from this shell's environment), so it is on no argv,
+    # neither this host's nor the container's (R29-MD-A, probed on the pinned
+    # Keycloak image). kcadm's cached token is removed after the read.
+    realm="$(KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$(svc_cid state keycloak)" sh -c "/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user '${KEYCLOAK_ADMIN}' >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${TENANT_SLUG} --fields realm; rm -f /opt/keycloak/.keycloak/kcadm.config" 2>/dev/null | tr -d '\r' || true)"
     if [[ "$realm" == *"\"${TENANT_SLUG}\""* ]]; then ok "TRD-440: realm $TENANT_SLUG exists"; else bad "TRD-440: realm $TENANT_SLUG absent"; fi
     printf '%s db=%s realm=%s\n' "$(now)" "${db:-none}" "$(echo "$realm" | tr -d ' \n')" | ledger trd440.log
 }
