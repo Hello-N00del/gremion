@@ -3,6 +3,7 @@
 // shell -- as the signed-in operator. The start is WATCHED (review A-HIGH): a
 // spawn failure is reported to the action (never an uncaught 'error' event
 // that takes the panel down), and the child's output and exit code are logged.
+import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import { createArgv, spawnDetached, startCreate, validateNewCustomer, type NewCustomerInput, type SpawnLog, type Spawner } from './executor'
 
@@ -119,6 +120,23 @@ describe('spawnDetached (the default spawner)', () => {
     expect(text).toMatch(/I .*musterstadt.*phase a: begin/)
     expect(text).toMatch(/E .*musterstadt.*refused: slug taken/)
     expect(text).toMatch(/E .*musterstadt.*exit code 3/)
+  })
+
+  it('a SECOND error event on a running child (a failed kill) is logged, never an uncaught exception (r3 LOW)', async () => {
+    const log = recorder()
+    const child = Object.assign(new EventEmitter(), { pid: 4242, stdout: null, stderr: null })
+    const fakeSpawn = (() => {
+      setImmediate(() => child.emit('spawn'))
+      return child
+    }) as unknown as typeof import('node:child_process').spawn
+    const started = await spawnDetached('gremion-tenant', ['create'], 'musterstadt', log, fakeSpawn)
+    expect(started.pid).toBe(4242)
+    const kill = Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' })
+    expect(() => child.emit('error', kill)).not.toThrow()
+    expect(() => child.emit('error', kill)).not.toThrow()
+    expect(log.lines.filter((l) => /ESRCH/.test(l))).toHaveLength(2)
+    child.emit('close', 1, null)
+    expect(await started.exited).toBeNull()
   })
 
   it('never copies a secret-looking output line into the log', async () => {

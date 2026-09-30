@@ -93,7 +93,7 @@ const SECRET_LINE = /(PASSWORD|SECRET|TOKEN)\s*[:=]/i
  * `gremion-tenant create` resumes at the next step (review r2 LOW). The panel
  * keeps no per-run log file because its root filesystem is read-only.
  */
-export function spawnDetached(cmd: string, argv: string[], tag: string, log: SpawnLog = consoleLog): Promise<Started> {
+export function spawnDetached(cmd: string, argv: string[], tag: string, log: SpawnLog = consoleLog, spawnImpl: typeof spawn = spawn): Promise<Started> {
   return new Promise<Started>((resolve, reject) => {
     const prefix = `[control-panel] gremion-tenant ${tag}:`
     let settled = false
@@ -108,14 +108,16 @@ export function spawnDetached(cmd: string, argv: string[], tag: string, log: Spa
     })
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(cmd, argv, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, shell: false })
+      child = spawnImpl(cmd, argv, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, shell: false })
     } catch (err) {
       const e = err as NodeJS.ErrnoException
       log.error(`${prefix} could not be started: ${e.code ?? ''} ${e.message}`)
       reject(err)
       return
     }
-    child.once('error', (err: NodeJS.ErrnoException) => {
+    // on, not once (r3 LOW): a later 'error' (a failed kill) must also find a
+    // listener, or it is an uncaught exception that ends the panel.
+    child.on('error', (err: NodeJS.ErrnoException) => {
       log.error(`${prefix} could not be started or failed: ${err.code ?? ''} ${err.message}`)
       finish(null)
       if (!settled) {
