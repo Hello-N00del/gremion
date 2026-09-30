@@ -54,12 +54,12 @@ No `-f`, no `--profile`, no `-p`. Each env file sets its own
 `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE` and `COMPOSE_PROFILES`, which is what
 makes that one flag sufficient.
 
-| File | Project |
+| File (under `/opt/gremion`) | Project |
 |---|---|
-| `state.env` | `${STACK}-state` |
-| `app-blue.env` / `app-green.env` | `${STACK}-app-blue` / `${STACK}-app-green` |
-| `mail.env` | `${STACK}-mail` |
-| `ops.env` | `${STACK}-ops` |
+| `etc/env/state.env` | `${STACK}-state` |
+| `etc/env/app-blue.env` / `etc/env/app-green.env` | `${STACK}-app-blue` / `${STACK}-app-green` |
+| `etc/env/mail.env` | `${STACK}-mail` |
+| `etc/env/ops.env` | `${STACK}-ops` |
 
 `STACK` is `gremion` on the production host and `staging` anywhere else. It is
 the prefix of every shared external network and volume, so two units on one
