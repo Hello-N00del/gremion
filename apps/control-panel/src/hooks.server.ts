@@ -9,7 +9,7 @@
 // goes through Auth.js (its own /auth/* routes) and then the gate, which
 // decides before any page, form action or +server endpoint runs.
 import { SvelteKitAuth } from '@auth/sveltekit'
-import { redirect, type Handle, type RequestEvent } from '@sveltejs/kit'
+import type { Handle, RequestEvent } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { env } from '$env/dynamic/private'
 import { authConfig, startSignIn } from '$lib/server/auth'
@@ -64,9 +64,9 @@ export const gate: Handle = async ({ event, resolve }) => {
     return resolve(event)
   }
   if (d.kind === 'sign-in') {
-    const location = await startSignIn(event, authConfig(c), `${event.url.pathname}${event.url.search}`, d.reason === 'step-up', env)
-    // Thrown, so SvelteKit carries the state/PKCE cookies startSignIn set.
-    redirect(302, location)
+    // Returned, never thrown (r3 LOW): a thrown redirect skips handle's
+    // withSecurityHeaders. The PKCE cookie rides on the response itself.
+    return startSignIn(event, authConfig(c), `${event.url.pathname}${event.url.search}`, d.reason === 'step-up', env)
   }
   if (d.clearCookie) for (const k of cookies) event.cookies.delete(k.name, { path: '/' })
   return refuse(d.status, d.reason)

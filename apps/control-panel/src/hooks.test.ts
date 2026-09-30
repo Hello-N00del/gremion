@@ -43,6 +43,7 @@ function event(opts: { method?: string; path?: string; session?: unknown; cookie
       get: (n: string) => jar.get(n),
       set: (n: string, v: string) => void jar.set(n, v),
       delete: (n: string) => void (jar.delete(n), deleted.push(n)),
+      serialize: (n: string, v: string, o: { path?: string; httpOnly?: boolean } = {}) => `${n}=${v}; Path=${o.path ?? '/'}${o.httpOnly ? '; HttpOnly' : ''}`,
     },
     deleted,
   }
@@ -51,11 +52,15 @@ function event(opts: { method?: string; path?: string; session?: unknown; cookie
 const nowSec = () => Math.floor(Date.now() / 1000)
 const claims = (over: Record<string, unknown> = {}) => ({ claims: { iss: OPS, acr: 'loa2', uid: '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33', email: 'ops@platform.example', roles: ['operator'], authAt: nowSec() - 60, ...over } })
 
+// `thrown` is the sign-in redirect, whether the gate RETURNS it (r4: so the
+// security headers reach it) or throws it.
 async function run(e: ReturnType<typeof event>) {
   const resolve = vi.fn(async () => new Response('RESOLVED'))
   try {
     const res = await gate({ event: e as never, resolve: resolve as never })
-    return { res, resolve, thrown: null as null | { status: number; location: string } }
+    const loc = res.headers.get('location')
+    const thrown = res.status >= 300 && res.status < 400 && loc !== null ? { status: res.status, location: loc } : null
+    return { res, resolve, thrown }
   } catch (err) {
     const r = err as { status?: number; location?: string }
     if (typeof r.status === 'number' && typeof r.location === 'string') return { res: null, resolve, thrown: { status: r.status, location: r.location } }
@@ -96,6 +101,16 @@ describe('the gate hook (TDD 15)', () => {
     expect(loc.searchParams.get('client_id')).toBe('control-panel')
     expect(loc.searchParams.get('code_challenge_method')).toBe('S256')
     expect(loc.searchParams.get('prompt')).toBeNull()
+  })
+
+  it('the sign-in redirect is RETURNED (never thrown) with the PKCE cookie on it, so handle can add the security headers (r3 LOW)', async () => {
+    const e = event({ path: '/customers' })
+    const resolve = vi.fn(async () => new Response('RESOLVED'))
+    const res = await gate({ event: e as never, resolve: resolve as never })
+    expect(res.status).toBe(302)
+    expect(new URL(res.headers.get('location')!).pathname).toBe(new URL(`${OPS}/protocol/openid-connect/auth`).pathname)
+    expect(res.headers.getSetCookie().some((c) => /authjs\.pkce\.code_verifier=/.test(c))).toBe(true)
+    expect(resolve).not.toHaveBeenCalled()
   })
 
   it('an ops session at loa1 is sent to a fresh login at loa2 (step-up)', async () => {
@@ -229,6 +244,19 @@ describe('the host guard (R29-I11)', () => {
       const { resolve } = await guard(hostEvent(path, '127.0.0.1:3000'))
       expect(resolve).toHaveBeenCalledOnce()
     }
+  })
+
+  it('the sign-in 302 an anonymous GET gets through handle carries nosniff and no-referrer (r3 LOW)', async () => {
+    // handle wraps the gate's result exactly like this (withSecurityHeaders
+    // around the sequence); SvelteKit's sequence() itself needs a live request store.
+    const e = event({ path: '/customers' })
+    const resolve = vi.fn(async () => new Response('RESOLVED'))
+    const res = await securityHeaders({ event: e as never, resolve: ((ev: never) => gate({ event: ev, resolve: resolve as never })) as never })
+    expect(res.status).toBe(302)
+    expect(res.headers.getSetCookie().some((c) => /authjs\.pkce\.code_verifier=/.test(c))).toBe(true)
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(resolve).not.toHaveBeenCalled()
   })
 
   it('handle runs the host guard first: a foreign Host never reaches Auth.js or the gate', async () => {
