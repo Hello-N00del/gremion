@@ -29,9 +29,13 @@ export function copiedBeforeInstall(stage: string[]): string[] {
   if (install < 0) throw new Error('builder stage: no pnpm install')
   const out: string[] = []
   for (const l of stage.slice(0, install)) {
-    const m = /^COPY\s+(?!--from)(.+)$/i.exec(l)
+    const m = /^COPY\s+(.+)$/i.exec(l)
     if (!m) continue
-    const parts = m[1]!.split(/\s+/).filter((p) => !p.startsWith('--'))
+    const words = m[1]!.split(/\s+/)
+    // Flags lead; --from may come after --chown/--link/--chmod. A COPY from
+    // another stage or image copies nothing from the build context.
+    if (words.some((w) => /^--from(=|$)/i.test(w))) continue
+    const parts = words.filter((p) => !p.startsWith('--'))
     out.push(...parts.slice(0, -1).map((p) => p.replace(/^\.\//, '').replace(/\/$/, '')))
   }
   return out
@@ -73,6 +77,28 @@ describe('the migrate image links the nats-auth bin (G5, Q12)', () => {
       'FROM node:26-alpine AS runner',
     ].join('\n')
     expect(unlinkedBins(broken, 'packages/nats-auth', pkg.bin)).toEqual(['nats-auth (packages/nats-auth/bin/nats-auth.mjs)'])
+  })
+
+  test('a COPY --from another stage does not count, whatever flags precede --from (r2 LOW)', () => {
+    for (const flags of ['--from=deps', '--chown=1000:1000 --from=deps', '--link --chmod=755 --from=deps']) {
+      const fromStage = [
+        'FROM node:26-alpine AS builder',
+        'COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./',
+        `COPY ${flags} /repo/packages/nats-auth/bin ./packages/nats-auth/bin/`,
+        'RUN pnpm install --frozen-lockfile',
+        'FROM node:26-alpine AS runner',
+      ].join('\n')
+      expect(copiedBeforeInstall(builderStage(fromStage)), flags).toEqual(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'])
+    }
+  })
+
+  test('a flag other than --from does not hide a COPY from the build context', () => {
+    const chowned = [
+      'FROM node:26-alpine AS builder',
+      'COPY --chown=1000:1000 packages/nats-auth/bin ./packages/nats-auth/bin/',
+      'RUN pnpm install --frozen-lockfile',
+    ].join('\n')
+    expect(copiedBeforeInstall(builderStage(chowned))).toEqual(['packages/nats-auth/bin'])
   })
 
   test('a COPY of the bin in the runner stage does not count', () => {
