@@ -38,6 +38,8 @@ function args() {
   const o = { verb }
   for (let i = 0; i < rest.length; i += 2) {
     if (!rest[i].startsWith('--')) throw new Error(`unexpected argument ${rest[i]}`)
+    // a flag without its value is an error, never a silent undefined (review C LOW, r2)
+    if (rest[i + 1] === undefined || rest[i + 1].startsWith('--')) throw new Error(`${rest[i]} requires a value`)
     o[rest[i].slice(2)] = rest[i + 1]
   }
   return o
@@ -258,13 +260,17 @@ async function mint(o) {
   console.log(JSON.stringify({ minted: name, iss: token.opsIss, acr: token.opsAcr }))
 }
 
-const o = args()
-const run = { login, mint }[o.verb]
-if (!run) {
+// The CLI runs only when this file is executed, never when a test imports
+// totp() (review C LOW, r2); the verb table is own-property only.
+const VERBS = { login, mint }
+const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href
+const o = isMain ? args() : null
+const run = o && Object.hasOwn(VERBS, o.verb) ? VERBS[o.verb] : null
+if (isMain && !run) {
   console.error('usage: panel-session.mjs login|mint --...')
   process.exit(2)
 }
-run(o).catch((err) => {
+if (run) run(o).catch((err) => {
   console.error(`[panel-session] FAILED: ${err instanceof Error ? err.message : String(err)}`)
   process.exitCode = 1
 })
