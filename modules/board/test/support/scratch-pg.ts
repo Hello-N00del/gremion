@@ -39,6 +39,15 @@ export function scratchDbUrl(db: string, user?: string): string {
   return u.toString()
 }
 
+/** The scratch server's url (maintenance database) as a LOGIN role, e.g. the module's app role. */
+export function scratchServerUrlAs(user: string, password: string): string {
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(user)) throw new Error(`[scratch-pg] refusing user ${JSON.stringify(user)}`)
+  const u = new URL(scratchServerUrl())
+  u.username = user
+  u.password = encodeURIComponent(password)
+  return u.toString()
+}
+
 function assertScratchName(db: string): void {
   if (db.startsWith(TEST_DB_PREFIX) && /^[a-z0-9_]{1,63}$/.test(db)) return
   assertScratchTenantDb(db)
