@@ -9,6 +9,7 @@
 // Order matters: the secret is checked FIRST so an unauthenticated caller never
 // learns anything about tenant-header validation (no 400-vs-403 oracle).
 import { timingSafeEqual } from 'node:crypto'
+import { isUuidV7 } from '@gremion/tenant-store'
 
 /** Mirror of SLUG_PATTERN in gremion-ui/src/lib/server/tenant/slug.ts. */
 export const SLUG_PATTERN = /^[a-z0-9-]{1,30}$/
@@ -56,9 +57,13 @@ export function checkGuard(input: GuardInput): GuardResult {
     return { ok: false, status: 403, message: 'forbidden' }
   }
 
-  // 2. Tenant identity headers.
+  // 2. Tenant identity headers. The id is the storage key (one database per
+  //    (tenant, module), t_<hex32>__board), so it must be a kernel tenant id: a
+  //    canonical lowercase UUIDv7 (R29-BOARD-STORE-K A2). Refused here, before
+  //    any database work. The slug is validated and never used to pick storage.
   const id = headers['x-tenant-id']
   if (!id) return { ok: false, status: 400, message: 'missing x-tenant-id header' }
+  if (!isUuidV7(id)) return { ok: false, status: 400, message: 'x-tenant-id must be a canonical lowercase UUIDv7' }
   const slug = headers['x-tenant-slug']
   if (!slug) return { ok: false, status: 400, message: 'missing x-tenant-slug header' }
   if (!SLUG_PATTERN.test(slug)) {
