@@ -79,6 +79,23 @@ export interface IsolationCase<R> {
 
 export const is2xx = (r: ApiResult): boolean => r.status >= 200 && r.status < 300
 
+/**
+ * What each leaf route does, for validateCase: a read needs a read attempt, a
+ * write a write attempt, and POST /api/v1/boards is covered by a control
+ * (vector 9, see boardControls). case.test.ts pins these keys to the route table.
+ */
+export const BOARD_ROUTE_KINDS: ReadonlyMap<string, 'read' | 'write' | 'control'> = new Map([
+  ['GET /api/v1/boards', 'read'],
+  ['POST /api/v1/boards', 'control'],
+  ['GET /api/v1/boards/:id', 'read'],
+  ['GET /api/v1/boards/:id/deck', 'read'],
+  ['POST /api/v1/boards/:id/stacks', 'write'],
+  ['POST /api/v1/cards', 'write'],
+  ['PATCH /api/v1/cards/:id/move', 'write'],
+  ['POST /api/v1/cards/promoted', 'read'],
+  ['POST /api/v1/boards/:id/promote', 'write'],
+])
+
 function byId<T extends { id?: unknown }>(rows: readonly T[]): T[] {
   return [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))
 }
