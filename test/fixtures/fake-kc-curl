@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# A tiny stateful stand-in for the Keycloak Admin REST API, installed as `curl`
+# by test/configure-keycloak.bats (F1-FIX-09, K6#4/#5/#30). It models only what
+# scripts/configure-keycloak-clients.sh talks to, and it models curl's own
+# contract the way the scripts depend on it: with -f a failed request prints
+# nothing and exits 22.
+#
+# State lives in $KCSTATE (one directory per test):
+#   calls.log          one line per request: "<METHOD> <path> <body>"
+#   flows.json         GET /authentication/flows               (default [])
+#   top-execs.json     GET /authentication/flows/browser-stepup/executions
+#   realm.json         GET /admin/realms/<realm>               (default {"attributes":{}})
+#   sa-mappings.json   GET .../role-mappings/clients/<rm>      (default [])
+#   granted.json       role names POSTed to the service account (appended)
+#   revoked.json       role names DELETEd from it (appended)
+# Knob: FAKE_KC_TOKEN_FAIL=1 makes the admin token request fail like `curl -f`.
+set -u
+: "${KCSTATE:?KCSTATE must name the state directory}"
+
+method=GET; url=""; body=""; read_stdin=0; has_data=0; explicit_method=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -X) method="$2"; explicit_method=1; shift 2; continue ;;
+        -d|--data|--data-raw) body="$2"; has_data=1; shift 2; continue ;;
+        --data-urlencode) has_data=1; case "$2" in *@-) read_stdin=1 ;; esac; shift 2; continue ;;
+        -H|-o|-w|--max-time|-u) shift 2; continue ;;
+    esac
+    case "$1" in http://*|https://*) url="$1" ;; esac
+    shift
+done
+[ "$read_stdin" = 1 ] && cat >/dev/null
+[ "$explicit_method" = 0 ] && [ "$has_data" = 1 ] && method=POST
+[ -n "$body" ] || body="-"
+
+path="${url#http://localhost:8082/auth}"
+printf '%s %s %s\n' "$method" "$path" "$body" >> "$KCSTATE/calls.log"
+
+ok()   { printf '%s' "$1"; exit 0; }
+fail() { exit 22; }
+file_or() { if [ -f "$KCSTATE/$1" ]; then cat "$KCSTATE/$1"; else printf '%s' "$2"; fi; exit 0; }
+
+case "$method $path" in
+    "GET /realms/master") ok '{}' ;;
+    "POST /realms/master/protocol/openid-connect/token")
+        [ "${FAKE_KC_TOKEN_FAIL:-}" = 1 ] && fail
+        ok '{"access_token":"fake-admin-token"}' ;;
+esac
+
+# every other route is the admin API of one realm: /admin/realms/<realm><rel>
+case "$path" in /admin/realms/*) : ;; *) fail ;; esac
+rel="${path#/admin/realms/}"
+case "$rel" in */*) rel="/${rel#*/}" ;; *) rel="" ;; esac
+
+case "$method $rel" in
+    "GET /clients?clientId=gremion-admin")           ok '[{"id":"cid-admin"}]' ;;
+    "GET /clients?clientId=realm-management")        ok '[{"id":"cid-rm"}]' ;;
+    "GET /clients?clientId=gremion-ui")              ok '[{"id":"cid-ui"}]' ;;
+    "GET /clients/cid-admin/service-account-user")   ok '{"id":"sa-user"}' ;;
+    "GET /clients/cid-rm/roles/"*)
+        n="${rel##*/}"; ok "{\"id\":\"role-${n}\",\"name\":\"${n}\"}" ;;
+    "GET /users/sa-user/role-mappings/clients/cid-rm") file_or sa-mappings.json '[]' ;;
+    "POST /users/sa-user/role-mappings/clients/cid-rm")
+        printf '%s\n' "$body" | jq -r '.[].name' >> "$KCSTATE/granted.json"; ok '' ;;
+    "DELETE /users/sa-user/role-mappings/clients/cid-rm")
+        printf '%s\n' "$body" | jq -r '.[].name' >> "$KCSTATE/revoked.json"; ok '' ;;
+    "GET /clients/cid-ui/protocol-mappers/models")   ok '[]' ;;
+    "GET /authentication/flows")                     file_or flows.json '[]' ;;
+    "GET /authentication/flows/browser-stepup/executions") file_or top-execs.json '[]' ;;
+    "GET /authentication/flows/stepup-1fa/executions")
+        ok '[{"id":"c1","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","authenticationConfig":"cfg1"},{"id":"p1","providerId":"auth-username-password-form","requirement":"REQUIRED"}]' ;;
+    "GET /authentication/flows/stepup-2fa/executions")
+        ok '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","authenticationConfig":"cfg2"},{"id":"o2","providerId":"auth-otp-form","requirement":"REQUIRED"}]' ;;
+    "POST /authentication/flows/browser/copy")
+        # a fresh copy that the script then builds up is complete when it is done
+        printf '%s' '[{"id":"flow-new","alias":"browser-stepup"}]' > "$KCSTATE/flows.json"
+        printf '%s' '[{"id":"f1","displayName":"stepup-1fa","requirement":"CONDITIONAL"},{"id":"f2","displayName":"stepup-2fa","requirement":"CONDITIONAL"}]' > "$KCSTATE/top-execs.json"
+        ok '' ;;
+    "DELETE /authentication/flows/"*)
+        printf '[]' > "$KCSTATE/flows.json"; printf '[]' > "$KCSTATE/top-execs.json"; ok '' ;;
+    "GET ")                                          file_or realm.json '{"attributes":{}}' ;;
+    "PUT ")
+        # a realm update that sets browserFlow is reflected by the next read
+        nf="$(printf '%s' "$body" | jq -r '.browserFlow // empty' 2>/dev/null)"
+        [ -z "$nf" ] || printf '{"attributes":{},"browserFlow":"%s"}' "$nf" > "$KCSTATE/realm.json"
+        ok '' ;;
+esac
+
+# the remaining writes of the step-up build and the acr mapper simply succeed
+case "$method" in POST|PUT|DELETE) ok '' ;; esac
+fail

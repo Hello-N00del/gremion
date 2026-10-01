@@ -77,8 +77,24 @@ success "Keycloak is ready."
 # native mingw64 curl on the Windows/Git-Bash staging host cannot open a POSIX
 # /tmp path (curl exit 26 → empty token → abort). The request body is byte-
 # identical. The file is removed immediately after the call (consumed
-# synchronously) rather than via a trap, since a later `trap … EXIT` (G-085,
-# below) would otherwise replace it.
+# synchronously).
+#
+# F1-FIX-09 (K6#4): it is ALSO removed by a single EXIT trap installed BEFORE the
+# file exists. A failed token request used to end the script under `set -e` at the
+# assignment below, silently and with the plaintext admin password still in /tmp;
+# the failure now says what failed and the file is always removed. The one trap
+# is EXTENDED by the kcadm step further down (KC_PW_HOST), never replaced.
+KC_PW_FILE=""
+KC_PW_HOST=""
+cleanup() {
+    [[ -z "$KC_PW_FILE" ]] || rm -f "$KC_PW_FILE"
+    if [[ -n "$KC_PW_HOST" ]]; then
+        rm -f "$KC_PW_HOST"
+        docker compose exec -T keycloak rm -f /tmp/kcadm-pw 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
 info "Authenticating as admin..."
 KC_PW_FILE=$(mktemp -t kc-admin-pw.XXXXXX)
 chmod 600 "$KC_PW_FILE"
@@ -90,15 +106,30 @@ TOKEN=$(curl -sf \
     -d "grant_type=password" \
     "${KC_BASE}/realms/master/protocol/openid-connect/token" \
     < "$KC_PW_FILE" \
-    | jq -r '.access_token')
+    | jq -r '.access_token') \
+    || error "Failed to obtain admin token (check KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD and that Keycloak is healthy)"
 rm -f "$KC_PW_FILE"
 
 [[ -z "$TOKEN" || "$TOKEN" == "null" ]] && error "Failed to obtain admin token"
 
-# ── Helper: assign a realm-management role to a service-account user ──
+# ── Helper: give a service-account user ITS realm-management roles ──────
 # A created realm does NOT carry service-account role mappings reliably in
 # Keycloak 26 — the SA exists but ends up with no realm-management
-# permissions. Calling this afterwards gives the SA admin access.
+# permissions. Calling this afterwards gives the SA the admin access it uses.
+#
+# F1-FIX-09 (K6#30): LEAST PRIVILEGE. The gremion-admin service account used to
+# get the composite `realm-admin` role, i.e. every realm-management permission
+# (clients, identity providers, authentication flows, realm settings ...), when
+# gremion-ui only manages users, groups and their realm-role mappings
+# (gremion-ui/src/lib/server/keycloak-admin.ts: /users, /users/{id}/groups,
+# /users/{id}/role-mappings/realm, /roles, /groups, credentials, execute-actions).
+# Exactly those realm-management roles are granted now. A realm that an earlier
+# run gave realm-admin is NARROWED on re-run: realm-admin is removed from the
+# service account unless KEYCLOAK_ADMIN_SA_ROLES asks for it by name.
+#   manage-users, view-users, query-users, query-groups  users + groups
+#   view-realm                                           GET /roles (realm roles)
+SA_ROLES="${KEYCLOAK_ADMIN_SA_ROLES:-manage-users view-users query-users query-groups view-realm}"
+
 assign_realm_admin_to_sa() {
     local client_id="$1"
 
@@ -125,21 +156,51 @@ assign_realm_admin_to_sa() {
         "${KC_BASE}/admin/realms/${REALM}/clients?clientId=realm-management" \
         | jq -r '.[0].id')
 
-    # 4. Fetch the realm-admin role definition
-    local realm_admin_role
-    realm_admin_role=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
-        "${KC_BASE}/admin/realms/${REALM}/clients/${rm_uuid}/roles/realm-admin")
+    [[ -z "$rm_uuid" || "$rm_uuid" == "null" ]] && error "Client 'realm-management' not found"
+    local mappings_url="${KC_BASE}/admin/realms/${REALM}/users/${sa_user_id}/role-mappings/clients/${rm_uuid}"
 
-    # 5. Assign the role (idempotent — Keycloak silently no-ops on duplicate)
+    # 4. Fetch each wanted realm-management role definition
+    local role role_json roles_json="" roles_array
+    for role in $SA_ROLES; do
+        role_json=$(curl -sf \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "${KC_BASE}/admin/realms/${REALM}/clients/${rm_uuid}/roles/${role}") \
+            || error "realm-management role '${role}' not found (KEYCLOAK_ADMIN_SA_ROLES)"
+        roles_json="${roles_json}${role_json}"$'\n'
+    done
+    [[ -n "$roles_json" ]] || error "KEYCLOAK_ADMIN_SA_ROLES is empty"
+    roles_array=$(printf '%s' "$roles_json" | jq -cs '.')
+
+    # 5. Assign the roles (idempotent — Keycloak silently no-ops on duplicates)
     curl -sf -X POST \
         -H "Authorization: Bearer ${TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "[${realm_admin_role}]" \
-        "${KC_BASE}/admin/realms/${REALM}/users/${sa_user_id}/role-mappings/clients/${rm_uuid}" \
-        || error "Failed to assign realm-admin to '${client_id}' service account"
+        -d "$roles_array" \
+        "$mappings_url" \
+        || error "Failed to assign realm-management roles (${SA_ROLES}) to '${client_id}' service account"
 
-    success "Service account for '${client_id}' has realm-admin."
+    # 6. Narrow a service account an earlier run gave the composite realm-admin
+    #    (unless it was asked for by name). Read from the realm, not assumed.
+    local current stale
+    case " ${SA_ROLES} " in
+        *" realm-admin "*) : ;;
+        *)
+            current=$(curl -sf -H "Authorization: Bearer ${TOKEN}" "$mappings_url") \
+                || error "Failed to read the role mappings of the '${client_id}' service account"
+            stale=$(printf '%s' "$current" | jq -c '[.[] | select(.name == "realm-admin")]')
+            if [[ "$stale" != "[]" ]]; then
+                curl -sf -X DELETE \
+                    -H "Authorization: Bearer ${TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "$stale" \
+                    "$mappings_url" \
+                    || error "Failed to remove realm-admin from the '${client_id}' service account"
+                info "  removed the over-broad realm-admin role from '${client_id}'."
+            fi
+            ;;
+    esac
+
+    success "Service account for '${client_id}' has: ${SA_ROLES}."
 }
 
 # ── #164: real 2FA step-up via a Level-of-Authentication browser flow ─────────
@@ -182,12 +243,75 @@ _kc_setcfg() { # EXEC_ID ALIAS LEVEL MAXAGE
         "{\"alias\":\"$2\",\"config\":{\"loa-condition-level\":\"$3\",\"loa-max-age\":\"$4\"}}" >/dev/null
 }
 
+# Prints absent | complete | partial for the browser-stepup flow, read from the
+# realm. COMPLETE = the forms flow holds both LoA subflows as CONDITIONAL, and
+# each holds its LoA condition (REQUIRED, with its level/max-age config attached)
+# and its authenticator (username/password in stepup-1fa, OTP in stepup-2fa),
+# both REQUIRED. Anything less is PARTIAL (a build that died halfway).
+_stepup_flow_state() {
+    local flows top sub subex want
+    flows=$(_kc_api GET "/authentication/flows") || error "cannot list the realm's authentication flows"
+    if ! printf '%s' "$flows" | jq -e '.[] | select(.alias == "browser-stepup")' >/dev/null 2>&1; then
+        echo absent; return 0
+    fi
+    top=$(_kc_api GET "/authentication/flows/browser-stepup/executions") || { echo partial; return 0; }
+    for sub in stepup-1fa stepup-2fa; do
+        if ! printf '%s' "$top" | jq -e --arg a "$sub" \
+                '[.[] | select(.displayName == $a and .requirement == "CONDITIONAL")] | length == 1' >/dev/null 2>&1; then
+            echo partial; return 0
+        fi
+        want="auth-username-password-form"
+        [[ "$sub" == "stepup-2fa" ]] && want="auth-otp-form"
+        subex=$(_kc_api GET "/authentication/flows/${sub}/executions") || { echo partial; return 0; }
+        if ! printf '%s' "$subex" | jq -e --arg w "$want" '
+                ([.[] | select(.providerId == "conditional-level-of-authentication"
+                               and .requirement == "REQUIRED"
+                               and ((.authenticationConfig // "") != ""))] | length == 1)
+                and ([.[] | select(.providerId == $w and .requirement == "REQUIRED")] | length == 1)' >/dev/null 2>&1; then
+            echo partial; return 0
+        fi
+    done
+    echo complete
+}
+
+# Removes a partial browser-stepup flow. Keycloak refuses to delete a flow the
+# realm is bound to, so the realm is pointed back at the stock `browser` flow
+# first (and step 2 of configure_stepup_flow points it at the rebuilt one).
+_drop_partial_stepup_flow() {
+    local bound flow_id
+    bound=$(_kc_api GET "" | jq -r '.browserFlow // ""') || error "cannot read the realm's browserFlow"
+    if [[ "$bound" == "browser-stepup" ]]; then
+        _kc_api PUT "" "{\"realm\":\"${REALM}\",\"browserFlow\":\"browser\"}" >/dev/null \
+            || error "cannot point the realm back at the stock browser flow"
+    fi
+    flow_id=$(_kc_api GET "/authentication/flows" \
+        | jq -r '.[] | select(.alias == "browser-stepup") | .id') \
+        || error "cannot list the realm's authentication flows"
+    [[ -n "$flow_id" && "$flow_id" != "null" ]] || error "partial browser-stepup flow has no id"
+    _kc_api DELETE "/authentication/flows/${flow_id}" >/dev/null \
+        || error "cannot delete the partial browser-stepup flow"
+}
+
 configure_stepup_flow() {
     info "Configuring #164 LoA step-up authentication flow..."
 
-    # 1. Build browser-stepup if absent (the build is not individually idempotent).
-    if _kc_api GET "/authentication/flows" | jq -e '.[]|select(.alias=="browser-stepup")' >/dev/null 2>&1; then
-        info "  browser-stepup flow already present — skipping build."
+    # 1. Build browser-stepup unless it is already COMPLETE. The build is a dozen
+    #    non-atomic calls, so a run that died halfway leaves a flow that EXISTS but
+    #    is not whole; skipping on existence alone (F1-FIX-09, K6#5) then called
+    #    it done on the next run and step 2 below wired the half-built flow in as
+    #    the realm's browserFlow, i.e. every login went through it. Its shape is
+    #    read from the realm instead (_stepup_flow_state); a partial flow is
+    #    removed (after un-pointing the realm from it) and rebuilt, and the result
+    #    is read back before the realm is pointed at it.
+    local flow_state
+    flow_state=$(_stepup_flow_state)
+    if [[ "$flow_state" == "partial" ]]; then
+        info "  browser-stepup flow exists but is INCOMPLETE — removing it and rebuilding."
+        _drop_partial_stepup_flow
+        flow_state="absent"
+    fi
+    if [[ "$flow_state" == "complete" ]]; then
+        info "  browser-stepup flow already present and complete — skipping build."
     else
         info "  Building browser-stepup from the default browser flow..."
         _kc_api POST "/authentication/flows/browser/copy" '{"newName":"browser-stepup"}' >/dev/null \
@@ -220,6 +344,10 @@ configure_stepup_flow() {
         _kc_setreq "$f2" CONDITIONAL; _kc_setreq "$c2" REQUIRED; _kc_setreq "$o2" REQUIRED
         _kc_setcfg "$c1" stepup-loa1 1 36000
         _kc_setcfg "$c2" stepup-loa2 2 300
+        # Post-condition, read back from the realm: only a COMPLETE flow may be
+        # pointed at by realm.browserFlow below.
+        [[ "$(_stepup_flow_state)" == "complete" ]] \
+            || error "browser-stepup flow is not complete after the build (read back from the realm); not wiring it in as the browser flow"
         success "  browser-stepup flow built (1FA loa1 + 2FA loa2 / OTP)."
     fi
 
@@ -251,8 +379,9 @@ configure_stepup_flow() {
 # ── Configure clients ─────────────────────────────────────────
 # gremion-admin is a confidential client with serviceAccountsEnabled=true,
 # used by gremion-ui to manage Keycloak users/groups (governance sync, user
-# provisioning). Without realm-admin its admin-API calls return 403.
-info "Granting realm-admin to gremion-admin service account..."
+# provisioning). Without the realm-management roles below its admin-API calls
+# return 403; it deliberately does NOT get the composite realm-admin (K6#30).
+info "Granting least-privilege realm-management roles to gremion-admin service account..."
 assign_realm_admin_to_sa "gremion-admin"
 
 # #164: build/refresh the LoA step-up flow + otpPolicy + acr mapper on the
@@ -287,10 +416,10 @@ info "Setting realm privacyPolicyUrl..."
 #      — the host's `ps -ef` cannot reach across into the container's
 #      argv. Outside the container, the host shell only sees the literal
 #      string `--password "$(cat /tmp/kcadm-pw)"`.
-#   4. The `trap … EXIT` cleans up both files even on failure.
+#   4. The EXIT trap (cleanup(), installed once near the top, F1-FIX-09 K6#4)
+#      cleans up both files even on failure: assigning KC_PW_HOST is what
+#      EXTENDS it with this step - nothing replaces it.
 KC_PW_HOST=$(mktemp -t kcadm-pw.XXXXXX)
-# shellcheck disable=SC2064  # we WANT $KC_PW_HOST expanded at trap-registration time
-trap "rm -f '$KC_PW_HOST'; docker compose exec -T keycloak rm -f /tmp/kcadm-pw 2>/dev/null || true" EXIT
 chmod 600 "$KC_PW_HOST"
 printf '%s' "$KEYCLOAK_ADMIN_PASSWORD" > "$KC_PW_HOST"
 if ! docker compose exec -T keycloak sh -c 'umask 077; cat > /tmp/kcadm-pw' < "$KC_PW_HOST"; then
