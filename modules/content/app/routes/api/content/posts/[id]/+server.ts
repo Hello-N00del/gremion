@@ -15,6 +15,7 @@ import type { RequestHandler } from './$types'
 import { isInternalBearerRequest } from '$lib/server/internal-fetch'
 import { requireContentRead, requireContentAuthor } from '$lib/server/content/route-auth'
 import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
+import { requireContentId } from '$lib/server/content/ids'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
 import type { ChannelId } from '$lib/server/content/types'
 
@@ -22,10 +23,11 @@ const CHANNELS: readonly ChannelId[] = ['email', 'portal', 'instagram']
 
 export const GET: RequestHandler = async (event) => {
   requireContentRead(event.locals.user)
+  const id = requireContentId(event.params.id)
   const resolved = resolveContentBackendOr503()
   if (resolved instanceof Response) return resolved
   const backend = resolved
-  const post = await backend.getPost(event.params.id)
+  const post = await backend.getPost(id)
   if (!post) throw error(404, 'Not found')
   return json(post)
 }
@@ -42,7 +44,7 @@ export const PATCH: RequestHandler = async (event) => {
   if (resolved instanceof Response) return resolved
   const backend = resolved
 
-  const id = event.params.id
+  const id = requireContentId(event.params.id)
   const post = await backend.getPost(id)
   if (!post) throw error(404, 'Not found')
 
@@ -124,7 +126,7 @@ export const DELETE: RequestHandler = async (event) => {
   if (resolved instanceof Response) return resolved
   const backend = resolved
 
-  const id = event.params.id
+  const id = requireContentId(event.params.id)
   const post = await backend.getPost(id)
   if (!post) throw error(404, 'Not found')
 

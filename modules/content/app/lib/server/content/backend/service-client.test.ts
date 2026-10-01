@@ -153,4 +153,105 @@ describe('ServiceContentClient', () => {
     ;(c as any).fetchImpl = fetchImpl
     await expect(c.publish('post-7', 'email')).rejects.toBeInstanceOf(ContentServiceError)
   })
+
+  // ── F1-FIX-07 H08 (K5#27): route ids never steer the leaf path ──────────────
+
+  it('encodes a traversal id into ONE path segment (never reaches /api/v1/lists)', async () => {
+    const fetchImpl = vi.fn(async () => new Response('', { status: 404 }))
+    const c = new ServiceContentClient()
+    ;(c as any).fetchImpl = fetchImpl
+    await c.getPost('x/../../lists')
+    const [url] = (fetchImpl.mock.calls[0] as unknown as [string]) ?? []
+    expect(url).toBe('http://content-service:8080/api/v1/posts/x%2F..%2F..%2Flists')
+    expect(new URL(url).pathname).toBe('/api/v1/posts/x%2F..%2F..%2Flists')
+  })
+
+  it.each(['..', '.', ''])('refuses the dot/empty segment %j without any leaf request', async (id) => {
+    const fetchImpl = vi.fn(async () => jsonRes([]))
+    const c = new ServiceContentClient()
+    ;(c as any).fetchImpl = fetchImpl
+    await expect(c.listMembers(id)).rejects.toMatchObject({ status: 400 })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('encodes every path param (list + member ids, channel)', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }))
+    const c = new ServiceContentClient()
+    ;(c as any).fetchImpl = fetchImpl
+    await c.removeListMember('l/1', 'm?2')
+    await c.clearPublication('p#1', 'portal')
+    const urls = fetchImpl.mock.calls.map((call) => (call as unknown as [string])[0])
+    expect(urls).toEqual([
+      'http://content-service:8080/api/v1/lists/l%2F1/members/m%3F2',
+      'http://content-service:8080/api/v1/publications/p%231/portal',
+    ])
+  })
+
+  // ── K5#1: the synchronous publish gets its own budget; bodies are bounded ───
+
+  function hangingFetch() {
+    return vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError')),
+          )
+        }),
+    )
+  }
+
+  it('publish is NOT aborted at the 5 s CRUD budget, but is at its own budget', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchImpl = hangingFetch()
+      const c = new ServiceContentClient()
+      ;(c as any).fetchImpl = fetchImpl
+      let settled: unknown = 'pending'
+      const p = c.publish('post-7', 'email').then(
+        () => 'resolved',
+        (e: unknown) => e,
+      )
+      void p.then((v) => {
+        settled = v
+      })
+      await vi.advanceTimersByTimeAsync(6_000)
+      expect(settled).toBe('pending')
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      expect(settled).toMatchObject({ name: 'AbortError' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a response body that never finishes is aborted at the request budget', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('[{"id":'))
+            init.signal?.addEventListener('abort', () =>
+              controller.error(new DOMException('The operation was aborted.', 'AbortError')),
+            )
+          },
+        })
+        return new Response(body, { status: 200 })
+      })
+      const c = new ServiceContentClient()
+      ;(c as any).fetchImpl = fetchImpl
+      let settled: unknown = 'pending'
+      void c.createPost({ title: 'T', created_by: 'u' }).then(
+        () => {
+          settled = 'resolved'
+        },
+        (e: unknown) => {
+          settled = e
+        },
+      )
+      await vi.advanceTimersByTimeAsync(6_000)
+      expect(settled).toMatchObject({ name: 'AbortError' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
