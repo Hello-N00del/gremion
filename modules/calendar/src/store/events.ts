@@ -172,50 +172,40 @@ export async function listEvents(sql: Sql, filter: ListEventsFilter = {}): Promi
   const to = filter.to ?? new Date('2099-01-01T00:00:00Z')
   const shared = DEFAULT_SHARED_EVENT_COLOR
 
-  let rows: EventRow[]
-  if (filter.committeeId && filter.eventTypeId) {
-    rows = await sql<EventRow[]>`
-      SELECT e.*, et.color AS event_type_color, et.name AS event_type_name
-      FROM calendar_events e
-      LEFT JOIN event_types et ON et.id = e.event_type_id
-      JOIN event_committees ec ON ec.event_id = e.id
-      WHERE ec.committee_id = ${filter.committeeId}
-        AND e.event_type_id = ${filter.eventTypeId}
-        AND e.end_at >= ${from}
-        AND e.start_at < ${to}
-      ORDER BY e.start_at
-    `
-  } else if (filter.committeeId) {
-    rows = await sql<EventRow[]>`
-      SELECT e.*, et.color AS event_type_color, et.name AS event_type_name
-      FROM calendar_events e
-      LEFT JOIN event_types et ON et.id = e.event_type_id
-      JOIN event_committees ec ON ec.event_id = e.id
-      WHERE ec.committee_id = ${filter.committeeId}
-        AND e.end_at >= ${from}
-        AND e.start_at < ${to}
-      ORDER BY e.start_at
-    `
-  } else if (filter.eventTypeId) {
-    rows = await sql<EventRow[]>`
-      SELECT e.*, et.color AS event_type_color, et.name AS event_type_name
-      FROM calendar_events e
-      LEFT JOIN event_types et ON et.id = e.event_type_id
-      WHERE e.event_type_id = ${filter.eventTypeId}
-        AND e.end_at >= ${from}
-        AND e.start_at < ${to}
-      ORDER BY e.start_at
-    `
-  } else {
-    rows = await sql<EventRow[]>`
-      SELECT e.*, et.color AS event_type_color, et.name AS event_type_name
-      FROM calendar_events e
-      LEFT JOIN event_types et ON et.id = e.event_type_id
-      WHERE e.end_at >= ${from}
-        AND e.start_at < ${to}
-      ORDER BY e.start_at
-    `
-  }
+  // S1c#12 / S5#7: a recurring event is stored ONCE, at its first occurrence, so
+  // the plain [start_at, end_at] overlap test made it vanish from every window
+  // after that first occurrence. A recurring event whose first occurrence is
+  // before the window's end and whose recurrence has not ended before the
+  // window's start is therefore returned too (the MASTER row, with its
+  // `recurrence` attached; the consumer expands occurrences). COUNT-limited
+  // recurrences cannot be bounded in SQL, so they over-include; that is the safe
+  // direction (an event shown, never an event lost).
+  const committeeClause = filter.committeeId
+    ? sql`AND EXISTS (
+        SELECT 1 FROM event_committees ec
+        WHERE ec.event_id = e.id AND ec.committee_id = ${filter.committeeId}
+      )`
+    : sql``
+  const typeClause = filter.eventTypeId ? sql`AND e.event_type_id = ${filter.eventTypeId}` : sql``
+
+  const rows = await sql<EventRow[]>`
+    SELECT e.*, et.color AS event_type_color, et.name AS event_type_name
+    FROM calendar_events e
+    LEFT JOIN event_types et ON et.id = e.event_type_id
+    WHERE (
+      (e.end_at >= ${from} AND e.start_at < ${to})
+      OR (
+        e.start_at < ${to}
+        AND EXISTS (
+          SELECT 1 FROM event_recurrence r
+          WHERE r.event_id = e.id AND (r.until IS NULL OR r.until >= ${from})
+        )
+      )
+    )
+    ${committeeClause}
+    ${typeClause}
+    ORDER BY e.start_at
+  `
 
   return Promise.all(rows.map((r) => enrichEvent(sql, r, shared)))
 }
@@ -319,16 +309,21 @@ export async function createEvent(sql: Sql, input: CreateEventInput): Promise<Db
 }
 
 export async function updateEvent(sql: Sql, id: string, input: UpdateEventInput): Promise<DbEvent> {
+  // K4#5: description / location / event type are NULLABLE columns, so "key
+  // absent" (leave alone) and "key = null" (clear) must be told apart. COALESCE
+  // cannot: COALESCE(null, col) is a silent no-op, so a field could never be
+  // cleared. Those three use CASE on key presence; the NOT NULL columns keep
+  // COALESCE (null there is never a meaningful value).
   await sql`
     UPDATE calendar_events SET
       title              = COALESCE(${input.title ?? null}, title),
-      description        = COALESCE(${input.description ?? null}, description),
-      location           = COALESCE(${input.location ?? null}, location),
+      description        = CASE WHEN ${input.description !== undefined} THEN ${input.description ?? null} ELSE description END,
+      location           = CASE WHEN ${input.location !== undefined} THEN ${input.location ?? null} ELSE location END,
       start_at           = COALESCE(${input.startAt ?? null}, start_at),
       end_at             = COALESCE(${input.endAt ?? null}, end_at),
       all_day            = COALESCE(${input.allDay ?? null}, all_day),
       is_public          = COALESCE(${input.isPublic ?? null}, is_public),
-      event_type_id      = COALESCE(${input.eventTypeId ?? null}, event_type_id),
+      event_type_id      = CASE WHEN ${input.eventTypeId !== undefined} THEN ${input.eventTypeId ?? null} ELSE event_type_id END,
       is_multi_committee = COALESCE(${input.isMultiCommittee ?? null}, is_multi_committee),
       updated_at         = now()
     WHERE id = ${id}
