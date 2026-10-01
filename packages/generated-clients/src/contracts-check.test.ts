@@ -94,7 +94,8 @@ describe('runContractsCheck — the real tree (T9)', () => {
     const presentAtBase = entries.filter((e) => existsAtRef(REPO_ROOT, baseRef as string, e.file)).length
     expect(presentAtBase).toBeGreaterThan(0)
     expect(result.compatChecked).toBe(presentAtBase)
-  })
+    // 60 s: scans the real tree and diffs every spec against the base ref; took 6-11 s under whole-tree gate load, over the 5 s default (R29-KHYG-K).
+  }, 60_000)
 
   it('resolveBaseRef finds a real, resolvable commit other than HEAD — or, on trunk itself, reports base === HEAD', () => {
     const env = { ...process.env }

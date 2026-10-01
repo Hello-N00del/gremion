@@ -313,9 +313,21 @@
     },
     {
       "path": "modules/finance/tsconfig.test.json",
-      "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked",
+      "reason": "toolchain guard (TASK-017 strict-TS check): trailing comma before ']' removed — check-toolchain.mjs parses tsconfig as JSON after stripping // comments and could not read this file, so its strictness went unchecked; then R29-KHYG-K: the test/yearend-parity.test.ts exclude dropped with the removed file",
       "owner": "TASK-200",
-      "blob": "191a604d7a7a062687191aaf40d66eb867af485a"
+      "blob": "1686967bfbf84d6dcd09d51acd437c90cb484819"
+    },
+    {
+      "path": "modules/finance/test/yearend-parity.test.ts",
+      "reason": "R29-KHYG-K: removed, the #435 year-end parity guard drove the StuRa gremion-ui year-end services against the leaf port; the kernel does not carry the gremion-ui half, so the file failed to collect and `vitest run` for the package could not pass (StuRaOS keeps its copy). The finance app half enters modules/finance/app/ with TASK-205, which re-adds the guard re-pointed at it (modules/COUPLED-TESTS.json entry removed with it)",
+      "owner": "TASK-205",
+      "blob": null
+    },
+    {
+      "path": "modules/finance/vitest.integration.config.ts",
+      "reason": "R29-KHYG-K: Vitest 4 dropped test.poolOptions (singleFork was silently ignored); maxWorkers 1 + fileParallelism false run the integration files serially so they stop racing on CREATE DATABASE (mirrors the StuRaOS services/finance fix, F1-FIX-05-S)",
+      "owner": "TASK-200",
+      "blob": "0a2e633fddce27e3aaa7e57f7d8695cb45093ddc"
     },
     {
       "path": "modules/messaging/src/livekit/livekit-client.ts",
