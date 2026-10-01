@@ -19,6 +19,7 @@ import type { ModuleManifest } from '$lib/modules/types'
 import { runMigrations } from '$lib/server/db'
 import { createOrgUnit, type OrgUnit } from '$lib/server/governance/org-units-db'
 import { provisionOrgUnit } from '$lib/server/governance/provisioning/orchestrator'
+import { DEFAULT_BLUEPRINT_REF } from '$lib/server/seed/blueprint-registry'
 import { createKeycloakSubsystem } from '$lib/server/governance/provisioning/subsystems/keycloak'
 import type { Adapters, ProvisioningSubsystem } from '$lib/server/governance/provisioning/types'
 import { runWithTenant, getTenant } from '$lib/server/tenant/context'
@@ -191,7 +192,11 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           matrixSpace: { aliasNamespace: `${slug}-` },
           domainProfile: { residencyZone: 'eu' },
           brandRef: `config:${slug}`,
-          blueprintRef: 'STURA_BLUEPRINT@1',
+          // The registry's default, not a second literal (review r4 LOW): a
+          // customer is made with GREMION_DISABLE_SEEDS, so no blueprint seeds
+          // it; the old --blueprint option is gone (residual for the seed/
+          // owner: blueprint-registry.ts:4 still names it).
+          blueprintRef: DEFAULT_BLUEPRINT_REF,
           connProfile: { perTenantMax: 4, prepare: true },
           backupKeyRef: containerRef(secretName.backupKey(slug)),
           audiences: ['gremion-ui', 'gremion-mobile'],
