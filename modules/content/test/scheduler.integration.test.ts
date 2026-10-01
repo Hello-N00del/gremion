@@ -20,7 +20,7 @@
  * Fail-closed guard mirrors dispatch.integration.test.ts.
  */
 import http from 'node:http'
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi, type MockInstance } from 'vitest'
 import postgres from 'postgres'
 import { storeFor, _resetTenantStoreForTests, type TenantRef } from '../src/tenant-store.ts'
 import { createServer } from '../src/http/server.ts'
@@ -34,10 +34,15 @@ import {
   getPublication,
   updatePost,
 } from '../src/store/index.ts'
-import { dispatchDueChannels } from '../src/scheduler.ts'
+import {
+  dispatchDueChannels,
+  resetStuckDispatches,
+  runSchedulerTick,
+  _resetSchedulerForTests,
+} from '../src/scheduler.ts'
 import { resolveInstagramCredentials } from '../src/instagram/credentials.ts'
 import type { ChannelTransport } from '../src/dispatch.ts'
-import type { KernelClient, Recipient } from '../src/kernel-client.ts'
+import { MailUnconfiguredError, type KernelClient, type Recipient } from '../src/kernel-client.ts'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
 
 // ── fail-closed guard ─────────────────────────────────────────────────────────
@@ -342,5 +347,144 @@ describe('dispatchDueChannels — scheduled-path outbox co-commit (A1)', () => {
     expect(rows[0]!.event_type).toBe('channel.portal.sent')
     expect(rows[0]!.payload).toEqual({ postId, news_posts_id: pub!.external_ref })
     expect(rows[0]!.correlation_id).toBe(postId)
+  })
+})
+
+// ── F1-FIX-07 K5#6 / S4#8: a post stuck in 'sending' is reset by the tick ──────
+
+describe('scheduler tick resets posts stuck in sending (K5#6)', () => {
+  function tickDeps() {
+    return {
+      listTenants: async () => [TENANT],
+      work: {
+        resetStuck: (t: TenantRef) => resetStuckDispatches(t, sql),
+        dispatchDue: async () => {},
+        drainPublishOps: async () => {},
+        purgeTokens: async () => {},
+      },
+    }
+  }
+
+  it('a post in sending for longer than the window is flipped to failed (re-dispatchable)', async () => {
+    const postId = await makePost()
+    await sql`UPDATE content.posts SET status = 'sending', updated_at = now() - interval '45 minutes' WHERE id = ${postId}`
+
+    await runSchedulerTick(tickDeps())
+
+    const rows = await sql<{ status: string }[]>`SELECT status FROM content.posts WHERE id = ${postId}`
+    expect(rows[0]!.status).toBe('failed')
+  })
+
+  it('a post that only just entered sending is left alone', async () => {
+    const postId = await makePost()
+    await sql`UPDATE content.posts SET status = 'sending' WHERE id = ${postId}`
+
+    await runSchedulerTick(tickDeps())
+
+    const rows = await sql<{ status: string }[]>`SELECT status FROM content.posts WHERE id = ${postId}`
+    expect(rows[0]!.status).toBe('sending')
+  })
+})
+
+// ── F1-FIX-07 r2: a failed scheduled publish is never silent ─────────────────────
+// dispatchDueChannels used to await publishChannel and drop the returned
+// PublishResult, so a status:'failed' result (partial send, unusable link base,
+// SMTP unconfigured) left no trace on the scheduled path. An unusable link base
+// also left the email channel 'scheduled', re-published every tick with no log
+// while holding a slot in the LIMIT-50 due list; the base is read only at boot,
+// so those retries could never succeed before a restart.
+
+describe('dispatchDueChannels — a failed scheduled publish is logged, never silent', () => {
+  let errSpy: MockInstance<typeof console.error>
+
+  beforeEach(() => {
+    _resetSchedulerForTests()
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    errSpy.mockRestore()
+  })
+
+  const logLines = (): string[] => errSpy.mock.calls.map((call) => call.map(String).join(' '))
+
+  function failingTransport(opts: { failFor?: Set<string>; unconfigured?: boolean }): ChannelTransport & {
+    sent: string[]
+  } {
+    const sent: string[] = []
+    let seq = 0
+    return {
+      sent,
+      async send(msg: { to?: string }): Promise<{ id: string }> {
+        if (opts.unconfigured) throw new MailUnconfiguredError()
+        if (opts.failFor?.has(msg.to ?? '')) throw new Error(`fake SMTP failure for ${msg.to}`)
+        sent.push(msg.to ?? '')
+        seq += 1
+        return { id: `<r2-${seq}@test>` }
+      },
+    }
+  }
+
+  it('a partial failure is logged with post, channel, tenant, detail and the failed recipient', async () => {
+    const postId = await makePost()
+    await addEmailRecipients(postId, ['one@x.com', 'two@x.com', 'three@x.com'])
+    await armChannelViaApi(postId, 'email', pastIso())
+
+    await dispatchDueChannels(TENANT, dueDeps({ emailTransport: failingTransport({ failFor: new Set(['two@x.com']) }) }))
+
+    expect((await getChannelRow(sql, postId, 'email'))!.status).toBe('failed')
+    const line = logLines().find((l) => l.includes(postId))
+    expect(line).toBeDefined()
+    expect(line).toContain('email')
+    expect(line).toContain(TENANT.slug)
+    expect(line).toContain('1 send(s) failed')
+    expect(line).toContain('two@x.com')
+  })
+
+  it('an unusable link base parks the due email channel as failed, claims nobody, logs it; a due portal channel still publishes', async () => {
+    const emailPost = await makePost()
+    await addEmailRecipients(emailPost, ['alice@x.com'])
+    await armChannelViaApi(emailPost, 'email', pastIso())
+    const portalPost = await makePost()
+    await armChannelViaApi(portalPost, 'portal', pastIso())
+    const transport = failingTransport({})
+
+    await dispatchDueChannels(TENANT, dueDeps({ origin: 'http://localhost:3000', emailTransport: transport }))
+
+    // Parked: no longer 'scheduled', so it leaves the due list instead of being
+    // re-polled every tick; nobody was mailed or claimed, so a manual publish once
+    // the base is fixed sends to every recipient.
+    expect((await getChannelRow(sql, emailPost, 'email'))!.status).toBe('failed')
+    expect(transport.sent).toHaveLength(0)
+    const dels = await sql<{ c: number }[]>`SELECT count(*)::int AS c FROM content.deliveries WHERE post_id = ${emailPost}`
+    expect(dels[0]!.c).toBe(0)
+    expect((await getChannelRow(sql, portalPost, 'portal'))!.status).toBe('published')
+    const line = logLines().find((l) => l.includes(emailPost))
+    expect(line).toContain('unusable public base URL')
+    expect(line).toContain(TENANT.slug)
+
+    // The next tick finds nothing due for it and says nothing more about it.
+    errSpy.mockClear()
+    await dispatchDueChannels(TENANT, dueDeps({ origin: 'http://localhost:3000', emailTransport: transport }))
+    expect(logLines().filter((l) => l.includes(emailPost))).toHaveLength(0)
+  })
+
+  it('SMTP unconfigured keeps the channel scheduled (SMTP can be fixed at runtime) and logs once, not every tick', async () => {
+    const postId = await makePost()
+    await addEmailRecipients(postId, ['alice@x.com'])
+    await armChannelViaApi(postId, 'email', pastIso())
+
+    await dispatchDueChannels(TENANT, dueDeps({ emailTransport: failingTransport({ unconfigured: true }) }))
+    await dispatchDueChannels(TENANT, dueDeps({ emailTransport: failingTransport({ unconfigured: true }) }))
+
+    expect((await getChannelRow(sql, postId, 'email'))!.status).toBe('scheduled')
+    const lines = logLines().filter((l) => l.includes(postId))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('SMTP not configured')
+
+    // Once SMTP works, the next tick delivers it.
+    const working = failingTransport({})
+    await dispatchDueChannels(TENANT, dueDeps({ emailTransport: working }))
+    expect((await getChannelRow(sql, postId, 'email'))!.status).toBe('sent')
+    expect(working.sent).toEqual(['alice@x.com'])
   })
 })

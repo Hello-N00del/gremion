@@ -22,7 +22,11 @@ const markDeliverySent = vi.fn()
 const markDeliveryFailed = vi.fn()
 const setChannelStatus = vi.fn()
 const resolvePostRecipients = vi.fn()
+const getTenant = vi.fn()
 
+vi.mock('$lib/server/tenant/context', () => ({
+	getTenant: (...a: unknown[]) => getTenant(...a),
+}))
 vi.mock('$lib/server/mail/tenant-mail', () => ({
 	sendMailForTenant: (...a: unknown[]) => sendMailForTenant(...a),
 	getTenantMailContext: (...a: unknown[]) => getTenantMailContext(...a),
@@ -74,6 +78,7 @@ beforeEach(() => {
 	resolvePostRecipients.mockResolvedValue([])
 	// SMTP configured by default; the unconfigured pre-check test flips this.
 	getTenantMailContext.mockReturnValue({ configured: true })
+	getTenant.mockReturnValue({ id: 't1', primaryHost: 'rat.example.org' })
 })
 
 describe('emailRenderer.derive', () => {
@@ -237,7 +242,7 @@ describe('emailRenderer.publish', () => {
 		expect(out.warnings).toContain('all sends failed')
 	})
 
-	it('isolates one recipient send failure: marks it failed, others still sent', async () => {
+	it('isolates one recipient send failure: marks it failed, others still sent, channel NOT sent (H07)', async () => {
 		resolvePostRecipients.mockResolvedValue([
 			{ email: 'good@x.de', name: null },
 			{ email: 'bad@x.de', name: null },
@@ -253,10 +258,33 @@ describe('emailRenderer.publish', () => {
 		expect(markDeliverySent).toHaveBeenCalledWith('p1', 'good@x.de', 'm1')
 		expect(markDeliverySent).toHaveBeenCalledWith('p1', 'good2@x.de', 'm3')
 		expect(markDeliveryFailed).toHaveBeenCalledWith('p1', 'bad@x.de', 'mailbox full')
-		expect(setChannelStatus).toHaveBeenCalledWith('p1', 'email', 'sent')
-		expect(out.status).toBe('sent')
+		// F1-FIX-07 H07: while a recipient is un-mailed the channel is not 'sent';
+		// a re-publish re-claims the failed row (claimRecipient takes over 'failed').
+		expect(setChannelStatus).toHaveBeenCalledWith('p1', 'email', 'failed')
+		expect(setChannelStatus).not.toHaveBeenCalledWith('p1', 'email', 'sent')
+		expect(out.status).toBe('failed')
 		expect(out.recipientCount).toBe(2)
-		expect(out.warnings).toEqual([expect.stringContaining('bad@x.de')])
+		expect(out.warnings).toEqual(expect.arrayContaining([expect.stringContaining('bad@x.de')]))
+	})
+
+	it('unsubscribe link is ABSOLUTE on the tenant primary host (S1c#0)', async () => {
+		resolvePostRecipients.mockResolvedValue([{ email: 'a@x.de', name: null }])
+
+		await emailRenderer.publish(post, [], channel())
+
+		const html = sendMailForTenant.mock.calls[0]![0].html as string
+		expect(html).toContain('href="https://rat.example.org/content/unsubscribe?token=tok-1"')
+	})
+
+	it('no primary host → failed result before any claim (no relative or localhost link is ever mailed)', async () => {
+		getTenant.mockReturnValue({ id: 't1', primaryHost: null })
+		resolvePostRecipients.mockResolvedValue([{ email: 'a@x.de', name: null }])
+
+		const out = await emailRenderer.publish(post, [], channel())
+
+		expect(out).toMatchObject({ channel: 'email', status: 'failed', detail: 'no public host for unsubscribe links' })
+		expect(claimRecipient).not.toHaveBeenCalled()
+		expect(sendMailForTenant).not.toHaveBeenCalled()
 	})
 
 	it('claim, token, and ledger all use the lowercased email (suppression cannot be bypassed by case)', async () => {

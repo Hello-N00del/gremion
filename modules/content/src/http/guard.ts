@@ -49,6 +49,14 @@ function secretMatches(provided: string, expected: string): boolean {
   return timingSafeEqual(pa, pb) && a.length === b.length
 }
 
+/** True iff the request carries the internal shared secret (fail-closed when the
+ *  server has none configured). F1-FIX-07 K5#12/K5#31: /healthz/tenants uses
+ *  this (mirrors the finance leaf, F1-FIX-05-K K4#32). */
+export function hasInternalSecret(headers: Record<string, string | undefined>, secret: string | undefined): boolean {
+  const provided = headers['x-internal-auth']
+  return !!secret && !!provided && secretMatches(provided, secret)
+}
+
 export function checkGuard(input: GuardInput): GuardResult {
   const { headers, secret } = input
 

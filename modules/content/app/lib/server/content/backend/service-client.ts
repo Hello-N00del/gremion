@@ -9,7 +9,9 @@
 //
 // Retry policy: ONE retry on idempotent GET/HEAD requests only (not on
 // POST/PUT/PATCH/DELETE). Retry only on network errors or 503 responses.
-// Timeout: 5000ms per attempt.
+// Timeout: 5000ms per attempt, body read included; the synchronous per-channel
+// publish gets PUBLISH_TIMEOUT_MS (K5#1). Every path param goes through seg()
+// (F1-FIX-07 H08): one value, one encoded segment, dot segments refused.
 //
 // Deviation from newsletter service-client:
 //   - fetchImpl is an injectable instance field (not module-level) for test injection.
@@ -61,7 +63,36 @@ export interface ServiceContentClientOptions {
 }
 
 const REQUEST_TIMEOUT_MS = 5000
+/**
+ * K5#1: the per-channel publish is synchronous and loops over every recipient
+ * on the leaf, so the 5 s CRUD budget aborted real sends mid-pass. It gets its
+ * own budget, kept BELOW the leaf's 15-minute stale-claim window so a publish
+ * this client gave up on can never overlap a takeover of its own claims.
+ */
+const PUBLISH_TIMEOUT_MS = 10 * 60_000
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD'])
+
+/**
+ * F1-FIX-07 H08 (K5#27): one route-supplied value becomes exactly ONE leaf path
+ * segment. SvelteKit hands routes DECODED params, so an id like
+ * `x/../../lists` would otherwise walk the leaf URL to an author-only endpoint
+ * (subscriber emails). encodeURIComponent keeps `/`, `?`, `#` inside the
+ * segment; '.', '..' and '' are refused outright because the WHATWG URL parser
+ * collapses dot segments even when percent-encoded.
+ */
+function seg(value: string): string {
+  if (value === '' || value === '.' || value === '..') {
+    throw new ContentServiceError(400, 'invalid path segment')
+  }
+  return encodeURIComponent(value)
+}
+
+/** One leaf attempt, fully read: the body is consumed under the same timer. */
+interface LeafReply {
+  status: number
+  ok: boolean
+  text: string
+}
 
 // ── ServiceContentClient ──────────────────────────────────────────────────────
 
@@ -128,24 +159,31 @@ export class ServiceContentClient implements ContentBackendPort {
 
   // ── Core fetch with retry ──────────────────────────────────────────────────
 
-  /** Single HTTP attempt — returns raw Response without any error handling. */
+  /**
+   * Single HTTP attempt. The timer covers the whole exchange — headers AND body
+   * (K5#1: it used to be cleared before res.json(), so a stalled body read hung
+   * the request forever). No status handling here.
+   */
   private async doLeafFetch(
     method: string,
     path: string,
     body: unknown,
     headers: Record<string, string>,
-  ): Promise<Response> {
+    timeoutMs: number,
+  ): Promise<LeafReply> {
     const baseUrl = this.resolveServiceUrl()
     const url = `${baseUrl}${path}`
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
-      return await this.fetchImpl(url, {
+      const res = await this.fetchImpl(url, {
         method,
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       })
+      const text = res.status === 204 ? '' : await res.text()
+      return { status: res.status, ok: res.ok, text }
     } finally {
       clearTimeout(timer)
     }
@@ -163,6 +201,7 @@ export class ServiceContentClient implements ContentBackendPort {
     path: string,
     body?: unknown,
     nullable = false,
+    timeoutMs = REQUEST_TIMEOUT_MS,
   ): Promise<unknown> {
     const headers = this.buildHeaders()
     const isIdempotent = IDEMPOTENT_METHODS.has(method.toUpperCase())
@@ -170,9 +209,9 @@ export class ServiceContentClient implements ContentBackendPort {
       correlationId: this.correlationId ?? 'none',
     })
 
-    const attempt = () => this.doLeafFetch(method, path, body, headers)
+    const attempt = () => this.doLeafFetch(method, path, body, headers, timeoutMs)
 
-    let res: Response
+    let res: LeafReply
     try {
       res = await attempt()
       // Retry once on idempotent + 503
@@ -200,15 +239,14 @@ export class ServiceContentClient implements ContentBackendPort {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => `HTTP ${res.status}`)
-      const err = new ContentServiceError(res.status, text)
+      const err = new ContentServiceError(res.status, res.text || `HTTP ${res.status}`)
       span.end(err)
       throw err
     }
 
     span.end()
-    if (res.status === 204) return undefined
-    return res.json()
+    if (res.status === 204 || res.text === '') return undefined
+    return JSON.parse(res.text) as unknown
   }
 
   // ── Post CRUD ─────────────────────────────────────────────────────────────
@@ -218,7 +256,7 @@ export class ServiceContentClient implements ContentBackendPort {
   }
 
   async getPost(id: string): Promise<Post | null> {
-    return (await this.leafFetch('GET', `/api/v1/posts/${id}`, undefined, true)) as Post | null
+    return (await this.leafFetch('GET', `/api/v1/posts/${seg(id)}`, undefined, true)) as Post | null
   }
 
   async listPosts(): Promise<Post[]> {
@@ -226,40 +264,40 @@ export class ServiceContentClient implements ContentBackendPort {
   }
 
   async updatePostTitle(id: string, title: string): Promise<Post> {
-    return (await this.leafFetch('PATCH', `/api/v1/posts/${id}`, { title })) as Post
+    return (await this.leafFetch('PATCH', `/api/v1/posts/${seg(id)}`, { title })) as Post
   }
 
   async updatePostBody(id: string, bodyHtml: string): Promise<Post> {
-    return (await this.leafFetch('PATCH', `/api/v1/posts/${id}`, {
+    return (await this.leafFetch('PATCH', `/api/v1/posts/${seg(id)}`, {
       body_html: bodyHtml,
     })) as Post
   }
 
   async deletePost(id: string): Promise<void> {
-    await this.leafFetch('DELETE', `/api/v1/posts/${id}`)
+    await this.leafFetch('DELETE', `/api/v1/posts/${seg(id)}`)
   }
 
   // ── Media ─────────────────────────────────────────────────────────────────
 
   async listMedia(postId: string): Promise<PostMedia[]> {
-    return (await this.leafFetch('GET', `/api/v1/posts/${postId}/media`)) as PostMedia[]
+    return (await this.leafFetch('GET', `/api/v1/posts/${seg(postId)}/media`)) as PostMedia[]
   }
 
   async addMedia(
     postId: string,
     m: { url: string; role: MediaRole; position?: number; alt?: string | null },
   ): Promise<PostMedia> {
-    return (await this.leafFetch('POST', `/api/v1/posts/${postId}/media`, m)) as PostMedia
+    return (await this.leafFetch('POST', `/api/v1/posts/${seg(postId)}/media`, m)) as PostMedia
   }
 
   // ── Channels ──────────────────────────────────────────────────────────────
 
   async getChannels(postId: string): Promise<PostChannel[]> {
-    return (await this.leafFetch('GET', `/api/v1/posts/${postId}/channels`)) as PostChannel[]
+    return (await this.leafFetch('GET', `/api/v1/posts/${seg(postId)}/channels`)) as PostChannel[]
   }
 
   async ensureChannels(postId: string): Promise<void> {
-    await this.leafFetch('POST', `/api/v1/posts/${postId}/channels`)
+    await this.leafFetch('POST', `/api/v1/posts/${seg(postId)}/channels`)
   }
 
   async setChannelEnabled(
@@ -267,7 +305,7 @@ export class ServiceContentClient implements ContentBackendPort {
     channel: ChannelId,
     enabled: boolean,
   ): Promise<PostChannel> {
-    return (await this.leafFetch('PATCH', `/api/v1/posts/${postId}/channels/${channel}`, {
+    return (await this.leafFetch('PATCH', `/api/v1/posts/${seg(postId)}/channels/${seg(channel)}`, {
       enabled,
     })) as PostChannel
   }
@@ -277,7 +315,7 @@ export class ServiceContentClient implements ContentBackendPort {
     channel: ChannelId,
     status: ChannelStatus,
   ): Promise<PostChannel> {
-    return (await this.leafFetch('PATCH', `/api/v1/posts/${postId}/channels/${channel}`, {
+    return (await this.leafFetch('PATCH', `/api/v1/posts/${seg(postId)}/channels/${seg(channel)}`, {
       status,
     })) as PostChannel
   }
@@ -287,7 +325,7 @@ export class ServiceContentClient implements ContentBackendPort {
     channel: ChannelId,
     scheduledAt: string | null,
   ): Promise<PostChannel> {
-    return (await this.leafFetch('PATCH', `/api/v1/posts/${postId}/channels/${channel}`, {
+    return (await this.leafFetch('PATCH', `/api/v1/posts/${seg(postId)}/channels/${seg(channel)}`, {
       scheduled_at: scheduledAt,
     })) as PostChannel
   }
@@ -297,7 +335,7 @@ export class ServiceContentClient implements ContentBackendPort {
     channel: ChannelId,
     overrides: Record<string, unknown>,
   ): Promise<PostChannel> {
-    return (await this.leafFetch('PATCH', `/api/v1/posts/${postId}/channels/${channel}`, {
+    return (await this.leafFetch('PATCH', `/api/v1/posts/${seg(postId)}/channels/${seg(channel)}`, {
       overrides,
     })) as PostChannel
   }
@@ -313,7 +351,7 @@ export class ServiceContentClient implements ContentBackendPort {
   }
 
   async deleteMailingList(id: string): Promise<void> {
-    await this.leafFetch('DELETE', `/api/v1/lists/${id}`)
+    await this.leafFetch('DELETE', `/api/v1/lists/${seg(id)}`)
   }
 
   // ── Mailing list members ───────────────────────────────────────────────────
@@ -322,15 +360,15 @@ export class ServiceContentClient implements ContentBackendPort {
     listId: string,
     m: { email: string; name?: string | null; source?: 'manual' | 'csv' },
   ): Promise<void> {
-    await this.leafFetch('POST', `/api/v1/lists/${listId}/members`, m)
+    await this.leafFetch('POST', `/api/v1/lists/${seg(listId)}/members`, m)
   }
 
   async listMembers(listId: string): Promise<MailingListMember[]> {
-    return (await this.leafFetch('GET', `/api/v1/lists/${listId}/members`)) as MailingListMember[]
+    return (await this.leafFetch('GET', `/api/v1/lists/${seg(listId)}/members`)) as MailingListMember[]
   }
 
   async removeListMember(listId: string, memberId: string): Promise<void> {
-    await this.leafFetch('DELETE', `/api/v1/lists/${listId}/members/${memberId}`)
+    await this.leafFetch('DELETE', `/api/v1/lists/${seg(listId)}/members/${seg(memberId)}`)
   }
 
   // ── Recipients ────────────────────────────────────────────────────────────
@@ -339,11 +377,11 @@ export class ServiceContentClient implements ContentBackendPort {
     postId: string,
     recips: { mailing_list_id?: string; keycloak_group_id?: string }[],
   ): Promise<void> {
-    await this.leafFetch('PUT', `/api/v1/posts/${postId}/recipients`, { recipients: recips })
+    await this.leafFetch('PUT', `/api/v1/posts/${seg(postId)}/recipients`, { recipients: recips })
   }
 
   async getPostRecipients(postId: string): Promise<PostRecipient[]> {
-    return (await this.leafFetch('GET', `/api/v1/posts/${postId}/recipients`)) as PostRecipient[]
+    return (await this.leafFetch('GET', `/api/v1/posts/${seg(postId)}/recipients`)) as PostRecipient[]
   }
 
   // ── Unsubscribe ───────────────────────────────────────────────────────────
@@ -374,7 +412,7 @@ export class ServiceContentClient implements ContentBackendPort {
    * on action='mint-token' to issue and return a single-use send token string.
    */
   async mintSendToken(postId: string, email: string): Promise<string> {
-    return (await this.leafFetch('POST', `/api/v1/posts/${postId}/recipients`, {
+    return (await this.leafFetch('POST', `/api/v1/posts/${seg(postId)}/recipients`, {
       action: 'mint-token',
       email,
     })) as string
@@ -409,7 +447,7 @@ export class ServiceContentClient implements ContentBackendPort {
   async markDeliverySent(postId: string, emailLower: string, messageId: string): Promise<void> {
     await this.leafFetch(
       'POST',
-      `/api/v1/deliveries/${postId}/${encodeURIComponent(emailLower)}/sent`,
+      `/api/v1/deliveries/${seg(postId)}/${seg(emailLower)}/sent`,
       { message_id: messageId },
     )
   }
@@ -417,7 +455,7 @@ export class ServiceContentClient implements ContentBackendPort {
   async markDeliveryFailed(postId: string, emailLower: string, error: string): Promise<void> {
     await this.leafFetch(
       'POST',
-      `/api/v1/deliveries/${postId}/${encodeURIComponent(emailLower)}/failed`,
+      `/api/v1/deliveries/${seg(postId)}/${seg(emailLower)}/failed`,
       { error },
     )
   }
@@ -427,7 +465,7 @@ export class ServiceContentClient implements ContentBackendPort {
   async getPublication(postId: string, channel: ChannelId): Promise<Publication | null> {
     return (await this.leafFetch(
       'GET',
-      `/api/v1/publications/${postId}/${channel}`,
+      `/api/v1/publications/${seg(postId)}/${seg(channel)}`,
       undefined,
       true,
     )) as Publication | null
@@ -438,13 +476,13 @@ export class ServiceContentClient implements ContentBackendPort {
     channel: ChannelId,
     externalRef: string | null,
   ): Promise<void> {
-    await this.leafFetch('PUT', `/api/v1/publications/${postId}/${channel}`, {
+    await this.leafFetch('PUT', `/api/v1/publications/${seg(postId)}/${seg(channel)}`, {
       external_ref: externalRef,
     })
   }
 
   async clearPublication(postId: string, channel: ChannelId): Promise<void> {
-    await this.leafFetch('DELETE', `/api/v1/publications/${postId}/${channel}`)
+    await this.leafFetch('DELETE', `/api/v1/publications/${seg(postId)}/${seg(channel)}`)
   }
 
   // ── Publish operations ────────────────────────────────────────────────────
@@ -493,7 +531,10 @@ export class ServiceContentClient implements ContentBackendPort {
     try {
       return (await this.leafFetch(
         'POST',
-        `/api/v1/posts/${postId}/publish/${channel}`,
+        `/api/v1/posts/${seg(postId)}/publish/${seg(channel)}`,
+        undefined,
+        false,
+        PUBLISH_TIMEOUT_MS,
       )) as PublishResult
     } catch (err) {
       if (err instanceof ContentServiceError && err.status === 409) {

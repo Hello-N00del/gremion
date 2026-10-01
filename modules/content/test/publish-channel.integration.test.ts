@@ -23,6 +23,7 @@ import {
 import { publishChannel, ChannelNotPublishableError } from '../src/publish-channel.ts'
 import type { ChannelTransport } from '../src/dispatch.ts'
 import { MailUnconfiguredError, type KernelClient, type Recipient } from '../src/kernel-client.ts'
+import type { TracerPort } from '@gremion/ports/tracer'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
 
 // ── fail-closed guard ─────────────────────────────────────────────────────────
@@ -260,6 +261,150 @@ describe('publishChannel — email', () => {
     // bob's claim was released (no durable 'claimed' row), so a retry sees him fresh.
     const bob = await sql<{ status: string }[]>`SELECT status FROM content.deliveries WHERE post_id = ${postId} AND email = 'bob@x.com'`
     expect(bob).toHaveLength(0)
+  })
+})
+
+// ── F1-FIX-07 K5#8 / K5#33: an unusable link base fails closed ───────────────────
+// Every email carries an unsubscribe link built from deps.origin. A missing or
+// loopback base (the old http://localhost:3000 default) must send NOTHING and
+// claim nothing, so a retry once the base is fixed sees every recipient fresh.
+
+describe('publishChannel — email refuses an unusable unsubscribe link base', () => {
+  it.each(['', 'http://localhost:3000', 'not a url'])('origin %j → failed, nothing sent, nothing claimed', async (origin) => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['alice@x.com'])
+    const transport = makeFakeEmailTransport()
+
+    const result = await publishChannel(TENANT, postId, 'email', {
+      ...deps(sql, makeFakeKernel(), transport),
+      origin,
+    })
+
+    expect(result).toMatchObject({ channel: 'email', status: 'failed', detail: 'unusable public base URL' })
+    expect(transport.sent).toHaveLength(0)
+    const dels = await sql<{ c: string }[]>`SELECT count(*) AS c FROM content.deliveries WHERE post_id = ${postId}`
+    expect(Number(dels[0]!.c)).toBe(0)
+  })
+
+  it('the mailed unsubscribe link is absolute on the configured base', async () => {
+    const postId = await makePost('<html><body><p>Hi</p></body></html>')
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['alice@x.com'])
+    const sentHtml: string[] = []
+    const transport = {
+      async send(msg: { html?: string }) {
+        sentHtml.push(msg.html ?? '')
+        return { id: '<x@test>' }
+      },
+    }
+
+    await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+
+    expect(sentHtml[0]).toMatch(/href="https:\/\/pubchan\.example\/content\/unsubscribe\?token=[^"]+"/)
+  })
+})
+
+// ── F1-FIX-07 H07 (K5#0): a transient per-recipient failure is retried ────────────
+// 3 recipients, the send to #2 fails ONCE. The first publish must not report the
+// channel 'sent' (failedCount > 0); a re-publish delivers #2 exactly once and
+// never re-sends #1 or #3.
+
+describe('publishChannel — email transient failure is retried exactly once (H07)', () => {
+  function makeFailOnceTransport(failOnce: string) {
+    const sent: string[] = []
+    let failed = false
+    let seq = 0
+    return {
+      sent,
+      countFor: (email: string) => sent.filter((t) => t === email).length,
+      async send(msg: { to?: string }): Promise<{ id: string }> {
+        if (msg.to === failOnce && !failed) {
+          failed = true
+          throw new Error('SMTP 451 4.7.1 try again later')
+        }
+        sent.push(msg.to ?? '')
+        seq += 1
+        return { id: `<retry-${seq}@test>` }
+      },
+    }
+  }
+
+  it('first pass reports failed (not sent); the republish delivers #2 exactly once', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['one@x.com', 'two@x.com', 'three@x.com'])
+    const transport = makeFailOnceTransport('two@x.com')
+
+    const first = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    expect(first.status).toBe('failed')
+    expect(first.recipientCount).toBe(2)
+    expect(first.warnings.join(' ')).toMatch(/two@x\.com/)
+    expect((await getChannelRow(sql, postId, 'email'))!.status).not.toBe('sent')
+    // A partial pass invents no channel.email.sent event.
+    expect(await outboxRows()).toHaveLength(0)
+
+    const second = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    expect(second.status).toBe('sent')
+    expect(transport.countFor('one@x.com')).toBe(1)
+    expect(transport.countFor('two@x.com')).toBe(1)
+    expect(transport.countFor('three@x.com')).toBe(1)
+    expect((await getChannelRow(sql, postId, 'email'))!.status).toBe('sent')
+
+    const dels = await sql<{ email: string; status: string }[]>`
+      SELECT email, status FROM content.deliveries WHERE post_id = ${postId} ORDER BY email`
+    expect(dels.map((d) => d.status)).toEqual(['sent', 'sent', 'sent'])
+  })
+
+  it('a third publish after success re-sends nobody', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['one@x.com', 'two@x.com', 'three@x.com'])
+    const transport = makeFailOnceTransport('two@x.com')
+
+    await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    const third = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+
+    expect(third.status).toBe('sent')
+    expect(transport.sent).toHaveLength(3)
+  })
+})
+
+// ── F1-FIX-07 r2: a failed per-channel result is a failed span, not a clean one ──
+// publishChannel RETURNS status:'failed' (it does not throw), so without an
+// explicit error the span ended clean and the trace hid the failure.
+
+describe('publishChannel — a failed result ends its span with an error', () => {
+  function recordingTracer(): TracerPort & { ends: unknown[] } {
+    const ends: unknown[] = []
+    return {
+      ends,
+      startSpan: () => ({ setAttribute: () => {}, end: (error?: unknown) => { ends.push(error) } }),
+      currentCorrelationId: () => null,
+    }
+  }
+
+  it('a partial failure ends the span with an Error carrying the detail; a success ends it clean', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['one@x.com', 'two@x.com'])
+    const tracer = recordingTracer()
+
+    await publishChannel(TENANT, postId, 'email', {
+      ...deps(sql, makeFakeKernel(), makeFakeEmailTransport({ failFor: new Set(['two@x.com']) })),
+      tracer,
+    })
+    expect(tracer.ends).toHaveLength(1)
+    expect(tracer.ends[0]).toBeInstanceOf(Error)
+    expect((tracer.ends[0] as Error).message).toMatch(/1 send\(s\) failed/)
+
+    await publishChannel(TENANT, postId, 'email', {
+      ...deps(sql, makeFakeKernel(), makeFakeEmailTransport()),
+      tracer,
+    })
+    expect(tracer.ends).toHaveLength(2)
+    expect(tracer.ends[1]).toBeUndefined()
   })
 })
 

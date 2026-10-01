@@ -37,12 +37,13 @@ import type { ContentEvent } from '@gremion/ports/broker'
 import type { Sql, TenantRef } from './tenant-store.js'
 import { MailUnconfiguredError, type KernelClient } from './kernel-client.js'
 import { enqueueOutbox } from './outbox.js'
+import { checkLinkBase } from './link-base.js'
 import {
   getPost,
   getChannelRow,
   setChannelStatus,
   getPostChannelRecipients,
-  claimRecipient,
+  claimDelivery,
   markSent,
   markFailed,
   releaseClaim,
@@ -97,8 +98,14 @@ export interface PublishChannelDeps {
   kernel: KernelClient
   /** Email transport (the kernel send-mail adapter) — only used for email. */
   emailTransport: ChannelTransport
-  /** This tenant's external origin for unsubscribe links (no trailing slash). */
+  /**
+   * This tenant's external origin for unsubscribe links (no trailing slash).
+   * Checked per email publish (checkLinkBase): unset/malformed/loopback fails
+   * the publish before any recipient is claimed (K5#8).
+   */
   origin: string
+  /** Local development only: accept a loopback origin (CONTENT_ALLOW_LOOPBACK_LINKS=1). */
+  allowLoopbackLinks?: boolean
   /**
    * The correlation id for this publish. Injected by the HTTP publish route from
    * the inbound x-correlation-id header so the co-committed outbox row (and the
@@ -160,7 +167,15 @@ export async function publishChannel(
     let outcome: ChannelOutcome
     switch (channel) {
       case 'email':
-        outcome = await publishEmail(sql, kernel, emailTransport, origin, postId, post)
+        outcome = await publishEmail(
+          sql,
+          kernel,
+          emailTransport,
+          origin,
+          deps.allowLoopbackLinks === true,
+          postId,
+          post,
+        )
         break
       case 'portal':
         outcome = await publishPortal(sql, kernel, postId, post)
@@ -184,7 +199,13 @@ export async function publishChannel(
       })
     }
 
-    span.end()
+    // A failed outcome is RETURNED, not thrown (the kernel UI renders it), so
+    // mark the span failed explicitly or the trace would show a clean publish.
+    if (outcome.result.status === 'failed') {
+      span.end(new Error(outcome.result.detail ?? 'publish failed'))
+    } else {
+      span.end()
+    }
     return outcome.result
   } catch (err) {
     span.end(err instanceof Error ? err : new Error(String(err)))
@@ -199,10 +220,29 @@ async function publishEmail(
   kernel: KernelClient,
   transport: ChannelTransport,
   origin: string,
+  allowLoopback: boolean,
   postId: string,
   post: ContentPost,
 ): Promise<ChannelOutcome> {
   const warnings: string[] = []
+
+  // K5#8 / K5#33: every mail carries an unsubscribe link built from `origin`.
+  // An unusable base (unset, malformed, loopback) is a config gap: return a
+  // clean failed result BEFORE claiming anyone, channel status untouched (as
+  // for SMTP-unconfigured), so a retry once the base is fixed sees all fresh.
+  const linkBase = checkLinkBase(origin, { allowLoopback })
+  if (!linkBase.usable) {
+    return {
+      result: {
+        channel: 'email',
+        status: 'failed',
+        recipientCount: 0,
+        warnings: [linkBase.reason],
+        detail: 'unusable public base URL',
+      },
+    }
+  }
+  const base = linkBase.base
 
   const recipientRows = await getPostChannelRecipients(sql, postId, 'email')
   const recipients = await buildRecipientList(sql, recipientRows, kernel)
@@ -231,7 +271,7 @@ async function publishEmail(
   for (const { email } of recipients) {
     const emailLower = email.toLowerCase()
 
-    const claim = await claimRecipient(sql, postId, emailLower)
+    const { result: claim, claimedAt } = await claimDelivery(sql, postId, emailLower)
     if (claim === 'already-sent') {
       alreadySentCount += 1
       continue
@@ -239,7 +279,7 @@ async function publishEmail(
     if (claim !== 'fresh') continue // 'in-flight' — another worker owns it
 
     const token = await addSendToken(sql, randomUUID(), postId, emailLower)
-    const unsubUrl = `${origin}/content/unsubscribe?token=${encodeURIComponent(token)}`
+    const unsubUrl = `${base}/content/unsubscribe?token=${encodeURIComponent(token)}`
     const personalizedHtml = injectUnsubscribeFooter(post.body_html, unsubUrl)
 
     try {
@@ -258,14 +298,16 @@ async function publishEmail(
         // the pass. Do NOT keep looping: the rest would fail identically, and a
         // recipient already-sent on a PRIOR pass must not let the pass report
         // success while these un-sent ones are silently dropped.
-        await releaseClaim(sql, postId, emailLower)
+        await releaseClaim(sql, postId, emailLower, claimedAt ?? undefined)
         smtpUnconfigured = true
         break
       }
-      // Per-recipient send failure: isolate it (bounded at-least-once via the
-      // 15-min stale-claim takeover) and keep sending the others.
+      // Per-recipient send failure: isolate it and keep sending the others. The
+      // 'failed' row is re-claimed by the next publish (claimRecipient takes
+      // over failed rows, F1-FIX-07 H07), so the recipient is retried, not lost.
       const message = err instanceof Error ? err.message : String(err)
-      await markFailed(sql, postId, emailLower, message)
+      // The claim token keeps a late failure off a claim another worker took over.
+      await markFailed(sql, postId, emailLower, message, claimedAt ?? undefined)
       failedCount += 1
       warnings.push(`send to ${emailLower} failed: ${message}`)
     }
@@ -314,6 +356,23 @@ async function publishEmail(
         recipientCount: 0,
         warnings: failedCount > 0 ? [...warnings, 'all sends failed'] : warnings,
         detail: 'all sends failed',
+      },
+    }
+  }
+
+  // PARTIAL (F1-FIX-07 H07): some recipients were delivered, some sends threw.
+  // The channel must NOT read 'sent' while a recipient is still un-mailed — the
+  // operator re-publishes, and the failed rows are re-claimed (and only they are
+  // sent again). No channel.email.sent event: the channel is not finished yet.
+  if (failedCount > 0) {
+    await setChannelStatus(sql, postId, 'email', 'failed')
+    return {
+      result: {
+        channel: 'email',
+        status: 'failed',
+        recipientCount: sentCount,
+        warnings: [...warnings, `${failedCount} recipient(s) not delivered — publish again to retry them`],
+        detail: `${failedCount} send(s) failed`,
       },
     }
   }
