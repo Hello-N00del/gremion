@@ -42,7 +42,7 @@ const startButton = () => screen.getByRole('button', { name: /Backup jetzt erste
 describe('TabBackups.svelte: real backup outcome', () => {
   it('disables the button and shows the reason when hostd cannot take the trigger', async () => {
     const reason = 'Der Host-Dienst (hostd) ist nicht erreichbar: sein Socket fehlt.'
-    const fetchMock = vi.fn(async () => json(statusBody({ available: false, reason })))
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(statusBody({ available: false, reason })))
     vi.stubGlobal('fetch', fetchMock)
 
     render(TabBackups, { props: { backups: BACKUPS, pollMs: 5 } })

@@ -33,7 +33,7 @@ describe('TabDangerZone.svelte (K2#9)', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/settings/reset')
     expect(init.method).toBe('POST')
-    const sent = String(init.body)
+    const sent = typeof init.body === 'string' ? init.body : ''
     expect(sent).not.toMatch(/finance|elections/)
     expect(JSON.parse(sent)).toEqual({ confirm: 'ZURÜCKSETZEN' })
     expect(await screen.findByText('Konfiguration zurückgesetzt.')).toBeTruthy()
