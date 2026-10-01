@@ -55,13 +55,37 @@
 #   customer-resume  every one of those restored (a fresh principal)
 #   customer-reconcile reconcile green; a planted platform@ sender fails
 #                    smtp-server; --apply repairs; check-principals --no-allowances
+#   customer-admins  brief section 1 "Admins sign in" (PRD-IDN-005): the realm's
+#                    discovery issuer through https://<host>/auth/realms/<slug>
+#                    equals tenant.issuer; for the it-admin and the
+#                    council-admin: the realm role, the execute-actions mail
+#                    READ FROM STALWART (IMAPS in the Stalwart container's own
+#                    network namespace, the roles@ mailbox -- the proof's admin
+#                    addresses are roles+<slug>-<role>@<PLATFORM_DOMAIN>
+#                    sub-addresses, so they land where the proof can read them),
+#                    sender kc-<token>@, link on the customer's host;
+#                    UPDATE_PASSWORD + CONFIGURE_TOTP through that link; the
+#                    code flow of gremion-ui through the realm router; 200 on /
+#                    with the dashboard PageTitle. Needs mail.env with
+#                    ROLES_IMAP_PASSWORD (roles@ provisioned) and a Keycloak that
+#                    reaches mail.<PLATFORM_DOMAIN>:587.
 #   customer-after   TRD-440: the container set and the services unchanged
-# OPEN (brief section 1 "Admins sign in"): the first-administrator sign-in
-# through the execute-actions mail (read the link from Stalwart, password +
-# TOTP, code flow through https://<host>/auth/realms/<slug>, 200 on /) is NOT
-# implemented here yet. It needs a mailbox the proof can read on the vendor
-# mail server of a running pooled stack; no decision moves it to TASK-038 --
-# the orchestrator decides (named residual of TASK-043 round 3).
+#
+# ADMINS REHEARSAL (scratch, plain `docker run` only; no pooled stack): the
+# customer-admins drivers against a REAL Keycloak 26.6.1 configured like the
+# pooled one (no --hostname, KC_HOSTNAME_STRICT=false, KC_PROXY_HEADERS=
+# xforwarded, the gremion login theme) and an SMTP sink that keeps the raw
+# message. Scratch deviations: the realm is made by kcadm (not by the
+# provisioner), sslRequired=external over plain http, the sink instead of
+# Stalwart (so the IMAPS read is not rehearsed), the callback of a stand-in
+# client instead of gremion-ui (so the PageTitle is not rehearsed).
+#   rehearsal-up     network, SMTP sink, Keycloak (${STACK}-rh-*)
+#   rehearsal-run    a realm WITHOUT frontendUrl mails a link on the internal
+#                    address and mail-link refuses it (the r4 defect, live);
+#                    with the realm-doc frontendUrl: mail-link, activate
+#                    (UPDATE_PASSWORD + CONFIGURE_TOTP), signin (password + OTP,
+#                    the callback carries a code and iss = the realm URL)
+#   rehearsal-down   everything rehearsal-up created, by name
 #
 # Every assertion reads a post-condition (docker inspect, an HTTP status and
 # header, a database row, a Keycloak read-back), never an exit code alone.
@@ -474,6 +498,43 @@ principal_count() { # <token>
 }
 customer_id() { q control "SELECT id FROM tenant WHERE slug = '$1'"; }
 host_of() { printf 'rat.%s.%s' "$1" "$(penv PLATFORM_DOMAIN)"; }
+# The first administrators' addresses: sub-addresses of the vendor server's
+# roles@ mailbox, so the execute-actions mail lands where customer-admins reads.
+admin_addr() { printf '%s+%s-%s@%s' "${PROOF_ADMIN_MAILBOX:-roles}" "$1" "$2" "$(penv PLATFORM_DOMAIN)"; }
+menv() { sed -n "s/^$1=//p" "$PENV/mail.env" 2>/dev/null | tr -d '"\r' | tail -n1; }
+# A scratch stack's edge and mail server carry no real certificate (no ACME).
+scratch_tls() { [[ "$PSTACK" == t040-* || "$PSTACK" == t043-* ]]; }
+# imap_fetch <to address> <out file>: the newest message to that address in
+# roles@'s INBOX, over IMAPS inside the Stalwart container's network namespace
+# (the pinned curl image; the password rides in the curl config on stdin,
+# never on an argv). Returns 1 when none arrived within ~60 s.
+imap_fetch() {
+    local dom stal img pw uid tries=0
+    local -a k=()
+    dom="$(penv PLATFORM_DOMAIN)"; stal="${PSTACK}-mail-stalwart"
+    [[ -f "$PENV/mail.env" ]] || die "no ${PENV}/mail.env: the vendor mail project is not part of this stack"
+    docker inspect "$stal" >/dev/null 2>&1 || die "no container ${stal}: the vendor mail project is not running"
+    img="$(menv PROBE_CURL_IMAGE)"
+    [[ -n "$img" ]] || img="$(sed -n 's/^PROBE_CURL_IMAGE=//p' "$ROOT/infra/host/templates/env/mail.env.tmpl" | tr -d '\r')"
+    [[ "$img" == *@sha256:* ]] || die "PROBE_CURL_IMAGE is not pinned by digest"
+    pw="$(menv ROLES_IMAP_PASSWORD)"
+    [[ -n "$pw" ]] || die "mail.env has no ROLES_IMAP_PASSWORD: provision roles@ first (gremion-mail-bringup)"
+    scratch_tls && k=(-k)
+    imap() { # <curl config body> -- one IMAP request, config on stdin
+        printf '%s\nuser = "roles@%s:%s"\nresolve = "mail.%s:993:127.0.0.1"\n' "$1" "$dom" "$pw" "$dom" \
+            | docker run --rm -i --name "${STACK}-imap-$$-${tries}" --network "container:${stal}" "$img" -sS ${k[@]+"${k[@]}"} -K - 2>/dev/null
+    }
+    while (( tries < 20 )); do
+        uid="$(imap "url = \"imaps://mail.${dom}:993/INBOX\"
+request = \"SEARCH TO \\\"$1\\\"\"" | tr -d '\r' | awk '/SEARCH/ { print $NF }' | tail -n1)" || uid=""
+        if [[ "$uid" =~ ^[0-9]+$ ]]; then
+            ( umask 077; imap "url = \"imaps://mail.${dom}:993/INBOX;UID=${uid}\"" > "$2" )
+            [[ -s "$2" ]] && return 0
+        fi
+        tries=$(( tries + 1 )); sleep 3
+    done
+    return 1
+}
 trd440() { # the container count and every project's service list
     # every measurement must succeed (review C, r2): a failed render on both
     # sides compared equal; each project renders from its own directory
@@ -520,17 +581,17 @@ phase_customer_create() {
     local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" out rc id kdb n
     [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
     # R29-I1: board is refused BY NAME, before any write.
-    rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "it@$(host_of "$X")" \
-        --council-admin "rat@$(host_of "$X")" --enable calendar,board 2>&1)" || rc=$?
+    rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,board 2>&1)" || rc=$?
     if (( rc != 0 )) && [[ "$out" == *board* ]] && [[ -z "$(customer_id "$X")" ]]; then
         ok "customer-create: --enable board refused by name (exit ${rc}), no control row written"
     else bad "customer-create: --enable board was not refused before any write (exit ${rc})"; fi
 
-    tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "it@$(host_of "$X")" \
-        --council-admin "rat@$(host_of "$X")" --enable calendar,vault > "$OUT/ledger/create-x.log" 2>&1 \
+    tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,vault > "$OUT/ledger/create-x.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-x.log" >&2; bad "customer-create: gremion-tenant create ${X} failed"; return; }
-    tenant create "$Y" --host "$(host_of "$Y")" --config "$cfg" --it-admin "it@$(host_of "$Y")" \
-        --council-admin "rat@$(host_of "$Y")" > "$OUT/ledger/create-y.log" 2>&1 \
+    tenant create "$Y" --host "$(host_of "$Y")" --config "$cfg" --it-admin "$(admin_addr "$Y" it)" \
+        --council-admin "$(admin_addr "$Y" rat)" > "$OUT/ledger/create-y.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-y.log" >&2; bad "customer-create: gremion-tenant create ${Y} failed"; return; }
     ok "customer-create: gremion-tenant create ${X} (calendar, vault) and ${Y} exited 0"
 
@@ -576,8 +637,8 @@ phase_customer_rerun() {
     local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" id before after b
     id="$(customer_id "$X")"
     before="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
-    tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "it@$(host_of "$X")" \
-        --council-admin "rat@$(host_of "$X")" --enable calendar,vault > "$OUT/ledger/rerun-x.log" 2>&1 \
+    tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,vault > "$OUT/ledger/rerun-x.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/rerun-x.log" >&2; bad "customer-rerun: the second create failed"; return; }
     after="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
     if [[ "$before" == "$after" ]]; then ok "customer-rerun: the ledger is unchanged (${after} rows)"; else bad "customer-rerun: the ledger grew ${before} -> ${after}"; fi
@@ -629,6 +690,152 @@ phase_customer_reconcile() {
     else bad "customer-reconcile: check-principals failed"; fi
 }
 
+# Brief section 1 "Admins sign in" (PRD-IDN-005, Q16).
+phase_customer_admins() {
+    need_pooled
+    local dom host realm_url port tiss disc role krole addr uid out
+    local -a tls=()
+    dom="$(penv PLATFORM_DOMAIN)"; host="$(host_of "$X")"; realm_url="https://${host}/auth/realms/${X}"
+    port="$(penv EDGE_HTTPS_PORT)"; port="${port:-443}"
+    scratch_tls && tls=(--insecure yes)
+    # Q16: the realm's discovery through the customer's OWN host (the realm router).
+    tiss="$(q control "SELECT issuer FROM tenant WHERE slug = '${X}'")"
+    disc="$(curl -ksS --max-time 20 --resolve "${host}:${port}:127.0.0.1" \
+        "https://${host}:${port}/auth/realms/${X}/.well-known/openid-configuration" 2>/dev/null | jq -r '.issuer // empty' 2>/dev/null)" || disc=""
+    if [[ -n "$disc" && "$disc" == "$realm_url" && "$tiss" == "$realm_url" ]]; then
+        ok "customer-admins: discovery through https://${host}/auth/realms/${X} names issuer ${disc} = tenant.issuer"
+    else bad "customer-admins: discovery issuer '${disc:-none}', tenant.issuer '${tiss:-none}', want ${realm_url}"; fi
+    for role in it rat; do
+        [[ "$role" == it ]] && krole=it-admin || krole=council-admin
+        addr="$(admin_addr "$X" "$role")"
+        uid="$(skc get users -r "$X" -q "email=${addr}" --fields id | jq -r '.[0].id // empty')"
+        if [[ -n "$uid" ]] && skc get "users/${uid}/role-mappings/realm" -r "$X" | jq -e --arg r "$krole" 'any(.[]; .name == $r)' >/dev/null; then
+            ok "customer-admins: ${addr} holds the realm role ${krole}"
+        else bad "customer-admins: ${addr} is absent or lacks the realm role ${krole}"; fi
+        if ! imap_fetch "$addr" "$OUT/secrets/admin-${role}.eml"; then
+            bad "customer-admins: no execute-actions mail to ${addr} reached roles@ on Stalwart"; continue
+        fi
+        if out="$(session mail-link --mail-file "$(host_path "$OUT/secrets/admin-${role}.eml")" --from "kc-${XT}@${dom}" \
+                --realm-url "$realm_url" --link-out "$(host_path "$OUT/secrets/admin-${role}.link")" 2> "$OUT/ledger/admin-${role}-mail.err")"; then
+            printf '%s %s\n' "$(now)" "$out" | ledger admin-mail.log
+            ok "customer-admins: the execute-actions mail to ${addr} is from kc-${XT}@${dom} and links under ${realm_url}"
+        else bad "customer-admins: the mail to ${addr}: $(tail -n1 "$OUT/ledger/admin-${role}-mail.err")"; continue; fi
+        printf 'Admin-%s-%s\n' "$(gen)" "Aa1!" | secret_file "admin-${role}-pw"
+        if out="$(session activate --link-file "$(host_path "$OUT/secrets/admin-${role}.link")" --resolve "${host}=https://127.0.0.1:${port}" \
+                ${tls[@]+"${tls[@]}"} --new-password-file "$(host_path "$OUT/secrets/admin-${role}-pw")" \
+                --totp-secret-out "$(host_path "$OUT/secrets/admin-${role}-totp")" 2> "$OUT/ledger/admin-${role}-activate.err")"; then
+            printf '%s %s\n' "$(now)" "$(jq -c 'del(.trace)' <<< "$out")" | ledger admin-activate.log
+            ok "customer-admins: ${krole} completed UPDATE_PASSWORD and CONFIGURE_TOTP through the link ($(jq -c .kinds <<< "$out"))"
+        else bad "customer-admins: ${krole} could not complete the actions: $(tail -n1 "$OUT/ledger/admin-${role}-activate.err")"; continue; fi
+        if out="$(session signin --app "https://${host}" --realm-url "$realm_url" --user "$addr" \
+                --password-file "$(host_path "$OUT/secrets/admin-${role}-pw")" --totp-secret-in "$(host_path "$OUT/secrets/admin-${role}-totp")" \
+                --resolve "${host}=https://127.0.0.1:${port}" ${tls[@]+"${tls[@]}"} 2> "$OUT/ledger/admin-${role}-signin.err")"; then
+            printf '%s %s\n' "$(now)" "$(jq -c 'del(.trace)' <<< "$out")" | ledger admin-signin.log
+            ok "customer-admins: ${krole} signed in with password + TOTP through $(jq -r .authorize <<< "$out"); / answered 200 with the dashboard PageTitle"
+        else bad "customer-admins: ${krole} sign-in: $(tail -n1 "$OUT/ledger/admin-${role}-signin.err") ${out}"; fi
+    done
+}
+
+# ── admins rehearsal (scratch; plain docker run) ───────────────────────────
+RH_NET="${STACK}-rh-net"
+RH_KC="${STACK}-rh-kc"
+RH_SINK="${STACK}-rh-sink"
+RH_REALM=proof-r
+RH_HOST=rat.proof-r.test
+RH_APP=app.proof-r.test
+NODE_IMAGE="node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8"
+rh_set() { mkdir -p "$OUT"; printf '%s=%s\n' "$1" "$2" >> "$OUT/rehearsal.env"; }
+rh_get() { [[ -f "$OUT/rehearsal.env" ]] || die "no ${OUT}/rehearsal.env: run rehearsal-up first"; sed -n "s/^$1=//p" "$OUT/rehearsal.env" | tail -n1; }
+rkc() { docker exec -i "$RH_KC" /opt/keycloak/bin/kcadm.sh "$@"; }
+
+phase_rehearsal_up() {
+    require_scratch rehearsal-up
+    mkdir -p "$OUT/ledger"; : > "$OUT/rehearsal.env"
+    gen | secret_file rh-kc-admin
+    local p; p="$(free_port)"; rh_set RH_KC_PORT "$p"
+    docker network inspect "$RH_NET" >/dev/null 2>&1 || docker network create "$RH_NET" >/dev/null
+    docker run -d --name "$RH_SINK" --network "$RH_NET" --tmpfs /out \
+        -v "$(host_path "$ROOT/test/host/fixtures/customer-provision/smtp-sink.mjs"):/sink.mjs:ro" "$NODE_IMAGE" node /sink.mjs >/dev/null
+    # Configured like the pooled stack's Keycloak (docker-compose.yml, .prod.yml):
+    # no --hostname, so every URL it builds follows the request -- or the
+    # realm's frontendUrl.
+    KC_BOOTSTRAP_ADMIN_PASSWORD="$(cat "$OUT/secrets/rh-kc-admin")" docker run -d --name "$RH_KC" --network "$RH_NET" \
+        -p "127.0.0.1:${p}:8080" -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD \
+        -e KC_HOSTNAME_STRICT=false -e KC_PROXY_HEADERS=xforwarded -e KC_HTTP_RELATIVE_PATH=/auth -e KC_HTTP_ENABLED=true \
+        -v "$(host_path "$ROOT/docker/keycloak/themes"):/opt/keycloak/themes:ro" "$KC_IMAGE" start-dev >/dev/null
+    ok "rehearsal-up: ${RH_SINK} and ${RH_KC} (no --hostname, the gremion theme) on 127.0.0.1:${p}"
+}
+
+rh_mail_to() { # <address> <out file>: the newest message the sink stored for it
+    local f
+    for _ in $(seq 1 20); do
+        f="$(docker exec "$RH_SINK" sh -c 'grep -l -i "^To: .*$0" /out/*.eml 2>/dev/null | sort | tail -n1' "$1" || true)"
+        if [[ -n "$f" ]]; then ( umask 077; docker exec "$RH_SINK" cat "$f" > "$2" ); [[ -s "$2" ]] && return 0; fi
+        sleep 1
+    done
+    return 1
+}
+
+phase_rehearsal_run() {
+    require_scratch rehearsal-run
+    local p realm_url addr uid out n_before
+    p="$(rh_get RH_KC_PORT)"; realm_url="http://${RH_HOST}:${p}/auth/realms/${RH_REALM}"
+    addr="roles+${RH_REALM}-it@proof.test"
+    local s=0
+    until curl -fsS "http://127.0.0.1:${p}/auth/realms/master" >/dev/null 2>&1; do (( s++ < 60 )) || die "keycloak never answered"; sleep 3; done
+    KC_LOGIN_PASSWORD="$(cat "$OUT/secrets/rh-kc-admin")" docker exec -e KC_LOGIN_PASSWORD "$RH_KC" sh -c \
+        '/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user admin --password "$KC_LOGIN_PASSWORD" >/dev/null'
+    # The realm as the provisioner makes it, in the parts this flow touches:
+    # the gremion login theme, the base OTP policy, the customer's own sender.
+    rkc create realms -s "realm=${RH_REALM}" -s enabled=true -s sslRequired=external -s loginTheme=gremion \
+        -s otpPolicyType=totp -s otpPolicyAlgorithm=HmacSHA1 -s otpPolicyDigits=6 -s otpPolicyPeriod=30 \
+        -s "smtpServer.host=${RH_SINK}" -s smtpServer.port=2525 -s "smtpServer.from=kc-proof_r@proof.test" >/dev/null
+    rkc create clients -r "$RH_REALM" -s clientId=rehearsal-app -s publicClient=true -s standardFlowEnabled=true \
+        -s "redirectUris=[\"https://${RH_APP}/auth/callback/keycloak\"]" >/dev/null
+    uid="$(rkc create users -r "$RH_REALM" -s "username=${addr}" -s "email=${addr}" -s enabled=true \
+        -s 'requiredActions=["UPDATE_PASSWORD","CONFIGURE_TOTP"]' -i | tr -d '\r')"
+    # 1. WITHOUT frontendUrl (the provisioner before r4): the admin call goes to
+    #    the internal address, and so does the mailed link -- refused.
+    printf '["UPDATE_PASSWORD","CONFIGURE_TOTP"]' | rkc update "users/${uid}/execute-actions-email" -r "$RH_REALM" -q lifespan=3600 -f - >/dev/null
+    rh_mail_to "$addr" "$OUT/secrets/rh-mail-1.eml" || die "the sink stored no execute-actions mail"
+    if out="$(session mail-link --mail-file "$(host_path "$OUT/secrets/rh-mail-1.eml")" --from kc-proof_r@proof.test \
+            --realm-url "$realm_url" --link-out "$(host_path "$OUT/secrets/rh-link-1")" 2>&1)"; then
+        bad "rehearsal: a realm without frontendUrl mailed a link under ${realm_url} (${out})"
+    else ok "rehearsal: without frontendUrl the link names the admin call's address and mail-link refuses it ($(grep -o 'no execute-actions link.*' <<< "$out" | head -n1))"; fi
+    # 2. WITH the realm doc's frontendUrl (realm-doc.ts frontendUrlFor).
+    rkc update "realms/${RH_REALM}" -s "attributes.frontendUrl=http://${RH_HOST}:${p}/auth" >/dev/null
+    n_before="$(docker exec "$RH_SINK" sh -c 'ls /out | wc -l' | tr -d ' \r')"
+    printf '["UPDATE_PASSWORD","CONFIGURE_TOTP"]' | rkc update "users/${uid}/execute-actions-email" -r "$RH_REALM" -q lifespan=3600 -f - >/dev/null
+    for _ in $(seq 1 20); do [[ "$(docker exec "$RH_SINK" sh -c 'ls /out | wc -l' | tr -d ' \r')" -gt "$n_before" ]] && break; sleep 1; done
+    rh_mail_to "$addr" "$OUT/secrets/rh-mail-2.eml" || die "the sink stored no second mail"
+    if out="$(session mail-link --mail-file "$(host_path "$OUT/secrets/rh-mail-2.eml")" --from kc-proof_r@proof.test \
+            --realm-url "$realm_url" --link-out "$(host_path "$OUT/secrets/rh-link-2")" 2> "$OUT/ledger/rh-mail.err")"; then
+        ok "rehearsal: with frontendUrl the real Keycloak mail parses: $(jq -c . <<< "$out")"
+    else bad "rehearsal: mail-link on the frontendUrl mail: $(tail -n1 "$OUT/ledger/rh-mail.err")"; return; fi
+    printf 'Admin-%s-%s\n' "$(gen)" "Aa1!" | secret_file rh-pw
+    if out="$(session activate --link-file "$(host_path "$OUT/secrets/rh-link-2")" --resolve "${RH_HOST}=http://127.0.0.1:${p}" \
+            --new-password-file "$(host_path "$OUT/secrets/rh-pw")" --totp-secret-out "$(host_path "$OUT/secrets/rh-totp")" \
+            2> "$OUT/ledger/rh-activate.err")"; then
+        ok "rehearsal: activate completed $(jq -c .kinds <<< "$out") and ended on: $(jq -r .page <<< "$out" | cut -c1-80)"
+    else bad "rehearsal: activate: $(tail -n1 "$OUT/ledger/rh-activate.err") ${out}"; return; fi
+    local az="${realm_url}/protocol/openid-connect/auth?client_id=rehearsal-app&response_type=code&scope=openid&redirect_uri=https%3A%2F%2F${RH_APP}%2Fauth%2Fcallback%2Fkeycloak&state=t043"
+    if out="$(session signin --app "https://${RH_APP}" --authorize-url "$az" --stop-host "$RH_APP" --realm-url "$realm_url" \
+            --user "$addr" --password-file "$(host_path "$OUT/secrets/rh-pw")" --totp-secret-in "$(host_path "$OUT/secrets/rh-totp")" \
+            --resolve "${RH_HOST}=http://127.0.0.1:${p}" 2> "$OUT/ledger/rh-signin.err")"; then
+        ok "rehearsal: signin through the gremion theme with password + TOTP: $(jq -c . <<< "$out")"
+    else bad "rehearsal: signin: $(tail -n1 "$OUT/ledger/rh-signin.err") ${out}"; fi
+    printf '%s rehearsal-run\n' "$(now)" | ledger run.log
+}
+
+phase_rehearsal_down() {
+    require_scratch rehearsal-down
+    docker rm -f -v "$RH_KC" "$RH_SINK" >/dev/null 2>&1 || true
+    docker network rm "$RH_NET" >/dev/null 2>&1 || true
+    if [[ -z "$(docker ps -aq --filter "name=^${STACK}-rh-")$(docker network ls -q --filter "name=^${RH_NET}$")" ]]; then
+        ok "rehearsal-down: no ${STACK}-rh-* container or network remains"
+    else bad "rehearsal-down left resources"; fi
+}
+
 phase_customer_after() {
     need_pooled
     trd440 > "$OUT/ledger/trd440-after.txt"
@@ -646,7 +853,11 @@ run_phase() {
         customer-suspend) phase_customer_suspend ;;
         customer-resume) phase_customer_resume ;;
         customer-reconcile) phase_customer_reconcile ;;
+        customer-admins) phase_customer_admins ;;
         customer-after) phase_customer_after ;;
+        rehearsal-up) phase_rehearsal_up ;;
+        rehearsal-run) phase_rehearsal_run ;;
+        rehearsal-down) phase_rehearsal_down ;;
         panel-image) phase_panel_image ;;
         panel-up) phase_panel_up ;;
         panel-realm) phase_panel_realm ;;
