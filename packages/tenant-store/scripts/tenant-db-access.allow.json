@@ -26,11 +26,11 @@
     },
     {
       "path": "gremion-ui/scripts/tenant-provision.ts",
-      "calls": 8,
+      "calls": 9,
       "imports": 1,
       "adoptedBy": "TASK-077",
       "since": "2026-09-30",
-      "reason": "TASK-043 adopted @gremion/tenant-store/lifecycle: no database is created or dropped here any more (ensureKernelDatabase, enableModule, dropKernelDatabase do it, server-quoted). What remains are the ADMIN connections the lifecycle takes injected: gremion_platform as its owner, the kernel and module servers' POSTGRES_USER (ModuleServer.admin needs CREATEDB/CREATEROLE), the leaf newsletter shred, and (r2) delete's read-only check of plt.module_database before it shreds anything; the registry (TASK-077) takes them over"
+      "reason": "TASK-043 adopted @gremion/tenant-store/lifecycle: no database is created or dropped here any more (ensureKernelDatabase, enableModule, dropKernelDatabase do it, server-quoted). What remains are the ADMIN connections the lifecycle takes injected: gremion_platform as its owner, the kernel and module servers' POSTGRES_USER (ModuleServer.admin needs CREATEDB/CREATEROLE), the leaf newsletter shred, (r2) delete's read-only check of plt.module_database before it shreds anything, and (r4) init's per-database admin connection (openAdminOn) through which ensurePanelReader creates the control panel's SELECT-only reader role and grants it on the control and platform databases -- never a tenant database; the registry (TASK-077) takes them over"
     },
     {
       "path": "gremion-ui/src/lib/server/tenant/provisioner/customer-adapters.ts",
