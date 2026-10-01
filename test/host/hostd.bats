@@ -283,6 +283,105 @@ hostd_stdin() {
 }
 
 # ---------------------------------------------------------------------------
+# One host operation at a time (F1-FIX-09, K6#26)
+#
+# Nothing serialised deploy, switch, rollback, snapshot and backup, so concurrent
+# requests raced on the colours, the migrations and the staged backup tree. Every
+# MUTATING verb now takes a non-blocking flock on $GREMION_ROOT/runtime/hostd.lock
+# and answers `busy` with EXIT 3 (blocked on another operation) when it is held.
+# The lock stays held by the program it started (the fd is inherited), and the
+# program is told through GREMION_HOST_LOCK_HELD=1 so gremion-backup, which takes
+# the same lock when the systemd timer starts it directly, does not wait on its
+# own parent.
+# ---------------------------------------------------------------------------
+
+@test "every mutating verb is refused as busy while another host operation holds the lock" {
+    local p req
+    for p in gremion-deploy gremion-switch gremion-rollback gremion-snapshot gremion-backup; do
+        shim "$p" 'echo SHOULD-NOT-RUN'
+    done
+    hold_host_lock 20
+    run hostd_stdin 'TOKEN itest-token-0123456789' 'deploy dist-v1.2.3'
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"busy"* ]]
+    [[ "$output" == *"EXIT 3"* ]]
+    [[ "$output" != *"SHOULD-NOT-RUN"* ]]
+    for req in 'switch blue' 'rollback' 'snapshot rel-1' 'backup'; do
+        run hostd_stdin "$req"
+        [ "$status" -eq 3 ]
+        [[ "$output" == *"busy"* ]]
+        [[ "$output" == *"EXIT 3"* ]]
+        [[ "$output" != *"SHOULD-NOT-RUN"* ]]
+    done
+}
+
+@test "two concurrent mutating requests: one runs to the end, the other is refused as busy" {
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    local out="${BATS_TEST_TMPDIR}/first.out" i first
+    shim gremion-backup 'echo backup-started; sleep 4; echo backup-finished'
+    shim gremion-switch 'echo SHOULD-NOT-RUN'
+    hostd_stdin 'backup' >"$out" 2>&1 3>&- &
+    first=$!
+    for i in $(seq 1 100); do
+        grep -q backup-started "$out" 2>/dev/null && break
+        sleep 0.1
+    done
+    grep -q backup-started "$out"
+    run hostd_stdin 'switch blue'
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"busy"* ]]
+    [[ "$output" != *"SHOULD-NOT-RUN"* ]]
+    wait "$first"
+    grep -q backup-finished "$out"
+    grep -qx 'EXIT 0' "$out"
+}
+
+@test "the lock is released when the verb finishes: back-to-back mutating requests both run" {
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    shim gremion-backup 'echo backup-ran'
+    shim gremion-switch 'echo switch-ran'
+    run hostd_stdin 'backup'
+    [ "$status" -eq 0 ]
+    run hostd_stdin 'switch green'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"switch-ran"* ]]
+}
+
+@test "read-only requests (noop, verify) are not blocked by the lock" {
+    shim gremion-verify 'echo verify-ran'
+    hold_host_lock 20
+    run hostd_stdin 'noop'
+    [ "$status" -eq 0 ]
+    run hostd_stdin 'verify'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"verify-ran"* ]]
+}
+
+@test "a refused request stays 'not permitted' even while the lock is held" {
+    shim gremion-backup 'echo SHOULD-NOT-RUN'
+    hold_host_lock 20
+    run hostd_stdin 'backup --now'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"not permitted"* ]]
+    [[ "$output" != *"busy"* ]]
+}
+
+@test "a program that is not installed is reported as such, not as busy" {
+    hold_host_lock 20
+    run hostd_stdin 'backup'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"gremion-backup is not installed on this host"* ]]
+}
+
+@test "a mutating verb tells its program it already holds the host lock" {
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    shim gremion-backup 'echo "held=${GREMION_HOST_LOCK_HELD:-unset}"'
+    run hostd_stdin 'backup'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"held=1"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # --ssh forced-command mode
 # ---------------------------------------------------------------------------
 

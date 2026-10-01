@@ -371,6 +371,9 @@ second_readers() {
 
 DOMAIN_BINDING='DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
 GUARDED_READ='${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
+# TASK-043's tenant-create one-shot passes the apex under its own name; with the guarded value that is the same guarded
+# read (no fallback), so the scan strips this exact key form first and still flags any other PLATFORM_DOMAIN mention.
+KEYED_GUARDED_READ='PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
 
 # TASK-040 (pooled stack) split the production render: the state project is
 # docker-compose.yml + docker-compose.prod.yml, the app tier (gremion-ui and
@@ -399,7 +402,7 @@ production_compose_text() {
     [ -z "$bad" ] || { echo "DOMAIN bound otherwise:"; echo "$bad"; return 1; }
     n="$(printf '%s\n' "$text" | grep -cF "$GUARDED_READ" || true)"
     [ "$n" -ge 1 ] || { echo "vacuous: no guarded PLATFORM_DOMAIN read"; return 1; }
-    rest="$(printf '%s\n' "$text" | awk -v g="$GUARDED_READ" '{ while ((i = index($0, g)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(g)); print }' \
+    rest="$(printf '%s\n' "$text" | awk -v k="$KEYED_GUARDED_READ" -v g="$GUARDED_READ" '{ while ((i = index($0, k)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(k)); while ((i = index($0, g)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(g)); print }' \
         | grep -n 'PLATFORM_DOMAIN' || true)"
     [ -z "$rest" ] || { echo "unguarded PLATFORM_DOMAIN read(s):"; echo "$rest"; return 1; }
 }

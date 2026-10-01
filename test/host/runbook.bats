@@ -82,7 +82,6 @@ PENDING_PATHS=(
     'scripts/migrations/runner/|TASK-075'      # the pre-migration dump (upgrade.md)
     'scripts/backup/|TASK-089'                 # the one-off verification (backup.md)
     'compose/observability/|TASK-039'          # the operator-only stack (install.md)
-    'packages/provisioning/|TASK-043'          # customer creation (install.md)
     'services/kernel-api/export/|TASK-119'     # tenant export (restore.md)
 )
 PENDING_BINS=()

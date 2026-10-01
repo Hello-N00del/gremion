@@ -63,6 +63,156 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Behaviour against a stateful stand-in for the Keycloak Admin API
+# (F1-FIX-09: K6#4 token failure, K6#5 half-built step-up flow, K6#30 service
+# account privilege). test/fixtures/fake-kc-curl is installed as `curl`; it models
+# curl's -f contract (a failed request prints nothing, exit 22) and keeps the
+# realm state in $KCSTATE so the script's own reads see its own writes.
+# ---------------------------------------------------------------------------
+
+kc_tree() {
+    TREE="${TEST_TEMP_DIR}/tree"
+    mkdir -p "${TREE}/scripts" "${TREE}/bin" "${TREE}/tmp"
+    cp "$KC_SCRIPT" "${PROJECT_ROOT}/scripts/check-realm-env.sh" "${TREE}/scripts/"
+    printf 'KEYCLOAK_ADMIN=admin\nKEYCLOAK_ADMIN_PASSWORD=fixture-admin-password\nKEYCLOAK_REALM=gremion-test\n' > "${TREE}/.env"
+    cp "${PROJECT_ROOT}/test/fixtures/fake-kc-curl" "${TREE}/bin/curl"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "${TREE}/bin/docker"
+    chmod +x "${TREE}/bin/curl" "${TREE}/bin/docker"
+    KCSTATE="${TEST_TEMP_DIR}/kc"
+    mkdir -p "$KCSTATE"
+    export KCSTATE
+    export PATH="${TREE}/bin:${PATH}"
+    # the script stages the admin password under $TMPDIR; a leftover is a leak
+    export TMPDIR="${TREE}/tmp"
+}
+
+kc_configure() { run bash "${TREE}/scripts/configure-keycloak-clients.sh"; }
+
+seed_complete_flow() {
+    printf '[{"id":"flow-1","alias":"browser-stepup"}]' > "${KCSTATE}/flows.json"
+    printf '%s' '[{"id":"f1","displayName":"stepup-1fa","requirement":"CONDITIONAL"},{"id":"f2","displayName":"stepup-2fa","requirement":"CONDITIONAL"}]' > "${KCSTATE}/top-execs.json"
+}
+
+seed_partial_flow() {   # the build died after the first subflow
+    printf '[{"id":"flow-1","alias":"browser-stepup"}]' > "${KCSTATE}/flows.json"
+    printf '%s' '[{"id":"f1","displayName":"stepup-1fa","requirement":"CONDITIONAL"}]' > "${KCSTATE}/top-execs.json"
+}
+
+call_line() {   # <grep -E pattern> -> the first matching line number in calls.log, or empty
+    grep -nE "$1" "${KCSTATE}/calls.log" | head -n1 | cut -d: -f1 || true
+}
+
+@test "a failed admin-token request is reported by name and leaves no password file (K6#4)" {
+    kc_tree
+    FAKE_KC_TOKEN_FAIL=1 kc_configure
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Failed to obtain admin token"* ]]
+    # nothing was sent to the admin API without a token, and the staged password is gone
+    run grep -c '/admin/' "${KCSTATE}/calls.log"
+    [ "$output" = "0" ]
+    run ls "${TREE}/tmp"
+    [[ "$output" != *"kc-admin-pw"* ]]
+}
+
+@test "the admin password file is removed on a successful run too" {
+    kc_tree
+    seed_complete_flow
+    kc_configure
+    [ "$status" -eq 0 ]
+    run ls "${TREE}/tmp"
+    [[ "$output" != *"kc-admin-pw"* ]]
+    [[ "$output" != *"kcadm-pw"* ]]
+}
+
+@test "the gremion-admin service account gets least-privilege realm-management roles, never realm-admin (K6#30)" {
+    kc_tree
+    seed_complete_flow
+    kc_configure
+    [ "$status" -eq 0 ]
+    local granted
+    granted="$(sort -u "${KCSTATE}/granted.json" | tr '\n' ' ')"
+    [ "$granted" = "manage-users query-groups query-users view-realm view-users " ]
+    run grep -c 'realm-admin' "${KCSTATE}/granted.json"
+    [ "$output" = "0" ]
+}
+
+@test "an earlier realm-admin grant is narrowed on re-run (K6#30)" {
+    kc_tree
+    seed_complete_flow
+    printf '[{"id":"role-realm-admin","name":"realm-admin"}]' > "${KCSTATE}/sa-mappings.json"
+    kc_configure
+    [ "$status" -eq 0 ]
+    grep -qx 'realm-admin' "${KCSTATE}/revoked.json"
+}
+
+@test "no revoke call is made when the service account never had realm-admin" {
+    kc_tree
+    seed_complete_flow
+    kc_configure
+    [ "$status" -eq 0 ]
+    [ ! -e "${KCSTATE}/revoked.json" ]
+}
+
+@test "KEYCLOAK_ADMIN_SA_ROLES=realm-admin is honoured and not revoked again" {
+    kc_tree
+    seed_complete_flow
+    printf '[{"id":"role-realm-admin","name":"realm-admin"}]' > "${KCSTATE}/sa-mappings.json"
+    KEYCLOAK_ADMIN_SA_ROLES=realm-admin kc_configure
+    [ "$status" -eq 0 ]
+    grep -qx 'realm-admin' "${KCSTATE}/granted.json"
+    [ ! -e "${KCSTATE}/revoked.json" ]
+}
+
+@test "step-up: an absent flow is built, read back, and only then wired in" {
+    kc_tree
+    kc_configure
+    [ "$status" -eq 0 ]
+    [ -n "$(call_line 'POST /admin/realms/gremion-test/authentication/flows/browser/copy')" ]
+    [ -z "$(call_line 'DELETE /admin/realms/gremion-test/authentication/flows/')" ]
+    # the realm is pointed at the flow AFTER it was built
+    [ "$(call_line 'authentication/flows/browser/copy')" -lt "$(call_line 'PUT /admin/realms/gremion-test .*browserFlow')" ]
+}
+
+@test "step-up: a complete flow is left alone (no copy, no delete)" {
+    kc_tree
+    seed_complete_flow
+    kc_configure
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already present and complete"* ]]
+    [ -z "$(call_line 'authentication/flows/browser/copy')" ]
+    [ -z "$(call_line 'DELETE /admin/realms/gremion-test/authentication/flows/')" ]
+}
+
+@test "step-up: a half-built flow is removed and rebuilt, not treated as done (K6#5)" {
+    kc_tree
+    seed_partial_flow
+    kc_configure
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"INCOMPLETE"* ]]
+    [[ "$output" != *"already present and complete"* ]]
+    local del copy
+    del="$(call_line 'DELETE /admin/realms/gremion-test/authentication/flows/flow-1')"
+    copy="$(call_line 'POST /admin/realms/gremion-test/authentication/flows/browser/copy')"
+    [ -n "$del" ]
+    [ -n "$copy" ]
+    [ "$del" -lt "$copy" ]
+}
+
+@test "step-up: a half-built flow the realm is bound to is un-pointed BEFORE it is deleted" {
+    kc_tree
+    seed_partial_flow
+    printf '{"attributes":{},"browserFlow":"browser-stepup"}' > "${KCSTATE}/realm.json"
+    kc_configure
+    [ "$status" -eq 0 ]
+    local unbind del
+    unbind="$(call_line 'PUT /admin/realms/gremion-test .*"browserFlow":"browser"')"
+    del="$(call_line 'DELETE /admin/realms/gremion-test/authentication/flows/flow-1')"
+    [ -n "$unbind" ]
+    [ -n "$del" ]
+    [ "$unbind" -lt "$del" ]
+}
+
+# ---------------------------------------------------------------------------
 # Keycloak realm TEMPLATE validation
 #
 # B-01 (spec B T.4): nothing is imported at boot and docker/keycloak/

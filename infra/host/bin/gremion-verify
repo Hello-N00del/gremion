@@ -712,6 +712,21 @@ check_cert() {
 
 sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 
+# F1-FIX-09 (K6#0). `curl -w '%{http_code}'` writes the code ITSELF -- 000 when it
+# could not connect -- and ALSO exits non-zero, so the old `... || echo '000'`
+# appended a second 000 and a dead endpoint read "000000": neither "000" nor
+# >= 400 in arithmetic, i.e. a pass. The status is now taken from curl's own
+# output alone (the caller discards the exit status) and normalised here to
+# exactly three digits; anything that is not a three-digit code is 000.
+http_status() {   # $1 = what curl wrote to stdout
+    local raw="${1//[!0-9]/}"
+    if (( ${#raw} >= 3 )); then
+        printf '%s' "${raw: -3}"
+    else
+        printf '000'
+    fi
+}
+
 # -k is deliberate: the certificate is asserted on its own by check_cert, and a
 # staging unit presents an internal-CA certificate that this arm must not fail on
 # for the wrong reason.
@@ -729,8 +744,9 @@ check_host_http() {
     code="$(curl -k -sS --max-time "$HTTP_TIMEOUT" \
                 --resolve "${h}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" \
                 -o "$clean" -w '%{http_code}' \
-                "https://${h}:${EDGE_HTTPS_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || echo '000')"
-    if [[ "$code" == "000" || "$code" -ge 400 ]]; then
+                "https://${h}:${EDGE_HTTPS_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || true)"
+    code="$(http_status "$code")"
+    if [[ "$code" == "000" ]] || (( 10#$code >= 400 )); then
         fail "https://${h}${VERIFY_MARKER_PATH} returned ${code} (expected < 400)"
     elif [[ ! -s "$clean" ]]; then
         fail "https://${h}${VERIFY_MARKER_PATH} returned an empty body"
@@ -741,7 +757,8 @@ check_host_http() {
                 --resolve "${h}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" \
                 -H "X-Forwarded-Host: ${other}" \
                 -o "$forged" -w '%{http_code}' \
-                "https://${h}:${EDGE_HTTPS_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || echo '000')"
+                "https://${h}:${EDGE_HTTPS_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || true)"
+    fcode="$(http_status "$fcode")"
     if [[ "${MARKER_SHA[$h]}" != "$(sha256_of "$forged")" ]]; then
         fail "host-pin: forged X-Forwarded-Host: ${other} changed the response for ${h} (${code}/${fcode})"
     fi
@@ -749,7 +766,8 @@ check_host_http() {
     acme="$(curl -sS --max-time "$HTTP_TIMEOUT" \
                 --resolve "${h}:${EDGE_HTTP_PORT}:${EDGE_BIND_IP}" \
                 -o /dev/null -w '%{http_code}' \
-                "http://${h}:${EDGE_HTTP_PORT}/.well-known/acme-challenge/probe" 2>/dev/null || echo '000')"
+                "http://${h}:${EDGE_HTTP_PORT}/.well-known/acme-challenge/probe" 2>/dev/null || true)"
+    acme="$(http_status "$acme")"
     [[ "$acme" == "404" ]] \
         || fail "acme-challenge probe for ${h} returned ${acme} (expected 404 from acme-http@internal, never a redirect)"
 
@@ -938,9 +956,11 @@ check_colour() {
 
     code="$(curl -sS --max-time "$HTTP_TIMEOUT" -H "Host: ${PLATFORM_DOMAIN}" \
                 -o /dev/null -w '%{http_code}' \
-                "http://127.0.0.1:${INTERNALTEST_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || echo '000')"
-    [[ "$code" != "000" && "$code" -lt 400 ]] \
-        || fail "internaltest entrypoint returned ${code} for ${PLATFORM_DOMAIN} (expected < 400)"
+                "http://127.0.0.1:${INTERNALTEST_PORT}${VERIFY_MARKER_PATH}" 2>/dev/null || true)"
+    code="$(http_status "$code")"
+    if [[ "$code" == "000" ]] || (( 10#$code >= 400 )); then
+        fail "internaltest entrypoint returned ${code} for ${PLATFORM_DOMAIN} (expected < 400)"
+    fi
 
     if ! ui="$(container_for_alias "gremion-ui-${c}")"; then
         fail "gremion-ui-${c}: no container"

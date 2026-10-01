@@ -47,6 +47,12 @@
       memberAddError = body?.error ?? `Fehler ${res.status}`
       return
     }
+    // F1-FIX-10-K / K2#7: a 207 means the member row exists but provisioning
+    // failed in some service; show that instead of a silent success.
+    const result = await res.json().catch(() => ({}))
+    if (result?.success === false) {
+      memberAddError = result.error ?? 'Bereitstellung nicht vollständig.'
+    }
     memberResults = memberResults.filter((u) => u.id !== userKeycloakId)
     memberSearch = ''
     await invalidateAll()
@@ -80,10 +86,12 @@
     removeError = ''
     try {
       const res = await fetch(`/api/governance/committees/${data.committee.id}/members/${memberId}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
       if (res.ok) {
+        // K2#7: 207 + success:false = removed, but provisioning failed somewhere.
+        if (body?.success === false) removeError = body.error ?? 'Bereitstellung nicht vollständig.'
         await invalidateAll()
       } else {
-        const body = await res.json().catch(() => ({}))
         removeError = body?.error ?? `Mitglied konnte nicht entfernt werden (${res.status})`
       }
     } catch {

@@ -221,9 +221,10 @@ test('derive: zero derived services, a missing file or a template without COMPOS
   assert.throws(() => derivedServices('ops', { root: nokey }), /unknown project/)
 })
 
-test('derive: the committed tree gives state {legal, vector, fallback} and app {gremion-ui, gremion-public, migrate, tenant-create}', () => {
+test('derive: the committed tree gives state {legal, vector, fallback} and app {gremion-ui, gremion-public, control-panel, migrate, tenant-create}', () => {
   assert.deepEqual(derivedServices('state'), ['legal', 'vector', 'fallback'])
-  assert.deepEqual(derivedServices('app'), ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create'])
+  // TASK-043 adds the control panel to the app tier (docker-compose.app.yml).
+  assert.deepEqual(derivedServices('app'), ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create'])
 })
 
 // ── one grep set for both layers (TASK-048b TDD 4) ─────────────────────────

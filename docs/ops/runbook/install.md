@@ -254,10 +254,12 @@ sudo -u gremion /opt/gremion/bin/gremion-verify
 jq -e '.ok == true and (.failures | length) == 0' /opt/gremion/runtime/last-verify.json
 ```
 
-17. **Create the pilot customer.** PENDING TASK-043 (`packages/provisioning/`):
-    the customer is created through the provisioning orchestrator, which creates
-    its realm, databases and broker account and invites its first
-    administrators. Until that lands, this step is recorded as blocked.
+17. **Create the pilot customer.** `gremion-tenant create` (TASK-043, `packages/provisioning/`)
+    creates the customer's realm, databases and broker account and invites its first
+    administrators. Its first running proof on a pooled stack (R29) found five defects
+    in the create path (TASK-043b: the provisioner secret mount, the realm-smtp read-back,
+    the one-shot's role-grant credential, CONNECT for pgbouncer_auth, the state template
+    keys); this step stays blocked until TASK-043b's customer proof is green.
 
 ```bash
 test -d /opt/gremion/current/packages/provisioning \
@@ -356,7 +358,7 @@ cat /opt/gremion/runtime/active-colour                                         #
   psql -U postgres -tAc 'SHOW server_version_num')                             # 18xxxx
 ```
 
-The pilot customer's first administrator has signed in (PENDING TASK-043 until
+The pilot customer's first administrator has signed in (blocked on TASK-043b until
 step 17 runs): the customer's realm holds a `LOGIN` event.
 
 ```bash
@@ -389,7 +391,7 @@ in [run-record.md](run-record.md).
 - `bash infra/host/bootstrap.sh timers` (`stage_timers`, also run by `all`) does `systemctl enable --now gremion-backup.timer`, while R15-1 wants the job installed and disabled; step 21 therefore disables it again. Owner: TASK-040 (`infra/**`), which merged with `stage_timers` unchanged, so the change is still open. `test/host/runbook.bats` fails the day `stage_timers` stops enabling the timer, so step 21 and this entry change in the same commit.
 - `gremion-deploy` step 3 refuses without `runtime/last-backup.json`, and `gremion-backup` refuses without a reachable off-site remote (`RCLONE_REMOTE`), while the pilot keeps off-site copies off as the north star (R13-4). Step 13 therefore needs a remote for that one run. PENDING TASK-089 (`scripts/backup/`) decides the pilot's verification path.
 - `docker-compose.yml` declares the log pipeline's `ipcrypt_key` secret as `./secrets/ipcrypt_key.txt` in the release tree, while `gremion-render` generates the key once in `etc/secrets/ipcrypt_key.txt` under the host root and nothing in `infra/host` puts it into a release tree; step 12 links it by hand. Every later release tree the state project is started from needs the same link first. Owner: the host tooling of TASK-040 (`infra/**`, `docker-compose*.yml`), merged with this divergence, so it needs a follow-up task. `test/host/runbook.bats` stops asking for the link the day `gremion-render` writes the key into the release tree.
-- Customer creation and the first administrator's sign-in: PENDING TASK-043 (`packages/provisioning/`), step 17 and the post-condition.
+- Customer creation and the first administrator's sign-in: `gremion-tenant create` exists (TASK-043, `packages/provisioning/`); blocked on TASK-043b's green customer proof, step 17 and the post-condition.
 - The ops project of step 15 (`infra/host/ops/`) is the on-box monitoring until the observability stack moves into its own project: PENDING TASK-039 (`compose/observability/`).
 - The pooled layout (TASK-040, [pooled-stack-layout.md](../pooled-stack-layout.md)) carries a deploy ordering hazard until TASK-034's 34b block lands: neither the apex nor `public.<domain>` has a websecure router, so the first deploy's public verification (step 14) and the post-condition's `/api/health` answer 404. No install is scheduled before 34b; TASK-038's waits carry it.
 - [A] Step 18's end-to-end suites run against the stack its `--stack-env` marker names; which stack that is for the rebuilt host is decided by TASK-038's first run.

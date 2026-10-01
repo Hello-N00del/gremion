@@ -445,7 +445,7 @@ exit 0'
     KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
         run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    ! grep -q 'create realms' "$SHIM_LOG"
+    ! grep -q 'create realms' "$SHIM_LOG" || { echo "a realm was created"; return 1; }
     # Another origin is a DIFFERENT realm: refused, never overwritten.
     KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
         run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://other.fixture.example
@@ -462,7 +462,7 @@ exit 0'
         run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"not known to be absent"* ]] || { echo "$output"; return 1; }
-    ! grep -q 'create realms' "$SHIM_LOG"
+    ! grep -q 'create realms' "$SHIM_LOG" || { echo "a realm was created"; return 1; }
     [ "$(cat "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")" = the-working-secret ]
 }
 

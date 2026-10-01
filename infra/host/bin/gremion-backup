@@ -81,6 +81,14 @@ SNAP_BEFORE=""
 # which of the two naming zones a (service, database) pair lands in.
 KERNEL_DUMPS=""
 KERNEL_PG_SERVICE=""
+# The D-4 trigger contract (R29-F1-WAVE2/addendum.md). A started run ends with ONE
+# machine-readable line, printed last, before gremion-hostd's own `EXIT <code>`:
+#   BACKUP-RESULT {"state":"finished"|"failed","startedAt":ISO,"finishedAt":ISO,"exitCode":N}
+# The settings API reads it to show started -> finished/failed with times and to
+# stamp last_backup_at ONLY from a finished run. It is printed on EVERY exit path
+# of a started run, from a trap that exists before any precondition can fail.
+BACKUP_STARTED_AT=""
+BACKUP_RESULT_ARMED=false
 
 usage() {
     cat >&2 <<'USAGE'
@@ -817,12 +825,59 @@ on_exit() {
         # said WHY the run stopped.
         if [ "$rc" -eq 0 ]; then rc=1; fi
     fi
+    emit_backup_result "$rc"
     exit "$rc"
 }
 
+# Prints the D-4 result line (see the contract at the top of this file). The
+# values are an enum, two UTC timestamps and an integer - nothing a caller can
+# influence - so printf builds the JSON and the line cannot be lost to a broken jq.
+# Only a STARTED run has one: --help and a usage error did not run anything.
+emit_backup_result() {   # $1 = the exit code the process is about to exit with
+    local rc="$1" state=failed finished
+    [ "$BACKUP_RESULT_ARMED" = true ] || return 0
+    [ "$rc" -eq 0 ] && state=finished
+    finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'BACKUP-RESULT {"state":"%s","startedAt":"%s","finishedAt":"%s","exitCode":%s}\n' \
+        "$state" "$BACKUP_STARTED_AT" "$finished" "$rc"
+}
+
+# The trap that covers the stretch BEFORE on_exit exists: a missing state.env, a
+# missing tool and a busy host lock all end the run before the report/alert
+# trap is installed (they have nowhere to alert yet), and each is still a
+# started run that a trigger must be able to read the outcome of. on_exit
+# replaces this trap and prints the line itself, with its final exit code.
+result_on_exit() {
+    local rc=$?
+    trap - EXIT
+    emit_backup_result "$rc"
+    exit "$rc"
+}
+
+# One host operation at a time (F1-FIX-09, K6#26). gremion-hostd takes this lock
+# for its mutating verbs and tells the program it started (GREMION_HOST_LOCK_HELD=1)
+# so it does not queue behind its own parent; the systemd timer starts this
+# program directly, so there it takes the lock itself. Non-blocking: a second
+# operation is `busy` (exit 3, blocked on another operation), never a queue.
+# The fd is inherited by every child, so the lock lasts as long as the run does.
+acquire_host_lock() {
+    local lock
+    [ "${GREMION_HOST_LOCK_HELD:-}" = 1 ] && return 0
+    need_cmd flock
+    lock="$(gremion_root)/runtime/hostd.lock"
+    mkdir -p "$(dirname "$lock")" || die "cannot create $(dirname "$lock")" 2
+    exec 9>>"$lock" || die "cannot open the host lock: ${lock}" 2
+    flock -n 9 \
+        || die "busy: another host operation is running (lock ${lock}); retry when it has finished" 3
+}
+
 main() {
+    BACKUP_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    trap result_on_exit EXIT
     parse_args "$@"
+    BACKUP_RESULT_ARMED=true
     require_tools
+    acquire_host_lock
     load_state_env
     require_keys
     # From here every exit path reports: §J requires a report on BOTH outcomes,

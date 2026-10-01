@@ -136,6 +136,7 @@ than exit codes.
 | `gremion-dns-check --domain D --edge-ip A --mail-ip B [--edit N]` | verify the published record set for one edit of the DNS table, one line per record |
 | `gremion-mail-bringup [--assert N\|all]` | the mail asserts in their required order, refusing to run out of order |
 | `gremion-vendor-mail <subcommand>` | the vendor mail tooling of `ops/vendor-mail` (TASK-015): `principals issue\|revoke\|list`, `realm-smtp` (no argument: `master` -> `system@`; `--realm platform`: the ops realm -> `system@`; `--realm <r> --tenant <token> [--rotate\|--revoke]`: a customer realm -> its own `kc-<token>@` principal, issued, stamped and read back, TASK-043 G2), `collect` and the vendor-mail checks, each `.mjs` run as `docker run --rm` of the digest-pinned `VENDOR_MAIL_NODE_IMAGE` (the host carries no Node). Runs from `current/infra/host/bin` or installed in `<root>/bin`, where it takes `ops/vendor-mail` from `<root>/current`; see `ops/vendor-mail/RUNBOOK.md` |
+| `gremion-tenant <verb>` | the host half of the customer lifecycle (TASK-043): `init [--realm-only] [--keycloak-container K] [--panel-origin O]`, `create <slug> --host H --config F --it-admin E --council-admin E [--enable a,b]`, `suspend|resume <slug>`, `reconcile <slug> [--apply]`, `status <slug>`, `panel`, `operator add <email> [--no-mail] [--keycloak-container K]` |
 | `gremion-verify [--colour c] [--hosts FILE] [--reboot]` | the verification contract: enumerate every router from the Traefik API, classify it, assert certificates, health, the host pin and the ACME path; print the six P4 waivers of `docs/ops/release-1-waivers.md` as `WAIVED`; writes `runtime/last-verify.json`. **Refuses to run without that ledger** — see below |
 | `gremion-switch <colour> [--no-evict]` | fan the eviction out, rewrite `etc/edge/active.yml` atomically, wait for Traefik to serve the new target, record `runtime/active-colour` |
 | `gremion-deploy <tag>` | the release procedure, twelve steps, token on stdin; logs `STEP n <name> ok\|fail` to `runtime/deploy.log` |
@@ -228,6 +229,30 @@ so the key can do nothing but talk to the agent. The agent accepts exactly
 answered `EXIT 2`. Every invocation is appended to
 `/opt/gremion/logs/hostd.log`.
 
+**One host operation at a time.** `deploy`, `switch`, `rollback`, `snapshot` and
+`backup` are mutating: each takes a non-blocking `flock` on
+`/opt/gremion/runtime/hostd.lock` before its program starts, and a second one
+answers `busy` with `EXIT 3` instead of racing the first on the colours, the
+migrations or the staged backup tree. `noop` and `verify` are read-only and are
+never blocked. The program inherits the lock (and `GREMION_HOST_LOCK_HELD=1`),
+so `gremion-backup`, which the systemd timer starts directly and which takes the
+same lock itself, does not wait on its own parent. A deploy requested while the
+nightly backup runs is therefore answered `busy`; retry it when the backup has
+finished.
+
+**The backup trigger's result line.** A started `gremion-backup` run ends, on
+every exit path, with one machine-readable line printed last, before the
+agent's `EXIT <code>` trailer:
+
+```
+BACKUP-RESULT {"state":"finished","startedAt":"<ISO>","finishedAt":"<ISO>","exitCode":0}
+```
+
+`state` is `finished` for exit 0 and `failed` otherwise (`exitCode` is the code
+the run really exits with, 3 when it was `busy`). The settings API reads it
+from the `backup` verb's output; `runtime/last-backup.json` remains the report
+of the run itself.
+
 **The wire format.** The client writes lines and reads lines; the response
 always ends with an `EXIT <code>` trailer:
 
@@ -286,6 +311,29 @@ and none of them can be created by the tooling:
    command line of section 5, rendered by `bootstrap.sh` (`authorized_keys_line`).
 
 Prove the channel with the `noop` of section 6 before the first real dispatch.
+
+### The Settings "Backup jetzt erstellen" button (F1-FIX-10-K, D-4)
+
+The button in Settings -> Backups is wired to the same allow-list: the app's
+settings API opens hostd's unix socket and sends the verb `backup` (no new verb,
+no new transport). The socket path comes from `GREMION_HOSTD_SOCKET` (default
+`/run/gremion/hostd.sock`); `GREMION_HOSTD_BACKUP_TIMEOUT_MS` bounds one run
+(default 6 h).
+
+- The API answers `started` only after hostd accepted the connection and the
+  request line was sent. It records the run (`started`, then `finished` or
+  `failed`, with times) under the tenant's `backup/runs/` directory.
+- A run is `finished` only when hostd answers `EXIT 0` and, when present, the
+  final `BACKUP-RESULT {"state":"finished","startedAt":ISO,"finishedAt":ISO,"exitCode":0}`
+  line that `gremion-backup` prints before hostd's `EXIT` line says so too. No
+  `EXIT` line, a dropped connection or a timeout is `failed`.
+- `config.backups.last_backup_at` is stamped from a finished run only.
+- Socket missing or refusing connections: the button is disabled and shows why.
+  The app container must have the socket mounted for the button to work.
+- A `started` record left by a dead app process is shown as failed (interrupted);
+  the host's own `runtime/last-backup.json` remains the record of what really ran.
+
+Trigger contract shared with F1-FIX-09: R29-F1-WAVE2/addendum.md ("D-4 trigger contract").
 
 ## 6. The noop dry-run
 

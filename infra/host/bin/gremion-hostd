@@ -25,7 +25,13 @@
 #   rollback
 #   snapshot <label>
 #   verify [--colour <blue|green>]
-#   backup
+#   backup                  streams gremion-backup's output, whose last line is
+#                           `BACKUP-RESULT {"state":...,"exitCode":N}` (the D-4
+#                           trigger contract the settings API reads), then EXIT
+#
+# deploy, switch, rollback, snapshot and backup are MUTATING: one at a time, under
+# a non-blocking flock on runtime/hostd.lock; a second one answers `busy`, EXIT 3.
+# noop and verify are read-only and are never blocked by it.
 #
 # MODES
 #   --ssh      forced-command mode; $SSH_ORIGINAL_COMMAND when non-empty is the
@@ -161,6 +167,50 @@ run_program() {
     return "$rc"
 }
 
+# run_mutating_program <program> [args...] — F1-FIX-09 (K6#26).
+# Nothing serialised deploy, switch, rollback, snapshot and backup, so two
+# requests raced on the colours, the migrations and the staged backup tree. Every
+# MUTATING verb takes a non-blocking flock on runtime/hostd.lock before its
+# program starts and answers `busy` (EXIT 3, blocked on another operation) when
+# the lock is held. noop and verify are read-only and never come through here.
+#
+# The lock is a property of the open file description on fd 9, which the program
+# INHERITS: it is held for as long as the program lives, even if this process is
+# killed first (a socat client that hung up). GREMION_HOST_LOCK_HELD=1 tells the
+# program it already holds it, so gremion-backup - which takes the same lock when
+# the systemd timer starts it directly - does not queue behind its own parent.
+# The program-installed check comes first: a missing program is a precondition
+# failure (2), never `busy`.
+run_mutating_program() {
+    local prog="$1"; shift
+    if ! command -v "$prog" >/dev/null 2>&1; then
+        emit "$prog is not installed on this host"
+        return 2
+    fi
+    if ! command -v flock >/dev/null 2>&1; then
+        emit "flock is not installed (util-linux); refusing to run $prog without the host lock"
+        return 2
+    fi
+    local lock
+    lock="$(gremion_root)/runtime/hostd.lock"
+    mkdir -p "$(dirname "$lock")" 2>/dev/null || true
+    if ! exec 9>>"$lock"; then
+        emit "cannot open the host lock: $lock"
+        return 2
+    fi
+    if ! flock -n 9; then
+        exec 9>&-
+        emit "busy: another host operation is running (lock $lock); retry when it has finished"
+        return 3
+    fi
+    GREMION_HOST_LOCK_HELD=1
+    export GREMION_HOST_LOCK_HELD
+    local rc=0
+    run_program "$prog" "$@" || rc=$?
+    exec 9>&-
+    return "$rc"
+}
+
 # ---------------------------------------------------------------------------
 # the allow-list
 # ---------------------------------------------------------------------------
@@ -183,7 +233,7 @@ cmd_deploy() {
         if ! take_token "$REQ_LINE"; then return 2; fi
     fi
     local rc=0
-    printf '%s\n' "$PENDING_TOKEN" | run_program gremion-deploy "$tag" || rc=$?
+    printf '%s\n' "$PENDING_TOKEN" | run_mutating_program gremion-deploy "$tag" || rc=$?
     PENDING_TOKEN=""
     return "$rc"
 }
@@ -195,7 +245,7 @@ cmd_switch() {
     fi
     if [[ ! "$1" =~ $COLOUR_RE ]]; then emit "refused colour: $1"; return 2; fi
     local rc=0
-    run_program gremion-switch "$1" || rc=$?
+    run_mutating_program gremion-switch "$1" || rc=$?
     return "$rc"
 }
 
@@ -205,7 +255,7 @@ cmd_rollback() {
         return 2
     fi
     local rc=0
-    run_program gremion-rollback || rc=$?
+    run_mutating_program gremion-rollback || rc=$?
     return "$rc"
 }
 
@@ -216,7 +266,7 @@ cmd_snapshot() {
     fi
     if [[ ! "$1" =~ $LABEL_RE ]]; then emit "refused label: $1"; return 2; fi
     local rc=0
-    run_program gremion-snapshot "$1" || rc=$?
+    run_mutating_program gremion-snapshot "$1" || rc=$?
     return "$rc"
 }
 
@@ -244,7 +294,7 @@ cmd_backup() {
         return 2
     fi
     local rc=0
-    run_program gremion-backup || rc=$?
+    run_mutating_program gremion-backup || rc=$?
     return "$rc"
 }
 
