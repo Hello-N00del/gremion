@@ -9,7 +9,7 @@
 // goes through Auth.js (its own /auth/* routes) and then the gate, which
 // decides before any page, form action or +server endpoint runs.
 import { SvelteKitAuth } from '@auth/sveltekit'
-import type { Handle, RequestEvent } from '@sveltejs/kit'
+import { redirect, type Handle, type RequestEvent } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { env } from '$env/dynamic/private'
 import { authConfig, startSignIn } from '$lib/server/auth'
@@ -64,9 +64,18 @@ export const gate: Handle = async ({ event, resolve }) => {
     return resolve(event)
   }
   if (d.kind === 'sign-in') {
-    // Returned, never thrown (r3 LOW): a thrown redirect skips handle's
-    // withSecurityHeaders. The PKCE cookie rides on the response itself.
-    return startSignIn(event, authConfig(c), `${event.url.pathname}${event.url.search}`, d.reason === 'step-up', env)
+    const s = await startSignIn(event, authConfig(c), `${event.url.pathname}${event.url.search}`, d.reason === 'step-up', env)
+    if (event.isDataRequest) {
+      // A client-side navigation (__data.json): THROWN, so SvelteKit answers
+      // its JSON redirect, which its router follows, and adds these cookies.
+      for (const k of s.cookies) event.cookies.set(k.name, k.value, k.options)
+      redirect(302, s.location)
+    }
+    // A document request: RETURNED (r3 LOW), so handle's withSecurityHeaders
+    // reaches it; a thrown redirect skipped them. The cookies ride on it.
+    const res = new Response(null, { status: 302, headers: { location: s.location, 'cache-control': 'no-store' } })
+    for (const k of s.cookies) res.headers.append('set-cookie', event.cookies.serialize(k.name, k.value, k.options))
+    return res
   }
   if (d.clearCookie) for (const k of cookies) event.cookies.delete(k.name, { path: '/' })
   return refuse(d.status, d.reason)

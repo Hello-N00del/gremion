@@ -125,16 +125,23 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
   }
 }
 
+export interface SignInStart {
+  /** The ops realm's authorization URL. */
+  location: string
+  /** Auth.js's PKCE and callback cookies, for the caller to deliver. */
+  cookies: { name: string; value: string; options: CookieOptions }[]
+}
+/** SvelteKit's own cookie options type (path required). */
+export type CookieOptions = Parameters<RequestEvent['cookies']['set']>[2]
+
 /**
- * Starts the authorization code flow at the ops realm and returns the 302
- * Response to the Keycloak URL, carrying Auth.js's PKCE and callback cookies
- * as Set-Cookie headers (serialised by SvelteKit's own cookie API). The same
- * request @auth/sveltekit's signIn builds, issued from the gate so an
- * anonymous GET goes straight to the realm (302), and a step-up forces a fresh
- * login (prompt=login) at loa2. RETURNED, never thrown (r3 LOW): a thrown
- * redirect bypasses handle, so it carried none of the security headers.
+ * Starts the authorization code flow at the ops realm: the Keycloak URL and
+ * the cookies Auth.js needs back at the callback. The same request
+ * @auth/sveltekit's signIn builds, issued from the gate so an anonymous GET
+ * goes straight to the realm (302), and a step-up forces a fresh login
+ * (prompt=login) at loa2. The gate decides how the redirect is delivered.
  */
-export async function startSignIn(event: RequestEvent, config: SvelteKitAuthConfig, callbackUrl: string, stepUp: boolean, env: Record<string, string | undefined>): Promise<Response> {
+export async function startSignIn(event: RequestEvent, config: SvelteKitAuthConfig, callbackUrl: string, stepUp: boolean, env: Record<string, string | undefined>): Promise<SignInStart> {
   const headers = new Headers(event.request.headers)
   const signInURL = createActionURL('signin', event.url.protocol, headers, env, config)
   const params = new URLSearchParams(stepUp ? { prompt: 'login' } : {})
@@ -147,7 +154,8 @@ export async function startSignIn(event: RequestEvent, config: SvelteKitAuthConf
   // the callback itself is bound to this browser by the state and PKCE cookies.
   const res = await Auth(req, { ...config, raw, skipCSRFCheck })
   if (!res?.redirect) throw new Error('Auth.js returned no authorization redirect')
-  const out = new Response(null, { status: 302, headers: { location: res.redirect, 'cache-control': 'no-store' } })
-  for (const cookie of res.cookies ?? []) out.headers.append('set-cookie', event.cookies.serialize(cookie.name, cookie.value, { path: '/', ...cookie.options }))
-  return out
+  return {
+    location: res.redirect,
+    cookies: (res.cookies ?? []).map((c) => ({ name: c.name, value: c.value, options: { path: '/', ...c.options } as CookieOptions })),
+  }
 }

@@ -113,6 +113,22 @@ describe('the gate hook (TDD 15)', () => {
     expect(resolve).not.toHaveBeenCalled()
   })
 
+  it('a client-side navigation (__data.json) still gets SvelteKit\'s own redirect, with the PKCE cookie set on the event (deletion-aware, r4)', async () => {
+    const e = Object.assign(event({ path: '/customers' }), { isDataRequest: true })
+    const resolve = vi.fn(async () => new Response('RESOLVED'))
+    let thrown: { status?: number; location?: string } | null = null
+    try {
+      await gate({ event: e as never, resolve: resolve as never })
+    } catch (err) {
+      thrown = err as { status?: number; location?: string }
+    }
+    // thrown, so SvelteKit answers {type:'redirect'} JSON the client router follows
+    expect(thrown?.status).toBe(302)
+    expect(new URL(thrown!.location!).pathname).toBe(new URL(`${OPS}/protocol/openid-connect/auth`).pathname)
+    expect(e.cookies.getAll().some((c) => /authjs\.pkce\.code_verifier/.test(c.name))).toBe(true)
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
   it('an ops session at loa1 is sent to a fresh login at loa2 (step-up)', async () => {
     const { thrown } = await run(event({ session: claims({ acr: 'loa1' }) }))
     expect(thrown?.status).toBe(302)
