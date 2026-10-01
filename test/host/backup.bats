@@ -898,6 +898,138 @@ exit 0'
 }
 
 # ---------------------------------------------------------------------------
+# The trigger contract's result line (F1-FIX-09, D-4)
+#
+# Contract pinned in R29-F1-WAVE2/addendum.md ("D-4 trigger contract"): the
+# settings API triggers `backup` through gremion-hostd and reads the outcome from
+# ONE machine-readable line that gremion-backup prints last, before hostd's own
+# `EXIT <code>`:
+#   BACKUP-RESULT {"state":"finished"|"failed","startedAt":ISO,"finishedAt":ISO,"exitCode":N}
+# It is printed on EVERY exit path of a started run (success, a failed
+# post-condition, a precondition failure), and exitCode is the code the process
+# really exits with, not the one the failing step first chose.
+# ---------------------------------------------------------------------------
+
+result_line() {   # the last line of $output, which must be the BACKUP-RESULT line
+    local last="${lines[${#lines[@]}-1]}"
+    [[ "$last" == "BACKUP-RESULT {"* ]] || {
+        echo "last output line is not a BACKUP-RESULT line: ${last}" >&2
+        return 1
+    }
+    printf '%s' "${last#BACKUP-RESULT }"
+}
+
+@test "a successful run ends with exactly one BACKUP-RESULT finished line" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    run "$BACKUP" --label nightly-r1
+    [ "$status" -eq 0 ]
+    local json
+    json="$(result_line)"
+    [ "$(printf '%s\n' "$output" | grep -c '^BACKUP-RESULT ')" -eq 1 ]
+    [ "$(jq -r '.state'    <<<"$json")" = "finished" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "0" ]
+    [[ "$(jq -r '.startedAt'  <<<"$json")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+    [[ "$(jq -r '.finishedAt' <<<"$json")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+    # ISO-8601 UTC sorts lexically: the run cannot have finished before it started
+    [[ ! "$(jq -r '.finishedAt' <<<"$json")" < "$(jq -r '.startedAt' <<<"$json")" ]]
+    # nothing but the key set the contract names
+    [ "$(jq -c 'keys' <<<"$json")" = '["exitCode","finishedAt","startedAt","state"]' ]
+}
+
+@test "a run that fails a post-condition ends with BACKUP-RESULT failed and the real exit code" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    touch "${GREMION_ROOT}/.empty-dump"
+    run "$BACKUP" --label nightly-r2
+    [ "$status" -eq 1 ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "1" ]
+}
+
+@test "a precondition failure (exit 2) still ends with BACKUP-RESULT failed exitCode 2" {
+    shim_baseline
+    touch "${GREMION_ROOT}/.offsite-down"
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "2" ]
+}
+
+@test "a precondition that fails before the report trap exists (no state.env) still reports" {
+    shim_baseline
+    rm -f "${GREMION_ROOT}/etc/env/state.env"
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "2" ]
+}
+
+@test "the result line carries the exit code the process really exits with (undeliverable alert -> 1)" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    shim curl 'exit 7'
+    run "$BACKUP"
+    [ "$status" -eq 1 ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "1" ]
+}
+
+@test "--help and a usage error do not claim a run: no BACKUP-RESULT line" {
+    run "$BACKUP" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"BACKUP-RESULT"* ]]
+    run "$BACKUP" --class weekly
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"BACKUP-RESULT"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# One host operation at a time (F1-FIX-09, K6#26): the timer starts gremion-backup
+# directly, so it takes the same lock gremion-hostd takes for its mutating verbs.
+# ---------------------------------------------------------------------------
+
+@test "gremion-backup started while another host operation holds the lock is busy (exit 3) and stages nothing" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    hold_host_lock 20
+    run "$BACKUP"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"busy"* ]]
+    [ ! -d "${GREMION_ROOT}/backups/current/volumes" ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "3" ]
+}
+
+@test "gremion-backup started by gremion-hostd (lock already held by its parent) does not wait on it" {
+    shim_baseline
+    hold_host_lock 20
+    rm -rf "${GREMION_ROOT}/current"
+    GREMION_HOST_LOCK_HELD=1 run "$BACKUP"
+    # it got past the lock stage: the next precondition is what stopped it
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"release tree absent"* ]]
+    [[ "$output" != *"busy"* ]]
+}
+
+@test "gremion-backup releases the host lock when it ends" {
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    shim_baseline
+    rm -rf "${GREMION_ROOT}/current"
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    # the failed run left no holder behind: the lock can be taken straight away
+    run flock -n "${GREMION_ROOT}/runtime/hostd.lock" true
+    [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
 # gremion-snapshot
 # ---------------------------------------------------------------------------
 
@@ -1220,12 +1352,28 @@ exec ${real} \"\$@\""
     rm -rf "${GREMION_ROOT}/runtime"
     : >"${GREMION_ROOT}/runtime"            # a stale file where the directory belongs
     touch "${GREMION_ROOT}/.offsite-down"   # and the run itself stops with 2
-    run "$BACKUP" --label report-1
+    # F1-FIX-09: this case is about the REPORT write, not the host lock. Run as
+    # gremion-hostd runs it (lock already held by the parent), because a runtime
+    # path that is a file also makes the lock file uncreatable, which is its own
+    # refusal (exit 2) before any report exists to fail.
+    GREMION_HOST_LOCK_HELD=1 run "$BACKUP" --label report-1
     # The precondition's code survives a report that could not be written.
     [ "$status" -eq 2 ]
     [[ "$output" == *"offsite remote unreachable"* ]]
     [[ "$output" == *"BACKUP-REPORT: cannot create"* ]]
     assert_recorded curl "https://alerts.example.org/hook"
+}
+
+@test "a runtime path that is not a directory refuses the run at the host lock (exit 2), never unserialised" {
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    rm -rf "${GREMION_ROOT}/runtime"
+    : >"${GREMION_ROOT}/runtime"
+    run "$BACKUP" --label lock-1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot create ${GREMION_ROOT}/runtime"* ]]
+    [ ! -d "${GREMION_ROOT}/backups/current/volumes" ]
+    [[ "${lines[-1]}" == "BACKUP-RESULT {"*'"state":"failed"'*'"exitCode":2}' ]]
 }
 
 @test "a report the filesystem refuses still alerts and fails the run loudly" {

@@ -29,7 +29,12 @@ RESTORE_HELPER_IMAGE="${RESTORE_HELPER_IMAGE:-alpine:3.22@sha256:5291449c3df73ca
 # Volumes whose content is restored from the DUMPS instead of the archive. A
 # Postgres data directory unpacked under a running server is undefined, and it
 # would carry the SOURCE instance's roles and passwords into the target.
-RESTORE_VOLUME_SKIP_RE="${RESTORE_VOLUME_SKIP_RE:-(_pg-data|_postgres-data|_pgdata)$}"
+# F1-FIX-09 (K6#1): the separator before `pg-data` is an underscore OR a hyphen.
+# Compose names a volume <project>_<volume>, and the module Postgres volumes are
+# themselves called board-pg-data, calendar-pg-data, ... so the old `_pg-data$`
+# matched only the kernel's own `pg-data` and left every leaf's live data
+# directory to be wiped and re-untarred.
+RESTORE_VOLUME_SKIP_RE="${RESTORE_VOLUME_SKIP_RE:-(^|[_-])(pg|postgres)[_-]?data$}"
 
 DB_COUNT=0; VOL_COUNT=0; VOL_SKIPPED=0; BUCKET_COUNT=0
 FILE_PROOFS=0; ROW_PROOFS=0; ACME_OK=false
@@ -69,7 +74,8 @@ consumed from <root>/etc/env/state.env (not from your shell — sudo resets it):
 
 environment:
   RESTORE_VOLUME_SKIP_RE  ERE of volume names restored from the dumps instead of
-                          the archive (default: (_pg-data|_postgres-data|_pgdata)$)
+                          the archive (default: (^|[_-])(pg|postgres)[_-]?data$ --
+                          every kernel and module Postgres data volume)
   RESTORE_HELPER_IMAGE    image used to unpack volume archives (default alpine:3.22, digest-pinned)
 EOF
     exit 2

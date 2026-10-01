@@ -89,3 +89,96 @@ teardown() {
 @test "restore.sh does not hardcode passwords" {
     ! grep -qE "password=['\"][^'\"]" "$RESTORE_SCRIPT"
 }
+
+# ---------------------------------------------------------------------------
+# Behaviour: a restore that did not restore must not report success
+# (F1-FIX-09, K6#3 / S5#2). The drop/create and the load both ran plain `psql`,
+# which keeps going after an error and exits 0, so a dump that failed halfway
+# still ended in "Restore complete". These cases run the REAL script against a
+# `docker` shim that models psql's own exit-status contract: an error in the
+# input is exit 3 ONLY when ON_ERROR_STOP is set, and exit 0 otherwise.
+# ---------------------------------------------------------------------------
+
+# $TREE is a copy of the script in its own repo-root-shaped directory, because
+# restore.sh cd's to its parent and reads ./.env from there.
+restore_tree() {
+    TREE="${TEST_TEMP_DIR}/tree"
+    mkdir -p "${TREE}/scripts" "${TREE}/bin"
+    cp "$RESTORE_SCRIPT" "${TREE}/scripts/restore.sh"
+    chmod +x "${TREE}/scripts/restore.sh"
+    printf 'POSTGRES_USER=postgres\n' > "${TREE}/.env"
+    CALLS="${TEST_TEMP_DIR}/docker-calls.log"
+    : > "$CALLS"
+    export CALLS
+    cat > "${TREE}/bin/docker" <<'SHIM'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CALLS"
+input="$(cat)"
+case "$*" in
+    *"count(*)"*) printf '%s\n' "${FAKE_TABLE_COUNT:-3}"; exit 0 ;;
+esac
+if [[ "$input" == *BOOM* ]]; then
+    echo "ERROR:  boom" >&2
+    # psql: exit 3 on a script error only under ON_ERROR_STOP, else it carries on and exits 0.
+    if [[ "$*" == *ON_ERROR_STOP=1* ]]; then exit 3; fi
+fi
+exit 0
+SHIM
+    chmod +x "${TREE}/bin/docker"
+    export PATH="${TREE}/bin:${PATH}"
+}
+
+good_dump() {   # <path>
+    printf 'CREATE TABLE a (x int);\nCOPY a FROM stdin;\n1\n\\.\n' | gzip > "$1"
+}
+
+bad_dump() {   # <path> -- an error halfway through the load
+    printf 'CREATE TABLE a (x int);\nBOOM;\nCREATE TABLE b (y int);\n' | gzip > "$1"
+}
+
+@test "restore.sh reports success for a dump that loads and leaves tables behind" {
+    restore_tree
+    good_dump "${TEST_TEMP_DIR}/ok.sql.gz"
+    run bash -c 'printf "yes\n" | "$1" control "$2"' _ "${TREE}/scripts/restore.sh" "${TEST_TEMP_DIR}/ok.sql.gz"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Restore complete for 'control'"* ]]
+}
+
+@test "restore.sh exits non-zero and never says Restore complete when the dump errors mid-load" {
+    restore_tree
+    bad_dump "${TEST_TEMP_DIR}/bad.sql.gz"
+    run bash -c 'printf "yes\n" | "$1" control "$2"' _ "${TREE}/scripts/restore.sh" "${TEST_TEMP_DIR}/bad.sql.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"Restore complete"* ]]
+}
+
+@test "restore.sh runs both psql calls with ON_ERROR_STOP and loads in ONE transaction" {
+    restore_tree
+    good_dump "${TEST_TEMP_DIR}/ok.sql.gz"
+    run bash -c 'printf "yes\n" | "$1" gremion "$2"' _ "${TREE}/scripts/restore.sh" "${TEST_TEMP_DIR}/ok.sql.gz"
+    [ "$status" -eq 0 ]
+    # the drop/create call (it carries the _target variable) ...
+    grep -E '_target=gremion' "$CALLS" | grep -qF 'ON_ERROR_STOP=1'
+    # ... and the load (the call that names the database positionally)
+    local load
+    load="$(grep -E 'psql -U postgres .*gremion$' "$CALLS" | grep -v '_target=' || true)"
+    [[ "$load" == *"ON_ERROR_STOP=1"* ]]
+    [[ "$load" == *"--single-transaction"* ]]
+}
+
+@test "restore.sh fails when the restored database holds no tables (post-condition)" {
+    restore_tree
+    good_dump "${TEST_TEMP_DIR}/ok.sql.gz"
+    run bash -c 'printf "yes\n" | FAKE_TABLE_COUNT=0 "$1" control "$2"' _ "${TREE}/scripts/restore.sh" "${TEST_TEMP_DIR}/ok.sql.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no tables"* ]]
+    [[ "$output" != *"Restore complete"* ]]
+}
+
+@test "restore.sh exits non-zero when the dump is not valid gzip" {
+    restore_tree
+    printf 'this is not gzip' > "${TEST_TEMP_DIR}/corrupt.sql.gz"
+    run bash -c 'printf "yes\n" | "$1" control "$2"' _ "${TREE}/scripts/restore.sh" "${TEST_TEMP_DIR}/corrupt.sql.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"Restore complete"* ]]
+}

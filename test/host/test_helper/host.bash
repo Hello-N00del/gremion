@@ -41,7 +41,8 @@ setup_host_root() {
 }
 
 teardown_host_root() {
-    if [[ -n "${GREMION_ROOT:-}" && -d "${GREMION_ROOT:-}" ]]; then
+    release_host_lock
+    if [[ -n "${GREMION_ROOT:-}"&& -d "${GREMION_ROOT:-}" ]]; then
         rm -rf "$GREMION_ROOT"
     fi
     return 0
@@ -80,6 +81,44 @@ shim() {
     fi
     chmod +x "$tmp"
     mv -f "$tmp" "$path"
+}
+
+# hold_host_lock [seconds] -- F1-FIX-09 (K6#26). Takes the host operation lock
+# ($GREMION_ROOT/runtime/hostd.lock, flock) in a background process, exactly as
+# gremion-hostd and gremion-backup do, and returns once it is HELD. Skips the test
+# where util-linux flock is not installed (Git Bash on Windows): the lock is a
+# Linux-host contract and the bats runner image and CI both carry flock.
+# The holder's fd 3 is closed so bats does not wait on it; release_host_lock ends
+# it early and teardown never leaves it behind.
+hold_host_lock() {
+    local secs="${1:-8}" i
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    HOST_LOCK_READY="${GREMION_ROOT}/.lock-holder-ready"
+    rm -f "$HOST_LOCK_READY"
+    mkdir -p "${GREMION_ROOT}/runtime"
+    (
+        exec 9>>"${GREMION_ROOT}/runtime/hostd.lock"
+        flock -n 9 || exit 1
+        : > "$HOST_LOCK_READY"
+        # exec: the holder pid IS the sleeping process, so kill ends the hold.
+        exec sleep "$secs"
+    ) >/dev/null 2>&1 3>&- &
+    HOST_LOCK_HOLDER=$!
+    for i in $(seq 1 100); do
+        [[ -f "$HOST_LOCK_READY" ]] && return 0
+        sleep 0.1
+    done
+    echo "hold_host_lock: the holder never took the lock" >&2
+    return 1
+}
+
+release_host_lock() {
+    if [[ -n "${HOST_LOCK_HOLDER:-}" ]]; then
+        kill "$HOST_LOCK_HOLDER" 2>/dev/null || true
+        wait "$HOST_LOCK_HOLDER" 2>/dev/null || true
+        HOST_LOCK_HOLDER=""
+    fi
+    return 0
 }
 
 # assert_recorded <cmd> <substring>

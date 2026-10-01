@@ -24,6 +24,9 @@ case "\$url" in
   */api/http/services/app@file)
       printf '{"loadBalancer":{"servers":[{"url":"http://gremion-ui-${colour}:3000"}]}}' ;;
   */api/internal/evict)
+      # EVICT_CODE=unreachable is a target curl cannot connect to: real curl
+      # prints the -w code 000 AND exits non-zero (F1-FIX-09, K6#0).
+      if [ "\${EVICT_CODE:-204}" = unreachable ]; then printf '000'; exit 7; fi
       printf '%s' "\${EVICT_CODE:-204}" ;;
   *)
       printf '' ;;
@@ -177,6 +180,18 @@ EOF
     [[ "$output" == *"answered 500, expected 204"* ]]
     [ ! -f "${GREMION_ROOT}/etc/edge/active.yml" ]
     [ ! -f "${GREMION_ROOT}/runtime/active-colour" ]
+}
+
+@test "an unreachable evict target is reported as 000, not as 000000, and aborts the switch" {
+    shim_edge blue
+    export EVICT_CODE=unreachable
+    cat > "${GREMION_ROOT}/runtime/evict-targets.json" <<'EOF'
+[{"container": "gremion-ui-blue", "url": "http://gremion-ui-blue:3000/api/internal/evict"}]
+EOF
+    run "$SWITCH" blue
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"answered 000, expected 204"* ]]
+    [ ! -f "${GREMION_ROOT}/etc/edge/active.yml" ]
 }
 
 @test "--no-evict skips the fan-out and records the skip" {

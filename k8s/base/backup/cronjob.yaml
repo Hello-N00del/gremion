@@ -38,10 +38,17 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           initContainers:
-            # Separate init container installs rclone so the main image stays
-            # as small as possible and the install is cached in the emptyDir.
+            # Separate init container provides rclone so the main image stays as
+            # small as possible; the binary is copied into the emptyDir.
+            # F1-FIX-09 (K6#38): this pod holds the database superuser and the
+            # restic secrets, so rclone is the vendor's own image pinned by
+            # version AND content digest (the digest is what is pulled; the tag
+            # is the reader's hint). It used to be the vendor's moving "current"
+            # zip fetched over curl with no checksum, i.e. whatever the download
+            # server answered that night. To move to a newer rclone, change BOTH
+            # halves together.
             - name: install-tools
-              image: curlimages/curl:8.7.1
+              image: rclone/rclone:1.75.1@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5
               # G-036: container-level baseline-PSS hardening.
               securityContext:
                 allowPrivilegeEscalation: false
@@ -51,11 +58,10 @@ spec:
                 - /bin/sh
                 - -c
                 - |
-                  curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
-                       -o /tmp/rclone.zip && \
-                  unzip -q /tmp/rclone.zip -d /tmp && \
-                  cp /tmp/rclone-*/rclone /tools/rclone && \
+                  set -eu
+                  cp /usr/local/bin/rclone /tools/rclone
                   chmod +x /tools/rclone
+                  /tools/rclone version
               volumeMounts:
                 - name: tools
                   mountPath: /tools
@@ -72,6 +78,10 @@ spec:
                 - -c
                 - |
                   set -eu
+                  # busybox ash (the restic image's sh) supports pipefail; a shell
+                  # that did not would stop here, loudly, instead of running
+                  # the dumps without it.
+                  set -o pipefail
                   export PATH="/tools:$PATH"
                   BACKUP_DIR=/backup
                   DUMP_DIR="$BACKUP_DIR/current"
@@ -114,13 +124,45 @@ spec:
 
                   # #310: gremion (app data) + control (tenant registry) live on
                   # the shared `postgres` host alongside keycloak.
+                  # F1-FIX-09 (K6#9): a dump that did not complete FAILS the job.
+                  # It used to be `pg_dump | gzip > f 2>/dev/null || true` with the
+                  # step recorded "ok" regardless, so a dead Postgres gave a green
+                  # job over empty dumps that restic then snapshotted. Now:
+                  #   * pipefail, so pg_dump's own exit status is the pipeline's;
+                  #   * stderr is kept (the reason belongs in the job log);
+                  #   * the dump goes to <db>.sql.gz.part and is renamed to the
+                  #     final name only after it is verified (gzip -t and at least
+                  #     one decompressed byte), so a failed run leaves the previous
+                  #     night's dump untouched and a truncated file is never at
+                  #     the final name;
+                  #   * the step is recorded "ok" only after that verification.
                   for db in keycloak gremion control; do
                     t0=$(date +%s)
                     info "  Dumping PostgreSQL: $db..."
-                    PGPASSWORD="$POSTGRES_PASSWORD" pg_dump \
-                      -h postgres -U "$POSTGRES_USER" "$db" \
-                      | gzip > "$DUMP_DIR/$db.sql.gz" 2>/dev/null || true
-                    sz=$(du -sb "$DUMP_DIR/$db.sql.gz" 2>/dev/null | cut -f1 || echo 0)
+                    part="$DUMP_DIR/$db.sql.gz.part"
+                    rm -f "$part"
+                    if ! PGPASSWORD="$POSTGRES_PASSWORD" pg_dump \
+                        -h postgres -U "$POSTGRES_USER" "$db" | gzip > "$part"; then
+                      rm -f "$part"
+                      record "dump_postgres_$db" "$t0" "failed"
+                      info "ERROR: pg_dump of $db failed - aborting before restic"
+                      exit 1
+                    fi
+                    if ! gzip -t "$part" 2>/dev/null; then
+                      rm -f "$part"
+                      record "dump_postgres_$db" "$t0" "failed"
+                      info "ERROR: dump of $db is not a valid gzip stream - aborting"
+                      exit 1
+                    fi
+                    bytes=$(gzip -dc "$part" | wc -c)
+                    if [ "$bytes" -lt 1 ]; then
+                      rm -f "$part"
+                      record "dump_postgres_$db" "$t0" "failed"
+                      info "ERROR: dump of $db is empty - aborting"
+                      exit 1
+                    fi
+                    mv -f "$part" "$DUMP_DIR/$db.sql.gz"
+                    sz=$(du -sb "$DUMP_DIR/$db.sql.gz" | cut -f1)
                     record "dump_postgres_$db" "$t0" "ok" "\"size_bytes\":$sz"
                   done
 
