@@ -101,6 +101,9 @@ export interface ProtokollRow {
   status: 'draft' | 'submitted' | 'published'
   committeeId: string
   committeeName: string
+  // R29-F104-KTWIN (D-3): the unit's visibility, so callers can apply the ONE
+  // rule (governance/visibility.ts filterVisibleProtocols) without a second query.
+  visibility: 'all_members' | 'committee_only'
   attended: number
   total: number
   // TOPs (Tagesordnungspunkte) aren't modelled as a distinct table, so we use
@@ -109,7 +112,9 @@ export interface ProtokollRow {
   tops: number
 }
 
-// Every protocol across all committees, newest meeting first.
+// Every protocol across all committees, newest meeting first. UNFILTERED: a
+// caller that renders this to a user must pass it through
+// governance/visibility.ts filterVisibleProtocols (R29-F104-KTWIN, D-3).
 export async function listProtocols(): Promise<readonly ProtokollRow[]> {
   return getDb()<ProtokollRow[]>`
     SELECT p.id::text                            AS "id",
@@ -118,6 +123,7 @@ export async function listProtocols(): Promise<readonly ProtokollRow[]> {
            p.status                              AS "status",
            ou.id::text                           AS "committeeId",
            ou.name                               AS "committeeName",
+           ou.visibility                         AS "visibility",
            (SELECT count(*)::int FROM protocol_attendance a
               WHERE a.protocol_id = p.id AND a.status = 'present')  AS "attended",
            (SELECT count(*)::int FROM protocol_attendance a

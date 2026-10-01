@@ -1,6 +1,7 @@
 import type { PageServerLoad } from './$types'
 import { listProtocols } from '$lib/server/governance/protocols-db'
 import { hasRole, Role } from '$lib/auth'
+import { filterVisibleProtocols, visibleProtocolsWithoutMembership } from '$lib/server/governance/visibility'
 
 // Aggregates every committee's meeting minutes (see protocols-db.listProtocols).
 // DB unavailability degrades to an empty list → first-class empty state.
@@ -30,12 +31,25 @@ function summarize(err: unknown): string {
 // `isAdmin = hasRole(user.roles, Role.CouncilAdmin)`), so this never widens
 // access: a non-admin reaching the editor route directly still only gets the
 // read view that route already allows.
+//
+// R29-F104-KTWIN (kernel twin of F1-FIX-04 / H19, operator decision D-3): the
+// page is Guest-reachable, so the rows go through the ONE visibility rule
+// (governance/visibility.ts): a Guest sees only published protocols of
+// all_members units, a Member additionally the all_members drafts and their own
+// units, a CouncilAdmin everything. A failed membership lookup fails CLOSED
+// (only the rows that need no membership stay) and is logged, never swallowed.
 export const load: PageServerLoad = async (event) => {
-  const protocols = await listProtocols().catch((err) => {
+  const rows = await listProtocols().catch((err) => {
     console.error('[protokolle] listProtocols failed, degrading to empty:', summarize(err))
     return []
   })
-  const roles = event.locals?.user?.roles ?? []
+  const user = event.locals?.user
+  const viewer = user ? { id: user.id, roles: user.roles ?? [] } : null
+  const protocols = await filterVisibleProtocols(viewer, rows).catch((err) => {
+    console.error('[protokolle] membership lookup failed, showing only rows that need no membership:', summarize(err))
+    return visibleProtocolsWithoutMembership(viewer, rows)
+  })
+  const roles = user?.roles ?? []
   const isAdmin = hasRole(roles, Role.CouncilAdmin)
   return { protocols, isAdmin }
 }
