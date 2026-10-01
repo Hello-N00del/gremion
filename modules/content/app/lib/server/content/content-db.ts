@@ -564,15 +564,21 @@ export async function claimRecipient(
 	`
 	if (inserted.length > 0) return 'fresh'
 
-	// Step 2: row exists — try a stale-takeover FIRST (atomic UPDATE … RETURNING).
+	// Step 2: row exists — try an atomic takeover FIRST (one UPDATE … RETURNING,
+	// so exactly one concurrent caller wins): a STALE 'claimed' row, or a 'failed'
+	// row (F1-FIX-07 H07: the send threw, the recipient was not mailed — without
+	// this a transient SMTP error dropped them for good). Back to 'claimed' with
+	// the error cleared, so a second concurrent claimer sees 'in-flight'.
 	const cutoff = new Date(Date.now() - STALE_CLAIM_MINUTES * 60 * 1000).toISOString()
 	const taken = await sql<{ id: string }[]>`
 		UPDATE content.deliveries
-		SET claimed_at = now()
+		SET status = 'claimed', claimed_at = now(), failed_at = NULL, error_message = NULL
 		WHERE post_id = ${postId}
 			AND email = ${emailLower}
-			AND status = 'claimed'
-			AND claimed_at < ${cutoff}::timestamptz
+			AND (
+				status = 'failed'
+				OR (status = 'claimed' AND claimed_at < ${cutoff}::timestamptz)
+			)
 		RETURNING id
 	`
 	if (taken.length > 0) return 'fresh'

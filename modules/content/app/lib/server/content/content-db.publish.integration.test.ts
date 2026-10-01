@@ -233,6 +233,27 @@ describe('content-db L2 publish/email (integration)', () => {
 		expect(rows[0]!.error_message).toBe('smtp 550')
 	})
 
+	// F1-FIX-07 H07: a 'failed' row is re-claimable (once), never stuck 'in-flight'.
+	it('claimRecipient takes over a failed row exactly once (retry without double-send)', async () => {
+		const sql = getDb()
+		const post = await createPost({ title: 'Retry', created_by: 'u1' })
+		await claimRecipient(post.id, 'a@x.de')
+		await markDeliveryFailed(post.id, 'a@x.de', 'smtp 451')
+
+		const results = await Promise.all([
+			claimRecipient(post.id, 'a@x.de'),
+			claimRecipient(post.id, 'a@x.de'),
+		])
+		expect(results.filter((r) => r === 'fresh')).toHaveLength(1)
+		expect(results.filter((r) => r === 'in-flight')).toHaveLength(1)
+
+		const rows = await sql<{ status: string; error_message: string | null }[]>`
+			SELECT status, error_message FROM content.deliveries
+			WHERE post_id = ${post.id} AND email = 'a@x.de'
+		`
+		expect(rows[0]).toMatchObject({ status: 'claimed', error_message: null })
+	})
+
 	// ── publications (upsert linkage) ─────────────────────────────────────────
 
 	it('setPublication upserts + stamps published_at; getPublication reads; clear removes', async () => {
