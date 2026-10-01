@@ -668,9 +668,21 @@ phase_customer_create() {
     # The kernel database: gremion-ui's own ledger shape, no seed, one body.
     if [[ "$(q "$kdb" "SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_name = 'schema_migrations'")" == "applied_at,filename" ]]; then ok "customer-create: schema_migrations is gremion-ui's (filename, applied_at), no sha256 (Q3)"; else bad "customer-create: schema_migrations has another shape"; fi
     if [[ "$(q "$kdb" "SELECT count(*) FROM schema_migrations WHERE filename LIKE '%seed%'")" == 0 ]]; then ok "customer-create: no *_seed.sql applied (GREMION_DISABLE_SEEDS)"; else bad "customer-create: a seed file was applied"; fi
-    if [[ "$(q "$kdb" "SELECT count(*) FROM org_units")/$(q "$kdb" "SELECT count(*) FROM committees")" == "1/0" ]]; then ok "customer-create: org_units = 1 (the council), committees = 0"; else bad "customer-create: org_units/committees are not 1/0"; fi
-    # The realm: one group, two administrators, the customer's own sender.
-    if [[ "$(skc get groups -r "$X" --fields name | jq 'length')" == 1 ]]; then ok "customer-create: realm ${X} holds one group (the first body)"; else bad "customer-create: realm ${X} group count"; fi
+    # gremion-ui's 0010_org_units.sql RENAMED committees to org_units: a
+    # committee is an org_units row of kind 'committee' (0038 kind catalogue).
+    # The old `FROM committees` errored, so this check could never pass.
+    local units; units="$(q "$kdb" "SELECT count(*) || ':' || coalesce(string_agg(kind, ','), '') || '/' || count(*) FILTER (WHERE kind = 'committee') FROM org_units")"
+    if [[ "$units" == "1:council/0" ]]; then ok "customer-create: org_units = 1 (kind council), committees (org_units of kind committee) = 0"; else bad "customer-create: org_units count:kinds/committees ${units:-unreadable}, want 1:council/0"; fi
+    # The realm: one group FOR THE FIRST BODY, two administrators, the
+    # customer's own sender. The base realm template (realm-doc composes every
+    # realm from it) carries its own groups (login, admin since ab45a0e5); they
+    # are set aside, and the one remaining group is named like the council row.
+    local base_groups body_name realm_groups
+    base_groups="$(jq -c '[.groups[]?.name] | sort' "$ROOT/docker/keycloak/realm-export.base.json")"
+    body_name="$(q "$kdb" "SELECT name FROM org_units WHERE kind = 'council'")"
+    realm_groups="$(skc get groups -r "$X" --fields name | jq -c --argjson base "$base_groups" '[.[].name] - $base')"
+    if [[ -n "$body_name" && "$realm_groups" == "[\"${body_name}\"]" ]]; then ok "customer-create: realm ${X} holds one group for the first body (${body_name}) beside the base template's ${base_groups}"
+    else bad "customer-create: realm ${X} groups beyond the base template's ${base_groups}: ${realm_groups:-unreadable}, want [\"${body_name}\"]"; fi
     local users; users="$(skc get users -r "$X" --fields username,requiredActions | jq -c '[.[] | select(.username | startswith("service-account-") | not)] | length')"
     if [[ "$users" == 2 ]]; then ok "customer-create: two administrators in ${X}"; else bad "customer-create: ${users} user(s) in ${X}, want 2"; fi
     # 'smtpServer(*)': on Keycloak 26.6 a bare `--fields smtpServer` returns
