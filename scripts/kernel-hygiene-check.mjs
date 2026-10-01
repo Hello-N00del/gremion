@@ -1706,17 +1706,28 @@ check('n2 the migrations ledger lists every shipped file and calls none of them 
   return problems.length ? problems.join(' | ') : null
 })
 
+// Data-plane files written in THIS repository after the port-back, which the
+// product chain the docs count against does not carry: they ship here but are
+// not "present from the product", so they do not shrink the absent count.
+// Each entry must exist on disk, so the list cannot outlive its file.
+// F1-FIX-02-K: 0059, the INV-1 chain anchor (the product numbers its own port
+// of the same fix separately).
+const KERNEL_ONLY_DATA_PLANE_FILES = ['0059_audit_log_chain_anchor.sql']
+
 check('n3 the "absent from the kernel" arithmetic is the product chain minus what ships', () => {
   const wrong = []
+  const stale = KERNEL_ONLY_DATA_PLANE_FILES.filter((f) => !dataPlaneFiles.includes(f))
+  if (stale.length) return `KERNEL_ONLY_DATA_PLANE_FILES names file(s) not in gremion-ui/migrations: ${stale.join(', ')}`
+  const fromProduct = dataPlaneFiles.length - KERNEL_ONLY_DATA_PLANE_FILES.length
   for (const p of INVENTORY_DOCS) {
     const doc = read(p)
     const total = [...doc.matchAll(/\*{0,2}(\d+)\*{0,2} (?:in the (?:reference )?product|data-plane files)/g)]
       .map((m) => Number(m[1]))
     const absent = [...doc.matchAll(/\*{0,2}(\d+)\*{0,2} are absent/g)].map((m) => Number(m[1]))
     if (!total.length) continue
-    const expected = total[0] - dataPlaneFiles.length
+    const expected = total[0] - fromProduct
     for (const n of absent) {
-      if (n !== expected) wrong.push(`${p}: says ${n} absent, but ${total[0]} - ${dataPlaneFiles.length} = ${expected}`)
+      if (n !== expected) wrong.push(`${p}: says ${n} absent, but ${total[0]} - ${fromProduct} (of ${dataPlaneFiles.length} shipped, ${KERNEL_ONLY_DATA_PLANE_FILES.length} kernel-only) = ${expected}`)
     }
   }
   return wrong.length ? wrong.join(' | ') : null

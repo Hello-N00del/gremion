@@ -18,7 +18,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/store.test.ts': 18,
     'src/manifest.test.ts': 10,
     'src/strip-outer-transaction.test.ts': 11,
-    'src/runner.test.ts': 6,
+    // F1-FIX-02-K (T5): +3, the body error propagates through finally
+    'src/runner.test.ts': 9,
     'src/schema-gate.test.ts': 8,
     'src/index.test.ts': 2,
     'src/lifecycle/lifecycle.test.ts': 22,
