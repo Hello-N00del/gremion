@@ -38,6 +38,7 @@ import { z } from 'zod'
 import type { Sql, TenantRef } from '../tenant-store.js'
 import type { Route, RouteContext } from './router.js'
 import { enqueueOutbox } from '../outbox.js'
+import { BYDAY_PATTERN } from '../caldav/client.js'
 import type { CalendarEvent } from '@gremion/ports/broker'
 import {
   listEvents,
@@ -119,13 +120,15 @@ async function readBody(req: http.IncomingMessage): Promise<unknown> {
 
 const EVENT_SOURCES = ['manual', 'helios', 'minutes', 'holiday', 'newsletter'] as const
 
-const RecurrenceSchema = z
+export const RecurrenceSchema = z
   .object({
     frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']),
     interval: z.number().int().positive().optional().default(1),
     count: z.number().int().positive().nullable().optional().default(null),
     until: z.coerce.date().nullable().optional().default(null),
-    byday: z.array(z.string()).nullable().optional().default(null),
+    // K4#21: BYDAY is written verbatim into the ICS RRULE, so it is validated here
+    // (and again in buildRRule): RFC 5545 weekday with an optional ordinal.
+    byday: z.array(z.string().regex(BYDAY_PATTERN, 'invalid BYDAY value')).nullable().optional().default(null),
     exceptions: z.array(z.coerce.date()).nullable().optional().default(null),
   })
   .nullable()
