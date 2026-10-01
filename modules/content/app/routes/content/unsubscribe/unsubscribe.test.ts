@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // K5#19 / S3#38 (F1-FIX-07): the GET load NEVER consumes the token — link
 // scanners and mail-client prefetchers issue GETs, and a GET that consumed the
 // single-use token unsubscribed recipients who never clicked. GET renders a
-// confirmation; the POST form action (also the RFC 8058 one-click target)
-// consumes and maps the three outcomes to a render status.
+// confirmation; the POST form action consumes and maps the three outcomes to a
+// render status. (Not an RFC 8058 one-click endpoint: see +page.server.ts.)
 
 const { mockConsume } = vi.hoisted(() => ({ mockConsume: vi.fn() }))
 vi.mock('$lib/server/content/content-db', () => ({ consumeUnsubscribeToken: mockConsume }))
@@ -69,7 +69,7 @@ describe('/content/unsubscribe POST action (consumes)', () => {
     expect(await actions.default(postEvent({ formToken: 'nope' }))).toEqual({ status: 'invalid' })
   })
 
-  it('RFC 8058 one-click: the token in the URL plus List-Unsubscribe=One-Click consumes', async () => {
+  it('a POST with the token only in the URL consumes it', async () => {
     mockConsume.mockResolvedValue({ ok: true })
     expect(await actions.default(postEvent({ urlToken: 'click', oneClick: true }))).toEqual({ status: 'ok' })
     expect(mockConsume).toHaveBeenCalledWith('click')
