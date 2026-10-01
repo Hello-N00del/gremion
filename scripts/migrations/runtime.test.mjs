@@ -89,8 +89,10 @@ test('6: the check runs once per run (same ctx), and again for a new run', async
 
 test('6: the kernel-data chain is the union of its dirs ordered by number (0058 before 1200)', () => {
   const names = chainFileNames('kernel-data', { root: REPO_ROOT })
-  assert.equal(names.length, 33)
-  assert.equal(names.at(-3), '0058_public_reader_grants.sql')
+  // 31 legacy + F1-FIX-02-K's claimed 0059 + the content app block (1200, 1201)
+  assert.equal(names.length, 34)
+  assert.equal(names.at(-4), '0058_public_reader_grants.sql')
+  assert.equal(names.at(-3), '0059_audit_log_chain_anchor.sql')
   assert.deepEqual(names.slice(-2), ['1200_content_news_posts.sql', '1201_news_posts_public_reader_columns.sql'])
 })
 
@@ -99,7 +101,9 @@ test('6: a pre-renumber (pad-3) kernel ledger is refused against the real kernel
   // TASK-038 re-asserts): today db.ts compares ledger names only through
   // applied.has(file) and would start re-applying at 0001_ on such a database.
   const chainFiles = chainFileNames('kernel-data', { root: REPO_ROOT })
-  const pad3 = chainFiles.filter((f) => /^0\d{3}_/.test(f)).map((f) => f.slice(1))
+  // A pre-renumber ledger can only hold the files that existed before the
+  // renumber (<= 0058); 0059 (F1-FIX-02-K) was claimed after it, pad 4 only.
+  const pad3 = chainFiles.filter((f) => /^0\d{3}_/.test(f) && f < '0059').map((f) => f.slice(1))
   assert.equal(pad3.length, 31)
   const err = await refused({ ledger: pad3, pending: chainFiles, hook: chainPreApply({ chainFiles }) }, 'LEDGER_NAME_NOT_IN_CHAIN')
   assert.deepEqual([...err.files].sort(byName), [...pad3].sort(byName))

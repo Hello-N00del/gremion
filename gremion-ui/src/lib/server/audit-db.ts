@@ -35,8 +35,9 @@ export async function writeAuditEntry(entry: AuditEntry, tx?: PgTransaction): Pr
 
 /**
  * Governance Core INV-1: verify the audit_log hash chain is intact.
- * Delegates to the in-DB verifier (migration 043) so hashing is identical to the
- * writer trigger. Returns the id of the first broken row, or ok when intact.
+ * Delegates to the in-DB verifier (migrations 0043, 0059) so hashing is
+ * identical to the writer trigger; the walk starts at the retention purge's
+ * anchor. Returns the id of the first broken row, or ok when intact.
  */
 export async function verifyAuditChain(): Promise<{ ok: true } | { ok: false; brokenAtId: number }> {
   const sql = getDb()
@@ -67,14 +68,26 @@ export async function readAuditLog(field?: string, limit = 50): Promise<AuditRec
  * unbounded past the BSI / GDPR security-log retention cap configured in
  * `config.retention.security_logs_days`.
  *
- * Returns the number of rows actually removed (postgres-js sets `.count` on
- * the result object for DML statements).
+ * H01 (F1-FIX-02): the purge runs in the database (migration 0059,
+ * audit_log_purge_before) so the INV-1 chain survives it: under the chain lock
+ * it removes the oldest PREFIX of the chain whose rows are all past the cutoff
+ * and records the last removed row_hash as the chain's anchor in the same
+ * transaction, which is where audit_log_verify_chain() then starts. A plain
+ * DELETE removed the head and left the verifier reporting BROKEN forever.
+ *
+ * K1#36: `days` must be a whole number of days, at least 1. A smaller window
+ * would erase the tamper-evident record, so it is refused before any SQL runs,
+ * whatever the configuration says.
+ *
+ * Returns the number of rows actually removed.
  */
 export async function purgeAuditLogsOlderThan(days: number): Promise<{ purged: number }> {
+  if (!Number.isInteger(days) || days < 1) {
+    throw new RangeError(`purgeAuditLogsOlderThan: days must be a whole number of at least 1 (got ${days})`)
+  }
   const sql = getDb()
-  const result = await sql`
-    DELETE FROM audit_log
-    WHERE created_at < now() - ${days}::int * INTERVAL '1 day'
+  const rows = await sql<{ purged: string }[]>`
+    SELECT audit_log_purge_before(now() - ${days}::int * INTERVAL '1 day')::text AS purged
   `
-  return { purged: result.count }
+  return { purged: Number(rows[0]?.purged ?? 0) }
 }

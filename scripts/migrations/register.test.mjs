@@ -243,9 +243,9 @@ test('empty chain: a declared dir may be absent only while highWater is 0 and no
 })
 
 // ---- TDD 9: the StuRa tree ------------------------------------------------
-test('stura: 0059_money_running_no_fiscal_year_idx.sql in gremion-ui/migrations is STURA_SLUG on the REAL register', () => {
-  // claimed properly (highWater bumped), so only the StuRa rule can refuse it
-  const got = codes(check(hw(withFile(treeState(), 'gremion-ui/migrations/0059_money_running_no_fiscal_year_idx.sql'), 'kernel-data', 59)))
+test('stura: 0060_money_running_no_fiscal_year_idx.sql in gremion-ui/migrations is STURA_SLUG on the REAL register', () => {
+  // claimed properly (highWater bumped past F1-FIX-02-K's 0059), so only the StuRa rule can refuse it
+  const got = codes(check(hw(withFile(treeState(), 'gremion-ui/migrations/0060_money_running_no_fiscal_year_idx.sql'), 'kernel-data', 60)))
   assert.ok(got.includes('STURA_SLUG'), got.join(','))
 })
 
@@ -274,13 +274,17 @@ test('real tree: the kernel checkout passes the register check', () => {
   assert.deepEqual(check(s), [])
 })
 
-test('real tree: kernel-data holds the 31 legacy files (floor 58) plus the content app block', () => {
+test('real tree: kernel-data holds the 31 legacy files (floor 58), the F1-FIX-02-K claim 0059 and the content app block', () => {
   const s = treeState()
   const k = s.register.chains.find((c) => c.id === 'kernel-data')
   assert.equal(k.legacy.length, 31)
   assert.equal(k.legacyFloor, 58)
+  // F1-FIX-02-K: 0059 claimed through `claim` (highWater 58 -> 59), locked by `freeze`.
+  assert.equal(k.highWater, 59)
+  assert.ok(!k.legacy.includes('0059_audit_log_chain_anchor.sql'))
+  assert.ok(s.lock.chains['kernel-data'].files['0059_audit_log_chain_anchor.sql'], '0059 is not in the lock')
   const files = s.files.filter((f) => k.dirs.some((d) => f.path.startsWith(`${d}/`)))
-  assert.equal(files.length, 33)
+  assert.equal(files.length, 34)
   assert.equal(s.slugs.slugs.length, 29)
 })
 

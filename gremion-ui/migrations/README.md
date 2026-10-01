@@ -375,7 +375,7 @@ data-plane file against the control-plane chain, or the reverse.
 
 ## What is here, what is not
 
-**31 data-plane migrations ship in this repository**, and they apply in this
+**32 data-plane migrations ship in this repository**, and they apply in this
 order:
 
 | File | What it does |
@@ -411,6 +411,7 @@ order:
 | `0056_role_assignment_history_recalled.sql` | Recall: widens the `001` CHECK so an archived assignment may carry `ended_reason = 'recalled'`. |
 | `0057_fk_hot_filter_indexes.sql` | Read-path indexes on five FK columns used as hot WHERE predicates. |
 | `0058_public_reader_grants.sql` | Closes the fresh-install grant hole for the anonymous portal: grants `gremion_public_reader` on the portal tables, and aborts rather than granting nothing. |
+| `0059_audit_log_chain_anchor.sql` | Keeps the INV-1 chain verifiable across the retention purge: `audit_log_chain_anchor` (the last purged `row_hash`), `audit_log_purge_before()` (removes a chain prefix and moves the anchor in one transaction), the verifier starting at the anchor, and the row id drawn under the chain lock. Rewrites no audit row; on a head purged before it, it aborts unless the operator acknowledges the exact hash (`gremion.audit_chain_adopt_head`). Kernel-only (written here, not ported). |
 
 Plus **5 control-plane migrations** in
 [`../migrations-control/`](../migrations-control/): `001_tenant_registry.sql`,
@@ -429,8 +430,8 @@ imposes on a pre-existing database are in
 
 ### Migrations that exist in the product and not here
 
-The reference product chain has **58** data-plane files; this one has 31, so
-**27 are absent**. Every one of them is module-owned or unshipped — finance
+The reference product chain has **58** data-plane files; 31 of them ship
+here (the 32nd file here, `0059`, is kernel-only), so **27 are absent**. Every one of them is module-owned or unshipped — finance
 (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`)
 ship in their own repositories, and handover (`050`–`052`) ships in no release-1
 tree at all: `make lint-unshipped-migrations` fails any tree that carries one.

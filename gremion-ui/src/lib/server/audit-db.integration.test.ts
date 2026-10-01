@@ -13,6 +13,9 @@
 // inline here per the brief's "use option (a)" instruction.
 
 import { describe, it, expect, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { TransactionSql } from 'postgres'
 import { getDb } from './db'
 import { writeAuditEntry, readAuditLog, verifyAuditChain } from './audit-db'
 
@@ -185,12 +188,25 @@ describe('G-103 audit-db integration', () => {
   })
 })
 
+/**
+ * Back to genesis: the rows and the purge anchor (migration 0059). The anchor
+ * is cleared only where its table exists, so a database without 0059 fails
+ * these tests on the defect they pin, not on a missing table.
+ */
+async function resetAuditChain(): Promise<void> {
+  const sql = getDb()
+  await sql`TRUNCATE audit_log RESTART IDENTITY`
+  await sql`
+    DO $$ BEGIN
+      IF to_regclass('public.audit_log_chain_anchor') IS NOT NULL THEN
+        DELETE FROM audit_log_chain_anchor;
+      END IF;
+    END $$`
+}
+
 // Governance Core INV-1 (tamper-evident record) — migration 043 hash chain.
 describe('audit_log hash chain (INV-1)', () => {
-  beforeEach(async () => {
-    const sql = getDb()
-    await sql`TRUNCATE audit_log RESTART IDENTITY`
-  })
+  beforeEach(resetAuditChain)
 
   it('chains sequential entries and verifies intact', async () => {
     await writeAuditEntry({ userId: 'u1', field: 'committee.create', oldValue: null, newValue: 'A' })
@@ -245,5 +261,140 @@ describe('audit_log hash chain (INV-1)', () => {
 
     // The remaining 2-row prefix is still internally consistent → reports ok.
     expect(await verifyAuditChain()).toEqual({ ok: true })
+  })
+})
+
+// K1#2 / S5#24 (F1-FIX-02): the id came from the column DEFAULT, i.e. BEFORE
+// the trigger took the chain lock, while the verifier walks the chain in id
+// order. A writer whose id was drawn while another transaction held the lock
+// linked itself behind a row with a HIGHER id, and the chain verified BROKEN
+// with nobody tampering. Migration 0059 draws the id under the lock.
+describe('audit_log hash chain under concurrent writers (K1#2)', () => {
+  beforeEach(resetAuditChain)
+
+  it('two connections: an id drawn while the other writer holds the chain lock still verifies intact', async () => {
+    const sql = getDb()
+    const a = await sql.reserve()
+    const b = await sql.reserve()
+    try {
+      await a.unsafe('BEGIN')
+      await a`INSERT INTO audit_log (user_id, field, new_value) VALUES ('writer-a', 'race.a', '1')`
+
+      // B draws its id now and then waits for A's transaction-scoped chain lock.
+      const bDone = b`INSERT INTO audit_log (user_id, field, new_value) VALUES ('writer-b', 'race.b', '2')`.then(() => 'b-committed')
+      let waiting = 0
+      for (let i = 0; i < 100 && waiting === 0; i++) {
+        const [row] = await sql<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`
+        waiting = row!.n
+        if (waiting === 0) await new Promise((r) => setTimeout(r, 50))
+      }
+      expect(waiting, 'writer B never queued behind the chain lock').toBe(1)
+
+      // A writes again (a higher id than B's) and commits; then B proceeds.
+      await a`INSERT INTO audit_log (user_id, field, new_value) VALUES ('writer-a', 'race.a', '3')`
+      await a.unsafe('COMMIT')
+      expect(await bDone).toBe('b-committed')
+    } finally {
+      a.release()
+      b.release()
+    }
+
+    const rows = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM audit_log`
+    expect(rows[0]!.n).toBe(3)
+    expect(await verifyAuditChain()).toEqual({ ok: true })
+  })
+})
+
+// Migration 0059 on a database whose head was ALREADY purged before it shipped.
+// The first surviving row's prev_hash is then the only trace of its removed
+// predecessor, and a migration cannot tell a retention purge from a deleted
+// head. It never rewrites or drops an audit row, and it fails loudly instead of
+// guessing: it adopts that prev_hash as the anchor only when the operator has
+// acknowledged exactly that hash (gremion.audit_chain_adopt_head). Each case
+// runs the committed file's text inside a transaction that is rolled back.
+describe('migration 0059 on a chain whose head was purged before it (H01 upgrade path)', () => {
+  const MIGRATION = join(process.cwd(), 'migrations', '0059_audit_log_chain_anchor.sql')
+  class Rollback extends Error {}
+
+  beforeEach(resetAuditChain)
+
+  async function inRolledBackTx(fn: (tx: TransactionSql) => Promise<void>): Promise<void> {
+    const sql = getDb()
+    await sql
+      .begin(async (tx) => {
+        await fn(tx)
+        throw new Rollback()
+      })
+      .catch((e: unknown) => {
+        if (!(e instanceof Rollback)) throw e
+      })
+  }
+
+  /** Three rows, the oldest removed the pre-0059 way: a plain DELETE, no anchor. */
+  async function purgedHeadWithoutAnchor(tx: TransactionSql): Promise<{ headPrev: string; chain: string }> {
+    for (const v of ['1', '2', '3']) {
+      await tx`INSERT INTO audit_log (user_id, field, new_value) VALUES ('u', 'upgrade.chain', ${v})`
+    }
+    await tx`DELETE FROM audit_log WHERE id = (SELECT min(id) FROM audit_log)`
+    await tx`DELETE FROM audit_log_chain_anchor`
+    const [head] = await tx<{ prev_hash: string }[]>`SELECT prev_hash FROM audit_log ORDER BY id LIMIT 1`
+    return { headPrev: head!.prev_hash, chain: await chainFingerprint(tx) }
+  }
+
+  async function chainFingerprint(tx: TransactionSql): Promise<string> {
+    const [r] = await tx<{ f: string | null }[]>`
+      SELECT string_agg(id::text || ':' || coalesce(prev_hash, '') || ':' || row_hash || ':' || new_value, ',' ORDER BY id) AS f
+      FROM audit_log`
+    return r!.f ?? ''
+  }
+
+  it('without the operator acknowledgement it refuses: it cannot tell a purge from a deleted head', async () => {
+    const text = readFileSync(MIGRATION, 'utf-8')
+    await inRolledBackTx(async (tx) => {
+      const { headPrev } = await purgedHeadWithoutAnchor(tx)
+      await expect(tx.unsafe(text)).rejects.toThrow(new RegExp(`cannot anchor[\\s\\S]*${headPrev}[\\s\\S]*gremion\\.audit_chain_adopt_head`))
+    })
+  })
+
+  it('with the acknowledged hash it adopts it as the anchor, rewrites no row, and the chain verifies', async () => {
+    const text = readFileSync(MIGRATION, 'utf-8')
+    await inRolledBackTx(async (tx) => {
+      const { headPrev, chain } = await purgedHeadWithoutAnchor(tx)
+      await tx`SELECT set_config('gremion.audit_chain_adopt_head', ${headPrev}, true)`
+      await tx.unsafe(text)
+
+      expect(await chainFingerprint(tx)).toBe(chain)
+      const [anchor] = await tx<{ anchor_hash: string; source: string }[]>`SELECT anchor_hash, source FROM audit_log_chain_anchor`
+      expect(anchor).toEqual({ anchor_hash: headPrev, source: 'adopted' })
+      const [v] = await tx<{ broken: string | null }[]>`SELECT audit_log_verify_chain() AS broken`
+      expect(v!.broken).toBeNull()
+    })
+  })
+
+  it('an acknowledgement naming a different hash is refused', async () => {
+    const text = readFileSync(MIGRATION, 'utf-8')
+    await inRolledBackTx(async (tx) => {
+      await purgedHeadWithoutAnchor(tx)
+      await tx`SELECT set_config('gremion.audit_chain_adopt_head', ${'0'.repeat(64)}, true)`
+      await expect(tx.unsafe(text)).rejects.toThrow(/does not match/)
+    })
+  })
+
+  it('a chain that still starts at genesis needs no anchor and no acknowledgement', async () => {
+    const text = readFileSync(MIGRATION, 'utf-8')
+    await inRolledBackTx(async (tx) => {
+      for (const v of ['1', '2']) {
+        await tx`INSERT INTO audit_log (user_id, field, new_value) VALUES ('u', 'upgrade.genesis', ${v})`
+      }
+      const before = await chainFingerprint(tx)
+      await tx.unsafe(text)
+
+      expect(await chainFingerprint(tx)).toBe(before)
+      const anchors = await tx`SELECT 1 FROM audit_log_chain_anchor`
+      expect(anchors).toHaveLength(0)
+      const [v] = await tx<{ broken: string | null }[]>`SELECT audit_log_verify_chain() AS broken`
+      expect(v!.broken).toBeNull()
+    })
   })
 })

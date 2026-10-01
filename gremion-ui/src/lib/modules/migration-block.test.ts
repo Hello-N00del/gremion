@@ -29,6 +29,9 @@ export const KERNEL_BLOCK_BASENAMES = [
   '0053_notification_read_marker.sql', '0054_resolution_adoption_mode.sql',
   '0055_resolution_challenges.sql', '0056_role_assignment_history_recalled.sql',
   '0057_fk_hot_filter_indexes.sql', '0058_public_reader_grants.sql',
+  // F1-FIX-02-K: the first kernel-only data-plane file after the port-back
+  // (the INV-1 chain anchor; claimed through scripts/migrations/register.mjs).
+  '0059_audit_log_chain_anchor.sql',
 ]
 
 /** Module-owned or unshipped numbers that must never appear in the kernel block. */
@@ -39,13 +42,13 @@ const FOREIGN_BASENAMES = [
 ]
 
 describe('kernel data-plane migration block', () => {
-  it('holds exactly the 31 kernel-block basenames', () => {
+  it('holds exactly the 32 kernel-block basenames', () => {
     const onDisk = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()
     expect(onDisk).toEqual([...KERNEL_BLOCK_BASENAMES].sort())
   })
 
-  it('is 31 files', () => {
-    expect(KERNEL_BLOCK_BASENAMES.length).toBe(31)
+  it('is 32 files', () => {
+    expect(KERNEL_BLOCK_BASENAMES.length).toBe(32)
   })
 
   it('carries no module-owned or unshipped file', () => {
@@ -78,8 +81,14 @@ export const PORTED_BASENAMES = [
 // it aborts, applyMigrationFile records nothing, and the boot wedges on every
 // retry with an error naming a table nobody removed. Derived from the two sets
 // rather than written down, so a future back-fill cannot slip in undeclared.
+/**
+ * Kernel files written AFTER the port-back, numbered above every ported one
+ * through the TASK-029 register. They are neither pre-port-back nor ported, so
+ * they must not move the pre-port-back high-water mark.
+ */
+export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql']
 const PRE_PORT_BACK_BASENAMES = KERNEL_BLOCK_BASENAMES.filter(
-  (f) => !PORTED_BASENAMES.includes(f),
+  (f) => !PORTED_BASENAMES.includes(f) && !POST_PORT_BACK_BASENAMES.includes(f),
 )
 export const PRE_PORT_BACK_HIGH_WATER = [...PRE_PORT_BACK_BASENAMES].sort().at(-1) as string
 export const BACK_FILLED_BASENAMES = PORTED_BASENAMES.filter(
@@ -90,6 +99,14 @@ describe('numbers back-filled below the pre-port-back high-water mark', () => {
   it('is exactly 003 and 034, measured against 048', () => {
     expect(PRE_PORT_BACK_HIGH_WATER).toBe('0048_resolution_decided_at.sql')
     expect(BACK_FILLED_BASENAMES).toEqual(['0003_calendar_schema.sql', '0034_deck_board.sql'])
+  })
+
+  it('every post-port-back file is in the block and sorts above every earlier one (claimed, never back-filled)', () => {
+    const earlier = KERNEL_BLOCK_BASENAMES.filter((f) => !POST_PORT_BACK_BASENAMES.includes(f)).sort()
+    for (const f of POST_PORT_BACK_BASENAMES) {
+      expect(KERNEL_BLOCK_BASENAMES).toContain(f)
+      expect(f > earlier.at(-1)!, `${f} must sort above ${earlier.at(-1)}`).toBe(true)
+    }
   })
 
   it('no file on disk sorts below the mark without being declared', () => {
