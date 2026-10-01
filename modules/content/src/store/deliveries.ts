@@ -18,8 +18,11 @@
 // whose send threw is retried on the next publish. Because 'failed' is now
 // re-claimable, markFailed never overwrites 'sent' (r2): a worker that hung past
 // the stale window and fails late cannot turn a delivered row into a re-send.
-// Residual: on the kernel HTTP path (no token) a late failure can still flip a
-// live takeover claim to 'failed' for the moment until that claimer's markSent.
+// The HTTP claim route returns the token (claim_token) and the /failed route
+// fences on it (R29-LOW-07 L1). Residual: a /failed request WITHOUT a token (a
+// caller that predates the token) keeps the status-only fence, so its late
+// failure can still flip a live takeover claim to 'failed' until that claimer's
+// markSent. markSent is deliberately never fenced.
 
 import type { Sql } from '../tenant-store.js'
 
@@ -63,8 +66,7 @@ export interface DeliveryClaim {
 
 /**
  * claimRecipient, also returning the claim token (F1-FIX-07 r2). The leaf's own
- * send loops (publish-channel, dispatch) use this; the kernel's HTTP claim route
- * keeps the bare ClaimResult contract.
+ * send loops (publish-channel, dispatch) and the HTTP claim route use this.
  */
 export async function claimDelivery(
   sql: Sql,

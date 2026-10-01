@@ -70,7 +70,7 @@ import {
   recordContentAudit,
   createMedia,
   listMediaByPost,
-  claimRecipient,
+  claimDelivery,
   markSent,
   markFailed,
   createPublication,
@@ -237,6 +237,10 @@ const MarkSentSchema = z.object({
 
 const MarkFailedDeliverySchema = z.object({
   error: z.string().min(1),
+  // The claim token returned by the claim route (claimed_at as epoch micros in
+  // text). With it only the caller's own claim can fail; WITHOUT it (a caller
+  // that predates the token) the failure keeps the status-only fence.
+  claim_token: z.string().regex(/^\d+$/).optional(),
 })
 
 const SetPublicationSchema = z.object({
@@ -877,9 +881,12 @@ export function buildApiRoutes(storeFn: StoreFn, publishDeps?: PublishDeps): Rou
       handler: wrap(async ({ req, res, tenant }) => {
         const body = ClaimDeliverySchema.parse(await readBody(req))
         const sql = await storeFn(tenant)
-        const result = await claimRecipient(sql, body.post_id, body.email)
-        // Return bare string — service-client does (await leafFetch(...)) as ClaimResult
-        sendJson(res, 200, result)
+        const { result, claimedAt } = await claimDelivery(sql, body.post_id, body.email)
+        // Bare object (no envelope): the result plus, only when 'fresh', the claim
+        // token the caller passes back on /failed so a superseded claimer cannot
+        // fail the live claim (R29-LOW-07 L1). service-client also accepts the
+        // legacy bare string.
+        sendJson(res, 200, { result, claim_token: claimedAt })
       }),
     },
 
@@ -906,7 +913,7 @@ export function buildApiRoutes(storeFn: StoreFn, publishDeps?: PublishDeps): Rou
         const email = params['email']!
         const body = MarkFailedDeliverySchema.parse(await readBody(req))
         const sql = await storeFn(tenant)
-        await markFailed(sql, postId, email, body.error)
+        await markFailed(sql, postId, email, body.error, body.claim_token)
         sendNoContent(res)
       }),
     },
