@@ -79,7 +79,13 @@ case " $* " in
         [ -n "${KEYCLOAK_ADMIN:-}" ] && [ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ] || { echo "no admin credential in the environment" >&2; exit 1; }
         printf "%s" "$KEYCLOAK_ADMIN_PASSWORD" > "$GREMION_ROOT/kc-pw-seen"
         [ -n "$od" ] && [ -d "$od" ] || { echo "no scratch mount" >&2; exit 1; }
-        [ -f "$GREMION_ROOT/bootstrap-writes-nothing" ] || printf "unit-provisioner-sa-secret\n" > "$od/tenant_provisioner" ;;
+        [ -f "$GREMION_ROOT/bootstrap-writes-nothing" ] || printf "unit-provisioner-sa-secret\n" > "$od/tenant_provisioner"
+        # an operator interrupt DURING the one-shot: the secret is already in the
+        # scratch directory when the launcher receives the signal (r2 verifier)
+        if [ -f "$GREMION_ROOT/bootstrap-signal" ]; then
+          i=0; while [ ! -s "$GREMION_ROOT/launcher.pid" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+          kill -s "$(cat "$GREMION_ROOT/bootstrap-signal")" "$(cat "$GREMION_ROOT/launcher.pid")"
+        fi ;;
       render-router)
         printf "# tenant-%s.yml\nhttp:\n  routers:\n    tenant-%s:\n      rule: \"Host(\`x\`)\"\n    tenant-%s.kc:\n      rule: \"x\"\n" "$slug" "$slug" "$slug" ;;
       init)
@@ -331,6 +337,36 @@ create() {
     [ ! -e "${GREMION_ROOT}/etc/secrets/tenant-create/tenant_provisioner" ]
     run find "${GREMION_ROOT}/etc/secrets" -maxdepth 1 -name '.tenant-provisioner.*'
     [ -z "$output" ] || { echo "scratch left: $output"; return 1; }
+}
+
+# TASK-043b r2 (verifier LOW): a SIGTERM while the one-shot runs -- the SA
+# secret already sits in the scratch directory -- must not leave that directory
+# behind. (SIGINT takes the same trap; a background job of a non-interactive
+# shell starts with SIGINT ignored, so only TERM is deliverable from here.)
+@test "a SIGTERM during bootstrap-provisioner fails init and leaves no scratch directory holding the SA secret, and no credential (TASK-043b r2)" {
+    printf 'TERM' > "${GREMION_ROOT}/bootstrap-signal"
+    local rc=0 pid
+    "$LAUNCHER" init > "${GREMION_ROOT}/bg.out" 2>&1 &
+    pid=$!
+    echo "$pid" > "${GREMION_ROOT}/launcher.pid"
+    wait "$pid" || rc=$?
+    [ "$rc" -ne 0 ] || { echo "init exited 0 after SIGTERM"; cat "${GREMION_ROOT}/bg.out"; return 1; }
+    run steps
+    [ "$output" = "tc bootstrap-provisioner " ] || { echo "steps: $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/etc/secrets/tenant-create/tenant_provisioner" ]
+    run find "${GREMION_ROOT}/etc/secrets" -maxdepth 1 -name '.tenant-provisioner.*'
+    [ -z "$output" ] || { echo "scratch left after SIGTERM (rc=${rc}): $output"; return 1; }
+}
+
+@test "a failing mktemp for the bootstrap scratch directory fails init by name, before any container (TASK-043b r2)" {
+    local real
+    real="$(command -v mktemp)"
+    shim mktemp "case \"\$*\" in *.tenant-provisioner.*) exit 1 ;; esac; exec '${real}' \"\$@\""
+    run "$LAUNCHER" init
+    [ "$status" -ne 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"scratch directory"* ]] || { echo "unnamed failure: $output"; return 1; }
+    run steps
+    [ -z "$output" ] || { echo "a container ran: $output"; return 1; }
 }
 
 # TASK-043b F5: init reads <ID>_PG_PASSWORD for every module server from

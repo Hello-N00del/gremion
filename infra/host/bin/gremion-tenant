@@ -262,7 +262,16 @@ ensure_provisioner_credential() {
     [[ -n "$password" ]] || password="$(env_key "$state" KEYCLOAK_ADMIN_PASSWORD)"
     [[ -n "$admin" && -n "$password" ]] \
         || die "the provisioner credential is absent and KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD are unset (neither exported nor in ${state}): bootstrap-provisioner cannot run" "$GREMION_EXIT_USAGE"
-    out="$(mktemp -d "${ROOT}/etc/secrets/.tenant-provisioner.XXXXXX")"
+    out="$(mktemp -d "${ROOT}/etc/secrets/.tenant-provisioner.XXXXXX")" \
+        || die "could not create the bootstrap-provisioner scratch directory under ${ROOT}/etc/secrets" "$GREMION_EXIT_ASSERT"
+    # The scratch directory holds the SA secret once the one-shot has written
+    # it: an interrupt (INT/TERM) or any exit before the move removes it.
+    # shellcheck disable=SC2064  # expand $out now
+    trap "rm -rf '${out}'" EXIT
+    # shellcheck disable=SC2064
+    trap "rm -rf '${out}'; exit 130" INT
+    # shellcheck disable=SC2064
+    trap "rm -rf '${out}'; exit 143" TERM
     chmod 700 "$out"
     TC_MOUNT=(-v "$(realpath "$out"):/run/secrets/provisioner-out"
               -e TENANT_PROVISIONER_SECRET_FILE=/run/secrets/provisioner-out/tenant_provisioner
@@ -281,6 +290,7 @@ ensure_provisioner_credential() {
     fi
     atomic_write "$file" 600 < "${out}/tenant_provisioner"
     rm -rf "$out"
+    trap - EXIT INT TERM
     [[ -s "$file" ]] || die "etc/secrets/tenant-create/tenant_provisioner is empty after the move" "$GREMION_EXIT_ASSERT"
     ok "provisioner bootstrapped: its credential is in etc/secrets/tenant-create/tenant_provisioner (0600)"
 }
