@@ -228,6 +228,30 @@ so the key can do nothing but talk to the agent. The agent accepts exactly
 answered `EXIT 2`. Every invocation is appended to
 `/opt/gremion/logs/hostd.log`.
 
+**One host operation at a time.** `deploy`, `switch`, `rollback`, `snapshot` and
+`backup` are mutating: each takes a non-blocking `flock` on
+`/opt/gremion/runtime/hostd.lock` before its program starts, and a second one
+answers `busy` with `EXIT 3` instead of racing the first on the colours, the
+migrations or the staged backup tree. `noop` and `verify` are read-only and are
+never blocked. The program inherits the lock (and `GREMION_HOST_LOCK_HELD=1`),
+so `gremion-backup`, which the systemd timer starts directly and which takes the
+same lock itself, does not wait on its own parent. A deploy requested while the
+nightly backup runs is therefore answered `busy`; retry it when the backup has
+finished.
+
+**The backup trigger's result line.** A started `gremion-backup` run ends, on
+every exit path, with one machine-readable line printed last, before the
+agent's `EXIT <code>` trailer:
+
+```
+BACKUP-RESULT {"state":"finished","startedAt":"<ISO>","finishedAt":"<ISO>","exitCode":0}
+```
+
+`state` is `finished` for exit 0 and `failed` otherwise (`exitCode` is the code
+the run really exits with, 3 when it was `busy`). The settings API reads it
+from the `backup` verb's output; `runtime/last-backup.json` remains the report
+of the run itself.
+
 **The wire format.** The client writes lines and reads lines; the response
 always ends with an `EXIT <code>` trailer:
 
