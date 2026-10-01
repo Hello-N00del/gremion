@@ -10,6 +10,12 @@
 > class at 30 days, pseudonymised logs included. RC-LOG-APP/SEC/FIN/AUD caps are now 30 d and
 > regular windows at most 30 d; the security window is 27 d / 30 d; G5 is closed (bound
 > 29 d + 2 h 5 min) and G8 reads 29 d (2505600). The documented tier [A-D8] is replaced.
+>
+> **Change note 2026-10-01 (R29-Q20):** operator decision [D R29-I24] gives the five modules
+> without a database (elections, files, handover, messaging, votes) provisional default
+> profiles `rp-<ctx>-module-data` so a customer can enable them; their window is the grace
+> (30 days) after the module is disabled, pending the DPO's answer (§7.15 RC-MOD-DATA, A-MOD).
+> RC-MOD-EXPORT records the six database modules' disable exports on the same window.
 
 | | |
 |---|---|
@@ -195,6 +201,7 @@ wait (TASK-016 acceptance).
 | Q9 — erasure against approved minutes, finance-relevant names | §8 | Redaction layer, finance names legible for the hold [A-L5] |
 | Q11 — newsletter consent evidence | RC-NWS-* | §7.11 values [A-D11] |
 | Legal question 17 (in part DPO question 7) — archive offer duty | Every K3 and K6 row at the end of its period | The offer step is modelled (§8.4) but its applicability is open [A-L3] |
+| Module default profiles (put to the DPO by the operator, 2026-10-01) | RC-MOD-EXPORT, RC-MOD-DATA (§7.15) | Grace (30 days) after a module is disabled; the five database-less modules' ids are provisional [D R29-I24, A-MOD] |
 
 **Re-dating procedure.** When a written answer arrives: (1) the affected rows are
 re-derived here, with the answer's date and reference in the row; (2) the reading date at
@@ -444,6 +451,20 @@ content tables belong to module repositories, which cite these rows.
 | RC-PLT-CAT | Module, version, event-type and contract catalogues; enablements; scheduled-job definitions (`rp-plt-scheduled-job`); vendor domains (`rp-plt-vendor-domain`); the other `rp-plt-*` catalogue profiles | withdrawn, deprecated, or disabled | not personal data except actor ids | with the catalogue entry | settled |
 | RC-PLT-ISO | Isolation evidence (`rp-plt-isolation-evidence`) | superseded by the next isolation check | Art. 5(2), 32(1)(d) | **audit window** | [A-G] |
 
+### 7.15 Module default profiles (`plt.module_version.retention_profile_default_id`)
+
+Every in-tree module carries one default profile, `rp-<ctx>-module-data` (TASK-021 Q1,
+TASK-077 Q14). The six modules with their own database declare it in `module.json`
+`runtime.export.retentionProfile`; the five without a database cannot declare an export
+and take a **provisional** id from the operator decision [D R29-I24] (2026-10-01), held in
+`packages/provisioning/src/catalogue-rows.ts` until the DPO answers. The ids stay when the
+answer arrives; only the windows below are re-dated (§3).
+
+| Row | Category (profile) | Start event | Basis | Window | Reading |
+|---|---|---|---|---|---|
+| RC-MOD-EXPORT | The (customer, module) `pg_dump` taken before a module database is dropped (TRD-424): board `rp-brd-module-data`, calendar `rp-cal-module-data`, content `rp-pub-module-data`, finance `rp-fin-module-data`, publishing `rp-nws-module-data`, vault `rp-pwd-module-data` | export verified (the module is disabled for the customer) | Art. 5(1)(e); a mistaken disable can be reversed from the export | **grace** (30 days), then the export is deleted; where the export holds K4 finance records, their RC-FIN-* hold prevails and the export is kept until it ends | [A-G, A-MOD] |
+| RC-MOD-DATA | Module data the platform still holds for a module **without its own database** when that module is disabled for a customer: elections `rp-ele-module-data`, files `rp-fil-module-data`, handover `rp-hnd-module-data`, messaging `rp-msg-module-data`, votes `rp-gov-module-data` | module disabled for the customer | Art. 5(1)(e), 17 | **provisional: grace** (30 days), then deleted. Categories with their own row keep it: election results and recorded votes (RC-ELE, RC-GOV-RES, RC-GOV-SECRET), handover tracks (RC-HND-TRACK, 2 years), chat rooms (RC-MSG-ROOM, on event); file contents stay in the council's own file store (§7.6) | [D R29-I24] provisional, [A-MOD]; re-dated on the DPO's answer |
+
 ---
 
 ## 8. Erasure against retention duties (K3, K4, K6)
@@ -530,6 +551,7 @@ owner named.
 | A-F1 | The finance log needs only the security window | Head-of-finance answers (TASK-073) |
 | A-D8 | Superseded by [D R29-I6]: 30 days for every log class, pseudonymised logs included (formerly the documented tier 14/30, 30/90, 90/180) | DPO question 8 |
 | A-D11 | Newsletter consent evidence kept for the audit window | DPO question 11 |
+| A-MOD | The five database-less modules' default profiles (RC-MOD-DATA) run on the grace window after a module is disabled; ids provisional under [D R29-I24] | The DPO's written answer, which the operator forwards; then §3's re-dating procedure |
 | A | Unlabelled [A] rows (trace, cache TTL, plumbing, working sessions, drafts, import rows, unread notifications, contact forms, verification-artefact deletion) | Operator confirmation; re-dated with the rest |
 
 ---
