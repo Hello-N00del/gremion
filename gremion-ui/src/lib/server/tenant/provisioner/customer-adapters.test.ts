@@ -45,13 +45,17 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..
 const BASE = JSON.parse(readFileSync(join(REPO, 'docker', 'keycloak', 'realm-export.base.json'), 'utf8')) as Record<string, unknown>
 const C = { id: '0192f1a2-3b4c-7d5e-8f60-718293a4b5c6', slug: 'musterstadt', token: 'musterstadt', realm: 'musterstadt', host: 'rat.musterstadt.example' }
 
-function kcFake(exists: boolean) {
+// held: the realm-management roles the gremion-admin SA holds, as read back
+// (before, and after a grant). Default: none held, and a grant makes them held.
+function kcFake(exists: boolean, held: string[][] = [[], ['realm-admin']]) {
+  const reads = [...held]
   return {
     realmExists: vi.fn(async () => exists),
     // typed with the parameter it receives, so mock.calls[0][0] type-checks (review B2-HIGH, r2)
     createRealm: vi.fn(async (_doc: Record<string, unknown>) => {}),
     configureStepupFlow: vi.fn(async () => {}),
-    assignServiceAccountRealmRoles: vi.fn(async () => {}),
+    assignServiceAccountRealmRoles: vi.fn(async (_realm: string, _client: string, _roles: readonly string[]) => {}),
+    getServiceAccountRealmRoleNames: vi.fn(async (_realm: string, _client: string) => (reads.length > 1 ? reads.shift()! : reads[0]!)),
   }
 }
 
@@ -134,6 +138,35 @@ describe('customerAdapters.realm.ensureRealm', () => {
     expect(written).toEqual([])
     expect(kc.configureStepupFlow).toHaveBeenCalledWith('musterstadt')
     expect(kc.assignServiceAccountRealmRoles).toHaveBeenCalledOnce()
+  })
+
+  // TASK-043b F3: the live proof's 403. The provisioner may READ the SA's
+  // mappings (measured 200) but never map realm-admin (measured 403); the
+  // import carries realm-admin, so a provisioner-created realm needs no grant.
+  it('the SA already holds the roles (the import carried them): no grant at all, neither the provisioner nor adminKc (TASK-043b F3)', async () => {
+    const kc = kcFake(false, [['manage-users', 'realm-admin']])
+    const adminKc = { assignServiceAccountRealmRoles: vi.fn(async () => {}) }
+    const { a } = adapters(kc, adminKc)
+    await a.realm.ensureRealm(C)
+    expect(kc.getServiceAccountRealmRoleNames).toHaveBeenCalledWith('musterstadt', 'gremion-admin')
+    expect(kc.assignServiceAccountRealmRoles).not.toHaveBeenCalled()
+    expect(adminKc.assignServiceAccountRealmRoles).not.toHaveBeenCalled()
+    expect(reg.markTenantResourceOk).toHaveBeenCalledWith(C.id, 'realm', 'musterstadt')
+  })
+
+  it('a refused grant (the provisioner\'s 403 on an older realm) fails the step by name, with the remedy, and the realm is not marked ok (TASK-043b F3)', async () => {
+    const kc = kcFake(true, [['manage-users']])
+    kc.assignServiceAccountRealmRoles.mockRejectedValueOnce(new Error('Keycloak Admin API error: 403 on POST /admin/realms/musterstadt/users/u/role-mappings/clients/rm: {"error":"HTTP 403 Forbidden"}'))
+    const { a } = adapters(kc)
+    await expect(a.realm.ensureRealm(C)).rejects.toThrow(/gremion-admin service account of realm musterstadt lacks \[realm-admin\].*403/)
+    expect(reg.markTenantResourceOk).not.toHaveBeenCalled()
+  })
+
+  it('a grant that "succeeds" but does not read back fails the step (the post-condition, not the exit) (TASK-043b F3)', async () => {
+    const kc = kcFake(true, [[], []])
+    const { a } = adapters(kc)
+    await expect(a.realm.ensureRealm(C)).rejects.toThrow(/still lacks \[realm-admin\]/)
+    expect(reg.markTenantResourceOk).not.toHaveBeenCalled()
   })
 })
 
