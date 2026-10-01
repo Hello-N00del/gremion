@@ -73,7 +73,7 @@ describe('outbound fetches are bounded by a timeout (K4#7)', () => {
     )
     const pusher = createCalDavPusher({ ...BASE, timeoutMs: 25, fetchImpl: hung as unknown as typeof fetch })
     const started = Date.now()
-    await expect(pusher.pushCreate(ev)).rejects.toThrow()
+    await expect(pusher.pushCreate(ev)).rejects.toThrow(/timeout|abort/i)
     expect(Date.now() - started).toBeLessThan(2000)
   })
 })

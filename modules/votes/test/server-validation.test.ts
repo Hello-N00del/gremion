@@ -141,7 +141,7 @@ describe('HeliosClient.getElection path safety (K5#41)', () => {
   beforeEach(() => {
     urls = []
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      urls.push(String(input))
+      urls.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
       return new Response(JSON.stringify(election(GOOD_UUID)), { status: 200 })
     }) as typeof fetch
   })

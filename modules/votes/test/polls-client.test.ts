@@ -51,10 +51,10 @@ describe('NextcloudPollsClient.createPoll (H16)', () => {
     process.env.NEXTCLOUD_ADMIN_USER = 'admin'
     process.env.NEXTCLOUD_ADMIN_PASSWORD = 'pw'
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(String(input))
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
       const method = init?.method ?? 'GET'
       const path = url.pathname.replace('/ocs/v2.php/apps/polls/api/v1.0', '')
-      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
       calls.push({ method, path, body })
       if (failOn === `${method} ${path}`) return new Response('nope', { status: 500 })
       if (method === 'POST' && path === '/poll') return ocs({ poll: poll() })
