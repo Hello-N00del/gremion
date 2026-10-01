@@ -398,6 +398,7 @@ EOF
     # The management API on a fresh loopback port (STALWART_ADMIN_URL: the
     # vendor mail tooling's only way in); with POOLED_CUSTOMER the submission
     # port on 127.0.0.1:587, where host-gateway lands. The scratch certificate.
+    # shellcheck disable=SC2016  # ${STALWART_API_PORT} / ${GREMION_ROOT} are compose interpolations, written literally
     {
         printf 'services:\n  stalwart:\n    ports: !override\n'
         printf '      - "127.0.0.1:${STALWART_API_PORT}:8080"\n'
@@ -682,6 +683,7 @@ phase_mail_roles() {
     if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
         mkdir -p "$OUT/secrets"; chmod 700 "$OUT/secrets" 2>/dev/null || true
         export PROOF_CURLK_DIR="$OUT/secrets"
+        # shellcheck disable=SC2329  # exported below (export -f) and invoked inside provision-roles.sh
         curl() { curl_config_shim "$@"; }
         export -f curl curl_config_shim
     fi
