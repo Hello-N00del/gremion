@@ -571,7 +571,12 @@ trd440() { # the container count and every project's service list
     # every measurement must succeed (review C, r2): a failed render on both
     # sides compared equal; each project renders from its own directory
     local p dir out
-    out="$(docker ps -q)" || die "TRD-440: docker ps failed"
+    out="$(docker ps --format '{{.Names}} {{.Label "com.docker.compose.project"}}')" || die "TRD-440: docker ps failed"
+    # A scratch stack shares its engine with other lanes: their containers come
+    # and go (measured: another lane's container stopped between before and
+    # after, running 24 -> 23, this stack's 20 -> 20), so only this stack's
+    # containers are counted there. A host counts every container.
+    if scratch_tls; then out="$(awk -v p="${PSTACK}" 'index($1, p) == 1 || index($2, p) == 1' <<< "$out")"; fi
     printf 'running=%s\n' "$(grep -c . <<< "$out" || true)"
     for p in state app-blue app-green ops mail; do
         [[ -f "$PENV/$p.env" ]] || continue
@@ -621,12 +626,19 @@ phase_customer_create() {
     need_pooled
     local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" out rc id kdb n
     [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
-    # R29-I1: board is refused BY NAME, before any write.
+    # R29-I1: board is refused BY NAME, before any write. "No write" is the
+    # control registry and the ledger UNCHANGED across the refused call (not
+    # "no row for X": a rerun after a failed create already has one).
+    local snap_before snap_after
+    snap() { printf '%s|%s' "$(q control "SELECT string_agg(slug || ':' || status, ',' ORDER BY slug) FROM tenant")" \
+        "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'" | grep -q 1 && q gremion_platform "SELECT count(*) || ':' || coalesce(max(occurred_at)::text, '-') FROM plt.provisioning_step")"; }
+    snap_before="$(snap)"
     rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
         --council-admin "$(admin_addr "$X" rat)" --enable calendar,board 2>&1)" || rc=$?
-    if (( rc != 0 )) && [[ "$out" == *board* ]] && [[ -z "$(customer_id "$X")" ]]; then
-        ok "customer-create: --enable board refused by name (exit ${rc}), no control row written"
-    else bad "customer-create: --enable board was not refused before any write (exit ${rc})"; fi
+    snap_after="$(snap)"
+    if (( rc != 0 )) && [[ "$out" == *board* ]] && [[ "$snap_before" == "$snap_after" ]]; then
+        ok "customer-create: --enable board refused by name (exit ${rc}); the control registry and the ledger unchanged"
+    else bad "customer-create: --enable board was not refused before any write (exit ${rc}; before ${snap_before}; after ${snap_after})"; fi
 
     tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
         --council-admin "$(admin_addr "$X" rat)" --enable calendar,vault > "$OUT/ledger/create-x.log" 2>&1 \
