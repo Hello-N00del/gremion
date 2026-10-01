@@ -1,4 +1,4 @@
 {
-  "baseline": 90,
+  "baseline": 73,
   "note": "R25-KC: standalone oxlint --type-aware error count on unit/R25-dedup after merging main c2810a8 (main itself counts 96 there); only ever lowered"
 }
