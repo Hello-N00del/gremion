@@ -17,8 +17,8 @@
 // sound while one tenant shares the Nextcloud (the single-tenant test env).
 // Enabling a second tenant requires per-tenant scoping (a per-tenant NC user or
 // group, or a tenant marker applied at create time and filtered on read) FIRST.
-// Request validation: every election uuid is validated + encoded before it is
-// interpolated into a Helios path, and malformed bodies answer 400, not 502.
+// Request validation: malformed bodies answer 400, not 502. A non-UUID election id
+// degrades its own card (never Helios-fetched, never interpolated into a path).
 import http from 'node:http'
 import { checkGuard, isHealthzPath } from './auth.js'
 import {
@@ -76,10 +76,18 @@ async function readJson<T>(req: http.IncomingMessage): Promise<T> {
   }
 }
 
+/** Internal marker: the tracked id is not a Helios UUID, so it was never looked up. */
+class NotAHeliosUuid extends Error {}
+
 /** Upper bound on elections one /votes call may settle (one Helios fetch each). */
 const MAX_ELECTION_UUIDS = 100
 
-/** K5#41 / S4#25: every uuid is interpolated into a Helios request path. */
+/** Shape check only: an array of at most MAX_ELECTION_UUIDS strings (else 400).
+ *  A string that is not a Helios UUID is NOT a request error (R29-VOTES-DEGRADE-K):
+ *  a tracked row may carry a non-UUID helios_uuid (seed fixtures), and one such row
+ *  must degrade its own card, not 400 the whole /votes call. K5#41 / S4#25: such a
+ *  string is never interpolated into a Helios path — composeVotes degrades it
+ *  without any fetch, and HeliosClient.getElection refuses it again. */
 function parseElectionUuids(raw: unknown): string[] {
   if (raw === undefined) return []
   if (!Array.isArray(raw)) throw new BadRequest('electionUuids must be an array')
@@ -87,7 +95,7 @@ function parseElectionUuids(raw: unknown): string[] {
     throw new BadRequest(`electionUuids may hold at most ${MAX_ELECTION_UUIDS} entries`)
   }
   for (const u of raw) {
-    if (!isHeliosUuid(u)) throw new BadRequest('electionUuids must be Helios election UUIDs')
+    if (typeof u !== 'string') throw new BadRequest('electionUuids must be an array of strings')
   }
   return raw as string[]
 }
@@ -126,15 +134,20 @@ async function composeVotes(
   polls: PollsPort,
   electionUuids: string[],
 ): Promise<{ votes: VoteItem[]; degradedUuids: string[]; pollError: string | null }> {
-  const settled = await Promise.allSettled(electionUuids.map((u) => helios.getElection(u)))
+  // A non-UUID id (K5#41 / S4#25) never reaches Helios: no fetch, no path
+  // interpolation. It is degraded in place, so input order is preserved.
+  const settled = await Promise.allSettled(
+    electionUuids.map((u) => (isHeliosUuid(u) ? helios.getElection(u) : Promise.reject(new NotAHeliosUuid()))),
+  )
   const reachable: VoteItem[] = []
   const degradedUuids: string[] = []
   settled.forEach((r, i) => {
     if (r.status === 'fulfilled') reachable.push(mapHeliosToVoteItem(r.value))
     else {
-      // K5#17: only a tracked-but-unreachable Helios degrades quietly; anything
-      // else is a real bug and must not vanish into an unlogged "degraded" row.
-      if (!isHeliosUnavailable(r.reason)) {
+      // K5#17: only a tracked-but-unreachable Helios (or an id that was never
+      // a Helios uuid) degrades quietly; anything else is a real bug and must
+      // not vanish into an unlogged "degraded" row.
+      if (!(r.reason instanceof NotAHeliosUuid) && !isHeliosUnavailable(r.reason)) {
         console.error(`[votes] helios getElection ${electionUuids[i]} failed`, r.reason)
       }
       degradedUuids.push(electionUuids[i])
