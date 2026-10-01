@@ -29,6 +29,8 @@ export interface DbEvent {
   startAt: Date
   endAt: Date
   allDay: boolean
+  /** D-2: only `true` events may ever be pushed to the shared CalDAV calendar. */
+  isPublic: boolean
   eventTypeId: string | null
   eventTypeColor: string | null
   eventTypeName: string | null
@@ -98,6 +100,7 @@ interface EventRow {
   start_at: Date
   end_at: Date
   all_day: boolean
+  is_public: boolean
   event_type_id: string | null
   event_type_color: string | null
   event_type_name: string | null
@@ -143,6 +146,7 @@ async function enrichEvent(sql: Sql, row: EventRow, sharedEventColor: string): P
     startAt: row.start_at,
     endAt: row.end_at,
     allDay: row.all_day,
+    isPublic: row.is_public === true,
     eventTypeId: row.event_type_id,
     eventTypeColor: row.event_type_color,
     eventTypeName: row.event_type_name,
