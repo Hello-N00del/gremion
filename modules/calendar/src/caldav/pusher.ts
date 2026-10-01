@@ -6,12 +6,16 @@
 // NOT import the kernel's files/nextcloud-client (that would re-introduce a
 // kernel-internal import).
 //
-// The pusher targets a "shared calendar" owned by an admin/shared account:
-//   /remote.php/dav/calendars/{CALDAV_SHARED_USER}/{CALDAV_SHARED_CALENDAR}/
+// The pusher targets one collection owned by an admin/shared account:
+//   /remote.php/dav/calendars/{user}/{calendar}/
 //
-// Env (leaf-local, see calendar-global-constraints.md):
-//   NEXTCLOUD_URL, NEXTCLOUD_ADMIN_USER, NEXTCLOUD_ADMIN_PASSWORD,
-//   CALDAV_SHARED_USER, CALDAV_SHARED_CALENDAR
+// H06: in production the {calendar} is resolved PER TENANT by caldav/target.ts
+// and passed in explicitly (tenant-drain.ts). The CALDAV_SHARED_CALENDAR env
+// default below survives only for direct/test construction; the leaf's drain
+// never uses it, because one collection for every tenant is the cross-tenant leak.
+//
+// Env (leaf-local): NEXTCLOUD_URL, NEXTCLOUD_ADMIN_USER,
+//   NEXTCLOUD_ADMIN_PASSWORD, CALDAV_SHARED_USER
 
 import { buildIcs, type IcsEvent } from './client.js'
 

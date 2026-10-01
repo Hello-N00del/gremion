@@ -23,7 +23,7 @@ import {
   type DbCalDavQueueEntry,
 } from '../store/index.js'
 import { dbEventToIcs } from './client.js'
-import { createCalDavPusher, type CalDavPusher } from './pusher.js'
+import type { CalDavPusher } from './pusher.js'
 
 export const MAX_ATTEMPTS = 3
 const DEFAULT_BATCH = 50
@@ -31,12 +31,13 @@ const DEFAULT_BATCH = 50
 /**
  * Drain one batch of a tenant's caldav_sync_queue entries.
  *
- * Injectable pusher for tests — if omitted, falls back to the env-backed
- * shared-calendar pusher (createCalDavPusher() with no args).
+ * The pusher is REQUIRED (H06): there is deliberately no env-backed default,
+ * because the old default pushed every tenant into one shared collection. The
+ * production caller is tenant-drain.ts, which resolves the per-tenant target.
  */
 export async function drainCaldavQueue(
   sql: Sql,
-  pusher: CalDavPusher = createCalDavPusher(),
+  pusher: CalDavPusher,
   maxAttempts: number = MAX_ATTEMPTS,
   limit: number = DEFAULT_BATCH,
 ): Promise<{ succeeded: number; failed: number }> {
