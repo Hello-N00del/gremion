@@ -89,7 +89,7 @@ vi.mock('../content-db', () => ({
 	addUnsubscribe: vi.fn(async () => undefined),
 	mintSendToken: vi.fn(async () => 'tok'),
 	consumeUnsubscribeToken: vi.fn(async () => ({ ok: true as const })),
-	claimRecipient: vi.fn(async () => 'fresh' as const),
+	claimDelivery: vi.fn(async () => ({ result: 'fresh' as const, claimToken: '1790000000000001' })),
 	markDeliverySent: vi.fn(async () => undefined),
 	markDeliveryFailed: vi.fn(async () => undefined),
 	getPublication: vi.fn(async () => null),
@@ -273,10 +273,10 @@ describe('InprocessContentClient', () => {
 		expect(result).toEqual({ ok: true })
 	})
 
-	it('delegates claimRecipient', async () => {
-		const result = await new InprocessContentClient().claimRecipient('p1', 'a@b.com')
-		expect(db.claimRecipient).toHaveBeenCalledWith('p1', 'a@b.com')
-		expect(result).toBe('fresh')
+	it('delegates claimDelivery (result + claim token)', async () => {
+		const result = await new InprocessContentClient().claimDelivery('p1', 'a@b.com')
+		expect(db.claimDelivery).toHaveBeenCalledWith('p1', 'a@b.com')
+		expect(result).toEqual({ result: 'fresh', claimToken: '1790000000000001' })
 	})
 
 	it('delegates markDeliverySent', async () => {
@@ -285,8 +285,8 @@ describe('InprocessContentClient', () => {
 	})
 
 	it('delegates markDeliveryFailed', async () => {
-		await new InprocessContentClient().markDeliveryFailed('p1', 'a@b.com', 'err')
-		expect(db.markDeliveryFailed).toHaveBeenCalledWith('p1', 'a@b.com', 'err')
+		await new InprocessContentClient().markDeliveryFailed('p1', 'a@b.com', 'err', '1790000000000001')
+		expect(db.markDeliveryFailed).toHaveBeenCalledWith('p1', 'a@b.com', 'err', '1790000000000001')
 	})
 
 	it('delegates getPublication', async () => {

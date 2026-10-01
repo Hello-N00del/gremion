@@ -22,6 +22,7 @@ export type {
   ChannelId,
   ChannelStatus,
   ClaimResult,
+  DeliveryClaim,
   MailingList,
   MailingListMember,
   MediaRole,
