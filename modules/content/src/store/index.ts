@@ -43,6 +43,7 @@ export {
   claimRecipient,
   claimDelivery,
   markSent,
+  recordDelivered,
   markFailed,
   releaseClaim,
 } from './deliveries.js'

@@ -298,6 +298,40 @@ describe('dispatch email — per-recipient SMTP failure', () => {
     expect(healthy.countFor('ok@x.com')).toBe(0)
     expect((await getPost(sql, postId))!.status).toBe('sent')
   })
+
+  // R29-LOW-07 L2: a mixed pass (one send throws, another delivered mail's ledger
+  // write keeps failing). "Do not re-publish" must win over "re-publish to retry".
+  it('a mixed pass (send throws + ledger write fails) says do not re-publish, and never fails the delivered row', async () => {
+    const { postId } = await makePostWithEmailList(['bad@x.com', 'ghost@x.com'])
+    const transport = makeFakeEmailTransport({ failFor: new Set(['bad@x.com']) })
+    await sql.unsafe(`
+      CREATE OR REPLACE FUNCTION content.r29k_block_sent() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.status = 'sent' AND NEW.email = 'ghost@x.com' THEN RAISE EXCEPTION 'ledger down'; END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql`)
+    await sql.unsafe(
+      `CREATE TRIGGER r29k_block_sent BEFORE UPDATE ON content.deliveries
+       FOR EACH ROW EXECUTE FUNCTION content.r29k_block_sent()`,
+    )
+    try {
+      await expect(
+        dispatch(DISPATCH_TENANT, postId, ACTOR, {
+          sql, kernel: makeFakeKernel(), channels: new Map([['email', transport]]), origin: 'https://o',
+        }),
+      ).rejects.toThrow(/do not re-publish before checking the delivery log/)
+    } finally {
+      await sql.unsafe('DROP TRIGGER IF EXISTS r29k_block_sent ON content.deliveries')
+    }
+
+    // The delivered-but-unrecorded recipient keeps its claim (never 'failed': a
+    // 'failed' row is re-sent by the next publish); the thrown one is failed.
+    const dels = await sql<{ email: string; status: string }[]>`
+      SELECT email, status FROM content.deliveries WHERE post_id = ${postId} ORDER BY email`
+    expect(dels.find((d) => d.email === 'ghost@x.com')!.status).toBe('claimed')
+    expect(dels.find((d) => d.email === 'bad@x.com')!.status).toBe('failed')
+    expect(transport.countFor('ghost@x.com')).toBe(1)
+  }, 20_000)
 })
 
 // ── portal channel: single-call publish ────────────────────────────────────

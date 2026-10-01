@@ -13,6 +13,7 @@ import { getTenant } from '$lib/server/tenant/context'
 import { getContentBackend } from '../backend'
 import { injectUnsubscribeFooter } from '../email-footer'
 import { resolvePostRecipients } from '../recipients'
+import { isOutcomeUnknown } from './smtp-outcome'
 import type { Post, PostMedia, PostChannel } from '../types'
 import type { ChannelRenderer, EmailArtifact, EmailPreview, PublishResult, RenderedArtifact } from './types'
 
@@ -37,6 +38,60 @@ function unsubscribeOrigin(): string | null {
 		return url.origin
 	} catch {
 		return null
+	}
+}
+
+/** Total markDeliverySent attempts for a delivered mail, and the pause before each retry. */
+const RECORD_DELIVERED_ATTEMPTS = 3
+const RECORD_DELIVERED_BACKOFF_MS = 50
+
+/**
+ * Record a mail the transport has ALREADY delivered. The ledger write is retried a
+ * bounded number of times; if it still fails the row is LEFT 'claimed' and this
+ * returns false. It never calls markDeliveryFailed: a 'failed' row is re-claimed
+ * by the next publish, which would mail a delivered recipient again.
+ */
+async function recordDelivered(
+	backend: ReturnType<typeof getContentBackend>,
+	postId: string,
+	emailLower: string,
+	messageId: string,
+): Promise<boolean> {
+	let lastError: unknown
+	for (let attempt = 1; attempt <= RECORD_DELIVERED_ATTEMPTS; attempt++) {
+		try {
+			await backend.markDeliverySent(postId, emailLower, messageId)
+			return true
+		} catch (err) {
+			lastError = err
+			if (attempt < RECORD_DELIVERED_ATTEMPTS) {
+				await new Promise((resolve) => setTimeout(resolve, RECORD_DELIVERED_BACKOFF_MS * attempt))
+			}
+		}
+	}
+	console.error(
+		`[email-renderer] ${emailLower} (post ${postId}) was DELIVERED (message ${messageId}) but the ledger ` +
+			`write failed ${RECORD_DELIVERED_ATTEMPTS}x; its claim is left in place (not marked failed):`,
+		lastError instanceof Error ? lastError.message : String(lastError),
+	)
+	return false
+}
+
+/**
+ * Flag the email channel 'failed', best-effort: the database is likely the thing
+ * failing, and a failed flag must never mask the publish result the operator needs.
+ */
+async function flagChannelFailed(
+	backend: ReturnType<typeof getContentBackend>,
+	postId: string,
+): Promise<void> {
+	try {
+		await backend.setChannelStatus(postId, 'email', 'failed')
+	} catch (err) {
+		console.error(
+			`[email-renderer] post ${postId}: flagging the email channel failed ALSO failed:`,
+			err instanceof Error ? err.message : String(err),
+		)
 	}
 }
 
@@ -70,10 +125,14 @@ export const emailRenderer: ChannelRenderer<EmailPreview> = {
 	 * from content mailing lists + KC groups (minus unsubscribes); each recipient
 	 * is gated by the per-recipient delivery ledger so a re-publish (or a restart)
 	 * never double-sends:
-	 *   claimRecipient → only 'fresh' proceeds (already-sent / in-flight skip) →
+	 *   claimDelivery → only 'fresh' proceeds (already-sent / in-flight skip) →
 	 *   mint a send token → inject the unsubscribe footer → sendMailForTenant →
 	 *   markDeliverySent. A per-recipient send throw is isolated (markDeliveryFailed
-	 *   + continue), so one bad address never aborts the pass or re-sends the rest.
+	 *   with the claim token + continue), so one bad address never aborts the pass or
+	 *   re-sends the rest. A throw that leaves the outcome unknown (connection drop
+	 *   after the message was handed over) keeps the claim instead, and a delivered
+	 *   mail whose ledger write fails is never marked failed: both count as
+	 *   "unrecorded" and the result says not to re-publish before checking the log.
 	 *
 	 * SMTP being unconfigured is surfaced as a clean 'failed' PublishResult (not a
 	 * throw). It is checked BEFORE the recipient loop so NO delivery row is claimed
@@ -135,15 +194,19 @@ export const emailRenderer: ChannelRenderer<EmailPreview> = {
 
 		let sentCount = 0 // fresh sends that succeeded this pass
 		let alreadySentCount = 0 // recipients already delivered on a prior pass
-		let failedCount = 0 // fresh sends that threw this pass
+		let failedCount = 0 // fresh sends that threw definitively this pass
+		// Delivered (or possibly delivered) this pass, but with no ledger row: the
+		// claim is kept, never 'failed' (a 'failed' row is re-sent by the next publish).
+		let unrecordedCount = 0
 
 		// Recipients are already lowercased by resolvePostRecipients; emailLower
 		// keeps the claim/token/ledger lookups byte-identical regardless of source.
 		for (const { email } of recipients) {
 			const emailLower = email.toLowerCase()
 
-			// The double-send gate: only a 'fresh' claim sends.
-			const claim = await backend.claimRecipient(post.id, emailLower)
+			// The double-send gate: only a 'fresh' claim sends. claimToken identifies
+			// THIS claim, so a late failure of ours cannot fail one that took over.
+			const { result: claim, claimToken } = await backend.claimDelivery(post.id, emailLower)
 			if (claim === 'already-sent') {
 				alreadySentCount += 1
 				continue
@@ -154,29 +217,73 @@ export const emailRenderer: ChannelRenderer<EmailPreview> = {
 			const unsubUrl = `${origin}/content/unsubscribe?token=${encodeURIComponent(token)}`
 			const personalizedHtml = injectUnsubscribeFooter(html, unsubUrl)
 
+			// ONLY the transport send is inside this try: a throw from the ledger
+			// write AFTER a delivered send must never reach markDeliveryFailed.
+			let messageId: string
 			try {
-				const { messageId } = await sendMailForTenant({
+				;({ messageId } = await sendMailForTenant({
 					to: email,
 					subject,
 					html: personalizedHtml,
-				})
-				await backend.markDeliverySent(post.id, emailLower, messageId)
-				sentCount += 1
+				}))
 			} catch (err) {
-				// Per-recipient send failure: isolate it and keep sending the others.
-				// The 'failed' row is re-claimed by the next publish (claimRecipient
-				// takes over failed rows, F1-FIX-07 H07), so it is retried, not lost.
 				const message = err instanceof Error ? err.message : String(err)
-				await backend.markDeliveryFailed(post.id, emailLower, message)
+				if (isOutcomeUnknown(err)) {
+					// The connection dropped AFTER the message was handed to the server: it
+					// MAY have been delivered. Keep the claim (no markDeliveryFailed), so a
+					// re-publish does not double-send it; the 15-min stale-claim takeover
+					// retries it (bounded at-least-once). Counted like an unrecorded delivery.
+					unrecordedCount += 1
+					warnings.push(
+						`send to ${emailLower} has an unknown outcome — its claim is kept, retried only after the 15-min stale window: ${message}`,
+					)
+					continue
+				}
+				// Definitive per-recipient failure (SMTP rejection / never connected):
+				// isolate it and keep sending the others. The 'failed' row is re-claimed
+				// by the next publish (claimDelivery takes over failed rows, F1-FIX-07
+				// H07), so it is retried, not lost.
+				await backend.markDeliveryFailed(post.id, emailLower, message, claimToken ?? undefined)
 				failedCount += 1
 				warnings.push(`send to ${emailLower} failed: ${message}`)
+				continue
+			}
+
+			// Delivered. Record it (bounded retry); if the ledger write still fails the
+			// claim stays in place and the recipient counts as not recorded.
+			if (await recordDelivered(backend, post.id, emailLower, messageId)) {
+				sentCount += 1
+			} else {
+				unrecordedCount += 1
+				warnings.push(
+					`${emailLower} was delivered but the delivery ledger write failed — not re-sent; its claim is kept (retried only after the 15-min stale window)`,
+				)
+			}
+		}
+
+		// "Do not re-publish" always wins (R29-LOW-07 L2): while any recipient was
+		// delivered (or may have been) without a ledger row, a re-publish could mail
+		// it again, so this beats the "publish again to retry" advice below even when
+		// other recipients failed definitively in the same pass. The channel flag is
+		// best-effort (the DB is likely what is failing) and must not mask the result.
+		if (unrecordedCount > 0) {
+			await flagChannelFailed(backend, post.id)
+			return {
+				channel: 'email',
+				status: 'failed',
+				recipientCount: sentCount,
+				warnings: [
+					...warnings,
+					`${unrecordedCount} recipient(s) delivered but not recorded in the delivery ledger — do not re-publish before checking the delivery log`,
+				],
+				detail: 'delivery not recorded',
 			}
 		}
 
 		// PARTIAL (F1-FIX-07 H07): some recipients delivered, some sends threw.
 		// The channel must not read 'sent' while a recipient is un-mailed.
 		if (failedCount > 0 && sentCount + alreadySentCount > 0) {
-			await backend.setChannelStatus(post.id, 'email', 'failed')
+			await flagChannelFailed(backend, post.id)
 			return {
 				channel: 'email',
 				status: 'failed',
@@ -191,7 +298,7 @@ export const emailRenderer: ChannelRenderer<EmailPreview> = {
 		// channel is genuinely failed.
 		const delivered = sentCount + alreadySentCount
 		if (delivered === 0) {
-			await backend.setChannelStatus(post.id, 'email', 'failed')
+			await flagChannelFailed(backend, post.id)
 			return {
 				channel: 'email',
 				status: 'failed',

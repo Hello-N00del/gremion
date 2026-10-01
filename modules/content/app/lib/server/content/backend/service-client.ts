@@ -26,6 +26,7 @@ import type {
   ChannelStatus,
   ClaimResult,
   ContentBackendPort,
+  DeliveryClaim,
   MailingList,
   MailingListMember,
   MediaRole,
@@ -437,11 +438,15 @@ export class ServiceContentClient implements ContentBackendPort {
 
   // ── Delivery ledger ───────────────────────────────────────────────────────
 
-  async claimRecipient(postId: string, emailLower: string): Promise<ClaimResult> {
-    return (await this.leafFetch('POST', '/api/v1/deliveries/claim', {
+  async claimDelivery(postId: string, emailLower: string): Promise<DeliveryClaim> {
+    const raw = (await this.leafFetch('POST', '/api/v1/deliveries/claim', {
       post_id: postId,
       email: emailLower,
-    })) as ClaimResult
+    })) as ClaimResult | { result: ClaimResult; claim_token?: string | null }
+    // A leaf that predates the claim token answers a bare ClaimResult string: no
+    // token, so a later failure keeps the status-only fence.
+    if (typeof raw === 'string') return { result: raw, claimToken: null }
+    return { result: raw.result, claimToken: raw.claim_token ?? null }
   }
 
   async markDeliverySent(postId: string, emailLower: string, messageId: string): Promise<void> {
@@ -452,11 +457,16 @@ export class ServiceContentClient implements ContentBackendPort {
     )
   }
 
-  async markDeliveryFailed(postId: string, emailLower: string, error: string): Promise<void> {
+  async markDeliveryFailed(
+    postId: string,
+    emailLower: string,
+    error: string,
+    claimToken?: string,
+  ): Promise<void> {
     await this.leafFetch(
       'POST',
       `/api/v1/deliveries/${seg(postId)}/${seg(emailLower)}/failed`,
-      { error },
+      claimToken === undefined ? { error } : { error, claim_token: claimToken },
     )
   }
 

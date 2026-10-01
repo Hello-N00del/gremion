@@ -112,6 +112,47 @@ describe('ServiceContentClient', () => {
     expect(body.op).toBe('publish')
   })
 
+  // ── delivery claim token (R29-LOW-07 L1) ────────────────────────────────────
+
+  it('claimDelivery returns the result and the claim token from the leaf', async () => {
+    const fetchImpl = vi.fn(async () => jsonRes({ result: 'fresh', claim_token: '1790000000123456' }))
+    const c = new ServiceContentClient()
+    ;(c as any).fetchImpl = fetchImpl
+    expect(await c.claimDelivery('p1', 'a@b.de')).toEqual({
+      result: 'fresh',
+      claimToken: '1790000000123456',
+    })
+    const [url] = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit]) ?? []
+    expect(url).toBe('http://content-service:8080/api/v1/deliveries/claim')
+  })
+
+  it('claimDelivery maps a non-fresh result to a null token', async () => {
+    const fetchImpl = vi.fn(async () => jsonRes({ result: 'in-flight', claim_token: null }))
+    const c = new ServiceContentClient()
+    ;(c as any).fetchImpl = fetchImpl
+    expect(await c.claimDelivery('p1', 'a@b.de')).toEqual({ result: 'in-flight', claimToken: null })
+  })
+
+  it('claimDelivery still accepts a legacy leaf that answers a bare string (no token)', async () => {
+    const fetchImpl = vi.fn(async () => jsonRes('fresh'))
+    const c = new ServiceContentClient()
+    ;(c as any).fetchImpl = fetchImpl
+    expect(await c.claimDelivery('p1', 'a@b.de')).toEqual({ result: 'fresh', claimToken: null })
+  })
+
+  it('markDeliveryFailed sends claim_token only when a token is given', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }))
+    const c = new ServiceContentClient()
+    ;(c as any).fetchImpl = fetchImpl
+    await c.markDeliveryFailed('p1', 'a@b.de', 'boom', '1790000000123456')
+    await c.markDeliveryFailed('p1', 'a@b.de', 'boom')
+    const bodies = fetchImpl.mock.calls.map(
+      (call) => JSON.parse(((call as unknown as [string, RequestInit])[1].body ?? '') as string),
+    )
+    expect(bodies[0]).toEqual({ error: 'boom', claim_token: '1790000000123456' })
+    expect(bodies[1]).toEqual({ error: 'boom' })
+  })
+
   // ── per-channel publish delegation ──────────────────────────────────────────
 
   it('publish POSTs the per-channel leaf endpoint and returns the PublishResult', async () => {

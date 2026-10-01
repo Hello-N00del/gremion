@@ -8,6 +8,9 @@
 //   claimRecipient(sql, postId, emailLower) → 'fresh' | 'already-sent' | 'in-flight'
 //   claimDelivery(sql, postId, emailLower) → { result, claimedAt }  (claim token)
 //   markSent(sql, postId, emailLower, messageId) → void   (never rewrites a 'sent' row)
+//   recordDelivered(sql, postId, emailLower, messageId) → boolean
+//                                                    (markSent with bounded retry; false = the
+//                                                     claim is kept, never marked failed)
 //   markFailed(sql, postId, emailLower, errorMessage, claimedAt?) → void
 //                                                    (only a 'claimed' row; with the
 //                                                     token, only the caller's claim)
@@ -18,8 +21,11 @@
 // whose send threw is retried on the next publish. Because 'failed' is now
 // re-claimable, markFailed never overwrites 'sent' (r2): a worker that hung past
 // the stale window and fails late cannot turn a delivered row into a re-send.
-// Residual: on the kernel HTTP path (no token) a late failure can still flip a
-// live takeover claim to 'failed' for the moment until that claimer's markSent.
+// The HTTP claim route returns the token (claim_token) and the /failed route
+// fences on it (R29-LOW-07 L1). Residual: a /failed request WITHOUT a token (a
+// caller that predates the token) keeps the status-only fence, so its late
+// failure can still flip a live takeover claim to 'failed' until that claimer's
+// markSent. markSent is deliberately never fenced.
 
 import type { Sql } from '../tenant-store.js'
 
@@ -63,8 +69,7 @@ export interface DeliveryClaim {
 
 /**
  * claimRecipient, also returning the claim token (F1-FIX-07 r2). The leaf's own
- * send loops (publish-channel, dispatch) use this; the kernel's HTTP claim route
- * keeps the bare ClaimResult contract.
+ * send loops (publish-channel, dispatch) and the HTTP claim route use this.
  */
 export async function claimDelivery(
   sql: Sql,
@@ -150,6 +155,48 @@ export async function markSent(
       AND email   = ${emailLower}
       AND status <> 'sent'
   `
+}
+
+// ── recordDelivered ───────────────────────────────────────────────────────────
+
+/** Total markSent attempts for a delivered mail, and the pause before each retry. */
+const RECORD_DELIVERED_ATTEMPTS = 3
+const RECORD_DELIVERED_BACKOFF_MS = 50
+
+/**
+ * Record a mail the transport has ALREADY delivered (R29-LOW-07 L2).
+ *
+ * The ledger write is retried a bounded number of times. If it still fails the
+ * row is LEFT 'claimed' and this returns false: it never calls markFailed, since
+ * a 'failed' row is re-claimed by the next publish, which would mail a delivered
+ * recipient again. A row left 'claimed' answers 'in-flight' until the 15-minute
+ * stale takeover, so the caller must count the recipient as not recorded and
+ * must not report the channel/post 'sent'.
+ */
+export async function recordDelivered(
+  sql: Sql,
+  postId: string,
+  emailLower: string,
+  messageId: string,
+): Promise<boolean> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= RECORD_DELIVERED_ATTEMPTS; attempt++) {
+    try {
+      await markSent(sql, postId, emailLower, messageId)
+      return true
+    } catch (err) {
+      lastError = err
+      if (attempt < RECORD_DELIVERED_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, RECORD_DELIVERED_BACKOFF_MS * attempt))
+      }
+    }
+  }
+  console.error(
+    `[deliveries] ${emailLower} (post ${postId}) was DELIVERED (message ${messageId}) but the ledger ` +
+      `write failed ${RECORD_DELIVERED_ATTEMPTS}x; its claim is left in place (not marked failed):`,
+    lastError instanceof Error ? lastError.message : String(lastError),
+  )
+  return false
 }
 
 // ── markFailed ────────────────────────────────────────────────────────────────

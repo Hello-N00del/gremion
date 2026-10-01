@@ -12,7 +12,8 @@
 //
 // Channel semantics:
 //   email:     Same bounded at-least-once pattern as newsletter — per-recipient
-//              claim → send → markSent/markFailed. Stale-claim takeover at 15 min.
+//              claim → send → recordDelivered (bounded retry; a delivered send is
+//              never marked failed) / markFailed. Stale-claim takeover at 15 min.
 //   portal:    Single network call to the kernel. Idempotent at the kernel side
 //              (content_origin_post_id UNIQUE). Failure rolls the entire dispatch to 'failed'.
 //   instagram: Purely outbox — createPublishOp enqueues a 'pending' row drained by
@@ -38,7 +39,7 @@ import {
   isUnsubscribed,
   addSendToken,
   claimDelivery,
-  markSent,
+  recordDelivered,
   markFailed,
   createPublication,
   createPublishOp,
@@ -270,6 +271,7 @@ async function dispatchEmail(
 
   let delivered = 0
   let failed = 0
+  let unrecorded = 0 // delivered, but the ledger write failed (claim kept)
   let lastError: unknown
 
   for (const { email } of recipients) {
@@ -280,14 +282,17 @@ async function dispatchEmail(
     const unsubUrl = `${base}/content/unsubscribe?token=${encodeURIComponent(token)}`
     const personalizedHtml = injectUnsubscribeFooter(post.body_html, unsubUrl)
 
+    // ONLY the transport send is inside this try: a throw from the ledger write
+    // AFTER a delivered send must never reach markFailed (a 'failed' row is
+    // re-claimed by the next dispatch, which would mail the recipient twice).
+    let messageId: string
     try {
       const info = await transport.send({
         to: email,
         subject: post.title,
         html: personalizedHtml,
       })
-      await markSent(sql, postId, email, String(info.id))
-      delivered += 1
+      messageId = String(info.id)
     } catch (err) {
       // F1-FIX-07 H07: mark the row 'failed' (not a lingering 'claimed') so the
       // next dispatch re-claims it at once. A lingering claim read 'in-flight'
@@ -299,7 +304,26 @@ async function dispatchEmail(
       failed += 1
       lastError = err
       console.error(`[dispatch] email send to ${email} (post ${postId}) failed:`, message)
+      continue
     }
+
+    // Delivered. Record it (bounded retry); if the ledger write still fails the
+    // claim stays in place (never 'failed') and the recipient counts as not recorded.
+    if (await recordDelivered(sql, postId, email, messageId)) {
+      delivered += 1
+    } else {
+      unrecorded += 1
+    }
+  }
+
+  // "Do not re-publish" always wins (R29-LOW-07 L2): a delivered-but-unrecorded
+  // recipient could be mailed again by a re-publish, so this message beats the
+  // plain failure message below even when other recipients failed in the same pass.
+  if (unrecorded > 0) {
+    const alsoFailed = failed > 0 ? ` (${failed} other recipient(s) also failed to send)` : ''
+    throw new Error(
+      `${unrecorded} recipient(s) delivered but not recorded in the delivery ledger — do not re-publish before checking the delivery log${alsoFailed}`,
+    )
   }
 
   if (failed > 0) {

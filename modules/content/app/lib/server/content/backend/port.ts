@@ -23,6 +23,11 @@ export type ChannelId = 'email' | 'portal' | 'instagram'
 export type ChannelStatus = 'draft' | 'scheduled' | 'sent' | 'published' | 'failed'
 export type MediaRole = 'hero' | 'slide' | 'inline'
 export type ClaimResult = 'fresh' | 'already-sent' | 'in-flight'
+/** A delivery claim; `claimToken` is set only when result is 'fresh'. */
+export interface DeliveryClaim {
+  result: ClaimResult
+  claimToken: string | null
+}
 
 export interface Post {
   id: string
@@ -148,9 +153,19 @@ export interface ContentBackendPort {
   consumeUnsubscribeToken(token: string): Promise<{ ok: true } | { ok: false; reason: 'invalid' | 'expired' }>
 
   // ── Delivery ledger ──────────────────────────────────────────────────────
-  claimRecipient(postId: string, emailLower: string): Promise<ClaimResult>
+  /** The claim result plus, only when 'fresh', the token to pass to markDeliveryFailed. */
+  claimDelivery(postId: string, emailLower: string): Promise<DeliveryClaim>
   markDeliverySent(postId: string, emailLower: string, messageId: string): Promise<void>
-  markDeliveryFailed(postId: string, emailLower: string, error: string): Promise<void>
+  /**
+   * With `claimToken` only the caller's own claim can fail (a superseded claimer's
+   * late failure changes nothing). markDeliverySent is deliberately not fenced.
+   */
+  markDeliveryFailed(
+    postId: string,
+    emailLower: string,
+    error: string,
+    claimToken?: string,
+  ): Promise<void>
 
   // ── Publications ─────────────────────────────────────────────────────────
   getPublication(postId: string, channel: ChannelId): Promise<Publication | null>

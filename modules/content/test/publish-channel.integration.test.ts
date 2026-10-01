@@ -375,6 +375,56 @@ describe('publishChannel — email transient failure is retried exactly once (H0
 // publishChannel RETURNS status:'failed' (it does not throw), so without an
 // explicit error the span ended clean and the trace hid the failure.
 
+// R29-LOW-07 L2: a mixed pass. One recipient's send throws; another's mail was
+// delivered but its ledger write keeps failing (a trigger). "Do not re-publish
+// before checking the delivery log" must win over "re-publish to retry", and the
+// failed-channel flag is best-effort (a second trigger makes it fail too).
+describe('publishChannel — mixed pass: do not re-publish wins', () => {
+  it('a send failure + an unrecorded delivery → do-not-re-publish result, delivered row kept claimed', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['bad@x.com', 'ghost@x.com'])
+    const transport = makeFakeEmailTransport({ failFor: new Set(['bad@x.com']) })
+    await sql.unsafe(`
+      CREATE OR REPLACE FUNCTION content.r29k_block() RETURNS trigger AS $$
+      BEGIN
+        IF TG_TABLE_NAME = 'deliveries' AND NEW.status = 'sent' AND NEW.email = 'ghost@x.com' THEN
+          RAISE EXCEPTION 'ledger down';
+        END IF;
+        IF TG_TABLE_NAME = 'post_channels' AND NEW.status = 'failed' THEN
+          RAISE EXCEPTION 'channel flag down';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql`)
+    await sql.unsafe(
+      `CREATE TRIGGER r29k_block_d BEFORE UPDATE ON content.deliveries
+       FOR EACH ROW EXECUTE FUNCTION content.r29k_block()`,
+    )
+    await sql.unsafe(
+      `CREATE TRIGGER r29k_block_c BEFORE UPDATE ON content.post_channels
+       FOR EACH ROW EXECUTE FUNCTION content.r29k_block()`,
+    )
+    let result
+    try {
+      result = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    } finally {
+      await sql.unsafe('DROP TRIGGER IF EXISTS r29k_block_d ON content.deliveries')
+      await sql.unsafe('DROP TRIGGER IF EXISTS r29k_block_c ON content.post_channels')
+    }
+
+    expect(result.status).toBe('failed')
+    expect(result.detail).toBe('delivery not recorded')
+    expect(result.warnings.join('\n')).toContain('do not re-publish before checking the delivery log')
+    expect(result.warnings.join('\n')).not.toContain('publish again to retry')
+
+    const dels = await sql<{ email: string; status: string }[]>`
+      SELECT email, status FROM content.deliveries WHERE post_id = ${postId} ORDER BY email`
+    expect(dels.find((d) => d.email === 'ghost@x.com')!.status).toBe('claimed')
+    expect(dels.find((d) => d.email === 'bad@x.com')!.status).toBe('failed')
+    expect(transport.countFor('ghost@x.com')).toBe(1)
+  }, 20_000)
+})
+
 describe('publishChannel — a failed result ends its span with an error', () => {
   function recordingTracer(): TracerPort & { ends: unknown[] } {
     const ends: unknown[] = []

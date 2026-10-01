@@ -1,14 +1,14 @@
 // R29-Q20-RETENTION drift guard (operator decision R29-I24, 2026-10-01): the REAL
 // modules/ tree, read the way `gremion-tenant init` reads it (gremion-ui
-// scripts/tenant-provision.ts loadModules: one entry per modules/<id> with a
-// module.json), must plan to a full load and no undecided module. The five
+// scripts/tenant-provision.ts loadModules, i.e. loadModuleJsons: one entry per
+// modules/<id> with a module.json), must plan to a full load and no undecided module. The five
 // database-less modules carry the provisional default profiles; the six with a
 // database carry their own declared ones.
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { PROVISIONAL_RETENTION_PROFILES, planCatalogueRows, type CatalogueModule } from '../src/catalogue-rows.ts'
+import { loadModuleJsons } from '../src/module-tree.ts'
 
 const MODULES = resolve(fileURLToPath(new URL('../../../modules', import.meta.url)))
 
@@ -16,10 +16,9 @@ interface TreeModule extends CatalogueModule {
   moduleJson: CatalogueModule['moduleJson'] & { runtime: { database: unknown } }
 }
 
-const tree: TreeModule[] = readdirSync(MODULES)
-  .sort()
-  .filter((id) => existsSync(join(MODULES, id, 'module.json')))
-  .map((id) => ({ id, moduleJson: JSON.parse(readFileSync(join(MODULES, id, 'module.json'), 'utf8')) as TreeModule['moduleJson'] }))
+// Loaded through the SAME helper the tenant-provision CLI uses (R29-LOW-07 L5),
+// so this guard sees the tree exactly the way `gremion-tenant init` does.
+const tree = loadModuleJsons(MODULES) as unknown as TreeModule[]
 
 /** The five database-less modules (section 2 of the brief; TASK-077 Q14 contexts). */
 const PROVISIONAL = {

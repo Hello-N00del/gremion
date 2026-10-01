@@ -23,8 +23,8 @@
 import type {
 	ChannelId,
 	ChannelStatus,
-	ClaimResult,
 	ContentBackendPort,
+	DeliveryClaim,
 	MailingList,
 	MailingListMember,
 	MediaRole,
@@ -187,16 +187,21 @@ export class InprocessContentClient implements ContentBackendPort {
 
 	// ── Delivery ledger ────────────────────────────────────────────────────────
 
-	claimRecipient(postId: string, emailLower: string): Promise<ClaimResult> {
-		return db.claimRecipient(postId, emailLower)
+	claimDelivery(postId: string, emailLower: string): Promise<DeliveryClaim> {
+		return db.claimDelivery(postId, emailLower)
 	}
 
 	markDeliverySent(postId: string, emailLower: string, messageId: string): Promise<void> {
 		return db.markDeliverySent(postId, emailLower, messageId)
 	}
 
-	markDeliveryFailed(postId: string, emailLower: string, error: string): Promise<void> {
-		return db.markDeliveryFailed(postId, emailLower, error)
+	markDeliveryFailed(
+		postId: string,
+		emailLower: string,
+		error: string,
+		claimToken?: string,
+	): Promise<void> {
+		return db.markDeliveryFailed(postId, emailLower, error, claimToken)
 	}
 
 	// ── Publications ───────────────────────────────────────────────────────────
