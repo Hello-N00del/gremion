@@ -41,6 +41,13 @@ exit-2 failure, never a default:
 `state.env`; the compose file mounts that directory read-only into
 `tenant-create` only.
 
+**Order: `migrate` before `init`.** `init` grants the panel reader SELECT on
+the control registry's `tenant` and `tenant_domain`, so the `migrate` one-shot
+must have migrated the control registry first. On an unmigrated stack `init`
+stops before it creates anything, with a `PRECONDITION` error that names the
+missing table (`ensurePanelReader`). `plt.provisioning_step` is `init`'s own
+work (`migratePlatform`), so it always exists by the time the grant runs.
+
 **A colour owns no data (TRD-038).** The only volumes an app colour mounts are
 the two stack-scoped externals `${STACK}_config_data` and
 `${STACK}_tenant_config_data`. `infra/host/bootstrap.sh stage_networks` creates

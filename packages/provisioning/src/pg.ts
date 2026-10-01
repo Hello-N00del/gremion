@@ -147,6 +147,25 @@ export async function ensurePanelReader(d: PanelReaderDeps): Promise<{ created: 
   if (!IDENT.test(d.role)) throw new ProvisioningError('INVALID_INPUT', `panel reader role ${JSON.stringify(d.role)} is not a plain identifier`)
   if (!IDENT.test(d.controlDatabase)) throw new ProvisioningError('INVALID_INPUT', `control database ${JSON.stringify(d.controlDatabase)} is not a plain identifier`)
   if (d.password.length < 16) throw new ProvisioningError('INVALID_INPUT', 'the panel reader password is shorter than 16 characters')
+  // Every table the role reads must exist BEFORE anything is created (review
+  // r4 LOW): `init` runs after the migrate one-shot has migrated the control
+  // registry; on an unmigrated stack it says so instead of a bare 42P01.
+  for (const [db, tables, by] of [
+    [d.controlDatabase, PANEL_READS.control, 'the migrate one-shot (control registry migrations)'],
+    ['gremion_platform', PANEL_READS.platform, 'migratePlatform (bootstrapPlatform)'],
+  ] as const) {
+    const sql = d.openAdminOn(db)
+    try {
+      for (const t of tables) {
+        const [r] = await sql<{ present: boolean }[]>`SELECT to_regclass(${t}) IS NOT NULL AS present`
+        if (!r?.present) {
+          throw new ProvisioningError('PRECONDITION', `panel reader: table ${t} is absent in database ${db}; run ${by} before gremion-tenant init (docs/ops/pooled-stack-layout.md)`)
+        }
+      }
+    } finally {
+      await sql.end({ timeout: 5 })
+    }
+  }
   const exists = (await d.kernelAdmin`SELECT 1 FROM pg_roles WHERE rolname = ${d.role}`).length > 0
   const attrs = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L'
   await execFmt(d.kernelAdmin, `${exists ? 'ALTER' : 'CREATE'} ROLE %I ${attrs}`, [d.role, d.password])

@@ -188,6 +188,20 @@ describe('the platform on a fresh server', () => {
     expect(r).toEqual({ s: false, c: false, r: false, b: false, l: true })
   })
 
+  // Review r4 LOW: `init` on a stack whose control registry is not migrated
+  // yet failed with a bare 42P01; it names the missing table and the order.
+  it('ensurePanelReader on an unmigrated control registry fails PRECONDITION naming the table and the migrate one-shot', async () => {
+    const BARE = 't043_control_bare'
+    if ((await admin`SELECT 1 FROM pg_database WHERE datname = ${BARE}`).length === 0) await admin.unsafe(`CREATE DATABASE ${BARE}`)
+    const deps = { kernelAdmin: admin, openAdminOn: (db: string) => open(db, 1), role: 't043_panel_bare', password: randomBytes(24).toString('base64url'), controlDatabase: BARE }
+    const err = await ensurePanelReader(deps).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toMatchObject({ code: 'PRECONDITION' })
+    expect(String((err as Error).message)).toMatch(/public\.tenant.*t043_control_bare.*migrate/s)
+  })
+
   it('pgLedger and pgAttestations round-trip on 0004', async () => {
     const p = open('gremion_platform', 2, OWNER, OWNER_PW)
     try {
