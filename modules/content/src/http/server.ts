@@ -1,7 +1,7 @@
 // services/content/src/http/server.ts
 // The node:http server (NO web framework — D-P1-1). It owns the request lifecycle:
 //   /healthz          → guard-EXEMPT, returns {"status":"ok"}
-//   /healthz/tenants  → guard-EXEMPT, per-tenant DB ping
+//   /healthz/tenants  → internal secret required (401 otherwise), booleans only
 //   /api/admin/*      → secret-only guard (NO tenant headers), adminRoutes router
 //   everything else   → checkGuard() (403 bad secret / 400 bad tenant headers) then
 //                       the router (404 unknown path / 405 wrong method / dispatch)
@@ -9,7 +9,7 @@
 // handlers in routes.ts can read the body and write the response directly.
 import http from 'node:http'
 import { createRouter, type Route, type RouteContext } from './router.js'
-import { checkGuard, isHealthzPath } from './guard.js'
+import { checkGuard, hasInternalSecret, isHealthzPath } from './guard.js'
 import type { TenantLister, StoreFn } from './routes.js'
 import { tenantHealthHandler } from './routes.js'
 
@@ -58,8 +58,13 @@ export function createServer(opts: ServerOptions): http.Server {
       if (method !== 'GET') {
         return sendJson(res, 405, { success: false, error: 'method not allowed' }, { allow: 'GET' })
       }
-      // /healthz/tenants → per-tenant DB ping.
+      // /healthz/tenants → per-tenant DB ping. F1-FIX-07 K5#12/K5#31: internal
+      // only (401 before any tenant pool is opened). Plain /healthz (the
+      // container healthcheck) stays unauthenticated.
       if (path === '/healthz/tenants' && opts.healthz) {
+        if (!hasInternalSecret(req.headers as Record<string, string | undefined>, opts.secret)) {
+          return sendJson(res, 401, { success: false, error: 'unauthorized' })
+        }
         return tenantHealthHandler(res, opts.healthz.listTenants, opts.healthz.storeFn)
       }
       return sendJson(res, 200, { status: 'ok' })
