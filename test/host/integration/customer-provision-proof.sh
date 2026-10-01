@@ -591,7 +591,9 @@ phase_customer_layout() {
     need_pooled no-operator
     [[ -z "${PROOF_GREMION_ROOT:-}" ]] || die "customer-layout lays out a SCRATCH root; PROOF_GREMION_ROOT names a real one"
     local r; r="$(croot)"; [[ -d "$r" ]] || die "the pooled stack's GREMION_ROOT ${r} is absent"
-    mkdir -p "$r/etc/env" "$r/runtime" "$r/etc/edge" "$r/logs"
+    # A fresh ${OUT} (no panel phase before it) has no ledger directory yet:
+    # the switch.log redirect below failed and gremion-switch never ran.
+    mkdir -p "$r/etc/env" "$r/runtime" "$r/etc/edge" "$r/logs" "$OUT/ledger"
     local f
     for f in state app-blue app-green mail ops; do [[ -f "$PENV/$f.env" ]] && cp "$PENV/$f.env" "$r/etc/env/$f.env"; done
     [[ -f "$r/runtime/active-colour" ]] || echo blue > "$r/runtime/active-colour"
