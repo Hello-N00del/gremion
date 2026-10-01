@@ -158,7 +158,17 @@ describe('customerAdapters.realm.ensureRealm', () => {
     const kc = kcFake(true, [['manage-users']])
     kc.assignServiceAccountRealmRoles.mockRejectedValueOnce(new Error('Keycloak Admin API error: 403 on POST /admin/realms/musterstadt/users/u/role-mappings/clients/rm: {"error":"HTTP 403 Forbidden"}'))
     const { a } = adapters(kc)
-    await expect(a.realm.ensureRealm(C)).rejects.toThrow(/gremion-admin service account of realm musterstadt lacks \[realm-admin\].*403/)
+    const err: unknown = await a.realm.ensureRealm(C).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    const msg = (err as Error).message
+    expect(msg).toMatch(/gremion-admin service account of realm musterstadt lacks \[realm-admin\].*403/)
+    // The remedy must be one an operator can actually take: `gremion-tenant
+    // create` never passes a master-admin credential to the one-shot (only
+    // `init`'s bootstrap-provisioner gets one), so "rerun with
+    // KEYCLOAK_ADMIN in the one-shot" is not a remedy (r2 verifier, LOW).
+    expect(msg).toMatch(/admin console/)
+    expect(msg).toMatch(/service-account-gremion-admin/)
+    expect(msg).not.toMatch(/KEYCLOAK_ADMIN/)
     expect(reg.markTenantResourceOk).not.toHaveBeenCalled()
   })
 
