@@ -26,11 +26,43 @@
     },
     {
       "path": "gremion-ui/scripts/tenant-provision.ts",
+      "calls": 9,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-30",
+      "reason": "TASK-043 adopted @gremion/tenant-store/lifecycle: no database is created or dropped here any more (ensureKernelDatabase, enableModule, dropKernelDatabase do it, server-quoted). What remains are the ADMIN connections the lifecycle takes injected: gremion_platform as its owner, the kernel and module servers' POSTGRES_USER (ModuleServer.admin needs CREATEDB/CREATEROLE), the leaf newsletter shred, (r2) delete's read-only check of plt.module_database before it shreds anything, and (r4) init's per-database admin connection (openAdminOn) through which ensurePanelReader creates the control panel's SELECT-only reader role and grants it on the control and platform databases -- never a tenant database; the registry (TASK-077) takes them over"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/tenant/provisioner/customer-adapters.ts",
       "calls": 3,
       "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-30",
+      "reason": "TASK-043 tenant-create adapters: the kernel server's POSTGRES_USER as the injected ModuleServer of ensureKernelDatabase, and a read-only post-condition read of the new kernel database's ledger and counts; no tenant data-plane pool (the kernel migration runs inside runWithTenant on the provisioning context)"
+    },
+    {
+      "path": "apps/control-panel/src/lib/server/customers.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-09-30",
+      "reason": "TASK-043 control panel: two READ pools of the control plane, never a tenant database -- the control registry (tenant, tenant_domain) as a SELECT-only role and, when configured, gremion_platform's provisioning ledger; the registry (TASK-077) takes them over like gremion-ui's control-db.ts"
+    },
+    {
+      "path": "apps/control-panel/src/lib/server/config.ts",
+      "calls": 2,
+      "imports": 0,
       "adoptedBy": "TASK-043",
-      "since": "2026-09-25",
-      "reason": "the provisioner's admin, new-tenant and leaf connections (tenant-provision.ts:284 string-builds CREATE DATABASE); TASK-021 ships the lifecycle API (@gremion/tenant-store/lifecycle) that replaces it, and customer provisioning (TASK-043) adopts it"
+      "since": "2026-09-30",
+      "reason": "not a connection: the URL-shape checks of CONTROL_DATABASE_URL and PLATFORM_DATABASE_URL (the regex /^postgres(ql)?:\\/\\//) match the call pattern; stays while the checks do"
+    },
+    {
+      "path": "packages/provisioning/test/integration/platform.int.test.ts",
+      "calls": 2,
+      "imports": 1,
+      "adoptedBy": "TASK-043",
+      "since": "2026-09-30",
+      "reason": "a destructive integration proof on its own scratch server (test/integration/run.mjs): it bootstraps gremion_platform from nothing and enables modules into throwaway (tenant, module) databases; openTenantDb cannot address a server that has no platform yet; stays allow-listed while the test exists"
     },
     {
       "path": "gremion-ui/scripts/tenant-health.ts",

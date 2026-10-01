@@ -236,6 +236,72 @@ services:
       start_period: 15s
 
   # ============================================================
+  # control-panel — the ops shell (TASK-043 Q12, TRD-048)
+  # ============================================================
+  # SvelteKit 2 (R29-I5). Reachable ONLY from the operator's own realm
+  # (`platform`, multi-factor) and never through a customer realm: its hooks
+  # refuse any other issuer. NO Traefik route and NO published port: the
+  # operator reaches it with `gremion-tenant panel`, which prints the
+  # `ssh -L 127.0.0.1:<p>:<ip>:3000` line for this colour's address on
+  # ${STACK}-app-<colour>_app (a public control router is TASK-118's). It
+  # executes nothing: "Neuer Mandant" registers the row and its pending
+  # ledger, `gremion-tenant create` completes it (Q6), so PANEL_EXECUTOR is
+  # `none` here and the button says so.
+  control-panel:
+    image: ghcr.io/hello-n00del/gremion-control-panel:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: .
+      dockerfile: apps/control-panel/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    deploy: *limits-m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    labels:
+      traefik.enable: "false"
+      # gremion-switch POSTs its evict fan-out to every long-running app
+      # container; the panel caches no tenant, so its /api/internal/evict
+      # verifies the bearer and answers 204.
+      gremion.evict: "true"
+    environment:
+      COLOUR: ${COLOUR:?COLOUR required}
+      INTERNAL_PUSH_SECRET: ${INTERNAL_PUSH_SECRET:-}
+      # The origin the operator's browser uses behind `ssh -L`: SvelteKit's
+      # CSRF check refuses a form POST from any other origin.
+      ORIGIN: http://127.0.0.1:3043
+      PANEL_OIDC_ISSUER: https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}/auth/realms/platform
+      PANEL_OIDC_INTERNAL_BASE: https://keycloak:8443/auth
+      NODE_EXTRA_CA_CERTS: /etc/ssl/internal/internal-ca.pem
+      PANEL_OIDC_CLIENT_ID: control-panel
+      PANEL_OIDC_CLIENT_SECRET_FILE: /run/secrets/control-panel/client_secret
+      AUTH_SECRET_FILE: /run/secrets/control-panel/auth_secret
+      PANEL_REQUIRED_ACR: loa2
+      # The panel only READS (tenant, tenant_domain, plt.provisioning_step):
+      # its own role, made by `gremion-tenant init` (ensurePanelReader), never
+      # the two databases' owners (r3 verifier MEDIUM #70).
+      CONTROL_DATABASE_URL: postgresql://${PANEL_DB_USER:-gremion_panel}:${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
+      PLATFORM_DATABASE_URL: postgresql://${PANEL_DB_USER:-gremion_panel}:${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
+      PANEL_EXECUTOR: none
+    volumes:
+      - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/control-panel:/run/secrets/control-panel:ro
+      - ./docker/keycloak/certs/internal-ca.pem:/etc/ssl/internal/internal-ca.pem:ro
+    networks:
+      app: {}
+      state:
+        aliases: ["control-panel-${COLOUR:?COLOUR required}"]
+    healthcheck:
+      # The process and a valid config only -- never Keycloak or a database,
+      # so the panel is healthy before `init`.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ============================================================
   # migrate — one-shot (spec A §F.4.7)
   # ============================================================
   #   docker compose --env-file etc/env/app-<colour>.env run --rm migrate
@@ -287,10 +353,15 @@ services:
         aliases: ["migrate-${COLOUR:?COLOUR required}"]
 
   # ============================================================
-  # tenant-create — interim one-shot (B-06)
+  # tenant-create — the customer lifecycle one-shot (B-06, TASK-043)
   # ============================================================
+  #   infra/host/bin/gremion-tenant init|create|suspend|resume|reconcile|status
+  # runs it as
   #   docker compose --env-file etc/env/app-<colour>.env run --rm \
-  #     tenant-create provision <slug> --config <file>
+  #     tenant-create <init|phase-a|record-step|phase-b|render-router|...> ...
+  # (the host phase -- the vendor mail principal and the router file -- runs
+  # between those on the host). It stays the interim fallback too: the same
+  # package, run by hand (TRD-044, L1-36).
   # entrypoint, not command: the operator's arguments land as the
   # container's ARGUMENTS (a command: would be replaced by them). Same image
   # as migrate. On _state for the databases and _edge for keycloak's
@@ -330,9 +401,47 @@ services:
       # ensure. No depends_on (the state project's nats is not in this
       # project): the connection retries itself, bounded, then fails loudly.
       NATS_URL: nats://nats-${STACK:?STACK required}:4222
+      # TASK-043 G3: the customer lifecycle's environment contract. The CLI
+      # checks every one of these before it connects and names a missing one
+      # (exit 2); none has a default. gremion_platform is reached DIRECT (the
+      # one runner refuses the pooler), as its owner role.
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      PLATFORM_DATABASE_URL: postgresql://${PLATFORM_DB_USER:-gremion_platform}:${PLATFORM_DB_PASSWORD:?PLATFORM_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
+      # `init` makes the control panel's read-only role with these (the
+      # control-panel block above connects as it).
+      PANEL_DB_USER: ${PANEL_DB_USER:-gremion_panel}
+      PANEL_DB_PASSWORD: ${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}
+      # The servers' POSTGRES_USERs (CREATEDB/CREATEROLE for ensureKernelDatabase
+      # and enableModule) and each module's app-role password: files written by
+      # `gremion-tenant init` into etc/secrets/tenant-create (0600), mounted
+      # read-only below and into this one-shot only.
+      KERNEL_PG_ADMIN_FILE: /run/secrets/tenant-create/kernel_pg_admin
+      MODULE_PG_ADMIN_BOARD_FILE: /run/secrets/tenant-create/module_pg_admin_board
+      MODULE_PG_ADMIN_CALENDAR_FILE: /run/secrets/tenant-create/module_pg_admin_calendar
+      MODULE_PG_ADMIN_CONTENT_FILE: /run/secrets/tenant-create/module_pg_admin_content
+      MODULE_PG_ADMIN_FINANCE_FILE: /run/secrets/tenant-create/module_pg_admin_finance
+      MODULE_PG_ADMIN_NEWSLETTER_FILE: /run/secrets/tenant-create/module_pg_admin_newsletter
+      MODULE_PG_ADMIN_VAULT_FILE: /run/secrets/tenant-create/module_pg_admin_vault
+      MODULE_APP_PASSWORD_BOARD_FILE: /run/secrets/tenant-create/module_app_password_board
+      MODULE_APP_PASSWORD_CALENDAR_FILE: /run/secrets/tenant-create/module_app_password_calendar
+      MODULE_APP_PASSWORD_CONTENT_FILE: /run/secrets/tenant-create/module_app_password_content
+      MODULE_APP_PASSWORD_FINANCE_FILE: /run/secrets/tenant-create/module_app_password_finance
+      MODULE_APP_PASSWORD_NEWSLETTER_FILE: /run/secrets/tenant-create/module_app_password_newsletter
+      MODULE_APP_PASSWORD_VAULT_FILE: /run/secrets/tenant-create/module_app_password_vault
+      # enableModule's export target; tenant-create never disables a module,
+      # so nothing is written here (the disable verb brings its volume).
+      TENANT_EXPORT_DIR: /var/lib/gremion/exports
+      # gremion-ui and migrate hard-code it; the kernel migration tenant-create
+      # now runs must never apply a *_seed.sql file (TDD 6).
+      GREMION_DISABLE_SEEDS: "true"
     volumes:
       - config-data:/app/config
       - tenant-config-data:/data
+      # TASK-043 G3: the admin credentials above, read-only.
+      - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/tenant-create:/run/secrets/tenant-create:ro
+      # The ops realm `init` imports (Q5), read-only like the base realm below.
+      # Never an etc/edge mount: the router file is written by the host (Q17, j4).
+      - ./docker/keycloak/realm-export.ops.json:/repo/docker/keycloak/realm-export.ops.json:ro
       # TASK-024 (Q4): the NATS seeds (rw) -- ONLY this service mounts them;
       # gremion-ui, gremion-public and migrate mount none -- and the rendered
       # accounts file the state project's nats reads.

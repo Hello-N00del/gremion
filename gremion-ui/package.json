@@ -24,7 +24,10 @@
     "provision": "tsx scripts/tenant-provision.mjs"
   },
   "devDependencies": {
+    "@gremion/edge-routers": "workspace:*",
     "@gremion/nats-auth": "workspace:*",
+    "@gremion/provisioning": "workspace:*",
+    "@gremion/tenant-store": "workspace:*",
     "@inlang/paraglide-js": "^2.25.4",
     "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-node": "^5.5.7",

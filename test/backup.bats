@@ -180,7 +180,7 @@ run_tenant_backup_stubbed() {
     mkdir -p "$bin" "${repo}/scripts"
     cp "${PROJECT_ROOT}/scripts/tenant-backup.sh" "${repo}/scripts/tenant-backup.sh"
     [[ ! -e "${repo}/.env" ]]
-    printf '#!/usr/bin/env bash\nprintf "realm1\\tactive\\teu\\tenv:BACKUP_KEY\\n"\n' > "${bin}/psql"
+    printf '#!/usr/bin/env bash\nprintf "01927f00-0000-7000-8000-000000000001\\trealm1\\tactive\\teu\\tenv:BACKUP_KEY\\n"\n' > "${bin}/psql"
     printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.log"\n' "$TEST_TEMP_DIR" > "${bin}/docker"
     printf '#!/usr/bin/env bash\ncat\n' > "${bin}/openssl"
     chmod +x "${bin}/psql" "${bin}/docker" "${bin}/openssl"
@@ -190,13 +190,15 @@ run_tenant_backup_stubbed() {
         bash "${repo}/scripts/tenant-backup.sh" "$slug"
 }
 
-@test "tenant-backup.sh dumps t_default for slug default, like any other slug" {
+@test "tenant-backup.sh dumps the kernel database of slug default by its tenant id, like any other slug" {
     run_tenant_backup_stubbed default
-    grep -q -- "pg_dump -Fc -U pg_stub t_default" "${TEST_TEMP_DIR}/docker.log"
+    grep -q -- "pg_dump -Fc -U pg_stub t_01927f00000070008000000000000001__kernel" "${TEST_TEMP_DIR}/docker.log"
     ! grep -qE -- "pg_dump -Fc -U pg_stub gremion( |$)" "${TEST_TEMP_DIR}/docker.log"
 }
 
-@test "tenant-backup.sh dumps t_<slug> for an ordinary slug" {
+# TASK-043 G8 (Q3): the kernel database is t_<tenant id hex>__kernel, never t_<slug>.
+@test "tenant-backup.sh dumps t_<tenant id hex>__kernel for an ordinary slug, never t_<slug>" {
     run_tenant_backup_stubbed alpha
-    grep -q -- "pg_dump -Fc -U pg_stub t_alpha" "${TEST_TEMP_DIR}/docker.log"
+    grep -q -- "pg_dump -Fc -U pg_stub t_01927f00000070008000000000000001__kernel" "${TEST_TEMP_DIR}/docker.log"
+    ! grep -q -- "pg_dump -Fc -U pg_stub t_alpha" "${TEST_TEMP_DIR}/docker.log"
 }

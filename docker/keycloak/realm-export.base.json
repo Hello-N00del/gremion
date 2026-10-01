@@ -193,6 +193,42 @@
       "serviceAccountsEnabled": true,
       "fullScopeAllowed": false,
       "secret": "__GREMION_ADMIN_OIDC_CLIENT_SECRET__"
+    },
+    {
+      "clientId": "synapse",
+      "name": "Synapse",
+      "description": "Matrix homeserver OIDC login (TASK-043 Q11; confidential, code flow only)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://__APEX_DOMAIN__/_synapse/client/oidc/callback"
+      ],
+      "webOrigins": [],
+      "fullScopeAllowed": false,
+      "secret": "__SYNAPSE_OIDC_CLIENT_SECRET__"
+    },
+    {
+      "clientId": "gremion-mobile",
+      "name": "Gremion Mobile",
+      "description": "Native app (RFC 8252): public client, authorization code + PKCE S256 only, private-use URI scheme redirect (TASK-043 Q11)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "fullScopeAllowed": false
     }
   ],
   "scopeMappings": [

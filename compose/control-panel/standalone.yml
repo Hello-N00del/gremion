@@ -1,0 +1,101 @@
+# compose/control-panel/standalone.yml — the ops control panel on a host WITHOUT
+# the pooled stack (TASK-043 section 11 (b), R29-I3: the netcup test env).
+#
+#   docker compose -p gremion-panel -f compose/control-panel/standalone.yml \
+#     --env-file <0600 env file, from standalone.env.tmpl> up -d
+#
+# One service. [D R29-I11] (supersedes the Q22 ssh -L default): the host's
+# existing edge Traefik routes ONE operator-supplied host name (PANEL_HOST,
+# env only -- no literal host in the repo) to it, TLS through the operator's
+# named certificate resolver, with gremion-ui's HSTS (one year,
+# includeSubDomains, never preload); the app sends gremion-ui's CSP and
+# refuses (421) every request whose Host is not PANEL_HOST (ORIGIN is
+# https://${PANEL_HOST}). Access stays the ops realm with multi-factor sign-in
+# (TRD-048): a customer-realm session is refused at the shell.
+#
+# The one published port binds the LOOPBACK only, for on-host diagnostics
+# (a request there must still carry Host: ${PANEL_HOST}). PANEL_NETWORK must be
+# shared by the edge Traefik (traefik.docker.network) and Keycloak's internal
+# endpoints (PANEL_OIDC_INTERNAL_BASE); the orchestrator re-measures it.
+# Secrets are files mounted read-only; the root filesystem is read-only, every
+# capability dropped. It executes nothing (PANEL_EXECUTOR=none): "Neuer
+# Mandant" is disabled with its reason until TASK-038's re-init.
+#
+# Outside scripts/check-pooled-stack.mjs's projects by design (Q12).
+
+name: gremion-panel
+
+x-required-env:
+  image-tag: "${IMAGE_TAG:?IMAGE_TAG required}"
+  panel-network: "${PANEL_NETWORK:?PANEL_NETWORK required}"
+  panel-host: "${PANEL_HOST:?PANEL_HOST required}"
+  panel-entrypoint: "${PANEL_TRAEFIK_ENTRYPOINT:?PANEL_TRAEFIK_ENTRYPOINT required}"
+  panel-resolver: "${PANEL_CERT_RESOLVER:?PANEL_CERT_RESOLVER required}"
+
+services:
+  control-panel:
+    image: ghcr.io/hello-n00del/gremion-control-panel:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: ../..
+      dockerfile: apps/control-panel/Dockerfile
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    ports:
+      - "127.0.0.1:${PANEL_PORT:-3043}:3000"
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${PANEL_NETWORK:?PANEL_NETWORK required}"
+      traefik.http.routers.gremion-panel.rule: "Host(`${PANEL_HOST:?PANEL_HOST required}`)"
+      traefik.http.routers.gremion-panel.entrypoints: "${PANEL_TRAEFIK_ENTRYPOINT:?PANEL_TRAEFIK_ENTRYPOINT required}"
+      traefik.http.routers.gremion-panel.tls: "true"
+      traefik.http.routers.gremion-panel.tls.certresolver: "${PANEL_CERT_RESOLVER:?PANEL_CERT_RESOLVER required}"
+      traefik.http.routers.gremion-panel.middlewares: "gremion-panel-hsts"
+      traefik.http.routers.gremion-panel.service: "gremion-panel"
+      traefik.http.services.gremion-panel.loadbalancer.server.port: "3000"
+      # gremion-ui's HSTS on the same edge: one year, includeSubDomains, no preload.
+      # Declared on this container: the router and its middleware live and die together.
+      traefik.http.middlewares.gremion-panel-hsts.headers.stsseconds: "31536000"
+      traefik.http.middlewares.gremion-panel-hsts.headers.stsincludesubdomains: "true"
+      traefik.http.middlewares.gremion-panel-hsts.headers.stspreload: "false"
+    environment:
+      ORIGIN: https://${PANEL_HOST:?PANEL_HOST required}
+      PANEL_OIDC_ISSUER: ${PANEL_OIDC_ISSUER:?PANEL_OIDC_ISSUER required}
+      PANEL_OIDC_INTERNAL_BASE: ${PANEL_OIDC_INTERNAL_BASE:?PANEL_OIDC_INTERNAL_BASE required}
+      PANEL_OIDC_CLIENT_ID: control-panel
+      PANEL_OIDC_CLIENT_SECRET_FILE: /run/secrets/control-panel/client_secret
+      AUTH_SECRET_FILE: /run/secrets/control-panel/auth_secret
+      PANEL_REQUIRED_ACR: loa2
+      CONTROL_DATABASE_URL: ${CONTROL_DATABASE_URL:?CONTROL_DATABASE_URL required}
+      PLATFORM_DATABASE_URL: ${PLATFORM_DATABASE_URL:-}
+      PANEL_EXECUTOR: ${PANEL_EXECUTOR:-none}
+      NODE_EXTRA_CA_CERTS: ${PANEL_NODE_EXTRA_CA_CERTS:-}
+    volumes:
+      - ${PANEL_SECRETS_DIR:?PANEL_SECRETS_DIR required}:/run/secrets/control-panel:ro
+    networks:
+      - panel
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    healthcheck:
+      # The process and a valid configuration only: never Keycloak or a database.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  panel:
+    external: true
+    name: ${PANEL_NETWORK:?PANEL_NETWORK required}

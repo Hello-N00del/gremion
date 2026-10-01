@@ -167,7 +167,8 @@
       "files": {
         "0001_plt_setup.sql": "80797659ccd6364c8653647bcf49cdfbd71fb473db5d76e7f29852bca2e31b07",
         "0002_plt_module.sql": "a52fa722eec6bcfedf0214ac4f22412d56296e89b750fc46fea1b45e69830729",
-        "0003_plt_module_database.sql": "ad86a84ee8b38a37c6a4771dacf90d02189b79f6971930d7c3937e255e1d975a"
+        "0003_plt_module_database.sql": "ad86a84ee8b38a37c6a4771dacf90d02189b79f6971930d7c3937e255e1d975a",
+        "0004_plt_provisioning_step.sql": "17626fbd0596c967cf4b730ead64c74f3653687fc36e79bbfe8a07b68d70a03e"
       }
     }
   }
