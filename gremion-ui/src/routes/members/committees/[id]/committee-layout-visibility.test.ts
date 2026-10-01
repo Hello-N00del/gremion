@@ -62,7 +62,8 @@ function layoutEvent(user: unknown, id: string) {
   } as unknown as Parameters<typeof layoutLoad>[0]
 }
 
-async function statusOf(run: () => Promise<unknown>): Promise<number> {
+// The generated load types are MaybePromise unions with void, hence `unknown`.
+async function statusOf(run: () => unknown): Promise<number> {
   try {
     await run()
     return 200
@@ -83,7 +84,7 @@ function pageStatus(user: unknown, id: string): Promise<number> {
   return statusOf(() => pageLoad(ev))
 }
 
-function protocolEvent(user: unknown, urlId: string, protocolCommitteeId: string, parent: () => Promise<unknown>) {
+function protocolEvent(user: unknown, urlId: string, protocolCommitteeId: string, parent: () => unknown) {
   const body = {
     protocol: { id: 'p1', committee_id: protocolCommitteeId, status: 'published', title: 'Sitzung', meeting_date: '2026-01-01' },
     attendance: [],
