@@ -129,7 +129,7 @@ describe('the gate hook (TDD 15)', () => {
     const res = await gate({ event: e as never, resolve: vi.fn() as never })
     expect(res.status).toBe(302)
     const sc = res.headers.getSetCookie()
-    expect(sc.some((c) => /^authjs\.csrf-token=rolled/.test(c))).toBe(true)
+    expect(sc.some((c) => c.startsWith('authjs.csrf-token=rolled'))).toBe(true)
     expect(sc.some((c) => /authjs\.pkce\.code_verifier=/.test(c))).toBe(true)
   })
 
@@ -137,7 +137,7 @@ describe('the gate hook (TDD 15)', () => {
     const e = event({ path: '/api/customers', cookies: [{ name: 'authjs.session-token', value: 'forged' }] })
     const res = await gate({ event: e as never, resolve: vi.fn() as never })
     expect(res.status).toBe(403)
-    expect(res.headers.getSetCookie().some((c) => /^authjs\.session-token=;/.test(c))).toBe(true)
+    expect(res.headers.getSetCookie().some((c) => c.startsWith('authjs.session-token=;'))).toBe(true)
   })
 
   it('a client-side navigation (__data.json) still gets SvelteKit\'s own redirect, with the PKCE cookie set on the event (deletion-aware, r4)', async () => {
