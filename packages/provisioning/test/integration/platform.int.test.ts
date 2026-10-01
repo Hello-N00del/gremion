@@ -319,6 +319,12 @@ describe('the platform on a fresh server', () => {
       await expect(modules.enable(ref, UNDECIDED_ID, operatorAllowGate(new Set([UNDECIDED_ID]), async () => randomUUID()), OPERATOR)).rejects.toMatchObject({
         code: 'MODULE_VERSION_UNKNOWN',
       })
+      // R29-I24: a database-less module with a provisional profile now enables (no database created)
+      const votesGate = operatorAllowGate(new Set(['votes']), (c, m) => att.lookup(c, m))
+      await att.ensure(X, 'votes', OPERATOR, ['votes'])
+      const votes = await modules.enable(ref, 'votes', votesGate, OPERATOR)
+      expect(votes).toEqual({ noop: false, database: null })
+      expect(await modules.enabled(ref)).toEqual(['calendar', 'vault', 'votes'])
     } finally {
       await p.end()
     }
