@@ -199,6 +199,35 @@ overlay_ref() {
     else printf '%s/%s' "$OVL_HOST" "$1"; fi
 }
 
+# The six module servers' <ID>_PG_USER/<ID>_PG_PASSWORD lines of state.env.
+# POOLED_CUSTOMER (TASK-043b F5): from a FRESH gremion-init-secrets render of
+# the product's own state.env.tmpl, never this script's gen() -- generating
+# them here hid a template that lacked the keys `gremion-tenant init` needs.
+# A key the render does not carry dies here by name. The render (secrets) is
+# removed once read; its log names files and keys only. ~3 min on Git Bash.
+# Callers run it as `x="$(module_pg_keys)" || exit $?`.
+module_pg_keys() {
+    local id u p f="$OUT/init-secrets/etc/env/state.env"
+    if [[ "${POOLED_CUSTOMER:-0}" != 1 ]]; then
+        for id in BOARD CALENDAR CONTENT FINANCE NEWSLETTER VAULT; do printf '%s_PG_PASSWORD=%s\n' "$id" "$(gen)"; done
+        return 0
+    fi
+    rm -rf "$OUT/init-secrets"; mkdir -p "$OUT/init-secrets" "$OUT/ledger"
+    bash "$ROOT/infra/host/bin/gremion-init-secrets" --root "$(host_path "$OUT/init-secrets")" --stack "$STACK" \
+        > "$OUT/ledger/init-secrets.log" 2>&1 \
+        || { rm -rf "$OUT/init-secrets"; tail -n 5 "$OUT/ledger/init-secrets.log" >&2; die "gremion-init-secrets failed (ledger/init-secrets.log)"; }
+    for id in BOARD CALENDAR CONTENT FINANCE NEWSLETTER VAULT; do
+        u="$(sed -n "s/^${id}_PG_USER=//p" "$f" | tr -d '\r' | tail -n1)"
+        p="$(sed -n "s/^${id}_PG_PASSWORD=//p" "$f" | tr -d '\r' | tail -n1)"
+        [[ -n "$u" && -n "$p" && "$p" != CHANGE_ME* ]] \
+            || { rm -rf "$OUT/init-secrets"; die "TASK-043b F5: a fresh gremion-init-secrets render of state.env.tmpl carries no usable ${id}_PG_USER/${id}_PG_PASSWORD"; }
+        printf '%s_PG_USER=%s\n%s_PG_PASSWORD=%s\n' "$id" "$u" "$id" "$p"
+    done
+    p=""
+    rm -rf "$OUT/init-secrets"
+    printf '%s F5: the six <ID>_PG_USER/_PG_PASSWORD keys came from a fresh gremion-init-secrets render of state.env.tmpl\n' "$(now)" >> "$OUT/ledger/init-secrets.log"
+}
+
 # The env files and the proof overlays, and nothing else: no docker engine
 # (bar free_port's `docker ps`) and no file under the repository. prepare
 # starts with it; on its own it is the render-env phase.
@@ -220,6 +249,8 @@ phase_render_env() {
     pw_plat="$(gen)"; pw_panel="$(gen)"
     local profiles=production
     [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && profiles="production,calendar,vault"
+    local mod_keys
+    mod_keys="$(module_pg_keys)" || exit $?
 
     cat > "$ENV_DIR/state.env" <<EOF
 COMPOSE_PROJECT_NAME=${STACK}-state
@@ -227,12 +258,7 @@ COMPOSE_FILE="docker-compose.yml${s}docker-compose.prod.yml${s}test/host/fixture
 COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=${profiles}
 STACK=${STACK}
-BOARD_PG_PASSWORD=$(gen)
-CALENDAR_PG_PASSWORD=$(gen)
-CONTENT_PG_PASSWORD=$(gen)
-FINANCE_PG_PASSWORD=$(gen)
-NEWSLETTER_PG_PASSWORD=$(gen)
-VAULT_PG_PASSWORD=$(gen)
+${mod_keys}
 GREMION_ROOT=${SROOT_H}
 PLATFORM_DOMAIN=proof.example.org
 DOMAIN=proof.example.org
