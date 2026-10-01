@@ -758,7 +758,10 @@ phase_customer_reconcile() {
     else bad "customer-reconcile: the failure does not name smtp-server"; fi
     if tenant reconcile "$X" --apply > "$OUT/ledger/reconcile-3.log" 2>&1; then ok "customer-reconcile: --apply repaired it by host rotation (Q7)"
     else tail -n 20 "$OUT/ledger/reconcile-3.log" >&2; bad "customer-reconcile: --apply did not repair"; fi
-    if bash "$ROOT/infra/host/bin/gremion-vendor-mail" check-principals --host --no-allowances > "$OUT/ledger/check-principals.log" 2>&1; then
+    # Against the laid-out root, as principal_count() runs the host tools: without
+    # GREMION_ROOT it read /opt/gremion/etc/env/mail.env ("mail env file not found").
+    if MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
+        bash "$ROOT/infra/host/bin/gremion-vendor-mail" check-principals --host --no-allowances > "$OUT/ledger/check-principals.log" 2>&1; then
         ok "customer-reconcile: check-principals --no-allowances is green over two customers (Q14)"
     else bad "customer-reconcile: check-principals failed"; fi
 }
