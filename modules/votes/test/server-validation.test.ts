@@ -82,18 +82,51 @@ describe('votes leaf HTTP validation', () => {
     expect(heliosCalls).toEqual([GOOD_UUID])
   })
 
-  it('/api/v1/votes rejects a path-shaped election uuid with 400 and never calls Helios', async () => {
-    for (const bad of ['../admin', 'abc/../def', '%2e%2e%2fadmin', `${GOOD_UUID}/../x`, 'ok-1', '']) {
-      const res = await post('/api/v1/votes', JSON.stringify({ electionUuids: [GOOD_UUID, bad] }))
-      expect(res.status, `uuid ${JSON.stringify(bad)}`).toBe(400)
-    }
-    expect(heliosCalls).toEqual([])
+  // R29-VOTES-DEGRADE-K: a tracked election whose helios_uuid is not a UUID (seed
+  // fixtures such as `hel-vorstand-26`) degrades ITS card; it must not 400 the
+  // whole request. It is never passed to Helios (no fetch, no path interpolation).
+  it('/api/v1/votes degrades a non-UUID slug and fetches only the valid uuid', async () => {
+    const res = await post('/api/v1/votes', JSON.stringify({ electionUuids: ['hel-vorstand-26', GOOD_UUID] }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { votes: { id?: string }[]; degradedUuids: string[] }
+    expect(body.degradedUuids).toEqual(['hel-vorstand-26'])
+    expect(body.votes).toHaveLength(1)
+    expect(heliosCalls).toEqual([GOOD_UUID])
+    expect(heliosCalls.join(' ')).not.toContain('hel-vorstand-26')
   })
 
-  it('/api/v1/votes rejects a non-array electionUuids, an oversized list and malformed JSON with 400', async () => {
+  it('/api/v1/votes degrades every path-shaped uuid with 200 and never calls Helios (injection guard holds)', async () => {
+    for (const bad of ['../../admin', '../admin', 'abc/../def', '%2e%2e%2fadmin', `${GOOD_UUID}/../x`, 'ok-1', '']) {
+      heliosCalls.length = 0
+      const res = await post('/api/v1/votes', JSON.stringify({ electionUuids: [bad] }))
+      expect(res.status, `uuid ${JSON.stringify(bad)}`).toBe(200)
+      const body = (await res.json()) as { degradedUuids: string[] }
+      expect(body.degradedUuids, `uuid ${JSON.stringify(bad)}`).toEqual([bad])
+      expect(heliosCalls, `uuid ${JSON.stringify(bad)}`).toEqual([])
+    }
+  })
+
+  it('/api/v1/votes keeps input order across mixed valid and non-UUID entries', async () => {
+    const res = await post(
+      '/api/v1/votes',
+      JSON.stringify({ electionUuids: ['hel-b', GOOD_UUID, 'hel-a', '../x'] }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { degradedUuids: string[] }
+    expect(body.degradedUuids).toEqual(['hel-b', 'hel-a', '../x'])
+    expect(heliosCalls).toEqual([GOOD_UUID])
+  })
+
+  it('/api/v1/votes rejects a non-array electionUuids, an oversized list, a non-string element and malformed JSON with 400', async () => {
     expect((await post('/api/v1/votes', JSON.stringify({ electionUuids: GOOD_UUID }))).status).toBe(400)
     const many = Array.from({ length: 101 }, () => GOOD_UUID)
     expect((await post('/api/v1/votes', JSON.stringify({ electionUuids: many }))).status).toBe(400)
+    for (const bad of [42, null, {}, ['x'], true]) {
+      expect(
+        (await post('/api/v1/votes', JSON.stringify({ electionUuids: [GOOD_UUID, bad] }))).status,
+        `element ${JSON.stringify(bad)}`,
+      ).toBe(400)
+    }
     expect((await post('/api/v1/votes', '{not json')).status).toBe(400)
     expect(heliosCalls).toEqual([])
   })
