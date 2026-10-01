@@ -120,6 +120,44 @@ describe('buildTenantRealmDoc (§4 realm contract)', () => {
       smtp: TEST_SMTP,
     })
 
+  // TASK-043b F3. Measured on keycloak:26.6.1: the create-realm-only
+  // provisioner SA is refused (403) mapping realm-management/realm-admin onto
+  // the gremion-admin SA over the Admin API (only a master `admin` may), but a
+  // realm it CREATES with users[].clientRoles {realm-management:[realm-admin]}
+  // comes up with exactly that mapping. So the import carries the grant.
+  it('the gremion-admin service account carries GREMION_ADMIN_SA_REALM_ROLES in the import itself, the base roles kept (TASK-043b F3)', () => {
+    const doc = build(cfgOff)
+    const sa = (doc.users as Array<{ serviceAccountClientId?: string; clientRoles?: Record<string, string[]> }>).filter(
+      (u) => u.serviceAccountClientId === 'gremion-admin',
+    )
+    expect(sa).toHaveLength(1)
+    const rm = sa[0]!.clientRoles?.['realm-management'] ?? []
+    expect(rm).toContain('realm-admin')
+    const baseRm = (base.users as Array<{ serviceAccountClientId?: string; clientRoles?: Record<string, string[]> }>).find(
+      (u) => u.serviceAccountClientId === 'gremion-admin',
+    )!.clientRoles!['realm-management']!
+    for (const r of baseRm) expect(rm).toContain(r)
+    expect(new Set(rm).size).toBe(rm.length)
+  })
+
+  it('a base without the gremion-admin service-account user gets one carrying realm-admin (TASK-043b F3)', () => {
+    const bare = { ...JSON.parse(JSON.stringify(base)), users: [] }
+    const doc = buildTenantRealmDoc({
+      base: bare,
+      manifests: MODULE_MANIFESTS,
+      config: cfgOff,
+      slug: 't2',
+      realmName: 'verein',
+      tenantHost: 't2.council.example',
+      apexDomain: 'council.example',
+      clientSecrets: Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, secretFor(c)])),
+      smtp: TEST_SMTP,
+    })
+    expect(doc.users).toEqual([
+      { username: 'service-account-gremion-admin', enabled: true, serviceAccountClientId: 'gremion-admin', clientRoles: { 'realm-management': ['realm-admin'] } },
+    ])
+  })
+
   it('sets the per-tenant realm name and sslRequired:all literal (#139)', () => {
     const doc = build(cfgOff)
     expect(doc.realm).toBe('verein')

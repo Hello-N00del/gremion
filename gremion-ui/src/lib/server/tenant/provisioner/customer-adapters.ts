@@ -167,6 +167,35 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
   const hostPath = (name: string) => `${o.tenantSecretsDir.replace(/\/$/, '')}/${name}`
   const readSecretFile = (name: string): string | null => (existsSync(hostPath(name)) ? readFileSync(hostPath(name), 'utf-8').trim() : null)
 
+  /**
+   * TASK-043b F3: the gremion-admin SA's realm-management roles, read first.
+   * A realm this provisioner creates carries them in the realm document it POSTs
+   * (buildTenantRealmDoc), so nothing is granted. Only a realm without them (one
+   * created before that document carried them, or drift) is granted -- through
+   * adminKc when the caller supplied one, else the provisioner, which
+   * Keycloak refuses for realm-admin (403, measured on 26.6.1): that is a named
+   * failure whose remedy is the admin console (`gremion-tenant create` passes the
+   * one-shot no master-admin credential), never a silent pass. The post-condition is the
+   * read-back, never the grant's exit.
+   */
+  async function ensureAdminSaRoles(realm: string): Promise<void> {
+    const missingOf = (held: readonly string[]) => GREMION_ADMIN_SA_REALM_ROLES.filter((r) => !held.includes(r))
+    const missing = missingOf(await o.kc.getServiceAccountRealmRoleNames(realm, ADMIN_CLIENT_ID))
+    if (missing.length === 0) return
+    try {
+      await (o.adminKc ?? o.kc).assignServiceAccountRealmRoles(realm, ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES)
+    } catch (err) {
+      throw new Error(
+        `the ${ADMIN_CLIENT_ID} service account of realm ${realm} lacks [${missing.join(', ')}] and the grant failed (${err instanceof Error ? err.message : String(err)}). ` +
+          'A realm created by tenant-create carries these roles in the realm document it POSTs (TASK-043b); a realm created before needs them granted once by a Keycloak master admin in the admin console ' +
+          `(realm ${realm} > Users > service-account-${ADMIN_CLIENT_ID} > Role mapping > Assign role > client realm-management: ${missing.join(', ')}), then rerun the verb`,
+        { cause: err },
+      )
+    }
+    const still = missingOf(await o.kc.getServiceAccountRealmRoleNames(realm, ADMIN_CLIENT_ID))
+    if (still.length) throw new Error(`the ${ADMIN_CLIENT_ID} service account of realm ${realm} still lacks [${still.join(', ')}] after the grant`)
+  }
+
   async function toRow(t: Tenant): Promise<ControlRow> {
     return { id: t.id, slug: t.slug, status: t.status, realm: t.realmName, host: await primaryHostForTenant(t.id) }
   }
@@ -261,7 +290,7 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           await o.kc.createRealm(doc as Record<string, unknown>)
         }
         await o.kc.configureStepupFlow(c.realm)
-        await (o.adminKc ?? o.kc).assignServiceAccountRealmRoles(c.realm, ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES)
+        await ensureAdminSaRoles(c.realm)
         await markTenantResourceOk(c.id, 'realm', c.realm)
       },
       async readSmtp(realm): Promise<SmtpReadBack> {

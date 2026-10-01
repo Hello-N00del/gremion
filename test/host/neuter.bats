@@ -808,8 +808,14 @@ case "$args" in
   *"kcadm.sh get realms --fields realm"*) cat "$GREMION_ROOT/runtime/.kc-realms"; exit 0 ;;
   *"kcadm.sh update realms/"*)
       { echo "$args"; cat; echo; } >> "$GREMION_ROOT/runtime/.kc-updates"; exit 0 ;;
+  # Keycloak 26.6.1 (TASK-043b F2): a bare --fields smtpServer answers the map
+  # EMPTY whatever the realm holds; only smtpServer(*) returns the fields.
+  *"kcadm.sh get realms/"*" --fields smtpServer(*)"*)
+      printf "{ \"smtpServer\" : { \"host\" : \"%s\" } }\n" "$(cat "$GREMION_ROOT/runtime/.kc-readback")"; exit 0 ;;
+  *"kcadm.sh get realms/"*" --fields smtpServer"*)
+      printf "{ \"smtpServer\" : { } }\n"; exit 0 ;;
   *"kcadm.sh get realms/"*)
-      printf "{ \"host\" : \"%s\" }\n" "$(cat "$GREMION_ROOT/runtime/.kc-readback")"; exit 0 ;;
+      echo "unexpected kcadm read: $args" >&2; exit 1 ;;
   *"{{.Names}}"*) exit 0 ;;
   *"{{.ID}}"*) echo "cid-pg stg-state postgres"; exit 0 ;;
   "inspect -f {{.State.Running}} stg-null-sink")

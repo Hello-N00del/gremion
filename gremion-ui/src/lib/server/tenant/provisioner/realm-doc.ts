@@ -39,6 +39,7 @@
 import { composeRealm } from '$lib/modules/realm'
 import { normaliseHost } from '$lib/server/tenant/host'
 import type { ModuleManifest } from '$lib/modules/types'
+import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
 
 type ModulesConfig = {
   modules: Record<string, boolean>
@@ -415,6 +416,28 @@ function substituteSentinels(value: unknown, table: Record<string, string>): unk
   return value
 }
 
+/**
+ * TASK-043b F3: the gremion-admin service-account user of the import carries
+ * GREMION_ADMIN_SA_REALM_ROLES under realm-management (merged into whatever the
+ * base already lists; added when the base has no such user). Only when the doc
+ * carries the gremion-admin client: a user for an absent client fails the import.
+ */
+function carryAdminSaRoles(doc: RealmDoc): void {
+  const clients = (doc.clients ?? []) as Array<{ clientId?: string }>
+  if (!clients.some((c) => c.clientId === ADMIN_CLIENT_ID)) return
+  const users = (Array.isArray(doc.users) ? doc.users : []) as Array<Record<string, unknown>>
+  let sa = users.find((u) => u.serviceAccountClientId === ADMIN_CLIENT_ID)
+  if (!sa) {
+    sa = { username: `service-account-${ADMIN_CLIENT_ID}`, enabled: true, serviceAccountClientId: ADMIN_CLIENT_ID }
+    users.push(sa)
+  }
+  const clientRoles = { ...((sa.clientRoles && typeof sa.clientRoles === 'object' ? sa.clientRoles : {}) as Record<string, unknown>) }
+  const held = Array.isArray(clientRoles['realm-management']) ? (clientRoles['realm-management'] as unknown[]).filter((r): r is string => typeof r === 'string') : []
+  clientRoles['realm-management'] = [...new Set([...held, ...GREMION_ADMIN_SA_REALM_ROLES])]
+  sa.clientRoles = clientRoles
+  doc.users = users
+}
+
 export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
   const { base, manifests, config, realmName, tenantHost, apexDomain, clientSecrets, smtp } = input
 
@@ -482,6 +505,14 @@ export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
     ...(attrs && typeof attrs === 'object' ? (attrs as Record<string, unknown>) : {}),
     frontendUrl: frontendUrlFor(tenantHost, realmName),
   }
+
+  // (2e) TASK-043b F3: the gremion-admin SA's realm-management roles ride in
+  // the IMPORT. Measured on keycloak:26.6.1: the create-realm-only provisioner
+  // is refused (403) mapping realm-admin over the Admin API -- Keycloak lets
+  // only a master `admin` map that role -- but a realm it creates with
+  // users[].clientRoles carrying realm-admin comes up with exactly that
+  // mapping. So no master admin credential is needed to create a customer.
+  carryAdminSaRoles(hostSwapped)
 
   // (3) inject the generated per-client secrets in place of the `__*__`
   // placeholders. A missing secret for a placeholder client is a programming

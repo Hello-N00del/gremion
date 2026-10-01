@@ -591,7 +591,9 @@ phase_customer_layout() {
     need_pooled no-operator
     [[ -z "${PROOF_GREMION_ROOT:-}" ]] || die "customer-layout lays out a SCRATCH root; PROOF_GREMION_ROOT names a real one"
     local r; r="$(croot)"; [[ -d "$r" ]] || die "the pooled stack's GREMION_ROOT ${r} is absent"
-    mkdir -p "$r/etc/env" "$r/runtime" "$r/etc/edge" "$r/logs"
+    # A fresh ${OUT} (no panel phase before it) has no ledger directory yet:
+    # the switch.log redirect below failed and gremion-switch never ran.
+    mkdir -p "$r/etc/env" "$r/runtime" "$r/etc/edge" "$r/logs" "$OUT/ledger"
     local f
     for f in state app-blue app-green mail ops; do [[ -f "$PENV/$f.env" ]] && cp "$PENV/$f.env" "$r/etc/env/$f.env"; done
     [[ -f "$r/runtime/active-colour" ]] || echo blue > "$r/runtime/active-colour"
@@ -666,9 +668,21 @@ phase_customer_create() {
     # The kernel database: gremion-ui's own ledger shape, no seed, one body.
     if [[ "$(q "$kdb" "SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_name = 'schema_migrations'")" == "applied_at,filename" ]]; then ok "customer-create: schema_migrations is gremion-ui's (filename, applied_at), no sha256 (Q3)"; else bad "customer-create: schema_migrations has another shape"; fi
     if [[ "$(q "$kdb" "SELECT count(*) FROM schema_migrations WHERE filename LIKE '%seed%'")" == 0 ]]; then ok "customer-create: no *_seed.sql applied (GREMION_DISABLE_SEEDS)"; else bad "customer-create: a seed file was applied"; fi
-    if [[ "$(q "$kdb" "SELECT count(*) FROM org_units")/$(q "$kdb" "SELECT count(*) FROM committees")" == "1/0" ]]; then ok "customer-create: org_units = 1 (the council), committees = 0"; else bad "customer-create: org_units/committees are not 1/0"; fi
-    # The realm: one group, two administrators, the customer's own sender.
-    if [[ "$(skc get groups -r "$X" --fields name | jq 'length')" == 1 ]]; then ok "customer-create: realm ${X} holds one group (the first body)"; else bad "customer-create: realm ${X} group count"; fi
+    # gremion-ui's 0010_org_units.sql RENAMED committees to org_units: a
+    # committee is an org_units row of kind 'committee' (0038 kind catalogue).
+    # The old `FROM committees` errored, so this check could never pass.
+    local units; units="$(q "$kdb" "SELECT count(*) || ':' || coalesce(string_agg(kind, ','), '') || '/' || count(*) FILTER (WHERE kind = 'committee') FROM org_units")"
+    if [[ "$units" == "1:council/0" ]]; then ok "customer-create: org_units = 1 (kind council), committees (org_units of kind committee) = 0"; else bad "customer-create: org_units count:kinds/committees ${units:-unreadable}, want 1:council/0"; fi
+    # The realm: one group FOR THE FIRST BODY, two administrators, the
+    # customer's own sender. The base realm template (realm-doc composes every
+    # realm from it) carries its own groups (login, admin since ab45a0e5); they
+    # are set aside, and the one remaining group is named like the council row.
+    local base_groups body_name realm_groups
+    base_groups="$(jq -c '[.groups[]?.name] | sort' "$ROOT/docker/keycloak/realm-export.base.json")"
+    body_name="$(q "$kdb" "SELECT name FROM org_units WHERE kind = 'council'")"
+    realm_groups="$(skc get groups -r "$X" --fields name | jq -c --argjson base "$base_groups" '[.[].name] - $base')"
+    if [[ -n "$body_name" && "$realm_groups" == "[\"${body_name}\"]" ]]; then ok "customer-create: realm ${X} holds one group for the first body (${body_name}) beside the base template's ${base_groups}"
+    else bad "customer-create: realm ${X} groups beyond the base template's ${base_groups}: ${realm_groups:-unreadable}, want [\"${body_name}\"]"; fi
     local users; users="$(skc get users -r "$X" --fields username,requiredActions | jq -c '[.[] | select(.username | startswith("service-account-") | not)] | length')"
     if [[ "$users" == 2 ]]; then ok "customer-create: two administrators in ${X}"; else bad "customer-create: ${users} user(s) in ${X}, want 2"; fi
     # 'smtpServer(*)': on Keycloak 26.6 a bare `--fields smtpServer` returns
@@ -744,7 +758,20 @@ phase_customer_reconcile() {
     else bad "customer-reconcile: the failure does not name smtp-server"; fi
     if tenant reconcile "$X" --apply > "$OUT/ledger/reconcile-3.log" 2>&1; then ok "customer-reconcile: --apply repaired it by host rotation (Q7)"
     else tail -n 20 "$OUT/ledger/reconcile-3.log" >&2; bad "customer-reconcile: --apply did not repair"; fi
-    if bash "$ROOT/infra/host/bin/gremion-vendor-mail" check-principals --host --no-allowances > "$OUT/ledger/check-principals.log" 2>&1; then
+    # Against the laid-out root, as principal_count() runs the host tools: without
+    # GREMION_ROOT it read /opt/gremion/etc/env/mail.env ("mail env file not found").
+    # Git Bash ONLY: the tool's `mktemp -d` work directory is an MSYS /tmp path,
+    # which a native jq.exe cannot open and Docker Desktop mounts as an EMPTY VM
+    # directory (measured: "Could not open file /tmp/tmp.X/principals.json",
+    # node ENOENT). TMPDIR in host form (C:/...) under ${OUT} serves both; the
+    # tool's own trap removes the directory. A Linux host never takes this path.
+    local -a tmpenv=()
+    if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+        mkdir -p "$OUT/tmp"; chmod 700 "$OUT/tmp" 2>/dev/null || true
+        tmpenv=(TMPDIR="$(host_path "$OUT/tmp")")
+    fi
+    if env ${tmpenv[@]+"${tmpenv[@]}"} MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
+        bash "$ROOT/infra/host/bin/gremion-vendor-mail" check-principals --host --no-allowances > "$OUT/ledger/check-principals.log" 2>&1; then
         ok "customer-reconcile: check-principals --no-allowances is green over two customers (Q14)"
     else bad "customer-reconcile: check-principals failed"; fi
 }
@@ -755,6 +782,10 @@ phase_customer_admins() {
     local dom host realm_url port tiss disc role krole addr uid out DASHBOARD_TITLE
     local -a tls=()
     # read from the tested source, so a renamed dashboard cannot pass on a stale literal
+    # A fresh ${OUT} (no panel phase before it) has no secrets directory:
+    # imap_fetch's `> $OUT/secrets/admin-<role>.eml` failed on every try
+    # (measured: 40 x "No such file or directory"), read as "no mail arrived".
+    mkdir -p "$OUT/secrets"; chmod 700 "$OUT/secrets" 2>/dev/null || true
     DASHBOARD_TITLE="$(sed -n 's/.*<PageTitle title="\([^"]*\)".*/\1/p' "$ROOT/gremion-ui/src/routes/+page.svelte" | head -n1)"
     [[ -n "$DASHBOARD_TITLE" ]] || die "customer-admins: no PageTitle in gremion-ui/src/routes/+page.svelte"
     dom="$(penv PLATFORM_DOMAIN)"; host="$(host_of "$X")"; realm_url="https://${host}/auth/realms/${X}"

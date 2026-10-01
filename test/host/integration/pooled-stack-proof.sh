@@ -20,7 +20,9 @@
 #   mail-roles   the vendor mail server's principals and roles@ mailbox by the
 #                repo's own infra/host/mail/provision-roles.sh (TASK-043's
 #                customer half reads the execute-actions mail there)
-#   limits       HostConfig.Memory and NanoCpus > 0 on every container
+#   mail-realm   bring-up step 2: gremion-vendor-mail realm-smtp (master ->
+#                system@), which check-principals requires
+#   limits      HostConfig.Memory and NanoCpus > 0 on every container
 #   rss          idle RSS below 80 % of the limit on every container
 #   isolation    project classification, network membership
 #   probes       TCP probes: positive control from _state, then each non-council net
@@ -48,7 +50,10 @@
 # POOLED_CUSTOMER=1 (TASK-043's customer half, customer-provision-proof.sh
 # customer-*): render-env adds the calendar and vault module servers to the
 # state profiles, publishes the vendor mail server's submission port on
-# 127.0.0.1:587 and lets the state Keycloak reach mail.<PLATFORM_DOMAIN>:587
+# 127.0.0.1:587 and its management API on the host's 127.0.0.1:8086 (the only
+# STALWART_ADMIN_URL gremion-vendor-mail accepts), takes the six module
+# server credentials from gremion-init-secrets (TASK-043b F5), and lets the
+# state Keycloak reach mail.<PLATFORM_DOMAIN>:587
 # through host-gateway, trusting the scratch mail certificate. SCRATCH
 # DEVIATIONS (a scratch box has no public DNS, no ACME, no LE certificate): the
 # mail server carries a self-signed certificate for mail.<PLATFORM_DOMAIN>
@@ -199,6 +204,35 @@ overlay_ref() {
     else printf '%s/%s' "$OVL_HOST" "$1"; fi
 }
 
+# The six module servers' <ID>_PG_USER/<ID>_PG_PASSWORD lines of state.env.
+# POOLED_CUSTOMER (TASK-043b F5): from a FRESH gremion-init-secrets render of
+# the product's own state.env.tmpl, never this script's gen() -- generating
+# them here hid a template that lacked the keys `gremion-tenant init` needs.
+# A key the render does not carry dies here by name. The render (secrets) is
+# removed once read; its log names files and keys only. ~3 min on Git Bash.
+# Callers run it as `x="$(module_pg_keys)" || exit $?`.
+module_pg_keys() {
+    local id u p f="$OUT/init-secrets/etc/env/state.env"
+    if [[ "${POOLED_CUSTOMER:-0}" != 1 ]]; then
+        for id in BOARD CALENDAR CONTENT FINANCE NEWSLETTER VAULT; do printf '%s_PG_PASSWORD=%s\n' "$id" "$(gen)"; done
+        return 0
+    fi
+    rm -rf "$OUT/init-secrets"; mkdir -p "$OUT/init-secrets" "$OUT/ledger"
+    bash "$ROOT/infra/host/bin/gremion-init-secrets" --root "$(host_path "$OUT/init-secrets")" --stack "$STACK" \
+        > "$OUT/ledger/init-secrets.log" 2>&1 \
+        || { rm -rf "$OUT/init-secrets"; tail -n 5 "$OUT/ledger/init-secrets.log" >&2; die "gremion-init-secrets failed (ledger/init-secrets.log)"; }
+    for id in BOARD CALENDAR CONTENT FINANCE NEWSLETTER VAULT; do
+        u="$(sed -n "s/^${id}_PG_USER=//p" "$f" | tr -d '\r' | tail -n1)"
+        p="$(sed -n "s/^${id}_PG_PASSWORD=//p" "$f" | tr -d '\r' | tail -n1)"
+        [[ -n "$u" && -n "$p" && "$p" != CHANGE_ME* ]] \
+            || { rm -rf "$OUT/init-secrets"; die "TASK-043b F5: a fresh gremion-init-secrets render of state.env.tmpl carries no usable ${id}_PG_USER/${id}_PG_PASSWORD"; }
+        printf '%s_PG_USER=%s\n%s_PG_PASSWORD=%s\n' "$id" "$u" "$id" "$p"
+    done
+    p=""
+    rm -rf "$OUT/init-secrets"
+    printf '%s F5: the six <ID>_PG_USER/_PG_PASSWORD keys came from a fresh gremion-init-secrets render of state.env.tmpl\n' "$(now)" >> "$OUT/ledger/init-secrets.log"
+}
+
 # The env files and the proof overlays, and nothing else: no docker engine
 # (bar free_port's `docker ps`) and no file under the repository. prepare
 # starts with it; on its own it is the render-env phase.
@@ -214,12 +248,23 @@ phase_render_env() {
     pw_bnc="$(gen)"; sec_proxy="$(gen)"; sec_auth="$(gen)"; sec_push="$(gen)"
     local p_http p_https p_api p_it p_mailapi
     p_http="$(free_port)"; p_https="$(free_port)"; p_api="$(free_port)"; p_it="$(free_port)"; p_mailapi="$(free_port)"
+    # POOLED_CUSTOMER: the management API on the host's own 127.0.0.1:8086
+    # (infra/host/mail/docker-compose.yml, mail.env.tmpl). gremion-vendor-mail's
+    # principals.mjs refuses any other STALWART_ADMIN_URL (LOOPBACK_8086), so a
+    # random port failed `create`'s mail step: "STALWART_ADMIN_URL must be
+    # http://<loopback>:8086". Like :587, one customer proof per engine.
+    if [[ "${POOLED_CUSTOMER:-0}" == 1 ]]; then
+        ! (exec 3<>/dev/tcp/127.0.0.1/8086) 2>/dev/null || die "127.0.0.1:8086 is taken: the customer proof needs the vendor mail API there"
+        p_mailapi=8086
+    fi
     # TASK-043: gremion_platform's owner and the panel's reader, ONE value for
     # both colours (one role each); docker-compose.app.yml requires both.
     local pw_plat pw_panel
     pw_plat="$(gen)"; pw_panel="$(gen)"
     local profiles=production
     [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && profiles="production,calendar,vault"
+    local mod_keys
+    mod_keys="$(module_pg_keys)" || exit $?
 
     cat > "$ENV_DIR/state.env" <<EOF
 COMPOSE_PROJECT_NAME=${STACK}-state
@@ -227,12 +272,7 @@ COMPOSE_FILE="docker-compose.yml${s}docker-compose.prod.yml${s}test/host/fixture
 COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=${profiles}
 STACK=${STACK}
-BOARD_PG_PASSWORD=$(gen)
-CALENDAR_PG_PASSWORD=$(gen)
-CONTENT_PG_PASSWORD=$(gen)
-FINANCE_PG_PASSWORD=$(gen)
-NEWSLETTER_PG_PASSWORD=$(gen)
-VAULT_PG_PASSWORD=$(gen)
+${mod_keys}
 GREMION_ROOT=${SROOT_H}
 PLATFORM_DOMAIN=proof.example.org
 DOMAIN=proof.example.org
@@ -700,6 +740,30 @@ phase_mail_roles() {
     fi
 }
 
+# Bring-up step 2 of ops/vendor-mail/RUNBOOK.md section 3, after mail-roles
+# (step 1): the operator realm master sends as system@<PLATFORM_DOMAIN>
+# (gremion-vendor-mail realm-smtp, no argument). Without it the vendor
+# realm has no SMTP user and check-principals (customer-reconcile, Q14) fails
+# "vendor realm master has no SMTP user" -- a step the scratch stack skipped,
+# not a customer defect. The env files by MAIL_ENV/STATE_ENV_FILE (the root's
+# etc/env is laid out later, by customer-layout).
+phase_mail_realm() {
+    require_scratch mail-realm
+    local out rc=0 line dom
+    dom="$(sed -n 's/^PLATFORM_DOMAIN=//p' "$ENV_DIR/mail.env" | tr -d '\r')"
+    out="$(MAIL_ENV="$(host_path "$ENV_DIR/mail.env")" STATE_ENV_FILE="$(host_path "$ENV_DIR/state.env")" \
+        GREMION_ROOT="$(host_path "$SROOT")" GREMION_RELEASE_DIR="$ROOT_H" \
+        bash "$ROOT/infra/host/bin/gremion-vendor-mail" realm-smtp 2>&1)" || rc=$?
+    # its lines name the realm, the sender and the verdict, never a secret
+    printf '%s rc=%s\n%s\n' "$(now)" "$rc" "$out" | ledger mail-realm.log
+    line="$(grep -o 'REALM-SMTP:.*' <<< "$out" | tail -n1 || true)"
+    if (( rc == 0 )) && [[ "$line" == "REALM-SMTP: realm=master user=system@${dom} "* ]]; then
+        ok "mail-realm: master sends as system@${dom} (${line})"
+    else
+        bad "mail-realm: realm-smtp exit ${rc}: $(tail -n 3 <<< "$out" | tr '\n' ' ')"
+    fi
+}
+
 # ── TRD-177 ────────────────────────────────────────────────────────────────
 phase_limits() {
     local cid n=0 line mem cpu name
@@ -1074,6 +1138,7 @@ run_phase() {
         app-wait) phase_app_wait "$2" ;;
         aux-up) phase_aux_up ;;
         mail-roles) phase_mail_roles ;;
+        mail-realm) phase_mail_realm ;;
         limits) phase_limits ;;
         rss) phase_rss ;;
         isolation) phase_isolation ;;

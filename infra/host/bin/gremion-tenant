@@ -37,8 +37,9 @@ set -euo pipefail
 # `config --services` before and after, and fails if either moved -- a
 # customer adds databases, a realm and accounts, never a container.
 #
-# SECRETS never reach an argv: the app passwords and admin URLs tenant-create
-# reads are 0600 files under etc/secrets/tenant-create (written by `init`),
+# SECRETS never reach an argv: the app passwords, admin URLs and the
+# provisioner credential tenant-create reads are 0600 files under
+# etc/secrets/tenant-create (written by `init`; mounted read-only),
 # the Keycloak admin password reaches kcadm through a name-only `-e`, and the
 # vendor mail principal's password never leaves gremion-vendor-mail.
 #
@@ -125,7 +126,8 @@ need_value() {
 
 # tc <args...> — the tenant-create one-shot of the ACTIVE colour, the one
 # shape a compose command takes on a host (N20): --env-file, no -f, no -p.
-# The optional TC_MOUNT is ONE extra read-only file mount (create's --config).
+# The optional TC_MOUNT carries extra `run` arguments: create's read-only
+# --config mount, or init's bootstrap-provisioner scratch mount and name-only -e's.
 TC_MOUNT=()
 tc() {
     local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
@@ -236,6 +238,63 @@ render_panel_secrets() {
     openssl rand -hex 32 | write_secret "${dir}/auth_secret"
 }
 
+# TASK-043b F1: the least-privilege provisioner credential (master SA
+# tenant-provisioner, create-realm only) that every tenant-create verb reads as
+# TENANT_PROVISIONER_SECRET_FILE=/run/secrets/tenant-create/tenant_provisioner,
+# from the READ-ONLY etc/secrets/tenant-create mount. Kept when present. Absent:
+# `bootstrap-provisioner` runs ONCE in the one-shot against a private 0700
+# scratch directory (the only writable mount it gets), and the secret moves
+# into etc/secrets/tenant-create, 0600. The Keycloak admin credential is used for
+# that call only and reaches the container through a name-only -e (from the
+# caller's environment, else state.env), never an argv.
+ensure_provisioner_credential() {
+    local dir="${ROOT}/etc/secrets/tenant-create" state="${ROOT}/etc/env/state.env" out admin password
+    local file="${dir}/tenant_provisioner"
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    if [[ -s "$file" ]]; then
+        ok "etc/secrets/tenant-create/tenant_provisioner present (the provisioner is bootstrapped)"
+        return 0
+    fi
+    admin="${KEYCLOAK_ADMIN:-}"
+    password="${KEYCLOAK_ADMIN_PASSWORD:-}"
+    [[ -n "$admin" ]] || admin="$(env_key "$state" KEYCLOAK_ADMIN)"
+    [[ -n "$password" ]] || password="$(env_key "$state" KEYCLOAK_ADMIN_PASSWORD)"
+    [[ -n "$admin" && -n "$password" ]] \
+        || die "the provisioner credential is absent and KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD are unset (neither exported nor in ${state}): bootstrap-provisioner cannot run" "$GREMION_EXIT_USAGE"
+    out="$(mktemp -d "${ROOT}/etc/secrets/.tenant-provisioner.XXXXXX")" \
+        || die "could not create the bootstrap-provisioner scratch directory under ${ROOT}/etc/secrets" "$GREMION_EXIT_ASSERT"
+    # The scratch directory holds the SA secret once the one-shot has written
+    # it: an interrupt (INT/TERM) or any exit before the move removes it.
+    # shellcheck disable=SC2064  # expand $out now
+    trap "rm -rf '${out}'" EXIT
+    # shellcheck disable=SC2064
+    trap "rm -rf '${out}'; exit 130" INT
+    # shellcheck disable=SC2064
+    trap "rm -rf '${out}'; exit 143" TERM
+    chmod 700 "$out"
+    TC_MOUNT=(-v "$(realpath "$out"):/run/secrets/provisioner-out"
+              -e TENANT_PROVISIONER_SECRET_FILE=/run/secrets/provisioner-out/tenant_provisioner
+              -e KEYCLOAK_ADMIN -e KEYCLOAK_ADMIN_PASSWORD)
+    # A prefix assignment on a function call: in tc's (and so docker's)
+    # environment for this one call, gone afterwards.
+    if ! KEYCLOAK_ADMIN="$admin" KEYCLOAK_ADMIN_PASSWORD="$password" tc bootstrap-provisioner; then
+        TC_MOUNT=(); password=""; rm -rf "$out"
+        die "tenant-create bootstrap-provisioner failed: no provisioner credential was written" "$GREMION_EXIT_ASSERT"
+    fi
+    TC_MOUNT=()
+    password=""
+    if [[ ! -s "${out}/tenant_provisioner" ]]; then
+        rm -rf "$out"
+        die "bootstrap-provisioner exited 0 but wrote no credential into its scratch directory" "$GREMION_EXIT_ASSERT"
+    fi
+    atomic_write "$file" 600 < "${out}/tenant_provisioner"
+    rm -rf "$out"
+    trap - EXIT INT TERM
+    [[ -s "$file" ]] || die "etc/secrets/tenant-create/tenant_provisioner is empty after the move" "$GREMION_EXIT_ASSERT"
+    ok "provisioner bootstrapped: its credential is in etc/secrets/tenant-create/tenant_provisioner (0600)"
+}
+
 # init --realm-only --keycloak-container <c>: the ops realm created by kcadm in
 # an EXISTING Keycloak (a host without the pooled stack, §11). Create
 # when absent, skip when equal (the template fingerprint on the realm),
@@ -332,6 +391,8 @@ cmd_init() {
     else
         render_tenant_create_secrets
     fi
+    # Both arms: the container's init creates the ops realm AS the provisioner.
+    ensure_provisioner_credential
     tc "${args[@]}" || die "tenant-create ${args[*]} failed" "$GREMION_EXIT_ASSERT"
     # The container wrote the control-panel client secret beside the tenant
     # secrets; it moves to the panel's own directory, 0600.
