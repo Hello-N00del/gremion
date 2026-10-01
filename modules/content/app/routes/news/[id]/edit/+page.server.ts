@@ -7,41 +7,14 @@ import { createNextcloudClient } from '$lib/server/files/nextcloud-client';
 import { createEmptyOdt, convertOdtToHtml } from '$lib/server/newsletter/collabora-convert';
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize';
 import { internalFetch } from '$lib/server/internal-fetch';
+import { getTenant } from '$lib/server/tenant/context';
+import { ensureNewsDraft, newsDraftPath, NEWS_DRAFT_USER as ADMIN_USER } from '$lib/server/news/draft-file';
 
-const ADMIN_USER = 'admin';
-
+// F1-FIX-07 H09 (K5#28): the draft lives under the CURRENT tenant's folder on
+// the shared Nextcloud (news_posts.id is a per-tenant SERIAL), and S3#9: the
+// empty stub is uploaded only on a real 404 — see lib/server/news/draft-file.ts.
 async function ensureDraftFile(id: number): Promise<string> {
-  const nc = createNextcloudClient();
-  const folderPath = `/remote.php/dav/files/${ADMIN_USER}/news-posts/drafts`;
-  const filePath = `${folderPath}/${id}.odt`;
-
-  // Ensure the drafts folder exists
-  try {
-    await nc.mkcol(`/remote.php/dav/files/${ADMIN_USER}/news-posts`, ADMIN_USER);
-  } catch {
-    // Folder already exists — ignore
-  }
-  try {
-    await nc.mkcol(folderPath, ADMIN_USER);
-  } catch {
-    // Folder already exists — ignore
-  }
-
-  // Check if file exists by trying to get its ID; if it fails, create it
-  try {
-    await nc.getFileId(filePath, ADMIN_USER);
-  } catch {
-    // File doesn't exist — create empty ODT stub
-    const emptyOdt = await createEmptyOdt();
-    await nc.upload(
-      filePath,
-      ADMIN_USER,
-      emptyOdt,
-      'application/vnd.oasis.opendocument.text'
-    );
-  }
-
-  return filePath;
+  return ensureNewsDraft(createNextcloudClient(), getTenant().id, id, createEmptyOdt);
 }
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -52,7 +25,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
   }
 
   const id = Number(params.id);
-  if (isNaN(id)) throw error(400, 'Invalid ID');
+  if (!Number.isSafeInteger(id) || id <= 0) throw error(400, 'Invalid ID');
 
   const post = await getNewsPostById(id);
   if (!post) throw error(404, 'Not found');
@@ -81,12 +54,13 @@ export const actions: Actions = {
     }
 
     const id = Number(params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) throw error(400, 'Invalid ID');
     const post = await getNewsPostById(id);
     if (!post) throw error(404, 'Not found');
 
     // Fetch the .odt from Nextcloud and convert to HTML
     const nc = createNextcloudClient();
-    const filePath = `/remote.php/dav/files/${ADMIN_USER}/news-posts/drafts/${id}.odt`;
+    const filePath = newsDraftPath(getTenant().id, id);
     const response = await nc.download(filePath, ADMIN_USER);
     if (!response.ok) throw error(502, 'Could not fetch ODT from Nextcloud');
 
