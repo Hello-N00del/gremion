@@ -48,7 +48,10 @@
 # POOLED_CUSTOMER=1 (TASK-043's customer half, customer-provision-proof.sh
 # customer-*): render-env adds the calendar and vault module servers to the
 # state profiles, publishes the vendor mail server's submission port on
-# 127.0.0.1:587 and lets the state Keycloak reach mail.<PLATFORM_DOMAIN>:587
+# 127.0.0.1:587 and its management API on the host's 127.0.0.1:8086 (the only
+# STALWART_ADMIN_URL gremion-vendor-mail accepts), takes the six module
+# server credentials from gremion-init-secrets (TASK-043b F5), and lets the
+# state Keycloak reach mail.<PLATFORM_DOMAIN>:587
 # through host-gateway, trusting the scratch mail certificate. SCRATCH
 # DEVIATIONS (a scratch box has no public DNS, no ACME, no LE certificate): the
 # mail server carries a self-signed certificate for mail.<PLATFORM_DOMAIN>
@@ -243,6 +246,15 @@ phase_render_env() {
     pw_bnc="$(gen)"; sec_proxy="$(gen)"; sec_auth="$(gen)"; sec_push="$(gen)"
     local p_http p_https p_api p_it p_mailapi
     p_http="$(free_port)"; p_https="$(free_port)"; p_api="$(free_port)"; p_it="$(free_port)"; p_mailapi="$(free_port)"
+    # POOLED_CUSTOMER: the management API on the host's own 127.0.0.1:8086
+    # (infra/host/mail/docker-compose.yml, mail.env.tmpl). gremion-vendor-mail's
+    # principals.mjs refuses any other STALWART_ADMIN_URL (LOOPBACK_8086), so a
+    # random port failed `create`'s mail step: "STALWART_ADMIN_URL must be
+    # http://<loopback>:8086". Like :587, one customer proof per engine.
+    if [[ "${POOLED_CUSTOMER:-0}" == 1 ]]; then
+        ! (exec 3<>/dev/tcp/127.0.0.1/8086) 2>/dev/null || die "127.0.0.1:8086 is taken: the customer proof needs the vendor mail API there"
+        p_mailapi=8086
+    fi
     # TASK-043: gremion_platform's owner and the panel's reader, ONE value for
     # both colours (one role each); docker-compose.app.yml requires both.
     local pw_plat pw_panel
