@@ -9,8 +9,7 @@
 //    --enable is GATE_REFUSED with no database; a module Q20 left undecided
 //    is MODULE_VERSION_UNKNOWN.
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { LifecycleModule, ModuleServer } from '@gremion/tenant-store/lifecycle'
 import postgres, { type Sql } from 'postgres'
@@ -19,6 +18,7 @@ import {
   bootstrapPlatform,
   ensurePanelReader,
   isDuplicateDone,
+  loadModuleJsons,
   operatorAllowGate,
   pgAttestations,
   pgLedger,
@@ -55,14 +55,12 @@ function uuidv7(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-// The catalogue as loadCatalogue reads it (one entry per modules/<id> with a
-// module.json), read here directly: the package root of @gremion/module-
-// catalogue does not type-check under this package's stricter flags.
+// The catalogue as the tenant-provision CLI reads it (one entry per modules/<id>
+// with a module.json): the shared loadModuleJsons (R29-LOW-07 L5). It lives in
+// this package, not in @gremion/module-catalogue, whose package root does not
+// type-check under this package's stricter flags.
 const MODULES = resolve(REPO, 'modules')
-const catalogue: LifecycleModule[] = readdirSync(MODULES)
-  .sort()
-  .filter((id) => existsSync(join(MODULES, id, 'module.json')))
-  .map((id) => ({ id, dir: join(MODULES, id), moduleJson: JSON.parse(readFileSync(join(MODULES, id, 'module.json'), 'utf8')) as LifecycleModule['moduleJson'] }))
+const catalogue: LifecycleModule[] = loadModuleJsons(MODULES)
 
 /** Every in-tree module: 11 since R29-I24 (the five database-less ones load under provisional profiles). */
 const ALL_MODULES = catalogue.map((m) => m.id).sort()

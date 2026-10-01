@@ -29,7 +29,7 @@
 // one-time secrets); every log line goes to STDERR. EXIT: 0 ok, 1 a failure,
 // 2 usage or a precondition (a missing environment variable is always named).
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import postgres from 'postgres'
 import {
@@ -38,6 +38,7 @@ import {
   PANEL_READS,
   createPhaseA,
   createPhaseB,
+  loadModuleJsons,
   pgAttestations,
   pgLedger,
   pgModules,
@@ -152,10 +153,8 @@ function assertCreateEnv(catalogue: readonly LifecycleModule[], opts: { needEdge
 // ── the catalogue (modules/*/module.json, loadCatalogue's rule) ──────────────
 function loadModules(): LifecycleModule[] {
   if (!existsSync(MODULES_DIR)) throw new UsageError(`${MODULES_DIR} is absent: the image carries no module catalogue`)
-  return readdirSync(MODULES_DIR)
-    .sort()
-    .filter((id) => existsSync(join(MODULES_DIR, id, 'module.json')))
-    .map((id) => ({ id, dir: join(MODULES_DIR, id), moduleJson: JSON.parse(readFileSync(join(MODULES_DIR, id, 'module.json'), 'utf-8')) as LifecycleModule['moduleJson'] }))
+  // The one reader of the tree, shared with the provisioning tests (R29-LOW-07 L5).
+  return loadModuleJsons(MODULES_DIR)
 }
 
 // ── secrets ─────────────────────────────────────────────────────────────────
