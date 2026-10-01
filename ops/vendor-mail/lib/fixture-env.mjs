@@ -63,9 +63,11 @@ function renderOne(text, { colour, state } = {}) {
   body = body.replace(/CHANGE_ME_GEN_(hex32|alnum32)_([a-z0-9_]+)/g, (_, _k, g) => groupValue(g))
   body = body.replace(/CHANGE_ME_OPERATOR_([a-z0-9_]+)/g, (_, n) => operatorValue(n))
   // The pins layer is written by the release workflow and never committed; the
-  // fixture names its own empty stand-in, as the pooled-stack fixture does.
+  // fixture names its own empty stand-in, as the pooled-stack fixture does --
+  // for the state project's layer too (docker-compose.state-pins.yml since
+  // TASK-048b; the stand-in is the same empty file).
   body = body.replace(/^COMPOSE_FILE=(.*)$/m, (_, v) =>
-    `COMPOSE_FILE=${v.replace(/(^|:)docker-compose\.pins\.yml/, `$1${FIXTURE_REL}/docker-compose.pins.yml`)}`,
+    `COMPOSE_FILE=${v.replace(/(^|:)docker-compose\.(?:state-)?pins\.yml/, `$1${FIXTURE_REL}/docker-compose.pins.yml`)}`,
   )
   // Compose splits COMPOSE_FILE on the OS path separator (';' on Windows)
   // unless the env file names one: a ':'-joined list read on Windows is ONE

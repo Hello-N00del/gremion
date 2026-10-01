@@ -255,6 +255,31 @@ create() {
     [ ! -e "${GREMION_ROOT}/tenant-secrets/platform_client_control-panel" ]
 }
 
+# TASK-043b F5: init reads <ID>_PG_PASSWORD for every module server from
+# state.env. Proven against a state.env RENDERED from the shipped template by
+# gremion-init-secrets (the host's own path), never a hand-written fixture.
+@test "init passes its own credential check on a state.env rendered from the shipped template: all six <ID>_PG_PASSWORD keys exist (TASK-043b F5)" {
+    rm -f "${GREMION_ROOT}/etc/env/"*.env
+    run "${HOST_SRC}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack guardstack
+    [ "$status" -eq 0 ] || { echo "render: status=$status $output"; return 1; }
+    printf 'TENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" >> "${GREMION_ROOT}/etc/env/app-blue.env"
+    # init's own check first: it dies "<ID>_PG_PASSWORD is empty in state.env".
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"kernel and 6 module server credential file(s)"* ]] || { echo "$output"; return 1; }
+    local id up
+    for id in board calendar content finance newsletter vault; do
+        up="$(printf '%s' "$id" | tr '[:lower:]' '[:upper:]')"
+        grep -qE "^${up}_PG_PASSWORD=[A-Za-z0-9]{32}$" "${GREMION_ROOT}/etc/env/state.env" \
+            || { echo "state.env carries no generated ${up}_PG_PASSWORD"; return 1; }
+        grep -qx "${up}_PG_USER=${id}" "${GREMION_ROOT}/etc/env/state.env" \
+            || { echo "state.env carries no ${up}_PG_USER=${id}"; return 1; }
+        [ -s "${GREMION_ROOT}/etc/secrets/tenant-create/module_pg_admin_${id}" ] || { echo "no module_pg_admin_${id}"; return 1; }
+    done
+    # Six DISTINCT generated passwords: one server's credential never opens another.
+    [ "$(grep -E '^[A-Z]+_PG_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env" | cut -d= -f2 | sort -u | wc -l)" -eq 6 ]
+}
+
 @test "init fails loudly when the ops client secret never arrives (review C, r2)" {
     touch "${GREMION_ROOT}/no-ops-secret"
     run "$LAUNCHER" init
