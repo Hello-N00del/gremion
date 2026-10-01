@@ -36,6 +36,6 @@ describe('loadModuleJsons', () => {
 
   it('a malformed module.json throws (never silently dropped)', () => {
     mod('broken', '{ not json')
-    expect(() => loadModuleJsons(root)).toThrow()
+    expect(() => loadModuleJsons(root)).toThrow(SyntaxError)
   })
 })
