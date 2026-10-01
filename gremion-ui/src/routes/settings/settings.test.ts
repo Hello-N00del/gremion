@@ -108,6 +108,31 @@ describe('PATCH /api/settings', () => {
     expect(res.status).toBe(422)
   })
 
+  // F1-FIX-10-K / K2#3: the compliance form sends every key; an empty DPO e-mail
+  // (an optional field) must save, a malformed one must still be refused.
+  it('accepts the default compliance object with an empty DPO e-mail', async () => {
+    mockHasRole.mockReturnValue(true)
+    const { PATCH } = await import('../api/settings/+server')
+    const compliance = { dpo_name: '', dpo_email: '', controller_name: '', controller_address: '', purpose_description: '' }
+    const request = new Request('http://localhost', { method: 'PATCH', body: JSON.stringify({ compliance }) })
+    // @ts-expect-error partial mock
+    const res = await PATCH({ request, locals: makeLocals(true) })
+    expect(res.status).toBe(200)
+    expect(mockWriteConfig).toHaveBeenCalledWith({ compliance })
+  })
+
+  it('still refuses a malformed DPO e-mail', async () => {
+    mockHasRole.mockReturnValue(true)
+    const { PATCH } = await import('../api/settings/+server')
+    const request = new Request('http://localhost', {
+      method: 'PATCH',
+      body: JSON.stringify({ compliance: { dpo_email: 'nope' } }),
+    })
+    // @ts-expect-error partial mock
+    const res = await PATCH({ request, locals: makeLocals(true) })
+    expect(res.status).toBe(422)
+  })
+
   it('accepts valid module toggle', async () => {
     mockHasRole.mockReturnValue(true)
     mockWriteConfig.mockReturnValue({ ...baseConfig, modules: { ...baseConfig.modules, elections: false } })
