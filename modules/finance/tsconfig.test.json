@@ -28,7 +28,6 @@
     "test/**/*.integration.test.ts",
     "test/project.store.test.ts",
     "test/sub-org.store.test.ts",
-    "test/booking.store.test.ts",
-    "test/yearend-parity.test.ts"
+    "test/booking.store.test.ts"
   ]
 }
