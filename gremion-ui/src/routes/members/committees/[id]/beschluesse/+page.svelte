@@ -1,14 +1,13 @@
 <script lang="ts">
   import type { PageData } from './$types'
   import Pill from '$lib/components/pills/Pill.svelte'
-  import { Button } from '$lib/components/ui/button'
-  import { hasRole, Role } from '$lib/auth'
-  import { page } from '$app/stores'
 
   let { data }: { data: PageData } = $props()
 
-  const user = $derived($page.data.user)
-  const isAdmin = $derived(user && hasRole(user.roles, Role.CouncilAdmin))
+  // F1-FIX-10-K / K2#5: the "CSV Export" button is gone. It requested
+  // ?format=csv, which the API ignores (it answers JSON), so it saved JSON under
+  // a .csv name and hid every failure. It returns together with a real text/csv
+  // branch (escaping + formula-injection guard) in the API.
 
   const TYPE_LABELS: Record<string, string> = {
     beschluss: 'Beschluss',
@@ -20,24 +19,6 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <h2 class="text-xl font-semibold">Beschlussregister</h2>
-    {#if isAdmin}
-      <Button
-        variant="outline"
-        size="sm"
-        onclick={async () => {
-          const res = await fetch(`/api/committees/${data.committeeId}/beschluesse?format=csv`)
-          if (res.ok) {
-            const blob = await res.blob()
-            const a = document.createElement('a')
-            a.href = URL.createObjectURL(blob)
-            a.download = `beschluesse-${data.committeeId}.csv`
-            a.click()
-          }
-        }}
-      >
-        CSV Export
-      </Button>
-    {/if}
   </div>
 
   {#if data.entries.length === 0}
