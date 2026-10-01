@@ -32,6 +32,7 @@ function makeDeps(
 ): { deps: SchedulerDeps; calls: { due: string[]; drain: string[]; purge: string[] } } {
   const calls = { due: [] as string[], drain: [] as string[], purge: [] as string[] }
   const work: TickWork = {
+    resetStuck: async () => {},
     dispatchDue: async (t) => { calls.due.push(t.slug) },
     drainPublishOps: async (t) => { calls.drain.push(t.slug) },
     purgeTokens: async (t) => { calls.purge.push(t.slug) },
@@ -88,6 +89,18 @@ describe('runSchedulerTick — per-tenant work', () => {
     expect(calls.drain).toEqual(['alpha'])
   })
 
+  // F1-FIX-07 K5#6 / S4#8: resetStuckPublishing had no caller, so a post whose
+  // dispatch died mid-flight stayed 'sending' (unclaimable) forever.
+  it('resetStuck runs for every tenant, BEFORE dispatchDue', async () => {
+    const order: string[] = []
+    const { deps } = makeDeps([T1, T2], {
+      resetStuck: async (t) => { order.push(`reset:${t.slug}`) },
+      dispatchDue: async (t) => { order.push(`due:${t.slug}`) },
+    })
+    await runSchedulerTick(deps)
+    expect(order).toEqual(['reset:alpha', 'due:alpha', 'reset:beta', 'due:beta'])
+  })
+
   it('weekly purge runs on every PURGE_EVERY_TICKS-th tick (cadence)', async () => {
     // Verify that PURGE_EVERY_TICKS is 7*24*60 = 10080
     const { PURGE_EVERY_TICKS } = await import('../src/scheduler.ts')
@@ -100,16 +113,22 @@ describe('per-tenant single-flight', () => {
     let resolveAlpha: () => void = () => {}
     const gate = new Promise<void>((r) => { resolveAlpha = r })
     const dueCalls: string[] = []
+    let entered: () => void = () => {}
+    const inDispatch = new Promise<void>((r) => { entered = r })
     const deps: SchedulerDeps = {
       listTenants: async () => [T1],
       work: {
-        dispatchDue: async (t) => { dueCalls.push(t.slug); await gate },
+        resetStuck: async () => {},
+        dispatchDue: async (t) => { dueCalls.push(t.slug); entered(); await gate },
         drainPublishOps: async () => {},
         purgeTokens: async () => {},
       },
     }
-    // First tick: starts alpha and blocks inside dispatchDue.
+    // First tick: starts alpha and blocks inside dispatchDue. Wait until it is
+    // really there (resetStuck runs first, so this is no longer the first
+    // microtask) before starting the overlapping tick.
     const first = runSchedulerTick(deps)
+    await inDispatch
     // Second tick while the first is still running alpha → alpha is skipped.
     await runSchedulerTick(deps)
     expect(dueCalls).toEqual(['alpha']) // only the first tick ran alpha

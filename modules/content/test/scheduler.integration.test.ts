@@ -34,7 +34,11 @@ import {
   getPublication,
   updatePost,
 } from '../src/store/index.ts'
-import { dispatchDueChannels } from '../src/scheduler.ts'
+import {
+  dispatchDueChannels,
+  resetStuckDispatches,
+  runSchedulerTick,
+} from '../src/scheduler.ts'
 import { resolveInstagramCredentials } from '../src/instagram/credentials.ts'
 import type { ChannelTransport } from '../src/dispatch.ts'
 import type { KernelClient, Recipient } from '../src/kernel-client.ts'
@@ -342,5 +346,41 @@ describe('dispatchDueChannels — scheduled-path outbox co-commit (A1)', () => {
     expect(rows[0]!.event_type).toBe('channel.portal.sent')
     expect(rows[0]!.payload).toEqual({ postId, news_posts_id: pub!.external_ref })
     expect(rows[0]!.correlation_id).toBe(postId)
+  })
+})
+
+// ── F1-FIX-07 K5#6 / S4#8: a post stuck in 'sending' is reset by the tick ──────
+
+describe('scheduler tick resets posts stuck in sending (K5#6)', () => {
+  function tickDeps() {
+    return {
+      listTenants: async () => [TENANT],
+      work: {
+        resetStuck: (t: TenantRef) => resetStuckDispatches(t, sql),
+        dispatchDue: async () => {},
+        drainPublishOps: async () => {},
+        purgeTokens: async () => {},
+      },
+    }
+  }
+
+  it('a post in sending for longer than the window is flipped to failed (re-dispatchable)', async () => {
+    const postId = await makePost()
+    await sql`UPDATE content.posts SET status = 'sending', updated_at = now() - interval '45 minutes' WHERE id = ${postId}`
+
+    await runSchedulerTick(tickDeps())
+
+    const rows = await sql<{ status: string }[]>`SELECT status FROM content.posts WHERE id = ${postId}`
+    expect(rows[0]!.status).toBe('failed')
+  })
+
+  it('a post that only just entered sending is left alone', async () => {
+    const postId = await makePost()
+    await sql`UPDATE content.posts SET status = 'sending' WHERE id = ${postId}`
+
+    await runSchedulerTick(tickDeps())
+
+    const rows = await sql<{ status: string }[]>`SELECT status FROM content.posts WHERE id = ${postId}`
+    expect(rows[0]!.status).toBe('sending')
   })
 })

@@ -11,7 +11,7 @@ import { buildAdminRoutes } from './http/admin-routes.js'
 import { storeFor, listTenants, closeAllPools } from './tenant-store.js'
 import { createShutdown, resolveShutdownTimeoutMs } from './shutdown.js'
 import { createRelaySupervisor, type RelaySupervisor } from './relay-supervisor.js'
-import { startScheduler, dispatchDueChannels } from './scheduler.js'
+import { startScheduler, dispatchDueChannels, resetStuckDispatches } from './scheduler.js'
 import { purgeSendTokensOlderThan90Days } from './store/index.js'
 import { resolveInstagramCredentials } from './instagram/credentials.js'
 import { createKernelClient, type KernelClient } from './kernel-client.js'
@@ -185,10 +185,15 @@ async function main(): Promise<void> {
 
   // ── Scheduler ────────────────────────────────────────────────────────────────
   // Gated on SCHEDULER_ENABLED (default true).
-  // Per-tenant work: dispatchDue → drainPublishOps → purgeTokens.
+  // Per-tenant work: resetStuck → dispatchDue → drainPublishOps → purgeTokens.
   const schedulerHandle = startScheduler({
     listTenants: () => listTenants(),
     work: {
+      async resetStuck(tenant: TenantRef): Promise<void> {
+        // K5#6: a whole-post dispatch that died mid-flight no longer pins its
+        // post in 'sending' forever.
+        await resetStuckDispatches(tenant, await storeFor(tenant))
+      },
       async dispatchDue(tenant: TenantRef): Promise<void> {
         const sql = await storeFor(tenant)
         const { randomUUID } = await import('node:crypto')

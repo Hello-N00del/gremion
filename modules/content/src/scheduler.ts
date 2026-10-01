@@ -6,12 +6,16 @@
 // publish pipeline:
 //
 // Per-tenant work, in order:
+//   0. resetStuck         — F1-FIX-07 K5#6 / S4#8: a whole-post dispatch that
+//                           died mid-flight left its post 'sending' (which
+//                           claimPostForPublish never re-claims) forever. Posts
+//                           'sending' for STUCK_PUBLISHING_MINUTES go to
+//                           'failed', so a re-dispatch can claim them again
+//                           (per-recipient deliveries keep it double-send-safe).
 //   1. dispatchDue        — publish scheduled posts whose scheduled_at <= now().
 //   2. drainPublishOps    — Instagram L3 reconcile loop.
 //   3. purgeTokens        — WEEKLY only (withPurge): delete send tokens for
 //                           content sent >90d ago.
-//
-// No resetStuck equivalent — content publish flow is simpler.
 //
 // Tick cadence: 60s (TICK_INTERVAL_MS). The weekly purge runs on the Nth tick
 // (PURGE_EVERY_TICKS) rather than a second timer, keeping one interval.
@@ -33,12 +37,19 @@ import type { KernelClient } from './kernel-client.js'
 import type { ChannelTransport } from './dispatch.js'
 import type { TracerPort } from '@gremion/ports/tracer'
 import { publishChannel } from './publish-channel.js'
-import { listDueScheduledChannels } from './store/index.js'
+import { listDueScheduledChannels, resetStuckPublishing } from './store/index.js'
 
 // ── constants ──────────────────────────────────────────────────────────────────
 
 /** Tick cadence — one tick per minute. */
 export const TICK_INTERVAL_MS = 60_000
+
+/**
+ * A post 'sending' for longer than this is treated as a dead dispatch (30 min,
+ * as in the newsletter leaf). Twice the 15-minute stale-claim window, so a live
+ * dispatch's per-recipient claims are already stale-takeable when it is reset.
+ */
+export const STUCK_PUBLISHING_MINUTES = 30
 
 /** Run the weekly token purge every Nth tick (60s × 10080 = 7 days). */
 export const PURGE_EVERY_TICKS = 7 * 24 * 60
@@ -50,6 +61,8 @@ const LABEL = 'content-scheduler'
 
 /** Per-tenant unit-of-work callbacks. Each receives the resolved tenant. */
 export interface TickWork {
+  /** Reset posts stuck in 'sending' (dead dispatch) to 'failed' — runs first. */
+  resetStuck(tenant: TenantRef): Promise<void>
   /** Dispatch every due 'scheduled' content post for this tenant. */
   dispatchDue(tenant: TenantRef): Promise<void>
   /** Instagram L3 reconcile loop: drain pending publish ops. */
@@ -150,6 +163,14 @@ async function runTenantTick(
   tenant: TenantRef,
   withPurge: boolean,
 ): Promise<void> {
+  // 0. Un-stick dead whole-post dispatches (K5#6). Its failure is logged and
+  //    never blocks this tenant's due publishes.
+  await work.resetStuck(tenant).catch((err: unknown) => {
+    console.error(
+      `[${LABEL}] tenant ${tenant.slug} stuck-publish reset failed:`,
+      err instanceof Error ? err.message : String(err),
+    )
+  })
   // 1. Dispatch due scheduled content posts.
   await work.dispatchDue(tenant)
   // 2. Instagram L3 reconcile loop.
@@ -158,6 +179,23 @@ async function runTenantTick(
   if (withPurge) {
     await work.purgeTokens(tenant)
   }
+}
+
+// ── stuck whole-post dispatch reset (K5#6 / S4#8) ──────────────────────────────
+
+/**
+ * Flip this tenant's posts stuck in 'sending' for STUCK_PUBLISHING_MINUTES to
+ * 'failed' (the production TickWork.resetStuck). Logs how many were reset.
+ */
+export async function resetStuckDispatches(tenant: TenantRef, sql: Sql): Promise<number> {
+  const n = await resetStuckPublishing(sql, STUCK_PUBLISHING_MINUTES)
+  if (n > 0) {
+    console.warn(
+      `[${LABEL}] tenant ${tenant.slug}: ${n} post(s) stuck in 'sending' for ` +
+        `>${STUCK_PUBLISHING_MINUTES} min reset to 'failed' (re-dispatchable)`,
+    )
+  }
+  return n
 }
 
 // ── due-channel dispatch (A1: key off post_channels, not posts.status) ──────────
