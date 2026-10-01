@@ -207,8 +207,10 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
       ])
       // On-screen parity (R29-FIN-SIGN-K): the budget detail view (getBudgetPlan) shows the
       // SAME Ist (booked) and Diff (remaining) for the seeded expense Titel, in cents.
-      const detail = await (await fetch(`${base}/api/v1/budget-plans/${planId}`, { headers: scopeHeaders(AUDITOR) })).json()
-      const items = (detail.groups as Array<{ items: Array<{ titel_nr: string; value: number; booked: number; remaining: number }> }>)
+      type DetailItem = { titel_nr: string; value: number; booked: number; remaining: number }
+      const detail: { groups: Array<{ items: DetailItem[] }> } =
+        await (await fetch(`${base}/api/v1/budget-plans/${planId}`, { headers: scopeHeaders(AUDITOR) })).json()
+      const items = detail.groups
         .flatMap((g) => g.items)
         .map((i) => [i.titel_nr, i.value, i.booked, i.remaining])
       expect(items).toEqual([['1.1', 12000, 11000, 1000], ['1.2', 5000, 0, 5000]])
