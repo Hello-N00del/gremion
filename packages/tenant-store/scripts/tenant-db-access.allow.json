@@ -329,14 +329,6 @@
       "reason": "test of the publishing module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
     },
     {
-      "path": "modules/publishing/test/deploy-drift.test.ts",
-      "calls": 1,
-      "imports": 0,
-      "adoptedBy": "TASK-038",
-      "since": "2026-09-27",
-      "reason": "not a connection: an assertion message naming the newsletter-postgres container ('... postgres (pg_isready)') matches the call pattern; coupled test in modules/COUPLED-TESTS.json, retires with the compose/k8s drift check it reads (TASK-038); frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
-    },
-    {
       "path": "modules/publishing/test/dispatch.integration.test.ts",
       "calls": 1,
       "imports": 1,
