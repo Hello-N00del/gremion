@@ -71,5 +71,18 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
     userId: user.id, field: 'org_unit.member.add',
     oldValue: null, newValue: `${params.id}:${userKeycloakId}:${report.overall}`
   })
+  // K2#7: the member row exists, but a subsystem (Keycloak group, Matrix room, ...)
+  // failed to follow. That is not a success; answer 207 success:false like the
+  // committee DELETE does, with the report so the UI can say what is missing.
+  if (report.overall !== 'ok') {
+    return json(
+      {
+        success: false,
+        error: 'Mitglied angelegt, aber die Bereitstellung in einzelnen Diensten ist fehlgeschlagen. Bitte die Bereitstellung des Gremiums erneut anstoßen.',
+        data: { report },
+      },
+      { status: 207 },
+    )
+  }
   return json({ success: true, data: { report } }, { status: 201 })
 }

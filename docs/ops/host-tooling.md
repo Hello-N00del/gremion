@@ -312,6 +312,29 @@ and none of them can be created by the tooling:
 
 Prove the channel with the `noop` of section 6 before the first real dispatch.
 
+### The Settings "Backup jetzt erstellen" button (F1-FIX-10-K, D-4)
+
+The button in Settings -> Backups is wired to the same allow-list: the app's
+settings API opens hostd's unix socket and sends the verb `backup` (no new verb,
+no new transport). The socket path comes from `GREMION_HOSTD_SOCKET` (default
+`/run/gremion/hostd.sock`); `GREMION_HOSTD_BACKUP_TIMEOUT_MS` bounds one run
+(default 6 h).
+
+- The API answers `started` only after hostd accepted the connection and the
+  request line was sent. It records the run (`started`, then `finished` or
+  `failed`, with times) under the tenant's `backup/runs/` directory.
+- A run is `finished` only when hostd answers `EXIT 0` and, when present, the
+  final `BACKUP-RESULT {"state":"finished","startedAt":ISO,"finishedAt":ISO,"exitCode":0}`
+  line that `gremion-backup` prints before hostd's `EXIT` line says so too. No
+  `EXIT` line, a dropped connection or a timeout is `failed`.
+- `config.backups.last_backup_at` is stamped from a finished run only.
+- Socket missing or refusing connections: the button is disabled and shows why.
+  The app container must have the socket mounted for the button to work.
+- A `started` record left by a dead app process is shown as failed (interrupted);
+  the host's own `runtime/last-backup.json` remains the record of what really ran.
+
+Trigger contract shared with F1-FIX-09: R29-F1-WAVE2/addendum.md ("D-4 trigger contract").
+
 ## 6. The noop dry-run
 
 Before the first real deploy, prove the whole channel with the one command
