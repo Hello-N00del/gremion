@@ -10,7 +10,9 @@
 //   markFailed(sql, postId, emailLower, errorMessage) → void
 //   releaseClaim(sql, postId, emailLower) → void   (undo a fresh claim)
 //
-// Stale-claim takeover: STALE_CLAIM_MINUTES = 15 (same as newsletter).
+// Takeover: a stale 'claimed' row (STALE_CLAIM_MINUTES = 15, same as newsletter)
+// and any 'failed' row are re-claimed atomically (F1-FIX-07 H07), so a recipient
+// whose send threw is retried on the next publish and mailed at most once more.
 
 import type { Sql } from '../tenant-store.js'
 
@@ -48,15 +50,25 @@ export async function claimRecipient(
     return 'fresh'
   }
 
-  // Step 2: try stale-takeover (atomic UPDATE).
+  // Step 2: atomic takeover (one UPDATE, so exactly one concurrent caller wins):
+  //  - a STALE 'claimed' row (its worker died mid-send; bounded at-least-once), or
+  //  - a 'failed' row (F1-FIX-07 H07): the transport threw, so this recipient was
+  //    not mailed on that pass. Without this branch a transient SMTP error drops
+  //    the recipient for good. The row goes back to 'claimed' with the error
+  //    cleared, so a concurrent second claimer sees 'in-flight', never 'fresh'.
   const cutoff = new Date(Date.now() - STALE_CLAIM_MINUTES * 60 * 1000).toISOString()
   const taken = await sql<{ id: string }[]>`
     UPDATE content.deliveries
-    SET claimed_at = now()
+    SET status        = 'claimed',
+        claimed_at    = now(),
+        failed_at     = NULL,
+        error_message = NULL
     WHERE post_id = ${postId}
       AND email = ${emailLower}
-      AND status = 'claimed'
-      AND claimed_at < ${cutoff}::timestamptz
+      AND (
+        status = 'failed'
+        OR (status = 'claimed' AND claimed_at < ${cutoff}::timestamptz)
+      )
     RETURNING id
   `
   if (taken.length > 0) {

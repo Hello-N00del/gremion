@@ -251,7 +251,7 @@ describe('dispatch email — recipient assembly', () => {
 
 // ── email channel: per-recipient failure ────────────────────────────────────
 describe('dispatch email — per-recipient SMTP failure', () => {
-  it('sends good ones, marks failed status, claims bad one (bounded at-least-once)', async () => {
+  it('sends good ones, marks failed status, records the bad one as failed (re-claimable)', async () => {
     const { postId } = await makePostWithEmailList(['ok@x.com', 'bad@x.com'])
     const emailTransport = makeFakeEmailTransport({ failFor: new Set(['bad@x.com']) })
 
@@ -269,13 +269,34 @@ describe('dispatch email — per-recipient SMTP failure', () => {
     const dels = await sql<{ email: string; status: string }[]>`
       SELECT email, status FROM content.deliveries WHERE post_id = ${postId} ORDER BY email`
     expect(dels.find((d) => d.email === 'ok@x.com')!.status).toBe('sent')
-    expect(dels.find((d) => d.email === 'bad@x.com')!.status).toBe('claimed')
+    expect(dels.find((d) => d.email === 'bad@x.com')!.status).toBe('failed')
 
     const post = await getPost(sql, postId)
     expect(post!.status).toBe('failed')
 
     const rows = await outboxRows()
     expect(rows.map((r) => r.event_type)).toContain('publish.failed')
+  })
+
+  // F1-FIX-07 H07: a re-dispatch right after a transient failure re-sends the
+  // failed recipient exactly once and never the delivered one.
+  it('an immediate re-dispatch delivers the failed recipient once and re-sends nobody else', async () => {
+    const { postId } = await makePostWithEmailList(['ok@x.com', 'bad@x.com'])
+    const failing = makeFakeEmailTransport({ failFor: new Set(['bad@x.com']) })
+    await expect(
+      dispatch(DISPATCH_TENANT, postId, ACTOR, {
+        sql, kernel: makeFakeKernel(), channels: new Map([['email', failing]]), origin: 'https://o',
+      }),
+    ).rejects.toThrow()
+
+    const healthy = makeFakeEmailTransport()
+    await dispatch(DISPATCH_TENANT, postId, ACTOR, {
+      sql, kernel: makeFakeKernel(), channels: new Map([['email', healthy]]), origin: 'https://o',
+    })
+
+    expect(healthy.countFor('bad@x.com')).toBe(1)
+    expect(healthy.countFor('ok@x.com')).toBe(0)
+    expect((await getPost(sql, postId))!.status).toBe('sent')
   })
 })
 

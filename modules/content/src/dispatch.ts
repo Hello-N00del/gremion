@@ -39,6 +39,7 @@ import {
   addSendToken,
   claimRecipient,
   markSent,
+  markFailed,
   createPublication,
   createPublishOp,
 } from './store/index.js'
@@ -265,13 +266,15 @@ async function dispatchEmail(
       await markSent(sql, postId, email, String(info.id))
       delivered += 1
     } catch (err) {
-      // Leave the claim in place (bounded at-least-once — mirrors newsletter pattern).
+      // F1-FIX-07 H07: mark the row 'failed' (not a lingering 'claimed') so the
+      // next dispatch re-claims it at once. A lingering claim read 'in-flight'
+      // for 15 min, so a retry inside that window skipped the recipient and
+      // still flipped the post to 'sent'.
+      const message = err instanceof Error ? err.message : String(err)
+      await markFailed(sql, postId, email, message)
       failed += 1
       lastError = err
-      console.error(
-        `[dispatch] email send to ${email} (post ${postId}) failed:`,
-        err instanceof Error ? err.message : String(err),
-      )
+      console.error(`[dispatch] email send to ${email} (post ${postId}) failed:`, message)
     }
   }
 

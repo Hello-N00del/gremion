@@ -262,8 +262,9 @@ async function publishEmail(
         smtpUnconfigured = true
         break
       }
-      // Per-recipient send failure: isolate it (bounded at-least-once via the
-      // 15-min stale-claim takeover) and keep sending the others.
+      // Per-recipient send failure: isolate it and keep sending the others. The
+      // 'failed' row is re-claimed by the next publish (claimRecipient takes
+      // over failed rows, F1-FIX-07 H07), so the recipient is retried, not lost.
       const message = err instanceof Error ? err.message : String(err)
       await markFailed(sql, postId, emailLower, message)
       failedCount += 1
@@ -314,6 +315,23 @@ async function publishEmail(
         recipientCount: 0,
         warnings: failedCount > 0 ? [...warnings, 'all sends failed'] : warnings,
         detail: 'all sends failed',
+      },
+    }
+  }
+
+  // PARTIAL (F1-FIX-07 H07): some recipients were delivered, some sends threw.
+  // The channel must NOT read 'sent' while a recipient is still un-mailed — the
+  // operator re-publishes, and the failed rows are re-claimed (and only they are
+  // sent again). No channel.email.sent event: the channel is not finished yet.
+  if (failedCount > 0) {
+    await setChannelStatus(sql, postId, 'email', 'failed')
+    return {
+      result: {
+        channel: 'email',
+        status: 'failed',
+        recipientCount: sentCount,
+        warnings: [...warnings, `${failedCount} recipient(s) not delivered — publish again to retry them`],
+        detail: `${failedCount} send(s) failed`,
       },
     }
   }

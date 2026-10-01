@@ -400,6 +400,36 @@ describe('deliveries', () => {
     const result = await claimRecipient(sql, p.id, 'stale@b.de')
     expect(result).toBe('fresh')
   })
+
+  // F1-FIX-07 H07 (K5#0): a 'failed' row means the transport threw and nothing
+  // was handed to SMTP for this recipient on that pass. It must be re-claimable,
+  // or a transient SMTP error drops that recipient for good.
+  it('a failed row is taken over as fresh, back in claimed state with the error cleared', async () => {
+    const p = await mkPost()
+    await claimRecipient(sql, p.id, 'retry@b.de')
+    await markFailed(sql, p.id, 'retry@b.de', 'SMTP 451 try again later')
+
+    expect(await claimRecipient(sql, p.id, 'retry@b.de')).toBe('fresh')
+
+    const rows = await sql<{ status: string; error_message: string | null; failed_at: Date | null }[]>`
+      SELECT status, error_message, failed_at FROM content.deliveries
+      WHERE post_id = ${p.id} AND email = ${'retry@b.de'}
+    `
+    expect(rows[0]).toMatchObject({ status: 'claimed', error_message: null, failed_at: null })
+  })
+
+  it('a failed row is taken over by exactly one of two concurrent claimers (no double send)', async () => {
+    const p = await mkPost()
+    await claimRecipient(sql, p.id, 'race@b.de')
+    await markFailed(sql, p.id, 'race@b.de', 'timeout')
+
+    const results = await Promise.all([
+      claimRecipient(sql, p.id, 'race@b.de'),
+      claimRecipient(sql, p.id, 'race@b.de'),
+    ])
+    expect(results.filter((r) => r === 'fresh')).toHaveLength(1)
+    expect(results.filter((r) => r === 'in-flight')).toHaveLength(1)
+  })
 })
 
 // ── unsubscribes ──────────────────────────────────────────────────────────────

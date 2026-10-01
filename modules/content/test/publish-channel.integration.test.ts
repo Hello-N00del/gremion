@@ -263,6 +263,72 @@ describe('publishChannel — email', () => {
   })
 })
 
+// ── F1-FIX-07 H07 (K5#0): a transient per-recipient failure is retried ────────────
+// 3 recipients, the send to #2 fails ONCE. The first publish must not report the
+// channel 'sent' (failedCount > 0); a re-publish delivers #2 exactly once and
+// never re-sends #1 or #3.
+
+describe('publishChannel — email transient failure is retried exactly once (H07)', () => {
+  function makeFailOnceTransport(failOnce: string) {
+    const sent: string[] = []
+    let failed = false
+    let seq = 0
+    return {
+      sent,
+      countFor: (email: string) => sent.filter((t) => t === email).length,
+      async send(msg: { to?: string }): Promise<{ id: string }> {
+        if (msg.to === failOnce && !failed) {
+          failed = true
+          throw new Error('SMTP 451 4.7.1 try again later')
+        }
+        sent.push(msg.to ?? '')
+        seq += 1
+        return { id: `<retry-${seq}@test>` }
+      },
+    }
+  }
+
+  it('first pass reports failed (not sent); the republish delivers #2 exactly once', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['one@x.com', 'two@x.com', 'three@x.com'])
+    const transport = makeFailOnceTransport('two@x.com')
+
+    const first = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    expect(first.status).toBe('failed')
+    expect(first.recipientCount).toBe(2)
+    expect(first.warnings.join(' ')).toMatch(/two@x\.com/)
+    expect((await getChannelRow(sql, postId, 'email'))!.status).not.toBe('sent')
+    // A partial pass invents no channel.email.sent event.
+    expect(await outboxRows()).toHaveLength(0)
+
+    const second = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    expect(second.status).toBe('sent')
+    expect(transport.countFor('one@x.com')).toBe(1)
+    expect(transport.countFor('two@x.com')).toBe(1)
+    expect(transport.countFor('three@x.com')).toBe(1)
+    expect((await getChannelRow(sql, postId, 'email'))!.status).toBe('sent')
+
+    const dels = await sql<{ email: string; status: string }[]>`
+      SELECT email, status FROM content.deliveries WHERE post_id = ${postId} ORDER BY email`
+    expect(dels.map((d) => d.status)).toEqual(['sent', 'sent', 'sent'])
+  })
+
+  it('a third publish after success re-sends nobody', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['one@x.com', 'two@x.com', 'three@x.com'])
+    const transport = makeFailOnceTransport('two@x.com')
+
+    await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+    const third = await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+
+    expect(third.status).toBe('sent')
+    expect(transport.sent).toHaveLength(3)
+  })
+})
+
 // ── portal channel ────────────────────────────────────────────────────────────
 
 describe('publishChannel — portal', () => {
