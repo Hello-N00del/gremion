@@ -6,7 +6,8 @@
 // defaulted but never read by any kernel governance read surface, so every
 // signed-in user -- Guests included -- read every committee's drafts,
 // attendance, resolutions and rosters. Ported from the product's reference
-// implementation (StuRaOS gremion-ui governance/visibility.ts, F1-FIX-04-S).
+// implementation (the product repo's gremion-ui governance/visibility.ts,
+// F1-FIX-04-S).
 //
 // Operator decision D-3 (R29-I16, binding): "NOTHING UNTIL PUBLISHED".
 //   - CouncilAdmin (and ITAdmin, via the role hierarchy) sees everything.
