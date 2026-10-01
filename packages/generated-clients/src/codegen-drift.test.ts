@@ -50,7 +50,8 @@ describe('checkCodegenDrift — scratch fixtures', () => {
     const source = generateClientSource(dir, spec)
     writeFileSync(join(dir, spec.outputFile), source, 'utf8')
     expect(checkCodegenDrift(dir, [spec])).toEqual([])
-  })
+    // 60 s: runs the real codegen twice; took 6-11 s under whole-tree gate load, over the 5 s default (R29-KHYG-K).
+  }, 60_000)
 
   it('names a hand edit (output present, does not match current codegen)', () => {
     const source = generateClientSource(dir, spec)

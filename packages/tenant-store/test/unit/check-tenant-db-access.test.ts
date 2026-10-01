@@ -41,7 +41,8 @@ describe('check-tenant-db-access (TRD-426)', () => {
     expect(r.stderr).toBe('')
     expect(r.status).toBe(0)
     expect(r.stdout).toMatch(/OK — \d{3,} file\(s\) scanned/)
-  })
+    // 60 s: spawns a scan of the whole tree; took 6-11 s under whole-tree gate load, over the 5 s default (R29-KHYG-K).
+  }, 60_000)
 
   it('RED fixture: the seeded postgres(url) in services/x.ts fails, naming the file (CLI exit 1)', () => {
     const r = spawnSync(process.execPath, [SCRIPT, '--root', FIXTURE, '--allow-list', FIXTURE_ALLOW], { encoding: 'utf8' })
