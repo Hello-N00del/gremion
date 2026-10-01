@@ -6,8 +6,9 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import {
   getOrgUnit, updateOrgUnit, deleteOrgUnit, hasMembers, hasElections, hasProtocols,
-  listOrgUnitMembers, getChildOrgUnits
+  listOrgUnitMembers, getChildOrgUnits, isMemberOf
 } from '$lib/server/governance/org-units-db'
+import { canSeeOrgUnit, seesAllGovernance } from '$lib/server/governance/visibility'
 import { listRoles } from '$lib/server/governance/governance-db'
 import { deprovisionOrgUnit } from '$lib/server/governance/provisioning/orchestrator'
 import { writeAuditEntry } from '$lib/server/audit-db'
@@ -26,6 +27,16 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   }
   const unit = await getOrgUnit(params.id)
   if (!unit) return json({ success: false, error: 'Not found' }, { status: 404 })
+  // R29-F104-KTWIN (kernel twin of F1-FIX-04 / S3#33, operator decision D-3):
+  // the detail carries the unit's roster and role holders, so it follows the
+  // same rule and the same 404 as the sibling members, roles and history
+  // endpoints. The check runs before any roster read, and a hidden unit answers
+  // like a missing one. The `children` list is unit LISTING (names only), which
+  // stays as it is until the operator decides whether D-3 covers the org chart.
+  const isUnitMember = seesAllGovernance(user) ? false : await isMemberOf(params.id, user.id)
+  if (!canSeeOrgUnit(user, unit, isUnitMember)) {
+    return json({ success: false, error: 'Not found' }, { status: 404 })
+  }
   const [members, roles, children] = await Promise.all([
     listOrgUnitMembers(params.id), listRoles(params.id), getChildOrgUnits(params.id)
   ])

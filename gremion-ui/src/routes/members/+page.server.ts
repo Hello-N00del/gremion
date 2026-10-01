@@ -11,6 +11,9 @@ export const load: PageServerLoad = async ({ locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   const isAdmin = !!user && (hasRole(user.roles, Role.CouncilAdmin) || hasRole(user.roles, Role.ITAdmin))
-  const members = await listMembers({ adminView: isAdmin })
+  // R29-F104-KTWIN (D-3): the basic view hides memberships of committee_only
+  // units the viewer is not in.
+  const viewer = user ? { id: user.id, roles: user.roles ?? [] } : null
+  const members = await listMembers({ adminView: isAdmin, viewer })
   return { members, isAdmin }
 }

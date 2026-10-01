@@ -11,13 +11,22 @@ interface RosterAttendance {
   displayName: string
 }
 
-export const load: PageServerLoad = async ({ params, fetch, locals }) => {
+export const load: PageServerLoad = async ({ params, fetch, locals, parent }) => {
   const user = locals.user
   if (!user) throw error(401, 'Unauthenticated')
+  // R29-F104-KTWIN (D-3): the committee layout holds the visibility gate for the
+  // URL unit. Await it BEFORE any read: on a __data.json request that skips the
+  // layout, only parent() makes its 404 abort this load before the roster read.
+  await parent()
 
   const res = await fetch(`/api/protocols/${params.protocolId}`)
   if (!res.ok) throw error(res.status, 'Protokoll nicht gefunden')
   const { protocol, attendance, resolutions, actionItems } = await res.json()
+  // R29-F104-KTWIN (D-3): the roster below is read by the URL's committee id,
+  // so the protocol must belong to that committee. Otherwise a readable protocol
+  // of one unit would carry another unit's roster (the layout gate judges the
+  // URL unit, the /api/protocols/[id] gate judges the protocol's).
+  if (protocol?.committee_id !== params.id) throw error(404, 'Protokoll nicht gefunden')
 
   // INV-5 attendance capture: merge the committee ROSTER (org_unit_members) with
   // whatever attendance has been recorded so far, so every member appears as a

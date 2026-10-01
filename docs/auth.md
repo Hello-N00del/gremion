@@ -417,11 +417,15 @@ reaches it (`PAGE_ACCESS` gates the segment at `Role.Member`). What the page doe
 instead is gate the *admin view* server-side in its `load`
 ([`gremion-ui/src/routes/members/+page.server.ts`](../gremion-ui/src/routes/members/+page.server.ts)):
 it computes an `isAdmin` flag by **role** and passes it to the loader, so admins
-get the full list while basic members get the narrowed one.
+get the full list while basic members get the narrowed one. The basic view also
+passes the viewer, so memberships of `committee_only` units the viewer is not in
+are dropped (operator decision D-3; the rule lives in
+`lib/server/governance/visibility.ts`).
 
 ```ts
 const isAdmin = !!user && (hasRole(user.roles, Role.CouncilAdmin) || hasRole(user.roles, Role.ITAdmin))
-const members = await listMembers({ adminView: isAdmin })
+const viewer = user ? { id: user.id, roles: user.roles ?? [] } : null
+const members = await listMembers({ adminView: isAdmin, viewer })
 return { members, isAdmin }
 ```
 

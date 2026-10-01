@@ -6,6 +6,10 @@ import {
   listChallengesForBeschluesse,
   type BeschlussChallengeRow,
 } from '$lib/server/governance/protocols-db'
+import {
+  filterVisiblePublished,
+  visiblePublishedWithoutMembership,
+} from '$lib/server/governance/visibility'
 
 // The Beschlussbuch aggregates passed resolutions from published protocols
 // (see protocols-db.listBeschluesse). DB unavailability degrades to an empty
@@ -26,6 +30,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
   const isAdmin = !!user && hasRole(user.roles, Role.CouncilAdmin)
+  const viewer = user ? { id: user.id, roles: user.roles ?? [] } : null
 
   // #439: both loads degrade to an empty list so the page still renders, but a
   // silent `.catch(() => [])` made a genuine query fault indistinguishable from
@@ -36,10 +41,20 @@ export const load: PageServerLoad = async ({ locals }) => {
   // loaded" instead of rendering the empty state as if there were nothing
   // (R28 review: a log line alone never reaches the admin looking at the page).
   let beschluesseUnavailable = false
-  const beschluesse = await listBeschluesse().catch((err) => {
+  const rows = await listBeschluesse().catch((err) => {
     console.error('[beschluesse] listBeschluesse failed, degrading to empty:', summarize(err))
     beschluesseUnavailable = true
     return []
+  })
+  // R29-F104-KTWIN (kernel twin of F1-FIX-04 / S3#39, operator decision D-3):
+  // the page is Guest-reachable, so the rows go through the ONE visibility rule
+  // (governance/visibility.ts): a Guest and a Member see the all_members units'
+  // resolutions, a Member also their own units', a CouncilAdmin everything. A
+  // failed membership lookup fails CLOSED (only the rows that need no
+  // membership stay) and is logged.
+  const beschluesse = await filterVisiblePublished(viewer, rows).catch((err) => {
+    console.error('[beschluesse] membership lookup failed, showing only rows that need no membership:', summarize(err))
+    return visiblePublishedWithoutMembership(viewer, rows)
   })
   let challengesUnavailable = false
   const challenges: readonly BeschlussChallengeRow[] = isAdmin
