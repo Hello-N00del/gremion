@@ -760,7 +760,17 @@ phase_customer_reconcile() {
     else tail -n 20 "$OUT/ledger/reconcile-3.log" >&2; bad "customer-reconcile: --apply did not repair"; fi
     # Against the laid-out root, as principal_count() runs the host tools: without
     # GREMION_ROOT it read /opt/gremion/etc/env/mail.env ("mail env file not found").
-    if MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
+    # Git Bash ONLY: the tool's `mktemp -d` work directory is an MSYS /tmp path,
+    # which a native jq.exe cannot open and Docker Desktop mounts as an EMPTY VM
+    # directory (measured: "Could not open file /tmp/tmp.X/principals.json",
+    # node ENOENT). TMPDIR in host form (C:/...) under ${OUT} serves both; the
+    # tool's own trap removes the directory. A Linux host never takes this path.
+    local -a tmpenv=()
+    if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+        mkdir -p "$OUT/tmp"; chmod 700 "$OUT/tmp" 2>/dev/null || true
+        tmpenv=(TMPDIR="$(host_path "$OUT/tmp")")
+    fi
+    if env ${tmpenv[@]+"${tmpenv[@]}"} MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
         bash "$ROOT/infra/host/bin/gremion-vendor-mail" check-principals --host --no-allowances > "$OUT/ledger/check-principals.log" 2>&1; then
         ok "customer-reconcile: check-principals --no-allowances is green over two customers (Q14)"
     else bad "customer-reconcile: check-principals failed"; fi
