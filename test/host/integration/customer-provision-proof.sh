@@ -782,6 +782,10 @@ phase_customer_admins() {
     local dom host realm_url port tiss disc role krole addr uid out DASHBOARD_TITLE
     local -a tls=()
     # read from the tested source, so a renamed dashboard cannot pass on a stale literal
+    # A fresh ${OUT} (no panel phase before it) has no secrets directory:
+    # imap_fetch's `> $OUT/secrets/admin-<role>.eml` failed on every try
+    # (measured: 40 x "No such file or directory"), read as "no mail arrived".
+    mkdir -p "$OUT/secrets"; chmod 700 "$OUT/secrets" 2>/dev/null || true
     DASHBOARD_TITLE="$(sed -n 's/.*<PageTitle title="\([^"]*\)".*/\1/p' "$ROOT/gremion-ui/src/routes/+page.svelte" | head -n1)"
     [[ -n "$DASHBOARD_TITLE" ]] || die "customer-admins: no PageTitle in gremion-ui/src/routes/+page.svelte"
     dom="$(penv PLATFORM_DOMAIN)"; host="$(host_of "$X")"; realm_url="https://${host}/auth/realms/${X}"
