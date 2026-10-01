@@ -350,7 +350,7 @@
     {
       "path": "modules/publishing/test/deploy-drift.test.ts",
       "reason": "R29-KHYG2-K: removed, the compose-vs-k8s drift guard compared the StuRa docker-compose.yml newsletter-service/nats services with k8s/base/{nats,newsletter}; the kernel carries neither the newsletter-service compose service nor those k8s bases (11 ENOENT failures, `vitest run` for the package could not pass; StuRaOS keeps its copy). The in-tree newsletter image/deploy wiring is TASK-038/TASK-198's, which re-adds a drift guard against what it creates (modules/COUPLED-TESTS.json entry removed with it)",
-      "owner": "TASK-038/TASK-198",
+      "owner": "TASK-038",
       "blob": null
     },
     {
