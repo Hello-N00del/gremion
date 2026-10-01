@@ -29,8 +29,8 @@ export const ADMIN_CLIENT_ID = 'gremion-admin'
  *  (configure-keycloak-clients.sh). `realm-admin` is the composite that carries
  *  manage-users / manage-groups / view-realm, which governance sync, newsletter
  *  group resolution and #164 step-up freshness all need. TASK-043b F3, measured
- *  on keycloak:26.6.1: the realm IMPORT carries them (buildTenantRealmDoc puts
- *  them on the SA user's clientRoles), while the create-realm-only provisioner
+ *  on keycloak:26.6.1: the realm document the provisioner POSTs carries them
+ *  (buildTenantRealmDoc puts them on the SA user's clientRoles), while the create-realm-only provisioner
  *  is refused (403) granting realm-admin over the Admin API -- so ensureRealm
  *  reads them first and grants only what is missing (adminKc, when supplied). */
 export const GREMION_ADMIN_SA_REALM_ROLES = ['realm-admin'] as const
