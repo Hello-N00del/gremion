@@ -348,6 +348,12 @@
       "blob": "0d5d13733a8ddfe8a4f4aeece997a7cfdf938df8"
     },
     {
+      "path": "modules/publishing/test/deploy-drift.test.ts",
+      "reason": "R29-KHYG2-K: removed, the compose-vs-k8s drift guard compared the StuRa docker-compose.yml newsletter-service/nats services with k8s/base/{nats,newsletter}; the kernel carries neither the newsletter-service compose service nor those k8s bases (11 ENOENT failures, `vitest run` for the package could not pass; StuRaOS keeps its copy). The in-tree newsletter image/deploy wiring is TASK-038/TASK-198's, which re-adds a drift guard against what it creates (modules/COUPLED-TESTS.json entry removed with it)",
+      "owner": "TASK-038",
+      "blob": null
+    },
+    {
       "path": "modules/publishing/test/guard.test.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
       "owner": "TASK-200",
@@ -388,6 +394,12 @@
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
       "owner": "TASK-200",
       "blob": "3b454ab23dfbd00fe99c8c8ab91a5b614553380f"
+    },
+    {
+      "path": "modules/votes/test/aggregator-parity.test.ts",
+      "reason": "R29-KHYG2-K: removed, the leaf-aggregator parity guard compared src/aggregator/{aggregator,types}.ts with the app oracle gremion-ui/src/lib/votes/{aggregator,types}.ts, which the kernel does not carry (2 ENOENT failures, `vitest run` for the package could not pass; StuRaOS keeps its copy). The elections app half (lib/votes) enters in-tree with TASK-205, which re-adds the guard re-pointed at it (modules/COUPLED-TESTS.json entry removed with it)",
+      "owner": "TASK-205",
+      "blob": null
     }
   ]
 }
