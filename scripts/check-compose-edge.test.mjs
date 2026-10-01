@@ -40,7 +40,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, mkdtempSync, write
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { FIXTURE, REPO_ROOT, parseYamlSubset, readEnvFile, renderState } from './compose-edge.mjs'
+import { FIXTURE, REPO_ROOT, parseYamlSubset, readEnvFile, renderState, socketIsolationViolations } from './compose-edge.mjs'
 
 // The brief's contract: this file exports renderState. TASK-034 should import
 // ./compose-edge.mjs directly -- importing a test file is what the entry guard
@@ -296,6 +296,50 @@ test('guard 3: Traefik runs from the rendered /tmp copy of the read-only committ
   const stat = (svc.volumes ?? []).filter((v) => v.target === '/etc/traefik/traefik.yml')
   assert.equal(stat.length, 1)
   assert.equal(stat[0].read_only, true)
+})
+
+// ── 5. the Docker API proxy is isolated (F1-FIX-11, H21, S5#28) ───────────
+//
+// docker-socket-proxy runs CONTAINERS=1, so any container beside it can read
+// /containers/{id}/json (every injected secret). The proxy must sit on its own
+// internal network that only it and traefik join, and on no other network.
+// Rendered, never read off the source: an overlay or a merged list can put the
+// proxy back on a shared network without the source file showing it.
+
+const COMPOSITIONS = [
+  ['the production fixture (docker-compose.yml + docker-compose.prod.yml)', undefined],
+  ['the base file alone', { COMPOSE_FILE: 'docker-compose.yml', COMPOSE_PROFILES: 'production' }],
+  ['the base file with the dev override', { COMPOSE_FILE: 'docker-compose.yml:docker-compose.override.yml', COMPOSE_PROFILES: 'production' }],
+]
+
+// One top-level test (the Makefile's lint-edge-render counts `^test(` lines
+// against what node collected, so no test may be declared in a loop).
+test('guard 5: every composition puts exactly {docker-socket-proxy, traefik} on an internal socket network, the proxy on no other', () => {
+  for (const [label, env] of COMPOSITIONS) {
+    const render = env ? renderState({ env }) : state()
+    assert.deepEqual(socketIsolationViolations(render), [], label)
+  }
+  // The proxy's address resolves by service name on that network: traefik's
+  // provider endpoint must name it, not an IP or a shared-network alias.
+  assert.match(readFileSync(path.join(REPO_ROOT, TRAEFIK_YML), 'utf8'), /endpoint:\s*"tcp:\/\/docker-socket-proxy:2375"/)
+})
+
+test('guard 5: the check fails on each way the isolation can be undone (guard efficacy, on synthetic renders)', () => {
+  const clone = () => JSON.parse(JSON.stringify(state()))
+  const fails = (mutate, re) => {
+    const r = clone()
+    mutate(r)
+    assert.match(socketIsolationViolations(r).join('\n'), re)
+  }
+  fails((r) => { r.services['docker-socket-proxy'].networks.edge = null }, /docker-socket-proxy is on \[.*edge.*\]/)
+  fails((r) => { r.services['docker-socket-proxy'].networks.state = null }, /docker-socket-proxy is on \[.*state.*\]/)
+  fails((r) => { r.services['docker-socket-proxy'].network_mode = 'host' }, /network_mode host/)
+  fails((r) => { r.services.keycloak.networks.socket = null }, /members are \[docker-socket-proxy, keycloak, traefik\]/)
+  fails((r) => { delete r.services.traefik.networks.socket }, /members are \[docker-socket-proxy\]/)
+  fails((r) => { delete r.networks.socket.internal }, /not internal: true/)
+  fails((r) => { r.networks.socket.external = true }, /is external/)
+  fails((r) => { delete r.networks.socket }, /networks\.socket is not declared/)
+  fails((r) => { delete r.services['docker-socket-proxy'] }, /not in the render/)
 })
 
 // ── 4. no middleware keys security on a client-supplied header ────────────
