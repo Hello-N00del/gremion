@@ -1188,8 +1188,9 @@ state_tree() {
                gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    [[ "$output" == *"6 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
-    [[ "$output" == *"6 pinned image(s)"* ]]
+    # release/valid pins 7 first-party images: app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043) + state legal, vector, fallback
+    [[ "$output" == *"7 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"7 pinned image(s)"* ]]
 }
 
 @test "a tag-only, real-build, gremion/ or flow-map image in the STATE layer exits 1 naming the file" {
@@ -1251,7 +1252,7 @@ exit 0
     printf 'services: {}\n' > "$T/docker-compose.state-pins.yml"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"3 pinned image(s)"* ]]
+    [[ "$output" == *"4 pinned image(s)"* ]]
     printf 'services: {}\n' > "$T/docker-compose.pins.yml"
     rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
     : > "$SHIM_LOG"
