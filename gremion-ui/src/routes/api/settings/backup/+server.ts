@@ -1,13 +1,20 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
-import { writeConfig } from '$lib/server/config'
+import { readConfig, writeConfig } from '$lib/server/config'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname } from 'node:path'
 import { env } from '$env/dynamic/private'
 import { getTenant } from '$lib/server/tenant/context'
-import { randomUUID } from 'node:crypto'
+import { backupTimeoutMs, hostdSocketPath } from '$lib/server/backup/hostd-client'
+import {
+  BackupTriggerError,
+  getBackupStatus,
+  startBackup,
+  triggerAvailability,
+  type BackupDeps,
+} from '$lib/server/backup/backup-trigger'
 
 interface BackupStep {
   step: string
@@ -71,10 +78,40 @@ export const GET: RequestHandler = async ({ locals }) => {
   }
 
   const runs = readRecentRuns()
-  return json({ success: true, data: runs })
+  const deps = backupDeps()
+  const status = getBackupStatus(deps)
+  let lastBackupAt: string | null = null
+  try {
+    lastBackupAt = readConfig().backups.last_backup_at
+  } catch {
+    /* unreadable config: show no timestamp rather than a wrong one */
+  }
+  return json({
+    success: true,
+    data: runs,
+    // F1-FIX-10-K: whether the button can work at all (with the reason when not),
+    // the real state of the latest triggered run, and the only trustworthy
+    // "last backup" timestamp (written solely from a finished run).
+    trigger: triggerAvailability(deps),
+    run: status.run,
+    runs_state: status.runs,
+    last_backup_at: lastBackupAt,
+  })
 }
 
-// POST — trigger a backup run, or request an integrity check
+function backupDeps(): BackupDeps {
+  const tenant = getTenant()
+  return {
+    socketPath: hostdSocketPath(env),
+    runsDir: env.BACKUP_RUNS_DIR ?? `${getConfigDir()}/backup/runs`,
+    timeoutMs: backupTimeoutMs(env),
+    stampLastBackup: (iso) => {
+      writeConfig({ backups: { last_backup_at: iso } } as never, tenant)
+    },
+  }
+}
+
+// POST — trigger a backup run (hostd `backup` verb), or request an integrity check
 export const POST: RequestHandler = async ({ request, locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
@@ -101,14 +138,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     }
   }
 
-  // Default: trigger a backup
-  const jobId = randomUUID()
-  const now = new Date().toISOString()
+  // Default: trigger a REAL backup through hostd (D-4). `started` is only
+  // answered after hostd accepted the connection and the request line was sent;
+  // last_backup_at is NOT written here, only when the run finishes (see
+  // lib/server/backup/backup-trigger.ts).
   try {
-    writeConfig({ backups: { last_backup_at: now } } as never)
-  } catch {
-    /* non-critical — backup will proceed independently */
+    const run = await startBackup(backupDeps(), { requestedBy: user?.id ?? null })
+    return json(
+      {
+        success: true,
+        data: { started: true, state: run.state, run_id: run.id, timestamp: run.startedAt },
+      },
+      { status: 202 },
+    )
+  } catch (err) {
+    if (err instanceof BackupTriggerError) {
+      return json(
+        { success: false, error: err.message, code: err.code },
+        { status: err.code === 'busy' ? 409 : 503 },
+      )
+    }
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    return json({ success: false, error: message }, { status: 500 })
   }
-
-  return json({ success: true, data: { started: true, job_id: jobId, timestamp: now } })
 }

@@ -13,6 +13,10 @@ vi.mock('$lib/server/config', () => ({
 
 vi.mock('$env/dynamic/private', () => ({ env: {} }))
 
+vi.mock('$lib/server/tenant/context', () => ({
+  getTenant: () => ({ id: 'tenant-1', configPath: '/data/tenant-1/config.json' }),
+}))
+
 // Prevent fs operations during tests (backup endpoint reads/writes files)
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>()
@@ -121,6 +125,7 @@ describe('PATCH /api/settings', () => {
 
 describe('POST /api/settings/backup', () => {
   beforeEach(() => {
+    mockWriteConfig.mockClear()
     mockReadConfig.mockReturnValue(baseConfig)
     mockWriteConfig.mockReturnValue(baseConfig)
   })
@@ -133,14 +138,22 @@ describe('POST /api/settings/backup', () => {
     expect(res.status).toBe(403)
   })
 
-  it('returns started: true for IT admin', async () => {
+  // F1-FIX-10-K / H04: this test used to pin the lie (200, started:true, with
+  // nothing started and last_backup_at stamped). The real trigger side effects
+  // (hostd receives `backup`, run state started -> finished/failed, last_backup_at
+  // only from a finished run) are asserted in api/settings/backup/backup.test.ts.
+  // Here: with no reachable hostd (fs is mocked, so the socket cannot exist) the
+  // endpoint refuses and writes nothing.
+  it('does not claim started and does not stamp last_backup_at when hostd is unreachable', async () => {
     mockHasRole.mockReturnValue(true)
     const { POST } = await import('../api/settings/backup/+server')
+    const request = new Request('http://localhost', { method: 'POST' })
     // @ts-expect-error partial mock
-    const res = await POST({ locals: makeLocals(true) })
+    const res = await POST({ request, locals: makeLocals(true) })
     const body = await res.json()
-    expect(res.status).toBe(200)
-    expect(body.data.started).toBe(true)
-    expect(body.data.job_id).toBeTruthy()
+    expect(res.status).toBe(503)
+    expect(body.success).toBe(false)
+    expect(body.data?.started).not.toBe(true)
+    expect(mockWriteConfig).not.toHaveBeenCalled()
   })
 })
