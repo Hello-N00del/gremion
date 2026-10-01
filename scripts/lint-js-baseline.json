@@ -1,4 +1,4 @@
 {
-  "baseline": 90,
-  "note": "R25-KC: standalone oxlint --type-aware error count on unit/R25-dedup after merging main c2810a8 (main itself counts 96 there); only ever lowered"
+  "baseline": 86,
+  "note": "F1-FIX-02-K: 89 on main 32ba4848 -> 86 after fixing runner.ts no-unsafe-finally (T5) and strip-outer-transaction.ts no-unused-expressions x2 (T6). Was 90 (R25-KC). Only ever lowered."
 }
