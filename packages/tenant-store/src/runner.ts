@@ -350,9 +350,13 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
         }
       }
       if (locked && poisoned === undefined) {
+        // No throw inside this finally (T5, no-unsafe-finally): a failed unlock
+        // only marks the connection poisoned; the block below decides whether
+        // it surfaces (UNLOCK_FAILED on an otherwise clean run) or is logged
+        // beside the run's own error, which always propagates unchanged.
         try {
           const [r] = await reserved<{ ok: boolean }[]>`SELECT pg_advisory_unlock(${classid}::int4, ${objid}::int4) AS ok`
-          if (!r?.ok) throw new Error('pg_advisory_unlock returned false')
+          if (!r?.ok) poisoned = new Error('pg_advisory_unlock returned false')
         } catch (unlockErr) {
           poisoned = unlockErr
         }
