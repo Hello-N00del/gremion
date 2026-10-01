@@ -12,7 +12,14 @@ export const ADMINS: AdminSpec[] = [
   { role: 'it-admin', email: 'it@customer.example' },
   { role: 'council-admin', email: 'council@customer.example' },
 ]
-const NO_BROKER = new Set(['board', 'files', 'messaging', 'vault', 'votes', 'elections', 'handover'])
+/**
+ * A synthetic catalogue module that declares no export and is NOT in
+ * PROVISIONAL_RETENTION_PROFILES: what `init` still leaves undecided (the Q20
+ * stop-and-ask), so the refusal guards keep a module that is really unloaded
+ * now that the five database-less modules carry provisional profiles (R29-I24).
+ */
+export const UNDECIDED_MODULE = 'undecided_probe'
+const NO_BROKER = new Set(['board', 'files', 'messaging', 'vault', 'votes', 'elections', 'handover', UNDECIDED_MODULE])
 const FLOWS = new Set(['kernel', 'publishing', 'content', 'calendar', 'finance'])
 
 let seq = 0
@@ -37,7 +44,8 @@ export interface World {
   knobs: { seedsOn: boolean; runnerShape: 'gremion-ui' | 'tenant-store'; dnsFails: boolean }
   /**
    * Catalogue modules with NO plt.module_version row: what `init` leaves
-   * undecided under Q20 (no retention profile declared), so enableModule would
+   * undecided under Q20 (no retention profile declared and not in the
+   * provisional table; the synthetic UNDECIDED_MODULE), so enableModule would
    * throw MODULE_VERSION_UNKNOWN for them (review B1 LOW, r2: the fake used to
    * enable them happily).
    */
@@ -57,7 +65,7 @@ export function world(): World {
     enabled: new Map(),
     attestations: new Map(),
     knobs: { seedsOn: false, runnerShape: 'gremion-ui', dnsFails: false },
-    unloaded: new Set(['elections', 'files', 'handover', 'messaging', 'votes']),
+    unloaded: new Set([UNDECIDED_MODULE]),
   }
 }
 
@@ -71,7 +79,7 @@ export function hostStamp(w: World, c: { realm: string; token: string }, user = 
   w.mutations.push(`host:stamp ${c.realm}`)
 }
 
-export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', 'vault', 'votes']): ProvisioningDeps & { ledger: ReturnType<typeof memoryLedger> } {
+export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', 'vault', 'votes', UNDECIDED_MODULE]): ProvisioningDeps & { ledger: ReturnType<typeof memoryLedger> } {
   const ledger = memoryLedger()
   const m = (s: string) => w.mutations.push(s)
   const pc = (c: CustomerRef): KernelPostCondition => {

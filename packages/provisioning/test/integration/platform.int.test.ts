@@ -64,6 +64,18 @@ const catalogue: LifecycleModule[] = readdirSync(MODULES)
   .filter((id) => existsSync(join(MODULES, id, 'module.json')))
   .map((id) => ({ id, dir: join(MODULES, id), moduleJson: JSON.parse(readFileSync(join(MODULES, id, 'module.json'), 'utf8')) as LifecycleModule['moduleJson'] }))
 
+/** Every in-tree module: 11 since R29-I24 (the five database-less ones load under provisional profiles). */
+const ALL_MODULES = catalogue.map((m) => m.id).sort()
+
+/**
+ * A synthetic module that declares no export and is NOT in
+ * PROVISIONAL_RETENTION_PROFILES: what stays undecided (Q20's loud path), so the
+ * refusal guards keep a module that is really unloaded.
+ */
+const UNDECIDED_ID = 'undecided_probe'
+const votesEntry = catalogue.find((m) => m.id === 'votes')!
+const undecidedProbe: LifecycleModule = { ...votesEntry, id: UNDECIDED_ID, moduleJson: { ...votesEntry.moduleJson, id: UNDECIDED_ID } }
+
 describe('the platform on a fresh server', () => {
   let admin: Sql
   const pools: Sql[] = []
@@ -107,18 +119,28 @@ describe('the platform on a fresh server', () => {
   })
 
   it('TDD 4: bootstrapPlatform creates, migrates and loads one module + one version row per decided module; a rerun changes nothing', async () => {
+    const logs: string[] = []
     const r = await bootstrapPlatform({
       kernelAdmin: admin,
       openPlatform: () => open('gremion_platform', 2, OWNER, OWNER_PW),
       owner: OWNER,
       ownerPassword: OWNER_PW,
       catalogue,
+      log: (l) => logs.push(l),
     })
     expect(r.platformCreated).toBe(true)
     expect(r.applied).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
-    expect(r.catalogue.insertedModules).toEqual(['board', 'calendar', 'content', 'finance', 'publishing', 'vault'])
+    expect(r.catalogue.insertedModules).toEqual(ALL_MODULES)
     expect(r.catalogue.insertedVersions).toEqual(r.catalogue.insertedModules)
-    expect(r.catalogue.undecided.map((u) => u.moduleKey)).toEqual(['elections', 'files', 'handover', 'messaging', 'votes'])
+    // R29-I24: the five database-less modules load under their provisional profiles; nothing is undecided
+    expect(r.catalogue.undecided).toEqual([])
+    expect(logs.filter((l) => l.includes('provisional retention profile')).sort()).toEqual([
+      'catalogue: elections loaded with provisional retention profile rp-ele-module-data (R29-I24, pending the DPO)',
+      'catalogue: files loaded with provisional retention profile rp-fil-module-data (R29-I24, pending the DPO)',
+      'catalogue: handover loaded with provisional retention profile rp-hnd-module-data (R29-I24, pending the DPO)',
+      'catalogue: messaging loaded with provisional retention profile rp-msg-module-data (R29-I24, pending the DPO)',
+      'catalogue: votes loaded with provisional retention profile rp-gov-module-data (R29-I24, pending the DPO)',
+    ])
 
     const p = open('gremion_platform', 1, OWNER, OWNER_PW)
     try {
@@ -127,9 +149,14 @@ describe('the platform on a fresh server', () => {
                v.created_by_kind AS ck, v.updated_by_kind AS uk,
                (SELECT count(*)::int FROM plt.module_version x WHERE x.module_id = m.module_id) AS n
           FROM plt.module m JOIN plt.module_version v USING (module_id) ORDER BY 1`
-      expect(rows.map((x) => x.module_key)).toEqual(['board', 'calendar', 'content', 'finance', 'publishing', 'vault'])
-      for (const x of rows) expect(x).toMatchObject({ status: 'draft', ck: 'system', uk: 'system', n: 1, semver: '1.0.0' })
+      expect(rows.map((x) => x.module_key)).toEqual(ALL_MODULES)
+      for (const x of rows) {
+        const own = catalogue.find((m) => m.id === x.module_key)!
+        expect(x).toMatchObject({ status: 'draft', ck: 'system', uk: 'system', n: 1, semver: own.moduleJson.runtime.version })
+      }
       expect(rows.find((x) => x.module_key === 'calendar')).toMatchObject({ ctx: 'cal', rp: 'rp-cal-module-data' })
+      expect(rows.find((x) => x.module_key === 'votes')).toMatchObject({ ctx: 'gov', rp: 'rp-gov-module-data' })
+      expect(rows.find((x) => x.module_key === 'elections')).toMatchObject({ ctx: 'ele', rp: 'rp-ele-module-data' })
     } finally {
       await p.end()
     }
@@ -144,6 +171,27 @@ describe('the platform on a fresh server', () => {
     expect(again).toMatchObject({ platformCreated: false, applied: [] })
     expect(again.catalogue.insertedModules).toEqual([])
     expect(again.catalogue.insertedVersions).toEqual([])
+  })
+
+  it('a module that declares no export and is not in the provisional table stays undecided: no plt.module row, a loud log line (Q20 refusal path kept)', async () => {
+    const logs: string[] = []
+    const r = await bootstrapPlatform({
+      kernelAdmin: admin,
+      openPlatform: () => open('gremion_platform', 2, OWNER, OWNER_PW),
+      owner: OWNER,
+      ownerPassword: OWNER_PW,
+      catalogue: [...catalogue, undecidedProbe],
+      log: (l) => logs.push(l),
+    })
+    expect(r.catalogue.undecided.map((u) => u.moduleKey)).toEqual([UNDECIDED_ID])
+    expect(r.catalogue.insertedModules).toEqual([])
+    expect(logs.some((l) => l.startsWith(`catalogue: ${UNDECIDED_ID} NOT loaded:`))).toBe(true)
+    const p = open('gremion_platform', 1, OWNER, OWNER_PW)
+    try {
+      expect((await p`SELECT 1 FROM plt.module WHERE module_key = ${UNDECIDED_ID}`).length).toBe(0)
+    } finally {
+      await p.end()
+    }
   })
 
   // Review C MEDIUM #70 (r3 verifier): the pooled panel connected as the
@@ -229,14 +277,14 @@ describe('the platform on a fresh server', () => {
     }
   })
 
-  it('TDD 7: calendar and vault enable through the interim gate with the attestation as both references; publishing (not passed) is refused with no database; votes (undecided, Q20) is MODULE_VERSION_UNKNOWN', async () => {
+  it('TDD 7: calendar and vault enable through the interim gate with the attestation as both references; publishing (not passed) is refused with no database; a synthetic undecided module (Q20) is MODULE_VERSION_UNKNOWN', async () => {
     const p = open('gremion_platform', 3, OWNER, OWNER_PW)
     try {
       const X = uuidv7()
       const ref = { id: X, slug: 'musterstadt', token: 'musterstadt', realm: 'musterstadt', host: 'rat.musterstadt.example' }
       const modules = pgModules({
         platform: p,
-        catalogue,
+        catalogue: [...catalogue, undecidedProbe],
         lifecycle: {
           server: () => server,
           secrets: { appPassword: () => APP_PW },
@@ -268,7 +316,7 @@ describe('the platform on a fresh server', () => {
 
       await expect(modules.enable(ref, 'publishing', gate, OPERATOR)).rejects.toMatchObject({ code: 'GATE_REFUSED' })
       expect((await admin`SELECT 1 FROM pg_database WHERE datname = ${`t_${hex}__publishing`}`).length).toBe(0)
-      await expect(modules.enable(ref, 'votes', operatorAllowGate(new Set(['votes']), async () => randomUUID()), OPERATOR)).rejects.toMatchObject({
+      await expect(modules.enable(ref, UNDECIDED_ID, operatorAllowGate(new Set([UNDECIDED_ID]), async () => randomUUID()), OPERATOR)).rejects.toMatchObject({
         code: 'MODULE_VERSION_UNKNOWN',
       })
     } finally {
