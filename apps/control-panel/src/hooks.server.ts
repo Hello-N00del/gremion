@@ -9,7 +9,7 @@
 // goes through Auth.js (its own /auth/* routes) and then the gate, which
 // decides before any page, form action or +server endpoint runs.
 import { SvelteKitAuth } from '@auth/sveltekit'
-import { redirect, type Handle, type RequestEvent } from '@sveltejs/kit'
+import { redirect, type Cookies, type Handle, type RequestEvent } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { env } from '$env/dynamic/private'
 import { authConfig, startSignIn } from '$lib/server/auth'
@@ -31,11 +31,40 @@ const auth = SvelteKitAuth(async () => {
   return authConfig(r.config)
 })
 
+/**
+ * Records every cookie written on `cookies` from now on, as the Set-Cookie
+ * line SvelteKit would send. SvelteKit adds the event's cookies only to a
+ * resolve() response or a THROWN redirect; a Response the gate RETURNS gets
+ * none (respond.js), so Auth.js's writes during auth() (a cleared or rolled
+ * session) and the gate's own clearing of a forged cookie ride on it through
+ * withWrittenCookies (review r4 LOW, deletion-aware).
+ */
+function trackCookieWrites(cookies: Cookies): Map<string, string> {
+  const written = new Map<string, string>()
+  const set = cookies.set.bind(cookies)
+  const del = cookies.delete.bind(cookies)
+  cookies.set = (name, value, opts) => {
+    set(name, value, opts)
+    written.set(name, cookies.serialize(name, value, opts))
+  }
+  cookies.delete = (name, opts) => {
+    del(name, opts)
+    written.set(name, cookies.serialize(name, '', { ...opts, maxAge: 0 }))
+  }
+  return written
+}
+
+function withWrittenCookies(res: Response, written: ReadonlyMap<string, string>): Response {
+  for (const line of written.values()) res.headers.append('set-cookie', line)
+  return res
+}
+
 export const gate: Handle = async ({ event, resolve }) => {
   if (isExempt(event.url.pathname)) return resolve(event)
   const r = loadConfig(env)
   if (!r.ok) return refuse(503, 'the control panel is not configured')
   const c = r.config
+  const written = trackCookieWrites(event.cookies)
   let claims: SessionClaims | null = null
   try {
     const session = await event.locals.auth()
@@ -72,13 +101,15 @@ export const gate: Handle = async ({ event, resolve }) => {
       redirect(302, s.location)
     }
     // A document request: RETURNED (r3 LOW), so handle's withSecurityHeaders
-    // reaches it; a thrown redirect skipped them. The cookies ride on it.
+    // reaches it; a thrown redirect skipped them. The cookies ride on it: what
+    // was written on the event so far, then the sign-in's own (they win).
     const res = new Response(null, { status: 302, headers: { location: s.location, 'cache-control': 'no-store' } })
-    for (const k of s.cookies) res.headers.append('set-cookie', event.cookies.serialize(k.name, k.value, k.options))
-    return res
+    const lines = new Map(written)
+    for (const k of s.cookies) lines.set(k.name, event.cookies.serialize(k.name, k.value, k.options))
+    return withWrittenCookies(res, lines)
   }
   if (d.clearCookie) for (const k of cookies) event.cookies.delete(k.name, { path: '/' })
-  return refuse(d.status, d.reason)
+  return withWrittenCookies(refuse(d.status, d.reason), written)
 }
 
 // [D R29-I11] The Content-Security-Policy gremion-ui sends (its cspGuard,

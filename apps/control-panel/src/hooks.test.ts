@@ -113,6 +113,33 @@ describe('the gate hook (TDD 15)', () => {
     expect(resolve).not.toHaveBeenCalled()
   })
 
+  // Review r4 LOW (deletion-aware): SvelteKit adds event.cookies only to a
+  // response from resolve() or a thrown redirect. A Response the gate RETURNS
+  // must carry every cookie written on the event during the request itself --
+  // what Auth.js's auth() wrote (a cleared or rolled session) and the gate's own
+  // clearing of a forged cookie -- or the browser never sees them.
+  it('the returned sign-in redirect also carries the cookies Auth.js wrote on the event during auth()', async () => {
+    const e = event({ path: '/customers' })
+    e.locals.auth = async () => {
+      // a cookie Auth.js writes on the event during auth() (not one the
+      // sign-in itself sets, which would replace it by name)
+      e.cookies.set('authjs.csrf-token', 'rolled')
+      return null
+    }
+    const res = await gate({ event: e as never, resolve: vi.fn() as never })
+    expect(res.status).toBe(302)
+    const sc = res.headers.getSetCookie()
+    expect(sc.some((c) => /^authjs\.csrf-token=rolled/.test(c))).toBe(true)
+    expect(sc.some((c) => /authjs\.pkce\.code_verifier=/.test(c))).toBe(true)
+  })
+
+  it('the 403 for a forged cookie carries the clearing Set-Cookie (a returned refusal gets no event cookies from SvelteKit)', async () => {
+    const e = event({ path: '/api/customers', cookies: [{ name: 'authjs.session-token', value: 'forged' }] })
+    const res = await gate({ event: e as never, resolve: vi.fn() as never })
+    expect(res.status).toBe(403)
+    expect(res.headers.getSetCookie().some((c) => /^authjs\.session-token=;/.test(c))).toBe(true)
+  })
+
   it('a client-side navigation (__data.json) still gets SvelteKit\'s own redirect, with the PKCE cookie set on the event (deletion-aware, r4)', async () => {
     const e = Object.assign(event({ path: '/customers' }), { isDataRequest: true })
     const resolve = vi.fn(async () => new Response('RESOLVED'))
