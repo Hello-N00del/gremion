@@ -44,7 +44,7 @@ import {
   setChannelStatus,
   getPostChannelRecipients,
   claimDelivery,
-  markSent,
+  recordDelivered,
   markFailed,
   releaseClaim,
   addSendToken,
@@ -213,6 +213,22 @@ export async function publishChannel(
   }
 }
 
+/**
+ * Flag the email channel 'failed', best-effort (R29-LOW-07 L2): the database is
+ * likely the thing failing, and a failed flag must never mask the publish result
+ * the operator needs (an exception here would replace the whole PublishResult).
+ */
+async function flagChannelFailed(sql: Sql, postId: string): Promise<void> {
+  try {
+    await setChannelStatus(sql, postId, 'email', 'failed')
+  } catch (err) {
+    console.error(
+      `[publish-channel] post ${postId}: flagging the email channel failed ALSO failed:`,
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+}
+
 // ── email channel (mirror of emailRenderer.publish) ─────────────────────────────
 
 async function publishEmail(
@@ -265,6 +281,7 @@ async function publishEmail(
   let sentCount = 0
   let alreadySentCount = 0
   let failedCount = 0
+  let unrecordedCount = 0 // delivered this pass, but the ledger write failed (claim kept)
   let smtpUnconfigured = false
 
   // buildRecipientList already lowercases; keep emailLower for the ledger lookups.
@@ -282,14 +299,17 @@ async function publishEmail(
     const unsubUrl = `${base}/content/unsubscribe?token=${encodeURIComponent(token)}`
     const personalizedHtml = injectUnsubscribeFooter(post.body_html, unsubUrl)
 
+    // ONLY the transport send is inside this try: a throw from the ledger write
+    // AFTER a delivered send must never reach markFailed (a 'failed' row is
+    // re-claimed by the next publish, which would mail the recipient twice).
+    let messageId: string
     try {
       const info = await transport.send({
         to: email,
         subject: post.title,
         html: personalizedHtml,
       })
-      await markSent(sql, postId, emailLower, String(info.id))
-      sentCount += 1
+      messageId = String(info.id)
     } catch (err) {
       if (err instanceof MailUnconfiguredError) {
         // SMTP is unconfigured tenant-wide → nothing was sent for THIS recipient
@@ -310,6 +330,42 @@ async function publishEmail(
       await markFailed(sql, postId, emailLower, message, claimedAt ?? undefined)
       failedCount += 1
       warnings.push(`send to ${emailLower} failed: ${message}`)
+      continue
+    }
+
+    // Delivered. Record it (bounded retry); if the ledger write still fails the
+    // claim stays in place (never 'failed') and the recipient counts as not
+    // recorded, so this pass does not report 'sent'.
+    if (await recordDelivered(sql, postId, emailLower, messageId)) {
+      sentCount += 1
+    } else {
+      unrecordedCount += 1
+      warnings.push(
+        `${emailLower} was delivered but the delivery ledger write failed — not re-sent; ` +
+          'its claim is kept (retried only after the 15-min stale window)',
+      )
+    }
+  }
+
+  // "Do not re-publish" always wins (R29-LOW-07 L2): while any recipient was
+  // delivered without a ledger row, a re-publish could mail it again, so this
+  // beats the "re-publish to retry" advice below even when other recipients failed
+  // in the same pass. The channel flag is best-effort (the DB is likely what is
+  // failing): flagging 'failed' also keeps a scheduled channel from being
+  // auto-retried by the next tick once the claim goes stale. No event, not 'sent'.
+  if (unrecordedCount > 0) {
+    await flagChannelFailed(sql, postId)
+    return {
+      result: {
+        channel: 'email',
+        status: 'failed',
+        recipientCount: sentCount,
+        warnings: [
+          ...warnings,
+          `${unrecordedCount} recipient(s) delivered but not recorded in the delivery ledger — do not re-publish before checking the delivery log`,
+        ],
+        detail: 'delivery not recorded',
+      },
     }
   }
 
@@ -334,7 +390,7 @@ async function publishEmail(
         },
       }
     }
-    await setChannelStatus(sql, postId, 'email', 'failed')
+    await flagChannelFailed(sql, postId)
     return {
       result: {
         channel: 'email',
@@ -348,7 +404,7 @@ async function publishEmail(
 
   const delivered = sentCount + alreadySentCount
   if (delivered === 0) {
-    await setChannelStatus(sql, postId, 'email', 'failed')
+    await flagChannelFailed(sql, postId)
     return {
       result: {
         channel: 'email',
@@ -365,7 +421,7 @@ async function publishEmail(
   // operator re-publishes, and the failed rows are re-claimed (and only they are
   // sent again). No channel.email.sent event: the channel is not finished yet.
   if (failedCount > 0) {
-    await setChannelStatus(sql, postId, 'email', 'failed')
+    await flagChannelFailed(sql, postId)
     return {
       result: {
         channel: 'email',
