@@ -13,6 +13,7 @@ import { getTenant } from '$lib/server/tenant/context'
 import { getContentBackend } from '../backend'
 import { injectUnsubscribeFooter } from '../email-footer'
 import { resolvePostRecipients } from '../recipients'
+import { isOutcomeUnknown } from './smtp-outcome'
 import type { Post, PostMedia, PostChannel } from '../types'
 import type { ChannelRenderer, EmailArtifact, EmailPreview, PublishResult, RenderedArtifact } from './types'
 
@@ -38,36 +39,6 @@ function unsubscribeOrigin(): string | null {
 	} catch {
 		return null
 	}
-}
-
-/** SMTP commands that precede the message body: a transport failure there means nothing was handed over. */
-const PRE_DATA_COMMANDS = new Set(['CONN', 'EHLO', 'HELO', 'LHLO', 'STARTTLS', 'AUTH', 'MAIL FROM', 'RCPT TO'])
-/** nodemailer transport-level error codes (connection drop, timeout, socket error). */
-const TRANSPORT_ERROR_CODES = new Set(['ETIMEDOUT', 'ECONNECTION', 'ESOCKET'])
-
-/**
- * Whether a sendMailForTenant throw leaves the outcome UNKNOWN (R29-LOW-07 L3),
- * mirroring the content leaf's MailOutcomeUnknownError: a connection drop,
- * timeout or socket error AFTER the message was handed to the server (nodemailer
- * `command` DATA or later, or no command at all) with NO SMTP response. The
- * server may have accepted the message, so the caller keeps the claim.
- *
- * Definitive (the mail was not accepted): any error that carries an SMTP response
- * code (a 4xx/5xx rejection on RCPT/MAIL/DATA), a transport error before the body
- * was sent (CONN / EHLO / AUTH / MAIL FROM / RCPT TO), and every non-transport
- * error (EENVELOPE, EAUTH, unconfigured, plain Error).
- */
-function isOutcomeUnknown(err: unknown): boolean {
-	if (typeof err !== 'object' || err === null) return false
-	const { code, command, responseCode } = err as {
-		code?: unknown
-		command?: unknown
-		responseCode?: unknown
-	}
-	if (typeof code !== 'string' || !TRANSPORT_ERROR_CODES.has(code)) return false
-	if (responseCode !== undefined && responseCode !== null) return false // the server answered
-	if (typeof command === 'string' && PRE_DATA_COMMANDS.has(command)) return false
-	return true
 }
 
 /** Total markDeliverySent attempts for a delivered mail, and the pause before each retry. */

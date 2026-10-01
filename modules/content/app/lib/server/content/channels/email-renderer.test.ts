@@ -352,9 +352,11 @@ describe('emailRenderer.publish', () => {
 	}
 
 	describe.each([
-		['ETIMEDOUT while the message body was sent (DATA)', { code: 'ETIMEDOUT', command: 'DATA' }],
-		['ECONNECTION after DATA (DATA END)', { code: 'ECONNECTION', command: 'DATA END' }],
-		['ESOCKET with no SMTP command or response at all', { code: 'ESOCKET' }],
+		// The shapes the installed nodemailer really emits (see smtp-outcome.test.ts, which
+		// proves them against the real transport): every socket-level error says 'CONN'.
+		['a socket timeout (ETIMEDOUT, CONN, "Timeout")', { code: 'ETIMEDOUT', command: 'CONN', message: 'Timeout' }],
+		['an unexpected close (ECONNECTION, CONN)', { code: 'ECONNECTION', command: 'CONN', message: 'Connection closed unexpectedly' }],
+		['a socket reset mid-session (ESOCKET, CONN, read)', { code: 'ESOCKET', command: 'CONN', syscall: 'read', errno: 'ECONNRESET' }],
 	])('L3 unknown outcome: %s', (_label, over) => {
 		it('keeps the claim (no markDeliveryFailed), counts it as unrecorded, never reports sent', async () => {
 			resolvePostRecipients.mockResolvedValue([{ email: 'a@x.de', name: null }])
@@ -376,8 +378,9 @@ describe('emailRenderer.publish', () => {
 	})
 
 	describe.each([
-		['ETIMEDOUT while connecting (CONN)', { code: 'ETIMEDOUT', command: 'CONN' }],
-		['ESOCKET before the recipient was accepted (RCPT TO)', { code: 'ESOCKET', command: 'RCPT TO' }],
+		['a refused connection (ESOCKET, CONN, connect)', { code: 'ESOCKET', command: 'CONN', syscall: 'connect', errno: 'ECONNREFUSED' }],
+		['a connection timeout (ETIMEDOUT, CONN, "Connection timeout")', { code: 'ETIMEDOUT', command: 'CONN', message: 'Connection timeout' }],
+		['a call on a destroyed connection (ECONNECTION, API)', { code: 'ECONNECTION', command: 'API' }],
 		['a 550 rejection of the recipient', { code: 'EENVELOPE', command: 'RCPT TO', responseCode: 550, response: '550 no such user' }],
 		['a 451 rejection of the message (DATA)', { code: 'EMESSAGE', command: 'DATA', responseCode: 451, response: '451 try later' }],
 		['a connection error that carries an SMTP response code', { code: 'ECONNECTION', command: 'DATA', responseCode: 421, response: '421 closing' }],
@@ -388,7 +391,7 @@ describe('emailRenderer.publish', () => {
 
 			const out = await emailRenderer.publish(post, [], channel())
 
-			expect(markDeliveryFailed).toHaveBeenCalledWith('p1', 'a@x.de', 'smtp transport error', TOKEN)
+			expect(markDeliveryFailed).toHaveBeenCalledWith('p1', 'a@x.de', expect.any(String), TOKEN)
 			expect(out.status).toBe('failed')
 			expect(out.detail).toBe('all sends failed')
 		})
