@@ -324,6 +324,12 @@
       "blob": null
     },
     {
+      "path": "modules/finance/vitest.integration.config.ts",
+      "reason": "R29-KHYG-K: Vitest 4 dropped test.poolOptions (singleFork was silently ignored); maxWorkers 1 + fileParallelism false run the integration files serially so they stop racing on CREATE DATABASE (mirrors the StuRaOS services/finance fix, F1-FIX-05-S)",
+      "owner": "TASK-200",
+      "blob": "0a2e633fddce27e3aaa7e57f7d8695cb45093ddc"
+    },
+    {
       "path": "modules/messaging/src/livekit/livekit-client.ts",
       "reason": "TASK-042 (Q3, G6; PRD-PLAT-012 every tenant is equal): livekitRoomNamespace drops the slug == 'default' branch - every tenant, default included, gets the t.<slug>. room namespace",
       "owner": "TASK-042",
