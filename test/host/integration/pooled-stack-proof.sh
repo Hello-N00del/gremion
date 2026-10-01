@@ -20,7 +20,9 @@
 #   mail-roles   the vendor mail server's principals and roles@ mailbox by the
 #                repo's own infra/host/mail/provision-roles.sh (TASK-043's
 #                customer half reads the execute-actions mail there)
-#   limits       HostConfig.Memory and NanoCpus > 0 on every container
+#   mail-realm   bring-up step 2: gremion-vendor-mail realm-smtp (master ->
+#                system@), which check-principals requires
+#   limits      HostConfig.Memory and NanoCpus > 0 on every container
 #   rss          idle RSS below 80 % of the limit on every container
 #   isolation    project classification, network membership
 #   probes       TCP probes: positive control from _state, then each non-council net
@@ -738,6 +740,30 @@ phase_mail_roles() {
     fi
 }
 
+# Bring-up step 2 of ops/vendor-mail/RUNBOOK.md section 3, after mail-roles
+# (step 1): the operator realm master sends as system@<PLATFORM_DOMAIN>
+# (gremion-vendor-mail realm-smtp, no argument). Without it the vendor
+# realm has no SMTP user and check-principals (customer-reconcile, Q14) fails
+# "vendor realm master has no SMTP user" -- a step the scratch stack skipped,
+# not a customer defect. The env files by MAIL_ENV/STATE_ENV_FILE (the root's
+# etc/env is laid out later, by customer-layout).
+phase_mail_realm() {
+    require_scratch mail-realm
+    local out rc=0 line dom
+    dom="$(sed -n 's/^PLATFORM_DOMAIN=//p' "$ENV_DIR/mail.env" | tr -d '\r')"
+    out="$(MAIL_ENV="$(host_path "$ENV_DIR/mail.env")" STATE_ENV_FILE="$(host_path "$ENV_DIR/state.env")" \
+        GREMION_ROOT="$(host_path "$SROOT")" GREMION_RELEASE_DIR="$ROOT_H" \
+        bash "$ROOT/infra/host/bin/gremion-vendor-mail" realm-smtp 2>&1)" || rc=$?
+    # its lines name the realm, the sender and the verdict, never a secret
+    printf '%s rc=%s\n%s\n' "$(now)" "$rc" "$out" | ledger mail-realm.log
+    line="$(grep -o 'REALM-SMTP:.*' <<< "$out" | tail -n1 || true)"
+    if (( rc == 0 )) && [[ "$line" == "REALM-SMTP: realm=master user=system@${dom} "* ]]; then
+        ok "mail-realm: master sends as system@${dom} (${line})"
+    else
+        bad "mail-realm: realm-smtp exit ${rc}: $(tail -n 3 <<< "$out" | tr '\n' ' ')"
+    fi
+}
+
 # ── TRD-177 ────────────────────────────────────────────────────────────────
 phase_limits() {
     local cid n=0 line mem cpu name
@@ -1112,6 +1138,7 @@ run_phase() {
         app-wait) phase_app_wait "$2" ;;
         aux-up) phase_aux_up ;;
         mail-roles) phase_mail_roles ;;
+        mail-realm) phase_mail_realm ;;
         limits) phase_limits ;;
         rss) phase_rss ;;
         isolation) phase_isolation ;;
