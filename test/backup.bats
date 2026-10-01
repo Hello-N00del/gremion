@@ -130,6 +130,110 @@ teardown() {
     grep -qE "for db in .*\bcontrol\b" "$cj"
 }
 
+# ---------------------------------------------------------------------------
+# k8s backup CronJob: a dump that failed must fail the job (F1-FIX-09, K6#9)
+#
+# The job ran `pg_dump | gzip > f 2>/dev/null || true` and recorded every dump as
+# "ok", so a dead Postgres produced a green job over empty dumps, and restic then
+# snapshotted them. The tests below run the REAL script block of the CronJob (cut
+# out of the YAML, not re-typed) under bash with pg_dump/restic shims whose exit
+# codes model the real tools.
+# ---------------------------------------------------------------------------
+
+cronjob_script() {   # the `backup` container's shell script, dedented
+    awk '
+        /^            - name: backup$/        { inb = 1 }
+        inb && /^                - \|$/       { grab = 1; next }
+        grab && /^              env:$/        { exit }
+        grab { sub(/^                  /, ""); print }
+    ' "${PROJECT_ROOT}/k8s/base/backup/cronjob.yaml"
+}
+
+# $1 = the pg_dump behaviour: ok | fail | empty | failmid
+cronjob_run() {
+    local mode="$1" bin="${TEST_TEMP_DIR}/bin" root="${TEST_TEMP_DIR}/backup"
+    mkdir -p "$bin" "$root"
+    cronjob_script | sed "s|BACKUP_DIR=/backup|BACKUP_DIR=${root}|" > "${TEST_TEMP_DIR}/cronjob.sh"
+    [ -s "${TEST_TEMP_DIR}/cronjob.sh" ]
+    cat > "${bin}/pg_dump" <<'SHIM'
+#!/usr/bin/env bash
+case "$FAKE_PGDUMP" in
+    ok)      echo "CREATE TABLE t (x int);"; echo "-- dump of $*" ;;
+    fail)    echo "pg_dump: error: connection to server failed" >&2; exit 1 ;;
+    empty)   : ;;
+    failmid) echo "CREATE TABLE t (x int);"; echo "pg_dump: error: query failed" >&2; exit 1 ;;
+esac
+SHIM
+    cat > "${bin}/restic" <<'SHIM'
+#!/usr/bin/env bash
+echo "restic $*" >> "$RESTIC_LOG"
+exit 0
+SHIM
+    chmod +x "${bin}/pg_dump" "${bin}/restic"
+    export FAKE_PGDUMP="$mode" RESTIC_LOG="${TEST_TEMP_DIR}/restic.log"
+    : > "$RESTIC_LOG"
+    PATH="${bin}:${PATH}" POSTGRES_USER=postgres POSTGRES_PASSWORD=fixture RESTIC_PASSWORD=fixture \
+        run bash "${TEST_TEMP_DIR}/cronjob.sh"
+}
+
+@test "k8s backup cronjob: the extracted script is real and parses" {
+    cronjob_script > "${TEST_TEMP_DIR}/cronjob.sh"
+    [ -s "${TEST_TEMP_DIR}/cronjob.sh" ]
+    grep -qF 'pg_dump' "${TEST_TEMP_DIR}/cronjob.sh"
+    bash -n "${TEST_TEMP_DIR}/cronjob.sh"
+}
+
+@test "k8s backup cronjob: three good dumps run restic and end ok" {
+    cronjob_run ok
+    [ "$status" -eq 0 ]
+    grep -q '^restic backup ' "$RESTIC_LOG"
+    local log
+    log="$(ls "${TEST_TEMP_DIR}/backup/logs/"*.json)"
+    [ "$(jq -r '.status' "$log")" = "ok" ]
+    [ "$(jq -r '[.steps[] | select(.step | startswith("dump_postgres_")) | select(.status == "ok")] | length' "$log")" = "3" ]
+    gzip -t "${TEST_TEMP_DIR}/backup/current/keycloak.sql.gz"
+}
+
+@test "k8s backup cronjob: a failing pg_dump fails the job, keeps the previous dump and never snapshots" {
+    mkdir -p "${TEST_TEMP_DIR}/backup/current"
+    printf 'previous-good-dump' | gzip > "${TEST_TEMP_DIR}/backup/current/keycloak.sql.gz"
+    local before
+    before="$(sha256sum "${TEST_TEMP_DIR}/backup/current/keycloak.sql.gz" | cut -d' ' -f1)"
+    cronjob_run fail
+    [ "$status" -ne 0 ]
+    # the previous artefact is byte-identical, and nothing was snapshotted
+    [ "$(sha256sum "${TEST_TEMP_DIR}/backup/current/keycloak.sql.gz" | cut -d' ' -f1)" = "$before" ]
+    run grep -c '^restic backup ' "$RESTIC_LOG"
+    [ "$output" = "0" ]
+    local log
+    log="$(ls "${TEST_TEMP_DIR}/backup/logs/"*.json)"
+    [ "$(jq -r '.status' "$log")" = "error" ]
+    [ "$(jq -r '[.steps[] | select(.step | startswith("dump_postgres_")) | select(.status == "ok")] | length' "$log")" = "0" ]
+}
+
+@test "k8s backup cronjob: a pg_dump that dies mid-stream is not recorded as ok" {
+    cronjob_run failmid
+    [ "$status" -ne 0 ]
+    run grep -c '^restic backup ' "$RESTIC_LOG"
+    [ "$output" = "0" ]
+    # a truncated-but-decompressible file must never sit at the final name
+    [ ! -e "${TEST_TEMP_DIR}/backup/current/keycloak.sql.gz" ]
+}
+
+@test "k8s backup cronjob: a dump with no content is a failure, not an ok step" {
+    cronjob_run empty
+    [ "$status" -ne 0 ]
+    run grep -c '^restic backup ' "$RESTIC_LOG"
+    [ "$output" = "0" ]
+}
+
+@test "k8s backup cronjob installs a digest-pinned rclone, not rclone-current (K6#38)" {
+    local cj="${PROJECT_ROOT}/k8s/base/backup/cronjob.yaml"
+    grep -qE 'image: rclone/rclone:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$' "$cj"
+    assert_file_not_contains "$cj" "rclone-current"
+    assert_file_not_contains "$cj" "downloads.rclone.org"
+}
+
 @test "k8s postgres configmap creates every database docker init creates (#310)" {
     # Parity guard: the K8s configmap and docker/postgres/init-databases.sh must
     # provision the SAME application databases, so a DB added to one is never
