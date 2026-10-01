@@ -118,11 +118,14 @@ describe('votes leaf HTTP server — ACL sits in front of the router + aggregati
   const heliosCalls: string[] = []
   const createdPolls: CreatePollDto[] = []
 
-  // Fakes: 'ok-*' resolve; anything else rejects (unreachable → degraded).
+  // Fakes: OK_UUID resolves; anything else rejects (unreachable → degraded).
+  // Election ids must be canonical UUIDs now (K5#41), so the fixtures are too.
+  const OK_UUID = '00000000-0000-4000-8000-000000000001'
+  const BAD_UUID = 'ffffffff-0000-4000-8000-000000000002'
   const helios: HeliosPort = {
     async getElection(uuid: string): Promise<HeliosElection> {
       heliosCalls.push(uuid)
-      if (uuid.startsWith('ok-')) return election(uuid)
+      if (uuid === OK_UUID) return election(uuid)
       throw new TypeError('fetch failed')
     },
   }
@@ -156,7 +159,7 @@ describe('votes leaf HTTP server — ACL sits in front of the router + aggregati
     const res = await fetch(`${base}/api/v1/votes`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-tenant-id': 't', 'x-tenant-slug': 'alpha' },
-      body: JSON.stringify({ electionUuids: ['ok-1'] }),
+      body: JSON.stringify({ electionUuids: [OK_UUID] }),
     })
     expect(res.status).toBe(403)
   })
@@ -174,14 +177,14 @@ describe('votes leaf HTTP server — ACL sits in front of the router + aggregati
     const res = await fetch(`${base}/api/v1/votes`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers() } as Record<string, string>,
-      body: JSON.stringify({ electionUuids: ['ok-1', 'bad-2'] }),
+      body: JSON.stringify({ electionUuids: [OK_UUID, BAD_UUID] }),
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { votes: { id: string }[]; degradedUuids: string[]; pollError: string | null }
     // Reachable election + the poll are merged; the unreachable one degrades.
-    expect(body.degradedUuids).toEqual(['bad-2'])
+    expect(body.degradedUuids).toEqual([BAD_UUID])
     expect(body.pollError).toBeNull()
-    expect(body.votes.map((v) => v.id).sort()).toEqual(['helios:ok-1', 'poll:7'])
+    expect(body.votes.map((v) => v.id).sort()).toEqual([`helios:${OK_UUID}`, 'poll:7'])
   })
 
   it('POST /api/v1/polls creates the quick-poll and returns {success:true}', async () => {

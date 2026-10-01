@@ -80,8 +80,21 @@ async function heliosFetch<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/** Helios election ids are canonical UUIDs. The id is interpolated into a request
+ *  path, so anything else (`../admin`, `%2e%2e`, a slash) is refused outright. */
+const HELIOS_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function isHeliosUuid(value: unknown): value is string {
+  return typeof value === 'string' && HELIOS_UUID.test(value)
+}
+
 export const HeliosClient = {
   getElection(uuid: string): Promise<HeliosElection> {
-    return heliosFetch<HeliosElection>(`/helios/elections/${uuid}`)
+    // K5#41: validate, then encode as defence in depth. Rejects (never a
+    // HeliosUnavailableError): a malformed id is a caller bug, not an outage.
+    if (!isHeliosUuid(uuid)) {
+      return Promise.reject(new Error('invalid helios election uuid'))
+    }
+    return heliosFetch<HeliosElection>(`/helios/elections/${encodeURIComponent(uuid)}`)
   },
 }
