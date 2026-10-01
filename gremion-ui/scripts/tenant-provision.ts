@@ -41,6 +41,7 @@ import {
   pgAttestations,
   pgLedger,
   pgModules,
+  provisionalNote,
   provisioningStatus,
   ProvisioningError,
   recordHostStep,
@@ -551,6 +552,7 @@ async function cmdInit(): Promise<void> {
     })
     log(`init: gremion_platform ${r.platformCreated ? 'created' : 'present'}; ${r.applied.length} migration(s) applied; catalogue rows: +${r.catalogue.insertedModules.length} module(s), +${r.catalogue.insertedVersions.length} version(s); ops realm ${r.opsRealm?.created ? 'created' : 'present'}`)
     for (const u of r.catalogue.undecided) log(`init: ${u.moduleKey} not loaded (${u.reason})`)
+    for (const row of r.catalogue.load) if (row.provisional) log(`init: ${provisionalNote(row)}`)
     const panel = await ensurePanelReader({
       kernelAdmin,
       openAdminOn: (db) => {

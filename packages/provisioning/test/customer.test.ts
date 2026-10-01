@@ -13,7 +13,7 @@ import {
   suspendCustomer,
   type CreateSpec,
 } from '../src/index.ts'
-import { ADMINS, deps, hostStamp, OPERATOR, PLATFORM_DOMAIN, world } from './fakes.ts'
+import { ADMINS, deps, hostStamp, OPERATOR, PLATFORM_DOMAIN, UNDECIDED_MODULE, world } from './fakes.ts'
 
 const spec = (over: Partial<CreateSpec> = {}): CreateSpec => ({
   slug: 'musterstadt',
@@ -104,10 +104,10 @@ describe('create (phases A, host, B)', () => {
     expect(w.control.size).toBe(0)
   })
 
-  it('a module whose plt.module_version init did not load (votes: undecided, Q20) is refused BEFORE any write -- no realm, no invite (review B1, r2)', async () => {
+  it('a module whose plt.module_version init did not load (a synthetic undecided module, Q20) is refused BEFORE any write -- no realm, no invite (review B1, r2)', async () => {
     const w = world()
     const d = deps(w)
-    await expect(createPhaseA(spec({ enable: ['calendar', 'votes'] }), d)).rejects.toMatchObject({ code: 'MODULE_NOT_LOADED' })
+    await expect(createPhaseA(spec({ enable: ['calendar', UNDECIDED_MODULE] }), d)).rejects.toMatchObject({ code: 'MODULE_NOT_LOADED' })
     expect(w.mutations).toEqual([])
     expect(w.control.size).toBe(0)
     // phase B checks it too (a resume after an operator edited --enable)
@@ -117,8 +117,16 @@ describe('create (phases A, host, B)', () => {
     hostStamp(w2, { realm: 'musterstadt', token: 'musterstadt' })
     await recordHostStep('musterstadt', 'mail_principal_issued', OPERATOR, d2)
     const mails = w2.realms.get('musterstadt')!.mails.length
-    await expect(createPhaseB(spec({ enable: ['calendar', 'votes'] }), d2)).rejects.toMatchObject({ code: 'MODULE_NOT_LOADED' })
+    await expect(createPhaseB(spec({ enable: ['calendar', UNDECIDED_MODULE] }), d2)).rejects.toMatchObject({ code: 'MODULE_NOT_LOADED' })
     expect(w2.realms.get('musterstadt')!.mails.length).toBe(mails)
+  })
+
+  it('a database-less module init now loads under a provisional profile (votes, R29-I24) is accepted by phase A, not refused as not loaded', async () => {
+    const w = world()
+    const d = deps(w)
+    const a = await createPhaseA(spec({ enable: ['calendar', 'votes'] }), d)
+    expect(a.customer.slug).toBe('musterstadt')
+    expect(w.control.size).toBe(1)
   })
 
   it('no module is enabled by default; vault gets an enablement and no broker user', async () => {

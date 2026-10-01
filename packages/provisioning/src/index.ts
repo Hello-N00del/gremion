@@ -26,7 +26,7 @@ export {
   validateCreate,
 } from './customer.ts'
 export type { CreateSpec, PhaseOutcome, ProvisioningStatus } from './customer.ts'
-export { loadCatalogueRows, OWNING_CONTEXT_CODES, planCatalogueRows } from './catalogue-rows.ts'
+export { loadCatalogueRows, OWNING_CONTEXT_CODES, planCatalogueRows, PROVISIONAL_RETENTION_PROFILES, provisionalNote } from './catalogue-rows.ts'
 export type { CatalogueModule, CatalogueRowPlan, CatalogueRowsResult } from './catalogue-rows.ts'
 export { bootstrapPlatform, ensurePanelReader, PANEL_READS, pgAttestations, pgModules, type PanelReaderDeps } from './pg.ts'
 export { renderCustomerRouter } from './router.ts'

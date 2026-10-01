@@ -12,7 +12,7 @@ import {
   type LifecycleDeps,
   type LifecycleModule,
 } from '@gremion/tenant-store/lifecycle'
-import { loadCatalogueRows, type CatalogueModule, type CatalogueRowsResult } from './catalogue-rows.ts'
+import { loadCatalogueRows, provisionalNote, type CatalogueModule, type CatalogueRowsResult } from './catalogue-rows.ts'
 import { assertUuid, ProvisioningError } from './errors.ts'
 import { INTERIM_GATE_BASIS } from './operator-gate.ts'
 import type { AttestationPort, CustomerRef, ModulesPort } from './ports.ts'
@@ -208,6 +208,7 @@ export async function bootstrapPlatform(deps: BootstrapDeps): Promise<BootstrapR
     const m = await migratePlatform(platform, { log })
     const catalogue = await loadCatalogueRows(platform, deps.catalogue)
     for (const u of catalogue.undecided) log(`catalogue: ${u.moduleKey} NOT loaded: ${u.reason}`)
+    for (const r of catalogue.load) if (r.provisional) log(`catalogue: ${provisionalNote(r)}`)
     const opsRealm = deps.opsRealm ? await deps.opsRealm.ensure() : null
     return { platformCreated: db.created, applied: m.applied, catalogue, opsRealm }
   } finally {

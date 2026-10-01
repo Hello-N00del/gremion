@@ -11,9 +11,12 @@
 // No invented values: retention_profile_default_id is the module's own
 // runtime.export.retentionProfile, and owning_context_code is that profile's
 // context segment (rp-<ctx>-...), which must be one of SCHEMA's context codes.
-// A module that declares no export profile is NOT loaded; it is reported as
-// needing a decision (Q20's stop-and-ask per module), and an enable of it then
-// fails MODULE_VERSION_UNKNOWN, loudly.
+// A module with no database cannot declare an export; for those the operator
+// decided (R29-I24, 2026-10-01) a provisional default profile, held in
+// PROVISIONAL_RETENTION_PROFILES below and flagged `provisional` in the plan.
+// A module that declares no export profile and is not in that table is NOT
+// loaded; it is reported as needing a decision (Q20's stop-and-ask per module),
+// and an enable of it then fails MODULE_VERSION_UNKNOWN, loudly.
 import type { Sql } from '@gremion/db'
 
 /** SCHEMA plt.module module_owning_context_code_check. */
@@ -26,17 +29,36 @@ const RETENTION = /^rp-([a-z]+)-[a-z0-9-]+$/
 /** module_version_semver_check, restated (0002_plt_module.sql). */
 const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,40})?$/
 
+/**
+ * Default retention profiles for the modules that have no database and so
+ * cannot declare runtime.export (the module-catalogue validator refuses an
+ * export without a database, and that rule stays). Operator decision R29-I24
+ * (2026-10-01), PROVISIONAL pending the DPO's written answer: the ids follow
+ * the rp-<ctx>-module-data convention (TASK-021 Q1, TASK-077 Q14) and do not
+ * change when the DPO answers; the retention WINDOWS live in the retention
+ * catalogue (RC-MOD-DATA), never here. A module that gains a database declares
+ * its own runtime.export and leaves this table.
+ */
+export const PROVISIONAL_RETENTION_PROFILES: Readonly<Record<string, string>> = Object.freeze({
+  elections: 'rp-ele-module-data',
+  files: 'rp-fil-module-data',
+  handover: 'rp-hnd-module-data',
+  messaging: 'rp-msg-module-data',
+  votes: 'rp-gov-module-data',
+})
+
 export interface CatalogueModule {
   id: string
   moduleJson: { runtime: { version: string; export: { retentionProfile: string } | null } }
 }
 
 export interface CatalogueRowPlan {
-  load: { moduleKey: string; semver: string; retentionProfile: string; owningContext: string }[]
+  /** `provisional` is true only when the profile came from PROVISIONAL_RETENTION_PROFILES. */
+  load: { moduleKey: string; semver: string; retentionProfile: string; owningContext: string; provisional: boolean }[]
   undecided: { moduleKey: string; reason: string }[]
 }
 
-export function planCatalogueRows(modules: readonly CatalogueModule[]): CatalogueRowPlan {
+export function planCatalogueRows(modules: readonly CatalogueModule[], provisionalProfiles: Readonly<Record<string, string>> = PROVISIONAL_RETENTION_PROFILES): CatalogueRowPlan {
   const plan: CatalogueRowPlan = { load: [], undecided: [] }
   for (const m of [...modules].sort((a, b) => a.id.localeCompare(b.id))) {
     if (!MODULE_KEY.test(m.id)) {
@@ -47,7 +69,11 @@ export function planCatalogueRows(modules: readonly CatalogueModule[]): Catalogu
       plan.undecided.push({ moduleKey: m.id, reason: `runtime.version ${JSON.stringify(m.moduleJson.runtime.version)} does not fit plt.module_version.semver (module_version_semver_check)` })
       continue
     }
-    const rp = m.moduleJson.runtime.export?.retentionProfile
+    // A declared export profile always wins; the provisional table is consulted
+    // only for a module that declares no export.
+    const declared = m.moduleJson.runtime.export?.retentionProfile
+    const fromTable = !declared && !m.moduleJson.runtime.export && Object.hasOwn(provisionalProfiles, m.id) ? provisionalProfiles[m.id] : undefined
+    const rp = declared || fromTable
     if (!rp) {
       plan.undecided.push({ moduleKey: m.id, reason: 'module.json declares no runtime.export.retentionProfile: retention_profile_default_id needs an operator decision (Q20)' })
       continue
@@ -57,9 +83,14 @@ export function planCatalogueRows(modules: readonly CatalogueModule[]): Catalogu
       plan.undecided.push({ moduleKey: m.id, reason: `retention profile ${rp} names no SCHEMA context code: owning_context_code needs an operator decision (Q20)` })
       continue
     }
-    plan.load.push({ moduleKey: m.id, semver: m.moduleJson.runtime.version, retentionProfile: rp, owningContext: ctx })
+    plan.load.push({ moduleKey: m.id, semver: m.moduleJson.runtime.version, retentionProfile: rp, owningContext: ctx, provisional: fromTable !== undefined })
   }
   return plan
+}
+
+/** The one line `init` logs per module loaded with a provisional profile (callers add their own prefix). */
+export function provisionalNote(row: CatalogueRowPlan['load'][number]): string {
+  return `${row.moduleKey} loaded with provisional retention profile ${row.retentionProfile} (R29-I24, pending the DPO)`
 }
 
 export interface CatalogueRowsResult extends CatalogueRowPlan {
