@@ -28,7 +28,7 @@ export {
 export type { CreateSpec, PhaseOutcome, ProvisioningStatus } from './customer.ts'
 export { loadCatalogueRows, OWNING_CONTEXT_CODES, planCatalogueRows } from './catalogue-rows.ts'
 export type { CatalogueModule, CatalogueRowPlan, CatalogueRowsResult } from './catalogue-rows.ts'
-export { bootstrapPlatform, pgAttestations, pgModules } from './pg.ts'
+export { bootstrapPlatform, ensurePanelReader, PANEL_READS, pgAttestations, pgModules, type PanelReaderDeps } from './pg.ts'
 export { renderCustomerRouter } from './router.ts'
 export type { CustomerRouterInput } from './router.ts'
 export type { BootstrapDeps, BootstrapResult } from './pg.ts'

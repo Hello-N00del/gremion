@@ -34,6 +34,8 @@ import { dirname, join } from 'node:path'
 import postgres from 'postgres'
 import {
   bootstrapPlatform,
+  ensurePanelReader,
+  PANEL_READS,
   createPhaseA,
   createPhaseB,
   pgAttestations,
@@ -531,6 +533,11 @@ async function cmdInit(): Promise<void> {
   assertCreateEnv(catalogue, { needEdge: false })
   const platformUrl = new URL(reqEnv('PLATFORM_DATABASE_URL'))
   const kernelAdminUrl = directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))
+  // r3 verifier MEDIUM #70: the panel's read-only role -- every input read
+  // BEFORE the first connection (a missing one is a named exit 2).
+  const panelRole = reqEnv('PANEL_DB_USER')
+  const panelPassword = reqEnv('PANEL_DB_PASSWORD')
+  const controlDatabase = decodeURIComponent(new URL(reqEnv('CONTROL_DATABASE_URL')).pathname.replace(/^\//, ''))
   const kernelAdmin = postgres(kernelAdminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
   try {
     const r = await bootstrapPlatform({
@@ -544,6 +551,18 @@ async function cmdInit(): Promise<void> {
     })
     log(`init: gremion_platform ${r.platformCreated ? 'created' : 'present'}; ${r.applied.length} migration(s) applied; catalogue rows: +${r.catalogue.insertedModules.length} module(s), +${r.catalogue.insertedVersions.length} version(s); ops realm ${r.opsRealm?.created ? 'created' : 'present'}`)
     for (const u of r.catalogue.undecided) log(`init: ${u.moduleKey} not loaded (${u.reason})`)
+    const panel = await ensurePanelReader({
+      kernelAdmin,
+      openAdminOn: (db) => {
+        const u = new URL(kernelAdminUrl)
+        u.pathname = `/${encodeURIComponent(db)}`
+        return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15 })
+      },
+      role: panelRole,
+      password: panelPassword,
+      controlDatabase,
+    })
+    log(`init: control-panel reader ${panelRole} ${panel.created ? 'created' : 'present'} (SELECT on ${[...PANEL_READS.control, ...PANEL_READS.platform].join(', ')} only)`)
   } finally {
     await kernelAdmin.end({ timeout: 5 })
   }

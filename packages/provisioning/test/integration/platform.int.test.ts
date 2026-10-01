@@ -17,6 +17,7 @@ import postgres, { type Sql } from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   bootstrapPlatform,
+  ensurePanelReader,
   isDuplicateDone,
   operatorAllowGate,
   pgAttestations,
@@ -143,6 +144,48 @@ describe('the platform on a fresh server', () => {
     expect(again).toMatchObject({ platformCreated: false, applied: [] })
     expect(again.catalogue.insertedModules).toEqual([])
     expect(again.catalogue.insertedVersions).toEqual([])
+  })
+
+  // Review C MEDIUM #70 (r3 verifier): the pooled panel connected as the
+  // control-DB owner and the gremion_platform owner. It only READS tenant,
+  // tenant_domain and plt.provisioning_step (customers.ts), so `init` gives it
+  // a LOGIN role that can do exactly that.
+  it('ensurePanelReader: a LOGIN role that SELECTs tenant, tenant_domain and plt.provisioning_step, writes nothing, creates nothing; a rerun is a no-op', async () => {
+    const CONTROL = 't043_control'
+    const ROLE = 't043_panel'
+    const PW = randomBytes(24).toString('base64url')
+    if ((await admin`SELECT 1 FROM pg_database WHERE datname = ${CONTROL}`).length === 0) await admin.unsafe(`CREATE DATABASE ${CONTROL}`)
+    const c = open(CONTROL, 1)
+    try {
+      await c.unsafe(`CREATE TABLE IF NOT EXISTS tenant (id uuid PRIMARY KEY, slug text NOT NULL);
+                      CREATE TABLE IF NOT EXISTS tenant_domain (host text PRIMARY KEY, tenant_id uuid NOT NULL);
+                      CREATE TABLE IF NOT EXISTS tenant_secret_ref (tenant_id uuid PRIMARY KEY, ref text)`)
+    } finally {
+      await c.end()
+    }
+    const deps = { kernelAdmin: admin, openAdminOn: (db: string) => open(db, 1), role: ROLE, password: PW, controlDatabase: CONTROL }
+    expect(await ensurePanelReader(deps)).toEqual({ created: true })
+    expect(await ensurePanelReader(deps)).toEqual({ created: false })
+
+    const asPanelControl = open(CONTROL, 1, ROLE, PW)
+    const asPanelPlatform = open('gremion_platform', 1, ROLE, PW)
+    const code = async (q: Promise<unknown>) => q.then(() => 'ok', (e: { code?: string }) => e.code)
+    try {
+      expect(await code(asPanelControl`SELECT count(*) FROM tenant t LEFT JOIN tenant_domain d ON d.tenant_id = t.id`)).toBe('ok')
+      expect(await code(asPanelPlatform`SELECT count(*) FROM plt.provisioning_step`)).toBe('ok')
+      expect(await code(asPanelControl`INSERT INTO tenant (id, slug) VALUES (${randomUUID()}, 'x')`)).toBe('42501')
+      expect(await code(asPanelControl`SELECT * FROM tenant_secret_ref`)).toBe('42501')
+      expect(await code(asPanelControl.unsafe('CREATE TABLE panel_owned (x int)'))).toBe('42501')
+      expect(await code(asPanelPlatform`SELECT count(*) FROM plt.module_enablement`)).toBe('42501')
+      // DEFAULT VALUES: the privilege check runs before any constraint
+      expect(await code(asPanelPlatform`INSERT INTO plt.provisioning_step DEFAULT VALUES`)).toBe('42501')
+    } finally {
+      await asPanelControl.end()
+      await asPanelPlatform.end()
+    }
+    const [r] = await admin<{ s: boolean; c: boolean; r: boolean; b: boolean; l: boolean }[]>`
+      SELECT rolsuper AS s, rolcreatedb AS c, rolcreaterole AS r, rolbypassrls AS b, rolcanlogin AS l FROM pg_roles WHERE rolname = ${ROLE}`
+    expect(r).toEqual({ s: false, c: false, r: false, b: false, l: true })
   })
 
   it('pgLedger and pgAttestations round-trip on 0004', async () => {

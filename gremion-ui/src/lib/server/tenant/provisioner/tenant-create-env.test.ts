@@ -99,6 +99,17 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
     expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
   }, 90_000)
 
+  // r3 verifier MEDIUM #70: `init` makes the panel's read-only role, so it
+  // needs that role's name and password -- named, before any connection.
+  it.each(['PANEL_DB_USER', 'PANEL_DB_PASSWORD'])('init without %s: exit 2 naming it, before any connection', (missing) => {
+    const env: Record<string, string> = { ...CONTRACT, PANEL_DB_USER: 'gremion_panel', PANEL_DB_PASSWORD: 'unit-panel-password-0123456789' }
+    delete env[missing]
+    const r = run(['init'], env)
+    expect(r.status, r.out).toBe(2)
+    expect(r.out).toContain(missing)
+    expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
+  }, 90_000)
+
   it('suspend with an operator that is not a uuid is refused (exit 2)', () => {
     const r = run(['suspend', 'musterstadt', '--operator', 'root'], CONTRACT)
     expect(r.status, r.out).toBe(2)

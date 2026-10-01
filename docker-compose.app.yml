@@ -279,8 +279,11 @@ services:
       PANEL_OIDC_CLIENT_SECRET_FILE: /run/secrets/control-panel/client_secret
       AUTH_SECRET_FILE: /run/secrets/control-panel/auth_secret
       PANEL_REQUIRED_ACR: loa2
-      CONTROL_DATABASE_URL: postgresql://${CONTROL_DB_USER:-control}:${CONTROL_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
-      PLATFORM_DATABASE_URL: postgresql://${PLATFORM_DB_USER:-gremion_platform}:${PLATFORM_DB_PASSWORD:?PLATFORM_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
+      # The panel only READS (tenant, tenant_domain, plt.provisioning_step):
+      # its own role, made by `gremion-tenant init` (ensurePanelReader), never
+      # the two databases' owners (r3 verifier MEDIUM #70).
+      CONTROL_DATABASE_URL: postgresql://${PANEL_DB_USER:-gremion_panel}:${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
+      PLATFORM_DATABASE_URL: postgresql://${PANEL_DB_USER:-gremion_panel}:${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
       PANEL_EXECUTOR: none
     volumes:
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/control-panel:/run/secrets/control-panel:ro
@@ -404,6 +407,10 @@ services:
       # one runner refuses the pooler), as its owner role.
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
       PLATFORM_DATABASE_URL: postgresql://${PLATFORM_DB_USER:-gremion_platform}:${PLATFORM_DB_PASSWORD:?PLATFORM_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
+      # `init` makes the control panel's read-only role with these (the
+      # control-panel block above connects as it).
+      PANEL_DB_USER: ${PANEL_DB_USER:-gremion_panel}
+      PANEL_DB_PASSWORD: ${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}
       # The servers' POSTGRES_USERs (CREATEDB/CREATEROLE for ensureKernelDatabase
       # and enableModule) and each module's app-role password: files written by
       # `gremion-tenant init` into etc/secrets/tenant-create (0600), mounted

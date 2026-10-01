@@ -104,6 +104,75 @@ export interface BootstrapResult {
   opsRealm: { created: boolean } | null
 }
 
+export interface PanelReaderDeps {
+  /** A superuser (the state server's POSTGRES_USER) on any database. */
+  kernelAdmin: Sql
+  /** The same superuser on the named database (closed by the caller's `end`). */
+  openAdminOn(database: string): Sql
+  role: string
+  password: string
+  /** The control registry's database (CONTROL_DB_NAME, `control`). */
+  controlDatabase: string
+}
+
+/** What the control panel reads (apps/control-panel customers.ts), and nothing else. */
+export const PANEL_READS = { control: ['public.tenant', 'public.tenant_domain'], platform: ['plt.provisioning_step'] } as const
+
+const IDENT = /^[a-z_][a-z0-9_]{0,62}$/
+
+async function execFmt(sql: Sql, template: string, args: readonly string[]): Promise<void> {
+  const ph = args.map((_, i) => `, $${i + 2}::text`).join('')
+  const [row] = await sql.unsafe<{ q: string }[]>(`SELECT format($1::text${ph}) AS q`, [template, ...args])
+  await sql.unsafe(row!.q)
+}
+
+async function assertReadsOnly(sql: Sql, role: string, tables: readonly string[]): Promise<void> {
+  for (const t of tables) {
+    const [r] = await sql<{ sel: boolean; write: boolean }[]>`
+      SELECT has_table_privilege(${role}, ${t}, 'SELECT') AS sel,
+             has_table_privilege(${role}, ${t}, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') AS write`
+    if (!r?.sel || r.write) throw new ProvisioningError('POSTCONDITION', `panel reader ${role} on ${t}: select=${r?.sel} write=${r?.write} (want select only)`)
+  }
+}
+
+/**
+ * The control panel's database role (review C MEDIUM #70): LOGIN, no
+ * superuser/createdb/createrole/bypassrls, CONNECT on the control registry
+ * and gremion_platform, SELECT on exactly PANEL_READS. The pooled panel
+ * connected as the two databases' OWNERS before; it never writes (Q6: every
+ * mutation is gremion-tenant's). Idempotent; a rerun re-sets the password
+ * (the env file is the source) and re-asserts the grants.
+ */
+export async function ensurePanelReader(d: PanelReaderDeps): Promise<{ created: boolean }> {
+  if (!IDENT.test(d.role)) throw new ProvisioningError('INVALID_INPUT', `panel reader role ${JSON.stringify(d.role)} is not a plain identifier`)
+  if (!IDENT.test(d.controlDatabase)) throw new ProvisioningError('INVALID_INPUT', `control database ${JSON.stringify(d.controlDatabase)} is not a plain identifier`)
+  if (d.password.length < 16) throw new ProvisioningError('INVALID_INPUT', 'the panel reader password is shorter than 16 characters')
+  const exists = (await d.kernelAdmin`SELECT 1 FROM pg_roles WHERE rolname = ${d.role}`).length > 0
+  const attrs = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L'
+  await execFmt(d.kernelAdmin, `${exists ? 'ALTER' : 'CREATE'} ROLE %I ${attrs}`, [d.role, d.password])
+  for (const db of [d.controlDatabase, 'gremion_platform']) await execFmt(d.kernelAdmin, 'GRANT CONNECT ON DATABASE %I TO %I', [db, d.role])
+  for (const [db, schema, tables] of [
+    [d.controlDatabase, 'public', PANEL_READS.control],
+    ['gremion_platform', 'plt', PANEL_READS.platform],
+  ] as const) {
+    const sql = d.openAdminOn(db)
+    try {
+      await execFmt(sql, 'GRANT USAGE ON SCHEMA %I TO %I', [schema, d.role])
+      for (const t of tables) {
+        const [s, name] = t.split('.') as [string, string]
+        await execFmt(sql, 'GRANT SELECT ON TABLE %I.%I TO %I', [s, name, d.role])
+      }
+      await assertReadsOnly(sql, d.role, tables)
+    } finally {
+      await sql.end({ timeout: 5 })
+    }
+  }
+  const [r] = await d.kernelAdmin<{ bad: boolean }[]>`
+    SELECT (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls OR NOT rolcanlogin) AS bad FROM pg_roles WHERE rolname = ${d.role}`
+  if (!r || r.bad) throw new ProvisioningError('POSTCONDITION', `panel reader ${d.role} carries an attribute beyond LOGIN`)
+  return { created: !exists }
+}
+
 /**
  * `gremion-tenant init` (Q15): gremion_platform created if absent, migrated
  * (migratePlatform asserts the connection), the catalogue rows loaded (Q20),
