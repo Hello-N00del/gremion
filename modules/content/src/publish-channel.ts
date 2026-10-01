@@ -199,7 +199,13 @@ export async function publishChannel(
       })
     }
 
-    span.end()
+    // A failed outcome is RETURNED, not thrown (the kernel UI renders it), so
+    // mark the span failed explicitly or the trace would show a clean publish.
+    if (outcome.result.status === 'failed') {
+      span.end(new Error(outcome.result.detail ?? 'publish failed'))
+    } else {
+      span.end()
+    }
     return outcome.result
   } catch (err) {
     span.end(err instanceof Error ? err : new Error(String(err)))

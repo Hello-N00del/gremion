@@ -23,6 +23,7 @@ import {
 import { publishChannel, ChannelNotPublishableError } from '../src/publish-channel.ts'
 import type { ChannelTransport } from '../src/dispatch.ts'
 import { MailUnconfiguredError, type KernelClient, type Recipient } from '../src/kernel-client.ts'
+import type { TracerPort } from '@gremion/ports/tracer'
 import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
 
 // ── fail-closed guard ─────────────────────────────────────────────────────────
@@ -367,6 +368,43 @@ describe('publishChannel — email transient failure is retried exactly once (H0
 
     expect(third.status).toBe('sent')
     expect(transport.sent).toHaveLength(3)
+  })
+})
+
+// ── F1-FIX-07 r2: a failed per-channel result is a failed span, not a clean one ──
+// publishChannel RETURNS status:'failed' (it does not throw), so without an
+// explicit error the span ended clean and the trace hid the failure.
+
+describe('publishChannel — a failed result ends its span with an error', () => {
+  function recordingTracer(): TracerPort & { ends: unknown[] } {
+    const ends: unknown[] = []
+    return {
+      ends,
+      startSpan: () => ({ setAttribute: () => {}, end: (error?: unknown) => { ends.push(error) } }),
+      currentCorrelationId: () => null,
+    }
+  }
+
+  it('a partial failure ends the span with an Error carrying the detail; a success ends it clean', async () => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['one@x.com', 'two@x.com'])
+    const tracer = recordingTracer()
+
+    await publishChannel(TENANT, postId, 'email', {
+      ...deps(sql, makeFakeKernel(), makeFakeEmailTransport({ failFor: new Set(['two@x.com']) })),
+      tracer,
+    })
+    expect(tracer.ends).toHaveLength(1)
+    expect(tracer.ends[0]).toBeInstanceOf(Error)
+    expect((tracer.ends[0] as Error).message).toMatch(/1 send\(s\) failed/)
+
+    await publishChannel(TENANT, postId, 'email', {
+      ...deps(sql, makeFakeKernel(), makeFakeEmailTransport()),
+      tracer,
+    })
+    expect(tracer.ends).toHaveLength(2)
+    expect(tracer.ends[1]).toBeUndefined()
   })
 })
 

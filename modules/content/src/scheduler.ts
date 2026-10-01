@@ -36,8 +36,15 @@ import type { TenantRef, Sql } from './tenant-store.js'
 import type { KernelClient } from './kernel-client.js'
 import type { ChannelTransport } from './dispatch.js'
 import type { TracerPort } from '@gremion/ports/tracer'
-import { publishChannel } from './publish-channel.js'
-import { listDueScheduledChannels, resetStuckPublishing } from './store/index.js'
+import { publishChannel, type PublishResult } from './publish-channel.js'
+import { checkLinkBase } from './link-base.js'
+import {
+  listDueScheduledChannels,
+  resetStuckPublishing,
+  failScheduledChannel,
+  getChannelRow,
+} from './store/index.js'
+import type { DueChannel } from './store/posts.js'
 
 // ── constants ──────────────────────────────────────────────────────────────────
 
@@ -108,6 +115,7 @@ const _inFlight = new Set<string>()
 /** Test-only: clear the module-scoped single-flight registry between cases. */
 export function _resetSchedulerForTests(): void {
   _inFlight.clear()
+  _loggedPendingFailures.clear()
 }
 
 // ── tick ──────────────────────────────────────────────────────────────────────
@@ -239,30 +247,95 @@ export async function dispatchDueChannels(
   deps: DispatchDueDeps,
 ): Promise<void> {
   const due = await listDueScheduledChannels(deps.sql)
+  // K5#8 (F1-FIX-07 r2): the link base is read once at boot. While it is
+  // unusable no email channel can publish before a restart, so a due email
+  // channel is parked as 'failed' (nobody claimed) instead of being re-polled
+  // every tick while it holds a slot in the LIMIT-50 due list.
+  const linkBase = checkLinkBase(deps.origin, { allowLoopback: deps.allowLoopbackLinks === true })
   for (const { post_id, channel } of due) {
     if (channel === 'instagram' && !deps.instagramConfigured) {
       // Disabled-by-default seam: leave the channel armed until IG is provisioned.
       continue
     }
-    await publishChannel(tenant, post_id, channel, {
-      sql: deps.sql,
-      kernel: deps.kernel,
-      emailTransport: deps.emailTransport,
-      origin: deps.origin,
-      allowLoopbackLinks: deps.allowLoopbackLinks,
-      // A scheduled tick has no inbound x-correlation-id header, so the scheduler
-      // is the origin of this publish: correlate the co-committed outbox row (and
-      // downstream NATS envelope) explicitly on the postId rather than leaning on
-      // publishChannel's implicit `?? postId` fallback.
-      correlationId: post_id,
-      tracer: deps.tracer,
-    }).catch((err) => {
+    const where = `post ${post_id} channel ${channel} (${tenant.slug})`
+    if (channel === 'email' && !linkBase.usable) {
+      if (await failScheduledChannel(deps.sql, post_id, channel)) {
+        console.error(
+          `[${LABEL}] scheduled publish failed for ${where}: unusable public base URL ` +
+            `(${linkBase.reason}). Channel set to 'failed', nobody was mailed; fix the base, ` +
+            `restart the leaf and publish again.`,
+        )
+      }
+      continue
+    }
+
+    let result: PublishResult
+    try {
+      result = await publishChannel(tenant, post_id, channel, {
+        sql: deps.sql,
+        kernel: deps.kernel,
+        emailTransport: deps.emailTransport,
+        origin: deps.origin,
+        allowLoopbackLinks: deps.allowLoopbackLinks,
+        // A scheduled tick has no inbound x-correlation-id header, so the scheduler
+        // is the origin of this publish: correlate the co-committed outbox row (and
+        // downstream NATS envelope) explicitly on the postId rather than leaning on
+        // publishChannel's implicit `?? postId` fallback.
+        correlationId: post_id,
+        tracer: deps.tracer,
+      })
+    } catch (err) {
       console.error(
-        `[${LABEL}] scheduled publish failed for post ${post_id} channel ${channel} (${tenant.slug}):`,
+        `[${LABEL}] scheduled publish failed for ${where}:`,
         err instanceof Error ? err.message : String(err),
       )
-    })
+      continue
+    }
+    await reportScheduledResult(deps.sql, tenant, post_id, channel, where, result)
   }
+}
+
+/**
+ * Failures already logged for channels that stay 'scheduled', keyed
+ * tenant::post::channel -> detail. SMTP unconfigured is the case: it leaves the
+ * channel armed (SMTP can be configured at runtime, and the next tick then
+ * delivers), so without this it would log the same line every 60 s.
+ */
+const _loggedPendingFailures = new Map<string, string>()
+
+/**
+ * F1-FIX-07 r2: log a status:'failed' PublishResult on the scheduled path (the
+ * manual path returns it to the UI; the scheduler has no caller to show it to).
+ * A failure that took the channel off the due list is logged once by
+ * construction; one that left it 'scheduled' is logged once per distinct detail.
+ */
+async function reportScheduledResult(
+  sql: Sql,
+  tenant: TenantRef,
+  postId: string,
+  channel: DueChannel['channel'],
+  where: string,
+  result: PublishResult,
+): Promise<void> {
+  const key = `${tenant.id}::${postId}::${channel}`
+  if (result.status !== 'failed') {
+    _loggedPendingFailures.delete(key)
+    return
+  }
+  const detail = result.detail ?? 'publish failed'
+  const row = await getChannelRow(sql, postId, channel).catch(() => null)
+  if (row?.status === 'scheduled') {
+    if (_loggedPendingFailures.get(key) === detail) return
+    _loggedPendingFailures.set(key, detail)
+  } else {
+    _loggedPendingFailures.delete(key)
+  }
+  const warnings = result.warnings.length > 0 ? `; warnings: ${result.warnings.join('; ')}` : ''
+  const next =
+    row?.status === 'scheduled'
+      ? ' Channel stays scheduled and is retried every tick.'
+      : ' Channel set to failed; publish again to retry the undelivered recipients.'
+  console.error(`[${LABEL}] scheduled publish failed for ${where}: ${detail}${warnings}.${next}`)
 }
 
 // ── start / stop ────────────────────────────────────────────────────────────────

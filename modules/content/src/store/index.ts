@@ -50,6 +50,7 @@ export type { ChannelRow, ChannelStatus } from './channels.js'
 export {
   getChannelRow,
   setChannelStatus,
+  failScheduledChannel,
 } from './channels.js'
 
 export {
