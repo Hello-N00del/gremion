@@ -6,12 +6,16 @@
 // NOT import the kernel's files/nextcloud-client (that would re-introduce a
 // kernel-internal import).
 //
-// The pusher targets a "shared calendar" owned by an admin/shared account:
-//   /remote.php/dav/calendars/{CALDAV_SHARED_USER}/{CALDAV_SHARED_CALENDAR}/
+// The pusher targets one collection owned by an admin/shared account:
+//   /remote.php/dav/calendars/{user}/{calendar}/
 //
-// Env (leaf-local, see calendar-global-constraints.md):
-//   NEXTCLOUD_URL, NEXTCLOUD_ADMIN_USER, NEXTCLOUD_ADMIN_PASSWORD,
-//   CALDAV_SHARED_USER, CALDAV_SHARED_CALENDAR
+// H06: in production the {calendar} is resolved PER TENANT by caldav/target.ts
+// and passed in explicitly (tenant-drain.ts). The CALDAV_SHARED_CALENDAR env
+// default below survives only for direct/test construction; the leaf's drain
+// never uses it, because one collection for every tenant is the cross-tenant leak.
+//
+// Env (leaf-local): NEXTCLOUD_URL, NEXTCLOUD_ADMIN_USER,
+//   NEXTCLOUD_ADMIN_PASSWORD, CALDAV_SHARED_USER
 
 import { buildIcs, type IcsEvent } from './client.js'
 
@@ -36,7 +40,12 @@ interface CalDavPusherOptions {
   sharedCalendar?: string
   /** Injectable for test isolation; defaults to globalThis.fetch in production. */
   fetchImpl?: FetchImpl
+  /** Per-request budget in ms (K4#7). Defaults to DEFAULT_TIMEOUT_MS. */
+  timeoutMs?: number
 }
+
+/** One hung Nextcloud request must not stall the tenant tick (K4#7). */
+export const DEFAULT_TIMEOUT_MS = 10_000
 
 class DirectCalDavPusher implements CalDavPusher {
   private readonly baseUrl: string
@@ -45,6 +54,7 @@ class DirectCalDavPusher implements CalDavPusher {
   private readonly userId: string
   private readonly calendarName: string
   private readonly fetchImpl: FetchImpl
+  private readonly timeoutMs: number
 
   constructor(opts: {
     baseUrl: string
@@ -53,6 +63,7 @@ class DirectCalDavPusher implements CalDavPusher {
     userId: string
     calendarName: string
     fetchImpl: FetchImpl
+    timeoutMs: number
   }) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '')
     this.adminUser = opts.adminUser
@@ -60,6 +71,7 @@ class DirectCalDavPusher implements CalDavPusher {
     this.userId = opts.userId
     this.calendarName = opts.calendarName
     this.fetchImpl = opts.fetchImpl
+    this.timeoutMs = opts.timeoutMs
   }
 
   get calPath(): string {
@@ -91,6 +103,7 @@ class DirectCalDavPusher implements CalDavPusher {
         'Content-Type': 'text/calendar; charset=utf-8',
       },
       body: icsData,
+      signal: AbortSignal.timeout(this.timeoutMs),
     })
     if (!res.ok) {
       const snippet = await res
@@ -118,7 +131,12 @@ class DirectCalDavPusher implements CalDavPusher {
         Authorization: this.authHeader(),
         'OCS-APIRequest': 'true',
       },
+      signal: AbortSignal.timeout(this.timeoutMs),
     })
+    // K4#6: the object is already gone (never pushed, or removed by someone
+    // else). That is the desired end state, not a failure: without this a
+    // create-then-delete pair parks in the failed list forever.
+    if (res.status === 404 || res.status === 410) return
     if (!res.ok) {
       const snippet = await res
         .text()
@@ -144,5 +162,6 @@ export function createCalDavPusher(opts: CalDavPusherOptions = {}): CalDavPusher
     userId: sharedUser,
     calendarName: sharedCalendar,
     fetchImpl,
+    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   })
 }
