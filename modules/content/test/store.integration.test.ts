@@ -44,6 +44,7 @@ import {
   listMediaByPost,
   // deliveries
   claimRecipient,
+  claimDelivery,
   markSent,
   markFailed,
   // tokens
@@ -429,6 +430,70 @@ describe('deliveries', () => {
     ])
     expect(results.filter((r) => r === 'fresh')).toHaveLength(1)
     expect(results.filter((r) => r === 'in-flight')).toHaveLength(1)
+  })
+
+  // F1-FIX-07 r2: once 'failed' is re-claimable, a late markFailed from a
+  // superseded claimer must not turn a delivered row back into 'failed'. Worker A
+  // hangs past the 15-minute stale window, worker B takes the claim over and
+  // delivers; A's send then throws. Before the guard A's markFailed overwrote
+  // 'sent' and the next publish mailed the recipient a second time.
+  it('a late markFailed from a superseded claimer never overwrites a later sent', async () => {
+    const p = await mkPost()
+    await claimRecipient(sql, p.id, 'late@b.de') // worker A
+    await sql`
+      UPDATE content.deliveries SET claimed_at = now() - interval '20 minutes'
+      WHERE post_id = ${p.id} AND email = ${'late@b.de'}
+    `
+    expect(await claimRecipient(sql, p.id, 'late@b.de')).toBe('fresh') // worker B takes over
+    await markSent(sql, p.id, 'late@b.de', 'msg-b')
+    await markFailed(sql, p.id, 'late@b.de', 'A: connection reset') // A's late failure
+
+    const rows = await sql<{ status: string; smtp_message_id: string | null }[]>`
+      SELECT status, smtp_message_id FROM content.deliveries
+      WHERE post_id = ${p.id} AND email = ${'late@b.de'}
+    `
+    expect(rows[0]).toMatchObject({ status: 'sent', smtp_message_id: 'msg-b' })
+    expect(await claimRecipient(sql, p.id, 'late@b.de')).toBe('already-sent')
+  })
+
+  it("a late markFailed carrying the superseded claim's token leaves the live claim alone", async () => {
+    const p = await mkPost()
+    const a = await claimDelivery(sql, p.id, 'tok@b.de')
+    expect(a.result).toBe('fresh')
+    await sql`
+      UPDATE content.deliveries SET claimed_at = now() - interval '20 minutes'
+      WHERE post_id = ${p.id} AND email = ${'tok@b.de'}
+    `
+    const staleToken = (
+      await sql<{ t: string }[]>`
+        SELECT (EXTRACT(EPOCH FROM claimed_at) * 1000000)::bigint::text AS t
+        FROM content.deliveries WHERE post_id = ${p.id} AND email = ${'tok@b.de'}
+      `
+    )[0]!.t
+    const b = await claimDelivery(sql, p.id, 'tok@b.de')
+    expect(b.result).toBe('fresh')
+    expect(b.claimedAt).not.toBe(staleToken)
+
+    // A's send throws while B is still sending: A's markFailed must not touch B's claim.
+    await markFailed(sql, p.id, 'tok@b.de', 'A: timeout', staleToken)
+    expect(await claimRecipient(sql, p.id, 'tok@b.de')).toBe('in-flight')
+
+    // B's own failure, with B's token, does mark it failed (and so re-claimable).
+    await markFailed(sql, p.id, 'tok@b.de', 'B: 451', b.claimedAt!)
+    const rows = await sql<{ status: string }[]>`
+      SELECT status FROM content.deliveries WHERE post_id = ${p.id} AND email = ${'tok@b.de'}
+    `
+    expect(rows[0]!.status).toBe('failed')
+  })
+
+  it('markSent still records a delivery whose claim a late markFailed already flipped', async () => {
+    // Without a token (the kernel's HTTP path) A's late markFailed can flip B's
+    // live claim to 'failed'; B's send DID go out, so B's markSent must win.
+    const p = await mkPost()
+    await claimRecipient(sql, p.id, 'flip@b.de')
+    await markFailed(sql, p.id, 'flip@b.de', 'A: late failure')
+    await markSent(sql, p.id, 'flip@b.de', 'msg-b')
+    expect(await claimRecipient(sql, p.id, 'flip@b.de')).toBe('already-sent')
   })
 })
 

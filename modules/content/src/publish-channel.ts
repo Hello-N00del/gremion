@@ -43,7 +43,7 @@ import {
   getChannelRow,
   setChannelStatus,
   getPostChannelRecipients,
-  claimRecipient,
+  claimDelivery,
   markSent,
   markFailed,
   releaseClaim,
@@ -271,7 +271,7 @@ async function publishEmail(
   for (const { email } of recipients) {
     const emailLower = email.toLowerCase()
 
-    const claim = await claimRecipient(sql, postId, emailLower)
+    const { result: claim, claimedAt } = await claimDelivery(sql, postId, emailLower)
     if (claim === 'already-sent') {
       alreadySentCount += 1
       continue
@@ -298,7 +298,7 @@ async function publishEmail(
         // the pass. Do NOT keep looping: the rest would fail identically, and a
         // recipient already-sent on a PRIOR pass must not let the pass report
         // success while these un-sent ones are silently dropped.
-        await releaseClaim(sql, postId, emailLower)
+        await releaseClaim(sql, postId, emailLower, claimedAt ?? undefined)
         smtpUnconfigured = true
         break
       }
@@ -306,7 +306,8 @@ async function publishEmail(
       // 'failed' row is re-claimed by the next publish (claimRecipient takes
       // over failed rows, F1-FIX-07 H07), so the recipient is retried, not lost.
       const message = err instanceof Error ? err.message : String(err)
-      await markFailed(sql, postId, emailLower, message)
+      // The claim token keeps a late failure off a claim another worker took over.
+      await markFailed(sql, postId, emailLower, message, claimedAt ?? undefined)
       failedCount += 1
       warnings.push(`send to ${emailLower} failed: ${message}`)
     }

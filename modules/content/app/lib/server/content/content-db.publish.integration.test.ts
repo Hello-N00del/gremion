@@ -254,6 +254,26 @@ describe('content-db L2 publish/email (integration)', () => {
 		expect(rows[0]).toMatchObject({ status: 'claimed', error_message: null })
 	})
 
+	// F1-FIX-07 r2: a late failure from a superseded claimer never turns a delivered
+	// row back into 'failed' (which, now that 'failed' is re-claimable, re-sends).
+	it('a late markDeliveryFailed after a takeover delivered leaves the row sent', async () => {
+		const sql = getDb()
+		const post = await createPost({ title: 'Late', created_by: 'u1' })
+		await claimRecipient(post.id, 'a@x.de') // worker A
+		await sql`UPDATE content.deliveries SET claimed_at = now() - interval '20 minutes'
+			WHERE post_id = ${post.id} AND email = 'a@x.de'`
+		expect(await claimRecipient(post.id, 'a@x.de')).toBe('fresh') // worker B takes over
+		await markDeliverySent(post.id, 'a@x.de', 'msg-b')
+		await markDeliveryFailed(post.id, 'a@x.de', 'A: connection reset') // A fails late
+
+		const rows = await sql<{ status: string; smtp_message_id: string | null }[]>`
+			SELECT status, smtp_message_id FROM content.deliveries
+			WHERE post_id = ${post.id} AND email = 'a@x.de'
+		`
+		expect(rows[0]).toMatchObject({ status: 'sent', smtp_message_id: 'msg-b' })
+		expect(await claimRecipient(post.id, 'a@x.de')).toBe('already-sent')
+	})
+
 	// ── publications (upsert linkage) ─────────────────────────────────────────
 
 	it('setPublication upserts + stamps published_at; getPublication reads; clear removes', async () => {

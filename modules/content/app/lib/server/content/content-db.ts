@@ -592,7 +592,12 @@ export async function claimRecipient(
 	return rows[0]!.status === 'sent' ? 'already-sent' : 'in-flight'
 }
 
-/** Mark a delivery successfully sent (status='sent', sent_at=now(), message id). */
+/**
+ * Mark a delivery successfully sent (status='sent', sent_at=now(), message id).
+ * Any non-'sent' row may become 'sent' (the mail went out, even if a superseded
+ * claimer's late failure already flipped the claim); a 'sent' row keeps its
+ * first sent_at and message id. Mirrors the leaf's markSent (F1-FIX-07 r2).
+ */
 export async function markDeliverySent(
 	postId: string,
 	emailLower: string,
@@ -602,11 +607,16 @@ export async function markDeliverySent(
 	await sql`
 		UPDATE content.deliveries
 		SET status = 'sent', sent_at = now(), smtp_message_id = ${messageId}
-		WHERE post_id = ${postId} AND email = ${emailLower}
+		WHERE post_id = ${postId} AND email = ${emailLower} AND status <> 'sent'
 	`
 }
 
-/** Mark a delivery failed (status='failed', failed_at=now(), error message). */
+/**
+ * Mark a delivery failed (status='failed', failed_at=now(), error message).
+ * Only a 'claimed' row can fail (F1-FIX-07 r2): 'failed' rows are re-claimed, so
+ * overwriting a 'sent' row (a worker that hung past the stale window, failing
+ * after a takeover delivered) would mail the recipient again.
+ */
 export async function markDeliveryFailed(
 	postId: string,
 	emailLower: string,
@@ -616,7 +626,7 @@ export async function markDeliveryFailed(
 	await sql`
 		UPDATE content.deliveries
 		SET status = 'failed', failed_at = now(), error_message = ${error}
-		WHERE post_id = ${postId} AND email = ${emailLower}
+		WHERE post_id = ${postId} AND email = ${emailLower} AND status = 'claimed'
 	`
 }
 

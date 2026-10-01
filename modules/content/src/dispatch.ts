@@ -37,7 +37,7 @@ import {
   listMembers,
   isUnsubscribed,
   addSendToken,
-  claimRecipient,
+  claimDelivery,
   markSent,
   markFailed,
   createPublication,
@@ -273,7 +273,7 @@ async function dispatchEmail(
   let lastError: unknown
 
   for (const { email } of recipients) {
-    const claim = await claimRecipient(sql, postId, email)
+    const { result: claim, claimedAt } = await claimDelivery(sql, postId, email)
     if (claim !== 'fresh') continue // already-sent or in-flight
 
     const token = await addSendToken(sql, randomUUID(), postId, email)
@@ -294,7 +294,8 @@ async function dispatchEmail(
       // for 15 min, so a retry inside that window skipped the recipient and
       // still flipped the post to 'sent'.
       const message = err instanceof Error ? err.message : String(err)
-      await markFailed(sql, postId, email, message)
+      // The claim token keeps a late failure off a claim another worker took over.
+      await markFailed(sql, postId, email, message, claimedAt ?? undefined)
       failed += 1
       lastError = err
       console.error(`[dispatch] email send to ${email} (post ${postId}) failed:`, message)
