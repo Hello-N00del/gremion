@@ -95,6 +95,15 @@ export function socketIsolationViolations(render, socketNet = 'socket') {
   if (JSON.stringify(members) !== JSON.stringify(['docker-socket-proxy', 'traefik'])) {
     out.push(`networks.${socketNet} members are [${members.join(', ')}], want exactly [docker-socket-proxy, traefik]`)
   }
+  // A service that joins the network namespace of traefik or the proxy reaches
+  // the proxy without appearing under `networks:` at all.
+  for (const [name, s] of Object.entries(svcs)) {
+    const mode = typeof s.network_mode === 'string' ? s.network_mode : ''
+    const m = /^(service|container):(.+)$/.exec(mode)
+    if (m && name !== 'docker-socket-proxy' && name !== 'traefik' && /docker-socket-proxy|traefik/.test(m[2])) {
+      out.push(`${name} shares the network namespace of ${mode}`)
+    }
+  }
   const proxy = svcs['docker-socket-proxy']
   if (proxy) {
     const nets = Object.keys(proxy.networks ?? {})

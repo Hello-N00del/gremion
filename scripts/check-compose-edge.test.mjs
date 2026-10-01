@@ -66,7 +66,12 @@ const realpath = (p) => {
   }
 }
 const IS_ENTRY = process.argv[1] !== undefined && realpath(process.argv[1]) === realpath(SELF)
-const test = IS_ENTRY ? nodeTest : () => {}
+// A statement-bodied wrapper returns nothing: the oxlint ratchet's
+// no-floating-promises flags every top-level `test(` whose callee returns the
+// node:test promise (the node:test exemption does not see through a wrapper).
+const test = (...args) => {
+  if (IS_ENTRY) nodeTest(...args)
+}
 const TRAEFIK_YML = 'docker/traefik/traefik.yml'
 const MARKERS = ['@ACME_EMAIL@', '@ACME_CA_SERVER@', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@']
 
@@ -340,6 +345,12 @@ test('guard 5: the check fails on each way the isolation can be undone (guard ef
   fails((r) => { r.networks.socket.external = true }, /is external/)
   fails((r) => { delete r.networks.socket }, /networks\.socket is not declared/)
   fails((r) => { delete r.services['docker-socket-proxy'] }, /not in the render/)
+  // Joining the proxy's or traefik's network namespace reaches it without
+  // being listed under `networks:`.
+  fails((r) => { r.services.keycloak.network_mode = 'service:traefik' }, /keycloak shares the network namespace of service:traefik/)
+  fails((r) => { r.services.keycloak.network_mode = 'service:docker-socket-proxy' }, /keycloak shares the network namespace of service:docker-socket-proxy/)
+  fails((r) => { r.services.keycloak.network_mode = 'container:gremion-traefik' }, /keycloak shares the network namespace of container:gremion-traefik/)
+  fails((r) => { r.services.keycloak.network_mode = 'container:docker-socket-proxy' }, /keycloak shares the network namespace of container:docker-socket-proxy/)
 })
 
 // ── 4. no middleware keys security on a client-supplied header ────────────
