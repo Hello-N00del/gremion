@@ -195,6 +195,52 @@ describe('ensureKernelDatabase (TDD 5)', () => {
     }
   })
 
+  // TASK-043b F4: PgBouncer's auth_query logs in AS pgbouncer_auth TO the
+  // requested database. lockDownDatabase revokes CONNECT from PUBLIC, so without
+  // an explicit grant every pooled login failed "permission denied for database
+  // t_<hex>__kernel" (measured on the pooled scratch stack t040-9d678995).
+  it('pgbouncer_auth may CONNECT to the locked-down kernel database and run the auth_query; exactly CONNECT, PUBLIC still locked out, idempotent (TASK-043b F4)', async () => {
+    const U = uuidv7()
+    const had = (await server.admin`SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer_auth'`).length === 1
+    const authPw = randomBytes(18).toString('base64url')
+    try {
+      if (!had) {
+        const [c] = await server.admin<{ stmt: string }[]>`SELECT format('CREATE ROLE pgbouncer_auth LOGIN PASSWORD %L', ${authPw}::text) AS stmt`
+        await server.admin.unsafe(c!.stmt)
+      }
+      const r = await ensureKernelDatabase(server, U, pwX)
+      expect(r.pgbouncerGrant).toBe('applied')
+      const priv = async () =>
+        (
+          await server.admin<{ auth_connect: boolean; auth_temp: boolean; public_connect: boolean }[]>`
+            SELECT has_database_privilege('pgbouncer_auth', datname, 'CONNECT') AS auth_connect,
+                   has_database_privilege('pgbouncer_auth', datname, 'TEMPORARY') AS auth_temp,
+                   has_database_privilege('public', datname, 'CONNECT') AS public_connect
+              FROM pg_database WHERE datname = ${r.dbName}`
+        )[0]
+      expect(await priv()).toEqual({ auth_connect: true, auth_temp: false, public_connect: false })
+      // a rerun re-asserts the same grant and nothing more
+      await ensureKernelDatabase(server, U, pwX)
+      expect(await priv()).toEqual({ auth_connect: true, auth_temp: false, public_connect: false })
+      if (had) {
+        console.error('[t043b] pgbouncer_auth pre-existed on this server: its password is not the test\'s, so only the privilege half ran')
+        return
+      }
+      // What PgBouncer does: log in as auth_user to the target database and run auth_query.
+      const auth = as(r.dbName, 'pgbouncer_auth', authPw)
+      try {
+        const rows = await auth<{ usename: string; passwd: string }[]>`SELECT usename, passwd FROM pgbouncer.get_auth(${r.app})`
+        expect(rows.map((x) => x.usename)).toEqual([r.app])
+        expect(rows[0]?.passwd.startsWith('SCRAM-SHA-256$')).toBe(true)
+      } finally {
+        await auth.end({ timeout: 1 }).catch(() => {})
+      }
+    } finally {
+      await dropKernelDatabase(server, U).catch((e: unknown) => console.error('[t043b] teardown left the kernel db of', U, e))
+      if (!had) await server.admin.unsafe('DROP ROLE IF EXISTS pgbouncer_auth')
+    }
+  })
+
   it('dropKernelDatabase removes the database and all three roles; a second call is a no-op', async () => {
     const W = uuidv7()
     await ensureKernelDatabase(server, W, pwX)

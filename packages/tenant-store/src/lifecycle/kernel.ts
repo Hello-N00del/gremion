@@ -12,7 +12,11 @@
 // Then: PUBLIC loses CONNECT and TEMPORARY, the app gains CONNECT; timezone
 // UTC; PUBLIC loses CREATE on schema public; pgbouncer.get_auth (the
 // auth_query PgBouncer resolves SCRAM verifiers through, which the old
-// createDatabaseAndRole also installed).
+// createDatabaseAndRole also installed) and, where the server has a
+// pgbouncer_auth role, CONNECT for it (TASK-043b F4: auth_query logs in to the
+// requested database itself). Module databases need no such grant: they sit on
+// their own servers, which no PgBouncer fronts (docker/pgbouncer/pgbouncer.ini
+// routes `*` to the kernel server only).
 //
 // It NEVER migrates: the kernel-data chain is gremion-ui's (db.ts
 // runMigrations, the (filename, applied_at) ledger); running it with this
@@ -155,6 +159,11 @@ export async function ensureKernelDatabase(server: ModuleServer, tenantId: strin
     await db.unsafe(GET_AUTH)
     const [auth] = await db<{ present: boolean }[]>`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer_auth') AS present`
     if (auth?.present) {
+      // TASK-043b F4: PgBouncer runs auth_query AS pgbouncer_auth IN the
+      // requested database, and lockDownDatabase took CONNECT from PUBLIC: without
+      // this grant every pooled login failed "permission denied for database".
+      // Exactly CONNECT (never TEMPORARY); a GRANT that is held is a no-op.
+      await execFormatted(server.admin, 'GRANT CONNECT ON DATABASE %I TO pgbouncer_auth', [dbName])
       await db.unsafe('GRANT USAGE ON SCHEMA pgbouncer TO pgbouncer_auth')
       await db.unsafe('GRANT EXECUTE ON FUNCTION pgbouncer.get_auth(text) TO pgbouncer_auth')
       pgbouncerGrant = 'applied'
