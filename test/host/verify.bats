@@ -22,6 +22,14 @@ fake_http() {   # <url> <code> <body> [forged]
     printf '%s' "$3" > "${FAKE_HTTP}/probe-${s}.body"
 }
 
+# A URL curl cannot connect to: prints 000 (the -w code) and exits 7, as curl does.
+fake_http_unreachable() {   # <url> [forged]
+    local s
+    s="$(slug "$1")"
+    [ "${2:-}" = "forged" ] && s="${s}-forged"
+    : > "${FAKE_HTTP}/probe-${s}.unreachable"
+}
+
 fake_cert() {   # <host> <san-line> <checkend-exit>
     printf -- '-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n' > "${FAKE_TLS}/$1.pem"
     # EXACTLY the shape `openssl x509 -noout -ext subjectAltName` prints: a
@@ -73,11 +81,18 @@ case "$url" in
 esac
 s="$(printf "%s" "$url" | tr -c "A-Za-z0-9" "-")"
 [ "$forged" = 1 ] && s="${s}-forged"
+# F1-FIX-09 (K6#0): a real curl that cannot connect prints the -w code 000 AND
+# exits non-zero (7). The shim used to print 000 and exit 0, which is the one
+# shape that hid `|| echo 000` appending a second 000 (-> "000000").
+if [ -f "$FAKE_HTTP/probe-$s.unreachable" ]; then
+  [ "$want_code" = 1 ] && printf "000"
+  exit 7
+fi
 if [ "$want_code" = 1 ]; then
   if [ -n "$outfile" ] && [ -f "$FAKE_HTTP/probe-$s.body" ]; then
     cat "$FAKE_HTTP/probe-$s.body" > "$outfile" 2>/dev/null || true
   fi
-  cat "$FAKE_HTTP/probe-$s.code" 2>/dev/null || printf "000"
+  cat "$FAKE_HTTP/probe-$s.code" 2>/dev/null || { printf "000"; exit 7; }
 else
   cat "$FAKE_HTTP/probe-$s.body" 2>/dev/null || true
 fi
@@ -403,6 +418,36 @@ EOF
     run "$VERIFY" --hosts "$HOSTS"
     [ "$status" -eq 1 ]
     [[ "$output" == *"acme-challenge probe for tenant-a.example.org returned 301"* ]]
+}
+
+# F1-FIX-09 / K6#0: `curl -w '%{http_code}' ... || echo 000` printed the code
+# curl itself wrote (000) and then a second 000, so a probe that could not connect
+# read "000000". That is neither "000" nor >= 400 in arithmetic, so the internaltest
+# probe in check_colour passed on a dead entrypoint. The shim above now prints 000
+# AND exits 7, as real curl does; each case asserts the failure NAMES code 000.
+@test "a host whose marker request cannot connect fails as 000, never as 000000" {
+    fake_http_unreachable "https://tenant-a.example.org:8443/whoami"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"returned 000 (expected < 400)"* ]]
+    [[ "$output" != *"000000"* ]]
+}
+
+@test "an acme-challenge probe that cannot connect fails as 000, never as 000000" {
+    fake_http_unreachable "http://tenant-a.example.org:8090/.well-known/acme-challenge/probe"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"acme-challenge probe for tenant-a.example.org returned 000 (expected 404"* ]]
+    [[ "$output" != *"000000"* ]]
+}
+
+@test "--colour fails when the internaltest probe cannot connect (000, not a pass)" {
+    prepare_green_colour
+    fake_http_unreachable "http://127.0.0.1:8081/whoami"
+    run "$VERIFY" --colour green --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"internaltest entrypoint returned 000 for example.org"* ]]
+    [[ "$output" != *"000000"* ]]
 }
 
 @test "the default host list is PLATFORM_DOMAIN, control. and etc/tenant-hosts.txt" {
