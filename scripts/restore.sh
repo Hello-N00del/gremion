@@ -105,8 +105,12 @@ case "$TARGET" in
         [[ "$TARGET" == "keycloak" ]] && DB_USER="${KEYCLOAK_DB_USER:-keycloak}"
         [[ "$TARGET" == "control"  ]] && DB_USER="${CONTROL_DB_USER:-control}"
 
-        # Drop and recreate (use psql -v with format() to prevent SQL injection)
+        # Drop and recreate (use psql -v with format() to prevent SQL injection).
+        # F1-FIX-09 (K6#3): ON_ERROR_STOP on EVERY psql call. Plain psql carries on
+        # after an error and exits 0, so a failed drop/create/load used to end in
+        # "Restore complete" over a half-built database.
         docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
+            -v ON_ERROR_STOP=1 \
             -v _target="$TARGET" -v _db_user="$DB_USER" <<-'SQL'
             SELECT pg_terminate_backend(pid)
             FROM pg_stat_activity
@@ -116,10 +120,26 @@ case "$TARGET" in
             SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'_target', :'_db_user') \gexec
 SQL
 
-        # Restore
+        # Restore. ON_ERROR_STOP plus ONE transaction: the load either lands in
+        # full or leaves the freshly created, empty database. pipefail (set above)
+        # makes a zcat failure fail the pipeline as well as a psql failure.
         zcat "$BACKUP_FILE" \
             | docker compose exec -T postgres \
-                psql -U "${POSTGRES_USER:-postgres}" "$TARGET"
+                psql -U "${POSTGRES_USER:-postgres}" \
+                    -v ON_ERROR_STOP=1 --single-transaction "$TARGET" \
+            || error "Restore of '${TARGET}' FAILED while loading ${BACKUP_FILE}; the database was dropped and is not usable"
+
+        # Post-condition, read from the restored database and not from the exit
+        # codes above: a dump that loaded nothing (an empty or header-only file)
+        # exits 0 everywhere. Every target of this script owns tables.
+        TABLES="$(docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
+            -d "$TARGET" -v ON_ERROR_STOP=1 -tAc \
+            "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')" \
+            </dev/null | tr -d '[:space:]')" \
+            || error "Restore of '${TARGET}' could not be verified (post-condition query failed)"
+        [[ "$TABLES" =~ ^[0-9]+$ && "$TABLES" -gt 0 ]] \
+            || error "Restore of '${TARGET}' FAILED: the restored database has no tables (post-condition read '${TABLES:-nothing}')"
+        info "Post-condition: '${TARGET}' holds ${TABLES} table(s)."
         ;;
 
     *)
