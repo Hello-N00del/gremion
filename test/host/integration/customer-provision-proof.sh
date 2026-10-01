@@ -415,8 +415,12 @@ PENV="${POOLED_ENV_DIR:-}"
 X=proof-x                 # the customer under proof
 Y=proof-y                 # the second customer (unaffected by X's suspend)
 XT="${X//-/_}"
-need_pooled() {
+need_pooled() { # [no-operator]
     [[ -n "$PSTACK" && -d "$PENV" && -f "$PENV/state.env" ]] || die "set POOLED_STACK and POOLED_ENV_DIR (a running pooled stack's env files)"
+    # customer-layout precedes the operator: `gremion-tenant init` (the ops
+    # realm) and `operator add` (the user whose id PROOF_OPERATOR_ID is) both
+    # run against the root it lays out.
+    [[ "${1:-}" == no-operator ]] && return 0
     [[ "${PROOF_OPERATOR_ID:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
         || die "set PROOF_OPERATOR_ID (a platform-realm user id, lowercase uuid)"
 }
@@ -537,6 +541,32 @@ request = \"UID SEARCH TO \\\"$1\\\"\"" | tr -d '\r' | awk '/SEARCH/ { print $NF
     done
     return 1
 }
+# A file the HOST writes into etc/edge (the router files of `create`, the
+# switch file) reaches Traefik's file provider through inotify. Docker
+# Desktop's Windows bind mounts deliver none into a container (measured,
+# test/host/integration/edge-proto.sh assert_file_watch): a file present at
+# Traefik's start is read, one written later never is. On a SCRATCH stack
+# only, after waiting for the watch, the harness re-writes each *.yml from
+# INSIDE the engine (cp + mv in a throwaway container on the same mount, the
+# bytes unchanged), which the watch does see; the nudge is recorded in
+# ledger/edge-nudge.log. A host (Linux) never takes this path.
+traefik_has() { # <api path>, e.g. http/routers/tenant-x.kc@file
+    curl -fsS --max-time 3 "http://127.0.0.1:$(penv TRAEFIK_API_PORT)/api/$1" >/dev/null 2>&1
+}
+edge_nudge() {
+    docker run --rm --name "${STACK}-edge-nudge-$$" -v "$(host_path "$(croot)/etc/edge"):/e" --entrypoint sh "$PG_IMAGE" \
+        -c 'for f in /e/*.yml; do [ -f "$f" ] || continue; cp -p "$f" /e/.nudge.tmp && mv -f /e/.nudge.tmp "$f"; done'
+}
+edge_wait() { # <api path> -- 0 once Traefik reports it
+    local s=0
+    while (( s < 20 )); do traefik_has "$1" && return 0; sleep 2; s=$(( s + 2 )); done
+    scratch_tls || return 1
+    printf '%s %s not reported 20 s after the host wrote etc/edge: nudged from inside the engine\n' "$(now)" "$1" | ledger edge-nudge.log
+    edge_nudge
+    s=0
+    while (( s < 30 )); do traefik_has "$1" && return 0; sleep 2; s=$(( s + 2 )); done
+    return 1
+}
 trd440() { # the container count and every project's service list
     # every measurement must succeed (review C, r2): a failed render on both
     # sides compared equal; each project renders from its own directory
@@ -553,14 +583,23 @@ trd440() { # the container count and every project's service list
 }
 
 phase_customer_layout() {
-    need_pooled
+    need_pooled no-operator
     [[ -z "${PROOF_GREMION_ROOT:-}" ]] || die "customer-layout lays out a SCRATCH root; PROOF_GREMION_ROOT names a real one"
     local r; r="$(croot)"; [[ -d "$r" ]] || die "the pooled stack's GREMION_ROOT ${r} is absent"
-    mkdir -p "$r/etc/env" "$r/runtime" "$r/etc/edge"
+    mkdir -p "$r/etc/env" "$r/runtime" "$r/etc/edge" "$r/logs"
     local f
     for f in state app-blue app-green mail ops; do [[ -f "$PENV/$f.env" ]] && cp "$PENV/$f.env" "$r/etc/env/$f.env"; done
     [[ -f "$r/runtime/active-colour" ]] || echo blue > "$r/runtime/active-colour"
     ok "customer-layout: ${r} carries etc/env, runtime/active-colour ($(cat "$r/runtime/active-colour")) and etc/edge"
+    # The switch file a host's first deploy writes (etc/edge/active.yml: the
+    # colour-bound service app@file every tenant router targets), by the
+    # repo's own gremion-switch; --no-evict: no app process caches a tenant yet.
+    # Without it every tenant router points at a service that does not exist.
+    GREMION_ROOT="$(host_path "$r")" TRAEFIK_API="http://127.0.0.1:$(penv TRAEFIK_API_PORT)" \
+        bash "$ROOT/infra/host/bin/gremion-switch" "$(cat "$r/runtime/active-colour")" --no-evict \
+        > "$OUT/ledger/switch.log" 2>&1 || info "gremion-switch: $(tail -n1 "$OUT/ledger/switch.log")"
+    if edge_wait "http/services/app@file"; then ok "customer-layout: etc/edge/active.yml written by gremion-switch; Traefik reports app@file"
+    else bad "customer-layout: Traefik does not report app@file after gremion-switch (see ledger/switch.log)"; fi
 }
 
 phase_customer_before() {
@@ -620,7 +659,9 @@ phase_customer_create() {
     if [[ "$(skc get groups -r "$X" --fields name | jq 'length')" == 1 ]]; then ok "customer-create: realm ${X} holds one group (the first body)"; else bad "customer-create: realm ${X} group count"; fi
     local users; users="$(skc get users -r "$X" --fields username,requiredActions | jq -c '[.[] | select(.username | startswith("service-account-") | not)] | length')"
     if [[ "$users" == 2 ]]; then ok "customer-create: two administrators in ${X}"; else bad "customer-create: ${users} user(s) in ${X}, want 2"; fi
-    local smtp; smtp="$(skc get "realms/$X" --fields smtpServer | jq -c '.smtpServer | [.user, .from, .host, .port, .starttls]')"
+    # 'smtpServer(*)': on Keycloak 26.6 a bare `--fields smtpServer` returns
+    # the map EMPTY (measured), so every field read back as null
+    local smtp; smtp="$(skc get "realms/$X" --fields 'smtpServer(*)' | jq -c '.smtpServer | [.user, .from, .host, .port, .starttls]')"
     if [[ "$smtp" == "[\"kc-${XT}@$(penv PLATFORM_DOMAIN)\",\"kc-${XT}@$(penv PLATFORM_DOMAIN)\",\"mail.$(penv PLATFORM_DOMAIN)\",\"587\",\"true\"]" ]]; then ok "customer-create: the realm sends as kc-${XT}@ through mail.<domain>:587 STARTTLS (R-E5b)"; else bad "customer-create: realm SMTP ${smtp}"; fi
     # The control row, the ledger, the broker, the router.
     if [[ "$(q control "SELECT count(*) FROM tenant_domain WHERE tenant_id = '${id}' AND is_primary")" == 1 ]]; then ok "customer-create: one primary tenant_domain row binds $(host_of "$X")"; else bad "customer-create: tenant_domain rows"; fi
@@ -630,6 +671,10 @@ phase_customer_create() {
         ok "customer-create: the broker account holds kernel and calendar users, none for vault (no flow, Q4)"
     else bad "customer-create: the broker account's users are not kernel+calendar"; fi
     if grep -qF "    tenant-${X}.kc:" "$(croot)/etc/edge/tenant-${X}.yml" 2>/dev/null; then ok "customer-create: etc/edge/tenant-${X}.yml carries the realm router (Q16, Q17)"; else bad "customer-create: no router file with the realm router"; fi
+    local rt
+    for rt in "tenant-${X}.kc" "tenant-${Y}.kc"; do
+        edge_wait "http/routers/${rt}@file" || info "Traefik does not report the router ${rt}@file"
+    done
     if edge_served "$(host_of "$X")"; then ok "customer-create: $(host_of "$X") is served by gremion-ui through the edge (${EDGE_SHAPE})"
     else bad "customer-create: $(host_of "$X") is not served (${EDGE_SHAPE}; want 302/303 into /auth/login or 200 with gremion-ui's CSP)"; fi
 }
