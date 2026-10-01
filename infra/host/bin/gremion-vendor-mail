@@ -167,10 +167,17 @@ kc_connect() {
         || die "kcadm could not authenticate against the state keycloak at ${KC_SERVER}" "$GREMION_EXIT_ASSERT"
 }
 
+# SMTP_FIELDS: kcadm's field filter for the realm's smtpServer map. 'smtpServer(*)',
+# never a bare `--fields smtpServer`: on Keycloak 26.6.1 the bare form answers
+# the map EMPTY ({"smtpServer":{}}) whatever the realm holds, so every read-back
+# failed although the update had applied (TASK-043b F2; the real outputs are
+# test/host/fixtures/kcadm-26.6.1/). The same holds for 'attributes(*)'.
+SMTP_FIELDS='smtpServer(*)'
+
 # The non-secret fields of a realm's smtpServer, one canonical JSON line.
 realm_smtp_fields() {   # <realm>
     local out
-    out="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$1" --fields smtpServer)" || return 1
+    out="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$1" --fields "$SMTP_FIELDS")" || return 1
     printf '%s' "$out" | jq -c '(.smtpServer // {}) | {host, port, user, from, starttls}'
 }
 
@@ -178,7 +185,7 @@ realm_smtp_fields() {   # <realm>
 # smtpServer password as its mask, never the value), one canonical JSON line.
 realm_smtp_state() {   # <realm>
     local out
-    out="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$1" --fields smtpServer)" || return 1
+    out="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$1" --fields "$SMTP_FIELDS")" || return 1
     printf '%s' "$out" | jq -c '(.smtpServer // {}) | {host, port, user, from, starttls, pwset: ((.password // "") != "")}'
 }
 
@@ -273,7 +280,7 @@ customer_realm_smtp() {
         # off mean the realm cannot authenticate as anyone; the principal
         # itself is proven gone by the listing below.
         local raw
-        raw="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$realm" --fields smtpServer)" \
+        raw="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$realm" --fields "$SMTP_FIELDS")" \
             || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
         state="$(jq -c '(.smtpServer // {}) | {user: (.user // ""), from: (.from // ""), auth: ((.auth // "") | tostring)}' <<<"$raw")" \
             || die "realms/${realm} read back as no JSON" "$GREMION_EXIT_ASSERT"
@@ -400,7 +407,7 @@ cmd_collect() {
     raw=""
     kc_connect
     local realms
-    realms="$(docker exec "$KC_CID" "$KCADM_BIN" get realms --fields realm,smtpServer)" \
+    realms="$(docker exec "$KC_CID" "$KCADM_BIN" get realms --fields "realm,${SMTP_FIELDS}")" \
         || die "kcadm could not list the realms" "$GREMION_EXIT_ASSERT"
     jq '[.[] | {realm, smtp: ((.smtpServer // {}) | {user, from, host})}]' <<<"$realms" \
         | atomic_write "${out}/realms.json" 0600 \

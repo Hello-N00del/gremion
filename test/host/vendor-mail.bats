@@ -267,10 +267,23 @@ case " $* " in
       jq -c ".smtpServer | $mask" "$ST/payload-$realm.json" > "$ST/realm-$realm.json"
     fi
     exit 0 ;;
+  # TASK-043b F2: Keycloak 26.6.1 answers a BARE `--fields smtpServer` with the
+  # map EMPTY whatever the realm holds (the real output is the fixture below);
+  # only `smtpServer(*)` returns the fields.
   *" get realms/"*" --fields smtpServer "*)
-    if [ -f "$ST/realm-$realm.json" ]; then jq -c "{smtpServer: .}" "$ST/realm-$realm.json"; else echo "{}"; fi
+    cat "'"${KERNEL_ROOT}"'/test/host/fixtures/kcadm-26.6.1/get-realm-fields-smtpServer.json"; exit 0 ;;
+  *" get realms/"*" --fields smtpServer(*) "*)
+    if [ "$(cat "$ST/mode")" = fixture ]; then
+      cat "'"${KERNEL_ROOT}"'/test/host/fixtures/kcadm-26.6.1/get-realm-fields-smtpServer-star.json"; exit 0
+    fi
+    if [ -f "$ST/realm-$realm.json" ]; then jq "{smtpServer: .}" "$ST/realm-$realm.json"; else printf "{\n  \"smtpServer\" : { }\n}\n"; fi
     exit 0 ;;
   *" get realms --fields realm,smtpServer "*)
+    printf "["; sep=""
+    for f in "$ST"/realm-*.json; do [ -f "$f" ] || continue; r="${f##*/realm-}"; r="${r%.json}"
+      printf "%s{\"realm\":\"%s\",\"smtpServer\":{ }}" "$sep" "$r"; sep=","; done
+    printf "]\n"; exit 0 ;;
+  *" get realms --fields realm,smtpServer(*) "*)
     printf "["; sep=""
     for f in "$ST"/realm-*.json; do [ -f "$f" ] || continue; r="${f##*/realm-}"; r="${r%.json}"
       printf "%s{\"realm\":\"%s\",\"smtpServer\":%s}" "$sep" "$r" "$(cat "$f")"; sep=","; done
@@ -463,6 +476,34 @@ issue_calls() { grep -c 'principals.mjs issue' "$SHIM_LOG" || true; }
     refute_recorded docker 'principals.mjs'
 }
 
+# TASK-043b F2: the read-back against the REAL Keycloak 26.6.1 output. The
+# fixture is what `kcadm get realms/master --fields 'smtpServer(*)'` printed on
+# keycloak:26.6.1 for a realm holding exactly this sender (a bare
+# `--fields smtpServer` printed {"smtpServer":{}} for the same realm).
+@test "realm-smtp reads its post-condition back with smtpServer(*): the real Keycloak 26.6.1 output passes (TASK-043b F2)" {
+    shim_keycloak fixture
+    write_state_env
+    run "$LAUNCHER" realm-smtp
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    [[ "$output" == *"REALM-SMTP: realm=master user=system@example.org"* ]] || { echo "$output"; return 1; }
+    assert_recorded docker 'get realms/master --fields smtpServer(*)'
+    ! grep -E -- '--fields (realm,)?smtpServer( |$)' "$SHIM_LOG" || { echo "a bare --fields smtpServer read"; return 1; }
+}
+
+@test "the kcadm 26.6.1 fixtures: a bare --fields smtpServer is empty, smtpServer(*) carries the fields (TASK-043b F2)" {
+    local d="${KERNEL_ROOT}/test/host/fixtures/kcadm-26.6.1"
+    run jq -c '.smtpServer' "${d}/get-realm-fields-smtpServer.json"
+    [ "$output" = '{}' ]
+    run jq -c '.smtpServer | {host, port, user, from, starttls}' "${d}/get-realm-fields-smtpServer-star.json"
+    [ "$output" = '{"host":"mail.example.org","port":"587","user":"system@example.org","from":"system@example.org","starttls":"true"}' ]
+    run jq -r '.smtpServer.password' "${d}/get-realm-fields-smtpServer-star.json"
+    [ "$output" = '**********' ]
+    run jq -c '[.[] | select(.realm == "master") | .smtpServer.host]' "${d}/get-realms-fields-realm-smtpServer.json"
+    [ "$output" = '[null]' ]
+    run jq -c '[.[] | select(.realm == "master") | .smtpServer.host]' "${d}/get-realms-fields-realm-smtpServer-star.json"
+    [ "$output" = '["mail.example.org"]' ]
+}
+
 # ---------------------------------------------------------------------------
 # collect: the host inputs of check-principals, secrets stripped
 # ---------------------------------------------------------------------------
@@ -514,7 +555,7 @@ if [ -n "$out" ]; then cp "'"${GREMION_ROOT}"'/principal-list.json" "$out"; else
     shim_principal_list '{"data":{"items":[],"total":0}}'
     # the keycloak shim knows no `get realms` until a realm file exists; make
     # the listing itself fail
-    printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" docker "$*" >> "$SHIM_LOG"\ncase " $* " in *" get realms --fields realm,smtpServer "*) echo "kcadm: 500" >&2; exit 1 ;; esac\nexec %s "$@"\n' \
+    printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" docker "$*" >> "$SHIM_LOG"\ncase " $* " in *" get realms --fields realm,smtpServer"*) echo "kcadm: 500" >&2; exit 1 ;; esac\nexec %s "$@"\n' \
         "${SHIM_DIR}/docker.real" > "${SHIM_DIR}/docker.wrap"
     mv "${SHIM_DIR}/docker" "${SHIM_DIR}/docker.real"; mv "${SHIM_DIR}/docker.wrap" "${SHIM_DIR}/docker"; chmod +x "${SHIM_DIR}/docker"
     mkdir -p "${GREMION_ROOT}/collect"

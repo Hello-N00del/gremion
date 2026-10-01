@@ -1,0 +1,22 @@
+[ {
+  "realm" : "exp-b",
+  "smtpServer" : { }
+}, {
+  "realm" : "exp-c",
+  "smtpServer" : { }
+}, {
+  "realm" : "exp-a",
+  "smtpServer" : { }
+}, {
+  "realm" : "master",
+  "smtpServer" : {
+    "password" : "**********",
+    "starttls" : "true",
+    "port" : "587",
+    "auth" : "true",
+    "host" : "mail.example.org",
+    "from" : "system@example.org",
+    "user" : "system@example.org",
+    "ssl" : "false"
+  }
+} ]

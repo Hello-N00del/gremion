@@ -863,8 +863,11 @@ for a in "$@"; do case "$a" in realms/*) realm="${a#realms/}" ;; esac; done
 case " $* " in
   *" update realms/"*" -f - "*)
     jq -c ".smtpServer | del(.password)" > "$ST/realm-$realm.json"; exit 0 ;;
-  *" get realms/"*" --fields smtpServer "*)
-    if [ -f "$ST/realm-$realm.json" ]; then jq -c "{smtpServer: .}" "$ST/realm-$realm.json"; else echo "{}"; fi
+  # Keycloak 26.6.1: a bare --fields smtpServer answers the map EMPTY
+  # (TASK-043b F2); only smtpServer(*) returns the fields.
+  *" get realms/"*" --fields smtpServer "*) echo "{\"smtpServer\":{}}"; exit 0 ;;
+  *" get realms/"*" --fields smtpServer(*) "*)
+    if [ -f "$ST/realm-$realm.json" ]; then jq -c "{smtpServer: .}" "$ST/realm-$realm.json"; else echo "{\"smtpServer\":{}}"; fi
     exit 0 ;;
   *" get users "*) printf "0d1f2e3a-0000-4000-8000-000000000001\n"; exit 0 ;;
   *"execute-actions-email"*) cat > "$ST/actions.json"; exit 0 ;;

@@ -511,7 +511,9 @@ neuter_keycloak_realms() {
             "$NULL_SINK_HOST" "$NULL_SINK_PORT" "$NULL_SINK_HOST" \
           | docker exec -i "$kc" "$KCADM_BIN" update "realms/${r}" -f - >/dev/null \
           || die "kcadm could not rewrite the smtpServer of realm ${r}" 1
-        out="$(docker exec "$kc" "$KCADM_BIN" get "realms/${r}" --fields smtpServer)" \
+        # 'smtpServer(*)': a bare `--fields smtpServer` answers the map EMPTY on
+        # Keycloak 26.6.1 (TASK-043b F2), which read back as "names neither".
+        out="$(docker exec "$kc" "$KCADM_BIN" get "realms/${r}" --fields 'smtpServer(*)')" \
             || die "cannot read back the smtpServer of realm ${r}" 1
         case "$out" in
             # Strictest first, exactly as env_line_is_live orders it: the real
