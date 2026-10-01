@@ -29,7 +29,7 @@ export interface LinkBaseOptions {
 
 function classifyHost(hostname: string): 'loopback' | 'unspecified' | null {
   const h = hostname.replace(/^\[|\]$/g, '').toLowerCase()
-  if (h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\./.test(h)) return 'loopback'
+  if (h === 'localhost' || h.endsWith('.localhost') || h === '::1' || h.startsWith('127.')) return 'loopback'
   if (h === '0.0.0.0' || h === '::') return 'unspecified'
   return null
 }

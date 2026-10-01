@@ -29,9 +29,7 @@ describe('checkLinkBase', () => {
     ['http://[::1]:3000', 'loopback'],
     ['http://0.0.0.0', 'unspecified'],
   ])('refuses %j (%s)', (raw, fault) => {
-    const out = checkLinkBase(raw as string | undefined)
-    expect(out.usable).toBe(false)
-    if (!out.usable) expect(out.fault).toBe(fault)
+    expect(checkLinkBase(raw as string | undefined)).toMatchObject({ usable: false, fault })
   })
 
   it('a loopback base is allowed only with CONTENT_ALLOW_LOOPBACK_LINKS=1 (local dev)', () => {
