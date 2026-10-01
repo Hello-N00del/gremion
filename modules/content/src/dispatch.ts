@@ -44,6 +44,7 @@ import {
   createPublishOp,
 } from './store/index.js'
 import { enqueueOutbox } from './outbox.js'
+import { checkLinkBase } from './link-base.js'
 
 // ── injected transport ──────────────────────────────────────────────────────
 
@@ -73,8 +74,13 @@ export interface DispatchDeps {
    * the real work goes through kernel.portalPublish or createPublishOp.
    */
   channels: Map<'email' | 'portal' | 'instagram', ChannelTransport>
-  /** This tenant's external origin for unsubscribe links (no trailing slash). */
+  /**
+   * This tenant's external origin for unsubscribe links (no trailing slash).
+   * An unusable value fails the email channel before any claim (K5#8).
+   */
   origin: string
+  /** Local development only: accept a loopback origin (CONTENT_ALLOW_LOOPBACK_LINKS=1). */
+  allowLoopbackLinks?: boolean
   /**
    * The correlation id for this dispatch. Injected by the HTTP send-route from
    * the inbound x-correlation-id header. Falls back to the postId when absent.
@@ -177,7 +183,17 @@ export async function dispatch(
     // ── Email channel ────────────────────────────────────────────────────────
     if (channels.has('email')) {
       const emailTransport = channels.get('email')!
-      await dispatchEmail(sql, kernel, emailTransport, postId, post, origin, correlationId, channelEvents)
+      await dispatchEmail(
+        sql,
+        kernel,
+        emailTransport,
+        postId,
+        post,
+        origin,
+        deps.allowLoopbackLinks === true,
+        correlationId,
+        channelEvents,
+      )
     }
 
     // ── Portal channel ───────────────────────────────────────────────────────
@@ -238,9 +254,16 @@ async function dispatchEmail(
   postId: string,
   post: { title: string; body_html: string },
   origin: string,
+  allowLoopback: boolean,
   _correlationId: string,
   channelEvents: Array<{ event: 'channel.email.sent' | 'channel.portal.sent' | 'channel.instagram.enqueued'; payload: unknown }>,
 ): Promise<void> {
+  // K5#8: refuse an unusable unsubscribe link base BEFORE claiming anyone (the
+  // throw fails the whole-post dispatch; nothing was claimed or sent).
+  const linkBase = checkLinkBase(origin, { allowLoopback })
+  if (!linkBase.usable) throw new Error(`unsubscribe link base unusable: ${linkBase.reason}`)
+  const base = linkBase.base
+
   // Build recipient list from post_recipients (mailing lists + KC groups).
   const recipientRows = await getPostChannelRecipients(sql, postId, 'email')
   const recipients = await buildRecipientList(sql, recipientRows, kernel)
@@ -254,7 +277,7 @@ async function dispatchEmail(
     if (claim !== 'fresh') continue // already-sent or in-flight
 
     const token = await addSendToken(sql, randomUUID(), postId, email)
-    const unsubUrl = `${origin}/content/unsubscribe?token=${token}`
+    const unsubUrl = `${base}/content/unsubscribe?token=${encodeURIComponent(token)}`
     const personalizedHtml = injectUnsubscribeFooter(post.body_html, unsubUrl)
 
     try {

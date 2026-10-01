@@ -263,6 +263,47 @@ describe('publishChannel — email', () => {
   })
 })
 
+// ── F1-FIX-07 K5#8 / K5#33: an unusable link base fails closed ───────────────────
+// Every email carries an unsubscribe link built from deps.origin. A missing or
+// loopback base (the old http://localhost:3000 default) must send NOTHING and
+// claim nothing, so a retry once the base is fixed sees every recipient fresh.
+
+describe('publishChannel — email refuses an unusable unsubscribe link base', () => {
+  it.each(['', 'http://localhost:3000', 'not a url'])('origin %j → failed, nothing sent, nothing claimed', async (origin) => {
+    const postId = await makePost()
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['alice@x.com'])
+    const transport = makeFakeEmailTransport()
+
+    const result = await publishChannel(TENANT, postId, 'email', {
+      ...deps(sql, makeFakeKernel(), transport),
+      origin,
+    })
+
+    expect(result).toMatchObject({ channel: 'email', status: 'failed', detail: 'unusable public base URL' })
+    expect(transport.sent).toHaveLength(0)
+    const dels = await sql<{ c: string }[]>`SELECT count(*) AS c FROM content.deliveries WHERE post_id = ${postId}`
+    expect(Number(dels[0]!.c)).toBe(0)
+  })
+
+  it('the mailed unsubscribe link is absolute on the configured base', async () => {
+    const postId = await makePost('<html><body><p>Hi</p></body></html>')
+    await enableChannel(postId, 'email')
+    await addEmailRecipients(postId, ['alice@x.com'])
+    const sentHtml: string[] = []
+    const transport = {
+      async send(msg: { html?: string }) {
+        sentHtml.push(msg.html ?? '')
+        return { id: '<x@test>' }
+      },
+    }
+
+    await publishChannel(TENANT, postId, 'email', deps(sql, makeFakeKernel(), transport))
+
+    expect(sentHtml[0]).toMatch(/href="https:\/\/pubchan\.example\/content\/unsubscribe\?token=[^"]+"/)
+  })
+})
+
 // ── F1-FIX-07 H07 (K5#0): a transient per-recipient failure is retried ────────────
 // 3 recipients, the send to #2 fails ONCE. The first publish must not report the
 // channel 'sent' (failedCount > 0); a re-publish delivers #2 exactly once and

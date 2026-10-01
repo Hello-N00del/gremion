@@ -209,6 +209,8 @@ export interface DispatchDueDeps {
   emailTransport: ChannelTransport
   /** This tenant's external origin for unsubscribe links (no trailing slash). */
   origin: string
+  /** Local development only: accept a loopback origin (K5#8). */
+  allowLoopbackLinks?: boolean
   /**
    * Whether Instagram is configured (resolveInstagramCredentials() != null).
    * When false, a scheduled instagram channel is SKIPPED (disabled-by-default) —
@@ -247,6 +249,7 @@ export async function dispatchDueChannels(
       kernel: deps.kernel,
       emailTransport: deps.emailTransport,
       origin: deps.origin,
+      allowLoopbackLinks: deps.allowLoopbackLinks,
       // A scheduled tick has no inbound x-correlation-id header, so the scheduler
       // is the origin of this publish: correlate the co-committed outbox row (and
       // downstream NATS envelope) explicitly on the postId rather than leaning on

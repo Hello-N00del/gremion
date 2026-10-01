@@ -14,6 +14,7 @@ import { createRelaySupervisor, type RelaySupervisor } from './relay-supervisor.
 import { startScheduler, dispatchDueChannels, resetStuckDispatches } from './scheduler.js'
 import { purgeSendTokensOlderThan90Days } from './store/index.js'
 import { resolveInstagramCredentials } from './instagram/credentials.js'
+import { resolveContentLinkBase } from './link-base.js'
 import { createKernelClient, type KernelClient } from './kernel-client.js'
 import { NatsBroker } from './nats-broker.js'
 import { runRelayPass } from './relay.js'
@@ -123,6 +124,21 @@ async function main(): Promise<void> {
     console.warn('[content] KERNEL_BASE_URL is unset — dispatch will fail at publish step')
   }
 
+  // K5#8 / K5#33: the unsubscribe link base. No localhost default any more: an
+  // unusable value is reported ONCE at boot and every email publish then fails
+  // closed (publishChannel/dispatch re-check it) instead of mailing dead links.
+  const linkBaseRaw = process.env.PUBLIC_BASE_URL ?? ''
+  const allowLoopbackLinks = process.env.CONTENT_ALLOW_LOOPBACK_LINKS === '1'
+  const linkBase = resolveContentLinkBase(process.env)
+  if (linkBase.usable) {
+    console.log(`[content] unsubscribe links use ${linkBase.base}`)
+  } else {
+    console.error(
+      `[content] ${linkBase.reason} — every EMAIL publish will fail until PUBLIC_BASE_URL is this ` +
+        `deployment's public origin (e.g. https://example.org). Portal and Instagram are unaffected.`,
+    )
+  }
+
   // F3: TRACE_EXPORTER — 'log' activates logTracer; anything else → noopTracer.
   const traceExporter = process.env.TRACE_EXPORTER ?? 'log'
   function makeTracer(correlationId: string): TracerPort {
@@ -154,7 +170,8 @@ async function main(): Promise<void> {
           sql,
           kernel,
           channels,
-          origin: process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000',
+          origin: linkBaseRaw,
+          allowLoopbackLinks,
           correlationId,
           tracer: makeTracer(correlationId),
         }
@@ -216,7 +233,8 @@ async function main(): Promise<void> {
           sql,
           kernel,
           emailTransport: kernelEmailTransport(kernel),
-          origin: process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000',
+          origin: linkBaseRaw,
+          allowLoopbackLinks,
           instagramConfigured: resolveInstagramCredentials() != null,
           tracer: makeTracer(corrId),
         })

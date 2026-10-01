@@ -37,6 +37,7 @@ import type { ContentEvent } from '@gremion/ports/broker'
 import type { Sql, TenantRef } from './tenant-store.js'
 import { MailUnconfiguredError, type KernelClient } from './kernel-client.js'
 import { enqueueOutbox } from './outbox.js'
+import { checkLinkBase } from './link-base.js'
 import {
   getPost,
   getChannelRow,
@@ -97,8 +98,14 @@ export interface PublishChannelDeps {
   kernel: KernelClient
   /** Email transport (the kernel send-mail adapter) — only used for email. */
   emailTransport: ChannelTransport
-  /** This tenant's external origin for unsubscribe links (no trailing slash). */
+  /**
+   * This tenant's external origin for unsubscribe links (no trailing slash).
+   * Checked per email publish (checkLinkBase): unset/malformed/loopback fails
+   * the publish before any recipient is claimed (K5#8).
+   */
   origin: string
+  /** Local development only: accept a loopback origin (CONTENT_ALLOW_LOOPBACK_LINKS=1). */
+  allowLoopbackLinks?: boolean
   /**
    * The correlation id for this publish. Injected by the HTTP publish route from
    * the inbound x-correlation-id header so the co-committed outbox row (and the
@@ -160,7 +167,15 @@ export async function publishChannel(
     let outcome: ChannelOutcome
     switch (channel) {
       case 'email':
-        outcome = await publishEmail(sql, kernel, emailTransport, origin, postId, post)
+        outcome = await publishEmail(
+          sql,
+          kernel,
+          emailTransport,
+          origin,
+          deps.allowLoopbackLinks === true,
+          postId,
+          post,
+        )
         break
       case 'portal':
         outcome = await publishPortal(sql, kernel, postId, post)
@@ -199,10 +214,29 @@ async function publishEmail(
   kernel: KernelClient,
   transport: ChannelTransport,
   origin: string,
+  allowLoopback: boolean,
   postId: string,
   post: ContentPost,
 ): Promise<ChannelOutcome> {
   const warnings: string[] = []
+
+  // K5#8 / K5#33: every mail carries an unsubscribe link built from `origin`.
+  // An unusable base (unset, malformed, loopback) is a config gap: return a
+  // clean failed result BEFORE claiming anyone, channel status untouched (as
+  // for SMTP-unconfigured), so a retry once the base is fixed sees all fresh.
+  const linkBase = checkLinkBase(origin, { allowLoopback })
+  if (!linkBase.usable) {
+    return {
+      result: {
+        channel: 'email',
+        status: 'failed',
+        recipientCount: 0,
+        warnings: [linkBase.reason],
+        detail: 'unusable public base URL',
+      },
+    }
+  }
+  const base = linkBase.base
 
   const recipientRows = await getPostChannelRecipients(sql, postId, 'email')
   const recipients = await buildRecipientList(sql, recipientRows, kernel)
@@ -239,7 +273,7 @@ async function publishEmail(
     if (claim !== 'fresh') continue // 'in-flight' — another worker owns it
 
     const token = await addSendToken(sql, randomUUID(), postId, emailLower)
-    const unsubUrl = `${origin}/content/unsubscribe?token=${encodeURIComponent(token)}`
+    const unsubUrl = `${base}/content/unsubscribe?token=${encodeURIComponent(token)}`
     const personalizedHtml = injectUnsubscribeFooter(post.body_html, unsubUrl)
 
     try {

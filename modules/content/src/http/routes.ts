@@ -817,6 +817,7 @@ export function buildApiRoutes(storeFn: StoreFn, publishDeps?: PublishDeps): Rou
             kernel: dd.kernel,
             emailTransport,
             origin: dd.origin,
+            allowLoopbackLinks: dd.allowLoopbackLinks,
             correlationId,
             tracer: dd.tracer,
           })
