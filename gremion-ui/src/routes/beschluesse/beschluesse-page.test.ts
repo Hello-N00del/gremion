@@ -32,7 +32,12 @@ vi.mock('$lib/auth', async () => {
 
 const { load } = await import('./+page.server')
 
-const BESCHLUESSE = [{ id: 'b1', text: 'Beschluss A', openChallengeCount: 1 }]
+// R29-F104-KTWIN (D-3): an all_members unit's resolution, which every
+// signed-in viewer may see; the visibility rule itself is pinned in
+// beschluesse-visibility.test.ts with the real role helper.
+const BESCHLUESSE = [
+  { id: 'b1', text: 'Beschluss A', committeeId: 'u-open', visibility: 'all_members', openChallengeCount: 1 },
+]
 const CHALLENGES = [
   { challengeId: 'c1', resolutionId: 'b1', raisedBy: 'member-7', grounds: 'Verstoß gegen §7' },
 ]

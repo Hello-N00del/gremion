@@ -25,6 +25,10 @@ export interface BeschlussRow {
   protocolTitle: string
   committeeId: string
   committeeName: string
+  // R29-F104-KTWIN (D-3): the unit's visibility, so the caller can apply the
+  // ONE rule (governance/visibility.ts filterVisiblePublished) without a
+  // second query.
+  visibility: 'all_members' | 'committee_only'
   // T6 (#320 contestability): number of OPEN challenges (migration 055,
   // resolution_challenges.status = 'open') against this resolution — drives
   // the 'Einspruch offen' badge on /beschluesse.
@@ -34,6 +38,9 @@ export interface BeschlussRow {
 // Passed resolutions from published protocols, newest meeting first. Drafts and
 // rejected/withdrawn resolutions are excluded — the Beschlussbuch only carries
 // binding, published decisions.
+// UNFILTERED across units: a caller that renders this to a user must pass it
+// through governance/visibility.ts filterVisiblePublished (R29-F104-KTWIN,
+// D-3), or a Guest reads every committee_only unit's resolutions.
 export async function listBeschluesse(): Promise<readonly BeschlussRow[]> {
   return getDb()<BeschlussRow[]>`
     SELECT r.id::text                                AS "id",
@@ -48,6 +55,7 @@ export async function listBeschluesse(): Promise<readonly BeschlussRow[]> {
            p.title                                   AS "protocolTitle",
            ou.id::text                               AS "committeeId",
            ou.name                                   AS "committeeName",
+           ou.visibility                             AS "visibility",
            (SELECT count(*)::int FROM resolution_challenges c
               WHERE c.resolution_id = r.id AND c.status = 'open') AS "openChallengeCount"
     FROM protocol_resolutions r

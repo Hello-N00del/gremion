@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { getDb } from '../db'
 import { createOrgUnit } from './org-units-db'
 import { createProtocol } from '../protocols/protocol-db'
-import { listBeschluesse, listChallengesForBeschluesse } from './protocols-db'
+import { listBeschluesse, listChallengesForBeschluesse, listProtocols } from './protocols-db'
 
 // A published protocol under a fresh org unit with `n` passed resolutions.
 // Returns the resolution ids in sequence order.
@@ -66,6 +66,29 @@ describe('beschluesse challenge read side (T6)', () => {
       const byId = new Map(rows.map((r) => [r.id, r]))
       expect(byId.get(res1!)!.openChallengeCount).toBe(2)
       expect(byId.get(res2!)!.openChallengeCount).toBe(0)
+    })
+  })
+
+  // R29-F104-KTWIN (D-3): the /beschluesse and /protokolle loaders filter rows
+  // by the unit's visibility, so both queries must carry it from the real schema.
+  describe('unit visibility on the read side', () => {
+    it('listBeschluesse returns each row\'s org unit visibility', async () => {
+      await seedPublishedProtocolWithResolutions(1)
+      const sql = getDb()
+      await sql`UPDATE org_units SET visibility = 'committee_only'`
+      const rows = await listBeschluesse()
+      expect(rows).toHaveLength(1)
+      expect(rows[0]!.visibility).toBe('committee_only')
+    })
+
+    it('listProtocols returns each row\'s org unit visibility', async () => {
+      await seedPublishedProtocolWithResolutions(1)
+      const sql = getDb()
+      await sql`UPDATE org_units SET visibility = 'committee_only'`
+      const rows = await listProtocols()
+      expect(rows).toHaveLength(1)
+      expect(rows[0]!.visibility).toBe('committee_only')
+      expect(rows[0]!.status).toBe('published')
     })
   })
 
