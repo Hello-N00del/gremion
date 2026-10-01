@@ -99,7 +99,7 @@ this repository. Addresses and names on these pages are documentation values
 
 Each of these is named at the step that needs it:
 
-- PENDING TASK-043 (`packages/provisioning/`): creating the pilot customer through the provisioning orchestrator and its first administrator's sign-in (install.md).
+- TASK-043b: creating the pilot customer with `gremion-tenant create` (TASK-043, `packages/provisioning/`) and its first administrator's sign-in waits for the green customer proof (install.md step 17).
 - PENDING TASK-039 (`compose/observability/`): the operator-only observability stack (install.md).
 - PENDING TASK-075 (`scripts/migrations/runner/`): the pre-migration dump taken by the migration runner itself (upgrade.md).
 - PENDING TASK-089 (`scripts/backup/`): the per-module backup verification that replaces today's enumeration (backup.md).
