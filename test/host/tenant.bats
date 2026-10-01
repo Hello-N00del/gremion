@@ -39,6 +39,8 @@ CONTENT_PG_PASSWORD=unit-content-secret
 FINANCE_PG_PASSWORD=unit-finance-secret
 NEWSLETTER_PG_PASSWORD=unit-newsletter-secret
 VAULT_PG_PASSWORD=unit-vault-secret
+KEYCLOAK_ADMIN=admin
+KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-state-secret
 TRAEFIK_CERT_RESOLVER=le-http
 EDGE_BIND_IP=192.0.2.10
 EDGE_BIND_IP6=2001:db8::a
@@ -60,12 +62,24 @@ shim_docker() {
 case " $* " in
   *" run "*" tenant-create "*)
     all="$*"
+    # the bootstrap-provisioner scratch mount (TASK-043b F1), before the args go
+    od=""; for a in "$@"; do case "$a" in *:/run/secrets/provisioner-out) od="${a%:/run/secrets/provisioner-out}" ;; esac; done
     rest="${all##* tenant-create }"
     set -- $rest
     verb="$1"; slug="${2:-}"
     printf "tc %s %s\n" "$verb" "$slug" >> "$ORDER"
     [ -f "$GREMION_ROOT/fail-$verb" ] && exit 1
     case "$verb" in
+      bootstrap-provisioner)
+        # docker copies a name-only -e from its caller: the admin credential
+        # must be in THIS process environment, and the one-shot writes the SA
+        # secret where TENANT_PROVISIONER_SECRET_FILE points (the scratch mount).
+        case " $all " in *" -e KEYCLOAK_ADMIN_PASSWORD "*) ;; *) echo "no name-only -e KEYCLOAK_ADMIN_PASSWORD" >&2; exit 1 ;; esac
+        case " $all " in *" -e TENANT_PROVISIONER_SECRET_FILE=/run/secrets/provisioner-out/tenant_provisioner "*) ;; *) echo "no scratch TENANT_PROVISIONER_SECRET_FILE" >&2; exit 1 ;; esac
+        [ -n "${KEYCLOAK_ADMIN:-}" ] && [ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ] || { echo "no admin credential in the environment" >&2; exit 1; }
+        printf "%s" "$KEYCLOAK_ADMIN_PASSWORD" > "$GREMION_ROOT/kc-pw-seen"
+        [ -n "$od" ] && [ -d "$od" ] || { echo "no scratch mount" >&2; exit 1; }
+        [ -f "$GREMION_ROOT/bootstrap-writes-nothing" ] || printf "unit-provisioner-sa-secret\n" > "$od/tenant_provisioner" ;;
       render-router)
         printf "# tenant-%s.yml\nhttp:\n  routers:\n    tenant-%s:\n      rule: \"Host(\`x\`)\"\n    tenant-%s.kc:\n      rule: \"x\"\n" "$slug" "$slug" "$slug" ;;
       init)
@@ -89,7 +103,8 @@ steps() { cat "$ORDER"; }
 
 refute_state_secrets() {
     local v
-    for v in unit-pg-root-secret unit-board-secret unit-calendar-secret unit-vault-secret; do
+    for v in unit-pg-root-secret unit-board-secret unit-calendar-secret unit-vault-secret \
+             unit-kc-admin-state-secret unit-provisioner-sa-secret; do
         ! grep -qF -- "$v" "$SHIM_LOG" || { echo "secret ${v} on a docker argv"; cat "$SHIM_LOG"; return 1; }
         [[ "$output" != *"$v"* ]] || { echo "secret ${v} printed"; return 1; }
     done
@@ -248,11 +263,74 @@ create() {
         [ "$(stat -c %a "${d}/kernel_pg_admin")" = 600 ]
     fi
     run steps
-    [ "${lines[0]}" = "tc init --panel-origin" ]
+    [ "${lines[0]}" = "tc bootstrap-provisioner " ] || { steps; return 1; }
+    [ "${lines[1]}" = "tc init --panel-origin" ]
     refute_state_secrets
     # the ops client secret moved into the panel's directory, 0600, and left the tenant secrets
     [ "$(cat "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")" = unit-ops-client-secret ]
     [ ! -e "${GREMION_ROOT}/tenant-secrets/platform_client_control-panel" ]
+}
+
+# TASK-043b F1: every tenant-create verb reads the provisioner credential from
+# the read-only etc/secrets/tenant-create mount; init is what puts it there.
+@test "init bootstraps the provisioner ONCE: the SA secret lands in etc/secrets/tenant-create/tenant_provisioner 0600, the admin password only by a name-only -e (TASK-043b F1)" {
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; cat "$SHIM_LOG"; return 1; }
+    local f="${GREMION_ROOT}/etc/secrets/tenant-create/tenant_provisioner"
+    [ "$(cat "$f")" = unit-provisioner-sa-secret ] || { echo "credential: $(cat "$f" 2>&1)"; return 1; }
+    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    # the admin credential came from state.env and reached the one-shot's environment, never an argv
+    [ "$(cat "${GREMION_ROOT}/kc-pw-seen")" = unit-kc-admin-state-secret ]
+    assert_recorded docker '-e KEYCLOAK_ADMIN_PASSWORD tenant-create bootstrap-provisioner'
+    refute_state_secrets
+    # the scratch directory is gone, and nothing but the credential was moved
+    run find "${GREMION_ROOT}/etc/secrets" -maxdepth 1 -name '.tenant-provisioner.*'
+    [ -z "$output" ] || { echo "scratch left: $output"; return 1; }
+    # a rerun keeps the credential and never bootstraps again
+    : > "$ORDER"
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    run steps
+    [ "$output" = "tc init --panel-origin" ] || { echo "$output"; return 1; }
+    [ "$(cat "$f")" = unit-provisioner-sa-secret ]
+}
+
+@test "init --realm-only on a pooled host bootstraps the provisioner too, before the container init (TASK-043b F1)" {
+    run "$LAUNCHER" init --realm-only
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run steps
+    [ "${lines[0]}" = "tc bootstrap-provisioner " ] || { steps; return 1; }
+    [ "${lines[1]}" = "tc init --panel-origin" ]
+    [ -s "${GREMION_ROOT}/etc/secrets/tenant-create/tenant_provisioner" ]
+}
+
+@test "init without the provisioner credential and without a Keycloak admin credential is exit 2, named, before any container (TASK-043b F1)" {
+    sed -i '/^KEYCLOAK_ADMIN/d' "${GREMION_ROOT}/etc/env/state.env"
+    run env -u KEYCLOAK_ADMIN -u KEYCLOAK_ADMIN_PASSWORD "$LAUNCHER" init
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"KEYCLOAK_ADMIN"* && "$output" == *"bootstrap-provisioner"* ]] || { echo "$output"; return 1; }
+    run steps
+    [ -z "$output" ] || { echo "a container ran: $output"; return 1; }
+}
+
+@test "a failed or empty bootstrap-provisioner fails init (exit 1) before the container init, and leaves no credential and no scratch (TASK-043b F1)" {
+    touch "${GREMION_ROOT}/fail-bootstrap-provisioner"
+    run "$LAUNCHER" init
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    run steps
+    [ "$output" = "tc bootstrap-provisioner " ] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/etc/secrets/tenant-create/tenant_provisioner" ]
+    rm -f "${GREMION_ROOT}/fail-bootstrap-provisioner"
+    touch "${GREMION_ROOT}/bootstrap-writes-nothing"
+    : > "$ORDER"
+    run "$LAUNCHER" init
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"wrote no credential"* ]] || { echo "$output"; return 1; }
+    run steps
+    [ "$output" = "tc bootstrap-provisioner " ] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/etc/secrets/tenant-create/tenant_provisioner" ]
+    run find "${GREMION_ROOT}/etc/secrets" -maxdepth 1 -name '.tenant-provisioner.*'
+    [ -z "$output" ] || { echo "scratch left: $output"; return 1; }
 }
 
 # TASK-043b F5: init reads <ID>_PG_PASSWORD for every module server from

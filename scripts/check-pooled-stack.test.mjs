@@ -399,6 +399,36 @@ test('real renders: blue and green control-panel publish no ports, carry traefik
   }
 })
 
+// TASK-043b F1: the one-shot read its provisioner credential from the CLI's
+// default /repo/secrets/tenant_provisioner, which nothing mounted, so every verb
+// died "provisioner credential file ... not found". It is wired exactly like the
+// other one-shot secrets: a file under the read-only etc/secrets/tenant-create
+// mount, never under the tenant data plane's /run/secrets/tenants, and that
+// directory is mounted into tenant-create ONLY.
+test('real renders: tenant-create reads TENANT_PROVISIONER_SECRET_FILE from its read-only etc/secrets/tenant-create mount, which no other app service mounts', () => {
+  for (const { project, colour } of [
+    { project: PROJECTS[1], colour: 'blue' },
+    { project: PROJECTS[2], colour: 'green' },
+  ]) {
+    const render = renderProject(project)
+    const tc = render.services?.['tenant-create']
+    assert.ok(tc, `tenant-create is not in the ${colour} render`)
+    const file = tc.environment?.TENANT_PROVISIONER_SECRET_FILE
+    assert.equal(file, '/run/secrets/tenant-create/tenant_provisioner', `${colour}: TENANT_PROVISIONER_SECRET_FILE`)
+    const isSecretsDir = (v) => v.type === 'bind' && /\/etc\/secrets\/tenant-create$/.test(String(v.source).replaceAll('\\', '/'))
+    const mounts = (tc.volumes ?? []).filter((v) => v.target === '/run/secrets/tenant-create')
+    assert.equal(mounts.length, 1, `${colour}: tenant-create mounts /run/secrets/tenant-create ${mounts.length} times`)
+    assert.ok(isSecretsDir(mounts[0]), `${colour}: /run/secrets/tenant-create is not the etc/secrets/tenant-create bind (${JSON.stringify(mounts[0])})`)
+    assert.equal(mounts[0].read_only, true, `${colour}: the etc/secrets/tenant-create mount is writable`)
+    assert.ok(!file.startsWith('/run/secrets/tenants/'), `${colour}: the provisioner credential sits in the tenant data plane's directory`)
+    for (const [name, svc] of Object.entries(render.services ?? {})) {
+      if (name === 'tenant-create') continue
+      assert.ok(!(svc.volumes ?? []).some(isSecretsDir), `${colour}: ${name} mounts etc/secrets/tenant-create`)
+      assert.equal(svc.environment?.TENANT_PROVISIONER_SECRET_FILE, undefined, `${colour}: ${name} names the provisioner credential`)
+    }
+  }
+})
+
 test('real renders: the two colours are one document modulo the colour token and the app subnet', () => {
   const norm = (r, c) =>
     JSON.stringify(r)
