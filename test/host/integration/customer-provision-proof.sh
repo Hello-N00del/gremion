@@ -524,9 +524,11 @@ imap_fetch() {
         printf '%s\nuser = "roles@%s:%s"\nresolve = "mail.%s:993:127.0.0.1"\n' "$1" "$dom" "$pw" "$dom" \
             | docker run --rm -i --name "${STACK}-imap-$$-${tries}" --network "container:${stal}" "$img" -sS ${k[@]+"${k[@]}"} -K - 2>/dev/null
     }
+    # UID SEARCH, not SEARCH: the numbers must be UIDs for the ;UID= fetch
+    # (sequence numbers drift once a message is expunged; review r4 LOW)
     while (( tries < 20 )); do
         uid="$(imap "url = \"imaps://mail.${dom}:993/INBOX\"
-request = \"SEARCH TO \\\"$1\\\"\"" | tr -d '\r' | awk '/SEARCH/ { print $NF }' | tail -n1)" || uid=""
+request = \"UID SEARCH TO \\\"$1\\\"\"" | tr -d '\r' | awk '/SEARCH/ { print $NF }' | tail -n1)" || uid=""
         if [[ "$uid" =~ ^[0-9]+$ ]]; then
             ( umask 077; imap "url = \"imaps://mail.${dom}:993/INBOX;UID=${uid}\"" > "$2" )
             [[ -s "$2" ]] && return 0
@@ -693,8 +695,11 @@ phase_customer_reconcile() {
 # Brief section 1 "Admins sign in" (PRD-IDN-005, Q16).
 phase_customer_admins() {
     need_pooled
-    local dom host realm_url port tiss disc role krole addr uid out
+    local dom host realm_url port tiss disc role krole addr uid out DASHBOARD_TITLE
     local -a tls=()
+    # read from the tested source, so a renamed dashboard cannot pass on a stale literal
+    DASHBOARD_TITLE="$(sed -n 's/.*<PageTitle title="\([^"]*\)".*/\1/p' "$ROOT/gremion-ui/src/routes/+page.svelte" | head -n1)"
+    [[ -n "$DASHBOARD_TITLE" ]] || die "customer-admins: no PageTitle in gremion-ui/src/routes/+page.svelte"
     dom="$(penv PLATFORM_DOMAIN)"; host="$(host_of "$X")"; realm_url="https://${host}/auth/realms/${X}"
     port="$(penv EDGE_HTTPS_PORT)"; port="${port:-443}"
     scratch_tls && tls=(--insecure yes)
@@ -727,7 +732,9 @@ phase_customer_admins() {
             printf '%s %s\n' "$(now)" "$(jq -c 'del(.trace)' <<< "$out")" | ledger admin-activate.log
             ok "customer-admins: ${krole} completed UPDATE_PASSWORD and CONFIGURE_TOTP through the link ($(jq -c .kinds <<< "$out"))"
         else bad "customer-admins: ${krole} could not complete the actions: $(tail -n1 "$OUT/ledger/admin-${role}-activate.err")"; continue; fi
-        if out="$(session signin --app "https://${host}" --realm-url "$realm_url" --user "$addr" \
+        # --title: the dashboard's PageTitle segment (gremion-ui routes/+page.svelte
+        # `<PageTitle title="Übersicht" />`, rendered "<segment> – <product>")
+        if out="$(session signin --app "https://${host}" --realm-url "$realm_url" --user "$addr" --title "$DASHBOARD_TITLE" \
                 --password-file "$(host_path "$OUT/secrets/admin-${role}-pw")" --totp-secret-in "$(host_path "$OUT/secrets/admin-${role}-totp")" \
                 --resolve "${host}=https://127.0.0.1:${port}" ${tls[@]+"${tls[@]}"} 2> "$OUT/ledger/admin-${role}-signin.err")"; then
             printf '%s %s\n' "$(now)" "$(jq -c 'del(.trace)' <<< "$out")" | ledger admin-signin.log
@@ -742,7 +749,6 @@ RH_KC="${STACK}-rh-kc"
 RH_SINK="${STACK}-rh-sink"
 RH_REALM=proof-r
 RH_HOST=rat.proof-r.test
-RH_APP=app.proof-r.test
 NODE_IMAGE="node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8"
 rh_set() { mkdir -p "$OUT"; printf '%s=%s\n' "$1" "$2" >> "$OUT/rehearsal.env"; }
 rh_get() { [[ -f "$OUT/rehearsal.env" ]] || die "no ${OUT}/rehearsal.env: run rehearsal-up first"; sed -n "s/^$1=//p" "$OUT/rehearsal.env" | tail -n1; }
@@ -778,8 +784,8 @@ rh_mail_to() { # <address> <out file>: the newest message the sink stored for it
 
 phase_rehearsal_run() {
     require_scratch rehearsal-run
-    local p realm_url addr uid out n_before
-    p="$(rh_get RH_KC_PORT)"; realm_url="http://${RH_HOST}:${p}/auth/realms/${RH_REALM}"
+    local p realm_url addr uid out n_before RH_APP_URL
+    p="$(rh_get RH_KC_PORT)"; realm_url="http://${RH_HOST}:${p}/auth/realms/${RH_REALM}"; RH_APP_URL="http://${RH_HOST}:${p}"
     addr="roles+${RH_REALM}-it@proof.test"
     local s=0
     until curl -fsS "http://127.0.0.1:${p}/auth/realms/master" >/dev/null 2>&1; do (( s++ < 60 )) || die "keycloak never answered"; sleep 3; done
@@ -790,8 +796,11 @@ phase_rehearsal_run() {
     rkc create realms -s "realm=${RH_REALM}" -s enabled=true -s sslRequired=external -s loginTheme=gremion \
         -s otpPolicyType=totp -s otpPolicyAlgorithm=HmacSHA1 -s otpPolicyDigits=6 -s otpPolicyPeriod=30 \
         -s "smtpServer.host=${RH_SINK}" -s smtpServer.port=2525 -s "smtpServer.from=kc-proof_r@proof.test" >/dev/null
+    # Q16 shape: the stand-in client's callback is on the realm's OWN host, as
+    # gremion-ui's is (review r4 HIGH: a separate app host hid a driver that
+    # stopped on Keycloak's first page).
     rkc create clients -r "$RH_REALM" -s clientId=rehearsal-app -s publicClient=true -s standardFlowEnabled=true \
-        -s "redirectUris=[\"https://${RH_APP}/auth/callback/keycloak\"]" >/dev/null
+        -s "redirectUris=[\"${RH_APP_URL}/auth/callback/keycloak\"]" >/dev/null
     uid="$(rkc create users -r "$RH_REALM" -s "username=${addr}" -s "email=${addr}" -s enabled=true \
         -s 'requiredActions=["UPDATE_PASSWORD","CONFIGURE_TOTP"]' -i | tr -d '\r')"
     # 1. WITHOUT frontendUrl (the provisioner before r4): the admin call goes to
@@ -818,8 +827,10 @@ phase_rehearsal_run() {
             2> "$OUT/ledger/rh-activate.err")"; then
         ok "rehearsal: activate completed $(jq -c .kinds <<< "$out") and ended on: $(jq -r .page <<< "$out" | cut -c1-80)"
     else bad "rehearsal: activate: $(tail -n1 "$OUT/ledger/rh-activate.err") ${out}"; return; fi
-    local az="${realm_url}/protocol/openid-connect/auth?client_id=rehearsal-app&response_type=code&scope=openid&redirect_uri=https%3A%2F%2F${RH_APP}%2Fauth%2Fcallback%2Fkeycloak&state=t043"
-    if out="$(session signin --app "https://${RH_APP}" --authorize-url "$az" --stop-host "$RH_APP" --realm-url "$realm_url" \
+    local az cb
+    cb="$(jq -rn --arg u "${RH_APP_URL}/auth/callback/keycloak" '$u|@uri')"
+    az="${realm_url}/protocol/openid-connect/auth?client_id=rehearsal-app&response_type=code&scope=openid&redirect_uri=${cb}&state=t043"
+    if out="$(session signin --app "$RH_APP_URL" --authorize-url "$az" --stop-host "$RH_HOST" --realm-url "$realm_url" \
             --user "$addr" --password-file "$(host_path "$OUT/secrets/rh-pw")" --totp-secret-in "$(host_path "$OUT/secrets/rh-totp")" \
             --resolve "${RH_HOST}=http://127.0.0.1:${p}" 2> "$OUT/ledger/rh-signin.err")"; then
         ok "rehearsal: signin through the gremion theme with password + TOTP: $(jq -c . <<< "$out")"

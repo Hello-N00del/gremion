@@ -221,6 +221,20 @@ function raw(url, method, headers, body, tls = {}) {
   })
 }
 
+// ── where Keycloak ends and the application begins ──────────────────────────
+/**
+ * Keycloak's own paths (KC_HTTP_RELATIVE_PATH=/auth). Q16 puts a customer's
+ * realm on the customer's OWN host, so the host alone never says "back on the
+ * application": only a path outside these does (review r4 HIGH).
+ */
+export const isKeycloakPath = (pathname) => /^\/auth\/(realms|resources)\//.test(pathname)
+
+/** True once `url` is an APPLICATION page of `host` (not one of Keycloak's). */
+export function onAppPage(host, url) {
+  const u = new URL(url)
+  return u.hostname === host && !isKeycloakPath(u.pathname)
+}
+
 // ── a per-host cookie jar and a client that maps public hosts to local bases ──
 export class Browser {
   /** @param {Map<string,string>} resolve host name -> local base URL */
@@ -265,7 +279,8 @@ export class Browser {
     return res
   }
   /** Follows redirects (GET), resolving relative Locations against the PUBLIC
-   *  url; stops BEFORE requesting a --stop-host (the rehearsal's callback). */
+   *  url; stops BEFORE requesting an application page of a --stop-host (the
+   *  rehearsal's callback) -- never on Keycloak's own redirects on that host. */
   async follow(url, init = {}) {
     let res = await this.request(url, init)
     let current = url
@@ -273,7 +288,7 @@ export class Browser {
       const loc = res.headers.get('location')
       if (!loc) break
       current = new URL(loc, current).toString()
-      if (this.stopHosts.has(new URL(current).hostname)) return { res, url: current, stopped: true }
+      if ([...this.stopHosts].some((h) => onAppPage(h, current))) return { res, url: current, stopped: true }
       res = await this.request(current)
     }
     return { res, url: current, stopped: false }
@@ -416,7 +431,7 @@ async function login(o) {
     totpUsedAt: t.usedAt,
     totpSecretOut: o['totp-secret-out'],
     debugOut: o['debug-out'],
-    until: (u) => new URL(u).hostname === host,
+    until: (u) => onAppPage(host, u),
   })
   if (r.final) throw new Error(`the sign-in never returned to the panel (last: ${new URL(r.page.url).pathname}: ${visibleText(r.html).slice(0, 200)})`)
   const status = r.page.res.status
@@ -462,6 +477,9 @@ async function signin(o) {
   const user = need(o, 'user')
   const password = readSecret(need(o, 'password-file'))
   const t = totpIn(need(o, 'totp-secret-in'))
+  // the gremion-ui form proves the dashboard: its PageTitle is required up front,
+  // before any request (review r4 HIGH: the proof never passed it)
+  const titleSegment = o['authorize-url'] ? null : need(o, 'title')
   const b = browserFrom(o)
   let authorize
   if (o['authorize-url']) {
@@ -498,7 +516,9 @@ async function signin(o) {
     totpUsedAt: t.usedAt,
     debugOut: o['debug-out'],
     lastName: 'Admin',
-    until: (u) => new URL(u).hostname === app.hostname,
+    // Q16: Keycloak answers on the app's own host, so only an application
+    // path of that host ends the drive
+    until: (u) => onAppPage(app.hostname, u),
   })
   if (r.final) throw new Error(`the sign-in stopped on a Keycloak page: ${visibleText(r.html).slice(0, 200)}`)
   const end = new URL(r.page.url)
@@ -510,7 +530,7 @@ async function signin(o) {
     return
   }
   const html = await r.page.res.text()
-  const title = new RegExp(`<title>${escapeRe(need(o, 'title'))}\\b`).test(html)
+  const title = new RegExp(`<title>${escapeRe(titleSegment)}\\b`).test(html)
   console.log(JSON.stringify({ status: r.page.res.status, path: end.pathname, authorize: `${az.origin}${az.pathname}`, kinds: r.kinds, title, trace: b.trace }))
   if (r.page.res.status !== 200 || !title) process.exitCode = 1
 }
