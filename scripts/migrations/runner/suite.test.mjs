@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
 import { loadRequiredSuites, SUITE_REGISTRY } from '../../verify/verify.mjs'
-import { baselineDigest } from './baseline.mjs'
+import { baselineDigest, PINNED_FILE, renderPinned } from './baseline.mjs'
 import { loadCanaries, runExpandContractSuite } from './suite.mjs'
 
 const TMP_ROOT = process.env.GREMION_TEST_TMPDIR || tmpdir()
@@ -32,10 +32,12 @@ function fixture({ runners = { alpha: 'tenant-store', beta: 'unadopted' }, basel
     writeFileSync(join(root, rel), text)
   }
   w('scripts/migrations/ranges.json', JSON.stringify({ chains: [{ id: 'alpha', dirs: ['db/alpha'] }, { id: 'beta', dirs: ['db/beta'] }], nonMigration: [] }))
-  w('scripts/migrations/applied.lock.json', JSON.stringify({ chains: { alpha: { files: { '001_a.sql': sha(LEGACY) } }, beta: { files: {} } } }))
+  const lock = { chains: { alpha: { files: { '001_a.sql': sha(LEGACY) } }, beta: { files: {} } } }
+  w('scripts/migrations/applied.lock.json', JSON.stringify(lock))
   w('scripts/migrations/runner/chain-runners.json', JSON.stringify({ chains: runners }))
   const b = { chains: baseline }
   w('scripts/migrations/runner/expand-contract-baseline.json', JSON.stringify(b))
+  w(PINNED_FILE, renderPinned(b, lock))
   w('db/alpha/001_a.sql', LEGACY)
   mkdirSync(join(root, 'db', 'beta'), { recursive: true })
   for (const [rel, text] of Object.entries(files)) w(rel, text)
@@ -50,8 +52,8 @@ describe('expand-contract suite (TDD 3)', () => {
     const canaries = loadCanaries().length
     assert.equal(r.unparseable, false)
     assert.equal(r.failed, 0, r.detail)
-    // chain-runners.json + the baseline + the required-canary set + each canary
-    assert.equal(r.collected, 3 + canaries)
+    // chain-runners.json + the baseline + its packaged copy + the required-canary set + each canary
+    assert.equal(r.collected, 4 + canaries)
     assert.match(r.detail, /^linted 0 file\(s\) outside the baseline/)
   })
 
@@ -100,6 +102,21 @@ describe('expand-contract suite (TDD 3)', () => {
     const r = run(f)
     assert.equal(r.failed, 1)
     assert.match(r.detail, /LOCKED_FILE_CHANGED db\/alpha\/001_a\.sql/)
+  })
+
+  // TASK-075 r2: the tenant-create image phases its files from the copy that
+  // ships in packages/tenant-store; it must never drift from the two files.
+  test('the packaged baseline copy: drifted or absent fails naming the regeneration command', () => {
+    const drifted = fixture()
+    writeFileSync(join(drifted.root, PINNED_FILE), renderPinned({ chains: { alpha: { '001_a.sql': 'contract' } } }, { chains: { alpha: { files: { '001_a.sql': sha(LEGACY) } } } }))
+    const r = run(drifted)
+    assert.equal(r.failed, 1, r.detail)
+    assert.match(r.detail, /packages\/tenant-store\/src\/phase-baseline\.ts: differs from its rendering .*--write-pinned/)
+    const absent = fixture()
+    rmSync(join(absent.root, PINNED_FILE))
+    const a = run(absent)
+    assert.equal(a.failed, 1, a.detail)
+    assert.match(a.detail, /phase-baseline\.ts: is absent/)
   })
 
   test('an absent baseline is unparseable, never an empty map', () => {

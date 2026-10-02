@@ -33,9 +33,9 @@ import { fileURLToPath } from 'node:url'
 import postgres from 'postgres'
 import { chainFileNames, chainPreApply } from '../../../../scripts/migrations/pre-apply.mjs'
 import { pgDumpExporter } from '../lifecycle/export.js'
-import { KERNEL_ROOT } from '../lifecycle/platform.js'
 import type { Exporter } from '../lifecycle/types.js'
-import { loadBaselinePhaseFor } from '../phase.js'
+import { pinnedPhaseFor } from '../phase.js'
+import { PINNED_BASELINE } from '../phase-baseline.js'
 import { runMigrations } from '../runner.js'
 import { composePreApply, dumpHook, scopeOf, type DumpHookOptions, type PreApply } from './hook.js'
 import { DumpError } from './ledger.js'
@@ -137,10 +137,15 @@ function dbOf(url: URL): string {
   return decodeURIComponent(url.pathname.replace(/^\//, ''))
 }
 
+/** The kernel checkout this file sits in (packages/tenant-store/src/dump -> four up); resolved on use, never at module load. */
+function kernelRoot(): string {
+  return fileURLToPath(new URL('../../../../', import.meta.url))
+}
+
 async function migrate(flags: Map<string, string>, env: NodeJS.ProcessEnv, io: CliIo, deps: CliDeps): Promise<number> {
   const chainId = need(flags, 'chain')
   const release = need(flags, 'release')
-  const root = flags.get('root') ?? KERNEL_ROOT
+  const root = flags.get('root') ?? kernelRoot()
   const runners = JSON.parse(readFileSync(join(root, 'scripts', 'migrations', 'runner', 'chain-runners.json'), 'utf8')) as { chains: Record<string, string> }
   const cls = runners.chains[chainId]
   if (cls === undefined) throw new UsageError(`chain ${chainId} is not in chain-runners.json`)
@@ -168,7 +173,7 @@ async function migrate(flags: Map<string, string>, env: NodeJS.ProcessEnv, io: C
       sql,
       dir: join(root, dirs[0]!),
       releaseRef: release,
-      phaseFor: loadBaselinePhaseFor(chainId, root),
+      phaseFor: pinnedPhaseFor(chainId, PINNED_BASELINE),
       log,
       hooks: {
         preApply: migratePreApply({

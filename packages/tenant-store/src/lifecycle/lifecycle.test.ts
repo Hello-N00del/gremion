@@ -2,17 +2,21 @@
 // the gate's default-deny, input refusals before any statement, the platform
 // migration folder, and the export verification (a recording/fake exporter).
 // The database half is test/integration/lifecycle-*.test.ts.
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import type { Sql } from '@gremion/db'
 import { readVerifiedMigrations } from '../manifest.js'
 import { tenantModuleDbName } from '../names.js'
-import { loadBaselinePhaseFor, resolvePhase } from '../phase.js'
+import { pinBaseline, pinnedPhaseFor, resolvePhase } from '../phase.js'
+import { PINNED_BASELINE } from '../phase-baseline.js'
 import { splitStatements } from '../strip-outer-transaction.js'
 import * as lifecycle from './index.js'
-import { KERNEL_ROOT, PLATFORM_CHAIN } from './platform.js'
+import { PLATFORM_CHAIN } from './platform.js'
+
+/** The kernel checkout (src/lifecycle -> four up); the unit suite runs from one. */
+const REPO = fileURLToPath(new URL('../../../../', import.meta.url))
 import {
   assertTenantModuleTarget,
   disableModule,
@@ -152,9 +156,36 @@ describe('the platform migration folder (gremion_platform, schema plt)', () => {
     for (const f of files) expect(() => splitStatements(f.text)).not.toThrow()
   })
 
-  it('TASK-075 G1b: migratePlatform\'s default phase lookup (the kernel baseline of chain platform) knows every locked platform file', () => {
-    const phaseFor = loadBaselinePhaseFor(PLATFORM_CHAIN, KERNEL_ROOT)
+  it('TASK-075 G1b: migratePlatform\'s default phase lookup (the baseline this package ships) knows every locked platform file', () => {
+    const phaseFor = pinnedPhaseFor(PLATFORM_CHAIN, PINNED_BASELINE)
     expect(files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand', 'expand'])
+  })
+
+  // TASK-075 r2: enableModule's default (no deps.phaseFor, as tenant-create
+  // runs it) must phase every migration of every kernel module with a
+  // database from the shipped baseline alone (headerless locked files) or
+  // from the file's own header (files added later).
+  it('TASK-075 r2: enableModule\'s default phase lookup resolves every module database migration of the kernel tree', () => {
+    const modulesRoot = join(REPO, 'modules')
+    const resolved: string[] = []
+    for (const id of readdirSync(modulesRoot).sort()) {
+      const mj = join(modulesRoot, id, 'module.json')
+      if (!existsSync(mj)) continue
+      const database = (JSON.parse(readFileSync(mj, 'utf8')) as { runtime?: { database?: { migrations: string } | null } }).runtime?.database
+      if (!database) continue
+      const phaseFor = pinnedPhaseFor(`module-${id}`, PINNED_BASELINE)
+      for (const f of readVerifiedMigrations(join(modulesRoot, id, database.migrations))) {
+        expect(() => resolvePhase(f.file, f.text, phaseFor), `${id}/${f.file}`).not.toThrow()
+        resolved.push(`${id}/${f.file}`)
+      }
+    }
+    expect(resolved.length).toBeGreaterThan(0)
+    expect(resolved).toContain('board/001_init.sql')
+  })
+
+  it('TASK-075 r2: the shipped baseline is the kernel baseline joined with applied.lock.json (no drift)', () => {
+    const read = (...p: string[]) => JSON.parse(readFileSync(join(REPO, ...p), 'utf8')) as never
+    expect(PINNED_BASELINE).toEqual(pinBaseline(read('scripts', 'migrations', 'runner', 'expand-contract-baseline.json'), read('scripts', 'migrations', 'applied.lock.json')))
   })
 
   it('0004 is SCHEMA DB-PLT-PROVISIONING-STEP with exactly two appended kinds (TASK-043 Q2) and stays append-only', () => {

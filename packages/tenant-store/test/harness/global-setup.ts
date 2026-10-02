@@ -8,8 +8,9 @@
 // package itself never creates or drops a database (TASK-021 owns that).
 import { fileURLToPath } from 'node:url'
 import type { TestProject } from 'vitest/node'
-import { KERNEL_ROOT, migratePlatform } from '../../src/lifecycle/platform.js'
-import { loadBaselinePhaseFor } from '../../src/phase.js'
+import { migratePlatform } from '../../src/lifecycle/platform.js'
+import { pinnedPhaseFor } from '../../src/phase.js'
+import { PINNED_BASELINE } from '../../src/phase-baseline.js'
 import { runMigrations } from '../../src/runner.js'
 import { tenantModuleDbName } from '../../src/names.js'
 import { connect } from './db.js'
@@ -52,7 +53,7 @@ export default async function setup(project: TestProject) {
     const control = connect('control', { max: 2 })
     try {
       // TASK-075: the control chain's locked files take their phase from the baseline.
-      await runMigrations({ sql: control, dir: CONTROL_MIGRATIONS, releaseRef: 'dist-v0.0.1', phaseFor: loadBaselinePhaseFor('control', KERNEL_ROOT), log: () => {} })
+      await runMigrations({ sql: control, dir: CONTROL_MIGRATIONS, releaseRef: 'dist-v0.0.1', phaseFor: pinnedPhaseFor('control', PINNED_BASELINE), log: () => {} })
       const ids: string[] = []
       for (const slug of ['t020-a', 't020-b']) {
         const [row] = await control<{ id: string }[]>`

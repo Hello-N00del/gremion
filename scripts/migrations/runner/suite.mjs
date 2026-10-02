@@ -8,6 +8,8 @@
 //   2. expand-contract-baseline.json is the one written at the merge: its
 //      digest equals BASELINE_DIGEST, every entry is a locked file (applied.
 //      lock.json) whose bytes still hash to the lock (LOCKED_FILE_CHANGED);
+//      and its runtime copy packages/tenant-store/src/phase-baseline.ts is
+//      byte-equal to renderPinned(baseline, lock) (TASK-075 r2);
 //   3. every canary (fixtures/canaries.json) still fails with its rule, or
 //      still passes -- so a run that lints no real file still collects > 0
 //      and a lint that stopped refusing is caught;
@@ -19,7 +21,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chainFileNames } from '../pre-apply.mjs'
-import { BASELINE_FILE, baselineDigest, fileDir } from './baseline.mjs'
+import { BASELINE_FILE, baselineDigest, fileDir, PINNED_FILE, renderPinned } from './baseline.mjs'
 import { checkContract, createdRoutineNames, formatProblem, lintSql, RULES } from './lint.mjs'
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..', '..')
@@ -148,6 +150,25 @@ export function runExpandContractSuite({ root = REPO_ROOT, canaries, canariesPat
     }
   }
   check(BASELINE_FILE, bproblems)
+
+  // 2b. the runtime copy tenant-store ships (the tenant-create image has no
+  // scripts/): byte-equal to its rendering from the baseline and the lock
+  let want
+  try {
+    want = renderPinned(baseline, lock)
+  } catch (err) {
+    want = null
+    check(PINNED_FILE, [`cannot be derived: ${err.message}`])
+  }
+  if (want !== null) {
+    let have = null
+    try {
+      have = readFileSync(join(root, PINNED_FILE), 'utf8').replace(/\r\n/g, '\n')
+    } catch {
+      /* absent: reported below */
+    }
+    check(PINNED_FILE, have === want ? [] : [`${have === null ? 'is absent' : 'differs from'} its rendering from ${BASELINE_FILE} and applied.lock.json: run node scripts/migrations/runner/baseline.mjs --write-pinned`])
+  }
 
   // 3. canaries: the checked-in set keeps every required one, and each behaves
   if (fromFile) {

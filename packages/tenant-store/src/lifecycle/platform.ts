@@ -8,7 +8,8 @@
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Sql } from '@gremion/db'
-import { loadBaselinePhaseFor, type PhaseFor } from '../phase.js'
+import { pinnedPhaseFor, type PhaseFor } from '../phase.js'
+import { PINNED_BASELINE } from '../phase-baseline.js'
 import { runMigrations, type RunMigrationsHooks, type RunMigrationsResult } from '../runner.js'
 import { execFormatted, sqlState } from './ddl.js'
 import { LifecycleError } from './guards.js'
@@ -108,13 +109,6 @@ export async function assertPlatform(sql: Sql): Promise<void> {
   }
 }
 
-/**
- * The kernel checkout this package sits in (packages/tenant-store/src|dist/lifecycle
- * -> four levels up). A published copy has no scripts/ there, and
- * loadBaselinePhaseFor then knows no file (fail closed: PHASE_MISSING).
- */
-export const KERNEL_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
-
 /** The register chain of gremion_platform (scripts/migrations/ranges.json). */
 export const PLATFORM_CHAIN = 'platform'
 
@@ -122,7 +116,11 @@ export interface MigratePlatformOptions {
   log?: (line: string) => void
   /** TASK-075: the release this run ships (ledger release_ref, 1-64 characters). */
   releaseRef: string
-  /** TASK-075: phase of a headerless file; default the kernel baseline of chain `platform`. */
+  /**
+   * TASK-075: phase of a headerless file; default the kernel baseline of chain
+   * `platform` as this package ships it (PINNED_BASELINE), so a tree without
+   * scripts/ (the tenant-create image) phases the same files a checkout does.
+   */
   phaseFor?: PhaseFor
   /** TASK-075: e.g. cli.ts's composed chain check + pre-migration dump (an upgrade of an existing catalogue). */
   hooks?: RunMigrationsHooks
@@ -135,7 +133,7 @@ export async function migratePlatform(sql: Sql, opts: MigratePlatformOptions): P
     sql,
     dir: PLATFORM_MIGRATIONS_DIR,
     releaseRef: opts?.releaseRef,
-    phaseFor: opts?.phaseFor ?? loadBaselinePhaseFor(PLATFORM_CHAIN, KERNEL_ROOT),
+    phaseFor: opts?.phaseFor ?? pinnedPhaseFor(PLATFORM_CHAIN, PINNED_BASELINE),
     ...(opts?.hooks ? { hooks: opts.hooks } : {}),
     ...(opts?.log ? { log: opts.log } : {}),
   })

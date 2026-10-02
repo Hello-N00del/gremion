@@ -28,8 +28,9 @@ import {
   LifecycleError,
   moduleRoles,
 } from './guards.js'
-import { loadBaselinePhaseFor } from '../phase.js'
-import { assertPlatform, casModuleDatabaseState, KERNEL_ROOT, lookupModuleVersion, readModuleDatabase } from './platform.js'
+import { pinnedPhaseFor } from '../phase.js'
+import { PINNED_BASELINE } from '../phase-baseline.js'
+import { assertPlatform, casModuleDatabaseState, lookupModuleVersion, readModuleDatabase } from './platform.js'
 import { scramSha256Verifier } from './scram.js'
 import type { Actor, EnableResult, GateResult, LifecycleDeps, LifecycleModule, ModuleServer } from './types.js'
 
@@ -208,7 +209,9 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
         // TASK-075 G1b: a database this call created has nothing to lose, so
         // no pre-migration dump; an existing one (upgrade, resumed enable)
         // runs under deps.upgradeHooks (the dump hook).
-        const phaseFor = deps.phaseFor ? deps.phaseFor(moduleId) : loadBaselinePhaseFor(`module-${moduleId}`, KERNEL_ROOT)
+        // Default: the baseline this package ships (never a kernel checkout's
+        // scripts/, which the tenant-create image does not carry).
+        const phaseFor = deps.phaseFor ? deps.phaseFor(moduleId) : pinnedPhaseFor(`module-${moduleId}`, PINNED_BASELINE)
         const hooks = created ? undefined : deps.upgradeHooks
         const r = await runMigrations({
           sql: owned,

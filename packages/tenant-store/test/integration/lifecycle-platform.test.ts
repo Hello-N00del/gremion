@@ -8,12 +8,18 @@
 //  - plt.operator_enable_attestation (Q19) is one row per (customer, module),
 //    append-only.
 import { randomBytes } from 'node:crypto'
+import { cpSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { Sql } from '@gremion/db'
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ensurePlatformDatabase, migratePlatform, PLATFORM_DATABASE } from '../../src/lifecycle/index.js'
+import { ensurePlatformDatabase, migratePlatform, PLATFORM_DATABASE, PLATFORM_MIGRATIONS_DIR } from '../../src/lifecycle/index.js'
+import type { LifecycleModule } from '../../src/lifecycle/index.js'
+import { loadManifest } from '../../src/manifest.js'
+import { tenantModuleDbName } from '../../src/names.js'
 import { connectModule, moduleDbUrl } from '../harness/db.js'
-import { platformDb, uuidv7 } from '../harness/lifecycle.js'
+import { lifecycleDeps, moduleServer, OPERATOR, platformDb, resetModuleServer, seedCatalogue, uuidv7 } from '../harness/lifecycle.js'
 
 const OWNER = 't043_platform_owner'
 const PASSWORD = randomBytes(24).toString('base64url')
@@ -235,5 +241,87 @@ describe('plt.operator_enable_attestation (0004, Q19)', () => {
     expect(await sqlError(platform`TRUNCATE plt.operator_enable_attestation`)).toMatchObject({ code: '23514' })
     const [still] = await platform<{ id: string }[]>`SELECT attestation_id AS id FROM plt.operator_enable_attestation WHERE customer_id = ${c}`
     expect(still?.id).toBe(row!.id)
+  })
+})
+
+// TASK-075 r2 (house review HIGH): `gremion-tenant init|create` runs from the
+// gremion-ui/Dockerfile builder stage, which copies packages/* and each
+// module's migrations, never scripts/. migratePlatform (init) and
+// enableModule (phase B) must phase their headerless files from what ships
+// in the package; a lookup that reads scripts/migrations/** from a kernel
+// checkout finds nothing there and refuses every file PHASE_MISSING.
+describe('TASK-075: the tenant-create image layout (no scripts/ in the tree)', () => {
+  const REPO = fileURLToPath(new URL('../../../../', import.meta.url))
+  const ROOT = join(REPO, '.scratch', `t075-image-layout-${process.pid}`)
+  const BOARD_OWNER = 't075_layout_owner'
+  let admin: Sql
+  let lc: typeof import('../../src/lifecycle/index.js')
+
+  beforeAll(async () => {
+    rmSync(ROOT, { recursive: true, force: true })
+    // the Dockerfile's COPYs: the package sources, and module.json + migrations/ of a module
+    cpSync(join(REPO, 'packages/tenant-store/src'), join(ROOT, 'packages/tenant-store/src'), { recursive: true, filter: (p) => !p.endsWith('.test.ts') })
+    cpSync(join(REPO, 'modules/board/module.json'), join(ROOT, 'modules/board/module.json'))
+    cpSync(join(REPO, 'modules/board/migrations'), join(ROOT, 'modules/board/migrations'), { recursive: true })
+    expect(existsSync(join(ROOT, 'scripts'))).toBe(false)
+    lc = (await import(pathToFileURL(join(ROOT, 'packages/tenant-store/src/lifecycle/index.ts')).href)) as typeof import('../../src/lifecycle/index.js')
+    admin = connectModule('postgres', { max: 1 })
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${PLATFORM_DATABASE} WITH (FORCE)`)
+    await admin.unsafe(`DROP ROLE IF EXISTS ${BOARD_OWNER}`)
+  })
+
+  afterAll(async () => {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${PLATFORM_DATABASE} WITH (FORCE)`)
+    await admin.unsafe(`DROP ROLE IF EXISTS ${BOARD_OWNER}`)
+    await admin.end()
+    rmSync(ROOT, { recursive: true, force: true })
+  })
+
+  it('migratePlatform (init) from the image layout applies every platform file with its phase', async () => {
+    expect(lc.PLATFORM_MIGRATIONS_DIR.startsWith(ROOT)).toBe(true)
+    await lc.ensurePlatformDatabase(admin, { owner: BOARD_OWNER, ownerPassword: PASSWORD })
+    const u = new URL(moduleDbUrl(PLATFORM_DATABASE))
+    u.username = BOARD_OWNER
+    u.password = encodeURIComponent(PASSWORD)
+    const owned = postgres(u.toString(), { max: 2, onnotice: () => {}, connect_timeout: 5 })
+    try {
+      const files = [...loadManifest(PLATFORM_MIGRATIONS_DIR).keys()].sort()
+      const m = await lc.migratePlatform(owned, { releaseRef: 'dist-v0.0.1', log: () => {} })
+      expect(m.applied).toEqual(files)
+      const ledger = await owned<{ filename: string; phase: string }[]>`SELECT filename, phase FROM public.schema_migrations ORDER BY filename`
+      expect(ledger.map((r) => r.filename)).toEqual(files)
+      expect(ledger.every((r) => ['expand', 'migrate', 'contract'].includes(r.phase))).toBe(true)
+    } finally {
+      await owned.end()
+    }
+  })
+
+  it('enableModule (phase B) from the image layout migrates a real module database with the default phase lookup', async () => {
+    const platform = platformDb()
+    const server = moduleServer()
+    try {
+      await seedCatalogue(platform, 'board')
+      const moduleJson = JSON.parse(readFileSync(join(ROOT, 'modules/board/module.json'), 'utf8')) as LifecycleModule['moduleJson']
+      const board: LifecycleModule = { id: 'board', dir: join(ROOT, 'modules/board'), moduleJson }
+      // the harness default injects a phaseFor for the lcfix fixture; the image passes none
+      const { phaseFor: _fixture, ...deps } = lifecycleDeps(platform, server, { server: () => server })
+      const X = uuidv7()
+      const r = await lc.enableModule(X, board, OPERATOR, deps)
+      expect(r).toMatchObject({ database: tenantModuleDbName(X, 'board'), created: true, applied: ['001_init.sql'] })
+      const owned = connectModule(tenantModuleDbName(X, 'board'), { max: 1 })
+      try {
+        expect(await owned<{ filename: string; phase: string; release_ref: string }[]>`SELECT filename, phase, release_ref FROM public.schema_migrations`).toEqual([
+          { filename: '001_init.sql', phase: 'expand', release_ref: 'dist-v0.0.1' },
+        ])
+      } finally {
+        await owned.end()
+      }
+    } finally {
+      await resetModuleServer(server.admin, platform)
+      await server.admin.unsafe('DROP ROLE IF EXISTS m_board_app')
+      await server.admin.unsafe('DROP ROLE IF EXISTS m_board')
+      await server.close()
+      await platform.end()
+    }
   })
 })

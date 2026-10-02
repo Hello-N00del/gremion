@@ -69,7 +69,7 @@ export interface RunMigrationsOptions {
   releaseRef: string
   /**
    * The phase of a file whose first line declares none: the baseline of files
-   * locked before the header existed (loadBaselinePhaseFor). Undefined for a
+   * locked before the header existed (pinnedPhaseFor over PINNED_BASELINE). Undefined for a
    * file it does not know, which is then PHASE_MISSING.
    */
   phaseFor?: PhaseFor

@@ -13,13 +13,15 @@
 // applied.lock.json) are never re-hashed to gain one: their phase comes from
 // scripts/migrations/runner/expand-contract-baseline.json instead, and a
 // baseline file whose bytes no longer match the lock is LOCKED_FILE_CHANGED.
+// The runtime reads that baseline from ./phase-baseline.ts (PINNED_BASELINE,
+// generated from the two kernel files, drift-checked by the expand-contract
+// suite), which ships inside this package: the tenant-create image has no
+// scripts/ directory (TASK-075 r2).
 //
 // Deliberately free of relative imports and of TypeScript-only runtime syntax
 // (no enums, no parameter properties): scripts/migrations/runner/lint.mjs loads
 // this file directly under Node's type stripping.
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 
 export const PHASES = ['expand', 'migrate', 'contract'] as const
 export type Phase = (typeof PHASES)[number]
@@ -157,19 +159,38 @@ export function baselinePhaseFor(chain: string, baseline: BaselineData, lock: Lo
   }
 }
 
-export const BASELINE_PATH = ['scripts', 'migrations', 'runner', 'expand-contract-baseline.json'] as const
-export const LOCK_PATH = ['scripts', 'migrations', 'applied.lock.json'] as const
+/** Per chain, per baseline file: its phase and the sha256 applied.lock.json pins for it. */
+export type PinnedBaseline = Record<string, Record<string, { phase: Phase; sha256: string }>>
 
 /**
- * The baseline lookup read from a kernel checkout at `root`. Without the
- * files (a published package), no file has a baseline phase: every headerless
- * file is then PHASE_MISSING, which fails closed.
+ * The baseline joined with the lock, as ./phase-baseline.ts ships it. Throws
+ * LOCKED_FILE_CHANGED for a baseline file the lock does not pin (the suite
+ * reports the same as a problem). Keys sorted, so the rendering is stable.
  */
-export function loadBaselinePhaseFor(chain: string, root: string): PhaseFor {
-  const b = join(root, ...BASELINE_PATH)
-  const l = join(root, ...LOCK_PATH)
-  if (!existsSync(b) || !existsSync(l)) return () => undefined
-  return baselinePhaseFor(chain, JSON.parse(readFileSync(b, 'utf8')) as BaselineData, JSON.parse(readFileSync(l, 'utf8')) as LockData)
+export function pinBaseline(baseline: BaselineData, lock: LockData): PinnedBaseline {
+  const out: PinnedBaseline = {}
+  for (const chain of Object.keys(baseline.chains ?? {}).sort()) {
+    const map = baseline.chains[chain]!
+    const locked = lock.chains?.[chain]?.files ?? {}
+    const files: PinnedBaseline[string] = {}
+    for (const file of Object.keys(map).sort()) {
+      const sha256 = locked[file]
+      if (sha256 === undefined) throw new PhaseError('LOCKED_FILE_CHANGED', file, `in the baseline of ${chain} but not in applied.lock.json`)
+      files[file] = { phase: map[file]!, sha256 }
+    }
+    out[chain] = files
+  }
+  return out
+}
+
+/** The baseline lookup for one chain from a pinned baseline (the one shipped in ./phase-baseline.ts). */
+export function pinnedPhaseFor(chain: string, pinned: PinnedBaseline): PhaseFor {
+  const entries = Object.entries(pinned[chain] ?? {})
+  return baselinePhaseFor(
+    chain,
+    { chains: { [chain]: Object.fromEntries(entries.map(([f, e]) => [f, e.phase])) } },
+    { chains: { [chain]: { files: Object.fromEntries(entries.map(([f, e]) => [f, e.sha256])) } } },
+  )
 }
 
 /** Header first, then `phaseFor` (the baseline), else PHASE_MISSING. */
