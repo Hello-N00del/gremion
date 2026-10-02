@@ -46,3 +46,32 @@ src/lib/i18n/paraglide/
 /src/lib/files/
 /src/lib/components/files/
 /src/lib/modules/manifests/files.*
+# messaging
+/src/routes/messages/
+/src/routes/element-call/
+/src/routes/livekit/
+/src/routes/api/messages/
+/src/routes/api/video/
+/src/routes/api/auth/matrix-*/
+/src/routes/api/internal/push/
+/src/lib/server/messages/
+/src/lib/stores/matrix.ts
+/src/lib/stores/call-store.svelte.ts
+/src/lib/components/VideoCallPip.svelte
+/src/lib/modules/manifests/messages.*
+# votes
+/src/routes/polls/
+/src/routes/votes/
+/src/routes/api/polls/
+/src/lib/server/polls/
+/src/lib/components/ballot/
+/src/lib/components/polls/
+/src/lib/client/
+/src/lib/modules/manifests/votes.*
+# elections
+/src/routes/elections/
+/src/routes/api/elections/
+/src/lib/server/elections/
+/src/lib/votes/
+/src/lib/modules/manifests/elections.*
+/src/lib/server/seed/seed-elections.ts

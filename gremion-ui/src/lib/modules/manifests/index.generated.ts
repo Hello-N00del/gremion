@@ -9,15 +9,21 @@
 import type { ModuleManifest } from '../types'
 import { coreManifest } from './core'
 import { governanceManifest } from './governance'
+import { electionsManifest } from './elections'
+import { votesManifest } from './votes'
 import { calendarManifest } from './calendar'
 import { filesManifest } from './files'
+import { messagesManifest } from './messages'
 import { boardManifest } from './board'
 
 /** All registered module manifests, in `order` (registration) sequence. */
 export const MODULE_MANIFESTS: ModuleManifest[] = [
   coreManifest,
   governanceManifest,
+  electionsManifest,
+  votesManifest,
   calendarManifest,
   filesManifest,
+  messagesManifest,
   boardManifest,
 ]

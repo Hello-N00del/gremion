@@ -9,4 +9,6 @@
 // subsystem factories). No import.meta.glob (a static import list resolves
 // under bare tsx/Node, not just the Vite graph).
 import '../calendar/register.server'
+import '../elections/register.server'
 import '../files/register.server'
+import '../messages/register.server'
