@@ -193,8 +193,29 @@ function scriptTestFiles(root) {
   // __fixtures__/** is deliberately excluded: those files exist to be
   // seeded-bad (zero declared tests, all-skip) for verify's OWN guard tests
   // and must never be swept into the real suite they are fixtures for.
-  return globSync('scripts/**/*.test.mjs', { cwd: root })
+  // gremion-ui/scripts/*.test.mjs joins (TASK-205a): the interim module overlay's own guard lives beside the
+  // script it guards, outside root scripts/, and a node:test file nobody collects passes vacuously.
+  return [...globSync('scripts/**/*.test.mjs', { cwd: root }), ...globSync('gremion-ui/scripts/*.test.mjs', { cwd: root })]
     .filter((f) => !f.split(/[\\/]/).includes('__fixtures__'))
+    .sort()
+}
+
+/**
+ * Every modules/<id> whose package.json defines a `test` script (TASK-205a, TASK-200 residual (b)). Each is a
+ * workspace package with its own vitest suite (the leaf service's unit tests); none of them runs through
+ * gremion-ui's vitest, so without this part a module's suite ran in NO verify suite. A module directory with
+ * no package.json test script (the app-only ids elections and handover) is not a suite. Returns bare ids.
+ */
+export function moduleDirsWithTestScript(root = REPO_ROOT) {
+  const modulesDir = path.join(root, 'modules')
+  return readdirSync(modulesDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .filter((id) => {
+      const pj = path.join(modulesDir, id, 'package.json')
+      if (!existsSync(pj)) return false
+      return typeof JSON.parse(readFileSync(pj, 'utf8')).scripts?.test === 'string'
+    })
     .sort()
 }
 
@@ -257,6 +278,13 @@ export const UNIT_PARTS = {
   'control-panel': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'apps', 'control-panel'), testScript: 'test', root, label: 'control-panel vitest (test)' }),
   ],
+  // TASK-205a: one vitest part per modules/<id> package with a test script. Zero such modules is itself a
+  // failing part (an empty module set must not read as a pass).
+  modules: (root) => {
+    const ids = moduleDirsWithTestScript(root)
+    if (ids.length === 0) return [{ label: 'modules vitest (no modules/*/package.json defines a test script)', collected: 0, passed: 0, failed: 0, skipped: 0 }]
+    return ids.map((id) => vitestSubcheck({ cwd: path.join(root, 'modules', id), testScript: 'test', root, label: `module ${id} vitest (test)` }))
+  },
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }
