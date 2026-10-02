@@ -10,7 +10,7 @@ const ADMIN_UUID = '00000000-0000-0000-0000-000000000002'
 describe('ElectionDb', () => {
   beforeEach(async () => {
     const sql = getDb()
-    await sql`TRUNCATE org_units, finance.bank_account, finance.reserve, finance.fiscal_year, finance.finanzordnung_profile, finance.finance_helios_settings RESTART IDENTITY CASCADE`
+    await sql`TRUNCATE org_units RESTART IDENTITY CASCADE`
     await sql`DELETE FROM committee_elections`
     await sql`DELETE FROM org_unit_members`
     await sql`DELETE FROM org_units`
