@@ -60,6 +60,7 @@ STATE_ENV="${STATE_ENV:-}"
 HOST_FQDN="${HOST_FQDN:-}"
 DEPLOY_PUBKEY_FILE="${DEPLOY_PUBKEY_FILE:-}"
 COSIGN_PUBKEY_FILE="${COSIGN_PUBKEY_FILE:-}"
+ALLOWED_SIGNERS_FILE="${ALLOWED_SIGNERS_FILE:-}"
 EXPECT_PTR=0
 DNS_RESOLVER="${DNS_RESOLVER:-1.1.1.1}"
 
@@ -82,13 +83,15 @@ Stages:
   timers       gremion-backup.timer + gremion-verify.service
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
-  all          base user docker addresses networks firewall agent timers
+  signers      the release-tag signers file (allowed_signers) (not part of 'all')
+  all         base user docker addresses networks firewall agent timers
 
 Options:
   --env-file PATH        state env file (default: <root>/etc/env/state.env)
   --fqdn NAME            host FQDN for the 'addresses' stage
   --deploy-pubkey PATH   public key for the 'agent' stage
   --cosign-pubkey PATH   release-signing PUBLIC key for the 'trust' stage
+  --allowed-signers PATH ssh allowed_signers file for the 'signers' stage
   --expect-ptr           'addresses' also verifies both PTR records
   -h, --help             this text
 
@@ -1122,6 +1125,48 @@ stage_trust() {
     ok "release trust anchor installed at ${dst} ($(sha256sum "$dst" | awk '{print $1}'))"
 }
 
+# signers — the release-tag trust anchor (H10)
+# gremion-deploy authenticates the release tree before anything in it runs: the
+# tag must carry an ssh signature from a key listed in <root>/etc/allowed_signers.
+# This stage is the ONLY writer of that file, root:root 0644 like etc/cosign.pub
+# (the deploy user reads it and cannot rewrite it); the release tree is never a
+# source for it. The same file the operator verified the first checkout with
+# (install.md step 3) is the one installed. Not part of 'all': the file is an
+# operator activation input, and a deploy without it fails closed anyway.
+stage_signers() {
+    require_root
+    local root dst src="${ALLOWED_SIGNERS_FILE}" line n=0
+    root="$(gremion_root)"
+    dst="${root}/etc/allowed_signers"
+    [[ -n "$src" ]] || die "ALLOWED_SIGNERS_FILE is not set (pass --allowed-signers)" 2
+    [[ -f "$src" ]] || die "allowed_signers file not found: ${src}" 2
+    if grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$src"; then
+        die "refusing ${src}: it holds a PRIVATE key - the signers file lists PUBLIC keys only" 1
+    fi
+    # Every entry must be a public-key line scoped to the git namespace: a line
+    # without the namespace restriction would also vouch for the same key in
+    # other ssh-signature uses.
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ "$line" == *'namespaces="git"'* ]] \
+            || die "${src}: an entry is not restricted to namespaces=\"git\": ${line%% *}" 1
+        [[ "$line" =~ [[:space:]](ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)[[:space:]]+[A-Za-z0-9+/=]+ ]] \
+            || die "${src}: an entry holds no ssh public key: ${line%% *}" 1
+        n=$((n + 1))
+    done < "$src"
+    [[ "$n" -gt 0 ]] || die "${src} lists no signer" 1
+    [[ -d "${root}/etc" ]] || die "precondition: ${root}/etc absent - run the 'user' stage first" 2
+
+    install -m 0644 "$src" "${dst}.tmp"
+    mv -f -T "${dst}.tmp" "$dst"
+    chown root:root "$dst"
+    # Post-conditions on the installed state, not on install's exit code.
+    cmp -s "$src" "$dst" || die "${dst} differs from ${src} after install" 1
+    [[ ! -L "$dst" ]] || die "${dst} is a symlink" 1
+    [[ "$(stat -c '%a' "$dst")" == "644" ]] || die "${dst} is not mode 644" 1
+    ok "release-tag signers installed at ${dst} (${n} signer(s), $(sha256sum "$dst" | awk '{print $1}'))"
+}
+
 main() {
     local stage=""
     while [[ $# -gt 0 ]]; do
@@ -1130,6 +1175,7 @@ main() {
             --fqdn)           HOST_FQDN="${2:-}";          shift 2 ;;
             --deploy-pubkey)  DEPLOY_PUBKEY_FILE="${2:-}"; shift 2 ;;
             --cosign-pubkey)  COSIGN_PUBKEY_FILE="${2:-}"; shift 2 ;;
+            --allowed-signers) ALLOWED_SIGNERS_FILE="${2:-}"; shift 2 ;;
             --expect-ptr)     EXPECT_PTR=1;                shift ;;
             -h|--help)        usage; return 0 ;;
             -*)               die "unknown option: $1 (see --help)" 2 ;;
@@ -1150,7 +1196,8 @@ main() {
         timers)      stage_timers ;;
         harden-ssh)  stage_harden_ssh ;;
         trust)       stage_trust ;;
-        all)         stage_base; stage_user; stage_docker; stage_addresses
+        signers)     stage_signers ;;
+        all)        stage_base; stage_user; stage_docker; stage_addresses
                      stage_networks; stage_firewall; stage_agent; stage_timers
                      echo; info "'all' does not include harden-ssh — run it explicitly." ;;
         *)           die "unknown stage: ${stage} (see --help)" 2 ;;
