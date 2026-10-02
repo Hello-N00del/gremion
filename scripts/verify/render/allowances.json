@@ -28,6 +28,13 @@
       "date": "2026-09-28",
       "retiresWith": "TASK-048b",
       "reason": "state keeps TASK-040's services: {} pins until TASK-048b ships the docker-compose.state-pins.yml release fixture"
+    },
+    {
+      "project": "state",
+      "service": "matrix",
+      "date": "2026-10-02",
+      "retiresWith": "TASK-048b",
+      "reason": "adders clause (TASK-198): Synapse is a first-party build: service in the state project (profiles: [messaging]); the render-guards state render carries no pins layer, so it keeps build like legal, vector and fallback; the release state-pins fixture pins it (test/host/fixtures/release/valid)"
     }
   ]
 }
