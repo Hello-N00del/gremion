@@ -42,7 +42,7 @@ describe('compareFingerprints', () => {
   it('equal fingerprints pass', () => {
     assert.deepEqual(compareFingerprints(BEFORE, BEFORE), [])
     // line order and CRLF do not matter (the lines are keyed)
-    const shuffled = BEFORE.split('\n').reverse().join('\r\n')
+    const shuffled = BEFORE.split('\n').toReversed().join('\r\n')
     assert.deepEqual(compareFingerprints(BEFORE, shuffled), [])
   })
 

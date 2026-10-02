@@ -8,13 +8,15 @@ import { assertEnableList, DEFAULT_DENY, operatorAllowGate, ProvisioningError } 
 const T = '01927f00-0000-7000-8000-000000000001'
 const ATT = '01927f00-0000-7000-8000-00000000abcd'
 
-function thrown(fn: () => unknown): unknown {
+/** The refusal of assertEnableList as plain data (null: no refusal). */
+function refusal(ids: readonly string[], known: readonly string[]): { provisioning: boolean; code: string; message: string } | null {
   try {
-    fn()
+    assertEnableList(ids, known)
   } catch (e) {
-    return e
+    if (e instanceof ProvisioningError) return { provisioning: true, code: e.code, message: e.message }
+    return { provisioning: false, code: 'OTHER', message: String(e) }
   }
-  return undefined
+  return null
 }
 
 describe('assertEnableList', () => {
@@ -26,25 +28,23 @@ describe('assertEnableList', () => {
   })
 
   it('refuses board by name (R29-I1: not tenant-isolated until TASK-058)', () => {
-    const err = thrown(() => assertEnableList(['calendar', 'board'], known))
-    expect(err).toBeInstanceOf(ProvisioningError)
-    expect((err as ProvisioningError).code).toBe('MODULE_DENIED')
-    expect((err as Error).message).toMatch(/board/)
+    const r = refusal(['calendar', 'board'], known)
+    expect(r).toMatchObject({ provisioning: true, code: 'MODULE_DENIED' })
+    expect(r?.message).toMatch(/module board cannot be enabled/)
     expect(DEFAULT_DENY.has('board')).toBe(true)
   })
 
   it('refuses vault by name (R30 addendum A1; PRD-PLAT-012 / PRD-REC-003: board and vault stay off for the pilot)', () => {
-    const err = thrown(() => assertEnableList(['calendar', 'vault'], known))
-    expect(err).toBeInstanceOf(ProvisioningError)
-    expect((err as ProvisioningError).code).toBe('MODULE_DENIED')
-    expect((err as Error).message).toMatch(/module vault cannot be enabled/)
-    expect((err as Error).message).toMatch(/PRD-PLAT-012/)
+    const r = refusal(['calendar', 'vault'], known)
+    expect(r).toMatchObject({ provisioning: true, code: 'MODULE_DENIED' })
+    expect(r?.message).toMatch(/module vault cannot be enabled/)
+    expect(r?.message).toMatch(/PRD-PLAT-012/)
     expect(DEFAULT_DENY.has('vault')).toBe(true)
   })
 
   it('the refusal names the reason of the module it refuses, not another one', () => {
-    expect((thrown(() => assertEnableList(['board'], known)) as Error).message).not.toMatch(/vault/)
-    expect((thrown(() => assertEnableList(['vault'], known)) as Error).message).not.toMatch(/board/)
+    expect(refusal(['board'], known)?.message).not.toMatch(/vault/)
+    expect(refusal(['vault'], known)?.message).not.toMatch(/board/)
   })
 
   it('refuses an id the catalogue does not know', () => {

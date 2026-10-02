@@ -56,7 +56,7 @@ export function compareFingerprints(beforeText, afterText) {
   const b = parseFingerprint(beforeText)
   const a = parseFingerprint(afterText)
   const out = [...emptiness(b, 'before suspend'), ...emptiness(a, 'after resume')]
-  const keys = [...new Set([...b.tables.keys(), ...a.tables.keys()])].sort()
+  const keys = [...new Set([...b.tables.keys(), ...a.tables.keys()])].toSorted((p, q) => (p < q ? -1 : p > q ? 1 : 0))
   for (const k of keys) {
     const x = b.tables.get(k)
     const y = a.tables.get(k)
