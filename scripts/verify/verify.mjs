@@ -23,7 +23,6 @@ import { parseSvelteCheckMachine } from './lib/parsers.mjs'
 import { writeRecord } from './lib/record.mjs'
 import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
 import { runCensusSuite } from './census/suite.mjs'
-import { runExpandContractSuite } from '../migrations/runner/suite.mjs'
 import { runBoundaryLintSuite } from './boundary-lint/suite.mjs'
 import { runRenderGuardsSuite } from './render/suite.mjs'
 import { runCarveLintSuite } from './suites/carve-lint.mjs'
@@ -70,8 +69,23 @@ export const SUITE_REGISTRY = {
   isolation: () => runIsolationSuite({ root: REPO_ROOT }),
   // TASK-036 (L1-17, TRD-178): declared health census of the production renders.
   census: () => runCensusSuite(),
-  // TASK-075 (TRD-361): a migration that would break the serving colour is refused before merge.
-  'expand-contract': () => runExpandContractSuite({ root: REPO_ROOT }),
+  // TASK-075 (TRD-361): a migration that would break the serving colour is
+  // refused before merge. Run as its own process (scripts/migrations/runner/
+  // suite-cli.mjs, which calls runExpandContractSuite) and never imported,
+  // like vendor-mail below: a missing runner/ tree is this suite's FAIL.
+  'expand-contract': () => {
+    const res = run(process.execPath, [path.join(REPO_ROOT, 'scripts', 'migrations', 'runner', 'suite-cli.mjs')], { cwd: REPO_ROOT })
+    const prefix = 'EXPAND-CONTRACT-SUITE '
+    const line = String(res.stdout ?? '').split(/\r?\n/).findLast((l) => l.startsWith(prefix))
+    if (res.code === 0 && line) {
+      try {
+        return JSON.parse(line.slice(prefix.length))
+      } catch {
+        // an unparseable result line is judged below, like no line at all
+      }
+    }
+    return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `scripts/migrations/runner/suite-cli.mjs: exit ${String(res.code ?? res.signal)} without a result line\n${tail(String(res.stdout) + String(res.stderr))}` }
+  },
   // TASK-053 (L2-05, TRD-440/444/343): pooled-stack render guards over the
   // production renders, and boundary-lint's full-tree scan with its
   // scanned-file floor. See render/suite.mjs and boundary-lint/suite.mjs.

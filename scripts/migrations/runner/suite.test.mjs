@@ -139,6 +139,16 @@ describe('wiring: verify runs the suite as required', () => {
     assert.ok(loadRequiredSuites().includes('expand-contract'), 'required-suites.txt dropped expand-contract')
   })
 
+  // verify must load from a copy of scripts/verify alone (its space-path CLI
+  // tests copy only that directory): the suite runs as its own process
+  // (suite-cli.mjs), never through a static import out of scripts/verify.
+  test('the registry entry runs the suite through suite-cli.mjs and judges its result line', () => {
+    const r = SUITE_REGISTRY['expand-contract']()
+    assert.equal(r.unparseable, false, r.detail)
+    assert.equal(r.failed, 0, r.detail)
+    assert.ok(r.collected >= 2 + loadCanaries().length, `collected ${r.collected}`)
+  })
+
   test('the real tree passes: every chain covered, the baseline intact, canaries behaving', () => {
     const r = runExpandContractSuite()
     assert.equal(r.unparseable, false, r.detail)

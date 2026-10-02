@@ -6,7 +6,10 @@ Two guarantees, TRD-361 and TRD-206:
    blue/green release the new colour's migrations run while the old colour
    still serves. A migration that would break the old colour is refused before
    merge by the required `expand-contract` verify suite
-   (`node scripts/verify/verify.mjs --only expand-contract`).
+   (`node scripts/verify/verify.mjs --only expand-contract`). verify runs it
+   as its own process (`suite-cli.mjs`, last stdout line
+   `EXPAND-CONTRACT-SUITE <json>`), never by importing `suite.mjs`: a copy of
+   `scripts/verify` must load alone.
 2. **One dump before DDL, deleted after the switch.** Before a schema migration
    is applied, one dump of the database it alters is taken. It is deleted, and
    the deletion logged, only once the blue/green switch shipping the migration
