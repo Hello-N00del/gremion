@@ -116,6 +116,92 @@ test('no --cosign-pubkey is a usage error (exit 2); a non-PEM file is refused', 
   assert.match(j.out, /not a PEM public key/)
 })
 
+// ---- 'signers' stage (H10): <root>/etc/allowed_signers, the release-tag anchor ----
+
+const SIGNER_LINE = 'release@example.test namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeFakeFakeFakeFakeFakeFakeFakeFakeFake'
+
+function stageSigners({ file, content, noEtc = false } = {}) {
+  n += 1
+  const root = join(h.tmp, `sroot-${n}`)
+  mkdirSync(noEtc ? root : join(root, 'etc'), { recursive: true })
+  let src = file ?? ''
+  if (content !== undefined) {
+    src = join(h.tmp, `signers-${n}`)
+    writeFileSync(src, content)
+  }
+  const script = `
+set -euo pipefail
+source "${BOOTSTRAP}"
+require_root() { :; }
+chown() { :; }
+stage_signers
+`
+  const r = sh('bash', ['-c', script], {
+    env: { ...process.env, GREMION_ROOT: root, ALLOWED_SIGNERS_FILE: src, NO_COLOR: '1' },
+  })
+  return { ...r, out: `${r.stdout}\n${r.stderr}`, root, src, dst: join(root, 'etc/allowed_signers') }
+}
+
+test("'signers' is a documented stage with an --allowed-signers option, and not part of 'all'", () => {
+  const r = sh('bash', [BOOTSTRAP, '--help'])
+  assert.equal(r.status, 0)
+  assert.match(r.stdout, /^ {2}signers {6}/m)
+  assert.match(r.stdout, /--allowed-signers PATH/)
+  const allLine = readFileSync(BOOTSTRAP, 'utf8').split('\n').find((l) => /^\s+all\)\s/.test(l))
+  assert.ok(allLine && !/stage_signers/.test(allLine), "stage_signers must not run from 'all'")
+})
+
+test('the signers stage installs the file as etc/allowed_signers (0644), byte for byte', () => {
+  const r = stageSigners({ content: `# the release signer\n${SIGNER_LINE}\n` })
+  assert.equal(r.status, 0, r.out)
+  assert.equal(readFileSync(r.dst, 'utf8'), readFileSync(r.src, 'utf8'))
+  // NTFS reports 666 for every file; the stage itself asserts 644 with stat(1)
+  if (process.platform !== 'win32') assert.equal((statSync(r.dst).mode & 0o777).toString(8), '644')
+  assert.match(r.out, /release-tag signers installed at .*etc\/allowed_signers \(1 signer/)
+})
+
+test('the signers stage is the --allowed-signers option end to end (bootstrap.sh run as a program)', () => {
+  const src = join(h.tmp, 'signers-cli')
+  writeFileSync(src, `${SIGNER_LINE}\n`)
+  const r = sh('bash', [BOOTSTRAP, '--allowed-signers', src, 'signers'], {
+    env: { ...process.env, GREMION_ROOT: join(h.tmp, 'cli-root'), NO_COLOR: '1' },
+  })
+  // not root here, so the program stops at require_root: the option parsed and the stage dispatched
+  assert.notEqual(r.status, 0)
+  assert.doesNotMatch(`${r.stdout}\n${r.stderr}`, /unknown (stage|option)/)
+})
+
+test('no --allowed-signers is a usage error (exit 2); a missing file is a precondition failure', () => {
+  const r = stageSigners({})
+  assert.equal(r.status, 2, r.out)
+  assert.match(r.out, /pass --allowed-signers/)
+  const m = stageSigners({ file: join(h.tmp, 'does-not-exist') })
+  assert.equal(m.status, 2, m.out)
+  assert.match(m.out, /not found/)
+})
+
+test('a PRIVATE key, an empty file, an unscoped entry and a non-key entry are refused; nothing is installed', () => {
+  const cases = [
+    ['private', '-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n', /PRIVATE key/],
+    ['empty', '', /lists no signer/],
+    ['comments only', '# nothing\n\n', /lists no signer/],
+    ['unscoped', 'release@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake\n', /not restricted to namespaces="git"/],
+    ['no key', 'release@example.test namespaces="git" not-a-key\n', /holds no ssh public key/],
+  ]
+  for (const [name, content, re] of cases) {
+    const r = stageSigners({ content })
+    assert.notEqual(r.status, 0, `${name}: ${r.out}`)
+    assert.match(r.out, re, name)
+    assert.equal(existsSync(r.dst), false, `${name}: a refused file was installed`)
+  }
+})
+
+test('the signers stage needs the host layout (the user stage) first', () => {
+  const r = stageSigners({ content: `${SIGNER_LINE}\n`, noEtc: true })
+  assert.equal(r.status, 2, r.out)
+  assert.match(r.out, /run the 'user' stage first/)
+})
+
 test('a host that is not x86_64 is refused by name (only the linux-amd64 asset is pinned)', () => {
   const k = h.keyPair('arm')
   const r = stageTrust({ keyFile: k.pub, arch: 'aarch64' })
