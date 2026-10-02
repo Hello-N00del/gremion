@@ -71,6 +71,7 @@ infra/host/ops/** text eol=lf
 # tree, and packages/edge-routers/test/hygiene-j.test.ts plants an edit into
 # the compose file that matches on "\n".
 compose/observability/** text eol=lf
+test/host/fixtures/observability/** text eol=lf
 docker/loki/** text eol=lf
 docker/tempo/** text eol=lf
 docker/alloy/** text eol=lf
