@@ -81,6 +81,9 @@ function scripted({ bodyError, unlockOk }: { bodyError?: Error; unlockOk: boolea
 }
 
 const FIXTURE_CHAIN = fileURLToPath(new URL('../test/fixtures/migrations/fixture/', import.meta.url))
+// TASK-075: every run names its release (ledger release_ref) and the fixture
+// chain, headerless, is an expand chain (as test/harness/migrations.ts says).
+const FIXTURE_RUN = { releaseRef: 'dist-v0.0.1', phaseFor: () => ({ phase: 'expand' as const }) }
 
 // F1-FIX-02-K (sweep tool item T5): the runner's `finally` releases the lock
 // and the connection. Whatever it does there must never replace or swallow the
@@ -90,7 +93,7 @@ describe('runMigrations error propagation through finally (T5)', () => {
     const { runMigrations } = await import('./runner.js')
     const boom = new Error('relation "nope" does not exist')
     const { sql, calls } = scripted({ bodyError: boom, unlockOk: true })
-    const err = await runMigrations({ sql, dir: FIXTURE_CHAIN, log: () => {} }).catch((e: unknown) => e)
+    const err = await runMigrations({ sql, dir: FIXTURE_CHAIN, ...FIXTURE_RUN, log: () => {} }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(MigrationRunnerError)
     expect((err as MigrationRunnerError).code).toBe('APPLY_FAILED')
     expect((err as MigrationRunnerError).cause).toBe(boom)
@@ -103,7 +106,7 @@ describe('runMigrations error propagation through finally (T5)', () => {
     const { runMigrations } = await import('./runner.js')
     const boom = new Error('syntax error at or near "CREAT"')
     const { sql, calls } = scripted({ bodyError: boom, unlockOk: false })
-    const err = await runMigrations({ sql, dir: FIXTURE_CHAIN, log: () => {} }).catch((e: unknown) => e)
+    const err = await runMigrations({ sql, dir: FIXTURE_CHAIN, ...FIXTURE_RUN, log: () => {} }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(MigrationRunnerError)
     expect((err as MigrationRunnerError).code).toBe('APPLY_FAILED')
     expect((err as MigrationRunnerError).cause).toBe(boom)
@@ -114,7 +117,7 @@ describe('runMigrations error propagation through finally (T5)', () => {
   it('a failed unlock after a clean run is not swallowed either: UNLOCK_FAILED', async () => {
     const { runMigrations } = await import('./runner.js')
     const { sql, calls } = scripted({ unlockOk: false })
-    const err = await runMigrations({ sql, dir: FIXTURE_CHAIN, log: () => {} }).catch((e: unknown) => e)
+    const err = await runMigrations({ sql, dir: FIXTURE_CHAIN, ...FIXTURE_RUN, log: () => {} }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(MigrationRunnerError)
     expect((err as MigrationRunnerError).code).toBe('UNLOCK_FAILED')
     expect(calls.some((c) => c.includes('pg_terminate_backend'))).toBe(true)
