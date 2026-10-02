@@ -22,6 +22,8 @@ import { dumpTools, migratePreApply, runCli } from '../../src/dump/cli.js'
 import { composePreApply } from '../../src/dump/hook.js'
 import { readEvents, type DumpEvent } from '../../src/dump/ledger.js'
 import { defaultDumpFs, type DumpFs } from '../../src/dump/take.js'
+import { PLATFORM_MIGRATIONS_DIR } from '../../src/lifecycle/platform.js'
+import { loadManifest } from '../../src/manifest.js'
 import { envResolveTarget, tenantModuleDbName } from '../../src/names.js'
 import { MigrationRunnerError, runMigrations } from '../../src/runner.js'
 import { schemaGate } from '../../src/schema-gate.js'
@@ -295,7 +297,10 @@ describe('TASK-075: the pre-migration dump on Postgres 18', () => {
     const io = { out: (l: string) => lines.push(l), err: (l: string) => lines.push(l) }
     const code = await runCli(['migrate', '--chain', 'platform', '--release', 'dist-v0.0.2', '--pg-dump-container', container()], { GREMION_MIGRATE_URL: dbUrl('gremion_platform'), GREMION_MIGRATION_DUMP_DIR: dumpDir }, io, { fs: FS })
     expect(code, lines.join('\n')).toBe(0)
-    expect(lines.join('\n')).toMatch(/MIGRATE-RESULT chain=platform release=dist-v0\.0\.2 applied=0 already=3 dump=none/)
+    // already = every file of the platform manifest (global setup applied them all)
+    const already = loadManifest(PLATFORM_MIGRATIONS_DIR).size
+    expect(already).toBeGreaterThanOrEqual(4)
+    expect(lines.join('\n')).toContain(`MIGRATE-RESULT chain=platform release=dist-v0.0.2 applied=0 already=${already} dump=none`)
     expect(events(dumpDir)).toEqual([])
   }, SLOW)
 })

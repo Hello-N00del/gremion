@@ -6,8 +6,12 @@
 // the ledger and plt.*, never from a return value alone.
 import type { Sql } from '@gremion/db'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { enableModule, LifecycleError } from '../../src/lifecycle/index.js'
+import { enableModule, LifecycleError, PLATFORM_MIGRATIONS_DIR } from '../../src/lifecycle/index.js'
+import { PLATFORM_CHAIN } from '../../src/lifecycle/platform.js'
+import { readVerifiedMigrations } from '../../src/manifest.js'
 import { tenantModuleDbName } from '../../src/names.js'
+import { pinnedPhaseFor, resolvePhase } from '../../src/phase.js'
+import { PINNED_BASELINE } from '../../src/phase-baseline.js'
 import { connect, connectModule, connectModuleAs } from '../harness/db.js'
 import {
   APP_PASSWORD,
@@ -128,13 +132,19 @@ describe('enableModule on the scratch stack', () => {
   })
 
   it('TASK-075 G1b (TDD 13): migratePlatform and enable write release_ref/phase; a fresh-DB enable runs no dump hook, a resumed (existing) DB does', async () => {
-    // migratePlatform (global setup, release dist-v0.0.1, the kernel baseline of chain platform)
+    // migratePlatform (global setup, release dist-v0.0.1, the shipped baseline of chain platform):
+    // one row per platform manifest file, each with the phase the default lookup resolves
+    const phaseFor = pinnedPhaseFor(PLATFORM_CHAIN, PINNED_BASELINE)
+    const expected = readVerifiedMigrations(PLATFORM_MIGRATIONS_DIR).map((f) => {
+      const p = resolvePhase(f.file, f.text, phaseFor)
+      return [f.file, p.phase, 'dist-v0.0.1', p.phase === 'contract' ? (p.contractAfter ?? null) : null]
+    })
     const plt = await platform<{ filename: string; phase: string; release_ref: string; contract_after: string | null }[]>`
       SELECT filename, phase, release_ref, contract_after FROM public.schema_migrations ORDER BY filename`
-    expect(plt.map((r) => [r.filename, r.phase, r.release_ref, r.contract_after])).toEqual([
+    expect(plt.map((r) => [r.filename, r.phase, r.release_ref, r.contract_after])).toEqual(expected)
+    expect(expected.slice(0, 2)).toEqual([
       ['0001_plt_setup.sql', 'contract', 'dist-v0.0.1', 'dist-v0.0.0'],
       ['0002_plt_module.sql', 'expand', 'dist-v0.0.1', null],
-      ['0003_plt_module_database.sql', 'expand', 'dist-v0.0.1', null],
     ])
 
     const calls: string[] = []
