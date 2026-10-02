@@ -1270,6 +1270,18 @@
       "reason": "added in the kernel after f2: c0ba5aab fix(votes): degrade a non-UUID tracked election instead of 400 for the whole request",
       "owner": "TASK-205",
       "blob": "662b7f3fda780406363157332861a74d9faa1488"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.nats-topology.test.ts",
+      "reason": "added by TASK-205a: the calendar share of f2 nats-topology-wiring.test.ts, split per module (R28-O2: a kernel test may not import a module)",
+      "owner": "TASK-205",
+      "blob": "d51693d6d207dd1d6bc022f337e1a779f8a78ce7"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.supervised.test.ts",
+      "reason": "added by TASK-205a: the calendar share of the f2 consumer-state.test.ts describe 'the audit consumers under a rejecting broker', split per module (R28-O2)",
+      "owner": "TASK-205",
+      "blob": "ddc1208d787d39a0efa7a537cfaf5277dfdaaca5"
     }
   ]
 }
