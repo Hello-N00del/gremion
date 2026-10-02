@@ -9,9 +9,9 @@
 // Error envelope: {success:false,error} — mirrors the monolith house JSON shape.
 // Body reading: the server provides no body helper, so readBody() is module-local.
 //
-// /healthz/tenants is guard-EXEMPT per guard.ts isHealthzPath(). The server
-// short-circuits all /healthz* paths; tenantHealthHandler is called from server.ts
-// for the /healthz/tenants sub-path.
+// /healthz/tenants is exempt from the TENANT-header guard per guard.ts
+// isHealthzPath(), but server.ts requires the internal secret on it (K5#31)
+// before calling tenantHealthHandler.
 //
 // ── Publish 202 / 409 design ──────────────────────────────────────────────────────
 // POST /api/v1/posts/:id/publish → 202; second send while claimed → 409.
@@ -70,7 +70,7 @@ import {
   recordContentAudit,
   createMedia,
   listMediaByPost,
-  claimRecipient,
+  claimDelivery,
   markSent,
   markFailed,
   createPublication,
@@ -237,6 +237,10 @@ const MarkSentSchema = z.object({
 
 const MarkFailedDeliverySchema = z.object({
   error: z.string().min(1),
+  // The claim token returned by the claim route (claimed_at as epoch micros in
+  // text). With it only the caller's own claim can fail; WITHOUT it (a caller
+  // that predates the token) the failure keeps the status-only fence.
+  claim_token: z.string().regex(/^\d+$/).optional(),
 })
 
 const SetPublicationSchema = z.object({
@@ -817,6 +821,7 @@ export function buildApiRoutes(storeFn: StoreFn, publishDeps?: PublishDeps): Rou
             kernel: dd.kernel,
             emailTransport,
             origin: dd.origin,
+            allowLoopbackLinks: dd.allowLoopbackLinks,
             correlationId,
             tracer: dd.tracer,
           })
@@ -876,9 +881,12 @@ export function buildApiRoutes(storeFn: StoreFn, publishDeps?: PublishDeps): Rou
       handler: wrap(async ({ req, res, tenant }) => {
         const body = ClaimDeliverySchema.parse(await readBody(req))
         const sql = await storeFn(tenant)
-        const result = await claimRecipient(sql, body.post_id, body.email)
-        // Return bare string — service-client does (await leafFetch(...)) as ClaimResult
-        sendJson(res, 200, result)
+        const { result, claimedAt } = await claimDelivery(sql, body.post_id, body.email)
+        // Bare object (no envelope): the result plus, only when 'fresh', the claim
+        // token the caller passes back on /failed so a superseded claimer cannot
+        // fail the live claim (R29-LOW-07 L1). service-client also accepts the
+        // legacy bare string.
+        sendJson(res, 200, { result, claim_token: claimedAt })
       }),
     },
 
@@ -905,7 +913,7 @@ export function buildApiRoutes(storeFn: StoreFn, publishDeps?: PublishDeps): Rou
         const email = params['email']!
         const body = MarkFailedDeliverySchema.parse(await readBody(req))
         const sql = await storeFn(tenant)
-        await markFailed(sql, postId, email, body.error)
+        await markFailed(sql, postId, email, body.error, body.claim_token)
         sendNoContent(res)
       }),
     },
@@ -1044,17 +1052,12 @@ export function buildApiRoutes(storeFn: StoreFn, publishDeps?: PublishDeps): Rou
 }
 
 // ── /healthz/tenants handler ──────────────────────────────────────────────────
-// Guard-EXEMPT (served from the /healthz* path in server.ts).
-// Returns per-tenant DB ping + subscriber + post counts.
-
-export interface TenantHealth {
-  tenant_id: string
-  tenant_slug: string
-  db_ok: boolean
-  subscribers?: number
-  posts?: number
-  error?: string
-}
+// Served from the /healthz* path in server.ts, which requires the internal secret
+// for this sub-path (F1-FIX-07 K5#12/K5#31, mirroring finance's K4#32). An
+// operator confirms the leaf's own PG is reachable for every tenant. The response
+// carries booleans ONLY: no tenant ids or slugs, no subscriber/post counts, no DB
+// error text (all of which went to any unauthenticated caller before). The
+// per-tenant detail is logged server-side.
 
 export type TenantLister = () => Promise<TenantRef[]>
 
@@ -1067,39 +1070,26 @@ export async function tenantHealthHandler(
   try {
     tenants = await listTenants()
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[content] /healthz/tenants: tenant listing failed', err)
     res.writeHead(503, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ success: false, error: `tenant listing failed: ${msg}` }))
+    res.end(JSON.stringify({ success: false, db_ok: false }))
     return
   }
 
-  const results: TenantHealth[] = await Promise.all(
-    tenants.map(async (t): Promise<TenantHealth> => {
+  const results: boolean[] = await Promise.all(
+    tenants.map(async (t): Promise<boolean> => {
       try {
         const sql = await storeFn(t)
-        const [subRows, postRows] = await Promise.all([
-          sql<{ c: string }[]>`SELECT COUNT(DISTINCT email) AS c FROM content.mailing_list_members`,
-          sql<{ c: string }[]>`SELECT COUNT(*) AS c FROM content.posts`,
-        ])
-        return {
-          tenant_id: t.id,
-          tenant_slug: t.slug,
-          db_ok: true,
-          subscribers: Number(subRows[0]!.c),
-          posts: Number(postRows[0]!.c),
-        }
+        await sql`SELECT 1`
+        return true
       } catch (err) {
-        return {
-          tenant_id: t.id,
-          tenant_slug: t.slug,
-          db_ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }
+        console.error(`[content] /healthz/tenants: tenant ${t.id} (${t.slug}) DB probe failed`, err)
+        return false
       }
     }),
   )
 
-  const allOk = results.every((r) => r.db_ok)
+  const allOk = results.every(Boolean)
   res.writeHead(allOk ? 200 : 503, { 'content-type': 'application/json' })
-  res.end(JSON.stringify({ success: allOk, data: results }))
+  res.end(JSON.stringify({ success: allOk, db_ok: allOk }))
 }

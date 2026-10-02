@@ -43,19 +43,20 @@ describe('GET /members (unified loader)', () => {
   it('a plain member gets the basic view (isAdmin=false), no 403', async () => {
     const result = (await runLoad(['member'])) as { isAdmin: boolean; members: unknown[] }
     expect(result.isAdmin).toBe(false)
-    expect(mockListMembers).toHaveBeenCalledWith({ adminView: false })
+    // R29-F104-KTWIN: the viewer is passed for the D-3 membership redaction.
+    expect(mockListMembers).toHaveBeenCalledWith({ adminView: false, viewer: { id: 'u1', roles: ['member'] } })
     expect(result.members).toEqual(SAMPLE)
   })
 
   it('council-admin (Vorstand) gets the admin view', async () => {
     const result = (await runLoad(['council-admin'])) as { isAdmin: boolean }
     expect(result.isAdmin).toBe(true)
-    expect(mockListMembers).toHaveBeenCalledWith({ adminView: true })
+    expect(mockListMembers).toHaveBeenCalledWith({ adminView: true, viewer: { id: 'u1', roles: ['council-admin'] } })
   })
 
   it('it-admin gets the admin view', async () => {
     const result = (await runLoad(['it-admin'])) as { isAdmin: boolean }
     expect(result.isAdmin).toBe(true)
-    expect(mockListMembers).toHaveBeenCalledWith({ adminView: true })
+    expect(mockListMembers).toHaveBeenCalledWith({ adminView: true, viewer: { id: 'u1', roles: ['it-admin'] } })
   })
 })

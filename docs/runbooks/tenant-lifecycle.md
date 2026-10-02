@@ -51,6 +51,13 @@ here, to create the SA; thereafter the provisioner authenticates as the SA via
 **outside** the bind-mounted `secrets/tenants/` dir so the app container can never
 read it. Idempotent — a re-run reuses the existing SA.
 
+On a pooled host this is not a manual step: `gremion-tenant init` runs
+`bootstrap-provisioner` once in the tenant-create one-shot (the Keycloak admin
+credential from `etc/env/state.env`, by a name-only `-e`) and moves the secret
+to `etc/secrets/tenant-create/tenant_provisioner` (0600). The one-shot reads it
+from there as `TENANT_PROVISIONER_SECRET_FILE`, through the read-only
+`etc/secrets/tenant-create` mount that no other service has (TASK-043b F1).
+
 > The `pnpm -C gremion-ui check` guard fails the build if the provisioner
 > credential resolves *inside* `TENANT_SECRETS_DIR`. Keep that directory a
 > dedicated leaf holding only per-tenant secret files.

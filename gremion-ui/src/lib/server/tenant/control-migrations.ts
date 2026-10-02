@@ -19,12 +19,23 @@ export async function runControlMigrations(): Promise<void> {
   const dir = join(process.cwd(), 'migrations-control')
   const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
   const manifest = loadMigrationManifest(dir)
+  // F1-FIX-02-K (K1#7, K1#37): verify EVERY file -- applied ones included --
+  // against the manifest before the applied-skip below and before any file
+  // runs, as db.ts runMigrations does since TASK-029 G5. Verifying only the
+  // file about to be applied let a file swapped after it was applied boot
+  // clean, and let a pending file run behind a tampered applied one.
+  const texts = new Map<string, string>()
   for (const file of files) {
-    const rows = await sql`SELECT 1 FROM schema_migrations WHERE filename = ${file}`
-    if (rows.length > 0) continue
-    const sql_text = readFileSync(join(dir, file), 'utf-8')
-    verifyMigrationIntegrity(file, sql_text, manifest)
-    await applyMigrationFile(sql, file, sql_text)
+    const text = readFileSync(join(dir, file), 'utf-8')
+    verifyMigrationIntegrity(file, text, manifest)
+    texts.set(file, text)
+  }
+  const appliedRows = await sql<{ filename: string }[]>`SELECT filename FROM schema_migrations`
+  const applied = new Set(appliedRows.map((r) => r.filename))
+  for (const file of files) {
+    if (applied.has(file)) continue
+    // every file was verified above, before any sql.unsafe()
+    await applyMigrationFile(sql, file, texts.get(file) as string)
     console.info(`[control-migrations] applied ${file}`)
   }
 }

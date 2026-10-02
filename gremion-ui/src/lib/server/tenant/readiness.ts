@@ -18,7 +18,7 @@
 // Control-plane/boot failure stays PROCESS-wide (hooks.server.ts `_bootError`
 // → 503 for everything): nothing can resolve a tenant without the control
 // plane, so per-tenant readiness is meaningless there (D-READY).
-import { migrateTenant, type FleetMigrationOutcome } from './fleet'
+import { migrateTenant, type FleetMigrationOutcome, type FleetFailureKind } from './fleet'
 import type { TenantContext } from './context'
 
 export type TenantReadiness = 'ready' | 'failed' | 'pending'
@@ -26,6 +26,18 @@ export type TenantReadiness = 'ready' | 'failed' | 'pending'
 interface ReadinessEntry {
   state: TenantReadiness
   error?: string
+  /** T07 — WHICH subsystem failed (fleet.ts, FleetFailureKind). A tenant whose
+   *  only problem is an un-materialized config.json is `brand-identity`, not
+   *  `migration`: without the distinction the 503's diagnostics point at the
+   *  migration runner, which is working. Undefined for a `ready` tenant. */
+  kind?: FleetFailureKind
+}
+
+/** Failure entry from a fleet outcome — one shape for boot and for the retry. */
+function entryFromOutcome(outcome: FleetMigrationOutcome): ReadinessEntry {
+  return outcome.ok
+    ? { state: 'ready' }
+    : { state: 'failed', error: outcome.error, kind: outcome.kind }
 }
 
 const _readiness = new Map<string, ReadinessEntry>()
@@ -38,10 +50,7 @@ export function setTenantReadinessFromFleet(
   outcomes: ReadonlyMap<string, FleetMigrationOutcome>,
 ): void {
   for (const [tenantId, outcome] of outcomes) {
-    _readiness.set(
-      tenantId,
-      outcome.ok ? { state: 'ready' } : { state: 'failed', error: outcome.error },
-    )
+    _readiness.set(tenantId, entryFromOutcome(outcome))
   }
   _fleetPopulated = true
 }
@@ -57,9 +66,30 @@ export function getTenantReadiness(tenantId: string): TenantReadiness {
   return _readiness.get(tenantId)?.state ?? 'pending'
 }
 
-/** The recorded migration error for a `failed` tenant (diagnostics only). */
+/** The recorded error for a `failed` tenant (diagnostics only). */
 export function getTenantReadinessError(tenantId: string): string | undefined {
   return _readiness.get(tenantId)?.error
+}
+
+/**
+ * T07 — which subsystem failed a `failed` tenant: `control-plane` (the registry
+ * or the migration ledger), `migration` (the data-plane replay) or
+ * `brand-identity` (an un-materialized config.json). Undefined for a ready or
+ * never-seen tenant; every `failed` entry carries one. Read this before blaming
+ * the migration runner: the other two classes mean the migrations were fine.
+ *
+ * HONESTY NOTE: no production surface calls this, and neither does
+ * getTenantReadinessError — both have zero non-test callers in gremion-ui/src.
+ * resolve.ts imports only getTenantReadiness, isFleetPopulated and
+ * triggerTenantMigrationRetry, and its readiness gate returns the constant
+ * `Service Unavailable: tenant not ready`. So the classification reaches the
+ * console line in fleet.ts and the tenant_migration_run.error column, and
+ * NOTHING ELSE — an operator debugging a 503 must read the ledger or the logs,
+ * not the response. This accessor exists for the structured read that surface
+ * should make; wiring it into the 503 body is the follow-up.
+ */
+export function getTenantReadinessFailureKind(tenantId: string): FleetFailureKind | undefined {
+  return _readiness.get(tenantId)?.kind
 }
 
 /**
@@ -82,20 +112,27 @@ export function triggerTenantMigrationRetry(
     // migrateTenant never throws — it ledgers and returns the outcome
     // (fleet.ts); the defensive catch below covers any unexpected escape.
     const outcome = await migrateTenant({ id: tenant.id, slug: tenant.slug })
-    _readiness.set(
-      tenant.id,
-      outcome.ok ? { state: 'ready' } : { state: 'failed', error: outcome.error },
-    )
+    _readiness.set(tenant.id, entryFromOutcome(outcome))
     console.info(
+      // `outcome.error` already carries the `<kind>: ` prefix fleet.ts writes,
+      // so repeating `(${outcome.kind})` here printed the class twice.
       `[tenant-readiness] tenant ${tenant.slug}: re-migration ${
         outcome.ok ? 'succeeded — tenant ready' : `failed — ${outcome.error}`
       }`,
     )
   })()
     .catch((err) => {
+      // T07: migrateTenant is contracted never to throw, so reaching here means
+      // the fleet layer itself broke — a CONTROL-PLANE failure. Recording no
+      // `kind` would leave a `failed` tenant whose class is undefined, which
+      // getTenantReadinessFailureKind documents as "ready or never seen": the
+      // one state that lies. The error text carries the same `<kind>: ` prefix
+      // fleet.ts writes, so every failed entry reads identically.
+      const message = err instanceof Error ? err.message : String(err)
       _readiness.set(tenant.id, {
         state: 'failed',
-        error: err instanceof Error ? err.message : String(err),
+        error: `control-plane: ${message}`,
+        kind: 'control-plane',
       })
       console.error(`[tenant-readiness] tenant ${tenant.slug}: re-migration attempt errored:`, err)
     })

@@ -348,7 +348,7 @@ write_last_backup_json() {   # $1 = bytes, $2 = ok(true|false), $3 = class
     mkdir -p "${GREMION_ROOT}/runtime"
     jq -n --argjson bytes "$1" --argjson ok "$2" --arg class "$3" \
        '{ts:"2026-09-01T02:00:00Z", ok:$ok, label:"prev", class:$class,
-         artefacts:{databases:5, volumes:4, buckets:2},
+         artefacts:{databases:5, volumes:4, buckets:0},
          offsite:true, bytes:$bytes}' \
        >"${GREMION_ROOT}/runtime/last-backup.json"
 }
@@ -402,10 +402,10 @@ esac
 exit 0'
 }
 
-@test "enumeration unions both project queries and the five external volumes" {
+@test "enumeration unions both project queries and the seven external volumes" {
     shim_baseline; shim_docker_ok
     run "$BACKUP"
-    [[ "$output" == *"volumes enumerated: 8"* ]]
+    [[ "$output" == *"volumes enumerated: 10"* ]]
     # Repeated --filter label= is ANDed by docker, so the two projects MUST be
     # two calls; one call with both filters returns nothing.
     assert_recorded docker "label=com.docker.compose.project=staging-state"
@@ -588,7 +588,10 @@ exit 0'
     # TASK-040: the app tier's two external config volumes
     [ -s "${d}/staging_config_data.tar" ]
     [ -s "${d}/staging_tenant_config_data.tar" ]
-    [[ "$output" == *"archived 8 volume(s) with alpine@sha256:00000000"* ]]
+    # TASK-024 (G7): the NATS seeds and the rendered accounts file
+    [ -s "${d}/staging_nats_secrets.tar" ]
+    [ -s "${d}/staging_nats_accounts.tar" ]
+    [[ "$output" == *"archived 10 volume(s) with alpine@sha256:00000000"* ]]
 }
 
 @test "the archive container mounts each volume read-only" {
@@ -606,36 +609,44 @@ exit 0'
 }
 
 # ---------------------------------------------------------------------------
-# Object storage buckets
+# Object storage: none on the pilot (TRD-066), plumbing removed (TRD-354)
 # ---------------------------------------------------------------------------
 
-@test "without MINIO_ENDPOINT the bucket class is zero and the reason is printed" {
-    shim_baseline; shim_docker_full
+@test "the bucket class is always zero and no object-storage client runs" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
     run "$BACKUP"
-    [[ "$output" == *"MINIO_ENDPOINT unset"* ]]
-    [[ "$output" == *"covered by the volume class"* ]]
+    [ "$status" -eq 0 ]
     [ "$(jq -r '.artefacts.buckets' "${GREMION_ROOT}/runtime/last-backup.json")" = "0" ]
+    [ -s "$SHIM_LOG" ]
+    run grep -wE 'mc|minio' "$SHIM_LOG"
+    [ "$status" -eq 1 ]
 }
 
-@test "MINIO_ENDPOINT without BACKUP_MC_IMAGE is a precondition failure (exit 2)" {
-    shim_baseline; shim_docker_full
-    echo 'MINIO_ENDPOINT=http://127.0.0.1:9000' >>"${GREMION_ROOT}/etc/env/state.env"
-    run "$BACKUP"
-    [ "$status" -eq 2 ]
-    [[ "$output" == *"MINIO_ENDPOINT is set but BACKUP_MC_IMAGE is not"* ]]
-}
-
-@test "MINIO_ENDPOINT set but no bucket found fails rather than reporting zero" {
+@test "a MINIO_* key left in state.env is refused (exit 2, TRD-066) and its value is never printed" {
     shim_baseline; shim_docker_full
     {
         echo 'MINIO_ENDPOINT=http://127.0.0.1:9000'
-        echo 'MINIO_ACCESS_KEY=testaccess'
-        echo 'MINIO_SECRET_KEY=testsecret'
-        echo 'BACKUP_MC_IMAGE=minio/mc@sha256:0000000000000000000000000000000000000000000000000000000000000002'
+        echo 'MINIO_SECRET_KEY=leftoversecretvalue'
     } >>"${GREMION_ROOT}/etc/env/state.env"
     run "$BACKUP"
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"bucket enumeration returned nothing"* ]]
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"object-storage key(s) in"*"MINIO_ENDPOINT"*"MINIO_SECRET_KEY"* ]]
+    [[ "$output" != *"leftoversecretvalue"* ]]
+    # refused before any work: nothing was staged
+    [ ! -e "${GREMION_ROOT}/backups/current" ]
+    # ...but reported on the alert channel and in the report, as every other
+    # failed run is: a nightly that stops on a stale key must not go quiet
+    [ "$(jq -r '.ok' "${GREMION_ROOT}/runtime/last-backup.json")" = "false" ]
+    grep -q '^curl .*-X POST' "$SHIM_LOG"
+    ! grep -q leftoversecretvalue "${GREMION_ROOT}/runtime/last-backup.json" "$SHIM_LOG"
+}
+
+@test "a *_S3_* key left in state.env is refused (exit 2)" {
+    shim_baseline; shim_docker_full
+    echo 'SYNAPSE_MEDIA_S3_ENDPOINT=http://127.0.0.1:9000' >>"${GREMION_ROOT}/etc/env/state.env"
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"object-storage key(s) in"*"SYNAPSE_MEDIA_S3_ENDPOINT"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -845,11 +856,11 @@ exit 0'
     [ "$(jq -r '.label'               "$f")" = "nightly-1" ]
     [ "$(jq -r '.class'               "$f")" = "daily" ]
     [ "$(jq -r '.artefacts.databases' "$f")" = "5" ]
-    [ "$(jq -r '.artefacts.volumes'   "$f")" = "8" ]
+    [ "$(jq -r '.artefacts.volumes'   "$f")" = "10" ]
     [ "$(jq -r '.artefacts.buckets'   "$f")" = "0" ]
     [ "$(jq -r '.offsite'             "$f")" = "true" ]
     [ -f "${GREMION_ROOT}/runtime/last-backup-daily.json" ]
-    [[ "$output" == *"BACKUP: label=nightly-1 class=daily databases=5 volumes=8 buckets=0 offsite=true ok=true"* ]]
+    [[ "$output" == *"BACKUP: label=nightly-1 class=daily databases=5 volumes=10 buckets=0 offsite=true ok=true"* ]]
 }
 
 @test "a failed run still writes ok:false and still alerts" {
@@ -884,6 +895,138 @@ exit 0'
     [[ "$output" == *"BACKUP-ALERT: delivery failed to ALERT_WEBHOOK_URL"* ]]
     # The report itself still records the successful backup.
     [ "$(jq -r '.ok' "${GREMION_ROOT}/runtime/last-backup.json")" = "true" ]
+}
+
+# ---------------------------------------------------------------------------
+# The trigger contract's result line (F1-FIX-09, D-4)
+#
+# Contract pinned in R29-F1-WAVE2/addendum.md ("D-4 trigger contract"): the
+# settings API triggers `backup` through gremion-hostd and reads the outcome from
+# ONE machine-readable line that gremion-backup prints last, before hostd's own
+# `EXIT <code>`:
+#   BACKUP-RESULT {"state":"finished"|"failed","startedAt":ISO,"finishedAt":ISO,"exitCode":N}
+# It is printed on EVERY exit path of a started run (success, a failed
+# post-condition, a precondition failure), and exitCode is the code the process
+# really exits with, not the one the failing step first chose.
+# ---------------------------------------------------------------------------
+
+result_line() {   # the last line of $output, which must be the BACKUP-RESULT line
+    local last="${lines[${#lines[@]}-1]}"
+    [[ "$last" == "BACKUP-RESULT {"* ]] || {
+        echo "last output line is not a BACKUP-RESULT line: ${last}" >&2
+        return 1
+    }
+    printf '%s' "${last#BACKUP-RESULT }"
+}
+
+@test "a successful run ends with exactly one BACKUP-RESULT finished line" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    run "$BACKUP" --label nightly-r1
+    [ "$status" -eq 0 ]
+    local json
+    json="$(result_line)"
+    [ "$(printf '%s\n' "$output" | grep -c '^BACKUP-RESULT ')" -eq 1 ]
+    [ "$(jq -r '.state'    <<<"$json")" = "finished" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "0" ]
+    [[ "$(jq -r '.startedAt'  <<<"$json")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+    [[ "$(jq -r '.finishedAt' <<<"$json")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+    # ISO-8601 UTC sorts lexically: the run cannot have finished before it started
+    [[ ! "$(jq -r '.finishedAt' <<<"$json")" < "$(jq -r '.startedAt' <<<"$json")" ]]
+    # nothing but the key set the contract names
+    [ "$(jq -c 'keys' <<<"$json")" = '["exitCode","finishedAt","startedAt","state"]' ]
+}
+
+@test "a run that fails a post-condition ends with BACKUP-RESULT failed and the real exit code" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    touch "${GREMION_ROOT}/.empty-dump"
+    run "$BACKUP" --label nightly-r2
+    [ "$status" -eq 1 ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "1" ]
+}
+
+@test "a precondition failure (exit 2) still ends with BACKUP-RESULT failed exitCode 2" {
+    shim_baseline
+    touch "${GREMION_ROOT}/.offsite-down"
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "2" ]
+}
+
+@test "a precondition that fails before the report trap exists (no state.env) still reports" {
+    shim_baseline
+    rm -f "${GREMION_ROOT}/etc/env/state.env"
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "2" ]
+}
+
+@test "the result line carries the exit code the process really exits with (undeliverable alert -> 1)" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    shim curl 'exit 7'
+    run "$BACKUP"
+    [ "$status" -eq 1 ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "1" ]
+}
+
+@test "--help and a usage error do not claim a run: no BACKUP-RESULT line" {
+    run "$BACKUP" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"BACKUP-RESULT"* ]]
+    run "$BACKUP" --class weekly
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"BACKUP-RESULT"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# One host operation at a time (F1-FIX-09, K6#26): the timer starts gremion-backup
+# directly, so it takes the same lock gremion-hostd takes for its mutating verbs.
+# ---------------------------------------------------------------------------
+
+@test "gremion-backup started while another host operation holds the lock is busy (exit 3) and stages nothing" {
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    hold_host_lock 20
+    run "$BACKUP"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"busy"* ]]
+    [ ! -d "${GREMION_ROOT}/backups/current/volumes" ]
+    local json
+    json="$(result_line)"
+    [ "$(jq -r '.state'    <<<"$json")" = "failed" ]
+    [ "$(jq -r '.exitCode' <<<"$json")" = "3" ]
+}
+
+@test "gremion-backup started by gremion-hostd (lock already held by its parent) does not wait on it" {
+    shim_baseline
+    hold_host_lock 20
+    rm -rf "${GREMION_ROOT}/current"
+    GREMION_HOST_LOCK_HELD=1 run "$BACKUP"
+    # it got past the lock stage: the next precondition is what stopped it
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"release tree absent"* ]]
+    [[ "$output" != *"busy"* ]]
+}
+
+@test "gremion-backup releases the host lock when it ends" {
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    shim_baseline
+    rm -rf "${GREMION_ROOT}/current"
+    run "$BACKUP"
+    [ "$status" -eq 2 ]
+    # the failed run left no holder behind: the lock can be taken straight away
+    run flock -n "${GREMION_ROOT}/runtime/hostd.lock" true
+    [ "$status" -eq 0 ]
 }
 
 # ---------------------------------------------------------------------------
@@ -929,9 +1072,9 @@ exit 0'
 
 @test "gremion-snapshot fails when an artefact class is below the last daily (guard watched RED)" {
     shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
-    # A daily that saw 8 volumes...
+    # A daily that saw 10 volumes...
     run "$BACKUP" --class daily --label nightly-4
-    [ "$(jq -r '.artefacts.volumes' "${GREMION_ROOT}/runtime/last-backup-daily.json")" = "8" ]
+    [ "$(jq -r '.artefacts.volumes' "${GREMION_ROOT}/runtime/last-backup-daily.json")" = "10" ]
     # ...then a snapshot taken while the mail project's volumes are gone.
     shim docker 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
@@ -956,7 +1099,7 @@ esac
 exit 0'
     run "$SNAPSHOT" dist-v1.2.4
     [ "$status" -eq 1 ]
-    [[ "$output" == *"snapshot artefact class volumes: 6 < last daily 8"* ]]
+    [[ "$output" == *"snapshot artefact class volumes: 8 < last daily 10"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -975,7 +1118,7 @@ exit 0'
 }
 
 @test "gremion-backup.service allows a run longer than the default timeout" {
-    # A full run copies volumes, mirrors buckets and reads 5% of the
+    # A full run copies volumes, dumps the databases and reads 5% of the
     # repository back; systemd's 90 s default would kill it mid-restic.
     grep -qE '^TimeoutStartSec=(6h|21600)$' "${UNIT_DIR}/gremion-backup.service"
 }
@@ -1209,12 +1352,28 @@ exec ${real} \"\$@\""
     rm -rf "${GREMION_ROOT}/runtime"
     : >"${GREMION_ROOT}/runtime"            # a stale file where the directory belongs
     touch "${GREMION_ROOT}/.offsite-down"   # and the run itself stops with 2
-    run "$BACKUP" --label report-1
+    # F1-FIX-09: this case is about the REPORT write, not the host lock. Run as
+    # gremion-hostd runs it (lock already held by the parent), because a runtime
+    # path that is a file also makes the lock file uncreatable, which is its own
+    # refusal (exit 2) before any report exists to fail.
+    GREMION_HOST_LOCK_HELD=1 run "$BACKUP" --label report-1
     # The precondition's code survives a report that could not be written.
     [ "$status" -eq 2 ]
     [[ "$output" == *"offsite remote unreachable"* ]]
     [[ "$output" == *"BACKUP-REPORT: cannot create"* ]]
     assert_recorded curl "https://alerts.example.org/hook"
+}
+
+@test "a runtime path that is not a directory refuses the run at the host lock (exit 2), never unserialised" {
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    rm -rf "${GREMION_ROOT}/runtime"
+    : >"${GREMION_ROOT}/runtime"
+    run "$BACKUP" --label lock-1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot create ${GREMION_ROOT}/runtime"* ]]
+    [ ! -d "${GREMION_ROOT}/backups/current/volumes" ]
+    [[ "${lines[-1]}" == "BACKUP-RESULT {"*'"state":"failed"'*'"exitCode":2}' ]]
 }
 
 @test "a report the filesystem refuses still alerts and fails the run loudly" {
@@ -1573,4 +1732,56 @@ exit 0'
     [ ! -e "${d}/pgkernel__keycloak.sql.gz" ]
     [ -s "${d}/pgkernel__t_pilot.sql.gz" ]
     [[ "$output" == *"every enumerated database has a non-empty dump (5)"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# R29-MD-A (A1b): the staged database dumps are personal data. The deploy user
+# runs gremion-backup with umask 022 and its own kernel script wrote the three
+# kernel dumps under it, so keycloak.sql.gz, gremion.sql.gz and control.sql.gz
+# were world-readable inside a 0755 stage tree. Every dump is now created
+# private (umask 077) and the stage directory is 0700 (GDPR Art. 32(1)(b)).
+# Modes are asserted after a run under an outer umask 022, on the files.
+# ---------------------------------------------------------------------------
+
+@test "the staged tree is 0700 and every staged database dump is 0600, the kernel three included" {
+    fs_carries_modes "$GREMION_ROOT" || skip "this filesystem does not store POSIX modes (proven in the bats runner)"
+    shim_baseline; shim_docker_full; shim_rsync_honouring_excludes; shim_restic_ok
+    umask 022
+    run "$BACKUP" --class daily --label private-1
+    [ "$status" -eq 0 ]
+    local d="${GREMION_ROOT}/backups/current" f n=0
+    [ "$(stat -c %a "$d")" = 700 ] || { echo "the staged tree is mode $(stat -c %a "$d"), not 700" >&2; return 1; }
+    for f in keycloak gremion control; do
+        [ -s "${d}/${f}.sql.gz" ] || { echo "the kernel dump ${f}.sql.gz was not staged" >&2; return 1; }
+        [ "$(stat -c %a "${d}/${f}.sql.gz")" = 600 ] \
+            || { echo "${f}.sql.gz is mode $(stat -c %a "${d}/${f}.sql.gz"), not 600" >&2; return 1; }
+    done
+    for f in "$d"/postgres__*.sql.gz; do
+        [ -e "$f" ] || continue
+        n=$((n + 1))
+        [ "$(stat -c %a "$f")" = 600 ] || { echo "${f##*/} is mode $(stat -c %a "$f"), not 600" >&2; return 1; }
+    done
+    [ "$n" -ge 2 ] || { echo "expected dump_database's own outputs (postgres__*.sql.gz), found ${n}" >&2; return 1; }
+}
+
+@test "the real kernel scripts/backup.sh writes its three dumps 0600 under umask 022" {
+    fs_carries_modes "$GREMION_ROOT" || skip "this filesystem does not store POSIX modes (proven in the bats runner)"
+    # The real script in a scratch release tree: a docker shim answers pg_dump
+    # with bytes, and a failing restic stops the run at phase 2, after the dumps.
+    # The exit code is not asserted; the files are.
+    local t="${GREMION_ROOT}/kernel-tree"
+    mkdir -p "${t}/scripts"
+    cp "${PROJECT_ROOT}/scripts/backup.sh" "${t}/scripts/backup.sh"
+    printf 'POSTGRES_USER=postgres\nRESTIC_PASSWORD=scratch-not-a-secret\nBACKUP_DIR=%s/bk\n' "$t" > "${t}/.env"
+    shim docker 'case "$*" in *pg_dump*) printf "PGDUMP" ;; esac'
+    shim restic 'exit 1'
+    umask 022
+    run bash "${t}/scripts/backup.sh"
+    assert_recorded docker "pg_dump -U postgres keycloak"
+    local f
+    for f in keycloak gremion control; do
+        [ -s "${t}/bk/current/${f}.sql.gz" ] || { echo "${f}.sql.gz was not written: ${output}" >&2; return 1; }
+        [ "$(stat -c %a "${t}/bk/current/${f}.sql.gz")" = 600 ] \
+            || { echo "${f}.sql.gz is mode $(stat -c %a "${t}/bk/current/${f}.sql.gz"), not 600" >&2; return 1; }
+    done
 }

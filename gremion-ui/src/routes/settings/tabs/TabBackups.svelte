@@ -2,17 +2,36 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
 
   export let backups: { retention_days: number; last_backup_at: string | null; encryption_key_path: string }
+  /** How often the real run state is re-read while a backup is in flight. */
+  export let pollMs = 3000
 
   let retentionDays = backups.retention_days
   let saving = false
   let saved = false
   let saveError = ''
 
+  // F1-FIX-10-K (D-4): the button triggers a REAL host backup (hostd). What is
+  // shown is the server-recorded run state; `last_backup_at` is only ever the
+  // value the server stamped from a finished run.
+  interface RunState {
+    id: string
+    state: 'started' | 'finished' | 'failed'
+    startedAt: string
+    finishedAt?: string
+    exitCode?: number | null
+    error?: string
+  }
+  let triggerLoaded = false
+  let triggerAvailable = false
+  let triggerReason = ''
+  let run: RunState | null = null
+  let lastBackupAt: string | null = backups.last_backup_at
+  let destroyed = false
+
   let triggeringBackup = false
-  let backupMessage = ''
   let backupError = ''
 
   let requestingCheck = false
@@ -44,24 +63,50 @@
       if (res.ok) {
         const body = await res.json()
         backupRuns = (body.data as BackupRun[] ?? []).slice().reverse()
+        triggerAvailable = body.trigger?.available === true
+        triggerReason = body.trigger?.reason ?? ''
+        run = (body.run as RunState | null) ?? null
+        lastBackupAt = body.last_backup_at ?? null
+        triggerLoaded = true
       }
     } finally {
       logLoading = false
     }
   }
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  // Re-read the recorded run state until it leaves `started`. The state comes
+  // from the server (hostd's answer), never from this component's guess.
+  async function pollRun() {
+    while (!destroyed && run?.state === 'started') {
+      await sleep(pollMs)
+      if (destroyed) return
+      try {
+        await loadLog()
+      } catch {
+        /* transient: keep polling, the next read shows the truth */
+      }
+    }
+  }
+
   async function triggerBackup() {
     triggeringBackup = true
-    backupMessage = ''
     backupError = ''
     try {
       const res = await fetch('/api/settings/backup', { method: 'POST' })
       if (res.ok) {
-        backupMessage = 'Backup erfolgreich gestartet.'
-        await loadLog()
+        const body = await res.json()
+        run = { id: body.data?.run_id ?? '', state: 'started', startedAt: body.data?.timestamp ?? new Date().toISOString() }
+        await pollRun()
       } else {
         const body = await res.json()
         backupError = body.error ?? 'Fehler beim Starten des Backups.'
+        if (res.status === 503) {
+          triggerAvailable = false
+          triggerReason = backupError
+          backupError = ''
+        }
       }
     } catch {
       backupError = 'Verbindungsfehler.'
@@ -143,7 +188,15 @@
     return labels[step] ?? step
   }
 
-  onMount(() => { loadLog() })
+  $: running = run?.state === 'started'
+  $: buttonDisabled = !triggerLoaded || !triggerAvailable || triggeringBackup || running
+
+  onMount(() => {
+    loadLog()
+      .then(pollRun)
+      .catch(() => { backupError = 'Backup-Status konnte nicht geladen werden.' })
+  })
+  onDestroy(() => { destroyed = true })
 </script>
 
 <div class="space-y-6 py-4">
@@ -170,15 +223,33 @@
   <!-- Actions -->
   <div class="flex flex-wrap gap-3 items-start">
     <div class="space-y-1">
-      <Button variant="outline" onclick={triggerBackup} disabled={triggeringBackup}>
-        {triggeringBackup ? 'Starte Backup…' : 'Backup jetzt erstellen'}
+      <Button variant="outline" onclick={triggerBackup} disabled={buttonDisabled}>
+        {running ? 'Backup läuft…' : triggeringBackup ? 'Starte Backup…' : 'Backup jetzt erstellen'}
       </Button>
-      {#if backupMessage}
-        <p class="text-sm text-green-700" role="status">{backupMessage}</p>
+      {#if triggerLoaded && !triggerAvailable && triggerReason}
+        <p class="text-sm text-ink-muted" data-testid="backup-trigger-reason">{triggerReason}</p>
+      {/if}
+      {#if run}
+        {#if run.state === 'started'}
+          <p class="text-sm text-ink-muted" role="status" data-testid="backup-run-state">
+            Backup läuft seit {formatDate(run.startedAt)}…
+          </p>
+        {:else if run.state === 'finished'}
+          <p class="text-sm text-green-700" role="status" data-testid="backup-run-state">
+            Backup abgeschlossen am {formatDate(run.finishedAt ?? run.startedAt)}.
+          </p>
+        {:else}
+          <p class="text-sm text-rust" role="alert" data-testid="backup-run-state">
+            Backup fehlgeschlagen{run.finishedAt ? ` am ${formatDate(run.finishedAt)}` : ''}{run.error ? `: ${run.error}` : '.'}
+          </p>
+        {/if}
       {/if}
       {#if backupError}
         <p class="text-sm text-rust" role="alert">{backupError}</p>
       {/if}
+      <p class="text-xs text-ink-muted" data-testid="backup-last-at">
+        {lastBackupAt ? `Letztes erfolgreiches Backup: ${formatDate(lastBackupAt)}` : 'Noch kein erfolgreiches Backup.'}
+      </p>
     </div>
 
     <div class="space-y-1">

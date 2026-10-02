@@ -1,0 +1,12 @@
+# Fixture (RED): a state pins layer whose legal image resolves by TAG, which
+# gremion-deploy's step 2 must refuse before any pull.
+services:
+  legal:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-legal:dist-v1.2.3
+  vector:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-vector@sha256:8888888888888888888888888888888888888888888888888888888888888888
+  fallback:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999

@@ -1,7 +1,8 @@
 // services/finance/src/index.ts
 // Process entrypoint for the finance leaf service. Boots the HTTP server (the
-// FinanceBackend route surface + the guard-exempt /healthz and /healthz/tenants
-// probes) and — #383 Lane E1 — the org-unit mirror CONSUMER: when NATS_URL is set
+// FinanceBackend route surface, the guard-exempt /healthz liveness probe, and
+// /healthz/tenants -- behind the internal secret since F1-FIX-05-K (K4#32), booleans
+// only) and — #383 Lane E1 — the org-unit mirror CONSUMER: when NATS_URL is set
 // it connects a NatsBroker bound to the ORGUNIT stream and applies kernel org-unit
 // change events to each tenant's finance.org_unit_mirror. Absent NATS_URL the
 // consumer stays off (staging-safe until the cutover wires compose). Graceful

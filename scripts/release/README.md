@@ -17,6 +17,11 @@ verified against the host's pinned public key (D R20-D18).
 | `check-runner-scope.mjs --live` | operator, dated | GitHub API view of both repos: Actions on ⇒ no key-class secret, no self-hosted runner |
 | `check-dependabot-dockerfiles.mjs`, `check-lockfile-committed.mjs`, `check-pins.mjs` | `verify` | Release-1 B35 adapts |
 | `lint-release.sh` | lint | runs every suite here and in `scripts/verify/sbom/`, asserts collected == declared tests, shellchecks `*.sh` |
+| `check-image-digests.mjs` (TASK-048) | `make lint-image-digests`, verify carve-lint | every `image:`, `*_IMAGE=` and `${*_IMAGE:-d}` in the discovered scan set (root-anchored `git ls-files` pathspecs; exclusions in `image-scan-exclusions.json`, reason required, stale = fail) is `<repo>[:tag]@sha256:<64 hex>`, bar first-party `${IMAGE_TAG:-dev}`/`${IMAGE_TAG:?}` on a `build:` service; no `latest` default; no object-storage image, profile, `MINIO_*`/`*_S3_*` key or S3 client in the lockfile (TRD-350/066/354). `--third-party-list` prints the host's `etc/third-party-images` |
+| `emit-pins.mjs` (TASK-048, TASK-048b) | operator workstation, release | `--project state\|app` writes `docker-compose.state-pins.yml` / `docker-compose.pins.yml` from the release's one `svc=<repo>@sha256:…` record, partitioned by the derived sets; refuses anything `check-pins.mjs` refuses |
+| `check-pins.mjs --project state\|app` (TASK-048b) | `verify`, release | the expected set is derived from every `build:` service in the project's template `COMPOSE_FILE` files (pins slot excluded), never listed |
+| `check-image-digests.mjs --render` (TASK-048b) | `make lint-image-digests` | the rendered release: state, app-blue, app-green, ops and mail rendered from their templates with the emitted pins (`test/host/fixtures/release/valid`); every image `@sha256:`, no kept `build`, every derived service rendered, STATE PURITY on the state render (`lib/render.mjs`) |
+| `release-signing.rehearsal.test.mjs` (TASK-048) | lint (`lint-release.sh`) | the `docs/ops/release-signing.md` sequence on throwaway material with a stub check record: signs, verifies with the rehearsal key, no tlog, another key fails |
 
 Tool pins live in `lib/tools.mjs` (registry, syft and grype by digest; cosign by
 release-asset sha256). `bootstrap.sh` and `sign-release.sh` repeat the cosign
@@ -37,7 +42,8 @@ failure is expected, and nothing here signs with a real key before it.
 3. **Host third-party list.** Step 2 verifies every image that
    `docker compose config --images` resolves for the state project and both
    colours, with every profile turned on (so the `migrate` service is
-   included), plus every canonical pin in `docker-compose.pins.yml`. An image
+   included), plus every canonical pin in `docker-compose.pins.yml` and
+   `docker-compose.state-pins.yml`. An image
    outside `<registry>/hello-n00del/` is refused unless its repository is
    listed, one per line with no tag or digest, in
    `$ROOT/etc/third-party-images`. That file lives on the host and is never
@@ -46,12 +52,13 @@ failure is expected, and nothing here signs with a real key before it.
    digest is what is pulled), and Docker Hub names are compared in canonical
    form, so the pin `redis:7-alpine@sha256:…` matches either
    `docker.io/library/redis` or `redis` in the list.
-4. **age recipient.** Generate the age identity (the private half goes to the
-   vault and the recovery kit), then replace the
+4. **age recipient.** DONE (bcfcf054, 2026-09-26): the operator's `age1…`
+   public recipient replaced the
    `<OPERATOR_AGE_PUBLIC_KEY_REPLACE_VIA_BOOTSTRAP_SOPS_SH>` sentinel in
-   `/.sops.yaml` with the `age1…` public recipient. Until then
-   `node scripts/release/check-sops.mjs` fails with `sentinel-recipient`, and
-   only with that.
+   `/.sops.yaml` (the private half is in the vault and the recovery kit), and
+   `node scripts/release/check-sops.mjs` reports zero problems. A sentinel
+   back in `/.sops.yaml` fails with `sentinel-recipient`
+   (`check-sops.test.mjs` proves the refusal on a fixture).
 5. **Grype DB.** On the workstation that runs `verify`, allow `grype db update`
    to reach the Anchore DB host, or `check-sbom` fails with `grype-db`.
 6. **Runner scope evidence.** With a token that can read Actions settings on

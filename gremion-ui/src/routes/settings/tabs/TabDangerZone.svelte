@@ -19,19 +19,16 @@
     resetting = true
     resetError = ''
     try {
-      // Reset to defaults: clear org, smtp, modules (but keep setup_complete: true and legal)
-      const res = await fetch('/api/settings', {
-        method: 'PATCH',
+      // F1-FIX-10-K / K2#9: the reset is a server action. The server rebuilds
+      // org, smtp, modules and backup retention from the real defaults (no module
+      // ids here) and audits it; setup state and legal texts stay untouched.
+      const res = await fetch('/api/settings/reset', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          org: { name: '', domain: '', logo_path: null },
-          smtp: { configured: false, host: '', port: 587, from_address: '', from_name: '' },
-          modules: { finance: true, elections: true },
-          backups: { retention_days: 30 },
-        }),
+        body: JSON.stringify({ confirm: resetConfirmText }),
       })
       if (!res.ok) {
-        const body = await res.json()
+        const body = await res.json().catch(() => ({}))
         resetError = body.error ?? 'Fehler beim Zurücksetzen.'
         return
       }
@@ -45,33 +42,9 @@
     }
   }
 
-  // ── Data wipe ──
-  let wipeDialogOpen = false
-  let wipePassword = ''
-  let wiping = false
-  let wipeError = ''
-
-  async function confirmWipe() {
-    if (!wipePassword) {
-      wipeError = 'Passwort erforderlich.'
-      return
-    }
-    wiping = true
-    wipeError = ''
-    try {
-      const res = await fetch('/api/settings/wipe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: wipePassword }),
-      })
-      const body = await res.json()
-      wipeError = body.error ?? 'Nicht implementiert.'
-    } catch {
-      wipeError = 'Verbindungsfehler.'
-    } finally {
-      wiping = false
-    }
-  }
+  // Data wipe: there is deliberately no button here. /api/settings/wipe answers
+  // 501 (a wipe must be started from the server CLI), so the former dialog asked
+  // for an admin password and then always failed (F1-FIX-10-K, K2#9).
 </script>
 
 <div class="space-y-6 py-4">
@@ -107,12 +80,10 @@
         <h3 class="text-sm font-semibold text-rust-ink">Alle Daten löschen</h3>
         <p class="text-sm text-ink-muted mt-1">
           Löscht alle Daten unwiderruflich. Diese Aktion kann nicht rückgängig gemacht werden.
-          In v1 muss dieser Vorgang über die Server-CLI eingeleitet werden.
+          Dieser Vorgang kann nicht über die Oberfläche ausgelöst werden: er muss über die Server-CLI
+          eingeleitet werden.
         </p>
       </div>
-      <Button variant="destructive" onclick={() => { wipeDialogOpen = true; wipePassword = ''; wipeError = '' }}>
-        Alle Daten löschen
-      </Button>
     </div>
   </div>
 
@@ -144,26 +115,4 @@
     </div>
   </Dialog>
 
-  <!-- Wipe confirmation dialog -->
-  <Dialog open={wipeDialogOpen} onClose={() => wipeDialogOpen = false}>
-    <DialogHeader>
-      <DialogTitle class="text-rust">Alle Daten löschen?</DialogTitle>
-    </DialogHeader>
-    <div class="mt-2 rounded border border-rust/50 bg-rust-soft px-3 py-2 text-sm text-rust-ink" role="alert">
-      Diese Aktion ist unwiderruflich. Alle Daten werden dauerhaft gelöscht.
-    </div>
-    <div class="mt-3 space-y-1">
-      <Label for="wipe-password">Admin-Passwort</Label>
-      <Input id="wipe-password" type="password" bind:value={wipePassword} autocomplete="current-password" />
-    </div>
-    {#if wipeError}
-      <p class="text-sm text-ink-muted mt-2" role="alert">{wipeError}</p>
-    {/if}
-    <div class="mt-4 flex justify-end gap-2">
-      <Button variant="outline" onclick={() => wipeDialogOpen = false}>Abbrechen</Button>
-      <Button variant="destructive" disabled={wiping} onclick={confirmWipe}>
-        {wiping ? 'Lösche…' : 'Alle Daten löschen'}
-      </Button>
-    </div>
-  </Dialog>
 </div>

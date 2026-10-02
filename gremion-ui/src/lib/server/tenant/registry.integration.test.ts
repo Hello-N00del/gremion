@@ -219,14 +219,26 @@ describe('resolveTenantBySlug — builds a full TenantContext', () => {
     expect(t2!.authClientId).toBe('gremion-ui')
   })
 
-  it('point 6: default authExternalBase derives from AUTH_KEYCLOAK_BASE (byte-identical)', async () => {
-    // The integration env sets AUTH_KEYCLOAK_BASE distinct from the issuer; the
-    // default tenant's authExternalBase must equal AUTH_KEYCLOAK_BASE, matching
-    // auth.ts:19. (If the env lacks AUTH_KEYCLOAK_BASE, it falls back to the issuer.)
-    await registerTenant(input)
-    const ctx = await resolveTenantBySlug('default')
-    const expected = (process.env.AUTH_KEYCLOAK_BASE ?? process.env.AUTH_KEYCLOAK_ISSUER ?? ctx!.issuer).replace(/\/$/, '')
-    expect(ctx!.authExternalBase).toBe(expected)
+  it('point 6 (TASK-042): every tenant, slug `default` included, gets its OWN issuer as authExternalBase whatever AUTH_KEYCLOAK_BASE/ISSUER say', async () => {
+    // The deleted `default` branch read AUTH_KEYCLOAK_BASE ?? AUTH_KEYCLOAK_ISSUER
+    // from the deployment env. Decoys are SET here, so the assertion cannot pass
+    // merely because the env is empty.
+    const saved = { base: process.env.AUTH_KEYCLOAK_BASE, issuer: process.env.AUTH_KEYCLOAK_ISSUER }
+    process.env.AUTH_KEYCLOAK_BASE = 'https://decoy.example/auth/realms/decoy-base'
+    process.env.AUTH_KEYCLOAK_ISSUER = 'https://decoy.example/auth/realms/decoy-issuer'
+    try {
+      _resetResolutionCacheForTests()
+      await registerTenant(input)
+      const ctx = await resolveTenantBySlug('default')
+      expect(ctx!.authExternalBase).toBe('https://council.example/auth/realms/gremion-test')
+      expect(ctx!.authExternalBase).toBe(ctx!.issuer)
+      expect(ctx!.authExternalBase).not.toMatch(/decoy/)
+    } finally {
+      if (saved.base === undefined) delete process.env.AUTH_KEYCLOAK_BASE
+      else process.env.AUTH_KEYCLOAK_BASE = saved.base
+      if (saved.issuer === undefined) delete process.env.AUTH_KEYCLOAK_ISSUER
+      else process.env.AUTH_KEYCLOAK_ISSUER = saved.issuer
+    }
   })
   it('T6 (D-JWKS/#256-6): resolution builds NO eager JWKS and carries no dead fields', async () => {
     await registerTenant(input)

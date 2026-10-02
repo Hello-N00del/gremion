@@ -93,9 +93,13 @@ export async function syncFints(
   } catch (e) {
     const msg = (e as Error).message
     errors.push(msg)
+    // F1-FIX-05-K (K4#13): a failed attempt must NOT advance last_sync_at -- the next
+    // sync computes fromDate from it, so advancing it skipped the unfetched window for
+    // good. Only the status and the error are recorded; dedup is by import hash, so
+    // re-fetching the window on the next success is safe.
     await sql`
       UPDATE finance.fints_config
-      SET last_sync_at = now(), last_sync_status = 'failed', last_sync_error = ${msg}
+      SET last_sync_status = 'failed', last_sync_error = ${msg}
       WHERE id = ${cfg.id}`
   }
   return { imported, skipped, errors }

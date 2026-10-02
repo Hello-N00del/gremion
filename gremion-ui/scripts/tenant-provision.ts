@@ -1,52 +1,78 @@
 // gremion-ui/scripts/tenant-provision.ts
-// P2.1c (T10) — the operator provisioning CLI (D-PROVSCRIPT: Node/tsx, not bash
-// — it reuses composeRealm, the registry modules, the slug guard and the secret
-// resolver, and is unit-testable via the pure modules in
-// src/lib/server/tenant/provisioner/*). Runs OPERATOR-SIDE
-// (`pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts <subcommand> …`), NOT
-// in the app container, so the §7.2 least-privilege provisioner credential is
-// never reachable from any tenant data-plane.
+// The tenant-create one-shot's CLI (TASK-043: the container half of
+// `gremion-tenant`, infra/host/bin/gremion-tenant). It DELEGATES: the order and
+// the post-conditions are @gremion/provisioning's, the $lib adapters are
+// src/lib/server/tenant/provisioner/customer-adapters.ts; this file assembles
+// the live dependencies from the environment contract and dispatches.
 //
-// Subcommands:
-//   provision <slug> --config <file> [--realm <name>] [--blueprint <ref>]
-//                                                        — idempotent DB/realm/registry pipeline
-//                                                          (--blueprint stamps the row's blueprint_ref;
-//                                                           default STURA_BLUEPRINT@1)
-//   suspend <slug>                                       — status -> suspended (evicts runtime)
-//   resume <slug>                                        — status -> active (evicts runtime)
-//   delete <slug>                                        — status -> deleting (crypto-shred wiring is T17)
-//   bootstrap-provisioner                                — one-shot: create the §7.2 SA, print the statement
-//   reconcile [--verify-only] <slug>|--all               — the R5 drift guard (implemented in T11)
-//   materialize-config [<slug>] [--config <path>]        — bake the fully-merged effective config back to the tenant config.json (T15)
+//   init [--realm-only] [--panel-origin <origin>]   gremion_platform + catalogue rows + the ops realm (Q15, Q5)
+//   phase-a <slug> <create flags>                   container phase A (realm .. broker account)
+//   record-step <slug> mail_principal_issued --operator <uuid>
+//                                                   the host phase's ledger step (verifies the stamp over Keycloak)
+//   phase-b <slug> <create flags>                   first accounts, --enable modules, active
+//   render-router <slug>                            the edge router document on STDOUT (Q17)
+//   suspend <slug> --operator <uuid>                status, realm, broker (the host then revokes the principal)
+//   resume <slug> --operator <uuid>                 stamp verified, realm, broker, status last
+//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host)
+//   status <slug>                                   provisioning status JSON on STDOUT
+//   operator-add <email> [--no-mail]                an operator in the ops realm `platform` (Q5, Q23)
+//   delete <slug>                                   crypto-shred delete (kernel database by tenant id)
+//   bootstrap-provisioner                           the least-privilege Keycloak provisioner SA
+//   materialize-config <slug> [--config <path>]     bake the effective tenant config
+//   --help                                          usage (and proof that every adapter imports)
 //
-// Live wiring only — the testable logic lives in the pure modules. The KC token
-// + transport, the host-side DB-admin connection, and the 0600 secret-file
-// writer (a loud no-op warning on Windows/NTFS, D-SECMOUNT) are assembled here.
-import { readFileSync, writeFileSync, existsSync, chmodSync, mkdirSync, renameSync, rmSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
+// <create flags>: --host <host> --config <file> --operator <uuid>
+//                 --it-admin <email> --council-admin <email>
+//                 [--enable a,b] [--body-name <name>]
+//
+// STDOUT carries only machine output (render-router, status, reconcile JSON,
+// one-time secrets); every log line goes to STDERR. EXIT: 0 ok, 1 a failure,
+// 2 usage or a precondition (a missing environment variable is always named).
+import { createHash, randomBytes } from 'node:crypto'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import postgres from 'postgres'
+import {
+  bootstrapPlatform,
+  ensurePanelReader,
+  PANEL_READS,
+  createPhaseA,
+  createPhaseB,
+  loadModuleJsons,
+  pgAttestations,
+  pgLedger,
+  pgModules,
+  provisionalNote,
+  provisioningStatus,
+  ProvisioningError,
+  recordHostStep,
+  renderCustomerRouter,
+  resumeCustomer,
+  suspendCustomer,
+  tokenFor,
+  type AdminSpec,
+  type CreateSpec,
+  type ProvisioningDeps,
+} from '@gremion/provisioning'
+import { assertPlatform, dropKernelDatabase, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
-import { validateSlug, dbNameForSlug } from '../src/lib/server/tenant/slug'
+import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
+import { normaliseHost } from '../src/lib/server/tenant/host'
+import { isReservedPlatformHost } from '../src/lib/server/tenant/reserved-hosts'
 import {
   getTenantBySlug,
-  registerTenant,
-  updateTenantProvisioning,
   updateTenantStatus,
-  ensureTenantResource,
-  markTenantResourceOk,
   markTenantResourceFailed,
-  getTenantResources,
-  getTenantStatusBySlug,
   listTenants,
   evictTenantRuntime,
-  resumeTenant,
-  suspendTenant,
+  listTenantDomains,
+  primaryHostForTenant,
+  configPathForTenant,
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
-import { provisionTenant, type ProvisionDeps } from '../src/lib/server/tenant/provisioner/pipeline'
-import { platformSmtpFromEnv } from '../src/lib/server/tenant/provisioner/realm-doc'
+import { customerAdapters, kernelServer } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
 import {
   reconcileRealm,
   reconcileFleet,
@@ -59,132 +85,165 @@ import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/li
 
 const repoRoot = join(import.meta.dirname, '..', '..')
 const kcDir = join(repoRoot, 'docker', 'keycloak')
+const MIGRATIONS_DIR = join(repoRoot, 'gremion-ui', 'migrations')
+const MODULES_DIR = join(repoRoot, 'modules')
 
-// ── env helpers (operator-side; the env-guard scans src/ only, not scripts/) ──
+const log = (line: string) => console.error(`[tenant-create] ${line}`)
+
+/** A precondition the operator must fix: exit 2, the variable or flag named. */
+class UsageError extends Error {}
+
+// ── the environment contract (TASK-043 G3; each missing variable is a named exit-2 failure) ──
 function reqEnv(name: string): string {
   const v = process.env[name]
-  if (!v) throw new Error(`required env ${name} is not set`)
+  if (!v) throw new UsageError(`required env ${name} is not set (tenant-create env contract, docs/ops/pooled-stack-layout.md)`)
   return v
 }
+/** A *_FILE variable: the file must exist and be non-empty; its content, trimmed. */
+function reqFileEnv(name: string): string {
+  const path = reqEnv(name)
+  if (!existsSync(path)) throw new UsageError(`${name} names ${path}, which does not exist`)
+  const v = readFileSync(path, 'utf-8').trim()
+  if (!v) throw new UsageError(`${name} names ${path}, which is empty`)
+  return v
+}
+function directPostgresUrl(name: string, value: string): string {
+  let u: URL
+  try {
+    u = new URL(value)
+  } catch {
+    throw new UsageError(`${name} is not a URL`)
+  }
+  if (u.protocol !== 'postgres:' && u.protocol !== 'postgresql:') throw new UsageError(`${name} is not a postgres:// URL`)
+  // The one runner and ensure* refuse a pooler: never pgbouncer, never 6432.
+  if (/pgbouncer/i.test(u.hostname) || u.port === '6432') throw new UsageError(`${name} points at the pooler (${u.hostname}:${u.port}); it must be the server itself`)
+  return value
+}
+
+/** Postgres service ids the catalogue's modules run on (calendar-postgres -> calendar). */
+function modulePostgresIds(catalogue: readonly LifecycleModule[]): string[] {
+  const ids = new Set<string>()
+  for (const m of catalogue) {
+    const svc = m.moduleJson.runtime.database?.postgresService
+    if (svc) ids.add(svc.replace(/-postgres$/, ''))
+  }
+  return [...ids].sort()
+}
+const envId = (id: string) => id.toUpperCase().replace(/-/g, '_')
+
+/** Every variable phase A/B and init read, checked BEFORE anything connects. */
+function assertCreateEnv(catalogue: readonly LifecycleModule[], opts: { needEdge: boolean }): void {
+  directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL'))
+  directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))
+  for (const id of modulePostgresIds(catalogue)) {
+    directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`))
+    reqFileEnv(`MODULE_APP_PASSWORD_${envId(id)}_FILE`)
+  }
+  reqEnv('TENANT_EXPORT_DIR')
+  if (reqEnv('GREMION_DISABLE_SEEDS') !== 'true') throw new UsageError('GREMION_DISABLE_SEEDS must be "true" in tenant-create (the kernel migration must never apply a *_seed.sql file)')
+  reqEnv('DOMAIN')
+  reqEnv('DATABASE_URL')
+  reqEnv('CONTROL_DATABASE_URL')
+  reqEnv('NATS_URL')
+  reqEnv('PLATFORM_DOMAIN')
+  if (opts.needEdge) edgeAddresses()
+  readProvisionerCreds()
+}
+
+// ── the catalogue (modules/*/module.json, loadCatalogue's rule) ──────────────
+function loadModules(): LifecycleModule[] {
+  if (!existsSync(MODULES_DIR)) throw new UsageError(`${MODULES_DIR} is absent: the image carries no module catalogue`)
+  // The one reader of the tree, shared with the provisioning tests (R29-LOW-07 L5).
+  return loadModuleJsons(MODULES_DIR)
+}
+
+// ── secrets ─────────────────────────────────────────────────────────────────
+function genSecret(): string {
+  return randomBytes(32).toString('base64url')
+}
+/** 0600 host file; NTFS has no POSIX mode (D-SECMOUNT), which is said loudly. */
+function writeSecretFile(hostPath: string, value: string): Promise<void> {
+  mkdirSync(dirname(hostPath), { recursive: true })
+  const tmp = `${hostPath}.tmp-${process.pid}`
+  writeFileSync(tmp, value, { encoding: 'utf-8', mode: 0o600 })
+  renameSync(tmp, hostPath)
+  try {
+    chmodSync(hostPath, 0o600)
+  } catch (err) {
+    log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
+  }
+  return Promise.resolve()
+}
+const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')
+
+/** The tenant's config.json, atomically (tmp + rename in the same directory). */
+function writeConfigFile(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, text, { mode: 0o640 })
+  renameSync(tmp, path)
+}
+
+/** A 0700 directory (the customer's storage prefix). */
+function makePrivateDir(dir: string): void {
+  mkdirSync(dir, { mode: 0o700 })
+}
+
+// ── Keycloak (the §7.2 provisioner SA; admin only for the SA bootstrap and the SA-role grant) ──
 const apexDomain = () => reqEnv('DOMAIN')
-/** The base realm template ships the deployment apex host as the
- *  `__APEX_DOMAIN__` sentinel rather than a literal, so the public repo trusts
- *  no host the deployer does not own. The Keycloak container resolves it at boot
- *  via the deleted boot-time substitution step; this is the SAME resolution
- *  for the provisioner, which reads the template directly. It must happen before
- *  the doc reaches realm-doc.ts: swapHost matches the apex authority literally,
- *  and restrictClientUris drops every URI whose host is not the tenant's, so an
- *  unresolved sentinel would silently strip every redirect URI from the
- *  provisioned realm. */
 function loadBaseRealmDoc(): Record<string, unknown> {
   const raw = readFileSync(join(kcDir, 'realm-export.base.json'), 'utf-8')
   return JSON.parse(raw.split('__APEX_DOMAIN__').join(apexDomain())) as Record<string, unknown>
 }
-const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')
-/** The KC admin REST base (operator-reachable). Default to the public edge. */
 const kcAdminBase = () => process.env.KC_ADMIN_URL ?? `https://${apexDomain()}/auth`
-/** (A) #139/G-080: the IN-CLUSTER KC admin/OIDC base persisted as the tenant's
- *  kc_internal — derived from AUTH_KEYCLOAK_INTERNAL exactly like the default
- *  tenant (register-default.ts), defaulting to the live internal-TLS posture
- *  (docker-compose.yml `https://keycloak:8443/auth`). kcInternalForTenant strips
- *  any realm suffix, so a realm-scoped AUTH_KEYCLOAK_INTERNAL also works. */
 const kcInternalBase = () => process.env.AUTH_KEYCLOAK_INTERNAL ?? 'https://keycloak:8443/auth'
+const PROVISIONER_SECRET_FILE = process.env.TENANT_PROVISIONER_SECRET_FILE ?? join(repoRoot, 'secrets', 'tenant_provisioner')
 
-/** Build a tenant's runtime DB connection URL by reusing the app's DATABASE_URL
- *  scheme + host:port authority (pgbouncer:6432 in prod) with THIS tenant's role,
- *  password and database. resolveTenantBySlug reads the db secret AS this URL
- *  (mirrors the default tenant's env:DATABASE_URL), so it must be a complete URL. */
-function tenantDbUrl(role: string, password: string, dbName: string): string {
-  const template = reqEnv('DATABASE_URL')
-  const m = /^([a-z][a-z0-9+.-]*):\/\/(?:[^@/]*@)?([^/?#]+)/i.exec(template)
-  if (!m) throw new Error('tenantDbUrl: cannot parse scheme+authority from DATABASE_URL')
-  const query = template.includes('?') ? template.slice(template.indexOf('?')) : ''
-  return `${m[1]}://${encodeURIComponent(role)}:${encodeURIComponent(password)}@${m[2]}/${dbName}${query}`
-}
-
-function genSecret(): string {
-  return randomBytes(32).toString('base64url')
-}
-
-/** Write a generated secret to a HOST file with 0600. NTFS has no POSIX mode —
- *  chmod is a no-op there, so we WARN loudly instead of failing (D-SECMOUNT). */
-function writeSecretFile(hostPath: string, value: string): Promise<void> {
-  mkdirSync(dirname(hostPath), { recursive: true })
-  writeFileSync(hostPath, value, { encoding: 'utf-8' })
-  try {
-    chmodSync(hostPath, 0o600)
-  } catch (err) {
-    console.warn(
-      `[tenant-provision] WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : err}) — ` +
-        'on Windows/NTFS this is expected (no POSIX mode). Ensure the file is operator-only via NTFS ACLs.',
-    )
-  }
-  if (process.platform === 'win32') {
-    console.warn(
-      `[tenant-provision] WARNING: ${hostPath} written without a POSIX 0600 mode (Windows host). ` +
-        'Tighten its ACLs before this directory is bind-mounted into the container.',
-    )
-  }
-  return Promise.resolve()
-}
-
-// ── KC token + transport (client-credentials with the §7.2 provisioner SA) ────
-const PROVISIONER_SECRET_FILE =
-  process.env.TENANT_PROVISIONER_SECRET_FILE ?? join(repoRoot, 'secrets', 'tenant_provisioner')
-
-interface ProvisionerCreds {
-  clientId: string
-  clientSecret: string
-}
-
-/** Read the §7.2 least-privilege provisioner credential from its HOST file —
- *  deliberately OUTSIDE the D-SECMOUNT secrets/tenants/ dir so the gremion-ui
- *  container can never see it through the bind mount. */
-function readProvisionerCreds(): ProvisionerCreds {
+function readProvisionerCreds(): { clientId: string; clientSecret: string } {
   if (!existsSync(PROVISIONER_SECRET_FILE)) {
-    throw new Error(
-      `provisioner credential file ${PROVISIONER_SECRET_FILE} not found — run \`bootstrap-provisioner\` once first`,
-    )
+    throw new UsageError(`provisioner credential file ${PROVISIONER_SECRET_FILE} (TENANT_PROVISIONER_SECRET_FILE) not found — run \`bootstrap-provisioner\` once first`)
   }
   const clientSecret = readFileSync(PROVISIONER_SECRET_FILE, 'utf-8').trim()
+  if (!clientSecret) throw new UsageError(`provisioner credential file ${PROVISIONER_SECRET_FILE} (TENANT_PROVISIONER_SECRET_FILE) is empty`)
   return { clientId: process.env.TENANT_PROVISIONER_CLIENT_ID ?? 'tenant-provisioner', clientSecret }
 }
 
-async function kcToken(base: string, realm: string, creds: ProvisionerCreds): Promise<string> {
-  const res = await fetch(`${base}/realms/${realm}/protocol/openid-connect/token`, {
+async function kcToken(base: string, form: Record<string, string>): Promise<string> {
+  const res = await fetch(`${base}/realms/master/protocol/openid-connect/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: creds.clientId,
-      client_secret: creds.clientSecret,
-    }).toString(),
+    body: new URLSearchParams(form).toString(),
   })
-  if (!res.ok) throw new Error(`Keycloak token fetch failed: ${res.status} ${await res.text()}`)
+  if (!res.ok) {
+    // The OAuth error fields carry no secret (invalid_client, unauthorized_client, ...)
+    // and tell a wrong provisioner secret from a missing SA or a disabled client.
+    let detail = ''
+    try {
+      const body = (await res.json()) as { error?: unknown; error_description?: unknown }
+      detail = [body.error, body.error_description].filter((x) => typeof x === 'string' && x).join(': ')
+    } catch {
+      detail = 'no OAuth error body'
+    }
+    throw new Error(`Keycloak token fetch failed: ${res.status}${detail ? ` (${detail})` : ''}`)
+  }
   return ((await res.json()) as { access_token: string }).access_token
 }
 
-/** A live KC admin transport authenticated as the provisioner SA against the
- *  master realm (where the create-realm role lives). */
-function makeKcTransport(base: string, creds: ProvisionerCreds): KcTransport {
-  let token: string | null = null
-  const send = (method: string, path: string, body: unknown): Promise<Response> => {
-    return fetch(`${base}${path}`, {
+function transport(base: string, token: () => Promise<string>, refreshOnDenied: boolean): KcTransport {
+  let cached: string | null = null
+  const send = (method: string, path: string, body: unknown) =>
+    fetch(`${base}${path}`, {
       method,
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${cached}`, 'Content-Type': 'application/json' },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
-  }
   return async (method, path, body) => {
-    token ??= await kcToken(base, 'master', creds)
+    cached ??= await token()
     let res = await send(method, path, body)
-    // create-realm SA token-refresh: a least-privilege `create-realm` SA only
-    // gains `<realm>-realm` admin AFTER it creates the realm, so the cached token
-    // (fetched before createRealm) lacks those mappings and the FIRST post-create
-    // admin op 401/403s. Refresh the token ONCE and retry so the just-granted
-    // per-realm admin roles take effect. (The admin-superuser path never hit this.)
-    if (res.status === 401 || res.status === 403) {
-      token = await kcToken(base, 'master', creds)
+    // A create-realm SA only gains <realm>-realm admin AFTER it creates the
+    // realm: refresh the token once and retry.
+    if (refreshOnDenied && (res.status === 401 || res.status === 403)) {
+      cached = await token()
       res = await send(method, path, body)
     }
     if (!res.ok) throw new Error(`Keycloak Admin API error: ${res.status} on ${method} ${path}: ${await res.text()}`)
@@ -194,429 +253,500 @@ function makeKcTransport(base: string, creds: ProvisionerCreds): KcTransport {
   }
 }
 
-/** A one-shot admin transport: password grant on master/admin-cli. Used ONLY by
- *  `bootstrap-provisioner` to mint the §7.2 SA — NEVER for tenant data-plane ops.
- *  The admin superuser is used exactly once, here, to create the least-privilege SA. */
-function makeAdminKcTransport(base: string, adminUser: string, adminPassword: string): KcTransport {
-  let token: string | null = null
-  const getToken = async (): Promise<string> => {
-    const res = await fetch(`${base}/realms/master/protocol/openid-connect/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'password',
-        client_id: 'admin-cli',
-        username: adminUser,
-        password: adminPassword,
-      }).toString(),
-    })
-    if (!res.ok) throw new Error(`Keycloak admin token fetch failed: ${res.status} ${await res.text()}`)
-    return ((await res.json()) as { access_token: string }).access_token
-  }
-  return async (method, path, body) => {
-    token ??= await getToken()
-    const res = await fetch(`${base}${path}`, {
-      method,
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-    if (!res.ok) throw new Error(`Keycloak Admin API error: ${res.status} ${await res.text()}`)
-    if (res.status === 204) return undefined
-    const text = await res.text()
-    return text ? JSON.parse(text) : undefined
-  }
+function provisionerKc(creds: { clientId: string; clientSecret: string } = readProvisionerCreds()): KcProvisionApi {
+  return new KcProvisionApi(transport(kcAdminBase(), () => kcToken(kcAdminBase(), { grant_type: 'client_credentials', client_id: creds.clientId, client_secret: creds.clientSecret }), true))
+}
+function adminKcOrUndefined(): KcProvisionApi | undefined {
+  const user = process.env.KEYCLOAK_ADMIN
+  const password = process.env.KEYCLOAK_ADMIN_PASSWORD
+  if (!user || !password) return undefined
+  return new KcProvisionApi(transport(kcAdminBase(), () => kcToken(kcAdminBase(), { grant_type: 'password', client_id: 'admin-cli', username: user, password }), false))
 }
 
-// ── host-side DB-admin executor (CREATE DATABASE + role; init-databases.sh shape) ──
-/** A superuser/CREATEDB postgres connection to the cluster (NOT the per-tenant
- *  data-plane pool, NOT the control pool). ADMIN_DATABASE_URL points at the
- *  postgres superuser. */
-function adminDb(): ReturnType<typeof postgres> {
-  return postgres(reqEnv('ADMIN_DATABASE_URL'), { max: 1, idle_timeout: 5, connect_timeout: 10 })
-}
-
-// (B) Provisioner input hardening. The DB-admin executor builds CREATE/DROP USER
-// statements that interpolate roleName + password as $r$-dollar-quoted literals
-// (a DO block body cannot carry bound parameters, so %I/%L-via-bind is not
-// available here — init-databases.sh gets %I/%L only because psql `\gexec`
-// substitutes -v variables, which has no postgres.js analogue inside a DO block).
-// We therefore assert a STRICT charset on both before any unsafe interpolation:
-// a value containing `$r$`, a quote, a backslash or whitespace is rejected loudly
-// rather than reaching the SQL string. This PINS the generator contract:
-// genSecret() = randomBytes(32).toString('base64url'), whose alphabet is exactly
-// [A-Za-z0-9_-]; roleName is the slug-derived `t_<slug>` (validateSlug's
-// ^[a-z0-9-]{1,30}$ + the `t_` prefix). If a future generator/slug change ever
-// widens the charset, this assertion fails loudly at provision time instead of
-// silently opening a SQLi seam. dbName stays "<id>"-quoted (already slug-derived).
-const SAFE_SQL_TOKEN = /^[A-Za-z0-9_-]+$/
-function assertSafeSqlToken(label: string, value: string): void {
-  if (!SAFE_SQL_TOKEN.test(value)) {
-    throw new Error(
-      `[tenant-provision] refusing to interpolate unsafe ${label} into a DB-admin statement: ` +
-        `must match ${SAFE_SQL_TOKEN} (genSecret base64url + t_<slug> contract). ` +
-        'If the secret generator or slug rule changed, update this guard deliberately.',
-    )
-  }
-}
-
-function makeDbExecutor() {
-  const sql = adminDb()
-  return {
-    async databaseExists(dbName: string): Promise<boolean> {
-      const rows = await sql<{ one: number }[]>`SELECT 1 AS one FROM pg_database WHERE datname = ${dbName}`
-      return rows.length > 0
-    },
-    // Same idempotent %I/%L shape as init-databases.sh create_db_and_user.
-    async createDatabaseAndRole(dbName: string, roleName: string, password: string): Promise<void> {
-      // (B) fail loudly before any $r$-literal interpolation (see assertSafeSqlToken).
-      assertSafeSqlToken('roleName', roleName)
-      assertSafeSqlToken('password', password)
-      await sql.unsafe(
-        `DO $$ BEGIN
-           IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = $r$${roleName}$r$) THEN
-             EXECUTE format('CREATE USER %I WITH PASSWORD %L', $r$${roleName}$r$, $r$${password}$r$);
-           END IF;
-         END $$;`,
-      )
-      // CREATE DATABASE cannot run inside a transaction/DO block.
-      const exists = await sql<{ one: number }[]>`SELECT 1 AS one FROM pg_database WHERE datname = ${dbName}`
-      if (exists.length === 0) {
-        await sql.unsafe(`CREATE DATABASE "${dbName}" OWNER "${roleName}"`)
-      }
-      await sql.unsafe(`GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${roleName}"`)
-      const tenantSql = postgres(reqEnv('ADMIN_DATABASE_URL').replace(/\/[^/]+$/, `/${dbName}`), { max: 1 })
-      try {
-        await tenantSql.unsafe(`GRANT ALL ON SCHEMA public TO "${roleName}"`)
-        // pgbouncer auth_query enablement (docker/pgbouncer/pgbouncer-auth.sql,
-        // runbook pgbouncer.md): pgbouncer logs into the TARGET database as
-        // pgbouncer_auth and resolves each role's SCRAM verifier via
-        // pgbouncer.get_auth, so EVERY per-tenant DB needs the schema+function+grants
-        // or the app's pgbouncer:6432 connection to a fresh tenant DB fails SCRAM.
-        // (pg_shadow is cluster-wide; the function just has to exist in this DB.)
-        await tenantSql.unsafe(
-          `CREATE SCHEMA IF NOT EXISTS pgbouncer;
-           CREATE OR REPLACE FUNCTION pgbouncer.get_auth(uname text)
-             RETURNS TABLE (usename name, passwd text)
-             LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog
-             AS $func$ SELECT usename, passwd FROM pg_catalog.pg_shadow WHERE usename = uname $func$;
-           REVOKE ALL ON FUNCTION pgbouncer.get_auth(text) FROM PUBLIC;
-           GRANT USAGE ON SCHEMA pgbouncer TO pgbouncer_auth;
-           GRANT EXECUTE ON FUNCTION pgbouncer.get_auth(text) TO pgbouncer_auth;`,
-        )
-      } finally {
-        await tenantSql.end({ timeout: 5 })
-      }
-    },
-    // T17 (§8.7) — the inverse of createDatabaseAndRole, idempotent: DROP DATABASE
-    // WITH FORCE (terminates any lingering backend so the drop never blocks behind
-    // a stale connection) IF EXISTS, then DROP ROLE IF EXISTS. dbName/roleName are
-    // slug-derived (validateSlug ^[a-z0-9-]{1,30}$ + the t_ prefix), so the
-    // identifier interpolation is safe — same shape as createDatabaseAndRole.
-    async dropDatabaseAndRole(dbName: string, roleName: string): Promise<void> {
-      // (B) fail loudly before any $r$-literal interpolation (see assertSafeSqlToken).
-      assertSafeSqlToken('roleName', roleName)
-      // DROP DATABASE cannot run inside a transaction/DO block.
-      await sql.unsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`)
-      await sql.unsafe(
-        `DO $$ BEGIN
-           IF EXISTS (SELECT FROM pg_roles WHERE rolname = $r$${roleName}$r$) THEN
-             EXECUTE format('DROP ROLE %I', $r$${roleName}$r$);
-           END IF;
-         END $$;`,
-      )
-    },
-    end: () => sql.end({ timeout: 5 }),
-  }
-}
-
-// ── deps assembly ─────────────────────────────────────────────────────────────
-function liveDeps(): { deps: ProvisionDeps; cleanup: () => Promise<void> } {
-  const creds = readProvisionerCreds()
-  const kc = new KcProvisionApi(makeKcTransport(kcAdminBase(), creds))
-  // Admin-assisted SA-role bootstrap (§7.2): the least-privilege `create-realm` SA
-  // can create + configure a realm but KC forbids it from granting the new realm's
-  // realm-management roles to that realm's gremion-admin SA. So when admin creds are
-  // present, supply an admin-authenticated KC client used ONLY for that one grant
-  // (mirrors bootstrap-provisioner: admin touches only the per-realm SA-role seed).
-  const adminKc =
-    process.env.KEYCLOAK_ADMIN && process.env.KEYCLOAK_ADMIN_PASSWORD
-      ? new KcProvisionApi(
-          makeAdminKcTransport(kcAdminBase(), process.env.KEYCLOAK_ADMIN, process.env.KEYCLOAK_ADMIN_PASSWORD),
-        )
-      : undefined
-  const db = makeDbExecutor()
-  const deps: ProvisionDeps = {
-    manifests: MODULE_MANIFESTS,
-    apexDomain: apexDomain(),
-    platformSmtp: platformSmtpFromEnv(process.env),
-    kcInternalBase: kcInternalBase(),
-    adminKc,
-    loadDefaultConfig: () => {
-      const p = process.env.CONFIG_PATH ?? join(repoRoot, 'config', 'config.json')
-      return existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : {}
-    },
-    loadBaseRealm: () => loadBaseRealmDoc(),
-    loadTenantConfig: (configFile: string) => JSON.parse(readFileSync(configFile, 'utf-8')),
-    tenantDbUrl,
-    genSecret,
-    writeSecretFile,
-    db,
-    kc,
-    registry: {
-      getTenantBySlug,
-      registerTenant,
-      updateTenantProvisioning,
-      updateTenantStatus,
-      ensureTenantResource,
-      markTenantResourceOk,
-      markTenantResourceFailed,
-      getTenantResources,
-    },
-  }
-  return { deps, cleanup: () => db.end() }
-}
-
-// ── subcommands ───────────────────────────────────────────────────────────────
+// ── flags ───────────────────────────────────────────────────────────────────
 function flag(name: string): string | undefined {
   const i = process.argv.indexOf(name)
-  return i >= 0 ? process.argv[i + 1] : undefined
+  if (i < 0) return undefined
+  const v = process.argv[i + 1]
+  if (v === undefined || v.startsWith('--')) throw new UsageError(`${name} requires a value`)
+  return v
 }
-
-async function cmdProvision(slug: string): Promise<void> {
-  const configFile = flag('--config')
-  if (!configFile) throw new Error('provision requires --config <file>')
-  // (C) The explicit --realm flag is interpolated UNENCODED into KC Admin-API
-  // paths (/admin/realms/${realm}…), so it MUST pass the same slug guard as the
-  // slug fallback (which pipeline.provisionTenant already validates). Validate
-  // here, before any use, and throw loudly on an invalid realm name.
-  const realmFlag = flag('--realm')
-  if (realmFlag !== undefined) {
-    const rv = validateSlug(realmFlag)
-    if (!rv.ok) throw new Error(`invalid --realm "${realmFlag}": ${rv.reason}`)
-  }
-  const realmName = realmFlag ?? slug
-  // P2.3 (#202): optional --blueprint stamps the registry row's blueprint_ref so
-  // the per-tenant seed path (resolveBlueprint) feeds this tenant ITS OWN
-  // blueprint (e.g. `--blueprint MUNICIPAL_BLUEPRINT@1` for a municipal tenant).
-  // Omitted → the pipeline default `STURA_BLUEPRINT@1` (byte-identical).
-  const blueprintRef = flag('--blueprint')
-  const { deps, cleanup } = liveDeps()
-  try {
-    const result = await provisionTenant(
-      { slug, realmName, configFile, ...(blueprintRef ? { blueprintRef } : {}) },
-      deps,
-      tenantSecretsDir(),
-    )
-    console.log(`[tenant-provision] ${slug} provisioned (realm=${result.realmName}, issuer=${result.issuer}).`)
-    console.log(`[tenant-provision] ledger: ${JSON.stringify(result.resources)}`)
-    console.log(
-      '[tenant-provision] NC/Matrix spaces are left PENDING — they ride the org-unit ' +
-        'provisioning worker once the tenant is active (S4/S5 manual step, see the runbook).',
-    )
-  } finally {
-    await cleanup()
-  }
+function reqFlag(name: string): string {
+  const v = flag(name)
+  if (!v) throw new UsageError(`${name} is required`)
+  return v
 }
-
-async function cmdStatusFlip(slug: string, status: 'suspended' | 'active'): Promise<void> {
-  // suspend/resume — the trivial status flips that route through the ONE lifecycle
-  // seam (updateTenantStatus → evictTenantRuntime, P2.1b T8): a suspended tenant
-  // stops resolving IMMEDIATELY, and the T6 page serves the 503 from the
-  // control-row status alone (no data-plane touch). DELETE is cmdDelete (T17).
-  //
-  // FIX2-LIFECYCLE (§7.8): these flips are a GUARDED state machine, NOT a bare
-  // UPDATE. resumeTenant/suspendTenant read the CURRENT status and refuse any
-  // illegal source — `resume <deleted-slug>` would otherwise resurrect a
-  // crypto-shredded tombstone back to `active` (resolveTenantBySlug filters only
-  // on status!=='active', so it would then resolve LIVE again, defeating the
-  // tombstone-is-terminal / subdomain-takeover defence), and would also promote a
-  // half-provisioned `provisioning` row straight to active. Resume is legal ONLY
-  // from `suspended`; suspend ONLY from `active`. The slug guard + unknown-tenant
-  // check + eviction all live in those registry fns now.
-  const tenant = status === 'active' ? await resumeTenant(slug) : await suspendTenant(slug)
-  console.log(`[tenant-provision] ${tenant.slug} status -> ${tenant.status} (runtime evicted).`)
-}
-
-// T21 (§8.7) — build a live LeafShredExecutor against the newsletter leaf PG.
-// Uses NEWSLETTER_PG_URL (the leaf newsletter-postgres admin URL). Returns null if
-// NEWSLETTER_PG_URL is unset (leaf not configured — cmdDelete still proceeds
-// without the leaf step, leaving the leaf cleanup for a later manual / re-run).
-function makeLeafShredExecutor(): LeafShredExecutor | null {
-  const leafUrl = process.env.NEWSLETTER_PG_URL
-  if (!leafUrl) return null
-  const leafSql = postgres(leafUrl, { max: 1, idle_timeout: 5, connect_timeout: 10 })
-  return {
-    async dropNewsletterDb(slug: string): Promise<void> {
-      // DROP DATABASE cannot run inside a transaction. Use unsafe to interpolate the
-      // slug-derived name; the slug is already validated by lifecycle.deleteTenant
-      // (^[a-z0-9-]{1,30}$), so `newsletter_<slug>` is safe to interpolate.
-      // F-3: if this throws, lifecycle.ts now propagates the error (no try/catch),
-      // so deleteCatalogRow will NOT be called. Close the connection in a finally
-      // block here so the PG connection is never leaked on a dropNewsletterDb failure.
-      try {
-        await leafSql.unsafe(`DROP DATABASE IF EXISTS "newsletter_${slug}"`)
-        console.log(`[tenant-provision] leaf: dropped newsletter_${slug} (IF EXISTS)`)
-      } catch (err) {
-        await leafSql.end({ timeout: 5 }).catch(() => undefined)
-        throw err
-      }
-    },
-    async deleteCatalogRow(tenantId: string): Promise<void> {
-      // F-3: always close the connection whether the DELETE succeeds or throws.
-      try {
-        await leafSql`DELETE FROM tenant_catalog WHERE tenant_id = ${tenantId}::uuid`
-        console.log(`[tenant-provision] leaf: deleted tenant_catalog row for ${tenantId}`)
-      } finally {
-        await leafSql.end({ timeout: 5 })
-      }
-    },
-  }
-}
-
-// T17 (§8.7) — assemble the live crypto-shred-on-delete deps and run the pipeline.
-// The pure ordering (key shred → DB drop → realm delete → tombstone) lives in
-// lifecycle.deleteTenant; this only supplies the live shredder, DB-drop executor,
-// KC realm-delete, and the registry fns.
-async function cmdDelete(slug: string): Promise<void> {
-  const creds = readProvisionerCreds()
-  const kc = new KcProvisionApi(makeKcTransport(kcAdminBase(), creds))
-  const db = makeDbExecutor()
-  const leaf = makeLeafShredExecutor()
-  if (!leaf) {
-    console.log(
-      '[tenant-provision] NEWSLETTER_PG_URL not set — leaf shred step skipped ' +
-        '(newsletter_<slug> DB + catalog row will not be removed from the leaf PG).',
-    )
-  }
-  const deps: DeleteDeps = {
-    // Crypto-shred = remove the host secret files (the per-tenant backup key is
-    // the §7.9 exactly-one location, so its removal voids ALL the tenant's
-    // backups). rmSync force:true is idempotent — a missing path is a no-op, so a
-    // re-run after a partial shred is terminal-safe.
-    shredSecretFiles: (paths) => {
-      for (const p of paths) {
-        if (existsSync(p)) {
-          rmSync(p, { force: true })
-          console.log(`[tenant-provision] crypto-shred: removed ${p}`)
-        } else {
-          console.log(`[tenant-provision] crypto-shred: ${p} already gone (no-op)`)
-        }
-      }
-      return Promise.resolve()
-    },
-    db: { dropDatabaseAndRole: (dbName, roleName) => db.dropDatabaseAndRole(dbName, roleName) },
-    kc: { deleteRealm: (realm) => kc.deleteRealm(realm) },
-    registry: { getTenantBySlug, updateTenantStatus, markTenantResourceFailed, evictTenantRuntime },
-    tenantSecretsDir: tenantSecretsDir(),
-    ...(leaf ? { leaf } : {}),
-  }
-  try {
-    const result = await deleteTenant(slug, deps)
-    if (result.shredded) {
-      console.log(
-        `[tenant-provision] ${slug} DELETED — backup key + ${result.shreddedPaths.length} secret file(s) ` +
-          'crypto-shredded, DB + realm dropped, row tombstoned (status=deleted; the slug is NEVER reusable, §7.8).',
-      )
-      console.log(
-        '[tenant-provision] NOTE: Nextcloud + Matrix spaces are silo satellites this script cannot reach — ' +
-          'they are flagged for MANUAL teardown in the ledger (see the runbook).',
-      )
-    } else {
-      console.log(`[tenant-provision] ${slug} is already a tombstone (status=deleted) — nothing to do.`)
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** Flags that take no value; every other --flag consumes the next argument. */
+const BOOLEAN_FLAGS = new Set(['--verify-only', '--all', '--realm-only', '--no-mail'])
+function positional(index = 0): string | undefined {
+  const out: string[] = []
+  const args = process.argv.slice(3)
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!
+    if (a.startsWith('--')) {
+      if (!BOOLEAN_FLAGS.has(a)) i++
+      continue
     }
-  } finally {
-    await db.end()
+    out.push(a)
+  }
+  return out[index]
+}
+
+function createSpec(slug: string): CreateSpec & { configFile: string; bodyName: string } {
+  const admins: AdminSpec[] = [
+    { role: 'it-admin', email: reqFlag('--it-admin') },
+    { role: 'council-admin', email: reqFlag('--council-admin') },
+  ]
+  const enable = (flag('--enable') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  return {
+    slug,
+    host: reqFlag('--host'),
+    enable,
+    operatorId: reqFlag('--operator'),
+    admins,
+    configFile: reqFlag('--config'),
+    bodyName: flag('--body-name') ?? 'Rat',
   }
 }
 
-async function cmdBootstrapProvisioner(): Promise<void> {
-  // §7.2: mint the DEDICATED master-realm service-account `tenant-provisioner`
-  // holding ONLY `create-realm` (KC grants the creator per-realm admin on realms it
-  // creates) — NEVER the `admin` superuser, NEVER a tenant data-plane credential.
-  // The admin creds are used EXACTLY ONCE, here, to create the SA; thereafter the
-  // provisioner authenticates as the SA (makeKcTransport, client_credentials). The
-  // SA secret is written to the host file OUTSIDE the D-SECMOUNT tenants dir so the
-  // gremion-ui container can never see it through the bind mount. Idempotent — a
-  // re-run reuses the existing SA and re-reads its secret.
-  const adminUser = reqEnv('KEYCLOAK_ADMIN')
-  const adminPassword = reqEnv('KEYCLOAK_ADMIN_PASSWORD')
-  const clientId = process.env.TENANT_PROVISIONER_CLIENT_ID ?? 'tenant-provisioner'
-  const kc = new KcProvisionApi(makeAdminKcTransport(kcAdminBase(), adminUser, adminPassword))
-  const { clientSecret, created } = await kc.createProvisionerServiceAccount('master', clientId, ['create-realm'])
-  await writeSecretFile(PROVISIONER_SECRET_FILE, clientSecret)
-  console.log(
-    `[tenant-provision] bootstrap-provisioner: master-realm SA "${clientId}" ${created ? 'CREATED' : 'already present'} ` +
-      `with ONLY [create-realm]; secret written to ${PROVISIONER_SECRET_FILE} ` +
-      `(outside the bind-mounted ${join('secrets', 'tenants')} dir). The provisioner now authenticates as this SA, ` +
-      'never the admin superuser.',
-  )
+// ── the live dependency set ──────────────────────────────────────────────────
+interface Live {
+  deps: ProvisioningDeps
+  close(): Promise<void>
 }
 
-// ── reconcile (the R5 drift guard, T11) ────────────────────────────────────────
-/** Derive a tenant's external host from its issuer URL (the authority is the
- *  per-tenant host the §4-4 exact URIs reference; for `default` this is the apex). */
+function edgeAddresses(): { ipv4: string[]; ipv6: string[] } | null {
+  if (process.env.TENANT_DNS_PREFLIGHT === 'off') return null
+  const v4 = (process.env.EDGE_BIND_IP ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const v6 = (process.env.EDGE_BIND_IP6 ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (!v4.length) throw new UsageError('EDGE_BIND_IP is not set: the DNS pre-flight needs the edge address (or set TENANT_DNS_PREFLIGHT=off explicitly on a scratch stack)')
+  return { ipv4: v4, ipv6: v6 }
+}
+
+function moduleServerFor(adminUrl: string): ModuleServer & { close(): Promise<void> } {
+  const admin = postgres(adminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
+  const pools: postgres.Sql[] = []
+  return {
+    admin,
+    open(database, options) {
+      const u = new URL(adminUrl)
+      u.pathname = `/${database}`
+      const sql = postgres(u.toString(), {
+        max: 2,
+        onnotice: () => {},
+        connect_timeout: 15,
+        ...(options?.role ? { connection: { options: `-c role=${options.role}` } } : {}),
+      })
+      pools.push(sql)
+      return sql
+    },
+    async close() {
+      await Promise.all([admin, ...pools].map((s) => s.end({ timeout: 5 }).catch((e: unknown) => log(`WARNING: a module server pool did not close: ${e instanceof Error ? e.message : String(e)}`))))
+    },
+  }
+}
+
+/**
+ * Every environment value, file and credential the live verbs read, resolved
+ * WITHOUT connecting to anything (review B2-HIGH, r2): a missing one is a named
+ * exit-2 failure before the platform pool exists, so no open socket can keep
+ * the one-shot alive after the error. `needEdge`: only phase A binds a domain
+ * (the DNS pre-flight); suspend/resume/record-step never read EDGE_BIND_IP.
+ */
+function resolveLiveEnv(needEdge: boolean) {
+  return {
+    platformUrl: directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')),
+    platformDomain: reqEnv('PLATFORM_DOMAIN'),
+    apexDomain: apexDomain(),
+    runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
+    kernelAdminUrl: directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
+    exportDir: reqEnv('TENANT_EXPORT_DIR'),
+    edge: needEdge ? edgeAddresses() : null,
+    creds: readProvisionerCreds(),
+  }
+}
+
+async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean } = {}): Promise<Live> {
+  const catalogue = loadModules()
+  const env = resolveLiveEnv(opts.needEdge ?? false)
+  const kc = provisionerKc(env.creds)
+  const adminKc = adminKcOrUndefined()
+  const servers = new Map<string, ReturnType<typeof moduleServerFor>>()
+  // Opened only after every value above resolved; ended on ANY later throw.
+  const platform = postgres(env.platformUrl, { max: 3, onnotice: () => {}, connect_timeout: 15 })
+  const close = async () => {
+    await Promise.all([...servers.values()].map((s) => s.close()))
+    await platform.end({ timeout: 5 })
+  }
+  try {
+    await assertPlatform(platform)
+    const serviceId = (service: string) => service.replace(/-postgres$/, '')
+    const adapters = customerAdapters({
+      apexDomain: env.apexDomain,
+      kcInternalBase: kcInternalBase(),
+      tenantSecretsDir: tenantSecretsDir(),
+      runtimeDatabaseUrl: env.runtimeDatabaseUrl,
+      kernelAdminUrl: env.kernelAdminUrl,
+      configFile: opts.configFile ?? '/nonexistent',
+      bodyName: opts.bodyName ?? 'Rat',
+      edge: env.edge,
+      storageRoot: process.env.GREMION_STORAGE_ROOT ?? null,
+      manifests: MODULE_MANIFESTS,
+      loadBaseRealm: loadBaseRealmDoc,
+      genSecret,
+      writeSecretFile,
+      writeConfigFile,
+      makePrivateDir,
+      kc,
+      ...(adminKc ? { adminKc } : {}),
+      log,
+    })
+    const deps: ProvisioningDeps = {
+      platformDomain: env.platformDomain,
+      ledger: pgLedger(platform),
+      attestations: pgAttestations(platform),
+      modules: pgModules({
+        platform,
+        catalogue,
+        lifecycle: {
+          server: (service) => {
+            const id = serviceId(service)
+            let s = servers.get(id)
+            if (!s) {
+              s = moduleServerFor(directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)))
+              servers.set(id, s)
+            }
+            return s
+          },
+          secrets: {
+            appPassword: (moduleId) => {
+              const m = catalogue.find((x) => x.id === moduleId)
+              const svc = m?.moduleJson.runtime.database?.postgresService
+              if (!svc) throw new Error(`module ${moduleId} declares no database`)
+              return reqFileEnv(`MODULE_APP_PASSWORD_${envId(serviceId(svc))}_FILE`)
+            },
+          },
+          exporter: {
+            dump: () => Promise.reject(new Error('tenant-create never disables a module (disable is not a create verb)')),
+            list: () => Promise.reject(new Error('tenant-create never disables a module')),
+          },
+          exportDir: env.exportDir,
+          log,
+        },
+      }),
+      ...adapters,
+      log,
+    }
+    return { deps, close }
+  } catch (err) {
+    await close().catch((e: unknown) => log(`WARNING: closing the pools after a failed start also failed: ${e instanceof Error ? e.message : String(e)}`))
+    throw err
+  }
+}
+
+async function withLive<T>(opts: { configFile?: string; bodyName?: string; needEdge?: boolean }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
+  const live = await liveDeps(opts)
+  try {
+    return await fn(live.deps)
+  } finally {
+    await live.close()
+  }
+}
+
+function slugArg(verb: string): string {
+  const s = positional(0)
+  if (!s) throw new UsageError(`${verb} requires <slug>`)
+  return s
+}
+
+// ── init (Q15) and the ops realm (Q5) ──────────────────────────────────────
+const OPS_REALM = 'platform'
+const OPS_FINGERPRINT_ATTR = 'gremion.ops-realm.sha256'
+
+function panelOrigin(): string {
+  const o = flag('--panel-origin') ?? 'http://127.0.0.1:3043'
+  let u: URL
+  try {
+    u = new URL(o)
+  } catch {
+    throw new UsageError(`--panel-origin ${o} is not an origin`)
+  }
+  if (u.origin !== o || o.includes('*') || !/^https?:$/.test(u.protocol)) throw new UsageError(`--panel-origin must be an exact origin (scheme://host[:port]), no path and no wildcard: ${o}`)
+  if (u.protocol === 'http:' && u.hostname !== '127.0.0.1' && u.hostname !== 'localhost') throw new UsageError('--panel-origin over plain http is allowed on the loopback only (the ssh -L access path)')
+  return o
+}
+
+/**
+ * The ops realm: create when absent, skip when equal (the template fingerprint
+ * stored on the realm matches), fail when different. The control-panel client
+ * secret goes to a 0600 file, never to stdout.
+ */
+async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ created: boolean }> {
+  const origin = panelOrigin()
+  const templateText = readFileSync(join(kcDir, 'realm-export.ops.json'), 'utf-8')
+  const fingerprint = createHash('sha256').update(templateText).update('\n').update(origin).digest('hex')
+  if (await kc.realmExists(OPS_REALM)) {
+    const rep = (await raw('GET', `/admin/realms/${OPS_REALM}`)) as { attributes?: Record<string, string> }
+    const have = rep?.attributes?.[OPS_FINGERPRINT_ATTR]
+    if (have === fingerprint) {
+      // Idempotent and re-asserted on every init (review B2, r2): a step-up
+      // setup that failed after createRealm must not stay missing because the
+      // fingerprint (imported with the realm) already matches.
+      await kc.configureStepupFlow(OPS_REALM)
+      return { created: false }
+    }
+    throw new ProvisioningError('PRECONDITION', `realm ${OPS_REALM} exists but differs from realm-export.ops.json for panel origin ${origin} (fingerprint ${have ?? 'absent'}): refusing to overwrite an ops realm by hand`)
+  }
+  const secretPath = process.env.OPS_CLIENT_SECRET_FILE ?? join(tenantSecretsDir(), 'platform_client_control-panel')
+  const secret = genSecret()
+  const doc = JSON.parse(templateText.split('__CONTROL_PANEL_OIDC_CLIENT_SECRET__').join(secret)) as Record<string, unknown> & {
+    clients: Array<Record<string, unknown>>
+    attributes?: Record<string, string>
+  }
+  const client = doc.clients.find((c) => c.clientId === 'control-panel')
+  if (!client) throw new ProvisioningError('PRECONDITION', 'realm-export.ops.json carries no control-panel client')
+  client.redirectUris = [`${origin}/*`]
+  client.webOrigins = [origin]
+  client.attributes = { ...(client.attributes as Record<string, string>), 'post.logout.redirect.uris': `${origin}/*` }
+  doc.attributes = { ...doc.attributes, [OPS_FINGERPRINT_ATTR]: fingerprint }
+  await writeSecretFile(secretPath, secret)
+  await kc.createRealm(doc)
+  await kc.configureStepupFlow(OPS_REALM)
+  log(`ops realm ${OPS_REALM} created; the control-panel client secret is in ${secretPath} (0600)`)
+  return { created: true }
+}
+
+function rawProvisionerTransport(): KcTransport {
+  const creds = readProvisionerCreds()
+  return transport(kcAdminBase(), () => kcToken(kcAdminBase(), { grant_type: 'client_credentials', client_id: creds.clientId, client_secret: creds.clientSecret }), true)
+}
+
+async function cmdInit(): Promise<void> {
+  const kc = provisionerKc()
+  if (process.argv.includes('--realm-only')) {
+    const r = await ensureOpsRealm(kc, rawProvisionerTransport())
+    log(`init --realm-only: ops realm ${r.created ? 'created' : 'present and equal'}`)
+    return
+  }
+  const catalogue = loadModules()
+  assertCreateEnv(catalogue, { needEdge: false })
+  const platformUrl = new URL(reqEnv('PLATFORM_DATABASE_URL'))
+  const kernelAdminUrl = directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))
+  // r3 verifier MEDIUM #70: the panel's read-only role -- every input read
+  // BEFORE the first connection (a missing one is a named exit 2).
+  const panelRole = reqEnv('PANEL_DB_USER')
+  const panelPassword = reqEnv('PANEL_DB_PASSWORD')
+  const controlDatabase = decodeURIComponent(new URL(reqEnv('CONTROL_DATABASE_URL')).pathname.replace(/^\//, ''))
+  const kernelAdmin = postgres(kernelAdminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
+  try {
+    const r = await bootstrapPlatform({
+      kernelAdmin,
+      openPlatform: () => postgres(platformUrl.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15 }),
+      owner: decodeURIComponent(platformUrl.username),
+      ownerPassword: decodeURIComponent(platformUrl.password),
+      catalogue,
+      opsRealm: { ensure: () => ensureOpsRealm(kc, rawProvisionerTransport()) },
+      log,
+    })
+    log(`init: gremion_platform ${r.platformCreated ? 'created' : 'present'}; ${r.applied.length} migration(s) applied; catalogue rows: +${r.catalogue.insertedModules.length} module(s), +${r.catalogue.insertedVersions.length} version(s); ops realm ${r.opsRealm?.created ? 'created' : 'present'}`)
+    for (const u of r.catalogue.undecided) log(`init: ${u.moduleKey} not loaded (${u.reason})`)
+    for (const row of r.catalogue.load) if (row.provisional) log(`init: ${provisionalNote(row)}`)
+    const panel = await ensurePanelReader({
+      kernelAdmin,
+      openAdminOn: (db) => {
+        const u = new URL(kernelAdminUrl)
+        u.pathname = `/${encodeURIComponent(db)}`
+        return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15 })
+      },
+      role: panelRole,
+      password: panelPassword,
+      controlDatabase,
+    })
+    log(`init: control-panel reader ${panelRole} ${panel.created ? 'created' : 'present'} (SELECT on ${[...PANEL_READS.control, ...PANEL_READS.platform].join(', ')} only)`)
+  } finally {
+    await kernelAdmin.end({ timeout: 5 })
+  }
+}
+
+// ── create phases, host step, router, suspend/resume, status ───────────────
+async function cmdPhase(which: 'a' | 'b'): Promise<void> {
+  const slug = slugArg(`phase-${which}`)
+  const spec = createSpec(slug)
+  assertCreateEnv(loadModules(), { needEdge: true })
+  // domain_bound (phase A) runs the DNS pre-flight: both create phases resolve EDGE_BIND_IP.
+  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName, needEdge: true }, async (deps) => {
+    if (which === 'a') {
+      const r = await createPhaseA(spec, deps)
+      log(`phase A ${slug}: ran [${r.run.ran.join(', ')}], skipped [${r.run.skipped.join(', ')}]${r.registered ? ' (control row registered)' : ''}`)
+      console.log(JSON.stringify({ phase: 'a', slug, customerId: r.customer.id, token: r.customer.token, ran: r.run.ran }))
+    } else {
+      const r = await createPhaseB(spec, deps)
+      log(`phase B ${slug}: ran [${r.run.ran.join(', ')}]; enabled [${r.enabled.join(', ')}]; broker ${r.reloaded ? 'reloaded' : 'unchanged'}; ${r.activated ? 'activated' : 'already active'}`)
+      console.log(JSON.stringify({ phase: 'b', slug, enabled: r.enabled, reloaded: r.reloaded, activated: r.activated, ran: r.run.ran }))
+    }
+  })
+}
+
+async function cmdRecordStep(): Promise<void> {
+  const slug = slugArg('record-step')
+  const kind = positional(1)
+  if (kind !== 'mail_principal_issued') throw new UsageError('record-step <slug> mail_principal_issued --operator <uuid>')
+  await withLive({}, async (deps) => {
+    const r = await recordHostStep(slug, kind, reqFlag('--operator'), deps)
+    log(`record-step ${slug} ${kind}: ${r.run.ran.length ? 'recorded' : 'already done'}`)
+  })
+}
+
+async function cmdRenderRouter(): Promise<void> {
+  const v = validateSlug(slugArg('render-router'))
+  if (!v.ok) throw new UsageError(`invalid slug: ${v.reason}`)
+  const tenant = await getTenantBySlug(v.slug)
+  if (!tenant) throw new UsageError(`unknown tenant ${v.slug}`)
+  const primary = await primaryHostForTenant(tenant.id)
+  if (!primary) throw new UsageError(`${v.slug} has no primary host`)
+  const platformDomain = reqEnv('PLATFORM_DOMAIN')
+  const yaml = renderCustomerRouter({
+    slug: v.slug,
+    hosts: (await listTenantDomains(tenant.id)).map((d) => d.host),
+    primaryHost: primary,
+    certResolver: reqEnv('TRAEFIK_CERT_RESOLVER'),
+    normaliseHost: (h) => normaliseHost(h),
+    isReservedHost: (h) => isReservedPlatformHost(h, platformDomain),
+  })
+  process.stdout.write(yaml)
+}
+
+async function cmdSuspendResume(which: 'suspend' | 'resume'): Promise<void> {
+  const slug = slugArg(which)
+  // The actor is validated and named on every line (review B2: presence-only
+  // before, the value discarded). The ledger has no suspend kind (SCHEMA §0.1),
+  // so the attribution is the stderr log line and the JSON result; a status
+  // audit row is TASK-079's (the event). STDOUT stays machine output only.
+  const operatorId = reqFlag('--operator')
+  if (!UUID_RE.test(operatorId)) throw new UsageError(`--operator must be the operator's ops-realm user id (a uuid), not ${JSON.stringify(operatorId)}`)
+  await withLive({}, async (deps) => {
+    const r = which === 'suspend' ? await suspendCustomer(slug, deps) : await resumeCustomer(slug, deps)
+    log(`${which} ${slug} by operator ${operatorId}: ${r.changed ? 'changed' : 'nothing to do'}`)
+    console.log(JSON.stringify({ verb: which, slug, operatorId, changed: r.changed }))
+  })
+}
+
+async function cmdStatus(): Promise<void> {
+  const slug = slugArg('status')
+  const platform = postgres(directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')), { max: 2, onnotice: () => {} })
+  try {
+    await assertPlatform(platform)
+    const adapters = customerAdapters({
+      apexDomain: apexDomain(),
+      tenantSecretsDir: tenantSecretsDir(),
+      runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
+      kernelAdminUrl: 'postgres://unused@127.0.0.1/unused',
+      configFile: '/nonexistent',
+      bodyName: 'Rat',
+      edge: null,
+      storageRoot: null,
+      manifests: MODULE_MANIFESTS,
+      loadBaseRealm: loadBaseRealmDoc,
+      genSecret,
+      writeSecretFile,
+      writeConfigFile,
+      makePrivateDir,
+      kc: new KcProvisionApi(async () => {
+        throw new Error('status reads no Keycloak')
+      }),
+    })
+    const s = await provisioningStatus(slug, { control: adapters.control, ledger: pgLedger(platform), attestations: pgAttestations(platform) })
+    console.log(JSON.stringify(s))
+  } finally {
+    await platform.end({ timeout: 5 })
+  }
+}
+
+// ── operator add (Q5, Q23) ─────────────────────────────────────────────────
+async function cmdOperatorAdd(): Promise<void> {
+  const email = positional(0)
+  if (!email || !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email)) throw new UsageError('operator-add <email> [--no-mail]')
+  const kc = provisionerKc()
+  if (!(await kc.realmExists(OPS_REALM))) throw new UsageError(`the ops realm ${OPS_REALM} does not exist: run init (or init --realm-only) first`)
+  if (!process.argv.includes('--no-mail')) {
+    const r = await kc.ensureInvitedUser(OPS_REALM, { email, realmRole: 'operator' })
+    log(`operator ${email}: ${r.created ? 'created' : 'present'}; ${r.invited ? 'execute-actions mail sent' : 'already invited'}`)
+    return
+  }
+  // Q23: a host without vendor mail (the netcup test env). The user is created
+  // with a generated TEMPORARY password (UPDATE_PASSWORD + CONFIGURE_TOTP stay
+  // required), handed to Keycloak in the request body, printed ONCE on stdout.
+  const raw = rawProvisionerTransport()
+  const found = ((await raw('GET', `/admin/realms/${OPS_REALM}/users?email=${encodeURIComponent(email.toLowerCase())}&exact=true`)) as Array<{ id: string; requiredActions?: string[] }>) ?? []
+  if (found.length) {
+    // A rerun re-asserts the role (idempotent) -- a first run that died after
+    // the create left a user without it (review B2, r2) -- and never exits 0
+    // for a user nobody can sign in as: a pending UPDATE_PASSWORD means the
+    // printed temporary password may be lost.
+    const role = await raw('GET', `/admin/realms/${OPS_REALM}/roles/operator`)
+    await raw('POST', `/admin/realms/${OPS_REALM}/users/${found[0]!.id}/role-mappings/realm`, [role])
+    if ((found[0]!.requiredActions ?? []).includes('UPDATE_PASSWORD')) {
+      throw new Error(
+        `operator ${email} exists (operator role re-asserted) but has never set a password: if the temporary password was not received, reset it in Keycloak (Credentials, temporary) or delete the user and rerun operator-add`,
+      )
+    }
+    log(`operator ${email} already exists: the operator role is held; no password is set or printed`)
+    return
+  }
+  const temporary = randomBytes(18).toString('base64url')
+  await raw('POST', `/admin/realms/${OPS_REALM}/users`, {
+    username: email.toLowerCase(),
+    email: email.toLowerCase(),
+    enabled: true,
+    emailVerified: true,
+    requiredActions: ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'],
+    credentials: [{ type: 'password', value: temporary, temporary: true }],
+  })
+  const [user] = ((await raw('GET', `/admin/realms/${OPS_REALM}/users?email=${encodeURIComponent(email.toLowerCase())}&exact=true`)) as Array<{ id: string }>) ?? []
+  if (!user?.id) throw new Error(`operator ${email} is absent after create`)
+  const role = await raw('GET', `/admin/realms/${OPS_REALM}/roles/operator`)
+  await raw('POST', `/admin/realms/${OPS_REALM}/users/${user.id}/role-mappings/realm`, [role])
+  log(`operator ${email} created with a temporary password (Q23: no vendor mail on this host); it must be changed and TOTP configured at first sign-in`)
+  process.stdout.write(`TEMPORARY-PASSWORD: ${temporary}\n`)
+}
+
+// ── reconcile (with the TASK-043 sender and fixture checks) ─────────────────
 function tenantHostFromIssuer(issuer: string): string {
   return new URL(issuer).host
 }
-
-/** Render a reconcile report as a human table to stderr + machine JSON to stdout. */
 function printReport(report: ReconcileReport): void {
-  console.error(`\n[tenant-provision] reconcile realm "${report.realm}" — ${report.ok ? 'PASS' : 'FAIL'}`)
-  for (const c of report.checks) {
-    console.error(`  ${c.ok ? 'ok  ' : 'FAIL'}  ${c.name}${c.ok ? '' : `  — ${c.detail}`}`)
-  }
-  if (report.applied.length > 0) {
-    console.error(`  applied repairs: ${report.applied.join(', ')}`)
-  }
+  console.error(`\n[tenant-create] reconcile realm "${report.realm}" — ${report.ok ? 'PASS' : 'FAIL'}`)
+  for (const c of report.checks) console.error(`  ${c.ok ? 'ok  ' : 'FAIL'}  ${c.name}${c.ok ? '' : `  — ${c.detail}`}`)
+  if (report.applied.length > 0) console.error(`  applied repairs: ${report.applied.join(', ')}`)
+  if (report.repairHost.length > 0) console.error(`  repair: host -> ${report.repairHost.join(', ')}`)
   console.log(JSON.stringify(report))
 }
-
 async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verifyOnly: boolean): Promise<ReconcileReport> {
-  const creds = readProvisionerCreds()
-  const transport = makeKcTransport(kcAdminBase(), creds)
-  return reconcileRealm(transport, {
+  return reconcileRealm(rawProvisionerTransport(), {
     realm: tenant.realmName,
     tenantHost: tenantHostFromIssuer(tenant.issuer),
     apexDomain: apexDomain(),
     base,
-    // (B) a realm whose client URIs were never minted from a tenant host
-    // legitimately keeps its localhost dev URIs — flag it so the URI checks
-    // don't false-fail.
-    isDefault: tenant.slug === 'default',
     verifyOnly,
+    sender: { platformDomain: reqEnv('PLATFORM_DOMAIN'), token: tokenFor(tenant.slug) },
+    fixtures: fixtureIdentities(MIGRATIONS_DIR),
   })
 }
-
-/** Render the per-tenant outcome lines of a `--all` fleet pass to stderr (the
- *  individual §4 reports are already printed by reconcileOne via printReport). */
 function printFleetSummary(fleet: FleetReport): void {
-  console.error('\n[tenant-provision] reconcile --all summary:')
+  console.error('\n[tenant-create] reconcile --all summary:')
   for (const r of fleet.rows) {
-    if (r.outcome === 'skipped') {
-      console.error(`  skip  ${r.slug} (realm=${r.realm}) — status=${r.skippedStatus} carries no realm`)
-    } else if (r.outcome === 'error') {
-      console.error(`  ERR   ${r.slug} (realm=${r.realm}) — ${r.error}`)
-    } else {
-      console.error(`  ${r.report?.ok ? 'pass' : 'FAIL'}  ${r.slug} (realm=${r.realm})`)
-    }
+    if (r.outcome === 'skipped') console.error(`  skip  ${r.slug} (realm=${r.realm}) — status=${r.skippedStatus} carries no realm`)
+    else if (r.outcome === 'error') console.error(`  ERR   ${r.slug} (realm=${r.realm}) — ${r.error}`)
+    else console.error(`  ${r.report?.ok ? 'pass' : 'FAIL'}  ${r.slug} (realm=${r.realm})`)
   }
 }
-
-async function cmdReconcile(positional: string | undefined): Promise<void> {
+async function cmdReconcile(): Promise<void> {
   const verifyOnly = process.argv.includes('--verify-only')
-  const all = process.argv.includes('--all')
-  if (!all && !positional) throw new Error('reconcile requires <slug> or --all')
-
   const base = loadBaseRealmDoc()
-
-  if (all) {
+  if (process.argv.includes('--all')) {
     const tenants = [...(await listTenants())]
-    if (tenants.length === 0) throw new Error('reconcile --all: no tenants registered')
-    // (C) SKIP non-realm-bearing tenants (deleted/deleting/provisioning) and
-    // try/catch each realm-bearing reconcile, so one tombstone (or one tenant's
-    // Admin-API throw) can never abort the whole fleet pass. reconcileFleet prints
-    // each tenant's §4 report as it lands; anyFailed still drives exit 1 on any
-    // genuine failure (a failed check OR a thrown error — never a skip).
+    if (tenants.length === 0) throw new UsageError('reconcile --all: no tenants registered')
     const fleet = await reconcileFleet(tenants, async (t) => {
       const report = await reconcileOne(t, base, verifyOnly)
       printReport(report)
@@ -626,125 +756,197 @@ async function cmdReconcile(positional: string | undefined): Promise<void> {
     if (fleet.anyFailed) process.exitCode = 1
     return
   }
-
-  const v = validateSlug(positional!)
-  if (!v.ok) throw new Error(`invalid slug "${positional}": ${v.reason}`)
+  const v = validateSlug(slugArg('reconcile'))
+  if (!v.ok) throw new UsageError(`invalid slug: ${v.reason}`)
   const tenant = await getTenantBySlug(v.slug)
-  if (!tenant) throw new Error(`unknown tenant "${v.slug}"`)
+  if (!tenant) throw new UsageError(`unknown tenant "${v.slug}"`)
   const report = await reconcileOne(tenant, base, verifyOnly)
   printReport(report)
-  // --verify-only exits 1 on ANY failed check (named in the table above); apply
-  // mode also exits 1 if drift remains after the repairable replays (e.g. a
-  // wildcard URI the §4-2 sequence cannot mechanically fix — re-import needed).
   if (!report.ok) process.exitCode = 1
 }
 
-// ── materialize-config (T15) ───────────────────────────────────────────────
-/** The on-disk config path for a slug — mirrors registry.ts configPathForTenant
- *  (D-CONFIGPATH): `default` → the CONFIG_PATH env (same fallback as
- *  loadDefaultConfig); any other slug → /data/<slug>/config.json. An explicit
- *  `--config <path>` overrides it (for a smoke-stack/S4 copy, per the plan). */
-function configPathForSlug(slug: string): string {
-  const override = flag('--config')
-  if (override) return override
-  if (slug === 'default') return process.env.CONFIG_PATH ?? join(repoRoot, 'config', 'config.json')
-  return `/data/${slug}/config.json`
+// ── delete, bootstrap-provisioner, materialize-config ───────────────────────
+function makeLeafShredExecutor(): LeafShredExecutor | null {
+  const leafUrl = process.env.NEWSLETTER_PG_URL
+  if (!leafUrl) return null
+  const leafSql = postgres(leafUrl, { max: 1, idle_timeout: 5, connect_timeout: 10 })
+  return {
+    async dropNewsletterDb(slug: string): Promise<void> {
+      try {
+        await leafSql.unsafe(`DROP DATABASE IF EXISTS "newsletter_${slug}"`)
+      } catch (err) {
+        await leafSql.end({ timeout: 5 }).catch(() => undefined)
+        throw err
+      }
+    },
+    async deleteCatalogRow(tenantId: string): Promise<void> {
+      try {
+        await leafSql`DELETE FROM tenant_catalog WHERE tenant_id = ${tenantId}::uuid`
+      } finally {
+        await leafSql.end({ timeout: 5 })
+      }
+    },
+  }
+}
+
+async function cmdDelete(): Promise<void> {
+  const slug = slugArg('delete')
+  const kc = provisionerKc()
+  const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
+  // Never report DELETED while the customer's data survives (review B2, r2).
+  // Refused BEFORE anything is shredded: a pre-TASK-043 t_<slug> database
+  // (dropKernelDatabase only knows t_<hex32>__kernel), and live per-customer
+  // module databases (delete has no module drop yet: the disable verb is
+  // TASK-044/077's). Both are named residuals, never silent.
+  const tenant = await getTenantBySlug(slug)
+  if (tenant && tenant.status !== 'deleted') {
+    try {
+      const legacy = dbNameForSlug(slug)
+      if ((await server.admin`SELECT 1 FROM pg_database WHERE datname = ${legacy}`).length) {
+        throw new UsageError(`${slug} still has the pre-TASK-043 database ${legacy}; delete does not drop it -- drop it (and its role) by hand first, then rerun delete`)
+      }
+      const platformUrl = process.env.PLATFORM_DATABASE_URL
+      if (!platformUrl) throw new UsageError('delete needs PLATFORM_DATABASE_URL to prove the customer has no enabled module database left')
+      const platform = postgres(directPostgresUrl('PLATFORM_DATABASE_URL', platformUrl), { max: 1, onnotice: () => {}, connect_timeout: 15 })
+      try {
+        const live = await platform<{ module_key: string }[]>`
+          SELECT m.module_key FROM plt.module_database d JOIN plt.module m USING (module_id)
+           WHERE d.customer_id = ${tenant.id} AND d.state <> 'dropped' ORDER BY 1`
+        if (live.length) {
+          throw new UsageError(`${slug} has module(s) ${live.map((r) => r.module_key).join(', ')} enabled with their own databases; delete does not drop module databases yet -- disable them first (TASK-044/077), then rerun delete`)
+        }
+      } finally {
+        await platform.end({ timeout: 5 })
+      }
+    } catch (err) {
+      await server.close()
+      throw err
+    }
+  }
+  const leaf = makeLeafShredExecutor()
+  const kernelDb: { dropped: boolean | null } = { dropped: null }
+  const deps: DeleteDeps = {
+    shredSecretFiles: (paths) => {
+      for (const p of paths) if (existsSync(p)) rmSync(p, { force: true })
+      return Promise.resolve()
+    },
+    db: {
+      dropKernelDatabase: async (tenantId) => {
+        kernelDb.dropped = (await dropKernelDatabase(server, tenantId)).dropped
+      },
+    },
+    kc: { deleteRealm: (realm) => kc.deleteRealm(realm) },
+    registry: { getTenantBySlug, updateTenantStatus, markTenantResourceFailed, evictTenantRuntime },
+    tenantSecretsDir: tenantSecretsDir(),
+    ...(leaf ? { leaf } : {}),
+  }
+  try {
+    const result = await deleteTenant(slug, deps)
+    const kernel = kernelDb.dropped === true ? 'kernel database dropped' : kernelDb.dropped === false ? 'no kernel database was present' : 'kernel database not touched'
+    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
+  } finally {
+    await server.close()
+  }
+}
+
+async function cmdBootstrapProvisioner(): Promise<void> {
+  const kc = adminKcOrUndefined()
+  if (!kc) throw new UsageError('bootstrap-provisioner needs KEYCLOAK_ADMIN and KEYCLOAK_ADMIN_PASSWORD')
+  const clientId = process.env.TENANT_PROVISIONER_CLIENT_ID ?? 'tenant-provisioner'
+  const { clientSecret, created } = await kc.createProvisionerServiceAccount('master', clientId, ['create-realm'])
+  await writeSecretFile(PROVISIONER_SECRET_FILE, clientSecret)
+  log(`bootstrap-provisioner: master-realm SA "${clientId}" ${created ? 'CREATED' : 'already present'} with ONLY [create-realm]; secret written to ${PROVISIONER_SECRET_FILE}`)
+}
+
+function cmdMaterializeConfig(): void {
+  const v = validateSlug(slugArg('materialize-config'))
+  if (!v.ok) throw new UsageError(`invalid slug: ${v.reason}`)
+  const path = flag('--config') || configPathForTenant(v.slug)
+  const rawStored: unknown = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf-8')) as unknown) : {}
+  const merged = materializeConfig(rawStored)
+  assertBrandIdentityComplete(merged, v.slug)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(`${path}.tmp`, JSON.stringify(merged, null, 2))
+  renameSync(`${path}.tmp`, path)
+  log(`materialize-config: wrote the effective config for "${v.slug}" to ${path}`)
+}
+
+const USAGE = `usage: tenant-create <verb> ...
+  init [--realm-only] [--panel-origin <origin>]
+  phase-a <slug> --host <host> --config <file> --operator <uuid> --it-admin <email> --council-admin <email> [--enable a,b] [--body-name <name>]
+  record-step <slug> mail_principal_issued --operator <uuid>
+  phase-b <slug> (the phase-a flags)
+  render-router <slug>
+  suspend <slug> --operator <uuid> | resume <slug> --operator <uuid>
+  reconcile [--verify-only] <slug>|--all
+  status <slug>
+  operator-add <email> [--no-mail]
+  delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]`
+
+async function main(): Promise<void> {
+  const verb = process.argv[2]
+  switch (verb) {
+    case undefined:
+    case '--help':
+    case '-h':
+    case 'help':
+      // Reaching here proves every adapter module resolved and imported (TDD 19).
+      console.log(USAGE)
+      if (verb === undefined) process.exitCode = 2
+      return
+    case 'init':
+      return cmdInit()
+    case 'phase-a':
+      return cmdPhase('a')
+    case 'phase-b':
+      return cmdPhase('b')
+    case 'record-step':
+      return cmdRecordStep()
+    case 'render-router':
+      return cmdRenderRouter()
+    case 'suspend':
+    case 'resume':
+      return cmdSuspendResume(verb)
+    case 'status':
+      return cmdStatus()
+    case 'operator-add':
+      return cmdOperatorAdd()
+    case 'reconcile':
+      return cmdReconcile()
+    case 'delete':
+      return cmdDelete()
+    case 'bootstrap-provisioner':
+      return cmdBootstrapProvisioner()
+    case 'materialize-config':
+      return cmdMaterializeConfig()
+    case 'provision':
+      throw new UsageError('provision is retired (TASK-043): a customer is created by `gremion-tenant create` (phase-a, the host mail step, record-step, phase-b, the router)')
+    default:
+      throw new UsageError(`unknown verb ${verb}\n${USAGE}`)
+  }
 }
 
 /**
- * materialize-config <slug> (default slug: `default`) — read the tenant's stored
- * config.json, run it through `materializeConfig` (defaults + stored, fully
- * merged), enforce the §6-P2.2 brand-identity guard, and write the complete
- * config back atomically. After T15 the source DEFAULT_CONFIG brand/legal block
- * is NEUTRAL, so an institution's real identity must already be present in the
- * stored file (Setup wizard / Settings); materialization bakes the effective
- * defaults in so the resolved config is self-contained and source carries no
- * institution literal. The guard REFUSES (loud, non-zero exit) a still-blank
- * brand — no silent blank render.
+ * A one-shot ends with its exit code, always (review B2-HIGH, r2): a handle
+ * something leaked (a pool socket, a timer) must never turn a named exit 2
+ * into a container that hangs until the socket's max_lifetime. stdout and
+ * stderr are flushed first, so machine output is never cut short.
  */
-function cmdMaterializeConfig(positional: string | undefined): void {
-  const slug = positional ?? 'default'
-  const v = validateSlug(slug)
-  if (!v.ok) throw new Error(`invalid slug "${slug}": ${v.reason}`)
-  const path = configPathForSlug(v.slug)
-
-  const rawStored: unknown = existsSync(path)
-    ? (JSON.parse(readFileSync(path, 'utf-8')) as unknown)
-    : {}
-  if (!existsSync(path)) {
-    console.warn(
-      `[tenant-provision] materialize-config: ${path} does not exist — materializing from neutral defaults. ` +
-        'The brand-identity guard will refuse to write a blank identity.',
-    )
+function exitWithCode(): void {
+  const code = typeof process.exitCode === 'number' ? process.exitCode : 0
+  let pending = 2
+  const done = () => {
+    if (--pending === 0) process.exit(code)
   }
-
-  // parseConfig (inside materializeConfig) THROWS loudly on a malformed stored
-  // file rather than silently defaulting.
-  const merged = materializeConfig(rawStored)
-  // §6-P2.2 boot guard: no silent blank / no missing institution identity.
-  assertBrandIdentityComplete(merged, v.slug)
-
-  const tmp = `${path}.tmp`
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(tmp, JSON.stringify(merged, null, 2))
-  renameSync(tmp, path)
-  console.log(
-    `[tenant-provision] materialize-config: wrote fully-merged effective config for "${v.slug}" to ${path} ` +
-      `(brand: product="${merged.brand.product}", org_short="${merged.brand.org_short}").`,
-  )
+  process.stdout.write('', done)
+  process.stderr.write('', done)
 }
 
-async function main(): Promise<void> {
-  const [, , subcommand, positional] = process.argv
-  switch (subcommand) {
-    case 'provision':
-      if (!positional) throw new Error('provision requires <slug>')
-      await cmdProvision(positional)
-      break
-    case 'suspend':
-      // (B) require the positional slug for the slug-taking lifecycle subcommands
-      // (mirrors the provision guard above): without it cmdStatusFlip/cmdDelete
-      // would forward an undefined into validateSlug/the registry and fail with an
-      // opaque error instead of a clear `<cmd> requires <slug>`.
-      if (!positional) throw new Error('suspend requires <slug>')
-      await cmdStatusFlip(positional, 'suspended')
-      break
-    case 'resume':
-      if (!positional) throw new Error('resume requires <slug>')
-      await cmdStatusFlip(positional, 'active')
-      break
-    case 'delete':
-      if (!positional) throw new Error('delete requires <slug>')
-      await cmdDelete(positional)
-      break
-    case 'bootstrap-provisioner':
-      await cmdBootstrapProvisioner()
-      break
-    case 'reconcile':
-      // The positional <slug> is the first non-flag arg after the subcommand
-      // (so `reconcile --verify-only t2` and `reconcile t2 --verify-only` both work).
-      await cmdReconcile(process.argv.slice(3).find((a) => !a.startsWith('--')))
-      break
-    case 'materialize-config':
-      cmdMaterializeConfig(positional)
-      break
-    default:
-      console.error(
-        'usage: tenant-provision <provision|suspend|resume|delete|bootstrap-provisioner|reconcile|materialize-config> …',
-      )
-      process.exitCode = 1
-  }
-}
-
-// Touch getTenantStatusBySlug + dbNameForSlug so the imports are not flagged
-// dead by the type-checker; they document the resolution invariants the script
-// relies on (status-only lookup, t_<slug> physical name) for future subcommands.
-void getTenantStatusBySlug
-void dbNameForSlug
-
-main().catch((err) => {
-  tlog('error', '[tenant-provision] FAILED', {
-    err: err instanceof Error ? err.message : String(err),
+main()
+  .catch((err) => {
+    const usage = err instanceof UsageError || (err instanceof ProvisioningError && ['INVALID_INPUT', 'MODULE_UNKNOWN', 'MODULE_DENIED', 'MODULE_NOT_LOADED', 'PRECONDITION', 'NOT_FOUND'].includes(err.code))
+    tlog('error', '[tenant-create] FAILED', { err: err instanceof Error ? err.message : String(err) })
+    console.error(`[tenant-create] ${usage ? 'USAGE' : 'FAILED'}: ${err instanceof Error ? err.message : String(err)}`)
+    process.exitCode = usage ? 2 : 1
   })
-  process.exitCode = 1
-})
+  .finally(exitWithCode)

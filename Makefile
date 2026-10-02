@@ -2,7 +2,7 @@
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
-        test test-unit test-host-docker test-integration test-all test-ports-nats \
+        test test-unit test-host-docker test-integration test-all test-ports-nats test-nats-auth nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
@@ -28,12 +28,18 @@ dev-networks:
 	@for n in edge state; do \
 	   docker network inspect $(DEV_STACK)_$$n >/dev/null 2>&1 || docker network create $(DEV_STACK)_$$n >/dev/null; \
 	 done
-	@for v in traefik_acme config_data tenant_config_data; do \
+	@for v in traefik_acme config_data tenant_config_data nats_accounts nats_secrets; do \
 	   docker volume inspect $(DEV_STACK)_$$v >/dev/null 2>&1 || docker volume create $(DEV_STACK)_$$v >/dev/null; \
 	 done
 
+# TASK-024 (Q12): the NATS SYS reload seed and a SYS-only accounts file on
+# the external volumes BEFORE nats first starts (it admits no anonymous
+# client). Idempotent, no network; the same one-shot a host runs.
+nats-init: dev-networks
+	$(DEV_APP) run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init
+
 # Start all services: state first, then the blue app colour
-up: dev-networks
+up: dev-networks nats-init
 	$(DEV_STATE) up -d
 	$(DEV_APP) up -d
 
@@ -47,8 +53,8 @@ build:
 	$(DEV_STATE) build
 	$(DEV_APP) build
 
-# Rebuild and restart
-rebuild: build dev-networks
+# Rebuild and restart (nats-init: fresh volumes need the accounts file first)
+rebuild: build dev-networks nats-init
 	$(DEV_STATE) up -d --force-recreate
 	$(DEV_APP) up -d --force-recreate
 
@@ -185,7 +191,18 @@ test: test-unit
 # Run all tests including integration (alias). test-ports-nats is IN here on
 # purpose: a target nothing aggregates is a target nobody runs, which is how the
 # JetStream proofs went unexecuted in the first place (integration defect D8).
-test-all: test-unit test-integration test-ports-nats
+test-all: test-unit test-integration test-ports-nats test-nats-auth
+
+# @gremion/nats-auth (TASK-024): the unit suite, then the acceptance against a
+# REAL broker -- packages/nats-auth/scripts/proof.sh --auth starts the state
+# image with docker/nats/nats.conf, asserts its own post-condition (a minimum
+# of passing live cases, none skipped) and removes the container by name.
+# Last, image-check.sh builds the migrate image's builder stage and runs the
+# call every site makes in it (`pnpm exec nats-auth init|render`).
+test-nats-auth:
+	@pnpm --filter @gremion/nats-auth test
+	@bash packages/nats-auth/scripts/proof.sh --auth
+	@bash packages/nats-auth/scripts/image-check.sh
 
 # @gremion/ports against a REAL NATS JetStream server. Starts a throwaway
 # container, runs the suite against it, tears it down, and ASSERTS the
@@ -236,7 +253,7 @@ test-ports-nats:
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh
+	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
 		[ -e "$$f" ] || continue; \
@@ -587,7 +604,32 @@ lint-migration-register:
 	 done
 	@node scripts/migrations/register.mjs check
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register
+# TASK-048 (TRD-350/066/354): every image a deployment manifest names is
+# pinned by digest (first-party ${IMAGE_TAG:-dev}/${IMAGE_TAG:?} refs only on a
+# build: service), and no object-storage image, profile, key or S3 client
+# remains. The scan set is discovered (root-anchored git ls-files pathspecs),
+# never listed. The suite runs first and its collected count must equal its
+# declared `test(` count: `node --test` exits 0 on a file that registers
+# nothing, and a guard whose RED cases stopped running would pass any tree.
+.PHONY: lint-image-digests
+lint-image-digests:
+	@echo "Checking image digests and object storage..."
+	@declared=$$(grep -c '^test(' scripts/release/check-image-digests.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/release/check-image-digests.test.mjs 2>&1); status=$$?; \
+	 printf '%s\n' "$$out" | grep -E '^(not ok|# (tests|pass|fail|skipped|todo))' >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^# tests \([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 skipped=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^# skipped \([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 todo=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^# todo \([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ] || [ "$${skipped:-x}" != "0" ] || [ "$${todo:-x}" != "0" ]; then \
+	   echo "lint-image-digests: the suite declares $$declared test(s) but node ran '$$collected' (skipped $${skipped:-?}, todo $${todo:-?})." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[image-digests] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/release/check-image-digests.mjs
+	@node scripts/release/check-image-digests.mjs --render
+
+lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

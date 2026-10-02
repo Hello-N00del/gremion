@@ -24,16 +24,30 @@ export interface IcsEvent {
   recurrence?: DbRecurrence | null
 }
 
-// RFC 5545 §3.1 — wrap property values at 75 octets.
+/** RFC 5545 BYDAY value: a weekday with an optional ordinal (1..53, signed). */
+export const BYDAY_PATTERN = /^(?:[+-]?(?:[1-9]|[1-4]\d|5[0-3]))?(?:MO|TU|WE|TH|FR|SA|SU)$/
+
+// RFC 5545 §3.1 — content lines are folded at 75 OCTETS (not UTF-16 units), and a
+// continuation line starts with one space that counts toward the limit. Splits
+// only ever fall on code-point boundaries.
 export function foldLine(line: string): string {
-  if (line.length <= 75) return line
+  if (Buffer.byteLength(line, 'utf8') <= 75) return line
   const parts: string[] = []
-  parts.push(line.slice(0, 75))
-  let i = 75
-  while (i < line.length) {
-    parts.push(' ' + line.slice(i, i + 74))
-    i += 74
+  let current = ''
+  let used = 0
+  let limit = 75
+  for (const ch of line) {
+    const size = Buffer.byteLength(ch, 'utf8')
+    if (used + size > limit) {
+      parts.push(current)
+      current = ' '
+      used = 1
+      limit = 75
+    }
+    current += ch
+    used += size
   }
+  parts.push(current)
   return parts.join('\r\n')
 }
 
@@ -80,7 +94,14 @@ function buildRRule(r: DbRecurrence): string {
   if (r.count) parts.push(`COUNT=${r.count}`)
   if (r.until)
     parts.push(`UNTIL=${formatIcsDateTime(r.until, false).replace(/Z$/, '') + 'Z'}`)
-  if (r.byday && r.byday.length > 0) parts.push(`BYDAY=${r.byday.join(',')}`)
+  if (r.byday && r.byday.length > 0) {
+    // K4#21: defence in depth behind the API schema - a raw string here would
+    // be CRLF / property injection into the ICS body.
+    for (const d of r.byday) {
+      if (!BYDAY_PATTERN.test(d)) throw new Error(`invalid RRULE BYDAY value: ${JSON.stringify(d)}`)
+    }
+    parts.push(`BYDAY=${r.byday.join(',')}`)
+  }
   return parts.join(';')
 }
 

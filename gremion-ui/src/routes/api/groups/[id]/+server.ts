@@ -5,10 +5,17 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
 import { parseJsonBody } from '$lib/server/parse-json-body'
+import { isUuid } from '../../../../params/uuid'
 
 const updateGroupSchema = z.object({
   name: z.string().min(1).max(100).optional()
 })
+
+// F1-FIX-01 (H03): the id is spliced into a Keycloak realm-admin path. Only a
+// UUID may pass; anything path-shaped (`../clients/x`, `..%2Fclients`) is a 404
+// and no admin call is made. Checked AFTER the role gate so the 404 is not an
+// oracle for unauthenticated callers.
+const notFound = () => json({ success: false, error: 'Gruppe nicht gefunden' }, { status: 404 })
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   const session = await locals.auth()
@@ -16,6 +23,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  if (!isUuid(params.id)) return notFound()
 
   const kc = getKeycloakAdminClient(locals.tenant)
   try {
@@ -36,6 +44,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  if (!isUuid(params.id)) return notFound()
 
   const body = await parseJsonBody(request)
   const parsed = updateGroupSchema.safeParse(body)
@@ -57,6 +66,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
   if (!user || !hasRole(user.roles, Role.ITAdmin)) {
     return json({ success: false, error: 'Forbidden: deleting groups requires it-admin role' }, { status: 403 })
   }
+  if (!isUuid(params.id)) return notFound()
 
   const kc = getKeycloakAdminClient(locals.tenant)
   await kc.deleteGroup(params.id)

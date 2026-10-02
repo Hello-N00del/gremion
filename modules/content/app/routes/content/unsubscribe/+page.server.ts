@@ -4,22 +4,46 @@
 // newsletter-leaf unsubscribe — the tenant resolver still runs, so the
 // content-db queries below hit the correct tenant DB.
 //
+// K5#19 / S3#38 (F1-FIX-07): the GET load NEVER consumes the token. Link
+// scanners and mail-client prefetchers issue GETs; a GET that consumed the
+// single-use token unsubscribed recipients who never clicked and burned the
+// link. GET renders a confirmation; the POST form action consumes. The action
+// also reads the token from the URL when the form carries none.
+//
+// NOT an RFC 8058 one-click endpoint (F1-FIX-07 r2, residual of S1c#0): no mail
+// carries List-Unsubscribe / List-Unsubscribe-Post (the kernel send-mail path has
+// no header field), and a provider's cross-site one-click POST would meet
+// SvelteKit's csrf origin check. Both live outside modules/content.
+//
 // consumeUnsubscribeToken atomically validates the token, records the
-// unsubscribe, and deletes the token (one-shot). We render its three outcomes:
+// unsubscribe, and deletes the token (one-shot). The action renders its three
+// outcomes:
 //   - ok       → confirmation.
 //   - expired  → the link is past its 7-day TTL.
 //   - invalid  → no such token (already used, or never minted).
-import type { PageServerLoad } from './$types'
+import type { Actions, PageServerLoad } from './$types'
 import { resolveContentBackendForPage } from '$lib/server/content/backend/resolve'
 
 export type UnsubscribeStatus = 'ok' | 'expired' | 'invalid'
 
-export const load: PageServerLoad = async ({ url }): Promise<{ status: UnsubscribeStatus }> => {
+export const load: PageServerLoad = async ({
+  url,
+}): Promise<{ status: 'confirm' | 'invalid'; token: string | null }> => {
   const token = url.searchParams.get('token')
-  if (!token) return { status: 'invalid' }
+  if (!token) return { status: 'invalid', token: null }
+  return { status: 'confirm', token }
+}
 
-  const backend = resolveContentBackendForPage()
-  const result = await backend.consumeUnsubscribeToken(token)
-  if (result.ok) return { status: 'ok' }
-  return { status: result.reason }
+export const actions: Actions = {
+  default: async ({ request, url }): Promise<{ status: UnsubscribeStatus }> => {
+    const form = await request.formData().catch(() => null)
+    const posted = form?.get('token')
+    const token = (typeof posted === 'string' && posted) || url.searchParams.get('token')
+    if (!token) return { status: 'invalid' }
+
+    const backend = resolveContentBackendForPage()
+    const result = await backend.consumeUnsubscribeToken(token)
+    if (result.ok) return { status: 'ok' }
+    return { status: result.reason }
+  },
 }

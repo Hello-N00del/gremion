@@ -8,11 +8,12 @@
 # covers k8s/overlays/production/secrets/*.enc.yaml, so encrypt-all.sh keeps
 # working unchanged.
 #
-# OPERATOR ACTIVATION: replace the <OPERATOR_AGE_PUBLIC_KEY_…> sentinel below
-# with the age PUBLIC recipient (age1…). Until then
-# `node scripts/release/check-sops.mjs` FAILS with `sentinel-recipient` —
-# expected, see scripts/release/README.md (activation checklist). The private
-# half lives in the operator vault and the recovery kit only; NEVER commit it.
+# OPERATOR ACTIVATION: DONE (bcfcf054, 2026-09-26) — the recipient below is the
+# operator's age PUBLIC recipient (age1…), so `node scripts/release/check-sops.mjs`
+# reports zero problems. A `<OPERATOR_AGE_PUBLIC_KEY_…>` sentinel in its place
+# would FAIL with `sentinel-recipient` (proven by check-sops.test.mjs); see
+# scripts/release/README.md (activation checklist). The private half lives in
+# the operator vault and the recovery kit only; NEVER commit it.
 #
 # Check: node scripts/release/check-sops.mjs
 #   Every secret-class file must be SOPS ciphertext (every value ENC[…], a

@@ -68,9 +68,13 @@ export function splitStatements(text: string): Statement[] {
       let depth = 1
       let j = i + 2
       while (j < text.length && depth > 0) {
-        if (text[j] === '/' && text[j + 1] === '*') (depth++, (j += 2))
-        else if (text[j] === '*' && text[j + 1] === '/') (depth--, (j += 2))
-        else j++
+        if (text[j] === '/' && text[j + 1] === '*') {
+          depth++
+          j += 2
+        } else if (text[j] === '*' && text[j + 1] === '/') {
+          depth--
+          j += 2
+        } else j++
       }
       if (depth > 0) throw new MigrationSqlError(`unterminated block comment at offset ${i}`)
       i = j

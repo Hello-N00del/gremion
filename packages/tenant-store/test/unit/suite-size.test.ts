@@ -18,8 +18,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/store.test.ts': 18,
     'src/manifest.test.ts': 10,
     'src/strip-outer-transaction.test.ts': 11,
-    // TASK-075: +1 releaseRef refusal
-    'src/runner.test.ts': 7,
+    // F1-FIX-02-K (T5): +3, the body error propagates through finally; TASK-075: +1 releaseRef refusal
+    'src/runner.test.ts': 10,
     // TASK-075 G2: +7 state `ahead`
     'src/schema-gate.test.ts': 15,
     'src/index.test.ts': 2,

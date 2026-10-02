@@ -21,6 +21,7 @@
 // re-import is the operator's answer.
 import { KcProvisionApi, realmSeg, type KcTransport } from './kc-admin-api'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
+import { frontendUrlFor } from './realm-doc'
 import type { TenantStatus } from '../registry'
 
 /** The exact, ordered set of named checks reconcile runs (the §4 contract). */
@@ -38,8 +39,16 @@ export const RECONCILE_CHECK_NAMES = [
   'gremion-ui-web-origins', // §4-4  exact per-tenant web-origins (#240)
   'full-scope-allowed', // #254   fullScopeAllowed == false on gremion-ui
   'gremion-admin-sa-roles', // (A)   gremion-admin SA holds the realm-management role(s)
-  'no-fixture-users', // #239   no non-service-account users
+  'no-fixture-users', // #239   no seed-subject id and no template fixture username (TASK-043 Q10)
+  'smtp-server', // TASK-043 R-E5b: the realm sends as its OWN kc-<token>@ principal, no sentinel
+  'frontend-url', // TASK-043 r4: attributes.frontendUrl == https://<tenant host>/auth (mailed links, iss)
 ] as const
+
+/** Failed checks only the HOST can repair (TASK-043 Q7): the realm's sender is
+ *  re-stamped by `gremion-vendor-mail realm-smtp --tenant --rotate`, never in
+ *  process (tenant-create is not on the mail network, and in-process
+ *  reconcile never rotates a principal). */
+export const HOST_REPAIRED_CHECKS: readonly ReconcileCheckName[] = ['smtp-server']
 
 export type ReconcileCheckName = (typeof RECONCILE_CHECK_NAMES)[number]
 
@@ -58,6 +67,8 @@ export interface ReconcileReport {
   checks: NamedCheck[]
   /** In apply mode: the failed check names whose repair was replayed. */
   applied: ReconcileCheckName[]
+  /** Failed checks whose repair is the host's (`repair: host`, HOST_REPAIRED_CHECKS). */
+  repairHost: ReconcileCheckName[]
 }
 
 // ── (C) reconcile --all fleet driver ────────────────────────────────────────
@@ -152,17 +163,15 @@ export interface ReconcileOptions {
   /** The module-neutral base template (parsed realm-export.base.json) — the
    *  expected per-tenant gremion-ui URI set is derived from it by host swap. */
   base: Record<string, unknown>
-  /** (B) True for a realm whose client URIs were NOT minted from a tenant host:
-   *  a dev-composed realm LEGITIMATELY keeps its localhost dev URIs, because the
-   *  realm doc it was imported from carries them — so the URI-set check KEEPS
-   *  localhost for such a realm and drops it ONLY for PROVISIONED tenants,
-   *  mirroring buildTenantRealmDoc's own default-vs-provisioned distinction.
-   *  Without this, reconcile against such a realm PERMANENTLY false-fails the
-   *  URI checks (never repairable).
-   *  Defaults to false (provisioned) when omitted. */
-  isDefault?: boolean
   /** verify-only = no mutation; apply (false) replays the repairable failures. */
   verifyOnly: boolean
+  /** TASK-043 R-E5b: the sender this realm must carry, kc-<token>@<platformDomain>
+   *  through mail.<platformDomain>:587 STARTTLS (the realm's own principal). */
+  sender: { platformDomain: string; token: string }
+  /** TASK-043 Q10: the identities that mark a FIXTURE user -- every seed-subject
+   *  id parsed from the kernel chain's *_seed.sql files (pad-agnostic) and every
+   *  template fixture username (fixture-identities.ts). */
+  fixtures: { ids: ReadonlySet<string>; usernames: ReadonlySet<string> }
 }
 
 // ── KC Admin-API shapes (the subset reconcile reads) ──────────────────────────
@@ -174,6 +183,7 @@ interface RealmRep {
   otpPolicyDigits?: number
   otpPolicyPeriod?: number
   attributes?: Record<string, unknown>
+  smtpServer?: Record<string, unknown>
 }
 interface FlowRep {
   alias?: string
@@ -199,8 +209,34 @@ interface MapperRep {
   config?: Record<string, string>
 }
 interface UserRep {
+  id?: string
   username?: string
   serviceAccountClientId?: string
+}
+
+/** A template sentinel the base realm carries (realm-export.base.json:12-20). */
+const SMTP_SENTINEL = /__SMTP_[A-Z0-9_]*__/
+
+/** TASK-043 R-E5b: the realm's smtpServer against its own principal. Pure. */
+export function smtpServerProblems(smtp: Record<string, unknown> | undefined, sender: { platformDomain: string; token: string }): string[] {
+  const want = `kc-${sender.token}@${sender.platformDomain}`
+  const s = smtp ?? {}
+  const str = (k: string): string => (typeof s[k] === 'string' ? (s[k] as string) : '')
+  const problems: string[] = []
+  if (SMTP_SENTINEL.test(JSON.stringify(s))) problems.push('an unresolved __SMTP_*__ template sentinel')
+  for (const k of ['user', 'from'] as const) {
+    const v = str(k)
+    if (v === want) continue
+    if (v.startsWith('platform@')) problems.push(`${k} is the retired shared sender ${v}`)
+    else if (/^kc-[a-z0-9_]+@/.test(v)) problems.push(`${k} is ANOTHER customer's principal ${v}`)
+    else problems.push(`${k} is ${JSON.stringify(v)}`)
+  }
+  if (str('host') !== `mail.${sender.platformDomain}`) problems.push(`host is ${JSON.stringify(str('host'))}`)
+  if (str('port') !== '587') problems.push(`port is ${JSON.stringify(str('port'))}`)
+  if (str('starttls') !== 'true') problems.push(`starttls is ${JSON.stringify(str('starttls'))}`)
+  if (str('auth') !== 'true') problems.push(`auth is ${JSON.stringify(str('auth'))}`)
+  if (str('password') === '') problems.push('no password is set')
+  return problems.length ? [`expected ${want} via mail.${sender.platformDomain}:587 STARTTLS; ${problems.join('; ')}`] : []
 }
 
 /** The expected acr.loa.map literal (matches the base + the §4-2 apply). */
@@ -246,19 +282,16 @@ function expectedUiUris(
   base: Record<string, unknown>,
   apexDomain: string,
   tenantHost: string,
-  isDefault: boolean,
 ): { redirectUris: string[]; webOrigins: string[] } {
   const clients = (base.clients as ClientRep[] | undefined) ?? []
   const ui = clients.find((c) => c.clientId === 'gremion-ui')
-  // (B) The DEFAULT realm keeps the base URIs verbatim (localhost dev URIs + apex);
-  // a PROVISIONED tenant gets the apex host swapped for its subdomain host AND every
+  // Every tenant (TASK-042 Q8: no default-realm exception; RFC 9700 §2.1 exact
+  // redirect-URI matching) gets the apex host swapped for its own host AND every
   // localhost/foreign-host http(s) entry dropped — mirroring buildTenantRealmDoc.
   const map = (xs: string[] | undefined) =>
-    isDefault
-      ? [...(xs ?? [])]
-      : (xs ?? [])
-          .map((u) => swapHost(u, apexDomain, tenantHost))
-          .filter((u) => uriAllowedForTenant(u, tenantHost))
+    (xs ?? [])
+      .map((u) => swapHost(u, apexDomain, tenantHost))
+      .filter((u) => uriAllowedForTenant(u, tenantHost))
   return { redirectUris: map(ui?.redirectUris), webOrigins: map(ui?.webOrigins) }
 }
 
@@ -274,7 +307,6 @@ function expectedUiScopeRoles(base: Record<string, unknown>): string[] {
 
 export async function reconcileRealm(transport: KcTransport, opts: ReconcileOptions): Promise<ReconcileReport> {
   const { realm, tenantHost, apexDomain, base, verifyOnly } = opts
-  const isDefault = opts.isDefault ?? false
   // (FIX3-B) Encode the realm name as a single path segment via the SHARED
   // realmSeg helper (same encoding KcProvisionApi applies) — defence-in-depth so
   // these GET/PUT paths can never break out of their segment even though the CLI
@@ -390,7 +422,7 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
       fail('gremion-ui-sub-mapper', 'gremion-ui has no uid sub-mapper (oidc-usermodel-property-mapper -> sub)')
     }
 
-    const expected = expectedUiUris(base, apexDomain, tenantHost, isDefault)
+    const expected = expectedUiUris(base, apexDomain, tenantHost)
     if (arraysEqualAsSet(ui.redirectUris, expected.redirectUris)) {
       pass('gremion-ui-redirect-uris')
     } else {
@@ -430,21 +462,41 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     }
   }
 
-  // ── #239: no fixture / dev users (service accounts only) ─────────────────────
+  // ── #239 / TASK-043 Q10: no FIXTURE user ─────────────────────────────────────
+  // NARROWED, not dropped: a provisioned realm now holds its real first
+  // administrators (PRD-IDN-005), so "any non-service-account user" is no
+  // longer a defect. What stays a defect is a fixture imported into a live
+  // realm: a user whose id is a seed subject of the kernel chain's *_seed.sql
+  // files, or whose username is a template fixture username. This is the only
+  // detector of fixtures imported later; "maps to a person" arrives with TASK-080.
   const users = (await get<UserRep[]>('/users?max=2000')) ?? []
   const offenders = users.filter(
     (u) =>
       typeof u.serviceAccountClientId !== 'string' &&
-      !(typeof u.username === 'string' && u.username.startsWith('service-account-')),
+      !(typeof u.username === 'string' && u.username.startsWith('service-account-')) &&
+      ((typeof u.id === 'string' && opts.fixtures.ids.has(u.id.toLowerCase())) ||
+        (typeof u.username === 'string' && opts.fixtures.usernames.has(u.username.toLowerCase()))),
   )
   if (offenders.length === 0) {
     pass('no-fixture-users')
   } else {
     fail(
       'no-fixture-users',
-      `non-service-account user(s) present (#239): ${offenders.map((u) => u.username ?? '<no username>').join(', ')}`,
+      `fixture user(s) present (#239, a seed-subject id or a template fixture username): ${offenders.map((u) => u.username ?? '<no username>').join(', ')}`,
     )
   }
+
+  // ── TASK-043 R-E5b: the realm's OWN sender ─────────────────────────────────
+  const smtp = smtpServerProblems(realmRep.smtpServer, opts.sender)
+  if (smtp.length === 0) pass('smtp-server')
+  else fail('smtp-server', `${smtp.join('; ')} (repair: host -- gremion-vendor-mail realm-smtp --realm ${realm} --tenant ${opts.sender.token} --rotate)`)
+
+  // ── TASK-043 r4: the realm's frontendUrl is the customer's own host ─────────
+  // Keycloak has no --hostname: without it every link Keycloak mails is built
+  // from the address the admin call used (the internal https://keycloak:8443).
+  const wantFrontend = frontendUrlFor(tenantHost, realm)
+  if (realmRep.attributes?.frontendUrl === wantFrontend) pass('frontend-url')
+  else fail('frontend-url', `attributes.frontendUrl is ${JSON.stringify(realmRep.attributes?.frontendUrl)} (expected ${wantFrontend}: mailed links would name another address)`)
 
   // ── (A) gremion-admin SA realm-management roles ───────────────────────────────
   // KC 26's import does NOT carry service-account role mappings reliably, so a
@@ -468,9 +520,10 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   // ── verdict ─────────────────────────────────────────────────────────────────
   const ok = checks.every((c) => c.ok)
   const applied: ReconcileCheckName[] = []
+  const repairHost = checks.filter((c) => !c.ok && HOST_REPAIRED_CHECKS.includes(c.name)).map((c) => c.name)
 
   if (verifyOnly || ok) {
-    return { realm, ok, checks, applied }
+    return { realm, ok, checks, applied, repairHost }
   }
 
   // ── APPLY: replay ONLY the failed, mechanically-repairable checks (§4-2). ────
@@ -487,15 +540,17 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
 
   // sslRequired is repaired by a localized partial realm PUT that MERGES the
   // existing attributes (a full round-tripped realm rep 500s on KC 26).
-  if (failedNames.has('ssl-required')) {
+  // The frontendUrl rides on the same partial PUT (one realm write).
+  if (failedNames.has('ssl-required') || failedNames.has('frontend-url')) {
     const fresh = await get<RealmRep>('')
     // (FIX3-B) encode the realm path segment via the shared helper (matches get()).
     await transport('PUT', `/admin/realms/${realmSeg(realm)}`, {
       realm,
       sslRequired: 'all',
-      attributes: { ...fresh.attributes, 'acr.loa.map': ACR_LOA_MAP },
+      attributes: { ...fresh.attributes, 'acr.loa.map': ACR_LOA_MAP, frontendUrl: frontendUrlFor(tenantHost, realm) },
     })
-    applied.push('ssl-required')
+    if (failedNames.has('ssl-required')) applied.push('ssl-required')
+    if (failedNames.has('frontend-url')) applied.push('frontend-url')
   }
 
   // (A) The gremion-admin SA realm-management grant is mechanically repairable: the
@@ -515,5 +570,5 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   // reported so the operator re-imports/re-stamps the realm. Re-verify so the
   // report reflects post-apply state.
   const after = await reconcileRealm(transport, { ...opts, verifyOnly: true })
-  return { realm, ok: after.ok, checks: after.checks, applied }
+  return { realm, ok: after.ok, checks: after.checks, applied, repairHost: after.repairHost }
 }

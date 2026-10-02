@@ -19,7 +19,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 
 const compliancePatchSchema = z.object({
   dpo_name: z.string().max(200).optional(),
-  dpo_email: z.string().email().max(200).optional(),
+  // The form sends every key; an empty DPO e-mail is a valid "not set" (K2#3).
+  dpo_email: z.union([z.string().email().max(200), z.literal('')]).optional(),
   controller_name: z.string().max(200).optional(),
   controller_address: z.string().max(500).optional(),
   purpose_description: z.string().max(2000).optional(),

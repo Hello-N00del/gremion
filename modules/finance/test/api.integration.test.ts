@@ -133,6 +133,11 @@ const SAGA_HEADERS = {
   'x-tenant-id': SAGA_TENANT.id,
   'x-tenant-slug': SAGA_TENANT.slug,
   'content-type': 'application/json',
+  // F1-FIX-05-K (H15): the sub-org sagas carry the write actor; these saga-mechanics
+  // tests run as a runtime superuser (the scope matrix is leaf-write-scope.integration).
+  'x-finance-user-id': 'saga-su',
+  'x-finance-is-auditor': 'false',
+  'x-finance-is-superuser': 'true',
 }
 const OU_A = '11111111-aaaa-4aaa-8aaa-111111111111'
 const OU_B = '22222222-bbbb-4bbb-8bbb-222222222222'
@@ -246,10 +251,19 @@ describe('finance leaf — store-backed CRUD domains (real PG)', () => {
   })
 
   const get = (path: string) => fetch(`${crudBase}${path}`, { headers: CRUD_HEADERS })
+  // F1-FIX-05-K r2 (K4#34): fiscal-year writes need the central/admin scope; these
+  // CRUD-mechanics tests run as a runtime superuser (the scope matrix lives in
+  // leaf-write-scope.integration).
+  const CRUD_WRITE_HEADERS = {
+    ...CRUD_HEADERS,
+    'x-finance-user-id': 'crud-su',
+    'x-finance-is-auditor': 'false',
+    'x-finance-is-superuser': 'true',
+  }
   const post = (path: string, body: unknown) =>
-    fetch(`${crudBase}${path}`, { method: 'POST', headers: CRUD_HEADERS, body: JSON.stringify(body) })
+    fetch(`${crudBase}${path}`, { method: 'POST', headers: CRUD_WRITE_HEADERS, body: JSON.stringify(body) })
   const patch = (path: string, body: unknown) =>
-    fetch(`${crudBase}${path}`, { method: 'PATCH', headers: CRUD_HEADERS, body: JSON.stringify(body) })
+    fetch(`${crudBase}${path}`, { method: 'PATCH', headers: CRUD_WRITE_HEADERS, body: JSON.stringify(body) })
 
   // ── fiscal_year ───────────────────────────────────────────────────────────────
   describe('fiscal-years', () => {

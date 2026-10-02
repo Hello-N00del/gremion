@@ -20,12 +20,12 @@ const set = JSON.parse(readFileSync(SET_FILE, 'utf8'))
 
 describe('do-not-overwrite.json — shape', () => {
   test('declares its own entry count and carries exactly that many', () => {
-    assert.equal(set.expectedEntries, 43)
+    assert.equal(set.expectedEntries, 41)
     assert.equal(set.doNotDelete.length + set.kernelAhead.length, set.expectedEntries)
   })
 
-  test('doNotDelete carries the 41 remaining measured paths, sorted and unique', () => {
-    assert.equal(set.doNotDelete.length, 41)
+  test('doNotDelete carries the 39 remaining measured paths, sorted and unique', () => {
+    assert.equal(set.doNotDelete.length, 39)
     assert.deepEqual(set.doNotDelete, [...new Set(set.doNotDelete)].sort())
   })
 
@@ -47,6 +47,11 @@ describe('do-not-overwrite.json — shape', () => {
     // §2, TRD-042). A protected row for a path that must NOT come back would
     // make the guard demand the very file the edge removed.
     assert.ok(!has('docker/traefik/dynamic/tls.yml'))
+    // TASK-042 (zero-tenant boot) deleted this path on purpose (the first-run wizard, Q1):
+    // its row left the set in the same commit as the file.
+    assert.ok(!has('gremion-ui/src/routes/setup/steps/wizard-submit-schema.test.ts'))
+    // Concatenated so the TASK-042 deletion assertion does not read it as a carrier.
+    assert.ok(!has('gremion-ui/src/lib/server/tenant/' + 'register-default.env.test.ts'))
     // 12, not the 13 the plan's prose says: the measured set at f7ac8260 carries
     // k8s/base/keycloak/pdb.yaml plus 5 dev and 6 production ingressroute patches.
     // The plan's own frozen JSON lists the same 12; only its prose miscounted.

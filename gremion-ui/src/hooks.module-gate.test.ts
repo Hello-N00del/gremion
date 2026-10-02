@@ -40,7 +40,6 @@ vi.mock('$lib/server/governance/provisioning/worker', () => ({ startProvisioning
 vi.mock('$lib/server/audit-db', () => ({ purgeAuditLogsOlderThan: vi.fn(async () => ({ purged: 0 })) }))
 vi.mock('./auth', () => ({ handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) => resolve(event) }))
 vi.mock('$lib/server/tenant/control-migrations', () => ({ runControlMigrations: vi.fn(async () => {}) }))
-vi.mock('$lib/server/tenant/register-default', () => ({ registerDefaultTenant: vi.fn(async () => ({ id: 'tid-1' })) }))
 vi.mock('$lib/server/tenant/registry', () => ({
   resolveTenantBySlug: vi.fn(async () => ({ id: 'default', slug: 'default', issuer: 'https://kc/realms/gremion-test' })),
   listActiveTenants: vi.fn(async () => [{ id: 'tid-1', slug: 'default', status: 'active' }]),
@@ -48,7 +47,6 @@ vi.mock('$lib/server/tenant/registry', () => ({
   finishTenantMigrationRun: vi.fn(async () => {}),
 }))
 vi.mock('$lib/server/tenant/context', () => ({ runWithTenant: (_ctx: unknown, fn: () => unknown) => fn() }))
-vi.mock('$lib/server/tenant/default-tenant', () => ({ DEFAULT_TENANT: { id: 'default', configPath: '/tmp/config.json' } }))
 vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }))
 
 let bearerPayload: Record<string, unknown> | null = null

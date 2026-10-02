@@ -97,6 +97,31 @@ export const NextcloudPollsClient = {
       throw e
     }
 
-    return poll
+    // Step 3 (H16): apply the configuration. POST /poll consumes ONLY
+    // { type, title }; anonymous / description / expire are applied by a follow-up
+    // PUT /poll/{id} { pollConfiguration }. Without this an "Anonym" poll was
+    // silently created NON-anonymous. Same rollback contract as the options write:
+    // a poll whose privacy setting did not take must never be left behind.
+    const pollConfiguration: Partial<NcPoll['configuration']> = {}
+    if (dto.anonymous) pollConfiguration.anonymous = true
+    if (dto.description !== undefined) pollConfiguration.description = dto.description
+    if (dto.expire !== undefined) pollConfiguration.expire = dto.expire
+    if (Object.keys(pollConfiguration).length === 0) return poll
+
+    try {
+      const updated = await ncFetch<{ poll?: NcPoll }>(`/poll/${poll.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ pollConfiguration }),
+      })
+      // Reflect what was applied even if the upstream reply omits the poll.
+      return updated.poll ?? { ...poll, configuration: { ...poll.configuration, ...pollConfiguration } }
+    } catch (e) {
+      try {
+        await ncFetch(`/poll/${poll.id}`, { method: 'DELETE' })
+      } catch {
+        // ignore rollback failure — the original error is what the caller must see
+      }
+      throw e
+    }
   },
 }

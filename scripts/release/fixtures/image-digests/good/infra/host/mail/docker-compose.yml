@@ -1,0 +1,3 @@
+services:
+  mail:
+    image: ${STALWART_IMAGE:?STALWART_IMAGE required}

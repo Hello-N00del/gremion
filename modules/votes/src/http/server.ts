@@ -10,9 +10,23 @@
 //   everything else   → 404
 // The leaf owns NO database — it is a stateless thin proxy over Helios + Nextcloud
 // Polls. The Helios ADMIN lifecycle stays on the kernel by design.
+//
+// KNOWN CONSTRAINT (K5#29 / S4#18, documented, NOT fixed here): Nextcloud Polls is
+// reached with ONE admin credential and /api/v1/votes lists every poll that
+// account can see, so the poll half of the list is tenant-BLIND. That is only
+// sound while one tenant shares the Nextcloud (the single-tenant test env).
+// Enabling a second tenant requires per-tenant scoping (a per-tenant NC user or
+// group, or a tenant marker applied at create time and filtered on read) FIRST.
+// Request validation: malformed bodies answer 400, not 502. A non-UUID election id
+// degrades its own card (never Helios-fetched, never interpolated into a path).
 import http from 'node:http'
 import { checkGuard, isHealthzPath } from './auth.js'
-import { HeliosClient, type HeliosElection } from '../helios/helios-client.js'
+import {
+  HeliosClient,
+  isHeliosUnavailable,
+  isHeliosUuid,
+  type HeliosElection,
+} from '../helios/helios-client.js'
 import { NextcloudPollsClient, type CreatePollDto, type NcPoll } from '../polls/polls-client.js'
 import { mapHeliosToVoteItem, mapPollToVoteItem, mergeVoteItems } from '../aggregator/aggregator.js'
 import type { VoteItem } from '../aggregator/types.js'
@@ -50,9 +64,67 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
   })
 }
 
+/** A client error: mapped to HTTP 400, never to the 502 "upstream" bucket. */
+class BadRequest extends Error {}
+
 async function readJson<T>(req: http.IncomingMessage): Promise<T> {
   const buf = await readBody(req)
-  return JSON.parse(buf.toString('utf8') || '{}') as T
+  try {
+    return JSON.parse(buf.toString('utf8') || '{}') as T
+  } catch {
+    throw new BadRequest('invalid JSON body')
+  }
+}
+
+/** Internal marker: the tracked id is not a Helios UUID, so it was never looked up. */
+class NotAHeliosUuid extends Error {}
+
+/** Upper bound on elections one /votes call may settle (one Helios fetch each). */
+const MAX_ELECTION_UUIDS = 100
+
+/** Shape check only: an array of at most MAX_ELECTION_UUIDS strings (else 400).
+ *  A string that is not a Helios UUID is NOT a request error (R29-VOTES-DEGRADE-K):
+ *  a tracked row may carry a non-UUID helios_uuid (seed fixtures), and one such row
+ *  must degrade its own card, not 400 the whole /votes call. K5#41 / S4#25: such a
+ *  string is never interpolated into a Helios path — composeVotes degrades it
+ *  without any fetch, and HeliosClient.getElection refuses it again. */
+function parseElectionUuids(raw: unknown): string[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) throw new BadRequest('electionUuids must be an array')
+  if (raw.length > MAX_ELECTION_UUIDS) {
+    throw new BadRequest(`electionUuids may hold at most ${MAX_ELECTION_UUIDS} entries`)
+  }
+  for (const u of raw) {
+    if (typeof u !== 'string') throw new BadRequest('electionUuids must be an array of strings')
+  }
+  return raw as string[]
+}
+
+/** H16: validate the quick-poll body; description/expire are optional. */
+function parseCreatePoll(dto: Partial<CreatePollDto> | null): CreatePollDto {
+  if (!dto || typeof dto !== 'object') throw new BadRequest('missing title or options')
+  if (typeof dto.title !== 'string' || !dto.title || !Array.isArray(dto.options)) {
+    throw new BadRequest('missing title or options')
+  }
+  const type = dto.type ?? 'textPoll'
+  if (type !== 'textPoll' && type !== 'datePoll') {
+    throw new BadRequest('type must be textPoll or datePoll')
+  }
+  if (dto.description !== undefined && typeof dto.description !== 'string') {
+    throw new BadRequest('description must be a string')
+  }
+  if (dto.expire !== undefined && (!Number.isInteger(dto.expire) || (dto.expire as number) < 0)) {
+    throw new BadRequest('expire must be a non-negative unix timestamp')
+  }
+  const out: CreatePollDto = {
+    title: dto.title,
+    type,
+    options: dto.options,
+    anonymous: Boolean(dto.anonymous),
+  }
+  if (dto.description !== undefined) out.description = dto.description
+  if (dto.expire !== undefined) out.expire = dto.expire
+  return out
 }
 
 /** Compose the /votes list: settle each Helios election (one 5xx must not blank
@@ -62,12 +134,24 @@ async function composeVotes(
   polls: PollsPort,
   electionUuids: string[],
 ): Promise<{ votes: VoteItem[]; degradedUuids: string[]; pollError: string | null }> {
-  const settled = await Promise.allSettled(electionUuids.map((u) => helios.getElection(u)))
+  // A non-UUID id (K5#41 / S4#25) never reaches Helios: no fetch, no path
+  // interpolation. It is degraded in place, so input order is preserved.
+  const settled = await Promise.allSettled(
+    electionUuids.map((u) => (isHeliosUuid(u) ? helios.getElection(u) : Promise.reject(new NotAHeliosUuid()))),
+  )
   const reachable: VoteItem[] = []
   const degradedUuids: string[] = []
   settled.forEach((r, i) => {
     if (r.status === 'fulfilled') reachable.push(mapHeliosToVoteItem(r.value))
-    else degradedUuids.push(electionUuids[i])
+    else {
+      // K5#17: only a tracked-but-unreachable Helios (or an id that was never
+      // a Helios uuid) degrades quietly; anything else is a real bug and must
+      // not vanish into an unlogged "degraded" row.
+      if (!(r.reason instanceof NotAHeliosUuid) && !isHeliosUnavailable(r.reason)) {
+        console.error(`[votes] helios getElection ${electionUuids[i]} failed`, r.reason)
+      }
+      degradedUuids.push(electionUuids[i])
+    }
   })
 
   let pollItems: VoteItem[] = []
@@ -116,27 +200,20 @@ export function createServer(opts: ServerOptions): http.Server {
     try {
       switch (path) {
         case '/api/v1/votes': {
-          const { electionUuids } = await readJson<{ electionUuids?: string[] }>(req)
-          const result = await composeVotes(helios, polls, electionUuids ?? [])
+          const body = await readJson<{ electionUuids?: unknown }>(req)
+          const result = await composeVotes(helios, polls, parseElectionUuids(body.electionUuids))
           return sendJson(res, 200, result)
         }
         case '/api/v1/polls': {
-          const dto = await readJson<CreatePollDto>(req)
-          if (!dto.title || !Array.isArray(dto.options)) {
-            return sendJson(res, 400, { success: false, error: 'missing title or options' })
-          }
-          await polls.createPoll({
-            title: dto.title,
-            type: dto.type,
-            options: dto.options,
-            anonymous: Boolean(dto.anonymous),
-          })
+          const dto = parseCreatePoll(await readJson<Partial<CreatePollDto>>(req))
+          await polls.createPoll(dto)
           return sendJson(res, 200, { success: true })
         }
         default:
           return sendJson(res, 404, { success: false, error: 'not found' })
       }
     } catch (err) {
+      if (err instanceof BadRequest) return sendJson(res, 400, { success: false, error: err.message })
       console.error('[votes] upstream error', err)
       return sendJson(res, 502, { success: false, error: err instanceof Error ? err.message : 'upstream error' })
     }

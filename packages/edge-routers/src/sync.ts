@@ -1,7 +1,9 @@
 // sync.ts — make etc/edge a faithful projection of the tenant registry.
 //
 // Ported from B18 edge-sync.ts (StuRaOS) with its security argument intact:
-// this runs HOST-SIDE, called by the control plane (TASK-043's provisioner).
+// this runs HOST-SIDE, called by the control plane. TASK-043's customers are
+// NOT synced by it: their files carry the realm router and are written by
+// `gremion-tenant create` (render-router, Q17); sync refuses to touch them.
 // The internet-facing app process holds no mount of etc/edge at all — Traefik's
 // read-only bind is the only one (hygiene j4) — so no app-level compromise can
 // publish a Host() router pointing a hostname at anything.
@@ -23,9 +25,9 @@
 
 import * as fs from 'node:fs'
 import { join } from 'node:path'
-import { assertSlug, ROUTER_FILE_RE, validateSlug } from './names.js'
+import { assertSlug, ROUTER_FILE_RE, routerFileName, validateSlug } from './names.js'
 import { emitTenantRouterFile, removeTenantRouterFile, type EmitAction, type EmitIo } from './emit.js'
-import { renderTenantRouter, type HostPolicy, type RouterSkip, type TenantDomain } from './render.js'
+import { keycloakRouterName, renderTenantRouter, type HostPolicy, type RouterSkip, type TenantDomain } from './render.js'
 
 /** gremion-ui registry TenantStatus, restated (the package imports nothing from gremion-ui). */
 export type TenantStatus = 'provisioning' | 'active' | 'suspended' | 'deleting' | 'deleted'
@@ -180,6 +182,33 @@ export function syncTenantRouters(opts: SyncTenantRoutersOptions): EdgeSyncRepor
     }
   }
 
+  // ── …and never strip a TASK-043 realm router (review B1, r2) ─────────────────
+  // A customer's tenant-<slug>.yml is written by `gremion-tenant create`'s host
+  // phase from `tenant-create render-router` (Q16, Q17), and carries the realm
+  // router tenant-<slug>.kc that this projection does not render (no realm
+  // input). Rewriting that file would silently drop the customer's issuer route
+  // and break sign-in, so syncTenantRouters does NOT co-manage it: a file that
+  // declares the realm router is refused, before anything is written.
+  for (const t of opts.tenants) {
+    if (emitOnly && !emitOnly.has(t.slug)) continue
+    if (hasRealmRouter(opts.dynamicDir, t.slug)) {
+      throw new Error(
+        `syncTenantRouters: ${routerFileName(t.slug)} carries the realm router ${keycloakRouterName(t.slug)} ` +
+          '(written by gremion-tenant render-router, TASK-043 Q16/Q17); this projection does not co-manage it -- ' +
+          'refusing to rewrite or remove it (re-render it with `gremion-tenant create`)',
+      )
+    }
+  }
+  if (prune) {
+    for (const name of fs.readdirSync(fs.realpathSync(opts.dynamicDir)).sort()) {
+      const m = ROUTER_FILE_RE.exec(name)
+      if (!m?.[1] || slugs.has(m[1]) || !validateSlug(m[1]).ok) continue
+      if (hasRealmRouter(opts.dynamicDir, m[1])) {
+        throw new Error(`syncTenantRouters: prune would remove ${name}, which carries a TASK-043 realm router; this projection does not co-manage it -- refusing`)
+      }
+    }
+  }
+
   const rows: EdgeSyncRow[] = []
   let changed = false
   for (const t of opts.tenants) {
@@ -232,6 +261,20 @@ export function syncTenantRouters(opts: SyncTenantRoutersOptions): EdgeSyncRepor
     dryRun,
     dynamicDir: opts.dynamicDir,
   }
+}
+
+/** True when etc/edge/tenant-<slug>.yml (a regular file) declares the realm router. */
+function hasRealmRouter(dynamicDir: string, slug: string): boolean {
+  const path = join(fs.realpathSync(dynamicDir), routerFileName(slug))
+  let st: fs.Stats
+  try {
+    st = fs.lstatSync(path)
+  } catch {
+    return false
+  }
+  if (!st.isFile()) return false
+  const key = `    ${keycloakRouterName(slug)}:`
+  return fs.readFileSync(path, 'utf8').split(/\r?\n/).some((l) => l.trimEnd() === key)
 }
 
 interface DiskClaim {

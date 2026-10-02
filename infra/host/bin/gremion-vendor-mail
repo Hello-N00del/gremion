@@ -1,0 +1,541 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-vendor-mail — the host launcher of the vendor mail tooling (TASK-015).
+#
+#   gremion-vendor-mail <subcommand> [args...]
+#
+# The vendor's own mail (system@, alerts@) is sent by the self-hosted Stalwart
+# of the ${STACK}-mail project. Its checks and its principal CLI are Node ESM
+# under ops/vendor-mail/, and the host carries no Node (bootstrap.sh installs
+# none, Q11): every .mjs subcommand therefore runs as
+#
+#   docker run --rm <VENDOR_MAIL_NODE_IMAGE> node /release/ops/vendor-mail/<sub>.mjs
+#
+# with ops/vendor-mail mounted read-only. VENDOR_MAIL_NODE_IMAGE is read from
+# mail.env ONLY (an exported value is discarded before the file is loaded, and
+# there is no default) and must be pinned by digest (TRD-350).
+#
+# WHERE IT RUNS FROM. Two layouts, tried in this order (as env_template_dirs()
+# in lib/common.sh does):
+#   1. a release clone: <root>/current is a full clone (gremion-deploy), so
+#      ${SCRIPT_DIR}/../../../ops/vendor-mail is <root>/current/ops/vendor-mail;
+#   2. installed: docs/ops/runbook/install.md copies every infra/host/bin/*
+#      into <root>/bin (first on PATH; the go-live gate runs a bare
+#      `gremion-mail-bringup`, which calls this file as its sibling), so the
+#      tree is taken from the live release, $(gremion_root)/current/ops/vendor-mail.
+# Neither present is a named precondition failure (exit 2).
+#
+# CONTAINERS. Named ${STACK}-vendor-mail-<sub>-<pid>, labelled
+# gremion.stack=${STACK}, --network none -- except `principals`, which needs
+# the loopback management API (STALWART_ADMIN_URL, <ip>:8086) and so runs with
+# --network host. That one exception sits outside check-pooled-stack's
+# ISOLATION table (it is a transient one-shot, not a project service);
+# ops/vendor-mail/RUNBOOK.md states it.
+#
+# SECRETS: mail.env (and, per subcommand, ops.env, the secret stores) are
+# MOUNTED read-only, and only into the checks that read them; the realm SMTP
+# password reaches kcadm on stdin; the Stalwart admin credential reaches curl
+# on stdin. The Keycloak admin password is passed as a name-only
+# `docker exec -e`, so it is on no argv of the docker CLI -- but kcadm's own
+# `config credentials --password` puts it on the java argv INSIDE the
+# Keycloak container, which host root can see (residual, named in
+# ops/vendor-mail/RUNBOOK.md; the same holds for gremion-neuter and
+# gremion-mail-bringup). Node check containers run with --log-driver none,
+# so what they print (principals' one-time app password) reaches the caller's
+# terminal and no daemon log.
+#
+# Subcommands
+#   principals issue|revoke|list --tenant <token>     (node, --network host)
+#   check-identities                                   (node)
+#   check-received --file <headers file> --receiver <name> | --authserv-id <id> (node)
+#   check-upstream-image                               (node)
+#   check-deliverability-record [--require]            (node)
+#   check-secret-separation --host                     (node; value hashes)
+#   check-principals --host [--no-allowances]          (node; runs `collect`)
+#   realm-smtp                                         (bash; kcadm)
+#   collect --out DIR                                  (bash; API + kcadm)
+#
+# EXIT CODES: 0 ok - 1 a check or post-condition failed - 2 usage/precondition.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+VENDOR_MAIL_DIR="${SCRIPT_DIR}/../../../ops/vendor-mail"
+KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
+KC_SERVER="http://127.0.0.1:8080/auth"
+NODE_SUBS=" principals check-identities check-received check-upstream-image check-deliverability-record check-secret-separation check-principals "
+# The image line of mail.env: repository, optional tag, and a sha256 digest.
+DIGEST_RE='^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$'
+
+usage() {
+    cat <<'EOF'
+usage: gremion-vendor-mail <subcommand> [args...]
+  principals issue|revoke|list --tenant <token> [--rotate]
+  check-identities | check-upstream-image | check-deliverability-record [--require]
+  check-received --file <headers file> --receiver <name> | --authserv-id <id>
+  check-secret-separation --host
+  check-principals --host [--no-allowances]
+  realm-smtp            (the operator realm `master` -> system@<PLATFORM_DOMAIN>)
+  realm-smtp --realm platform
+                        (the ops realm -> system@<PLATFORM_DOMAIN>)
+  realm-smtp --realm <r> --tenant <token> [--rotate|--revoke]
+                        (a customer realm -> its own kc-<token>@<PLATFORM_DOMAIN>)
+  collect --out DIR
+EOF
+}
+
+# env_key <file> <key> — ONE key of an env file, never the whole file (the
+# single whole-file reader is load_env). Empty when absent.
+env_key() {
+    local file="$1" key="$2" n v
+    [[ -f "$file" ]] || die "env file not found: ${file}" "$GREMION_EXIT_USAGE"
+    n="$(grep -c "^${key}=" "$file" || true)"
+    [[ "$n" -le 1 ]] || die "duplicate key ${key} in ${file}" "$GREMION_EXIT_USAGE"
+    v="$(sed -n "s/^${key}=//p" "$file")"
+    v="${v%$'\r'}"
+    # one layer of matching quotes, as load_env and compose --env-file strip it
+    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
+    printf '%s' "$v"
+}
+
+resolve_vendor_dir() {
+    # The sibling tree first (run from a release clone), then the live release
+    # (installed into <root>/bin) -- the order env_template_dirs() uses.
+    local installed
+    installed="$(gremion_root)/current/ops/vendor-mail"
+    if [[ ! -d "$VENDOR_MAIL_DIR" ]]; then
+        [[ -d "$installed" ]] \
+            || die "ops/vendor-mail not found at ${VENDOR_MAIL_DIR} (beside this launcher) nor at ${installed} (the live release): deploy a release first" \
+                   "$GREMION_EXIT_USAGE"
+        VENDOR_MAIL_DIR="$installed"
+    fi
+    VENDOR_MAIL_DIR="$(cd "$VENDOR_MAIL_DIR" && pwd)"
+    RELEASE_DIR="$(cd "${VENDOR_MAIL_DIR}/../.." && pwd)"
+}
+
+load_mail_env() {
+    MAIL_ENV="${MAIL_ENV:-$(gremion_root)/etc/env/mail.env}"
+    # docker -v reads a relative source as a volume NAME; mount by path.
+    [[ -f "$MAIL_ENV" ]] || die "mail env file not found: ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
+    MAIL_ENV="$(realpath "$MAIL_ENV")"
+    # From mail.env ONLY: a value exported by the caller must not survive a file
+    # that does not declare the key.
+    unset VENDOR_MAIL_NODE_IMAGE
+    load_env "$MAIL_ENV"
+    [[ -n "${STACK:-}" ]] || die "STACK is not set in ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
+}
+
+require_node_image() {
+    # `:+set`, not a `:-` default: check-image-digests (TRD-350) reads every
+    # ${*_IMAGE:-...} as an image default, and this image has none.
+    [[ -n "${VENDOR_MAIL_NODE_IMAGE:+set}" ]] \
+        || die "VENDOR_MAIL_NODE_IMAGE is not set in ${MAIL_ENV}: the checks run in that pinned image and nowhere else (no default)" \
+               "$GREMION_EXIT_USAGE"
+    [[ "$VENDOR_MAIL_NODE_IMAGE" =~ $DIGEST_RE ]] \
+        || die "VENDOR_MAIL_NODE_IMAGE must be pinned by digest (<repo>@sha256:<64 hex>), not by a tag (TRD-350)" \
+               "$GREMION_EXIT_USAGE"
+}
+
+# ── kcadm against the state Keycloak ────────────────────────────────────────
+STATE_ENV=""
+KC_CID=""
+
+kc_connect() {
+    need_cmd docker jq
+    STATE_ENV="${STATE_ENV_FILE:-$(gremion_root)/etc/env/state.env}"
+    local admin="${KEYCLOAK_ADMIN:-}" password="${KEYCLOAK_ADMIN_PASSWORD:-}" rc=0
+    if [[ -z "$admin" ]]; then admin="$(env_key "$STATE_ENV" KEYCLOAK_ADMIN)" || exit $?; fi
+    if [[ -z "$password" ]]; then password="$(env_key "$STATE_ENV" KEYCLOAK_ADMIN_PASSWORD)" || exit $?; fi
+    [[ -n "$admin" && -n "$password" ]] \
+        || die "KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD are unset (neither exported nor in ${STATE_ENV}); kcadm has no credential" \
+               "$GREMION_EXIT_USAGE"
+    KC_CID="$(state_kc_cid "$STACK")" || rc=$?
+    case "$rc" in
+        0) ;;
+        2) die "docker could not list the ${STACK}-state containers" "$GREMION_EXIT_USAGE" ;;
+        *) die "no single running keycloak in the ${STACK}-state project (looked up by the compose labels project=${STACK}-state, service=keycloak)" \
+               "$GREMION_EXIT_USAGE" ;;
+    esac
+    # Name-only -e: docker copies the value from this process's environment,
+    # so it is on no argv of the docker CLI (see the SECRETS note above for
+    # kcadm's own argv inside the container).
+    KC_LOGIN_PASSWORD="$password" docker exec -e KC_LOGIN_PASSWORD "$KC_CID" sh -c \
+        '"$0" config credentials --server "$1" --realm master --user "$2" --password "$KC_LOGIN_PASSWORD" >/dev/null' \
+        "$KCADM_BIN" "$KC_SERVER" "$admin" \
+        || die "kcadm could not authenticate against the state keycloak at ${KC_SERVER}" "$GREMION_EXIT_ASSERT"
+}
+
+# SMTP_FIELDS: kcadm's field filter for the realm's smtpServer map. 'smtpServer(*)',
+# never a bare `--fields smtpServer`: on Keycloak 26.6.1 the bare form answers
+# the map EMPTY ({"smtpServer":{}}) whatever the realm holds, so every read-back
+# failed although the update had applied (TASK-043b F2; the real outputs are
+# test/host/fixtures/kcadm-26.6.1/). The same holds for 'attributes(*)'.
+SMTP_FIELDS='smtpServer(*)'
+
+# The non-secret fields of a realm's smtpServer, one canonical JSON line.
+realm_smtp_fields() {   # <realm>
+    local out
+    out="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$1" --fields "$SMTP_FIELDS")" || return 1
+    printf '%s' "$out" | jq -c '(.smtpServer // {}) | {host, port, user, from, starttls}'
+}
+
+# The non-secret fields plus whether a password is set (Keycloak answers a set
+# smtpServer password as its mask, never the value), one canonical JSON line.
+realm_smtp_state() {   # <realm>
+    local out
+    out="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$1" --fields "$SMTP_FIELDS")" || return 1
+    printf '%s' "$out" | jq -c '(.smtpServer // {}) | {host, port, user, from, starttls, pwset: ((.password // "") != "")}'
+}
+
+# A customer realm is its slug; its principal token is the slug with - -> _.
+REALM_RE='^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
+TENANT_TOKEN_RE='^[a-z][a-z0-9_]{2,39}$'
+
+# realm-smtp — three arms and nothing else:
+#   realm-smtp                        master -> system@<PLATFORM_DOMAIN> (TASK-015)
+#   realm-smtp --realm platform       the ops realm -> system@<PLATFORM_DOMAIN>
+#                                     (TASK-043 Q5; allowances.json names it)
+#   realm-smtp --realm <r> --tenant <token> [--rotate|--revoke]
+#                                     a customer realm -> its OWN principal
+#                                     kc-<token>@<PLATFORM_DOMAIN> (TASK-043 G2)
+# `master` stays reachable only with no --realm and no --tenant, so a caller
+# cannot point a customer principal at a vendor realm by mistake.
+cmd_realm_smtp() {
+    local realm="" tenant="" rotate=no revoke=no
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --realm)  [[ $# -ge 2 ]] || die "--realm requires a value" "$GREMION_EXIT_USAGE"; realm="$2"; shift 2 ;;
+            --tenant) [[ $# -ge 2 ]] || die "--tenant requires a value" "$GREMION_EXIT_USAGE"; tenant="$2"; shift 2 ;;
+            --rotate) rotate=yes; shift ;;
+            --revoke) revoke=yes; shift ;;
+            -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
+            *) usage >&2; die "realm-smtp: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    [[ "$rotate$revoke" != yesyes ]] || die "realm-smtp: --rotate and --revoke exclude each other" "$GREMION_EXIT_USAGE"
+    if [[ -z "$tenant" ]]; then
+        [[ "$rotate" == no && "$revoke" == no ]] \
+            || die "realm-smtp: --rotate/--revoke act on a customer principal and need --realm <r> --tenant <token>" "$GREMION_EXIT_USAGE"
+        case "$realm" in
+            "")       vendor_realm_smtp master ;;
+            platform) vendor_realm_smtp platform ;;
+            master)   die "realm-smtp: master is the default arm; pass no --realm for it" "$GREMION_EXIT_USAGE" ;;
+            *)        die "realm-smtp --realm ${realm} needs --tenant <token>: only the ops realm platform takes no tenant" "$GREMION_EXIT_USAGE" ;;
+        esac
+        return
+    fi
+    [[ -n "$realm" ]] || die "realm-smtp --tenant needs --realm <customer realm>" "$GREMION_EXIT_USAGE"
+    [[ "$realm" != master && "$realm" != platform ]] \
+        || die "realm-smtp --tenant on ${realm}: a vendor realm sends as system@, never as a customer principal" "$GREMION_EXIT_USAGE"
+    [[ "$realm" =~ $REALM_RE && ${#realm} -ge 3 && ${#realm} -le 30 ]] \
+        || die "realm-smtp: realm ${realm} is not a customer slug" "$GREMION_EXIT_USAGE"
+    [[ "$tenant" =~ $TENANT_TOKEN_RE ]] || die "realm-smtp: tenant token ${tenant} does not match ${TENANT_TOKEN_RE}" "$GREMION_EXIT_USAGE"
+    [[ "${realm//-/_}" == "$tenant" ]] \
+        || die "realm-smtp: ${tenant} is not the token of realm ${realm} (the slug with - -> _)" "$GREMION_EXIT_USAGE"
+    customer_realm_smtp "$realm" "$tenant" "$rotate" "$revoke"
+}
+
+# kcadm_update_stdin <realm> — the payload arrives on OUR stdin and goes to
+# kcadm on ITS stdin; it is never an argument.
+kcadm_update_stdin() {
+    docker exec -i "$KC_CID" "$KCADM_BIN" update "realms/$1" -f - >/dev/null
+}
+
+# customer_realm_smtp <realm> <token> <rotate> <revoke> — the G2 algorithm:
+#   1. `principals list --tenant <token>` first;
+#   2. absent: `principals issue`, stamp the realm;
+#   3. present AND the realm reads back kc-<token>@, mail.<domain>, 587,
+#      STARTTLS with a password set: nothing to do (changed=no);
+#   4. present but the realm is not stamped (a crash between issue and stamp):
+#      `issue --rotate` (the password is unrecoverable by design), stamp;
+#   5. --revoke: `principals revoke` (it DELETEs the principal), then blank the
+#      realm's user, from and password and read that back; resume is therefore
+#      a fresh issue (step 2), never --rotate.
+# The app password leaves `principals issue` on its stdout (printed once), is
+# held in a shell variable of THIS process, reaches jq through $ENV and kcadm
+# on stdin: never a file, a log line or an argv.
+customer_realm_smtp() {
+    local realm="$1" token="$2" rotate="$3" revoke="$4"
+    [[ -n "${PLATFORM_DOMAIN:-}" ]] || die "PLATFORM_DOMAIN is empty in ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
+    local principal="kc-${token}@${PLATFORM_DOMAIN}"
+    kc_connect
+    local listed present=no
+    listed="$(run_node principals list --tenant "$token")" \
+        || die "principals list --tenant ${token} failed" "$GREMION_EXIT_ASSERT"
+    if printf '%s\n' "$listed" | grep -qxF -- "$principal"; then present=yes; fi
+
+    local state
+    if [[ "$revoke" == yes ]]; then
+        run_node principals revoke --tenant "$token" >/dev/null \
+            || die "principals revoke --tenant ${token} failed" "$GREMION_EXIT_ASSERT"
+        jq -nc --arg d "$PLATFORM_DOMAIN" \
+            '{smtpServer: {host: ("mail." + $d), port: "587", starttls: "true", ssl: "false", auth: "false",
+                           fromDisplayName: "Gremion", user: "", from: "", password: ""}}' \
+            | kcadm_update_stdin "$realm" \
+            || die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"
+        # The post-condition does NOT read the password: Keycloak may answer an
+        # empty one as its mask (review C, r2). No user, no from and SMTP auth
+        # off mean the realm cannot authenticate as anyone; the principal
+        # itself is proven gone by the listing below.
+        local raw
+        raw="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$realm" --fields "$SMTP_FIELDS")" \
+            || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
+        state="$(jq -c '(.smtpServer // {}) | {user: (.user // ""), from: (.from // ""), auth: ((.auth // "") | tostring)}' <<<"$raw")" \
+            || die "realms/${realm} read back as no JSON" "$GREMION_EXIT_ASSERT"
+        if [[ "$(jq -r '.user + "|" + .from + "|" + .auth' <<<"$state")" != "||false" ]]; then
+            bad "realms/${realm} smtpServer read back as ${state} after the revoke, expected no user, no from, auth false"
+            exit "$GREMION_EXIT_ASSERT"
+        fi
+        listed="$(run_node principals list --tenant "$token")" \
+            || die "principals list --tenant ${token} failed after the revoke" "$GREMION_EXIT_ASSERT"
+        if printf '%s\n' "$listed" | grep -qxF -- "$principal"; then
+            bad "${principal} is still listed after the revoke"
+            exit "$GREMION_EXIT_ASSERT"
+        fi
+        ok "realms/${realm} has no sender; ${principal} is revoked"
+        printf 'REALM-SMTP: realm=%s user=%s changed=%s action=revoked\n' "$realm" "$principal" "$([[ "$present" == yes ]] && echo yes || echo no)"
+        return
+    fi
+
+    local want
+    want="$(jq -nc --arg d "$PLATFORM_DOMAIN" --arg p "$principal" \
+        '{host: ("mail." + $d), port: "587", user: $p, from: $p, starttls: "true"}')"
+    state="$(realm_smtp_state "$realm")" || die "kcadm could not read realms/${realm}" "$GREMION_EXIT_ASSERT"
+    local stamped=no
+    if [[ "$(jq -c -S 'del(.pwset)' <<<"$state")" == "$(jq -c -S . <<<"$want")" && "$(jq -r .pwset <<<"$state")" == true ]]; then
+        stamped=yes
+    fi
+    if [[ "$present" == yes && "$stamped" == yes && "$rotate" == no ]]; then
+        ok "realms/${realm} already sends as ${principal} via mail.${PLATFORM_DOMAIN}:587 STARTTLS"
+        printf 'REALM-SMTP: realm=%s user=%s changed=no action=none\n' "$realm" "$principal"
+        return
+    fi
+    local action=issued out pw payload
+    local -a issue_args=(issue --tenant "$token")
+    if [[ "$present" == yes ]]; then issue_args+=(--rotate); action=rotated; fi
+    out="$(run_node principals "${issue_args[@]}")" \
+        || die "principals ${issue_args[*]} failed" "$GREMION_EXIT_ASSERT"
+    pw="$(printf '%s\n' "$out" | sed -n 's/^APP-PASSWORD: //p')"
+    out=""
+    [[ -n "$pw" ]] || die "principals issue printed no APP-PASSWORD line for ${principal}" "$GREMION_EXIT_ASSERT"
+    payload="$(REALM_SMTP_PASSWORD="$pw" jq -nc --argjson w "$want" \
+        '{smtpServer: ($w + {ssl: "false", auth: "true", fromDisplayName: "Gremion",
+                             password: $ENV.REALM_SMTP_PASSWORD})}')"
+    pw=""
+    printf '%s' "$payload" | kcadm_update_stdin "$realm" \
+        || { payload=""; die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"; }
+    payload=""
+    state="$(realm_smtp_state "$realm")" || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
+    if [[ "$(jq -c -S 'del(.pwset)' <<<"$state")" != "$(jq -c -S . <<<"$want")" || "$(jq -r .pwset <<<"$state")" != true ]]; then
+        bad "realms/${realm} smtpServer read back as ${state}, expected ${want} with a password set"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    ok "realms/${realm} sends as ${principal} via mail.${PLATFORM_DOMAIN}:587 STARTTLS (${action})"
+    printf 'REALM-SMTP: realm=%s user=%s changed=yes action=%s\n' "$realm" "$principal" "$action"
+}
+
+# vendor_realm_smtp <master|platform> — a vendor realm sends as
+# system@<PLATFORM_DOMAIN> through mail.<PLATFORM_DOMAIN>:587 with STARTTLS
+# (TASK-015; the ops realm platform since TASK-043 Q5). Idempotent: the payload
+# is converged on every run and the non-secret fields are READ BACK; the
+# post-condition is the read-back, never kcadm's exit code.
+vendor_realm_smtp() {
+    local realm="$1"
+    [[ -n "${VENDOR_SMTP_PASSWORD:-}" ]] || die "VENDOR_SMTP_PASSWORD is empty in ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
+    [[ -n "${PLATFORM_DOMAIN:-}" ]] || die "PLATFORM_DOMAIN is empty in ${MAIL_ENV}" "$GREMION_EXIT_USAGE"
+    kc_connect
+    local want before after payload
+    want="$(jq -nc --arg d "$PLATFORM_DOMAIN" \
+        '{host: ("mail." + $d), port: "587", user: ("system@" + $d), from: ("system@" + $d), starttls: "true"}')"
+    before="$(realm_smtp_fields "$realm")" \
+        || die "kcadm could not read realms/${realm}" "$GREMION_EXIT_ASSERT"
+    # The password is read by jq from the environment ($ENV), never from argv,
+    # and the payload reaches kcadm on stdin.
+    payload="$(jq -nc --argjson w "$want" \
+        '{smtpServer: ($w + {ssl: "false", auth: "true", fromDisplayName: "Gremion",
+                             password: $ENV.VENDOR_SMTP_PASSWORD})}')"
+    printf '%s' "$payload" | docker exec -i "$KC_CID" "$KCADM_BIN" update "realms/${realm}" -f - >/dev/null \
+        || die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"
+    after="$(realm_smtp_fields "$realm")" \
+        || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
+    if [[ "$(jq -c -S . <<<"$after")" != "$(jq -c -S . <<<"$want")" ]]; then
+        bad "realms/${realm} smtpServer read back as ${after}, expected ${want}"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    local changed=yes
+    [[ "$(jq -c -S . <<<"$before")" == "$(jq -c -S . <<<"$want")" ]] && changed=no
+    ok "realms/${realm} sends as system@${PLATFORM_DOMAIN} via mail.${PLATFORM_DOMAIN}:587 STARTTLS"
+    printf 'REALM-SMTP: realm=%s user=system@%s changed=%s\n' "$realm" "$PLATFORM_DOMAIN" "$changed"
+}
+
+# collect --out DIR — the host inputs of check-principals, stripped to what the
+# check reads: principal names/emails/roles (never their secrets, which the
+# list API returns in plaintext app-password form) and every realm's
+# smtpServer user/from/host (never its password).
+cmd_collect() {
+    local out=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --out) [[ $# -ge 2 ]] || die "--out requires a value" "$GREMION_EXIT_USAGE"; out="$2"; shift 2 ;;
+            *) usage >&2; die "collect: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    [[ -n "$out" && -d "$out" ]] || die "collect needs --out <existing directory>" "$GREMION_EXIT_USAGE"
+    need_cmd curl jq docker
+    # The list answers every principal WITH its plaintext app secrets, so it is
+    # held in memory only (never a temp file a signal could leave behind) and
+    # stripped before anything is written.
+    local raw esc_user esc_pw
+    esc_user="${STALWART_ADMIN_USER//\\/\\\\}"; esc_user="${esc_user//\"/\\\"}"
+    esc_pw="${STALWART_ADMIN_PASSWORD//\\/\\\\}"; esc_pw="${esc_pw//\"/\\\"}"
+    # The admin credential goes to curl on stdin (-K -), never on its argv;
+    # quotes and backslashes are escaped for curl's config syntax.
+    raw="$(printf 'user = "%s:%s"\n' "$esc_user" "$esc_pw" \
+        | curl -sS -K - "${STALWART_ADMIN_URL}/api/principal?types=individual&limit=0")" \
+        || die "the management API at ${STALWART_ADMIN_URL} did not answer" "$GREMION_EXIT_ASSERT"
+    # HTTP 200 carries failures too: the verdict is the body.
+    if ! printf '%s' "$raw" | jq -e 'has("data") and (.data.items | type == "array")' >/dev/null 2>&1; then
+        die "the principal list came back without a data.items array (an {\"error\":...} body is a failure, not an empty list)" \
+            "$GREMION_EXIT_ASSERT"
+    fi
+    printf '%s' "$raw" \
+        | jq '[.data.items[] | if type == "string" then {name: .} else {name, type, emails: (.emails // []), roles: (.roles // [])} end]' \
+        | atomic_write "${out}/principals.json" 0600 \
+        || die "the principal list could not be stripped and written" "$GREMION_EXIT_ASSERT"
+    raw=""
+    kc_connect
+    local realms
+    realms="$(docker exec "$KC_CID" "$KCADM_BIN" get realms --fields "realm,${SMTP_FIELDS}")" \
+        || die "kcadm could not list the realms" "$GREMION_EXIT_ASSERT"
+    jq '[.[] | {realm, smtp: ((.smtpServer // {}) | {user, from, host})}]' <<<"$realms" \
+        | atomic_write "${out}/realms.json" 0600 \
+        || die "the realm listing was not a JSON array" "$GREMION_EXIT_ASSERT"
+    ok "collected $(jq length "${out}/principals.json") principal(s) and $(jq length "${out}/realms.json") realm(s) into ${out}"
+}
+
+# The gremion-ui containers' environment as <colour>\t<KEY>\t<sha256(value)>
+# lines, so the separation check compares values it is never handed.
+ui_env_hashes() {   # <file>
+    local file="$1" colour cid line env active="" n=0
+    : > "$file"
+    [[ ! -f "$(gremion_root)/runtime/active-colour" ]] \
+        || active="$(tr -d '[:space:]' < "$(gremion_root)/runtime/active-colour")"
+    # No live colour recorded means no app to compare against: "hashed 0" is
+    # never a pass (round-2 review).
+    [[ "$active" == blue || "$active" == green ]] \
+        || die "runtime/active-colour is ${active:-absent}, not blue or green: there is no live gremion-ui to compare (deploy first)" \
+               "$GREMION_EXIT_USAGE"
+    for colour in blue green; do
+        cid="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${colour}" \
+                            --filter "label=com.docker.compose.service=gremion-ui")" \
+            || die "docker could not list the ${STACK}-app-${colour} containers" "$GREMION_EXIT_USAGE"
+        cid="${cid%%$'\n'*}"
+        if [[ -z "$cid" ]]; then
+            # The live colour's app MUST be read: an empty arm is not "shares
+            # nothing", it is "never looked".
+            [[ "$colour" != "$active" ]] \
+                || die "no gremion-ui container of the active colour ${active} is running: its environment cannot be compared" \
+                       "$GREMION_EXIT_USAGE"
+            continue
+        fi
+        # Captured first: a failed inspect inside < <(...) would read as an
+        # empty environment.
+        env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$cid")" \
+            || die "docker could not inspect the ${STACK}-app-${colour} gremion-ui container" "$GREMION_EXIT_USAGE"
+        while IFS= read -r line; do
+            [[ "$line" == *=* ]] || continue
+            printf '%s\t%s\t%s\n' "$colour" "${line%%=*}" \
+                "$(printf '%s' "${line#*=}" | sha256sum | cut -d' ' -f1)" >> "$file"
+        done <<< "$env"
+        env=""
+        n=$((n + 1))
+    done
+    info "gremion-ui containers hashed: ${n}"
+}
+
+run_node() {
+    local sub="$1"; shift
+    require_node_image
+    [[ -f "${VENDOR_MAIL_DIR}/${sub}.mjs" ]] \
+        || die "ops/vendor-mail/${sub}.mjs is missing from ${VENDOR_MAIL_DIR}" "$GREMION_EXIT_USAGE"
+    local net=none root work="" a
+    root="$(gremion_root)"
+    [[ "$sub" == principals ]] && net=host
+    local -a mounts=(-v "${VENDOR_MAIL_DIR}:/release/ops/vendor-mail:ro")
+    local -a args=()
+    case "$sub" in
+        principals)
+            mounts+=(-v "${MAIL_ENV}:/run/gremion/env/mail.env:ro") ;;
+        check-identities)
+            mounts+=(-v "${MAIL_ENV}:/run/gremion/env/mail.env:ro"
+                     -v "${root}/etc/env/ops.env:/run/gremion/env/ops.env:ro") ;;
+        check-received)
+            # Untrusted input: it gets the three non-secret values it needs as
+            # arguments, and no secret-bearing file.
+            args+=(--domain "$PLATFORM_DOMAIN" --bind-ip "$MAIL_BIND_IP" --bind-ip6 "$MAIL_BIND_IP6") ;;
+        check-upstream-image|check-deliverability-record)
+            mounts+=(-v "${RELEASE_DIR}/infra/host/mail:/release/infra/host/mail:ro"
+                     -v "${RELEASE_DIR}/infra/host/templates/env:/release/infra/host/templates/env:ro") ;;
+        check-secret-separation|check-principals)
+            [[ " $* " == *" --host "* ]] \
+                || die "${sub} runs on a host with --host; the fixture mode is the verify suite's" "$GREMION_EXIT_USAGE"
+            work="$(mktemp -d)"
+            # shellcheck disable=SC2064  # expand $work now: it is local
+            trap "rm -rf '${work}'" EXIT
+            chmod 700 "$work"
+            if [[ "$sub" == check-secret-separation ]]; then
+                ui_env_hashes "${work}/ui-env.tsv"
+                mounts+=(-v "${root}/etc/env:/run/gremion/env-all:ro"
+                         -v "${root}/etc/secrets:/run/gremion/secrets:ro"
+                         -v "${work}:/run/gremion/collect:ro")
+            else
+                cmd_collect --out "$work" >&2
+                mounts+=(-v "${work}:/run/gremion/collect:ro")
+            fi ;;
+    esac
+    # check-received reads one headers file: mount it and hand the check the
+    # in-container path.
+    while [[ $# -gt 0 ]]; do
+        a="$1"; shift
+        if [[ "$sub" == check-received && "$a" == --file ]]; then
+            [[ $# -ge 1 ]] || die "--file requires a value" "$GREMION_EXIT_USAGE"
+            [[ -r "$1" ]] || die "cannot read ${1}" "$GREMION_EXIT_USAGE"
+            mounts+=(-v "$(realpath "$1"):/run/gremion/in/received.eml:ro")
+            args+=(--file /run/gremion/in/received.eml); shift
+        else
+            args+=("$a")
+        fi
+    done
+    local rc=0
+    docker run --rm --name "${STACK}-vendor-mail-${sub}-$$" --label "gremion.stack=${STACK}" \
+        --network "$net" --read-only --cap-drop ALL --security-opt no-new-privileges \
+        --log-driver none --pids-limit 64 --memory 256m \
+        --user "$(id -u):$(id -g)" -e VENDOR_MAIL_MODE=host \
+        "${mounts[@]}" "$VENDOR_MAIL_NODE_IMAGE" node "/release/ops/vendor-mail/${sub}.mjs" "${args[@]}" \
+        || rc=$?
+    return "$rc"
+}
+
+main() {
+    [[ $# -ge 1 ]] || { usage >&2; exit "$GREMION_EXIT_USAGE"; }
+    local sub="$1"; shift
+    case "$sub" in
+        -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
+    esac
+    if [[ "$NODE_SUBS" != *" ${sub} "* && "$sub" != realm-smtp && "$sub" != collect ]]; then
+        usage >&2
+        die "unknown subcommand: ${sub}" "$GREMION_EXIT_USAGE"
+    fi
+    need_cmd docker sed tail mktemp
+    resolve_vendor_dir
+    load_mail_env
+    case "$sub" in
+        realm-smtp) cmd_realm_smtp "$@" ;;
+        collect)    cmd_collect "$@" ;;
+        *)          run_node "$sub" "$@" ;;
+    esac
+}
+
+main "$@"

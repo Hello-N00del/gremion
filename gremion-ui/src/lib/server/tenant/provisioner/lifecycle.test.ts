@@ -2,7 +2,7 @@
 // fully-mocked subsystems. No DB, no KC, no network, no filesystem. Exercises the
 // crypto-shred-FIRST ordering, the resumable mid-sequence ledger state (re-run
 // completes; key-already-shredded is terminal-safe), the §7.8 tombstone (a deleted
-// slug is never re-provisionable), the `default`-tenant hard guard, and the T21
+// slug is never re-provisionable), every-tenant-equal deletion (TASK-042), and the T21
 // leaf-shred step (drop newsletter_<slug> + delete catalog row on the leaf PG).
 import { describe, it, expect, vi } from 'vitest'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from './lifecycle'
@@ -57,7 +57,7 @@ function harness(opts: { row?: Tenant | null; shredFailsOnce?: boolean; dbDropFa
       for (const p of paths) shredded.add(p)
     }),
     db: {
-      dropDatabaseAndRole: vi.fn(async () => {
+      dropKernelDatabase: vi.fn(async () => {
         dropCalls++
         if (opts.dbDropFailsOnce && dropCalls === 1) throw new Error('boom: DB drop failed')
         order.push('db-drop')
@@ -116,6 +116,18 @@ describe('deleteTenant — crypto-shred-first ordering', () => {
     expect(paths.some((p) => p.endsWith('tenant_t2_db'))).toBe(true)
     expect(paths.some((p) => p.endsWith('tenant_t2_client_gremion-ui'))).toBe(true)
     expect(paths.some((p) => p.endsWith('tenant_t2_client_gremion-admin'))).toBe(true)
+    // TASK-043 Q11: the list of generated secrets shrank; a tenant made before the
+    // shrink still has the old client files, and they are still shredded.
+    expect(paths.some((p) => p.endsWith('tenant_t2_client_synapse'))).toBe(true)
+    for (const legacy of ['nextcloud', 'helios', 'helios-voter']) {
+      expect(paths.some((p) => p.endsWith(`tenant_t2_client_${legacy}`))).toBe(true)
+    }
+  })
+
+  it('TASK-043 Q3: drops the kernel database by the tenant ID, never by the slug', async () => {
+    const h = harness()
+    await deleteTenant('t2', h.deps)
+    expect(h.deps.db.dropKernelDatabase).toHaveBeenCalledWith('id-t2')
   })
 
   it('marks NC + Matrix for manual teardown (silo satellites the script cannot reach)', async () => {
@@ -141,27 +153,38 @@ describe('deleteTenant — crypto-shred-first ordering', () => {
   })
 })
 
-describe('deleteTenant — default-tenant hard guard', () => {
-  it('REFUSES to delete the default tenant (no shred, no drop, no realm delete)', async () => {
-    const h = harness({ row: tenant({ id: 'default', slug: 'default' }) })
-    await expect(deleteTenant('default', h.deps)).rejects.toThrow(/default tenant/i)
-    expect(h.deps.shredSecretFiles).not.toHaveBeenCalled()
-    expect(h.deps.db.dropDatabaseAndRole).not.toHaveBeenCalled()
-    expect(h.deps.kc.deleteRealm).not.toHaveBeenCalled()
+// TASK-042 TDD 6 (TRD-042 [D R15-2]): there is no bootstrap tenant, so a
+// tenant whose slug happens to be `default` is deleted exactly like any other.
+describe('deleteTenant — every tenant is equal (no default-tenant guard)', () => {
+  function forSlug(slug: string): Tenant {
+    return tenant({
+      id: `id-${slug}`,
+      slug,
+      dbConnRef: `file:/run/secrets/tenants/tenant_${slug}_db`,
+      kcClientRef: `file:/run/secrets/tenants/tenant_${slug}_client_gremion-admin`,
+      authClientRef: `file:/run/secrets/tenants/tenant_${slug}_client_gremion-ui`,
+      backupKeyRef: `file:/run/secrets/tenants/tenant_${slug}_backup_key`,
+    })
+  }
+
+  async function runDelete(slug: string) {
+    const h = harness({ row: forSlug(slug) })
+    const result = await deleteTenant(slug, h.deps)
+    const paths = ((h.deps.shredSecretFiles as any).mock.calls[0][0] as string[]).map((p) =>
+      p.split(slug).join('<slug>'),
+    )
+    return { result: { ...result, slug: '<slug>', shreddedPaths: result.shreddedPaths.map((p) => p.split(slug).join('<slug>')) }, order: h.order, paths, status: h.row!.status }
+  }
+
+  it('deletes a tenant whose slug is `default`: shred, drop, realm delete, tombstone', async () => {
+    const d = await runDelete('default')
+    expect(d.status).toBe('deleted')
+    expect(d.result.shredded).toBe(true)
+    expect(d.paths.some((p) => p.endsWith('tenant_<slug>_backup_key'))).toBe(true)
   })
 
-  // Belt-and-braces (depth): if the registry ever returns the default ROW for a
-  // non-`default` input slug, the resolved-row slug guard still refuses. (The
-  // (0a) input-slug guard cannot catch this — the input slug is not 'default'.)
-  it('REFUSES when the registry returns a row whose SLUG is default for a non-default input', async () => {
-    const h = harness()
-    // Force the registry to hand back the DEFAULT row for a non-default lookup.
-    h.deps.registry.getTenantBySlug = async () =>
-      tenant({ slug: 'default', id: 'id-default-uuid' })
-    await expect(deleteTenant('t2', h.deps)).rejects.toThrow(/default tenant/i)
-    expect(h.deps.shredSecretFiles).not.toHaveBeenCalled()
-    expect(h.deps.db.dropDatabaseAndRole).not.toHaveBeenCalled()
-    expect(h.deps.kc.deleteRealm).not.toHaveBeenCalled()
+  it('`default` and `alpha` go through byte-equal delete sequences', async () => {
+    expect(await runDelete('default')).toEqual(await runDelete('alpha'))
   })
 })
 
@@ -170,7 +193,7 @@ describe('deleteTenant — §7.8 tombstone is terminal (slug never reusable)', (
     const h = harness({ row: tenant({ status: 'deleted' }) })
     await deleteTenant('t2', h.deps)
     expect(h.deps.shredSecretFiles).not.toHaveBeenCalled()
-    expect(h.deps.db.dropDatabaseAndRole).not.toHaveBeenCalled()
+    expect(h.deps.db.dropKernelDatabase).not.toHaveBeenCalled()
     expect(h.deps.kc.deleteRealm).not.toHaveBeenCalled()
   })
 
@@ -192,12 +215,12 @@ describe('deleteTenant — resumable mid-sequence ledger state', () => {
     await expect(deleteTenant('t2', h.deps)).rejects.toThrow(/shred failed/i)
     // status flipped to 'deleting' BEFORE the shred, so the partial state is visible
     expect(h.row!.status).toBe('deleting')
-    expect(h.deps.db.dropDatabaseAndRole).not.toHaveBeenCalled()
+    expect(h.deps.db.dropKernelDatabase).not.toHaveBeenCalled()
     // re-run from the resumable 'deleting' state completes
     await deleteTenant('t2', h.deps)
     expect(h.row!.status).toBe('deleted')
     expect(h.deps.shredSecretFiles).toHaveBeenCalledTimes(2)
-    expect(h.deps.db.dropDatabaseAndRole).toHaveBeenCalledTimes(1)
+    expect(h.deps.db.dropKernelDatabase).toHaveBeenCalledTimes(1)
   })
 
   it('a DB-drop failure after the shred is resumable; re-run re-shreds (terminal-safe) and completes', async () => {
@@ -207,7 +230,7 @@ describe('deleteTenant — resumable mid-sequence ledger state', () => {
     // re-run: key-already-shredded is terminal-safe (re-shred is harmless), DB drop now succeeds
     await deleteTenant('t2', h.deps)
     expect(h.row!.status).toBe('deleted')
-    expect(h.deps.db.dropDatabaseAndRole).toHaveBeenCalledTimes(2)
+    expect(h.deps.db.dropKernelDatabase).toHaveBeenCalledTimes(2)
   })
 })
 

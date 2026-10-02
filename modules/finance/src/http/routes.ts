@@ -38,12 +38,15 @@ import type http from 'node:http'
 import type { HttpMethod, Route, RouteContext, RouteHandler } from './router.js'
 import type { TenantRef, Sql } from '../tenant-store.js'
 import {
-  tableCount,
   insertFinanceUnit,
   getFinanceUnitById,
   updateFinanceUnitById,
   deleteFinanceUnitForSubOrg,
   countOrgUnitFinanceRefs,
+  assertSubOrgCreateAllowed,
+  assertCentralScopeWritable,
+  assertFinanceUnitWritable,
+  assertBankAccountWritable,
   FinanceValidationError,
   AccessDeniedError,
   ApprovalWorkflowError,
@@ -60,6 +63,7 @@ import {
   ReceiptMimeError,
   ReceiptNotFoundError,
   ReceiptImmutableError,
+  InvalidReceiptFilenameError,
   type ReceiptUpload,
   listExpenses,
   getExpense,
@@ -389,18 +393,35 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(JSON.stringify(body))
 }
 
-/** Read + JSON-parse the request body (empty body → {}). */
+/** A request body that is not a JSON object (F1-FIX-05-K, K4#4). The server maps it
+ *  to 400 'invalid JSON body' before any store call. */
+export class BadJsonBodyError extends Error {
+  readonly httpStatus = 400
+  constructor(reason: string) {
+    super(`invalid JSON body: ${reason}`)
+    this.name = 'BadJsonBodyError'
+  }
+}
+
+/** Read + JSON-parse the request body. An empty body means {}; a malformed body or
+ *  a JSON value that is not an object (array, null, string, number) throws
+ *  BadJsonBodyError -- it used to become {}, so a truncated mutation ran as an empty
+ *  one (a sign request without its note still signed). */
 async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   for await (const chunk of req) chunks.push(chunk as Buffer)
   const raw = Buffer.concat(chunks).toString('utf8').trim()
   if (raw.length === 0) return {}
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+    parsed = JSON.parse(raw)
   } catch {
-    return {}
+    throw new BadJsonBodyError('not parseable')
   }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new BadJsonBodyError('not an object')
+  }
+  return parsed as Record<string, unknown>
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined)
@@ -535,14 +556,18 @@ function createSubOrgHandler(storeFn: StoreFn): RouteHandler {
     const body = await readJsonBody(req)
     const orgUnitId = str(body.org_unit_id)
     if (!orgUnitId) return sendJson(res, 400, { success: false, error: 'org_unit_id (string) is required' })
-    const sql = await storeFn(tenant)
-    const fu = await insertFinanceUnit(sql, {
-      orgUnitId,
-      kind: str(body.kind),
-      bookkeepingMode: str(body.bookkeeping_mode),
-      carryOverRule: str(body.carry_over_rule),
+    await runStore(res, async () => {
+      const sql = await storeFn(tenant)
+      // F1-FIX-05-K (H15): the write actor must be able to write the parent org unit.
+      await assertSubOrgCreateAllowed(sql, actorFromHeaders(req), orgUnitId, str(body.parent_org_unit_id))
+      const fu = await insertFinanceUnit(sql, {
+        orgUnitId,
+        kind: str(body.kind),
+        bookkeepingMode: str(body.bookkeeping_mode),
+        carryOverRule: str(body.carry_over_rule),
+      })
+      sendJson(res, 200, fu)
     })
-    sendJson(res, 200, fu)
   }
 }
 
@@ -560,30 +585,42 @@ function updateSubOrgHandler(storeFn: StoreFn): RouteHandler {
   return async (ctx: RouteContext): Promise<void> => {
     const { req, res, tenant, params } = ctx as ApiContext
     const body = await readJsonBody(req)
-    const sql = await storeFn(tenant)
-    const fu = await updateFinanceUnitById(sql, params.id!, {
-      bookkeepingMode: str(body.bookkeeping_mode),
-      carryOverRule: str(body.carry_over_rule),
+    await runStore(res, async () => {
+      const sql = await storeFn(tenant)
+      // F1-FIX-05-K (H15): the write actor must be able to write the sub-org itself.
+      if (!(await assertFinanceUnitWritable(sql, actorFromHeaders(req), params.id!))) {
+        return sendJson(res, 404, { success: false, error: 'sub-org not found' })
+      }
+      const fu = await updateFinanceUnitById(sql, params.id!, {
+        bookkeepingMode: str(body.bookkeeping_mode),
+        carryOverRule: str(body.carry_over_rule),
+      })
+      if (!fu) return sendJson(res, 404, { success: false, error: 'sub-org not found' })
+      sendJson(res, 200, fu)
     })
-    if (!fu) return sendJson(res, 404, { success: false, error: 'sub-org not found' })
-    sendJson(res, 200, fu)
   }
 }
 
 function deleteSubOrgHandler(storeFn: StoreFn): RouteHandler {
   return async (ctx: RouteContext): Promise<void> => {
-    const { res, tenant, params } = ctx as ApiContext
-    const sql = await storeFn(tenant)
-    const result = await deleteFinanceUnitForSubOrg(sql, params.id!)
-    if (result.status === 'not_found') return sendJson(res, 404, { success: false, error: 'sub-org not found' })
-    if (result.status === 'blocked') {
-      return sendJson(res, 409, {
-        success: false,
-        error: 'sub-org still referenced by finance rows (RESTRICT)',
-        counts: result.counts,
-      })
-    }
-    sendJson(res, 200, { org_unit_id: result.orgUnitId })
+    const { req, res, tenant, params } = ctx as ApiContext
+    await runStore(res, async () => {
+      const sql = await storeFn(tenant)
+      // F1-FIX-05-K (H15): the write actor must be able to write the sub-org itself.
+      if (!(await assertFinanceUnitWritable(sql, actorFromHeaders(req), params.id!))) {
+        return sendJson(res, 404, { success: false, error: 'sub-org not found' })
+      }
+      const result = await deleteFinanceUnitForSubOrg(sql, params.id!)
+      if (result.status === 'not_found') return sendJson(res, 404, { success: false, error: 'sub-org not found' })
+      if (result.status === 'blocked') {
+        return sendJson(res, 409, {
+          success: false,
+          error: 'sub-org still referenced by finance rows (RESTRICT)',
+          counts: result.counts,
+        })
+      }
+      sendJson(res, 200, { org_unit_id: result.orgUnitId })
+    })
   }
 }
 
@@ -622,6 +659,7 @@ function createFiscalYearHandler(storeFn: StoreFn): RouteHandler {
     }
     await runStore(res, async () => {
       const sql = await storeFn(tenant)
+      await assertCentralOrConfigAdmin(sql, actorFromHeaders(req))
       sendJson(res, 200, await createFiscalYear(sql, { name, startDate, endDate }))
     })
   }
@@ -637,6 +675,7 @@ function updateFiscalYearHandler(storeFn: StoreFn): RouteHandler {
     if (typeof body.end_date === 'string') patch.endDate = body.end_date
     await runStore(res, async () => {
       const sql = await storeFn(tenant)
+      await assertCentralOrConfigAdmin(sql, actorFromHeaders(req))
       const fy = await updateFiscalYear(sql, params.id!, patch)
       if (!fy) return sendJson(res, 404, { success: false, error: 'fiscal_year not found' })
       sendJson(res, 200, fy)
@@ -1125,6 +1164,8 @@ function csvImportHandler(storeFn: StoreFn): RouteHandler {
     const csvOrderReversed = parts.find((p) => p.name === 'csv_order_reversed')?.data.toString('utf8') === 'true'
     try {
       const sql = await storeFn(tenant)
+      // F1-FIX-05-K (K4#34): only an actor who may write a unit backed by this account.
+      await assertBankAccountWritable(sql, actorFromHeaders(req), Number(params.id))
       const result = await importCsv(sql, Number(params.id), file.data.toString('utf8'), mapping, csvOrderReversed)
       sendJson(res, 200, result)
     } catch (err) {
@@ -1133,6 +1174,9 @@ function csvImportHandler(storeFn: StoreFn): RouteHandler {
       }
       if (err instanceof BankAccountNotFoundError) {
         return sendJson(res, 404, { success: false, error: err.message })
+      }
+      if (err instanceof AccessDeniedError) {
+        return sendJson(res, 403, { success: false, error: err.message, code: 'ACCESS_DENIED' })
       }
       throw err
     }
@@ -1155,6 +1199,8 @@ function configureFintsHandler(storeFn: StoreFn): RouteHandler {
     }
     try {
       const sql = await storeFn(tenant)
+      // F1-FIX-05-K (K4#34): only an actor who may write a unit backed by this account.
+      await assertBankAccountWritable(sql, actorFromHeaders(req), Number(params.id))
       const config = await configureFints(sql, Number(params.id), {
         fints_url: fintsUrl,
         bank_code: bankCode,
@@ -1166,6 +1212,9 @@ function configureFintsHandler(storeFn: StoreFn): RouteHandler {
       if (err instanceof FintsConfigValidationError) {
         return sendJson(res, 400, { success: false, error: err.message })
       }
+      if (err instanceof AccessDeniedError) {
+        return sendJson(res, 403, { success: false, error: err.message, code: 'ACCESS_DENIED' })
+      }
       throw err // incl. a missing FINANCE_FINTS_PASSWORD_KEY → 500 (native parity)
     }
   }
@@ -1173,13 +1222,18 @@ function configureFintsHandler(storeFn: StoreFn): RouteHandler {
 
 function syncFintsHandler(storeFn: StoreFn): RouteHandler {
   return async (ctx: RouteContext): Promise<void> => {
-    const { res, tenant, params } = ctx as ApiContext
+    const { req, res, tenant, params } = ctx as ApiContext
     try {
       const sql = await storeFn(tenant)
+      // F1-FIX-05-K (K4#34): only an actor who may write a unit backed by this account.
+      await assertBankAccountWritable(sql, actorFromHeaders(req), Number(params.id))
       sendJson(res, 200, await syncFints(sql, Number(params.id)))
     } catch (err) {
       if (err instanceof FintsSyncNotFoundError) {
         return sendJson(res, 404, { success: false, error: err.message })
+      }
+      if (err instanceof AccessDeniedError) {
+        return sendJson(res, 403, { success: false, error: err.message, code: 'ACCESS_DENIED' })
       }
       throw err
     }
@@ -1206,7 +1260,8 @@ async function runReceipt(res: http.ServerResponse, fn: () => Promise<void>): Pr
       err instanceof ReceiptTooLargeError ||
       err instanceof ReceiptMimeError ||
       err instanceof ReceiptNotFoundError ||
-      err instanceof ReceiptImmutableError
+      err instanceof ReceiptImmutableError ||
+      err instanceof InvalidReceiptFilenameError
     ) {
       return sendJson(res, err.httpStatus, { success: false, error: err.message })
     }
@@ -1237,7 +1292,9 @@ function uploadReceiptHandler(storeFn: StoreFn): RouteHandler {
     }
     await runReceipt(res, async () => {
       const sql = await storeFn(tenant)
-      const receipt = await uploadReceipt(sql, actorFromHeaders(req), Number(params.id), upload, getStorage())
+      const receipt = await uploadReceipt(
+        sql, actorFromHeaders(req), Number(params.id), upload, getStorage(), tenant.id,
+      )
       sendJson(res, 200, receipt)
     })
   }
@@ -1373,6 +1430,7 @@ function createSubOrgTypeHandler(storeFn: StoreFn): RouteHandler {
     if (!name) return sendJson(res, 400, { success: false, error: 'name (string) is required' })
     await runStore(res, async () => {
       const sql = await storeFn(tenant)
+      await assertCentralOrConfigAdmin(sql, actorFromHeaders(req))
       sendJson(res, 200, await createSubOrgType(sql, { name, description: str(body.description) ?? null }))
     })
   }
@@ -1380,11 +1438,24 @@ function createSubOrgTypeHandler(storeFn: StoreFn): RouteHandler {
 
 function deleteSubOrgTypeHandler(storeFn: StoreFn): RouteHandler {
   return async (ctx: RouteContext): Promise<void> => {
-    const { res, tenant, params } = ctx as ApiContext
-    const sql = await storeFn(tenant)
-    await deleteSubOrgType(sql, params.id!)
-    sendJson(res, 200, { success: true })
+    const { req, res, tenant, params } = ctx as ApiContext
+    await runStore(res, async () => {
+      const sql = await storeFn(tenant)
+      await assertCentralOrConfigAdmin(sql, actorFromHeaders(req))
+      await deleteSubOrgType(sql, params.id!)
+      sendJson(res, 200, { success: true })
+    })
   }
+}
+
+/** F1-FIX-05-K r2 (K4#34 remainder): tenant-wide finance configuration -- fiscal
+ *  years and sub-org types -- needs the central/admin scope, as the ledger fix asks:
+ *  the admin / it-admin config groups (the updateSignerConfig gate below), else the
+ *  central finance_unit's org unit (auditor refused, runtime superuser passes). These
+ *  handlers used to run with no actor at all. Throws AccessDeniedError -> 403. */
+async function assertCentralOrConfigAdmin(sql: Sql, actor: ActorContext): Promise<void> {
+  if (isFinanceConfigAdmin(actor.groups)) return
+  await assertCentralScopeWritable(sql, actor)
 }
 
 // ── LIVE finanzordnung config handlers (TASK-009 lane C / R23-6) ─────────────
@@ -1888,18 +1959,11 @@ export function buildApiRoutes(storeFn?: StoreFn): Route[] {
 }
 
 // ── /healthz/tenants handler ──────────────────────────────────────────────────
-// Guard-EXEMPT (served from the /healthz* path in server.ts). Returns a per-tenant
-// DB ping + a couple of finance counts, so an operator can confirm the leaf's own
-// PG is reachable and migrated for every tenant before a cutover.
-
-export interface TenantHealth {
-  tenant_id: string
-  tenant_slug: string
-  db_ok: boolean
-  bank_accounts?: number
-  bookings?: number
-  error?: string
-}
+// Served from the /healthz* path in server.ts, which requires the internal secret
+// for this sub-path (F1-FIX-05-K, K4#32). An operator confirms the leaf's own PG is
+// reachable and migrated for every tenant. The response carries booleans ONLY: no
+// tenant ids or slugs, no finance counts, no DB error text (those went to any
+// unauthenticated caller before). The per-tenant detail is logged server-side.
 
 export async function tenantHealthHandler(
   res: http.ServerResponse,
@@ -1910,31 +1974,24 @@ export async function tenantHealthHandler(
   try {
     tenants = await listTenants()
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    sendJson(res, 503, { success: false, error: `tenant listing failed: ${msg}` })
+    console.error('[finance] /healthz/tenants: tenant listing failed', err)
+    sendJson(res, 503, { success: false, db_ok: false })
     return
   }
 
-  const results: TenantHealth[] = await Promise.all(
-    tenants.map(async (t): Promise<TenantHealth> => {
+  const results = await Promise.all(
+    tenants.map(async (t): Promise<boolean> => {
       try {
         const sql = await storeFn(t)
-        const [bankAccounts, bookings] = await Promise.all([
-          tableCount(sql, 'bank_account'),
-          tableCount(sql, 'booking'),
-        ])
-        return { tenant_id: t.id, tenant_slug: t.slug, db_ok: true, bank_accounts: bankAccounts, bookings }
+        await sql`SELECT 1`
+        return true
       } catch (err) {
-        return {
-          tenant_id: t.id,
-          tenant_slug: t.slug,
-          db_ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        }
+        console.error(`[finance] /healthz/tenants: tenant ${t.id} (${t.slug}) DB probe failed`, err)
+        return false
       }
     }),
   )
 
-  const allOk = results.every((r) => r.db_ok)
-  sendJson(res, allOk ? 200 : 503, { success: allOk, data: results })
+  const allOk = results.every((ok) => ok)
+  sendJson(res, allOk ? 200 : 503, { success: allOk, db_ok: allOk })
 }

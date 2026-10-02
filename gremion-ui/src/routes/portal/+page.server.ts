@@ -14,6 +14,5 @@ export const load: PageServerLoad = async ({ locals }) => {
   const config = readConfig()
   return {
     domain: config.org.domain,
-    portalSections: config.org.portal_sections,
   }
 }

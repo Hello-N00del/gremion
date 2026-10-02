@@ -676,6 +676,102 @@ describe('POST /api/v1/posts/:id/audit', () => {
   })
 })
 
+// -- delivery claim fence over HTTP (R29-LOW-07 L1) ----------------------------
+
+describe('delivery claim token over HTTP (R29-LOW-07 L1)', () => {
+  async function mkPostId(): Promise<string> {
+    const c = await callServer(server, 'POST', '/api/v1/posts', guardHeaders(T1), POST_BODY)
+    return (c.body as { id: string }).id
+  }
+  const claim = (postId: string, email: string) =>
+    callServer(server, 'POST', '/api/v1/deliveries/claim', guardHeaders(T1), {
+      post_id: postId,
+      email,
+    })
+  const failed = (postId: string, email: string, error: string, token?: string) =>
+    callServer(
+      server,
+      'POST',
+      `/api/v1/deliveries/${postId}/${encodeURIComponent(email)}/failed`,
+      guardHeaders(T1),
+      token === undefined ? { error } : { error, claim_token: token },
+    )
+  const sent = (postId: string, email: string, messageId: string) =>
+    callServer(
+      server,
+      'POST',
+      `/api/v1/deliveries/${postId}/${encodeURIComponent(email)}/sent`,
+      guardHeaders(T1),
+      { message_id: messageId },
+    )
+  const status = async (postId: string, email: string) =>
+    (
+      await sql1<{ status: string }[]>`
+        SELECT status FROM content.deliveries WHERE post_id = ${postId} AND email = ${email}
+      `
+    )[0]?.status
+
+  it('the claim route returns the result AND, when fresh, the claim token', async () => {
+    const postId = await mkPostId()
+    const first = await claim(postId, 'tok@x.de')
+    expect(first.status).toBe(200)
+    const body = first.body as { result: string; claim_token: string | null }
+    expect(body.result).toBe('fresh')
+    expect(body.claim_token).toMatch(/^\d{10,}$/)
+
+    const second = (await claim(postId, 'tok@x.de')).body as { result: string; claim_token: string | null }
+    expect(second).toEqual({ result: 'in-flight', claim_token: null })
+  })
+
+  it('three-way interleave: a superseded claimer late failure (with its token) changes nothing', async () => {
+    const postId = await mkPostId()
+    // A claims.
+    const a = (await claim(postId, 'race@x.de')).body as { result: string; claim_token: string }
+    expect(a.result).toBe('fresh')
+    // A's claim goes stale; B takes it over.
+    await sql1`
+      UPDATE content.deliveries SET claimed_at = now() - interval '20 minutes'
+      WHERE post_id = ${postId} AND email = ${'race@x.de'}
+    `
+    const b = (await claim(postId, 'race@x.de')).body as { result: string; claim_token: string }
+    expect(b.result).toBe('fresh')
+    expect(b.claim_token).not.toBe(a.claim_token)
+    // A's late failure carries A's token: B's live claim is untouched.
+    const late = await failed(postId, 'race@x.de', 'A: timeout', a.claim_token)
+    expect(late.status).toBe(204)
+    expect(await status(postId, 'race@x.de')).toBe('claimed')
+    // B delivers and records it.
+    expect((await sent(postId, 'race@x.de', 'msg-b')).status).toBe(204)
+    expect(await status(postId, 'race@x.de')).toBe('sent')
+    // A re-publish C must not claim it.
+    const c = (await claim(postId, 'race@x.de')).body as { result: string }
+    expect(c.result).toBe('already-sent')
+  })
+
+  it('the failed route with the claimer own token marks the claim failed', async () => {
+    const postId = await mkPostId()
+    const a = (await claim(postId, 'own@x.de')).body as { claim_token: string }
+    expect((await failed(postId, 'own@x.de', 'A: 451', a.claim_token)).status).toBe(204)
+    expect(await status(postId, 'own@x.de')).toBe('failed')
+  })
+
+  it('a failed request WITHOUT a token keeps the legacy status-only behaviour', async () => {
+    const postId = await mkPostId()
+    await claim(postId, 'legacy@x.de')
+    expect((await failed(postId, 'legacy@x.de', 'old caller')).status).toBe(204)
+    expect(await status(postId, 'legacy@x.de')).toBe('failed')
+  })
+
+  it('markSent still records after a superseded failure flipped the claim (no token)', async () => {
+    const postId = await mkPostId()
+    await claim(postId, 'flip@x.de')
+    await failed(postId, 'flip@x.de', 'A: late failure')
+    await sent(postId, 'flip@x.de', 'msg-b')
+    expect(await status(postId, 'flip@x.de')).toBe('sent')
+    expect(((await claim(postId, 'flip@x.de')).body as { result: string }).result).toBe('already-sent')
+  })
+})
+
 // -- tenant isolation ---------------------------------------------------------
 
 describe('tenant isolation', () => {

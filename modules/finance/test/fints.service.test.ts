@@ -206,6 +206,16 @@ describe('fints sync — syncFints', () => {
     expect(updates.some((u) => /last_sync_status = 'failed'/.test(u.q))).toBe(true)
   })
 
+  it('F1-FIX-05-K (K4#13): a failed sync never advances last_sync_at (the unfetched window is retried)', async () => {
+    const { fn, updates } = fakeSyncSql({ hasConfig: true, hasAccount: true, encryptedPassword: encryptFintsPassword('p', TEST_KEY) })
+    const fake = new FakeFintsClient()
+    fake.stageAuthError()
+    await syncFints(fn, 7, fake)
+    const failed = updates.find((u) => /last_sync_status = 'failed'/.test(u.q))
+    expect(failed).toBeDefined()
+    expect(failed!.q).not.toMatch(/last_sync_at\s*=/)
+  })
+
   it('a corrupt stored envelope is RECORDED as a failed sync (never a 500)', async () => {
     const { fn, updates } = fakeSyncSql({ hasConfig: true, hasAccount: true, encryptedPassword: 'not-base64-envelope' })
     const fake = new FakeFintsClient()

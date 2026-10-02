@@ -12,7 +12,8 @@
 //
 // Channel semantics:
 //   email:     Same bounded at-least-once pattern as newsletter — per-recipient
-//              claim → send → markSent/markFailed. Stale-claim takeover at 15 min.
+//              claim → send → recordDelivered (bounded retry; a delivered send is
+//              never marked failed) / markFailed. Stale-claim takeover at 15 min.
 //   portal:    Single network call to the kernel. Idempotent at the kernel side
 //              (content_origin_post_id UNIQUE). Failure rolls the entire dispatch to 'failed'.
 //   instagram: Purely outbox — createPublishOp enqueues a 'pending' row drained by
@@ -37,12 +38,14 @@ import {
   listMembers,
   isUnsubscribed,
   addSendToken,
-  claimRecipient,
-  markSent,
+  claimDelivery,
+  recordDelivered,
+  markFailed,
   createPublication,
   createPublishOp,
 } from './store/index.js'
 import { enqueueOutbox } from './outbox.js'
+import { checkLinkBase } from './link-base.js'
 
 // ── injected transport ──────────────────────────────────────────────────────
 
@@ -72,8 +75,13 @@ export interface DispatchDeps {
    * the real work goes through kernel.portalPublish or createPublishOp.
    */
   channels: Map<'email' | 'portal' | 'instagram', ChannelTransport>
-  /** This tenant's external origin for unsubscribe links (no trailing slash). */
+  /**
+   * This tenant's external origin for unsubscribe links (no trailing slash).
+   * An unusable value fails the email channel before any claim (K5#8).
+   */
   origin: string
+  /** Local development only: accept a loopback origin (CONTENT_ALLOW_LOOPBACK_LINKS=1). */
+  allowLoopbackLinks?: boolean
   /**
    * The correlation id for this dispatch. Injected by the HTTP send-route from
    * the inbound x-correlation-id header. Falls back to the postId when absent.
@@ -176,7 +184,17 @@ export async function dispatch(
     // ── Email channel ────────────────────────────────────────────────────────
     if (channels.has('email')) {
       const emailTransport = channels.get('email')!
-      await dispatchEmail(sql, kernel, emailTransport, postId, post, origin, correlationId, channelEvents)
+      await dispatchEmail(
+        sql,
+        kernel,
+        emailTransport,
+        postId,
+        post,
+        origin,
+        deps.allowLoopbackLinks === true,
+        correlationId,
+        channelEvents,
+      )
     }
 
     // ── Portal channel ───────────────────────────────────────────────────────
@@ -237,42 +255,75 @@ async function dispatchEmail(
   postId: string,
   post: { title: string; body_html: string },
   origin: string,
+  allowLoopback: boolean,
   _correlationId: string,
   channelEvents: Array<{ event: 'channel.email.sent' | 'channel.portal.sent' | 'channel.instagram.enqueued'; payload: unknown }>,
 ): Promise<void> {
+  // K5#8: refuse an unusable unsubscribe link base BEFORE claiming anyone (the
+  // throw fails the whole-post dispatch; nothing was claimed or sent).
+  const linkBase = checkLinkBase(origin, { allowLoopback })
+  if (!linkBase.usable) throw new Error(`unsubscribe link base unusable: ${linkBase.reason}`)
+  const base = linkBase.base
+
   // Build recipient list from post_recipients (mailing lists + KC groups).
   const recipientRows = await getPostChannelRecipients(sql, postId, 'email')
   const recipients = await buildRecipientList(sql, recipientRows, kernel)
 
   let delivered = 0
   let failed = 0
+  let unrecorded = 0 // delivered, but the ledger write failed (claim kept)
   let lastError: unknown
 
   for (const { email } of recipients) {
-    const claim = await claimRecipient(sql, postId, email)
+    const { result: claim, claimedAt } = await claimDelivery(sql, postId, email)
     if (claim !== 'fresh') continue // already-sent or in-flight
 
     const token = await addSendToken(sql, randomUUID(), postId, email)
-    const unsubUrl = `${origin}/content/unsubscribe?token=${token}`
+    const unsubUrl = `${base}/content/unsubscribe?token=${encodeURIComponent(token)}`
     const personalizedHtml = injectUnsubscribeFooter(post.body_html, unsubUrl)
 
+    // ONLY the transport send is inside this try: a throw from the ledger write
+    // AFTER a delivered send must never reach markFailed (a 'failed' row is
+    // re-claimed by the next dispatch, which would mail the recipient twice).
+    let messageId: string
     try {
       const info = await transport.send({
         to: email,
         subject: post.title,
         html: personalizedHtml,
       })
-      await markSent(sql, postId, email, String(info.id))
-      delivered += 1
+      messageId = String(info.id)
     } catch (err) {
-      // Leave the claim in place (bounded at-least-once — mirrors newsletter pattern).
+      // F1-FIX-07 H07: mark the row 'failed' (not a lingering 'claimed') so the
+      // next dispatch re-claims it at once. A lingering claim read 'in-flight'
+      // for 15 min, so a retry inside that window skipped the recipient and
+      // still flipped the post to 'sent'.
+      const message = err instanceof Error ? err.message : String(err)
+      // The claim token keeps a late failure off a claim another worker took over.
+      await markFailed(sql, postId, email, message, claimedAt ?? undefined)
       failed += 1
       lastError = err
-      console.error(
-        `[dispatch] email send to ${email} (post ${postId}) failed:`,
-        err instanceof Error ? err.message : String(err),
-      )
+      console.error(`[dispatch] email send to ${email} (post ${postId}) failed:`, message)
+      continue
     }
+
+    // Delivered. Record it (bounded retry); if the ledger write still fails the
+    // claim stays in place (never 'failed') and the recipient counts as not recorded.
+    if (await recordDelivered(sql, postId, email, messageId)) {
+      delivered += 1
+    } else {
+      unrecorded += 1
+    }
+  }
+
+  // "Do not re-publish" always wins (R29-LOW-07 L2): a delivered-but-unrecorded
+  // recipient could be mailed again by a re-publish, so this message beats the
+  // plain failure message below even when other recipients failed in the same pass.
+  if (unrecorded > 0) {
+    const alsoFailed = failed > 0 ? ` (${failed} other recipient(s) also failed to send)` : ''
+    throw new Error(
+      `${unrecorded} recipient(s) delivered but not recorded in the delivery ledger — do not re-publish before checking the delivery log${alsoFailed}`,
+    )
   }
 
   if (failed > 0) {

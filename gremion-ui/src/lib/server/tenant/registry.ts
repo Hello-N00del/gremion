@@ -3,7 +3,6 @@
 // Reads ONLY the control pool (getControlDb) — never a tenant data-plane pool,
 // never the ALS resolver. The ledger functions mirror ledger.ts's idempotency
 // pattern at tenant granularity, keyed by (tenant_id, subsystem).
-import { env } from '$env/dynamic/private'
 import { getControlDb } from './control-db'
 import { validateSlug } from './slug'
 import { normaliseHost } from './host'
@@ -31,6 +30,7 @@ import { evictJwks } from '$lib/server/jwt-verify'
 import { evictDisplayNameResolver } from '$lib/server/identity/display-names'
 import { evictTenantMail } from '$lib/server/mail/tenant-mail'
 import { runTenantEvictHooks } from '$lib/server/modules/runtime-registry'
+import { platformEnv } from '$lib/server/env/platform-env'
 import type { TenantContext } from './context'
 
 export type TenantStatus = 'provisioning' | 'active' | 'suspended' | 'deleting' | 'deleted'
@@ -393,16 +393,45 @@ export async function resolveTenantById(id: string): Promise<TenantContext | nul
  * Callers MUST have already confirmed row.status === 'active'.
  */
 async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<TenantContext> {
-  const slug = row.slug
-  const dbUrl = resolveSecret(row.dbConnRef)
+  const ctx = await buildTenantContext(row)
+  // HARDENING-1: an eviction that landed while this resolution was in flight
+  // must not be undone by its cache write.
+  if (_evictionEpoch === epoch) {
+    _resolutionCache.set(row.slug, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
+  }
+  return ctx
+}
+
+/**
+ * TASK-043 Q21: the context of a customer that is still `provisioning`, for
+ * the one thing that must run inside it before the row may become `active`:
+ * the kernel migration (gremion-ui's db.ts runMigrations() inside
+ * runWithTenant), then the first body. resolveTenantBySlug / migrateTenant
+ * resolve `active` rows only, so they cannot be used; setting the row
+ * `active` first would serve a half-made tenant. NEVER cached (the resolution
+ * cache holds active tenants only) and refused for any other status.
+ * `dbUrl` overrides the row's db secret for this context only (the migration
+ * runs DIRECT and as the database owner, TASK-043 Q3); the caller evicts the
+ * tenant's pool around its use, because pools are keyed by tenant id.
+ */
+export async function contextForProvisioningTenant(row: Tenant, opts: { dbUrl?: string } = {}): Promise<TenantContext> {
+  if (row.status !== 'provisioning') {
+    throw new Error(`contextForProvisioningTenant: tenant ${row.slug} is ${row.status}, not provisioning`)
+  }
+  return buildTenantContext(row, opts.dbUrl)
+}
+
+/** The context of one registry row (no cache write, no status check). */
+async function buildTenantContext(row: Tenant, dbUrlOverride?: string): Promise<TenantContext> {
+  const dbUrl = dbUrlOverride ?? resolveSecret(row.dbConnRef)
   const conn = row.connProfile as { perTenantMax?: number; prepare?: boolean }
   const dbMax = typeof conn.perTenantMax === 'number' ? conn.perTenantMax : 4
   const dbPrepare = conn.prepare ?? true
   const issuer = row.issuer.replace(/\/$/, '')
   const kcInternal = row.kcInternal.replace(/\/$/, '')
-  // CR1: per-tenant audiences come from the registry row (seeded for `default`
-  // from parseAudiences(env.AUTH_JWT_AUDIENCES) at registration — Task 30); the
-  // parseAudiences(undefined) fallback only fires for a malformed empty row.
+  // CR1: per-tenant audiences come from the registry row (written at
+  // provisioning); the parseAudiences(undefined) fallback only fires for a
+  // malformed empty row.
   const audiences = row.audiences.length ? Array.from(row.audiences) : parseAudiences(undefined)
   const matrixSpace = row.matrixSpace as {
     serverName?: string
@@ -414,13 +443,13 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
   // P2.1b T7: per-tenant external-service endpoints. domain_profile carries the
   // helios/livekit resolution; matrix_space carries the homeserver/admin refs
   // (spec §3.1 "Matrix url/admin-ref/serverName/aliasNamespace"). All optional —
-  // an absent field means env fallback at the consuming module, and the DEFAULT
-  // tenant ignores `services` entirely (env stays its source of truth).
+  // an absent field means the consuming module's own fallback; every tenant
+  // is read the same way (TASK-042: there is no env-derived tenant).
   const domainProfile = row.domainProfile as {
     heliosUrl?: string
     livekit?: { url?: string; apiKeyRef?: string; apiSecretRef?: string }
     // SP-2: per-tenant SMTP credential ref + optional host/port/from override.
-    // The default row carries no `smtp` key ⇒ undefined ⇒ config.smtp + auth-less.
+    // A row without an `smtp` key ⇒ undefined ⇒ config.smtp + auth-less.
     smtp?: { host?: string; port?: number; from?: string; user?: string; passwordRef?: string }
   }
   const configPath = configPathForTenant(row.slug)
@@ -457,11 +486,9 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
     kcClientSecretRef: row.kcClientRef,
     // MJ-secret: the Auth.js provider uses the UI client (gremion-ui) + its OWN secret
     // ref (row.authClientRef), NOT the admin client/secret above.
-    // externalBase (point 6): for the `default` tenant this must derive from
-    // AUTH_KEYCLOAK_BASE (matching auth.ts:19 `AUTH_KEYCLOAK_BASE ?? AUTH_KEYCLOAK_ISSUER`)
-    // so the browser authorization redirect URL is byte-identical to today; other
-    // tenants fall back to their issuer.
-    authExternalBase: authExternalBaseForTenant(row.slug, issuer),
+    // externalBase (point 6, TASK-042): every tenant's is its own issuer; no
+    // slug reads the deployment env (registry.integration.test.ts point 6).
+    authExternalBase: authExternalBaseForTenant(issuer),
     // D-UICLIENT (P2.1c §8.1): the UI client id is FROZEN to `gremion-ui` for every
     // tenant realm — no per-tenant registry column. The realm template's UI client
     // is `gremion-ui` (realm-export.base.json) and the provisioner always creates it
@@ -490,15 +517,10 @@ async function buildAndCacheTenantContext(row: Tenant, epoch: number): Promise<T
       livekitUrl: domainProfile.livekit?.url,
       livekitApiKeyRef: domainProfile.livekit?.apiKeyRef,
       livekitApiSecretRef: domainProfile.livekit?.apiSecretRef,
-      // SP-2 (O-2): per-tenant SMTP from domain_profile.smtp. Absent on the
-      // default row ⇒ undefined ⇒ tenant-mail falls back to config.smtp + auth-less.
+      // SP-2 (O-2): per-tenant SMTP from domain_profile.smtp. Absent ⇒
+      // undefined ⇒ tenant-mail falls back to config.smtp + auth-less.
       smtp: domainProfile.smtp,
     },
-  }
-  // HARDENING-1: an eviction that landed while this resolution was in flight
-  // must not be undone by its cache write.
-  if (_evictionEpoch === epoch) {
-    _resolutionCache.set(slug, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })
   }
   return ctx
 }
@@ -751,22 +773,25 @@ export async function updateTenantProvisioning(
   return rows[0] ? hydrate(rows[0]) : null
 }
 
-/** The `default` tenant keeps env.CONFIG_PATH; others use a per-slug data dir. */
-function configPathForTenant(slug: string): string {
-  return slug === 'default' ? (env.CONFIG_PATH ?? '/app/config/config.json') : `/data/${slug}/config.json`
+/**
+ * Every tenant's config lives in its per-slug data dir under the deployment-
+ * global TENANT_DATA_ROOT (default `/data`). TASK-042 (TRD-042 [D R15-2]):
+ * there is no deployment-derived tenant #1 any more, so no slug (`default`
+ * included) reads env.CONFIG_PATH. Exported for the every-tenant-equal test
+ * (tenant-equal.test.ts).
+ */
+export function configPathForTenant(slug: string): string {
+  const root = (platformEnv('TENANT_DATA_ROOT') ?? '/data').replace(/\/+$/, '')
+  return `${root}/${slug}/config.json`
 }
 
 /**
- * Point 6 (byte-identical default): the `default` tenant's Auth.js external base
- * MUST match auth.ts:19 today — `AUTH_KEYCLOAK_BASE ?? AUTH_KEYCLOAK_ISSUER` —
- * so the browser authorization-redirect URL is unchanged. (The realm issuer can
- * differ from the OIDC endpoint base when KC runs under --http-relative-path, which
- * is exactly why auth.ts splits BASE from ISSUER.) Other tenants use their issuer.
+ * Every tenant's Auth.js external base is its own issuer (TASK-042). The former
+ * `default` branch read AUTH_KEYCLOAK_BASE/ISSUER from the deployment env, which
+ * made one slug special; a tenant whose KC runs under a different relative path
+ * carries that in its issuer.
  */
-function authExternalBaseForTenant(slug: string, issuer: string): string {
-  if (slug === 'default') {
-    return (env.AUTH_KEYCLOAK_BASE ?? env.AUTH_KEYCLOAK_ISSUER ?? issuer).replace(/\/$/, '')
-  }
+export function authExternalBaseForTenant(issuer: string): string {
   return issuer
 }
 
@@ -785,7 +810,7 @@ function kcAdminUrlFromInternal(kcInternal: string): string {
 // which is kernel-portable (no SvelteKit import, see kernel-portable.guard.
 // test.ts) — every function below is a THIN WRAPPER that supplies the three
 // things only registry.ts is allowed to know about: getControlDb() (the
-// control pool), env.PLATFORM_DOMAIN, and evictTenantRuntime (the runtime
+// control pool), platformEnv('PLATFORM_DOMAIN'), and evictTenantRuntime (the runtime
 // eviction callback). No behaviour change: same exports, same signatures,
 // same errors — the extraction moved code, not semantics.
 export type { TenantDomain }
@@ -840,7 +865,7 @@ export async function addTenantDomain(
   opts: AddTenantDomainOptions = {},
 ): Promise<TenantDomain> {
   return tdAdd(getControlDb(), tenantId, rawHost, opts, {
-    platformDomain: env.PLATFORM_DOMAIN ?? '',
+    platformDomain: platformEnv('PLATFORM_DOMAIN') ?? '',
     onEvict: evictTenantRuntime,
   })
 }

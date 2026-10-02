@@ -69,7 +69,7 @@ Task-specific operator runbooks live under [`docs/runbooks/`](runbooks/) and
 | [runbooks/tenant-edge.md](runbooks/tenant-edge.md) | Tenant edge routing (whole-host resolution, per-host Traefik routers, control-DB bootstrap) |
 | [runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md) | Provisioning, suspending, and deleting tenants |
 | [runbooks/pgbouncer.md](runbooks/pgbouncer.md) | PgBouncer transaction-pooling front (production overlay) — deploy / verify / rollback |
-| [ops/restore-runbook.md](ops/restore-runbook.md) | Step-by-step disaster restore from a restic snapshot |
+| [ops/runbook/README.md](ops/runbook/README.md) | The four-procedure operations runbook: install, upgrade, backup and restore (supersedes ops/restore-runbook.md) |
 | [ops/setup.md](ops/setup.md) | First-time setup |
 
 ---
@@ -235,6 +235,11 @@ GDPR-safe defaults and hard caps live in `.env.example`:
 | `LOG_APP_RETENTION_SECONDS` | 30 days | 90 days |
 | `LOG_SECURITY_RETENTION_SECONDS` | 90 days | 180 days |
 | `LOG_SECURITY_NOPII_RETENTION_SECONDS` | 90 days | 365 days |
+
+Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. The
+edge files, Traefik's own log (`/logs/traefik/traefik.log`, read it through the
+vector container) and Keycloak's event store already obey it; see the "Upper
+bound" section of the policy.
 
 ```bash
 docker compose logs -f vector             # pipeline diagnostics

@@ -97,20 +97,16 @@ A host reaches a tenant only when BOTH exist:
   `X-Forwarded-Host` to that host (rendered per customer host by the edge
   router emitter, TASK-034).
 
-> **⛔ No shipped tool writes a `tenant_domain` row yet, so a kernel stack
-> built from this tree serves NO tenant on ANY host.** The resolver selects
-> by the whole bound host only (TASK-041); the apex binds no tenant (TRD-075)
-> and the old wildcard and apex default-tenant routes are gone. Nothing that
-> ships calls `addTenantDomain`: `gremion-ui/scripts/tenant-provision.ts`
-> creates a tenant but binds no host, the default tenant binds none, and
-> migration `004_tenant_domain.sql` creates the table empty. The binding
-> arrives with the customer-create CLI (TASK-043: its provisioning run writes
-> the `tenant_domain` row for the customer's domain) on top of the zero-tenant
-> boot (TASK-042). Until TASK-043 lands, **do not deploy this kernel to a
-> stack that must serve a tenant**, and do not hand-insert `tenant_domain`
-> rows: `addTenantDomain` carries the reserved-host refusal, the owner
-> pre-read and the cache-eviction notice in one transaction, and a raw
-> `INSERT` skips all three.
+> **A customer's host is bound by `gremion-tenant create` (TASK-043), and by
+> nothing else.** The resolver selects by the whole bound host only
+> (TASK-041); the apex binds no tenant (TRD-075) and the old wildcard and apex
+> default-tenant routes are gone. `create` writes the ONE primary
+> `tenant_domain` row through `addTenantDomain` in its container phase A
+> (reserved-host refusal, owner pre-read and cache-eviction notice in one
+> transaction), checks the host's DNS against the edge (`domain_bound`), and
+> after phase B writes the customer's router file
+> `etc/edge/tenant-<slug>.yml` from the host. Do not hand-insert
+> `tenant_domain` rows: a raw `INSERT` skips all three guards.
 
 The compose files carry only the apex routers (`gremion-ui`, `keycloak`,
 `keycloak-admin`, `fallback`), each literal on `${DOMAIN}`. A request for any
@@ -281,10 +277,17 @@ curl -sI https://not-bound.example.org
 #   tenant.host.rejected line in the gremion-ui log).
 ```
 
-Per-host Keycloak routing for a customer's primary host (its issuer host) is not
-in the compose files: it arrives with the per-host router emitter (TASK-034) and
-the issuer re-mint (TASK-043). Until then only the apex routes `/auth/*` to
-Keycloak.
+Per-host Keycloak routing for a customer's primary host (its issuer host,
+`https://<host>/auth/realms/<slug>`) is in the customer's router file, not in
+the compose files: `tenant-<slug>.kc` routes `/auth/realms/<slug>/` and
+`/auth/resources/` on that host to `keycloak@docker`, with the host's own pin
+first (TASK-043 Q16). The dot in the name is deliberate: no slug can spell it,
+so it never collides with customer `<slug>-kc`'s host router. Never
+`/auth/admin`, never another realm (the render refuses `master`, `platform`
+and any realm but the slug): the admin console stays on the apex behind its
+allowlist. That file is written by `gremion-tenant create` (render-router);
+`syncTenantRouters` does not co-manage it and refuses to rewrite or prune a
+file that carries the realm router.
 
 > **A bare Traefik 404 (no `Location`, no app/login redirect, no gremion-ui
 > marker) is a FALSE GREEN for a host you expected to serve.** Always follow

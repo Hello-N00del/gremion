@@ -4,11 +4,19 @@
 // scheduler: the leaf owns no state). Graceful shutdown (SIGTERM/SIGINT) closes
 // the server.
 import { createServer } from './http/server.js'
+import { bootConfigProblems } from './boot-config.js'
 
 const PORT = Number.parseInt(process.env.PORT ?? '8080', 10)
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
 function main(): void {
+  // K5#29 / S4#18: refuse to boot without the Nextcloud admin credential.
+  const fatal = bootConfigProblems(process.env)
+  if (fatal.length > 0) {
+    for (const p of fatal) console.error(`[votes] FATAL: ${p}`)
+    process.exit(1)
+  }
+
   const secret = process.env.INTERNAL_VOTES_SECRET
   if (!secret) {
     console.warn('[votes] INTERNAL_VOTES_SECRET is unset — all guarded routes will 403')

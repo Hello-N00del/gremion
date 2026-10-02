@@ -33,10 +33,12 @@ export default defineConfig({
   plugins: [paraglideVitePlugin(paraglideOptions), sveltekit()],
   ssr: { noExternal: ['@gremion/db'] },
   test: {
-    include: ['tests/integration/**/*.integration.test.ts'],
+    // TASK-042: named, not globbed: tests/integration also holds the
+    // createTestTenant suite, which belongs to the integration lane.
+    include: ['tests/integration/municipal-acceptance.integration.test.ts'],
     globals: true,
     environment: 'node',
-    // Establish the default-tenant ALS context (P2.1a) and guard DATABASE_URL
+    // Establish the lane's tenant ALS context (P2.1a) and guard DATABASE_URL
     // before the boot-smoke's beforeAll runs. See deselection-setup.ts for why
     // this is separate from the shared integration setup.ts.
     setupFiles: ['tests/integration/deselection-setup.ts'],

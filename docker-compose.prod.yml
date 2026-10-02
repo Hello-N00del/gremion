@@ -6,7 +6,9 @@
 #
 #   docker compose --env-file /opt/gremion/etc/env/state.env <verb>
 #
-# (docker-compose.yml : docker-compose.prod.yml : docker-compose.pins.yml).
+# (docker-compose.yml : docker-compose.prod.yml : docker-compose.state-pins.yml,
+# the state project's own release pins layer; the app layer
+# docker-compose.pins.yml is the colour projects').
 # The app tier (gremion-ui, gremion-public) is NOT overlaid here any more:
 # it is docker-compose.app.yml, one project per colour, reached only through
 # etc/edge/active.yml (TASK-040). No router or middleware label here names
@@ -231,7 +233,7 @@ services:
     build:
       context: ./docker/fallback
       dockerfile: Dockerfile
-    image: ghcr.io/hello-n00del/gremion-fallback:${IMAGE_TAG:-latest}
+    image: ghcr.io/hello-n00del/gremion-fallback:${IMAGE_TAG:-dev}
     restart: unless-stopped
     logging:
       driver: json-file

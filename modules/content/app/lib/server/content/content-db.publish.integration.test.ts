@@ -27,6 +27,7 @@ import {
 	mintSendToken,
 	consumeUnsubscribeToken,
 	claimRecipient,
+	claimDelivery,
 	markDeliverySent,
 	markDeliveryFailed,
 	getPublication,
@@ -231,6 +232,99 @@ describe('content-db L2 publish/email (integration)', () => {
 		`
 		expect(rows[0]!.status).toBe('failed')
 		expect(rows[0]!.error_message).toBe('smtp 550')
+	})
+
+	// F1-FIX-07 H07: a 'failed' row is re-claimable (once), never stuck 'in-flight'.
+	it('claimRecipient takes over a failed row exactly once (retry without double-send)', async () => {
+		const sql = getDb()
+		const post = await createPost({ title: 'Retry', created_by: 'u1' })
+		await claimRecipient(post.id, 'a@x.de')
+		await markDeliveryFailed(post.id, 'a@x.de', 'smtp 451')
+
+		const results = await Promise.all([
+			claimRecipient(post.id, 'a@x.de'),
+			claimRecipient(post.id, 'a@x.de'),
+		])
+		expect(results.filter((r) => r === 'fresh')).toHaveLength(1)
+		expect(results.filter((r) => r === 'in-flight')).toHaveLength(1)
+
+		const rows = await sql<{ status: string; error_message: string | null }[]>`
+			SELECT status, error_message FROM content.deliveries
+			WHERE post_id = ${post.id} AND email = 'a@x.de'
+		`
+		expect(rows[0]).toMatchObject({ status: 'claimed', error_message: null })
+	})
+
+	// F1-FIX-07 r2: a late failure from a superseded claimer never turns a delivered
+	// row back into 'failed' (which, now that 'failed' is re-claimable, re-sends).
+	it('a late markDeliveryFailed after a takeover delivered leaves the row sent', async () => {
+		const sql = getDb()
+		const post = await createPost({ title: 'Late', created_by: 'u1' })
+		await claimRecipient(post.id, 'a@x.de') // worker A
+		await sql`UPDATE content.deliveries SET claimed_at = now() - interval '20 minutes'
+			WHERE post_id = ${post.id} AND email = 'a@x.de'`
+		expect(await claimRecipient(post.id, 'a@x.de')).toBe('fresh') // worker B takes over
+		await markDeliverySent(post.id, 'a@x.de', 'msg-b')
+		await markDeliveryFailed(post.id, 'a@x.de', 'A: connection reset') // A fails late
+
+		const rows = await sql<{ status: string; smtp_message_id: string | null }[]>`
+			SELECT status, smtp_message_id FROM content.deliveries
+			WHERE post_id = ${post.id} AND email = 'a@x.de'
+		`
+		expect(rows[0]).toMatchObject({ status: 'sent', smtp_message_id: 'msg-b' })
+		expect(await claimRecipient(post.id, 'a@x.de')).toBe('already-sent')
+	})
+
+	// R29-LOW-07 L1: the claim token. claimDelivery returns it only when 'fresh';
+	// markDeliveryFailed with a token only touches the caller's own claim.
+	it('claimDelivery returns the claim token only when fresh', async () => {
+		const post = await createPost({ title: 'Tok', created_by: 'u1' })
+		const first = await claimDelivery(post.id, 'a@x.de')
+		expect(first.result).toBe('fresh')
+		expect(first.claimToken).toMatch(/^\d{10,}$/)
+		expect(await claimDelivery(post.id, 'a@x.de')).toEqual({ result: 'in-flight', claimToken: null })
+		await markDeliverySent(post.id, 'a@x.de', 'm')
+		expect(await claimDelivery(post.id, 'a@x.de')).toEqual({ result: 'already-sent', claimToken: null })
+	})
+
+	it('three-way interleave: a superseded claimer late failure (own token) changes nothing', async () => {
+		const sql = getDb()
+		const post = await createPost({ title: 'Three', created_by: 'u1' })
+		const status = async () =>
+			(
+				await sql<{ status: string }[]>`
+					SELECT status FROM content.deliveries WHERE post_id = ${post.id} AND email = 'a@x.de'
+				`
+			)[0]!.status
+		const a = await claimDelivery(post.id, 'a@x.de') // A claims
+		await sql`UPDATE content.deliveries SET claimed_at = now() - interval '20 minutes'
+			WHERE post_id = ${post.id} AND email = 'a@x.de'`
+		const b = await claimDelivery(post.id, 'a@x.de') // A goes stale, B takes over
+		expect(b.result).toBe('fresh')
+		expect(b.claimToken).not.toBe(a.claimToken)
+
+		await markDeliveryFailed(post.id, 'a@x.de', 'A: timeout', a.claimToken!) // A's late failure
+		expect(await status()).toBe('claimed') // B's claim is untouched
+
+		await markDeliverySent(post.id, 'a@x.de', 'msg-b') // B delivers
+		expect(await status()).toBe('sent')
+		expect(await claimRecipient(post.id, 'a@x.de')).toBe('already-sent') // C does not claim
+
+		// B's own failure with B's token does fail a live claim.
+		await claimDelivery(post.id, 'z@x.de')
+		const z = await claimDelivery(post.id, 'y@x.de')
+		await markDeliveryFailed(post.id, 'y@x.de', 'B: 451', z.claimToken!)
+		const rows = await sql<{ status: string }[]>`
+			SELECT status FROM content.deliveries WHERE post_id = ${post.id} AND email = 'y@x.de'`
+		expect(rows[0]!.status).toBe('failed')
+	})
+
+	it('markDeliverySent still records after a tokenless late failure flipped the claim', async () => {
+		const post = await createPost({ title: 'Flip', created_by: 'u1' })
+		await claimRecipient(post.id, 'a@x.de')
+		await markDeliveryFailed(post.id, 'a@x.de', 'A: late failure')
+		await markDeliverySent(post.id, 'a@x.de', 'msg-b')
+		expect(await claimRecipient(post.id, 'a@x.de')).toBe('already-sent')
 	})
 
 	// ── publications (upsert linkage) ─────────────────────────────────────────

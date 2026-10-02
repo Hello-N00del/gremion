@@ -15,7 +15,7 @@ import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 
 import { Harness, REPO_ROOT, sh } from './lib/harness.mjs'
-import { runSopsCheck, isSopsEncrypted, parseSopsConfig, SENTINEL_RE } from './check-sops.mjs'
+import { runSopsCheck, isSopsEncrypted, parseSopsConfig, SENTINEL_RE, AGE_RECIPIENT_RE } from './check-sops.mjs'
 
 const h = new Harness('sops')
 after(() => h.teardown())
@@ -67,13 +67,16 @@ const clean = { 'README.md': '# fixture\n' }
 
 // ── the committed tree ──────────────────────────────────────────────────────
 
-test('the committed tree fails ONLY on the pending age recipient (operator activation step)', () => {
+// The operator activated the age recipient (bcfcf054, TASK-046 activation step
+// 4), so the committed tree has ZERO problems. The sentinel refusal itself is
+// still proven by the fixture test below ('the sentinel recipient ... fails').
+test('the committed tree has zero problems (age recipient activated by the operator)', () => {
   const res = runSopsCheck(REPO_ROOT)
   assert.ok(res.scanned > 100, `scanned ${res.scanned} files`)
   assert.deepEqual(
-    codes(res),
-    ['sentinel-recipient'],
-    `unexpected problems in the committed tree:\n${res.problems.map((p) => `${p.code} ${p.path}: ${p.message}`).join('\n')}`,
+    res.problems.map((p) => `${p.code} ${p.path}: ${p.message}`),
+    [],
+    'unexpected problems in the committed tree',
   )
 })
 
@@ -85,7 +88,11 @@ test('the committed .sops.yaml has a compose-layout rule and no k8s-only rule', 
     assert.ok(re.test(p), `rule does not cover ${p}`)
   }
   assert.doesNotMatch(cfg.rules[0].pathRegex, /^k8s\//)
-  assert.match(cfg.rules[0].recipients.join(','), SENTINEL_RE)
+  assert.ok(cfg.rules[0].recipients.length > 0, 'the rule names no recipient')
+  for (const rc of cfg.rules[0].recipients) {
+    assert.match(rc, AGE_RECIPIENT_RE, 'the rule recipient is not a well-formed age recipient')
+    assert.doesNotMatch(rc, SENTINEL_RE, 'the rule still carries the activation sentinel')
+  }
 })
 
 // ── RED cases: each must FAIL ──────────────────────────────────────────────

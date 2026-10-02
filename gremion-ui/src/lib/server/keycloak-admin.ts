@@ -55,12 +55,37 @@ export interface ListUsersOptions {
   readonly first?: number
   readonly max?: number
   readonly search?: string
+  /** Exact-username lookup (`username=<v>&exact=true`); wins over `search`. */
+  readonly username?: string
+  readonly exact?: boolean
   readonly enabled?: boolean
 }
+
+export interface KeycloakAdminClientOptions {
+  /** Per-request budget for every outbound Keycloak fetch (token + admin). */
+  readonly timeoutMs?: number
+}
+
+/** F1-FIX-01 (K1#8/#38): one hung Keycloak call must not stall a scheduler tick. */
+const DEFAULT_TIMEOUT_MS = 15_000
 
 interface TokenCache {
   token: string
   expiresAt: number
+}
+
+/**
+ * F1-FIX-01 (H03): every id spliced into a realm-admin REST path goes through
+ * this. SvelteKit hands route handlers the DECODED param and fetch() collapses
+ * `..` segments, so a raw `../clients/x` would steer the service-account token
+ * to any admin endpoint. encodeURIComponent turns `/`, `?`, `#` and `%` into
+ * data; the bare dot segments survive encoding, so they are rejected outright.
+ */
+function seg(id: string): string {
+  if (typeof id !== 'string' || id === '' || id === '.' || id === '..') {
+    throw new Error('Invalid Keycloak id')
+  }
+  return encodeURIComponent(id)
 }
 
 export class KeycloakAdminClient {
@@ -68,13 +93,22 @@ export class KeycloakAdminClient {
   private readonly realm: string
   private readonly clientId: string
   private readonly clientSecret: string
+  private readonly timeoutMs: number
   private tokenCache: TokenCache | null = null
+  private tokenInflight: Promise<string> | null = null
 
-  constructor(adminUrl: string, realm: string, clientId: string, clientSecret: string) {
+  constructor(
+    adminUrl: string,
+    realm: string,
+    clientId: string,
+    clientSecret: string,
+    opts?: KeycloakAdminClientOptions,
+  ) {
     this.adminUrl = adminUrl
     this.realm = realm
     this.clientId = clientId
     this.clientSecret = clientSecret
+    this.timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
   }
 
   /** Validate that the configured admin client credentials are accepted by
@@ -106,11 +140,19 @@ export class KeycloakAdminClient {
     }
   }
 
-  private async getToken(): Promise<string> {
+  private getToken(): Promise<string> {
     if (this.tokenCache && Date.now() < this.tokenCache.expiresAt - 30_000) {
-      return this.tokenCache.token
+      return Promise.resolve(this.tokenCache.token)
     }
+    // Single-flight: concurrent callers on a cold/expired cache share one
+    // token request instead of each hitting the token endpoint.
+    this.tokenInflight ??= this.fetchToken().finally(() => {
+      this.tokenInflight = null
+    })
+    return this.tokenInflight
+  }
 
+  private async fetchToken(): Promise<string> {
     const res = await fetch(
       `${this.adminUrl}/realms/${this.realm}/protocol/openid-connect/token`,
       {
@@ -120,7 +162,8 @@ export class KeycloakAdminClient {
           grant_type: 'client_credentials',
           client_id: this.clientId,
           client_secret: this.clientSecret
-        }).toString()
+        }).toString(),
+        signal: AbortSignal.timeout(this.timeoutMs)
       }
     )
 
@@ -145,7 +188,8 @@ export class KeycloakAdminClient {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(this.timeoutMs)
     })
 
     if (!res.ok) {
@@ -159,34 +203,15 @@ export class KeycloakAdminClient {
     return res.json() as Promise<T>
   }
 
-  async listUsers(opts?: ListUsersOptions): Promise<readonly KcUser[]> {
-    const params = new URLSearchParams()
-    params.set('first', String(opts?.first ?? 0))
-    params.set('max', String(opts?.max ?? 25))
-    if (opts?.search) params.set('search', opts.search)
-    if (opts?.enabled !== undefined) params.set('enabled', String(opts.enabled))
-    return this.request<KcUser[]>('GET', `/users?${params}`)
-  }
-
-  async getUser(id: string): Promise<KcUser> {
-    try {
-      return await this.request<KcUser>('GET', `/users/${id}`)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('404')) throw new Error('User not found')
-      throw err
-    }
-  }
-
-  async createUser(data: KcUserCreate): Promise<string> {
+  /** POST that answers 201 + Location; returns the trailing id. Path is
+   *  already encoded by the caller. */
+  private async postCreate(path: string, body: unknown, what: string): Promise<string> {
     const token = await this.getToken()
-    const res = await fetch(`${this.adminUrl}/admin/realms/${this.realm}/users`, {
+    const res = await fetch(`${this.adminUrl}/admin/realms/${this.realm}${path}`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(data)
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.timeoutMs)
     })
 
     if (!res.ok) {
@@ -196,36 +221,64 @@ export class KeycloakAdminClient {
 
     const location = res.headers.get('Location') ?? ''
     const id = location.split('/').at(-1) ?? ''
-    if (!id) throw new Error('Keycloak createUser: no Location header in response')
+    if (!id) throw new Error(`Keycloak ${what}: no Location header in response`)
     return id
   }
 
+  async listUsers(opts?: ListUsersOptions): Promise<readonly KcUser[]> {
+    const params = new URLSearchParams()
+    params.set('first', String(opts?.first ?? 0))
+    params.set('max', String(opts?.max ?? 25))
+    if (opts?.username) {
+      params.set('username', opts.username)
+      if (opts.exact) params.set('exact', 'true')
+    } else if (opts?.search) {
+      params.set('search', opts.search)
+    }
+    if (opts?.enabled !== undefined) params.set('enabled', String(opts.enabled))
+    return this.request<KcUser[]>('GET', `/users?${params}`)
+  }
+
+  async getUser(id: string): Promise<KcUser> {
+    try {
+      return await this.request<KcUser>('GET', `/users/${seg(id)}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('404')) throw new Error('User not found')
+      throw err
+    }
+  }
+
+  async createUser(data: KcUserCreate): Promise<string> {
+    return this.postCreate('/users', data, 'createUser')
+  }
+
   async updateUser(id: string, data: KcUserUpdate): Promise<void> {
-    return this.request<void>('PUT', `/users/${id}`, data)
+    return this.request<void>('PUT', `/users/${seg(id)}`, data)
   }
 
   async deleteUser(id: string): Promise<void> {
-    return this.request<void>('DELETE', `/users/${id}`)
+    return this.request<void>('DELETE', `/users/${seg(id)}`)
   }
 
   async listUserGroups(id: string): Promise<readonly KcGroup[]> {
-    return this.request<KcGroup[]>('GET', `/users/${id}/groups`)
+    return this.request<KcGroup[]>('GET', `/users/${seg(id)}/groups`)
   }
 
   async addUserToGroup(userId: string, groupId: string): Promise<void> {
-    return this.request<void>('PUT', `/users/${userId}/groups/${groupId}`)
+    return this.request<void>('PUT', `/users/${seg(userId)}/groups/${seg(groupId)}`)
   }
 
   async removeUserFromGroup(userId: string, groupId: string): Promise<void> {
-    return this.request<void>('DELETE', `/users/${userId}/groups/${groupId}`)
+    return this.request<void>('DELETE', `/users/${seg(userId)}/groups/${seg(groupId)}`)
   }
 
   async listUserRoles(id: string): Promise<readonly KcRole[]> {
-    return this.request<KcRole[]>('GET', `/users/${id}/role-mappings/realm`)
+    return this.request<KcRole[]>('GET', `/users/${seg(id)}/role-mappings/realm`)
   }
 
   async assignRoles(userId: string, roles: readonly KcRole[]): Promise<void> {
-    return this.request<void>('POST', `/users/${userId}/role-mappings/realm`, [...roles])
+    return this.request<void>('POST', `/users/${seg(userId)}/role-mappings/realm`, [...roles])
   }
 
   async listRealmRoles(): Promise<readonly KcRole[]> {
@@ -233,7 +286,7 @@ export class KeycloakAdminClient {
   }
 
   async executeActionsEmail(userId: string, actions: readonly string[]): Promise<void> {
-    return this.request<void>('PUT', `/users/${userId}/execute-actions-email`, [...actions])
+    return this.request<void>('PUT', `/users/${seg(userId)}/execute-actions-email`, [...actions])
   }
 
   async listGroups(): Promise<readonly KcGroup[]> {
@@ -243,12 +296,12 @@ export class KeycloakAdminClient {
   /** Direct children of a group (one level). Used to adopt an existing same-name
    *  subgroup so re-provisioning is idempotent against leftover Keycloak state. */
   async listSubGroups(parentId: string): Promise<readonly KcGroup[]> {
-    return this.request<KcGroup[]>('GET', `/groups/${parentId}/children`)
+    return this.request<KcGroup[]>('GET', `/groups/${seg(parentId)}/children`)
   }
 
   async getGroup(id: string): Promise<KcGroup> {
     try {
-      return await this.request<KcGroup>('GET', `/groups/${id}`)
+      return await this.request<KcGroup>('GET', `/groups/${seg(id)}`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg.includes('404')) throw new Error('Group not found')
@@ -257,64 +310,30 @@ export class KeycloakAdminClient {
   }
 
   async createGroup(name: string): Promise<string> {
-    const token = await this.getToken()
-    const res = await fetch(`${this.adminUrl}/admin/realms/${this.realm}/groups`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name })
-    })
-
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`Keycloak Admin API error: ${res.status} ${text}`)
-    }
-
-    const location = res.headers.get('Location') ?? ''
-    const id = location.split('/').at(-1) ?? ''
-    if (!id) throw new Error('Keycloak createGroup: no Location header in response')
-    return id
+    return this.postCreate('/groups', { name }, 'createGroup')
   }
 
   async createSubgroup(parentId: string, name: string): Promise<string> {
-    const token = await this.getToken()
-    const res = await fetch(
-      `${this.adminUrl}/admin/realms/${this.realm}/groups/${parentId}/children`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      }
-    )
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`Keycloak Admin API error: ${res.status} ${text}`)
-    }
-    const location = res.headers.get('Location') ?? ''
-    const id = location.split('/').at(-1) ?? ''
-    if (!id) throw new Error('Keycloak createSubgroup: no Location header in response')
-    return id
+    return this.postCreate(`/groups/${seg(parentId)}/children`, { name }, 'createSubgroup')
   }
 
   async updateGroup(id: string, data: { name?: string; attributes?: Record<string, string[]> }): Promise<void> {
-    return this.request<void>('PUT', `/groups/${id}`, data)
+    return this.request<void>('PUT', `/groups/${seg(id)}`, data)
   }
 
   async deleteGroup(id: string): Promise<void> {
-    return this.request<void>('DELETE', `/groups/${id}`)
+    return this.request<void>('DELETE', `/groups/${seg(id)}`)
   }
 
   async listGroupMembers(id: string): Promise<readonly KcUser[]> {
-    return this.request<KcUser[]>('GET', `/groups/${id}/members`)
+    return this.request<KcUser[]>('GET', `/groups/${seg(id)}/members`)
   }
 
   /** Returns all members of a Keycloak group. Fetches up to 1000 users (typical group size for a student union). */
   async getGroupMembers(groupId: string): Promise<readonly KcUser[]> {
     return this.request<KcUser[]>(
       'GET',
-      `/groups/${encodeURIComponent(groupId)}/members?first=0&max=1000`
+      `/groups/${seg(groupId)}/members?first=0&max=1000`
     )
   }
 
@@ -328,7 +347,7 @@ export class KeycloakAdminClient {
 
   /** #164: true iff the user has an OTP (TOTP) credential enrolled in Keycloak. */
   async hasOtpCredential(userId: string): Promise<boolean> {
-    const creds = await this.request<Array<{ type: string }>>('GET', `/users/${userId}/credentials`)
+    const creds = await this.request<Array<{ type: string }>>('GET', `/users/${seg(userId)}/credentials`)
     return creds.some((c) => c.type === 'otp')
   }
 }

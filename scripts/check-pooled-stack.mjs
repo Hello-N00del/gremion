@@ -44,6 +44,7 @@ import { existsSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { REPO_ROOT, readEnvFile, renderState } from './compose-edge.mjs'
+import { appTierServiceNames, renderColourViolations } from './verify/render/colour-suffix.mjs'
 
 export { REPO_ROOT }
 
@@ -58,8 +59,8 @@ export const PROJECTS = [
   { id: 'mail', envFile: `${FIXTURE_DIR}/mail.env`, cwd: 'infra/host/mail' },
 ]
 
-export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create']
-export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public']
+export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create']
+export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel']
 export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create' }
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault']
 /** The leaf services app.env.tmpl names (content-service ... vault-service). */
@@ -84,6 +85,9 @@ export const PLACEMENT = {
     postgres: store,
     ...Object.fromEntries(MODULE_POSTGRES_IDS.map((id) => [`${id}-postgres`, store])),
     pgbouncer: store,
+    // TASK-024: the NATS broker is state-tier data (JetStream store) reached
+    // only over ${STACK}_state by name, like the databases.
+    nats: store,
     keycloak: { class: 'council', networks: ['edge', 'state'] },
     legal: { class: 'council-edge', networks: ['edge'] },
     fallback: { class: 'council-edge', networks: ['edge'] },
@@ -95,6 +99,8 @@ export const PLACEMENT = {
   app: {
     'gremion-ui': { class: 'council-app', networks: ['app', 'edge', 'state'] },
     'gremion-public': { class: 'council-app', networks: ['app', 'edge', 'state'] },
+    // TASK-043 Q12: no edge network, no published port, no Traefik route.
+    'control-panel': { class: 'council-app', networks: ['app', 'state'] },
     migrate: { class: 'council-oneshot', networks: ['state'] },
     'tenant-create': { class: 'council-oneshot', networks: ['edge', 'state'] },
   },
@@ -241,26 +247,13 @@ export function appShapeViolations(render, colour, stack, label = `app-${colour}
 // ── COLOUR SUFFIX ──────────────────────────────────────────────────────────
 
 export function colourSuffixViolations(render, colour, label = `app-${colour}`) {
-  const out = []
-  const firstParty = [...APP_SERVICES, ...LEAF_SERVICES]
-  for (const [svcName, svc] of services(render)) {
-    for (const [key, raw] of Object.entries(svc.environment ?? {})) {
-      const value = String(raw ?? '')
-      // A HOST token only: a URL authority (after // or user@), or the whole
-      // value of a *_HOST key. A bare value elsewhere is a name, not a host --
-      // AUTH_KEYCLOAK_ID=gremion-ui is the OIDC client id, which no colour owns.
-      const hostKey = key.endsWith('HOST')
-      for (const name of firstParty) {
-        const re = hostKey
-          ? new RegExp(`(?:^|//|@)${name}(-[a-z0-9-]+)?(?=$|[^a-z0-9-])`, 'g')
-          : new RegExp(`(?://|@)${name}(-[a-z0-9-]+)?(?=$|[^a-z0-9-])`, 'g')
-        for (const m of value.matchAll(re)) {
-          if (m[1] !== `-${colour}`) out.push(`${label}/${svcName}: environment.${key} names ${name} without the -${colour} suffix: ${value}`)
-        }
-      }
-    }
-  }
-  return out
+  // TASK-053 G2: the ONE reference predicate lives in
+  // scripts/verify/render/colour-suffix.mjs. Its name set is the union of this
+  // list, the render's first-party-image services and app.env.tmpl's
+  // -${COLOUR} hosts (a strict superset of the list-bound scan this replaced);
+  // HOST tokens only (URL authority, whole *HOST value), longest name first.
+  const names = appTierServiceNames({ renders: [render], extra: [...APP_SERVICES, ...LEAF_SERVICES] })
+  return renderColourViolations(render, colour, names, label)
 }
 
 // ── ISOLATION (TRD-045) ────────────────────────────────────────────────────

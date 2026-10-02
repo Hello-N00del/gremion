@@ -14,6 +14,7 @@ import { waitForDbReady, isTransientDbStartupError } from '$lib/server/db'
 import { isBootAndResolveExempt } from '$lib/server/boot-exempt'
 import { startProvisioningWorker } from '$lib/server/governance/provisioning/worker'
 import { verifyBearerJwt } from '$lib/server/jwt-verify'
+import { isInternalBearerRequest } from '$lib/server/internal-fetch'
 import { purgeAuditLogsOlderThan, verifyAuditChain } from '$lib/server/audit-db'
 import { generateErrId } from '$lib/server/err-id'
 import { assertIssMatch } from '$lib/server/tenant/iss-match'
@@ -21,10 +22,8 @@ import { roleVocabularyForTenant } from '$lib/server/tenant/role-vocabulary'
 import { tenantResolveHandle, tenantForwardFetch } from '$lib/server/tenant/resolve'
 import { createI18nHandle } from '$lib/i18n/server/i18n-handle'
 import { runControlMigrations } from '$lib/server/tenant/control-migrations'
-import { registerDefaultTenant } from '$lib/server/tenant/register-default'
 import { runFleetMigrations } from '$lib/server/tenant/fleet'
 import { setTenantReadinessFromFleet } from '$lib/server/tenant/readiness'
-import { resolveTenantBySlug } from '$lib/server/tenant/registry'
 import { getControlDb } from '$lib/server/tenant/control-db'
 import { startTenantEvictListener } from '$lib/server/tenant/evict-listener'
 import { forEachActiveTenant } from '$lib/server/tenant/worker-fleet'
@@ -97,6 +96,28 @@ export const bootRuntime = {
   },
 }
 
+/**
+ * F1-FIX-03 / S1a#4: delays of the one post-boot run of each audit tick. The
+ * 24 h / 6 h intervals have no initial run, so a process restarted more often
+ * than that (every deploy) never purged or verified. The integrity run is
+ * scheduled after the retention run, so it normally checks the purged table.
+ */
+export const AUDIT_RETENTION_BOOT_DELAY_MS = 90_000
+export const AUDIT_INTEGRITY_BOOT_DELAY_MS = 150_000
+
+/**
+ * One unref'd run of a fleet tick after boot. The tick's per-tenant failures are
+ * handled inside forEachActiveTenant; anything that still escapes (listing the
+ * fleet) is logged here instead of becoming an unhandled rejection.
+ */
+function schedulePostBootRun(label: string, tick: () => Promise<unknown>, delayMs: number): void {
+  bootRuntime.schedule(() => {
+    tick().catch((err: unknown) => {
+      console.error(`[${label}] post-boot run failed:`, err)
+    })
+  }, delayMs)
+}
+
 function scheduleBootRetry(): void {
   if (_bootRetryPending) return
   _bootRetryPending = true
@@ -136,21 +157,22 @@ export function boot(): Promise<void> {
       // data-plane runMigrations() runs inside the runWithTenant block below.
       await waitForDbReady({ ping: () => getControlDb()`SELECT 1` })
 
-      // P2.1a: migrate the control plane and register this deployment itself as
-      // the canonical `default` tenant #1 BEFORE the data-plane migration — the
-      // default registry row must exist so resolveTenantBySlug('default') below
-      // can build the ALS context the data-plane migration runs inside.
-      // Control migrations + default registration touch ONLY the control pool
-      // (no ALS), so they can run before any tenant scope is established.
+      // P2.1a: migrate the control plane BEFORE the data-plane migration.
+      // Control migrations touch ONLY the control pool (no ALS), so they run
+      // before any tenant scope is established.
+      //
+      // TASK-042 (PRD-PLAT-012, TRD-075): boot WRITES NOTHING into the tenant
+      // registry. There is no deployment-derived tenant #1 any more; every
+      // customer is created by the platform operator (TASK-043), and a platform
+      // with zero customers boots healthy and serves no tenant content.
       await runControlMigrations()
-      await registerDefaultTenant()
 
       // P2.1b T2+T3 (D-FLEET / D-READY): the data-plane migration step is a
-      // FLEET run over every ACTIVE registry tenant (default included — same
-      // path), each applied inside runWithTenant(ctx, …) so the P0.2
-      // module-skip uses THAT tenant's config, with the per-tenant outcome
-      // ledgered in the control plane's tenant_migration_run. One tenant's
-      // failure — the DEFAULT included — no longer fails boot: the outcomes
+      // FLEET run over every ACTIVE registry tenant (zero included: an empty
+      // fleet is a complete run), each applied inside runWithTenant(ctx, …) so
+      // the P0.2 module-skip uses THAT tenant's config, with the per-tenant
+      // outcome ledgered in the control plane's tenant_migration_run. One
+      // tenant's failure no longer fails boot: the outcomes
       // populate the per-tenant readiness map and tenantResolveHandle serves a
       // failed/pending tenant a tenant-scoped 503 with a single-flighted lazy
       // re-migration retry, while every other tenant serves normally. The
@@ -158,8 +180,7 @@ export function boot(): Promise<void> {
       // tenants (and whole ticks pre-population), so background writes never
       // hit a half-migrated tenant DB either (G-014's "no traffic against a
       // half-migrated DB" now holds per tenant on BOTH planes). Only a
-      // CONTROL-plane failure (control migrations, default registration,
-      // listing the fleet) escapes into the process-wide catch below — nothing
+      // CONTROL-plane failure (control migrations, listing the fleet) escapes into the process-wide catch below — nothing
       // can resolve without the control plane.
       const fleetOutcomes = await runFleetMigrations()
       setTenantReadinessFromFleet(fleetOutcomes)
@@ -171,11 +192,10 @@ export function boot(): Promise<void> {
       }
       console.info('[boot] Migrations complete')
 
-      // Control-plane sanity check: the default tenant must resolve after
-      // registration — if it can't, nothing will (process-wide boot failure).
-      if (!(await resolveTenantBySlug('default'))) {
-        throw new Error('[boot] default tenant not resolvable after registration')
-      }
+      // TASK-042: the former "default tenant must resolve" sanity check is gone
+      // (zero tenants is a valid, healthy state). Its control-plane-check role is
+      // kept by runFleetMigrations above: listActiveTenants() reads the control
+      // plane, and its failure still reaches the catch below (exit 1).
 
       // G-XPROC (SP-4): subscribe THIS process to cross-process tenant evictions
       // so a CLI suspend/delete busts this app replica's resolution cache +
@@ -217,23 +237,23 @@ export function boot(): Promise<void> {
       // ambient ALS scope established during boot does NOT survive into it, so
       // purgeAuditLogsOlderThan -> getDb() would throw "no tenant context"
       // (fail-closed). forEachActiveTenant re-establishes an EXPLICIT
-      // runWithTenant scope per ACTIVE tenant (previously only the captured
-      // default context), purging each tenant's audit_log with THAT tenant's
-      // configured retention window — with per-(worker, tenant) single-flight
-      // and per-tenant try/catch + structured log in the helper. readConfig()
-      // resolves the CURRENT tenant from the ALS scope (the default tenant's
-      // config path is byte-identical to DEFAULT_TENANT's).
+      // runWithTenant scope per ACTIVE tenant, purging each tenant's audit_log
+      // with THAT tenant's configured retention window — with per-(worker,
+      // tenant) single-flight and per-tenant try/catch + structured log in the
+      // helper. readConfig() resolves the CURRENT tenant from the ALS scope.
       const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000
-      setInterval(
-        () =>
-          forEachActiveTenant('audit-retention', async () => {
-            const cfg = readConfig()
-            const days = cfg.retention?.security_logs_days ?? 90
-            const { purged } = await purgeAuditLogsOlderThan(days)
-            if (purged > 0) console.info(`[audit-retention] purged ${purged} rows older than ${days}d`)
-          }),
-        PURGE_INTERVAL_MS,
-      ).unref()
+      const auditRetentionTick = () =>
+        forEachActiveTenant('audit-retention', async () => {
+          const cfg = readConfig()
+          const days = cfg.retention?.security_logs_days ?? 90
+          const { purged } = await purgeAuditLogsOlderThan(days)
+          if (purged > 0) console.info(`[audit-retention] purged ${purged} rows older than ${days}d`)
+        })
+      setInterval(auditRetentionTick, PURGE_INTERVAL_MS).unref()
+      // F1-FIX-03 / S1a#4: plus ONE run shortly after boot. The interval alone
+      // never fires in a process that restarts more often than every 24 h (every
+      // deploy), so retention would silently never run.
+      schedulePostBootRun('audit-retention', auditRetentionTick, AUDIT_RETENTION_BOOT_DELAY_MS)
 
       // gremion#22 finding 1 (governance integrity): the kernel carve lost the
       // periodic audit-chain-verification tick the full product wires from #320
@@ -252,18 +272,19 @@ export function boot(): Promise<void> {
       // operator alert, never an app-halting action. .unref() so it doesn't keep
       // the process alive during graceful shutdown / test teardown.
       const AUDIT_INTEGRITY_INTERVAL_MS = 6 * 60 * 60 * 1000
-      setInterval(
-        () =>
-          forEachActiveTenant('audit-integrity', async () => {
-            const r = await verifyAuditChain()
-            if (!r.ok) {
-              console.error(
-                `[audit-integrity] audit_log hash chain BROKEN at id ${r.brokenAtId}`,
-              )
-            }
-          }),
-        AUDIT_INTEGRITY_INTERVAL_MS,
-      ).unref()
+      const auditIntegrityTick = () =>
+        forEachActiveTenant('audit-integrity', async () => {
+          const r = await verifyAuditChain()
+          if (!r.ok) {
+            console.error(
+              `[audit-integrity] audit_log hash chain BROKEN at id ${r.brokenAtId}`,
+            )
+          }
+        })
+      setInterval(auditIntegrityTick, AUDIT_INTEGRITY_INTERVAL_MS).unref()
+      // F1-FIX-03 / S1a#4: plus ONE run after boot (scheduled after the
+      // retention run), for the same reason as above.
+      schedulePostBootRun('audit-integrity', auditIntegrityTick, AUDIT_INTEGRITY_BOOT_DELAY_MS)
 
       // (The Content Engine L2 per-minute content-publish drain is now a
       // module-registered server-init hook — see content/register.server.ts —
@@ -359,6 +380,100 @@ function tenantMismatchResponse(path: string): Response {
   return new Response('Forbidden: tenant mismatch', { status: 403 })
 }
 
+/**
+ * The session guard's public allow-list (see authGuard). Exported so the pin in
+ * hooks.boot.test.ts reads the shipped list, not a copy of it.
+ */
+export const PUBLIC_PATHS: readonly string[] = [
+  '/auth/',
+  '/legal/',
+  '/api/setup/seed',
+  '/api/health',
+  '/api/public/protocols/*/pdf',
+]
+
+/**
+ * F1-FIX-03 / S1a#28: how a PUBLIC_PATHS entry matches.
+ *   - ends in '/'  -> a PAGE subtree ('/auth/' holds the Auth.js endpoints,
+ *                     '/legal/' the legal pages); never used for /api.
+ *   - contains '*' -> an exact route whose '*' is ONE non-empty segment.
+ *   - otherwise    -> an exact route, nothing below it.
+ * The /api entries used to be subtrees (and '/api/health' also matched
+ * '/api/health/<anything>'), so any route later added below a public one was
+ * served without a session.
+ */
+function matchesPublicPath(entry: string, path: string): boolean {
+  if (entry.endsWith('/')) return path.startsWith(entry)
+  if (!entry.includes('*')) return path === entry
+  const want = entry.split('/')
+  const got = path.split('/')
+  if (want.length !== got.length) return false
+  return want.every((seg, i) => (seg === '*' ? got[i].length > 0 : seg === got[i]))
+}
+
+/**
+ * F1-FIX-03 / H11: the exact (method, path) pairs whose handlers accept the
+ * internalFetch Bearer (`Authorization: Bearer <INTERNAL_PUSH_SECRET>`, G-075)
+ * in place of a session. The guard used to verify every /api Bearer as a
+ * Keycloak JWT, so each internalFetch self-call got a 401 here before the
+ * handler's own isInternalBearerRequest() branch could run.
+ *
+ * Kept exact on purpose: one method, one anchored pattern per route, the id
+ * restricted to the characters the route really uses (an encoded `%2F..` id can
+ * never match). A new internal consumer is added here together with its
+ * handler's own isInternalBearerRequest() check. The route still authorises the
+ * caller itself; this list only decides which requests the session guard may
+ * hand over without a user.
+ */
+export interface InternalBearerRoute {
+  readonly method: 'PATCH'
+  readonly pattern: RegExp
+}
+
+// Round 2 (review LOW): every entry is frozen too, not only the array, so no
+// importer can re-point a pattern or method on this security allow-list.
+export const INTERNAL_BEARER_ROUTES: readonly InternalBearerRoute[] = Object.freeze([
+  // news/[id]/edit page actions -> PATCH (body / publish / unpublish).
+  Object.freeze({ method: 'PATCH', pattern: /^\/api\/news\/[0-9]{1,12}$/ } as const),
+  // Content editor autosave -> PATCH (title / body / channel toggle).
+  Object.freeze({ method: 'PATCH', pattern: /^\/api\/content\/posts\/[0-9A-Za-z-]{1,64}$/ } as const),
+])
+
+function isInternalBearerRoute(method: string, path: string): boolean {
+  return INTERNAL_BEARER_ROUTES.some((r) => r.method === method && r.pattern.test(path))
+}
+
+/** The 401 reason for an internal Bearer the guard refused (never 'no_session'). */
+export const INTERNAL_BEARER_REJECTED_REASON = 'internal_bearer_not_allowed'
+
+interface InternalBearerRejection {
+  method: string
+  path: string
+  /** The resolver validated x-internal-host-trust (the request is on the internal hop). */
+  tenantSelectionTrusted: boolean
+  /** (method, path) is on INTERNAL_BEARER_ROUTES. */
+  allowListed: boolean
+  /** The Bearer constant-time-matched INTERNAL_PUSH_SECRET. */
+  secretMatches: boolean
+}
+
+/**
+ * F1-FIX-03 round 2 (review MEDIUM): leave a server-side trace of WHY an
+ * internal Bearer was refused. Only the request shape and the three verdicts
+ * are logged; the token never is.
+ */
+function logInternalBearerRejected(ctx: InternalBearerRejection): void {
+  console.warn('[authGuard] internal Bearer rejected', ctx)
+}
+
+function internalBearerRejected(ctx: InternalBearerRejection): Response {
+  logInternalBearerRejected(ctx)
+  return new Response(JSON.stringify({ error: 'Unauthenticated', reason: INTERNAL_BEARER_REJECTED_REASON }), {
+    status: 401,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
 export const authGuard: Handle = async ({ event, resolve }) => {
   const path = event.url.pathname
 
@@ -406,7 +521,9 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // the session, Bearer, iss-match and module gates below exactly as before.
   if (unresolvedExempt) return resolve(event)
 
-  // Public routes — no auth required
+  // Public routes — no auth required (PUBLIC_PATHS, below this handle).
+  // TASK-042 Q1: '/setup' is gone with the first-run wizard; a request for it is
+  // answered like any unknown path (Q9: no authGuard change).
   // /api/setup/seed self-guards with the X-Seed-Token header + an empty-DB check,
   // so it is exempt from the session guard (the one-time production seed runbook
   // calls it unauthenticated with only that header).
@@ -418,21 +535,52 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // public portal (gremion-public) redirects the browser to — it self-enforces
   // status='published' + public org-unit visibility, so the session guard is
   // skipped here. The tenant resolver (element 0) still runs.
-  const publicPaths = ['/auth/', '/legal/', '/setup', '/api/setup/seed', '/api/health', '/api/public/protocols/']
-  // Match on a SEGMENT boundary, not a bare prefix: a plain startsWith(p) also
-  // matched every path that merely EXTENDS an entry ('/setupmalicious' extends
-  // '/setup', '/api/healthz' extends '/api/health'), which would serve such a
-  // route unauthenticated. An entry is public only on an exact hit or a
-  // '/'-delimited descendant.
-  if (publicPaths.some((p) => path === p || path.startsWith(p.endsWith('/') ? p : p + '/'))) {
+  // Never a bare prefix: a plain startsWith(p) also matched every path that
+  // merely EXTENDS an entry ('/api/healthz' extends '/api/health'), and a
+  // '/'-delimited descendant rule made every /api entry a whole subtree
+  // (S1a#28). See matchesPublicPath for the three entry shapes.
+  if (PUBLIC_PATHS.some((p) => matchesPublicPath(p, path))) {
     return resolve(event)
   }
+
+  // Set when an internalFetch-hop Bearer failed to authenticate (see below), so
+  // the no-session 401 carries the distinct 'internal_bearer_not_allowed' reason.
+  let internalBearerMismatch = false
 
   // For API routes, accept Bearer JWT from mobile/external clients as an
   // alternative to the Auth.js cookie session used by the web frontend.
   if (path.startsWith('/api/')) {
     const authHeader = event.request.headers.get('Authorization')
     if (authHeader?.startsWith('Bearer ')) {
+      // F1-FIX-03 / H11: an internalFetch self-call. Honoured only when all of
+      // these hold: the (method, path) is on the exact allow-list, the request
+      // arrived on the internal hop (the resolver validated its
+      // x-internal-host-trust secret, so it never came through the edge), and
+      // the Bearer constant-time-matches INTERNAL_PUSH_SECRET. No user is set:
+      // the handler authorises the internal caller itself. The module-disable
+      // gate applies exactly as for every other caller.
+      // Round 2 (review MEDIUM): the secret on a route off the allow-list or
+      // off the internal hop is refused HERE with a logged, distinct 401
+      // (internal_bearer_not_allowed). It used to fall through to the JWT path
+      // and end as an anonymous-looking 'no_session', which is exactly how H11
+      // stayed invisible.
+      const internalTrusted = event.locals.tenantSelectionTrusted === true
+      const internalAllowListed = isInternalBearerRoute(event.request.method, path)
+      const internalSecretMatches = isInternalBearerRequest(event.request)
+      if (internalSecretMatches) {
+        if (internalTrusted && internalAllowListed) {
+          const internalModuleGate = moduleGateResponse(path)
+          if (internalModuleGate) return internalModuleGate
+          return resolve(event)
+        }
+        return internalBearerRejected({
+          method: event.request.method,
+          path,
+          tenantSelectionTrusted: internalTrusted,
+          allowListed: internalAllowListed,
+          secretMatches: true,
+        })
+      }
       const token = authHeader.slice(7)
       const payload = await verifyBearerJwt(token, event.locals.tenant)
       if (payload) {
@@ -458,6 +606,21 @@ export const authGuard: Handle = async ({ event, resolve }) => {
           return resolve(event)
         }
       }
+      // Round 2 (review MEDIUM): a Bearer that is neither the secret nor a
+      // verified JWT, on a request carrying the internalFetch hop marker
+      // (x-internal-host-trust, valid or not): an internal caller whose secret
+      // does not match this process. Logged, and the 401 below names it; the
+      // session fallback itself is unchanged.
+      if (event.request.headers.has('x-internal-host-trust')) {
+        internalBearerMismatch = true
+        logInternalBearerRejected({
+          method: event.request.method,
+          path,
+          tenantSelectionTrusted: internalTrusted,
+          allowListed: internalAllowListed,
+          secretMatches: false,
+        })
+      }
     }
   }
 
@@ -476,7 +639,11 @@ export const authGuard: Handle = async ({ event, resolve }) => {
       return new Response(
         JSON.stringify({
           error: 'Unauthenticated',
-          reason: tokenError ? 'token_refresh_failed' : 'no_session',
+          reason: tokenError
+            ? 'token_refresh_failed'
+            : internalBearerMismatch
+              ? INTERNAL_BEARER_REJECTED_REASON
+              : 'no_session',
         }),
         { status: 401, headers: { 'content-type': 'application/json' } }
       )
@@ -618,8 +785,49 @@ export const CSP_HEADER_VALUE = [
 // for the per-tenant accent tag — both survive sequence() (brief §4).
 export const i18nHandle: Handle = createI18nHandle((locals) => locals.tenant?.id ?? null)
 
+/**
+ * A Response whose headers can be written. A Response from fetch() or
+ * Response.redirect()/error() has an immutable header guard, and set() throws
+ * a TypeError on it; such a response is re-wrapped once (same body stream,
+ * status and headers) instead of losing its security headers. The writability
+ * probe IS the nosniff write (cspGuard sets it again, idempotently). Any other
+ * error is a real fault and propagates (round 2, review LOW).
+ */
+function withWritableHeaders(response: Response): Response {
+  try {
+    response.headers.set('X-Content-Type-Options', 'nosniff')
+    return response
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err
+    // Response.error() (status 0) cannot be re-wrapped; it carries no body a
+    // browser would render, so it passes through as it is.
+    if (response.status < 200 || response.status > 599) return response
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    })
+  }
+}
+
+/**
+ * F1-FIX-03 / S1a#17: sits right after correlationHandle (position 1), so it
+ * wraps EVERY downstream response, the early returns included (tenant
+ * 404/429/503, authGuard 401/403/503, the module gate). It used to be the
+ * innermost handle, which those returns never passed through.
+ *
+ * nosniff goes on every response: MIME sniffing matters most on the non-HTML
+ * ones (attachments, file downloads, JSON). Referrer-Policy is the browser
+ * default, set only when the handler did not choose one. The CSP stays scoped
+ * to text/html (see CSP_HEADER_VALUE).
+ */
 export const cspGuard: Handle = async ({ event, resolve }) => {
-  const response = await resolve(event)
+  const response = withWritableHeaders(await resolve(event))
+  if (response.status < 200 || response.status > 599) return response
+  response.headers.set('X-Content-Type-Options', 'nosniff')
+  if (!response.headers.has('referrer-policy')) {
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  }
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.startsWith('text/html')) {
     response.headers.set('Content-Security-Policy', CSP_HEADER_VALUE)
@@ -694,15 +902,17 @@ export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
 // correlationHandle is element 0: it mints/validates the correlation id BEFORE
 // tenant resolution, auth, or any data-plane query so every downstream handle
 // (including tenantResolveHandle's ALS scope) can read event.locals.correlationId.
-// tenantResolveHandle remains element 1 (establishes TenantContext + ALS).
+// cspGuard is element 1 (F1-FIX-03 / S1a#17): it wraps every later handle, so
+// their early returns carry the security headers too. It reads no tenant state.
+// tenantResolveHandle follows it (establishes TenantContext + ALS).
 export const handle = sequence(
   correlationHandle,
+  cspGuard,
   tenantResolveHandle,
   tenantBrandStyleHandle,
   authHandleUnlessExempt,
   authGuard,
   i18nHandle,
-  cspGuard,
 )
 
 /**

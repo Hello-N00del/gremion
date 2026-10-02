@@ -16,10 +16,5 @@ backup:
   cron_start: "0 2 * * *"         # 02:00 UTC daily chain start
   restic_check_subset: "10%"
 
-vector:
-  image: ghcr.io/hello-n00del/gremion-vector:latest
-  log_volume: traefik-logs
-  processed_volume: vector-processed-logs
-
 ipcrypt:
   rotation_days: 14

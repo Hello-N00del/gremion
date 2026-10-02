@@ -43,6 +43,11 @@ before(async () => {
 
   refs.unsigned = h.pushImage('gremion-ui', 'unsigned', { 'app/ui.txt': 'never signed\n' })
 
+  // TASK-048b: a state-layer image, signed and unsigned
+  refs.signedLegal = h.pushImage('gremion-legal', 'dist-v1.2.3', { 'app/legal.txt': 'legal v1.2.3\n' })
+  h.sign(refs.signedLegal, hostKey.key)
+  refs.unsignedLegal = h.pushImage('gremion-legal', 'unsigned', { 'app/legal.txt': 'never signed\n' })
+
   refs.otherKey = h.pushImage('gremion-ui', 'otherkey', { 'app/ui.txt': 'signed by a stranger\n' })
   h.sign(refs.otherKey, otherKey.key)
 
@@ -60,14 +65,15 @@ after(() => {
 
 // ── the deploy fixture ─────────────────────────────────────────────────────
 
-function pinsFile(images) {
-  const svc = ['gremion-ui', 'gremion-public', 'migrate', 'postgres', 'extra']
+function pinsFile(images, svc = ['gremion-ui', 'gremion-public', 'migrate', 'postgres', 'extra']) {
+  if (!images.length) return 'services: {}\n'
   let out = 'services:\n'
   images.forEach((ref, i) => {
     out += `  ${svc[i]}:\n    build: !reset null\n    image: ${ref}\n`
   })
   return out
 }
+const STATE_SVC = ['legal', 'vector', 'fallback']
 
 let caseNo = 0
 /**
@@ -80,6 +86,8 @@ let caseNo = 0
  *   extraResolved — an image compose resolves that no canonical pins line names
  *   profiledResolved — an image compose resolves only with every profile on
  *                      (COMPOSE_PROFILES=*), like a service under profiles: [migrate]
+ *   stateImages — the refs of docker-compose.state-pins.yml (TASK-048b; empty
+ *                 layer by default, which the host judges over the union)
  */
 function deploy(images, opts = {}) {
   caseNo += 1
@@ -90,6 +98,7 @@ function deploy(images, opts = {}) {
   mkdirSync(shims, { recursive: true })
   h.copyTree(VALID, `tree-${caseNo}`)
   writeFileSync(join(tree, 'docker-compose.pins.yml'), pinsFile(images))
+  writeFileSync(join(tree, 'docker-compose.state-pins.yml'), pinsFile(opts.stateImages ?? [], STATE_SVC))
   if (opts.treePub) {
     copyFileSync(opts.treePub, join(tree, 'cosign.pub'))
     mkdirSync(join(tree, 'etc'), { recursive: true })
@@ -99,9 +108,13 @@ function deploy(images, opts = {}) {
   if (opts.thirdParty) writeFileSync(join(root, 'etc', 'third-party-images'), opts.thirdParty.join('\n') + '\n')
   writeFileSync(
     join(root, 'etc/env/state.env'),
-    'STACK=teststack\nCOMPOSE_PROJECT_NAME=teststack-state\nSOAK_MINUTES=0\nINTERNAL_PUSH_SECRET=test-push-secret\n',
+    'STACK=teststack\nCOMPOSE_PROJECT_NAME=teststack-state\n' +
+      'COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml\n' +
+      'SOAK_MINUTES=0\nINTERNAL_PUSH_SECRET=test-push-secret\n',
   )
-  for (const c of ['blue', 'green']) writeFileSync(join(root, `etc/env/app-${c}.env`), `STACK=teststack\nCOLOUR=${c}\n`)
+  for (const c of ['blue', 'green']) {
+    writeFileSync(join(root, `etc/env/app-${c}.env`), `STACK=teststack\nCOLOUR=${c}\nCOMPOSE_FILE=docker-compose.app.yml:docker-compose.pins.yml\n`)
+  }
   const shim = (name, body) => {
     const p = join(shims, name)
     writeFileSync(p, `#!/usr/bin/env bash\nprintf '%s %s\\n' ${name} "$*" >> "${shims}/calls.log"\n${body}\n`)
@@ -114,10 +127,10 @@ case "$1" in
 esac
 exit 0`)
   // `docker compose … config --images` answers what compose would resolve:
-  // the tree's canonical pins plus opts.extraResolved.
+  // the tree's canonical pins (both layers) plus opts.extraResolved.
   shim('docker', `case "$1" in login) cat >/dev/null; exit 0 ;; esac
 case "$*" in *"config --images"*)
-  grep -E '^[[:space:]]*image:' "${tree}/docker-compose.pins.yml" | sed -E 's/^[[:space:]]*image:[[:space:]]*//'
+  cat "${tree}/docker-compose.pins.yml" "${tree}/docker-compose.state-pins.yml" | grep -E '^[[:space:]]*image:' | sed -E 's/^[[:space:]]*image:[[:space:]]*//'
   ${opts.extraResolved ? `printf '%s\\n' '${opts.extraResolved}'` : ':'}
   ${opts.profiledResolved ? `[ "\${COMPOSE_PROFILES:-}" = '*' ] && printf '%s\\n' '${opts.profiledResolved}'` : ':'}
   exit 0 ;;
@@ -253,4 +266,18 @@ test('an unsigned image under an inactive compose profile (step 7 migrate) is re
   const res = deploy([refs.signedUi], { profiledResolved: refs.unsigned })
   assert.ok(refusedAtStep2(res), `profiled unsigned image got through:\n${res.out}\n${res.log}`)
   assert.match(res.out, /signature verification failed for .*gremion-ui@sha256:/)
+})
+
+// ── TASK-048b: the state layer is verified live ────────────────────────────
+
+test('a state-layer image signed with the host key is verified at step 2', () => {
+  const res = deploy([refs.signedUi], { stateImages: [refs.signedLegal] })
+  assert.ok(passedStep2(res), `signed state image did not pass step 2:\n${res.out}\n${res.log}`)
+  assert.match(res.out, /2 first-party image\(s\) verified against .*etc\/cosign\.pub/)
+})
+
+test('an UNSIGNED state-layer image is refused at step 2, beside a signed app layer', () => {
+  const res = deploy([refs.signedUi, refs.signedPublic, refs.signedMigrate], { stateImages: [refs.unsignedLegal] })
+  assert.ok(refusedAtStep2(res), `unsigned state image was not refused:\n${res.out}\n${res.log}`)
+  assert.match(res.out, /signature verification failed for .*gremion-legal@sha256:/)
 })

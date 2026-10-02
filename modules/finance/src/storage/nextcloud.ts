@@ -26,7 +26,10 @@ const DAV_PREFIX = '/remote.php/dav/files'
 /** The subset of the leaf WebDAV client the storage backend drives. The upload body is a
  *  Blob (native-oracle parity; a valid fetch BodyInit under both the leaf + kernel tsconfigs). */
 export interface StorageWebdavClient {
-  upload(path: string, impersonateUser: string, body: Blob, contentType: string): Promise<void>
+  upload(
+    path: string, impersonateUser: string, body: Blob, contentType: string,
+    opts?: { createOnly?: boolean },
+  ): Promise<void>
   download(path: string, impersonateUser: string): Promise<Response>
   delete(path: string, impersonateUser: string): Promise<void>
   mkcol(path: string, impersonateUser: string): Promise<void>
@@ -69,7 +72,12 @@ export class NextcloudStorageBackend implements StorageBackend {
     // the leaf's node-only lib AND the kernel's DOM lib (a bare Uint8Array is not).
     const ab = new ArrayBuffer(bytes.byteLength)
     new Uint8Array(ab).set(bytes)
-    await this.client.upload(fullPath, this.storageUser, new Blob([ab]), 'application/octet-stream')
+    // F1-FIX-05-K r2: create-only, parity with LocalStorageBackend's 'wx'. Keys are
+    // server-built with a UUID, so a collision means a bug -- fail it (412), never
+    // replace another receipt's bytes.
+    await this.client.upload(fullPath, this.storageUser, new Blob([ab]), 'application/octet-stream', {
+      createOnly: true,
+    })
     return fullPath
   }
 

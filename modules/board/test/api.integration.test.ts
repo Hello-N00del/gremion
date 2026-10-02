@@ -1,36 +1,24 @@
-// services/board/test/api.integration.test.ts
+// modules/board/test/api.integration.test.ts
 //
-// Integration tests for services/board/src/http/routes.ts. Each test drives an
-// in-process node:http server backed by a REAL board leaf store on an EPHEMERAL,
-// isolated Postgres (BOARD_TEST_PG_URL). A fail-closed guard refuses to run
-// unless the host is localhost/127.0.0.1 — a test run can NEVER touch the live
-// staging stack. The test creates + drops its own board_test_api database.
+// Integration tests for src/http/routes.ts. Each test drives the leaf built by
+// the shipped factory buildApp(env), backed by a REAL (tenant, board) database
+// t_<hex32>__board of fixture tenant A on an EPHEMERAL, isolated Postgres
+// (BOARD_TEST_PG_URL), migrated with the one runner. A fail-closed guard refuses
+// to run unless the host is localhost/127.0.0.1 on a non-5432 port — a test run
+// can NEVER touch the live staging stack.
 import http from 'node:http'
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
-import postgres from 'postgres'
-import { createServer } from '../src/http/server.ts'
-import { buildApiRoutes } from '../src/http/routes.ts'
-import { runMigrations, createBoard, createStack, type Sql } from '../src/store/index.ts'
-import { requireEphemeralTestPgUrl, assertSafeTestEnv } from './support/pg-test-guard.ts'
+import { buildApp, type BoardApp } from '../src/app.ts'
+import { createBoard, createStack, type Sql } from '../src/store/index.ts'
+import { connectAdmin, dropScratchDb, provisionDb, scratchServerUrl, tenantBoardDb, type ScratchSql } from './support/scratch-pg.ts'
+import { TENANT_A } from './support/tenants.ts'
 
-// -- fail-closed guard --------------------------------------------------------
-
-const TEST_PG_URL = requireEphemeralTestPgUrl()
-const TEST_DB_PREFIX = 'board_test_'
-assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
-
-const TEST_DB = 'board_test_api'
 const TEST_SECRET = 'test-board-secret-123'
-
-function dbUrlFor(adminUrl: string, dbName: string): string {
-  const u = new URL(adminUrl)
-  u.pathname = '/' + dbName
-  return u.toString()
-}
 
 // -- HTTP helpers -------------------------------------------------------------
 
-const TENANT = { id: 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1', slug: 'boardtenant' }
+// A fixed canonical UUIDv7 fixture tenant: the guard refuses any other id shape.
+const TENANT = TENANT_A
 
 // org_unit_id / stack_id columns are UUID (mirrors the kernel 034 schema), so
 // fixtures MUST use real UUIDs, not readable slugs.
@@ -98,36 +86,31 @@ async function callServer(
 
 // -- setup --------------------------------------------------------------------
 
-let admin: Sql
+let admin: ScratchSql
 let sql: Sql
 let server: http.Server
-
-async function dropTestDb(pgSql: Sql): Promise<void> {
-  await pgSql
-    .unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${TEST_DB}' AND pid <> pg_backend_pid()`)
-    .catch(() => {})
-  await pgSql.unsafe(`DROP DATABASE IF EXISTS "${TEST_DB}"`)
-}
+let app: BoardApp
 
 beforeAll(async () => {
-  admin = postgres(TEST_PG_URL, { max: 1, prepare: false })
-  await dropTestDb(admin)
-  await admin.unsafe(`CREATE DATABASE "${TEST_DB}"`)
+  admin = connectAdmin()
+  await provisionDb(admin, tenantBoardDb(TENANT.id))
 
-  const testUrl = dbUrlFor(TEST_PG_URL, TEST_DB)
-  await runMigrations(testUrl)
-  sql = postgres(testUrl, { max: 4, prepare: true })
-
-  const routes = buildApiRoutes(() => Promise.resolve(sql))
-  server = createServer({ secret: TEST_SECRET, routes })
+  // The leaf is built ONLY through the shipped factory; the suite seeds
+  // through the exact store function buildApp hands to the routes.
+  app = buildApp({ GREMION_BOARD_PG_URL: scratchServerUrl(), INTERNAL_BOARD_SECRET: TEST_SECRET })
+  const r = await app.storeFor(TENANT)
+  if (typeof r !== 'function') throw new Error(`[api] app.storeFor(A) refused: ${JSON.stringify(r)}`)
+  sql = r
+  server = app.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
 })
 
 afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  await sql.end().catch(() => {})
-  await dropTestDb(admin)
-  await admin.end()
+  await app?.close()
+  if (admin) {
+    await dropScratchDb(admin, tenantBoardDb(TENANT.id))
+    await admin.end({ timeout: 5 })
+  }
 })
 
 beforeEach(async () => {
@@ -320,5 +303,189 @@ describe('POST /api/v1/cards/promoted', () => {
       { candidateIds: [] },
     )
     expect(r.status).toBe(403)
+  })
+})
+
+// -- foreign and malformed ids are 404, never 500 (R29-BOARD-STORE-K A6) ----------
+
+describe('foreign ids', () => {
+  it("POST /api/v1/cards with a stackId that is not in this tenant: 404 'stack not found' (FK 23503), nothing written", async () => {
+    const r = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), { stackId: MISSING_UUID, title: 'x', createdBy: 'u1' })
+    expect(r.status).toBe(404)
+    expect(r.body).toEqual({ success: false, error: 'stack not found' })
+    const [n] = await sql<{ c: string }[]>`SELECT count(*) AS c FROM card`
+    expect(Number(n!.c)).toBe(0)
+  })
+
+  it("POST /api/v1/cards with a stackId that is not a uuid: 404 'stack not found' (22P02)", async () => {
+    const r = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), { stackId: 'not-a-uuid', title: 'x', createdBy: 'u1' })
+    expect(r.status).toBe(404)
+    expect(r.body).toEqual({ success: false, error: 'stack not found' })
+  })
+
+  it("POST /api/v1/cards with a real stack but a malformed protocolActionItemId: 400, never 404 'stack not found', nothing written", async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const s1 = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const r = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), {
+      stackId: s1.id,
+      title: 'x',
+      protocolActionItemId: 'not-a-uuid',
+      createdBy: 'u1',
+    })
+    expect({ status: r.status, body: r.body }).toEqual({
+      status: 400,
+      body: { success: false, error: 'protocolActionItemId must be a uuid' },
+    })
+    const [n] = await sql<{ c: string }[]>`SELECT count(*) AS c FROM card`
+    expect(Number(n!.c)).toBe(0)
+  })
+
+  it("PATCH /api/v1/cards/:id/move into a stack that is not in this tenant (or not a uuid): 404 'stack not found', card unmoved", async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const s1 = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const created = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), { stackId: s1.id, title: 'X', createdBy: 'u1' })
+    const cardId = (created.body as { id: string }).id
+    for (const stackId of [MISSING_UUID, 'not-a-uuid']) {
+      const r = await callServer(server, 'PATCH', `/api/v1/cards/${cardId}/move`, guardHeaders(), { stackId, order: 0 })
+      expect(r.status, stackId).toBe(404)
+      expect(r.body, stackId).toEqual({ success: false, error: 'stack not found' })
+    }
+    const [row] = await sql<{ stack_id: string }[]>`SELECT stack_id FROM card WHERE id = ${cardId}`
+    expect(row!.stack_id).toBe(s1.id)
+  })
+
+  it('a malformed :id is a 404 on every id route, never a 500', async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const s = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const item = { id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', text: 'x', assigneeKeycloakId: null, dueDate: null }
+    const cases: [string, string, unknown?][] = [
+      ['GET', '/api/v1/boards/b-42'],
+      ['GET', '/api/v1/boards/b-42/deck'],
+      ['PATCH', '/api/v1/cards/c-9/move', { stackId: s.id, order: 0 }],
+      ['POST', '/api/v1/boards/b-3/promote', { item, createdBy: 'u1' }],
+    ]
+    for (const [method, path, body] of cases) {
+      const r = await callServer(server, method, path, guardHeaders(), body)
+      expect(r.status, `${method} ${path}`).toBe(404)
+    }
+  })
+
+  it("POST /api/v1/boards/:id/promote on a board that is not in this tenant: 404 'board not found', nothing written", async () => {
+    const item = { id: 'ffffffff-ffff-ffff-ffff-ffffffffffff', text: 'x', assigneeKeycloakId: null, dueDate: null }
+    const r = await callServer(server, 'POST', `/api/v1/boards/${MISSING_UUID}/promote`, guardHeaders(), { item, createdBy: 'u1' })
+    expect(r.status).toBe(404)
+    expect(r.body).toEqual({ success: false, error: 'board not found' })
+  })
+
+  it('action-item ids must be uuids: promote and promoted answer 400, never 500', async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const promote = await callServer(server, 'POST', `/api/v1/boards/${b.id}/promote`, guardHeaders(), {
+      item: { id: 'not-a-uuid', text: 'x', assigneeKeycloakId: null, dueDate: null },
+      createdBy: 'u1',
+    })
+    expect(promote.status).toBe(400)
+    const promoted = await callServer(server, 'POST', '/api/v1/cards/promoted', guardHeaders(), { candidateIds: ['not-a-uuid'] })
+    expect(promoted.status).toBe(400)
+  })
+})
+
+// -- create routes (R29-BOARD-STORE-K A5) ----------------------------------------
+
+describe('POST /api/v1/boards', () => {
+  it('creates a board and its stacks in order: 201 { board, stacks }', async () => {
+    const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), {
+      orgUnitId: OU1,
+      name: 'Vorstand',
+      stacks: ['To Do', 'Doing', 'Done'],
+    })
+    expect(r.status).toBe(201)
+    const body = r.body as { board: { id: string; org_unit_id: string; name: string; archived: boolean }; stacks: { board_id: string; name: string; sort_order: number }[] }
+    expect(body.board).toMatchObject({ org_unit_id: OU1, name: 'Vorstand', archived: false })
+    expect(body.stacks.map((s) => [s.name, s.sort_order, s.board_id])).toEqual([
+      ['To Do', 0, body.board.id],
+      ['Doing', 1, body.board.id],
+      ['Done', 2, body.board.id],
+    ])
+    const deck = await callServer(server, 'GET', `/api/v1/boards/${body.board.id}/deck`, guardHeaders())
+    expect(deck.status).toBe(200)
+    expect((deck.body as { stacks: unknown[] }).stacks).toHaveLength(3)
+  })
+
+  it('creates an archived board with no stacks when stacks is omitted', async () => {
+    const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), { orgUnitId: OU2, name: 'Alt', archived: true })
+    expect(r.status).toBe(201)
+    expect(r.body).toMatchObject({ board: { org_unit_id: OU2, name: 'Alt', archived: true }, stacks: [] })
+  })
+
+  it('400s on bad input (Q10 caps) and writes nothing', async () => {
+    const bad: unknown[] = [
+      {},
+      { orgUnitId: 'not-a-uuid', name: 'x' },
+      { orgUnitId: OU1, name: '' },
+      { orgUnitId: OU1, name: 'x'.repeat(121) },
+      { orgUnitId: OU1, name: 'x', archived: 'yes' },
+      { orgUnitId: OU1, name: 'x', stacks: Array.from({ length: 21 }, (_, i) => `s${i}`) },
+      { orgUnitId: OU1, name: 'x', stacks: ['ok', ''] },
+      { orgUnitId: OU1, name: 'x', stacks: ['ok', 'y'.repeat(61)] },
+    ]
+    for (const body of bad) {
+      const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), body)
+      expect(r.status, JSON.stringify(body).slice(0, 80)).toBe(400)
+    }
+    const [n] = await sql<{ c: string }[]>`SELECT count(*) AS c FROM board`
+    expect(Number(n!.c)).toBe(0)
+  })
+
+  it('accepts exactly the caps: name 120, 20 stacks of 60', async () => {
+    const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), {
+      orgUnitId: OU1,
+      name: 'n'.repeat(120),
+      stacks: Array.from({ length: 20 }, (_, i) => `${i}`.padEnd(60, 's')),
+    })
+    expect(r.status).toBe(201)
+    expect((r.body as { stacks: unknown[] }).stacks).toHaveLength(20)
+  })
+
+  it('writes the board and its stacks in ONE transaction: a failing second stack leaves no board', async () => {
+    // Postgres refuses a NUL byte in text (22021) — past validation, on the second
+    // stack insert, after the board row was inserted in the same transaction.
+    const r = await callServer(server, 'POST', '/api/v1/boards', guardHeaders(), {
+      orgUnitId: OU1,
+      name: 'Rollback',
+      stacks: ['To Do', 'bad\u0000stack'],
+    })
+    expect(r.status).toBe(400)
+    expect(r.body).toEqual({ success: false, error: 'invalid text' })
+    const boards = await sql<{ c: string }[]>`SELECT count(*) AS c FROM board`
+    const stacks = await sql<{ c: string }[]>`SELECT count(*) AS c FROM stack`
+    expect([Number(boards[0]!.c), Number(stacks[0]!.c)]).toEqual([0, 0])
+  })
+})
+
+describe('POST /api/v1/boards/:id/stacks', () => {
+  it('adds a stack to a board of this tenant: 201 Stack', async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const r = await callServer(server, 'POST', `/api/v1/boards/${b.id}/stacks`, guardHeaders(), { name: 'Review', order: 3 })
+    expect(r.status).toBe(201)
+    expect(r.body).toMatchObject({ board_id: b.id, name: 'Review', sort_order: 3 })
+  })
+
+  it("404 'board not found' for a board that is not in this tenant (unknown uuid, or not a uuid)", async () => {
+    for (const id of [MISSING_UUID, 'b-42']) {
+      const r = await callServer(server, 'POST', `/api/v1/boards/${id}/stacks`, guardHeaders(), { name: 'X', order: 0 })
+      expect(r.status, id).toBe(404)
+      expect(r.body, id).toEqual({ success: false, error: 'board not found' })
+    }
+    const [n] = await sql<{ c: string }[]>`SELECT count(*) AS c FROM stack`
+    expect(Number(n!.c)).toBe(0)
+  })
+
+  it('400s on bad input', async () => {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    for (const body of [{}, { name: '', order: 0 }, { name: 'x'.repeat(61), order: 0 }, { name: 'x', order: -1 }, { name: 'x', order: 1.5 }, { name: 'x' }]) {
+      const r = await callServer(server, 'POST', `/api/v1/boards/${b.id}/stacks`, guardHeaders(), body)
+      expect(r.status, JSON.stringify(body)).toBe(400)
+    }
   })
 })

@@ -27,17 +27,25 @@
 // route through registry.updateTenantStatus (the ONE lifecycle seam, P2.1b T8),
 // which is wired directly in the CLI (cmdStatusFlip); this module owns only the
 // multi-step DELETE that needs the shred/drop/realm-delete ordering.
-import { validateSlug, dbNameForSlug } from '$lib/server/tenant/slug'
+import { validateSlug } from '$lib/server/tenant/slug'
 import { PROVISIONER_SECRET_CLIENTS } from './realm-doc'
 import { tenantSecretHostPath } from '$lib/server/tenant/secrets'
 import type { Tenant, TenantStatus, TenantSubsystem } from '$lib/server/tenant/registry'
 
-/** Host-side DB admin executor for the delete path — drops the per-tenant DB +
- *  role (the inverse of pipeline.ProvisionDbExecutor.createDatabaseAndRole). */
+/** Host-side DB admin executor for the delete path — drops the customer's
+ *  kernel database t_<hex32>__kernel and ALL THREE of its roles (owner, app,
+ *  purger): the inverse of @gremion/tenant-store/lifecycle ensureKernelDatabase
+ *  (TASK-043 Q3; the pre-TASK-043 t_<slug> database and its one LOGIN owner are
+ *  gone with the provisioner that made them). */
 export interface DeleteDbExecutor {
-  /** Idempotent: DROP DATABASE … (WITH FORCE) IF EXISTS + DROP ROLE IF EXISTS. */
-  dropDatabaseAndRole(dbName: string, roleName: string): Promise<void>
+  /** Idempotent: DROP DATABASE … WITH (FORCE) when present, then the three roles. */
+  dropKernelDatabase(tenantId: string): Promise<void>
 }
+
+/** Client secret files a pre-TASK-043 provisioner wrote for clients no template
+ *  carries (PROVISIONER_SECRET_CLIENTS shrank, Q11). Still SHREDDED on delete, so
+ *  a tenant made before the shrink leaves no credential behind. */
+export const LEGACY_SECRET_CLIENTS = ['nextcloud', 'helios', 'helios-voter'] as const
 
 /** The KC Admin-API surface the delete path needs (realm teardown). */
 export interface DeleteKc {
@@ -92,13 +100,9 @@ export interface DeleteResult {
   shreddedPaths: readonly string[]
 }
 
-/** The default tenant is the bootstrap root (env-keyed secrets, the global stack);
- *  its data + key are NEVER tenant-lifecycle-managed (design §3 bootstrap caveat). */
-const DEFAULT_SLUG = 'default'
-
 /**
  * Translate a per-tenant `file:` secret REF to its HOST path, or null for a
- * non-file ref (e.g. the default tenant's `env:` refs — nothing to shred). Reuses
+ * non-file ref (e.g. an `env:` ref — nothing to shred). Reuses
  * tenantSecretHostPath so the shred target is the SAME path the backup script
  * (T16) and provisioner (T10) write.
  */
@@ -112,8 +116,8 @@ function hostPathForRef(ref: string | null | undefined): string | null {
  * the backup key FIRST (the §7.9 exactly-one location — shredding it voids all
  * backups), then the data-plane DB credential and every confidential-client
  * secret, so no live credential outlives the tenant. Deterministic file names
- * mirror pipeline.provisionTenant; refs that are not `file:` (default-tenant
- * `env:` refs) contribute nothing. De-duplicated, backup key first.
+ * mirror pipeline.provisionTenant; refs that are not `file:` (`env:` refs)
+ * contribute nothing. De-duplicated, backup key first.
  */
 function shredTargets(tenant: Tenant, tenantSecretsDir: string): string[] {
   const root = tenantSecretsDir.replace(/\/$/, '')
@@ -134,7 +138,7 @@ function shredTargets(tenant: Tenant, tenantSecretsDir: string): string[] {
   // here directly so a ref the registry never stored (e.g. extra clients) is
   // still covered by the slug-derived name set.
   paths.push(fromName(`tenant_${tenant.slug}_db`))
-  for (const client of PROVISIONER_SECRET_CLIENTS) {
+  for (const client of [...PROVISIONER_SECRET_CLIENTS, ...LEGACY_SECRET_CLIENTS]) {
     paths.push(fromName(`tenant_${tenant.slug}_client_${client}`))
   }
   // De-dup while preserving order (the backup key stays first).
@@ -145,8 +149,9 @@ function shredTargets(tenant: Tenant, tenantSecretsDir: string): string[] {
  * Crypto-shred-on-delete (§8.7). See the file header for the full contract.
  * Order: status->deleting → KEY SHRED (first) → DB drop → realm delete → NC/Matrix
  * marked for manual teardown → tombstone status='deleted' + evict runtime.
- * Idempotent + resumable; the default tenant is hard-refused; a tombstoned slug
- * is a terminal-safe no-op (§7.8 — the slug is never reusable).
+ * Idempotent + resumable; a tombstoned slug is a terminal-safe no-op (§7.8 —
+ * the slug is never reusable). TASK-042: every tenant is deletable, a slug
+ * spelled `default` included (TRD-042 [D R15-2]: there is no bootstrap tenant).
  */
 export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise<DeleteResult> {
   // (0) slug guard before ANY subsystem touch.
@@ -154,21 +159,8 @@ export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise
   if (!v.ok) throw new Error(`invalid slug "${slugInput}": ${v.reason}`)
   const slug = v.slug
 
-  // (0a) the default tenant is NEVER deletable (bootstrap root — hard guard).
-  if (slug === DEFAULT_SLUG) {
-    throw new Error('refusing to delete the default tenant (bootstrap root — not lifecycle-managed)')
-  }
-
   const tenant = await deps.registry.getTenantBySlug(slug)
   if (!tenant) throw new Error(`unknown tenant "${slug}"`)
-  // Belt-and-braces: the RESOLVED ROW must not be the default tenant either —
-  // compare the row's SLUG (the identifier) to DEFAULT_SLUG, not its id (a UUID
-  // that is never the literal 'default'). This defends in depth if a registry
-  // lookup ever returned the default row for a non-`default` input slug; the
-  // (0a) guard above already covers the input-slug==='default' path.
-  if (tenant.slug === DEFAULT_SLUG) {
-    throw new Error('refusing to delete the default tenant (bootstrap root — not lifecycle-managed)')
-  }
 
   // (0b) §7.8 tombstone is terminal — a re-run on an already-deleted tenant is a
   // no-op (the destructive work is done; the slug stays reserved forever).
@@ -189,9 +181,9 @@ export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise
   const shreddedPaths = shredTargets(tenant, deps.tenantSecretsDir)
   await deps.shredSecretFiles(shreddedPaths)
 
-  // (3) drop the data-plane DB + role (idempotent: DROP … IF EXISTS).
-  const dbName = dbNameForSlug(slug) // t_<slug>
-  await deps.db.dropDatabaseAndRole(dbName, dbName)
+  // (3) drop the kernel database t_<hex32>__kernel and its three roles
+  // (idempotent). The name follows the tenant ID, never the slug (TASK-043 Q3).
+  await deps.db.dropKernelDatabase(tenantId)
 
   // (3b) T21 §8.7 — leaf shred: drop the newsletter_<slug> DB on the leaf PG +
   // delete the tenant_catalog row. A missing `deps.leaf` means the leaf is not

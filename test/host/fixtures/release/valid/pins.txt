@@ -1,0 +1,13 @@
+# Fixture: the release's pushed-digest record (one svc=<repo>@sha256:<64 hex>
+# per first-party service). docker-compose.pins.yml and
+# docker-compose.state-pins.yml beside it are emit-pins.mjs output from this
+# file, byte-equal (scripts/release/emit-pins.test.mjs). Digests are obviously
+# synthetic; nothing in the unit tests contacts a registry.
+gremion-ui=ghcr.io/hello-n00del/gremion-ui@sha256:1111111111111111111111111111111111111111111111111111111111111111
+gremion-public=ghcr.io/hello-n00del/gremion-public@sha256:2222222222222222222222222222222222222222222222222222222222222222
+migrate=ghcr.io/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333
+tenant-create=ghcr.io/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333
+control-panel=ghcr.io/hello-n00del/gremion-control-panel@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+legal=ghcr.io/hello-n00del/gremion-legal@sha256:7777777777777777777777777777777777777777777777777777777777777777
+vector=ghcr.io/hello-n00del/gremion-vector@sha256:8888888888888888888888888888888888888888888888888888888888888888
+fallback=ghcr.io/hello-n00del/gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999

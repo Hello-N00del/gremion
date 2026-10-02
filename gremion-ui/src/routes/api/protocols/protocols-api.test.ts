@@ -25,6 +25,13 @@ vi.mock('$lib/server/protocols/protocol-db', () => ({
   updateProtocol: mockUpdateProtocolDb,
   deleteProtocol: mockDeleteProtocol,
 }))
+// R29-F104-KTWIN: GET resolves the unit before listing (unknown unit = 404 for
+// every role), so the unit lookup is stubbed here; the visibility rule itself
+// is pinned in protocols-visibility.test.ts with the real role helper.
+vi.mock('$lib/server/governance/org-units-db', () => ({
+  getOrgUnit: vi.fn(async (id: string) => ({ id, visibility: 'all_members' })),
+  isMemberOf: vi.fn(async () => false),
+}))
 vi.mock('$lib/auth', () => ({
   hasRole: mockHasRole,
   Role: { Guest: 'guest', Member: 'member', CouncilAdmin: 'council-admin', ITAdmin: 'it-admin' },

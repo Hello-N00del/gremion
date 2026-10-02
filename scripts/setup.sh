@@ -92,6 +92,10 @@ else
     # (PGBOUNCER_AUTH_PASSWORD, P2.1b). Each appears once in .env.example.
     _sed "s/CHANGE_ME_control_db/$(gen)/"      .env
     _sed "s/CHANGE_ME_pgbouncer_auth/$(gen)/"  .env
+    # TASK-043: the platform owner (PLATFORM_DB_PASSWORD) and the control panel's
+    # read-only role (PANEL_DB_PASSWORD). Each appears once in .env.example.
+    _sed "s/CHANGE_ME_platform_db/$(gen)/"     .env
+    _sed "s/CHANGE_ME_panel_db/$(gen)/"        .env
 
     # gremion_public_reader read-only DB password. Appears twice in .env.example
     # (PUBLIC_DB_PASSWORD and GREMION_PUBLIC_DB_URL) and both must match, so we

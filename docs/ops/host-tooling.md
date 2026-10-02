@@ -98,7 +98,11 @@ list of keys still to fill. The non-secret set, with generic examples:
 
 Secret keys are every `CHANGE_ME_` key of `.env.example` plus
 `RESTIC_PASSWORD`, `RCLONE_CONFIG_BACKUP_*`, `INTERNAL_PUSH_SECRET`,
-`STALWART_ADMIN_PASSWORD`, `STALWART_API_KEY` and `PLATFORM_SMTP_PASSWORD`.
+`STALWART_ADMIN_PASSWORD`, `STALWART_API_KEY` (both `mail.env`; the API key
+also `ops.env`), `VENDOR_SMTP_PASSWORD` (`system@`, `mail.env` only),
+`ALERT_SMTP_PASSWORD` (`alerts@`, `mail.env` and `ops.env`) and the transitional
+`PLATFORM_SMTP_PASSWORD` (`platform@`, `mail.env` and the app tier) -- three
+generator groups, never one (TASK-015, TRD-251).
 `app-blue.env` and `app-green.env` additionally set `COLOUR` and the
 colour-suffixed service URLs (`INTERNAL_BASE_URL`, `KERNEL_BASE_URL`,
 `<LEAF>_SERVICE_URL`); no app-tier URL names a bare service name.
@@ -131,6 +135,8 @@ than exit codes.
 | `gremion-hostd --socket \| --ssh` | the restricted agent of section 5 |
 | `gremion-dns-check --domain D --edge-ip A --mail-ip B [--edit N]` | verify the published record set for one edit of the DNS table, one line per record |
 | `gremion-mail-bringup [--assert N\|all]` | the mail asserts in their required order, refusing to run out of order |
+| `gremion-vendor-mail <subcommand>` | the vendor mail tooling of `ops/vendor-mail` (TASK-015): `principals issue\|revoke\|list`, `realm-smtp` (no argument: `master` -> `system@`; `--realm platform`: the ops realm -> `system@`; `--realm <r> --tenant <token> [--rotate\|--revoke]`: a customer realm -> its own `kc-<token>@` principal, issued, stamped and read back, TASK-043 G2), `collect` and the vendor-mail checks, each `.mjs` run as `docker run --rm` of the digest-pinned `VENDOR_MAIL_NODE_IMAGE` (the host carries no Node). Runs from `current/infra/host/bin` or installed in `<root>/bin`, where it takes `ops/vendor-mail` from `<root>/current`; see `ops/vendor-mail/RUNBOOK.md` |
+| `gremion-tenant <verb>` | the host half of the customer lifecycle (TASK-043): `init [--realm-only] [--keycloak-container K] [--panel-origin O]`, `create <slug> --host H --config F --it-admin E --council-admin E [--enable a,b]`, `suspend|resume <slug>`, `reconcile <slug> [--apply]`, `status <slug>`, `panel`, `operator add <email> [--no-mail] [--keycloak-container K]` |
 | `gremion-verify [--colour c] [--hosts FILE] [--reboot]` | the verification contract: enumerate every router from the Traefik API, classify it, assert certificates, health, the host pin and the ACME path; print the six P4 waivers of `docs/ops/release-1-waivers.md` as `WAIVED`; writes `runtime/last-verify.json`. **Refuses to run without that ledger** — see below |
 | `gremion-switch <colour> [--no-evict]` | fan the eviction out, rewrite `etc/edge/active.yml` atomically, wait for Traefik to serve the new target, record `runtime/active-colour` |
 | `gremion-deploy <tag>` | the release procedure, twelve steps, token on stdin; logs `STEP n <name> ok\|fail` to `runtime/deploy.log`. Step 5 is `gremion-migration-dump preflight --release <tag>`; after step 11 passes it runs `switched --release <tag>` (a failure there exits 1 with `DUMP-NOT-DELETED`) |
@@ -171,8 +177,8 @@ GREMION_WAIVER_LEDGER=/opt/gremion/releases/<tag>/docs/ops/release-1-waivers.md 
 ### The same ledger in `gremion-deploy` and `gremion-rollback`
 
 `gremion-deploy` treats the ledger as a **release-tree contract**, checked at
-step 2 beside `docker-compose.app.yml`, `docker-compose.pins.yml` and
-`release.json`. A tag whose tree carries no ledger is refused there:
+step 2 beside `docker-compose.app.yml`, `docker-compose.pins.yml`,
+`docker-compose.state-pins.yml` and `release.json`. A tag whose tree carries no ledger is refused there:
 
 ```
 BLOCKED: docs/ops/release-1-waivers.md absent (spec B): /opt/gremion/releases/<tag>/docs/ops/release-1-waivers.md
@@ -224,6 +230,30 @@ so the key can do nothing but talk to the agent. The agent accepts exactly
 answered `EXIT 2`. Every invocation is appended to
 `/opt/gremion/logs/hostd.log`.
 
+**One host operation at a time.** `deploy`, `switch`, `rollback`, `snapshot` and
+`backup` are mutating: each takes a non-blocking `flock` on
+`/opt/gremion/runtime/hostd.lock` before its program starts, and a second one
+answers `busy` with `EXIT 3` instead of racing the first on the colours, the
+migrations or the staged backup tree. `noop` and `verify` are read-only and are
+never blocked. The program inherits the lock (and `GREMION_HOST_LOCK_HELD=1`),
+so `gremion-backup`, which the systemd timer starts directly and which takes the
+same lock itself, does not wait on its own parent. A deploy requested while the
+nightly backup runs is therefore answered `busy`; retry it when the backup has
+finished.
+
+**The backup trigger's result line.** A started `gremion-backup` run ends, on
+every exit path, with one machine-readable line printed last, before the
+agent's `EXIT <code>` trailer:
+
+```
+BACKUP-RESULT {"state":"finished","startedAt":"<ISO>","finishedAt":"<ISO>","exitCode":0}
+```
+
+`state` is `finished` for exit 0 and `failed` otherwise (`exitCode` is the code
+the run really exits with, 3 when it was `busy`). The settings API reads it
+from the `backup` verb's output; `runtime/last-backup.json` remains the report
+of the run itself.
+
 **The wire format.** The client writes lines and reads lines; the response
 always ends with an `EXIT <code>` trailer:
 
@@ -252,7 +282,9 @@ single-flight per target, and runs in a GitHub environment that requires a
 reviewer. Before it opens SSH it proves the tag is annotated, matches
 `dist-vX.Y.Z`, and carries a `release.json` naming that same tag with an
 explicit boolean `overlap`, an array of `migrations` and a `sha256:` manifest
-digest, plus a `docker-compose.pins.yml`, at its tree root.
+digest, plus a `docker-compose.pins.yml`, at its tree root. (`gremion-deploy`
+itself also requires the state layer `docker-compose.state-pins.yml` at its
+step 2; `deploy.yml` checks only the app layer, a dormant residual.)
 
 ### What the operator must create before the first dispatch
 
@@ -280,6 +312,29 @@ and none of them can be created by the tooling:
    command line of section 5, rendered by `bootstrap.sh` (`authorized_keys_line`).
 
 Prove the channel with the `noop` of section 6 before the first real dispatch.
+
+### The Settings "Backup jetzt erstellen" button (F1-FIX-10-K, D-4)
+
+The button in Settings -> Backups is wired to the same allow-list: the app's
+settings API opens hostd's unix socket and sends the verb `backup` (no new verb,
+no new transport). The socket path comes from `GREMION_HOSTD_SOCKET` (default
+`/run/gremion/hostd.sock`); `GREMION_HOSTD_BACKUP_TIMEOUT_MS` bounds one run
+(default 6 h).
+
+- The API answers `started` only after hostd accepted the connection and the
+  request line was sent. It records the run (`started`, then `finished` or
+  `failed`, with times) under the tenant's `backup/runs/` directory.
+- A run is `finished` only when hostd answers `EXIT 0` and, when present, the
+  final `BACKUP-RESULT {"state":"finished","startedAt":ISO,"finishedAt":ISO,"exitCode":0}`
+  line that `gremion-backup` prints before hostd's `EXIT` line says so too. No
+  `EXIT` line, a dropped connection or a timeout is `failed`.
+- `config.backups.last_backup_at` is stamped from a finished run only.
+- Socket missing or refusing connections: the button is disabled and shows why.
+  The app container must have the socket mounted for the button to work.
+- A `started` record left by a dead app process is shown as failed (interrupted);
+  the host's own `runtime/last-backup.json` remains the record of what really ran.
+
+Trigger contract shared with F1-FIX-09: R29-F1-WAVE2/addendum.md ("D-4 trigger contract").
 
 ## 6. The noop dry-run
 

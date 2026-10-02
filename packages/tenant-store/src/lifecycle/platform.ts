@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url'
 import type { Sql } from '@gremion/db'
 import { loadBaselinePhaseFor, type PhaseFor } from '../phase.js'
 import { runMigrations, type RunMigrationsHooks, type RunMigrationsResult } from '../runner.js'
+import { execFormatted, sqlState } from './ddl.js'
 import { LifecycleError } from './guards.js'
+import { scramSha256Verifier } from './scram.js'
 
 export const PLATFORM_DATABASE = 'gremion_platform'
 
@@ -26,6 +28,77 @@ function migrationsDir(): string {
 
 /** The platform catalogue's one migration folder (sha256 manifest), run by runMigrations. */
 export const PLATFORM_MIGRATIONS_DIR = migrationsDir()
+
+export interface EnsurePlatformResult {
+  owner: string
+  /** true when this call created the database. */
+  created: boolean
+}
+
+const PLATFORM_OWNER = /^[a-z][a-z0-9_]{0,62}$/
+/** The COMMENT a role this function created carries: only such a role (or the database's owner) is adopted. */
+export const PLATFORM_OWNER_MARK = 'gremion: owner of gremion_platform (TASK-043 ensurePlatformDatabase)'
+
+/**
+ * TASK-043 G1 / Q15: creates gremion_platform on the kernel server if it is
+ * absent, owned by `owner` (a LOGIN role, NOSUPERUSER NOCREATEDB NOCREATEROLE,
+ * its password set as a SCRAM verifier), with PUBLIC's CONNECT and TEMPORARY
+ * revoked. `admin` is the kernel server's POSTGRES_USER on its maintenance
+ * database. Idempotent; refuses a gremion_platform owned by anyone else.
+ * It does not migrate: migratePlatform (on a connection AS the owner) does.
+ */
+export async function ensurePlatformDatabase(admin: Sql, opts: { owner: string; ownerPassword: string }): Promise<EnsurePlatformResult> {
+  const { owner } = opts
+  if (typeof owner !== 'string' || !PLATFORM_OWNER.test(owner) || owner === 'postgres' || owner.startsWith('pg_')) {
+    throw new LifecycleError('INVALID_INPUT', `platform owner role ${JSON.stringify(owner)} is not a plain lowercase role name`)
+  }
+  const [me] = await admin<{ u: string }[]>`SELECT current_user AS u`
+  if (owner === me?.u) throw new LifecycleError('INVALID_INPUT', `platform owner role ${owner} is the server's own admin role`)
+  const current = async () =>
+    (
+      await admin<{ owner: string }[]>`
+        SELECT r.rolname AS owner FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE d.datname = ${PLATFORM_DATABASE}`
+    )[0]?.owner ?? null
+  // Every refusal BEFORE any role is touched (review B1, r2): a foreign owner
+  // of gremion_platform, and an existing role this function did not create
+  // (marked by COMMENT) that does not already own it -- a misconfigured owner
+  // name must never demote and re-password another service's role.
+  let have = await current()
+  if (have !== null && have !== owner) {
+    throw new LifecycleError('DATABASE_FOREIGN_OWNER', `${PLATFORM_DATABASE} exists but is owned by ${have}, not ${owner}`)
+  }
+  const attrs = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
+  const [existing] = await admin<{ marked: boolean }[]>`
+    SELECT coalesce(shobj_description(oid, 'pg_authid'), '') = ${PLATFORM_OWNER_MARK} AS marked FROM pg_roles WHERE rolname = ${owner}`
+  if (!existing) {
+    try {
+      await execFormatted(admin, `CREATE ROLE %I ${attrs}`, [owner])
+    } catch (err) {
+      if (sqlState(err) !== '42710') throw err
+    }
+    await execFormatted(admin, 'COMMENT ON ROLE %I IS %L', [owner, PLATFORM_OWNER_MARK])
+  } else if (!existing.marked && have !== owner) {
+    throw new LifecycleError('INVALID_INPUT', `role ${owner} already exists and was not created as the platform owner: refusing to adopt (and demote) it`)
+  }
+  await execFormatted(admin, `ALTER ROLE %I ${attrs}`, [owner])
+  await execFormatted(admin, 'ALTER ROLE %I PASSWORD %L', [owner, scramSha256Verifier(opts.ownerPassword)])
+  let created = false
+  if (have === null) {
+    try {
+      await execFormatted(admin, 'CREATE DATABASE %I OWNER %I', [PLATFORM_DATABASE, owner])
+      created = true
+    } catch (err) {
+      if (sqlState(err) !== '42P04') throw err
+    }
+    have = await current()
+  }
+  if (have !== owner) {
+    throw new LifecycleError('DATABASE_FOREIGN_OWNER', `${PLATFORM_DATABASE} exists but is owned by ${have ?? 'nobody'}, not ${owner}`)
+  }
+  await execFormatted(admin, 'REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', [PLATFORM_DATABASE])
+  await execFormatted(admin, 'GRANT CONNECT ON DATABASE %I TO %I', [PLATFORM_DATABASE, owner])
+  return { owner, created }
+}
 
 /** Throws unless `sql` is connected to gremion_platform. */
 export async function assertPlatform(sql: Sql): Promise<void> {

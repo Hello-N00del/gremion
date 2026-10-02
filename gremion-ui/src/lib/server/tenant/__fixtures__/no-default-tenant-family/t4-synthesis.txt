@@ -1,0 +1,3 @@
+const tenantHost = `${slug}.${deps.apexDomain}`
+return `https://${slug}.${apexDomain}/auth/realms/${realmName}`
+const h = `${ctx.slug}.${apexDomain}`

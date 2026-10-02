@@ -554,39 +554,73 @@ export async function claimRecipient(
 	postId: string,
 	emailLower: string,
 ): Promise<ClaimResult> {
+	return (await claimDelivery(postId, emailLower)).result
+}
+
+/** A claim plus, when 'fresh', the token identifying THIS claim (R29-LOW-07 L1). */
+export interface DeliveryClaim {
+	result: ClaimResult
+	/**
+	 * The claim's claimed_at as epoch microseconds in text (exact and time-zone
+	 * free: a JS Date or a timestamptz parameter would drop the microseconds), set
+	 * only when result is 'fresh'. Pass it to markDeliveryFailed so a superseded
+	 * claimer (its claim was taken over after the stale window) cannot fail the
+	 * live claim. Mirrors the content leaf's claimDelivery.
+	 */
+	claimToken: string | null
+}
+
+/** claimRecipient, also returning the claim token. */
+export async function claimDelivery(
+	postId: string,
+	emailLower: string,
+): Promise<DeliveryClaim> {
 	const sql = getDb()
 	// Step 1: optimistic INSERT — fast path for a brand-new recipient.
-	const inserted = await sql<{ id: string }[]>`
+	const inserted = await sql<{ token: string }[]>`
 		INSERT INTO content.deliveries (post_id, email)
 		VALUES (${postId}, ${emailLower})
 		ON CONFLICT (post_id, email) DO NOTHING
-		RETURNING id
+		RETURNING (EXTRACT(EPOCH FROM claimed_at) * 1000000)::bigint::text AS token
 	`
-	if (inserted.length > 0) return 'fresh'
+	if (inserted.length > 0) return { result: 'fresh', claimToken: inserted[0]!.token }
 
-	// Step 2: row exists — try a stale-takeover FIRST (atomic UPDATE … RETURNING).
+	// Step 2: row exists — try an atomic takeover FIRST (one UPDATE … RETURNING,
+	// so exactly one concurrent caller wins): a STALE 'claimed' row, or a 'failed'
+	// row (F1-FIX-07 H07: the send threw, the recipient was not mailed — without
+	// this a transient SMTP error dropped them for good). Back to 'claimed' with
+	// the error cleared, so a second concurrent claimer sees 'in-flight'.
 	const cutoff = new Date(Date.now() - STALE_CLAIM_MINUTES * 60 * 1000).toISOString()
-	const taken = await sql<{ id: string }[]>`
+	// clock_timestamp(), not now(): now() is the transaction start, so a takeover
+	// inside a caller's transaction could repeat the old token.
+	const taken = await sql<{ token: string }[]>`
 		UPDATE content.deliveries
-		SET claimed_at = now()
+		SET status = 'claimed', claimed_at = clock_timestamp(), failed_at = NULL, error_message = NULL
 		WHERE post_id = ${postId}
 			AND email = ${emailLower}
-			AND status = 'claimed'
-			AND claimed_at < ${cutoff}::timestamptz
-		RETURNING id
+			AND (
+				status = 'failed'
+				OR (status = 'claimed' AND claimed_at < ${cutoff}::timestamptz)
+			)
+		RETURNING (EXTRACT(EPOCH FROM claimed_at) * 1000000)::bigint::text AS token
 	`
-	if (taken.length > 0) return 'fresh'
+	if (taken.length > 0) return { result: 'fresh', claimToken: taken[0]!.token }
 
 	// Step 3: inspect the current row to decide 'already-sent' vs 'in-flight'.
 	const rows = await sql<{ status: string }[]>`
 		SELECT status FROM content.deliveries
 		WHERE post_id = ${postId} AND email = ${emailLower}
 	`
-	if (rows.length === 0) return 'in-flight'
-	return rows[0]!.status === 'sent' ? 'already-sent' : 'in-flight'
+	if (rows.length === 0) return { result: 'in-flight', claimToken: null }
+	return { result: rows[0]!.status === 'sent' ? 'already-sent' : 'in-flight', claimToken: null }
 }
 
-/** Mark a delivery successfully sent (status='sent', sent_at=now(), message id). */
+/**
+ * Mark a delivery successfully sent (status='sent', sent_at=now(), message id).
+ * Any non-'sent' row may become 'sent' (the mail went out, even if a superseded
+ * claimer's late failure already flipped the claim); a 'sent' row keeps its
+ * first sent_at and message id. Mirrors the leaf's markSent (F1-FIX-07 r2).
+ */
 export async function markDeliverySent(
 	postId: string,
 	emailLower: string,
@@ -596,21 +630,39 @@ export async function markDeliverySent(
 	await sql`
 		UPDATE content.deliveries
 		SET status = 'sent', sent_at = now(), smtp_message_id = ${messageId}
-		WHERE post_id = ${postId} AND email = ${emailLower}
+		WHERE post_id = ${postId} AND email = ${emailLower} AND status <> 'sent'
 	`
 }
 
-/** Mark a delivery failed (status='failed', failed_at=now(), error message). */
+/**
+ * Mark a delivery failed (status='failed', failed_at=now(), error message).
+ * Only a 'claimed' row can fail (F1-FIX-07 r2): 'failed' rows are re-claimed, so
+ * overwriting a 'sent' row (a worker that hung past the stale window, failing
+ * after a takeover delivered) would mail the recipient again. With `claimToken`
+ * (from claimDelivery) only the caller's own claim is touched, never one a later
+ * worker took over (R29-LOW-07 L1). Without a token (a caller that cannot supply
+ * one) the status-only fence applies.
+ */
 export async function markDeliveryFailed(
 	postId: string,
 	emailLower: string,
 	error: string,
+	claimToken?: string,
 ): Promise<void> {
 	const sql = getDb()
+	if (claimToken !== undefined) {
+		await sql`
+			UPDATE content.deliveries
+			SET status = 'failed', failed_at = now(), error_message = ${error}
+			WHERE post_id = ${postId} AND email = ${emailLower} AND status = 'claimed'
+				AND (EXTRACT(EPOCH FROM claimed_at) * 1000000)::bigint::text = ${claimToken}
+		`
+		return
+	}
 	await sql`
 		UPDATE content.deliveries
 		SET status = 'failed', failed_at = now(), error_message = ${error}
-		WHERE post_id = ${postId} AND email = ${emailLower}
+		WHERE post_id = ${postId} AND email = ${emailLower} AND status = 'claimed'
 	`
 }
 

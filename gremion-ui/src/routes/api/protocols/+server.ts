@@ -5,6 +5,8 @@ import type { SessionUser } from '$lib/auth'
 import { createProtocol, listProtocols, updateProtocol, deleteProtocol } from '$lib/server/protocols/protocol-db'
 import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import type { ProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
+import { getOrgUnit, isMemberOf } from '$lib/server/governance/org-units-db'
+import { canSeeProtocol, seesAllGovernance } from '$lib/server/governance/visibility'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -22,15 +24,33 @@ function requireDocumentPort(): ProtocolDocumentPort {
   return port
 }
 
+// R29-F104-KTWIN (kernel twin of F1-FIX-04 / H19, operator decision D-3): the
+// list is filtered through the ONE visibility rule (governance/visibility.ts).
+// A Guest gets only the published protocols of an all_members unit, nothing of
+// a committee_only unit; a unit member and a CouncilAdmin get every status. An
+// unknown unit, and a unit the caller may see nothing of, is a 404.
 export async function GET(event: RequestEvent) {
   try {
-    requireAuth(event)
+    const user = requireAuth(event)
     const committeeId = event.url.searchParams.get('committeeId')
     if (!committeeId) throw error(400, 'committeeId required')
     const status = event.url.searchParams.get('status') as 'draft' | 'submitted' | 'published' | undefined
     const yearParam = event.url.searchParams.get('year')
     const year = yearParam ? parseInt(yearParam, 10) : undefined
-    const protocols = await listProtocols({ committeeId, status: status ?? undefined, year })
+    // The unknown-unit 404 comes first, so every role gets the same contract.
+    const unit = await getOrgUnit(committeeId)
+    if (!unit) throw error(404, 'Gremium nicht gefunden')
+    const rows = await listProtocols({ committeeId, status: status ?? undefined, year })
+    if (seesAllGovernance(user)) return json({ protocols: rows })
+
+    // One membership query at most, and only when it can change the outcome.
+    const memberMatters =
+      unit.visibility === 'committee_only' || rows.some((p) => !canSeeProtocol(user, unit, p.status, false))
+    const isUnitMember = memberMatters ? await isMemberOf(committeeId, user.id) : false
+    // A unit the caller may see nothing of (a foreign committee_only unit) is a
+    // 404, exactly like a missing one, so its existence does not leak.
+    if (!canSeeProtocol(user, unit, 'published', isUnitMember)) throw error(404, 'Gremium nicht gefunden')
+    const protocols = rows.filter((p) => canSeeProtocol(user, unit, p.status, isUnitMember))
     return json({ protocols })
   } catch (e) {
     const err = e as { status?: number; body?: { message?: string } }

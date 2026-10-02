@@ -34,7 +34,10 @@ import { drainCaldavQueue } from '../src/caldav/sync.js'
 // forwarded to the (mocked) store functions — so a stub object is enough.
 const fakeSql = {} as Sql
 
-function makeEvent(id: string, uid: string): DbEvent {
+// D-2 (R29-I15): only is_public=true events may ever be pushed to the shared
+// Nextcloud calendar, so the default fixture is a PUBLIC event and the
+// non-public cases below say so explicitly.
+function makeEvent(id: string, uid: string, isPublic = true): DbEvent {
   return {
     id,
     title: 'Test',
@@ -43,6 +46,7 @@ function makeEvent(id: string, uid: string): DbEvent {
     startAt: new Date('2026-01-01T10:00:00Z'),
     endAt: new Date('2026-01-01T11:00:00Z'),
     allDay: false,
+    isPublic,
     eventTypeId: null,
     eventTypeColor: null,
     eventTypeName: null,
@@ -161,7 +165,10 @@ describe('drainCaldavQueue', () => {
     expect(result).toEqual({ succeeded: 0, failed: 1 })
   })
 
-  it('treats a vanished event as a failure for create/update', async () => {
+  // K4#6: a create/update whose event is already gone has nothing left to push
+  // (a delete entry for the same uid carries the removal). It used to land in the
+  // failed list forever; it is now retired.
+  it('retires a create/update whose event vanished instead of failing it forever', async () => {
     mocks.listPendingCaldavSync.mockResolvedValueOnce([
       makeEntry({ id: 'q3', operation: 'create', eventId: 'missing' }),
     ])
@@ -170,12 +177,13 @@ describe('drainCaldavQueue', () => {
 
     const result = await drainCaldavQueue(fakeSql, pusher)
 
-    expect(result).toEqual({ succeeded: 0, failed: 1 })
-    expect(mocks.recordCaldavSyncFailure).toHaveBeenCalledOnce()
+    expect(result).toEqual({ succeeded: 1, failed: 0 })
+    expect(mocks.recordCaldavSyncFailure).not.toHaveBeenCalled()
+    expect(mocks.removeCaldavSyncEntry).toHaveBeenCalledWith(fakeSql, 'q3')
     expect(pusher.pushCreate).not.toHaveBeenCalled()
   })
 
-  it('treats a create/update queue entry with no event_id as a failure', async () => {
+  it('retires a create/update queue entry whose event_id was nulled by the event delete', async () => {
     mocks.listPendingCaldavSync.mockResolvedValueOnce([
       makeEntry({ id: 'q4', operation: 'update', eventId: null }),
     ])
@@ -183,13 +191,11 @@ describe('drainCaldavQueue', () => {
 
     const result = await drainCaldavQueue(fakeSql, pusher)
 
-    expect(result).toEqual({ succeeded: 0, failed: 1 })
+    expect(result).toEqual({ succeeded: 1, failed: 0 })
     expect(mocks.getEvent).not.toHaveBeenCalled()
-    expect(mocks.recordCaldavSyncFailure).toHaveBeenCalledWith(
-      fakeSql,
-      'q4',
-      expect.stringContaining('no event_id'),
-    )
+    expect(mocks.recordCaldavSyncFailure).not.toHaveBeenCalled()
+    expect(mocks.removeCaldavSyncEntry).toHaveBeenCalledWith(fakeSql, 'q4')
+    expect(pusher.pushUpdate).not.toHaveBeenCalled()
   })
 
   it('processes multiple pending entries independently, tallying succeeded/failed', async () => {
@@ -207,6 +213,69 @@ describe('drainCaldavQueue', () => {
     expect(result).toEqual({ succeeded: 1, failed: 1 })
     expect(mocks.removeCaldavSyncEntry).toHaveBeenCalledWith(fakeSql, 'q-ok')
     expect(mocks.recordCaldavSyncFailure).toHaveBeenCalledWith(fakeSql, 'q-bad', 'DELETE 500')
+  })
+
+  // ── D-2 = NEVER PUSH NON-PUBLIC (R29-I15, H06) ─────────────────────────────
+  describe('D-2: is_public=false events never reach the shared calendar', () => {
+    it('does NOT push a queued create for a non-public event, and retires the queue row', async () => {
+      mocks.listPendingCaldavSync.mockResolvedValueOnce([
+        makeEntry({ id: 'np1', operation: 'create', eventId: 'e-np', caldavUid: 'uid-np@stura' }),
+      ])
+      mocks.getEvent.mockResolvedValueOnce(makeEvent('e-np', 'uid-np@stura', false))
+      const pusher = makePusher()
+
+      const result = await drainCaldavQueue(fakeSql, pusher)
+
+      expect(pusher.pushCreate).not.toHaveBeenCalled()
+      expect(pusher.pushUpdate).not.toHaveBeenCalled()
+      expect(mocks.markCaldavSynced).not.toHaveBeenCalled()
+      expect(mocks.removeCaldavSyncEntry).toHaveBeenCalledWith(fakeSql, 'np1')
+      expect(result).toEqual({ succeeded: 1, failed: 0 })
+    })
+
+    it('does NOT push a queued update for a non-public event; it retracts any earlier copy instead', async () => {
+      mocks.listPendingCaldavSync.mockResolvedValueOnce([
+        makeEntry({ id: 'np2', operation: 'update', eventId: 'e-np2', caldavUid: 'uid-np2@stura' }),
+      ])
+      // The event was public once (pushed), then flipped to non-public.
+      mocks.getEvent.mockResolvedValueOnce(makeEvent('e-np2', 'uid-np2@stura', false))
+      const pusher = makePusher()
+
+      const result = await drainCaldavQueue(fakeSql, pusher)
+
+      expect(pusher.pushUpdate).not.toHaveBeenCalled()
+      expect(pusher.pushCreate).not.toHaveBeenCalled()
+      expect(pusher.pushDelete).toHaveBeenCalledWith('uid-np2@stura')
+      expect(mocks.removeCaldavSyncEntry).toHaveBeenCalledWith(fakeSql, 'np2')
+      expect(result).toEqual({ succeeded: 1, failed: 0 })
+    })
+
+    it('fails closed: an event whose isPublic is missing is treated as non-public', async () => {
+      mocks.listPendingCaldavSync.mockResolvedValueOnce([
+        makeEntry({ id: 'np3', operation: 'create', eventId: 'e-np3', caldavUid: 'uid-np3@stura' }),
+      ])
+      const ev = makeEvent('e-np3', 'uid-np3@stura') as Partial<DbEvent>
+      delete ev.isPublic
+      mocks.getEvent.mockResolvedValueOnce(ev)
+      const pusher = makePusher()
+
+      await drainCaldavQueue(fakeSql, pusher)
+
+      expect(pusher.pushCreate).not.toHaveBeenCalled()
+      expect(pusher.pushUpdate).not.toHaveBeenCalled()
+    })
+
+    it('still pushes a PUBLIC event (the guard is not a blanket stop)', async () => {
+      mocks.listPendingCaldavSync.mockResolvedValueOnce([
+        makeEntry({ id: 'p1', operation: 'create', eventId: 'e-p', caldavUid: 'uid-p@stura' }),
+      ])
+      mocks.getEvent.mockResolvedValueOnce(makeEvent('e-p', 'uid-p@stura', true))
+      const pusher = makePusher()
+
+      await drainCaldavQueue(fakeSql, pusher)
+
+      expect(pusher.pushCreate).toHaveBeenCalledOnce()
+    })
   })
 
   it('passes maxAttempts and limit through to listPendingCaldavSync', async () => {

@@ -5,14 +5,13 @@
   import Icon from '$lib/components/ui/Icon.svelte'
   import { resolveBrand } from '$lib/brand'
   import {
-    INSTANCE_STATE_META,
     STATUS_PILL,
     SERVICE_ICON,
     PLUGGABLE_MODULES,
     CORE_MODULE_LABELS,
-    instanceServices,
     type InstanceState,
   } from '$lib/instance-status'
+  import { systemHeadline, systemServices, UNKNOWN_PILL } from './signals'
   import type { PageData } from './$types'
 
   // #264 (HANDOVER-v8 Part C) — provisioning-convergence Systemstatus. Read-only
@@ -26,8 +25,10 @@
   // NB: not named `state` — that collides with the `$state` rune ($state(...)
   // gets parsed as store-subscribe of a `state` variable).
   const instState = $derived(data.instance.state as InstanceState)
-  const meta = $derived(INSTANCE_STATE_META[instState] ?? INSTANCE_STATE_META.ready)
-  const services = $derived(instanceServices(instState, data.instance.realStatuses))
+  // K2#13: rows come from real signals only (see ./signals.ts); a service
+  // without one is "Unbekannt", and the banner never claims "ready" over them.
+  const services = $derived(systemServices(instState, data.instance.realStatuses))
+  const meta = $derived(systemHeadline(instState, services))
 
   const ready = $derived(services.filter((s) => s.status === 'ok').length)
   const total = $derived(services.length)
@@ -93,6 +94,7 @@
   </div>
   <div class="card sys-svc-card">
     {#each list as s (s.key)}
+      {@const pill = s.status === 'unknown' ? UNKNOWN_PILL : STATUS_PILL[s.status]}
       <div class="sys-svc is-{s.status}">
         <div class="svc-ico"><Icon name={SERVICE_ICON[s.key] ?? 'package'} size={19} /></div>
         <div class="svc-body">
@@ -101,13 +103,12 @@
           <div class="svc-msg">{s.message}</div>
         </div>
         <div class="svc-right">
-          <span class="pill {STATUS_PILL[s.status].cls}">
-            <Icon name={STATUS_PILL[s.status].icon} size={10} />
-            {STATUS_PILL[s.status].label}
+          <span class="pill {pill.cls}">
+            <Icon name={pill.icon} size={10} />
+            {pill.label}
           </span>
-          {#if s.status === 'failed'}
-            <button type="button" class="btn btn-sm"><Icon name="refresh" size={13} /> Erneut versuchen</button>
-          {/if}
+          <!-- K2#13: the "Erneut versuchen" button had no handler and was removed;
+               a retry belongs here only once it is wired to a real reprovision call. -->
         </div>
       </div>
     {/each}

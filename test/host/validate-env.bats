@@ -32,7 +32,8 @@ render_filled() {
         ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME_' "$f" || { echo "sentinel left in $f"; return 1; }
     done
     touch "$RELEASE"/docker-compose.yml "$RELEASE"/docker-compose.prod.yml \
-          "$RELEASE"/docker-compose.pins.yml "$RELEASE"/docker-compose.app.yml
+          "$RELEASE"/docker-compose.pins.yml "$RELEASE"/docker-compose.app.yml \
+          "$RELEASE"/docker-compose.state-pins.yml
 }
 
 value_of() {
@@ -97,8 +98,12 @@ refute_secrets_printed() {
 
 @test "a missing COMPOSE_FILE entry exits 1 and names the file" {
     render_filled
-    rm "$RELEASE/docker-compose.pins.yml"
+    rm "$RELEASE/docker-compose.state-pins.yml"
     run "$VALIDATE" --env-file "${ENV_DIR}/state.env" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"docker-compose.state-pins.yml"* ]]
+    rm "$RELEASE/docker-compose.pins.yml"
+    run "$VALIDATE" --env-file "${ENV_DIR}/app-blue.env" --release "$RELEASE"
     [ "$status" -eq 1 ]
     [[ "$output" == *"docker-compose.pins.yml"* ]]
 }
@@ -148,6 +153,44 @@ refute_secrets_printed() {
     [[ "$output" == *"GREMION_PUBLIC_DB_URL"* ]]
     [[ "$output" == *"PUBLIC_DB_PASSWORD"* ]]
     refute_secrets_printed "${HOST_SRC}/templates/env/app.env.tmpl" "$f"
+}
+
+# set_key <file> <key> <value> -- replace a key's line, or append it.
+set_key() {
+    if grep -q "^$2=" "$1"; then
+        sed -i "s|^$2=.*|$2=$3|" "$1"
+    else
+        printf '%s=%s\n' "$2" "$3" >> "$1"
+    fi
+}
+
+# TASK-015 (G2): the alert_smtp group spans TWO files -- mail.env (for
+# provision-roles.sh, which sets alerts@'s password) and ops.env (Alertmanager
+# authenticates with it). gremion-validate-env judges alias equality WITHIN one
+# file (its header says so), so the cross-file drift guard is check-identities
+# (gremion-mail-bringup assert 3). This pins that guard on a REAL init-secrets
+# render: equal after rendering, exit 1 naming the key after drift, no value
+# printed. VENDOR_MAIL_SRC points a drill at a mutilated copy.
+@test "alert_smtp drift between mail.env and ops.env exits 1, naming the key and printing no value (TASK-015)" {
+    command -v node >/dev/null || { echo "node is part of the bats runner image; missing here"; return 1; }
+    local check="${VENDOR_MAIL_SRC:-${KERNEL_ROOT}/ops/vendor-mail}/check-identities.mjs"
+    render_filled
+    local mail="${ENV_DIR}/mail.env" ops="${ENV_DIR}/ops.env"
+    [ -f "$mail" ] && [ -f "$ops" ] || { echo "init-secrets rendered no mail.env/ops.env"; return 1; }
+    set_key "$mail" PLATFORM_DOMAIN example.org
+    set_key "$ops" PLATFORM_DOMAIN example.org
+    set_key "$ops" ALERT_SMTP_USER alerts@example.org
+    set_key "$ops" ALERT_EMAIL_FROM alerts@example.org
+    set_key "$ops" ALERT_SMTP_HOST mail.example.org
+    [ -n "$(value_of "$mail" ALERT_SMTP_PASSWORD)" ] || { echo "mail.env has no ALERT_SMTP_PASSWORD"; return 1; }
+    run node "$check" --mail-env "$mail" --ops-env "$ops"
+    [ "$status" -eq 0 ] || { echo "the fresh render is not consistent: status=$status $output"; return 1; }
+    set_key "$ops" ALERT_SMTP_PASSWORD "$(printf 'z%.0s' {1..32})"
+    run node "$check" --mail-env "$mail" --ops-env "$ops"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"ALERT_SMTP_PASSWORD differs between mail.env and ops.env"* ]] || { echo "$output"; return 1; }
+    refute_secrets_printed "${HOST_SRC}/templates/env/mail.env.tmpl" "$mail"
+    refute_secrets_printed "${HOST_SRC}/templates/env/ops.env.tmpl" "$ops"
 }
 
 @test "load_env's refusals pass through with exit 2 (an operator sentinel left in place)" {
@@ -328,6 +371,9 @@ second_readers() {
 
 DOMAIN_BINDING='DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
 GUARDED_READ='${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
+# TASK-043's tenant-create one-shot passes the apex under its own name; with the guarded value that is the same guarded
+# read (no fallback), so the scan strips this exact key form first and still flags any other PLATFORM_DOMAIN mention.
+KEYED_GUARDED_READ='PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}'
 
 # TASK-040 (pooled stack) split the production render: the state project is
 # docker-compose.yml + docker-compose.prod.yml, the app tier (gremion-ui and
@@ -356,7 +402,7 @@ production_compose_text() {
     [ -z "$bad" ] || { echo "DOMAIN bound otherwise:"; echo "$bad"; return 1; }
     n="$(printf '%s\n' "$text" | grep -cF "$GUARDED_READ" || true)"
     [ "$n" -ge 1 ] || { echo "vacuous: no guarded PLATFORM_DOMAIN read"; return 1; }
-    rest="$(printf '%s\n' "$text" | awk -v g="$GUARDED_READ" '{ while ((i = index($0, g)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(g)); print }' \
+    rest="$(printf '%s\n' "$text" | awk -v k="$KEYED_GUARDED_READ" -v g="$GUARDED_READ" '{ while ((i = index($0, k)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(k)); while ((i = index($0, g)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(g)); print }' \
         | grep -n 'PLATFORM_DOMAIN' || true)"
     [ -z "$rest" ] || { echo "unguarded PLATFORM_DOMAIN read(s):"; echo "$rest"; return 1; }
 }

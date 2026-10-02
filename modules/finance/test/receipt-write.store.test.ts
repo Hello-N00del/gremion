@@ -28,6 +28,7 @@ import type { Sql } from '../src/tenant-store.ts'
 
 const OU_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const OU_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const TENANT = 'tttttttt-0000-4000-8000-000000000001'.replace(/t/g, 'a')
 // expense 7 → finance_unit 3 (OU_A); expense 8 → finance_unit 4 (OU_B); 999 → absent.
 const EXPENSE_FU: Record<string, string> = { '7': '3', '8': '4' }
 const FU_OU: Record<string, string> = { '3': OU_A, '4': OU_B }
@@ -140,7 +141,7 @@ describe('receipt write — uploadReceipt (cap / mime / handle / scope)', () => 
     const { backend, puts } = fakeStorage()
     const over = 10 * 1024 * 1024 + 1
     const big: ReceiptUpload = { filename: 'big.pdf', mimeType: 'application/pdf', bytes: new Uint8Array(over) }
-    await expect(uploadReceipt(fn, WRITER_A, 7, big, backend)).rejects.toBeInstanceOf(ReceiptTooLargeError)
+    await expect(uploadReceipt(fn, WRITER_A, 7, big, backend, TENANT)).rejects.toBeInstanceOf(ReceiptTooLargeError)
     // rejected BEFORE any storage write (no orphaned object).
     expect(puts.length).toBe(0)
   })
@@ -149,14 +150,14 @@ describe('receipt write — uploadReceipt (cap / mime / handle / scope)', () => 
     const { fn } = fakeSql()
     const { backend, puts } = fakeStorage()
     const bad: ReceiptUpload = { filename: 'x.gif', mimeType: 'image/gif', bytes: new Uint8Array(4) }
-    await expect(uploadReceipt(fn, WRITER_A, 7, bad, backend)).rejects.toBeInstanceOf(ReceiptMimeError)
+    await expect(uploadReceipt(fn, WRITER_A, 7, bad, backend, TENANT)).rejects.toBeInstanceOf(ReceiptMimeError)
     expect(puts.length).toBe(0)
   })
 
   it('404s an absent expense before storing (ReceiptNotFoundError)', async () => {
     const { fn } = fakeSql()
     const { backend, puts } = fakeStorage()
-    await expect(uploadReceipt(fn, AUDITOR, 999, pdf(), backend)).rejects.toBeInstanceOf(ReceiptNotFoundError)
+    await expect(uploadReceipt(fn, AUDITOR, 999, pdf(), backend, TENANT)).rejects.toBeInstanceOf(ReceiptNotFoundError)
     expect(puts.length).toBe(0)
   })
 
@@ -164,20 +165,24 @@ describe('receipt write — uploadReceipt (cap / mime / handle / scope)', () => 
     const { fn } = fakeSql()
     const { backend, puts } = fakeStorage()
     // expense 7 → OU_A; OUTSIDER is scoped to OU_B only.
-    await expect(uploadReceipt(fn, OUTSIDER, 7, pdf(), backend)).rejects.toBeInstanceOf(AccessDeniedError)
+    await expect(uploadReceipt(fn, OUTSIDER, 7, pdf(), backend, TENANT)).rejects.toBeInstanceOf(AccessDeniedError)
     expect(puts.length).toBe(0)
   })
 
-  it('happy path: stores bytes at finance/expense/<id>/<name>, inserts row, returns the Receipt DTO', async () => {
+  it('happy path: stores bytes at finance/<tenant>/expense/<id>/<uuid>.pdf, inserts row, returns the Receipt DTO', async () => {
     const { fn, atts } = fakeSql()
     const { backend, puts, objects } = fakeStorage()
     const file = pdf(16)
-    const receipt = await uploadReceipt(fn, WRITER_A, 7, file, backend)
-    // storage put with the native relPath convention + exact bytes.
-    expect(puts).toEqual([{ relPath: 'finance/expense/7/beleg.pdf', bytes: file.bytes }])
+    const receipt = await uploadReceipt(fn, WRITER_A, 7, file, backend, TENANT)
+    // F1-FIX-05-K: a server-built key (tenant + expense + UUID + mime extension) + exact bytes.
+    expect(puts).toHaveLength(1)
+    expect(puts[0]!.relPath).toMatch(
+      new RegExp(`^finance/${TENANT}/expense/7/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.pdf$`),
+    )
+    expect(puts[0]!.bytes).toEqual(file.bytes)
     // opaque handle persisted in storage_path; nextcloud_path NULL.
     const stored = [...atts.values()][0]!
-    expect(stored.storage_path).toBe('fake://finance/expense/7/beleg.pdf')
+    expect(stored.storage_path).toBe(`fake://${puts[0]!.relPath}`)
     expect(stored.nextcloud_path).toBeNull()
     expect(stored.kind).toBe('beleg')
     // byte round-trip: the handle reads back the exact bytes.
@@ -199,7 +204,7 @@ describe('receipt write — uploadReceipt (cap / mime / handle / scope)', () => 
   it('superuser bypasses the write-scope gate (empty scope)', async () => {
     const { fn } = fakeSql()
     const { backend, puts } = fakeStorage()
-    const receipt = await uploadReceipt(fn, SUPERUSER, 8, pdf(), backend) // expense 8 → OU_B, not in scope
+    const receipt = await uploadReceipt(fn, SUPERUSER, 8, pdf(), backend, TENANT) // expense 8 → OU_B, not in scope
     expect(receipt.expense_id).toBe(8)
     expect(puts.length).toBe(1)
   })
