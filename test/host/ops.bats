@@ -387,7 +387,8 @@ set_key() {   # <KEY> <value>
     set_key OPS_THIRD_PARTY_PROBES '"nextcloud=https://cloud.example.org/status.php helios=https://vote.example.org/"'
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    [[ "$output" == *"targets=13"* ]]
+    # 9 platform targets (no tenant host list here) + the 2 third parties
+    [[ "$output" == *"targets=11"* ]]
     local f="$GREMION_ROOT/runtime/ops/targets/blackbox-third-party.yml"
     grep -q '^- targets: \["https://cloud.example.org/status.php"\]$' "$f"
     grep -q '^    service: helios$' "$f"
