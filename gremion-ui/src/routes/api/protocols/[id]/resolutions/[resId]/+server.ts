@@ -4,6 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { updateResolution, deleteResolution } from '$lib/server/protocols/protocol-db'
 import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { getDb } from '$lib/server/db'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
 import { isDecisionRuleInputError } from '$lib/server/governance/decision-rule'
@@ -53,6 +54,7 @@ async function loadEditableResolution(event: RequestEvent): Promise<EditableReso
 
 export async function PATCH(event: RequestEvent) {
   requireAdmin(event)
+  requireUuidParams(event, 'id', 'resId')
   const body = await event.request.json()
   const current = await loadEditableResolution(event)
 
@@ -157,6 +159,7 @@ export async function PATCH(event: RequestEvent) {
 
 export async function DELETE(event: RequestEvent) {
   requireAdmin(event)
+  requireUuidParams(event, 'id', 'resId')
   await loadEditableResolution(event)
   await deleteResolution(event.params.resId!)
   return new Response(null, { status: 204 })

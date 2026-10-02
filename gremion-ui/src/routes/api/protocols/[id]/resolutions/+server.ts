@@ -4,6 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { getProtocol, addResolution } from '$lib/server/protocols/protocol-db'
 import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { decideResolution } from '$lib/server/governance/resolution-decision'
 import {
   CORE_DECISION_RULE_IDS,
@@ -21,6 +22,7 @@ function requireAdmin(event: RequestEvent): SessionUser {
 
 export async function POST(event: RequestEvent) {
   requireAdmin(event)
+  requireUuidParams(event, 'id')
   const protocol = await getProtocol(event.params.id!)
   if (!protocol || protocol.status === 'published') throw error(403, 'Nicht bearbeitbar')
   const body = await event.request.json()

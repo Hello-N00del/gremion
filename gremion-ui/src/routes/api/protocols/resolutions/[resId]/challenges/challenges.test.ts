@@ -75,8 +75,8 @@ const ADMIN = { id: 'admin-1', roles: [Role.CouncilAdmin], groups: [], email: 'a
 // Row vocabulary per migration 055 (raised_by / resolved_by / resolved_at /
 // decision_note — all folded into the resolution_challenges CREATE).
 const OPEN_CHALLENGE = {
-  id: 'ch-1',
-  resolution_id: 'res-1',
+  id: '123e4567-e89b-12d3-a456-426614174003',
+  resolution_id: '123e4567-e89b-12d3-a456-426614174002',
   raised_by: 'member-1',
   grounds: 'Verstoß gegen §7 der Geschäftsordnung',
   status: 'open',
@@ -89,7 +89,7 @@ const OPEN_CHALLENGE = {
 function postEvent(body: unknown, user: unknown = MEMBER) {
   return {
     locals: { user },
-    params: { resId: 'res-1' },
+    params: { resId: '123e4567-e89b-12d3-a456-426614174002' },
     request: { json: async () => body },
   } as unknown as Parameters<typeof POST>[0]
 }
@@ -97,7 +97,7 @@ function postEvent(body: unknown, user: unknown = MEMBER) {
 function patchEvent(body: unknown, user: unknown = ADMIN) {
   return {
     locals: { user },
-    params: { resId: 'res-1', challengeId: 'ch-1' },
+    params: { resId: '123e4567-e89b-12d3-a456-426614174002', challengeId: '123e4567-e89b-12d3-a456-426614174003' },
     request: { json: async () => body },
   } as unknown as Parameters<typeof PATCH>[0]
 }
@@ -141,11 +141,11 @@ describe('POST /api/protocols/resolutions/[resId]/challenges — member files a 
     const res = await POST(postEvent({ grounds: 'Verstoß gegen §7 der Geschäftsordnung' }))
     expect(res.status).toBe(201)
     const body = await res.json()
-    expect(body.challenge).toMatchObject({ id: 'ch-1', status: 'open' })
+    expect(body.challenge).toMatchObject({ id: '123e4567-e89b-12d3-a456-426614174003', status: 'open' })
     // The challenger is the SESSION user and the resolution comes from the URL —
     // never from the request body.
     expect(h.fileChallenge).toHaveBeenCalledWith({
-      resolutionId: 'res-1',
+      resolutionId: '123e4567-e89b-12d3-a456-426614174002',
       raisedBy: 'member-1',
       grounds: 'Verstoß gegen §7 der Geschäftsordnung',
     })
@@ -163,7 +163,7 @@ describe('POST /api/protocols/resolutions/[resId]/challenges — member files a 
     const first = await POST(postEvent({ grounds: 'Verstoß gegen §7' }))
     expect(first.status).toBe(201)
 
-    h.fileChallenge.mockRejectedValueOnce(new DuplicateOpenChallengeError('res-1', 'member-1'))
+    h.fileChallenge.mockRejectedValueOnce(new DuplicateOpenChallengeError('123e4567-e89b-12d3-a456-426614174002', 'member-1'))
     await expect(POST(postEvent({ grounds: 'Verstoß gegen §7' }))).rejects.toMatchObject({
       status: 409,
     })
@@ -173,7 +173,7 @@ describe('POST /api/protocols/resolutions/[resId]/challenges — member files a 
     // #437: only an ADOPTED resolution can be contested. The service refuses
     // when decided_at IS NULL (protocol still draft/submitted); the route must
     // surface that as 403, not leak it as a 500.
-    h.fileChallenge.mockRejectedValueOnce(new ResolutionNotAdoptedError('res-1'))
+    h.fileChallenge.mockRejectedValueOnce(new ResolutionNotAdoptedError('123e4567-e89b-12d3-a456-426614174002'))
     await expect(POST(postEvent({ grounds: 'Verstoß gegen §7' }))).rejects.toMatchObject({
       status: 403,
     })
@@ -202,13 +202,13 @@ describe('PATCH /api/protocols/resolutions/[resId]/challenges/[challengeId] — 
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.challenge).toMatchObject({
-      id: 'ch-1',
+      id: '123e4567-e89b-12d3-a456-426614174003',
       status: 'upheld',
       decision_note: 'Frist war tatsächlich verletzt',
     })
     expect(h.decideChallenge).toHaveBeenCalledWith({
-      challengeId: 'ch-1',
-      resolutionId: 'res-1',
+      challengeId: '123e4567-e89b-12d3-a456-426614174003',
+      resolutionId: '123e4567-e89b-12d3-a456-426614174002',
       resolvedBy: 'admin-1',
       status: 'upheld',
       decisionNote: 'Frist war tatsächlich verletzt',
@@ -221,7 +221,7 @@ describe('PATCH /api/protocols/resolutions/[resId]/challenges/[challengeId] — 
   })
 
   it('deciding a challenge that is not open (or unknown) → 404', async () => {
-    h.decideChallenge.mockRejectedValueOnce(new ChallengeNotOpenError('ch-1'))
+    h.decideChallenge.mockRejectedValueOnce(new ChallengeNotOpenError('123e4567-e89b-12d3-a456-426614174003'))
     await expect(PATCH(patchEvent({ status: 'dismissed' }))).rejects.toMatchObject({ status: 404 })
   })
 })
