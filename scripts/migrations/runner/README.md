@@ -68,10 +68,15 @@ unknown class). Three classes:
 | `legacy-boot` | `kernel-data`, `control` | `gremion-migration-dump preflight --release <T>` (gremion-deploy step 5) takes the host-side dump when a chain's `dirs[]` gains a file (Q11) |
 | `unadopted` | `module-*`, `kernel-api`, `governance`, `mail` | nobody yet: a new file must carry `-- gremion:manual-dump <runbook step>` |
 
-An adopter flips its chain's class. `module-*` upgrades run in the leaf
-runner; enabling a module for a customer creates a fresh database, which has
-nothing to lose, so `enableModule` passes no dump hook there (an existing
-database, a resumed enable or an upgrade, runs `deps.upgradeHooks`).
+An adopter flips its chain's class. A `module-*` database is migrated by
+`enableModule` (the tenant-store runner; since R29 the board leaf never
+migrates, B21). Enabling a module for a customer creates a fresh database,
+which has nothing to lose, so `enableModule` passes no dump hook there; an
+existing database (a resumed enable or an upgrade) runs `deps.upgradeHooks`.
+`gremion-tenant` (tenant-provision's `pgModules`) passes no `upgradeHooks`
+yet, so the `module-*` chains stay `unadopted` until a caller wires the dump
+hook (TASK-077/084); `init` and phase B record `release_ref` from
+`GREMION_RELEASE_REF` (the colour's `IMAGE_TAG`).
 
 ## The dump
 
