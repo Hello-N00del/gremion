@@ -3,9 +3,11 @@
 #
 # One pooled stack per host (PRD-PLAT-005, TRD-440): this file (+ the prod
 # overlay and the release pins layer) is the ${STACK}-state project --
-# postgres, the six profile-gated <id>-postgres, nats, keycloak, legal,
-# vector, and in the production profile traefik, docker-socket-proxy,
-# pgbouncer and fallback. mailpit is dev-only (profiles: [dev]).
+# postgres, the seven profile-gated <id>-postgres, nats, keycloak, legal,
+# vector, matrix (Synapse, with messaging-postgres under profiles:
+# [messaging], TASK-198), and in the production profile traefik,
+# docker-socket-proxy, pgbouncer and fallback. mailpit is dev-only
+# (profiles: [dev]).
 #
 # The app tier (gremion-ui, gremion-public, the migrate and tenant-create
 # one-shots) is NOT here: it is docker-compose.app.yml, instantiated twice as
