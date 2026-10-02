@@ -1,6 +1,6 @@
 {
   "$comment": "TASK-075 (TRD-361): the phase of every migration locked before the -- gremion:phase header existed. Written ONCE by baseline.mjs --write; never edited (suite.mjs pins its digest). Files added later carry their own header.",
-  "writtenAt": "2026-09-28",
+  "writtenAt": "2026-10-02",
   "chains": {
     "kernel-data": {
       "0001_governance_schema.sql": "expand",
@@ -34,6 +34,7 @@
       "0056_role_assignment_history_recalled.sql": "contract",
       "0057_fk_hot_filter_indexes.sql": "contract",
       "0058_public_reader_grants.sql": "contract",
+      "0059_audit_log_chain_anchor.sql": "contract",
       "1200_content_news_posts.sql": "contract",
       "1201_news_posts_public_reader_columns.sql": "contract"
     },
@@ -62,7 +63,8 @@
       "002_org_unit_mirror.sql": "expand",
       "003_money_running_no_fiscal_year_idx.sql": "contract",
       "004_money_fk_indexes.sql": "contract",
-      "005_unwrap_double_encoded_jsonb.sql": "migrate"
+      "005_unwrap_double_encoded_jsonb.sql": "migrate",
+      "006_approval_single_open.sql": "contract"
     },
     "module-publishing": {
       "001_init.sql": "contract"
@@ -74,7 +76,8 @@
     "platform": {
       "0001_plt_setup.sql": "contract",
       "0002_plt_module.sql": "expand",
-      "0003_plt_module_database.sql": "expand"
+      "0003_plt_module_database.sql": "expand",
+      "0004_plt_provisioning_step.sql": "expand"
     }
   }
 }

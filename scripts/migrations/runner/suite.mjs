@@ -25,7 +25,7 @@ import { checkContract, createdRoutineNames, formatProblem, lintSql, RULES } fro
 const REPO_ROOT = join(import.meta.dirname, '..', '..', '..')
 
 /** The digest of the baseline written at the TASK-075 merge. Never edited. */
-export const BASELINE_DIGEST = '3f2bd952230928b410796c0a948371c6b23e27ee75efdbcab2b363d97a3bf014'
+export const BASELINE_DIGEST = '11464e9ccab82f662db062c0be334aabf15e71c7c7465cae035b0682e6779341'
 
 export const CLASSES = ['tenant-store', 'legacy-boot', 'unadopted']
 

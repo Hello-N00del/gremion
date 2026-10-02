@@ -154,7 +154,7 @@ describe('the platform migration folder (gremion_platform, schema plt)', () => {
 
   it('TASK-075 G1b: migratePlatform\'s default phase lookup (the kernel baseline of chain platform) knows every locked platform file', () => {
     const phaseFor = loadBaselinePhaseFor(PLATFORM_CHAIN, KERNEL_ROOT)
-    expect(files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand', 'PHASE_TBD_0004'])
+    expect(files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand', 'expand'])
   })
 
   it('0004 is SCHEMA DB-PLT-PROVISIONING-STEP with exactly two appended kinds (TASK-043 Q2) and stays append-only', () => {
