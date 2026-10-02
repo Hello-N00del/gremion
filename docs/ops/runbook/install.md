@@ -83,6 +83,10 @@ apt-get update && apt-get install -y --no-install-recommends git ca-certificates
 install -d -m 755 /opt/gremion/releases
 git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$REL"
 git -C "$REL" describe --tags --exact-match          # prints the tag
+# authenticate the tree BEFORE step 4 runs code from it: the release signer's
+# allowed_signers file, copied to /root from the workstation (docs/ops/host-tooling.md)
+git -C "$REL" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=/root/allowed_signers \
+  verify-tag "refs/tags/$TAG"                        # Good "git" signature
 ```
 
 4. **Base system, deploy user, Docker.** `infra/host/bootstrap.sh`, stages

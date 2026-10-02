@@ -75,6 +75,8 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
 ```bash
 cat /opt/gremion/runtime/current-tag /opt/gremion/runtime/active-colour
 sudo -u gremion git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$REL"
+sudo -u gremion git -C "$REL" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=/opt/gremion/etc/allowed_signers \
+  verify-tag "refs/tags/$TAG"                                     # Good "git" signature; read nothing from the tree before it
 stat -c '%U %n' "$REL"                                            # gremion
 jq '{tag, overlap, migrations}' "$REL/release.json"
 jq -s 'map([.chains | to_entries[] | .key + " " + (.value.files | to_entries[] | .key + " " + .value)]) | .[0] - .[1]' \

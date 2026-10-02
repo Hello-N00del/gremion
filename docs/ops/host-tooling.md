@@ -312,6 +312,48 @@ and none of them can be created by the tooling:
 
 Prove the channel with the `noop` of section 6 before the first real dispatch.
 
+### Authenticating the release tree: `etc/allowed_signers` (H10)
+
+`gremion-deploy` runs code and config from the release tree it checks out
+(render, snapshot, restore-into, the compose files). It therefore authenticates
+the tree **before anything in it is read or run**: the `dist-vX.Y.Z` tag must be
+an **annotated tag with a valid ssh signature** from a key listed in the host
+file `/opt/gremion/etc/allowed_signers` (`git verify-tag`, ssh signing), and the
+checked-out commit must be the one that tag names. A fresh clone is staged in
+`releases/.incoming-*` and only a tree that passed is moved to `releases/<tag>`;
+an existing `releases/<tag>` checkout is verified again on every deploy. The
+check fails closed (exit 1, step 2) on: no `allowed_signers` (or an empty one),
+an unsigned or lightweight tag, a tag signed by a key that is not listed. A
+copy of `allowed_signers` inside the tree is never consulted. This is the
+tree's half of the gate; the image half is `etc/cosign.pub` (TRD-441).
+
+Create the trust anchor once, on a workstation that holds the release-signing
+key, and copy only the **public** half to the host by a channel that does not
+pass through the release repository:
+
+```bash
+# release signer's workstation (a key of its own; not the cosign image key)
+ssh-keygen -t ed25519 -C "gremion release signing" -f ~/.ssh/gremion-release-signing
+printf 'release-signer namespaces="git" %s\n' \
+  "$(cut -d' ' -f1,2 ~/.ssh/gremion-release-signing.pub)" > allowed_signers
+# host, as root: install the file (one line per accepted signer; remove a line to revoke)
+install -m 0644 -o gremion -g gremion allowed_signers /opt/gremion/etc/allowed_signers
+```
+
+Sign a release as an annotated tag, push it, and check it the way the host will:
+
+```bash
+git -c gpg.format=ssh -c user.signingkey=~/.ssh/gremion-release-signing.pub \
+  tag -s -m "Release dist-vX.Y.Z" dist-vX.Y.Z
+git push origin dist-vX.Y.Z
+git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=allowed_signers verify-tag dist-vX.Y.Z   # Good "git" signature
+```
+
+A tag cut before this check existed is unsigned and is refused, also on a
+`gremion-rollback` redeploy of it; re-create it signed on the same commit
+before deploying it again. `bootstrap.sh` does not install `allowed_signers`
+yet, so a new host needs the `install` line above before its first deploy.
+
 ### The Settings "Backup jetzt erstellen" button (F1-FIX-10-K, D-4)
 
 The button in Settings -> Backups is wired to the same allow-list: the app's
