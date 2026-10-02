@@ -323,8 +323,11 @@ checked-out commit must be the one that tag names. A fresh clone is staged in
 `releases/.incoming-*` and only a tree that passed is moved to `releases/<tag>`;
 an existing `releases/<tag>` checkout is verified again on every deploy. The
 check fails closed (exit 1, step 2) on: no `allowed_signers` (or an empty one),
-an unsigned or lightweight tag, a tag signed by a key that is not listed. A
-copy of `allowed_signers` inside the tree is never consulted. This is the
+an unsigned or lightweight tag, a tag signed by a key that is not listed, and a
+tag whose signature is not exactly one ssh signature (an OpenPGP or x509
+signature would be checked against the deploy user's gpg keyring or gpgsm trust
+store, never against this file). A copy of `allowed_signers` inside the tree is
+never consulted. This is the
 tree's half of the gate; the image half is `etc/cosign.pub` (TRD-441).
 
 Create the trust anchor once, on a workstation that holds the release-signing
@@ -336,8 +339,11 @@ pass through the release repository:
 ssh-keygen -t ed25519 -C "gremion release signing" -f ~/.ssh/gremion-release-signing
 printf 'release-signer namespaces="git" %s\n' \
   "$(cut -d' ' -f1,2 ~/.ssh/gremion-release-signing.pub)" > allowed_signers
-# host, as root: install the file (one line per accepted signer; remove a line to revoke)
-install -m 0644 -o gremion -g gremion allowed_signers /opt/gremion/etc/allowed_signers
+# host, as root: install the file through the bootstrap stage (one line per accepted
+# signer; remove a line and run it again to revoke). root:root 0644, like etc/cosign.pub:
+# the deploy user reads the anchor and must not be able to rewrite it.
+bash infra/host/bootstrap.sh --allowed-signers allowed_signers signers
+stat -c '%U:%G %a %n' /opt/gremion/etc/allowed_signers      # root:root 644
 ```
 
 Sign a release as an annotated tag, push it, and check it the way the host will:
@@ -351,8 +357,9 @@ git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=allowed_signers verify-tag d
 
 A tag cut before this check existed is unsigned and is refused, also on a
 `gremion-rollback` redeploy of it; re-create it signed on the same commit
-before deploying it again. `bootstrap.sh` does not install `allowed_signers`
-yet, so a new host needs the `install` line above before its first deploy.
+before deploying it again. A new host gets the anchor from the install runbook
+(step 10, `bootstrap.sh signers`); `gremion-deploy` refuses its first deploy
+without it.
 
 ### The Settings "Backup jetzt erstellen" button (F1-FIX-10-K, D-4)
 

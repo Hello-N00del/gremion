@@ -287,7 +287,7 @@ step_1_login() { # <token>
 authenticate_release_tree() { # <dir>
     local dir="$1" signers="$ROOT/etc/allowed_signers" out tagc head sigfmt
     [[ -f "$signers" && ! -L "$signers" && -s "$signers" ]] \
-        || die "release-tag trust anchor absent: $signers (create it as docs/ops/host-tooling.md 'Authenticating the release tree' says) - refusing to use an unauthenticated release tree" 1
+        || die "release-tag trust anchor absent: $signers (install it with bootstrap.sh --allowed-signers PATH signers; docs/ops/host-tooling.md 'Authenticating the release tree') - refusing to use an unauthenticated release tree" 1
     # The signature FORMAT is pinned too. git picks the verifier from the
     # signature's own header, so an OpenPGP or x509 signature would be checked
     # against the deploy user's gpg keyring or gpgsm trust store and never reach

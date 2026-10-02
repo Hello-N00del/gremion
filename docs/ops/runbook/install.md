@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 3.0.0
+- Version: 4.0.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -44,8 +44,11 @@ export PATH="/opt/gremion/bin:$PATH"
 - The administrator holds, on their own machine: the provider panel login, the
   registrar login, an SSH key the rebuilt server will accept for root, a
   registry token with read access to the release images (typed at a prompt,
-  never written to disk), the deploy key's public half, and the release-signing
-  public key for `bootstrap.sh trust`.
+  never written to disk), the deploy key's public half, the release-signing
+  public key for `bootstrap.sh trust`, and the release signer's `allowed_signers`
+  file (ssh public keys only, `namespaces="git"`; how to make it:
+  [host-tooling.md](../host-tooling.md), "Authenticating the release tree"),
+  copied to `/root/allowed_signers` on the rebuilt server before step 3.
 - The host's public addresses (edge and mail, IPv4 and IPv6) are known from the
   provider panel, for example `203.0.113.10` and `2001:db8::a`.
 - Decided before the first `docker compose up`, because none of them can be
@@ -84,7 +87,8 @@ install -d -m 755 /opt/gremion/releases
 git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$REL"
 git -C "$REL" describe --tags --exact-match          # prints the tag
 # authenticate the tree BEFORE step 4 runs code from it: the release signer's
-# allowed_signers file, copied to /root from the workstation (docs/ops/host-tooling.md)
+# allowed_signers file, copied to /root from the workstation (docs/ops/host-tooling.md).
+# Step 10 installs this same file as the host's permanent anchor, /opt/gremion/etc/allowed_signers.
 git -C "$REL" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=/root/allowed_signers \
   verify-tag "refs/tags/$TAG"                        # Good "git" signature
 ```
@@ -162,11 +166,18 @@ bash "$REL/infra/host/bootstrap.sh" networks
 bash "$REL/infra/host/bootstrap.sh" firewall
 ```
 
-10. **Release trust and the deploy agent.**
+10. **Release trust and the deploy agent.** Two anchors, both written only by
+    `bootstrap.sh`, both `root:root` 0644 (the deploy user reads them and cannot
+    rewrite them): `etc/cosign.pub` (the image half, TRD-441) and
+    `etc/allowed_signers` (the release-tree half, H10). `gremion-deploy` refuses
+    the first deploy without either. The `signers` stage installs the file step 3
+    already verified the tag with.
 
 ```bash
 bash "$REL/infra/host/bootstrap.sh" --cosign-pubkey "<release public key file>" trust
+bash "$REL/infra/host/bootstrap.sh" --allowed-signers /root/allowed_signers signers
 bash "$REL/infra/host/bootstrap.sh" --deploy-pubkey "<deploy public key file>" agent
+stat -c '%U:%G %a %n' /opt/gremion/etc/cosign.pub /opt/gremion/etc/allowed_signers   # root:root 644, both
 ```
 
 11. **Check the published DNS records.** Every line `OK`; no `MISSING`, no
@@ -329,7 +340,8 @@ reboot gate or deploy does not die on a root-owned file:
 ```bash
 stat -c '%U %a %n' /opt/gremion/etc/env/*.env                                 # gremion 600, for each of the five
 stat -c '%U %n' "$REL" "$(readlink -f /opt/gremion/current)"                    # gremion, both
-find /opt/gremion/etc/env "$REL" ! -user gremion | wc -l                        # 0 (etc/cosign.pub stays root's on purpose)
+find /opt/gremion/etc/env "$REL" ! -user gremion | wc -l                        # 0
+stat -c '%U:%G %a %n' /opt/gremion/etc/cosign.pub /opt/gremion/etc/allowed_signers   # root:root 644, both: the trust anchors stay root's on purpose
 ```
 
 Readiness, fresh volumes and fresh certificates:
@@ -403,6 +415,7 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 4.0.0 (2026-10-03): H10 (F1 sweep K6#19, TASK-048b relay). Step 3 authenticates the release tag against the release signer's `allowed_signers` before step 4 runs code from the tree; step 10 installs that same file as the host's anchor `etc/allowed_signers` (`bootstrap.sh --allowed-signers PATH signers`, `root:root` 0644 like `etc/cosign.pub`), and the post-condition reads both anchors' owner and mode. `gremion-deploy` refuses a tag that is unsigned, signed by an unlisted key or not an ssh signature. Major: a step changed.
 - 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). The post-condition's sign-in observation passes the Keycloak admin password to kcadm as `KC_CLI_PASSWORD` by name (no `--password` on any command line), uses `--server` with Keycloak's `/auth` relative path (the URL without it answered 404) and removes kcadm's cached token afterwards. Major: a post-condition changed (Q9).
 - 2.0.0 (2026-09-28): step 12 runs `gremion-render` as the deploy user before the state project's first `up`, links the ipcrypt key into the release tree, and observes both (TASK-037 review).
 - 1.0.0 (2026-09-27): first version (TASK-037).
