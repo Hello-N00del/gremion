@@ -1528,6 +1528,42 @@
       "reason": "added by TASK-205b (TASK-058 Q10): the Helios items follow the elections module",
       "owner": "TASK-205",
       "blob": "475e7d2d24924bfb23acf0c542badcb5c78a1b5c"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/MatrixChip.svelte",
+      "reason": "added by TASK-205b: the Matrix chip of the TopBar chips slot part (was inline in the source TopBar; TASK-208 slot contract, UX-071a.6)",
+      "owner": "TASK-205",
+      "blob": "14b00c2263cfed4f0637eeb3c8d1b5e2fad833a0"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/CallLiveChip.svelte",
+      "reason": "added by TASK-205b: the live-call indicator of the TopBar liveCall slot part (was inline in the source TopBar)",
+      "owner": "TASK-205",
+      "blob": "ddf050b428831a12f35526354e5091d1c4753cf0"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/NotificationBell.svelte",
+      "reason": "added by TASK-205b: the bell and its popover (min(348px, 100vw - 32px)) of the TopBar bell slot part; chat source only, the kernel carries no aggregated notifications API",
+      "owner": "TASK-205",
+      "blob": "15c1c75c829867c266b81b6ac9a209b7d7874be2"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/fixtures/MessagingShellFixture.svelte",
+      "reason": "added by TASK-205b: browser-suite fixture mounting AppShell with the real messaging slot components",
+      "owner": "TASK-205",
+      "blob": "cd2416c81ef2a9650f3fda0e0a1e1c1a76190d95"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/messaging-topbar.browser.test.ts",
+      "reason": "added by TASK-205b: the messaging TopBar parts in real Chromium (chips hidden below 768 px, live-call and bell kept, 44 px target, popover width, no marking)",
+      "owner": "TASK-205",
+      "blob": "64e927514a3c57824305aff5a38e505505f529aa"
+    },
+    {
+      "path": "modules/messaging/app/lib/modules/slots/messaging.slot.ts",
+      "reason": "added by TASK-205b: the messaging module's contribution to the shell chrome (chips, live call, bell, call picture-in-picture) for the root layout's interim slot composition",
+      "owner": "TASK-205",
+      "blob": "029d491f439c6520e953ee1ecbc2cab6fc989382"
     }
   ]
 }
