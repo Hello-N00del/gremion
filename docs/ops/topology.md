@@ -219,12 +219,13 @@ host marker records the StuRaOS master `87c004a8` (kernel gitlink `a21c1740`), e
   may create a new unit; which one applies (if any) is the operator's call, and none is claimed
   here.
 
-### 5.4 2026-10-01: tasks board enabled on the test environment only (R29-I1)
+### 5.4 2026-09-30: tasks board enabled on the test environment only (R29-I1)
 
 - Under R29-I1 (board opt-in now, per-tenant store) the board runs on the test environment: the
   board service is up and healthy, and its databases are per-tenant (`board_control` and
-  `board_default`), with counts and checksums equal to the legacy store at cut-over. Live since
-  2026-10-01.
+  `board_default`), with counts and checksums equal to the legacy store at cut-over. Opted in on
+  the test environment on 2026-09-30 (single-tenant exception); the per-tenant store went live with
+  the same evening's redeploy.
 - This is a test-environment exception. §3 is unchanged for the pilot: the tasks board stays off
   until PRD-PLAT-012's cross-tenant isolation proof passes (PRD-REC-003). No new deployment unit
   is involved: the board service is one of the 32 services in §1.
