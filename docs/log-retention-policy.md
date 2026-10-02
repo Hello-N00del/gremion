@@ -126,8 +126,10 @@ static model and its mutation guards under `verify`.
 
 Residuals, named: while the vector container is stopped nothing is rotated or
 pruned and Traefik keeps appending, so the bound holds only while the container
-runs (the first loop after a start deletes what has aged out; the container-down
-alert is TASK-039's). `tail -F` duplicates up to 10 records into `security.log`
+runs (the first loop after a start deletes what has aged out). A stopped or
+removed vector container raises `ContainerUnhealthy2m` with `component` naming it
+(`gremion:cond:container_unhealthy` in `compose/observability/prometheus/rules.yml`,
+TASK-039), so the operator learns of it within minutes. `tail -F` duplicates up to 10 records into `security.log`
 on each restart (covered by `L`; the `tail -n 0 -F` fix belongs to TASK-033, which
 owns `process-logs.sh`). A lost `vector-processed-logs` volume takes the security
 and retained files with it and the Traefik files then span one extra day (still
@@ -231,6 +233,27 @@ Vector pipeline volumes). Operators who ship logs to a central backend (e.g. Lok
 Elasticsearch) must configure retention at that backend to match — or be stricter
 than — the windows above. Pseudonymisation happens before the processed log is
 written, so a downstream collector receives already-pseudonymised access records.
+
+**The operator's own log store (TASK-039).** The ops project
+(`compose/observability/`) runs Loki with compactor retention ON (Loki's default
+keeps every line for ever) and one stream per class of the retention catalogue
+(section 4.1), each held under the 30-day ceiling [D R29-I6] in the worst case
+(window + 24 h index period + 2 h delete delay + 10 min compaction interval):
+
+| Loki stream | Window | Worst case | Fed by |
+|---|---|---|---|
+| `class="access"` | 14 days | 15 d 2 h 10 min | (reserved for TASK-033's access classes) |
+| `class="security"` | 27 days | 28 d 2 h 10 min | Vector's `security.log`, read-only by Alloy |
+| `class="finance"` | 27 days | 28 d 2 h 10 min | (reserved for the finance log, TASK-033) |
+| `class="audit"` | 27 days | 28 d 2 h 10 min | Grafana's own request log (the operator-access record) |
+| `class="application"` | 28 days [A] | 29 d 2 h 10 min | OTLP logs pushed to the ops ingest (TASK-116) |
+| no class | 14 days | 15 d 2 h 10 min | anything else |
+
+Traces (Tempo) are kept 7 days (RC-LOG-TRC), metrics (Prometheus) 30 days at
+most. `compose/observability/retention.test.mjs` fails on any window whose worst
+case passes 30 days. Container stdout of the council services is not shipped
+(no ops service may read the Docker data root), so the `json-file` residual above
+is unchanged.
 
 ---
 

@@ -13,7 +13,7 @@ is `test/host/integration/pooled-stack-proof.sh`.
 | `${STACK}-state` | `docker-compose.yml` + `docker-compose.prod.yml` + state pins (`docker-compose.state-pins.yml`) | every database and volume, keycloak, the edge (traefik, its socket proxy, fallback, legal), vector |
 | `${STACK}-app-blue` | `docker-compose.app.yml` + pins, `COLOUR=blue` | gremion-ui, gremion-public, control-panel (+ the `migrate` / `tenant-create` one-shots) |
 | `${STACK}-app-green` | the same file, `COLOUR=green` | the same five services, other colour |
-| `${STACK}-ops` | `infra/host/ops/docker-compose.yml` | prometheus, alertmanager, node-exporter, cadvisor, blackbox (**non-council**) |
+| `${STACK}-ops` | `compose/observability/docker-compose.yml` (TASK-039) | grafana, prometheus, loki, tempo, alloy, blackbox (**non-council**) |
 | `${STACK}-mail` | `infra/host/mail/docker-compose.yml` | stalwart, the platform mail server (**non-council**) |
 
 **Tenants cost no containers (TRD-440).** A customer adds databases (its
@@ -73,7 +73,7 @@ and that code is the authoritative copy.
 | gremion-ui, gremion-public | council app | app-`<colour>` | `_edge`, `_state`, `app` |
 | control-panel (TASK-043 Q12: no port, no Traefik route; `gremion-tenant panel` prints the `ssh -L` line) | council app | app-`<colour>` | `_state`, `app` |
 | migrate / tenant-create | council one-shot | app-`<colour>` | `_state` / `_state` + `_edge` |
-| prometheus, alertmanager, node-exporter, cadvisor, blackbox | **non-council** | ops | `ops` |
+| grafana, prometheus, loki, tempo, alloy, blackbox | **non-council** | ops | `ops` |
 | stalwart | **non-council** | mail | `mail` |
 | sales site (R26-1, other repo) | **non-council** | its own | its own |
 
@@ -116,9 +116,9 @@ limit.
 | app-`<colour>` | control-panel | 512M | 0.5 | 0 |
 | app-`<colour>` | migrate (one-shot) | 1G | 1.0 | 0 |
 | app-`<colour>` | tenant-create (one-shot) | 512M | 0.5 | 0 |
-| ops | prometheus | 1G | 1.0 | 0 |
-| ops | cadvisor | 512M | 0.5 | 0 |
-| ops | alertmanager, node-exporter, blackbox | 3 × 256M | 3 × 0.25 | 0 |
+| ops | prometheus, loki | 2 × 1G | 1.0 + 0.5 | 0 |
+| ops | grafana, tempo, alloy | 3 × 512M | 3 × 0.5 | 0 |
+| ops | blackbox | 256M | 0.25 | 0 |
 | mail | stalwart | 512M | 0.5 | 0 |
 
 ### The sum against the host
@@ -128,10 +128,10 @@ limit.
 | state, no module Postgres | 5.0G | 4.5 |
 | state, all six module Postgres | 6.5G | 6.0 |
 | one app colour (steady state, with the control panel since TASK-043) | 2.0G | 2.0 |
-| ops | 2.25G | 2.25 |
+| ops (TASK-039) | 3.75G | 3.25 |
 | mail | 0.5G | 0.5 |
-| **steady state** (state with all modules + one colour + ops + mail) | **11.25G** | **10.75** |
-| **deploy window** (+ the second colour + migrate) | **14.25G** | **13.75** |
+| **steady state** (state with all modules + one colour + ops + mail) | **12.75G** | **11.75** |
+| **deploy window** (+ the second colour + migrate) | **15.75G** | **14.75** |
 
 These are ceilings, not usage. A CPU limit caps each container and reserves
 nothing, so a CPU sum above the host's core count means contention under load,

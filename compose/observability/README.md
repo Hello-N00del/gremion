@@ -52,6 +52,27 @@ written by `gremion-tenant init --realm-only --keycloak-container <kc>`; until i
 exists Grafana starts and nobody can sign in (`render-ops.sh` prints
 `grafana-sso=pending`).
 
+**An ops realm created before TASK-039** has no `grafana` client, and its stored
+template fingerprint no longer matches, so `gremion-tenant init` refuses it (by
+design: an ops realm is never overwritten). Add the client once with kcadm, as
+the deploy user, with the Keycloak admin password handed by name (never on a
+command line):
+
+    kc="$(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
+    KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$kc" /opt/keycloak/bin/kcadm.sh \
+      config credentials --server http://127.0.0.1:8080/auth --realm master --user "$KEYCLOAK_ADMIN"
+    jq '.clients[] | select(.clientId == "grafana")' /opt/gremion/current/docker/keycloak/realm-export.ops.json \
+      | docker exec -i "$kc" /opt/keycloak/bin/kcadm.sh create clients -r platform -f -
+    id="$(docker exec "$kc" /opt/keycloak/bin/kcadm.sh get clients -r platform -q clientId=grafana --fields id | jq -r '.[0].id')"
+    docker exec "$kc" /opt/keycloak/bin/kcadm.sh get roles/operator -r platform | jq -c '[.]' \
+      | docker exec -i "$kc" /opt/keycloak/bin/kcadm.sh create "clients/${id}/scope-mappings/realm" -r platform -f -
+    install -d -m 700 /opt/gremion/etc/secrets/grafana
+    docker exec "$kc" /opt/keycloak/bin/kcadm.sh get "clients/${id}/client-secret" -r platform \
+      | jq -r .value | (umask 077; cat > /opt/gremion/etc/secrets/grafana/client_secret)
+    docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config
+
+then re-run `render-ops.sh` (it prints `grafana-sso=ready`) and restart Grafana.
+
 ## Collection [A, Q3 / Q11 provisional]
 
 TRD-203 leaves the ops side no route to NATS or Postgres, and Vector runs with

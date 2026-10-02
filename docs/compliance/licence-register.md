@@ -90,6 +90,37 @@ checked-out git blob — no upstream commit was individually resolved for these 
 | oxlint | `1.85.0` | `LICENSE` | `95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3` |
 | oxlint-tsgolint | `7.0.2003` | `LICENSE` | `c211cc5336d2d47f21322aca35c8149699de621edc447294b617048d05a745ce` |
 
+## 2b. The operator-only observability stack (TASK-039, read 2026-10-02)
+
+The ops project `compose/observability/` (`${STACK}-ops`): operator-side, non-council,
+never offered to a council and never member-facing (TRD-199). Read by section 4's
+procedure at the release each image is digest-pinned to in
+`compose/observability/docker-compose.yml`; not one of TRD-265's seven systems, so the
+marketing-copy check does not read this table. Each repository's root carries `LICENSE`
+and `LICENSING.md` (Grafana also `NOTICE.md`); `LICENSING.md` names the default licence
+and the sub-directories that are Apache-2.0 instead.
+
+| System | Upstream repository | Version read | Deployed as | Commit read (linked) | Licence file | What the file states | SPDX expression | Plain wording for copy |
+|---|---|---|---|---|---|---|---|---|
+| Grafana | grafana/grafana | tag `v12.4.0` | the upstream image `grafana/grafana:12.4.0`, digest-pinned | [`d1729c5`](https://github.com/grafana/grafana/blob/d1729c53a7f44e2e58947eb44eb896c2fb1c30b3/LICENSE) | `LICENSE` (+ `LICENSING.md`, `NOTICE.md`) | the GNU Affero General Public License, Version 3 text; `LICENSING.md`: "The default license for this project is AGPL-3.0-only", listed directories Apache-2.0 | `AGPL-3.0-only` | "GNU Affero General Public License v3.0 only" |
+| Loki | grafana/loki | tag `v3.7.0` | the upstream image `grafana/loki:3.7.0`, digest-pinned | [`3361de2`](https://github.com/grafana/loki/blob/3361de24b692875d77bd7433cd6baa7c68dc0ef9/LICENSE) | `LICENSE` (+ `LICENSING.md`) | the GNU Affero General Public License, Version 3 text; `LICENSING.md`: "The default license for this project is AGPL-3.0-only", listed folders Apache-2.0 | `AGPL-3.0-only` | "GNU Affero General Public License v3.0 only" |
+| Tempo | grafana/tempo | tag `v2.10.0` | the upstream image `grafana/tempo:2.10.0`, digest-pinned | [`5773eb8`](https://github.com/grafana/tempo/blob/5773eb8b0bdd4439a6c065e54f777e4f77d419a1/LICENSE) | `LICENSE` (+ `LICENSING.md`) | the GNU Affero General Public License, Version 3 text; `LICENSING.md`: "The default license for this project is AGPL-3.0-only", listed folders Apache-2.0 | `AGPL-3.0-only` | "GNU Affero General Public License v3.0 only" |
+| Alloy | grafana/alloy | tag `v1.14.0` | the upstream image `grafana/alloy:v1.14.0`, digest-pinned | [`9c463f2`](https://github.com/grafana/alloy/blob/9c463f233171efef2ddd5f272f09a7adac4078fe/LICENSE) | `LICENSE` (+ `LICENSING.md`) | Apache License, Version 2.0; `LICENSING.md`: "The default license for this project is Apache-2.0" | `Apache-2.0` | "Apache License 2.0" |
+
+| System | Full commit SHA | File | SHA-256 of the file as read |
+|---|---|---|---|
+| Grafana | `d1729c53a7f44e2e58947eb44eb896c2fb1c30b3` | `LICENSE` | `0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0` |
+| Loki | `3361de24b692875d77bd7433cd6baa7c68dc0ef9` | `LICENSE` | `0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0` |
+| Tempo | `5773eb8b0bdd4439a6c065e54f777e4f77d419a1` | `LICENSE` | `0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0` |
+| Alloy | `9c463f233171efef2ddd5f272f09a7adac4078fe` | `LICENSE` | `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` |
+
+The three AGPL files hash like Synapse's (the unmodified AGPL v3 text), Alloy's like
+Keycloak's (the unmodified Apache 2.0 text). As deployed, the three AGPL components run
+from the unmodified upstream images, as the vendor's own operations tooling reached only
+by the operator through an SSH tunnel; no council user reaches them. Prometheus and the blackbox
+exporter (Apache-2.0) were already part of the ops project before TASK-039 and carry no
+row yet: a gap under rule 2, stated here.
+
 ## 3. Known gaps, stated openly
 
 - **Element Call:** this repository pins no Element Call image and the 2026-09-24 census
