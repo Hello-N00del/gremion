@@ -1,48 +1,23 @@
-// services/board/src/store/index.ts
+// modules/board/src/store/index.ts
 //
-// The board leaf's Postgres store: domain types, the re-exported migration
-// runner (defined in ../migrations.ts), a single-DB connection accessor, and the
-// board/stack/card query ops.
+// The board leaf's store: domain types and the board/stack/card query ops.
 //
 // The ops are lifted verbatim from gremion-ui/src/lib/server/board/board-db.ts
-// (byte-identical SQL) but take an explicit `sql` handle as their first argument
-// so tests can inject a pre-seeded pool (mirrors the newsletter/calendar leaf
-// store-op shape). This leaf owns a SINGLE database (BOARD_PG_URL) — there is no
-// per-tenant CREATE DATABASE machinery here (that provisioning is a documented
-// cutover prerequisite, see docs/runbooks/board-cutover.md).
+// (byte-identical SQL) but take an explicit `sql` handle as their first argument.
+// That handle is ONE tenant's (tenant, board) pool, t_<hex32>__board, opened by
+// @gremion/tenant-store behind the schema gate (./tenant-db.ts, wired once in
+// ../app.ts). Nothing here opens a connection, reads a url or migrates: the
+// database is created and migrated only by enableModule (TASK-021, B21).
 
-import postgres from 'postgres'
-import { runMigrations, _resetMigrationCacheForTests } from '../migrations.js'
-
-// Re-export the migration runner (relocated to src/migrations.ts at depth 1 so
-// its MIGRATIONS_DIR resolves correctly from the depth-1 esbuild bundle as well
-// as the source tree) so existing `store/index` importers keep working.
-export { runMigrations }
-
-/**
- * Resolve the runtime Postgres URL, failing closed. In production BOARD_PG_URL
- * is set; we deliberately DO NOT fall back to localhost:5432 — on the staging host
- * that port is the LIVE kernel Postgres (#394 require-explicit-env posture). Fires
- * only when neither an explicit pgUrl nor the env var is set (a misconfiguration).
- */
-export function requireRuntimePgUrl(explicit: string | undefined, envName: string): string {
-  const url = explicit || process.env[envName]
-  if (!url) {
-    throw new Error(
-      `[board] no Postgres URL configured — set ${envName} (or pass options.pgUrl). ` +
-        'Refusing to default to localhost:5432 (the LIVE kernel Postgres on the staging host).',
-    )
-  }
-  return url
-}
+import type { TenantStore } from '@gremion/tenant-store'
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
-export type Sql = ReturnType<typeof postgres>
+/** A tenant's pool as @gremion/tenant-store hands it out (the package exports no Sql). */
+export type Sql = Awaited<ReturnType<TenantStore['openTenantDb']>>
 
-/** Minimal tenant identity carried on guard-validated headers (kept for HTTP
- *  handler-signature parity with the other leaves; the single-DB store ignores
- *  it today). */
+/** Guard-validated tenant identity. The id (a canonical UUIDv7) is the storage
+ *  key; the slug is validated and never used to choose a database. */
 export interface TenantRef {
   readonly id: string
   readonly slug: string
@@ -83,36 +58,6 @@ export interface Deck {
   cards: readonly Card[]
 }
 
-// ── single-DB connection accessor ────────────────────────────────────────────
-
-let _pool: Sql | null = null
-
-export interface StoreOptions {
-  pgUrl?: string
-}
-
-/**
- * Return the leaf's single ready postgres-js pool, creating it (and running the
- * manifest-verified migrations) on first contact. Identity guarantee: repeated
- * calls return the SAME pool until _resetStoreForTests() drains it.
- */
-export async function getStore(options: StoreOptions = {}): Promise<Sql> {
-  if (_pool) return _pool
-  const pgUrl = requireRuntimePgUrl(options.pgUrl, 'BOARD_PG_URL')
-  await runMigrations(pgUrl)
-  _pool = postgres(pgUrl, { max: 4, prepare: true, idle_timeout: 20, connect_timeout: 10 })
-  return _pool
-}
-
-/** TEST-ONLY: drain the pool + clear the manifest cache. */
-export async function _resetStoreForTests(): Promise<void> {
-  if (_pool !== null) {
-    await _pool.end().catch(() => {})
-    _pool = null
-  }
-  _resetMigrationCacheForTests()
-}
-
 // ── store ops (byte-identical SQL to board-db.ts, sql-param shape) ────────────
 
 export async function createBoard(
@@ -123,6 +68,35 @@ export async function createBoard(
     INSERT INTO board (org_unit_id, name, archived)
     VALUES (${data.orgUnitId}, ${data.name}, ${data.archived ?? false}) RETURNING *`
   return rows[0]!
+}
+
+/**
+ * R29-BOARD-STORE-K A5: a board and its stacks (sort_order = position) in ONE
+ * transaction, so a failing stack insert leaves no board. Same INSERTs as
+ * createBoard / createStack, run on the transaction handle.
+ */
+export async function createBoardWithStacks(
+  sql: Sql,
+  data: { orgUnitId: string; name: string; archived?: boolean; stacks?: readonly string[] },
+): Promise<{ board: Board; stacks: Stack[] }> {
+  return sql.begin(async (tx) => {
+    const [board] = await tx<Board[]>`
+      INSERT INTO board (org_unit_id, name, archived)
+      VALUES (${data.orgUnitId}, ${data.name}, ${data.archived ?? false}) RETURNING *`
+    const stacks: Stack[] = []
+    for (const [order, name] of (data.stacks ?? []).entries()) {
+      const [stack] = await tx<Stack[]>`
+        INSERT INTO stack (board_id, name, sort_order) VALUES (${board!.id}, ${name}, ${order}) RETURNING *`
+      stacks.push(stack!)
+    }
+    return { board: board!, stacks }
+  }) as Promise<{ board: Board; stacks: Stack[] }>
+}
+
+/** True when `id` is a stack in THIS tenant's database. */
+export async function stackExists(sql: Sql, id: string): Promise<boolean> {
+  const rows = await sql`SELECT 1 FROM stack WHERE id = ${id}`
+  return rows.length === 1
 }
 
 export async function listBoardsForOrgUnits(sql: Sql, orgUnitIds: readonly string[]): Promise<readonly Board[]> {

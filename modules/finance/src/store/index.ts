@@ -12,11 +12,11 @@
 // expense_attachment bytes ride the injected StorageBackend), expense
 // read/write, pending-approval, budget / statement / booking reads, project
 // state-machine + CRUD, and sub-org reads + sub_org_type catalog writes —
-// alongside the #369 sub-org saga ops and the /healthz/tenants liveness helper
-// (tableCount). All 52 LIVE ops run against the leaf's own `finance` schema — the
+// alongside the #369 sub-org saga ops. All 52 LIVE ops run against the leaf's own `finance` schema — the
 // year-end closeBudget (FIN-52) was the last kernel-coupling residual, now ported
 // LEAF-LOCAL (see http/routes.ts LIVE_OPS; KERNEL_COUPLING_EXCEPTIONS is now empty).
 
+import { randomUUID } from 'node:crypto'
 import type { Sql } from '../tenant-store.js'
 import type { StorageBackend } from '../storage/index.js'
 
@@ -256,14 +256,6 @@ export const CHECKSUM_COLUMN: Partial<Record<FinanceTable, string>> = {
   fiscal_year: 'name',
   project: 'name',
   expense: 'payee_name',
-}
-
-// ── health helper ──────────────────────────────────────────────────────────────
-
-/** Count rows in a finance table (schema-qualified) — used by /healthz/tenants. */
-export async function tableCount(sql: Sql, table: FinanceTable): Promise<number> {
-  const rows = await sql<{ c: string }[]>`SELECT COUNT(*) AS c FROM ${sql(`${FINANCE_SCHEMA}.${table}`)}`
-  return Number(rows[0]!.c)
 }
 
 // ── sub-org saga store ops (#369 slice 3) ───────────────────────────────────────
@@ -506,6 +498,45 @@ export class HeliosApprovalNotManuallySignable extends ApprovalWorkflowError {
   constructor(approvalId: number) {
     super(`approval ${approvalId} is decided by Helios ingest and cannot be manually signed or rejected`)
   }
+}
+
+/** F1-FIX-05-K (H20): the approvable already has a pending approval. A repeated
+ *  "Genehmigung anfordern" (double click, retry) must not open a second one. */
+export class ApprovalAlreadyOpenError extends ApprovalWorkflowError {
+  override readonly name = 'ApprovalAlreadyOpenError'
+  readonly code = 'APPROVAL_ALREADY_OPEN'
+  readonly httpStatus = 409
+  constructor(type: string, approvableId: number) {
+    super(`${type} ${approvableId} already has a pending approval`)
+  }
+}
+
+/** F1-FIX-05-K (H20): an expense that is already approved or paid cannot open a
+ *  new approval (a second approval would finalise into a second payment_order). */
+export class ApprovableNotRequestableError extends ApprovalWorkflowError {
+  override readonly name = 'ApprovableNotRequestableError'
+  readonly code = 'APPROVABLE_NOT_REQUESTABLE'
+  readonly httpStatus = 409
+  constructor(type: string, approvableId: number, state: string) {
+    super(`${type} ${approvableId} is ${state}; it cannot open a new approval`)
+  }
+}
+
+/** F1-FIX-05-K (H20): finalising an expense approval when the expense already has a
+ *  live (non-voided) payment_order. One expense, one payment order. */
+export class PaymentOrderExistsError extends ApprovalWorkflowError {
+  override readonly name = 'PaymentOrderExistsError'
+  readonly code = 'PAYMENT_ORDER_EXISTS'
+  readonly httpStatus = 409
+  constructor(subject: string) {
+    super(`${subject} already has a live payment_order`)
+  }
+}
+
+/** True when `err` is a Postgres unique violation on the named index/constraint. */
+function isUniqueViolationOn(err: unknown, constraint: string): boolean {
+  const e = err as { code?: string; constraint_name?: string } | null
+  return e?.code === '23505' && e.constraint_name === constraint
 }
 
 /** Coerce a DATE column (postgres-js may hand back a Date, or a 'YYYY-MM-DD'
@@ -932,6 +963,16 @@ export class ReceiptImmutableError extends Error {
   }
 }
 
+/** A receipt filename that carries no usable basename ('', '.', '..', a bare path)
+ *  or a control character. Route -> 400. F1-FIX-05-K (H05). */
+export class InvalidReceiptFilenameError extends Error {
+  readonly httpStatus = 400
+  constructor(filename: string) {
+    super(`receipt: filename ${JSON.stringify(filename)} has no usable basename`)
+    this.name = 'InvalidReceiptFilenameError'
+  }
+}
+
 /** The parsed multipart upload the leaf hands the store (the leaf never sees a `File`;
  *  the multipart parser yields the exact-size bytes + the part's filename / mime). */
 export interface ReceiptUpload {
@@ -944,6 +985,47 @@ export interface ReceiptUpload {
  *  extra storage_path/kind the DTO drops). toReceiptDto maps it to the Receipt DTO. */
 interface RawAttachmentRow extends RawReceiptRow {
   storage_path: string
+}
+
+/** Storage extension per allow-listed mime (the key never carries client text). */
+const RECEIPT_EXT: Record<(typeof RECEIPT_ALLOWED_MIME)[number], string> = {
+  'application/pdf': '.pdf',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+}
+
+/** A tenant id may enter a storage key only as one plain segment. */
+const TENANT_KEY_SEGMENT = /^[A-Za-z0-9-]{1,64}$/
+
+/** The display name kept in expense_attachment.filename: the client filename's
+ *  basename (either separator), never a path. Refuses a name with no usable
+ *  basename or with a control character. It is NEVER part of the storage key. */
+export function receiptDisplayName(filename: string): string {
+  const base = filename.split(/[/\\]/).pop() ?? ''
+  // eslint-disable-next-line no-control-regex
+  if (base === '' || base === '.' || base === '..' || /[\u0000-\u001f\u007f]/.test(base)) {
+    throw new InvalidReceiptFilenameError(filename)
+  }
+  return base
+}
+
+/** F1-FIX-05-K (H05 leaf, K4#2 / K4#29): the storage key is built from
+ *  server-controlled parts only -- finance/<tenantId>/expense/<expenseId>/<uuid><ext>.
+ *  The tenant segment separates tenants on the shared Nextcloud / local root, the
+ *  UUID makes every upload its own object (a same-name upload can no longer
+ *  overwrite, and deleting one can no longer delete, another receipt's bytes), and
+ *  no client text reaches the key (no '../' traversal across expense folders).
+ *  Receipts written under the old key stay readable: read/delete act on the
+ *  stored storage_path handle, which is never recomputed. */
+export function receiptStorageKey(tenantId: string, expenseId: number, mimeType: string): string {
+  if (!TENANT_KEY_SEGMENT.test(tenantId)) {
+    throw new Error(`receipt: tenant id ${JSON.stringify(tenantId)} is not a plain key segment`)
+  }
+  if (!Number.isSafeInteger(expenseId) || expenseId <= 0) {
+    throw new ReceiptNotFoundError(`expense ${expenseId} not found`)
+  }
+  const ext = RECEIPT_EXT[mimeType as (typeof RECEIPT_ALLOWED_MIME)[number]] ?? ''
+  return `finance/${tenantId}/expense/${expenseId}/${randomUUID()}${ext}`
 }
 
 function assertReceiptAllowed(upload: ReceiptUpload): void {
@@ -989,14 +1071,22 @@ export async function uploadReceipt(
   expenseId: number,
   upload: ReceiptUpload,
   storage: StorageBackend,
+  tenantId: string,
 ): Promise<ReceiptDto> {
   assertReceiptAllowed(upload)
+  const displayName = receiptDisplayName(upload.filename)
+  if (!TENANT_KEY_SEGMENT.test(tenantId)) {
+    throw new Error(`receipt: tenant id ${JSON.stringify(tenantId)} is not a plain key segment`)
+  }
 
   // Pre-flight access check OUTSIDE the storage write so we don't waste storage on
   // requests we're going to reject.
   await assertExpenseWritable(sql, actor, expenseId, false)
 
-  const storagePath = await storage.put(`finance/expense/${expenseId}/${upload.filename}`, upload.bytes)
+  const storagePath = await storage.put(
+    receiptStorageKey(tenantId, expenseId, upload.mimeType ?? ''),
+    upload.bytes,
+  )
 
   return sql.begin(async (tx) => {
     const t = tx as unknown as Sql
@@ -1005,7 +1095,7 @@ export async function uploadReceipt(
     const rows = await t<RawAttachmentRow[]>`
       INSERT INTO finance.expense_attachment
         (expense_id, kind, filename, mime_type, storage_path, nextcloud_path, uploaded_by)
-      VALUES (${expenseId}, 'beleg', ${upload.filename}, ${upload.mimeType},
+      VALUES (${expenseId}, 'beleg', ${displayName}, ${upload.mimeType},
               ${storagePath}, ${null}, ${actor.userId})
       RETURNING *`
     return toReceiptDto(rows[0]!)
@@ -1677,6 +1767,13 @@ async function voidPendingPaymentOrders(tx: Sql, expenseId: number): Promise<voi
 async function finaliseApproved(tx: Sql, approval: ApprovalRecord): Promise<void> {
   const stages = await stagesForApproval(tx, approval.id)
   if (approval.approvable_type === 'expense') {
+    // F1-FIX-05-K (H20): one expense, one live payment_order. The partial unique
+    // index payment_order_one_live_per_expense_idx is the backstop; this check turns
+    // the common case into a typed 409 instead of a constraint error.
+    const live = await tx<{ id: string }[]>`
+      SELECT id FROM finance.payment_order
+      WHERE expense_id = ${approval.approvable_id} AND state <> 'voided' LIMIT 1`
+    if (live.length > 0) throw new PaymentOrderExistsError(`expense ${approval.approvable_id}`)
     const order = await tx<{ id: string }[]>`
       INSERT INTO finance.payment_order
         (expense_id, anordnung_by, feststellung_sachlich_by, feststellung_rechnerisch_by)
@@ -1713,12 +1810,52 @@ export async function createApproval(
   actor: ActorContext,
   input: { approvableType: ApprovableType; approvableId: number; method?: ApprovalMethod },
 ): Promise<{ approval_id: number }> {
+  try {
+    return await openApprovalTx(sql, actor, input)
+  } catch (err) {
+    // Two requests that raced past the pending check (possible only where no row
+    // lock serialises them, e.g. a budget_plan) meet the partial unique index.
+    if (isUniqueViolationOn(err, 'approval_one_open_per_approvable_idx')) {
+      throw new ApprovalAlreadyOpenError(input.approvableType, input.approvableId)
+    }
+    throw err
+  }
+}
+
+/** Expense states from which no new approval may be opened (H20): an approved or
+ *  paid expense already has its payment_order. */
+const EXPENSE_STATES_CLOSED_FOR_APPROVAL = new Set(['approved', 'paid'])
+
+async function openApprovalTx(
+  sql: Sql,
+  actor: ActorContext,
+  input: { approvableType: ApprovableType; approvableId: number; method?: ApprovalMethod },
+): Promise<{ approval_id: number }> {
   return sql.begin(async (tx) => {
     const t = tx as unknown as Sql
     // §11 create-time write-scope guard — runs FIRST so an unauthorised actor never
-    // materialises an approval row.
+    // materialises an approval row. For an expense / project it also takes the
+    // approvable's row lock, which serialises concurrent requests for it.
     const orgUnitId = await resolveApprovableOrgUnit(t, input.approvableType, input.approvableId)
     assertOrgUnitWritable(actor, orgUnitId)
+
+    // F1-FIX-05-K (H20): one open approval per approvable, and no new approval for an
+    // expense that is already approved / paid. Checked under the row lock above; the
+    // partial unique index approval_one_open_per_approvable_idx is the backstop.
+    if (input.approvableType === 'expense') {
+      const st = await t<{ state: string }[]>`
+        SELECT state FROM finance.expense WHERE id = ${input.approvableId}`
+      const state = st[0]?.state
+      if (state !== undefined && EXPENSE_STATES_CLOSED_FOR_APPROVAL.has(state)) {
+        throw new ApprovableNotRequestableError('expense', input.approvableId, state)
+      }
+    }
+    const open = await t<{ id: string }[]>`
+      SELECT id FROM finance.approval
+      WHERE approvable_type = ${input.approvableType} AND approvable_id = ${input.approvableId}
+        AND status = 'pending'
+      LIMIT 1`
+    if (open.length > 0) throw new ApprovalAlreadyOpenError(input.approvableType, input.approvableId)
 
     const amountCents = await resolveApprovalAmount(t, input.approvableType, input.approvableId)
     const config = await getSignerConfig(t)
@@ -1748,6 +1885,23 @@ export async function createApproval(
  *  the next stage or — on the final stage — finalises the approvable. Returns the
  *  refreshed status ('pending' while stages remain, 'approved' once the final signs). */
 export async function signApproval(
+  sql: Sql,
+  actor: ActorContext,
+  approvalId: number,
+  opts: { note?: string } & ForwardedStepUp,
+): Promise<string> {
+  try {
+    return await signApprovalTx(sql, actor, approvalId, opts)
+  } catch (err) {
+    // Backstop for finaliseApproved's live-order check (a concurrent finalisation).
+    if (isUniqueViolationOn(err, 'payment_order_one_live_per_expense_idx')) {
+      throw new PaymentOrderExistsError(`the expense of approval ${approvalId}`)
+    }
+    throw err
+  }
+}
+
+async function signApprovalTx(
   sql: Sql,
   actor: ActorContext,
   approvalId: number,
@@ -3803,6 +3957,82 @@ async function assertBankTransactionOwnScopeWritable(
   throw lastDenial ?? new Error(`bank_account#${bankAccountId}: no writable org unit`)
 }
 
+// ── F1-FIX-05-K: write scope for the sub-org sagas and the bank-account ops ──────
+// (H15 / S1b#27; H14 leaf twin / K4#34). These handlers used to run with no actor at
+// all: any caller holding the internal secret -- i.e. any Finance user behind the ACL
+// -- could create / rename / delete any sub-org and reconfigure, sync or inject CSV
+// transactions into any bank account. The actor rides the ACL headers like every
+// other write op; an absent actor is the fail-closed deny scope.
+
+const MIRROR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Central-scope gate: the actor must be able to write the central finance_unit's
+ *  org unit (auditor refused, superuser passes). No central finance_unit -> only a
+ *  superuser passes. Used for the sub-org create fallback and, r2 (K4#34 remainder),
+ *  for the tenant-wide fiscal-year and sub-org-type mutations. */
+export async function assertCentralScopeWritable(sql: Sql, actor: ActorContext): Promise<void> {
+  if (actor.isSuperuser) return
+  const rows = await sql<{ org_unit_id: string }[]>`
+    SELECT org_unit_id FROM finance.finance_unit WHERE kind = 'central' ORDER BY id LIMIT 1`
+  const central = rows[0]?.org_unit_id
+  if (central === undefined) throw new AccessDeniedError(actor.userId, 'central')
+  assertOrgUnitWritable(actor, central)
+}
+
+/** Create gate (native parity: services/write/sub-org.ts gates createSubOrg on the
+ *  PARENT org unit, since the new sub-org has no id yet). The parent is the explicit
+ *  `parentOrgUnitId` ONLY when the leaf's org-unit mirror confirms it is the new
+ *  unit's live parent (r2: a bare body claim let a caller name any parent it can
+ *  write); otherwise the central finance_unit's org unit (every StuFis-era sub-org is
+ *  parented under central, which is what the service-mode saga does). No resolvable
+ *  parent -> only a superuser may create. */
+export async function assertSubOrgCreateAllowed(
+  sql: Sql, actor: ActorContext, orgUnitId: string, parentOrgUnitId: string | undefined,
+): Promise<void> {
+  if (actor.isSuperuser) return
+  // Only a UUID pair can be looked up (the mirror's ids are UUID; anything else would
+  // be a 22P02 500 instead of a scope answer) -- a malformed claim is simply unconfirmed.
+  if (parentOrgUnitId !== undefined && MIRROR_UUID.test(orgUnitId) && MIRROR_UUID.test(parentOrgUnitId)) {
+    const confirmed = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM finance.org_unit_mirror
+      WHERE id = ${orgUnitId} AND parent_id = ${parentOrgUnitId} AND NOT deleted`
+    if ((confirmed[0]?.n ?? 0) > 0) {
+      assertOrgUnitWritable(actor, parentOrgUnitId)
+      return
+    }
+  }
+  await assertCentralScopeWritable(sql, actor)
+}
+
+/** Update / delete gate (native parity: updateSubOrg / deleteSubOrg gate on the
+ *  sub-org's OWN org unit). Returns false when the finance_unit does not exist (the
+ *  handler keeps its 404); throws AccessDeniedError (403) on a scope denial. */
+export async function assertFinanceUnitWritable(
+  sql: Sql, actor: ActorContext, financeUnitId: string | number,
+): Promise<boolean> {
+  const rows = await sql<{ org_unit_id: string }[]>`
+    SELECT org_unit_id FROM finance.finance_unit WHERE id = ${financeUnitId}`
+  if (rows.length === 0) return false
+  assertOrgUnitWritable(actor, rows[0]!.org_unit_id)
+  return true
+}
+
+/** configureFints / syncFints / csvImport gate: the actor must be able to write at
+ *  least one finance_unit whose ledger_account is backed by the bank account (the
+ *  same ANY-of predicate the split allocation uses; native read/fints.ts shape). A
+ *  superuser passes; an account no ledger backs is refused for everyone else (so an
+ *  unknown id is indistinguishable from an out-of-scope one). */
+export async function assertBankAccountWritable(
+  sql: Sql, actor: ActorContext, bankAccountId: string | number,
+): Promise<void> {
+  if (actor.isSuperuser) return
+  if (actor.isAuditor) throw new AccessDeniedError(actor.userId, `bank_account#${bankAccountId}`)
+  const rows = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM finance.ledger_account WHERE bank_account_id = ${bankAccountId}`
+  if ((rows[0]?.n ?? 0) === 0) throw new AccessDeniedError(actor.userId, `bank_account#${bankAccountId}`)
+  await assertBankTransactionOwnScopeWritable(sql, actor, String(bankAccountId))
+}
+
 /** TASK-009 verifier item 5b: lock a payment_order FOR UPDATE and assert the
  *  actor may write its owning org unit (PO -> expense -> finance_unit) BEFORE
  *  anything about it — existence, state, expense link — is revealed. A
@@ -3868,6 +4098,50 @@ async function lockMoneyPaymentOrderInScope(
   return { po, exp: expRows[0]! }
 }
 
+/** F1-FIX-05-K (K4#35): a booking's Titel must be one the actor may write (Titel ->
+ *  group -> section -> finance_unit -> org_unit) and must belong to the plan of the
+ *  booked fiscal year. Before this, payout and split bookings accepted any Titel id
+ *  and any fiscal year id, so a writer of unit A could charge unit B's budget or book
+ *  into a year the Titel does not belong to. Unknown Titel -> 422. */
+async function assertTitelBookable(
+  tx: Sql, actor: ActorContext, budgetTitelId: number, fiscalYearId: number,
+): Promise<void> {
+  const rows = await tx<{ org_unit_id: string; fiscal_year_id: string }[]>`
+    SELECT fu.org_unit_id, bp.fiscal_year_id
+    FROM finance.budget_titel bt
+    JOIN finance.budget_group bg ON bg.id = bt.budget_group_id
+    JOIN finance.budget_section bs ON bs.id = bg.budget_section_id
+    JOIN finance.budget_plan bp ON bp.id = bs.budget_plan_id
+    JOIN finance.finance_unit fu ON fu.id = bs.finance_unit_id
+    WHERE bt.id = ${budgetTitelId}`
+  if (rows.length === 0) throw new FinanceUnprocessableError(`budget_titel#${budgetTitelId} not found`)
+  assertOrgUnitWritable(actor, rows[0]!.org_unit_id)
+  if (Number(rows[0]!.fiscal_year_id) !== fiscalYearId) {
+    throw new FinanceUnprocessableError(
+      `budget_titel#${budgetTitelId} belongs to fiscal_year#${rows[0]!.fiscal_year_id}, not fiscal_year#${fiscalYearId}`,
+    )
+  }
+}
+
+/** F1-FIX-05-K (K4#17): the amount a payment order authorises -- the amount snapshot
+ *  of the expense's latest APPROVED approval (what the Vier-Augen signers signed off),
+ *  else the sum of the expense's receipt items (a payment order created outside the
+ *  approval workflow, e.g. migrated data). */
+async function authorisedPayoutCents(tx: Sql, expenseId: number): Promise<number> {
+  const snap = await tx<{ amount_cents: string | null }[]>`
+    SELECT amount_cents FROM finance.approval
+    WHERE approvable_type = 'expense' AND approvable_id = ${expenseId} AND status = 'approved'
+      AND amount_cents IS NOT NULL
+    ORDER BY id DESC LIMIT 1`
+  if (snap.length > 0 && snap[0]!.amount_cents !== null) return Number(snap[0]!.amount_cents)
+  const sum = await tx<{ total: string }[]>`
+    SELECT COALESCE(SUM(ri.amount_cents), 0)::text AS total
+    FROM finance.receipt_item ri
+    JOIN finance.receipt r ON r.id = ri.receipt_id
+    WHERE r.expense_id = ${expenseId}`
+  return Number(sum[0]?.total ?? 0)
+}
+
 interface RecordPayoutParams {
   paymentOrderId: number
   ledgerAccountId: number
@@ -3905,6 +4179,16 @@ async function doRecordPayout(
   }
   if (!p.enforceCashBox && ledger.type === 'cash_box') {
     throw new FinanceStateError('ledger_account: cash_box -> manual-payout is not a valid transition')
+  }
+
+  // F1-FIX-05-K (K4#35, K4#17): the Titel is in scope and in the booked year, and the
+  // payout moves exactly the authorised amount (never a caller-chosen one).
+  await assertTitelBookable(tx, actor, p.budgetTitelId, p.fiscalYearId)
+  const authorised = await authorisedPayoutCents(tx, po.expense_id)
+  if (p.amountCents !== authorised) {
+    throw new FinanceUnprocessableError(
+      `payment_order#${p.paymentOrderId}: payout amount does not match the authorised amount`,
+    )
   }
 
   const receiptRows = await tx<{ id: string }[]>`
@@ -4069,6 +4353,8 @@ export async function allocateSplit(
           `ledger_account#${part.ledgerAccountId}: bank_account mismatch -> split-allocation is not a valid transition`,
         )
       }
+      // F1-FIX-05-K (K4#35): each part's Titel is in scope and in the part's year.
+      await assertTitelBookable(tx, actor, part.budgetTitelId, part.fiscalYearId)
     }
 
     const dateRows = await tx<{ booking_date: Date | string }[]>`

@@ -109,8 +109,7 @@
       "files": [
         "modules/content/app/lib/server/content/backend/resolve.test.ts",
         "modules/files/test/webdav-path.test.ts",
-        "modules/publishing/test/api.integration.test.ts",
-        "modules/publishing/test/deploy-drift.test.ts"
+        "modules/publishing/test/api.integration.test.ts"
       ],
       "rules": { "vitest/no-conditional-expect": "off" }
     },

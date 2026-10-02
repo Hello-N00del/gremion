@@ -19,10 +19,8 @@ import type { KeycloakAdminClient } from '$lib/server/keycloak-admin'
 /**
  * P2.1b T7 — per-tenant external-service endpoints/secret refs, resolved by
  * the registry from `matrix_space` / `domain_profile` JSONB. All fields are
- * OPTIONAL: an absent field falls back to env at the consuming module. The
- * DEFAULT tenant NEVER reads these — its env expressions stay the source of
- * truth (standing rule 6, byte-identical), so the per-tenant modules branch on
- * `slug === 'default'` BEFORE consulting `services`.
+ * OPTIONAL: an absent field falls back to env at the consuming module. Every
+ * tenant reads these the same way (TASK-042: no slug is special).
  */
 export interface TenantServices {
   readonly matrixUrl?: string

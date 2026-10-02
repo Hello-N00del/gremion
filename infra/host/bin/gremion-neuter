@@ -21,9 +21,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/../lib/common.sh"
 
 # The sink accepts SMTP and discards it. Staging-only helper, never part of any
-# production composition, so it is tag-pinned rather than digest-pinned; set
-# NULL_SINK_IMAGE to a digest reference to pin it.
-NULL_SINK_IMAGE="${NULL_SINK_IMAGE:-axllent/mailpit:v1.30.1}"
+# production composition; still pinned tag@digest like every host helper
+# default (TRD-350, lint-image-digests). Give an override as tag@digest too;
+# the static guard reads only this default, not the run-time environment.
+NULL_SINK_IMAGE="${NULL_SINK_IMAGE:-axllent/mailpit:v1.30.1@sha256:3bd7c2f2696deb35a4780d152b404dceec99cb041b942c0877b3b22384714f85}"
 NULL_SINK_HOST="${NULL_SINK_HOST:-null-sink}"
 NULL_SINK_PORT="${NULL_SINK_PORT:-1025}"
 # The kcadm entrypoint inside the Keycloak image - the same path
@@ -34,7 +35,11 @@ NEUTER_EXEC_EXEMPT="${NEUTER_EXEC_EXEMPT:-}"
 
 NEUTER_HOST_KEYS_RE='(^|_)(SMTP_HOST|EMAIL_HOST|SMTP_SERVER)$'
 NEUTER_PORT_KEYS_RE='(^|_)(SMTP_PORT|EMAIL_PORT)$'
-NEUTER_TOKEN_KEYS_RE='^(INSTAGRAM_.+|.+_PUBLISH_TOKEN|.+_ACCESS_TOKEN|.+_WEBHOOK_URL|EMAIL_HOST_PASSWORD|SMTP_PASSWORD|PLATFORM_SMTP_PASSWORD)$'
+# TASK-015: the vendor mail credentials (system@, alerts@, roles@, the Stalwart admin
+# and API key) are live secrets of the production sender and are blanked too.
+# Named exactly: a looser `.*_PASSWORD|STALWART_.*` would also blank
+# STALWART_IMAGE, the digest pin the restored mail project starts from.
+NEUTER_TOKEN_KEYS_RE='^(INSTAGRAM_.+|.+_PUBLISH_TOKEN|.+_ACCESS_TOKEN|.+_WEBHOOK_URL|EMAIL_HOST_PASSWORD|SMTP_PASSWORD|PLATFORM_SMTP_PASSWORD|VENDOR_SMTP_PASSWORD|ALERT_SMTP_PASSWORD|ROLES_IMAP_PASSWORD|STALWART_(ADMIN_PASSWORD|API_KEY))$'
 
 ENV_FILES_SEEN=0
 ENV_FILES_CHANGED=0
@@ -458,7 +463,7 @@ neuter_registry_rows() {
 # at the sink with auth off and an EMPTY user/password, and every realm is then
 # READ BACK - the post-condition, never the exit code of the write.
 neuter_keycloak_realms() {
-    local kc="${STACK}-state-keycloak" declared admin password realms r out live=0
+    local kc="" declared admin password realms r out live=0 rc=0
     # Whether this instance HAS a Keycloak is read from the composition, not
     # from what happens to be running: a stopped Keycloak still holds the live
     # sender in its database and would send the moment it came up, so "the
@@ -473,16 +478,23 @@ neuter_keycloak_realms() {
         info "the state composition declares no keycloak service; no realm to neuter"
         return 0
     fi
-    docker inspect "$kc" >/dev/null 2>&1 \
-        || die "keycloak container ${kc} is not running: its realms still hold the production sender and its password, and no env rewrite reaches them (gremion#6) - bring the state project up and re-run" 2
+    # By compose LABELS (state_kc_cid, TASK-015): the container is
+    # ${STACK}-state-keycloak-1, and the name this used to inspect never existed.
+    kc="$(state_kc_cid "$STACK")" || rc=$?
+    [[ "$rc" -eq 0 ]] \
+        || die "no single running keycloak in the ${STACK}-state project (compose labels): its realms still hold the production sender and its password, and no env rewrite reaches them (gremion#6) - bring the state project up and re-run" 2
     admin="$(env_value "$STATE_ENV" KEYCLOAK_ADMIN)"
     password="$(env_value "$STATE_ENV" KEYCLOAK_ADMIN_PASSWORD)"
     [[ -n "$admin" && -n "$password" ]] \
         || die "KEYCLOAK_ADMIN/KEYCLOAK_ADMIN_PASSWORD are unset in ${STATE_ENV}; kcadm has no credential and the realm senders cannot be neutered" 2
-    docker exec "$kc" "$KCADM_BIN" config credentials \
-        --server http://127.0.0.1:8080 --realm master \
-        --user "$admin" --password "$password" >/dev/null \
-        || die "kcadm could not authenticate against ${kc}" 1
+    # /auth: the state keycloak's relative path. The password is passed as a
+    # name-only `docker exec -e`, so it is on no argv of the docker CLI (kcadm's
+    # own --password still puts it on the java argv inside the container: a
+    # residual named in ops/vendor-mail/RUNBOOK.md).
+    KC_LOGIN_PASSWORD="$password" docker exec -e KC_LOGIN_PASSWORD "$kc" sh -c \
+        '"$0" config credentials --server "$1" --realm master --user "$2" --password "$KC_LOGIN_PASSWORD" >/dev/null' \
+        "$KCADM_BIN" http://127.0.0.1:8080/auth "$admin" \
+        || die "kcadm could not authenticate against the state keycloak (${kc})" 1
     # Captured first: a `die` inside $( ) runs in a subshell and could not end
     # the program, and a kcadm that failed would read back as "no realm".
     realms="$(docker exec "$kc" "$KCADM_BIN" get realms --fields realm --format csv --noquotes)" \
@@ -499,7 +511,9 @@ neuter_keycloak_realms() {
             "$NULL_SINK_HOST" "$NULL_SINK_PORT" "$NULL_SINK_HOST" \
           | docker exec -i "$kc" "$KCADM_BIN" update "realms/${r}" -f - >/dev/null \
           || die "kcadm could not rewrite the smtpServer of realm ${r}" 1
-        out="$(docker exec "$kc" "$KCADM_BIN" get "realms/${r}" --fields smtpServer)" \
+        # 'smtpServer(*)': a bare `--fields smtpServer` answers the map EMPTY on
+        # Keycloak 26.6.1 (TASK-043b F2), which read back as "names neither".
+        out="$(docker exec "$kc" "$KCADM_BIN" get "realms/${r}" --fields 'smtpServer(*)')" \
             || die "cannot read back the smtpServer of realm ${r}" 1
         case "$out" in
             # Strictest first, exactly as env_line_is_live orders it: the real

@@ -60,3 +60,23 @@ export async function setChannelStatus(
     WHERE post_id = ${postId} AND channel = ${channel}
   `
 }
+
+/**
+ * Take a still-'scheduled' channel off the scheduler's due list by flipping it
+ * to 'failed' (F1-FIX-07 r2). Conditional on status='scheduled', so it never
+ * overwrites a result a concurrent manual publish already wrote. Returns whether
+ * the row was flipped.
+ */
+export async function failScheduledChannel(
+  sql: Sql,
+  postId: string,
+  channel: ChannelId,
+): Promise<boolean> {
+  const rows = await sql<{ post_id: string }[]>`
+    UPDATE content.post_channels
+    SET status = 'failed'
+    WHERE post_id = ${postId} AND channel = ${channel} AND status = 'scheduled'
+    RETURNING post_id
+  `
+  return rows.length > 0
+}

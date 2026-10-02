@@ -23,7 +23,7 @@ import {
   type DbCalDavQueueEntry,
 } from '../store/index.js'
 import { dbEventToIcs } from './client.js'
-import { createCalDavPusher, type CalDavPusher } from './pusher.js'
+import type { CalDavPusher } from './pusher.js'
 
 export const MAX_ATTEMPTS = 3
 const DEFAULT_BATCH = 50
@@ -31,12 +31,13 @@ const DEFAULT_BATCH = 50
 /**
  * Drain one batch of a tenant's caldav_sync_queue entries.
  *
- * Injectable pusher for tests — if omitted, falls back to the env-backed
- * shared-calendar pusher (createCalDavPusher() with no args).
+ * The pusher is REQUIRED (H06): there is deliberately no env-backed default,
+ * because the old default pushed every tenant into one shared collection. The
+ * production caller is tenant-drain.ts, which resolves the per-tenant target.
  */
 export async function drainCaldavQueue(
   sql: Sql,
-  pusher: CalDavPusher = createCalDavPusher(),
+  pusher: CalDavPusher,
   maxAttempts: number = MAX_ATTEMPTS,
   limit: number = DEFAULT_BATCH,
 ): Promise<{ succeeded: number; failed: number }> {
@@ -70,13 +71,27 @@ async function processEntry(
     return
   }
 
-  // create/update require the current event body.
-  if (!entry.eventId) {
-    throw new Error('create/update queue entry has no event_id (event deleted?)')
-  }
+  // create/update require the current event body. K4#6: when the event is gone
+  // (event_id is NULLed by ON DELETE SET NULL, or the row no longer resolves)
+  // there is nothing left to push; the delete entry queued by deleteEvent
+  // carries the removal. Retire this entry rather than failing it forever.
+  if (!entry.eventId) return
   const event = await getEvent(sql, entry.eventId)
-  if (!event) {
-    throw new Error(`event ${entry.eventId} vanished before sync`)
+  if (!event) return
+
+  // D-2 (R29-I15, H06): NEVER PUSH NON-PUBLIC. The shared Nextcloud calendar is
+  // readable by people who must not see a committee-internal event, so only an
+  // explicitly public event may be written to it. This is the single choke point
+  // for every push, so it fails CLOSED: anything but isPublic === true is
+  // non-public. A non-public create is a no-op (the row is retired by the
+  // caller). A non-public UPDATE means the event may have been public earlier
+  // and already sit in the calendar, so it is RETRACTED (DELETE is idempotent:
+  // 404/410 is success) rather than refreshed.
+  if (event.isPublic !== true) {
+    if (entry.operation === 'update') {
+      await pusher.pushDelete(entry.caldavUid)
+    }
+    return
   }
 
   const ics = dbEventToIcs(event)

@@ -22,5 +22,13 @@ export const POST: RequestHandler = async ({ params, locals }) => {
     userId: user.id, field: 'org_unit.provision',
     oldValue: null, newValue: `${params.id}:${report.overall}`
   })
+  // K2#7: the retry only succeeded when the report says so (207 + success:false
+  // otherwise, as the committee DELETE answers); `data` stays the report.
+  if (report.overall !== 'ok') {
+    return json(
+      { success: false, error: 'Bereitstellung nicht vollständig: einzelne Dienste sind weiterhin fehlgeschlagen.', data: report },
+      { status: 207 },
+    )
+  }
   return json({ success: true, data: report })
 }

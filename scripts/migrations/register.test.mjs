@@ -243,9 +243,9 @@ test('empty chain: a declared dir may be absent only while highWater is 0 and no
 })
 
 // ---- TDD 9: the StuRa tree ------------------------------------------------
-test('stura: 0059_money_running_no_fiscal_year_idx.sql in gremion-ui/migrations is STURA_SLUG on the REAL register', () => {
-  // claimed properly (highWater bumped), so only the StuRa rule can refuse it
-  const got = codes(check(hw(withFile(treeState(), 'gremion-ui/migrations/0059_money_running_no_fiscal_year_idx.sql'), 'kernel-data', 59)))
+test('stura: 0060_money_running_no_fiscal_year_idx.sql in gremion-ui/migrations is STURA_SLUG on the REAL register', () => {
+  // claimed properly (highWater bumped past F1-FIX-02-K's 0059), so only the StuRa rule can refuse it
+  const got = codes(check(hw(withFile(treeState(), 'gremion-ui/migrations/0060_money_running_no_fiscal_year_idx.sql'), 'kernel-data', 60)))
   assert.ok(got.includes('STURA_SLUG'), got.join(','))
 })
 
@@ -274,29 +274,35 @@ test('real tree: the kernel checkout passes the register check', () => {
   assert.deepEqual(check(s), [])
 })
 
-test('real tree: kernel-data holds the 31 legacy files (floor 58) plus the content app block', () => {
+test('real tree: kernel-data holds the 31 legacy files (floor 58), the F1-FIX-02-K claim 0059 and the content app block', () => {
   const s = treeState()
   const k = s.register.chains.find((c) => c.id === 'kernel-data')
   assert.equal(k.legacy.length, 31)
   assert.equal(k.legacyFloor, 58)
+  // F1-FIX-02-K: 0059 claimed through `claim` (highWater 58 -> 59), locked by `freeze`.
+  assert.equal(k.highWater, 59)
+  assert.ok(!k.legacy.includes('0059_audit_log_chain_anchor.sql'))
+  assert.ok(s.lock.chains['kernel-data'].files['0059_audit_log_chain_anchor.sql'], '0059 is not in the lock')
   const files = s.files.filter((f) => k.dirs.some((d) => f.path.startsWith(`${d}/`)))
-  assert.equal(files.length, 33)
+  assert.equal(files.length, 34)
   assert.equal(s.slugs.slugs.length, 29)
 })
 
-test('real tree: the platform chain holds TASK-021 plt migrations 0001-0003 (gremion_platform, pad 4, floor 3), locked, next claim 0004', () => {
+test('real tree: the platform chain holds TASK-021 plt migrations 0001-0003 (legacy, floor 3) and TASK-043 0004 (Q18 claim), locked, next claim 0005', () => {
   const s = treeState()
   const c = s.register.chains.find((x) => x.id === 'platform')
   assert.ok(c, 'ranges.json declares no platform chain (TASK-077 precondition, TASK-043 Q18)')
   const dir = 'packages/tenant-store/src/lifecycle/platform-migrations'
-  const names = ['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql']
+  const legacy = ['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql']
+  const names = [...legacy, '0004_plt_provisioning_step.sql']
   assert.equal(c.database, 'gremion_platform')
   assert.deepEqual(c.dirs, [dir])
   assert.deepEqual(c.manifestDirs, [dir])
   assert.equal(c.padWidth, 4)
   assert.equal(c.legacyFloor, 3)
-  assert.deepEqual([...c.legacy].sort(byName), names)
+  assert.equal(c.highWater, 4)
+  assert.deepEqual([...c.legacy].sort(byName), legacy)
   assert.deepEqual(s.files.filter((f) => f.path.startsWith(`${dir}/`)).map((f) => f.path.slice(dir.length + 1)), names)
   assert.deepEqual(Object.keys(s.lock.chains.platform?.files ?? {}), names)
-  assert.equal(claim({ register: s.register, files: s.files.map((f) => f.path), chain: 'platform', name: 'next' }).filename, '0004_next.sql')
+  assert.equal(claim({ register: s.register, files: s.files.map((f) => f.path), chain: 'platform', name: 'next' }).filename, '0005_next.sql')
 })

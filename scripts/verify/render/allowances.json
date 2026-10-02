@@ -1,0 +1,33 @@
+{
+  "_comment": "TASK-053 G-053-build-absence (brief Q4): first-party services that still render a build: key in the production render because the release contract fixture does not pin them yet. Each row FAILS the guard once its service renders without build: or is absent -- delete it then. Adders clause (brief S3): a unit adding a first-party build: service to a production render may append one dated row naming TASK-048b.",
+  "rows": [
+    {
+      "project": "app",
+      "service": "tenant-create",
+      "date": "2026-09-28",
+      "retiresWith": "TASK-048b",
+      "reason": "same gremion-migrate image as migrate, but test/host/fixtures/release/valid/docker-compose.pins.yml does not reset its build; retires once the release fixture pins it"
+    },
+    {
+      "project": "state",
+      "service": "legal",
+      "date": "2026-09-28",
+      "retiresWith": "TASK-048b",
+      "reason": "state keeps TASK-040's services: {} pins until TASK-048b ships the docker-compose.state-pins.yml release fixture"
+    },
+    {
+      "project": "state",
+      "service": "vector",
+      "date": "2026-09-28",
+      "retiresWith": "TASK-048b",
+      "reason": "state keeps TASK-040's services: {} pins until TASK-048b ships the docker-compose.state-pins.yml release fixture"
+    },
+    {
+      "project": "state",
+      "service": "fallback",
+      "date": "2026-09-28",
+      "retiresWith": "TASK-048b",
+      "reason": "state keeps TASK-040's services: {} pins until TASK-048b ships the docker-compose.state-pins.yml release fixture"
+    }
+  ]
+}

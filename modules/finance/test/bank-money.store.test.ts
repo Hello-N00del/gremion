@@ -98,6 +98,8 @@ describe('recordCashPayout / recordManualPayout — shared doRecordPayout', () =
       [{ org_unit_id: 'ou-1' }], // PO's own finance_unit -> org_unit (write-scope gate)
       [{ id: '9', finance_unit_id: '10', type: 'cash_box' }], // ledger lookup
       [{ org_unit_id: 'ou-1' }], // ledger's finance_unit lookup (write-scope gate)
+      [{ org_unit_id: 'ou-1', fiscal_year_id: '1' }], // F1-FIX-05-K: Titel scope + plan year
+      [{ amount_cents: '4500' }], // F1-FIX-05-K: approved approval's amount snapshot
       [{ id: '3' }], // receipt lookup (Belegprinzip)
       [], // running_no head upsert (unused return)
       [{ max: '4' }], // MAX running_no
@@ -296,6 +298,9 @@ describe('recordCashPayout / recordManualPayout — shared doRecordPayout', () =
       [{ org_unit_id: 'ou-1' }],
       [{ id: '9', finance_unit_id: '10', type: 'own_account' }],
       [{ org_unit_id: 'ou-1' }],
+      [{ org_unit_id: 'ou-1', fiscal_year_id: '1' }], // F1-FIX-05-K: Titel scope + plan year
+      [], // F1-FIX-05-K: no approved approval snapshot ...
+      [{ total: '4500' }], // ... so the receipt-item sum is the authorised amount
       [{ id: '3' }],
       [],
       [{ max: '0' }],
@@ -419,6 +424,7 @@ describe('allocateSplit', () => {
       [], // no prior bookings
       [{ id: '9', finance_unit_id: '10', type: 'own_account', bank_account_id: '5' }], // ledger lookup (same bank_account)
       [{ org_unit_id: 'ou-1' }], // finance_unit lookup (in scope)
+      [{ org_unit_id: 'ou-1', fiscal_year_id: '1' }], // F1-FIX-05-K: Titel scope + plan year
       [{ booking_date: '2026-06-15' }], // txn booking_date
       [], // running_no head upsert
       [{ max: '0' }], // MAX running_no
@@ -446,8 +452,10 @@ describe('allocateSplit', () => {
       [], // no prior bookings
       [{ id: '9', finance_unit_id: '10', type: 'own_account', bank_account_id: '5' }], // part 1 ledger
       [{ org_unit_id: 'ou-1' }],
+      [{ org_unit_id: 'ou-1', fiscal_year_id: '1' }], // F1-FIX-05-K: part 1 Titel scope + year
       [{ id: '11', finance_unit_id: '10', type: 'sub_fund', bank_account_id: '5' }], // part 2 ledger
       [{ org_unit_id: 'ou-1' }],
+      [{ org_unit_id: 'ou-1', fiscal_year_id: '1' }], // F1-FIX-05-K: part 2 Titel scope + year
       [{ booking_date: '2026-06-15' }], // txn booking_date
       [], [{ max: '0' }], // running_no for ledger 9
       [{ ...BOOKING_DRAFT, id: '60', ledger_account_id: '9', amount_cents: '-60', bank_transaction_id: '1', payment_type: 'bargeldlos' }],

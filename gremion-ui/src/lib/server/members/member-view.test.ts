@@ -59,9 +59,11 @@ it('admin sees everyone; basic sees only placed+active', async () => {
     id === 'uuid-anna' ? ['ou-1'] : [],
   )
 
-  const admin = await listMembers({ adminView: true })
+  // R29-F104-KTWIN: listMembers takes the viewer (D-3 membership redaction,
+  // pinned in member-view-visibility.test.ts).
+  const admin = await listMembers({ adminView: true, viewer: { id: 'admin', roles: ['council-admin'] as never } })
   expect(admin.map((m) => m.id).sort()).toEqual(['anna.berger', 'old.user', 'tom.maier'])
 
-  const basic = await listMembers({ adminView: false })
+  const basic = await listMembers({ adminView: false, viewer: { id: 'uuid-anna', roles: ['member'] as never } })
   expect(basic.map((m) => m.id)).toEqual(['anna.berger']) // only placed + enabled
 })

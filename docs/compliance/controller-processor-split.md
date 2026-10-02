@@ -204,6 +204,10 @@ Enforced in code and clamped so a careless configuration change cannot lengthen 
 | Newsletter send tokens | expiry at 7 d, bulk sweep at 90 d | — | Art. 5(1)(e) |
 | Backup retention | floor of 7 d | — | availability |
 
+Operator ceiling 30 d [D R29-I6]: every figure above 30 d in this table is the
+code's current value; the application tiers change with TASK-033. Edge and
+identity-provider logs already obey the ceiling (`docs/log-retention-policy.md`).
+
 A German-language **Löschkonzept** is generated on demand from the live configuration, so
 it cannot drift from the windows actually enforced. It is fed by the `compliance.*`
 configuration fields (`controller_name`, `controller_address`, `dpo_name`, `dpo_email`,

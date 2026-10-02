@@ -1,5 +1,5 @@
 name: gremion_kernel_governance_client
-version: 1.0.0
+version: 1.1.0
 description: Generated Dart client for the kernel-governance surface (contracts/kernel/openapi.governance.json). Do not edit by hand.
 homepage: https://github.com/Hello-N00del/gremion
 publish_to: none

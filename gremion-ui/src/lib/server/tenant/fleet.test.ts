@@ -221,6 +221,92 @@ describe('runFleetMigrations — T15 brand-completeness boot/readiness guard (§
     })
   })
 
+  // T07 — the ledger must say WHICH subsystem failed. Before this, a brand-
+  // identity assertion and a broken migration wrote indistinguishable
+  // tenant_migration_run rows, so the pilot realm's first boot reported a
+  // MIGRATION failure for a config gap.
+  it('classifies the outcome and the ledgered error: brand-identity vs migration', async () => {
+    vi.mocked(readConfig).mockImplementation((tenant) =>
+      (tenant as { id: string }).id === 'tid-default' ? completeBrandConfig() : blankBrandConfig(),
+    )
+
+    const outcomes = await runFleetMigrations()
+
+    expect(outcomes.get('tid-alpha')!.kind).toBe('brand-identity')
+    expect(outcomes.get('tid-default')!.kind).toBeUndefined() // ok:true carries no class
+    expect(finishTenantMigrationRun).toHaveBeenCalledWith('run-tid-alpha', {
+      ok: false,
+      error: expect.stringMatching(/^brand-identity: /),
+    })
+
+    // Contrast: a genuine migration failure keeps the migration class.
+    vi.clearAllMocks()
+    vi.mocked(startTenantMigrationRun).mockImplementation(async (tenantId: string) => `run-${tenantId}`)
+    vi.mocked(finishTenantMigrationRun).mockResolvedValue(undefined)
+    vi.mocked(readConfig).mockReturnValue(completeBrandConfig())
+    vi.mocked(runMigrations).mockRejectedValue(new Error('relation "org_units" does not exist'))
+
+    const failedOutcomes = await runFleetMigrations()
+
+    expect(failedOutcomes.get('tid-alpha')!.kind).toBe('migration')
+    expect(finishTenantMigrationRun).toHaveBeenCalledWith('run-tid-alpha', {
+      ok: false,
+      error: expect.stringMatching(/^migration: /),
+    })
+  })
+
+  // T07 fix round — the class defaulted to `migration`, so EVERY failure outside
+  // the tenant scope (control registry down, ledger write refused) was ledgered
+  // as a migration failure over migrations that had never run or had already
+  // succeeded. That is the same mis-attribution the class exists to remove, one
+  // subsystem over.
+  it('classifies failures OUTSIDE the tenant scope as control-plane, not migration', async () => {
+    vi.mocked(readConfig).mockReturnValue(completeBrandConfig())
+
+    // (a) the registry cannot resolve the tenant — the data plane was never touched.
+    vi.mocked(resolveTenantBySlug).mockResolvedValue(null)
+    const unresolvable = await runFleetMigrations()
+    expect(unresolvable.get('tid-alpha')!.kind).toBe('control-plane')
+    expect(unresolvable.get('tid-alpha')!.error).toMatch(/^control-plane: /)
+
+    // (b) migrations SUCCEED and the closing ledger write fails. Blaming the
+    // migration runner here points at the one component known to be healthy.
+    vi.clearAllMocks()
+    vi.mocked(listActiveTenants).mockResolvedValue([tenantRow('tid-alpha', 'alpha')])
+    vi.mocked(resolveTenantBySlug).mockImplementation(async (slug: string) => ctxFor('tid-alpha', slug))
+    vi.mocked(startTenantMigrationRun).mockImplementation(async (tenantId: string) => `run-${tenantId}`)
+    vi.mocked(readConfig).mockReturnValue(completeBrandConfig())
+    vi.mocked(runMigrations).mockResolvedValue(undefined)
+    vi.mocked(getDb).mockReturnValue(
+      (async () => [{ filename: '057_x.sql' }]) as unknown as ReturnType<typeof getDb>,
+    )
+    vi.mocked(finishTenantMigrationRun).mockRejectedValue(new Error('control registry unreachable'))
+
+    const ledgerBroken = await runFleetMigrations()
+    expect(ledgerBroken.get('tid-alpha')!.kind).toBe('control-plane')
+    expect(ledgerBroken.get('tid-alpha')!.error).toMatch(/^control-plane: control registry unreachable$/)
+  })
+
+  // T07 fix round — one failure, one string. The ledger row and the outcome that
+  // feeds readiness (and the tenant-scoped 503) previously carried DIFFERENT
+  // texts for the same event: the row was prefixed with the class, the outcome
+  // was not, so an operator comparing the two saw two different errors.
+  it('ledgers the identical classified string it returns in the outcome', async () => {
+    vi.mocked(readConfig).mockReturnValue(completeBrandConfig())
+    vi.mocked(runMigrations).mockRejectedValue(new Error('relation "org_units" does not exist'))
+
+    const outcomes = await runFleetMigrations()
+    const outcome = outcomes.get('tid-alpha')!
+
+    expect(outcome.error).toBe('migration: relation "org_units" does not exist')
+    expect(finishTenantMigrationRun).toHaveBeenCalledWith('run-tid-alpha', {
+      ok: false,
+      error: outcome.error,
+    })
+    // `cause` still carries the ORIGINAL thrown value, unprefixed and unwrapped.
+    expect((outcome.cause as Error).message).toBe('relation "org_units" does not exist')
+  })
+
   it('the guard runs inside the per-tenant scope (readConfig sees the resolved ctx)', async () => {
     const seenCtxIds: string[] = []
     vi.mocked(readConfig).mockImplementation((tenant) => {

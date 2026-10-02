@@ -82,7 +82,6 @@ PENDING_PATHS=(
     'scripts/migrations/runner/|TASK-075'      # the pre-migration dump (upgrade.md)
     'scripts/backup/|TASK-089'                 # the one-off verification (backup.md)
     'compose/observability/|TASK-039'          # the operator-only stack (install.md)
-    'packages/provisioning/|TASK-043'          # customer creation (install.md)
     'services/kernel-api/export/|TASK-119'     # tenant export (restore.md)
 )
 PENDING_BINS=()
@@ -784,12 +783,175 @@ pending_landed() {                               # <tree root>
     fi
 }
 
+# R29-MD-A (TRD-206, GDPR Art. 32(1)(b)): a database dump is personal data, so a
+# runbook line that writes one into a file must create that file private. The
+# redirect and `umask 077` have to share ONE subshell: `( umask 077; true ); ...
+# > "$dump"` protects nothing, and a `chmod 600` after the write leaves the file
+# readable for as long as the dump takes (the defect this replaces).
+#
+# Vacuity: while PENDING_PATHS lists TASK-075's migration runner, the hand-typed
+# dump of upgrade.md step 3 is the only dump, so finding none means the extractor
+# read nothing. Once TASK-075 landed and moved the dump into its runner, no
+# hand-written dump is expected, and the check then asks only that it read a
+# bash block at all.
+check_private_dumps() {
+    local f line seen=0 blocks=0 bad=0 pending=0 e stripped
+    for e in "${PENDING_PATHS[@]}"; do
+        [ "${e#*|}" = TASK-075 ] && pending=1
+    done
+    for f in "${RUNBOOK_FILES[@]}"; do
+        while IFS= read -r line; do
+            if [ "$line" = __BLOCK__ ]; then blocks=$((blocks + 1)); continue; fi
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            # file-descriptor redirects (2>&1, 2>/dev/null) are not the dump's destination
+            stripped="$(sed -E 's/[0-9]*>&[0-9-]//g; s/[0-9]+>[[:space:]]*\/dev\/null//g' <<<"$line")"
+            grep -qE 'pg_dump(all)?([[:space:]]|$)' <<<"$stripped" || continue
+            grep -qE 'pg_dump(all)?[^>]*>' <<<"$stripped" || continue
+            seen=$((seen + 1))
+            if ! grep -qE '\([[:space:]]*umask 077;[^)]*pg_dump(all)?[^)]*>' <<<"$line"; then
+                echo "${f}.md: a pg_dump redirect outside a 'umask 077' subshell (the dump is readable while it is written): ${line}" >&2; bad=1
+            fi
+        done < <(bash_blocks < "$1/$f.md")
+    done
+    if [ "$pending" -eq 1 ]; then
+        [ "$seen" -gt 0 ] || { echo "no pg_dump redirect found in any bash block while TASK-075 is PENDING: the extractor is reading nothing" >&2; bad=1; }
+    else
+        [ "$blocks" -gt 0 ] || { echo "no bash block read at all: the extractor is reading nothing" >&2; bad=1; }
+    fi
+    return "$bad"
+}
+
+# R29-MD-A (OWASP ASVS 5.0 V13, CWE-214): no secret on a host's process list. A
+# `--password "$X"` on a docker exec argv is visible to every local account in
+# `ps` and /proc/<pid>/cmdline for as long as kcadm runs. The channel the
+# runbook uses instead (probed on the pinned Keycloak image, R29-MD-A Q3) is
+# KC_CLI_PASSWORD, handed to `docker exec` by NAME only (`-e KC_CLI_PASSWORD`,
+# the value comes from the caller's environment). The one `--password` the check
+# still allows is the TASK-015 pattern: `--password "$NAME"` inside a
+# SINGLE-quoted `sh -c` on a line that also passes `-e NAME` name-only, where
+# the container's own shell expands it.
+check_no_argv_secret() {
+    local f line name sq="'" re bad=0
+    for f in "${RUNBOOK_FILES[@]}"; do
+        while IFS= read -r line; do
+            [ "$line" = __BLOCK__ ] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            grep -qE -- "--password([[:space:]]+|=)[\"']?\\$" <<<"$line" || continue
+            name="$(sed -nE 's/.*--password[[:space:]=]+["'"'"']?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?.*/\1/p' <<<"$line" | head -n 1)"
+            if [ -n "$name" ]; then
+                re="sh -c ${sq}[^${sq}]*--password[[:space:]]+\"\\\$\\{?${name}\\}?\"[^${sq}]*${sq}"
+                if grep -qE -- "$re" <<<"$line" && grep -qE -- "(^|[[:space:]])-e ${name}([[:space:]]|\$)" <<<"$line"; then
+                    continue
+                fi
+            fi
+            echo "${f}.md: a --password expansion on a command line (visible in ps and /proc for as long as it runs): ${line}" >&2; bad=1
+        done < <(bash_blocks < "$1/$f.md")
+    done
+    return "$bad"
+}
+
+# The relative path Keycloak serves under, read from docker-compose.yml's
+# keycloak service (KC_HTTP_RELATIVE_PATH), never hard-coded here: a kcadm
+# `--server` without it answers 404 and the sign-in observation never runs.
+keycloak_relative_path() {
+    tr -d '\r' < "${TREE_ROOT}/docker-compose.yml" | awk '
+        /^  keycloak:/ { s = 1; next }
+        s && /^  [A-Za-z0-9_-]+:/ { s = 0 }
+        s && /^[[:space:]]+KC_HTTP_RELATIVE_PATH:/ { v = $2; gsub(/["'"'"']/, "", v); print v; exit }'
+}
+
+check_kc_server_path() {
+    local f line url path rel seen=0 bad=0
+    rel="$(keycloak_relative_path)"
+    [ -n "$rel" ] || { echo "no KC_HTTP_RELATIVE_PATH found for the keycloak service in docker-compose.yml" >&2; return 1; }
+    for f in "${RUNBOOK_FILES[@]}"; do
+        while IFS= read -r line; do
+            [ "$line" = __BLOCK__ ] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ "$line" == *kcadm.sh* ]] || continue
+            [[ "$line" =~ --server[[:space:]]+([^[:space:]]+) ]] || continue
+            seen=$((seen + 1))
+            url="${BASH_REMATCH[1]//[\"\']/}"
+            path="$(sed -E 's#^[A-Za-z]+://[^/]*##; s#/$##' <<<"$url")"
+            if [ "$path" != "$rel" ]; then
+                echo "${f}.md: kcadm --server ${url} does not end in Keycloak's relative path '${rel}' (docker-compose.yml): ${line}" >&2; bad=1
+            fi
+        done < <(bash_blocks < "$1/$f.md")
+    done
+    [ "$seen" -gt 0 ] || { echo "no kcadm.sh --server line found in any bash block: the extractor is reading nothing" >&2; bad=1; }
+    return "$bad"
+}
+
+# R29-MD-A: a post-condition that cannot fail is not one. Two shapes did that:
+# `2>/dev/null | grep` (a failing command and a clean one both read as no
+# output) and a loop over an unscoped `docker ps` (an empty or failing list
+# passes, and on a shared host it walks the production containers too).
+check_postcondition_scope() {
+    local u line bad=0
+    for u in "${UNITS[@]}"; do
+        while IFS= read -r line; do
+            [ "$line" = __BLOCK__ ] && continue
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            if [[ "$line" == *'2>/dev/null'* ]] && grep -qE '(^|[|;&[:space:]])grep([[:space:]]|$)' <<<"$line"; then
+                echo "${u}: a Post-condition discards stderr and filters through grep (a failing command reads as an empty result): ${line}" >&2; bad=1
+            fi
+            if grep -qE 'for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]]+\$\(docker ps' <<<"$line" \
+                && ! grep -qE -- '--filter|\|[[:space:]]*(awk|grep)[[:space:]]' <<<"$line"; then
+                echo "${u}: a Post-condition loops over an unscoped docker ps (every container on the host, not this stack's): ${line}" >&2; bad=1
+            fi
+        done < <(postcondition_blocks "$1" "$u")
+    done
+    return "$bad"
+}
+
 ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_list
             check_operator_phrase check_commands check_repo_paths check_host_paths
             check_postconditions check_required check_forbidden check_restore_target
             check_install_tail check_run_record check_floor check_artefacts
             check_deploy_log check_reboot_gate check_deploy_user check_registry_creds
-            check_post_vars check_render_first check_pending_backed)
+            check_post_vars check_render_first check_pending_backed
+            check_private_dumps check_no_argv_secret check_kc_server_path
+            check_postcondition_scope)
+
+# ---------------------------------------------------------------------------
+# The pre-migration dump, run for real (R29-MD-A). upgrade.md's step 3 is
+# extracted from the real file, pointed at a scratch root and run against a
+# docker shim that records how the dump file was created. Nothing here reads
+# an exit code: every assertion is on a file or a mode.
+
+DUMP_TAG="dist-v0.0.0-t29"
+DUMP_SHIMS="${PROJECT_ROOT}/test/host/fixtures/runbook/dump-shims"
+
+# The bash block of upgrade.md's Steps that runs pg_dump.
+dump_block() {                                   # <dir>
+    unit_text "$1" upgrade | section_body '## Steps' | bash_blocks | awk '
+        /^__BLOCK__$/ { if (b ~ /pg_dump/) { printf "%s", b; done = 1; exit } b = ""; next }
+        { b = b $0 "\n" }
+        END { if (!done && b ~ /pg_dump/) printf "%s", b }'
+}
+
+# <dir with upgrade.md> <scratch root>: the script and the shims, in place.
+prep_dump_host() {
+    local d="$1" root="$2" s
+    mkdir -p "${root}/opt/gremion/current" "${root}/opt/gremion/etc/env" "${root}/opt/gremion/backups" "${root}/bin"
+    : > "${root}/opt/gremion/etc/env/state.env"
+    for s in docker logger date; do
+        tr -d '\r' < "${DUMP_SHIMS}/${s}" > "${root}/bin/${s}"     # CR-stripped, like every runbook read
+        chmod 755 "${root}/bin/${s}"
+    done
+    dump_block "$d" | sed -e "s#/opt/gremion#${root}/opt/gremion#g" -e 's#^db=.*#db="kdb"#' > "${root}/step3.sh"
+    [ -s "${root}/step3.sh" ] || { echo "step 3's bash block could not be extracted from upgrade.md" >&2; return 1; }
+}
+
+# Runs step 3 under an outer umask 022 (the deploy user's and root's default).
+run_dump_step() {                                # <scratch root>
+    local root="$1"
+    ( umask 022
+      cd "$root"
+      export PATH="${root}/bin:${PATH}" TAG="$DUMP_TAG" SIDE="${root}/side" CALLS="${root}/calls" \
+             LOGGER_LOG="${root}/logger.log" FAKE_STAMP="${FAKE_STAMP:-}"
+      bash step3.sh > "${root}/step3.out" 2>&1 ) || true
+}
 
 # ---------------------------------------------------------------------------
 
@@ -1092,6 +1254,132 @@ ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_li
     run check_pending_backed "$d"
     [ "$status" -ne 0 ]
     [[ "$output" == *"PENDING_PATHS has no TASK-999 entry"* ]]
+}
+
+@test "upgrade step 3 creates the pre-migration dump private from its first byte (umask 022 outside)" {
+    d="$(real_dir)"; root="${BATS_TEST_TMPDIR}/host-private"
+    prep_dump_host "$d" "$root"
+    run_dump_step "$root"
+    # Non-vacuous: the shim was reached, so the side file describes a real dump.
+    grep -qx pg_dump "${root}/calls" || { echo "pg_dump was never called: $(cat "${root}/step3.out")" >&2; return 1; }
+    [ -f "${root}/side" ] || { echo "the docker shim recorded no mode" >&2; return 1; }
+    [ "$(cat "${root}/side")" = 600 ] \
+        || { echo "the dump file was created mode $(cat "${root}/side"), not 600, and stayed that way while pg_dump wrote it" >&2; return 1; }
+    local bk="${root}/opt/gremion/backups" f n=0
+    for f in "$bk"/pre-migration-"${DUMP_TAG}"-kdb-*.dump; do
+        [ -e "$f" ] || continue
+        n=$((n + 1))
+        [ "$(stat -c %a "$f")" = 600 ] || { echo "${f} is mode $(stat -c %a "$f")" >&2; return 1; }
+    done
+    [ "$n" -eq 1 ] || { echo "expected exactly one pre-migration-${DUMP_TAG}-kdb-*.dump, found ${n}" >&2; return 1; }
+    [ -z "$(ls "$bk"/*.part 2>/dev/null)" ] || { echo "a .part is left behind: $(ls "$bk")" >&2; return 1; }
+    grep -q "taken " "${root}/logger.log" || { echo "no 'taken' line was logged" >&2; return 1; }
+}
+
+@test "upgrade step 3 never touches a dump an earlier attempt took" {
+    d="$(real_dir)"; root="${BATS_TEST_TMPDIR}/host-attempts"
+    prep_dump_host "$d" "$root"
+    local bk="${root}/opt/gremion/backups" a b
+    a="${bk}/pre-migration-${DUMP_TAG}-kdb-20000101T000000Z.dump"    # an earlier attempt of this runbook
+    b="${bk}/pre-migration-${DUMP_TAG}-kdb.dump"                     # what runbook 2.0.0 left after a failed switch
+    printf 'EARLIER-ATTEMPT-STAMPED\n' > "$a"; printf 'EARLIER-ATTEMPT-FIXED-NAME\n' > "$b"
+    chmod 644 "$a" "$b"; touch -d '2000-01-01 00:00:00' "$a" "$b"
+    local a_m b_m a_t b_t
+    a_m="$(stat -c %a "$a")"; b_m="$(stat -c %a "$b")"; a_t="$(stat -c %Y "$a")"; b_t="$(stat -c %Y "$b")"
+    run_dump_step "$root"
+    [ "$(cat "$a")" = EARLIER-ATTEMPT-STAMPED ] || { echo "the stamped earlier dump's bytes changed" >&2; return 1; }
+    [ "$(cat "$b")" = EARLIER-ATTEMPT-FIXED-NAME ] || { echo "the fixed-name earlier dump was truncated and rewritten (its bytes are now: $(cat "$b"))" >&2; return 1; }
+    [ "$(stat -c %a "$a")" = "$a_m" ] && [ "$(stat -c %a "$b")" = "$b_m" ] || { echo "an earlier dump's mode changed" >&2; return 1; }
+    [ "$(stat -c %Y "$a")" = "$a_t" ] && [ "$(stat -c %Y "$b")" = "$b_t" ] || { echo "an earlier dump's mtime changed" >&2; return 1; }
+    local n=0 f
+    for f in "$bk"/pre-migration-"${DUMP_TAG}"-kdb-*.dump; do [ -e "$f" ] && n=$((n + 1)); done
+    [ "$n" -eq 2 ] || { echo "the new dump should sit beside the earlier stamped one (2 stamped dumps), found ${n}" >&2; return 1; }
+}
+
+@test "upgrade step 3 fails closed on a .part left in the same second (noclobber backstop)" {
+    d="$(real_dir)"; root="${BATS_TEST_TMPDIR}/host-noclobber"
+    prep_dump_host "$d" "$root"
+    local bk="${root}/opt/gremion/backups" part
+    part="${bk}/pre-migration-${DUMP_TAG}-kdb-20010101T000000Z.dump.part"
+    printf 'SEEDED-PART\n' > "$part"; chmod 644 "$part"
+    FAKE_STAMP=20010101T000000Z run_dump_step "$root"
+    [ "$(cat "$part")" = SEEDED-PART ] || { echo "the pre-seeded .part was overwritten: $(cat "$part")" >&2; return 1; }
+    [ "$(stat -c %a "$part")" = 644 ] || { echo "the pre-seeded .part's mode changed" >&2; return 1; }
+    [ -z "$(ls "$bk"/*.dump 2>/dev/null)" ] || { echo "a final-name dump appeared although its .part could not be created: $(ls "$bk")" >&2; return 1; }
+    [ ! -e "${root}/calls" ] || { echo "pg_dump ran although the redirect had to fail" >&2; return 1; }
+}
+
+@test "no runbook step redirects a database dump into a file that is not created private" {
+    d="$(real_dir)"; check_private_dumps "$d"
+    d="$(fixture valid)"; check_private_dumps "$d"
+    d="$(fixture_snippet "${FIX}/snippets/world-readable-dump.md" upgrade)"
+    run check_private_dumps "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"upgrade.md: a pg_dump redirect outside a 'umask 077' subshell"* ]]
+    [[ "$output" == *'> "$dump"'* ]]
+    d="$(fixture_snippet "${FIX}/snippets/umask-other-subshell.md" upgrade)"
+    run check_private_dumps "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"upgrade.md: a pg_dump redirect outside a 'umask 077' subshell"* ]]
+    [[ "$output" == *'( umask 077; true )'* ]]
+}
+
+@test "check_private_dumps is not vacuous while TASK-075 is PENDING, and reads blocks once it landed" {
+    d="$(fixture valid)"
+    grep -vF 'pg_dump' "$d/upgrade.md" > "$d/upgrade.tmp" && mv "$d/upgrade.tmp" "$d/upgrade.md"
+    run check_private_dumps "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"no pg_dump redirect found in any bash block while TASK-075 is PENDING"* ]]
+    # The same tree with TASK-075's entry gone (it landed): zero hand-written dumps is fine ...
+    local keep=() e
+    for e in "${PENDING_PATHS[@]}"; do [[ "$e" == *'|TASK-075' ]] || keep+=("$e"); done
+    [ "${#keep[@]}" -eq "$(( ${#PENDING_PATHS[@]} - 1 ))" ]
+    local PENDING_PATHS=("${keep[@]}")
+    check_private_dumps "$d"
+    # ... but a tree with no bash block at all is an extractor reading nothing.
+    local f
+    for f in "$d"/*.md; do grep -v '^[[:space:]]*```' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
+    run check_private_dumps "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"no bash block read at all"* ]]
+}
+
+@test "no runbook command line carries the Keycloak admin password (ps and /proc)" {
+    d="$(real_dir)"; check_no_argv_secret "$d"
+    d="$(fixture valid)"; check_no_argv_secret "$d"
+    d="$(fixture_snippet "${FIX}/snippets/argv-password.md" install)"
+    run check_no_argv_secret "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *'install.md: a --password expansion on a command line'* ]]
+    [[ "$output" == *'--password "$KEYCLOAK_ADMIN_PASSWORD"'* ]]
+    # The TASK-015 pattern stays legal: name-only -e, expanded by the container's own single-quoted sh -c.
+    d="$(fixture valid)"
+    printf '\n```bash\ndocker exec -e KC_LOGIN_PASSWORD "$kc" sh -c '"'"'kcadm.sh config credentials --user admin --password "$KC_LOGIN_PASSWORD"'"'"'\n```\n' >> "$d/install.md"
+    check_no_argv_secret "$d"
+    # ... but a value handed by -e NAME=value, or a double-quoted sh -c, is not.
+    d="$(fixture valid)"
+    printf '\n```bash\ndocker exec -e KC_LOGIN_PASSWORD="$X" "$kc" sh -c '"'"'kcadm.sh config credentials --password "$KC_LOGIN_PASSWORD"'"'"'\n```\n' >> "$d/install.md"
+    run check_no_argv_secret "$d"
+    [ "$status" -ne 0 ]
+}
+
+@test "every kcadm --server in the runbook ends in the relative path docker-compose.yml gives Keycloak" {
+    [ "$(keycloak_relative_path)" = /auth ]
+    d="$(real_dir)"; check_kc_server_path "$d"
+    d="$(fixture valid)"; check_kc_server_path "$d"
+    d="$(fixture_snippet "${FIX}/snippets/kc-server-no-relpath.md" install)"
+    run check_kc_server_path "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"install.md: kcadm --server http://127.0.0.1:8080 does not end in Keycloak's relative path '/auth'"* ]]
+}
+
+@test "a post-condition cannot pass on an empty result: no silenced grep, no unscoped docker ps loop" {
+    d="$(real_dir)"; check_postcondition_scope "$d"
+    d="$(fixture valid)"; check_postcondition_scope "$d"
+    d="$(fixture_snippet "${FIX}/snippets/grep-silenced-post.md" install)"
+    run check_postcondition_scope "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"install: a Post-condition discards stderr and filters through grep"* ]]
+    d="$(fixture_snippet "${FIX}/snippets/unscoped-ps-loop.md" install)"
+    run check_postcondition_scope "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"install: a Post-condition loops over an unscoped docker ps"* ]]
+    # `2>/dev/null` without a grep (install.md's openssl | openssl x509) stays legal.
+    d="$(fixture valid)"
+    printf '\n## Post-condition\n\n```bash\nopenssl s_client -connect example.org:443 2>/dev/null | openssl x509 -noout -subject\n```\n' >> "$d/install.md"
+    check_postcondition_scope "$d"
 }
 
 @test "positive control: the valid fixture passes every check" {

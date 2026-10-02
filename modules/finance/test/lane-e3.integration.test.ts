@@ -50,8 +50,18 @@ const BASE_HEADERS = {
   'x-tenant-id': TENANT.id,
   'x-tenant-slug': TENANT.slug,
 }
-const JSON_HEADERS = { ...BASE_HEADERS, 'content-type': 'application/json' }
 const OU_1 = 'e1111111-aaaa-4aaa-8aaa-e11111111111'
+// F1-FIX-05-K (K4#34): csvImport / configureFints / syncFints carry the write actor.
+// WRITER_1 may write OU_1, whose ledger the bank account backs; SUPER is the runtime
+// see-all (used where a test targets an account no ledger backs, to reach the 404).
+const WRITER_1 = {
+  'x-finance-user-id': 'fin-1', 'x-finance-is-auditor': 'false', 'x-finance-is-superuser': 'false',
+  'x-finance-scoped-org-units': OU_1,
+}
+const SUPER = { 'x-finance-user-id': 'su', 'x-finance-is-auditor': 'false', 'x-finance-is-superuser': 'true' }
+const WRITER_HEADERS = { ...BASE_HEADERS, ...WRITER_1 }
+const JSON_HEADERS = { ...BASE_HEADERS, 'content-type': 'application/json', ...WRITER_1 }
+const SUPER_JSON_HEADERS = { ...BASE_HEADERS, 'content-type': 'application/json', ...SUPER }
 const OU_2 = 'e2222222-bbbb-4bbb-8bbb-e22222222222'
 
 type Scope = { isAuditor: boolean; isSuperuser: boolean; orgUnits: string[] }
@@ -120,13 +130,17 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
       VALUES (${grp}, ${nr}, ${name}, ${planned}) RETURNING id`)[0]!.id
     const tit1 = await titel('1.1', 'Personal', 12000)
     await titel('1.2', 'Sachmittel', 5000)
+    // R29-FIN-SIGN-K: booking.amount_cents is BANK-SIGNED (#410 FIN-3; the split-allocation
+    // write path copies the bank transaction's sign onto every part): a 110 EUR expense paid
+    // out of the account is a DEBIT, -11000. The old seed (+11000) was a 110 EUR refund INTO
+    // an expense Titel, which every view correctly renders as Ist -110 / Diff 230.
     const btx = (await sql<{ id: string }[]>`
       INSERT INTO finance.bank_transaction (bank_account_id, booking_date, amount_cents, import_hash)
-      VALUES (${bankAccountId}, '2026-03-01', 11000, 'seed-hash-e3') RETURNING id`)[0]!.id
+      VALUES (${bankAccountId}, '2026-03-01', -11000, 'seed-hash-e3') RETURNING id`)[0]!.id
     await sql`
       INSERT INTO finance.booking (ledger_account_id, budget_titel_id, fiscal_year_id, amount_cents,
                                    booking_date, running_no, payment_type, bank_transaction_id, state)
-      VALUES (${la}, ${tit1}, ${fy}, 11000, '2026-03-01', 1, 'bargeldlos', ${btx}, 'posted')`
+      VALUES (${la}, ${tit1}, ${fy}, -11000, '2026-03-01', 1, 'bargeldlos', ${btx}, 'posted')`
   })
 
   afterAll(async () => {
@@ -152,9 +166,11 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
       expect(html).toMatch(/<html/i)
       expect(html).toContain('Haushalt 2026')
       expect(html).toContain('Titel-Nr.')
-      expect(html).toContain('120.00') // 12000 cents Ansatz
-      expect(html).toContain('110.00') // posted booking Ist
-      expect(html).toContain('10.00') // Diff
+      // Row-anchored (R29-FIN-SIGN-K): a bare toContain('110.00') / ('10.00') also matched the
+      // sign-flipped '-110.00' / '230.00' row, so the PDF never caught the inverted Ist.
+      // 12000 cents Ansatz | posted expense Ist (positive = consumed) | Diff = Ansatz - Ist
+      expect(html).toMatch(/<td class="num">120\.00<\/td>\s*<td class="num">110\.00<\/td>\s*<td class="num">10\.00<\/td>/)
+      expect(html).not.toContain('-110.00')
       expect(html).toContain('Sachmittel')
     })
 
@@ -189,13 +205,26 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
         ['1.1', 'Personal', 120, 110, 10],
         ['1.2', 'Sachmittel', 50, 0, 50],
       ])
+      // On-screen parity (R29-FIN-SIGN-K): the budget detail view (getBudgetPlan) shows the
+      // SAME Ist (booked) and Diff (remaining) for the seeded expense Titel, in cents.
+      type DetailItem = { titel_nr: string; value: number; booked: number; remaining: number }
+      const detail: { groups: Array<{ items: DetailItem[] }> } =
+        await (await fetch(`${base}/api/v1/budget-plans/${planId}`, { headers: scopeHeaders(AUDITOR) })).json()
+      const items = detail.groups
+        .flatMap((g) => g.items)
+        .map((i) => [i.titel_nr, i.value, i.booked, i.remaining])
+      expect(items).toEqual([['1.1', 12000, 11000, 1000], ['1.2', 5000, 0, 5000]])
     })
 
     it('ods: 200 with CSV bytes under the ODS MIME (native parity)', async () => {
       const res = await fetch(`${base}/api/v1/budget-plans/${planId}/export?format=ods`, { headers: scopeHeaders(AUDITOR) })
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toBe('application/vnd.oasis.opendocument.spreadsheet')
-      expect(await res.text()).toContain('Titel-Nr.,Bezeichnung,Ansatz,Ist,Diff')
+      const csv = await res.text()
+      expect(csv).toContain('Titel-Nr.,Bezeichnung,Ansatz,Ist,Diff')
+      // Same rows as the xlsx matrix (R29-FIN-SIGN-K): ods and xlsx render one projection.
+      expect(csv).toContain('1.1,Personal,120,110,10')
+      expect(csv).toContain('1.2,Sachmittel,50,0,50')
     })
 
     it('missing/invalid ?format → 400', async () => {
@@ -228,8 +257,8 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
       f.append('csv_order_reversed', String(reversed))
       return f
     }
-    const post = (accountId: string | number, body: FormData) =>
-      fetch(`${base}/api/v1/bank-accounts/${accountId}/csv-import`, { method: 'POST', headers: BASE_HEADERS, body })
+    const post = (accountId: string | number, body: FormData, headers: Record<string, string> = WRITER_HEADERS) =>
+      fetch(`${base}/api/v1/bank-accounts/${accountId}/csv-import`, { method: 'POST', headers, body })
 
     it('imports both rows and persists the canonical columns', async () => {
       const res = await post(bankAccountId, form(CSV, MAPPING, false))
@@ -265,7 +294,7 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
     })
 
     it('unknown bank account → 404', async () => {
-      const res = await post(999999, form(CSV, MAPPING, false))
+      const res = await post(999999, form(CSV, MAPPING, false), { ...BASE_HEADERS, ...SUPER })
       expect(res.status).toBe(404)
     })
 
@@ -347,10 +376,12 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
             'fints.org/de/hersteller/produktregistrierung before enabling FinTS sync',
         ],
       })
-      const row = await sql<{ last_sync_status: string; last_sync_error: string }[]>`
-        SELECT last_sync_status, last_sync_error FROM finance.fints_config WHERE bank_account_id = ${bankAccountId}`
+      const row = await sql<{ last_sync_status: string; last_sync_error: string; last_sync_at: Date | null }[]>`
+        SELECT last_sync_status, last_sync_error, last_sync_at FROM finance.fints_config WHERE bank_account_id = ${bankAccountId}`
       expect(row[0]!.last_sync_status).toBe('failed')
       expect(row[0]!.last_sync_error).toMatch(/FINTS_PRODUCT_ID/)
+      // F1-FIX-05-K (K4#13): a failed sync leaves last_sync_at unchanged (it was never synced).
+      expect(row[0]!.last_sync_at).toBeNull()
       // and the Lane A status read reflects it
       const status = await (await fetch(`${base}/api/v1/bank-accounts/${bankAccountId}/fints`, { headers: scopeHeaders(AUDITOR) })).json()
       expect(status.last_sync_status).toBe('failed')
@@ -359,7 +390,7 @@ describe('finance leaf — Lane E3 byte exports + CSV + FinTS (real PG)', () => 
     it('an account without a fints_config → 404 (native missing-config throw)', async () => {
       const bare = (await sql<{ id: string }[]>`
         INSERT INTO finance.bank_account (name, iban) VALUES ('Ohne FinTS', 'DE02100100100006820101') RETURNING id`)[0]!.id
-      const res = await fetch(`${base}/api/v1/bank-accounts/${bare}/fints/sync`, { method: 'POST', headers: JSON_HEADERS })
+      const res = await fetch(`${base}/api/v1/bank-accounts/${bare}/fints/sync`, { method: 'POST', headers: SUPER_JSON_HEADERS })
       expect(res.status).toBe(404)
     })
   })

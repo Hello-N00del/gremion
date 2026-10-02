@@ -12,6 +12,8 @@ class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response
   final bool success;
   @override
   final RoleAssignment data;
+  @override
+  final bool? groupsReconciled;
 
   factory _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response(
           [void Function(
@@ -22,7 +24,7 @@ class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response
           ._build();
 
   _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response._(
-      {required this.success, required this.data})
+      {required this.success, required this.data, this.groupsReconciled})
       : super._();
   @override
   ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response rebuild(
@@ -42,7 +44,8 @@ class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response
     if (identical(other, this)) return true;
     return other is ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response &&
         success == other.success &&
-        data == other.data;
+        data == other.data &&
+        groupsReconciled == other.groupsReconciled;
   }
 
   @override
@@ -50,6 +53,7 @@ class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response
     var _$hash = 0;
     _$hash = $jc(_$hash, success.hashCode);
     _$hash = $jc(_$hash, data.hashCode);
+    _$hash = $jc(_$hash, groupsReconciled.hashCode);
     _$hash = $jf(_$hash);
     return _$hash;
   }
@@ -59,7 +63,8 @@ class _$ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response
     return (newBuiltValueToStringHelper(
             r'ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response')
           ..add('success', success)
-          ..add('data', data))
+          ..add('data', data)
+          ..add('groupsReconciled', groupsReconciled))
         .toString();
   }
 }
@@ -78,6 +83,11 @@ class ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseBuilder
   RoleAssignmentBuilder get data => _$this._data ??= RoleAssignmentBuilder();
   set data(RoleAssignmentBuilder? data) => _$this._data = data;
 
+  bool? _groupsReconciled;
+  bool? get groupsReconciled => _$this._groupsReconciled;
+  set groupsReconciled(bool? groupsReconciled) =>
+      _$this._groupsReconciled = groupsReconciled;
+
   ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseBuilder() {
     ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response._defaults(this);
   }
@@ -87,6 +97,7 @@ class ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseBuilder
     if ($v != null) {
       _success = $v.success;
       _data = $v.data.toBuilder();
+      _groupsReconciled = $v.groupsReconciled;
       _$v = null;
     }
     return this;
@@ -119,6 +130,7 @@ class ApiGovernanceCommitteesIdRolesRoleIdAssignPost201ResponseBuilder
                 r'ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response',
                 'success'),
             data: data.build(),
+            groupsReconciled: groupsReconciled,
           );
     } catch (_) {
       late String _$failedField;

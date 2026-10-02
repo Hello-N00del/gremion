@@ -17,7 +17,7 @@
 // PROVISIONED-REALM HARDENING (FIX-REALM):
 //   (A) #139/G-080 — kcInternalForTenant returns an internal-TLS URL
 //       (`https://keycloak:8443/auth/realms/<realm>` by default, or the
-//       env-derived AUTH_KEYCLOAK_INTERNAL base the default tenant uses), NOT a
+//       base the CLI derives from AUTH_KEYCLOAK_INTERNAL), NOT a
 //       plaintext `http://keycloak:8080` URL. A realm stamped `sslRequired:'all'`
 //       MUST be reached by its admin client over TLS or every provisioned-tenant
 //       OIDC/admin call breaks.
@@ -37,7 +37,9 @@
 //       only a vocabulary that is a SUBSET of the carried realm roles may be
 //       provisioned.
 import { composeRealm } from '$lib/modules/realm'
+import { normaliseHost } from '$lib/server/tenant/host'
 import type { ModuleManifest } from '$lib/modules/types'
+import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
 
 type ModulesConfig = {
   modules: Record<string, boolean>
@@ -56,23 +58,52 @@ type RealmDoc = Record<string, unknown> & {
 }
 
 // The confidential clients in the base template whose `__*__OIDC_CLIENT_SECRET__`
-// placeholder a provisioned realm must replace with a generated secret. The
-// public PKCE client (gremion-mobile) has no secret; gremion-admin DOES (service
-// account). Pinned against the base template's placeholders.
-export const PROVISIONER_SECRET_CLIENTS = [
-  'nextcloud',
-  'gremion-ui',
-  'gremion-admin',
-  'helios',
-  'helios-voter',
-  'synapse',
-] as const
+// placeholder a provisioned realm must replace with a generated secret: EXACTLY
+// the base template's placeholders (TASK-043 Q11 shrank it from six names, four
+// of which no template carried -- a secret file per phantom client). The public
+// PKCE client (gremion-mobile) has no secret; gremion-admin DOES (service
+// account). realm-doc.test.ts pins this list against the template.
+export const PROVISIONER_SECRET_CLIENTS = ['gremion-ui', 'gremion-admin', 'synapse'] as const
+
+/**
+ * TASK-043 Q11 (RFC 8252 §7.1): the native app's private-use URI scheme is the
+ * platform domain reversed, `<reversed domain>.app:/oauthredirect` -- e.g.
+ * `example.council.app:/oauthredirect` for `council.example`. Set per realm here
+ * (the base template carries no sentinel for it).
+ */
+export function mobileRedirectUri(platformDomain: string): string {
+  const labels = platformDomain.toLowerCase().split('.').filter(Boolean)
+  if (labels.length < 2 || !labels.every((l) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(l))) {
+    throw new Error(`realm-doc: platform domain ${JSON.stringify(platformDomain)} is not a DNS name`)
+  }
+  return `${labels.reverse().join('.')}.app:/oauthredirect`
+}
 
 export type ProvisionerSecretClient = (typeof PROVISIONER_SECRET_CLIENTS)[number]
 
-/** D-ISSUER-HOST: NEW tenants get a tenant-subdomain issuer. */
-export function issuerForTenant(slug: string, realmName: string, apexDomain: string): string {
-  return `https://${slug}.${apexDomain}/auth/realms/${realmName}`
+/**
+ * TASK-042 Q2 (TRD-075, spec B §T.2): a tenant's issuer is minted from the host
+ * the OPERATOR supplied for it, used verbatim — never synthesised from the slug
+ * and the platform apex. The host must already be the canonical lower-case
+ * `tenant_domain.host` form (normaliseHost); anything else is refused, so the
+ * issuer and the tenant's primary `tenant_domain` row can never disagree.
+ */
+/**
+ * TASK-043 r4: the realm attribute `frontendUrl` -- the `/auth` base of
+ * issuerForTenant(host, realm), so the issuer and every link Keycloak mails
+ * name the customer's own host whatever address the admin call used.
+ */
+export function frontendUrlFor(host: string, realmName: string): string {
+  const issuer = issuerForTenant(host, realmName)
+  return issuer.slice(0, issuer.length - `/realms/${realmName}`.length)
+}
+
+export function issuerForTenant(host: string, realmName: string): string {
+  const canonical = normaliseHost(host)
+  if (!canonical || canonical !== host) {
+    throw new Error(`tenant: host is not a valid hostname (${JSON.stringify(host)})`)
+  }
+  return `https://${host}/auth/realms/${realmName}`
 }
 
 /**
@@ -83,9 +114,8 @@ export function issuerForTenant(slug: string, realmName: string, apexDomain: str
  * ([[keycloak-sslrequired-all-scopes-to-plaintext-callers]]).
  *
  * `kcInternalBase` is the scheme+authority+`/auth` prefix (NO trailing
- * `/realms/...`) — derived by the CLI from `AUTH_KEYCLOAK_INTERNAL` exactly the
- * way the DEFAULT tenant does (register-default.ts), with a TLS default matching
- * the live internal posture (`docker-compose.yml` `https://keycloak:8443/auth`,
+ * `/realms/...`) — derived by the CLI from `AUTH_KEYCLOAK_INTERNAL`, with a TLS
+ * default matching the live internal posture (`https://keycloak:8443/auth`,
  * #139). Any realm suffix on the supplied base is stripped so a realm-scoped
  * AUTH_KEYCLOAK_INTERNAL (e.g. `.../auth/realms/<tenant-slug>`) still yields the right
  * per-tenant URL.
@@ -140,10 +170,14 @@ export interface BuildTenantRealmDocInput {
   apexDomain: string
   /** Generated per-client secrets keyed by clientId (PROVISIONER_SECRET_CLIENTS). */
   clientSecrets: Record<string, string>
-  /** The platform's authenticating SMTP sender. REQUIRED: the template's
-   *  __SMTP_*__ sentinels have no other filler now that the Keycloak boot
-   *  import is gone (spec B §T.4, gremion#6). */
-  smtp: RealmSmtpSettings
+  /** The realm's authenticating SMTP sender. `null` (TASK-043, every customer
+   *  realm): the realm is created with NO sender at all -- the template's
+   *  smtpServer block is removed -- and the host phase stamps the customer's
+   *  OWN submission principal (gremion-vendor-mail realm-smtp --tenant) before
+   *  any user exists; reconcile's smtp-server check guards it from then on. A
+   *  settings object keeps the pre-TASK-043 shape (the template sentinels
+   *  filled from it) for the callers that still compose a full realm. */
+  smtp: RealmSmtpSettings | null
 }
 
 /** Recursively replace every `https://<apexDomain>` occurrence with the tenant
@@ -382,6 +416,28 @@ function substituteSentinels(value: unknown, table: Record<string, string>): unk
   return value
 }
 
+/**
+ * TASK-043b F3: the gremion-admin service-account user of the import carries
+ * GREMION_ADMIN_SA_REALM_ROLES under realm-management (merged into whatever the
+ * base already lists; added when the base has no such user). Only when the doc
+ * carries the gremion-admin client: a user for an absent client fails the import.
+ */
+function carryAdminSaRoles(doc: RealmDoc): void {
+  const clients = (doc.clients ?? []) as Array<{ clientId?: string }>
+  if (!clients.some((c) => c.clientId === ADMIN_CLIENT_ID)) return
+  const users = (Array.isArray(doc.users) ? doc.users : []) as Array<Record<string, unknown>>
+  let sa = users.find((u) => u.serviceAccountClientId === ADMIN_CLIENT_ID)
+  if (!sa) {
+    sa = { username: `service-account-${ADMIN_CLIENT_ID}`, enabled: true, serviceAccountClientId: ADMIN_CLIENT_ID }
+    users.push(sa)
+  }
+  const clientRoles = { ...((sa.clientRoles && typeof sa.clientRoles === 'object' ? sa.clientRoles : {}) as Record<string, unknown>) }
+  const held = Array.isArray(clientRoles['realm-management']) ? (clientRoles['realm-management'] as unknown[]).filter((r): r is string => typeof r === 'string') : []
+  clientRoles['realm-management'] = [...new Set([...held, ...GREMION_ADMIN_SA_REALM_ROLES])]
+  sa.clientRoles = clientRoles
+  doc.users = users
+}
+
 export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
   const { base, manifests, config, realmName, tenantHost, apexDomain, clientSecrets, smtp } = input
 
@@ -403,14 +459,19 @@ export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
   // so every __…__ sentinel is filled HERE, in the same pass that swaps the realm
   // name and the authority. __APEX_DOMAIN__ is resolved BEFORE swapHost so the
   // apex authority is real by the time the tenant-host swap runs.
-  assertSmtpConfiguredForEmailLogin(composed, smtp)
+  if (smtp === null) {
+    // TASK-043: no sender until the host stamps the customer's own principal.
+    delete (composed as Record<string, unknown>).smtpServer
+  } else {
+    assertSmtpConfiguredForEmailLogin(composed, smtp)
+  }
   const resolved = substituteSentinels(composed, {
     __APEX_DOMAIN__: apexDomain,
-    ...Object.fromEntries(
-      Object.entries(smtpServerBlock(smtp)).map(([k, v]) => [`__SMTP_${k.toUpperCase()}__`, v]),
-    ),
+    ...(smtp === null
+      ? {}
+      : Object.fromEntries(Object.entries(smtpServerBlock(smtp)).map(([k, v]) => [`__SMTP_${k.toUpperCase()}__`, v]))),
   }) as RealmDoc
-  resolved.smtpServer = smtpServerBlock(smtp)
+  if (smtp !== null) resolved.smtpServer = smtpServerBlock(smtp)
 
   // (2) per-tenant realm identity + sslRequired:'all' literal (#139).
   resolved.realm = realmName
@@ -429,7 +490,29 @@ export function buildTenantRealmDoc(input: BuildTenantRealmDocInput): RealmDoc {
   // and localhost dev URI from every client. Custom mobile schemes survive.
   for (const client of (hostSwapped.clients ?? []) as Array<Record<string, unknown>>) {
     restrictClientUris(client, tenantHost)
+    // TASK-043 Q11: the native client's ONE redirect, the reversed platform domain.
+    if (client.clientId === 'gremion-mobile') client.redirectUris = [mobileRedirectUri(apexDomain)]
   }
+
+  // (2d) TASK-043 r4 (PRD-IDN-005, Q16): the realm's frontendUrl is the
+  // customer's own host. Keycloak runs with no --hostname, so without it every
+  // link it mails (the first administrators' execute-actions invitation) is
+  // built from the address the ADMIN call used -- https://keycloak:8443, which
+  // no administrator can open (measured on keycloak 26.6.1). Derived from the
+  // issuer, so the two can never disagree.
+  const attrs = (hostSwapped as Record<string, unknown>).attributes
+  ;(hostSwapped as Record<string, unknown>).attributes = {
+    ...(attrs && typeof attrs === 'object' ? (attrs as Record<string, unknown>) : {}),
+    frontendUrl: frontendUrlFor(tenantHost, realmName),
+  }
+
+  // (2e) TASK-043b F3: the gremion-admin SA's realm-management roles ride in
+  // the IMPORT. Measured on keycloak:26.6.1: the create-realm-only provisioner
+  // is refused (403) mapping realm-admin over the Admin API -- Keycloak lets
+  // only a master `admin` map that role -- but a realm it creates with
+  // users[].clientRoles carrying realm-admin comes up with exactly that
+  // mapping. So no master admin credential is needed to create a customer.
+  carryAdminSaRoles(hostSwapped)
 
   // (3) inject the generated per-client secrets in place of the `__*__`
   // placeholders. A missing secret for a placeholder client is a programming

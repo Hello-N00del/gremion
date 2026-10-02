@@ -1,6 +1,6 @@
 # Restore: three arms
 
-- Version: 1.0.0
+- Version: 2.0.0
 - Implements: TRD-200 (restore), TRD-174 and TRD-175 (the provider drill), TRD-170's timed restore, TRD-180 (the reboot measurement), FLOW-OPS-005
 
 Three separately testable arms, each with its own preconditions, steps and
@@ -142,15 +142,20 @@ sudo -u gremion /opt/gremion/bin/gremion-restore-into --stack staging --snapshot
 ### Post-condition
 
 On the non-production unit: the restore proved itself by content, it was timed,
-and the restored stack sends no mail:
+and the restored stack sends no mail. The mail reading is scoped to the restored
+stack (`staging`, the `STACK` of the precondition; its compose projects are
+`staging-<project>`), so a production container on a shared host is never
+listed. It is counted, so an empty list is not a pass, and an exec that fails
+prints `EXEC-FAILED` instead of vanishing:
 
 ```bash
 jq -e '.ok == true and .stack == "staging" and .proofs.files >= 1 and .proofs.rows >= 1 and .proofs.acme == true' \
   /opt/gremion/runtime/last-restore.json
 jq -r '.rtoSeconds' /opt/gremion/runtime/last-restore.json                       # the timed restore, in seconds
-for c in $(docker ps --format '{{.Names}}'); do
-  docker exec "$c" env 2>/dev/null | grep -E '^SMTP_HOST=' | sed "s/^/${c} /"    # the null sink only
-done
+docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}' | awk '$1 ~ /^staging-/' | wc -l   # > 0: the restored stack runs
+for c in $(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}' | awk '$1 ~ /^staging-/ {print $2}'); do
+  v="$(docker exec "$c" sh -c 'printenv SMTP_HOST || true' 2>&1)" || v="EXEC-FAILED ${v}"; printf '%s SMTP_HOST=%s\n' "$c" "${v:-<unset>}"
+done   # one line per staging container; every mail-capable service shows the null sink; no line says EXEC-FAILED
 ```
 
 ## Arm C — the reboot measurement (TRD-180)
@@ -211,10 +216,16 @@ grep -E 'REBOOT-GATE: verify=pass restarted=[01]' /opt/gremion/logs/reboot-gate.
 ```bash
 . /opt/gremion/lib/common.sh && load_env /opt/gremion/etc/env/state.env
 kc="$(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
-docker exec "$kc" /opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080 \
-  --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"
+KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$kc" /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://127.0.0.1:8080/auth --realm master --user "$KEYCLOAK_ADMIN"
 docker exec "$kc" /opt/keycloak/bin/kcadm.sh get events -r "<customer realm>" -q type=LOGIN -q max=1
+docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config
 ```
+
+The password reaches kcadm through `KC_CLI_PASSWORD`, handed to `docker exec` by
+name, so no command line carries it; the `--server` URL ends in Keycloak's
+relative path `/auth`, and the last command removes the token kcadm cached in
+the container.
 
 5. **Stop the probe** and read its first answer after the reboot, on the
    off-host machine.
@@ -255,4 +266,5 @@ export of its data, and both Beschluss texts say so.
 
 ## Changelog
 
+- 2.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). Arm B's post-condition lists only the restored stack's (`staging-*`) containers, counts them, and prints one `SMTP_HOST` line per container with `EXEC-FAILED` for an exec that failed, instead of an unscoped loop whose silenced errors let an empty or failing list pass. Arm C's sign-in read passes the Keycloak admin password as `KC_CLI_PASSWORD` by name (no `--password` on a command line), uses `--server` with the `/auth` relative path and removes kcadm's cached token. Major: post-conditions and a step changed (Q9).
 - 1.0.0 (2026-09-27): first version (TASK-037).

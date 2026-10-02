@@ -26,7 +26,7 @@ export type { StorageBackend, StorageConfig, StorageFs } from './types.js'
 export { LocalStorageBackend, DEFAULT_LOCAL_ROOT } from './local.js'
 export { MemoryStorageBackend } from './memory.js'
 export { assertMountedRoot, parseMountPoints, parseMountTable, DEFAULT_MOUNTINFO_PATH, type MountCheck } from './assertMountedRoot.js'
-export { assertTenantId, LEGACY_DEFAULT_TENANT_ID } from './tenant.js'
+export { assertTenantId } from './tenant.js'
 
 /** The backends selectable by configuration alone (STORAGE_BACKEND). */
 export const STORAGE_BACKENDS = ['local', 'memory'] as const

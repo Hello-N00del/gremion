@@ -95,6 +95,7 @@ export const TRAVERSAL_FIXTURES = Object.freeze([
   { file: 'modules/finance/test/storage.test.ts', literal: '../../etc/passwd' },
   { file: 'modules/finance/test/storage.test.ts', literal: 'finance/../../../etc/x' },
   { file: 'modules/finance/test/webdav-path.test.ts', literal: '../../escape' },
+  { file: 'modules/votes/test/server-validation.test.ts', literal: '../../admin' },
 ].map((e) => ({ ...e, reason: 'path-traversal input asserted to be REJECTED by the module\'s own path guard; never read' })))
 
 const OWNER_RE = /^TASK-\d+[a-z]?(\/TASK-\d+[a-z]?)*$/

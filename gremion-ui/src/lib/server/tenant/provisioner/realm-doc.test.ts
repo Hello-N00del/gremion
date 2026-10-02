@@ -47,10 +47,22 @@ const TEST_SMTP: RealmSmtpSettings = {
 
 describe('issuer / kc-internal derivation (D-ISSUER-HOST)', () => {
   it('builds the per-tenant subdomain issuer', () => {
-    expect(issuerForTenant('t2', 'verein', 'council.example')).toBe(
+    expect(issuerForTenant('t2.council.example', 'verein')).toBe(
       'https://t2.council.example/auth/realms/verein',
     )
   })
+
+  // TASK-042 TDD 9 (Q2): the supplied host is used VERBATIM (no slug.apex synthesis).
+  it('issuerForTenant mints the issuer from the supplied host verbatim', () => {
+    expect(issuerForTenant('stura-example.de', 'stura')).toBe('https://stura-example.de/auth/realms/stura')
+  })
+
+  it.each(['', 'Stura-Example.de', 'stura example.de', 'a.de,b.de', 'https://stura-example.de', 'stura-example.de/x', '*.example.de'])(
+    'issuerForTenant refuses the host %j',
+    (host) => {
+      expect(() => issuerForTenant(host, 'stura')).toThrow(/tenant: host is not a valid hostname/)
+    },
+  )
 
   it('(A) #139/G-080: kcInternalForTenant returns an internal-TLS URL by default (https, not plaintext :8080)', () => {
     const url = kcInternalForTenant('verein')
@@ -108,12 +120,65 @@ describe('buildTenantRealmDoc (§4 realm contract)', () => {
       smtp: TEST_SMTP,
     })
 
+  // TASK-043b F3. Measured on keycloak:26.6.1: the create-realm-only
+  // provisioner SA is refused (403) mapping realm-management/realm-admin onto
+  // the gremion-admin SA over the Admin API (only a master `admin` may), but a
+  // realm it CREATES with users[].clientRoles {realm-management:[realm-admin]}
+  // comes up with exactly that mapping. So the import carries the grant.
+  it('the gremion-admin service account carries GREMION_ADMIN_SA_REALM_ROLES in the import itself, the base roles kept (TASK-043b F3)', () => {
+    const doc = build(cfgOff)
+    const sa = (doc.users as Array<{ serviceAccountClientId?: string; clientRoles?: Record<string, string[]> }>).filter(
+      (u) => u.serviceAccountClientId === 'gremion-admin',
+    )
+    expect(sa).toHaveLength(1)
+    const rm = sa[0]!.clientRoles?.['realm-management'] ?? []
+    expect(rm).toContain('realm-admin')
+    const baseRm = (base.users as Array<{ serviceAccountClientId?: string; clientRoles?: Record<string, string[]> }>).find(
+      (u) => u.serviceAccountClientId === 'gremion-admin',
+    )!.clientRoles!['realm-management']!
+    for (const r of baseRm) expect(rm).toContain(r)
+    expect(new Set(rm).size).toBe(rm.length)
+  })
+
+  it('a base without the gremion-admin service-account user gets one carrying realm-admin (TASK-043b F3)', () => {
+    const bare = { ...JSON.parse(JSON.stringify(base)), users: [] }
+    const doc = buildTenantRealmDoc({
+      base: bare,
+      manifests: MODULE_MANIFESTS,
+      config: cfgOff,
+      slug: 't2',
+      realmName: 'verein',
+      tenantHost: 't2.council.example',
+      apexDomain: 'council.example',
+      clientSecrets: Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, secretFor(c)])),
+      smtp: TEST_SMTP,
+    })
+    expect(doc.users).toEqual([
+      { username: 'service-account-gremion-admin', enabled: true, serviceAccountClientId: 'gremion-admin', clientRoles: { 'realm-management': ['realm-admin'] } },
+    ])
+  })
+
   it('sets the per-tenant realm name and sslRequired:all literal (#139)', () => {
     const doc = build(cfgOff)
     expect(doc.realm).toBe('verein')
     expect(doc.sslRequired).toBe('all')
     // no placeholder left behind
     expect(JSON.stringify(doc)).not.toContain('__SSL_REQUIRED__')
+  })
+
+  // TASK-043 r4 (PRD-IDN-005, Q16). Keycloak on the pooled stack has no
+  // --hostname: without the realm's frontendUrl every link it mails is built
+  // from the address the ADMIN call used. Measured on keycloak 26.6.1
+  // (KC_HOSTNAME_STRICT=false, KC_PROXY_HEADERS=xforwarded): the
+  // execute-actions link was http://127.0.0.1:8080/auth/realms/r/login-actions/
+  // ... (the internal address), and https://rat.proof.test/auth/realms/r/...
+  // once attributes.frontendUrl was set -- so the first administrators'
+  // invitation pointed at https://keycloak:8443 and could never be opened.
+  it("pins the realm's frontendUrl to the customer's host, so mailed links and the issuer never carry the internal address", () => {
+    const doc = build(cfgOff)
+    const attrs = (doc as { attributes?: Record<string, unknown> }).attributes ?? {}
+    expect(attrs.frontendUrl).toBe('https://t2.council.example/auth')
+    expect(`${attrs.frontendUrl as string}/realms/verein`).toBe(issuerForTenant('t2.council.example', 'verein'))
   })
 
   it('strips hardcoded ids from authenticationFlows + authenticatorConfig so KC mints fresh per-realm ids (cross-realm collision)', () => {

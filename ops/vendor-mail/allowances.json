@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "_comment": "TASK-015. Named exceptions of the two vendor-mail guards. `separation` entries are PAIRS: an allowance is stale -- and fails the guard -- the moment either side of its pair is gone, never on a date (Q2). `principals.vendorRealms` are structural (the realms that ARE the vendor's) and hold under --no-allowances; `principals.transitional` entries are dropped by --no-allowances (TASK-038's host run).",
+  "separation": [
+    {
+      "id": "platform-smtp-transitional",
+      "connectorFile": "app.env.tmpl",
+      "connectorKey": "PLATFORM_SMTP_PASSWORD",
+      "vendorGroup": "platform_smtp",
+      "vendorKey": "PLATFORM_SMTP_PASSWORD",
+      "why": "platform@ is the app tier's realm sender until TASK-043 gives every realm its own kc-<token>@ principal (Q2 transitional)",
+      "removedBy": "TASK-015-FU (grant G8), after TASK-043"
+    }
+  ],
+  "principals": {
+    "vendorRealms": {
+      "master": "the operator realm every Keycloak has; sends as system@ (realm-smtp)",
+      "platform": "reserved for spec C's operator realm (mail.env.tmpl KEYCLOAK_PROBE_REALM comment); gets system@ through realm-smtp (TASK-043 Q5)"
+    },
+    "vendorPrincipals": [
+      "system",
+      "alerts",
+      "roles"
+    ],
+    "transitional": [
+      {
+        "id": "platform-sender-transitional",
+        "principal": "platform",
+        "why": "customer realms may still send as platform@ until TASK-043 issues their kc-<token>@. It waives only the SHARING of platform@ by customer realms; a realm whose From is not platform@ (realm-doc.ts stamps no-reply@) still fails, because the pinned build refuses that envelope (501 5.5.4, measured)",
+        "removedBy": "TASK-015-FU (grant G8), after TASK-043"
+      }
+    ]
+  }
+}

@@ -41,6 +41,23 @@ afterEach(() => {
 const MARKUP_HINT =
   'Für einen internen Relay <b>SMTP_TEST_ALLOW_PRIVATE=1</b> setzen <img src="x">.'
 
+// F1-FIX-10-K / K2#8: the notice told admins to set EMAIL_HOST_PASSWORD, which no
+// kernel code path reads (docs/runbooks/email-smtp.md: the credential comes only
+// from the registry row's passwordRef). An instruction that has no effect is a
+// facade: the notice must name the mechanism that is really read.
+describe('TabEmail.svelte — password notice (K2#8)', () => {
+  it('does not tell the admin to set an env var nothing reads', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    expect(container.textContent).not.toMatch(/EMAIL_HOST_PASSWORD/)
+  })
+
+  it('names the real mechanism (registry passwordRef) and the runbook', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    expect(container.textContent).toMatch(/passwordRef/)
+    expect(container.textContent).toMatch(/email-smtp/)
+  })
+})
+
 describe('TabEmail.svelte — SMTP test result surface', () => {
   it('renders the operator hint that comes back with a refused target', async () => {
     vi.stubGlobal(

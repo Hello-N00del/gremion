@@ -11,9 +11,12 @@
 
 import { createHmac, createHash } from 'node:crypto'
 
-/** `''` for the default tenant; `t.<slug>.` for every other tenant. */
+/**
+ * `t.<slug>.` for every tenant. TASK-042 (PRD-PLAT-012): there is no default
+ * tenant, so no slug earns the old un-prefixed namespace.
+ */
 export function livekitRoomNamespace(tenantSlug: string): string {
-  return tenantSlug === 'default' ? '' : `t.${tenantSlug}.`
+  return `t.${tenantSlug}.`
 }
 
 /** Stable LiveKit room name from a Matrix room id (tenant-namespaced). */

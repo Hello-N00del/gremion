@@ -230,7 +230,50 @@ exit 0'
     [ "$status" -ne 0 ]
 }
 
-@test "gremion-restore-into exits 3 when a snapshot carries buckets without a pinned mc image" {
+# F1-FIX-09 (K6#1). The default skip pattern required an UNDERSCORE before
+# `pg-data`, so the module Postgres volumes of docker-compose.yml (board-pg-data,
+# calendar-pg-data, ... -- compose names them <project>_<volume>) were not skipped:
+# a leaf's live data directory was wiped and re-untarred under a running server and
+# carried the SOURCE instance's roles into the target. Every `*-pg-data` volume of
+# the compose file is listed here, and the proof is on the docker calls the program
+# actually made, not on its summary line.
+@test "gremion-restore-into skips every -pg-data volume, module Postgres volumes included" {
+    shim restic '
+target=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "--target" ]; then target="$a"; fi
+  prev="$a"
+done
+s="$target/opt/gremion/backups/current"
+mkdir -p "$s/volumes" "$target/opt/gremion/etc/env"
+: >"$s/control.sql.gz"
+: >"$s/keycloak.sql.gz"
+printf "STACK=alpha\n" >"$target/opt/gremion/etc/env/state.env"
+printf "x" >"$s/volumes/alpha_traefik_acme.tar"
+printf "x" >"$s/volumes/alpha-state_files-data.tar"
+printf "x" >"$s/volumes/alpha_pg_data.tar"
+for v in pg-data board-pg-data calendar-pg-data content-pg-data finance-pg-data newsletter-pg-data vault-pg-data; do
+  printf "x" >"$s/volumes/alpha-state_${v}.tar"
+done
+exit 0'
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
+        --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
+    [ "$status" -eq 0 ]
+    local v
+    for v in pg-data board-pg-data calendar-pg-data content-pg-data finance-pg-data newsletter-pg-data vault-pg-data; do
+        [[ "$output" == *"SKIP volume alpha-state_${v}"* ]]
+        refute_recorded docker "volume create stg-state_${v}"
+    done
+    # the non-database volumes are still restored
+    assert_recorded docker "volume create stg_traefik_acme"
+    assert_recorded docker "volume create stg-state_files-data"
+    # gremion_pg_data is the kernel's fixed volume name (underscores throughout)
+    [[ "$output" == *"SKIP volume alpha_pg_data"* ]]
+    refute_recorded docker "volume create stg_pg_data"
+    [[ "$output" == *"volumes restored: 2 (8 skipped)"* ]]
+}
+
+@test "gremion-restore-into refuses a snapshot carrying buckets/ (exit 3) before restoring anything (TRD-066/354)" {
     shim restic '
 target=""; prev=""
 for a in "$@"; do
@@ -243,10 +286,36 @@ mkdir -p "$s/volumes" "$s/buckets/nextcloud" "$target/opt/gremion/etc/env"
 printf "STACK=alpha\n" >"$target/opt/gremion/etc/env/state.env"
 printf "x" >"$s/volumes/alpha_traefik_acme.tar"
 exit 0'
-    run env MC_IMAGE= "$RESTORE_INTO" --stack stg --snapshot latest \
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
         --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
     [ "$status" -eq 3 ]
-    [[ "$output" == *"BLOCKED: bucket restore needs MC_IMAGE"* ]]
+    [[ "$output" == *"BLOCKED: snapshot latest carries buckets/"* ]]
+    # refused, never skipped, and nothing restored: restore.sh never ran and
+    # no volume was created or unpacked
+    [ ! -e "${GREMION_ROOT}/runtime/restore-sh.log" ]
+    run grep -cE "volume create|tar -xf" "$SHIM_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "gremion-restore-into refuses a snapshot whose buckets is a dangling symlink (refused, never skipped)" {
+    shim restic '
+target=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "--target" ]; then target="$a"; fi
+  prev="$a"
+done
+s="$target/opt/gremion/backups/current"
+mkdir -p "$s/volumes" "$target/opt/gremion/etc/env"
+ln -s /nonexistent-bucket-store "$s/buckets"
+: >"$s/control.sql.gz"
+printf "STACK=alpha\n" >"$target/opt/gremion/etc/env/state.env"
+printf "x" >"$s/volumes/alpha_traefik_acme.tar"
+exit 0'
+    run "$RESTORE_INTO" --stack stg --snapshot latest \
+        --proof-file "$PROOF_FILE" --proof-row "$PROOF_ROW"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"BLOCKED: snapshot latest carries buckets/"* ]]
+    [ ! -e "${GREMION_ROOT}/runtime/restore-sh.log" ]
 }
 
 # The flat disaster-recovery layout stays supported.

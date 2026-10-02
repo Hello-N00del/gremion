@@ -64,6 +64,9 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-hygiene', kind: 'make', target: 'lint-hygiene' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
+  // TASK-048 (TRD-350/066/354): every deployed image pinned by digest, no
+  // object storage. Brief G4 fixes tool 'docker' (the release toolchain).
+  { name: 'lint-image-digests', kind: 'make', target: 'lint-image-digests', tool: 'docker' },
   // TASK-198: the chat module's Synapse (module suites + the compose render of
   // messaging-postgres and matrix): docker. The scratch proof (synapse-proof)
   // is deliberately NOT here.

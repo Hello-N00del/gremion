@@ -69,6 +69,50 @@ export function renderState({ envFile = FIXTURE, cwd = REPO_ROOT, env = {} } = {
   return JSON.parse(res.stdout)
 }
 
+/**
+ * F1-FIX-11 (H21, S5#28): the Docker API proxy network contract, read out of a
+ * RENDER. The proxy runs with CONTAINERS=1, so any container that can reach it
+ * can read /containers/{id}/json -- every injected secret. The contract:
+ *   - a dedicated network `socketNet` with `internal: true`;
+ *   - exactly {docker-socket-proxy, traefik} are attached to it;
+ *   - docker-socket-proxy is attached to no other network and is not on a
+ *     network_mode (host/bridge would also put it beside everything else).
+ * Returns the list of violations (empty = holds).
+ */
+export function socketIsolationViolations(render, socketNet = 'socket') {
+  const out = []
+  const svcs = render?.services ?? {}
+  const net = render?.networks?.[socketNet]
+  if (!net) return [`networks.${socketNet} is not declared`]
+  if (net.internal !== true) out.push(`networks.${socketNet} is not internal: true (it has a route off the host)`)
+  if (net.external === true) out.push(`networks.${socketNet} is external: some other project could join it`)
+  if (!svcs['docker-socket-proxy']) out.push('docker-socket-proxy is not in the render -- the guard would pass vacuously')
+  if (!svcs.traefik) out.push('traefik is not in the render -- the guard would pass vacuously')
+  const members = Object.entries(svcs)
+    .filter(([, s]) => Object.keys(s.networks ?? {}).includes(socketNet))
+    .map(([n]) => n)
+    .sort()
+  if (JSON.stringify(members) !== JSON.stringify(['docker-socket-proxy', 'traefik'])) {
+    out.push(`networks.${socketNet} members are [${members.join(', ')}], want exactly [docker-socket-proxy, traefik]`)
+  }
+  // A service that joins the network namespace of traefik or the proxy reaches
+  // the proxy without appearing under `networks:` at all.
+  for (const [name, s] of Object.entries(svcs)) {
+    const mode = typeof s.network_mode === 'string' ? s.network_mode : ''
+    const m = /^(service|container):(.+)$/.exec(mode)
+    if (m && name !== 'docker-socket-proxy' && name !== 'traefik' && /docker-socket-proxy|traefik/.test(m[2])) {
+      out.push(`${name} shares the network namespace of ${mode}`)
+    }
+  }
+  const proxy = svcs['docker-socket-proxy']
+  if (proxy) {
+    const nets = Object.keys(proxy.networks ?? {})
+    if (proxy.network_mode !== undefined) out.push(`docker-socket-proxy sets network_mode ${proxy.network_mode}`)
+    if (JSON.stringify(nets) !== JSON.stringify([socketNet])) out.push(`docker-socket-proxy is on [${nets.join(', ')}], want only [${socketNet}]`)
+  }
+  return out
+}
+
 /** Reads KEY=VALUE lines of an env file (comments and blanks skipped). */
 export function readEnvFile(file) {
   const out = {}

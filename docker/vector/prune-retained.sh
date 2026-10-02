@@ -16,9 +16,15 @@
 # Kept: every day file dated today-DAYS .. today (UTC), i.e. DAYS+1 calendar
 # days. Removed: dated strictly before today-DAYS.
 #
+# Window (R29-RETENTION-30, [D R29-I6]): DAYS = 27, so today-27 .. today are kept.
+# Worst-case record age of this family = (27+1) d + loop interval (<= 1 h) + one
+# loop run (<= 5 min) + the ingest lag of a restart replay (<= 1 d + 1 h)
+# = 29 d + 2 h 5 min, under the 30 d bound. The arithmetic lives in
+# test-edge-retention-bound.sh; raising this number breaks that test.
+#
 # Environment (defaults are the production values):
 #   RETAINED_DIR             directory holding the sink files   (/logs/processed)
-#   RETAINED_RETENTION_DAYS  retention in whole days, >= 1       (31)
+#   RETAINED_RETENTION_DAYS  retention in whole days, >= 1       (27)
 #   RETAINED_TODAY           YYYY-MM-DD override for tests       (UTC today)
 #
 # Fail safe: an unusable clock, date or retention value deletes NOTHING and
@@ -26,7 +32,7 @@
 set -u
 
 DIR="${RETAINED_DIR:-/logs/processed}"
-DAYS="${RETAINED_RETENTION_DAYS:-31}"
+DAYS="${RETAINED_RETENTION_DAYS:-27}"
 TODAY="${RETAINED_TODAY:-}"
 
 die() {

@@ -74,10 +74,10 @@ Both surfaces are fixed. The dashboard subtitle in
 `gremion-ui/src/lib/i18n/{de,en}.ts` no longer names any product — it reads
 "Willkommen — Ihrer Plattform für die Gremienarbeit." / "Welcome — your
 governance platform." A tenant's own product name is what `resolveBrand()` /
-`requireBrand()` are for, so no new literal replaced the old one. The setup
-wizard's test mail goes out as `Gremion SMTP-Test`
-(`gremion-ui/src/routes/api/setup/test-smtp/+server.ts`), and the first-boot
-banner in `setup-token.ts` says `Gremion Setup Token`.
+`requireBrand()` are for, so no new literal replaced the old one. The IT-admin
+test mail goes out as `Gremion SMTP-Test`
+(`gremion-ui/src/routes/api/setup/test-smtp/+server.ts`). The first-boot
+setup-token banner is gone with the setup wizard and its token (TASK-042 Q1).
 
 `gremion-ui/src/lib/brand.guard.test.ts` used to snapshot the remaining
 carriers into a finite `STURAOS_KNOWN_DIRTY` set and assert only that no NEW

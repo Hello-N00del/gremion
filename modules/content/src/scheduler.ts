@@ -6,12 +6,16 @@
 // publish pipeline:
 //
 // Per-tenant work, in order:
+//   0. resetStuck         — F1-FIX-07 K5#6 / S4#8: a whole-post dispatch that
+//                           died mid-flight left its post 'sending' (which
+//                           claimPostForPublish never re-claims) forever. Posts
+//                           'sending' for STUCK_PUBLISHING_MINUTES go to
+//                           'failed', so a re-dispatch can claim them again
+//                           (per-recipient deliveries keep it double-send-safe).
 //   1. dispatchDue        — publish scheduled posts whose scheduled_at <= now().
 //   2. drainPublishOps    — Instagram L3 reconcile loop.
 //   3. purgeTokens        — WEEKLY only (withPurge): delete send tokens for
 //                           content sent >90d ago.
-//
-// No resetStuck equivalent — content publish flow is simpler.
 //
 // Tick cadence: 60s (TICK_INTERVAL_MS). The weekly purge runs on the Nth tick
 // (PURGE_EVERY_TICKS) rather than a second timer, keeping one interval.
@@ -32,13 +36,27 @@ import type { TenantRef, Sql } from './tenant-store.js'
 import type { KernelClient } from './kernel-client.js'
 import type { ChannelTransport } from './dispatch.js'
 import type { TracerPort } from '@gremion/ports/tracer'
-import { publishChannel } from './publish-channel.js'
-import { listDueScheduledChannels } from './store/index.js'
+import { publishChannel, type PublishResult } from './publish-channel.js'
+import { checkLinkBase } from './link-base.js'
+import {
+  listDueScheduledChannels,
+  resetStuckPublishing,
+  failScheduledChannel,
+  getChannelRow,
+} from './store/index.js'
+import type { DueChannel } from './store/posts.js'
 
 // ── constants ──────────────────────────────────────────────────────────────────
 
 /** Tick cadence — one tick per minute. */
 export const TICK_INTERVAL_MS = 60_000
+
+/**
+ * A post 'sending' for longer than this is treated as a dead dispatch (30 min,
+ * as in the newsletter leaf). Twice the 15-minute stale-claim window, so a live
+ * dispatch's per-recipient claims are already stale-takeable when it is reset.
+ */
+export const STUCK_PUBLISHING_MINUTES = 30
 
 /** Run the weekly token purge every Nth tick (60s × 10080 = 7 days). */
 export const PURGE_EVERY_TICKS = 7 * 24 * 60
@@ -50,6 +68,8 @@ const LABEL = 'content-scheduler'
 
 /** Per-tenant unit-of-work callbacks. Each receives the resolved tenant. */
 export interface TickWork {
+  /** Reset posts stuck in 'sending' (dead dispatch) to 'failed' — runs first. */
+  resetStuck(tenant: TenantRef): Promise<void>
   /** Dispatch every due 'scheduled' content post for this tenant. */
   dispatchDue(tenant: TenantRef): Promise<void>
   /** Instagram L3 reconcile loop: drain pending publish ops. */
@@ -95,6 +115,7 @@ const _inFlight = new Set<string>()
 /** Test-only: clear the module-scoped single-flight registry between cases. */
 export function _resetSchedulerForTests(): void {
   _inFlight.clear()
+  _loggedPendingFailures.clear()
 }
 
 // ── tick ──────────────────────────────────────────────────────────────────────
@@ -150,6 +171,14 @@ async function runTenantTick(
   tenant: TenantRef,
   withPurge: boolean,
 ): Promise<void> {
+  // 0. Un-stick dead whole-post dispatches (K5#6). Its failure is logged and
+  //    never blocks this tenant's due publishes.
+  await work.resetStuck(tenant).catch((err: unknown) => {
+    console.error(
+      `[${LABEL}] tenant ${tenant.slug} stuck-publish reset failed:`,
+      err instanceof Error ? err.message : String(err),
+    )
+  })
   // 1. Dispatch due scheduled content posts.
   await work.dispatchDue(tenant)
   // 2. Instagram L3 reconcile loop.
@@ -158,6 +187,23 @@ async function runTenantTick(
   if (withPurge) {
     await work.purgeTokens(tenant)
   }
+}
+
+// ── stuck whole-post dispatch reset (K5#6 / S4#8) ──────────────────────────────
+
+/**
+ * Flip this tenant's posts stuck in 'sending' for STUCK_PUBLISHING_MINUTES to
+ * 'failed' (the production TickWork.resetStuck). Logs how many were reset.
+ */
+export async function resetStuckDispatches(tenant: TenantRef, sql: Sql): Promise<number> {
+  const n = await resetStuckPublishing(sql, STUCK_PUBLISHING_MINUTES)
+  if (n > 0) {
+    console.warn(
+      `[${LABEL}] tenant ${tenant.slug}: ${n} post(s) stuck in 'sending' for ` +
+        `>${STUCK_PUBLISHING_MINUTES} min reset to 'failed' (re-dispatchable)`,
+    )
+  }
+  return n
 }
 
 // ── due-channel dispatch (A1: key off post_channels, not posts.status) ──────────
@@ -171,6 +217,8 @@ export interface DispatchDueDeps {
   emailTransport: ChannelTransport
   /** This tenant's external origin for unsubscribe links (no trailing slash). */
   origin: string
+  /** Local development only: accept a loopback origin (K5#8). */
+  allowLoopbackLinks?: boolean
   /**
    * Whether Instagram is configured (resolveInstagramCredentials() != null).
    * When false, a scheduled instagram channel is SKIPPED (disabled-by-default) —
@@ -199,29 +247,95 @@ export async function dispatchDueChannels(
   deps: DispatchDueDeps,
 ): Promise<void> {
   const due = await listDueScheduledChannels(deps.sql)
+  // K5#8 (F1-FIX-07 r2): the link base is read once at boot. While it is
+  // unusable no email channel can publish before a restart, so a due email
+  // channel is parked as 'failed' (nobody claimed) instead of being re-polled
+  // every tick while it holds a slot in the LIMIT-50 due list.
+  const linkBase = checkLinkBase(deps.origin, { allowLoopback: deps.allowLoopbackLinks === true })
   for (const { post_id, channel } of due) {
     if (channel === 'instagram' && !deps.instagramConfigured) {
       // Disabled-by-default seam: leave the channel armed until IG is provisioned.
       continue
     }
-    await publishChannel(tenant, post_id, channel, {
-      sql: deps.sql,
-      kernel: deps.kernel,
-      emailTransport: deps.emailTransport,
-      origin: deps.origin,
-      // A scheduled tick has no inbound x-correlation-id header, so the scheduler
-      // is the origin of this publish: correlate the co-committed outbox row (and
-      // downstream NATS envelope) explicitly on the postId rather than leaning on
-      // publishChannel's implicit `?? postId` fallback.
-      correlationId: post_id,
-      tracer: deps.tracer,
-    }).catch((err) => {
+    const where = `post ${post_id} channel ${channel} (${tenant.slug})`
+    if (channel === 'email' && !linkBase.usable) {
+      if (await failScheduledChannel(deps.sql, post_id, channel)) {
+        console.error(
+          `[${LABEL}] scheduled publish failed for ${where}: unusable public base URL ` +
+            `(${linkBase.reason}). Channel set to 'failed', nobody was mailed; fix the base, ` +
+            `restart the leaf and publish again.`,
+        )
+      }
+      continue
+    }
+
+    let result: PublishResult
+    try {
+      result = await publishChannel(tenant, post_id, channel, {
+        sql: deps.sql,
+        kernel: deps.kernel,
+        emailTransport: deps.emailTransport,
+        origin: deps.origin,
+        allowLoopbackLinks: deps.allowLoopbackLinks,
+        // A scheduled tick has no inbound x-correlation-id header, so the scheduler
+        // is the origin of this publish: correlate the co-committed outbox row (and
+        // downstream NATS envelope) explicitly on the postId rather than leaning on
+        // publishChannel's implicit `?? postId` fallback.
+        correlationId: post_id,
+        tracer: deps.tracer,
+      })
+    } catch (err) {
       console.error(
-        `[${LABEL}] scheduled publish failed for post ${post_id} channel ${channel} (${tenant.slug}):`,
+        `[${LABEL}] scheduled publish failed for ${where}:`,
         err instanceof Error ? err.message : String(err),
       )
-    })
+      continue
+    }
+    await reportScheduledResult(deps.sql, tenant, post_id, channel, where, result)
   }
+}
+
+/**
+ * Failures already logged for channels that stay 'scheduled', keyed
+ * tenant::post::channel -> detail. SMTP unconfigured is the case: it leaves the
+ * channel armed (SMTP can be configured at runtime, and the next tick then
+ * delivers), so without this it would log the same line every 60 s.
+ */
+const _loggedPendingFailures = new Map<string, string>()
+
+/**
+ * F1-FIX-07 r2: log a status:'failed' PublishResult on the scheduled path (the
+ * manual path returns it to the UI; the scheduler has no caller to show it to).
+ * A failure that took the channel off the due list is logged once by
+ * construction; one that left it 'scheduled' is logged once per distinct detail.
+ */
+async function reportScheduledResult(
+  sql: Sql,
+  tenant: TenantRef,
+  postId: string,
+  channel: DueChannel['channel'],
+  where: string,
+  result: PublishResult,
+): Promise<void> {
+  const key = `${tenant.id}::${postId}::${channel}`
+  if (result.status !== 'failed') {
+    _loggedPendingFailures.delete(key)
+    return
+  }
+  const detail = result.detail ?? 'publish failed'
+  const row = await getChannelRow(sql, postId, channel).catch(() => null)
+  if (row?.status === 'scheduled') {
+    if (_loggedPendingFailures.get(key) === detail) return
+    _loggedPendingFailures.set(key, detail)
+  } else {
+    _loggedPendingFailures.delete(key)
+  }
+  const warnings = result.warnings.length > 0 ? `; warnings: ${result.warnings.join('; ')}` : ''
+  const next =
+    row?.status === 'scheduled'
+      ? ' Channel stays scheduled and is retried every tick.'
+      : ' Channel set to failed; publish again to retry the undelivered recipients.'
+  console.error(`[${LABEL}] scheduled publish failed for ${where}: ${detail}${warnings}.${next}`)
 }
 
 // ── start / stop ────────────────────────────────────────────────────────────────

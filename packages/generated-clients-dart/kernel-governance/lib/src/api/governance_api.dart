@@ -27,6 +27,8 @@ import 'package:gremion_kernel_governance_client/src/model/api_governance_commit
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_post_request.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_role_id_assign_post201_response.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_role_id_assign_post_request.dart';
+import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_role_id_revoke_post200_response.dart';
+import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_role_id_revoke_post_request.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_post201_response.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_post_request.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_groups_get200_response.dart';
@@ -1265,6 +1267,116 @@ class GovernanceApi {
     }
 
     return Response<ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// INV-3 recall: revoke the role&#39;s active mandate as a recorded governance act — archives the assignment as &#39;recalled&#39; and appends the &#39;mandate.revoked&#39; audit act in one transaction, then reconciles the revoked holder&#39;s auto-managed Keycloak groups
+  /// 
+  ///
+  /// Parameters:
+  /// * [id] 
+  /// * [roleId] 
+  /// * [apiGovernanceCommitteesIdRolesRoleIdRevokePostRequest] 
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ApiGovernanceCommitteesIdRolesRoleIdRevokePost200Response] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ApiGovernanceCommitteesIdRolesRoleIdRevokePost200Response>> apiGovernanceCommitteesIdRolesRoleIdRevokePost({ 
+    required String id,
+    required String roleId,
+    required ApiGovernanceCommitteesIdRolesRoleIdRevokePostRequest apiGovernanceCommitteesIdRolesRoleIdRevokePostRequest,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/api/governance/committees/{id}/roles/{roleId}/revoke'.replaceAll('{' r'id' '}', encodeQueryParameter(_serializers, id, const FullType(String)).toString()).replaceAll('{' r'roleId' '}', encodeQueryParameter(_serializers, roleId, const FullType(String)).toString());
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'bearerJwt',
+          },{
+            'type': 'apiKey',
+            'name': 'cookieSession',
+            'keyName': 'authjs.session-token',
+            'where': '',
+          },
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      const _type = FullType(ApiGovernanceCommitteesIdRolesRoleIdRevokePostRequest);
+      _bodyData = _serializers.serialize(apiGovernanceCommitteesIdRolesRoleIdRevokePostRequest, specifiedType: _type);
+
+    } catch(error, stackTrace) {
+      throw DioException(
+         requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ApiGovernanceCommitteesIdRolesRoleIdRevokePost200Response? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null ? null : _serializers.deserialize(
+        rawResponse,
+        specifiedType: const FullType(ApiGovernanceCommitteesIdRolesRoleIdRevokePost200Response),
+      ) as ApiGovernanceCommitteesIdRolesRoleIdRevokePost200Response;
+
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ApiGovernanceCommitteesIdRolesRoleIdRevokePost200Response>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,

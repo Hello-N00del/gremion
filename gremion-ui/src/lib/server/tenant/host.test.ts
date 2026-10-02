@@ -162,7 +162,7 @@ describe('normaliseHost — idempotence (read path and write path agree)', () =>
 // Tenancy D1 (§1.2/§1.4) — hostFromIssuer is migration 004's seed expressed in
 // TypeScript. `assertIssMatch` is BYTE-STRICT, so if these two ever derive a
 // different host from the same issuer, a tenant seeded by the migration and a
-// tenant reconciled by registerDefaultTenant disagree about their own identity
+// tenant whose host is derived in TypeScript disagree about their own identity
 // and every login 403s. Each case below is pinned against the SQL twin
 // (`substring(issuer from '^[a-zA-Z][a-zA-Z0-9+.-]*://([^/?#]+)')` + numeric-port
 // strip + lower + LDH/length filter) — verified by applying 004 to a real DB.

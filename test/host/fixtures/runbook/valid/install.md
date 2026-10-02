@@ -42,6 +42,10 @@ systemctl is-enabled gremion-backup.timer    # disabled
 systemctl is-active gremion-backup.timer     # inactive
 jq -e '.ok == true' /opt/gremion/runtime/last-verify.json
 stat -c '%U %a %n' /opt/gremion/etc/env/*.env   # gremion 600, every file
+kc="$(docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
+KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$kc" /opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user "$KEYCLOAK_ADMIN"
+docker exec "$kc" /opt/keycloak/bin/kcadm.sh get events -r example -q type=LOGIN -q max=1
+docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config
 ```
 
 ## Known gaps

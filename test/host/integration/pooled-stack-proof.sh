@@ -17,7 +17,12 @@
 #   app-up C     migrate one-shot (run --rm) then `up` of app-C
 #   app-wait C   app-C healthy, /healthz reports "colour":"C", isolation
 #   aux-up       the non-council ops and mail projects
-#   limits       HostConfig.Memory and NanoCpus > 0 on every container
+#   mail-roles   the vendor mail server's principals and roles@ mailbox by the
+#                repo's own infra/host/mail/provision-roles.sh (TASK-043's
+#                customer half reads the execute-actions mail there)
+#   mail-realm   bring-up step 2: gremion-vendor-mail realm-smtp (master ->
+#                system@), which check-principals requires
+#   limits      HostConfig.Memory and NanoCpus > 0 on every container
 #   rss          idle RSS below 80 % of the limit on every container
 #   isolation    project classification, network membership
 #   probes       TCP probes: positive control from _state, then each non-council net
@@ -41,6 +46,18 @@
 #     bash test/host/integration/pooled-stack-proof.sh limits rss isolation probes
 # POOLED_SCOPE=host classifies EVERY compose project on the host (the R26-1
 # sales site included); the scratch default classifies the ${STACK}-* ones.
+#
+# POOLED_CUSTOMER=1 (TASK-043's customer half, customer-provision-proof.sh
+# customer-*): render-env adds the calendar and vault module servers to the
+# state profiles, publishes the vendor mail server's submission port on
+# 127.0.0.1:587 and its management API on the host's 127.0.0.1:8086 (the only
+# STALWART_ADMIN_URL gremion-vendor-mail accepts), takes the six module
+# server credentials from gremion-init-secrets (TASK-043b F5), and lets the
+# state Keycloak reach mail.<PLATFORM_DOMAIN>:587
+# through host-gateway, trusting the scratch mail certificate. SCRATCH
+# DEVIATIONS (a scratch box has no public DNS, no ACME, no LE certificate): the
+# mail server carries a self-signed certificate for mail.<PLATFORM_DOMAIN>
+# instead of the [acme] block, and Keycloak's truststore names it.
 #
 # Every assertion reads a post-condition (docker inspect, docker stats, a TCP
 # connect, a database row), never an exit code alone. Zero containers, zero
@@ -187,6 +204,35 @@ overlay_ref() {
     else printf '%s/%s' "$OVL_HOST" "$1"; fi
 }
 
+# The six module servers' <ID>_PG_USER/<ID>_PG_PASSWORD lines of state.env.
+# POOLED_CUSTOMER (TASK-043b F5): from a FRESH gremion-init-secrets render of
+# the product's own state.env.tmpl, never this script's gen() -- generating
+# them here hid a template that lacked the keys `gremion-tenant init` needs.
+# A key the render does not carry dies here by name. The render (secrets) is
+# removed once read; its log names files and keys only. ~3 min on Git Bash.
+# Callers run it as `x="$(module_pg_keys)" || exit $?`.
+module_pg_keys() {
+    local id u p f="$OUT/init-secrets/etc/env/state.env"
+    if [[ "${POOLED_CUSTOMER:-0}" != 1 ]]; then
+        for id in BOARD CALENDAR CONTENT FINANCE NEWSLETTER VAULT; do printf '%s_PG_PASSWORD=%s\n' "$id" "$(gen)"; done
+        return 0
+    fi
+    rm -rf "$OUT/init-secrets"; mkdir -p "$OUT/init-secrets" "$OUT/ledger"
+    bash "$ROOT/infra/host/bin/gremion-init-secrets" --root "$(host_path "$OUT/init-secrets")" --stack "$STACK" \
+        > "$OUT/ledger/init-secrets.log" 2>&1 \
+        || { rm -rf "$OUT/init-secrets"; tail -n 5 "$OUT/ledger/init-secrets.log" >&2; die "gremion-init-secrets failed (ledger/init-secrets.log)"; }
+    for id in BOARD CALENDAR CONTENT FINANCE NEWSLETTER VAULT; do
+        u="$(sed -n "s/^${id}_PG_USER=//p" "$f" | tr -d '\r' | tail -n1)"
+        p="$(sed -n "s/^${id}_PG_PASSWORD=//p" "$f" | tr -d '\r' | tail -n1)"
+        [[ -n "$u" && -n "$p" && "$p" != CHANGE_ME* ]] \
+            || { rm -rf "$OUT/init-secrets"; die "TASK-043b F5: a fresh gremion-init-secrets render of state.env.tmpl carries no usable ${id}_PG_USER/${id}_PG_PASSWORD"; }
+        printf '%s_PG_USER=%s\n%s_PG_PASSWORD=%s\n' "$id" "$u" "$id" "$p"
+    done
+    p=""
+    rm -rf "$OUT/init-secrets"
+    printf '%s F5: the six <ID>_PG_USER/_PG_PASSWORD keys came from a fresh gremion-init-secrets render of state.env.tmpl\n' "$(now)" >> "$OUT/ledger/init-secrets.log"
+}
+
 # The env files and the proof overlays, and nothing else: no docker engine
 # (bar free_port's `docker ps`) and no file under the repository. prepare
 # starts with it; on its own it is the render-env phase.
@@ -200,15 +246,33 @@ phase_render_env() {
     local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push
     pw_pg="$(gen)"; pw_kcdb="$(gen)"; pw_kc="$(gen)"; pw_gr="$(gen)"; pw_ctl="$(gen)"; pw_pub="$(gen)"
     pw_bnc="$(gen)"; sec_proxy="$(gen)"; sec_auth="$(gen)"; sec_push="$(gen)"
-    local p_http p_https p_api p_it
-    p_http="$(free_port)"; p_https="$(free_port)"; p_api="$(free_port)"; p_it="$(free_port)"
+    local p_http p_https p_api p_it p_mailapi
+    p_http="$(free_port)"; p_https="$(free_port)"; p_api="$(free_port)"; p_it="$(free_port)"; p_mailapi="$(free_port)"
+    # POOLED_CUSTOMER: the management API on the host's own 127.0.0.1:8086
+    # (infra/host/mail/docker-compose.yml, mail.env.tmpl). gremion-vendor-mail's
+    # principals.mjs refuses any other STALWART_ADMIN_URL (LOOPBACK_8086), so a
+    # random port failed `create`'s mail step: "STALWART_ADMIN_URL must be
+    # http://<loopback>:8086". Like :587, one customer proof per engine.
+    if [[ "${POOLED_CUSTOMER:-0}" == 1 ]]; then
+        ! (exec 3<>/dev/tcp/127.0.0.1/8086) 2>/dev/null || die "127.0.0.1:8086 is taken: the customer proof needs the vendor mail API there"
+        p_mailapi=8086
+    fi
+    # TASK-043: gremion_platform's owner and the panel's reader, ONE value for
+    # both colours (one role each); docker-compose.app.yml requires both.
+    local pw_plat pw_panel
+    pw_plat="$(gen)"; pw_panel="$(gen)"
+    local profiles=production
+    [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && profiles="production,calendar,vault"
+    local mod_keys
+    mod_keys="$(module_pg_keys)" || exit $?
 
     cat > "$ENV_DIR/state.env" <<EOF
 COMPOSE_PROJECT_NAME=${STACK}-state
-COMPOSE_FILE="docker-compose.yml${s}docker-compose.prod.yml${s}test/host/fixtures/pooled-stack/docker-compose.pins.yml${s}$(overlay_ref state.proof.yml '')"
+COMPOSE_FILE="docker-compose.yml${s}docker-compose.prod.yml${s}test/host/fixtures/pooled-stack/docker-compose.state-pins.yml${s}$(overlay_ref state.proof.yml '')"
 COMPOSE_PATH_SEPARATOR="${s}"
-COMPOSE_PROFILES=production
+COMPOSE_PROFILES=${profiles}
 STACK=${STACK}
+${mod_keys}
 GREMION_ROOT=${SROOT_H}
 PLATFORM_DOMAIN=proof.example.org
 DOMAIN=proof.example.org
@@ -262,6 +326,11 @@ TENANT_PROXY_SHARED_SECRET=${sec_proxy}
 TENANT_SECRETS_DIR=${SROOT_H}/secrets/tenants
 # not yet in app.env.tmpl (TASK-028 wait): migrate and gremion-ui need it
 AUTH_KEYCLOAK_ISSUER=https://proof.example.org/auth/realms/gremion
+# TASK-043 (app.env.tmpl): tenant-create's and the control panel's mounts
+# under etc/secrets, gremion_platform's owner, the panel's read-only role
+GREMION_ROOT=${SROOT_H}
+PLATFORM_DB_PASSWORD=${pw_plat}
+PANEL_DB_PASSWORD=${pw_panel}
 EOF
     done
     cat > "$ENV_DIR/ops.env" <<EOF
@@ -278,6 +347,17 @@ OPS_UID=65534
 OPS_GID=65534
 PROM_RETENTION_TIME=1d
 EOF
+    # Every key of mail.env.tmpl (the vendor mail tooling's load_env refuses an
+    # empty generated secret), the images by the template's own digests. The
+    # template's pin is load-bearing: v0.16.x parses its config as JSON only and
+    # never reads this project's config.toml (mail.env.tmpl, spike S4), so the
+    # v0.16.21 tag this file named booted an UNCONFIGURED server: no domain, no
+    # admin credential, no listener of ours.
+    local tmpl_mail="$ROOT/infra/host/templates/env/mail.env.tmpl" k
+    tkey() { sed -n "s/^$1=//p" "$tmpl_mail" | tr -d '\r' | tail -n1; }
+    for k in STALWART_IMAGE PROBE_CURL_IMAGE VENDOR_MAIL_NODE_IMAGE; do
+        [[ "$(tkey "$k")" == *@sha256:* ]] || die "mail.env.tmpl: ${k} is not pinned by digest"
+    done
     cat > "$ENV_DIR/mail.env" <<EOF
 STACK=${STACK}
 GREMION_ROOT=${SROOT_H}
@@ -286,13 +366,37 @@ COMPOSE_FILE="docker-compose.yml${s}$(overlay_ref mail.proof.yml ../../../)"
 COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=mail
 PLATFORM_DOMAIN=proof.example.org
+ACME_EMAIL=acme@proof.example.org
 MAIL_BIND_IP=127.0.0.1
 MAIL_BIND_IP6=::1
+EDGE_BIND_IP=127.0.0.1
+EDGE_BIND_IP6=::1
 MAIL_V4_SUBNET=10.231.9.0/24
 MAIL_V6_SUBNET=fd5a:231:9::/64
+APP_BLUE_V4_SUBNET=10.231.2.0/24
+APP_GREEN_V4_SUBNET=10.231.3.0/24
 MAIL_LOG_RETENTION_DAYS=2
-STALWART_IMAGE=stalwartlabs/stalwart:v0.16.21
+STALWART_IMAGE=$(tkey STALWART_IMAGE)
+PROBE_CURL_IMAGE=$(tkey PROBE_CURL_IMAGE)
+VENDOR_MAIL_NODE_IMAGE=$(tkey VENDOR_MAIL_NODE_IMAGE)
+DKIM_SELECTOR_A=$(tkey DKIM_SELECTOR_A)
+DKIM_SELECTOR_B=$(tkey DKIM_SELECTOR_B)
+MAIL_ACCOUNT_QUOTA=$(tkey MAIL_ACCOUNT_QUOTA)
+MAIL_RATE_LIMIT_RCPT=$(tkey MAIL_RATE_LIMIT_RCPT)
+STALWART_API_PORT=${p_mailapi}
+STALWART_ADMIN_URL=http://127.0.0.1:${p_mailapi}
+STALWART_ADMIN_USER=admin
+STALWART_ADMIN_PASSWORD=$(gen)
+STALWART_API_KEY=$(gen)
+VENDOR_SMTP_PASSWORD=$(gen)
+ALERT_SMTP_PASSWORD=$(gen)
+PLATFORM_SMTP_PASSWORD=$(gen)
+ROLES_IMAP_PASSWORD=$(gen)
+MAIL_DNS_RESOLVER=127.0.0.1
+KEYCLOAK_PROBE_REALM=master
+KEYCLOAK_PROBE_USER=probe
 EOF
+    chmod 600 "$ENV_DIR/mail.env" 2>/dev/null || true
 
     # The proof overlays: loopback-only, freshly allocated host ports (the
     # host's edge/mail binds and ops' fixed ports would collide on a dev box).
@@ -310,6 +414,20 @@ services:
   legal:
     ports: !reset []
 EOF
+    if [[ "${POOLED_CUSTOMER:-0}" == 1 ]]; then
+        # The state Keycloak reaches mail.<domain>:587 the way a host's does --
+        # through the host's own published submission port -- and trusts the
+        # scratch mail certificate (a host's is an LE one). No network is added.
+        cat >> "$OUT/state.proof.yml" <<'EOF'
+  keycloak:
+    extra_hosts:
+      - "mail.proof.example.org:host-gateway"
+    environment:
+      KC_TRUSTSTORE_PATHS: /opt/keycloak/conf/truststores/scratch-mail.pem
+    volumes:
+      - ${GREMION_ROOT}/etc/mail/tls/tls.crt:/opt/keycloak/conf/truststores/scratch-mail.pem:ro
+EOF
+    fi
     cat > "$OUT/ops.proof.yml" <<'EOF'
 services:
   prometheus:
@@ -317,12 +435,57 @@ services:
   alertmanager:
     ports: !reset []
 EOF
-    cat > "$OUT/mail.proof.yml" <<'EOF'
-services:
-  stalwart:
-    ports: !reset []
-EOF
+    # The management API on a fresh loopback port (STALWART_ADMIN_URL: the
+    # vendor mail tooling's only way in); with POOLED_CUSTOMER the submission
+    # port on 127.0.0.1:587, where host-gateway lands. The scratch certificate.
+    # shellcheck disable=SC2016  # ${STALWART_API_PORT} / ${GREMION_ROOT} are compose interpolations, written literally
+    {
+        printf 'services:\n  stalwart:\n    ports: !override\n'
+        printf '      - "127.0.0.1:${STALWART_API_PORT}:8080"\n'
+        [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && printf '      - "127.0.0.1:587:587"\n'
+        printf '    volumes:\n      - ${GREMION_ROOT}/etc/mail/tls:/opt/stalwart/etc/tls:ro\n'
+    } > "$OUT/mail.proof.yml"
     ok "render-env ${STACK}: env files in ${ENV_DIR}, overlays in ${OUT}"
+}
+
+# The vendor mail server's config.toml from the project's own template, with
+# the values of mail.env (the admin credential provision-roles.sh and the
+# vendor tooling authenticate with) and the scratch deviations of TASK-015's
+# ops/vendor-mail/test/scratch-stalwart.sh: no [acme] block (it would ask the
+# real Let's Encrypt for a name no one owns), a self-signed certificate for
+# mail.<domain> instead, generated DKIM keys. The certificate is what the
+# state Keycloak trusts under POOLED_CUSTOMER.
+render_mail_config() {
+    local menv="$ENV_DIR/mail.env" dom sa sb pw tls="$SROOT/etc/mail/tls" dkim="$SROOT/etc/secrets/mail"
+    mkey() { sed -n "s/^$1=//p" "$menv" | tr -d '\r' | tail -n1; }
+    dom="$(mkey PLATFORM_DOMAIN)"; sa="$(mkey DKIM_SELECTOR_A)"; sb="$(mkey DKIM_SELECTOR_B)"; pw="$(mkey STALWART_ADMIN_PASSWORD)"
+    [[ -n "$dom" && -n "$sa" && -n "$sb" && -n "$pw" ]] || die "mail.env lacks PLATFORM_DOMAIN, a DKIM selector or STALWART_ADMIN_PASSWORD"
+    mkdir -p "$tls" "$dkim"
+    # host-form paths: a native openssl.exe (Git Bash) cannot open /c/... under MSYS_NO_PATHCONV
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout "$(host_path "$tls")/tls.key" -out "$(host_path "$tls")/tls.crt" -days 3 \
+        -subj "/CN=mail.${dom}" -addext "subjectAltName=DNS:mail.${dom}" 2>/dev/null \
+        || die "openssl could not make the scratch mail certificate"
+    openssl genrsa -out "$(host_path "$dkim")/${sa}.private" 2048 2>/dev/null || die "openssl could not make a DKIM key"
+    cp "$dkim/${sa}.private" "$dkim/${sb}.private"
+    chmod 644 "$tls/"* "$dkim/"* 2>/dev/null || true
+    # shellcheck disable=SC2016  # the ${...} are LITERAL template placeholders
+    awk -v D="$dom" -v PW="$pw" -v SA="$sa" -v SB="$sb" -v RL="$(mkey MAIL_RATE_LIMIT_RCPT)" -v LR="$(mkey MAIL_LOG_RETENTION_DAYS)" '
+/^\[acme\."le"\]/ { skip = 1; next }
+skip && /^# Two selectors/ { skip = 0 }
+skip { next }
+/^\[certificate\.default\]/ {
+    print; print "cert = \"%{file:/opt/stalwart/etc/tls/tls.crt}%\""
+    print "private-key = \"%{file:/opt/stalwart/etc/tls/tls.key}%\""; next }
+{ gsub(/\$\{MAIL_HOSTNAME\}/, "mail." D); gsub(/\$\{PLATFORM_DOMAIN\}/, D); gsub(/\$\{ACME_EMAIL\}/, "acme@" D)
+  gsub(/\$\{DKIM_SELECTOR_A\}/, SA); gsub(/\$\{DKIM_SELECTOR_B\}/, SB)
+  gsub(/\$\{MAIL_RATE_LIMIT_RCPT\}/, RL); gsub(/\$\{MAIL_LOG_RETENTION_DAYS\}/, LR)
+  gsub(/\$\{STALWART_ADMIN_USER\}/, "admin"); gsub(/\$\{STALWART_ADMIN_PASSWORD\}/, PW); print }' \
+        "$ROOT/infra/host/mail/config.toml.tmpl" | tr -d '\r' > "$SROOT/etc/mail/config.toml"
+    pw=""
+    # shellcheck disable=SC2016  # the LITERAL two characters a surviving placeholder starts with
+    ! grep -q '\${' "$SROOT/etc/mail/config.toml" || die "the scratch mail config render left a placeholder"
+    grep -q '^\[acme' "$SROOT/etc/mail/config.toml" && die "the scratch mail config still carries an [acme] block"
+    return 0
 }
 
 phase_prepare() {
@@ -363,10 +526,7 @@ phase_prepare() {
         envsubst '${PLATFORM_DOMAIN} ${ALERT_EMAIL_FROM} ${ALERT_SMTP_USER} ${ALERT_WEBHOOK_URL}' \
         < "$ROOT/infra/host/ops/alertmanager.yml.tmpl" | tr -d '\r' > "$SROOT/runtime/ops/alertmanager.yml"
     chmod -R a+rwX "$SROOT/runtime" 2>/dev/null || true
-    PLATFORM_DOMAIN=proof.example.org ACME_EMAIL=acme@proof.example.org DKIM_SELECTOR_A=a DKIM_SELECTOR_B=b \
-        MAIL_HOSTNAME=mail.proof.example.org MAIL_LOG_RETENTION_DAYS=2 MAIL_RATE_LIMIT_RCPT=10 \
-        STALWART_ADMIN_USER=admin STALWART_ADMIN_PASSWORD="$(gen)" \
-        envsubst < "$ROOT/infra/host/mail/config.toml.tmpl" | tr -d '\r' > "$SROOT/etc/mail/config.toml"
+    render_mail_config
 
     # The stack-scoped externals (bootstrap.sh stage_networks' set).
     docker network inspect "${STACK}_edge" >/dev/null 2>&1 \
@@ -375,7 +535,7 @@ phase_prepare() {
         || docker network create --ipv6 --subnet 10.231.1.0/24 --subnet fd5a:231:1::/64 "${STACK}_state" >/dev/null
     info "externals: networks ready"
     local vol
-    for vol in traefik_acme config_data tenant_config_data tenant_secrets mail_data; do
+    for vol in traefik_acme config_data tenant_config_data tenant_secrets mail_data nats_accounts nats_secrets; do
         docker volume inspect "${STACK}_${vol}" >/dev/null 2>&1 || docker volume create "${STACK}_${vol}" >/dev/null
     done
     info "externals: volumes ready"
@@ -410,13 +570,19 @@ phase_names() {
 phase_state_up() {
     require_scratch state-up
     [[ -f "$OUT/.names-ok" ]] || die "run the names phase first: no up before every rendered name is asserted"
+    # TASK-024 (Q12): nats-auth init BEFORE the first state up -- the SYS
+    # reload seed and a SYS-only accounts file, so nats boots with no
+    # anonymous user. Idempotent, no network (--no-deps).
+    compose app-blue run --rm --no-deps --pull never --entrypoint pnpm tenant-create exec nats-auth init \
+        > "$OUT/ledger/nats-auth-init.log" 2>&1 \
+        || { tail -15 "$OUT/ledger/nats-auth-init.log" >&2; die "nats-auth init failed"; }
     compose state up -d --pull never >/dev/null
     ok "state project up ($(docker ps -q --filter "label=com.docker.compose.project=${STACK}-state" | grep -c .) container(s))"
 }
 
 phase_state_wait() {
     local cid s
-    for s in postgres keycloak; do
+    for s in postgres keycloak nats; do
         cid="$(svc_cid state "$s")"; [[ -n "$cid" ]] || die "state/$s has no container"
         wait_health "$cid" 200 || die "state/$s did not become healthy"
     done
@@ -521,6 +687,83 @@ phase_aux_up() {
     ok "ops ($(docker ps -q --filter "label=com.docker.compose.project=${STACK}-ops" | grep -c .)) and mail ($(docker ps -q --filter "label=com.docker.compose.project=${STACK}-mail" | grep -c .)) running"
 }
 
+# ── the vendor mail principals (TASK-043's customer half) ──────────────────
+# provision-roles.sh hands curl its admin credential as `-K <(...)`. A native
+# Windows curl (Git Bash on a Docker Desktop box) cannot open the /proc/<pid>/fd
+# path of a process substitution ("cannot read config"). On such a host ONLY,
+# curl becomes an exported function that copies that config into a 0600 file
+# under ${OUT}/secrets for the one call and removes it after; on Linux the
+# script runs untouched. The script itself runs without MSYS_NO_PATHCONV, so
+# its native children (curl, jq) get Windows forms of its temp paths.
+# shellcheck disable=SC2329  # invoked by provision-roles.sh's bash, exported below
+curl_config_shim() {
+    local -a a=(); local tmp="" rc=0
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == -K && $# -ge 2 && "$2" != - ]]; then
+            tmp="$(umask 077; mktemp "${PROOF_CURLK_DIR:?}/curl-k.XXXXXX")"
+            cat "$2" > "$tmp"
+            a+=(-K "$(cygpath -m "$tmp")"); shift 2
+        else a+=("$1"); shift; fi
+    done
+    command curl "${a[@]}" || rc=$?
+    [[ -z "$tmp" ]] || rm -f "$tmp"
+    return "$rc"
+}
+phase_mail_roles() {
+    require_scratch mail-roles
+    local api s=0 out rc=0 line
+    api="$(sed -n 's/^STALWART_ADMIN_URL=//p' "$ENV_DIR/mail.env" | tr -d '\r')"
+    [[ -n "$api" ]] || die "mail.env carries no STALWART_ADMIN_URL (run prepare at this tip)"
+    # a redirect, not `-o /dev/null`: under this script's global MSYS_NO_PATHCONV
+    # a native curl.exe cannot open /dev/null and exits 23 on every try
+    until curl -fsS --max-time 3 "${api}/healthz/live" >/dev/null 2>&1; do
+        (( s++ < 40 )) || { bad "mail-roles: the management API at ${api} never answered"; docker logs --tail 20 "${STACK}-mail-stalwart" >&2 || true; return; }
+        sleep 3
+    done
+    if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+        mkdir -p "$OUT/secrets"; chmod 700 "$OUT/secrets" 2>/dev/null || true
+        export PROOF_CURLK_DIR="$OUT/secrets"
+        # shellcheck disable=SC2329  # exported below (export -f) and invoked inside provision-roles.sh
+        curl() { curl_config_shim "$@"; }
+        export -f curl curl_config_shim
+    fi
+    out="$(env -u MSYS_NO_PATHCONV bash "$ROOT/infra/host/mail/provision-roles.sh" \
+        --env "$(host_path "$ENV_DIR/mail.env")" --allow-unrestricted 2>&1)" || rc=$?
+    unset -f curl 2>/dev/null || true
+    # its lines name principals and verdicts, never a secret
+    printf '%s rc=%s\n%s\n' "$(now)" "$rc" "$out" | ledger mail-roles.log
+    line="$(grep -o 'MAIL-ROLES:.*' <<< "$out" | tail -n1 || true)"
+    if (( rc == 0 )) && [[ "$line" == *"vendor-app-password=ok alerts-app-password=ok platform-app-password=ok"* ]]; then
+        ok "mail-roles: provision-roles.sh converged (${line}); roles@ carries ROLES_IMAP_PASSWORD"
+    else
+        bad "mail-roles: provision-roles.sh exit ${rc}: $(tail -n 3 <<< "$out" | tr '\n' ' ')"
+    fi
+}
+
+# Bring-up step 2 of ops/vendor-mail/RUNBOOK.md section 3, after mail-roles
+# (step 1): the operator realm master sends as system@<PLATFORM_DOMAIN>
+# (gremion-vendor-mail realm-smtp, no argument). Without it the vendor
+# realm has no SMTP user and check-principals (customer-reconcile, Q14) fails
+# "vendor realm master has no SMTP user" -- a step the scratch stack skipped,
+# not a customer defect. The env files by MAIL_ENV/STATE_ENV_FILE (the root's
+# etc/env is laid out later, by customer-layout).
+phase_mail_realm() {
+    require_scratch mail-realm
+    local out rc=0 line dom
+    dom="$(sed -n 's/^PLATFORM_DOMAIN=//p' "$ENV_DIR/mail.env" | tr -d '\r')"
+    out="$(MAIL_ENV="$(host_path "$ENV_DIR/mail.env")" STATE_ENV_FILE="$(host_path "$ENV_DIR/state.env")" \
+        GREMION_ROOT="$(host_path "$SROOT")" GREMION_RELEASE_DIR="$ROOT_H" \
+        bash "$ROOT/infra/host/bin/gremion-vendor-mail" realm-smtp 2>&1)" || rc=$?
+    # its lines name the realm, the sender and the verdict, never a secret
+    printf '%s rc=%s\n%s\n' "$(now)" "$rc" "$out" | ledger mail-realm.log
+    line="$(grep -o 'REALM-SMTP:.*' <<< "$out" | tail -n1 || true)"
+    if (( rc == 0 )) && [[ "$line" == "REALM-SMTP: realm=master user=system@${dom} "* ]]; then
+        ok "mail-realm: master sends as system@${dom} (${line})"
+    else
+        bad "mail-realm: realm-smtp exit ${rc}: $(tail -n 3 <<< "$out" | tr '\n' ' ')"
+    fi
+}
+
 # ── TRD-177 ────────────────────────────────────────────────────────────────
 phase_limits() {
     local cid n=0 line mem cpu name
@@ -580,6 +823,7 @@ state_port() {
     case "$1" in
         postgres|*-postgres) echo 5432 ;;
         pgbouncer) echo 6432 ;;
+        nats) echo 4222 ;;
         keycloak) echo 8080 ;;
         gremion-ui|gremion-public) echo 3000 ;;
         mailpit) echo 1025 ;;
@@ -678,19 +922,34 @@ phase_probes() {
 }
 
 # ── TRD-440 ────────────────────────────────────────────────────────────────
+#
+# Every reading is captured into a local FIRST and dies (exit 2) when its command
+# failed: a docker engine that is down, or a `compose ls` that errors, used to
+# come out of the printf-argument substitutions as running=0, an empty
+# compose-ls and stack-containers 0 on BOTH sides, so TRD-440 read "unchanged"
+# on a dead engine (R29-MD-A, review r3). Counting is awk, not `grep -c .`:
+# grep exits 1 on zero lines, which under pipefail would abort a legitimate 0.
 counts() {
-    local p svcs
+    local p svcs running lsj names allps
     for p in state app-blue app-green ops mail; do
         # a render error is FATAL here, never services=0 on both sides of TRD-440
         svcs="$(compose_config "$p" --services)" || exit $?
+        running="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-$p")" \
+            || die "the running= reading failed for ${STACK}-$p (docker ps)"
         printf '%s services=%s running=%s\n' "$p" \
-            "$(printf '%s\n' "$svcs" | grep -c .)" \
-            "$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-$p" | grep -c .)"
+            "$(printf '%s\n' "$svcs" | awk 'NF{n++} END{print n+0}')" \
+            "$(printf '%s\n' "$running" | awk 'NF{n++} END{print n+0}')"
     done
-    printf 'compose-ls %s\n' "$(docker compose ls -a --format json | jq -r --arg p "${STACK}-" '[.[] | select(.Name | startswith($p)) | .Name] | sort | join(",")')"
+    lsj="$(docker compose ls -a --format json)" \
+        || die "the compose-ls reading failed (docker compose ls)"
+    names="$(printf '%s\n' "$lsj" | jq -r --arg p "${STACK}-" '[.[] | select(.Name | startswith($p)) | .Name] | sort | join(",")')" \
+        || die "the compose-ls reading failed (jq could not read docker compose ls)"
+    printf 'compose-ls %s\n' "$names"
     # Stack-scoped: every container whose compose project or name carries the
     # ${STACK} prefix (the whole engine's count moves with unrelated work).
-    printf 'stack-containers %s\n' "$(docker ps -a --format '{{.Names}} {{.Label "com.docker.compose.project"}}' | tr -d '\r' | awk -v p="${STACK}" 'index($1, p) == 1 || index($2, p) == 1' | grep -c .)"
+    allps="$(docker ps -a --format '{{.Names}} {{.Label "com.docker.compose.project"}}')" \
+        || die "the stack-containers reading failed (docker ps -a)"
+    printf 'stack-containers %s\n' "$(printf '%s\n' "$allps" | tr -d '\r' | awk -v p="${STACK}" '(index($1, p) == 1 || index($2, p) == 1) {n++} END{print n+0}')"
 }
 phase_tenant() {
     require_scratch tenant
@@ -722,9 +981,13 @@ phase_tenant() {
 
 # Split so no call outlives a time box: each compose render is ~10 s here.
 phase_tenant_before() {
-    # via .part: a counts that dies half-way must not leave a baseline behind
-    counts > "$OUT/ledger/trd440-before.txt.part"
-    mv -f "$OUT/ledger/trd440-before.txt.part" "$OUT/ledger/trd440-before.txt"
+    # The counts are captured BEFORE any file is created: a counts that dies
+    # (docker error, render error) leaves neither a baseline nor a .part behind,
+    # and an earlier baseline is removed first so a failed re-run can never leave
+    # the previous run's numbers for the tenant phase to accept (R29-MD-A).
+    rm -f "$OUT/ledger/trd440-before.txt" "$OUT/ledger/trd440-before.txt.part"
+    local b; b="$(counts)" || exit $?
+    printf '%s\n' "$b" > "$OUT/ledger/trd440-before.txt.part" && mv -f "$OUT/ledger/trd440-before.txt.part" "$OUT/ledger/trd440-before.txt"
     [[ -s "$OUT/ledger/trd440-before.txt" ]] || die "empty TRD-440 baseline"
     ok "tenant-before: baseline recorded"
 }
@@ -741,7 +1004,11 @@ phase_tenant_after() {
     cid="$(svc_cid state postgres)"
     db="$(docker exec "$cid" psql -tAqU postgres -c "SELECT datname FROM pg_database WHERE datname IN ('t_${TENANT_SLUG//-/_}', 't_${TENANT_SLUG}')" | tr -d '\r')"
     if [[ -n "$db" ]]; then ok "TRD-440: tenant database $db exists"; else bad "TRD-440: no tenant database for $TENANT_SLUG"; fi
-    realm="$(docker exec "$(svc_cid state keycloak)" sh -c "/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user '${KEYCLOAK_ADMIN}' --password '${KEYCLOAK_ADMIN_PASSWORD}' >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${TENANT_SLUG} --fields realm" 2>/dev/null | tr -d '\r' || true)"
+    # The admin password reaches kcadm as KC_CLI_PASSWORD, handed to `docker exec`
+    # by NAME (the value comes from this shell's environment), so it is on no argv,
+    # neither this host's nor the container's (R29-MD-A, probed on the pinned
+    # Keycloak image). kcadm's cached token is removed after the read.
+    realm="$(KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$(svc_cid state keycloak)" sh -c "/opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080/auth --realm master --user '${KEYCLOAK_ADMIN}' >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${TENANT_SLUG} --fields realm; rm -f /opt/keycloak/.keycloak/kcadm.config" 2>/dev/null | tr -d '\r' || true)"
     if [[ "$realm" == *"\"${TENANT_SLUG}\""* ]]; then ok "TRD-440: realm $TENANT_SLUG exists"; else bad "TRD-440: realm $TENANT_SLUG absent"; fi
     printf '%s db=%s realm=%s\n' "$(now)" "${db:-none}" "$(echo "$realm" | tr -d ' \n')" | ledger trd440.log
 }
@@ -870,6 +1137,8 @@ run_phase() {
         app-up) phase_app_up "$2" ;;
         app-wait) phase_app_wait "$2" ;;
         aux-up) phase_aux_up ;;
+        mail-roles) phase_mail_roles ;;
+        mail-realm) phase_mail_realm ;;
         limits) phase_limits ;;
         rss) phase_rss ;;
         isolation) phase_isolation ;;

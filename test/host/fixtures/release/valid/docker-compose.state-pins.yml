@@ -1,0 +1,12 @@
+# docker-compose.state-pins.yml: the release pins layer (state services), written by
+# scripts/release/emit-pins.mjs and judged by scripts/release/check-pins.mjs.
+services:
+  legal:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-legal@sha256:7777777777777777777777777777777777777777777777777777777777777777
+  vector:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-vector@sha256:8888888888888888888888888888888888888888888888888888888888888888
+  fallback:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999

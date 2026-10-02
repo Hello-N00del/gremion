@@ -3,7 +3,8 @@
 # gremion-restore-into — restore a restic snapshot into a NON-PRODUCTION stack
 # and prove it by content (§J).
 #
-# It restores databases, data volumes and object buckets; it NEVER restores
+# It restores databases and data volumes (a snapshot carrying object-storage
+# buckets/ is refused, TRD-066/354); it NEVER restores
 # /opt/gremion/etc — that path is in the backup set for disaster recovery of the
 # same host only, and a digest taken before the restore is re-read after it.
 # Then it neuters the instance and asserts, from the running system, one file
@@ -24,14 +25,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NEUTER_BIN="${NEUTER_BIN:-${SCRIPT_DIR}/gremion-neuter}"
 # Unpacks volume archives; the same helper Task 9 uses to create them.
-RESTORE_HELPER_IMAGE="${RESTORE_HELPER_IMAGE:-alpine:3.22}"
-# The digest-pinned MinIO client of the release; only needed when the snapshot
-# carries buckets/.
-MC_IMAGE="${MC_IMAGE:-}"
+RESTORE_HELPER_IMAGE="${RESTORE_HELPER_IMAGE:-alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}"
 # Volumes whose content is restored from the DUMPS instead of the archive. A
 # Postgres data directory unpacked under a running server is undefined, and it
 # would carry the SOURCE instance's roles and passwords into the target.
-RESTORE_VOLUME_SKIP_RE="${RESTORE_VOLUME_SKIP_RE:-(_pg-data|_postgres-data|_pgdata)$}"
+# F1-FIX-09 (K6#1): the separator before `pg-data` is an underscore OR a hyphen.
+# Compose names a volume <project>_<volume>, and the module Postgres volumes are
+# themselves called board-pg-data, calendar-pg-data, ... so the old `_pg-data$`
+# matched only the kernel's own `pg-data` and left every leaf's live data
+# directory to be wiped and re-untarred.
+RESTORE_VOLUME_SKIP_RE="${RESTORE_VOLUME_SKIP_RE:-(^|[_-])(pg|postgres)[_-]?data$}"
 
 DB_COUNT=0; VOL_COUNT=0; VOL_SKIPPED=0; BUCKET_COUNT=0
 FILE_PROOFS=0; ROW_PROOFS=0; ACME_OK=false
@@ -71,9 +74,9 @@ consumed from <root>/etc/env/state.env (not from your shell — sudo resets it):
 
 environment:
   RESTORE_VOLUME_SKIP_RE  ERE of volume names restored from the dumps instead of
-                          the archive (default: (_pg-data|_postgres-data|_pgdata)$)
-  MC_IMAGE                digest-pinned mc image; required only for buckets/
-  RESTORE_HELPER_IMAGE    image used to unpack volume archives (default alpine:3.22)
+                          the archive (default: (^|[_-])(pg|postgres)[_-]?data$ --
+                          every kernel and module Postgres data volume)
+  RESTORE_HELPER_IMAGE    image used to unpack volume archives (default alpine:3.22, digest-pinned)
 EOF
     exit 2
 }
@@ -470,27 +473,16 @@ restore_volumes() {
     ok "volumes restored: ${VOL_COUNT} (${VOL_SKIPPED} skipped)"
 }
 
-# ── buckets ────────────────────────────────────────────────────────────────
-restore_buckets() {
-    local bdir="${DUMP_DIR}/buckets" b user pass
-    if [[ ! -d "$bdir" ]]; then
-        info "snapshot carries no buckets/ (object storage off, N11); buckets=0"
-        return 0
+# ── buckets: refused, never skipped (TRD-066/354, TASK-048 Q8) ────────────
+# The pilot runs no object storage and nothing restores a bucket. A snapshot
+# that carries buckets/ holds data this script cannot put back, so it is
+# BLOCKED (exit 3) before any database or volume is touched: a restore that
+# skipped it would report success while dropping that data silently.
+refuse_buckets() {
+    if [[ -e "${DUMP_DIR}/buckets" || -L "${DUMP_DIR}/buckets" ]]; then
+        die "BLOCKED: snapshot ${SNAPSHOT} carries buckets/ (object-storage data); the pilot restores no object storage (TRD-066/354) - nothing restored" 3
     fi
-    [[ -n "$MC_IMAGE" ]] || \
-        die "BLOCKED: bucket restore needs MC_IMAGE (the digest-pinned mc image of the release); spec B pins the object-storage images" 3
-    user="$(env_value "$STATE_ENV" MINIO_ROOT_USER)"
-    pass="$(env_value "$STATE_ENV" MINIO_ROOT_PASSWORD)"
-    [[ -n "$user" && -n "$pass" ]] || \
-        die "BLOCKED: snapshot carries buckets/ but MINIO_ROOT_USER/MINIO_ROOT_PASSWORD are absent from ${STATE_ENV} (spec B: object-storage port-back, N11)" 3
-    while IFS= read -r b; do
-        b="$(basename "$b")"
-        docker run --rm --network "${STACK}_state" -v "${bdir}:/src:ro" \
-            -e "MC_HOST_target=http://${user}:${pass}@minio:9000" \
-            "$MC_IMAGE" mirror --overwrite "/src/${b}" "target/${b}" >/dev/null
-        BUCKET_COUNT=$((BUCKET_COUNT + 1))
-    done < <(find "$bdir" -mindepth 1 -maxdepth 1 -type d | sort)
-    ok "buckets mirrored: ${BUCKET_COUNT}"
+    info "snapshot carries no buckets/ (no object storage, TRD-066); buckets=0"
 }
 
 # ── the proof, read from the RUNNING system ────────────────────────────────
@@ -550,9 +542,9 @@ main() {
     load_restic_env
     ETC_SHA_BEFORE="$(etc_digest)"
     restic_restore
+    refuse_buckets
     restore_databases
     restore_volumes
-    restore_buckets
     assert_etc_untouched
     run_neuter
     local spec i

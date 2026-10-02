@@ -724,6 +724,11 @@ stage_networks() {
     # or `down -v` of a colour can remove them.
     ensure_volume  "${STACK}_config_data"
     ensure_volume  "${STACK}_tenant_config_data"
+    # TASK-024: the NATS seeds (tenant-create only) and the rendered accounts
+    # file (tenant-create writes, the state project's nats reads). Filled by
+    # `nats-auth init` before the first state up, never here (Q12).
+    ensure_volume  "${STACK}_nats_secrets"
+    ensure_volume  "${STACK}_nats_accounts"
     ensure_volume  "${STACK}_tenant_secrets"
     ensure_volume  "${STACK}_mail_data"
 }

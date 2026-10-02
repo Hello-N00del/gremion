@@ -380,6 +380,10 @@ The `vector` service tails Traefik access logs, pseudonymises IPs
 | `LOG_SECURITY_RETENTION_SECONDS` | `7776000` (90 d) | `15552000` (180 d) |
 | `LOG_SECURITY_NOPII_RETENTION_SECONDS` | `7776000` (90 d) | `31536000` (365 d) |
 
+Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. The
+edge files, Traefik's own log and Keycloak's event store already obey it
+([log-retention-policy.md](log-retention-policy.md), "Upper bound").
+
 The IP-pseudonymisation key is supplied to Vector as a Docker secret file
 (`./secrets/ipcrypt_key.txt`), not via env.
 

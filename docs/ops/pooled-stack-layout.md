@@ -10,16 +10,43 @@ is `test/host/integration/pooled-stack-proof.sh`.
 
 | Project | Compose files | What it holds |
 |---|---|---|
-| `${STACK}-state` | `docker-compose.yml` + `docker-compose.prod.yml` + pins | every database and volume, keycloak, the edge (traefik, its socket proxy, fallback, legal), vector |
-| `${STACK}-app-blue` | `docker-compose.app.yml` + pins, `COLOUR=blue` | gremion-ui, gremion-public (+ the `migrate` / `tenant-create` one-shots) |
-| `${STACK}-app-green` | the same file, `COLOUR=green` | the same four services, other colour |
+| `${STACK}-state` | `docker-compose.yml` + `docker-compose.prod.yml` + state pins (`docker-compose.state-pins.yml`) | every database and volume, keycloak, the edge (traefik, its socket proxy, fallback, legal), vector |
+| `${STACK}-app-blue` | `docker-compose.app.yml` + pins, `COLOUR=blue` | gremion-ui, gremion-public, control-panel (+ the `migrate` / `tenant-create` one-shots) |
+| `${STACK}-app-green` | the same file, `COLOUR=green` | the same five services, other colour |
 | `${STACK}-ops` | `infra/host/ops/docker-compose.yml` | prometheus, alertmanager, node-exporter, cadvisor, blackbox (**non-council**) |
 | `${STACK}-mail` | `infra/host/mail/docker-compose.yml` | stalwart, the platform mail server (**non-council**) |
 
-**Tenants cost no containers (TRD-440).** A second tenant adds databases, a
-Keycloak realm and an account (`tenant-provision provision <slug>`). It adds no
-container and no compose project. The per-tenant column below is 0 on every
-row.
+**Tenants cost no containers (TRD-440).** A customer adds databases (its
+kernel database and one per enabled module), a Keycloak realm, a broker
+account and its first accounts (`gremion-tenant create <slug> ...`, TASK-043).
+It adds no container and no compose project, and `create` fails if the
+container count or any project's `config --services` moved. The per-tenant
+column below is 0 on every row.
+
+**The tenant-create environment contract (TASK-043 G3).** Every variable is
+checked before the one-shot connects anywhere, and a missing one is a named
+exit-2 failure, never a default:
+
+| Variable | Value | Why |
+|---|---|---|
+| `PLATFORM_DATABASE_URL` | direct `postgres-${STACK}:5432/gremion_platform`, as `PLATFORM_DB_USER` (the platform owner) | `assertPlatform` / `migratePlatform`; the one runner refuses the pooler |
+| `KERNEL_PG_ADMIN_FILE` | `etc/secrets/tenant-create/kernel_pg_admin` (the kernel server's `POSTGRES_USER` URL) | `ensureKernelDatabase` needs CREATEDB, CREATEROLE and the `pg_shadow` read of `pgbouncer.get_auth` |
+| `MODULE_PG_ADMIN_<ID>_FILE` | one per module server (`MODULE_POSTGRES_IDS`), `etc/secrets/tenant-create/module_pg_admin_<id>` | `ModuleServer.admin` of `enableModule` |
+| `MODULE_APP_PASSWORD_<ID>_FILE` | one per module server, generated once by `gremion-tenant init` | the module's app role password (`secrets.appPassword`) |
+| `TENANT_EXPORT_DIR` | `/var/lib/gremion/exports` | `enableModule`'s export target (tenant-create never exports) |
+| `GREMION_DISABLE_SEEDS` | `"true"` | the kernel migration tenant-create runs must never apply a `*_seed.sql` |
+| `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | `gremion_panel` and a generated secret (`app.env`) | `init` makes the control panel's READ-ONLY role (`ensurePanelReader`: LOGIN, SELECT on `tenant`, `tenant_domain`, `plt.provisioning_step` only); the `control-panel` block connects as it, never as a database owner |
+
+`gremion-tenant init` writes the `etc/secrets/tenant-create` files (0600) from
+`state.env`; the compose file mounts that directory read-only into
+`tenant-create` only.
+
+**Order: `migrate` before `init`.** `init` grants the panel reader SELECT on
+the control registry's `tenant` and `tenant_domain`, so the `migrate` one-shot
+must have migrated the control registry first. On an unmigrated stack `init`
+stops before it creates anything, with a `PRECONDITION` error that names the
+missing table (`ensurePanelReader`). `plt.provisioning_step` is `init`'s own
+work (`migratePlatform`), so it always exists by the time the grant runs.
 
 **A colour owns no data (TRD-038).** The only volumes an app colour mounts are
 the two stack-scoped externals `${STACK}_config_data` and
@@ -36,6 +63,7 @@ and that code is the authoritative copy.
 | Service | Class | Project | Networks |
 |---|---|---|---|
 | postgres, 7 × `<id>-postgres`, pgbouncer | council store | state | `_state` |
+| nats (TASK-024: nkey auth, one account per tenant) | council store | state | `_state` |
 | keycloak | council | state | `_state`, `_edge` |
 | matrix (Synapse, `profiles: [messaging]`, TASK-198) | council | state | `_state` only, no ports |
 | legal, fallback | council (edge) | state | `_edge` |
@@ -44,6 +72,7 @@ and that code is the authoritative copy.
 | vector | council (logs) | state | `network_mode: none` |
 | mailpit | dev only | state, `profiles: [dev]` | `_state` |
 | gremion-ui, gremion-public | council app | app-`<colour>` | `_edge`, `_state`, `app` |
+| control-panel (TASK-043 Q12: no port, no Traefik route; `gremion-tenant panel` prints the `ssh -L` line) | council app | app-`<colour>` | `_state`, `app` |
 | migrate / tenant-create | council one-shot | app-`<colour>` | `_state` / `_state` + `_edge` |
 | prometheus, alertmanager, node-exporter, cadvisor, blackbox | **non-council** | ops | `ops` |
 | stalwart | **non-council** | mail | `mail` |
@@ -76,6 +105,7 @@ limit.
 | state | 7 × `<id>-postgres` (profile-gated, only enabled modules start) | 7 × 256M | 7 × 0.25 | 0 |
 | state | matrix (profile-gated with messaging-postgres, TASK-198) | 1G | 1.0 | 0 |
 | state | pgbouncer | 256M | 0.25 | 0 |
+| state | nats | 512M | 0.5 | 0 |
 | state | keycloak | 1.5G | 1.0 | 0 |
 | state | legal | 256M | 0.25 | 0 |
 | state | fallback | 256M | 0.25 | 0 |
@@ -85,6 +115,7 @@ limit.
 | state | mailpit (dev only, not on a host) | 256M | 0.25 | 0 |
 | app-`<colour>` | gremion-ui | 1G | 1.0 | 0 |
 | app-`<colour>` | gremion-public | 512M | 0.5 | 0 |
+| app-`<colour>` | control-panel | 512M | 0.5 | 0 |
 | app-`<colour>` | migrate (one-shot) | 1G | 1.0 | 0 |
 | app-`<colour>` | tenant-create (one-shot) | 512M | 0.5 | 0 |
 | ops | prometheus | 1G | 1.0 | 0 |
@@ -96,13 +127,13 @@ limit.
 
 | Situation | Memory ceiling | CPU ceiling |
 |---|---|---|
-| state, no module Postgres | 4.5G | 4.0 |
-| state, all six module Postgres | 6.0G | 5.5 |
-| one app colour (steady state) | 1.5G | 1.5 |
+| state, no module Postgres | 5.0G | 4.5 |
+| state, all seven module Postgres + matrix (messaging profile, TASK-198) | 7.75G | 7.25 |
+| one app colour (steady state, with the control panel since TASK-043) | 2.0G | 2.0 |
 | ops | 2.25G | 2.25 |
 | mail | 0.5G | 0.5 |
-| **steady state** (state with all modules + one colour + ops + mail) | **10.25G** | **9.75** |
-| **deploy window** (+ the second colour + migrate) | **12.75G** | **12.25** |
+| **steady state** (state with all modules + one colour + ops + mail) | **12.5G** | **12.0** |
+| **deploy window** (+ the second colour + migrate) | **15.5G** | **15.0** |
 
 These are ceilings, not usage. A CPU limit caps each container and reserves
 nothing, so a CPU sum above the host's core count means contention under load,
@@ -220,7 +251,11 @@ Left open by TASK-040, each with its owner:
   deletion. It is outside this unit's files and stays until its owner removes
   it.
 - **gremion-public `/healthz`** carries no colour field (gremion-ui's does).
-- **NATS account per tenant** (TRD-440 lists it): TASK-024 / TASK-043.
+- **NATS account per tenant** (TRD-440 lists it): closed by TASK-024. The
+  state project's `nats` admits clients only by per-module nkey inside one
+  account per tenant (`packages/nats-auth`); a tenant add reloads it, never
+  adds a container. TASK-043 drops its publishing -> newsletter alias; the
+  live host re-runs the proof under TASK-038.
 - **Dev loop proof (Q6; orchestrator or operator).** `make up` serving
   `127.0.0.1:3001` / `:3002` has not been run and recorded; only the dev
   render is guarded (loopback-only binds). `make up` brings up the base

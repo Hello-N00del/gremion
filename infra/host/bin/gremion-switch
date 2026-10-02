@@ -112,7 +112,13 @@ evict_fanout() {
                     -H "Authorization: Bearer ${INTERNAL_PUSH_SECRET}" \
                     -H 'Content-Type: application/json' \
                     --data '{"tenant":"*"}' \
-                    "$url" 2>/dev/null || echo '000')"
+                    "$url" 2>/dev/null || true)"
+        # F1-FIX-09 (K6#0): curl's -w already wrote the code (000 when it could not
+        # connect) and exits non-zero; `|| echo 000` appended a second 000 and the
+        # failure message read "answered 000000". The code is curl's own output,
+        # normalised to exactly three digits.
+        code="${code//[!0-9]/}"
+        if (( ${#code} >= 3 )); then code="${code: -3}"; else code="000"; fi
         [[ "$code" == "204" ]] \
             || die "evict fan-out: ${container} (${url}) answered ${code}, expected 204" 1
         ok "evicted ${container}"

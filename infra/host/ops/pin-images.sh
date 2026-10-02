@@ -31,11 +31,25 @@ resolve() {
     printf '%s@%s\n' "$ref" "$digest"
 }
 
+# The first-party namespace, compared as a whole-component prefix (trailing
+# slash included), so ghcr.io.evil/hello-n00del/… or ghcr.io/hello-n00del-x/…
+# is still third-party and still pinned (TASK-048).
+FIRST_PARTY_PREFIX="ghcr.io/hello-n00del/"
+
 pin_file() {
     local file="$1" ref pinned count=0 pinned_total
     [[ -f "$file" ]] || die "no such file: ${file}" 2
     while IFS= read -r ref; do
         [[ "$ref" == *"@sha256:"* ]] && continue
+        # A first-party build: image is tagged ${IMAGE_TAG:-dev} (only that
+        # form is skipped; a literal first-party tag is resolved); its digest is
+        # written by the release pins layer, not resolved here. A ${VAR} ref is
+        # resolved from the project's env template, where the digest lives.
+        # scripts/release/check-image-digests.mjs judges both.
+        if [[ ( "$ref" == "$FIRST_PARTY_PREFIX"* && "$ref" =~ :\$\{IMAGE_TAG(:-dev|:\?[^}]*)\}$ ) || "$ref" == *'$'* ]]; then
+            info "skipping ${ref} (first-party or \${...}: pinned elsewhere)"
+            continue
+        fi
         pinned="$(resolve "$ref")"
         info "pinning ${ref}"
         sed -i "s|image: ${ref}\$|image: ${pinned}|" "$file"

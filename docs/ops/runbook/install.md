@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 2.0.0
+- Version: 3.0.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -18,7 +18,7 @@ one stack per host, five compose projects, each named by its own env file under
 
 | Env file | Project | Compose files (from the env file's `COMPOSE_FILE`) | Started by |
 |---|---|---|---|
-| `state.env` | `${STACK}-state`: every database and volume, keycloak, the edge | `docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.pins.yml` | step 12 |
+| `state.env` | `${STACK}-state`: every database and volume, keycloak, the edge | `docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.state-pins.yml` | step 12 |
 | `app-blue.env`, `app-green.env` | `${STACK}-app-blue`, `${STACK}-app-green`: gremion-ui, gremion-public and the `migrate` one-shot, one colour serving at a time | `docker-compose.app.yml`, `docker-compose.pins.yml` | `gremion-deploy`, step 14 (the first deploy starts blue) |
 | `ops.env` | `${STACK}-ops`: on-box monitoring, non-council | `infra/host/ops/docker-compose.yml` | step 15 |
 | `mail.env` | `${STACK}-mail`: the platform mail server, non-council | `infra/host/mail/docker-compose.yml` | the go-live gate (see Known gaps) |
@@ -38,7 +38,8 @@ export PATH="/opt/gremion/bin:$PATH"
   (FLOW-OPS-002, "F1 behoben").
 - The tag exists and its tree carries the contracts `gremion-deploy` checks at
   its step 2: `release.json` (the tag, a boolean `overlap`, a `migrations`
-  array, a manifest digest), `docker-compose.pins.yml` and
+  array, a manifest digest), both pins layers (`docker-compose.pins.yml` for
+  the colours, `docker-compose.state-pins.yml` for the state project) and
   `docs/ops/release-1-waivers.md`.
 - The administrator holds, on their own machine: the provider panel login, the
   registrar login, an SSH key the rebuilt server will accept for root, a
@@ -188,7 +189,12 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
     deploy user puts the same key into the tree (one inode, so an in-place key
     rotation reaches both names; see Known gaps). No program starts the state
     project; `gremion-deploy` only pulls it. The registry token is read at a
-    prompt and the login is removed again at once.
+    prompt and the login is removed again at once. Before the first up,
+    `nats-auth init` (TASK-024, Q12) writes the NATS SYS reload seed and the
+    SYS-only accounts file into the two nats volumes bootstrap created: the
+    broker's config includes that file and does not start without it. It runs
+    in the `tenant-create` one-shot of the blue colour, with no dependency
+    started, and is idempotent (`gremion-deploy` repeats it in its step 4).
 
 ```bash
 sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
@@ -198,6 +204,7 @@ stat -c '%i %U %n' /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcryp
 cd "$REL"
 read -rs GHCR_TOKEN
 printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u x-access-token --password-stdin
+docker compose --env-file /opt/gremion/etc/env/app-blue.env run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init   # [nats-auth] init: sys reload seed created; ... written
 docker compose --env-file /opt/gremion/etc/env/state.env up -d
 docker logout ghcr.io; unset GHCR_TOKEN
 docker compose --env-file /opt/gremion/etc/env/state.env ps
@@ -247,10 +254,12 @@ sudo -u gremion /opt/gremion/bin/gremion-verify
 jq -e '.ok == true and (.failures | length) == 0' /opt/gremion/runtime/last-verify.json
 ```
 
-17. **Create the pilot customer.** PENDING TASK-043 (`packages/provisioning/`):
-    the customer is created through the provisioning orchestrator, which creates
-    its realm, databases and broker account and invites its first
-    administrators. Until that lands, this step is recorded as blocked.
+17. **Create the pilot customer.** `gremion-tenant create` (TASK-043, `packages/provisioning/`)
+    creates the customer's realm, databases and broker account and invites its first
+    administrators. Its first running proof on a pooled stack (R29) found five defects
+    in the create path (TASK-043b: the provisioner secret mount, the realm-smtp read-back,
+    the one-shot's role-grant credential, CONNECT for pgbouncer_auth, the state template
+    keys); this step stays blocked until TASK-043b's customer proof is green.
 
 ```bash
 test -d /opt/gremion/current/packages/provisioning \
@@ -349,15 +358,23 @@ cat /opt/gremion/runtime/active-colour                                         #
   psql -U postgres -tAc 'SHOW server_version_num')                             # 18xxxx
 ```
 
-The pilot customer's first administrator has signed in (PENDING TASK-043 until
+The pilot customer's first administrator has signed in (blocked on TASK-043b until
 step 17 runs): the customer's realm holds a `LOGIN` event.
 
 ```bash
 kc="$(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
-docker exec "$kc" /opt/keycloak/bin/kcadm.sh config credentials --server http://127.0.0.1:8080 \
-  --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"
+KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$kc" /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://127.0.0.1:8080/auth --realm master --user "$KEYCLOAK_ADMIN"
 docker exec "$kc" /opt/keycloak/bin/kcadm.sh get events -r "<customer realm>" -q type=LOGIN -q max=1
+docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config
 ```
+
+The password reaches kcadm through `KC_CLI_PASSWORD`, handed to `docker exec` by
+name, so it is on no command line of the host (and, unlike `--password`, on none
+inside the container either). The `--server` URL carries Keycloak's relative
+path `/auth` (`KC_HTTP_RELATIVE_PATH` in `docker-compose.yml`); without it the
+login answers 404. The last command removes the token kcadm cached in the
+container.
 
 The two snapshot files of step 18 read PASS for every row:
 
@@ -374,7 +391,7 @@ in [run-record.md](run-record.md).
 - `bash infra/host/bootstrap.sh timers` (`stage_timers`, also run by `all`) does `systemctl enable --now gremion-backup.timer`, while R15-1 wants the job installed and disabled; step 21 therefore disables it again. Owner: TASK-040 (`infra/**`), which merged with `stage_timers` unchanged, so the change is still open. `test/host/runbook.bats` fails the day `stage_timers` stops enabling the timer, so step 21 and this entry change in the same commit.
 - `gremion-deploy` step 3 refuses without `runtime/last-backup.json`, and `gremion-backup` refuses without a reachable off-site remote (`RCLONE_REMOTE`), while the pilot keeps off-site copies off as the north star (R13-4). Step 13 therefore needs a remote for that one run. PENDING TASK-089 (`scripts/backup/`) decides the pilot's verification path.
 - `docker-compose.yml` declares the log pipeline's `ipcrypt_key` secret as `./secrets/ipcrypt_key.txt` in the release tree, while `gremion-render` generates the key once in `etc/secrets/ipcrypt_key.txt` under the host root and nothing in `infra/host` puts it into a release tree; step 12 links it by hand. Every later release tree the state project is started from needs the same link first. Owner: the host tooling of TASK-040 (`infra/**`, `docker-compose*.yml`), merged with this divergence, so it needs a follow-up task. `test/host/runbook.bats` stops asking for the link the day `gremion-render` writes the key into the release tree.
-- Customer creation and the first administrator's sign-in: PENDING TASK-043 (`packages/provisioning/`), step 17 and the post-condition.
+- Customer creation and the first administrator's sign-in: `gremion-tenant create` exists (TASK-043, `packages/provisioning/`); blocked on TASK-043b's green customer proof, step 17 and the post-condition.
 - The ops project of step 15 (`infra/host/ops/`) is the on-box monitoring until the observability stack moves into its own project: PENDING TASK-039 (`compose/observability/`).
 - The pooled layout (TASK-040, [pooled-stack-layout.md](../pooled-stack-layout.md)) carries a deploy ordering hazard until TASK-034's 34b block lands: neither the apex nor `public.<domain>` has a websecure router, so the first deploy's public verification (step 14) and the post-condition's `/api/health` answer 404. No install is scheduled before 34b; TASK-038's waits carry it.
 - [A] Step 18's end-to-end suites run against the stack its `--stack-env` marker names; which stack that is for the rebuilt host is decided by TASK-038's first run.
@@ -382,5 +399,6 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). The post-condition's sign-in observation passes the Keycloak admin password to kcadm as `KC_CLI_PASSWORD` by name (no `--password` on any command line), uses `--server` with Keycloak's `/auth` relative path (the URL without it answered 404) and removes kcadm's cached token afterwards. Major: a post-condition changed (Q9).
 - 2.0.0 (2026-09-28): step 12 runs `gremion-render` as the deploy user before the state project's first `up`, links the ipcrypt key into the release tree, and observes both (TASK-037 review).
 - 1.0.0 (2026-09-27): first version (TASK-037).

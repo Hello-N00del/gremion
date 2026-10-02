@@ -52,16 +52,16 @@ byte-identical to the auth-less Mailpit transport.
 an Absender-Adresse, then click **Test-E-Mail senden**. The message shows up in
 Mailpit at `http://localhost:8026`.
 
-**Via the test-smtp endpoint** (only valid before setup is complete; it
-requires the setup token and refuses once `setup_complete` is true). The
-endpoint is rate-limited and opens an outbound connection to the
-body-supplied `host:port`, so the cap also bounds its use as an SSRF/port-probe
-oracle during the pre-setup window:
+**Via the test-smtp endpoint** (TASK-042 Q1: a signed-in session with the
+IT-admin role; there is no setup token any more). The endpoint is rate-limited,
+target-guarded (docs/security/test-smtp-guard.md) and opens an outbound connection to the body-supplied
+`host:port`, so the cap also bounds its use as an SSRF/port-probe oracle. Send
+the session cookie of an IT admin:
 
 ```bash
 curl -X POST http://localhost:3001/api/setup/test-smtp \
   -H "Content-Type: application/json" \
-  -H "X-Setup-Token: $SEED_TOKEN" \
+  -H "Cookie: $IT_ADMIN_SESSION_COOKIE" \
   -d '{"host":"mailpit","port":1025,"user":"","password":"",
        "from_address":"noreply@localhost","to_address":"test@example.org"}'
 ```
@@ -181,6 +181,6 @@ loads at `http://localhost:8026`. Do not use `:latest` — tags drift.
   (`8026:8025`, loopback-only).
 - `gremion-ui/src/lib/server/mail/tenant-mail.ts` — the single per-tenant mail
   seam (`getTenantMailContext`, `sendMailForTenant`, `evictTenantMail`).
-- `gremion-ui/src/routes/api/setup/test-smtp/+server.ts` — the pre-setup
-  test-mail endpoint.
+- `gremion-ui/src/routes/api/setup/test-smtp/+server.ts` — the IT-admin
+  test-mail endpoint (session + `Role.ITAdmin`, TASK-042 Q1).
 - `.env.example` — `Outgoing Email / SMTP` section.

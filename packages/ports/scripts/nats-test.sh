@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 #
 # Run the @gremion/ports JetStream integration suite against a REAL NATS server.
+# This is the LIBRARY proof and deliberately runs an OPEN broker (-js, no
+# config). The kernel's authenticated broker -- nkey users, one account per
+# tenant (TASK-024) -- is proved by packages/nats-auth/scripts/proof.sh.
 #
 # Integration defect D8 (run findings 11, 25). Before this script the only proof
 # that NatsBroker works against real JetStream was a manual `docker run` pasted

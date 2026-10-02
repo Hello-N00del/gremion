@@ -1,0 +1,12 @@
+{
+  "smtpServer" : {
+    "password" : "**********",
+    "starttls" : "true",
+    "port" : "587",
+    "auth" : "true",
+    "host" : "mail.example.org",
+    "from" : "system@example.org",
+    "user" : "system@example.org",
+    "ssl" : "false"
+  }
+}

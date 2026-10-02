@@ -20,9 +20,14 @@
     "coverage": "vitest run --project unit --coverage",
     "migrate": "tsx scripts/run-migrations-verified.mjs",
     "migrate:control": "tsx scripts/run-control-migrations.mjs",
+    "migrate:test-fixture": "tsx scripts/migrate-test-fixture.mjs",
     "provision": "tsx scripts/tenant-provision.mjs"
   },
   "devDependencies": {
+    "@gremion/edge-routers": "workspace:*",
+    "@gremion/nats-auth": "workspace:*",
+    "@gremion/provisioning": "workspace:*",
+    "@gremion/tenant-store": "workspace:*",
     "@inlang/paraglide-js": "^2.25.4",
     "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-node": "^5.5.7",

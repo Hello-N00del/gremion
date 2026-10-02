@@ -16,6 +16,7 @@
 import { getKeycloakAdminClientForCurrentTenant, type KcUser } from '$lib/server/keycloak-admin'
 import { getOrgUnitIdsForUser, getOrgUnit, listOrgUnitMembers } from '$lib/server/governance/org-units-db'
 import { tlog } from '$lib/server/observability/tenant-log'
+import { canSeeOrgUnit, seesAllGovernance, type Viewer } from '$lib/server/governance/visibility'
 
 export interface MemberMembership {
   gremium_or_referat_name: string
@@ -116,11 +117,43 @@ export async function memberView(u: KcUser): Promise<Member> {
   }
 }
 
-export async function listMembers(opts: { adminView: boolean }): Promise<Member[]> {
+// R29-F104-KTWIN (kernel twin of F1-FIX-04 / S3#33, operator decision D-3): the
+// basic directory drops the memberships of units the viewer may not see (a
+// committee_only unit the viewer is not in), so the directory does not reveal a
+// roster the committee pages and the members API hide. A person whose every
+// membership is hidden from this viewer is dropped too: listing them with no
+// visible unit would tell the viewer that they sit in a hidden one. A failed
+// lookup of the viewer's own units fails CLOSED (committee_only memberships
+// hidden) and is logged. `placed` and the friendly roles are computed before
+// the redaction.
+async function redactHiddenMemberships(viewer: Viewer | null, members: Member[]): Promise<Member[]> {
+  if (seesAllGovernance(viewer)) return members
+  const keys = [...new Set(members.flatMap((m) => m.memberships.map((x) => x.ou_key)))]
+  const units = new Map(await Promise.all(keys.map(async (k) => [k, await getOrgUnit(k)] as const)))
+  const own = new Set(
+    viewer
+      ? await getOrgUnitIdsForUser(viewer.id).catch((err) => {
+          tlog('warn', 'members: viewer unit lookup failed, hiding committee_only memberships', { error: String(err) })
+          return [] as readonly string[]
+        })
+      : [],
+  )
+  return members
+    .map((m) => ({
+      ...m,
+      memberships: m.memberships.filter((x) => {
+        const unit = units.get(x.ou_key)
+        return !!unit && canSeeOrgUnit(viewer, unit, own.has(x.ou_key))
+      }),
+    }))
+    .filter((m) => m.memberships.length > 0)
+}
+
+export async function listMembers(opts: { adminView: boolean; viewer: Viewer | null }): Promise<Member[]> {
   const kc = getKeycloakAdminClientForCurrentTenant()
   // admin sees all incl. disabled/invited; basic view starts from enabled only
   const users = await kc.listUsers({ first: 0, max: 500, enabled: opts.adminView ? undefined : true })
   const members = await Promise.all(users.map((u) => memberView(u)))
   if (opts.adminView) return members
-  return members.filter((m) => m.placed && m.enabled)
+  return redactHiddenMemberships(opts.viewer, members.filter((m) => m.placed && m.enabled))
 }

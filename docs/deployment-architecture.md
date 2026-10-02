@@ -15,7 +15,7 @@ Addresses here are documentation values (`example.org`, `203.0.113.0/24`,
 
 | Project | Compose project name | Holds |
 |---|---|---|
-| state | `${STACK}-state` | every Postgres server, Keycloak, Traefik, socket proxy, pgbouncer, NATS, Redis, MinIO, vector, legal, fallback, the sales site and the module-owned services |
+| state | `${STACK}-state` | every Postgres server, Keycloak, Traefik, socket proxy, pgbouncer, NATS, Redis, vector, legal, fallback, the sales site and the module-owned services |
 | app (blue) | `${STACK}-app-blue` | `gremion-ui`, `gremion-public`, the nine leaves, `migrate` |
 | app (green) | `${STACK}-app-green` | the same set, the other colour |
 
@@ -32,7 +32,7 @@ aliases; only the edge publishes ports. Composition is env-file only:
 | Network | Purpose | Created by |
 |---|---|---|
 | `${STACK}_edge` | Traefik ↔ app tiers, control plane, sales site, legal, fallback | the host bootstrap; `external: true` in every project |
-| `${STACK}_state` | databases, Keycloak, NATS, Redis, MinIO, and the other state services | the host bootstrap; `external: true` |
+| `${STACK}_state` | databases, Keycloak, NATS, Redis, and the other state services | the host bootstrap; `external: true` |
 | `app` | one per colour, project-scoped | the colour project |
 
 All are pinned and dual-stack with a ULA prefix. Traefik's
@@ -72,7 +72,8 @@ A release is a directory checked out at its tag, carrying:
 | Artefact | Contract |
 |---|---|
 | `release.json` | `{tag, overlap, migrations, distManifestDigest}`; the digest is `"sha256:" + 64 lowercase hex` of the manifest bytes as read — the bare hex form is rejected at both ends |
-| `docker-compose.pins.yml` | every first-party service `build: !reset null` plus `image: …@sha256:` |
+| `docker-compose.pins.yml` | the app layer: every first-party app-tier service `build: !reset null` plus `image: …@sha256:` (the colour projects' pins) |
+| `docker-compose.state-pins.yml` | the state layer: the same for every first-party state service (legal, vector, fallback), layered only onto the state project |
 | `docker-compose.app.yml` | the colour project's app-tier services |
 | `pnpm-lock.yaml` | the assembled lockfile, committed next to the pins, so `--frozen-lockfile` holds inside the image build |
 

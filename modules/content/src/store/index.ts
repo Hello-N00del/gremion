@@ -38,10 +38,12 @@ export {
   listMediaByPost,
 } from './media.js'
 
-export type { ClaimResult } from './deliveries.js'
+export type { ClaimResult, DeliveryClaim } from './deliveries.js'
 export {
   claimRecipient,
+  claimDelivery,
   markSent,
+  recordDelivered,
   markFailed,
   releaseClaim,
 } from './deliveries.js'
@@ -50,6 +52,7 @@ export type { ChannelRow, ChannelStatus } from './channels.js'
 export {
   getChannelRow,
   setChannelStatus,
+  failScheduledChannel,
 } from './channels.js'
 
 export {

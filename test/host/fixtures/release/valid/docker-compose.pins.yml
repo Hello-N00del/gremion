@@ -1,5 +1,5 @@
-# Fixture: the shape spec B's release workflow writes. Digests are obviously
-# synthetic; nothing in the unit tests contacts a registry.
+# docker-compose.pins.yml: the release pins layer (app services), written by
+# scripts/release/emit-pins.mjs and judged by scripts/release/check-pins.mjs.
 services:
   gremion-ui:
     build: !reset null
@@ -7,6 +7,12 @@ services:
   gremion-public:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-public@sha256:2222222222222222222222222222222222222222222222222222222222222222
+  control-panel:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-control-panel@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
   migrate:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333
+  tenant-create:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333

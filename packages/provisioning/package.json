@@ -1,0 +1,31 @@
+{
+  "name": "@gremion/provisioning",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Customer provisioning for the Gremion governance kernel (TASK-043, CAP-PROVISION): create, suspend, resume and reconcile a customer through one ledger-driven step machine",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:integration": "node test/integration/run.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@gremion/db": "workspace:*",
+    "@gremion/edge-routers": "workspace:*",
+    "@gremion/module-catalogue": "workspace:*",
+    "@gremion/nats-auth": "workspace:*",
+    "@gremion/tenant-store": "workspace:*",
+    "postgres": "^3.4.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11"
+  }
+}

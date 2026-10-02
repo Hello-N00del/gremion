@@ -1,0 +1,7 @@
+[
+  { "realm": "master", "smtp": { "user": "system@example.org", "from": "system@example.org", "host": "mail.example.org" } },
+  { "realm": "platform", "smtp": { "user": "system@example.org", "from": "system@example.org", "host": "mail.example.org" } },
+  { "realm": "alpha_council", "smtp": { "user": "kc-alpha_council@example.org", "from": "kc-alpha_council@example.org", "host": "mail.example.org" } },
+  { "realm": "beta_council", "smtp": { "user": "kc-beta_council@example.org", "from": "kc-beta_council@example.org", "host": "mail.example.org" } },
+  { "realm": "gamma_council", "smtp": { "user": null, "from": null, "host": null } }
+]

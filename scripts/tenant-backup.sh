@@ -92,11 +92,13 @@ info "Reading registry row for tenant '${slug}' (control DB)..."
 # and escapes the value as a SQL string literal) — defence-in-depth over the
 # guard above, never a raw "${slug}" string-substitution into the SQL text.
 row=$(psql "$CONTROL_DATABASE_URL" -At -F $'\t' -v slug="$slug" -c \
-    "SELECT realm_name, status, domain_profile->>'residencyZone', backup_key_ref
+    "SELECT id, realm_name, status, domain_profile->>'residencyZone', backup_key_ref
        FROM tenant WHERE slug = :'slug'") \
     || error "control-DB query failed for slug '${slug}'"
 [[ -n "$row" ]] || error "no registry row for tenant '${slug}'"
-IFS=$'\t' read -r realm_name status residency_zone backup_key_ref <<< "$row"
+IFS=$'\t' read -r tenant_id realm_name status residency_zone backup_key_ref <<< "$row"
+[[ "$tenant_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
+    || error "the registry row of '${slug}' carries no UUIDv7 tenant id"
 [[ "$status" == "active" ]] || info "WARN: tenant '${slug}' status is '${status}' (not active) — backing up anyway"
 
 # ── Resolve the per-tenant backup KEY to its EXACTLY-ONE host location ────────
@@ -116,7 +118,7 @@ case "$backup_key_ref" in
     key_var="${backup_key_ref#env:}"
     BACKUP_KEY="${!key_var:-}"
     [[ -n "$BACKUP_KEY" ]] || error "backup key env var ${key_var} is unset"
-    info "backup key: env:${key_var} (default-tenant root secret)"
+    info "backup key: env:${key_var} (operator root secret)"
     ;;
   *)
     error "unsupported backup_key_ref scheme: ${backup_key_ref%%:*}:"
@@ -124,12 +126,10 @@ case "$backup_key_ref" in
 esac
 
 # ── Per-tenant data-plane DB name ─────────────────────────────────────────────
-# DB name mirrors slug.ts dbNameForSlug() / register-default (env:DATABASE_URL).
-if [[ "$slug" == "default" ]]; then
-    db_name="${POSTGRES_DB:-gremion}"
-else
-    db_name="t_${slug}"
-fi
+# TASK-043 (G8, Q3): the customer's kernel database is named by its TENANT ID,
+# t_<id as 32 hex>__kernel (@gremion/tenant-store/lifecycle kernelDbName), for
+# every customer -- never by the slug. There is no default tenant (TASK-042).
+db_name="t_${tenant_id//-/}__kernel"
 
 OUT_DIR="${BACKUP_DIR%/}/tenants/${residency_zone:-eu}/${slug}"
 mkdir -p "$OUT_DIR"

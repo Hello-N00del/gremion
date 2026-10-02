@@ -11,12 +11,14 @@ export default defineConfig({
     include: ['test/**/*.integration.test.ts'],
     environment: 'node',
     globals: true,
+    // One file at a time, in one worker: the files share the finance_test_ control DB
+    // and race on CREATE DATABASE (pg_database_datname_index) when run in parallel.
+    // Vitest 4 removed test.poolOptions (the old forks.singleFork was silently
+    // ignored); these are the top-level Vitest 4 options (R29-KHYG-K, mirrors the
+    // StuRaOS services/finance F1-FIX-05-S fix).
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    maxWorkers: 1,
+    fileParallelism: false,
     testTimeout: 30_000,
   },
 })

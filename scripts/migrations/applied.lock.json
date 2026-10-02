@@ -96,6 +96,7 @@
         "0056_role_assignment_history_recalled.sql": "96002e5b887cb1a8621157c0220f893d5df72242760338a2c64b0093c6183f01",
         "0057_fk_hot_filter_indexes.sql": "1dc2cdad096597e5710acbd24fe0d0bfebcadc8e094233f941f5799aa2d60cbc",
         "0058_public_reader_grants.sql": "b963388faef6afa033c0c3be29918bd9371986306d9c136b2a30bbd361d854be",
+        "0059_audit_log_chain_anchor.sql": "1e344401669805cd84849101b1e5858f7ff29e7ea39f9e42b61990490bfb82cd",
         "1200_content_news_posts.sql": "dabcd6a81e45b8dc6ac1dbfc4cbfb77286bc5471ee3eb18c2ae5bbacbc508707",
         "1201_news_posts_public_reader_columns.sql": "b3d0f74a26a63a560111ac9cdad9ba603f2e34b9d75b3bf2769c7dc103acd801"
       }
@@ -138,7 +139,8 @@
         "002_org_unit_mirror.sql": "2c30fc1c5f3d823d90f6094e86b81ce60880d2fdc13cd6bea2f403d31bf1b1fd",
         "003_money_running_no_fiscal_year_idx.sql": "328601b96bb3ad0b6673a3d3d13fd52ad05a6332856ec3703ffdd2dc98a02e34",
         "004_money_fk_indexes.sql": "edb36391d8546cc402309e6e7a99bd490f2fb208317b8fce620259c94fd655ee",
-        "005_unwrap_double_encoded_jsonb.sql": "59508f3a9f924c9a75278a30f9d6630658ad5152b4e85c104eff4093d4bd2f99"
+        "005_unwrap_double_encoded_jsonb.sql": "59508f3a9f924c9a75278a30f9d6630658ad5152b4e85c104eff4093d4bd2f99",
+        "006_approval_single_open.sql": "ab5b02284c798317dce7bcd9d46bb31e46a0610c3a1685ae49a90641dd0ab380"
       }
     },
     "module-publishing": {
@@ -166,7 +168,8 @@
       "files": {
         "0001_plt_setup.sql": "80797659ccd6364c8653647bcf49cdfbd71fb473db5d76e7f29852bca2e31b07",
         "0002_plt_module.sql": "a52fa722eec6bcfedf0214ac4f22412d56296e89b750fc46fea1b45e69830729",
-        "0003_plt_module_database.sql": "ad86a84ee8b38a37c6a4771dacf90d02189b79f6971930d7c3937e255e1d975a"
+        "0003_plt_module_database.sql": "ad86a84ee8b38a37c6a4771dacf90d02189b79f6971930d7c3937e255e1d975a",
+        "0004_plt_provisioning_step.sql": "17626fbd0596c967cf4b730ead64c74f3653687fc36e79bbfe8a07b68d70a03e"
       }
     }
   }

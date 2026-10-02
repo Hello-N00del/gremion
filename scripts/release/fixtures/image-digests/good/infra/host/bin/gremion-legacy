@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Excluded by the fixture's image-scan-exclusions.json (proves an exclusion works).
+LEGACY_IMAGE=busybox:1.37

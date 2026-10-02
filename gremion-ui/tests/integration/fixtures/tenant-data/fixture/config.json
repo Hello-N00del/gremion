@@ -1,0 +1,15 @@
+{
+  "setup_complete": true,
+  "org": {
+    "name": "Studierendenrat",
+    "domain": "portal.example.org"
+  },
+  "brand": {
+    "product": "Portal",
+    "logo_letter": "P",
+    "org_short": "StuRa",
+    "term": "2026",
+    "matrix_homeserver": "matrix.example.org",
+    "version": "v1"
+  }
+}

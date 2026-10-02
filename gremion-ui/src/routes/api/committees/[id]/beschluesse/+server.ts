@@ -3,6 +3,8 @@ import type { RequestEvent } from '@sveltejs/kit'
 import type { SessionUser } from '$lib/auth'
 import { getBeschlussregisterSettings } from '$lib/server/protocols/protocol-db'
 import { getDb } from '$lib/server/db'
+import { getOrgUnit } from '$lib/server/governance/org-units-db'
+import { viewerCanSeeProtocol } from '$lib/server/governance/visibility'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -10,9 +12,18 @@ function requireAuth(event: RequestEvent): SessionUser {
   return user
 }
 
+// R29-F104-KTWIN (kernel twin of F1-FIX-04 / S3#39, operator decision D-3): the
+// register lists PUBLISHED resolutions, so it follows canSeeProtocol for status
+// 'published': a committee_only unit only for its members and CouncilAdmins, an
+// all_members unit for every signed-in user. A hidden unit answers 404, exactly
+// like a missing one, before any register read.
 export async function GET(event: RequestEvent) {
-  requireAuth(event)
+  const user = requireAuth(event)
   const committeeId = event.params.id!
+  const unit = await getOrgUnit(committeeId)
+  if (!unit || !(await viewerCanSeeProtocol(user, committeeId, unit, 'published'))) {
+    throw error(404, 'Gremium nicht gefunden')
+  }
   const settings = await getBeschlussregisterSettings(committeeId)
 
   const yearParam = event.url.searchParams.get('year')

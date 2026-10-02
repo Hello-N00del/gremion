@@ -110,7 +110,7 @@ const URL_AUTHORITY = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]+)/
  * that parser, and migration 004's seed is its byte-for-byte SQL twin
  * (`substring(issuer from '^[a-zA-Z][a-zA-Z0-9+.-]*://([^/?#]+)')`, a numeric
  * port stripped, lowercased, LDH/length-checked) — so the migration's seed and
- * `registerDefaultTenant`'s env reconcile cannot disagree about what a given
+ * any TypeScript-side host derivation cannot disagree about what a given
  * issuer means.
  *
  * ⚠ Deliberately NOT `new URL(issuer).host`, which diverges from that SQL twin

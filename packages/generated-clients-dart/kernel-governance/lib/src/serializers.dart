@@ -33,6 +33,8 @@ import 'package:gremion_kernel_governance_client/src/model/api_governance_commit
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_post_request.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_role_id_assign_post201_response.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_role_id_assign_post_request.dart';
+import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_role_id_revoke_post200_response.dart';
+import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_id_roles_role_id_revoke_post_request.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_post201_response.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_post201_response_data.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_governance_committees_post_request.dart';
@@ -77,6 +79,8 @@ part 'serializers.g.dart';
   ApiGovernanceCommitteesIdRolesPostRequest,
   ApiGovernanceCommitteesIdRolesRoleIdAssignPost201Response,
   ApiGovernanceCommitteesIdRolesRoleIdAssignPostRequest,
+  ApiGovernanceCommitteesIdRolesRoleIdRevokePost200Response,
+  ApiGovernanceCommitteesIdRolesRoleIdRevokePostRequest,
   ApiGovernanceCommitteesPost201Response,
   ApiGovernanceCommitteesPost201ResponseData,
   ApiGovernanceCommitteesPostRequest,

@@ -236,6 +236,11 @@ GDPR-safe defaults and hard caps live in `.env.example`:
 | `LOG_SECURITY_RETENTION_SECONDS` | 90 days | 180 days |
 | `LOG_SECURITY_NOPII_RETENTION_SECONDS` | 90 days | 365 days |
 
+Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. The
+edge files, Traefik's own log (`/logs/traefik/traefik.log`, read it through the
+vector container) and Keycloak's event store already obey it; see the "Upper
+bound" section of the policy.
+
 ```bash
 docker compose logs -f vector             # pipeline diagnostics
 docker compose exec vector ls -lh /logs/processed/   # processed output

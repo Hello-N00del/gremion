@@ -102,8 +102,11 @@
   <h2 class="text-lg font-semibold">E-Mail (SMTP)</h2>
 
   <div class="rounded-lg border bg-surface-2/40 px-4 py-3 text-sm text-ink-muted">
-    Das SMTP-Passwort wird nicht in den Einstellungen gespeichert. Es muss als Umgebungsvariable
-    <code class="font-mono">EMAIL_HOST_PASSWORD</code> gesetzt werden.
+    Benutzer und Passwort für den SMTP-Versand werden nicht in den Einstellungen gespeichert. Sie
+    stehen im Mandanten-Eintrag der Registry als Geheimnis-Referenz
+    (<code class="font-mono">domain_profile.smtp.passwordRef</code>). Einrichtung: Runbook
+    <code class="font-mono">docs/runbooks/email-smtp.md</code>. Eine Umgebungsvariable wird dafür
+    nicht ausgewertet.
   </div>
 
   <form class="space-y-4 max-w-lg" on:submit|preventDefault={save}>

@@ -18,7 +18,7 @@ import { storeFor, listTenants, closeAllPools } from './tenant-store.js'
 import { createShutdown, resolveShutdownTimeoutMs } from './shutdown.js'
 import { createRelaySupervisor, type RelaySupervisor } from './relay-supervisor.js'
 import { startScheduler } from './scheduler.js'
-import { drainCaldavQueue } from './caldav/sync.js'
+import { drainCaldavForTenant } from './caldav/tenant-drain.js'
 import { NatsBroker } from './nats-broker.js'
 import { runRelayPass } from './relay.js'
 import type { TenantRef } from './tenant-store.js'
@@ -139,7 +139,8 @@ async function main(): Promise<void> {
     work: {
       async drainCaldav(tenant: TenantRef): Promise<{ succeeded: number; failed: number }> {
         const sql = await storeFor(tenant)
-        return drainCaldavQueue(sql)
+        // H06: per-tenant CalDAV target; refuses (pushes nothing) without one.
+        return drainCaldavForTenant(sql, tenant)
       },
     },
   })

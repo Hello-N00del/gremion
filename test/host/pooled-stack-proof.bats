@@ -31,7 +31,7 @@ setup() {
     export POOLED_COLD_HOLD=0
     export POOLED_COLD_BUDGET=3
     export POOLED_POLL=1
-    unset SHIM_ALIAS_STATE SHIM_READY SHIM_READY_DOWN SHIM_REGISTER
+    unset SHIM_ALIAS_STATE SHIM_READY SHIM_READY_DOWN SHIM_REGISTER SHIM_PS SHIM_COMPOSE_LS
 }
 
 # ── app-wait: the per-colour isolation checks ────────────────────────────────
@@ -203,7 +203,7 @@ assert_env_files_resolve() {
     [ "$status" -eq 0 ]
     assert_env_files_resolve
     local rel=".scratch/pooled-stack-proof/t040-shim-bats-${BATS_TEST_NUMBER}-$$"
-    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:docker-compose.prod.yml:test/host/fixtures/pooled-stack/docker-compose.pins.yml:${rel}/state.proof.yml\"" "${POOLED_OUT}/env/state.env"
+    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:docker-compose.prod.yml:test/host/fixtures/pooled-stack/docker-compose.state-pins.yml:${rel}/state.proof.yml\"" "${POOLED_OUT}/env/state.env"
     grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../../${rel}/ops.proof.yml\"" "${POOLED_OUT}/env/ops.env"
     grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../../${rel}/mail.proof.yml\"" "${POOLED_OUT}/env/mail.env"
 }
@@ -266,6 +266,54 @@ assert_env_files_resolve() {
     [ "$status" -ne 0 ]
     # no half-written baseline for the tenant phase to accept
     [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt" ]
+}
+
+# ── a failing docker engine is never a count of 0 (R29-MD-A, TRD-440) ────────
+# counts() read `docker ps` and `docker compose ls` inside printf arguments: an
+# engine error came out as running=0, an empty compose-ls and stack-containers 0
+# on BOTH sides of TRD-440, and the tenant-add "changed nothing" on a dead engine.
+
+@test "tenant-before: a failing docker ps is a FATAL naming the running= reading, never a running=0 baseline" {
+    export SHIM_PS=fail
+    run bash "$PROOF" tenant-before
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: "*"running="*"t040-shim-state"* ]]
+    [[ "$output" != *"ok   tenant-before"* ]]
+    [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt" ]
+    [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt.part" ]
+}
+
+@test "tenant-before: a failing docker compose ls is a FATAL naming compose-ls, never an empty compose-ls baseline" {
+    export SHIM_COMPOSE_LS=fail
+    run bash "$PROOF" tenant-before
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: "*"compose-ls"* ]]
+    [[ "$output" != *"ok   tenant-before"* ]]
+    [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt" ]
+    [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt.part" ]
+}
+
+@test "tenant-after: a failing docker ps against a baseline a failing engine wrote is a FATAL, not 'unchanged'" {
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    # exactly what an unfixed tenant-before wrote under SHIM_PS=fail (fixture)
+    tr -d '\r' < "${REPO_ROOT}/test/host/fixtures/pooled-stack/trd440-before-failing-engine.txt" > "${POOLED_OUT}/ledger/trd440-before.txt"
+    [ -s "${POOLED_OUT}/env/state.env" ]
+    export SHIM_PS=fail
+    run bash "$PROOF" tenant-after
+    [[ "$output" == *"FATAL: "*"running="* ]] || { echo "no FATAL naming the running= reading; the proof said:" >&2; echo "$output" >&2; return 1; }
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"ok   TRD-440: services, running containers and compose projects unchanged by the tenant-add"* ]]
+}
+
+@test "tenant-before: a failing compose config leaves neither an earlier baseline nor a .part behind" {
+    printf 'state services=2 running=3\n' > "${POOLED_OUT}/ledger/trd440-before.txt"
+    printf 'half written\n' > "${POOLED_OUT}/ledger/trd440-before.txt.part"
+    export SHIM_COMPOSE_CONFIG=fail
+    run bash "$PROOF" tenant-before
+    [ "$status" -ne 0 ]
+    [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt" ]
+    [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt.part" ]
 }
 
 teardown() {

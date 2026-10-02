@@ -92,8 +92,18 @@ export class FinanceWebdavClient {
   }
 
   /** PUT the object bytes with an explicit Content-Type. */
-  async upload(path: string, impersonateUser: string, body: WebdavBody, contentType: string): Promise<void> {
-    await this.request('PUT', path, impersonateUser, { headers: { 'Content-Type': contentType }, body })
+  async upload(
+    path: string,
+    impersonateUser: string,
+    body: WebdavBody,
+    contentType: string,
+    opts: { createOnly?: boolean } = {},
+  ): Promise<void> {
+    // createOnly (F1-FIX-05-K r2): If-None-Match: * makes the server refuse (412) a PUT
+    // onto an existing resource instead of silently replacing its bytes.
+    const headers: Record<string, string> = { 'Content-Type': contentType }
+    if (opts.createOnly) headers['If-None-Match'] = '*'
+    await this.request('PUT', path, impersonateUser, { headers, body })
   }
 
   /** MKCOL a collection (409/405 "already exists" is the success-shaped failure the

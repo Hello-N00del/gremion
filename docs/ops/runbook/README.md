@@ -11,10 +11,10 @@ recorded as one.
 
 | Procedure | What it does | Version | First run |
 |---|---|---|---|
-| [install.md](install.md) | the from-zero bring-up a rebuilt host follows (TRD-042, R15-2) | 2.0.0 | TASK-038, the pilot re-initialisation |
-| [upgrade.md](upgrade.md) | one release onto a running installation through `gremion-deploy` | 2.0.0 (provisional) | the first pilot release after the re-initialisation |
+| [install.md](install.md) | the from-zero bring-up a rebuilt host follows (TRD-042, R15-2) | 3.0.0 | TASK-038, the pilot re-initialisation |
+| [upgrade.md](upgrade.md) | one release onto a running installation through `gremion-deploy` | 4.0.0 (provisional) | the first pilot release after the re-initialisation |
 | [backup.md](backup.md) | the pilot posture: installed, verified once, then disabled (R15-1) | 1.0.0 | TASK-089 |
-| [restore.md](restore.md) | three arms: the provider host-backup drill, the platform restore into a non-production stack, the reboot measurement | 1.0.0 | TASK-089 (arms A, B), TASK-123 (arm C) |
+| [restore.md](restore.md) | three arms: the provider host-backup drill, the platform restore into a non-production stack, the reboot measurement | 2.0.0 | TASK-089 (arms A, B), TASK-123 (arm C) |
 | [run-record.md](run-record.md) | the record every run of a procedure leaves | — | — |
 
 `test/host/runbook.bats` keeps these pages honest: every `gremion-*` program they
@@ -99,7 +99,7 @@ this repository. Addresses and names on these pages are documentation values
 
 Each of these is named at the step that needs it:
 
-- PENDING TASK-043 (`packages/provisioning/`): creating the pilot customer through the provisioning orchestrator and its first administrator's sign-in (install.md).
+- TASK-043b: creating the pilot customer with `gremion-tenant create` (TASK-043, `packages/provisioning/`) and its first administrator's sign-in waits for the green customer proof (install.md step 17).
 - PENDING TASK-039 (`compose/observability/`): the operator-only observability stack (install.md).
 - PENDING TASK-075 (`scripts/migrations/runner/`): the pre-migration dump taken by the migration runner itself (upgrade.md).
 - PENDING TASK-089 (`scripts/backup/`): the per-module backup verification that replaces today's enumeration (backup.md).

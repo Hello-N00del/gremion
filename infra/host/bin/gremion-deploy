@@ -176,7 +176,7 @@ release_waiver_ledger() { # <release dir>
 
 require_spec_b_contracts() { # <release dir>
     local dir="$1" f ledger
-    for f in docker-compose.app.yml docker-compose.pins.yml release.json; do
+    for f in docker-compose.app.yml docker-compose.pins.yml docker-compose.state-pins.yml release.json; do
         [[ -f "$dir/$f" ]] || blocked "$f absent (spec B)"
     done
     # The signed waiver ledger is a hard PRECONDITION of gremion-verify (exit 2,
@@ -192,6 +192,61 @@ require_spec_b_contracts() { # <release dir>
     ledger="$(release_waiver_ledger "$dir")"
     [[ -f "$ledger" ]] \
         || blocked "docs/ops/release-1-waivers.md absent (spec B): $ledger"
+}
+
+# compose_file_basenames <env file> -> the basename of every COMPOSE_FILE entry,
+# one per line. Compose's own dotenv reader accepts more spellings than this
+# one (spaces or ':' around the key, a trailing comment, ${VAR} expansion, a
+# second declaration that wins, another COMPOSE_PATH_SEPARATOR), so anything
+# but ONE plain `COMPOSE_FILE=a:b:c` line (optionally double-quoted) is
+# refused rather than read differently from compose. Exit 2.
+compose_file_basenames() {
+    local f="$1" n v e
+    local -a parts=()
+    [[ -f "$f" && -r "$f" ]] || die "env file absent or unreadable: $f" 2
+    n="$(grep -cE '^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE[[:space:]]*[=:]' "$f" || true)"
+    [[ "$n" =~ ^[01]$ ]] || die "$f declares COMPOSE_FILE ${n:-?} times" 2
+    ! grep -qE '^[[:space:]]*(export[[:space:]]+)?COMPOSE_PATH_SEPARATOR[[:space:]]*[=:][[:space:]]*["'\'']?[^:"'\''[:space:]]' "$f" \
+        || die "$f sets a COMPOSE_PATH_SEPARATOR other than ':' (refusing to split COMPOSE_FILE differently from compose)" 2
+    [[ "$n" == 1 ]] || return 0
+    v="$(grep -E '^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE[[:space:]]*[=:]' "$f" | tr -d '\r')"
+    if [[ "$v" =~ ^COMPOSE_FILE=([A-Za-z0-9._/:-]+)$ || "$v" =~ ^COMPOSE_FILE=\"([A-Za-z0-9._/:-]+)\"$ ]]; then
+        v="${BASH_REMATCH[1]}"
+    else
+        die "$f: COMPOSE_FILE is not one plain KEY=a:b:c line (no spaces, comment or \$ expansion): refusing to read it differently from compose" 2
+    fi
+    IFS=':' read -r -a parts <<< "$v"
+    for e in "${parts[@]}"; do
+        [[ -n "$e" ]] && printf '%s\n' "${e##*/}"
+    done
+    return 0
+}
+
+# require_split_pins_env — TASK-048b (Q2; TRD-038, TRD-440). The pins layer is
+# split per project: the state project layers docker-compose.state-pins.yml,
+# the app colours docker-compose.pins.yml. A host env file rendered before the
+# split would add the app pins to the state project (phantom app services, and
+# legal/vector/fallback resolving by tag) or the state pins to a colour: the
+# repo declares one layering and the host would run another. Refused, exit 2,
+# before anything is verified or pulled. The remedy is the one-line edit of
+# docs/ops/runbook/upgrade.md step 2 (the COMPOSE_FILE line only), never a
+# re-render: gremion-init-secrets --force regenerates every live secret.
+require_split_pins_env() {
+    local env="$ROOT/etc/env/state.env" names c
+    local fix="edit only its COMPOSE_FILE line as docs/ops/runbook/upgrade.md step 2 says; never gremion-init-secrets --force on a live host"
+    names="$(compose_file_basenames "$env")"
+    grep -qxF docker-compose.state-pins.yml <<< "$names" \
+        || die "stale $env: COMPOSE_FILE does not name docker-compose.state-pins.yml ($fix)" 2
+    ! grep -qxF docker-compose.pins.yml <<< "$names" \
+        || die "stale $env: COMPOSE_FILE names the app layer docker-compose.pins.yml; the state project reads docker-compose.state-pins.yml only ($fix)" 2
+    for c in blue green; do
+        env="$ROOT/etc/env/app-${c}.env"
+        [[ -e "$env" ]] || continue
+        names="$(compose_file_basenames "$env")"
+        ! grep -qxF docker-compose.state-pins.yml <<< "$names" \
+            || die "stale $env: COMPOSE_FILE names the state layer docker-compose.state-pins.yml ($fix)" 2
+    done
+    return 0
 }
 
 # The inactive colour is the one not in runtime/active-colour; blue on a
@@ -221,6 +276,7 @@ step_1_login() { # <token>
 
 # ── step 2 — the config tree at the tag (§F.4.2) ────────────────────────────
 step_2_checkout() {
+    require_split_pins_env
     RELEASE_DIR="$ROOT/releases/$TAG"
     if [[ -d "$RELEASE_DIR/.git" ]]; then
         local head want
@@ -293,12 +349,16 @@ verify_first_party_signatures() {
     # The pin set is read from canonical `image: <ref>` lines only, so any
     # other line that declares an image (a flow mapping, a quoted key, a
     # trailing comment) would be pulled by compose yet never verified here.
-    local stray
-    stray="$(grep -vE '^[[:space:]]*#' "$RELEASE_DIR/docker-compose.pins.yml" \
-        | grep -E 'image' \
-        | grep -vE '^[[:space:]]*image:[[:space:]]*["'\'']?[^][:space:]"'\''{}#,]+["'\'']?[[:space:]]*$' || true)"
-    [[ -z "$stray" ]] \
-        || die "unrecognised image declaration in docker-compose.pins.yml (only '<indent>image: <repo>@sha256:<hex>' is verifiable): $(printf '%s' "$stray" | head -c 300)" 1
+    # Both pins layers (TASK-048b), each named in its own refusal.
+    local stray f
+    for f in docker-compose.pins.yml docker-compose.state-pins.yml; do
+        [[ -f "$RELEASE_DIR/$f" && -r "$RELEASE_DIR/$f" ]] || die "$f absent or unreadable in $RELEASE_DIR" 1
+        stray="$(grep -vE '^[[:space:]]*#' "$RELEASE_DIR/$f" \
+            | grep -E 'image' \
+            | grep -vE '^[[:space:]]*image:[[:space:]]*["'\'']?[^][:space:]"'\''{}#,]+["'\'']?[[:space:]]*$' || true)"
+        [[ -z "$stray" ]] \
+            || die "unrecognised image declaration in $f (only '<indent>image: <repo>@sha256:<hex>' is verifiable): $(printf '%s' "$stray" | head -c 300)" 1
+    done
 
     # Which images are third-party is the HOST's decision, not the tree's: a
     # pin outside the first-party prefix is refused unless its repository is
@@ -372,7 +432,7 @@ verify_first_party_signatures() {
 }
 
 validate_release_tree() { # <dir>
-    local dir="$1" rel="$1/release.json" pins="$1/docker-compose.pins.yml"
+    local dir="$1" rel="$1/release.json" pins f
     jq -e . "$rel" >/dev/null 2>&1 || die "release.json does not parse: $rel" 1
     local jtag
     jtag="$(jq -r '.tag // empty' "$rel")"
@@ -386,26 +446,45 @@ validate_release_tree() { # <dir>
         || die "release.json distManifestDigest is not a sha256 digest" 1
     OVERLAP="$(jq -r '.overlap' "$rel")"
 
-    local bad_images
-    bad_images="$(grep -E '^[[:space:]]*image:' "$pins" | grep -v '@sha256:' || true)"
-    [[ -z "$bad_images" ]] \
-        || die "unpinned image in docker-compose.pins.yml: $(printf '%s' "$bad_images" | tr -s ' \n' ' ')" 1
-    local thirdparty
-    thirdparty="$(grep -E '^[[:space:]]*image:[[:space:]]*["'\'']?gremion/' "$pins" || true)"
-    [[ -z "$thirdparty" ]] \
-        || die "third-party gremion/ namespace in pins: $thirdparty" 1
-    local real_builds
-    real_builds="$(grep -E '^[[:space:]]*build:' "$pins" \
-        | grep -vE 'build:[[:space:]]*!reset[[:space:]]+null' || true)"
-    [[ -z "$real_builds" ]] \
-        || die "docker-compose.pins.yml carries a real build: key (§E: no build in production)" 1
+    # TASK-048b: two pins layers, docker-compose.pins.yml (app colours) and
+    # docker-compose.state-pins.yml (state project). ONE grep set judges both:
+    # the loop is the only place a pattern appears (check-pins.mjs re-reads
+    # these greps and refuses a duplicate), so the files cannot drift apart.
+    local image_lines bad_images thirdparty real_builds pinned
+    PINNED_IMAGES=""
+    for f in docker-compose.pins.yml docker-compose.state-pins.yml; do
+        pins="$dir/$f"
+        # grep cannot tell an unreadable file from one without a match once
+        # `|| true` swallows its status: an unreadable layer is refused here.
+        [[ -f "$pins" && -r "$pins" ]] || die "$f absent or unreadable in the release tree: $pins" 1
+        # each layer is its own file: a symlink would let one layer stand in
+        # for the other (the app pins layered onto the state project)
+        [[ ! -L "$pins" ]] || die "$f is a symlink in the release tree: $pins" 1
+        # `|| true` is load-bearing: without it a layer with NO image: line
+        # makes the substitution exit 1 and set -e ends the program before the
+        # union guard after the loop — the one that names the fault — can run.
+        image_lines="$(grep -E '^[[:space:]]*image:' "$pins" || true)"
+        bad_images="$(grep -v '@sha256:' <<< "$image_lines" || true)"
+        [[ -z "$bad_images" ]] \
+            || die "unpinned image in $f: $(printf '%s' "$bad_images" | tr -s ' \n' ' ')" 1
+        thirdparty="$(grep -E '^[[:space:]]*image:[[:space:]]*["'\'']?gremion/' "$pins" || true)"
+        [[ -z "$thirdparty" ]] \
+            || die "third-party gremion/ namespace in $f: $thirdparty" 1
+        real_builds="$(grep -E '^[[:space:]]*build:' "$pins" \
+            | grep -vE 'build:[[:space:]]*!reset[[:space:]]+null' || true)"
+        [[ -z "$real_builds" ]] \
+            || die "$f carries a real build: key (§E: no build in production)" 1
 
-    # `|| true` is load-bearing: without it a pins file with NO image: line makes
-    # the substitution exit 1, set -e ends the program here, and the guard on the
-    # next line — the one that names the fault — can never run.
-    PINNED_IMAGES="$(grep -E '^[[:space:]]*image:' "$pins" \
-        | sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//' || true)"
-    [[ -n "$PINNED_IMAGES" ]] || die "docker-compose.pins.yml pins no images" 1
+        # An empty layer is judged over the union (Q3): each file must exist,
+        # and together they must pin something.
+        pinned="$(sed -E 's/^[[:space:]]*image:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//' <<< "$image_lines")"
+        [[ -z "$pinned" ]] || PINNED_IMAGES+="${pinned}"$'\n'
+    done
+    # The union, each ref once (migrate and tenant-create share an image):
+    # step 3 reads every manifest and asserts every image present after the
+    # pull, and step 2 verifies every one of them.
+    PINNED_IMAGES="$(printf '%s' "$PINNED_IMAGES" | awk 'NF && !seen[$0]++')"
+    [[ -n "$PINNED_IMAGES" ]] || die "the pins layers pin no images (docker-compose.pins.yml, docker-compose.state-pins.yml)" 1
     ok "release.json valid (overlap=$OVERLAP), $(printf '%s\n' "$PINNED_IMAGES" | wc -l | tr -d ' ') pinned image(s)"
 }
 
@@ -457,6 +536,26 @@ step_4_render() {
     local prog; prog="$(bin_path gremion-render)"
     "$prog" --release "$RELEASE_DIR"
     ok "host-rendered files produced for $TAG"
+    # TASK-024 (Q12): nats-auth init before any colour comes up -- the NATS
+    # SYS reload seed and the accounts file on the external nats volumes.
+    # Here, not in step 3: tenant-create bind-mounts files gremion-render
+    # produces (internal-ca.pem), and compose would create a missing bind
+    # source as a directory. Idempotent and offline (--no-deps): a present
+    # seed is kept, an unchanged file is not rewritten. A changed render is
+    # loaded by the next reload (tenant-create) or nats restart.
+    # tenant-create mounts two EXTERNAL volumes; bootstrap stage_networks
+    # creates them on a new host, but a host bootstrapped before this release
+    # has neither and compose refuses the run. Ensured here the way
+    # ensure_volume makes them (plain, named): an existing one is kept as is.
+    local vol
+    for vol in "${STACK}_nats_secrets" "${STACK}_nats_accounts"; do
+        docker volume inspect "$vol" >/dev/null 2>&1 \
+            || docker volume create "$vol" >/dev/null \
+            || die "cannot create volume $vol for $TAG" 1
+    done
+    compose "app-${NEW_COLOUR}" run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init \
+        || die "nats-auth init failed for $TAG" 1
+    ok "nats-auth init: seeds and accounts file in place"
 }
 
 # ── step 5 — pre-release snapshot (§F.4.5) ──────────────────────────────────

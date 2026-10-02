@@ -1,14 +1,14 @@
 // services/finance/src/http/server.ts
 // The node:http server for the finance leaf (NO web framework). Request lifecycle:
 //   /healthz          → guard-EXEMPT, returns {"status":"ok"}
-//   /healthz/tenants  → guard-EXEMPT, per-tenant DB ping
+//   /healthz/tenants  → internal secret required (401 otherwise), booleans only
 //   everything else   → checkGuard() (403 bad secret / 400 bad tenant headers)
 //                       then the router (404 unknown path / 405 wrong method /
 //                       dispatch to the matched — currently surface-locked — handler)
 import http from 'node:http'
 import { createRouter, type Route, type RouteContext } from './router.js'
-import { checkGuard, isHealthzPath } from './guard.js'
-import { tenantHealthHandler, type TenantLister, type StoreFn } from './routes.js'
+import { checkGuard, hasInternalSecret, isHealthzPath } from './guard.js'
+import { BadJsonBodyError, tenantHealthHandler, type TenantLister, type StoreFn } from './routes.js'
 
 export interface ServerOptions {
   /** Shared secret expected in x-internal-auth (INTERNAL_FINANCE_SECRET). */
@@ -47,6 +47,11 @@ export function createServer(opts: ServerOptions): http.Server {
         return sendJson(res, 405, { success: false, error: 'method not allowed' }, { allow: 'GET' })
       }
       if (path === '/healthz/tenants' && opts.healthz) {
+        // F1-FIX-05-K (K4#32): the per-tenant probe is internal-only. Plain /healthz
+        // (the container healthcheck) stays unauthenticated.
+        if (!hasInternalSecret(req.headers as Record<string, string | undefined>, opts.secret)) {
+          return sendJson(res, 401, { success: false, error: 'unauthorized' })
+        }
         return tenantHealthHandler(res, opts.healthz.listTenants, opts.healthz.storeFn)
       }
       return sendJson(res, 200, { status: 'ok' })
@@ -72,6 +77,14 @@ export function createServer(opts: ServerOptions): http.Server {
       return sendJson(res, 405, { success: false, error: 'method not allowed' }, { allow: [...m.allowed].join(', ') })
     }
     const ctx = { params: m.params, req, res, tenant: guard.tenant } as unknown as RouteContext
-    await m.handler(ctx)
+    try {
+      await m.handler(ctx)
+    } catch (err) {
+      // F1-FIX-05-K (K4#4): a malformed / non-object JSON body is the caller's error.
+      if (err instanceof BadJsonBodyError && !res.headersSent) {
+        return sendJson(res, 400, { success: false, error: err.message })
+      }
+      throw err
+    }
   }
 }

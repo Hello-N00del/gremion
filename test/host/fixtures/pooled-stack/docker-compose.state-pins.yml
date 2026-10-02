@@ -1,0 +1,11 @@
+# test/host/fixtures/pooled-stack/docker-compose.state-pins.yml
+#
+# A stand-in for the STATE project's release pins layer (TASK-048b split the
+# layer per project: docker-compose.state-pins.yml is written by the release
+# and never committed). It is EMPTY on purpose, like the app stand-in beside
+# it: a pins layer only swaps image references and resets build:, so the
+# placement, limits and isolation the guard reads are the same with or without
+# it. The FORM of the real layer is asserted by gremion-deploy's
+# validate_release_tree; the rendered release with the emitted pins is judged
+# by `node scripts/release/check-image-digests.mjs --render`.
+services: {}

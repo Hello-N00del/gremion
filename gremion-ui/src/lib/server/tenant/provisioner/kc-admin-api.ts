@@ -35,6 +35,9 @@ function statusFrom(err: unknown): number | null {
   return m ? Number(m[1]) : null
 }
 
+/** The user attribute that records a first administrator's invite (send-once). */
+export const INVITE_MARK = 'gremion_invited_at'
+
 export class KcProvisionApi {
   constructor(private readonly transport: KcTransport) {}
 
@@ -309,6 +312,124 @@ export class KcProvisionApi {
         await this.setCfg(realm, cond.id, r.alias, r.level, r.maxAge)
       }
     }
+  }
+
+  // ── TASK-043: the customer lifecycle's realm operations ─────────────────────
+
+  /** The non-secret smtpServer fields (Keycloak answers a set password as its
+   *  mask, so only whether one is set is reported, never its value). */
+  async getRealmSmtp(realm: string): Promise<{ host: string | null; port: string | null; user: string | null; from: string | null; starttls: string | null; passwordSet: boolean }> {
+    const rep = await this.realmGet<{ smtpServer?: Record<string, unknown> }>(realm, '')
+    const s = rep?.smtpServer ?? {}
+    const str = (k: string): string | null => (typeof s[k] === 'string' && s[k] !== '' ? (s[k] as string) : null)
+    return { host: str('host'), port: str('port'), user: str('user'), from: str('from'), starttls: str('starttls'), passwordSet: str('password') !== null }
+  }
+
+  async isRealmEnabled(realm: string): Promise<boolean> {
+    const rep = await this.realmGet<{ enabled?: boolean }>(realm, '')
+    return rep?.enabled === true
+  }
+
+  /**
+   * Suspend (false): the realm disabled, its notBefore moved to now (every
+   * token issued before is refused) and every session logged out -- in that
+   * order, so no new session starts between the logout and the disable.
+   * Resume (true): the realm enabled again. Partial PUTs (KC merges them).
+   */
+  async setRealmEnabled(realm: string, enabled: boolean, nowSeconds: number = Math.floor(Date.now() / 1000)): Promise<void> {
+    if (enabled) {
+      await this.realmReq(realm, 'PUT', '', { realm, enabled: true })
+      return
+    }
+    await this.realmReq(realm, 'PUT', '', { realm, enabled: false, notBefore: nowSeconds })
+    await this.realmReq(realm, 'POST', '/logout-all')
+  }
+
+  /**
+   * TASK-043 FLOW-IDN-002 / Q9: a first administrator. Never an operator-set
+   * password: the user gets UPDATE_PASSWORD + CONFIGURE_TOTP and ONE
+   * execute-actions mail, sent from the realm's own sender. Idempotent and
+   * crash-safe: a user that exists (created now, found by email, or a 409 on
+   * create) is ADOPTED; the invite is recorded on the user
+   * (attribute gremion_invited_at) and sent only while that mark is absent, so
+   * a rerun sends nothing and a crash between create and send still invites.
+   */
+  async ensureInvitedUser(
+    realm: string,
+    spec: { email: string; realmRole: string | null; lifespanSeconds?: number },
+    nowIso: () => string = () => new Date().toISOString(),
+  ): Promise<{ id: string; created: boolean; invited: boolean }> {
+    const email = spec.email.toLowerCase()
+    const find = async () =>
+      (await this.realmGet<Array<{ id?: string; email?: string; attributes?: Record<string, string[]> }>>(
+        realm,
+        `/users?email=${encodeURIComponent(email)}&exact=true`,
+      )) ?? []
+    let found = (await find()).find((u) => u.email?.toLowerCase() === email)
+    let created = false
+    if (!found) {
+      try {
+        await this.realmReq(realm, 'POST', '/users', {
+          username: email,
+          email,
+          emailVerified: false,
+          enabled: true,
+          requiredActions: ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'],
+        })
+        created = true
+      } catch (err) {
+        if (statusFrom(err) !== 409) throw err
+      }
+      found = (await find()).find((u) => u.email?.toLowerCase() === email)
+    }
+    const id = found?.id
+    if (!id) throw new Error(`ensureInvitedUser: user ${email} is absent from realm "${realm}" after create`)
+    if (spec.realmRole) {
+      const role = await this.realmGet<Record<string, unknown>>(realm, `/roles/${encodeURIComponent(spec.realmRole)}`)
+      if (!role) throw new Error(`ensureInvitedUser: realm role "${spec.realmRole}" not found in realm "${realm}"`)
+      await this.realmReq(realm, 'POST', `/users/${id}/role-mappings/realm`, [role])
+    }
+    if (found?.attributes?.[INVITE_MARK]?.length) return { id, created, invited: false }
+    // Before any mail: the mark must be able to persist (review B2 MEDIUM, r2).
+    await this.ensureInviteMarkDeclared(realm)
+    const lifespan = spec.lifespanSeconds ?? 72 * 3600
+    await this.realmReq(realm, 'PUT', `/users/${id}/execute-actions-email?lifespan=${lifespan}`, ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'])
+    // The FULL representation: on Keycloak 24+ a PUT carrying `attributes`
+    // replaces the user's attribute set, root attributes included.
+    const user = await this.realmGet<Record<string, unknown> & { attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
+    if (!user) throw new Error(`ensureInvitedUser: user ${email} vanished from realm "${realm}" after the invite`)
+    await this.realmReq(realm, 'PUT', `/users/${id}`, { ...user, attributes: { ...user.attributes, [INVITE_MARK]: [nowIso()] } })
+    const back = await this.realmGet<{ attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
+    if (!back?.attributes?.[INVITE_MARK]?.length) {
+      throw new Error(
+        `ensureInvitedUser: the invite mark ${INVITE_MARK} did not persist on ${email} in realm "${realm}" (is it declared in the user profile?); a rerun would invite again`,
+      )
+    }
+    return { id, created, invited: true }
+  }
+
+  /**
+   * Declares the send-once invite mark in the realm's user profile, admin-only
+   * (view/edit: admin), so Keycloak 24+ keeps it: an undeclared attribute is
+   * dropped on write while unmanaged attributes are disabled (the default).
+   * Read-modify-write of the realm's own profile, every other attribute and
+   * group kept; no realm-wide unmanagedAttributePolicy is switched on. Returns
+   * whether it wrote. Refuses loudly when the profile cannot be read.
+   */
+  async ensureInviteMarkDeclared(realm: string): Promise<boolean> {
+    const profile = await this.realmGet<{ attributes?: Array<{ name?: string }> } & Record<string, unknown>>(realm, '/users/profile')
+    if (!profile || !Array.isArray(profile.attributes)) {
+      throw new Error(`ensureInviteMarkDeclared: the user profile of realm "${realm}" cannot be read; no invite is sent`)
+    }
+    if (profile.attributes.some((a) => a.name === INVITE_MARK)) return false
+    await this.realmReq(realm, 'PUT', '/users/profile', {
+      ...profile,
+      attributes: [
+        ...profile.attributes,
+        { name: INVITE_MARK, displayName: 'Gremion invitation sent', permissions: { view: ['admin'], edit: ['admin'] }, multivalued: false },
+      ],
+    })
+    return true
   }
 
   /**

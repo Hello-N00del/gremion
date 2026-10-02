@@ -73,7 +73,13 @@ if docker ps --format '{{.Ports}}' | grep -q ":${PORT}->"; then
   exit 1
 fi
 
-docker run -d --name "$NAME" -e POSTGRES_PASSWORD=proof -p "127.0.0.1:${PORT}:5432" "$IMAGE" >/dev/null
+# --auth-host=scram-sha-256 is load-bearing (T07, 75cffdef): the image's
+# generated pg_hba trusts 127.0.0.1, so the reader-login probe below would never
+# verify a password. log_error_verbosity=verbose puts the SQLSTATE (28P01) of a
+# refused login in the server log, where the probe asserts it.
+docker run -d --name "$NAME" -e POSTGRES_PASSWORD=proof \
+  -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 \
+  -p "127.0.0.1:${PORT}:5432" "$IMAGE" -c log_error_verbosity=verbose >/dev/null
 echo "[fresh-init] waiting for postgres on ${PORT}..."
 timeout 90 bash -c "until docker exec $NAME pg_isready -U postgres >/dev/null 2>&1; do sleep 2; done"
 
@@ -163,6 +169,44 @@ if echo "$probe_out" | grep -q 'permission denied'; then
 else
   echo "FAIL live probe: expected 'permission denied' reading resolution_challenges as gremion_public_reader, got: $probe_out"
   fail=1
+fi
+
+# -- a REAL login as the public reader, over SCRAM (T07: 61683d99, 75cffdef) ----
+# Not SET ROLE from the superuser: a fresh connection AS gremion_public_reader
+# with its own password, over a host (TCP) connection, so LOGIN, the password
+# itself and CONNECT are under test alongside the SELECT. Asserted wrong
+# password FIRST: without it "logs in with its password" is unfalsifiable (the
+# image's generated pg_hba trusts loopback unless initdb is told otherwise).
+reader_probe() {
+  docker exec -e PGPASSWORD="$1" "$NAME" \
+    psql "postgresql://gremion_public_reader@127.0.0.1:5432/gremion" \
+    -v ON_ERROR_STOP=1 -X -tAc "SELECT 1 FROM protocols LIMIT 1;" 2>&1
+}
+set +e
+badpw_out="$(reader_probe proof_WRONG)"
+badpw_rc=$?
+set -e
+if [ "$badpw_rc" -eq 0 ]; then
+  echo "FAIL reader login: a WRONG password connected as gremion_public_reader (the probe path is not authenticating)"
+  fail=1
+elif ! printf '%s\n' "$badpw_out" | grep -q 'password authentication failed'; then
+  echo "FAIL reader login: the wrong-password probe failed, but not with 'password authentication failed': $badpw_out"
+  fail=1
+elif ! docker logs "$NAME" 2>&1 | grep -q '28P01'; then
+  echo "FAIL reader login: no SQLSTATE 28P01 in the server log after the wrong-password probe"
+  fail=1
+else
+  say "ok reader login: a wrong password is refused (28P01)"
+fi
+set +e
+goodpw_out="$(reader_probe proof)"
+goodpw_rc=$?
+set -e
+if [ "$goodpw_rc" -ne 0 ]; then
+  echo "FAIL reader login: gremion_public_reader cannot log in with its password and read protocols: $goodpw_out"
+  fail=1
+else
+  say "ok reader login: gremion_public_reader logs in over SCRAM and reads protocols"
 fi
 
 # -- control 004 ---------------------------------------------------------------

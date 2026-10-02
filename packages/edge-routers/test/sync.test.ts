@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { formatEdgeSyncReport, syncTenantRouters, type EdgeSyncTenant } from '../src/sync.js'
+import { renderTenantRouter } from '../src/render.js'
 import { deps } from './helpers.js'
 
 // See test/emit.test.ts: Windows has no exact rwxrwxrwx model, so emit.ts's
@@ -45,6 +46,14 @@ describe('syncTenantRouters — TDD 5', () => {
     expect(r.orphans).toEqual(['tenant-gone.yml'])
     expect(r.changed).toBe(true)
     expect(listing()).toEqual(['.tenant-gone.yml.1.ab.tmp', 'active.yml', 'tenant-acme.yml', 'tls.yml'])
+  })
+
+  it("never strips a TASK-043 realm router: a file render-router wrote is refused, nothing is written (review B1, r2)", () => {
+    const withKc = renderTenantRouter({ slug: 'acme', domains: [{ host: 'a.example.net' }], ...deps, keycloak: { realm: 'acme', host: 'a.example.net' } })
+    writeFileSync(join(dir, 'tenant-acme.yml'), withKc.yaml!)
+    expect(() => sync([t('acme', ['a.example.net']), t('beta', ['b.example.net'])])).toThrow(/realm router/)
+    expect(readFileSync(join(dir, 'tenant-acme.yml'), 'utf8')).toBe(withKc.yaml)
+    expect(listing()).not.toContain('tenant-beta.yml')
   })
 
   it('without prune an orphan is left in place and not reported', () => {

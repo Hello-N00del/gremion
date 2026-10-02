@@ -61,8 +61,8 @@ updates:
         # for why a single dev-deps mega-bundle is unmaintainable.
         update-types: [patch, minor]
 
-  # Docker images — every Dockerfile in docker/, the gremion-ui one and the
-  # bats runner.
+  # Docker images — every Dockerfile in docker/, modules/ and the gremion-ui
+  # one, plus both bats runners.
   # `directories:` (plural) with explicit paths is more reliable than a glob
   # for Dependabot v2; the alternative `directory: /` only finds /Dockerfile.
   # The list names exactly the Dockerfile directories this repository has — a
@@ -77,11 +77,26 @@ updates:
       - /docker/legal
       - /docker/vector
       - /gremion-ui
+      # TASK-043 G11: the ops control panel image (gremion-control-panel).
+      - /apps/control-panel
       # The local bats runner image (test/host/runner). Not shipped, but it
       # pins a base image like any other; scripts/release/
       # check-dependabot-dockerfiles.mjs fails on a tracked Dockerfile whose
       # directory no docker entry names (TASK-046).
       - /test/host/runner
+      # The nine module images (TASK-200) and the bats runner that
+      # test/*.bats runs in (TASK-045): a tracked Dockerfile that no entry
+      # names never opens a base-image PR (R29-MD-C-K).
+      - /modules/board
+      - /modules/calendar
+      - /modules/content
+      - /modules/files
+      - /modules/finance
+      - /modules/messaging
+      - /modules/publishing
+      - /modules/vault
+      - /modules/votes
+      - /scripts/verify/bats-runner
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

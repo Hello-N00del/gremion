@@ -12,7 +12,7 @@
         "gremion-ui/migrations"
       ],
       "padWidth": 4,
-      "highWater": 58,
+      "highWater": 59,
       "legacyFloor": 58,
       "legacy": [
         "0001_governance_schema.sql",
@@ -128,7 +128,7 @@
         "modules/finance/migrations"
       ],
       "padWidth": 3,
-      "highWater": 5,
+      "highWater": 6,
       "legacyFloor": 0,
       "legacy": []
     },
@@ -206,7 +206,7 @@
         "packages/tenant-store/src/lifecycle/platform-migrations"
       ],
       "padWidth": 4,
-      "highWater": 3,
+      "highWater": 4,
       "legacyFloor": 3,
       "legacy": [
         "0001_plt_setup.sql",
@@ -239,6 +239,10 @@
     {
       "glob": "packages/module-catalogue/test/fixtures/**/migrations/*.sql",
       "reason": "module-catalogue validator fixtures (TASK-021): fixture module roots whose migrations/manifest.json the validator checks for presence, never applied by a runner"
+    },
+    {
+      "glob": "test/host/fixtures/zero-tenant-proof/*.sql",
+      "reason": "zero-tenant proof fixture (TASK-042-b): seeded into the proof's scratch control database with psql -f by test/host/integration/zero-tenant-proof.sh, never applied by a runner"
     }
   ]
 }

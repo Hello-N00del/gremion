@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { PageData } from './$types'
   import type { ProtocolActionItem } from '$lib/server/protocols/protocol-db'
+  import { resolutionPatchBody } from '$lib/governance/resolution-patch-body'
 
   interface ResolutionLike {
     id?: string
@@ -58,10 +59,11 @@
   }
 
   async function saveResolution(r: ResolutionLike) {
+    // INV-5: never the whole row — the route refuses a free-hand result (400).
     const res = await fetch(`/api/protocols/${data.protocol.id}/resolutions/${r.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(r),
+      body: JSON.stringify(resolutionPatchBody(r)),
     })
     if (res.ok) {
       // (5) reflect the SERVER's authoritative row back into the list so a

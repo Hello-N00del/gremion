@@ -136,9 +136,21 @@ describe('refusals run no SQL at all', () => {
 describe('the platform migration folder (gremion_platform, schema plt)', () => {
   const files = readVerifiedMigrations(PLATFORM_MIGRATIONS_DIR)
 
-  it('is verified against its sha256 manifest: 0001 setup, 0002 module tables, 0003 module_database', () => {
-    expect(files.map((f) => f.file)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql'])
+  it('is verified against its sha256 manifest: 0001 setup, 0002 module tables, 0003 module_database, 0004 provisioning ledger (TASK-043)', () => {
+    expect(files.map((f) => f.file)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
     for (const f of files) expect(() => splitStatements(f.text)).not.toThrow()
+  })
+
+  it('0004 is SCHEMA DB-PLT-PROVISIONING-STEP with exactly two appended kinds (TASK-043 Q2) and stays append-only', () => {
+    const text = files[3]!.text
+    expect(text).toContain('CREATE TABLE plt.provisioning_step (')
+    expect(text).toMatch(/WHEN 'broker_account_created' THEN 7 WHEN 'mail_principal_issued' THEN 8/)
+    expect(text).toMatch(/CREATE UNIQUE INDEX provisioning_step_customer_id_step_kind_key ON plt\.provisioning_step \(customer_id, step_kind\)\s+WHERE status = 'done'/)
+    // UPDATE, DELETE and TRUNCATE all refused (review B1, r2), on both tables
+    for (const t of ['provisioning_step', 'operator_enable_attestation']) {
+      expect(text).toMatch(new RegExp(`${t}_append_only_trg BEFORE UPDATE OR DELETE ON plt\\.${t}\\s+FOR EACH ROW EXECUTE FUNCTION plt\\.refuse_update\\(\\)`))
+      expect(text).toMatch(new RegExp(`${t}_no_truncate_trg BEFORE TRUNCATE ON plt\\.${t}\\s+FOR EACH STATEMENT EXECUTE FUNCTION plt\\.refuse_update\\(\\)`))
+    }
   })
 
   it('0002 carries the three SCHEMA tables with the level-1 gate check, and omits only the isolation-test FKs', () => {

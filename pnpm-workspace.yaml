@@ -3,6 +3,8 @@ packages:
   - 'gremion-public'
   - 'packages/*'
   - 'modules/*'
+  # TASK-043 G6: the ops control panel (apps/control-panel, SvelteKit 2).
+  - 'apps/*'
 
 # TASK-017 (TRD-401 [D R19-D34]): Node 26 everywhere. engineStrict makes a
 # mismatched engines.node (root package.json) a FAILED install, not a warning

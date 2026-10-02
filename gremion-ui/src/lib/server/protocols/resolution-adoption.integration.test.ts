@@ -98,10 +98,12 @@ describe('#320 recordResolutionAdoptions (integration)', () => {
     expect(passedPayload).toEqual({
       resolutionId: passed.id, result: 'passed',
       votesYes: 2, votesNo: 0, votesAbstain: 1, requiredMajority: 'simple',
+      adoption_mode: 'tally',
     })
     expect(rejectedPayload).toEqual({
       resolutionId: rejected.id, result: 'rejected',
       votesYes: 0, votesNo: 3, votesAbstain: 0, requiredMajority: 'two_thirds',
+      adoption_mode: 'tally',
     })
     // (c) no audit row references the withdrawn resolution.
     expect(payloads.some((p) => p.resolutionId === withdrawn.id)).toBe(false)
@@ -221,6 +223,54 @@ describe('#320 recordResolutionAdoptions (integration)', () => {
     const payloads = auditsAfterSecond.map((a) => JSON.parse(a.newValue) as Record<string, unknown>)
     expect(payloads.filter((p) => p.resolutionId === passed.id)).toHaveLength(1)
     expect(payloads.filter((p) => p.resolutionId === rejected.id)).toHaveLength(1)
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // T4 (#320 Phase 2) — acclamation adoption: the audit payload states HOW the
+  // decision was reached ("adoption_mode") and tolerates NULL tallies.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('T4: acclamation adoption audit payload carries "adoption_mode":"acclamation" and tolerates NULL tallies', async () => {
+    const unit = await createOrgUnit({
+      name: 'Rat', description: null, parentId: null, kind: 'council',
+      visibility: 'all_members', wantsMatrixRoom: false, wantsNextcloudFolder: false,
+    })
+    const protocol = await createProtocol({
+      committeeId: unit.id, meetingDate: '2026-06-21', title: 'Sitzung', createdBy: 'x',
+    })
+    const acclaimed = await addResolution(protocol.id, {
+      text: 'Per Akklamation angenommen',
+      votesYes: null, votesNo: null, votesAbstain: null,
+      result: 'passed', requiredMajority: 'simple',
+      adoptionMode: 'acclamation',
+    })
+    // The row itself persisted with NULL tallies + the acclamation mode.
+    expect(acclaimed.votes_yes).toBeNull()
+    expect(acclaimed.votes_no).toBeNull()
+    expect(acclaimed.votes_abstain).toBeNull()
+    expect(acclaimed.adoption_mode).toBe('acclamation')
+
+    const resolutions = await listResolutions(protocol.id)
+    const recorded = await getDb().begin((tx) =>
+      recordResolutionAdoptions(ADOPTER, resolutions, tx),
+    )
+    expect(recorded).toBe(1) // a declared 'passed' is binding — adopted like a tally result
+
+    const after = await listResolutions(protocol.id)
+    expect(after.find((r) => r.id === acclaimed.id)?.decided_at).not.toBeNull()
+
+    const audits = await readAuditLog('protocol_resolution.decided')
+    expect(audits).toHaveLength(1)
+    // The raw JSON carries the snake_case DB-column key with the acclamation mode…
+    expect(audits[0].newValue).toContain('"adoption_mode":"acclamation"')
+    // …and the full payload round-trips with NULL tallies intact.
+    expect(JSON.parse(audits[0].newValue)).toEqual({
+      resolutionId: acclaimed.id, result: 'passed',
+      votesYes: null, votesNo: null, votesAbstain: null,
+      requiredMajority: 'simple',
+      adoption_mode: 'acclamation',
+    })
+    expect(await verifyAuditChain()).toEqual({ ok: true })
   })
 
   it('(e) a rolled-back publish tx leaves NO decided_at and NO audit row (atomic participation)', async () => {

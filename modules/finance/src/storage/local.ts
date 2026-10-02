@@ -52,7 +52,17 @@ export class LocalStorageBackend implements StorageBackend {
   async put(relPath: string, bytes: Uint8Array): Promise<string> {
     const abs = safeJoin(this.root, relPath)
     await mkdir(dirname(abs), { recursive: true })
-    await writeFile(abs, bytes)
+    // F1-FIX-05-K: never overwrite an existing object ('wx' = exclusive create).
+    // Receipt keys are server-built and unique; an existing file at the key means a
+    // bug or a race, and replacing it would silently change a stored receipt.
+    try {
+      await writeFile(abs, bytes, { flag: 'wx' })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(`storage(local): object already exists at ${relPath}`)
+      }
+      throw err
+    }
     return abs
   }
 

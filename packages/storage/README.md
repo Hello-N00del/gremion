@@ -17,8 +17,9 @@ const bytesAgain = await getStorageFor(tenantId).read(handle)
 
 - **Explicit tenant, fail-closed.** `getStorageFor(tenantId)` takes the tenant
   as an argument. A missing, empty or malformed id throws synchronously, before
-  any I/O. Accepted ids: a lowercase canonical UUID, or the legacy literal
-  `'default'`. There is no zero-argument accessor and no ambient-context read.
+  any I/O. Accepted ids: a lowercase canonical UUID, nothing else (the
+  pre-registry literal `'default'` was retired with the zero-tenant boot,
+  TASK-042). There is no zero-argument accessor and no ambient-context read.
 - **Tenant-prefixed handles.** Every handle is `<tenantId>/<relPath>`. A
   backend refuses (before any I/O) a handle that is not a canonical key under
   its own tenant's segment — including another tenant's handle and any `..`
@@ -74,9 +75,9 @@ own tenant). Every container, volume and image is removed by name.
   shown by the live proof above.
 - **Memoisation (Q1).** The per-tenant map is unbounded, with no eviction —
   revisit at the object-store cutover (TRD-223).
-- **The `'default'` tenant id (Q5)** is accepted as a literal until zero-tenant
-  boot retires it; until then one tenant can have objects under both
-  `default/` and its registry UUID.
+- **The `'default'` tenant id (Q5)** is retired (TASK-042 Q6): `assertTenantId`
+  refuses it. Objects a pre-registry deployment wrote under `default/` are not
+  migrated; a re-initialised host has none.
 - **Scope of the bypass scan (Q3, Q7).** `scripts/check-storage-seam.mjs`
   covers this repository only. Duplicated, tenant-blind storage code in the
   downstream deployment repository is not scanned. The council-owned file

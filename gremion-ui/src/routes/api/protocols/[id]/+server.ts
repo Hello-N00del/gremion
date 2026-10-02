@@ -6,6 +6,8 @@ import {
   getProtocol, updateProtocol, upsertAttendance,
   listAttendance, listResolutions, listActionItems,
 } from '$lib/server/protocols/protocol-db'
+import { getOrgUnit } from '$lib/server/governance/org-units-db'
+import { seesAllGovernance, viewerCanSeeProtocol } from '$lib/server/governance/visibility'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -13,10 +15,20 @@ function requireAuth(event: RequestEvent): SessionUser {
   return user
 }
 
+// R29-F104-KTWIN (kernel twin of F1-FIX-04 / H19, operator decision D-3):
+// protocol, attendance, resolutions and action items are returned only when the
+// caller may see the protocol (governance/visibility.ts). A hidden protocol
+// answers 404, exactly like a missing one, so its existence does not leak.
 export async function GET(event: RequestEvent) {
-  requireAuth(event)
+  const user = requireAuth(event)
   const protocol = await getProtocol(event.params.id!)
   if (!protocol) throw error(404, 'Protokoll nicht gefunden')
+  if (!seesAllGovernance(user)) {
+    const unit = await getOrgUnit(protocol.committee_id)
+    if (!unit || !(await viewerCanSeeProtocol(user, protocol.committee_id, unit, protocol.status))) {
+      throw error(404, 'Protokoll nicht gefunden')
+    }
+  }
 
   const [attendance, resolutions, actionItems] = await Promise.all([
     listAttendance(protocol.id),

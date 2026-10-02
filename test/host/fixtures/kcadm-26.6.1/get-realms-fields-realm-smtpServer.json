@@ -1,0 +1,13 @@
+[ {
+  "realm" : "exp-b",
+  "smtpServer" : { }
+}, {
+  "realm" : "exp-c",
+  "smtpServer" : { }
+}, {
+  "realm" : "exp-a",
+  "smtpServer" : { }
+}, {
+  "realm" : "master",
+  "smtpServer" : { }
+} ]
