@@ -200,10 +200,53 @@ create() {
     [ "${lines[1]}" = "tc resume alpha-rat" ]
 }
 
-@test "a failed revoke fails suspend" {
+@test "a failed revoke fails suspend, and the failure names the rerun that converges (TASK-043c)" {
     touch "${GREMION_ROOT}/vendor-mail-fails"
     run "$LAUNCHER" suspend alpha-rat --operator "$OP"
     [ "$status" -eq 1 ]
+    [[ "$output" == *"could not be revoked"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"rerun gremion-tenant suspend alpha-rat"* ]] || { echo "$output"; return 1; }
+}
+
+@test "suspend rerun after a failed host step: the container step runs again harmlessly and the rerun exits 0 (TASK-043c)" {
+    touch "${GREMION_ROOT}/vendor-mail-fails"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 1 ]
+    rm -f "${GREMION_ROOT}/vendor-mail-fails"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run steps
+    [ "${lines[0]}" = "tc suspend alpha-rat" ]
+    [ "${lines[1]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat --revoke" ]
+    [ "${lines[2]}" = "tc suspend alpha-rat" ]
+    [ "${lines[3]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat --revoke" ]
+    [ "${#lines[@]}" -eq 4 ]
+}
+
+@test "resume after a half suspend (host step failed): a fresh issue, never --rotate, then the container (TASK-043c)" {
+    touch "${GREMION_ROOT}/vendor-mail-fails"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 1 ]
+    rm -f "${GREMION_ROOT}/vendor-mail-fails"
+    : > "$ORDER"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run steps
+    [ "${lines[0]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
+    [ "${lines[1]}" = "tc resume alpha-rat" ]
+    [[ "$output" != *"--rotate"* && "$output" != *"--revoke"* ]]
+}
+
+@test "suspend and resume put no app password and no secret on an argv or in the output (TASK-043c)" {
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ]
+    refute_state_secrets
+    [[ "$output" != *"APP-PASSWORD"* ]]
+    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ]
+    refute_state_secrets
+    [[ "$output" != *"APP-PASSWORD"* ]]
+    ! grep -q 'APP-PASSWORD' "$SHIM_LOG"
 }
 
 @test "reconcile --apply rotates on the host when smtp-server is repair: host, then re-verifies" {
