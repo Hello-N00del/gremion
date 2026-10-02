@@ -274,7 +274,34 @@ step_1_login() { # <token>
     ok "authenticated to ${REGISTRY_HOST} (logout armed in the EXIT trap)"
 }
 
+# authenticate_release_tree <dir> — H10 (F1 sweep K6#19, relay TASK-048b). The
+# release tree is code and config this host is about to run (render, snapshot,
+# restore-into, metrics, and a compose file that could bypass the cosign gate
+# of verify_first_party_signatures). Nothing in it is read, sourced or executed
+# before this returns: the tag must be an annotated tag whose ssh signature
+# verifies against $ROOT/etc/allowed_signers, a HOST file (bootstrap or the
+# operator installs it; a copy in the tree would be exactly what an attacker
+# who controls the tree ships), and the checked-out commit must be the one the
+# tag names. Every failure is a refusal (exit 1), never a skip. `git clone` and
+# `git verify-tag` only read git objects: no hook of the tree is run.
+authenticate_release_tree() { # <dir>
+    local dir="$1" signers="$ROOT/etc/allowed_signers" out tagc head
+    [[ -f "$signers" && ! -L "$signers" && -s "$signers" ]] \
+        || die "release-tag trust anchor absent: $signers (create it as docs/ops/host-tooling.md 'Authenticating the release tree' says) - refusing to use an unauthenticated release tree" 1
+    out="$(git -C "$dir" -c gpg.format=ssh -c "gpg.ssh.allowedSignersFile=$signers" \
+               verify-tag "refs/tags/$TAG" 2>&1)" \
+        || die "tag $TAG is unsigned, or not signed by a key in $signers - refusing to use the release tree: $(printf '%s' "$out" | tr '\n' ' ' | head -c 300)" 1
+    tagc="$(git -C "$dir" rev-parse --verify "refs/tags/${TAG}^{commit}" 2>/dev/null || true)"
+    head="$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null || true)"
+    [[ -n "$tagc" && "$head" == "$tagc" ]] \
+        || die "release tree $dir is not at the commit the signed tag $TAG names" 1
+    ok "tag $TAG authenticated against $signers"
+}
+
 # ── step 2 — the config tree at the tag (§F.4.2) ────────────────────────────
+# Authenticated BEFORE anything else reads the tree (H10): a fresh clone lands
+# in a staging directory and only a tree that passed authenticate_release_tree
+# is moved to $RELEASE_DIR; a pre-existing checkout is authenticated too.
 step_2_checkout() {
     require_split_pins_env
     RELEASE_DIR="$ROOT/releases/$TAG"
@@ -284,11 +311,19 @@ step_2_checkout() {
         want="$(git -C "$RELEASE_DIR" rev-list -n 1 "$TAG" 2>/dev/null || true)"
         [[ -n "$want" && "$head" == "$want" ]] \
             || die "existing $RELEASE_DIR is not checked out at $TAG" 1
+        authenticate_release_tree "$RELEASE_DIR"
         info "reusing existing checkout $RELEASE_DIR"
     else
         [[ ! -e "$RELEASE_DIR" ]] || die "$RELEASE_DIR exists and is not a git checkout" 1
-        git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$RELEASE_DIR" >/dev/null 2>&1 \
-            || die "cannot check out $TAG from $GREMION_SOURCE_URL" 1
+        local stage="$ROOT/releases/.incoming-$TAG.$$"
+        rm -rf "$stage"
+        git clone --depth 1 --branch "$TAG" "$GREMION_SOURCE_URL" "$stage" >/dev/null 2>&1 \
+            || { rm -rf "$stage"; die "cannot check out $TAG from $GREMION_SOURCE_URL" 1; }
+        # a failure below ends the program: the unverified clone is removed
+        # first, so no unauthenticated tree is left where a later run (or the
+        # rollback program) would take it for a release.
+        ( authenticate_release_tree "$stage" ) || { rm -rf "$stage"; exit 1; }
+        mv "$stage" "$RELEASE_DIR" || { rm -rf "$stage"; die "cannot move the authenticated tree to $RELEASE_DIR" 1; }
     fi
     [[ -d "$RELEASE_DIR" ]] || die "release tree absent after checkout: $RELEASE_DIR" 1
     require_spec_b_contracts "$RELEASE_DIR"

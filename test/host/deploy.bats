@@ -59,6 +59,12 @@ EOF
 seed_trust_anchor() {
     printf '%s\n' '-----BEGIN PUBLIC KEY-----' 'placeholder-not-a-key' '-----END PUBLIC KEY-----' \
         > "${GREMION_ROOT}/etc/cosign.pub"
+    # H10: the release tag is authenticated against the host's allowed_signers
+    # before the tree is used. The git shim of stub_git answers verify-tag with
+    # success, so the placeholder is never parsed; section M uses real git and
+    # real throwaway keys.
+    printf '%s\n' 'release@example.test namespaces="git" ssh-ed25519 placeholder-not-a-key' \
+        > "${GREMION_ROOT}/etc/allowed_signers"
     # What `docker compose config --images` resolves: the canonical pins of
     # BOTH layers (docker-compose.pins.yml, docker-compose.state-pins.yml) plus
     # anything a test injects through EXTRA_RESOLVED (images compose would
@@ -97,9 +103,11 @@ exit 0'
 stub_git() {
     shim git '
 # The program calls `git -C <dir> rev-parse …`, so the subcommand is NOT $1.
-# Step over any leading -C <dir> pair before dispatching, exactly as git does.
-while [ "$1" = "-C" ]; do shift 2; done
+# Step over any leading -C <dir> / -c <k=v> pair before dispatching, exactly as
+# git does.
+while [ "$1" = "-C" ] || [ "$1" = "-c" ]; do shift 2; done
 case "$1" in
+  verify-tag) exit 0 ;;
   clone)
       dest="${*: -1}"
       mkdir -p "$dest"
@@ -391,6 +399,167 @@ EOF
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     assert_recorded git "clone --depth 1 --branch dist-v1.2.3"
     [ -f "${GREMION_ROOT}/releases/dist-v1.2.3/release.json" ]
+}
+
+# ---------------------------------------------------------------------------
+# D2. the release tree is authenticated before any use (H10, F1 sweep K6#19)
+#
+# Real git and REAL throwaway ssh keys, generated inside the test and never
+# kept: the guard is the signature check itself, so a shimmed git would only
+# prove that the program calls a shim. The program must refuse - exit 1, before
+# anything of the tree is validated, rendered, pulled or run - a tag that is
+# unsigned, lightweight or signed by a key the host has not pinned, and a host
+# without its allowed_signers file.
+# ---------------------------------------------------------------------------
+
+gen_key() { # <name> -> ${BATS_TEST_TMPDIR}/keys/<name> (+ .pub)
+    mkdir -p "${BATS_TEST_TMPDIR}/keys"
+    ssh-keygen -q -t ed25519 -N '' -C "$1@example.test" -f "${BATS_TEST_TMPDIR}/keys/$1" >/dev/null
+}
+
+# pin_key <name> -- the host trusts exactly this public key for the git namespace
+pin_key() {
+    printf 'release@example.test namespaces="git" %s\n' \
+        "$(cut -d' ' -f1,2 "${BATS_TEST_TMPDIR}/keys/$1.pub")" \
+        > "${GREMION_ROOT}/etc/allowed_signers"
+}
+
+# real_git_release <signed:KEY | unsigned | lightweight>
+# A real source repository holding the valid fixture, tagged dist-v1.2.3, and
+# the program pointed at it. The git shim is removed FIRST so this runs real git.
+real_git_release() {
+    local mode="$1" src="${BATS_TEST_TMPDIR}/source"
+    rm -f "${SHIM_DIR}/git"
+    rm -rf "$src"
+    mkdir -p "$src"
+    cp -R "${FIXTURES}/valid"/. "$src"/
+    git -C "$src" init -q
+    git -C "$src" add -A
+    git -C "$src" -c user.name=t -c user.email=t@example.test -c commit.gpgsign=false commit -q -m release
+    case "$mode" in
+        signed:*)
+            git -C "$src" -c user.name=t -c user.email=t@example.test -c gpg.format=ssh \
+                -c "user.signingkey=${BATS_TEST_TMPDIR}/keys/${mode#signed:}" \
+                tag -s -m release dist-v1.2.3 ;;
+        unsigned)
+            git -C "$src" -c user.name=t -c user.email=t@example.test -c tag.gpgsign=false \
+                tag -a -m release dist-v1.2.3 ;;
+        lightweight)
+            git -C "$src" tag dist-v1.2.3 ;;
+    esac
+    export GREMION_SOURCE_URL="$src"
+}
+
+# Nothing of an unauthenticated tree was used: no tree left behind, and no
+# compose, render, snapshot or verifier call (every one of them reads or runs it).
+assert_tree_never_used() {
+    [ ! -e "${GREMION_ROOT}/releases/dist-v1.2.3" ]
+    refute_recorded docker "compose"
+    refute_recorded gremion-render ""
+    refute_recorded gremion-snapshot ""
+    refute_recorded gremion-verify ""
+}
+
+@test "H10: an unsigned release tag is refused before the tree is used" {
+    stub_all
+    gen_key pinned
+    pin_key pinned
+    real_git_release unsigned
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"tag dist-v1.2.3 is unsigned, or not signed by a key in ${GREMION_ROOT}/etc/allowed_signers"* ]]
+    assert_tree_never_used
+}
+
+@test "H10: a lightweight release tag is refused" {
+    stub_all
+    gen_key pinned
+    pin_key pinned
+    real_git_release lightweight
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"is unsigned, or not signed by a key in"* ]]
+    assert_tree_never_used
+}
+
+@test "H10: a tag signed by a key the host has not pinned is refused" {
+    stub_all
+    gen_key pinned
+    gen_key attacker
+    pin_key pinned
+    real_git_release signed:attacker
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"is unsigned, or not signed by a key in"* ]]
+    assert_tree_never_used
+}
+
+@test "H10: a host without allowed_signers refuses, never skips the check" {
+    stub_all
+    gen_key pinned
+    real_git_release signed:pinned
+    rm -f "${GREMION_ROOT}/etc/allowed_signers"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"release-tag trust anchor absent: ${GREMION_ROOT}/etc/allowed_signers"* ]]
+    assert_tree_never_used
+}
+
+@test "H10: an empty allowed_signers refuses" {
+    stub_all
+    gen_key pinned
+    real_git_release signed:pinned
+    : > "${GREMION_ROOT}/etc/allowed_signers"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"release-tag trust anchor absent"* ]]
+    assert_tree_never_used
+}
+
+@test "H10: an allowed_signers shipped in the release tree is never the anchor" {
+    stub_all
+    gen_key pinned
+    gen_key attacker
+    pin_key pinned
+    real_git_release signed:attacker
+    # the attacker's tree vouches for the attacker's key
+    mkdir -p "${BATS_TEST_TMPDIR}/source/etc"
+    printf 'release@example.test namespaces="git" %s\n' \
+        "$(cut -d' ' -f1,2 "${BATS_TEST_TMPDIR}/keys/attacker.pub")" \
+        > "${BATS_TEST_TMPDIR}/source/etc/allowed_signers"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"is unsigned, or not signed by a key in ${GREMION_ROOT}/etc/allowed_signers"* ]]
+    assert_tree_never_used
+}
+
+@test "H10: a tag signed by a pinned key is accepted and the deploy proceeds" {
+    stub_all
+    gen_key pinned
+    pin_key pinned
+    real_git_release signed:pinned
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"tag dist-v1.2.3 authenticated against ${GREMION_ROOT}/etc/allowed_signers"* ]]
+    [ -f "${GREMION_ROOT}/releases/dist-v1.2.3/release.json" ]
+    # authenticated first, used after: the verifier ran, on the moved tree
+    assert_recorded gremion-render "--release ${GREMION_ROOT}/releases/dist-v1.2.3"
+}
+
+@test "H10: a checkout already on the host is authenticated too (local tag rewritten)" {
+    stub_all
+    gen_key pinned
+    pin_key pinned
+    real_git_release signed:pinned
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    # an attacker with write access to the checkout swaps the signed tag for an
+    # unsigned one on the same commit
+    git -C "${GREMION_ROOT}/releases/dist-v1.2.3" -c user.name=t -c user.email=t@example.test \
+        -c tag.gpgsign=false tag -f -a -m forged dist-v1.2.3 >/dev/null 2>&1
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"is unsigned, or not signed by a key in"* ]]
 }
 
 # ---------------------------------------------------------------------------
