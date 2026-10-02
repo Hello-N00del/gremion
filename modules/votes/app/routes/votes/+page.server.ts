@@ -46,14 +46,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const isAdmin = hasRole(user.roles, Role.CouncilAdmin) || hasRole(user.roles, Role.ITAdmin)
 
+  // TASK-058 Q10 (TASK-205b): votes owns /votes and /polls, the elections module owns /elections and the
+  // Helios ballots. While the elections module is OFF for the tenant (an explicit `false` in its module map;
+  // absent = on), this page shows polls only: no committee_elections read, no Helios probe, no Helios status
+  // pill, no Helios entry point. A tenant with votes on and elections off therefore never sees a ballot entry.
+  const electionsEnabled = locals.tenant?.config?.modules?.elections !== false
+
   // Kernel-owned reads: the committee_elections rows stay in the kernel DB. The
   // votes backend (branch-by-abstraction: in-process HeliosClient + Nextcloud
   // Polls + aggregator, or the votes-service leaf) hydrates them into VoteItems.
-  const electionRows: readonly CommitteeElection[] = await (
-    isAdmin
-      ? ElectionDb.findAll()
-      : ElectionDb.findVisibleToUser(user.id)
-  ).catch(() => [])
+  const electionRows: readonly CommitteeElection[] = electionsEnabled
+    ? await (
+        isAdmin
+          ? ElectionDb.findAll()
+          : ElectionDb.findVisibleToUser(user.id)
+      ).catch(() => [])
+    : []
 
   // Helios satellite reads + Nextcloud Polls + aggregator merge, behind the seam.
   // Unreachable ballots come back as `degradedUuids` (never dropped) so we can
@@ -110,8 +118,10 @@ export const load: PageServerLoad = async ({ locals }) => {
     votes: [...sortedHydrated, ...degraded] as VoteListItem[],
     pollErrors,
     // D4: the head pill derives from the SAME probe as the degraded cards —
-    // never a hardcoded "verbunden" contradicting the list below it.
-    heliosStatus: deriveHeliosStatus(pollError, degraded.length),
+    // never a hardcoded "verbunden" contradicting the list below it. Null while elections is off: no Helios
+    // item of any kind is shown then (TASK-058 Q10).
+    heliosStatus: electionsEnabled ? deriveHeliosStatus(pollError, degraded.length) : null,
+    electionsEnabled,
     // Drives the inline quick-poll create control (relocated from /polls, #197).
     isManager: isAdmin,
   }

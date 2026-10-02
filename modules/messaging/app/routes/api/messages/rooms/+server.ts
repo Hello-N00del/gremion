@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 import { getTenant } from '$lib/server/tenant/context'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import type { SessionUser } from '$lib/auth'
 import { hasRole, Role } from '$lib/auth'
 import { createRoom, getRoomArchiveMarker } from '$lib/server/messages/admin/room-admin'
@@ -13,13 +13,13 @@ import { mapRoomError } from './map-room-error'
 // The CURRENT tenant's homeserver base (registry services.matrixUrl for
 // non-default tenants, env fallback) — same resolution as livekit-jwt.ts
 // matrixUrl() / getMatrixClient(). The per-user matrixToken is valid ONLY on
-// the tenant's own Synapse; a defaultTenantEnv-only base would transmit a
+// the tenant's own Synapse; a serviceEnv-only base would transmit a
 // non-default tenant's token to the DEFAULT tenant's homeserver (design v11
 // review, same defect class as messages/register.server.ts unread-rooms).
 function matrixBase(): string {
   const ctx = getTenant()
-  const svc = ctx.slug === 'default' ? undefined : ctx.services
-  return (svc?.matrixUrl ?? defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
+  const svc = ctx.services
+  return (svc?.matrixUrl ?? serviceEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
 }
 
 function requireAuth(event: RequestEvent): SessionUser {

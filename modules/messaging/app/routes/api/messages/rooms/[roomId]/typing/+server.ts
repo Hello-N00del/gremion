@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { z } from 'zod'
 import { getMessagesBackend } from '$lib/server/messages/backend'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import type { SessionUser } from '$lib/auth'
 
 function requireAuth(event: RequestEvent): SessionUser {
@@ -21,7 +21,7 @@ async function getKeycloakJwt(event: RequestEvent): Promise<string> {
 }
 
 async function getWhoAmI(matrixToken: string): Promise<string> {
-  const base = (defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
+  const base = (serviceEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
   const res = await fetch(`${base}/_matrix/client/v3/account/whoami`, {
     headers: { Authorization: `Bearer ${matrixToken}` }
   })

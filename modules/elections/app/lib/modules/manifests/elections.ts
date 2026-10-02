@@ -1,9 +1,5 @@
 import { Role } from '$lib/auth/types'
 import type { ModuleManifest } from '../types'
-// type-only: a VALUE import of NavItem would create an init cycle
-// (nav-schema → registry → manifests → nav-schema). NavItem is an interface, so
-// `import type` erases at runtime and breaks that edge (registry.test.ts cycle smoke).
-import type { NavItem } from '$lib/components/layout/nav-schema'
 
 export const electionsManifest: ModuleManifest = {
   id: 'elections',
@@ -20,16 +16,9 @@ export const electionsManifest: ModuleManifest = {
   // consistent with the votes-leaf Option-A exemption keeping election-db
   // kernel-side. Re-gating is pinned OFF by module-migrations.test.ts and
   // migration-ownership.test.ts.
-  pages: [
-    { segment: 'elections', minRole: Role.Member },
-    { segment: 'polls', minRole: Role.Member },
-    { segment: 'votes', minRole: Role.Member },
-  ],
-  routePrefixes: ['/elections', '/api/elections', '/polls', '/api/polls'],
-  // Merged rail entry: /polls and /elections still exist as routes; the rail
-  // collapses Abstimmungen + Umfragen + Wahlen into this single /votes item,
-  // woven into the Gremien section by composeNavSchema (anchor: 'elections').
-  nav: [
-    { kind: 'item', href: '/votes', label: 'Abstimmungen & Wahlen', icon: 'vote', role: Role.Member, badge: 'live', moduleId: 'elections' } satisfies NavItem,
-  ],
+  // TASK-205b (TASK-058 Q10): the StuRa manifest owned /elections, /polls and /votes together. After the
+  // module split elections owns /elections only; /votes, /polls and the merged rail entry belong to the votes
+  // module (manifests/votes.ts), which hides Helios items while this module is off.
+  pages: [{ segment: 'elections', minRole: Role.Member }],
+  routePrefixes: ['/elections', '/api/elections'],
 }

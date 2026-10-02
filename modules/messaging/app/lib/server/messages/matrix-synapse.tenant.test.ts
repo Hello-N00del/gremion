@@ -6,6 +6,13 @@ import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 // uses an EXPLICIT runWithTenant(ctx, …) scope
 // ([[als-default-tenant-test-harness-masks-fail-closed]], plan standing rule 5).
 
+// TASK-205b: the service endpoints (Matrix, Helios, LiveKit, Nextcloud) come through the serviceEnv seam, the
+// successor of the deleted default-tenant env reader. This suite feeds the seam the same values it already
+// feeds its `$env/dynamic/private` mock, so every case keeps its own env fixture.
+vi.mock('$lib/server/env/service-env', async () => {
+  const { env } = await import('$env/dynamic/private')
+  return { serviceEnv: (name: string) => (env as Record<string, string | undefined>)[name] }
+})
 vi.mock('$env/dynamic/private', () => ({
   env: {
     MATRIX_URL: 'http://matrix.test:8008',
@@ -27,14 +34,6 @@ import {
   __resetSynapseAdminForTests,
 } from './synapse-admin'
 
-const DEFAULT_CTX = {
-  id: 'tid-default',
-  slug: 'default',
-  // Byte-identical pin: even if a registry row ever carries service overrides,
-  // the DEFAULT tenant's clients must keep building from env exactly as today.
-  services: { matrixUrl: 'http://never-used:1', synapseServerName: 'never.used' },
-} as unknown as TenantContext
-
 const ALPHA_CTX = {
   id: 'tid-alpha',
   slug: 'alpha',
@@ -46,8 +45,8 @@ const ALPHA_CTX = {
   },
 } as unknown as TenantContext
 
-// No services at all — a non-default tenant falls back to env (shared stack
-// until P2.1c provisioning writes real per-tenant endpoints).
+// No services at all — a tenant falls back to the deployment-wide env (shared stack until provisioning
+// writes real per-tenant endpoints). TASK-042: no tenant is special, so service refs are honoured for ALL.
 const BETA_CTX = { id: 'tid-beta', slug: 'beta' } as unknown as TenantContext
 
 function jwtWithSub(sub: string): string {
@@ -84,8 +83,8 @@ describe('getMatrixClient — per-tenant keyed registry (T7)', () => {
     expect(runWithTenant(ALPHA_CTX, () => getMatrixClient())).toBe(a)
   })
 
-  it('default tenant: built from env (URL + admin token byte-identical, services ignored)', async () => {
-    await runWithTenant(DEFAULT_CTX, () => getMatrixClient().getRoomIdByAlias('#x:matrix.test'))
+  it('a tenant without services: built from env (URL + admin token)', async () => {
+    await runWithTenant(BETA_CTX, () => getMatrixClient().getRoomIdByAlias('#x:matrix.test'))
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe(
       'http://matrix.test:8008/_matrix/client/v3/directory/room/' + encodeURIComponent('#x:matrix.test'),
@@ -93,14 +92,14 @@ describe('getMatrixClient — per-tenant keyed registry (T7)', () => {
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer env-admin-token')
   })
 
-  it('non-default tenant builds from its registry services (url + resolved admin token ref)', async () => {
+  it('a tenant builds from its registry services (url + resolved admin token ref)', async () => {
     await runWithTenant(ALPHA_CTX, () => getMatrixClient().getRoomIdByAlias('#x:alpha.example.org'))
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('http://matrix-alpha:8008/_matrix/client/v3/directory/room/')
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer alpha-admin-token')
   })
 
-  it('non-default tenant WITHOUT services falls back to env', async () => {
+  it('a tenant WITHOUT services falls back to env (no tenant is special)', async () => {
     await runWithTenant(BETA_CTX, () => getMatrixClient().getRoomIdByAlias('#y:matrix.test'))
     const [url] = fetchMock.mock.calls[0] as [string]
     expect(url).toContain('http://matrix.test:8008/')
@@ -190,8 +189,8 @@ describe('getSynapseAdmin — per-tenant keyed registry (T7)', () => {
     expect(runWithTenant(ALPHA_CTX, () => getSynapseAdmin())).toBe(a)
   })
 
-  it('default tenant: env base + env server name + env token (byte-identical, services ignored)', async () => {
-    await runWithTenant(DEFAULT_CTX, () => getSynapseAdmin().createUser('bob', 'Bob'))
+  it('a tenant without services: env base + env server name + env token', async () => {
+    await runWithTenant(BETA_CTX, () => getSynapseAdmin().createUser('bob', 'Bob'))
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe(
       'http://matrix.test:8008/_synapse/admin/v2/users/' + encodeURIComponent('@bob:matrix.test'),
@@ -199,7 +198,7 @@ describe('getSynapseAdmin — per-tenant keyed registry (T7)', () => {
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer env-admin-token')
   })
 
-  it('non-default tenant: services base + server name + resolved admin token ref', async () => {
+  it('a tenant with services: services base + server name + resolved admin token ref', async () => {
     await runWithTenant(ALPHA_CTX, () => getSynapseAdmin().createUser('bob', 'Bob'))
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe(

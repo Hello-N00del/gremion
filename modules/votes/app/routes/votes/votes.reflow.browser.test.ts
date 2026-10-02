@@ -28,7 +28,7 @@ vi.mock('$app/navigation', () => ({ invalidateAll: () => Promise.resolve() }))
 vi.mock('$env/dynamic/public', () => ({ env: { PUBLIC_HELIOS_URL: '' } }))
 vi.mock('$lib/i18n', async () => {
   const { readable } = await import('svelte/store')
-  const de = (await import('$lib/i18n/de')).default
+  const de = (await import('$lib/i18n/messages/de.json')).default as Record<string, string>
   return { t: readable((key: string) => de[key] ?? key), lang: readable('de') }
 })
 

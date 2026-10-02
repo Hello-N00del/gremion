@@ -1,7 +1,7 @@
 // POST /api/video/meeting-room
 //
 // Issue #151: the dashboard "Video-Link" used to point at the STANDALONE
-// element-call guest page, which 401s on createRoom because StuRaOS's Synapse is
+// element-call guest page, which 401s on createRoom because the tenant's Synapse is
 // a CLOSED homeserver (no registration / no guests — only Keycloak-authenticated
 // users hold a Matrix token). This route repoints the button to the working
 // EMBEDDED per-room call flow: it creates (or idempotently reuses, by alias) a

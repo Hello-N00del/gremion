@@ -1,6 +1,6 @@
 import { env } from '$env/dynamic/private'
 import { getTenant } from '$lib/server/tenant/context'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { resolveSecret } from '$lib/server/tenant/secrets'
 
 interface SynapseErrorBody {
@@ -120,7 +120,7 @@ class SynapseAdminClient {
   // `error` (or `Synapse <status>`), which the route maps to a 502; a network error
   // propagates as-is. userId = @{localpart}:{serverName} (this.serverName is the
   // per-tenant server name, byte-identical to the route's default-tenant
-  // defaultTenantEnv('SYNAPSE_SERVER_NAME') resolution). Deliberately does NOT go
+  // serviceEnv('SYNAPSE_SERVER_NAME') resolution). Deliberately does NOT go
   // through apiRequest() so the thrown message matches the pre-seam route verbatim.
   // DELETE /_synapse/admin/v2/users/{userId}/devices/{deviceId}
   async deleteDevice(localpart: string, deviceId: string): Promise<void> {
@@ -313,11 +313,11 @@ export function getSynapseAdmin(): SynapseAdminClient {
   const ctx = getTenant()
   const existing = _adminByTenant.get(ctx.id)
   if (existing) return existing
-  const svc = ctx.slug === 'default' ? undefined : ctx.services
+  const svc = ctx.services
   const client = new SynapseAdminClient(
-    svc?.matrixUrl ?? defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008',
+    svc?.matrixUrl ?? serviceEnv('MATRIX_URL') ?? 'http://matrix:8008',
     svc?.synapseAdminTokenRef ? resolveSecret(svc.synapseAdminTokenRef) : (env.SYNAPSE_ADMIN_TOKEN ?? ''),
-    svc?.synapseServerName ?? defaultTenantEnv('SYNAPSE_SERVER_NAME') ?? 'localhost'
+    svc?.synapseServerName ?? serviceEnv('SYNAPSE_SERVER_NAME') ?? 'localhost'
   )
   _adminByTenant.set(ctx.id, client)
   return client

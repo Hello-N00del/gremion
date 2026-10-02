@@ -461,7 +461,7 @@
   <!-- Room list -->
   <aside class="room-list">
     <div class="room-list-head">
-      <div class="eyebrow">Matrix · {brand.matrixHomeserver}</div>
+      <div class="eyebrow">Matrix</div>
       <div class="room-list-title-row">
         <h3 class="room-list-title">Räume</h3>
         {#if isRoomAdmin}

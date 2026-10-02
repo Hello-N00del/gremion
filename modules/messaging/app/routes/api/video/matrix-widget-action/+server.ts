@@ -5,7 +5,7 @@
 // (e.g. m.call.member state events for MatrixRTC call membership signaling).
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from '@sveltejs/kit'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 
 interface SendEventRequest {
@@ -90,7 +90,7 @@ export const POST: RequestHandler = async (event) => {
     if (typeof body.delayId !== 'string' || !body.delayId) {
       return json({ error: 'Missing delayId' }, { status: 400 })
     }
-    const matrixBase2 = (defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
+    const matrixBase2 = (serviceEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
     try {
       const matrixToken2 = await getMessagesBackend().matrix().getMatrixToken(keycloakJwt)
       const mgmtUrl = `${matrixBase2}/_matrix/client/unstable/org.matrix.msc4140/delayed_events/${encodeURIComponent(body.delayId)}/${body.updateAction}`
@@ -115,7 +115,7 @@ export const POST: RequestHandler = async (event) => {
     return json({ error: `Event type '${String(body.type)}' not allowed` }, { status: 403 })
   }
 
-  const matrixBase = (defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
+  const matrixBase = (serviceEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
 
   try {
     const matrixToken = await getMessagesBackend().matrix().getMatrixToken(keycloakJwt)

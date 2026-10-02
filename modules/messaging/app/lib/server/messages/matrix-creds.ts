@@ -12,7 +12,7 @@
 // membership (meeting-room) must check for an empty userId and reject (403).
 import { error } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { getMatrixClient } from '$lib/server/messages/matrix-client'
 
 /** Extract the Keycloak access token from the Authorization header or session. */
@@ -40,7 +40,7 @@ export async function resolveMatrixCreds(event: RequestEvent): Promise<MatrixCre
   try {
     const jwt = await getKeycloakJwt(event)
     const matrixToken = await getMatrixClient().getMatrixToken(jwt)
-    const base = (defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
+    const base = (serviceEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
     const res = await fetch(`${base}/_matrix/client/v3/account/whoami`, {
       headers: { Authorization: `Bearer ${matrixToken}` },
     })

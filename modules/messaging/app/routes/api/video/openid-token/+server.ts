@@ -6,7 +6,7 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 
 interface OpenIdToken {
@@ -27,7 +27,7 @@ export const GET: RequestHandler = async (event) => {
   const keycloakJwt = (session as unknown as { accessToken?: string })?.accessToken
   if (!keycloakJwt) return json({ error: 'Unauthenticated' }, { status: 401 })
 
-  const matrixInternalBase = (defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
+  const matrixInternalBase = (serviceEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
   const matrixPublicBase = (env.MATRIX_PUBLIC_URL ?? 'http://localhost:8009').replace(/\/$/, '')
 
   try {

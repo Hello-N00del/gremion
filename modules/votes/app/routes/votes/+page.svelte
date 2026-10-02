@@ -162,19 +162,25 @@
       <div class="eyebrow">Abstimmungen &amp; Wahlen</div>
       <h1 class="page-title">Wahl- und Meinungsbilder</h1>
       <div class="page-sub">
-        Zwei Stimmen-Arten: <b>Helios</b> für anonyme, verifizierbare Wahlen ·
-        <b>Nextcloud Polls</b> für schnelle Meinungsbilder.
+        {#if data.electionsEnabled}
+          Zwei Stimmen-Arten: <b>Helios</b> für anonyme, verifizierbare Wahlen ·
+          <b>Nextcloud Polls</b> für schnelle Meinungsbilder.
+        {:else}
+          <b>Nextcloud Polls</b> für schnelle Meinungsbilder.
+        {/if}
       </div>
     </div>
     <div class="head-actions">
       <!-- D4: derived from the same backend probe as the degraded cards below
            (single reachability source) — success only when nothing degraded;
            warn (R2: Einschränkung) otherwise. Glyphs per the pill-icon contract. -->
-      <span
-        class="pill"
-        class:pill-success={data.heliosStatus.tone === 'success'}
-        class:pill-warn={data.heliosStatus.tone === 'warn'}
-      ><Icon name={data.heliosStatus.icon} size={12} /> {data.heliosStatus.label}</span>
+      {#if data.heliosStatus}
+        <span
+          class="pill"
+          class:pill-success={data.heliosStatus.tone === 'success'}
+          class:pill-warn={data.heliosStatus.tone === 'warn'}
+        ><Icon name={data.heliosStatus.icon} size={12} /> {data.heliosStatus.label}</span>
+      {/if}
       {#if data.isManager}
         <button type="button" class="btn btn-sm" onclick={() => (showPollCreate = true)}>
           <Icon name="poll" size={14} /> {$t('votes.poll.new')}
@@ -206,7 +212,9 @@
       {/each}
     </div>
     <div class="kind-legend">
-      <span class="legend-item"><span class="kind-dot helios" aria-hidden="true"></span> Helios</span>
+      {#if data.electionsEnabled}
+        <span class="legend-item"><span class="kind-dot helios" aria-hidden="true"></span> Helios</span>
+      {/if}
       <span class="legend-item"><span class="kind-dot poll" aria-hidden="true"></span> Poll</span>
     </div>
   </div>
@@ -476,14 +484,16 @@
         </button>
       </div>
       <div class="dialog-choices">
-        <a href="/elections/new" class="dialog-choice">
-          <div class="dialog-choice-icon helios"><Icon name="shield" size={18} /></div>
-          <div class="dialog-choice-text">
-            <div class="dialog-choice-title">Helios-Wahl</div>
-            <div class="dialog-choice-sub">End-to-end verschlüsselt · anonym · öffentlich verifizierbar. Für Vorstandswahlen, Urabstimmungen, Satzung.</div>
-          </div>
-          <Icon name="arrow-right" size={14} />
-        </a>
+        {#if data.electionsEnabled}
+          <a href="/elections/new" class="dialog-choice">
+            <div class="dialog-choice-icon helios"><Icon name="shield" size={18} /></div>
+            <div class="dialog-choice-text">
+              <div class="dialog-choice-title">Helios-Wahl</div>
+              <div class="dialog-choice-sub">End-to-end verschlüsselt · anonym · öffentlich verifizierbar. Für Vorstandswahlen, Urabstimmungen, Satzung.</div>
+            </div>
+            <Icon name="arrow-right" size={14} />
+          </a>
+        {/if}
         <button
           type="button"
           class="dialog-choice"
@@ -499,7 +509,11 @@
       </div>
       <div class="dialog-foot mono">
         <Icon name="info" size={12} />
-        <span>Nur <b>Vorstand</b> und <b>Wahlausschuss</b> dürfen Helios-Wahlen starten. Polls kann jedes Mitglied erstellen.</span>
+        {#if data.electionsEnabled}
+          <span>Nur <b>Vorstand</b> und <b>Wahlausschuss</b> dürfen Helios-Wahlen starten. Polls kann jedes Mitglied erstellen.</span>
+        {:else}
+          <span>Polls kann jedes Mitglied erstellen.</span>
+        {/if}
       </div>
     </div>
   </div>

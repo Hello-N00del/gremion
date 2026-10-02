@@ -1,7 +1,7 @@
 // Design v11 review (same defect class as messages/register.server.ts
 // unread-rooms): the per-room m.room.name state read must target the CURRENT
 // tenant's homeserver — the per-user matrixToken is valid only there. A
-// defaultTenantEnv('MATRIX_URL')-only base would transmit a non-default tenant's
+// serviceEnv('MATRIX_URL')-only base would transmit a non-default tenant's
 // token to the DEFAULT tenant's Synapse (cross-tenant credential disclosure).
 // The tenant CONTEXT module is deliberately REAL and the request runs inside an
 // explicit runWithTenant scope (matrix-synapse.tenant.test.ts pattern).
@@ -28,6 +28,13 @@ vi.mock('$lib/server/messages/synapse-admin', () => ({
   getSynapseAdmin: () => ({ forceJoinRoom: vi.fn().mockResolvedValue(undefined) }),
 }))
 
+// TASK-205b: the service endpoints (Matrix, Helios, LiveKit, Nextcloud) come through the serviceEnv seam, the
+// successor of the deleted default-tenant env reader. This suite feeds the seam the same values it already
+// feeds its `$env/dynamic/private` mock, so every case keeps its own env fixture.
+vi.mock('$lib/server/env/service-env', async () => {
+  const { env } = await import('$env/dynamic/private')
+  return { serviceEnv: (name: string) => (env as Record<string, string | undefined>)[name] }
+})
 vi.mock('$env/dynamic/private', () => ({
   env: { MATRIX_URL: 'http://default-env:8008' },
 }))

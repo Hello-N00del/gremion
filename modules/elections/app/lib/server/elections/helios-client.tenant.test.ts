@@ -2,10 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 
 // P2.1b T7 — the Helios service-account session cache (_sessionCookie/_csrfToken)
-// is keyed by tenant id, and the Helios base URL resolves per tenant
-// (default = env.HELIOS_URL byte-identically). Tenant context module is REAL;
+// is keyed by tenant id, and the Helios base URL resolves per tenant: a tenant's own services.heliosUrl, else
+// the deployment-wide env (TASK-042: no tenant is special, so the services refs are honoured for EVERY tenant).
+// Tenant context module is REAL;
 // every per-tenant case uses an EXPLICIT runWithTenant scope (standing rule 5).
 
+// TASK-205b: the service endpoints (Matrix, Helios, LiveKit, Nextcloud) come through the serviceEnv seam, the
+// successor of the deleted default-tenant env reader. This suite feeds the seam the same values it already
+// feeds its `$env/dynamic/private` mock, so every case keeps its own env fixture.
+vi.mock('$lib/server/env/service-env', async () => {
+  const { env } = await import('$env/dynamic/private')
+  return { serviceEnv: (name: string) => (env as Record<string, string | undefined>)[name] }
+})
 vi.mock('$env/dynamic/private', () => ({
   env: {
     HELIOS_URL: 'http://helios-default:8000',
@@ -16,11 +24,10 @@ vi.mock('$env/dynamic/private', () => ({
 
 import { HeliosClient, _resetSessionForTest, evictHeliosSession } from './helios-client'
 
-const DEFAULT_CTX = {
-  id: 'tid-default',
-  slug: 'default',
-  // Byte-identical pin: the default tenant ignores service overrides — env wins.
-  services: { heliosUrl: 'http://never-used:1' },
+// A tenant WITHOUT its own services.heliosUrl falls back to the deployment-wide env.
+const ENV_CTX = {
+  id: 'tid-alpha',
+  slug: 'alpha',
 } as unknown as TenantContext
 
 const BETA_CTX = {
@@ -93,8 +100,8 @@ describe('HeliosClient — per-tenant session cache + base URL (T7)', () => {
     await expect(HeliosClient.getElection('u1')).rejects.toThrow(/No tenant context/)
   })
 
-  it('default tenant base stays env.HELIOS_URL (byte-identical; services ignored)', async () => {
-    await runWithTenant(DEFAULT_CTX, () => HeliosClient.getElection('u1'))
+  it('a tenant without services.heliosUrl falls back to env.HELIOS_URL', async () => {
+    await runWithTenant(ENV_CTX, () => HeliosClient.getElection('u1'))
     const url = fetchMock.mock.calls[0][0] as string
     expect(url).toBe('http://helios-default:8000/helios/elections/u1')
   })
@@ -106,27 +113,27 @@ describe('HeliosClient — per-tenant session cache + base URL (T7)', () => {
   })
 
   it('session cache is keyed by tenant: tenant B logs in on ITS base; tenant A session is not reused', async () => {
-    await runWithTenant(DEFAULT_CTX, () => HeliosClient.listVoters('u1'))
+    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('u1'))
     expect(loginOrigins).toEqual(['http://helios-default:8000'])
 
     await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('u1'))
     expect(loginOrigins).toEqual(['http://helios-default:8000', 'http://helios-beta:8000'])
 
-    // Back to the default tenant — its session is still cached, no third login.
-    await runWithTenant(DEFAULT_CTX, () => HeliosClient.listVoters('u1'))
+    // Back to the first tenant — its session is still cached, no third login.
+    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('u1'))
     expect(loginOrigins).toHaveLength(2)
   })
 
   it('evictHeliosSession(tenantId) forces a re-login for that tenant only', async () => {
-    await runWithTenant(DEFAULT_CTX, () => HeliosClient.listVoters('u1'))
+    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('u1'))
     await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('u1'))
     expect(loginOrigins).toHaveLength(2)
 
-    evictHeliosSession('tid-default')
+    evictHeliosSession('tid-alpha')
 
     await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('u1')) // still cached
     expect(loginOrigins).toHaveLength(2)
-    await runWithTenant(DEFAULT_CTX, () => HeliosClient.listVoters('u1')) // re-login
+    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('u1')) // re-login
     expect(loginOrigins).toHaveLength(3)
     expect(loginOrigins[2]).toBe('http://helios-default:8000')
   })

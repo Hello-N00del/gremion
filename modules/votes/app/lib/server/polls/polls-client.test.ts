@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// TASK-205b: the service endpoints (Matrix, Helios, LiveKit, Nextcloud) come through the serviceEnv seam, the
+// successor of the deleted default-tenant env reader. This suite feeds the seam the same values it already
+// feeds its `$env/dynamic/private` mock, so every case keeps its own env fixture.
+vi.mock('$lib/server/env/service-env', async () => {
+  const { env } = await import('$env/dynamic/private')
+  return { serviceEnv: (name: string) => (env as Record<string, string | undefined>)[name] }
+})
 vi.mock('$env/dynamic/private', () => ({
   env: {
     NEXTCLOUD_URL: 'http://nextcloud-test',

@@ -3,6 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // matrix-client reads MATRIX_URL / SYNAPSE_ADMIN_TOKEN / SYNAPSE_ADMIN_BOT_USER_ID
 // at construction via $env/dynamic/private. Provide deterministic values so the
 // constructed base URL is predictable.
+// TASK-205b: the service endpoints (Matrix, Helios, LiveKit, Nextcloud) come through the serviceEnv seam, the
+// successor of the deleted default-tenant env reader. This suite feeds the seam the same values it already
+// feeds its `$env/dynamic/private` mock, so every case keeps its own env fixture.
+vi.mock('$lib/server/env/service-env', async () => {
+  const { env } = await import('$env/dynamic/private')
+  return { serviceEnv: (name: string) => (env as Record<string, string | undefined>)[name] }
+})
 vi.mock('$env/dynamic/private', () => ({
   env: {
     MATRIX_URL: 'http://matrix.test:8008',

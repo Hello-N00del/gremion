@@ -1,4 +1,4 @@
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { getTenant } from '$lib/server/tenant/context'
 import { getMatrixClient } from './matrix-client'
 import { getSynapseAdmin } from './synapse-admin'
@@ -26,8 +26,8 @@ export interface SfuResponse {
 // with env fallback until P2.1c provisioning).
 function matrixUrl(): string {
   const ctx = getTenant()
-  const svc = ctx.slug === 'default' ? undefined : ctx.services
-  return (svc?.matrixUrl ?? defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
+  const svc = ctx.services
+  return (svc?.matrixUrl ?? serviceEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
 }
 
 /**

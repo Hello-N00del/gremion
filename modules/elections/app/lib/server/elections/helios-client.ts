@@ -1,4 +1,4 @@
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { currentTenantId, getTenant } from '$lib/server/tenant/context'
 
 // Thrown when Helios is reachable but returns an application-level error
@@ -142,12 +142,12 @@ export function deriveLifecycle(e: HeliosElection): ElectionLifecycle {
 // P2.1b T7: the Helios base URL resolves per tenant. The DEFAULT tenant keeps the
 // HELIOS_URL env read byte-identically (services ignored); other tenants use their
 // registry services.heliosUrl with env fallback until P2.1c provisioning. T14 §7.7:
-// the default-tenant env read goes through the allowlisted defaultTenantEnv seam.
+// the default-tenant env read goes through the allowlisted serviceEnv seam.
 // Fail-closed: outside a runWithTenant scope this throws (context.ts contract).
 function heliosBase(): string {
   const ctx = getTenant()
-  const svc = ctx.slug === 'default' ? undefined : ctx.services
-  return (svc?.heliosUrl ?? defaultTenantEnv('HELIOS_URL') ?? 'http://helios:8000').replace(/\/$/, '')
+  const svc = ctx.services
+  return (svc?.heliosUrl ?? serviceEnv('HELIOS_URL') ?? 'http://helios:8000').replace(/\/$/, '')
 }
 
 /** Redirect statuses a browser (and undici) would follow. */
@@ -259,8 +259,8 @@ async function ensureSession(): Promise<HeliosSession> {
   const cached = _sessionByTenant.get(tenantId)
   if (cached) return cached
 
-  const username = defaultTenantEnv('HELIOS_SERVICE_EMAIL') ?? ''
-  const password = defaultTenantEnv('HELIOS_SERVICE_PASSWORD') ?? ''
+  const username = serviceEnv('HELIOS_SERVICE_EMAIL') ?? ''
+  const password = serviceEnv('HELIOS_SERVICE_PASSWORD') ?? ''
   const base = heliosBase()
 
   // Step 1: GET login page to get the csrftoken cookie (Django's own — needed for the login form)

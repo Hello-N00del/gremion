@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 import { autoJoinOwnUnitRooms } from '$lib/server/messages/auto-join'
 
@@ -37,7 +37,7 @@ export const GET: RequestHandler = async ({ request, url, locals }) => {
 
     // Ask Synapse for the actual user ID — JWT exchange creates users with UUID localparts
     // (based on Keycloak sub), so we cannot derive the ID from preferredUsername.
-    const matrixBase = (defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
+    const matrixBase = (serviceEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
     let matrixUserId: string
     let matrixDeviceId: string = ''
     // Only a Synapse-confirmed id may be force-joined (the admin join ignores
@@ -53,7 +53,7 @@ export const GET: RequestHandler = async ({ request, url, locals }) => {
       whoamiConfirmed = whoAmI.ok && matrixUserId !== ''
     } catch {
       // Fall back to username-based ID if whoAmI fails (non-fatal)
-      const matrixServerName = defaultTenantEnv('SYNAPSE_SERVER_NAME') ?? 'localhost'
+      const matrixServerName = serviceEnv('SYNAPSE_SERVER_NAME') ?? 'localhost'
       matrixUserId = `@${user.preferredUsername ?? user.id}:${matrixServerName}`
     }
 

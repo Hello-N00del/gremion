@@ -18,7 +18,7 @@
 import { getMatrixClient } from '../matrix-client'
 import { getSynapseAdmin } from '../synapse-admin'
 import { aliasLocalpart } from '../provisioning/matrix-subsystem'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { getOrgUnit, listOrgUnits, type OrgUnit } from '$lib/server/governance/org-units-db'
 import { getResource } from '$lib/server/governance/provisioning/ledger'
 import { attachSubsystem, releaseSubsystem } from '$lib/server/governance/provisioning/orchestrator'
@@ -73,12 +73,12 @@ function isForbidden(err: unknown): boolean {
 
 // R3 (rooms-plan.md, known/flagged-not-fixed bug): this MUST resolve the server
 // name the exact same way registerProvisioningSubsystem does for the matrix
-// subsystem (defaultTenantEnv('SYNAPSE_SERVER_NAME'), not a per-tenant-correct
+// subsystem (serviceEnv('SYNAPSE_SERVER_NAME'), not a per-tenant-correct
 // value) — the canonical alias this reads to DELETE on archive was built with
 // that same value at create time. Using a different value here would silently
 // miss the real alias on a non-default tenant.
 function serverName(): string {
-  return defaultTenantEnv('SYNAPSE_SERVER_NAME') ?? 'localhost'
+  return serviceEnv('SYNAPSE_SERVER_NAME') ?? 'localhost'
 }
 
 function canonicalAlias(unitName: string): string {

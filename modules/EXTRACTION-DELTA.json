@@ -1297,21 +1297,21 @@
     },
     {
       "path": "modules/votes/app/lib/server/polls/polls-client.test.ts",
-      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16)",
+      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16); TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
       "owner": "TASK-205",
-      "blob": "482563b871d09ecd3ef122ee27ad4d3a18095903"
+      "blob": "59de31cc48ad00155abaf0fc6087e8c998e3716c"
     },
     {
       "path": "modules/votes/app/lib/server/polls/polls-client.ts",
-      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16)",
+      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16); TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
       "owner": "TASK-205",
-      "blob": "20a14e081461cdfdb8582524ecc96fc551205065"
+      "blob": "ceebe19efb9614caf62f5765970cefc50f53cb9d"
     },
     {
       "path": "modules/messaging/app/routes/api/auth/matrix-token/+server.ts",
-      "reason": "post-f2 StuRaOS f01e7d6d: fix(messages): matrix-token first-login auto-join only for a Synapse-confirmed Matrix id, never a guessed one ",
+      "reason": "post-f2 StuRaOS f01e7d6d: fix(messages): matrix-token first-login auto-join only for a Synapse-confirmed Matrix id, never a guessed one ; TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
       "owner": "TASK-205",
-      "blob": "669f2e46b9684331f0fa96d919426dec391b4660"
+      "blob": "982a9db1b9059f72064056decf53a92a00a31f44"
     },
     {
       "path": "modules/messaging/app/routes/api/auth/matrix-token/matrix-token-auto-join.test.ts",
@@ -1321,9 +1321,9 @@
     },
     {
       "path": "modules/messaging/app/routes/api/messages/rooms/+server.ts",
-      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04; TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
       "owner": "TASK-205",
-      "blob": "6e7d2ffe65599a8e722517b242df2aeab3638b44"
+      "blob": "a1422f0b020e798e335d4338d33ff4b66356da78"
     },
     {
       "path": "modules/messaging/app/routes/api/messages/rooms/rooms-archived-flag.test.ts",
@@ -1342,6 +1342,192 @@
       "reason": "post-f2 StuRaOS 1d9df363: test(votes): /votes loader renders degraded cards when the service leaf degrades non-UUID tracked elections (R",
       "owner": "TASK-205",
       "blob": "0a9e1f606be77fd2a6ae5377c9ef70e6ca72f0df"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/admin/room-admin.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "d77f999f07c134d63b2575aecc4828fbe7ab4465"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/matrix-creds.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "db36521fdb59493d07306adf246d3ac32fc7715a"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/register.server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "6ad5867a7b5a0278a4b1fb29d24d3644fb48add0"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/[roomId]/typing/+server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "b0bb7370179d085ee7e2dbc6f97a95400df4092a"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/video/matrix-widget-action/+server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "7d3d288d6a0a8d8d59fec5514e2c1c8370a7a743"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/video/openid-token/+server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "8ddb4e40246ce3581361fd252f5fa720d673e2be"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/livekit-jwt.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "owner": "TASK-205",
+      "blob": "361168a915f0703739577cb525c28613c015f0a0"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/matrix-client.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "owner": "TASK-205",
+      "blob": "8df7c3beb97ada298bcd27cd0b1b247f6e4ac5c8"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/synapse-admin.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "owner": "TASK-205",
+      "blob": "530845ca57cd669e41587a056b1ef34f67b8bdfd"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/livekit-client.ts",
+      "reason": "TASK-205b: every tenant resolves its LiveKit url/key/secret and gets the t.<slug>. room namespace (no default-tenant branch, TASK-042 / the leaf livekitRoomNamespace); endpoints through serviceEnv",
+      "owner": "TASK-205",
+      "blob": "9af3ce423e820be1ecc750b4443eed9ae5c9f487"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/livekit-client.test.ts",
+      "reason": "TASK-205b: room names carry the tenant namespace for every tenant; seam mock",
+      "owner": "TASK-205",
+      "blob": "75cac7bd02bd4d581f5b2d562fe12268316cbd06"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/livekit.tenant.test.ts",
+      "reason": "TASK-205b: the default-tenant pins become every-tenant cases (env fallback for a tenant without refs, namespace for all, cross-tenant rejection); seam mock",
+      "owner": "TASK-205",
+      "blob": "2e849f9b4533649593305a3265665eb535b7f8a0"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/matrix-synapse.tenant.test.ts",
+      "reason": "TASK-205b: the default-tenant pins become the no-services env fallback for any tenant; seam mock",
+      "owner": "TASK-205",
+      "blob": "9b59dc74bd21bd0dcb8c95ac0733dee7fcbf86fa"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/admin/room-admin.test.ts",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "owner": "TASK-205",
+      "blob": "cae0de83cbea39af44d0a2706e0bbeec8109d628"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/matrix-client.test.ts",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "owner": "TASK-205",
+      "blob": "7409ed187be754c02fa1352b1485a0a410423823"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/rooms-tenant-url.test.ts",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "owner": "TASK-205",
+      "blob": "bc02dbf3e5575f90221af3fcb34888e0f4088ebc"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/register.server.test.ts",
+      "reason": "TASK-205b: comment names serviceEnv, not the deleted default-tenant env reader",
+      "owner": "TASK-205",
+      "blob": "db9340e33ff0d4e4036c4384e5e819248cfec347"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/video/meeting-room/+server.ts",
+      "reason": "TASK-205b: no product literal in gremion-ui/src (brand.guard.test.ts)",
+      "owner": "TASK-205",
+      "blob": "01bb2d8d9d68b4b7f9cee4c9088d68434c6bf6db"
+    },
+    {
+      "path": "modules/messaging/app/routes/messages/+page.svelte",
+      "reason": "TASK-205b: the eyebrow no longer reads brand.matrixHomeserver (the carve dropped that Brand field and its config/readiness pipeline); it says Matrix",
+      "owner": "TASK-205",
+      "blob": "a8a45ed61921c2e61b02792075c53734e7c86483"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/backend/service-client.test.ts",
+      "reason": "excluded: reads contracts/messages/openapi.messages-internal.json, a module contract the kernel does not carry (product-module-contracts); returns with the contract harvest (TASK-011)",
+      "owner": "TASK-011",
+      "blob": null
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/helios-client.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "owner": "TASK-205",
+      "blob": "c6e00d6cb44abfade70c657e589625c11340c763"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/helios-client.test.ts",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "owner": "TASK-205",
+      "blob": "4c72f6b6d91f2fc0378012fa4b17ea5c3e868dff"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/helios-client.tenant.test.ts",
+      "reason": "TASK-205b: the default-tenant pin becomes a tenant-without-services env fallback; seam mock",
+      "owner": "TASK-205",
+      "blob": "811737adc50088cb4a383a928613fb858f20b28c"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/manage/+page.server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "758b035b4072cac40253a2f9a1f6f47123c31582"
+    },
+    {
+      "path": "modules/elections/app/lib/modules/manifests/elections.ts",
+      "reason": "TASK-205b (TASK-058 Q10): the StuRa manifest owned /elections, /polls and /votes; after the split elections owns /elections only, the merged rail entry moves to the votes manifest",
+      "owner": "TASK-205",
+      "blob": "916a499d81bf3eebba3dbc37fb004afbc27cf928"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/backend/service-client.test.ts",
+      "reason": "excluded: reads contracts/votes/openapi.votes-internal.json, a module contract the kernel does not carry (product-module-contracts); returns with the contract harvest (TASK-011)",
+      "owner": "TASK-011",
+      "blob": null
+    },
+    {
+      "path": "modules/votes/app/routes/votes/+page.server.ts",
+      "reason": "TASK-205b (TASK-058 Q10): the landing page shows polls only while the elections module is off for the tenant (no committee_elections read, no Helios probe, heliosStatus null, electionsEnabled in the page data)",
+      "owner": "TASK-205",
+      "blob": "3a7a08dc7a44e13c262964668dd28e1799f34f2d"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/+page.svelte",
+      "reason": "TASK-205b (TASK-058 Q10): no Helios pill, legend entry, sub-title or Helios-Wahl choice while elections is off",
+      "owner": "TASK-205",
+      "blob": "aa3996cb78ef28265624045e95cb4b306354fdda"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/votes.reflow.browser.test.ts",
+      "reason": "TASK-205b: the kernel catalogue is messages/de.json (Paraglide, TASK-062), not the removed $lib/i18n/de module",
+      "owner": "TASK-205",
+      "blob": "8336a5c49111e3793d88f87bf7e23fb7d99e958c"
+    },
+    {
+      "path": "modules/votes/app/lib/modules/manifests/votes.ts",
+      "reason": "added by TASK-205b (TASK-058 Q10): the votes manifest split out of the elections manifest - owns /votes, /polls and the merged rail entry",
+      "owner": "TASK-205",
+      "blob": "7e94389425783245c5406e325fa3553305293d0b"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/votes-elections-off.test.ts",
+      "reason": "added by TASK-205b (TASK-058 Q10): the Helios items follow the elections module",
+      "owner": "TASK-205",
+      "blob": "475e7d2d24924bfb23acf0c542badcb5c78a1b5c"
     }
   ]
 }

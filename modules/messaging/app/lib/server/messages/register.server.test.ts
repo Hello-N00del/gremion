@@ -1,6 +1,6 @@
 // Design v11 review: the 'messages:unread-rooms' data provider (D11 notification
 // popover chat rows) must read each room's display name through the TENANT-KEYED
-// MatrixClient (getRoomName), never via a hand-built defaultTenantEnv('MATRIX_URL')
+// MatrixClient (getRoomName), never via a hand-built serviceEnv('MATRIX_URL')
 // URL — that would transmit a non-default tenant's per-user Matrix token to the
 // DEFAULT tenant's homeserver (cross-tenant credential disclosure). The global
 // fetch spy below is the regression pin: the provider itself must not fetch.

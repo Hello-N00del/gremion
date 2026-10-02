@@ -10,7 +10,7 @@ import {
   registerDataProvider,
   registerSetupHealthProbe,
 } from '$lib/server/modules/runtime-registry'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { evictMatrixClient } from './matrix-client'
 import { getMatrixClient } from './matrix-client'
 import { evictSynapseAdmin } from './synapse-admin'
@@ -34,7 +34,7 @@ registerTenantEvictHook(evictServiceMatrixTokenCache)
 registerProvisioningSubsystem('matrix', (kc) =>
   createMatrixSubsystem(
     { matrix: getMatrixClient(), synapse: getSynapseAdmin(), kc },
-    defaultTenantEnv('SYNAPSE_SERVER_NAME') ?? 'localhost',
+    serviceEnv('SYNAPSE_SERVER_NAME') ?? 'localhost',
   ),
 )
 

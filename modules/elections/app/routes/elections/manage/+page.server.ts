@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { readConfig } from '$lib/server/config'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -14,7 +14,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const config = readConfig()
   const trackedUuids = config.elections?.tracked_uuids ?? []
-  const heliosBase = (defaultTenantEnv('HELIOS_URL') ?? 'http://helios:8000').replace(/\/$/, '')
+  const heliosBase = (serviceEnv('HELIOS_URL') ?? 'http://helios:8000').replace(/\/$/, '')
   const heliosAdminUrl = `${heliosBase}/helios`
 
   return {

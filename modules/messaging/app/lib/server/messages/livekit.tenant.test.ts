@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 
-// P2.1b T7 (D-LIVEKIT) — LiveKit resolves url/key/secret via TenantContext
-// (registry services, env fallback for the DEFAULT tenant, byte-identical),
-// livekitRoomName/roomNameFromMatrixId/dmRoomName gain a tenant-slug namespace
-// prefix for NON-default tenants only, and mintToken REJECTS a room outside
-// the current tenant's namespace (the room-pinned grant retires R12).
+// P2.1b T7 (D-LIVEKIT) — LiveKit resolves url/key/secret via TenantContext (registry services refs, falling
+// back to the deployment-wide env), livekitRoomName/roomNameFromMatrixId/dmRoomName carry the tenant-slug
+// namespace prefix for EVERY tenant (TASK-042: there is no default tenant), and mintToken REJECTS a room
+// outside the current tenant's namespace (the room-pinned grant retires R12).
 // Tenant context module is REAL; per-tenant cases use EXPLICIT runWithTenant.
 
 const lkEnv = vi.hoisted(
@@ -19,6 +18,13 @@ const lkEnv = vi.hoisted(
       LK_MUNI_SECRET: 'muni-secret',
     }) as Record<string, string | undefined>,
 )
+// TASK-205b: the service endpoints (Matrix, Helios, LiveKit, Nextcloud) come through the serviceEnv seam, the
+// successor of the deleted default-tenant env reader. This suite feeds the seam the same values it already
+// feeds its `$env/dynamic/private` mock, so every case keeps its own env fixture.
+vi.mock('$lib/server/env/service-env', async () => {
+  const { env } = await import('$env/dynamic/private')
+  return { serviceEnv: (name: string) => (env as Record<string, string | undefined>)[name] }
+})
 vi.mock('$env/dynamic/private', () => ({ env: lkEnv }))
 
 interface MintRecord {
@@ -57,11 +63,10 @@ import {
 } from './livekit-client'
 import { livekitRoomName, handleSfuRequest } from './livekit-jwt'
 
-const DEFAULT_CTX = {
-  id: 'tid-default',
-  slug: 'default',
-  // Byte-identical pin: the default tenant ignores service overrides — env wins.
-  services: { livekitUrl: 'wss://never-used', livekitApiKeyRef: 'env:LK_MUNI_KEY' },
+// A tenant WITHOUT service refs: url, key and secret fall back to the deployment-wide env.
+const ENV_CTX = {
+  id: 'tid-alpha',
+  slug: 'alpha',
 } as unknown as TenantContext
 
 const MUNI_CTX = {
@@ -84,16 +89,13 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('room-name namespace (D-LIVEKIT)', () => {
-  it('default tenant room names are byte-identical to today (pin)', () => {
-    runWithTenant(DEFAULT_CTX, () => {
-      expect(roomNameFromMatrixId('!abc123:matrix.example.com')).toBe('stura-room-abc123')
-      expect(dmRoomName('@alice:m.test', '@bob:m.test')).toMatch(/^stura-dm-[0-9a-f]{16}$/)
-      expect(livekitRoomName('#general:m.test')).toBe('general')
-      expect(livekitRoomName('bare-room')).toBe('bare-room')
+  it('every tenant gets the t.<slug>. namespace prefix on every derivation, one without service refs included', () => {
+    runWithTenant(ENV_CTX, () => {
+      expect(roomNameFromMatrixId('!abc123:matrix.example.com')).toBe('t.alpha.stura-room-abc123')
+      expect(dmRoomName('@alice:m.test', '@bob:m.test')).toMatch(/^t\.alpha\.stura-dm-[0-9a-f]{16}$/)
+      expect(livekitRoomName('#general:m.test')).toBe('t.alpha.general')
+      expect(livekitRoomName('bare-room')).toBe('t.alpha.bare-room')
     })
-  })
-
-  it('non-default tenants get the t.<slug>. namespace prefix on every derivation', () => {
     runWithTenant(MUNI_CTX, () => {
       expect(roomNameFromMatrixId('!abc123:muni.example.org')).toBe('t.muni.stura-room-abc123')
       expect(dmRoomName('@a:muni.example.org', '@b:muni.example.org')).toMatch(
@@ -112,25 +114,25 @@ describe('room-name namespace (D-LIVEKIT)', () => {
 })
 
 describe('mintToken — per-tenant creds + room-pinned grant + cross-tenant rejection', () => {
-  it('default tenant mints with env key/secret and pins the room in the grant (pin)', async () => {
-    const jwt = await runWithTenant(DEFAULT_CTX, () =>
-      mintToken({ roomName: 'stura-room-x', identity: '@u:m', displayName: 'U', canPublish: true }),
+  it('a tenant without service refs mints with the env key/secret and pins its namespaced room in the grant', async () => {
+    const jwt = await runWithTenant(ENV_CTX, () =>
+      mintToken({ roomName: 't.alpha.stura-room-x', identity: '@u:m', displayName: 'U', canPublish: true }),
     )
     expect(jwt).toContain('env-key')
     expect(minted[0]).toMatchObject({ key: 'env-key', secret: 'env-secret' })
-    expect(minted[0].grant).toMatchObject({ room: 'stura-room-x', roomJoin: true })
+    expect(minted[0].grant).toMatchObject({ room: 't.alpha.stura-room-x', roomJoin: true })
   })
 
-  it('default tenant missing LIVEKIT_API_KEY keeps the exact error (pin)', async () => {
+  it('a tenant with no key anywhere keeps the exact error', async () => {
     delete lkEnv.LIVEKIT_API_KEY
     await expect(
-      runWithTenant(DEFAULT_CTX, () =>
-        mintToken({ roomName: 'stura-room-x', identity: '@u:m', displayName: 'U', canPublish: true }),
+      runWithTenant(ENV_CTX, () =>
+        mintToken({ roomName: 't.alpha.stura-room-x', identity: '@u:m', displayName: 'U', canPublish: true }),
       ),
     ).rejects.toThrow('LIVEKIT_API_KEY not configured')
   })
 
-  it('non-default tenant mints with ITS resolved key/secret refs', async () => {
+  it('a tenant mints with ITS resolved key/secret refs', async () => {
     await runWithTenant(MUNI_CTX, () =>
       mintToken({ roomName: 't.muni.stura-room-x', identity: '@u:muni', displayName: 'U', canPublish: true }),
     )
@@ -138,16 +140,16 @@ describe('mintToken — per-tenant creds + room-pinned grant + cross-tenant reje
     expect(minted[0].grant).toMatchObject({ room: 't.muni.stura-room-x' })
   })
 
-  it('CROSS-TENANT REJECTION: tenant #1 cannot mint into another tenant namespaced room', async () => {
+  it('CROSS-TENANT REJECTION: a tenant cannot mint into another tenant namespaced room', async () => {
     await expect(
-      runWithTenant(DEFAULT_CTX, () =>
+      runWithTenant(ENV_CTX, () =>
         mintToken({ roomName: 't.muni.stura-room-x', identity: '@u:m', displayName: 'U', canPublish: true }),
       ),
     ).rejects.toThrow(/cross-tenant/)
     expect(minted).toHaveLength(0)
   })
 
-  it('CROSS-TENANT REJECTION: a non-default tenant cannot mint outside its own namespace', async () => {
+  it('CROSS-TENANT REJECTION: a tenant cannot mint outside its own namespace, an un-namespaced room included', async () => {
     await expect(
       runWithTenant(MUNI_CTX, () =>
         mintToken({ roomName: 'stura-room-x', identity: '@u:muni', displayName: 'U', canPublish: true }),
@@ -169,11 +171,11 @@ describe('mintToken — per-tenant creds + room-pinned grant + cross-tenant reje
 })
 
 describe('livekitServerUrl + settings cache eviction', () => {
-  it('default tenant keeps env.LIVEKIT_URL (byte-identical; services ignored)', () => {
-    expect(runWithTenant(DEFAULT_CTX, () => livekitServerUrl())).toBe('ws://livekit-default:7880')
+  it('a tenant without services.livekitUrl falls back to env.LIVEKIT_URL', () => {
+    expect(runWithTenant(ENV_CTX, () => livekitServerUrl())).toBe('ws://livekit-default:7880')
   })
 
-  it('non-default tenant resolves its services.livekitUrl', () => {
+  it('a tenant with services.livekitUrl resolves it', () => {
     expect(runWithTenant(MUNI_CTX, () => livekitServerUrl())).toBe('wss://lk.muni.example.org')
   })
 

@@ -1,6 +1,6 @@
 import { env } from '$env/dynamic/private'
 import { currentTenantId, getTenant } from '$lib/server/tenant/context'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { resolveSecret } from '$lib/server/tenant/secrets'
 
 // Cache Matrix access tokens per Keycloak user sub.
@@ -244,7 +244,7 @@ class MatrixClient {
   // back to the room id). SECURITY (design v11 review): this goes through
   // this.baseUrl — the client is tenant-keyed, so the per-user token minted by
   // getMatrixToken (valid ONLY on this tenant's homeserver) is never transmitted
-  // to another tenant's Synapse. A hand-built defaultTenantEnv('MATRIX_URL') URL
+  // to another tenant's Synapse. A hand-built serviceEnv('MATRIX_URL') URL
   // would leak a non-default tenant's token to the DEFAULT tenant's homeserver.
   async getRoomName(userToken: string, roomId: string): Promise<string | null> {
     try {
@@ -573,9 +573,9 @@ export function getMatrixClient(): MatrixClient {
   const ctx = getTenant()
   const existing = _clientByTenant.get(ctx.id)
   if (existing) return existing
-  const svc = ctx.slug === 'default' ? undefined : ctx.services
+  const svc = ctx.services
   const client = new MatrixClient(
-    svc?.matrixUrl ?? defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008',
+    svc?.matrixUrl ?? serviceEnv('MATRIX_URL') ?? 'http://matrix:8008',
     svc?.synapseAdminTokenRef ? resolveSecret(svc.synapseAdminTokenRef) : (env.SYNAPSE_ADMIN_TOKEN ?? ''),
     svc?.synapseAdminBotUserId ?? env.SYNAPSE_ADMIN_BOT_USER_ID ?? ''
   )

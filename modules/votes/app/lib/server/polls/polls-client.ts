@@ -1,4 +1,4 @@
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 
 // Polls v9 (NC 33) serves its REST API on the OCS mount. The legacy
 // index.php/apps/polls/api/v1.0 mount now only registers the OPTIONS preflight
@@ -64,12 +64,12 @@ function requestedSettings(
 }
 
 function ncBase(): string {
-  return (defaultTenantEnv('NEXTCLOUD_URL') ?? 'http://nextcloud').replace(/\/$/, '')
+  return (serviceEnv('NEXTCLOUD_URL') ?? 'http://nextcloud').replace(/\/$/, '')
 }
 
 function adminAuthHeader(): string {
-  const user = defaultTenantEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
-  const pass = defaultTenantEnv('NEXTCLOUD_ADMIN_PASSWORD') ?? ''
+  const user = serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+  const pass = serviceEnv('NEXTCLOUD_ADMIN_PASSWORD') ?? ''
   return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
 }
 
