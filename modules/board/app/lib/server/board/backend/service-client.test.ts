@@ -332,6 +332,72 @@ describe('ServiceBoardClient — method routing', () => {
   })
 })
 
+describe('ServiceBoardClient — create path (R29-BOARD-STORE-S B5)', () => {
+  it('createBoard → POST /api/v1/boards with the input as body; deserialises { board, stacks }', async () => {
+    resetStub({
+      firstStatus: 201,
+      body: {
+        board: makeBoardBody({ id: 'b7', name: 'Vorstand' }),
+        stacks: [
+          { id: 's1', board_id: 'b7', name: 'To Do', sort_order: 0 },
+          { id: 's2', board_id: 'b7', name: 'Done', sort_order: 1 },
+        ],
+      },
+    })
+    const client = new ServiceBoardClient()
+    const input = { orgUnitId: 'ou-1', name: 'Vorstand', archived: false, stacks: ['To Do', 'Done'] }
+    const result = await withTenant(() => client.createBoard(input))
+    expect(lastRequest!.method).toBe('POST')
+    expect(lastRequest!.url).toBe('/api/v1/boards')
+    expect(lastRequest!.body).toEqual(input)
+    expect(lastRequest!.headers['x-tenant-id']).toBe('tenant-uuid-board')
+    expect(lastRequest!.headers['x-tenant-slug']).toBe('board-test')
+    expect(lastRequest!.headers['x-internal-auth']).toBe('board-secret-5678')
+    expect(result.board.id).toBe('b7')
+    expect(result.board.created_at).toBeInstanceOf(Date)
+    expect(result.stacks.map((s) => [s.name, s.sort_order])).toEqual([
+      ['To Do', 0],
+      ['Done', 1],
+    ])
+  })
+
+  it('createBoard THROWS on a 201 without the { board, stacks } shape (fail loud)', async () => {
+    resetStub({ firstStatus: 201, body: makeBoardBody() })
+    const client = new ServiceBoardClient()
+    await expect(
+      withTenant(() => client.createBoard({ orgUnitId: 'ou-1', name: 'x' })),
+    ).rejects.toThrow(/malformed createBoard response/)
+  })
+
+  it('createBoard does NOT retry a POST, even on 503', async () => {
+    resetStub({ firstStatus: 503, subsequentStatus: 201, body: { board: makeBoardBody(), stacks: [] } })
+    const client = new ServiceBoardClient()
+    await expect(
+      withTenant(() => client.createBoard({ orgUnitId: 'ou-1', name: 'x' })),
+    ).rejects.toSatisfy((e: unknown) => e instanceof BoardServiceError && e.status === 503)
+    expect(stubBehaviour.callCount).toBe(1)
+  })
+
+  it('createStack → POST /api/v1/boards/b1/stacks with { name, order }; returns the Stack', async () => {
+    resetStub({ firstStatus: 201, body: { id: 's9', board_id: 'b1', name: 'Review', sort_order: 3 } })
+    const client = new ServiceBoardClient()
+    const result = await withTenant(() => client.createStack('b1', { name: 'Review', order: 3 }))
+    expect(lastRequest!.method).toBe('POST')
+    expect(lastRequest!.url).toBe('/api/v1/boards/b1/stacks')
+    expect(lastRequest!.body).toEqual({ name: 'Review', order: 3 })
+    expect(result).toEqual({ id: 's9', board_id: 'b1', name: 'Review', sort_order: 3 })
+  })
+
+  it('createStack does NOT retry and surfaces a 404 as BoardServiceError (never a silent null)', async () => {
+    resetStub({ firstStatus: 404, subsequentStatus: 201, body: { error: 'board not found' } })
+    const client = new ServiceBoardClient()
+    await expect(
+      withTenant(() => client.createStack('missing', { name: 'x', order: 0 })),
+    ).rejects.toSatisfy((e: unknown) => e instanceof BoardServiceError && e.status === 404)
+    expect(stubBehaviour.callCount).toBe(1)
+  })
+})
+
 describe('ServiceBoardClient — malformed-200 shape guard (#387)', () => {
   it('listPromotedActionItemIds THROWS on a 200 missing the { data: [] } envelope (fail-loud, not fail-open)', async () => {
     resetStub({ firstStatus: 200, body: { oops: true } })

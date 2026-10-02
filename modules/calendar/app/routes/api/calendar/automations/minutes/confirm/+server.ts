@@ -18,8 +18,11 @@
 //       "allDay":   boolean (optional, default false)
 //     },
 //     ...
-//   ]
+//   ],
+//   "createdBy": "string"             // internal Bearer callers only (F1-FIX-03 / S3#5)
 // }
+//
+// Callers: the internal Bearer (protocol publish) or a CouncilAdmin session.
 //
 // Response: { success: true, data: { created: number, eventIds: string[] } }
 
@@ -29,6 +32,7 @@ import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveCalendarBackendOr503 } from '$lib/server/calendar/backend/resolve'
+import { isInternalBearerRequest } from '$lib/server/internal-fetch'
 
 const eventSchema = z.object({
   title: z.string().min(1).max(500),
@@ -42,13 +46,32 @@ const bodySchema = z.object({
   minutesId: z.string().max(200).nullable().default(null),
   committeeId: z.string().uuid().nullable().default(null),
   events: z.array(eventSchema).min(1).max(50),
+  // Internal callers only (see below): the user the publish acted for.
+  createdBy: z.string().min(1).max(200).optional(),
 })
 
 export const POST: RequestHandler = async ({ request, locals }) => {
-  const session = await locals.auth()
-  const user = session?.user as SessionUser | undefined
-  if (!user || !hasRole(user.roles, Role.Member)) {
-    return json({ success: false, error: 'Forbidden' }, { status: 403 })
+  // F1-FIX-03 / S3#5: the protocol-publish flow commits the minutes' structured
+  // "Nächstes Treffen" event through this endpoint via internalFetch (G-075),
+  // so it accepts the trusted internal Bearer. The internal caller names the
+  // acting user in `createdBy` (the publishing CouncilAdmin); a session
+  // caller's `createdBy` is ignored and always their own id.
+  //
+  // Round 2 (house review HIGH): this endpoint deletes and replaces every
+  // minutes event keyed on `minutesId`, and publish keys them on the protocol
+  // id, so a session caller could wipe or overwrite the events a publish
+  // created. The session path therefore requires CouncilAdmin, the role that
+  // may publish a protocol (and the role the Helios sibling now requires).
+  // No UI calls the session path today.
+  const internal = isInternalBearerRequest(request)
+  let actorId: string | null = null
+  if (!internal) {
+    const session = await locals.auth()
+    const user = session?.user as SessionUser | undefined
+    if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
+      return json({ success: false, error: 'Forbidden' }, { status: 403 })
+    }
+    actorId = user.id
   }
 
   const resolved = resolveCalendarBackendOr503()
@@ -71,6 +94,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   const { minutesId, committeeId, events } = parsed.data
+  const createdBy = internal ? parsed.data.createdBy : actorId
+  if (!createdBy) {
+    return json({ success: false, error: 'createdBy is required for an internal caller' }, { status: 400 })
+  }
 
   // Idempotent: if this is a re-run with a minutesId, clear previous events
   // tagged with that id so the new set fully replaces them.
@@ -97,7 +124,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       allDay: ev.allDay,
       eventTypeId: meetingTypeId,
       isMultiCommittee: false,
-      createdBy: user.id,
+      createdBy,
       source: 'minutes',
       externalId: minutesId,
       committeeIds,

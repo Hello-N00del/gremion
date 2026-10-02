@@ -5,7 +5,10 @@ import { NextcloudResponseError } from '$lib/server/files/backend'
 import { buildWebdavPath } from '$lib/server/files/webdav-path'
 import { Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
-import { isViewableFile } from '$lib/files/editable-types'
+import { fileResponseContentType, isViewableFile } from '$lib/files/editable-types'
+
+/** F1-FIX-03 / H17: the CSP of every user-file response (see GET). */
+const FILE_RESPONSE_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -100,18 +103,29 @@ export const GET: RequestHandler = async (event) => {
     const hasExtension = /\.[a-zA-Z0-9]+$/.test(paramPath.split('/').pop() ?? '')
     if (hasExtension) {
       const upstream = await backend.download(webdavPath, ncUsername(user))
-      const contentType = upstream.headers.get('Content-Type') ?? 'application/octet-stream'
       const filename = paramPath.split('/').pop() ?? 'download'
+      // F1-FIX-03 / H17: the Content-Type is fixed per extension (never the
+      // upstream value, which follows the uploaded file), and only the fixed
+      // viewable list (no .svg) is ever inline.
+      const contentType = fileResponseContentType(filename)
       const inline = event.url.searchParams.get('inline') === '1' && isViewableFile(filename)
       const disposition = inline
         ? `inline; filename*=UTF-8''${encodeURIComponent(filename)}`
         : `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
-      return new Response(upstream.body, {
-        headers: {
-          'Content-Type': contentType,
-          'Content-Disposition': disposition
-        }
-      })
+      const headers: Record<string, string> = {
+        'Content-Type': contentType,
+        'Content-Disposition': disposition,
+        'X-Content-Type-Options': 'nosniff',
+      }
+      // A user file never runs script on the app origin: `sandbox` gives the
+      // document an opaque origin with scripts off, `default-src 'none'` loads
+      // nothing. Images and text still display under it. The one exception is
+      // an inline PDF: browsers refuse to start their PDF viewer in a sandboxed
+      // document, and that viewer does not run the file's script in this origin.
+      if (!(inline && contentType === 'application/pdf')) {
+        headers['Content-Security-Policy'] = FILE_RESPONSE_CSP
+      }
+      return new Response(upstream.body, { headers })
     }
     const uname = ncUsername(user)
     const entries = await backend.propfind(webdavPath, uname)

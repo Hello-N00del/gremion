@@ -230,6 +230,16 @@ export async function listEvents(filter: ListEventsFilter = {}): Promise<DbEvent
   const to = filter.to ?? new Date('2099-01-01T00:00:00Z')
   const shared = getSharedEventColor()
 
+  // F1-FIX-08 (S1c#12): a recurring master whose series is still running is
+  // part of every later window; callers expand it (recurrence-expand.ts).
+  const inWindow = sql`(
+    (e.end_at >= ${from} AND e.start_at < ${to})
+    OR (e.start_at < ${to} AND EXISTS (
+      SELECT 1 FROM event_recurrence r
+      WHERE r.event_id = e.id AND (r.until IS NULL OR r.until >= ${from})
+    ))
+  )`
+
   let rows: EventRow[]
   if (filter.committeeId && filter.eventTypeId) {
     rows = await sql<EventRow[]>`
@@ -239,8 +249,7 @@ export async function listEvents(filter: ListEventsFilter = {}): Promise<DbEvent
       JOIN event_committees ec ON ec.event_id = e.id
       WHERE ec.committee_id = ${filter.committeeId}
         AND e.event_type_id = ${filter.eventTypeId}
-        AND e.end_at >= ${from}
-        AND e.start_at < ${to}
+        AND ${inWindow}
       ORDER BY e.start_at
     `
   } else if (filter.committeeId) {
@@ -250,8 +259,7 @@ export async function listEvents(filter: ListEventsFilter = {}): Promise<DbEvent
       LEFT JOIN event_types et ON et.id = e.event_type_id
       JOIN event_committees ec ON ec.event_id = e.id
       WHERE ec.committee_id = ${filter.committeeId}
-        AND e.end_at >= ${from}
-        AND e.start_at < ${to}
+        AND ${inWindow}
       ORDER BY e.start_at
     `
   } else if (filter.eventTypeId) {
@@ -260,8 +268,7 @@ export async function listEvents(filter: ListEventsFilter = {}): Promise<DbEvent
       FROM calendar_events e
       LEFT JOIN event_types et ON et.id = e.event_type_id
       WHERE e.event_type_id = ${filter.eventTypeId}
-        AND e.end_at >= ${from}
-        AND e.start_at < ${to}
+        AND ${inWindow}
       ORDER BY e.start_at
     `
   } else {
@@ -269,8 +276,7 @@ export async function listEvents(filter: ListEventsFilter = {}): Promise<DbEvent
       SELECT e.*, et.color AS event_type_color, et.name AS event_type_name
       FROM calendar_events e
       LEFT JOIN event_types et ON et.id = e.event_type_id
-      WHERE e.end_at >= ${from}
-        AND e.start_at < ${to}
+      WHERE ${inWindow}
       ORDER BY e.start_at
     `
   }
@@ -366,16 +372,21 @@ export async function createEvent(input: CreateEventInput): Promise<DbEvent> {
 export async function updateEvent(id: string, input: UpdateEventInput): Promise<DbEvent> {
   const sql = getDb()
 
+  // F1-FIX-08 (S1c#10, twin of the leaf S4#11 fix): the nullable columns
+  // distinguish an explicit null (clear) from an absent key (keep).
+  const hasDescription = input.description !== undefined
+  const hasLocation = input.location !== undefined
+  const hasEventTypeId = input.eventTypeId !== undefined
   await sql`
     UPDATE calendar_events SET
       title              = COALESCE(${input.title ?? null}, title),
-      description        = COALESCE(${input.description ?? null}, description),
-      location           = COALESCE(${input.location ?? null}, location),
+      description        = CASE WHEN ${hasDescription}::boolean THEN ${input.description ?? null}::text ELSE description END,
+      location           = CASE WHEN ${hasLocation}::boolean THEN ${input.location ?? null}::text ELSE location END,
       start_at           = COALESCE(${input.startAt ?? null}, start_at),
       end_at             = COALESCE(${input.endAt ?? null}, end_at),
       all_day            = COALESCE(${input.allDay ?? null}, all_day),
       is_public          = COALESCE(${input.isPublic ?? null}, is_public),
-      event_type_id      = COALESCE(${input.eventTypeId ?? null}, event_type_id),
+      event_type_id      = CASE WHEN ${hasEventTypeId}::boolean THEN ${input.eventTypeId ?? null}::uuid ELSE event_type_id END,
       is_multi_committee = COALESCE(${input.isMultiCommittee ?? null}, is_multi_committee),
       updated_at         = now()
     WHERE id = ${id}
@@ -474,6 +485,56 @@ export async function deleteEventsByExternalId(
 export async function markCaldavSynced(eventId: string): Promise<void> {
   const sql = getDb()
   await sql`UPDATE calendar_events SET caldav_synced_at = now() WHERE id = ${eventId}`
+}
+
+/** F1-FIX-08 (D-2): the event's copy was removed from the shared calendar. */
+export async function markCaldavUnsynced(eventId: string): Promise<void> {
+  const sql = getDb()
+  await sql`UPDATE calendar_events SET caldav_synced_at = NULL WHERE id = ${eventId}`
+}
+
+/**
+ * F1-FIX-08 (D-2, R29-I15): the CalDAV drain's visibility gate — the event's
+ * is_public flag, or null when the row is gone. Kept off DbEvent so the API
+ * payload and the CalendarBackendPort DTO stay unchanged.
+ */
+export async function getEventPublicFlag(eventId: string): Promise<boolean | null> {
+  const sql = getDb()
+  const rows = await sql<{ is_public: boolean }[]>`
+    SELECT is_public FROM calendar_events WHERE id = ${eventId}
+  `
+  return rows[0] ? rows[0].is_public === true : null
+}
+
+/**
+ * F1-FIX-08 round 2 (D-2 cleanup, in-process twin of the leaf's
+ * services/calendar/migrations/004_caldav_unpublish_private.sql): queue an
+ * 'update' row for every non-public event an earlier push left in the shared
+ * calendar (caldav_synced_at set). The drain turns it into a DELETE and clears
+ * caldav_synced_at, so the event stops matching. Idempotent, so the drain runs
+ * it every tick (the gremion-ui schema is not this unit's to migrate). Unlike
+ * the once-per-boot leaf migration, NOT EXISTS matches ANY queued update row
+ * for the event, dead-lettered ones included: a DELETE that keeps failing
+ * stays one row in the admin failure list instead of one more row per tick.
+ * Returns the rows queued.
+ */
+export async function enqueuePrivateCaldavCleanup(): Promise<number> {
+  const sql = getDb()
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO caldav_sync_queue (event_id, caldav_uid, operation)
+    SELECT e.id, e.caldav_uid, 'update'
+    FROM calendar_events e
+    WHERE e.is_public = false
+      AND e.caldav_uid IS NOT NULL
+      AND e.caldav_synced_at IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM caldav_sync_queue q
+        WHERE q.event_id = e.id
+          AND q.operation = 'update'
+      )
+    RETURNING id
+  `
+  return rows.length
 }
 
 // ─── Event types ──────────────────────────────────────────────────────────────

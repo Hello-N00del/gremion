@@ -13,11 +13,14 @@ vi.mock('$lib/server/governance/org-units-db', () => ({
   listOrgUnits: mockListOrgUnits,
 }))
 
+// F1-FIX-04 r3: the loader filters by visibility (D-3), so the rows carry the
+// real columns it reads; the committee_only case lives in
+// routes/calendar/calendar-committees-visibility.test.ts.
 const UNITS = [
-  { id: 'ou-vorstand', name: 'Vorstand', wants_nextcloud_folder: true },
-  { id: 'ou-fsi', name: 'Fachschaft Informatik', wants_nextcloud_folder: true },
+  { id: 'ou-vorstand', parent_id: null, visibility: 'all_members', name: 'Vorstand', wants_nextcloud_folder: true },
+  { id: 'ou-fsi', parent_id: null, visibility: 'all_members', name: 'Fachschaft Informatik', wants_nextcloud_folder: true },
   // no Nextcloud folder → never a workspace, so its id must not resolve
-  { id: 'ou-no-folder', name: 'Geschlossene Gruppe', wants_nextcloud_folder: false },
+  { id: 'ou-no-folder', parent_id: null, visibility: 'all_members', name: 'Geschlossene Gruppe', wants_nextcloud_folder: false },
 ]
 
 function makeLocals() {

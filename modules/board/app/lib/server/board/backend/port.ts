@@ -5,7 +5,8 @@
 // once the seam is wired in (the five /api/board routes + the /tasks page load).
 // The method set is exactly the boardDb surface those callers actually invoke:
 // listBoardsForOrgUnits / getBoard / deckFor / createCard / moveCard /
-// promoteActionItem / listPromotedActionItemIds.
+// promoteActionItem / listPromotedActionItemIds, plus the create path
+// createBoard / createStack (R29-BOARD-STORE-S B5, used by the seed).
 //
 // The domain DTO types (Board, Stack, Card + the input shapes) are lifted
 // verbatim from board-db.ts. After the (HELD) cutover, callers import only from
@@ -79,6 +80,24 @@ export interface Deck {
   cards: readonly Card[]
 }
 
+/** R29-BOARD-STORE-S B5: a board and its stacks (sort_order = position), created together. */
+export interface CreateBoardInput {
+  orgUnitId: string
+  name: string
+  archived?: boolean
+  stacks?: string[]
+}
+
+export interface CreatedBoard {
+  board: Board
+  stacks: readonly Stack[]
+}
+
+export interface CreateStackInput {
+  name: string
+  order: number
+}
+
 // ── Port interface ────────────────────────────────────────────────────────────
 
 export interface BoardBackendPort {
@@ -110,4 +129,10 @@ export interface BoardBackendPort {
    *  counts — the check is deliberately NOT board-scoped, mirroring the global
    *  partial unique index on card.protocol_action_item_id. Empty input → []. */
   listPromotedActionItemIds(candidateIds: readonly string[]): Promise<readonly string[]>
+  /** R29-BOARD-STORE-S B5: create a board and its stacks in ONE transaction
+   *  (the seed's create path; no user-facing creation page, K Q5). */
+  createBoard(input: CreateBoardInput): Promise<CreatedBoard>
+  /** R29-BOARD-STORE-S B5: add a stack to a board of the caller's tenant.
+   *  THROWS when the board does not exist in the tenant (service: 404). */
+  createStack(boardId: string, input: CreateStackInput): Promise<Stack>
 }

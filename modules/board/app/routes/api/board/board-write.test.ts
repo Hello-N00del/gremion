@@ -4,6 +4,12 @@ vi.mock('$lib/server/board/scope', () => ({ resolveBoardOrgUnitScope: vi.fn(asyn
 vi.mock('$lib/server/board/board-db', () => ({
   boardDb: {
     getBoard: vi.fn(async () => ({ id: 'b1', org_unit_id: 'ou-1', name: 'StuRa', archived: false })),
+    // R29-BOARD-STORE-S B12: the handlers check stackId/cardId against the board's deck.
+    deckFor: vi.fn(async () => ({
+      board: { id: 'b1', org_unit_id: 'ou-1', name: 'StuRa', archived: false },
+      stacks: [{ id: 's1', board_id: 'b1', name: 'To Do', sort_order: 0 }, { id: 's2', board_id: 'b1', name: 'Done', sort_order: 1 }],
+      cards: [{ id: 'c1', stack_id: 's1' }],
+    })),
     createCard: vi.fn(async (d: any) => ({ id: 'c1', ...d })),
     moveCard: vi.fn(async (id: string, to: any) => ({ id, stack_id: to.stackId, sort_order: to.order })),
   },

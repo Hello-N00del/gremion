@@ -18,13 +18,16 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveCalendarBackendOr503 } from '$lib/server/calendar/backend/resolve'
 import type { ListEventsFilter, DbRecurrence } from '$lib/server/calendar/backend'
+import { canPublishEvent, forbiddenCommitteeTags, loadEventAuthzContext } from '$lib/server/calendar/event-authz'
+import { expandRecurringEvents } from '$lib/server/calendar/recurrence-expand'
 
 const recurrenceSchema = z.object({
   frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']),
   interval: z.number().int().min(1).max(99).default(1),
   until: z.string().datetime().nullable().default(null),
   count: z.number().int().min(1).max(999).nullable().default(null),
-  byday: z.array(z.string().max(4)).nullable().default(null),
+  // F1-FIX-08 (K4#21): RFC 5545 weekdays only (no CRLF into the ICS body).
+  byday: z.array(z.string().regex(/^([+-]?\d{1,2})?(MO|TU|WE|TH|FR|SA|SU)$/)).nullable().default(null),
   exceptions: z.array(z.string().datetime()).nullable().default(null),
 })
 
@@ -53,18 +56,23 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   const backend = resolved
 
   const p = url.searchParams
-  const filter: ListEventsFilter = {}
   const now = new Date()
-  filter.from = p.get('from')
+  const from = p.get('from')
     ? new Date(p.get('from')!)
     : new Date(now.getFullYear(), now.getMonth(), 1)
-  filter.to = p.get('to')
+  const to = p.get('to')
     ? new Date(p.get('to')!)
     : new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59)
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return json({ success: false, error: 'Invalid from/to' }, { status: 400 })
+  }
+  const filter: ListEventsFilter = { from, to }
   if (p.get('committeeId')) filter.committeeId = p.get('committeeId')!
   if (p.get('eventTypeId')) filter.eventTypeId = p.get('eventTypeId')!
 
-  const events = await backend.listEvents(filter)
+  // F1-FIX-08 (S1c#12): recurring masters that started before the window are
+  // expanded into the window's occurrences instead of vanishing.
+  const events = expandRecurringEvents(await backend.listEvents(filter), from, to)
   return json({ success: true, data: events })
 }
 
@@ -95,6 +103,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   const d = parsed.data
+
+  // F1-FIX-08 (S3#29): a non-admin may only tag committees they belong to and
+  // may only publish (isPublic=true) for one of those committees.
+  const authz = await loadEventAuthzContext(user)
+  if (forbiddenCommitteeTags(authz, d.committeeIds).length > 0) {
+    return json({ success: false, error: 'Forbidden: not a member of that committee' }, { status: 403 })
+  }
+  if (d.isPublic && !canPublishEvent(authz, d.committeeIds)) {
+    return json({ success: false, error: 'Forbidden: publishing needs committee membership' }, { status: 403 })
+  }
+
   const recurrence: DbRecurrence | null = d.recurrence
     ? {
         frequency: d.recurrence.frequency,

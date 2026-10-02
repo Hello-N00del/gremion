@@ -76,4 +76,13 @@ describe('getBoardBackend() factory', () => {
     process.env.BOARD_BACKEND = 'redis'
     expect(() => getBoardBackend()).toThrow(/redis/)
   })
+
+  it('both backends expose the create path createBoard + createStack (R29-BOARD-STORE-S B5)', () => {
+    for (const value of ['inprocess', 'service']) {
+      process.env.BOARD_BACKEND = value
+      const backend = getBoardBackend()
+      expect(typeof backend.createBoard, value).toBe('function')
+      expect(typeof backend.createStack, value).toBe('function')
+    }
+  })
 })

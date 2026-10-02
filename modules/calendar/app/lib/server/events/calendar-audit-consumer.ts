@@ -164,7 +164,9 @@ export const CALENDAR_AUDIT_WORKER = 'calendar-audit-consumer'
 
 /** What the boot needs from a broker beyond BrokerPort — injectable for tests. */
 export interface AuditBroker extends BrokerPort {
-  ensureStream(name: string, subjects: readonly string[]): Promise<void>
+  // Mirrors NatsBroker.ensureStream: it takes a MUTABLE string[] (the stream
+  // config it hands the server), and STREAMS.*.subjects are mutable arrays.
+  ensureStream(name: string, subjects: string[]): Promise<void>
   close(): Promise<void>
 }
 

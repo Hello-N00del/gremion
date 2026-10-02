@@ -12,21 +12,41 @@ export const EDITABLE_EXTENSIONS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * The fixed Content-Type served for each viewable extension. The files route
+ * never echoes the upstream (Nextcloud) Content-Type: that value follows the
+ * uploaded file, so an attacker chooses it. Markdown and plain text are served
+ * as text/plain, never as a renderable document type.
+ *
+ * F1-FIX-03 / H17: `.svg` is NOT here. An SVG is a document that can carry
+ * <script>; served inline from the app origin it ran with the viewer's session.
+ * It downloads as an attachment like any other non-viewable file.
+ */
+const VIEWABLE_CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/plain; charset=utf-8',
+})
+
+/**
  * File types that the browser can render natively when served inline.
  * These get an "Öffnen" button that streams the file with Content-Disposition: inline.
  * Markdown and plain text are included for in-browser text viewing.
  */
-export const VIEWABLE_EXTENSIONS: ReadonlySet<string> = new Set([
-  '.pdf',
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.svg',
-  '.txt',
-  '.md',
-])
+export const VIEWABLE_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(VIEWABLE_CONTENT_TYPES))
+
+/**
+ * The Content-Type the files route sends for `filename`: the fixed type of a
+ * viewable extension, else application/octet-stream. Never derived from the
+ * upstream response.
+ */
+export function fileResponseContentType(filename: string): string {
+  return VIEWABLE_CONTENT_TYPES[getFileExtension(filename)] ?? 'application/octet-stream'
+}
 
 /**
  * Extract the lowercase file extension (including the dot) from a file name.

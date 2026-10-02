@@ -3,6 +3,7 @@ import type { SessionUser } from '$lib/auth'
 import { listOrgUnits, getOrgUnitIdsForUser } from '$lib/server/governance/org-units-db'
 import { resolveCalendarBackendForPage } from '$lib/server/calendar/backend/resolve'
 import { deriveAbbr, deriveHue } from '$lib/governance/committee-color'
+import { canListOrgUnit } from '$lib/server/governance/visibility'
 
 export interface CalendarCommittee {
   key: string
@@ -15,8 +16,9 @@ export interface CalendarCommittee {
 // The calendar page is intentionally accessible to all session users including
 // guests (the Svelte component derives readonly mode from `Role.Guest`). The
 // committee filter chips and the per-user "mine" flag both gracefully degrade
-// to empty when no user is present — anonymous viewers see all committees but
-// none marked as theirs.
+// to empty when no user is present. Since F1-FIX-04 r3 (D-3) a viewer gets
+// chips only for the units they may know of (canListOrgUnit), so no session
+// gets no chips.
 export const load: PageServerLoad = async ({ locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
@@ -30,7 +32,11 @@ export const load: PageServerLoad = async ({ locals }) => {
   ])
 
   const myIdSet = new Set(myIds)
-  const calendarCommittees: CalendarCommittee[] = committees.map((c) => ({
+  // F1-FIX-04 round 3 (operator decision D-3): a committee_only unit gets a
+  // chip only for its members and CouncilAdmins. A failed membership lookup
+  // reads as "member of nothing", so it fails closed.
+  const listed = committees.filter((c) => canListOrgUnit(user, c, myIdSet.has(c.id)))
+  const calendarCommittees: CalendarCommittee[] = listed.map((c) => ({
     key: c.id,
     label: c.name,
     abbr: deriveAbbr(c.name),

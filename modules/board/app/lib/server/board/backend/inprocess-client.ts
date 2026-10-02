@@ -16,6 +16,10 @@ import type {
   MoveCardTarget,
   PromoteActionItemInput,
   Deck,
+  CreateBoardInput,
+  CreatedBoard,
+  CreateStackInput,
+  Stack,
 } from './port'
 import { boardDb } from '../board-db'
 
@@ -52,5 +56,13 @@ export class InprocessBoardClient implements BoardBackendPort {
 
   async listPromotedActionItemIds(candidateIds: readonly string[]): Promise<readonly string[]> {
     return boardDb.listPromotedActionItemIds(candidateIds)
+  }
+
+  async createBoard(input: CreateBoardInput): Promise<CreatedBoard> {
+    return boardDb.createBoardWithStacks(input)
+  }
+
+  async createStack(boardId: string, input: CreateStackInput): Promise<Stack> {
+    return boardDb.createStack({ boardId, name: input.name, order: input.order })
   }
 }

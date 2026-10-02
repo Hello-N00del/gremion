@@ -31,6 +31,8 @@ vi.mock('./calendar-db', () => ({
   recordCaldavSyncFailure: vi.fn().mockResolvedValue(undefined),
   markCaldavSynced: vi.fn().mockResolvedValue(undefined),
   getEvent: vi.fn(),
+  // Round 2: the tenant drain queues the D-2 cleanup before reading its batch.
+  enqueuePrivateCaldavCleanup: vi.fn().mockResolvedValue(0),
 }))
 vi.mock('./caldav-client', () => ({
   createCalDavPusher: vi.fn(() => ({})),
@@ -45,6 +47,7 @@ import {
   _resetReadinessForTests,
 } from '$lib/server/tenant/readiness'
 import { listPendingCaldavSync } from './calendar-db'
+import { createCalDavPusher } from './caldav-client'
 import { startCalDavSyncWorker } from './caldav-sync'
 
 const tenantRow = (id: string, slug: string) =>
@@ -74,6 +77,39 @@ beforeEach(() => {
     slug === 'default' ? ctxFor('tid-default', 'default') : ctxFor('tid-beta', 'beta'),
   )
   vi.mocked(listPendingCaldavSync).mockResolvedValue([])
+  // F1-FIX-08 (H06): every drained tenant needs its own CalDAV collection;
+  // 'default' keeps the legacy CALDAV_SHARED_CALENDAR, 'beta' is configured.
+  process.env.CALDAV_TENANT_CALENDARS = 'beta=beta-kalender'
+  delete process.env.CALDAV_DEFAULT_TENANT_SLUG
+  delete process.env.CALDAV_SHARED_CALENDAR
+})
+
+describe('CalDAV sync worker tick — per-tenant target (F1-FIX-08 H06)', () => {
+  it('drains each tenant into its own collection', async () => {
+    await tick!()
+
+    const targets = vi.mocked(createCalDavPusher).mock.calls.map((c) => (c as unknown[])[0])
+    expect(targets).toEqual([
+      expect.objectContaining({ calendar: 'stura' }),
+      expect.objectContaining({ calendar: 'beta-kalender' }),
+    ])
+  })
+
+  it('refuses a tenant without a configured collection (its queue is not read)', async () => {
+    delete process.env.CALDAV_TENANT_CALENDARS
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const scopes: string[] = []
+    vi.mocked(listPendingCaldavSync).mockImplementation(async () => {
+      scopes.push(currentTenantId())
+      return []
+    })
+
+    await tick!()
+
+    expect(scopes).toEqual(['tid-default'])
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("'beta'"))).toBe(true)
+    warn.mockRestore()
+  })
 })
 
 describe('CalDAV sync worker tick — P2.1b T4 fleet wrap', () => {

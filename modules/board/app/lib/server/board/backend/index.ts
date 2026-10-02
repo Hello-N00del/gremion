@@ -15,7 +15,19 @@ import { ServiceBoardClient } from './service-client'
 import { makeLogTracer, noopTracer } from '@gremion/ports/tracer'
 import type { BoardBackendPort } from './port'
 
-export type { BoardBackendPort, Board, Stack, Card, CreateCardInput, MoveCardTarget, PromoteActionItemInput, Deck } from './port'
+export type {
+  BoardBackendPort,
+  Board,
+  Stack,
+  Card,
+  CreateCardInput,
+  MoveCardTarget,
+  PromoteActionItemInput,
+  Deck,
+  CreateBoardInput,
+  CreatedBoard,
+  CreateStackInput,
+} from './port'
 
 /**
  * Resolve the board backend for the current BOARD_BACKEND env.

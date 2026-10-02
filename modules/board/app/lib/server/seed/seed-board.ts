@@ -7,8 +7,15 @@
 // today + (designDue − 2026-05-31), so overdue/soon/done states stay faithful
 // over time. c-1/c-4 carry a protocol_action_item_id (promote-link) resolved
 // from the design action-item ids the protocol seeder returns.
-import { getDb } from '../db'
-import { boardDb } from '../board/board-db'
+//
+// R29-BOARD-STORE-S B6: every read and write goes through the BoardBackendPort
+// (getBoardBackend() by default; precedent seed-newsletter.ts), so with
+// BOARD_BACKEND=service the fixtures land in the tenant's OWN leaf database
+// board_<slug> — before this, the seed wrote the KERNEL database even in service
+// mode and the leaf showed an empty /tasks. The de-duplication read is the
+// port's listing for the unit (archived boards included) plus a name match.
+// runSeed calls this only when config.modules.board === true (Q3).
+import { getBoardBackend, type BoardBackendPort } from '../board/backend'
 
 /** The design's reference "today". Card dues are stored relative to this so the
  *  fixtures keep their overdue/soon/done relationship to the seed-time clock. */
@@ -118,25 +125,25 @@ const SPECS: BoardSpec[] = [
 export async function seedBoardFixtures(
   orgUnitIds: ReadonlyMap<string, string>,
   userIds: ReadonlyMap<string, string>,
-  actionItemIds: ReadonlyMap<string, string>
+  actionItemIds: ReadonlyMap<string, string>,
+  backend: BoardBackendPort = getBoardBackend()
 ): Promise<void> {
-  const sql = getDb()
   const createdBy = userIds.get('dev.admin') ?? null
   for (const spec of SPECS) {
     const orgUnitId = orgUnitIds.get(spec.orgUnitKey)
     if (orgUnitId === undefined) continue
-    const existing = await sql<{ id: string }[]>`
-      SELECT id FROM board WHERE org_unit_id = ${orgUnitId} AND name = ${spec.boardName} LIMIT 1`
-    if (existing.length > 0) continue
-    const board = await boardDb.createBoard({
+    const existing = await backend.listBoardsForOrgUnits([orgUnitId])
+    if (existing.some((b) => b.name === spec.boardName)) continue
+    // The board and its stacks in one create (one transaction in both backends).
+    const { stacks } = await backend.createBoard({
       orgUnitId,
       name: spec.boardName,
       archived: spec.archived ?? false,
+      stacks: [...spec.stacks],
     })
-    const stackIds: string[] = []
-    for (let i = 0; i < spec.stacks.length; i++) {
-      const s = await boardDb.createStack({ boardId: board.id, name: spec.stacks[i]!, order: i })
-      stackIds.push(s.id)
+    const stackIds = [...stacks].sort((a, b) => a.sort_order - b.sort_order).map((s) => s.id)
+    if (stackIds.length !== spec.stacks.length) {
+      throw new Error(`seedBoardFixtures: board "${spec.boardName}" came back with ${stackIds.length} of ${spec.stacks.length} stacks`)
     }
     let order = 0
     for (const c of spec.cards) {
@@ -144,7 +151,7 @@ export async function seedBoardFixtures(
       const promoteId = c.promoteActionItemKey
         ? actionItemIds.get(c.promoteActionItemKey) ?? null
         : null
-      await boardDb.createCard({
+      await backend.createCard({
         stackId: stackIds[c.stack]!,
         title: c.title,
         description: c.description ?? null,

@@ -53,6 +53,32 @@ export async function getBoard(id: string): Promise<Board | null> {
   return rows[0] ?? null
 }
 
+/**
+ * R29-BOARD-STORE-S B5 (Q7): a board and its stacks (sort_order = position) in
+ * ONE transaction, so a failing stack insert leaves no board — the in-process
+ * twin of the leaf's POST /api/v1/boards. Same INSERTs as createBoard /
+ * createStack, run on the transaction handle of the tenant's own getDb().
+ */
+export async function createBoardWithStacks(data: {
+  orgUnitId: string
+  name: string
+  archived?: boolean
+  stacks?: readonly string[]
+}): Promise<{ board: Board; stacks: Stack[] }> {
+  return getDb().begin(async (tx) => {
+    const [board] = await tx<Board[]>`
+      INSERT INTO board (org_unit_id, name, archived)
+      VALUES (${data.orgUnitId}, ${data.name}, ${data.archived ?? false}) RETURNING *`
+    const stacks: Stack[] = []
+    for (const [order, name] of (data.stacks ?? []).entries()) {
+      const [stack] = await tx<Stack[]>`
+        INSERT INTO stack (board_id, name, sort_order) VALUES (${board!.id}, ${name}, ${order}) RETURNING *`
+      stacks.push(stack!)
+    }
+    return { board: board!, stacks }
+  }) as Promise<{ board: Board; stacks: Stack[] }>
+}
+
 export async function createStack(data: { boardId: string; name: string; order: number }): Promise<Stack> {
   const rows = await getDb()<Stack[]>`
     INSERT INTO stack (board_id, name, sort_order) VALUES (${data.boardId}, ${data.name}, ${data.order}) RETURNING *`
@@ -146,6 +172,7 @@ export async function listPromotedActionItemIds(candidateIds: readonly string[])
 
 export const boardDb = {
   createBoard,
+  createBoardWithStacks,
   listBoardsForOrgUnits,
   getBoard,
   createStack,

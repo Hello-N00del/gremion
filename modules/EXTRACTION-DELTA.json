@@ -400,6 +400,276 @@
       "reason": "R29-KHYG2-K: removed, the leaf-aggregator parity guard compared src/aggregator/{aggregator,types}.ts with the app oracle gremion-ui/src/lib/votes/{aggregator,types}.ts, which the kernel does not carry (2 ENOENT failures, `vitest run` for the package could not pass; StuRaOS keeps its copy). The elections app half (lib/votes) enters in-tree with TASK-205, which re-adds the guard re-pointed at it (modules/COUPLED-TESTS.json entry removed with it)",
       "owner": "TASK-205",
       "blob": null
+    },
+    {
+      "path": "modules/calendar/app/lib/components/calendar/WeekGrid.svelte",
+      "reason": "post-f2 StuRaOS b14639b7: fix(calendar-ui): key the week view's all-day row by id and start (F1-FIX-08 S1c#12 follow-through)",
+      "owner": "TASK-205",
+      "blob": "901ef892f45a564f2782cf9674cffc9038399dc8"
+    },
+    {
+      "path": "modules/files/app/lib/files/editable-types.test.ts",
+      "reason": "post-f2 StuRaOS b91c10dc: fix(files): an uploaded SVG never runs on the app origin; fixed Content-Type and sandbox CSP on every file res",
+      "owner": "TASK-205",
+      "blob": "76427824774de72dc13484336866e347321dd55c"
+    },
+    {
+      "path": "modules/files/app/lib/files/editable-types.ts",
+      "reason": "post-f2 StuRaOS b91c10dc: fix(files): an uploaded SVG never runs on the app origin; fixed Content-Type and sandbox CSP on every file res",
+      "owner": "TASK-205",
+      "blob": "6a0b58b992de844820ff7334109341118b71583b"
+    },
+    {
+      "path": "modules/board/app/lib/modules/manifests/board.ts",
+      "reason": "post-f2 StuRaOS cee6f398: fix(board): drop product literal from board manifest scope comment",
+      "owner": "TASK-205",
+      "blob": "7bc8cd8091ac846fd005b0392bc1a038944b58cb"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/index.test.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "14679e5770901b1bfc33b0a0776a2e30e44da697"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/index.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "bbe2c36fb0293f7dd27a108ee8d872a4dd5d02c7"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/inprocess-client.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "55de40f52eda9c5ecc02635afcb3a46901669935"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/port.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "51bed145a688fc882fa167d8783ff686c714738c"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/route-parity.test.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "a635f894f1d537c5987a27916b671e0cde1d124b"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/service-client.test.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "bdee4ba74cc9ddcaf153307b53b3ac063149bc6f"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/service-client.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "aa1249473d01ba32b473ff3a80b5904f44d93294"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/board-db.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "67af90c4ca7326d4d99ebd4c67992c22f4e1134f"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-client.test.ts",
+      "reason": "post-f2 StuRaOS 52203876: fix(calendar): recurrence until/exceptions are Berlin civil days, not UTC-midnight instants (F1-FIX-08 round 2",
+      "owner": "TASK-205",
+      "blob": "12ae770c0021330d5a54e3bcf7f7aa6d52500e1a"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-client.ts",
+      "reason": "post-f2 StuRaOS 770458ad: fix(calendar): in-process CalDAV DELETE treats 404/410 as done (F1-FIX-08 round 2, acceptance 5)",
+      "owner": "TASK-205",
+      "blob": "a45dbaf8a15c2252b811655fa589809e88f6d1ae"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-sync.test.ts",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "762425385dc09cf0fbf03e479db49d1e2df5f141"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-sync.tick.test.ts",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "783cc44ea3c16926f9919374629268e8be2262a1"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-sync.ts",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "1acbf2f1ed2883d886192fb5062e6235f278edde"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-target.ts",
+      "reason": "post-f2 StuRaOS 93b435e6: fix(calendar): in-process CalDAV drain mirrors per-tenant target and D-2 never-push-non-public (F1-FIX-08 H06)",
+      "owner": "TASK-205",
+      "blob": "396c0eb5ef57a161c62c2c08858fb8511e9d2d52"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/calendar-db.ts",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "a3b3d513cddd509c606d8e7b106636fc87b75461"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/event-authz.ts",
+      "reason": "post-f2 StuRaOS 21eaff18: fix(calendar): limit event edit/delete/publish to creator, committee members or CouncilAdmin (F1-FIX-08 S3#29)",
+      "owner": "TASK-205",
+      "blob": "ada246bf647b006c0cb958ceaa639dbc4af43006"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/recurrence-expand.test.ts",
+      "reason": "post-f2 StuRaOS 52203876: fix(calendar): recurrence until/exceptions are Berlin civil days, not UTC-midnight instants (F1-FIX-08 round 2",
+      "owner": "TASK-205",
+      "blob": "768c0d370f302ff79882364cb65624c8fbc72eed"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/recurrence-expand.ts",
+      "reason": "post-f2 StuRaOS 52203876: fix(calendar): recurrence until/exceptions are Berlin civil days, not UTC-midnight instants (F1-FIX-08 round 2",
+      "owner": "TASK-205",
+      "blob": "a6aeb739a977b283c9e44274f3448d1e1a14e27e"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/register.server.test.ts",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "be0c3c8cc8101c2f1e4017c10e7af39e3d3ad464"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/register.server.ts",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "4507fa3875b7751d864f3239dffe731d87a4abfc"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.ts",
+      "reason": "post-f2 StuRaOS 871636a9: fix(types): svelte-check 12 -> 0 errors (R29-SVCHECK-S)",
+      "owner": "TASK-205",
+      "blob": "2a90da3dc8496ec5575c78aba7e2a6a74c259b12"
+    },
+    {
+      "path": "modules/board/app/lib/server/seed/seed-board.ts",
+      "reason": "post-f2 StuRaOS 754e0ce7: feat(seed): demo boards seed through the board port, gated on config.modules.board (R29-BOARD-STORE-S item 6, ",
+      "owner": "TASK-205",
+      "blob": "d39322fad563747965836760822f030e7b546fd0"
+    },
+    {
+      "path": "modules/board/app/routes/api/board/[id]/cards/+server.ts",
+      "reason": "post-f2 StuRaOS 52ab9d16: fix(board): web-tier object binding - stack, card and action item must belong to the scoped board, else 404 (R",
+      "owner": "TASK-205",
+      "blob": "c3cbfbda0b48af84f0cf3e3cc4c39158d8cc9f41"
+    },
+    {
+      "path": "modules/board/app/routes/api/board/[id]/promote/+server.ts",
+      "reason": "post-f2 StuRaOS 52ab9d16: fix(board): web-tier object binding - stack, card and action item must belong to the scoped board, else 404 (R",
+      "owner": "TASK-205",
+      "blob": "2f619a03d8e02008d622b9c36750abd5268e4893"
+    },
+    {
+      "path": "modules/board/app/routes/api/board/board-binding.test.ts",
+      "reason": "post-f2 StuRaOS 52ab9d16: fix(board): web-tier object binding - stack, card and action item must belong to the scoped board, else 404 (R",
+      "owner": "TASK-205",
+      "blob": "5163f592be45d3d1d1c8a847f7c1451343824204"
+    },
+    {
+      "path": "modules/board/app/routes/api/board/board-write.test.ts",
+      "reason": "post-f2 StuRaOS 52ab9d16: fix(board): web-tier object binding - stack, card and action item must belong to the scoped board, else 404 (R",
+      "owner": "TASK-205",
+      "blob": "0ea72deccff15404fc73c44e9e569242e7711ac0"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/automations/helios/+server.ts",
+      "reason": "post-f2 StuRaOS 44089f7a: fix(calendar): the Helios election automation requires a CouncilAdmin (F1-FIX-03-S S3#4 S3#30)",
+      "owner": "TASK-205",
+      "blob": "8dd797fb843c52ca0accf21cd1caad2d049a6b10"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/automations/helios/helios.test.ts",
+      "reason": "post-f2 StuRaOS 44089f7a: fix(calendar): the Helios election automation requires a CouncilAdmin (F1-FIX-03-S S3#4 S3#30)",
+      "owner": "TASK-205",
+      "blob": "0caca391f78fbaa357b0d53d5b9a7abfdc423505"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/+server.ts",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "owner": "TASK-205",
+      "blob": "9f4196ecc3b97e272715e4e3027564aa360ca172"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/confirm.test.ts",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "owner": "TASK-205",
+      "blob": "3b83e1c299e8602b5158dca372620a1dfd8802b0"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/+server.ts",
+      "reason": "post-f2 StuRaOS 9666f2a1: fix(calendar): RFC 5545-valid CalDAV ICS and validated BYDAY (F1-FIX-08 S1c#13, K4#21)",
+      "owner": "TASK-205",
+      "blob": "29610ea8cc40d1d48dd4d109814b61cb83bca39b"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/[id]/+server.ts",
+      "reason": "post-f2 StuRaOS 85c701e0: fix(calendar): PATCH with a series occurrence's times no longer moves the whole series (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "155bbcdf4b46a8d70066381dc7e7d7bff6de6fff"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/[id]/event-authz.test.ts",
+      "reason": "post-f2 StuRaOS 8f84fdfa: test(calendar): keep F1-FIX-08 guards inside the oxlint ratchet",
+      "owner": "TASK-205",
+      "blob": "a576050b91b369438c1f4dc7f4ad3618e973ba39"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/[id]/occurrence-patch.test.ts",
+      "reason": "post-f2 StuRaOS 85c701e0: fix(calendar): PATCH with a series occurrence's times no longer moves the whole series (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "9f12f2a3a061e3852ff6038a04e6ce5e5775090e"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/events-recurrence.test.ts",
+      "reason": "post-f2 StuRaOS 443c635f: fix(calendar): recurring events no longer vanish after their first occurrence (F1-FIX-08 S1c#12)",
+      "owner": "TASK-205",
+      "blob": "e23c0504df2c1578e2e8f8da8c3e1892093a3907"
+    },
+    {
+      "path": "modules/files/app/routes/api/files/[...path]/+server.ts",
+      "reason": "post-f2 StuRaOS b91c10dc: fix(files): an uploaded SVG never runs on the app origin; fixed Content-Type and sandbox CSP on every file res",
+      "owner": "TASK-205",
+      "blob": "c9c765b14b85c803f000b1fcf4b28e01bd700a28"
+    },
+    {
+      "path": "modules/files/app/routes/api/files/[...path]/file-serving.test.ts",
+      "reason": "post-f2 StuRaOS b91c10dc: fix(files): an uploaded SVG never runs on the app origin; fixed Content-Type and sandbox CSP on every file res",
+      "owner": "TASK-205",
+      "blob": "335c6f63891465cd158f6c9c6584883ae1efda54"
+    },
+    {
+      "path": "modules/calendar/app/routes/calendar/+page.server.ts",
+      "reason": "post-f2 StuRaOS dc53c0bd: fix(governance): /calendar chips and /files workspaces name a committee_only unit only to its members and Coun",
+      "owner": "TASK-205",
+      "blob": "e10cf28d349b8d62b50c66b61372a58dae182054"
+    },
+    {
+      "path": "modules/calendar/app/routes/calendar/calendar-committees-visibility.test.ts",
+      "reason": "post-f2 StuRaOS dc53c0bd: fix(governance): /calendar chips and /files workspaces name a committee_only unit only to its members and Coun",
+      "owner": "TASK-205",
+      "blob": "b7ebe28b2e71f3cc99842edad32402f293410c69"
+    },
+    {
+      "path": "modules/files/app/routes/files/+page.server.ts",
+      "reason": "post-f2 StuRaOS dc53c0bd: fix(governance): /calendar chips and /files workspaces name a committee_only unit only to its members and Coun",
+      "owner": "TASK-205",
+      "blob": "8bbff405c670dc13877603d532762aa275f21380"
+    },
+    {
+      "path": "modules/files/app/routes/files/files-deeplink.test.ts",
+      "reason": "post-f2 StuRaOS dc53c0bd: fix(governance): /calendar chips and /files workspaces name a committee_only unit only to its members and Coun",
+      "owner": "TASK-205",
+      "blob": "1f485cd0247e3dba21c01355fb9853e0aa36593c"
     }
   ]
 }

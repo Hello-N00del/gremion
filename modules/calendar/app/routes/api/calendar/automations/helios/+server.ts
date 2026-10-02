@@ -20,8 +20,12 @@
 // Idempotent: re-POSTing for the same electionId first deletes any previous
 // events for that election, so B2 can safely call on both create AND update.
 //
-// Auth: caller must be authenticated (Member+). In practice invoked via
-// internal fetch from the elections route using the logged-in user's session.
+// Auth: CouncilAdmin session only (F1-FIX-03 / S3#4 + S3#30). Any Member used
+// to be able to create undeletable read-only events here, or replace another
+// election's events (the idempotent re-POST deletes them first). Election
+// scheduling is a CouncilAdmin action, and there is no internal producer of
+// this endpoint, so the internal Bearer is not accepted either (it is not on
+// the authGuard internal-bearer allow-list).
 
 import { json } from '@sveltejs/kit'
 import { z } from 'zod'
@@ -43,7 +47,7 @@ const bodySchema = z.object({
 export const POST: RequestHandler = async ({ request, locals }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
-  if (!user || !hasRole(user.roles, Role.Member)) {
+  if (!user || !hasRole(user.roles, Role.CouncilAdmin)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 

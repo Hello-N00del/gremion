@@ -5,7 +5,7 @@ import { Role, hasRole } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveBoardOrgUnitScope } from '$lib/server/board/scope'
 import { resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
-import { getActionItem } from '$lib/server/protocols/protocol-db'
+import { getActionItem, getProtocol } from '$lib/server/protocols/protocol-db'
 
 const schema = z.object({ actionItemId: z.string().min(1) })
 
@@ -30,6 +30,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   if (!parsed.success) throw error(400, 'actionItemId fehlt')
   const item = await getActionItem(parsed.data.actionItemId)
   if (!item) throw error(404, 'Aufgabe nicht gefunden')
+  // R29-BOARD-STORE-S B12 (OWASP API1:2023, BOLA): the item must come from a
+  // protocol of THIS board's committee — the predicate /promotable lists by
+  // (p.committee_id = board.org_unit_id). 404, not 403: no existence oracle.
+  const protocol = await getProtocol(item.protocol_id)
+  if (!protocol || protocol.committee_id !== board.org_unit_id) throw error(404, 'Aufgabe nicht gefunden')
   const card = await backend.promoteActionItem(
     params.id,
     { id: item.id, text: item.text, assigneeKeycloakId: item.assignee_keycloak_id, dueDate: item.due_date },

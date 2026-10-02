@@ -60,7 +60,10 @@
     <div class="flex border-b">
       <div class="w-12 shrink-0"></div>
       <div class="flex-1 flex gap-1 p-1 flex-wrap">
-        {#each allDayEvents() as ev (ev.id)}
+        <!-- F1-FIX-08 (S1c#12): the API expands a recurring series into occurrences
+             that share the series id; this row lists the whole fetched window, so
+             the key includes the start (per-day lists below stay keyed by id). -->
+        {#each allDayEvents() as ev (`${ev.id}@${ev.dtstart.getTime()}`)}
           <button
             class="rounded px-1 text-xs text-white truncate max-w-[160px]"
             style="background: {gradient(ev)}"

@@ -21,11 +21,13 @@ export const boardManifest: ModuleManifest = {
   id: 'board',
   order: 100,
   toggleable: true,
-  // services/board/src/index.ts:24 — "storeFn ignores the tenant (single
-  // BOARD_PG_URL database today)". No tenant-store.ts, and board/stack/card
-  // carry no tenant column. Defaults OFF until that is fixed; see
-  // ModuleManifest.notTenantIsolated.
-  notTenantIsolated: true,
+  // No notTenantIsolated marker: the board leaf keeps one database per tenant,
+  // board_<slug>, catalogued in board_control (services/board/src/tenant-store.ts),
+  // with the (id, slug) pair bound on every call. Marker removed for this
+  // vertical's test environment under R29-I1 (leaf per-tenant store plus a leaf-level,
+  // shared-secret isolation pass). This is not the TRD-060 pass and does not
+  // satisfy TRD-064; the kernel keeps the board off (R29-BOARD-STORE-K §3.4,
+  // TASK-058).
   pages: [{ segment: 'tasks', minRole: Role.Member }],
   routePrefixes: ['/tasks', '/api/board'],
 }

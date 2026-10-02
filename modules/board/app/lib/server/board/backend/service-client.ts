@@ -15,6 +15,10 @@ import type {
   MoveCardTarget,
   PromoteActionItemInput,
   Deck,
+  CreateBoardInput,
+  CreatedBoard,
+  CreateStackInput,
+  Stack,
 } from './port'
 
 // ── Error class ───────────────────────────────────────────────────────────────
@@ -96,6 +100,15 @@ function readDataArray(res: unknown, op: string): unknown[] {
     )
   }
   return data
+}
+
+function deserializeStack(raw: Record<string, unknown>): Stack {
+  return {
+    id: raw.id as string,
+    board_id: raw.board_id as string,
+    name: raw.name as string,
+    sort_order: raw.sort_order as number,
+  }
 }
 
 function deserializeCard(raw: Record<string, unknown>): Card {
@@ -280,5 +293,31 @@ export class ServiceBoardClient implements BoardBackendPort {
       candidateIds: [...candidateIds],
     })
     return readDataArray(res, 'listPromotedActionItemIds') as string[]
+  }
+
+  /** R29-BOARD-STORE-S B5 → POST /api/v1/boards (201 { board, stacks }). A POST:
+   *  never retried (a retry after a lost response would create a second board). */
+  async createBoard(input: CreateBoardInput): Promise<CreatedBoard> {
+    const res = (await this.leafFetch('POST', '/api/v1/boards', input)) as {
+      board?: unknown
+      stacks?: unknown
+    } | null
+    if (!res || typeof res.board !== 'object' || res.board === null || !Array.isArray(res.stacks)) {
+      throw new Error('[board-service-client] malformed createBoard response: expected { board, stacks } from the board leaf')
+    }
+    return {
+      board: deserializeBoard(res.board as Record<string, unknown>),
+      stacks: res.stacks.map((s) => deserializeStack(s as Record<string, unknown>)),
+    }
+  }
+
+  /** R29-BOARD-STORE-S B5 → POST /api/v1/boards/:id/stacks (201 Stack). Not
+   *  retried; a board outside the tenant surfaces as BoardServiceError 404. */
+  async createStack(boardId: string, input: CreateStackInput): Promise<Stack> {
+    const res = (await this.leafFetch('POST', `/api/v1/boards/${encodeURIComponent(boardId)}/stacks`, {
+      name: input.name,
+      order: input.order,
+    })) as Record<string, unknown>
+    return deserializeStack(res)
   }
 }

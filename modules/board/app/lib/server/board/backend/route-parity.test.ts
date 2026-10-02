@@ -22,7 +22,9 @@ const {
   mockDeckFor,
   mockPromoteActionItem,
   mockListPromotedActionItemIds,
+  mockCreateBoardWithStacks,
 } = vi.hoisted(() => ({
+  mockCreateBoardWithStacks: vi.fn(),
   mockCreateBoard: vi.fn(),
   mockListBoardsForOrgUnits: vi.fn(),
   mockGetBoard: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock('../board-db', () => ({
     deckFor: mockDeckFor,
     promoteActionItem: mockPromoteActionItem,
     listPromotedActionItemIds: mockListPromotedActionItemIds,
+    createBoardWithStacks: mockCreateBoardWithStacks,
   },
 }))
 
@@ -130,6 +133,24 @@ describe('InprocessBoardClient — byte-identical delegation to boardDb', () => 
     const item = { id: 'ai-1', text: 'Do it', assigneeKeycloakId: null, dueDate: null }
     mockPromoteActionItem.mockRejectedValueOnce(new Error('board has no stacks'))
     await expect(client.promoteActionItem('b1', item, 'u1')).rejects.toThrow('board has no stacks')
+  })
+
+  it('createBoard delegates to boardDb.createBoardWithStacks (one transaction) with the exact input (R29-BOARD-STORE-S B5)', async () => {
+    const input = { orgUnitId: 'ou-1', name: 'StuRa', archived: false, stacks: ['To Do', 'Done'] }
+    const created = { board: BOARD, stacks: [{ id: 's1', board_id: 'b1', name: 'To Do', sort_order: 0 }] }
+    mockCreateBoardWithStacks.mockResolvedValueOnce(created)
+    const result = await client.createBoard(input)
+    expect(mockCreateBoardWithStacks).toHaveBeenCalledWith(input)
+    expect(mockCreateBoard).not.toHaveBeenCalled()
+    expect(result).toBe(created)
+  })
+
+  it('createStack delegates to boardDb.createStack as { boardId, name, order } (R29-BOARD-STORE-S B5)', async () => {
+    const stack = { id: 's9', board_id: 'b1', name: 'Review', sort_order: 3 }
+    mockCreateStack.mockResolvedValueOnce(stack)
+    const result = await client.createStack('b1', { name: 'Review', order: 3 })
+    expect(mockCreateStack).toHaveBeenCalledWith({ boardId: 'b1', name: 'Review', order: 3 })
+    expect(result).toBe(stack)
   })
 
   it('listPromotedActionItemIds delegates argument-for-argument and passes the result through (#384)', async () => {

@@ -12,6 +12,7 @@ import {
 import { startNotificationScheduler } from './notification-scheduler'
 import { startCalDavSyncWorker } from './caldav-sync'
 import { getCalendarBackend } from './backend'
+import { expandRecurringEvents } from './recurrence-expand'
 import { makeLogTracer, noopTracer } from '$lib/server/ports/tracer'
 import { defaultTenantEnv } from '$lib/server/tenant/default-env'
 import {
@@ -73,7 +74,18 @@ registerServerInitHook(async () => {
 registerDataProvider('calendar:upcoming-events', async (range) => {
   try {
     const backend = getCalendarBackend()
-    const events = await backend.listEvents({ from: range.from, to: range.to })
+    // F1-FIX-08 (S1c#12): expand recurring series into the dashboard window,
+    // then keep ONE row per event id: the series' next occurrence. Every
+    // occurrence carries the series id and the dashboard keys its list by id,
+    // so two occurrences of a weekly series threw each_key_duplicate (round 2).
+    const events = nextOccurrencePerId(
+      expandRecurringEvents(
+        await backend.listEvents({ from: range.from, to: range.to }),
+        range.from,
+        range.to,
+      ),
+      range.from,
+    )
     return events.map((e) => ({
       id: e.id,
       startAt: e.startAt,
@@ -86,3 +98,18 @@ registerDataProvider('calendar:upcoming-events', async (range) => {
     return []
   }
 })
+
+/**
+ * One event per id from a start-sorted expansion: the first occurrence that
+ * starts at or after `from` (the "upcoming" one); an occurrence that is
+ * already running only stands in when the series has no later one in range.
+ */
+function nextOccurrencePerId<T extends { id: string; startAt: Date }>(sorted: readonly T[], from: Date): T[] {
+  const picked = new Map<string, T>()
+  for (const e of sorted) {
+    const current = picked.get(e.id)
+    if (!current) picked.set(e.id, e)
+    else if (current.startAt.getTime() < from.getTime() && e.startAt.getTime() >= from.getTime()) picked.set(e.id, e)
+  }
+  return sorted.filter((e) => picked.get(e.id) === e)
+}
