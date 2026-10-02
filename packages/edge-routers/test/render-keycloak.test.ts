@@ -36,11 +36,14 @@ describe('the realm router (TDD 18)', () => {
     expect(kc).toMatch(/tls:\n {8}certResolver: "le-http"/)
   })
 
-  it('chains the SAME pin first and the same chain as the host router', () => {
+  it('chains the SAME pin first and the host router chain WITHOUT the proxy-trust stamp (TASK-043c Qc3)', () => {
     const kc = block(yaml, 'tenant-musterstadt.kc')
     const mws = [...kc.matchAll(/^ {8}- "([^"]+)"$/gm)].map((m) => m[1])
+    // Keycloak never receives the app's shared secret
     expect(mws).toEqual(['edge-hostpin-musterstadt@file', 'edge-hsts-custom@docker', 'edge-ratelimit-app@docker', 'edge-perip-musterstadt@file'])
-    expect(r.keycloakRouter?.chain).toEqual(r.routers[0]!.chain)
+    expect(yaml).not.toMatch(/tenant-musterstadt\.kc:[\s\S]*proxytrust/)
+    expect(r.routers[0]!.chain).toEqual([...r.keycloakRouter!.chain, 'gremion-ui-proxytrust@docker'])
+    expect(r.keycloakRouter?.chain[0]).toBe(r.routers[0]!.chain[0])
   })
 
   it('never routes /auth/admin, /auth/js, a bare /auth or another realm', () => {

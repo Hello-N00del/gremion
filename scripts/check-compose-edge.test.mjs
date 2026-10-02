@@ -379,3 +379,37 @@ test('guard 4: no ratelimit middleware in the production render keys its bucket 
   }
   assert.deepEqual(offenders, [], `a ratelimit bucket keys on a spoofable client header (Traefik is the first hop, so remote-address keying is what makes the bucket real): ${offenders.join(', ')}`)
 })
+
+// ── 6. every <name>@docker a tenant router chains is declared on traefik ──
+//
+// TASK-043c (P1). The byte-exact tenant render fixtures the edge-proto drill
+// runs (test/host/fixtures/edge-proto/dynamic/tenant-*.yml, asserted equal to
+// the emitter's output by @gremion/edge-routers' tests) chain middlewares
+// `<name>@docker`. The edge-proto fixture compose declared them; the PRODUCTION
+// compose did not, so the drill was green while every tenant router on a real
+// host reported `middleware "edge-ratelimit-app@docker" does not exist` and the
+// customer host answered 404. This reads the names out of the fixtures (no TS
+// import) and demands each one on the production render's traefik labels --
+// the artefact that is the deployed topology. (Numbered 6 because guard 5 above
+// is the socket isolation.)
+
+const TENANT_FIXTURE_DIR = path.join(REPO_ROOT, 'test/host/fixtures/edge-proto/dynamic')
+const chainedDockerMiddlewares = (yaml) => [...yaml.matchAll(/^\s*-\s*"([A-Za-z0-9._-]+)@docker"\s*$/gm)].map((m) => m[1])
+
+test('guard 6: the production traefik labels declare every <name>@docker the tenant router fixtures chain', () => {
+  const files = readdirSync(TENANT_FIXTURE_DIR).filter((f) => /^tenant-.+\.yml$/.test(f))
+  assert.ok(files.length >= 2, `only ${files.length} tenant fixture(s) found in ${TENANT_FIXTURE_DIR} -- the guard would pass vacuously`)
+  const chained = new Set(files.flatMap((f) => chainedDockerMiddlewares(readFileSync(path.join(TENANT_FIXTURE_DIR, f), 'utf8'))))
+  // The names the emitter chains today: a fixture that lost them would also
+  // empty this guard.
+  for (const must of ['edge-hsts-custom', 'edge-ratelimit-app', 'gremion-ui-proxytrust']) {
+    assert.ok(chained.has(must), `the tenant fixtures no longer chain ${must}@docker -- is the fixture stale?`)
+  }
+  const declared = new Set(
+    Object.keys(traefik().labels ?? {})
+      .map((k) => /^traefik\.http\.middlewares\.([^.]+)\./.exec(k)?.[1])
+      .filter(Boolean),
+  )
+  const missing = [...chained].filter((n) => !declared.has(n)).sort()
+  assert.deepEqual(missing, [], `tenant routers chain ${missing.map((n) => `${n}@docker`).join(', ')}, which the production traefik service does not declare: Traefik reports "middleware does not exist", disables the router and the customer host answers 404`)
+})
