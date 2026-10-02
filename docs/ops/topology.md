@@ -1,6 +1,6 @@
 # Deployment topology
 
-Date: 2026-09-24.
+Date: 2026-09-24. Amended 2026-10-02 (§5: second census and dated additions, TRD-352).
 
 TASK-010. Implements PRD-REC-001, PRD-REC-003, PRD-REC-004; TRD-351, TRD-352, TRD-395.
 
@@ -148,7 +148,8 @@ The tasks board and the password vault (native Vaultwarden alternative) are **no
 council under decision P2 (PRD-REC-003). Both stay off until PRD-PLAT-012's cross-tenant isolation
 test passes for that module:
 
-- Tasks board: off, blocked on the isolation proof (PRD-PLAT-012).
+- Tasks board: off, blocked on the isolation proof (PRD-PLAT-012). The test environment runs
+  it as a dated, test-only exception (R29-I1); see §5.4. The pilot configuration stays off.
 - Native password vault: off by default; may be enabled later in the pilot once its isolation test
   passes [D R19-D13, D R19-D37]. Vaultwarden (the council's own externally-operated instance, per
   TRD §11's reading of PRD §12.1a) remains the supported alternative credential tool for the pilot
@@ -170,3 +171,62 @@ Classes 1–2 may only fix what already exists; classes 3–5 may create a new u
 these five waits for the verdict. A class-5 addition records the builder-weeks it consumes against
 PRD §14.1 (TRD-351). Each release's change list is checked against this record; an addition is
 either named with its exception class and dated entry, or none was made.
+
+## 5. Dated amendments (TRD-352)
+
+Each change to the deployed topology after the 2026-09-24 publication is entered here with its date
+(TRD-352: the deployed topology stays consistent with this record; each change dated). The target
+in §2 is unchanged by these entries. Hosts are described by role: "the pilot host" is the current
+test environment.
+
+### 5.1 Second census, 2026-10-02 (TRD-395, second reading)
+
+Read-only census of the pilot host on the evening of 2026-10-02. Deployed state at the time: the
+host marker records the StuRaOS master `87c004a8` (kernel gitlink `a21c1740`), extracted
+2026-10-02 00:07 (UTC+2).
+
+**34 containers were up, in 3 compose projects:**
+
+| Compose project | Containers | What it is | First recorded |
+|---|---|---|---|
+| the main stack project | 32 | the same 32 services as the §1 table, one-to-one by service name | §1, 2026-09-24 |
+| `gremion-panel` | 1 | the operator control panel (§5.3) | §5.3, 2026-10-01 |
+| `gremion-site` | 1 | the public marketing site (§5.2) | §5.2, 2026-09-29 |
+
+- Health: every container that declares a healthcheck reported healthy.
+- The main stack project still has exactly the 32 services of §1. Nothing was added to it and
+  nothing removed. The LiveKit gap recorded in §1 is therefore unchanged.
+- Not re-taken tonight: the per-container image and pin readings of §1 and the §2 pin status. The
+  2026-09-24 reading stands for them until the re-init.
+- What changed since the first reading is the project count, from one to three. The two entries
+  below are the whole difference.
+
+### 5.2 2026-09-29: compose project `gremion-site` (marketing site)
+
+- A compose project of its own with one container, serving the public marketing site. Live since
+  2026-09-29.
+- Plan basis: the target keeps the sales site as its own compose project with no route to council
+  data (TRD-415, TASK-118 note). That property was not re-verified in the 2026-10-02 census.
+- Exception class (§4 / TRD-351): **[A] not yet assigned.** Pending the operator. Until assigned,
+  this addition has no exception class and is open against the §4 rule.
+
+### 5.3 2026-10-01: compose project `gremion-panel` (operator control panel)
+
+- A compose project of its own with one container: the first-party control-panel image, tagged
+  `r29-d7722921` (the tag suffix names the build commit). Source in this repository:
+  `apps/control-panel` and `compose/control-panel`. Live since 2026-10-01.
+- Exception class (§4 / TRD-351): **[A] not yet assigned.** Pending the operator. Classes 3 to 5
+  may create a new unit; which one applies (if any) is the operator's call, and none is claimed
+  here.
+
+### 5.4 2026-10-01: tasks board enabled on the test environment only (R29-I1)
+
+- Under R29-I1 (board opt-in now, per-tenant store) the board runs on the test environment: the
+  board service is up and healthy, and its databases are per-tenant (`board_control` and
+  `board_default`), with counts and checksums equal to the legacy store at cut-over. Live since
+  2026-10-01.
+- This is a test-environment exception. §3 is unchanged for the pilot: the tasks board stays off
+  until PRD-PLAT-012's cross-tenant isolation proof passes (PRD-REC-003). No new deployment unit
+  is involved: the board service is one of the 32 services in §1.
+- The native password vault is unchanged: off at the application level (the web app's environment
+  carries no vault backend key) while its container remains one of the 32.
