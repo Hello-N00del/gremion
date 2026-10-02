@@ -330,7 +330,8 @@ EOF
     write_override
     ok "Keycloak 26.6.1 starting outside ops on 127.0.0.1:${KC_PORT} with the platform realm and a council realm"
 
-    docker inspect "$C_MAIL" >/dev/null 2>&1 || docker run -d --name "$C_MAIL" -p "127.0.0.1:${MAILPIT_PORT}:8025" \n        -e MP_SMTP_AUTH_ACCEPT_ANY=1 -e MP_SMTP_AUTH_ALLOW_INSECURE=1 "$MAILPIT_IMAGE" >/dev/null
+    docker inspect "$C_MAIL" >/dev/null 2>&1 || docker run -d --name "$C_MAIL" -p "127.0.0.1:${MAILPIT_PORT}:8025" \
+        -e MP_SMTP_AUTH_ACCEPT_ANY=1 -e MP_SMTP_AUTH_ALLOW_INSECURE=1 "$MAILPIT_IMAGE" >/dev/null
     docker inspect "$C_COLL" >/dev/null 2>&1 || docker run -d --name "$C_COLL" --network none \
         -v //var/run/docker.sock:/var/run/docker.sock -v "$(hp "$ROOT"):/src:ro" -v "$(hp "$SROOT"):/g" \
         --tmpfs /disk:size=100m --entrypoint sh "$COLLECTOR_IMAGE" -c \
