@@ -44,9 +44,11 @@
 #   customer-layout  scratch only: etc/env, runtime/active-colour, etc/edge
 #   customer-before  TRD-440 baseline (running containers, every project's
 #                    config --services), pg_database lists, no gremion_platform
-#   customer-create  `--enable board` refused by name before any write; then
-#                    `gremion-tenant create proof-x --enable calendar,vault` and a
-#                    second customer proof-y; every section 1 "Create" line
+#   customer-create  `--enable board` and `--enable vault` refused by name before
+#                    any write (R29-I1; R30 A1, PRD-PLAT-012 / PRD-REC-003); then
+#                    `gremion-tenant create proof-x --enable calendar,votes` (calendar:
+#                    a database and a broker user; votes: neither) and a second
+#                    customer proof-y; every section 1 "Create" line
 #   customer-rerun   a second create: phase A and B run nothing, the broker is
 #                    not reloaded, the ledger and the database lists unchanged
 #   customer-suspend suspend proof-x: status, realm disabled, the tenant host
@@ -667,21 +669,25 @@ phase_customer_create() {
     local snap_before snap_after
     snap() { printf '%s|%s' "$(q control "SELECT string_agg(slug || ':' || status, ',' ORDER BY slug) FROM tenant")" \
         "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'" | grep -q 1 && q gremion_platform "SELECT count(*) || ':' || coalesce(max(occurred_at)::text, '-') FROM plt.provisioning_step")"; }
-    snap_before="$(snap)"
-    rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,board 2>&1)" || rc=$?
-    snap_after="$(snap)"
-    if (( rc != 0 )) && [[ "$out" == *board* ]] && [[ "$snap_before" == "$snap_after" ]]; then
-        ok "customer-create: --enable board refused by name (exit ${rc}); the control registry and the ledger unchanged"
-    else bad "customer-create: --enable board was not refused before any write (exit ${rc}; before ${snap_before}; after ${snap_after})"; fi
+    # R30 A1 (PRD-PLAT-012 / PRD-REC-003): vault is refused the same way.
+    local denied
+    for denied in board vault; do
+        snap_before="$(snap)"
+        rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
+            --council-admin "$(admin_addr "$X" rat)" --enable "calendar,${denied}" 2>&1)" || rc=$?
+        snap_after="$(snap)"
+        if (( rc != 0 )) && [[ "$out" == *"module ${denied} cannot be enabled"* ]] && [[ "$snap_before" == "$snap_after" ]]; then
+            ok "customer-create: --enable ${denied} refused by name (exit ${rc}); the control registry and the ledger unchanged"
+        else bad "customer-create: --enable ${denied} was not refused before any write (exit ${rc}; before ${snap_before}; after ${snap_after})"; fi
+    done
 
     tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,vault > "$OUT/ledger/create-x.log" 2>&1 \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes > "$OUT/ledger/create-x.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-x.log" >&2; bad "customer-create: gremion-tenant create ${X} failed"; return; }
     tenant create "$Y" --host "$(host_of "$Y")" --config "$cfg" --it-admin "$(admin_addr "$Y" it)" \
         --council-admin "$(admin_addr "$Y" rat)" > "$OUT/ledger/create-y.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-y.log" >&2; bad "customer-create: gremion-tenant create ${Y} failed"; return; }
-    ok "customer-create: gremion-tenant create ${X} (calendar, vault) and ${Y} exited 0"
+    ok "customer-create: gremion-tenant create ${X} (calendar, votes) and ${Y} exited 0"
 
     if [[ -n "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]; then ok "customer-create: gremion_platform exists (bootstrapped, Q15)"; else bad "customer-create: no gremion_platform"; fi
     n="$(q gremion_platform "SELECT count(*) FROM plt.module_version")"
@@ -694,10 +700,13 @@ phase_customer_create() {
     comm -13 "$OUT/ledger/dbs-kernel-before.txt" <(dbs_kernel) | grep -v "^t_${yid//-/}__" > "$OUT/ledger/dbs-kernel-new-x.txt" || true
     if [[ "$(cat "$OUT/ledger/dbs-kernel-new-x.txt")" == "$kdb" ]]; then ok "customer-create: the kernel server gained exactly ${kdb}"
     else bad "customer-create: the kernel server gained [$(tr '\n' ' ' < "$OUT/ledger/dbs-kernel-new-x.txt")], want ${kdb}"; fi
-    for m in calendar vault; do
-        if [[ "$(comm -13 "$OUT/ledger/dbs-$m-before.txt" <(dbs_module "$m"))" == "t_${id//-/}__${m}" ]]; then ok "customer-create: ${m}-postgres gained exactly t_…__${m}"
-        else bad "customer-create: ${m}-postgres did not gain exactly t_${id//-/}__${m}"; fi
-    done
+    if [[ "$(comm -13 "$OUT/ledger/dbs-calendar-before.txt" <(dbs_module calendar))" == "t_${id//-/}__calendar" ]]; then ok "customer-create: calendar-postgres gained exactly t_…__calendar"
+    else bad "customer-create: calendar-postgres did not gain exactly t_${id//-/}__calendar"; fi
+    # votes has no database (module.json database: null); vault was refused (R30 A1)
+    # (read first: a failed read must not compare as "gained nothing")
+    local vdbs
+    if vdbs="$(dbs_module vault)" && [[ -z "$(comm -13 "$OUT/ledger/dbs-vault-before.txt" <(printf '%s\n' "$vdbs" | sed '/^$/d'))" ]]; then ok "customer-create: vault-postgres gained no database (vault refused, R30 A1)"
+    else bad "customer-create: vault-postgres gained a database although vault is denied, or could not be read"; fi
     # The kernel database: gremion-ui's own ledger shape, no seed, one body.
     if [[ "$(q "$kdb" "SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_name = 'schema_migrations'")" == "applied_at,filename" ]]; then ok "customer-create: schema_migrations is gremion-ui's (filename, applied_at), no sha256 (Q3)"; else bad "customer-create: schema_migrations has another shape"; fi
     if [[ "$(q "$kdb" "SELECT count(*) FROM schema_migrations WHERE filename LIKE '%seed%'")" == 0 ]]; then ok "customer-create: no *_seed.sql applied (GREMION_DISABLE_SEEDS)"; else bad "customer-create: a seed file was applied"; fi
@@ -726,8 +735,8 @@ phase_customer_create() {
     if [[ "$(q control "SELECT count(*) FROM tenant_domain WHERE tenant_id = '${id}' AND is_primary")" == 1 ]]; then ok "customer-create: one primary tenant_domain row binds $(host_of "$X")"; else bad "customer-create: tenant_domain rows"; fi
     if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "8/8" ]]; then ok "customer-create: eight done ledger rows, one per kind (Q2)"; else bad "customer-create: the ledger is not eight done rows"; fi
     local acc; acc="$(accounts)"
-    if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# vault@' <<< "$acc"; then
-        ok "customer-create: the broker account holds kernel and calendar users, none for vault (no flow, Q4)"
+    if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# votes@' <<< "$acc"; then
+        ok "customer-create: the broker account holds kernel and calendar users, none for votes (no flow, Q4)"
     else bad "customer-create: the broker account's users are not kernel+calendar"; fi
     if grep -qF "    tenant-${X}.kc:" "$(croot)/etc/edge/tenant-${X}.yml" 2>/dev/null; then ok "customer-create: etc/edge/tenant-${X}.yml carries the realm router (Q16, Q17)"; else bad "customer-create: no router file with the realm router"; fi
     local rt
@@ -749,7 +758,7 @@ phase_customer_rerun() {
     id="$(customer_id "$X")"
     before="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
     tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,vault > "$OUT/ledger/rerun-x.log" 2>&1 \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes > "$OUT/ledger/rerun-x.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/rerun-x.log" >&2; bad "customer-rerun: the second create failed"; return; }
     after="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
     if [[ "$before" == "$after" ]]; then ok "customer-rerun: the ledger is unchanged (${after} rows)"; else bad "customer-rerun: the ledger grew ${before} -> ${after}"; fi
