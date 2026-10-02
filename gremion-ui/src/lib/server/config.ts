@@ -95,6 +95,8 @@ export interface GremionConfig {
   // module even though the type no longer encodes the literal `true`.
   modules: Record<string, boolean>
   // TASK-205a: the calendar module's settings (re-applied from the source; the carve removed them).
+  // TASK-205b: the elections module's tracked Helios election ids (re-applied from the source).
+  elections?: { tracked_uuids: string[] }
   calendar?: {
     shared_event_color: string
     german_state: string // 'DE' for federal, or 'BY', 'BE', etc. for a Bundesland
@@ -211,6 +213,7 @@ const DEFAULT_CONFIG: GremionConfig = {
   // WP3-modules-dynamic: derive the default toggle map from the manifests so a
   // net-new toggleable module is on-by-default with zero edits here.
   modules: defaultModulesConfig(),
+  elections: { tracked_uuids: [] },
   calendar: { shared_event_color: '#94a3b8', german_state: 'DE' },
   legal: {
     datenschutz_html: DEFAULT_DATENSCHUTZ_HTML,
@@ -330,6 +333,12 @@ const smtpSchema = z
 // modules can never persist disabled (and REQUIRED_MODULES is its source).
 const modulesSchema = z.record(z.string(), z.boolean())
 
+const electionsSchema = z
+  .object({
+    tracked_uuids: z.array(z.string()),
+  })
+  .partial()
+
 const calendarSchema = z
   .object({
     shared_event_color: z.string(),
@@ -403,6 +412,7 @@ export const gremionConfigSchema = z
     admin_accounts: adminAccountsSchema,
     smtp: smtpSchema,
     modules: modulesSchema,
+    elections: electionsSchema,
     calendar: calendarSchema,
     legal: legalSchema,
     backups: backupsSchema,
@@ -499,6 +509,7 @@ function mergeStored(stored: StoredConfig): GremionConfig {
     admin_accounts: { ...DEFAULT_CONFIG.admin_accounts, ...stored.admin_accounts },
     smtp: { ...DEFAULT_CONFIG.smtp, ...stored.smtp },
     modules: { ...DEFAULT_CONFIG.modules, ...stored.modules },
+    elections: { ...DEFAULT_CONFIG.elections, ...stored.elections },
     calendar: { ...DEFAULT_CONFIG.calendar, ...stored.calendar },
     legal: { ...DEFAULT_CONFIG.legal, ...stored.legal },
     backups: { ...DEFAULT_CONFIG.backups, ...stored.backups },
@@ -654,6 +665,7 @@ export function writeConfig(update: ConfigUpdate, tenant: ConfigTenant = require
     financeRoles: (update.financeRoles ?? current.financeRoles) as GremionConfig['financeRoles'],
     smtp: { ...current.smtp, ...update.smtp },
     legal: { ...current.legal, ...update.legal },
+    elections: { ...current.elections, ...update.elections } as GremionConfig['elections'],
     calendar: { ...current.calendar, ...update.calendar } as GremionConfig['calendar'],
     modules: mergedModules as GremionConfig['modules'],
     backups: mergedBackups,

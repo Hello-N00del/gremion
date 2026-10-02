@@ -75,6 +75,10 @@ export const PAGE_ACCESS_PUBLIC_SEGMENTS: ReadonlySet<string> = new Set([
   'auth',
   'legal',
   'setup',
+  // TASK-205b (messaging): the Element Call widget host and the LiveKit proxy are public surfaces; their own
+  // handlers authorise (the widget token), authGuard's publicPaths short-circuits them before canAccess.
+  'livekit',
+  'element-call',
   'api',
   'healthz',
 ])

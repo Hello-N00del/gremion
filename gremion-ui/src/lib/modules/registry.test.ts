@@ -18,9 +18,9 @@ const GENERATED_BARREL = join(PKG_ROOT, 'src', 'lib', 'modules', 'manifests', 'i
 // on top (TASK-205: gremion-ui/scripts/interim-module-overlay.mjs overlays modules/<id>/app onto src/
 // before the manifest barrel is generated). Disabled modules (modules/disabled.json) contribute nothing.
 // So every golden below is the composition of the enabled set; each module commit updates it in the same
-// commit. TASK-205a: calendar, files, board.
+// commit. TASK-205: elections, votes, calendar, files, messages, board (registration = `order` sequence).
 const KERNEL_MANIFEST_IDS = ['core', 'governance'] as const
-const MODULE_MANIFEST_IDS = ['calendar', 'files', 'board'] as const
+const MODULE_MANIFEST_IDS = ['elections', 'votes', 'calendar', 'files', 'messages', 'board'] as const
 const COMPOSED_MANIFEST_IDS = [...KERNEL_MANIFEST_IDS, ...MODULE_MANIFEST_IDS] as const
 
 describe('WP2-1 codegen — generated barrel is the single registration source', () => {
@@ -88,9 +88,13 @@ const KERNEL_PAGE_ACCESS: Record<string, Role> = {
   portal: Role.CouncilAdmin,
   protokolle: Role.Guest,
   beschluesse: Role.Guest,
-  // calendar, files, board (TASK-205a)
+  // the composed modules (TASK-205): elections, votes (polls + votes), calendar, files, messages, board (tasks)
+  elections: Role.Member,
+  polls: Role.Member,
+  votes: Role.Member,
   calendar: Role.Guest,
   files: Role.Member,
+  messages: Role.Member,
   tasks: Role.Member,
 }
 
@@ -106,6 +110,11 @@ describe('registry — composePageAccess (golden)', () => {
 describe('registry — moduleRoutePrefixes (golden vs hooks.server.ts)', () => {
   it('exposes exactly the toggleable modules route prefixes, in registration order (the kernel manifests add none)', () => {
     expect(moduleRoutePrefixes()).toEqual([
+      { prefix: '/elections', moduleId: 'elections' },
+      { prefix: '/api/elections', moduleId: 'elections' },
+      { prefix: '/votes', moduleId: 'votes' },
+      { prefix: '/polls', moduleId: 'votes' },
+      { prefix: '/api/polls', moduleId: 'votes' },
       { prefix: '/calendar', moduleId: 'calendar' },
       { prefix: '/api/calendar', moduleId: 'calendar' },
       { prefix: '/tasks', moduleId: 'board' },

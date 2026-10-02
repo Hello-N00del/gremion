@@ -387,6 +387,12 @@ function tenantMismatchResponse(path: string): Response {
 export const PUBLIC_PATHS: readonly string[] = [
   '/auth/',
   '/legal/',
+  // TASK-205b (carve-keep hunk re-applied, MODULE: messaging): the LiveKit proxy and the same-origin Element
+  // Call SPA are page trees their own handlers/widget tokens authorise; '/element-call' itself is the exact
+  // entry document (an entry without a trailing slash is an exact route).
+  '/livekit/',
+  '/element-call/',
+  '/element-call',
   '/api/setup/seed',
   '/api/health',
   '/api/public/protocols/*/pdf',

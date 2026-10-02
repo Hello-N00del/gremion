@@ -24,7 +24,7 @@ const missingEnv = ENV_KEYS.filter((k) => !process.env[k])
 
 test.use({ baseURL: process.env.E2E_BASE_URL })
 
-const REPO_ROOT = resolve(__dirname, '..', '..', '..')
+const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..')
 const MODULES_DIR = join(REPO_ROOT, 'modules')
 
 interface ModuleLanding {
