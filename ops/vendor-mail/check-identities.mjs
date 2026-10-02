@@ -3,8 +3,9 @@
 //
 //   node ops/vendor-mail/check-identities.mjs [--mail-env F] [--ops-env F]
 //
-// Alertmanager authenticates as ALERT_SMTP_USER and writes ALERT_EMAIL_FROM
-// into every alert (infra/host/ops/alertmanager.yml.tmpl). Stalwart's
+// The alert sender (Grafana alerting in compose/observability since TASK-039,
+// Alertmanager before) authenticates as ALERT_SMTP_USER and writes
+// ALERT_EMAIL_FROM into every alert. Stalwart's
 // must-match-sender (config.toml.tmpl [session.auth]) refuses a From that is
 // not the authenticated principal's with 5.7.1, so the two MUST be the same
 // address, and it must be the principal provision-roles.sh creates:

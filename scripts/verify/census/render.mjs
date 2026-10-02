@@ -18,7 +18,7 @@
 // `--project-directory` is explicit too, so relative paths resolve the way
 // they do on the host (the mail project from infra/host/mail/, as
 // gremion-mail-bringup's check_port_binds renders it; ops from
-// infra/host/ops/).
+// compose/observability/, TASK-039).
 //
 // Replaceable by TASK-053's shared renderer (brief S3). Outside
 // scripts/verify/census/, only TASK-048b's release render arm
@@ -39,7 +39,7 @@ export const PROJECTS = [
   { name: 'state', template: `${TEMPLATE_DIR}/state.env.tmpl`, dir: '.', exemptKey: 'HEALTH_EXEMPT_SERVICES' },
   { name: 'app', template: `${TEMPLATE_DIR}/app.env.tmpl`, dir: '.', exemptKey: null },
   { name: 'mail', template: `${TEMPLATE_DIR}/mail.env.tmpl`, dir: 'infra/host/mail', exemptKey: null },
-  { name: 'ops', template: `${TEMPLATE_DIR}/ops.env.tmpl`, dir: 'infra/host/ops', exemptKey: 'HEALTH_EXEMPT_SERVICES' },
+  { name: 'ops', template: `${TEMPLATE_DIR}/ops.env.tmpl`, dir: 'compose/observability', exemptKey: 'HEALTH_EXEMPT_SERVICES' },
 ]
 
 /** The pins layers are resolved per release by gremion-deploy; they only swap

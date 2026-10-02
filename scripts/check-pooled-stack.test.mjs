@@ -140,8 +140,8 @@ test('limits: an unlimited profile-gated calendar-postgres fails', () => {
 
 test('limits: an ops or mail service without limits fails', () => {
   const o = opsRender()
-  delete o.services.cadvisor.deploy
-  assert.match(limitsViolations(o, 'ops').join('\n'), /ops\/cadvisor: no non-zero/)
+  delete o.services.loki.deploy
+  assert.match(limitsViolations(o, 'ops').join('\n'), /ops\/loki: no non-zero/)
   const m = mailRender()
   m.services.stalwart.deploy = { resources: { limits: { memory: '536870912' } } }
   assert.match(limitsViolations(m, 'mail').join('\n'), /mail\/stalwart: no non-zero deploy\.resources\.limits\.cpus/)
@@ -283,7 +283,7 @@ test('isolation: a non-council service on ${STACK}_state fails, both as a placem
   assert.match(v, /ops\/prometheus: non-council service shares \[[^\]]*teststack_state\] with a service on teststack_state/)
   // ...and prometheus now ALSO puts the ops network next to a state-network
   // member, so every ops peer is reported, not only the moved service.
-  assert.match(v, /ops\/alertmanager: non-council service shares \[teststack-ops_ops\]/)
+  assert.match(v, /ops\/grafana: non-council service shares \[teststack-ops_ops\]/)
 })
 
 test('isolation: stalwart on ${STACK}_edge fails (keycloak, which is on _state, is on _edge too)', () => {
@@ -340,8 +340,8 @@ test('isolation: a docker-routed service without traefik.docker.network fails', 
 
 test('isolation: a service missing from the placement table fails, and so does an unclassified project', () => {
   const rs = allRenders()
-  rs[3].render.services['grafana'] = { image: 'grafana:1', deploy: lim(), networks: { ops: null } }
-  assert.match(isolationViolations(rs, STACK).join('\n'), /ops\/grafana: not in the placement table/)
+  rs[3].render.services['pushgateway'] = { image: 'pushgateway:1', deploy: lim(), networks: { ops: null } }
+  assert.match(isolationViolations(rs, STACK).join('\n'), /ops\/pushgateway: not in the placement table/)
   const withSales = [...allRenders(), { id: 'sales', render: { services: { web: { networks: { default: null } } }, networks: { default: { name: `${STACK}-sales_default` } } } }]
   assert.match(isolationViolations(withSales, STACK).join('\n'), /sales: a project the placement table does not classify/)
 })

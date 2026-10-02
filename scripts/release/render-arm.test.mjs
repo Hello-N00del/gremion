@@ -140,7 +140,7 @@ test('argv: -f per COMPOSE_FILE entry, pins slot replaced by the emitted fixture
   }
   const pname = (p) => p.argv[p.argv.indexOf('--project-name') + 1]
   assert.deepEqual(plans.map(pname).sort(cmp), ['release-render-app-blue', 'release-render-app-green', 'release-render-mail', 'release-render-ops', 'release-render-state'])
-  assert.equal(byId.ops.argv[byId.ops.argv.indexOf('--project-directory') + 1], join(REPO_ROOT, 'infra/host/ops'))
+  assert.equal(byId.ops.argv[byId.ops.argv.indexOf('--project-directory') + 1], join(REPO_ROOT, 'compose/observability'))
   assert.equal(byId.mail.argv[byId.mail.argv.indexOf('--project-directory') + 1], join(REPO_ROOT, 'infra/host/mail'))
   // an override (the tag-pinned reference) swaps the slot's file, nothing else
   const ref = planRenders({ pinsOverride: { 'docker-compose.state-pins.yml': join(REPO_ROOT, PINS_FIXTURE_DIR, 'docker-compose.pins.yml') } })

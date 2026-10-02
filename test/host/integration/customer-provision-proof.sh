@@ -580,7 +580,7 @@ trd440() { # the container count and every project's service list
     printf 'running=%s\n' "$(grep -c . <<< "$out" || true)"
     for p in state app-blue app-green ops mail; do
         [[ -f "$PENV/$p.env" ]] || continue
-        case "$p" in ops) dir="$ROOT/infra/host/ops" ;; mail) dir="$ROOT/infra/host/mail" ;; *) dir="$ROOT" ;; esac
+        case "$p" in ops) dir="$ROOT/compose/observability" ;; mail) dir="$ROOT/infra/host/mail" ;; *) dir="$ROOT" ;; esac
         out="$(cd "$dir" && docker compose --env-file "$(host_path "$PENV/$p.env")" config --services)" || die "TRD-440: config --services failed for ${p}"
         [[ -n "$out" ]] || die "TRD-440: ${p} renders no service"
         printf '%s: %s\n' "$p" "$(sort <<< "$out" | tr '\n' ' ')"

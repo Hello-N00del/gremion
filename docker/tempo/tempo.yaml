@@ -1,0 +1,44 @@
+# docker/tempo/tempo.yaml -- the ops trace store (TASK-039; first writer, G4;
+# trace propagation is TASK-116's).
+#
+# Span attributes carry user ids, so the store is personal data [D R19-D27]:
+# RC-LOG-TRC is 7 days regular, 14 days cap (retention catalogue section 4.1).
+# block_retention 168h deletes a block 7 days after it was cut; with the
+# 5-minute block cut and one compaction cycle the worst case stays far under
+# the 14-day cap (compose/observability/retention.test.mjs pins both).
+#
+# Tempo receives OTLP only from Alloy on the ops network; it publishes no host
+# port. The OTLP ingest from council services is Alloy's (Q15).
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 168h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+usage_report:
+  reporting_enabled: false

@@ -116,7 +116,7 @@ require_scratch() { is_scratch || die "phase '$1' brings resources up or down an
 compose() {
     local p="$1"; shift
     local dir="$ROOT"
-    case "$p" in ops) dir="$ROOT/infra/host/ops" ;; mail) dir="$ROOT/infra/host/mail" ;; esac
+    case "$p" in ops) dir="$ROOT/compose/observability" ;; mail) dir="$ROOT/infra/host/mail" ;; esac
     ( cd "$dir" && docker compose --env-file "$(host_path "$ENV_DIR/${p}.env")" "$@" )
 }
 
@@ -336,16 +336,22 @@ EOF
     cat > "$ENV_DIR/ops.env" <<EOF
 STACK=${STACK}
 COMPOSE_PROJECT_NAME=${STACK}-ops
-COMPOSE_FILE="docker-compose.yml${s}$(overlay_ref ops.proof.yml ../../../)"
+COMPOSE_FILE="docker-compose.yml${s}$(overlay_ref ops.proof.yml ../../)"
 COMPOSE_PATH_SEPARATOR="${s}"
 COMPOSE_PROFILES=production
 OPS_V4_SUBNET=10.231.8.0/24
 OPS_V6_SUBNET=fd5a:231:8::/64
 GREMION_ROOT_DIR=${SROOT_H}
 OPS_BIND_IP=127.0.0.1
+OPS_INGEST_BIND_IP=127.0.0.1
 OPS_UID=65534
 OPS_GID=65534
 PROM_RETENTION_TIME=1d
+PLATFORM_DOMAIN=proof.example.org
+ALERT_SMTP_HOST=mail.proof.example.org
+ALERT_SMTP_PORT=587
+ALERT_SMTP_USER=alerts@proof.example.org
+ALERT_EMAIL_FROM=alerts@proof.example.org
 EOF
     # Every key of mail.env.tmpl (the vendor mail tooling's load_env refuses an
     # empty generated secret), the images by the template's own digests. The
@@ -428,11 +434,14 @@ EOF
       - ${GREMION_ROOT}/etc/mail/tls/tls.crt:/opt/keycloak/conf/truststores/scratch-mail.pem:ro
 EOF
     fi
+    # TASK-039: the ops project's two published services (Grafana on
+    # OPS_BIND_IP, Alloy's OTLP ingest on OPS_INGEST_BIND_IP) publish nothing
+    # here; test/host/integration/observability-proof.sh proves those binds.
     cat > "$OUT/ops.proof.yml" <<'EOF'
 services:
-  prometheus:
+  grafana:
     ports: !reset []
-  alertmanager:
+  alloy:
     ports: !reset []
 EOF
     # The management API on a fresh loopback port (STALWART_ADMIN_URL: the
@@ -514,17 +523,19 @@ phase_prepare() {
         # reuse: the auth password is whatever the existing userlist carries
         sed -i "s/^PGBOUNCER_AUTH_PASSWORD=.*/PGBOUNCER_AUTH_PASSWORD=$(sed -n 's/^"pgbouncer_auth" "\(.*\)"$/\1/p' "$ROOT/docker/pgbouncer/userlist.txt")/" "$ENV_DIR/state.env"
     fi
-    # ops: the files render-ops.sh would place under the release tree
-    mkdir -p "$SROOT/current/infra/host/ops" "$SROOT/runtime/ops/targets" "$SROOT/runtime/ops/prometheus-data" \
-             "$SROOT/runtime/ops/alertmanager-data" "$SROOT/runtime/textfile" "$SROOT/etc/secrets/ops" \
+    # ops (TASK-039, compose/observability): the files and directories
+    # render-ops.sh would place under the host root. The compose file reads
+    # its static configs from the release tree itself (relative paths).
+    mkdir -p "$SROOT/runtime/ops/targets" "$SROOT/runtime/ops/prometheus-data" "$SROOT/runtime/ops/grafana-data" \
+             "$SROOT/runtime/ops/grafana-logs" "$SROOT/runtime/ops/loki-data" "$SROOT/runtime/ops/tempo-data" \
+             "$SROOT/runtime/ops/alloy-data" "$SROOT/runtime/textfile" "$SROOT/etc/secrets/ops" "$SROOT/etc/secrets/grafana" \
              "$SROOT/etc/mail" "$SROOT/etc/secrets/mail"
-    cp "$ROOT/infra/host/ops/prometheus.yml" "$ROOT/infra/host/ops/alerts.yml" "$ROOT/infra/host/ops/blackbox.yml" "$SROOT/current/infra/host/ops/"
+    rm -rf "$SROOT/runtime/ops/grafana-provisioning"
+    cp -R "$ROOT/compose/observability/grafana/provisioning" "$SROOT/runtime/ops/grafana-provisioning"
+    rm -f "$SROOT/runtime/ops/grafana-provisioning/alerting/policies.yaml"   # no sink: no policy (render-ops.sh)
+    printf '[]\n' > "$SROOT/runtime/ops/targets/blackbox-third-party.yml"
     gen > "$SROOT/etc/secrets/ops/stalwart-api-key"; gen > "$SROOT/etc/secrets/ops/smtp-password"
-    # shellcheck disable=SC2016  # envsubst takes the literal ${VAR} list it may replace
-    PLATFORM_DOMAIN=proof.example.org ALERT_EMAIL_FROM=alerts@proof.example.org ALERT_SMTP_USER=alerts \
-        ALERT_WEBHOOK_URL=http://127.0.0.1:9/none \
-        envsubst '${PLATFORM_DOMAIN} ${ALERT_EMAIL_FROM} ${ALERT_SMTP_USER} ${ALERT_WEBHOOK_URL}' \
-        < "$ROOT/infra/host/ops/alertmanager.yml.tmpl" | tr -d '\r' > "$SROOT/runtime/ops/alertmanager.yml"
+    gen | tr -d '\n' > "$SROOT/etc/secrets/ops/otlp-ingest-token"
     chmod -R a+rwX "$SROOT/runtime" 2>/dev/null || true
     render_mail_config
 

@@ -1,0 +1,142 @@
+// docker/alloy/config.alloy -- the ops collector (TASK-039; first writer, G4).
+//
+// Alloy dials only services on the ops network (prometheus, loki, tempo) and
+// reads only what compose/observability/docker-compose.yml mounts read-only:
+// host procfs and sysfs, the host collector's textfile directory, Vector's
+// output volume and Grafana's request log. It holds no Docker API and no
+// route to any council network (TRD-203). Council services reach it the
+// other way round: they PUSH OTLP to the receive-only ingest below (Q15).
+
+logging {
+  level  = "warn"
+  format = "logfmt"
+}
+
+prometheus.remote_write "ops" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+  }
+}
+
+// ---- host metrics -------------------------------------------------------
+// procfs and sysfs only, no root filesystem: the filesystem collector is
+// left out on purpose. Disk bytes come from the host collector's df/du in
+// the textfile (gremion_host_filesystem_*, gremion_storage_component_bytes),
+// together with container health and memory, Postgres connections, the
+// broker's jsz gauges and the backup record (Q3, Q8, Q9, Q16).
+prometheus.exporter.unix "host" {
+  procfs_path    = "/host/proc"
+  sysfs_path     = "/host/sys"
+  set_collectors = ["cpu", "loadavg", "meminfo", "pressure", "textfile", "time", "uname"]
+
+  textfile {
+    directory = "/textfile"
+  }
+}
+
+prometheus.scrape "host" {
+  targets         = prometheus.exporter.unix.host.targets
+  forward_to      = [prometheus.remote_write.ops.receiver]
+  job_name        = "host"
+  scrape_interval = "15s"
+}
+
+prometheus.exporter.self "alloy" { }
+
+prometheus.scrape "alloy" {
+  targets         = prometheus.exporter.self.alloy.targets
+  forward_to      = [prometheus.remote_write.ops.receiver]
+  job_name        = "alloy"
+  scrape_interval = "30s"
+}
+
+// ---- logs ---------------------------------------------------------------
+loki.write "ops" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// Vector's pseudonymised security log (Q11 [A]): read from its volume,
+// read-only; Vector stays networkless and ships nothing itself. Lines are
+// already pseudonymised and query-redacted before they are written.
+local.file_match "security" {
+  path_targets = [{"__path__" = "/vector-logs/security.log", "class" = "security", "source" = "edge"}]
+}
+
+loki.source.file "security" {
+  targets       = local.file_match.security.targets
+  forward_to    = [loki.write.ops.receiver]
+  tail_from_end = true
+}
+
+// Grafana's own request log: who looked at what, as the operator-access
+// record (RC-LOG-AUD).
+local.file_match "grafana_audit" {
+  path_targets = [{"__path__" = "/grafana-logs/grafana.log", "class" = "audit", "source" = "grafana"}]
+}
+
+loki.source.file "grafana_audit" {
+  targets       = local.file_match.grafana_audit.targets
+  forward_to    = [loki.write.ops.receiver]
+  tail_from_end = true
+}
+
+// ---- OTLP ingest (Q15, TRD-197) -----------------------------------------
+// Receive-only, behind a bearer token (render-ops.sh writes the token file
+// and refuses an empty one). Spans go to Tempo, metrics to Prometheus, logs
+// to Loki as class=application. TASK-116 builds the senders.
+local.file "ingest_token" {
+  filename  = "/run/secrets/ops/otlp-ingest-token"
+  is_secret = true
+}
+
+otelcol.auth.bearer "ingest" {
+  token = local.file.ingest_token.content
+}
+
+otelcol.receiver.otlp "ingest" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+    auth     = otelcol.auth.bearer.ingest.handler
+  }
+
+  http {
+    endpoint = "0.0.0.0:4318"
+    auth     = otelcol.auth.bearer.ingest.handler
+  }
+
+  output {
+    metrics = [otelcol.exporter.prometheus.ingest.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+    logs    = [otelcol.exporter.loki.ingest.input]
+  }
+}
+
+otelcol.exporter.prometheus "ingest" {
+  forward_to = [prometheus.remote_write.ops.receiver]
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+
+    tls {
+      insecure = true
+    }
+  }
+}
+
+otelcol.exporter.loki "ingest" {
+  forward_to = [loki.process.application.receiver]
+}
+
+loki.process "application" {
+  stage.static_labels {
+    values = {
+      class = "application",
+    }
+  }
+
+  forward_to = [loki.write.ops.receiver]
+}

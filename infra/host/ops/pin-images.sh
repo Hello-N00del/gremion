@@ -4,7 +4,7 @@
 # digest and never auto-updated (spec A §K); the ops project's test refuses an
 # unpinned reference, so this script is how a version bump lands.
 #
-# usage: pin-images.sh [FILE...]   (default: infra/host/ops/docker-compose.yml)
+# usage: pin-images.sh [FILE...]   (default: compose/observability/docker-compose.yml)
 # exit 0 pinned · 1 resolver returned a malformed digest · 2 tool or tag missing
 set -euo pipefail
 
@@ -64,7 +64,7 @@ pin_file() {
 main() {
     local file
     if [[ $# -eq 0 ]]; then
-        set -- "$SCRIPT_DIR/docker-compose.yml"
+        set -- "$SCRIPT_DIR/../../../compose/observability/docker-compose.yml"
     fi
     for file in "$@"; do
         pin_file "$file"

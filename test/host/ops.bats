@@ -1,20 +1,25 @@
 #!/usr/bin/env bats
-# Task 11 — the ${STACK}-ops project, the textfile collector and the post-boot verify gate.
-# Unit only: docker, curl and psql are shimmed; nothing here touches a real daemon.
+# Task 11 / TASK-039 — the ${STACK}-ops project (compose/observability/), its
+# host half (render-ops.sh, the host collector) and the post-boot verify gate.
+# Unit only: docker, systemctl, curl and psql are shimmed; nothing here touches
+# a real daemon. The running proof is test/host/integration/observability-proof.sh.
 
 load 'test_helper/host'
 
 PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 OPS_DIR="${PROJECT_ROOT}/infra/host/ops"
-COMPOSE="${OPS_DIR}/docker-compose.yml"
-PROM="${OPS_DIR}/prometheus.yml"
-ALERTS="${OPS_DIR}/alerts.yml"
-BLACKBOX="${OPS_DIR}/blackbox.yml"
+OBS_DIR="${PROJECT_ROOT}/compose/observability"
+COMPOSE="${OBS_DIR}/docker-compose.yml"
+PROM="${OBS_DIR}/prometheus/prometheus.yml"
+RULES="${OBS_DIR}/prometheus/rules.yml"
+RULES_TEST="${OBS_DIR}/prometheus/rules.test.yml"
+BLACKBOX="${OBS_DIR}/blackbox.yml"
 RENDER="${OPS_DIR}/render-ops.sh"
 METRICS="${OPS_DIR}/metrics-textfile.sh"
 VERIFY="${PROJECT_ROOT}/infra/host/bin/gremion-verify"
 UNIT_DIR="${PROJECT_ROOT}/infra/host/templates/systemd"
 OPS_TMPL="${PROJECT_ROOT}/infra/host/templates/env/ops.env.tmpl"
+PROV="runtime/ops/grafana-provisioning"
 
 setup() {
     setup_host_root
@@ -29,105 +34,104 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# The compose project
+# The compose project (static; the rendered checks are compose/observability/*.test.mjs)
 # ---------------------------------------------------------------------------
 
-@test "ops compose declares exactly the five ops services" {
+@test "ops compose declares exactly the six observability services" {
     [ -f "$COMPOSE" ]
     # Scoped to the services: block on purpose. A bare `/^  [a-z-]+:$/` also
-    # matches `  ops:` under the top-level networks: key, so the unscoped form
-    # counts the project network as a sixth service and can never pass.
+    # matches `  ops:` under the top-level networks: key.
     run awk '/^services:/{s=1;next} /^[a-z]/{s=0} s && /^  [a-z-]+:$/ {gsub(/[ :]/,"",$1); print $1}' "$COMPOSE"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort | tr '\n' ' ')" = "alertmanager blackbox cadvisor node-exporter prometheus " ]
+    [ "$(echo "$output" | sort | tr '\n' ' ')" = "alloy blackbox grafana loki prometheus tempo " ]
 }
 
-@test "every ops image is digest-pinned and none is :latest" {
-    run awk '/^[[:space:]]+image:/ {print $2}' "$COMPOSE"
+@test "the old ops project is gone: no compose file, no Alertmanager, no node-exporter, no cAdvisor" {
+    [ ! -e "${OPS_DIR}/docker-compose.yml" ]
+    [ ! -e "${OPS_DIR}/alertmanager.yml.tmpl" ]
+    run grep -nE 'alertmanager|node-exporter|cadvisor|/var/run/docker\.sock' "$COMPOSE"
+    [ "$status" -ne 0 ]
+}
+
+@test "every ops image and image mount is digest-pinned and none is :latest" {
+    run awk '/^[[:space:]]+(image|source):[[:space:]]*[a-z0-9.\/_-]+:[^[:space:]]*@?/ && !/\$\{/ {print $2}' "$COMPOSE"
     [ "$status" -eq 0 ]
     [ -n "$output" ]
+    local n=0
     while read -r ref; do
         [[ "$ref" == *"@sha256:"* ]] || { echo "not digest-pinned: $ref"; return 1; }
         [[ "$ref" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "malformed digest: $ref"; return 1; }
         [[ "$ref" != *":latest@"* ]] || { echo "latest tag: $ref"; return 1; }
+        n=$((n + 1))
     done <<< "$output"
+    [ "$n" -ge 7 ]   # six services + the busybox probe mount
 }
 
-@test "no ops port binds a wildcard address" {
+@test "only grafana and the OTLP ingest publish, never on a wildcard" {
     run grep -nE '^[[:space:]]+- "[^"]*:[0-9]+:[0-9]+"' "$COMPOSE"
     [ "$status" -eq 0 ]
+    [ "$(echo "$output" | wc -l)" -eq 3 ]
     while read -r line; do
-        [[ "$line" == *'"${OPS_BIND_IP'* ]] || { echo "port not bound to OPS_BIND_IP: $line"; return 1; }
+        [[ "$line" == *'"${OPS_BIND_IP'*':3000:3000"'* || "$line" == *'"${OPS_INGEST_BIND_IP'*':431'[78]':431'[78]'"'* ]] \
+            || { echo "port not bound to OPS_BIND_IP:3000 or OPS_INGEST_BIND_IP:4317/4318: $line"; return 1; }
         [[ "$line" != *'0.0.0.0'* ]] || { echo "wildcard bind: $line"; return 1; }
     done <<< "$output"
 }
 
-@test "ops compose carries no name: key and no forbidden compose flag" {
-    run grep -nE '^[[:space:]]*name:' "$COMPOSE"
+@test "ops compose carries no top-level name: key and no forbidden compose flag" {
+    run grep -nE '^name:' "$COMPOSE"
     [ "$status" -ne 0 ]
     run grep -nE 'docker compose .*( -f | -p | --profile )' "$COMPOSE"
     [ "$status" -ne 0 ]
 }
 
 # ---------------------------------------------------------------------------
-# Alert rules
+# Conditions (recording rules) -- Grafana alerts on them
 # ---------------------------------------------------------------------------
 
-@test "alerts.yml declares exactly the eight rules of the spec" {
-    [ -f "$ALERTS" ]
-    run awk '/^[[:space:]]+- alert:/ {print $3}' "$ALERTS"
+@test "rules.yml records exactly the twelve conditions" {
+    [ -f "$RULES" ]
+    run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/ {print $3}' "$RULES"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort | tr '\n' ' ')" = "BackupOlderThan26h CertExpiresUnder20d ContainerUnhealthy2m DiskAbove70 EdgePort80Down MailQueueOldest1h MemoryPressure PostgresConnections80pct " ]
+    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
 }
 
-@test "every alert rule is fail-closed on a blind collector" {
-    # A rule whose input series simply vanishes must fire, not go quiet: that is
-    # the difference between a guard and a guard that lies.
-    #
-    # Comment lines are skipped first. The file's own header explains the
-    # absent() contract in prose; counted, that prose would print an empty rule
-    # name and make the "8 distinct rules" assertion pass on 7 real rules plus a
-    # comment — the guard matching its own documentation.
-    run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- alert:/{name=$3} /absent\(/{print name}' "$ALERTS"
+@test "every condition but third_party_unreachable is fail-closed on a blind collector" {
+    # Comment lines are skipped first: the header explains the absent()
+    # contract in prose, and a guard that counts its own documentation lies.
+    run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/{name=$3} /absent\(/{print name}' "$RULES"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort -u | wc -l)" -eq 8 ]
-}
-
-@test "alert annotations are static — no templating promtool cannot compare" {
-    # A "must not contain" grep is vacuously true on a file that is not there.
-    [ -f "$ALERTS" ]
-    run grep -nE '\{\{' "$ALERTS"
-    [ "$status" -ne 0 ]
+    [ "$(echo "$output" | sort -u | wc -l)" -eq 11 ]
+    [[ "$output" != *"third_party_unreachable"* ]]
 }
 
 @test "the unverified mail-queue series is labelled as unverified" {
-    # MailQueueOldest1h names a Stalwart series nobody has scraped yet. It stays
-    # in the file (it is fail-closed, so a wrong name alerts) but it must never
-    # read as confirmed. Task 8's S4 spike table owns the confirmation.
-    [ -f "$ALERTS" ]
-    grep -q '# series name unverified until §L step 7; see S4' "$ALERTS"
+    [ -f "$RULES" ]
+    grep -q 'series name unverified until section L' "$RULES"
 }
 
-@test "alerts.test.yml exercises both directions of every rule" {
-    [ -f "${OPS_DIR}/alerts.test.yml" ]
-    grep -q "rule_files:" "${OPS_DIR}/alerts.test.yml"
-    # Comment lines are skipped: the file documents its own key order, and a
-    # guard that counts its documentation counts 17 where 16 are expected.
-    run awk '/^[[:space:]]*#/ {next} /alertname:/ {print $3}' "${OPS_DIR}/alerts.test.yml"
-    [ "$status" -eq 0 ]
-    # eight healthy expectations + eight blind expectations
-    [ "$(echo "$output" | wc -l)" -eq 16 ]
+@test "rules.test.yml exercises the healthy world, the blind world and the brief's scenarios" {
+    [ -f "$RULES_TEST" ]
+    grep -q "rule_files:" "$RULES_TEST"
+    grep -q -- '- rules.yml' "$RULES_TEST"
+    # one promql_expr_test per test block: healthy, blind, 4 backup, TRD-224, broker, third party
+    [ "$(grep -c 'promql_expr_test:' "$RULES_TEST")" -ge 9 ]
+    # every condition is asserted at least twice (both directions)
+    local r
+    for r in $(awk '/^[[:space:]]+- record:/ {print $3}' "$RULES"); do
+        [ "$(grep -c "expr: ${r}\$" "$RULES_TEST")" -ge 1 ] || { echo "no test reads ${r}"; return 1; }
+    done
 }
 
 # ---------------------------------------------------------------------------
 # Scrape config and probe modules
 # ---------------------------------------------------------------------------
 
-@test "prometheus.yml declares every job the rules reference" {
+@test "prometheus.yml declares the probe, stalwart and self jobs and nothing else" {
     [ -f "$PROM" ]
     run awk '/job_name:/ {gsub(/[",]/,"",$3); print $3}' "$PROM"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort | tr '\n' ' ')" = "blackbox-acme blackbox-control blackbox-https blackbox-smtp blackbox-smtp25 blackbox-tls cadvisor node prometheus stalwart " ]
+    [ "$(echo "$output" | sort | tr '\n' ' ')" = "blackbox-acme blackbox-control blackbox-https blackbox-smtp blackbox-smtp25 blackbox-third-party blackbox-tls prometheus stalwart " ]
 }
 
 @test "prometheus.yml takes every probe target from file_sd, never a literal host" {
@@ -136,9 +140,10 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
-@test "prometheus.yml loads the rules and points at the alertmanager service" {
-    grep -q '/etc/prometheus/alerts.yml' "$PROM"
-    grep -q 'alertmanager:9093' "$PROM"
+@test "prometheus.yml loads rules.yml and carries no alerting block (Grafana alerts)" {
+    grep -q '/etc/prometheus/rules.yml' "$PROM"
+    run grep -nE '^alerting:|alertmanagers:' "$PROM"
+    [ "$status" -ne 0 ]
 }
 
 @test "prometheus reads the stalwart credential from a file, never inline" {
@@ -157,8 +162,7 @@ teardown() {
 @test "the acme probe module accepts 404 and refuses a redirect" {
     [ -f "$BLACKBOX" ]
     # An awk RANGE cannot be used here: the opening line "  http_404:" also
-    # matches the closing pattern "^  [a-z]", so the range is one record long
-    # and the body of the module is never printed. Flag, not range.
+    # matches the closing pattern "^  [a-z]", so the range is one record long.
     run awk '/^  http_404:/ {f=1; next} f && /^  [a-z]/ {f=0} f' "$BLACKBOX"
     [ -n "$output" ]
     [[ "$output" == *"valid_status_codes: [404]"* ]]
@@ -179,11 +183,21 @@ teardown() {
     local key
     for key in STACK COMPOSE_PROJECT_NAME COMPOSE_FILE PLATFORM_DOMAIN \
                EDGE_BIND_IP EDGE_BIND_IP6 OPS_V4_SUBNET OPS_V6_SUBNET \
-               ALERT_WEBHOOK_URL ALERT_EMAIL_TO ALERT_SMTP_USER ALERT_SMTP_PASSWORD \
-               GREMION_ROOT_DIR OPS_BIND_IP OPS_UID OPS_GID PROM_RETENTION_TIME \
-               ALERT_EMAIL_FROM STALWART_API_KEY OPS_TENANT_HOSTS_FILE; do
+               ALERT_WEBHOOK_URL ALERT_EMAIL_TO ALERT_SMTP_HOST ALERT_SMTP_PORT \
+               ALERT_SMTP_USER ALERT_SMTP_PASSWORD \
+               GREMION_ROOT_DIR OPS_BIND_IP OPS_INGEST_BIND_IP OPS_UID OPS_GID PROM_RETENTION_TIME \
+               ALERT_EMAIL_FROM STALWART_API_KEY OPS_TENANT_HOSTS_FILE OTLP_INGEST_TOKEN \
+               OPS_THIRD_PARTY_PROBES GREMION_DISK_ROOT GREMION_STORAGE_COMPONENTS; do
         grep -qE "^${key}=" "$OPS_TMPL" || { echo "ops.env.tmpl is missing ${key}"; return 1; }
     done
+    # The ingest token is generated, never an operator literal (Q15).
+    grep -qx 'OTLP_INGEST_TOKEN=CHANGE_ME_GEN_hex32_otlp_ingest' "$OPS_TMPL"
+}
+
+@test "ops.env.tmpl keeps Prometheus at 30 days or less (R29-I6)" {
+    run sed -n 's/^PROM_RETENTION_TIME=\([0-9]*\)d$/\1/p' "$OPS_TMPL"
+    [ -n "$output" ]
+    [ "$output" -le 30 ]
 }
 
 # ---------------------------------------------------------------------------
@@ -196,9 +210,10 @@ write_ops_env() {
     cat > "$GREMION_ROOT/etc/env/ops.env" <<EOF
 STACK=staging
 COMPOSE_PROJECT_NAME=staging-ops
-COMPOSE_FILE=${GREMION_ROOT}/current/infra/host/ops/docker-compose.yml
+COMPOSE_FILE=docker-compose.yml
 GREMION_ROOT_DIR=${GREMION_ROOT}
 OPS_BIND_IP=127.0.0.1
+OPS_INGEST_BIND_IP=10.90.1.1
 OPS_UID=$(id -u)
 OPS_GID=$(id -g)
 OPS_V4_SUBNET=10.90.8.0/24
@@ -210,22 +225,30 @@ EDGE_BIND_IP6=2001:db8::a
 ALERT_WEBHOOK_URL=http://127.0.0.1:9099/hook
 ALERT_EMAIL_TO=${1:-}
 ALERT_EMAIL_FROM=alerts@example.org
+ALERT_SMTP_HOST=mail.example.org
+ALERT_SMTP_PORT=587
 ALERT_SMTP_USER=alerts@example.org
 ALERT_SMTP_PASSWORD=${2:-CHANGE_ME_GEN_alnum32_alert_smtp}
 STALWART_API_KEY=CHANGE_ME_GEN_hex32_stalwart_api
+OTLP_INGEST_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 OPS_TENANT_HOSTS_FILE=${GREMION_ROOT}/etc/tenant-hosts.txt
+OPS_THIRD_PARTY_PROBES=
 EOF
+}
+
+set_key() {   # <KEY> <value>
+    sed -i "s|^$1=.*|$1=$2|" "$GREMION_ROOT/etc/env/ops.env"
 }
 
 @test "render-ops writes every target list from the env file" {
     write_ops_env
     printf 'pilot.example.org\nsecond.example.org\n' > "$GREMION_ROOT/etc/tenant-hosts.txt"
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     # 11 = 3 https (platform + two tenants) + 1 control + 2 acme (v4 and v6)
-    #    + 1 smtp + 1 smtp25 + 2 tls + 1 stalwart. Both ACME probes are asserted
-    #    individually below, so the total cannot be 10 as the brief's draft said.
-    [[ "$output" == *"OPS-RENDER: files=7 targets=11 email=off stalwart-key=unset"* ]]
+    #    + 1 smtp + 1 smtp25 + 2 tls + 1 stalwart; 8 files with the (empty)
+    #    third-party list.
+    [[ "$output" == *"OPS-RENDER: files=8 targets=11 email=off webhook=on stalwart-key=unset grafana-sso=pending"* ]]
     grep -q 'https://example.org' "$GREMION_ROOT/runtime/ops/targets/blackbox-https.yml"
     grep -q 'https://pilot.example.org' "$GREMION_ROOT/runtime/ops/targets/blackbox-https.yml"
     grep -q 'https://second.example.org' "$GREMION_ROOT/runtime/ops/targets/blackbox-https.yml"
@@ -237,36 +260,44 @@ EOF
     grep -q 'mail.example.org:465' "$GREMION_ROOT/runtime/ops/targets/blackbox-tls.yml"
     grep -q 'mail.example.org:993' "$GREMION_ROOT/runtime/ops/targets/blackbox-tls.yml"
     grep -q 'mail.example.org' "$GREMION_ROOT/runtime/ops/targets/stalwart.yml"
+    [ "$(cat "$GREMION_ROOT/runtime/ops/targets/blackbox-third-party.yml")" = "[]" ]
+    # every directory a bind mount of the project names exists before the first up
+    local d
+    for d in prometheus-data grafana-data grafana-logs loki-data tempo-data alloy-data; do
+        [ -d "$GREMION_ROOT/runtime/ops/$d" ] || { echo "missing runtime/ops/$d"; return 1; }
+    done
+    [ -d "$GREMION_ROOT/etc/secrets/grafana" ]
 }
 
-@test "render-ops leaves no unsubstituted variable in alertmanager.yml" {
+@test "render-ops copies the provisioning tree and renders the webhook contact point with resolve notices" {
     write_ops_env
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
-    [ "$status" -eq 0 ]
-    grep -q "smtp_smarthost: 'mail.example.org:587'" "$GREMION_ROOT/runtime/ops/alertmanager.yml"
-    grep -q "url: 'http://127.0.0.1:9099/hook'" "$GREMION_ROOT/runtime/ops/alertmanager.yml"
-    grep -q "smtp_auth_password_file: '/etc/alertmanager/smtp-password'" "$GREMION_ROOT/runtime/ops/alertmanager.yml"
-    run grep -c '\${' "$GREMION_ROOT/runtime/ops/alertmanager.yml"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local cp="$GREMION_ROOT/$PROV/alerting/contact-points.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/alerting/rules.yaml" "$GREMION_ROOT/$PROV/alerting/rules.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/alerting/policies.yaml" "$GREMION_ROOT/$PROV/alerting/policies.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/datasources/datasources.yaml" "$GREMION_ROOT/$PROV/datasources/datasources.yaml"
+    grep -q "url: 'http://127.0.0.1:9099/hook'" "$cp"
+    grep -q '^      - uid: platform-webhook$' "$cp"
+    run grep -c 'disableResolveMessage: false' "$cp"
+    [ "$output" = "1" ]
+    run grep -c 'type: email' "$cp"
     [ "$output" = "0" ]
-    # Measured, not theoretical: Git for Windows' /mingw64/bin/envsubst writes
-    # CRLF, and amtool rejected the rendered file with "did not find expected
-    # '-' indicator". A carriage return lands inside the YAML value.
-    run grep -c $'\r' "$GREMION_ROOT/runtime/ops/alertmanager.yml"
+    # Measured, not theoretical: Git for Windows' envsubst wrote CRLF once.
+    run grep -c $'\r' "$cp"
     [ "$output" = "0" ]
 }
 
-@test "render-ops keeps the smtp password out of alertmanager.yml" {
+@test "render-ops keeps the smtp password out of the provisioning tree, in a 0600 file" {
     write_ops_env "ops@example.org" "s3cret-app-password"
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"email=on"* ]]
-    grep -q "to: 'ops@example.org'" "$GREMION_ROOT/runtime/ops/alertmanager.yml"
-    # email_configs is a KEY OF THE RECEIVER, a sibling of webhook_configs: four
-    # spaces. At six, amtool refused the file with "did not find expected '-'
-    # indicator" and nothing on this box would have noticed without it.
-    grep -q '^    email_configs:$' "$GREMION_ROOT/runtime/ops/alertmanager.yml"
-    run grep -c 's3cret-app-password' "$GREMION_ROOT/runtime/ops/alertmanager.yml"
-    [ "$output" = "0" ]
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"email=on webhook=on"* ]]
+    grep -q "addresses: 'ops@example.org'" "$GREMION_ROOT/$PROV/alerting/contact-points.yaml"
+    run grep -c 'disableResolveMessage: false' "$GREMION_ROOT/$PROV/alerting/contact-points.yaml"
+    [ "$output" = "2" ]
+    run grep -rc 's3cret-app-password' "$GREMION_ROOT/$PROV"
+    [[ "$output" != *":1"* ]]
     [ "$(cat "$GREMION_ROOT/etc/secrets/ops/smtp-password")" = "s3cret-app-password" ]
     if fs_carries_modes "$GREMION_ROOT/etc"; then
         [ "$(stat -c '%a' "$GREMION_ROOT/etc/secrets/ops/smtp-password")" = "600" ]
@@ -275,49 +306,117 @@ EOF
     fi
 }
 
-@test "render-ops refuses a wildcard bind address" {
+@test "render-ops escapes a dollar in a sink for Grafana's environment expansion" {
     write_ops_env
-    sed -i 's|^OPS_BIND_IP=.*|OPS_BIND_IP=0.0.0.0|' "$GREMION_ROOT/etc/env/ops.env"
+    set_key ALERT_WEBHOOK_URL 'http://127.0.0.1:9099/hook?k=$abc'
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    grep -qF "url: 'http://127.0.0.1:9099/hook?k=\$\$abc'" "$GREMION_ROOT/$PROV/alerting/contact-points.yaml"
+}
+
+@test "render-ops renders no contact point and no policy while both sinks are sentinels" {
+    write_ops_env "CHANGE_ME_OPERATOR_alert_email_to"
+    set_key ALERT_WEBHOOK_URL CHANGE_ME_OPERATOR_alert_webhook_url
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"email=off webhook=off"* ]]
+    [ ! -e "$GREMION_ROOT/$PROV/alerting/contact-points.yaml" ]
+    [ ! -e "$GREMION_ROOT/$PROV/alerting/policies.yaml" ]
+    # the rules still ship: they evaluate and show, nothing is sent
+    [ -s "$GREMION_ROOT/$PROV/alerting/rules.yaml" ]
+    run grep -rc 'CHANGE_ME_' "$GREMION_ROOT/$PROV"
+    [[ "$output" != *":1"* ]]
+}
+
+@test "render-ops refuses a wildcard bind address, for the UI and for the ingest" {
+    write_ops_env
+    set_key OPS_BIND_IP 0.0.0.0
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 2 ]
     [[ "$output" == *"OPS_BIND_IP must be a concrete address"* ]]
+    write_ops_env
+    set_key OPS_INGEST_BIND_IP 0.0.0.0
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"OPS_INGEST_BIND_IP must be a concrete address"* ]]
 }
 
 @test "render-ops refuses a uid it does not run as" {
     write_ops_env
-    sed -i 's|^OPS_UID=.*|OPS_UID=999999|' "$GREMION_ROOT/etc/env/ops.env"
+    set_key OPS_UID 999999
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 2 ]
     [[ "$output" == *"OPS_UID=999999 but this process runs as"* ]]
 }
 
-@test "render-ops is BLOCKED when e-mail alerting has no app password" {
+@test "render-ops refuses a Prometheus retention above 30 days (R29-I6), and accepts 30" {
+    write_ops_env
+    set_key PROM_RETENTION_TIME 31d
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"exceeds the 30-day ceiling"* ]]
+    set_key PROM_RETENTION_TIME 721h
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    set_key PROM_RETENTION_TIME 30d
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ]
+}
+
+@test "render-ops never leaves the OTLP ingest open: an empty or sentinel token is refused" {
+    write_ops_env
+    set_key OTLP_INGEST_TOKEN CHANGE_ME_GEN_hex32_otlp_ingest
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"the OTLP ingest would be open"* ]]
+    set_key OTLP_INGEST_TOKEN ''
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    write_ops_env
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ]
+    # the bytes Alloy compares: the token, no trailing newline, 0600
+    [ "$(wc -c < "$GREMION_ROOT/etc/secrets/ops/otlp-ingest-token")" -eq 64 ]
+    if fs_carries_modes "$GREMION_ROOT/etc"; then
+        [ "$(stat -c '%a' "$GREMION_ROOT/etc/secrets/ops/otlp-ingest-token")" = "600" ]
+    fi
+}
+
+@test "render-ops renders the third-party probes with their kind and service labels, and refuses a malformed entry" {
+    write_ops_env
+    set_key OPS_THIRD_PARTY_PROBES '"nextcloud=https://cloud.example.org/status.php helios=https://vote.example.org/"'
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"targets=13"* ]]
+    local f="$GREMION_ROOT/runtime/ops/targets/blackbox-third-party.yml"
+    grep -q '^- targets: \["https://cloud.example.org/status.php"\]$' "$f"
+    grep -q '^    service: helios$' "$f"
+    [ "$(grep -c '^    kind: third_party$' "$f")" -eq 2 ]
+    set_key OPS_THIRD_PARTY_PROBES '"nextcloud"'
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"is not <service>=<http(s) url>"* ]]
+    # the refused render left the previous list in place, whole
+    grep -q '^    service: helios$' "$f"
+}
+
+@test "render-ops is BLOCKED when e-mail alerting has no app password or no submission host" {
     # ALERT_SMTP_PASSWORD is Task 1's key, in the alert_smtp sentinel group
-    # shared with mail.env (TASK-015). Before the Stalwart bring-up it legitimately still
-    # carries its sentinel, and this is the one place that must say so exactly.
+    # shared with mail.env (TASK-015). Before the Stalwart bring-up it
+    # legitimately still carries its sentinel, and this is the one place that
+    # must say so exactly.
     write_ops_env "ops@example.org" "CHANGE_ME_GEN_alnum32_alert_smtp"
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 3 ]
     [[ "$output" == *"BLOCKED: ALERT_SMTP_PASSWORD not provisioned (Stalwart app password, §I)"* ]]
-}
-
-@test "render-ops treats a CHANGE_ME_ recipient as e-mail alerting off" {
-    # A freshly rendered ops.env carries ALERT_EMAIL_TO=CHANGE_ME_OPERATOR_...
-    # Reading that as a real recipient would render `to: 'CHANGE_ME_...'` or,
-    # with the password still a sentinel, block the whole render on a step the
-    # operator never asked for. Not configured is not the same as misconfigured.
-    write_ops_env "CHANGE_ME_OPERATOR_alert_email_to"
+    write_ops_env "ops@example.org" "s3cret-app-password"
+    set_key ALERT_SMTP_HOST CHANGE_ME_OPERATOR_alert_smtp_host
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"email=off"* ]]
-    run grep -c 'CHANGE_ME_' "$GREMION_ROOT/runtime/ops/alertmanager.yml"
-    [ "$output" = "0" ]
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"BLOCKED: ALERT_SMTP_HOST is not set"* ]]
 }
 
 @test "render-ops refuses an option with no value instead of using the default" {
-    # "--env-file" as the last argument used to leave ENV_FILE empty and fall
-    # back to the default file, which renders something plausible from an env
-    # the operator did not name.
     run "$RENDER" --env-file
     [ "$status" -eq 2 ]
     [[ "$output" == *"--env-file requires a value"* ]]
@@ -328,9 +427,8 @@ EOF
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 0 ]
     [[ "$output" == *"stalwart-key=unset"* ]]
-    [ -s "$GREMION_ROOT/etc/secrets/ops/stalwart-api-key" ]
     [ "$(cat "$GREMION_ROOT/etc/secrets/ops/stalwart-api-key")" = "unset" ]
-    sed -i 's|^STALWART_API_KEY=.*|STALWART_API_KEY=deadbeefdeadbeefdeadbeefdeadbeef|' "$GREMION_ROOT/etc/env/ops.env"
+    set_key STALWART_API_KEY deadbeefdeadbeefdeadbeefdeadbeef
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 0 ]
     [[ "$output" == *"stalwart-key=set"* ]]
@@ -342,51 +440,108 @@ EOF
     fi
 }
 
+@test "render-ops reports the grafana sign-in as ready once gremion-tenant wrote its secret" {
+    write_ops_env
+    mkdir -p "$GREMION_ROOT/etc/secrets/grafana"
+    printf 'a-client-secret\n' > "$GREMION_ROOT/etc/secrets/grafana/client_secret"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"grafana-sso=ready"* ]]
+    # never printed, never copied
+    [[ "$output" != *"a-client-secret"* ]]
+}
+
 # ---------------------------------------------------------------------------
-# metrics-textfile.sh
+# metrics-textfile.sh (the host collector)
 # ---------------------------------------------------------------------------
 
-shim_docker_healthy() {
+# docker as the host sees it: one healthy state postgres, an unhealthy ui, a
+# STOPPED vector, a broker whose jsz answers, the daemon's volume sizes.
+shim_docker_world() {
     shim docker '
 case "$*" in
+  "ps --all --size"*)
+    printf "staging-state-postgres-1\t1.5kB (virtual 300MB)\nstaging-state-vector-1\t0B (virtual 90MB)\n" ;;
   *"com.docker.compose.service=postgres"*) echo "abc123" ;;
+  *"com.docker.compose.service=nats"*) [ -f "$GREMION_ROOT/no-nats" ] || echo "nats99" ;;
   "exec abc123 psql"*)                     echo "42|100" ;;
+  "exec nats99 wget"*)
+    [ -f "$GREMION_ROOT/jsz-broken" ] && { echo "<html>"; exit 0; }
+    printf "%s" "{\"account_details\":[{\"name\":\"ACC1\",\"stream_detail\":[{\"name\":\"EVENTS\",\"state\":{\"messages\":5,\"bytes\":1200},\"consumer_detail\":[{\"name\":\"worker\",\"num_pending\":5,\"num_ack_pending\":1,\"ack_floor\":{\"stream_seq\":3},\"delivered\":{\"stream_seq\":4}}]}]}]}" ;;
   "ps --all"*)
-    printf "staging-state-postgres-1\tUp 3 hours (healthy)\nstaging-app-blue-gremion-ui-1\tUp 2 hours (unhealthy)\n" ;;
+    printf "staging-state-postgres-1\tUp 3 hours (healthy)\tpostgres\tstaging-state\nstaging-app-blue-gremion-ui-1\tUp 2 hours (unhealthy)\tgremion-ui\tstaging-app-blue\nstaging-state-vector-1\tExited (1) 5 minutes ago\tvector\tstaging-state\n" ;;
+  "stats --no-stream"*)
+    printf "staging-state-postgres-1\t12.5MiB / 1GiB\nstaging-app-blue-gremion-ui-1\t1.5GiB / 2GiB\n" ;;
+  "info --format"*) echo "$GREMION_ROOT" ;;
+  "system df -v"*)
+    printf "%s" "[{\"Name\":\"staging-state_pg-data\",\"Size\":\"1.5GB\"},{\"Name\":\"staging-state_vector-processed-logs\",\"Size\":\"20MB\"},{\"Name\":\"other_data\",\"Size\":\"9GB\"}]" ;;
   *) : ;;
 esac
 exit 0'
 }
 
-@test "metrics-textfile writes the backup age from last-backup.json" {
-    shim_docker_healthy
-    printf '{"ts":"2026-09-09T02:00:00Z","ok":true,"label":"daily"}\n' > "$GREMION_ROOT/runtime/last-backup.json"
-    run "$METRICS"
-    [ "$status" -eq 0 ]
-    # 2026-09-09T02:00:00Z is 1788919200, not the 1788739200 of the brief's
-    # draft (which is 2026-09-06T22:40:00Z — two days out).
-    grep -q '^gremion_backup_last_success_timestamp_seconds 1788919200$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+shim_timer() {   # $1 = what systemctl is-enabled prints
+    shim systemctl "echo $1; exit 0"
 }
 
-@test "metrics-textfile emits nothing for a failed backup, so the rule fires" {
-    shim_docker_healthy
-    printf '{"ts":"2026-09-09T02:00:00Z","ok":false,"label":"daily"}\n' > "$GREMION_ROOT/runtime/last-backup.json"
-    run "$METRICS"
+prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
+
+@test "metrics-textfile reports the backup outcome, its time and the timer state (Q8)" {
+    shim_docker_world
+    shim_timer disabled
+    printf '{"ts":"2026-09-09T02:00:00Z","ok":true,"label":"daily"}\n' > "$GREMION_ROOT/runtime/last-backup.json"
+    STACK=staging run "$METRICS"
     [ "$status" -eq 0 ]
-    run grep -c 'gremion_backup_last_success_timestamp_seconds ' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # 2026-09-09T02:00:00Z is 1788919200.
+    grep -q '^gremion_backup_last_ok 1$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_backup_last_ts_seconds 1788919200$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_backup_timer_enabled 0$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    assert_recorded systemctl "is-enabled gremion-backup.timer"
+}
+
+@test "metrics-textfile reports a FAILED backup as 0, never as absent or as a success" {
+    shim_docker_world
+    shim_timer enabled
+    printf '{"ts":"2026-09-09T02:00:00Z","ok":false,"label":"daily"}\n' > "$GREMION_ROOT/runtime/last-backup.json"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    grep -q '^gremion_backup_last_ok 0$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_backup_timer_enabled 1$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+}
+
+@test "metrics-textfile leaves the backup record ABSENT when there is no last-backup.json or no systemd" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -cE '^gremion_backup_last_(ok|ts_seconds) ' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    grep -q '^gremion_backup_timer_enabled 1$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # an unreadable ok flag is not a success either
+    printf '{"ts":"2026-09-09T02:00:00Z","ok":"yes"}\n' > "$GREMION_ROOT/runtime/last-backup.json"
+    STACK=staging run "$METRICS"
+    run grep -c '^gremion_backup_last_ok ' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     [ "$output" = "0" ]
 }
 
-@test "metrics-textfile marks an unhealthy container and clears a healthy one" {
-    shim_docker_healthy
-    run "$METRICS"
+@test "metrics-textfile marks an unhealthy container, a stopped one, and their memory and disk" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
     [ "$status" -eq 0 ]
     grep -q 'gremion_container_unhealthy{name="staging-app-blue-gremion-ui-1"} 1' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     grep -q 'gremion_container_unhealthy{name="staging-state-postgres-1"} 0' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q 'gremion_container_up{name="staging-state-vector-1",service="vector",project="staging-state"} 0' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q 'gremion_container_up{name="staging-state-postgres-1",service="postgres",project="staging-state"} 1' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # 12.5 MiB = 13107200 bytes; 1.5 GiB = 1610612736; 1.5 kB = 1500
+    grep -q 'gremion_container_memory_bytes{name="staging-state-postgres-1"} 13107200' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q 'gremion_container_memory_bytes{name="staging-app-blue-gremion-ui-1"} 1610612736' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q 'gremion_container_disk_bytes{name="staging-state-postgres-1"} 1500' "$GREMION_ROOT/runtime/textfile/gremion.prom"
 }
 
 @test "metrics-textfile reports postgres connections from the state project" {
-    shim_docker_healthy
+    shim_docker_world
+    shim_timer enabled
     STACK=staging run "$METRICS"
     [ "$status" -eq 0 ]
     grep -q '^gremion_postgres_connections_used 42$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
@@ -394,16 +549,100 @@ exit 0'
     assert_recorded docker "com.docker.compose.project=staging-state"
 }
 
+@test "metrics-textfile turns the broker's jsz into stream and consumer gauges, read inside the broker (TDD 9)" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    grep -q '^gremion_nats_jsz_up 1$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_nats_stream_bytes{account="ACC1",stream="EVENTS"} 1200$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_nats_consumer_num_pending{account="ACC1",stream="EVENTS",consumer="worker"} 5$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_nats_consumer_num_ack_pending{account="ACC1",stream="EVENTS",consumer="worker"} 1$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_nats_consumer_ack_floor_stream_seq{account="ACC1",stream="EVENTS",consumer="worker"} 3$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # the monitor is read on the broker's own loopback, by docker exec
+    assert_recorded docker "exec nats99 wget -qO- http://127.0.0.1:8222/jsz?accounts=true&streams=true&consumers=true"
+}
+
+@test "metrics-textfile leaves every broker gauge ABSENT, never 0, when the broker is gone or answers garbage" {
+    shim_docker_world
+    shim_timer enabled
+    touch "$GREMION_ROOT/no-nats"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -c '^gremion_nats_.*[0-9]$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    rm -f "$GREMION_ROOT/no-nats"; touch "$GREMION_ROOT/jsz-broken"
+    STACK=staging run "$METRICS"
+    run grep -c '^gremion_nats_.*[0-9]$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+}
+
+@test "metrics-textfile measures the TRD-224 components against GREMION_DISK_ROOT, never /, and a missing one is absent (TDD 8)" {
+    shim_docker_world
+    shim_timer enabled
+    mkdir -p "$GREMION_ROOT/disk/seeded"
+    head -c 4096 /dev/zero > "$GREMION_ROOT/disk/seeded/blob"
+    GREMION_DISK_ROOT="$GREMION_ROOT/disk" GREMION_STORAGE_INTERVAL=0 \
+        GREMION_STORAGE_COMPONENTS="seeded=$GREMION_ROOT/disk/seeded gone=$GREMION_ROOT/disk/nope" \
+        STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    grep -qE "^gremion_host_disk_provisioned_bytes\{path=\"$GREMION_ROOT/disk\"\} [0-9]+$" "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -qE '^gremion_storage_component_bytes\{component="seeded"\} [0-9]+$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    run grep -c 'component="gone"' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    grep -qE '^gremion_host_filesystem_size_bytes\{mountpoint="/"\} [0-9]+$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+}
+
+@test "metrics-textfile defaults the components to the state project's Postgres and Vector volumes, by the daemon" {
+    shim_docker_world
+    shim_timer enabled
+    GREMION_STORAGE_INTERVAL=0 STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    grep -q '^gremion_storage_component_bytes{component="staging-state_pg-data"} 1500000000$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_storage_component_bytes{component="staging-state_vector-processed-logs"} 20000000$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    run grep -c 'other_data' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    # default GREMION_DISK_ROOT: Docker's data root, as the daemon reports it
+    assert_recorded docker "info --format"
+}
+
+@test "metrics-textfile reuses the last component reading inside GREMION_STORAGE_INTERVAL" {
+    shim_docker_world
+    shim_timer enabled
+    GREMION_STORAGE_INTERVAL=0 STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    : > "$SHIM_LOG"
+    GREMION_STORAGE_INTERVAL=900 STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -c 'system df' "$SHIM_LOG"
+    [ "$output" = "0" ]
+    grep -q '^gremion_storage_component_bytes{component="staging-state_pg-data"} 1500000000$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+}
+
 @test "metrics-textfile always stamps its own timestamp last" {
-    shim_docker_healthy
+    shim_docker_world
+    shim_timer enabled
     run "$METRICS"
     [ "$status" -eq 0 ]
     run tail -n 1 "$GREMION_ROOT/runtime/textfile/gremion.prom"
     [[ "$output" =~ ^gremion_metrics_textfile_timestamp_seconds\ [0-9]+$ ]]
 }
 
+@test "metrics-textfile writes each metric family once, contiguously (the text format)" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run bash -c "grep -oE '^# TYPE [a-z_]+' '$GREMION_ROOT/runtime/textfile/gremion.prom' | sort | uniq -d"
+    [ -z "$output" ]
+    # samples of one family never interleave with another's
+    run awk '/^#/ {next} {n=$0; sub(/[{ ].*/, "", n); if (n != last) { if (seen[n]++) { print "interleaved " n; exit 1 } last = n } }' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
 @test "metrics-textfile leaves no partial file behind" {
-    shim_docker_healthy
+    shim_docker_world
+    shim_timer enabled
     run "$METRICS"
     [ "$status" -eq 0 ]
     run find "$GREMION_ROOT/runtime/textfile" -name '*.tmp'
@@ -411,7 +650,7 @@ exit 0'
 }
 
 @test "metrics-textfile refuses a missing runtime directory" {
-    shim_docker_healthy
+    shim_docker_world
     rm -rf "$GREMION_ROOT/runtime"
     run "$METRICS"
     [ "$status" -eq 2 ]

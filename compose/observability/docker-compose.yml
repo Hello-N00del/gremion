@@ -1,0 +1,320 @@
+# compose/observability/docker-compose.yml
+# Project ${STACK}-ops (TASK-039; PRD-OPS-007, TRD-197/181/182/111/199/203/224):
+# the operator-only observability stack. Invocation, always and only, from this
+# directory:
+#   docker compose --env-file /opt/gremion/etc/env/ops.env <verb>
+#
+# Six services, one network (`ops`), non-council (docs/ops/pooled-stack-layout.md):
+#   grafana     the one entry point: ${OPS_BIND_IP}:3000 (loopback; SSH tunnel),
+#               native OIDC against the `platform` realm by its public URL, no
+#               login form, no basic auth, no anonymous access (TRD-111, Q4/Q5).
+#               Grafana-managed alerting replaces Alertmanager [D R17-23].
+#   prometheus  metrics store; no host port. Alloy remote-writes into it; it
+#               scrapes only the blackbox exporter and the Stalwart endpoint.
+#   loki        log store, single binary; no host port; per-class retention
+#               streams under the 30-day ceiling [D R29-I6] (docker/loki/).
+#   tempo       trace store; no host port; 7-day block retention (docker/tempo/).
+#   alloy       collector: host procfs/sysfs read-only, the host collector's
+#               textfile, Vector's output volume read-only (Q11 [A]), Grafana's
+#               own request log (class=audit), and the receive-only OTLP ingest
+#               (Q15) on ${OPS_INGEST_BIND_IP}:4317/4318 behind a bearer token.
+#   blackbox    probes (TLS expiry, ACME :80, SMTP, third-party reachability)
+#               from the file-SD lists render-ops.sh writes.
+#
+# What this project does NOT have, on purpose:
+#   - no Docker API in any form (no socket, no socket proxy): a proxy with
+#     CONTAINERS=1 hands /containers/{id}/json -- every injected council secret
+#     -- to whoever sits beside it (check-compose-edge guard 5, H21). Per-container
+#     memory and disk come from the host collector instead [A, Q6 deviation].
+#   - no mount of `/`, of /var/lib/docker, of a database volume, no pid: host:
+#     filesystem bytes are measured by the host collector (df/du), never through
+#     an ops mount (Q16; compose/observability/observability.test.mjs).
+#   - no network shared with ${STACK}_state or with Keycloak (TRD-203).
+#
+# Every image is digest-pinned (infra/host/ops/pin-images.sh, TRD-350). Every
+# service is limited (TRD-177) and carries its own probing healthcheck
+# (TRD-178): loki, tempo and alloy ship distroless images with no shell or
+# HTTP client, so a pinned static busybox is mounted READ-ONLY from its image at
+# /probe and the healthcheck runs /probe/bin/busybox wget against loopback.
+# Data lives in bind mounts under runtime/ops so the containers run as the
+# deploy uid without a named volume's root-owned first-run directory.
+
+x-probe-mount: &probe-mount
+  type: image
+  source: busybox:1.37.0-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092
+  target: /probe
+  read_only: true
+
+x-hardening: &hardening
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+x-labels: &labels
+  # TRD-203 second half / TRD-223: the ops containers are platform overhead,
+  # counted apart from every council's footprint.
+  gremion.footprint: platform_overhead
+
+services:
+  grafana:
+    image: grafana/grafana:12.4.0@sha256:b0ae311af06228bcfd4a620504b653db80f5b91e94dc3dc2a5b7dab202bcde20
+    restart: unless-stopped
+    <<: *hardening
+    labels: *labels
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    user: "${OPS_UID:?OPS_UID required}:${OPS_GID:?OPS_GID required}"
+    environment:
+      GF_SERVER_HTTP_PORT: "3000"
+      GF_SERVER_ROOT_URL: "http://127.0.0.1:3000/"
+      GF_SERVER_ROUTER_LOGGING: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      # TRD-111: no local identity at all. No initial admin, no login form, no
+      # basic auth, no anonymous viewer, no self sign-up.
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "true"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_OAUTH_ALLOW_INSECURE_EMAIL_LOOKUP: "false"
+      # The sole provider: the `platform` realm, by its PUBLIC URL (Q4). Never
+      # master, never a council realm; no network is shared with Keycloak.
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+      GF_AUTH_GENERIC_OAUTH_NAME: "Gremion platform"
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE: /run/secrets/grafana/client_secret
+      GF_AUTH_GENERIC_OAUTH_SCOPES: "openid profile email"
+      GF_AUTH_GENERIC_OAUTH_USE_PKCE: "true"
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: "https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}/auth/realms/platform/protocol/openid-connect/auth"
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "https://${PLATFORM_DOMAIN}/auth/realms/platform/protocol/openid-connect/token"
+      GF_AUTH_GENERIC_OAUTH_API_URL: "https://${PLATFORM_DOMAIN}/auth/realms/platform/protocol/openid-connect/userinfo"
+      GF_AUTH_GENERIC_OAUTH_LOGIN_ATTRIBUTE_PATH: preferred_username
+      GF_AUTH_GENERIC_OAUTH_EMAIL_ATTRIBUTE_PATH: email
+      GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
+      GF_AUTH_GENERIC_OAUTH_ALLOW_ASSIGN_GRAFANA_ADMIN: "false"
+      # Q5 gate: the realm role `operator` AND an MFA-level session (acr loa2),
+      # both read from the ID token (the grafana client maps both claims into
+      # it; Grafana evaluates the path per source). Anything else maps to '',
+      # which role_attribute_strict refuses: no default Viewer.
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(realm_access.roles[*], 'operator') && acr == 'loa2' && 'Admin' || ''"
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT: "true"
+      GF_AUTH_GENERIC_OAUTH_AUTO_LOGIN: "true"
+      # Alert e-mail through the vendor's own submission service as alerts@
+      # (TASK-015). The app password is a file, never an environment value.
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: "${ALERT_SMTP_HOST:?ALERT_SMTP_HOST required}:${ALERT_SMTP_PORT:?ALERT_SMTP_PORT required}"
+      GF_SMTP_USER: "${ALERT_SMTP_USER:?ALERT_SMTP_USER required}"
+      GF_SMTP_PASSWORD__FILE: /run/secrets/ops/smtp-password
+      GF_SMTP_FROM_ADDRESS: "${ALERT_EMAIL_FROM:?ALERT_EMAIL_FROM required}"
+      GF_SMTP_FROM_NAME: "Gremion operations"
+      GF_SMTP_STARTTLS_POLICY: MandatoryStartTLS
+      # Grafana's own request log is the operator-access record (RC-LOG-AUD):
+      # written to a file Alloy ships to Loki as class=audit, rotated daily
+      # and kept 7 days on disk.
+      GF_LOG_MODE: "console file"
+      GF_LOG_LEVEL: info
+      GF_LOG_FILE_FORMAT: json
+      GF_LOG_FILE_DAILY_ROTATE: "true"
+      GF_LOG_FILE_MAX_DAYS: "7"
+    ports:
+      - "${OPS_BIND_IP:?OPS_BIND_IP required}:3000:3000"
+    volumes:
+      - "${GREMION_ROOT_DIR:?GREMION_ROOT_DIR required}/runtime/ops/grafana-provisioning:/etc/grafana/provisioning:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/grafana-data:/var/lib/grafana"
+      - "${GREMION_ROOT_DIR}/runtime/ops/grafana-logs:/var/log/grafana"
+      - "${GREMION_ROOT_DIR}/etc/secrets/grafana:/run/secrets/grafana:ro"
+      - "${GREMION_ROOT_DIR}/etc/secrets/ops/smtp-password:/run/secrets/ops/smtp-password:ro"
+    networks:
+      - ops
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    healthcheck:
+      # /api/health answers once the database is migrated; "ok" is asserted,
+      # not a bare 200.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q '\"database\": *\"ok\"'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  prometheus:
+    image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+    restart: unless-stopped
+    <<: *hardening
+    labels: *labels
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    user: "${OPS_UID}:${OPS_GID}"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # R29-I6: 30 days at most; render-ops.sh refuses a longer value.
+      - "--storage.tsdb.retention.time=${PROM_RETENTION_TIME:?PROM_RETENTION_TIME required}"
+      - "--web.listen-address=:9090"
+      # Alloy pushes the host and OTLP series; nothing here scrapes a council
+      # service (TRD-203: senders push, ops dials nothing on _state).
+      - "--web.enable-remote-write-receiver"
+    volumes:
+      - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "./prometheus/rules.yml:/etc/prometheus/rules.yml:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/targets:/etc/prometheus/targets:ro"
+      - "${GREMION_ROOT_DIR}/etc/secrets/ops/stalwart-api-key:/etc/prometheus/stalwart-api-key:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/prometheus-data:/prometheus"
+    networks:
+      - ops
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9090/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  loki:
+    image: grafana/loki:3.7.0@sha256:c316b7c7589a5eeca843b6926c7446149d18300b79ac8538dc4ae063bc478da2
+    restart: unless-stopped
+    <<: *hardening
+    labels: *labels
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+    user: "${OPS_UID}:${OPS_GID}"
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - "../../docker/loki/loki.yaml:/etc/loki/loki.yaml:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/loki-data:/loki"
+      - *probe-mount
+    networks:
+      - ops
+    healthcheck:
+      test: ["CMD", "/probe/bin/busybox", "wget", "-q", "-O", "-", "http://127.0.0.1:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  tempo:
+    image: grafana/tempo:2.10.0@sha256:d7f4c72e0bad2b42b4e7263b0addaf3f5bbc105cec6b1917eba0aae3b9b70364
+    restart: unless-stopped
+    <<: *hardening
+    labels: *labels
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    user: "${OPS_UID}:${OPS_GID}"
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - "../../docker/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/tempo-data:/var/tempo"
+      - *probe-mount
+    networks:
+      - ops
+    healthcheck:
+      test: ["CMD", "/probe/bin/busybox", "wget", "-q", "-O", "-", "http://127.0.0.1:3200/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  alloy:
+    image: grafana/alloy:v1.14.0@sha256:f50931848bd8178774521767bb46b905e1a081301950ff28d7623c9db7c01076
+    restart: unless-stopped
+    <<: *hardening
+    labels: *labels
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    user: "${OPS_UID}:${OPS_GID}"
+    command:
+      - "run"
+      - "/etc/alloy/config.alloy"
+      - "--storage.path=/var/lib/alloy/data"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--disable-reporting"
+    # Q15: receive-only OTLP. Published on the _state bridge's gateway address
+    # (OPS_INGEST_BIND_IP), where a council container reaches it through the
+    # host; ops joins no council network and dials nothing on one.
+    ports:
+      - "${OPS_INGEST_BIND_IP:?OPS_INGEST_BIND_IP required}:4317:4317"
+      - "${OPS_INGEST_BIND_IP}:4318:4318"
+    volumes:
+      # Q16 allow-list: procfs and sysfs read-only, the host collector's
+      # textfile, Vector's output volume read-only, Grafana's request log.
+      - "/proc:/host/proc:ro"
+      - "/sys:/host/sys:ro"
+      - "${GREMION_ROOT_DIR}/runtime/textfile:/textfile:ro"
+      - "vector-logs:/vector-logs:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/grafana-logs:/grafana-logs:ro"
+      - "../../docker/alloy/config.alloy:/etc/alloy/config.alloy:ro"
+      - "${GREMION_ROOT_DIR}/etc/secrets/ops/otlp-ingest-token:/run/secrets/ops/otlp-ingest-token:ro"
+      - "${GREMION_ROOT_DIR}/runtime/ops/alloy-data:/var/lib/alloy/data"
+      - *probe-mount
+    networks:
+      - ops
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    healthcheck:
+      test: ["CMD", "/probe/bin/busybox", "wget", "-q", "-O", "-", "http://127.0.0.1:12345/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.26.0@sha256:92e05d5fe0df01d3980518dc42f07b778a8997048b57392ebc7f7391ebd7bb06
+    restart: unless-stopped
+    <<: *hardening
+    labels: *labels
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+    command:
+      - "--config.file=/etc/blackbox/blackbox.yml"
+      - "--web.listen-address=:9115"
+    volumes:
+      - "./blackbox.yml:/etc/blackbox/blackbox.yml:ro"
+    networks:
+      - ops
+    healthcheck:
+      # The exporter's own /-/healthy, answering "Healthy" with this
+      # directory's blackbox.yml loaded (TASK-036, TRD-178).
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9115/-/healthy | grep -q Healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  # Vector's pseudonymised output (docker-compose.yml, ${STACK}-state). Read
+  # only, by Alloy only (Q11 [A]): Vector stays networkless and ships nothing.
+  vector-logs:
+    external: true
+    name: "${STACK:?STACK required}-state_vector-processed-logs"
+
+networks:
+  ops:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: "${OPS_V4_SUBNET:?OPS_V4_SUBNET required}"
+        - subnet: "${OPS_V6_SUBNET:?OPS_V6_SUBNET required}"

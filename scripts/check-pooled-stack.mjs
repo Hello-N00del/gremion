@@ -55,7 +55,8 @@ export const PROJECTS = [
   { id: 'state', envFile: `${FIXTURE_DIR}/state.env`, cwd: '.' },
   { id: 'app-blue', colour: 'blue', envFile: `${FIXTURE_DIR}/app-blue.env`, cwd: '.' },
   { id: 'app-green', colour: 'green', envFile: `${FIXTURE_DIR}/app-green.env`, cwd: '.' },
-  { id: 'ops', envFile: `${FIXTURE_DIR}/ops.env`, cwd: 'infra/host/ops' },
+  // TASK-039: the ops project moved to compose/observability/.
+  { id: 'ops', envFile: `${FIXTURE_DIR}/ops.env`, cwd: 'compose/observability' },
   { id: 'mail', envFile: `${FIXTURE_DIR}/mail.env`, cwd: 'infra/host/mail' },
 ]
 
@@ -104,8 +105,11 @@ export const PLACEMENT = {
     migrate: { class: 'council-oneshot', networks: ['state'] },
     'tenant-create': { class: 'council-oneshot', networks: ['edge', 'state'] },
   },
+  // TASK-039: the observability stack. On `ops` only: no ops service shares a
+  // network with _state or with Keycloak (TRD-203, TRD-111); the OTLP ingest
+  // is a published port, never a shared network (Q15).
   ops: Object.fromEntries(
-    ['prometheus', 'alertmanager', 'node-exporter', 'cadvisor', 'blackbox'].map((s) => [s, { class: 'non-council', networks: ['ops'] }]),
+    ['grafana', 'prometheus', 'loki', 'tempo', 'alloy', 'blackbox'].map((s) => [s, { class: 'non-council', networks: ['ops'] }]),
   ),
   mail: { stalwart: { class: 'non-council', networks: ['mail'] } },
 }

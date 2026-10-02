@@ -1,0 +1,90 @@
+# docker/loki/loki.yaml -- the ops log store (TASK-039; first writer, G4;
+# TASK-033 owns the application log classes that will flow into it).
+#
+# Single binary, filesystem storage under the ops bind mount, TSDB schema v13
+# with a 24 h index period. RETENTION IS ON: Loki's default keeps every line
+# for ever, and the operator ceiling is 30 days for every log class
+# [D R29-I6]. Five class streams (retention catalogue section 4.1, [D R17-25]),
+# each one's WORST CASE under 30 days:
+#
+#   worst case = window + 24 h (index period) + retention_delete_delay (2 h)
+#                + compaction_interval (10 min)
+#
+#   class        window  worst case       row
+#   access       14 d    15 d 2 h 10 min  RC-LOG-ACC (14 d / 30 d)
+#   security     27 d    28 d 2 h 10 min  RC-LOG-SEC (27 d / 30 d)
+#   finance      27 d    28 d 2 h 10 min  RC-LOG-FIN (27 d / 30 d)
+#   audit        27 d    28 d 2 h 10 min  RC-LOG-AUD (27 d / 30 d, bound to SEC)
+#   application  28 d    29 d 2 h 10 min  RC-LOG-APP (30 d / 30 d) [A: 28 d so
+#                                         the worst case stays under the cap]
+#   (unlabelled) 14 d    15 d 2 h 10 min  the global default: a stream without a
+#                                         class gets the SHORTEST window
+#
+# compose/observability/retention.test.mjs reads this file and fails on any
+# window whose worst case exceeds 30 days (watched RED on 31 d).
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2026-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 14d
+  retention_stream:
+    - selector: '{class="access"}'
+      priority: 1
+      period: 14d
+    - selector: '{class="security"}'
+      priority: 1
+      period: 27d
+    - selector: '{class="finance"}'
+      priority: 1
+      period: 27d
+    - selector: '{class="audit"}'
+      priority: 1
+      period: 27d
+    - selector: '{class="application"}'
+      priority: 1
+      period: 28d
+  # A line older than a day is refused on ingest, so a replayed or
+  # back-dated line cannot land in a chunk that outlives its class window.
+  reject_old_samples: true
+  reject_old_samples_max_age: 24h
+  allow_structured_metadata: true
+
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 50
+  delete_request_store: filesystem
+
+ruler:
+  enable_api: false
+
+analytics:
+  reporting_enabled: false
