@@ -146,9 +146,8 @@ read_tenant_hosts() {
 # which Prometheus' file SD reads as no targets.
 render_third_party() {
     local entry name url entries=()
-    # Split on whitespace on purpose: the value is a list.
-    # shellcheck disable=SC2086
-    set -f; entries=(${OPS_THIRD_PARTY_PROBES:-}); set +f
+    # Split on whitespace on purpose: the value is a list (no glob: set -f).
+    read -r -a entries <<< "${OPS_THIRD_PARTY_PROBES:-}"
     # Validated BEFORE anything is written: a die inside the pipeline below
     # would leave a half-written list behind.
     for entry in ${entries[@]+"${entries[@]}"}; do

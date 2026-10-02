@@ -199,11 +199,15 @@ emit_postgres_connections() {
 }
 
 # The jq program per family: one family per pass, so every family's samples
-# stay contiguous (the text format requires it).
+# stay contiguous (the text format requires it). The `$a`, `$s`, `$c` below are
+# jq variables, single-quoted on purpose.
 JSZ_ESC='def esc: tostring | gsub("\\\\"; "\\\\\\\\") | gsub("\""; "\\\"");'
+# shellcheck disable=SC2016
 JSZ_STREAMS='.account_details[]? as $a | ($a.stream_detail // [])[] as $s'
+# shellcheck disable=SC2016
 JSZ_CONSUMERS="${JSZ_STREAMS}"' | ($s.consumer_detail // [])[] as $c'
 
+# shellcheck disable=SC2016  # the jq paths in the family lists are jq variables
 emit_nats() {
     local cid json fam
     cid="$(state_container nats)"
