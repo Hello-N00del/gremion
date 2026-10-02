@@ -51,8 +51,12 @@
 #                    not reloaded, the ledger and the database lists unchanged
 #   customer-suspend suspend proof-x: status, realm disabled, the tenant host
 #                    503 through the edge, broker module users evicted, the
-#                    principal revoked; proof-y untouched
+#                    principal revoked, the realm carries no authenticating
+#                    sender; a SECOND suspend exits 0 and changes nothing
+#                    (TASK-043c); proof-y untouched
 #   customer-resume  every one of those restored (a fresh principal)
+#   (create and resume also read Traefik's STATE of both routers of each
+#   customer: enabled, no error -- TASK-043c; presence is not enough)
 #   customer-reconcile reconcile green; a planted platform@ sender fails
 #                    smtp-server; --apply repairs; check-principals --no-allowances
 #   customer-admins  brief section 1 "Admins sign in" (PRD-IDN-005): the realm's
@@ -567,6 +571,35 @@ edge_wait() { # <api path> -- 0 once Traefik reports it
     while (( s < 30 )); do traefik_has "$1" && return 0; sleep 2; s=$(( s + 2 )); done
     return 1
 }
+# routers_enabled <slug>... -- TASK-043c P1. Traefik's STATE of both routers of
+# each customer (tenant-<slug>@file and tenant-<slug>.kc@file): enabled, no
+# error. A router whose chained @docker middleware does not exist is REPORTED
+# but status "disabled" (the 043b run: "middleware edge-ratelimit-app@docker
+# does not exist"), so presence proves nothing. Polled up to ~40 s (the docker
+# provider converges after the file provider); the judge is
+# fixtures/customer-provision/router-state.mjs (zero routers is a failure). The
+# bodies are appended to ledger/edge-routers.txt; the violations are printed on
+# stdout and the return is non-zero when any remain.
+routers_enabled() { # <slug>...
+    local slug rt body json tries=0 out rc port
+    port="$(penv TRAEFIK_API_PORT)"
+    while :; do
+        json='{}'
+        for slug in "$@"; do
+            for rt in "tenant-${slug}" "tenant-${slug}.kc"; do
+                body="$(curl -fsS --max-time 5 "http://127.0.0.1:${port}/api/http/routers/${rt}@file" 2>/dev/null)" || body=""
+                json="$(jq -c --arg k "$rt" --argjson v "${body:-null}" '. + {($k): $v}' <<< "$json")" || json='{}'
+            done
+        done
+        rc=0
+        out="$(node "$ROOT_H/test/host/fixtures/customer-provision/router-state.mjs" <<< "$json")" || rc=$?
+        (( rc == 0 || tries >= 20 )) && break
+        tries=$(( tries + 1 )); sleep 2
+    done
+    printf '%s %s\n' "$(now)" "$json" | ledger edge-routers.txt
+    printf '%s' "$out"
+    return "$rc"
+}
 trd440() { # the container count and every project's service list
     # every measurement must succeed (review C, r2): a failed render on both
     # sides compared equal; each project renders from its own directory
@@ -701,6 +734,11 @@ phase_customer_create() {
     for rt in "tenant-${X}.kc" "tenant-${Y}.kc"; do
         edge_wait "http/routers/${rt}@file" || info "Traefik does not report the router ${rt}@file"
     done
+    # TASK-043c P1: the STATE, not the presence (the 043b run: all four routers
+    # reported, all four disabled by an undeclared @docker middleware).
+    local rs
+    if rs="$(routers_enabled "$X" "$Y")"; then ok "customer-create: Traefik reports tenant-${X}, tenant-${X}.kc, tenant-${Y} and tenant-${Y}.kc enabled with no error"
+    else bad "customer-create: Traefik routers are not enabled: ${rs}"; fi
     if edge_served "$(host_of "$X")"; then ok "customer-create: $(host_of "$X") is served by gremion-ui through the edge (${EDGE_SHAPE})"
     else bad "customer-create: $(host_of "$X") is not served (${EDGE_SHAPE}; want 302/303 into /auth/login or 200 with gremion-ui's CSP)"; fi
 }
@@ -731,6 +769,18 @@ phase_customer_suspend() {
     local n
     if n="$(principal_count "$XT")" && [[ "$n" == 0 ]]; then ok "customer-suspend: the principal kc-${XT}@ is revoked (R-E5a; principals list rc 0, KC-PRINCIPALS: 0)"
     else bad "customer-suspend: the principal is not provably revoked (principals list: ${n:-failed})"; fi
+    # TASK-043c P2: the realm carries no authenticating sender (Keycloak 26.6.1
+    # refused the old blank-sender payload and the principal had already been
+    # deleted: the 043b run), and a SECOND suspend converges and changes nothing.
+    local smtp
+    smtp="$(skc get "realms/$X" --fields 'smtpServer(*)' | jq -c '(.smtpServer // {}) | [.user, .from, .auth]')" || smtp=""
+    if [[ -n "$smtp" ]] && jq -e '(.[0] // "") == "" and (.[1] // "") == "" and ((.[2] // "") | tostring) != "true"' <<< "$smtp" >/dev/null; then ok "customer-suspend: realm ${X} carries no authenticating sender (smtpServer user/from/auth: ${smtp})"
+    else bad "customer-suspend: realm ${X} still carries a sender (smtpServer user/from/auth: ${smtp:-unreadable})"; fi
+    if tenant suspend "$X" > "$OUT/ledger/suspend-x-2.log" 2>&1; then
+        if grep -q 'changed=no action=revoked' "$OUT/ledger/suspend-x-2.log" && n="$(principal_count "$XT")" && [[ "$n" == 0 ]] \
+           && [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == suspended ]]; then ok "customer-suspend: a second suspend exits 0 and changes nothing (REALM-SMTP changed=no, no principal, still suspended)"
+        else bad "customer-suspend: the second suspend exited 0 but did not converge to a no-op (see ledger/suspend-x-2.log)"; fi
+    else tail -n 20 "$OUT/ledger/suspend-x-2.log" >&2; bad "customer-suspend: a second suspend failed (it must be idempotent)"; fi
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${Y}'")" == active ]] && edge_served "$(host_of "$Y")"; then ok "customer-suspend: ${Y} is untouched (active, served: ${EDGE_SHAPE})"
     else bad "customer-suspend: ${Y} was affected (${EDGE_SHAPE})"; fi
 }
@@ -742,6 +792,9 @@ phase_customer_resume() {
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == true ]]; then ok "customer-resume: realm enabled"; else bad "customer-resume: realm still disabled"; fi
     if edge_served "$(host_of "$X")"; then ok "customer-resume: $(host_of "$X") is served by gremion-ui again (${EDGE_SHAPE})"
     else bad "customer-resume: $(host_of "$X") is not served (${EDGE_SHAPE})"; fi
+    local rs
+    if rs="$(routers_enabled "$X" "$Y")"; then ok "customer-resume: Traefik reports both routers of ${X} and of ${Y} enabled with no error"
+    else bad "customer-resume: Traefik routers are not enabled: ${rs}"; fi
     if grep -q '# calendar@' <<< "$(accounts)"; then ok "customer-resume: the calendar broker user is back"; else bad "customer-resume: no calendar broker user"; fi
     local n
     if n="$(principal_count "$XT")" && [[ "$n" == 1 ]]; then ok "customer-resume: a fresh principal kc-${XT}@ exists (KC-PRINCIPALS: 1)"
