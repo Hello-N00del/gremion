@@ -589,14 +589,19 @@ edge_wait() { # <api path> -- 0 once Traefik reports it
 # bodies are appended to ledger/edge-routers.txt; the violations are printed on
 # stdout and the return is non-zero when any remain.
 routers_enabled() { # <slug>...
-    local slug rt body json tries=0 out rc port
+    local slug rt body json next tries=0 out rc port
     port="$(penv TRAEFIK_API_PORT)"
     while :; do
         json='{}'
         for slug in "$@"; do
             for rt in "tenant-${slug}" "tenant-${slug}.kc"; do
                 body="$(curl -fsS --max-time 5 "http://127.0.0.1:${port}/api/http/routers/${rt}@file" 2>/dev/null)" || body=""
-                json="$(jq -c --arg k "$rt" --argjson v "${body:-null}" '. + {($k): $v}' <<< "$json")" || json='{}'
+                # a body jq cannot parse records THIS router as null ("not reported
+                # by Traefik"); resetting the whole object dropped every router
+                # collected so far, and the judge then passed a subset
+                # (into a temporary: a failed substitution would empty $json)
+                if next="$(jq -c --arg k "$rt" --argjson v "${body:-null}" '. + {($k): $v}' <<< "$json" 2>/dev/null)"; then json="$next"
+                else json="$(jq -c --arg k "$rt" '. + {($k): null}' <<< "$json")"; fi
             done
         done
         rc=0
