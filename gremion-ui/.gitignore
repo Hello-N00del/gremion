@@ -14,3 +14,35 @@ var/
 
 # TASK-062: Paraglide output, compiled from src/lib/i18n/messages on dev/build/check
 src/lib/i18n/paraglide/
+
+# TASK-205 Q1: interim module overlay (scripts/interim-module-overlay.mjs). The in-process half of
+# every enabled module lives ONCE, under modules/<id>/app/**; the overlay copies it onto src/** so
+# SvelteKit can route it. These are build outputs, never committed (one source file, TRD-411).
+# The overlay test asserts that every destination of every enabled module is matched here
+# (git check-ignore), so a new module file outside these patterns fails loudly instead of showing
+# up in `git status`. TASK-125 deletes the overlay and this block with it.
+/.module-overlay.json
+# board
+/src/routes/api/board/
+/src/routes/tasks/
+/src/lib/server/board/
+/src/lib/components/board/
+/src/lib/modules/manifests/board.*
+/src/lib/server/seed/seed-board.ts
+/src/lib/test/board-tokens-contract.test.ts
+# calendar
+/src/routes/calendar/
+/src/routes/api/calendar/
+/src/lib/server/calendar/
+/src/lib/components/calendar/
+/src/lib/stores/calendar.ts
+/src/lib/modules/manifests/calendar.*
+/src/lib/server/seed/seed-calendar.ts
+/src/lib/server/events/calendar-audit-consumer.*
+# files
+/src/routes/files/
+/src/routes/api/files/
+/src/lib/server/files/
+/src/lib/files/
+/src/lib/components/files/
+/src/lib/modules/manifests/files.*
