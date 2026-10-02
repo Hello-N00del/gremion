@@ -6,8 +6,8 @@ export const electionsManifest: ModuleManifest = {
   order: 30,
   toggleable: true,
   // DELIBERATELY no `migrations` key (#371 review): committee_elections
-  // (migrations/004_committee_elections.sql) stays KERNEL-applied.
-  // 010_org_units.sql is a cross-cutting kernel migration (attributed to no
+  // (migrations/0004_committee_elections.sql) stays KERNEL-applied.
+  // 0010_org_units.sql is a cross-cutting kernel migration (attributed to no
   // manifest, therefore always applied) that UNCONDITIONALLY runs
   // `ALTER TABLE committee_elections RENAME COLUMN committee_id TO org_unit_id`,
   // so gating 004 behind the elections toggle breaks a FRESH elections-OFF init

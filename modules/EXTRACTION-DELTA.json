@@ -421,9 +421,9 @@
     },
     {
       "path": "modules/board/app/lib/modules/manifests/board.ts",
-      "reason": "post-f2 StuRaOS cee6f398: fix(board): drop product literal from board manifest scope comment",
+      "reason": "post-f2 StuRaOS cee6f398: fix(board): drop product literal from board manifest scope comment; TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
       "owner": "TASK-205",
-      "blob": "7bc8cd8091ac846fd005b0392bc1a038944b58cb"
+      "blob": "b7efb46a6bd40b557f066e4fdcaf1581662ea2fc"
     },
     {
       "path": "modules/board/app/lib/server/board/backend/index.test.ts",
@@ -655,9 +655,9 @@
     },
     {
       "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.integration.test.ts",
-      "reason": "TASK-205a: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant",
+      "reason": "TASK-205a: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant; TASK-205a: neutral tenant-b issuer host (kernel hygiene h2/i1: no retired product host in a shipped surface)",
       "owner": "TASK-205",
-      "blob": "4023ad661a1803e9fb5a131364a0daf3b5648673"
+      "blob": "b7b966a27f366acb02bbba6915759b3791a1ece9"
     },
     {
       "path": "modules/files/app/lib/server/files/backend/inprocess-client.ts",
@@ -1489,9 +1489,9 @@
     },
     {
       "path": "modules/elections/app/lib/modules/manifests/elections.ts",
-      "reason": "TASK-205b (TASK-058 Q10): the StuRa manifest owned /elections, /polls and /votes; after the split elections owns /elections only, the merged rail entry moves to the votes manifest",
+      "reason": "TASK-205b (TASK-058 Q10): the StuRa manifest owned /elections, /polls and /votes; after the split elections owns /elections only, the merged rail entry moves to the votes manifest; TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
       "owner": "TASK-205",
-      "blob": "916a499d81bf3eebba3dbc37fb004afbc27cf928"
+      "blob": "aeba4cf66f3733a2b2b8105f5c87ea77ff80d380"
     },
     {
       "path": "modules/elections/app/lib/server/elections/backend/service-client.test.ts",
@@ -1576,6 +1576,18 @@
       "reason": "TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); an afterAll clears the rows it created (a left-behind committee_elections row broke every later file that deletes org_units)",
       "owner": "TASK-205",
       "blob": "a9c2a185829b84358d10a68000c519aa90ce3762"
+    },
+    {
+      "path": "modules/calendar/app/lib/modules/manifests/calendar.test.ts",
+      "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
+      "owner": "TASK-205",
+      "blob": "0ff648a89a152b5b16770455aee31d14cea09280"
+    },
+    {
+      "path": "modules/calendar/app/lib/modules/manifests/calendar.ts",
+      "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
+      "owner": "TASK-205",
+      "blob": "6a4368dd21431984732e3506393c378c34c5c504"
     }
   ]
 }

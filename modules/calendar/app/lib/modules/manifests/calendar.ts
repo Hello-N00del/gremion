@@ -8,7 +8,7 @@ import type { ModuleManifest } from '../types'
 // sources toggleable ids from MODULE_MANIFESTS and sets each true by default).
 //
 // DELIBERATELY no `migrations` key (#372): calendar_events
-// (migrations/003_calendar_schema.sql) stays KERNEL-applied. 008_public_portal.sql
+// (migrations/0003_calendar_schema.sql) stays KERNEL-applied. 0008_public_portal.sql
 // is a cross-cutting kernel migration (attributed to no manifest, therefore
 // always applied) that UNCONDITIONALLY runs
 // `ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS is_public ...`, so gating

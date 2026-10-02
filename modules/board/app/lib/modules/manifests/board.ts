@@ -8,7 +8,7 @@ import type { ModuleManifest } from '../types'
 // board disable; the flag defaults ON (defaultModulesConfig sources toggleable
 // ids from MODULE_MANIFESTS and sets each true by default).
 //
-// DELIBERATELY no schema-file attribution: 034_deck_board.sql stays
+// DELIBERATELY no schema-file attribution: 0034_deck_board.sql stays
 // KERNEL-applied. Its DDL CREATEs board/stack/card with cross-DB FKs to
 // org_units(id) AND protocol_action_items(id) — both governance-scoped kernel
 // tables — so the board schema is governance-coupled kernel data, exactly the

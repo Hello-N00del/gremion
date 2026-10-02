@@ -22,7 +22,7 @@ describe('calendar manifest — split out of core (Task 0)', () => {
 
   it('calendar manifest attributes NO migrations — 003 stays kernel-applied (#372)', async () => {
     // Mirrors electionsManifest: the calendar_events schema (003) stays
-    // KERNEL-applied because 008_public_portal.sql unconditionally ALTERs it.
+    // KERNEL-applied because 0008_public_portal.sql unconditionally ALTERs it.
     // See the exemption comment in calendar.ts and the coupling guards in
     // module-migrations.test.ts / migration-ownership.test.ts.
     const { calendarManifest } = await import('./calendar')

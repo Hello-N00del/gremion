@@ -158,7 +158,7 @@ describe('calendar-audit-consumer', () => {
       status: 'active',
       dbConnRef: 'env:DATABASE_URL',
       realmName: 'tenant-b',
-      issuer: 'https://sturaos.com/auth/realms/tenant-b',
+      issuer: 'https://tenant-b.test/auth/realms/tenant-b',
       kcInternal: 'http://keycloak:8080/auth/realms/tenant-b',
       kcClientId: 'stura-admin',
       kcClientRef: 'env:KEYCLOAK_ADMIN_CLIENT_SECRET',
