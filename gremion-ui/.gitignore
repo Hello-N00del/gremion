@@ -78,3 +78,5 @@ src/lib/i18n/paraglide/
 # TASK-205b: the module halves' shell chrome (slots/*.slot.ts, layout-slot.ts consumer) and the messaging components
 /src/lib/modules/slots/
 /src/lib/components/messaging/
+# TASK-205 TDD 11: the scratch app the disabled-module lane builds (scripts/module-lane.mjs); never committed
+/_module-lane/
