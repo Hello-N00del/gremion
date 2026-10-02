@@ -322,7 +322,9 @@ EOF
         users: [{username: "council-user", enabled: true, email: "council-user@proof.invalid", emailVerified: true,
                  firstName: "Council", lastName: "User", realmRoles: ["operator"],
                  credentials: [{type: "password", value: $ENV.PW, temporary: false}]}]}' > "$OUT/kc-import/council-proof-realm.json"
-    docker inspect "$C_KC" >/dev/null 2>&1 || docker run -d --name "$C_KC" -p "127.0.0.1:${KC_PORT}:8080" \
+    # Recreated on every prepare: the realm above carries this run's secrets.
+    docker rm -f "$C_KC" >/dev/null 2>&1 || true
+    docker run -d --name "$C_KC" -p "127.0.0.1:${KC_PORT}:8080" \
         -v "$(hp "$OUT/kc-import"):/opt/keycloak/data/import:ro" \
         -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD="$kcpw" \
         -e KC_HTTP_RELATIVE_PATH=/auth -e KC_HOSTNAME="http://127.0.0.1:${KC_PORT}/auth" \
