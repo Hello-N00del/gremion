@@ -94,6 +94,11 @@ export interface GremionConfig {
   // key to `true` at write time, so a config can never persist a disabled core
   // module even though the type no longer encodes the literal `true`.
   modules: Record<string, boolean>
+  // TASK-205a: the calendar module's settings (re-applied from the source; the carve removed them).
+  calendar?: {
+    shared_event_color: string
+    german_state: string // 'DE' for federal, or 'BY', 'BE', etc. for a Bundesland
+  }
   legal: { datenschutz_html: string; impressum_html: string; barrierefreiheit_html: string }
   backups: { retention_days: number; last_backup_at: string | null; encryption_key_path: string }
   retention: {
@@ -206,6 +211,7 @@ const DEFAULT_CONFIG: GremionConfig = {
   // WP3-modules-dynamic: derive the default toggle map from the manifests so a
   // net-new toggleable module is on-by-default with zero edits here.
   modules: defaultModulesConfig(),
+  calendar: { shared_event_color: '#94a3b8', german_state: 'DE' },
   legal: {
     datenschutz_html: DEFAULT_DATENSCHUTZ_HTML,
     impressum_html: DEFAULT_IMPRESSUM_HTML,
@@ -324,6 +330,13 @@ const smtpSchema = z
 // modules can never persist disabled (and REQUIRED_MODULES is its source).
 const modulesSchema = z.record(z.string(), z.boolean())
 
+const calendarSchema = z
+  .object({
+    shared_event_color: z.string(),
+    german_state: z.string(),
+  })
+  .partial()
+
 const legalSchema = z
   .object({
     datenschutz_html: z.string(),
@@ -390,6 +403,7 @@ export const gremionConfigSchema = z
     admin_accounts: adminAccountsSchema,
     smtp: smtpSchema,
     modules: modulesSchema,
+    calendar: calendarSchema,
     legal: legalSchema,
     backups: backupsSchema,
     retention: retentionSchema,
@@ -485,6 +499,7 @@ function mergeStored(stored: StoredConfig): GremionConfig {
     admin_accounts: { ...DEFAULT_CONFIG.admin_accounts, ...stored.admin_accounts },
     smtp: { ...DEFAULT_CONFIG.smtp, ...stored.smtp },
     modules: { ...DEFAULT_CONFIG.modules, ...stored.modules },
+    calendar: { ...DEFAULT_CONFIG.calendar, ...stored.calendar },
     legal: { ...DEFAULT_CONFIG.legal, ...stored.legal },
     backups: { ...DEFAULT_CONFIG.backups, ...stored.backups },
     retention: { ...DEFAULT_CONFIG.retention, ...stored.retention },
@@ -639,6 +654,7 @@ export function writeConfig(update: ConfigUpdate, tenant: ConfigTenant = require
     financeRoles: (update.financeRoles ?? current.financeRoles) as GremionConfig['financeRoles'],
     smtp: { ...current.smtp, ...update.smtp },
     legal: { ...current.legal, ...update.legal },
+    calendar: { ...current.calendar, ...update.calendar } as GremionConfig['calendar'],
     modules: mergedModules as GremionConfig['modules'],
     backups: mergedBackups,
     retention: mergedRetention,

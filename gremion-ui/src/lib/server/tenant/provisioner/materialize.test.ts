@@ -17,9 +17,9 @@ describe('materializeConfig (defaults + stored -> fully-merged effective config)
     expect(merged.brand.org_short).toBe('Muster-HS')
     // ... and fields the stored partial omits are back-filled from defaults.
     expect(merged.brand.logo_letter).toBe('P') // neutral default
-    // Governance-only kernel: no always-on feature modules, so the default
-    // modules map is empty (a stored partial that omits `modules` back-fills {}).
-    expect(merged.modules).toEqual({})
+    // The default modules map is the toggleable manifests the build composes (TASK-205a): a stored
+    // partial that omits `modules` back-fills it.
+    expect(merged.modules).toEqual({ calendar: true, board: true })
     expect(merged.legal.impressum_html).toContain('per-tenant: set via config')
   })
 
