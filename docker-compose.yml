@@ -707,7 +707,10 @@ services:
   matrix:
     build:
       context: modules/messaging/synapse
-    image: ghcr.io/hello-n00del/gremion-synapse:${IMAGE_TAG:-latest}
+    # `:-dev` as legal/vector: lint-image-digests fails a latest default, and
+    # the release pins layer (docker-compose.state-pins.yml) resets build and
+    # pins the digest on a host (TASK-048b's state set).
+    image: ghcr.io/hello-n00del/gremion-synapse:${IMAGE_TAG:-dev}
     profiles: [messaging]
     restart: unless-stopped
     logging:
