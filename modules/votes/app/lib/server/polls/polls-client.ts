@@ -50,6 +50,19 @@ export interface CreatePollDto {
   expire?: number
 }
 
+/** The user-requested poll settings that NC Polls only accepts through the
+ * `PUT /poll/{id}` pollConfiguration (F1-FIX-08, H16). `anonymous` is always
+ * explicit; description/expire only when the caller supplied them. */
+function requestedSettings(
+  dto: CreatePollDto,
+): Pick<NcPoll['configuration'], 'anonymous'> & Partial<Pick<NcPoll['configuration'], 'description' | 'expire'>> {
+  return {
+    anonymous: dto.anonymous,
+    ...(dto.description !== undefined ? { description: dto.description } : {}),
+    ...(dto.expire !== undefined ? { expire: dto.expire } : {}),
+  }
+}
+
 function ncBase(): string {
   return (defaultTenantEnv('NEXTCLOUD_URL') ?? 'http://nextcloud').replace(/\/$/, '')
 }
@@ -111,8 +124,7 @@ export function createPollsClient(opts: { oidcBearer?: string } = {}) {
     async createPoll(dto: CreatePollDto): Promise<NcPoll> {
       // Step 1: create the poll. NC Polls v9.1.4 `POST /poll` (PollApiController::add)
       // consumes ONLY { type, title } — anonymous/description/expire are not read
-      // here; applying them needs a follow-up `PUT /poll/{id}` pollConfiguration
-      // call (tracked separately, out of scope for #156).
+      // here; step 3 applies them with the `PUT /poll/{id}` pollConfiguration.
       const { poll } = await ncFetch<{ poll: NcPoll }>('/poll', {
         method: 'POST',
         body: JSON.stringify({ title: dto.title, type: dto.type }),
@@ -142,16 +154,31 @@ export function createPollsClient(opts: { oidcBearer?: string } = {}) {
         throw e
       }
 
-      // Step 3: open the poll NC-side (#411). Polls default to access=private
-      // (creator-only), which 400s every per-user bearer read/vote — the app
-      // gates /polls itself and all members are NC users, so 'open' is the NC
-      // mapping of the app's semantics. Same rollback contract as the options
-      // write: a private poll is unvotable, never leave one behind.
+      // Step 3: configure the poll NC-side in ONE pollConfiguration PUT.
+      // - access 'open' (#411): polls default to access=private (creator-only),
+      //   which 400s every per-user bearer read/vote — the app gates /polls
+      //   itself and all members are NC users, so 'open' is the NC mapping.
+      // - anonymous / description / expire (F1-FIX-08, H16): `POST /poll` reads
+      //   only { type, title }, so these MUST travel here. anonymous is always
+      //   sent explicitly so the privacy setting never rides on NC's default.
+      // Same rollback contract as the options write: never leave behind a poll
+      // that is unvotable or that broke the requested privacy setting.
+      const settings = requestedSettings(dto)
+      let configured: NcPoll | undefined
       try {
-        await ncFetch(`/poll/${poll.id}`, {
+        const res = await ncFetch<{ poll?: NcPoll }>(`/poll/${poll.id}`, {
           method: 'PUT',
-          body: JSON.stringify({ pollConfiguration: { access: 'open' } }),
+          body: JSON.stringify({ pollConfiguration: { access: 'open', ...settings } }),
         })
+        configured = res?.poll
+        // Fail closed on privacy: when Nextcloud echoes the stored poll, its
+        // anonymity MUST match the request. A named-voter poll that the user
+        // created as "Anonym" is worse than no poll.
+        if (configured?.configuration && Boolean(configured.configuration.anonymous) !== dto.anonymous) {
+          throw new Error(
+            `Nextcloud Polls /poll/${poll.id} did not apply anonymous=${dto.anonymous}`,
+          )
+        }
       } catch (e) {
         try {
           await ncFetch(`/poll/${poll.id}`, { method: 'DELETE' })
@@ -161,7 +188,9 @@ export function createPollsClient(opts: { oidcBearer?: string } = {}) {
         throw e
       }
 
-      return poll
+      // Return what Nextcloud stored; without an echo, overlay the applied
+      // configuration so callers never see the stale POST defaults.
+      return configured ?? { ...poll, configuration: { ...poll.configuration, ...settings } }
     },
 
     vote: (_pollId: number, optionId: number): Promise<unknown> =>

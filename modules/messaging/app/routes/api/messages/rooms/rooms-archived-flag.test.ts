@@ -36,6 +36,19 @@ vi.mock('$lib/server/messages/admin/room-admin', () => ({
   getRoomArchiveMarker: mockMarker,
   createRoom: vi.fn(),
 }))
+// F1-FIX-04 (H18): the auto-join candidates are the rooms of the caller's own
+// org units (provisioning ledger x org_unit_members), no longer every server
+// room -- so the candidate list now comes from the kernel DB. The tests below
+// feed their former listAllRoomIds fixture through that source instead.
+const unitRoomState = vi.hoisted(() => ({ rooms: [] as string[] }))
+vi.mock('$lib/server/db', () => ({
+  getDb: () => (strings: TemplateStringsArray) =>
+    Promise.resolve(
+      strings.join('?').includes('provisioning_resources')
+        ? unitRoomState.rooms.map((roomId) => ({ roomId }))
+        : [],
+    ),
+}))
 
 let GET: (event: unknown) => Promise<Response>
 
@@ -79,7 +92,7 @@ describe('getRoomArchiveMarker rejections: auto-join fails CLOSED, listing stays
     mockGetJoinedRooms
       .mockResolvedValueOnce([]) // pre-auto-join: no joined rooms yet
       .mockResolvedValueOnce(['!ok:matrix.test']) // post-auto-join re-read
-    mockListAllRoomIds.mockResolvedValue(['!ok:matrix.test', '!flaky:matrix.test'])
+    unitRoomState.rooms = ['!ok:matrix.test', '!flaky:matrix.test']
     mockMarker.mockImplementation(async (roomId: string) => {
       if (roomId === '!flaky:matrix.test') throw new Error('ETIMEDOUT')
       return null
@@ -133,7 +146,7 @@ describe('T18: first-login auto-join skips archived rooms', () => {
     mockGetJoinedRooms
       .mockResolvedValueOnce([]) // pre-auto-join: no joined rooms yet
       .mockResolvedValueOnce(['!fresh:matrix.test']) // post-auto-join re-read
-    mockListAllRoomIds.mockResolvedValue(['!fresh:matrix.test', '!archived:matrix.test'])
+    unitRoomState.rooms = ['!fresh:matrix.test', '!archived:matrix.test']
     mockMarker.mockImplementation(async (roomId: string) =>
       roomId === '!archived:matrix.test' ? { org_unit_id: 'u1' } : null
     )

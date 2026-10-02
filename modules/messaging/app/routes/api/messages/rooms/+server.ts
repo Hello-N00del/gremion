@@ -7,6 +7,7 @@ import { defaultTenantEnv } from '$lib/server/tenant/default-env'
 import type { SessionUser } from '$lib/auth'
 import { hasRole, Role } from '$lib/auth'
 import { createRoom, getRoomArchiveMarker } from '$lib/server/messages/admin/room-admin'
+import { autoJoinOwnUnitRooms } from '$lib/server/messages/auto-join'
 import { mapRoomError } from './map-room-error'
 
 // The CURRENT tenant's homeserver base (registry services.matrixUrl for
@@ -48,7 +49,7 @@ async function getWhoAmI(matrixToken: string): Promise<string> {
 }
 
 export const GET: RequestHandler = async (event) => {
-  requireAuth(event)
+  const user = requireAuth(event)
 
   const mc = getMessagesBackend().matrix()
   let matrixToken: string
@@ -61,47 +62,14 @@ export const GET: RequestHandler = async (event) => {
   }
   let joinedRooms = await mc.getJoinedRooms(matrixToken)
 
-  // Auto-join user to all server rooms if they haven't joined any yet.
-  // #370: the admin all-rooms list comes through the backend seam (the route no
-  // longer fetches /_synapse/admin/v1/rooms or references SYNAPSE_ADMIN_TOKEN).
-  // FLOW-MSG-001 (TASK-009 lane B, row 10): an ARCHIVED room is skipped here —
-  // R23-5 "archived rooms keep members joined [from before], read-only" means
-  // existing members stay, but a FRESH user must not be auto-joined into a
-  // room that is no longer the unit's active room.
+  // First-login backfill, F1-FIX-04 (H18, operator decision D-3): a caller with
+  // no joined room yet is joined ONLY to the rooms of their own org units, and
+  // a Guest never (messages/auto-join.ts). The old "join every server room"
+  // path put Guests into committee_only rooms. Archived rooms stay skipped
+  // (FLOW-MSG-001 row 10, fail closed on a marker read error).
   if (joinedRooms.length === 0) {
-    const synapse = getMessagesBackend().synapse()
-    const allRooms = await synapse.listAllRoomIds()
-    if (allRooms.length > 0) {
-      const matrixUserId = await getWhoAmI(matrixToken)
-      const joinableRooms = (
-        await Promise.all(
-          allRooms.map(async (roomId) => {
-            // Fail CLOSED on a rejected read: a network blip or malformed
-            // state-event shape must never be treated as "not archived" here
-            // — that would auto-join a fresh user into a room this code's own
-            // invariant (above) forbids joining them into. Skip the room and
-            // log so an elevated failure rate is observable to operators.
-            try {
-              const archived = await getRoomArchiveMarker(roomId)
-              return archived ? null : roomId
-            } catch (err) {
-              console.error('[messages] getRoomArchiveMarker failed during auto-join, skipping room (fail-closed)', {
-                roomId, error: err instanceof Error ? err.message : String(err),
-              })
-              return null
-            }
-          })
-        )
-      ).filter((roomId): roomId is string => roomId !== null)
-      await Promise.all(
-        joinableRooms.map((roomId) =>
-          synapse.forceJoinRoom(roomId, matrixUserId).catch(() => {
-            // ignore — room might already be joined or restricted
-          })
-        )
-      )
-      joinedRooms = await mc.getJoinedRooms(matrixToken)
-    }
+    const attempted = await autoJoinOwnUnitRooms(user, () => getWhoAmI(matrixToken), 'messages')
+    if (attempted.length > 0) joinedRooms = await mc.getJoinedRooms(matrixToken)
   }
 
   // #188: real per-room unread *message* counts (excludes the invite_for_me

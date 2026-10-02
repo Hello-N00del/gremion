@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { defaultTenantEnv } from '$lib/server/tenant/default-env'
 import { getMessagesBackend } from '$lib/server/messages/backend'
+import { autoJoinOwnUnitRooms } from '$lib/server/messages/auto-join'
 
 /**
  * GET /api/auth/matrix-token
@@ -39,6 +40,9 @@ export const GET: RequestHandler = async ({ request, url, locals }) => {
     const matrixBase = (defaultTenantEnv('MATRIX_URL') ?? 'http://matrix:8008').replace(/\/$/, '')
     let matrixUserId: string
     let matrixDeviceId: string = ''
+    // Only a Synapse-confirmed id may be force-joined (the admin join ignores
+    // join rules); the username-based fallback below is a guess.
+    let whoamiConfirmed = false
     try {
       const whoAmI = await fetch(`${matrixBase}/_matrix/client/v3/account/whoami`, {
         headers: { Authorization: `Bearer ${matrixToken}` }
@@ -46,31 +50,32 @@ export const GET: RequestHandler = async ({ request, url, locals }) => {
       const whoData = await whoAmI.json() as { user_id?: string; device_id?: string }
       matrixUserId = whoData.user_id ?? ''
       matrixDeviceId = whoData.device_id ?? ''
+      whoamiConfirmed = whoAmI.ok && matrixUserId !== ''
     } catch {
       // Fall back to username-based ID if whoAmI fails (non-fatal)
       const matrixServerName = defaultTenantEnv('SYNAPSE_SERVER_NAME') ?? 'localhost'
       matrixUserId = `@${user.preferredUsername ?? user.id}:${matrixServerName}`
     }
 
-    // Auto-join new users to all rooms (fire-and-forget — never fails the token exchange)
-    if (matrixUserId) {
-      const backend = getMessagesBackend()
-      const mc = backend.matrix()
-      const synapse = backend.synapse()
-      mc.getJoinedRooms(matrixToken)
+    // First-login backfill (fire-and-forget, never fails the token exchange).
+    // F1-FIX-04 (H18, operator decision D-3): the same scoped helper as
+    // /api/messages/rooms -- a Guest is never auto-joined, a Member only into
+    // the rooms of their own org units. It used to join EVERY server room,
+    // committee_only rooms included, for any caller. F1-FIX-04 r2: never for a
+    // guessed Matrix id (whoami failed).
+    if (matrixUserId && whoamiConfirmed) {
+      const joinedUserId = matrixUserId
+      getMessagesBackend().matrix().getJoinedRooms(matrixToken)
         .then(async (joined) => {
           if (joined.length === 0) {
-            // #370: the admin all-rooms list comes through the backend seam
-            // (SYNAPSE_ADMIN_TOKEN stays in the backend / leaf; per-tenant token).
-            const allRoomIds = await synapse.listAllRoomIds()
-            await Promise.all(
-              allRoomIds.map((roomId) =>
-                synapse.forceJoinRoom(roomId, matrixUserId).catch(() => undefined)
-              )
-            )
+            await autoJoinOwnUnitRooms(user, async () => joinedUserId, 'matrix-token')
           }
         })
-        .catch(() => undefined) // non-fatal
+        .catch((err: unknown) => {
+          console.warn('[matrix-token] first-login auto-join failed (non-fatal)', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
     }
 
     return json({

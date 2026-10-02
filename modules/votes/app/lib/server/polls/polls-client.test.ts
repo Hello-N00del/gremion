@@ -141,8 +141,78 @@ describe('NextcloudPollsClient', () => {
       ([url, opts]) => url === `${OCS_BASE}/poll/${mockPoll.id}` && opts.method === 'PUT'
     )
     expect(configCall).toBeDefined()
+    // anonymous is ALWAYS sent explicitly (F1-FIX-08 H16): the requested
+    // privacy setting must never depend on Nextcloud's default.
     expect(JSON.parse(configCall![1].body as string)).toEqual({
-      pollConfiguration: { access: 'open' },
+      pollConfiguration: { access: 'open', anonymous: false },
+    })
+  })
+
+  // F1-FIX-08 (H16 / S1c#3): an "Anonym" poll used to be created
+  // non-anonymous because createPoll dropped anonymous/description/expire.
+  describe('createPoll applies the requested configuration (H16)', () => {
+    const requested = {
+      title: 'Geheime Umfrage',
+      type: 'textPoll' as const,
+      options: ['Ja', 'Nein'],
+      anonymous: true,
+      description: 'Bitte bis Freitag abstimmen',
+      expire: 1767225600,
+    }
+
+    function routeFetch(putPoll: unknown) {
+      mockFetch.mockImplementation((url: string, opts: { method?: string }) => {
+        const method = opts?.method ?? 'GET'
+        if (url === `${OCS_BASE}/poll` && method === 'POST') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(ocs({ poll: mockPoll })) })
+        }
+        if (url === `${OCS_BASE}/poll/1` && method === 'PUT') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(ocs({ poll: putPoll })) })
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(ocs({})) })
+      })
+    }
+
+    it('the pollConfiguration PUT carries anonymous:true, description and expire', async () => {
+      routeFetch({
+        ...mockPoll,
+        configuration: {
+          ...mockPoll.configuration,
+          anonymous: true,
+          description: requested.description,
+          expire: requested.expire,
+        },
+      })
+      const { NextcloudPollsClient } = await import('./polls-client')
+      const poll = await NextcloudPollsClient.createPoll(requested)
+
+      const putCall = mockFetch.mock.calls.find(
+        ([u, o]) => u === `${OCS_BASE}/poll/1` && o?.method === 'PUT',
+      )
+      expect(putCall).toBeDefined()
+      expect(JSON.parse(putCall![1].body as string)).toEqual({
+        pollConfiguration: {
+          access: 'open',
+          anonymous: true,
+          description: 'Bitte bis Freitag abstimmen',
+          expire: 1767225600,
+        },
+      })
+      // The returned poll reflects what Nextcloud stored, not the stale POST echo.
+      expect(poll.configuration.anonymous).toBe(true)
+      expect(poll.configuration.description).toBe('Bitte bis Freitag abstimmen')
+      expect(poll.configuration.expire).toBe(1767225600)
+    })
+
+    it('rolls back and rejects when Nextcloud does not confirm the anonymity (privacy fail-closed)', async () => {
+      routeFetch({ ...mockPoll, configuration: { ...mockPoll.configuration, anonymous: false } })
+      const { NextcloudPollsClient } = await import('./polls-client')
+      await expect(NextcloudPollsClient.createPoll(requested)).rejects.toThrow(/anonym/i)
+
+      const deleteCall = mockFetch.mock.calls.find(
+        ([u, o]) => u === `${OCS_BASE}/poll/1` && o?.method === 'DELETE',
+      )
+      expect(deleteCall).toBeDefined()
     })
   })
 

@@ -1282,6 +1282,66 @@
       "reason": "added by TASK-205a: the calendar share of the f2 consumer-state.test.ts describe 'the audit consumers under a rejecting broker', split per module (R28-O2)",
       "owner": "TASK-205",
       "blob": "ddc1208d787d39a0efa7a537cfaf5277dfdaaca5"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/auto-join.integration.test.ts",
+      "reason": "post-f2 StuRaOS 8928249a: fix(notifications): elections join on org_unit_id, scope elections and published protocols per D-3, log degrad",
+      "owner": "TASK-205",
+      "blob": "f58b89496871475381101f0fc300a954c41cb8e1"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/auto-join.ts",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04",
+      "owner": "TASK-205",
+      "blob": "ca522bbcac719ff0420a6735c58cc26647dc1128"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/polls-client.test.ts",
+      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16)",
+      "owner": "TASK-205",
+      "blob": "482563b871d09ecd3ef122ee27ad4d3a18095903"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/polls-client.ts",
+      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16)",
+      "owner": "TASK-205",
+      "blob": "20a14e081461cdfdb8582524ecc96fc551205065"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/auth/matrix-token/+server.ts",
+      "reason": "post-f2 StuRaOS f01e7d6d: fix(messages): matrix-token first-login auto-join only for a Synapse-confirmed Matrix id, never a guessed one ",
+      "owner": "TASK-205",
+      "blob": "669f2e46b9684331f0fa96d919426dec391b4660"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/auth/matrix-token/matrix-token-auto-join.test.ts",
+      "reason": "post-f2 StuRaOS f01e7d6d: fix(messages): matrix-token first-login auto-join only for a Synapse-confirmed Matrix id, never a guessed one ",
+      "owner": "TASK-205",
+      "blob": "0bc4a548a9a989967d122cb4e422c076b25c5391"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/+server.ts",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04",
+      "owner": "TASK-205",
+      "blob": "6e7d2ffe65599a8e722517b242df2aeab3638b44"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/rooms-archived-flag.test.ts",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04",
+      "owner": "TASK-205",
+      "blob": "2dafb62bdbbd87e26be50d0e7297223aa509cc32"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/rooms-auto-join-scope.test.ts",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04",
+      "owner": "TASK-205",
+      "blob": "449a3accccac54e71b1744c6d98c446efce7ba06"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/votes-service-degrade.test.ts",
+      "reason": "post-f2 StuRaOS 1d9df363: test(votes): /votes loader renders degraded cards when the service leaf degrades non-UUID tracked elections (R",
+      "owner": "TASK-205",
+      "blob": "0a9e1f606be77fd2a6ae5377c9ef70e6ca72f0df"
     }
   ]
 }
