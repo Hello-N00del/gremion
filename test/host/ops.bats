@@ -472,7 +472,7 @@ case "$*" in
   "ps --all"*)
     printf "staging-state-postgres-1\tUp 3 hours (healthy)\tpostgres\tstaging-state\nstaging-app-blue-gremion-ui-1\tUp 2 hours (unhealthy)\tgremion-ui\tstaging-app-blue\nstaging-state-vector-1\tExited (1) 5 minutes ago\tvector\tstaging-state\n" ;;
   "stats --no-stream"*)
-    printf "staging-state-postgres-1\t12.5MiB / 1GiB\nstaging-app-blue-gremion-ui-1\t1.5GiB / 2GiB\n" ;;
+    printf "staging-state-postgres-1\t0.75%%\t12.5MiB / 1GiB\nstaging-app-blue-gremion-ui-1\t112.30%%\t1.5GiB / 2GiB\n" ;;
   "info --format"*) echo "$GREMION_ROOT" ;;
   "system df -v"*)
     printf "%s" "[{\"Name\":\"staging-state_pg-data\",\"Size\":\"1.5GB\"},{\"Name\":\"staging-state_vector-processed-logs\",\"Size\":\"20MB\"},{\"Name\":\"other_data\",\"Size\":\"9GB\"}]" ;;
@@ -538,6 +538,9 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     grep -q 'gremion_container_memory_bytes{name="staging-state-postgres-1"} 13107200' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     grep -q 'gremion_container_memory_bytes{name="staging-app-blue-gremion-ui-1"} 1610612736' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     grep -q 'gremion_container_disk_bytes{name="staging-state-postgres-1"} 1500' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # per-container CPU, which cAdvisor carried before TASK-039
+    grep -q '^gremion_container_cpu_percent{name="staging-state-postgres-1"} 0.75$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_container_cpu_percent{name="staging-app-blue-gremion-ui-1"} 112.30$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
 }
 
 @test "metrics-textfile reports postgres connections from the state project" {

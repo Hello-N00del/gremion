@@ -1,5 +1,5 @@
 [Unit]
-Description=Gremion node-exporter textfile metrics
+Description=Gremion host collector (textfile metrics for the ops stack, TASK-039)
 Documentation=file://${GREMION_ROOT}/current/infra/host/ops/README.md
 After=docker.service
 Requires=docker.service

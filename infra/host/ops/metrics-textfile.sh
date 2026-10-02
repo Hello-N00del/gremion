@@ -145,17 +145,25 @@ emit_containers() {
         printf '# TYPE gremion_container_up gauge\n'
         printf '%s' "$up"
     fi
-    # Per-container memory (TRD-181), from the daemon: no ops container reads
-    # cgroups or the Docker API.
-    while IFS=$'\t' read -r name size; do
+    # Per-container memory and CPU (TRD-181; what cAdvisor carried before
+    # TASK-039), from the daemon: no ops container reads cgroups or the Docker API.
+    local cpu="" pct
+    while IFS=$'\t' read -r name pct size; do
         [[ -n "$name" ]] || continue
         bytes="$(to_bytes "${size%% /*}")"
         [[ -n "$bytes" ]] && mem+="gremion_container_memory_bytes{name=\"$(esc "$name")\"} ${bytes}"$'\n'
-    done < <(docker stats --no-stream --format '{{.Name}}	{{.MemUsage}}' 2>/dev/null || true)
+        pct="${pct%\%}"
+        [[ "$pct" =~ ^[0-9]+(\.[0-9]+)?$ ]] && cpu+="gremion_container_cpu_percent{name=\"$(esc "$name")\"} ${pct}"$'\n'
+    done < <(docker stats --no-stream --format '{{.Name}}	{{.CPUPerc}}	{{.MemUsage}}' 2>/dev/null || true)
     if [[ -n "$mem" ]]; then
         printf '# HELP gremion_container_memory_bytes Memory the container uses (docker stats).\n'
         printf '# TYPE gremion_container_memory_bytes gauge\n'
         printf '%s' "$mem"
+    fi
+    if [[ -n "$cpu" ]]; then
+        printf '# HELP gremion_container_cpu_percent CPU the container used at the reading, percent of one core (docker stats).\n'
+        printf '# TYPE gremion_container_cpu_percent gauge\n'
+        printf '%s' "$cpu"
     fi
     # Per-container disk: the writable layer (volumes are TRD-224's components).
     while IFS=$'\t' read -r name size; do
