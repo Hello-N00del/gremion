@@ -6,7 +6,6 @@
 
   const MODULES = [
     { id: 'calendar', label: 'Kalender' },
-    { id: 'vault', label: 'Tresor' },
     { id: 'content', label: 'Inhalte' },
     { id: 'publishing', label: 'Newsletter' },
     { id: 'finance', label: 'Finanzen' },
@@ -61,7 +60,7 @@
       {#each MODULES as m (m.id)}
         <label class="check"><input type="checkbox" name="enable" value={m.id} checked={checkedModules.includes(m.id)} /> {m.label} <code>{m.id}</code></label>
       {/each}
-      <p class="muted">„board“ ist noch nicht mandantengetrennt und nicht wählbar.</p>
+      <p class="muted">„board“ ist noch nicht mandantengetrennt, „vault“ (Tresor) bleibt im Pilotbetrieb abgeschaltet: beide sind nicht wählbar.</p>
       {#if errors.enable}<span class="err">{errors.enable}</span>{/if}
     </fieldset>
     <p id="hint" class="muted">

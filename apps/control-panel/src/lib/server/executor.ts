@@ -21,7 +21,11 @@ const EMAIL = /^[^\s@<>()[\]\\,;:"]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])
 const MODULE = /^[a-z][a-z0-9_]*$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
-/** Validates the form and returns the field errors (empty: valid). board is refused by name (R29-I1). */
+/**
+ * Validates the form and returns the field errors (empty: valid). board (R29-I1)
+ * and vault (PRD-PLAT-012 / PRD-REC-003, TASK-043c R30 A1) are refused by name,
+ * as the interim enable gate behind `gremion-tenant create` refuses them.
+ */
 export function validateNewCustomer(input: NewCustomerInput): Record<string, string> {
   const errors: Record<string, string> = {}
   if (!SLUG.test(input.slug) || input.slug.length < 3 || input.slug.length > 30 || input.slug === 'platform') {
@@ -32,6 +36,7 @@ export function validateNewCustomer(input: NewCustomerInput): Record<string, str
   if (!EMAIL.test(input.councilAdmin.toLowerCase())) errors.councilAdmin = 'E-Mail-Adresse der Gremienverwaltung.'
   if (input.enable.some((m) => !MODULE.test(m))) errors.enable = 'Module als Kennungen, z. B. calendar.'
   else if (input.enable.includes('board')) errors.enable = 'board ist noch nicht mandantengetrennt und kann nicht aktiviert werden (R29-I1).'
+  else if (input.enable.includes('vault')) errors.enable = 'vault (Tresor) bleibt im Pilotbetrieb abgeschaltet und kann nicht aktiviert werden (PRD-PLAT-012).'
   return errors
 }
 
