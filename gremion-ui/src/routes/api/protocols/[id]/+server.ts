@@ -6,6 +6,7 @@ import {
   getProtocol, updateProtocol, upsertAttendance,
   listAttendance, listResolutions, listActionItems,
 } from '$lib/server/protocols/protocol-db'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { getOrgUnit } from '$lib/server/governance/org-units-db'
 import { seesAllGovernance, viewerCanSeeProtocol } from '$lib/server/governance/visibility'
 
@@ -21,6 +22,7 @@ function requireAuth(event: RequestEvent): SessionUser {
 // answers 404, exactly like a missing one, so its existence does not leak.
 export async function GET(event: RequestEvent) {
   const user = requireAuth(event)
+  requireUuidParams(event, 'id')
   const protocol = await getProtocol(event.params.id!)
   if (!protocol) throw error(404, 'Protokoll nicht gefunden')
   if (!seesAllGovernance(user)) {
@@ -44,6 +46,7 @@ export async function GET(event: RequestEvent) {
 export async function PATCH(event: RequestEvent) {
   const user = requireAuth(event)
   if (!hasRole(user.roles, Role.CouncilAdmin)) throw error(403, 'Nur Admins können Protokolle bearbeiten')
+  requireUuidParams(event, 'id')
 
   const protocol = await getProtocol(event.params.id!)
   if (!protocol) throw error(404, 'Protokoll nicht gefunden')

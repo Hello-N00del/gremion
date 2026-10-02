@@ -3,6 +3,7 @@ import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { updateActionItem } from '$lib/server/protocols/protocol-db'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 
 function requireAdmin(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -13,6 +14,7 @@ function requireAdmin(event: RequestEvent): SessionUser {
 
 export async function PATCH(event: RequestEvent) {
   requireAdmin(event)
+  requireUuidParams(event, 'id', 'itemId')
   const body = await event.request.json()
   const actionItem = await updateActionItem(event.params.itemId!, {
     text: body.text,
