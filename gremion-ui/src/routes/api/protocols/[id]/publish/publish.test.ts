@@ -130,7 +130,7 @@ const expiredPassingPoll = {
 function makeEvent() {
   return {
     locals: { user: { id: 'u1', roles: ['council-admin'] } },
-    params: { id: 'p1' },
+    params: { id: '123e4567-e89b-12d3-a456-426614174001' },
     url: { origin: 'http://localhost:4001' },
     request: { headers: { get: () => '' } },
   } as unknown as Parameters<typeof POST>[0]

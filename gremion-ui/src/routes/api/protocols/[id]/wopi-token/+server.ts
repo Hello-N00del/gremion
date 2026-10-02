@@ -3,6 +3,7 @@ import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { getProtocol } from '$lib/server/protocols/protocol-db'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { isMemberOf } from '$lib/server/governance/org-units-db'
 import { seesAllGovernance } from '$lib/server/governance/visibility'
@@ -15,6 +16,7 @@ function requireAuth(event: RequestEvent): SessionUser {
 
 export async function GET(event: RequestEvent) {
   const user = requireAuth(event)
+  requireUuidParams(event, 'id')
   const protocol = await getProtocol(event.params.id!)
   if (!protocol) throw error(404, 'Protokoll nicht gefunden')
   if (protocol.status !== 'draft') throw error(403, 'Nur Entwürfe können bearbeitet werden')

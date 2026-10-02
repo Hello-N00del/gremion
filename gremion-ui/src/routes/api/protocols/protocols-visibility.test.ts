@@ -25,10 +25,10 @@ const UNITS: Record<string, Unit> = {
   'u-open': { id: 'u-open', visibility: 'all_members' },
 }
 const PROTOCOLS: Proto[] = [
-  { id: 'p-closed-draft', committee_id: 'u-closed', status: 'draft' },
-  { id: 'p-closed-pub', committee_id: 'u-closed', status: 'published' },
-  { id: 'p-open-draft', committee_id: 'u-open', status: 'draft' },
-  { id: 'p-open-pub', committee_id: 'u-open', status: 'published' },
+  { id: '00000000-0000-4000-8000-000000000001', committee_id: 'u-closed', status: 'draft' },
+  { id: '00000000-0000-4000-8000-000000000002', committee_id: 'u-closed', status: 'published' },
+  { id: '00000000-0000-4000-8000-000000000003', committee_id: 'u-open', status: 'draft' },
+  { id: '00000000-0000-4000-8000-000000000004', committee_id: 'u-open', status: 'published' },
 ]
 // user id -> org units the user is a member of
 const MEMBERSHIPS: Record<string, string[]> = {
@@ -143,48 +143,48 @@ beforeEach(() => {
 
 describe('D-3 Guest: nothing of committee_only, no drafts, only published all_members protocols', () => {
   it('/protokolle load shows the Guest only the published protocol of the all_members unit', async () => {
-    expect(await pageIds(GUEST)).toEqual(['p-open-pub'])
+    expect(await pageIds(GUEST)).toEqual(['00000000-0000-4000-8000-000000000004'])
   })
 
   it('GET /api/protocols lists nothing of the committee_only unit and no draft of the open unit', async () => {
     expect(await listIds(GUEST, 'u-closed')).toEqual([])
-    expect(await listIds(GUEST, 'u-open')).toEqual(['p-open-pub'])
+    expect(await listIds(GUEST, 'u-open')).toEqual(['00000000-0000-4000-8000-000000000004'])
   })
 
   it('GET /api/protocols/[id] refuses committee_only protocols and drafts (404), allows the public one', async () => {
-    for (const id of ['p-closed-draft', 'p-closed-pub', 'p-open-draft']) {
+    for (const id of ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003']) {
       expect(await statusOf(() => oneGET(ev(GUEST, { params: { id } }))), id).toBe(404)
     }
     expect(h.listAttendance).not.toHaveBeenCalled()
-    expect(await statusOf(() => oneGET(ev(GUEST, { params: { id: 'p-open-pub' } })))).toBe(200)
+    expect(await statusOf(() => oneGET(ev(GUEST, { params: { id: '00000000-0000-4000-8000-000000000004' } })))).toBe(200)
   })
 })
 
 describe('Member who is not in the committee_only unit', () => {
   it('/protokolle load omits every protocol of the committee_only unit', async () => {
-    expect(await pageIds(STRANGER)).toEqual(['p-open-draft', 'p-open-pub'])
+    expect(await pageIds(STRANGER)).toEqual(['00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000004'])
   })
 
   it('GET /api/protocols and /api/protocols/[id] hide the committee_only unit with a 404', async () => {
     const res = (await listGET(ev(STRANGER, { search: { committeeId: 'u-closed' } }))) as Response
     expect(res.status).toBe(404)
-    expect(await statusOf(() => oneGET(ev(STRANGER, { params: { id: 'p-closed-draft' } })))).toBe(404)
-    expect(await statusOf(() => oneGET(ev(STRANGER, { params: { id: 'p-open-draft' } })))).toBe(200)
+    expect(await statusOf(() => oneGET(ev(STRANGER, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(404)
+    expect(await statusOf(() => oneGET(ev(STRANGER, { params: { id: '00000000-0000-4000-8000-000000000003' } })))).toBe(200)
   })
 
   it('wopi-token: 403 for another committee draft, whatever the unit visibility (S3#28)', async () => {
-    expect(await statusOf(() => wopiGET(ev(STRANGER, { params: { id: 'p-closed-draft' } })))).toBe(403)
-    expect(await statusOf(() => wopiGET(ev(STRANGER, { params: { id: 'p-open-draft' } })))).toBe(403)
+    expect(await statusOf(() => wopiGET(ev(STRANGER, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(403)
+    expect(await statusOf(() => wopiGET(ev(STRANGER, { params: { id: '00000000-0000-4000-8000-000000000003' } })))).toBe(403)
     expect(h.getDraftWopiToken).not.toHaveBeenCalled()
   })
 })
 
 describe('unit member and CouncilAdmin still see and edit the committee_only draft', () => {
   it('the unit member sees every protocol of their own unit plus the open unit', async () => {
-    expect(await pageIds(UNIT_MEMBER)).toEqual(['p-closed-draft', 'p-closed-pub', 'p-open-draft', 'p-open-pub'])
-    expect(await listIds(UNIT_MEMBER, 'u-closed')).toEqual(['p-closed-draft', 'p-closed-pub'])
-    expect(await statusOf(() => oneGET(ev(UNIT_MEMBER, { params: { id: 'p-closed-draft' } })))).toBe(200)
-    expect(await statusOf(() => wopiGET(ev(UNIT_MEMBER, { params: { id: 'p-closed-draft' } })))).toBe(200)
+    expect(await pageIds(UNIT_MEMBER)).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000004'])
+    expect(await listIds(UNIT_MEMBER, 'u-closed')).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'])
+    expect(await statusOf(() => oneGET(ev(UNIT_MEMBER, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(200)
+    expect(await statusOf(() => wopiGET(ev(UNIT_MEMBER, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(200)
   })
 
   it('an unknown unit is a 404 for every role, the CouncilAdmin included', async () => {
@@ -195,9 +195,9 @@ describe('unit member and CouncilAdmin still see and edit the committee_only dra
   })
 
   it('the CouncilAdmin sees everything', async () => {
-    expect(await pageIds(ADMIN)).toEqual(['p-closed-draft', 'p-closed-pub', 'p-open-draft', 'p-open-pub'])
-    expect(await listIds(ADMIN, 'u-closed')).toEqual(['p-closed-draft', 'p-closed-pub'])
-    expect(await statusOf(() => oneGET(ev(ADMIN, { params: { id: 'p-closed-draft' } })))).toBe(200)
-    expect(await statusOf(() => wopiGET(ev(ADMIN, { params: { id: 'p-closed-draft' } })))).toBe(200)
+    expect(await pageIds(ADMIN)).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000004'])
+    expect(await listIds(ADMIN, 'u-closed')).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'])
+    expect(await statusOf(() => oneGET(ev(ADMIN, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(200)
+    expect(await statusOf(() => wopiGET(ev(ADMIN, { params: { id: '00000000-0000-4000-8000-000000000001' } })))).toBe(200)
   })
 })

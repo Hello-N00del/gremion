@@ -3,6 +3,7 @@ import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { getProtocol, addActionItem } from '$lib/server/protocols/protocol-db'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 
 function requireAdmin(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -13,6 +14,7 @@ function requireAdmin(event: RequestEvent): SessionUser {
 
 export async function POST(event: RequestEvent) {
   requireAdmin(event)
+  requireUuidParams(event, 'id')
   const protocol = await getProtocol(event.params.id!)
   if (!protocol || protocol.status === 'published') throw error(403, 'Nicht bearbeitbar')
   const body = await event.request.json()

@@ -59,15 +59,19 @@ vi.mock('$lib/server/db', () => ({ getDb: mockGetDb }))
 import { POST } from './+server'
 import { PATCH, DELETE } from './[resId]/+server'
 
-const draftProtocol = { id: 'p1', committee_id: 'c1', status: 'draft' }
+// R30-F1-PROTO-K: route ids under /api/protocols/** must be UUIDs.
+const PID = '123e4567-e89b-12d3-a456-426614174001'
+const RID = '123e4567-e89b-12d3-a456-426614174002'
+
+const draftProtocol = { id: PID, committee_id: 'c1', status: 'draft' }
 
 const storedTallyRow = {
-  protocol_id: 'p1',
+  protocol_id: PID,
   votes_yes: 2, votes_no: 1, votes_abstain: 0,
   required_majority: 'simple', adoption_mode: 'tally',
 }
 const storedAcclamationRow = {
-  protocol_id: 'p1',
+  protocol_id: PID,
   votes_yes: null, votes_no: null, votes_abstain: null,
   required_majority: 'simple', adoption_mode: 'acclamation',
 }
@@ -75,7 +79,7 @@ const storedAcclamationRow = {
 function makePostEvent(body: unknown) {
   return {
     locals: { user: { id: 'u1', roles: ['council-admin'] } },
-    params: { id: 'p1' },
+    params: { id: PID },
     request: { json: async () => body },
   } as unknown as Parameters<typeof POST>[0]
 }
@@ -83,7 +87,7 @@ function makePostEvent(body: unknown) {
 function makePatchEvent(body: unknown) {
   return {
     locals: { user: { id: 'u1', roles: ['council-admin'] } },
-    params: { id: 'p1', resId: 'r1' },
+    params: { id: PID, resId: RID },
     request: { json: async () => body },
   } as unknown as Parameters<typeof PATCH>[0]
 }
@@ -93,10 +97,10 @@ type ResolutionInput = Record<string, unknown>
 beforeEach(() => {
   mockGetProtocol.mockReset().mockResolvedValue(draftProtocol)
   mockAddResolution.mockReset().mockImplementation(
-    async (_protocolId: string, input: ResolutionInput) => ({ id: 'r-new', protocol_id: 'p1', ...input }),
+    async (_protocolId: string, input: ResolutionInput) => ({ id: 'r-new', protocol_id: PID, ...input }),
   )
   mockUpdateResolution.mockReset().mockImplementation(
-    async (id: string, input: ResolutionInput) => ({ id, protocol_id: 'p1', ...input }),
+    async (id: string, input: ResolutionInput) => ({ id, protocol_id: PID, ...input }),
   )
   mockDeleteResolution.mockReset()
   mockGetQuorumContext.mockReset().mockResolvedValue({
@@ -470,6 +474,6 @@ describe('resolution PATCH/DELETE — adopted rows and foreign protocols are ref
     mockSql.mockResolvedValue([{ ...storedTallyRow, protocol_status: 'draft', decided_at: null }])
     const res = await DELETE(makePatchEvent(undefined))
     expect(res.status).toBe(204)
-    expect(mockDeleteResolution).toHaveBeenCalledWith('r1')
+    expect(mockDeleteResolution).toHaveBeenCalledWith(RID)
   })
 })

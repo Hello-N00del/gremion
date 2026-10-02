@@ -3,6 +3,7 @@ import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
 import { getProtocol, setProtocolStatus } from '$lib/server/protocols/protocol-db'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -14,6 +15,7 @@ export async function POST(event: RequestEvent) {
   try {
     const user = requireAuth(event)
     if (!hasRole(user.roles, Role.CouncilAdmin)) throw error(403, 'Nur Admins können einreichen')
+    requireUuidParams(event, 'id')
 
     const protocol = await getProtocol(event.params.id!)
     if (!protocol) throw error(404, 'Protokoll nicht gefunden')
