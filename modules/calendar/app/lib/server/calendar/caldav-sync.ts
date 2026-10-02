@@ -37,7 +37,7 @@ import {
   dbEventToIcs,
   type CalDavPusher,
 } from './caldav-client'
-import { resolveCaldavTarget, type CaldavTarget } from './caldav-target'
+import { resolveCaldavTarget, serviceCaldavVars, type CaldavTarget } from './caldav-target'
 
 export const MAX_ATTEMPTS = 3
 const DEFAULT_BATCH = 50
@@ -85,7 +85,7 @@ export async function drainTenantCaldav(
   tenant: { readonly slug: string },
   deps: TenantDrainDeps = {},
 ): Promise<{ succeeded: number; failed: number; refused?: string }> {
-  const resolved = resolveCaldavTarget(tenant, deps.env ?? process.env)
+  const resolved = resolveCaldavTarget(tenant, deps.env ?? serviceCaldavVars())
   if (!resolved.ok) {
     ;(deps.log ?? ((m: string) => console.warn(m)))(`[caldav-sync] drain refused: ${resolved.reason}`)
     return { succeeded: 0, failed: 0, refused: resolved.reason }

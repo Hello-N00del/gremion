@@ -10,9 +10,9 @@ export interface EmailSender {
 }
 
 const SUBJECTS: Record<ScheduledNotification['type'], string> = {
-  term_reminder: 'StuRaOS: Term expiry reminder',
-  grace_start: 'StuRaOS: Term has expired — grace period started',
-  grace_expiry: 'StuRaOS: Grace period ending — access will be revoked'
+  term_reminder: 'Gremion: Term expiry reminder',
+  grace_start: 'Gremion: Term has expired — grace period started',
+  grace_expiry: 'Gremion: Grace period ending — access will be revoked'
 }
 
 export async function processDueNotifications(sender: EmailSender): Promise<void> {

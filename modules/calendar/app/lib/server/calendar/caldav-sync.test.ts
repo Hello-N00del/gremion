@@ -304,7 +304,7 @@ function makePusher() {
 
 // H06 twin: each tenant drains into its own collection; unconfigured → refused.
 describe('drainTenantCaldav — per-tenant target (H06)', () => {
-  const env = { NEXTCLOUD_ADMIN_USER: 'admin', CALDAV_SHARED_CALENDAR: 'stura', CALDAV_TENANT_CALENDARS: 'beta=beta-kalender' }
+  const env = { NEXTCLOUD_ADMIN_USER: 'admin', CALDAV_TENANT_CALENDARS: JSON.stringify({ default: 'stura', beta: 'beta-kalender' }) }
 
   beforeEach(() => {
     vi.clearAllMocks()

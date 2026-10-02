@@ -77,10 +77,9 @@ beforeEach(() => {
     slug === 'default' ? ctxFor('tid-default', 'default') : ctxFor('tid-beta', 'beta'),
   )
   vi.mocked(listPendingCaldavSync).mockResolvedValue([])
-  // F1-FIX-08 (H06): every drained tenant needs its own CalDAV collection;
-  // 'default' keeps the legacy CALDAV_SHARED_CALENDAR, 'beta' is configured.
-  process.env.CALDAV_TENANT_CALENDARS = 'beta=beta-kalender'
-  delete process.env.CALDAV_DEFAULT_TENANT_SLUG
+  // F1-FIX-08 (H06): every drained tenant needs its own CalDAV collection. Kernel rules (TASK-042, no special tenant): both tenants are mapped explicitly.
+  process.env.CALDAV_TENANT_CALENDARS = JSON.stringify({ default: 'stura', beta: 'beta-kalender' })
+  delete process.env.CALDAV_CALENDAR_TEMPLATE
   delete process.env.CALDAV_SHARED_CALENDAR
 })
 
@@ -96,7 +95,7 @@ describe('CalDAV sync worker tick — per-tenant target (F1-FIX-08 H06)', () => 
   })
 
   it('refuses a tenant without a configured collection (its queue is not read)', async () => {
-    delete process.env.CALDAV_TENANT_CALENDARS
+    process.env.CALDAV_TENANT_CALENDARS = JSON.stringify({ default: 'stura' })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const scopes: string[] = []
     vi.mocked(listPendingCaldavSync).mockImplementation(async () => {

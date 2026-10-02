@@ -2,7 +2,6 @@ import type { PageServerLoad } from './$types'
 import type { SessionUser } from '$lib/auth'
 import { listOrgUnits } from '$lib/server/governance/org-units-db'
 import { deriveAbbr, deriveHue } from '$lib/governance/committee-color'
-import { canListOrgUnit, filterListedOrgUnits } from '$lib/server/governance/visibility'
 
 export interface FileWorkspace {
   id: string
@@ -17,14 +16,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // Workspaces = org-units that provision a Nextcloud folder (seeder-backed, not
   // hardcoded). The sidebar uses these to scope the FileBrowser; absent a DB the
   // list degrades to empty and the sidebar shows only the "Alle Dateien" root.
-  // F1-FIX-04 round 3 (operator decision D-3): a committee_only unit is a
-  // workspace (and a deep-link target) only for its members and CouncilAdmins.
-  // A failed membership lookup keeps only the all_members units (fail closed).
-  const user = session?.user as SessionUser | undefined
-  const allUnits = await listOrgUnits().catch(() => [])
-  const units = await filterListedOrgUnits(user, allUnits).catch(() =>
-    allUnits.filter((u) => canListOrgUnit(user, u, false)),
-  )
+  const units = await listOrgUnits().catch(() => [])
   const workspaces: FileWorkspace[] = units
     .filter((u) => u.wants_nextcloud_folder)
     .map((u) => ({
@@ -44,7 +36,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const initialWorkspace = ou ? (workspaces.find((w) => w.id === ou)?.label ?? '') : ''
 
   return {
-    user,
+    user: session?.user as SessionUser | undefined,
     workspaces,
     initialWorkspace,
   }

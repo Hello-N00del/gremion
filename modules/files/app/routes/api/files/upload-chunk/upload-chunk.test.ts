@@ -27,10 +27,10 @@ const envState: { values: Record<string, string | undefined> } = {
   }
 }
 
-vi.mock('$env/dynamic/private', () => ({
-  env: new Proxy({} as Record<string, string | undefined>, {
-    get: (_t, prop: string) => envState.values[prop]
-  })
+// TASK-205a: the Nextcloud endpoint comes through the serviceEnv seam (the successor of the deleted
+// default-tenant env reader), so the test drives the seam, not `$env/dynamic/private`.
+vi.mock('$lib/server/env/service-env', () => ({
+  serviceEnv: (name: string) => envState.values[name]
 }))
 
 function makeUser(role: Role = Role.Member): SessionUser {

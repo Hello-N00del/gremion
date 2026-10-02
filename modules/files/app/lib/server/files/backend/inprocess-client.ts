@@ -6,14 +6,14 @@
 // createNextcloudClient (constructed once with the caller's OIDC bearer, exactly
 // like the pre-seam route which did `const nc = createNextcloudClient({...})`
 // once per request). The chunked-upload assembly reproduces the upload-chunk
-// route's raw admin-Basic fetch path verbatim (env via defaultTenantEnv →
+// route's raw admin-Basic fetch path verbatim (env via serviceEnv →
 // $env/dynamic/private, PUT the chunk, MOVE-assemble on the last chunk).
 //
 // No logic lives here beyond that delegation — callers use FilesBackendPort.
 
 import { error } from '@sveltejs/kit'
 import { createNextcloudClient } from '../nextcloud-client'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import type { DavEntry, FilesBackendPort, UploadChunkInput, UploadChunkResult } from './port'
 
 export class InprocessFilesClient implements FilesBackendPort {
@@ -74,9 +74,9 @@ export class InprocessFilesClient implements FilesBackendPort {
   // (thrown BEFORE this is called), so no fetch runs on a rejected request.
   async uploadChunk(input: UploadChunkInput): Promise<UploadChunkResult> {
     // G-023: env via `$env/dynamic/private`, not `process.env`.
-    const ncUrl = defaultTenantEnv('NEXTCLOUD_URL')?.replace(/\/$/, '')
-    const ncUser = defaultTenantEnv('NEXTCLOUD_ADMIN_USER')
-    const ncPass = defaultTenantEnv('NEXTCLOUD_ADMIN_PASSWORD')
+    const ncUrl = serviceEnv('NEXTCLOUD_URL')?.replace(/\/$/, '')
+    const ncUser = serviceEnv('NEXTCLOUD_ADMIN_USER')
+    const ncPass = serviceEnv('NEXTCLOUD_ADMIN_PASSWORD')
     if (!ncUrl || !ncUser || !ncPass) throw error(500, 'Nextcloud env vars not configured')
 
     const authHeader = 'Basic ' + Buffer.from(ncUser + ':' + ncPass).toString('base64')

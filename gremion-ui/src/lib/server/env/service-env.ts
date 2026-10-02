@@ -9,7 +9,7 @@
 // request's TenantContext, a tenant's own config) and never assumed from the process. Until the
 // tenant-level carriers exist for every endpoint a module needs, the module reads
 // `tenant value ?? serviceEnv(NAME)`: this seam is that fallback tier, the successor of the deleted
-// `defaultTenantEnv` without the word "default" in its contract. It is the same single instance for
+// default-tenant env reader without any notion of a default tenant in its contract. It is the same single instance for
 // every tenant, so it can never be mistaken for a tenant-specific read.
 //
 // Closed by construction: only names the per-tenant list classes (per-tenant-env-names.js) are served

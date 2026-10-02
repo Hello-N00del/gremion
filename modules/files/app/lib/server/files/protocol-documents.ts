@@ -9,7 +9,7 @@
 // Bodies are moved verbatim from the old protocols/protocol-wopi.ts (same DAV
 // paths, same #235 upload contract, same #241 path validation). The Collabora
 // conversion helpers were split off into documents/collabora-convert.ts.
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import type { ProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { createNextcloudClient } from './nextcloud-client'
 import { validatePublishedPdfPath } from './webdav-path'
@@ -18,7 +18,7 @@ const DRAFTS_BASE = '/protocols/drafts'
 const PUBLISHED_BASE = '/protocols/published'
 
 function sysUser(): string {
-  return defaultTenantEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+  return serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
 }
 
 function davPath(ncRelPath: string): string {

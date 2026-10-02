@@ -22,7 +22,7 @@ vi.mock('./notification-scheduler', () => ({ startNotificationScheduler: vi.fn()
 vi.mock('./caldav-sync', () => ({ startCalDavSyncWorker: vi.fn() }))
 vi.mock('./backend', () => ({ getCalendarBackend: () => ({ listEvents: h.listEvents }) }))
 vi.mock('$lib/server/ports/tracer', () => ({ makeLogTracer: vi.fn(), noopTracer: {} }))
-vi.mock('$lib/server/tenant/default-env', () => ({ defaultTenantEnv: vi.fn() }))
+vi.mock('$lib/server/env/platform-env', () => ({ platformEnv: vi.fn() }))
 vi.mock('$lib/server/events/calendar-audit-consumer', () => ({
   startCalendarAuditConsumer: vi.fn(),
   CALENDAR_AUDIT_WORKER: 'calendar-audit',

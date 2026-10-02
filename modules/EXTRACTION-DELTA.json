@@ -481,33 +481,33 @@
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/caldav-client.ts",
-      "reason": "post-f2 StuRaOS 770458ad: fix(calendar): in-process CalDAV DELETE treats 404/410 as done (F1-FIX-08 round 2, acceptance 5)",
+      "reason": "post-f2 StuRaOS 770458ad: fix(calendar): in-process CalDAV DELETE treats 404/410 as done (F1-FIX-08 round 2, acceptance 5); TASK-205a: CALDAV_SHARED_USER / NEXTCLOUD_ADMIN_USER read through serviceEnv (the deleted default-tenant env reader); TASK-205a: no product literal in gremion-ui/src (brand.guard.test.ts): PRODID and comment say Gremion",
       "owner": "TASK-205",
-      "blob": "a45dbaf8a15c2252b811655fa589809e88f6d1ae"
+      "blob": "c8e187b2f16790b2f721c8c08052c8274fe2d7c3"
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/caldav-sync.test.ts",
-      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2)",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2); TASK-205a: per-tenant CalDAV map in the kernel JSON format, both tenants explicit",
       "owner": "TASK-205",
-      "blob": "762425385dc09cf0fbf03e479db49d1e2df5f141"
+      "blob": "1a5386c30d7215c582670433b00b07cb0e3cfaa4"
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/caldav-sync.tick.test.ts",
-      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2)",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2); TASK-205a: per-tenant CalDAV map in the kernel JSON format, both tenants explicit; no default-tenant slug variable",
       "owner": "TASK-205",
-      "blob": "783cc44ea3c16926f9919374629268e8be2262a1"
+      "blob": "82fb70d4297c2b89d601b23501c366b8a2a22c22"
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/caldav-sync.ts",
-      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2)",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2); TASK-205a: resolveCaldavTarget defaults to serviceCaldavVars()",
       "owner": "TASK-205",
-      "blob": "1acbf2f1ed2883d886192fb5062e6235f278edde"
+      "blob": "6766894b69d90a51d6eea88b4023ef8bf9ca02c8"
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/caldav-target.ts",
-      "reason": "post-f2 StuRaOS 93b435e6: fix(calendar): in-process CalDAV drain mirrors per-tenant target and D-2 never-push-non-public (F1-FIX-08 H06)",
+      "reason": "post-f2 StuRaOS 93b435e6: fix(calendar): in-process CalDAV drain mirrors per-tenant target and D-2 never-push-non-public (F1-FIX-08 H06); TASK-205a: kernel rules (twin of modules/calendar/src/caldav/target.ts): JSON map or {slug} template, no 'legacy pair for the default tenant' (TASK-042 deletion assertion); service vars through serviceEnv; TASK-205a: no product literal in gremion-ui/src",
       "owner": "TASK-205",
-      "blob": "396c0eb5ef57a161c62c2c08858fb8511e9d2d52"
+      "blob": "d069e8dcd9af9b10c80dc9d2831c7a5cd801d0b0"
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/calendar-db.ts",
@@ -535,15 +535,15 @@
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/register.server.test.ts",
-      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2)",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: mocks platformEnv instead of the deleted default-env",
       "owner": "TASK-205",
-      "blob": "be0c3c8cc8101c2f1e4017c10e7af39e3d3ad464"
+      "blob": "56816af19ab905682ad9361a3d060a7fad206418"
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/register.server.ts",
-      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2)",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
       "owner": "TASK-205",
-      "blob": "4507fa3875b7751d864f3239dffe731d87a4abfc"
+      "blob": "7dd60f3aa0bfc02506c9d58bc5b43ba1325ec49c"
     },
     {
       "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.ts",
@@ -648,28 +648,58 @@
       "blob": "335c6f63891465cd158f6c9c6584883ae1efda54"
     },
     {
-      "path": "modules/calendar/app/routes/calendar/+page.server.ts",
-      "reason": "post-f2 StuRaOS dc53c0bd: fix(governance): /calendar chips and /files workspaces name a committee_only unit only to its members and Coun",
-      "owner": "TASK-205",
-      "blob": "e10cf28d349b8d62b50c66b61372a58dae182054"
+      "path": "modules/files/app/lib/server/files/backend/service-client.test.ts",
+      "reason": "excluded: reads contracts/files/openapi.files-internal.json, a module contract the kernel does not carry (product-module-contracts); returns with the contract harvest (TASK-011), like contracts-newsletter-specs",
+      "owner": "TASK-011",
+      "blob": null
     },
     {
-      "path": "modules/calendar/app/routes/calendar/calendar-committees-visibility.test.ts",
-      "reason": "post-f2 StuRaOS dc53c0bd: fix(governance): /calendar chips and /files workspaces name a committee_only unit only to its members and Coun",
+      "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.integration.test.ts",
+      "reason": "TASK-205a: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant",
       "owner": "TASK-205",
-      "blob": "b7ebe28b2e71f3cc99842edad32402f293410c69"
+      "blob": "4023ad661a1803e9fb5a131364a0daf3b5648673"
     },
     {
-      "path": "modules/files/app/routes/files/+page.server.ts",
-      "reason": "post-f2 StuRaOS dc53c0bd: fix(governance): /calendar chips and /files workspaces name a committee_only unit only to its members and Coun",
+      "path": "modules/files/app/lib/server/files/backend/inprocess-client.ts",
+      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader)",
       "owner": "TASK-205",
-      "blob": "8bbff405c670dc13877603d532762aa275f21380"
+      "blob": "7084011d37a5162d2277a9ec84f8838d6ad17a8a"
     },
     {
-      "path": "modules/files/app/routes/files/files-deeplink.test.ts",
-      "reason": "post-f2 StuRaOS dc53c0bd: fix(governance): /calendar chips and /files workspaces name a committee_only unit only to its members and Coun",
+      "path": "modules/files/app/lib/server/files/backend/route-parity.test.ts",
+      "reason": "TASK-205a: drives the serviceEnv seam instead of $env/dynamic/private",
       "owner": "TASK-205",
-      "blob": "1f485cd0247e3dba21c01355fb9853e0aa36593c"
+      "blob": "c62a8e27417ea8c1046f41bdf76f2cb294af1748"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/nextcloud-client.ts",
+      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "69ffb32d3a76e6fd1d6d4dffdb0b9b40604f9fae"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/protocol-documents.ts",
+      "reason": "TASK-205a: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "08cefb8219198e440c4724794cd1966064682b8e"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/register.server.ts",
+      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "a759bf4cdf65249f5cecd1aa114ce1c606f44ce8"
+    },
+    {
+      "path": "modules/files/app/routes/api/files/upload-chunk/upload-chunk.test.ts",
+      "reason": "TASK-205a: drives the serviceEnv seam instead of $env/dynamic/private",
+      "owner": "TASK-205",
+      "blob": "8340d010c36e6212b672953b2dcea75c059f0edb"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/notification-scheduler.ts",
+      "reason": "TASK-205a: no product literal in gremion-ui/src (brand.guard.test.ts): subject prefix says Gremion (carries the civitas-modules 1295a40 fix from f2)",
+      "owner": "TASK-205",
+      "blob": "573fdb193b167eb54bf69b77da9699cac8381069"
     }
   ]
 }

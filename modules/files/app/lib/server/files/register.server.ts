@@ -8,7 +8,7 @@ import {
   registerProtocolDocumentPort,
   registerSetupHealthProbe,
 } from '$lib/server/modules/runtime-registry'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { createNextcloudClient } from './nextcloud-client'
 import { createNextcloudSubsystem } from './provisioning/nextcloud-subsystem'
 import { protocolDocumentPort } from './protocol-documents'
@@ -19,7 +19,7 @@ import { protocolDocumentPort } from './protocol-documents'
 registerProvisioningSubsystem('nextcloud', (kc) =>
   createNextcloudSubsystem(
     { nc: createNextcloudClient(), kc },
-    Number(defaultTenantEnv('NEXTCLOUD_OIDC_PROVIDER_ID') ?? '1'),
+    Number(serviceEnv('NEXTCLOUD_OIDC_PROVIDER_ID') ?? '1'),
   ),
 )
 

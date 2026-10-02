@@ -1,5 +1,5 @@
 import { DOMParser } from '@xmldom/xmldom'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 
 export interface DavEntry {
   href: string
@@ -664,11 +664,11 @@ function extractInitialState<T>(html: string, key: string): T | null {
  */
 export function createNextcloudClient(opts: { webdavBearer?: string } = {}): NextcloudClient {
   return new NextcloudClient(
-    defaultTenantEnv('NEXTCLOUD_URL') ?? 'http://nextcloud',
-    defaultTenantEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin',
-    defaultTenantEnv('NEXTCLOUD_ADMIN_PASSWORD') ?? '',
-    defaultTenantEnv('NEXTCLOUD_CALDAV_USER_TOKENS') ?? '',
-    defaultTenantEnv('NEXTCLOUD_USER_TOKENS') ?? '',
+    serviceEnv('NEXTCLOUD_URL') ?? 'http://nextcloud',
+    serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin',
+    serviceEnv('NEXTCLOUD_ADMIN_PASSWORD') ?? '',
+    serviceEnv('NEXTCLOUD_CALDAV_USER_TOKENS') ?? '',
+    serviceEnv('NEXTCLOUD_USER_TOKENS') ?? '',
     opts.webdavBearer ?? ''
   )
 }

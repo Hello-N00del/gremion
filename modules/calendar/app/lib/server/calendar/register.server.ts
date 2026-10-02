@@ -14,7 +14,7 @@ import { startCalDavSyncWorker } from './caldav-sync'
 import { getCalendarBackend } from './backend'
 import { expandRecurringEvents } from './recurrence-expand'
 import { makeLogTracer, noopTracer } from '$lib/server/ports/tracer'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { platformEnv } from '$lib/server/env/platform-env'
 import {
   startCalendarAuditConsumer,
   CALENDAR_AUDIT_WORKER,
@@ -51,7 +51,9 @@ if ((process.env.CALENDAR_BACKEND ?? 'inprocess') !== 'service') {
 // → consumer stays off (staging-safe). Non-fatal: a consumer that won't start
 // must not block the whole app.
 registerServerInitHook(async () => {
-  const natsUrl = defaultTenantEnv('NATS_URL')
+  // TASK-042 (Q3, Q4): NATS_URL is deployment-global - read through platformEnv, never through the
+  // deleted default-tenant env family.
+  const natsUrl = platformEnv('NATS_URL')
   if (!natsUrl) {
     console.info('[calendar-audit-consumer] NATS_URL not set — consumer off')
     markWorkerOff(CALENDAR_AUDIT_WORKER, 'NATS_URL not set')

@@ -3,7 +3,7 @@
 // The stura Postgres DB is the source of truth for all calendar events. This
 // module exists solely to propagate changes OUT to Nextcloud CalDAV so
 // external clients (iOS Calendar, Thunderbird, Apple Calendar, …) still see
-// StuRaOS events. Reads from CalDAV are no longer performed by the app.
+// Gremion events. Reads from CalDAV are no longer performed by the app.
 //
 // Entry points:
 //   • buildIcs(event)                          — render ICS body for PUT
@@ -19,7 +19,7 @@
 // (already used by NextcloudClient) handles writes on that user's behalf.
 
 import { env } from '$env/dynamic/private'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import {
   createNextcloudClient,
   NextcloudResponseError,
@@ -165,7 +165,7 @@ export function buildIcs(event: IcsEvent): string {
   const lines: string[] = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//StuRaOS//StuRaOS Calendar//DE',
+    'PRODID:-//Gremion//Gremion Calendar//DE',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     vtimezone(),
@@ -296,7 +296,7 @@ export class CalDavPusher {
  */
 export function createCalDavPusher(target?: { user: string; calendar: string }): CalDavPusher {
   if (target) return new CalDavPusher(createNextcloudClient(), target.user, target.calendar)
-  const userId = defaultTenantEnv('CALDAV_SHARED_USER') ?? defaultTenantEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+  const userId = serviceEnv('CALDAV_SHARED_USER') ?? serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
   const calendarName = env.CALDAV_SHARED_CALENDAR ?? 'stura'
   return new CalDavPusher(createNextcloudClient(), userId, calendarName)
 }

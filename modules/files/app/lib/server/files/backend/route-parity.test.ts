@@ -32,9 +32,8 @@ vi.mock('$lib/server/files/nextcloud-client', () => ({
   NextcloudResponseError: class NextcloudResponseError extends Error {},
 }))
 
-// The chunked-upload assembly resolves NC env via defaultTenantEnv →
-// $env/dynamic/private and uses the global fetch. Mock both (mirrors
-// upload-chunk.test.ts).
+// The chunked-upload assembly resolves NC env via serviceEnv and uses the global fetch. Mock both
+// (mirrors upload-chunk.test.ts).
 const envState: { values: Record<string, string | undefined> } = {
   values: {
     NEXTCLOUD_URL: 'https://cloud.example.com',
@@ -42,10 +41,9 @@ const envState: { values: Record<string, string | undefined> } = {
     NEXTCLOUD_ADMIN_PASSWORD: 'admin-secret',
   },
 }
-vi.mock('$env/dynamic/private', () => ({
-  env: new Proxy({} as Record<string, string | undefined>, {
-    get: (_t, prop: string) => envState.values[prop],
-  }),
+// TASK-205a: the Nextcloud endpoint comes through the serviceEnv seam, so the test drives the seam.
+vi.mock('$lib/server/env/service-env', () => ({
+  serviceEnv: (name: string) => envState.values[name],
 }))
 
 const fetchMock = vi.fn()
