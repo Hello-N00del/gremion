@@ -1,0 +1,111 @@
+/* ======================================================================
+ * #166 — Helios election wizard (/elections/new). Ported from the design
+ * prototype web/tokens.css .wiz-*. The real wizard is a PAGE (not the
+ * prototype's fixed overlay), so .wiz-overlay is intentionally omitted.
+ * Every value resolves to a repo token so .dark auto-switches.
+ * Module CSS — moved verbatim out of app.css (design-review 2026-07 T3);
+ * imported by elections/new/+page.svelte, its only consumer.
+ * ====================================================================== */
+.wiz { max-width: 880px; margin: 0 auto; padding: 28px 32px 60px; }
+.wiz-top {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; margin-bottom: 18px;
+}
+.wiz-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--ink-muted); background: none; border: none;
+  cursor: pointer; padding: 0; text-decoration: none;
+}
+.wiz-back:hover { color: var(--ink); }
+.wiz-kindpill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 100px;
+  background: var(--accent-soft); color: var(--accent-ink);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.wiz-title { font-family: var(--font-display); font-size: 28px; font-weight: 500; letter-spacing: -0.015em; }
+.wiz-sub { font-size: 13.5px; color: var(--ink-muted); margin-top: 4px; }
+
+/* Stepper */
+.wiz-stepper { display: flex; align-items: center; gap: 0; margin: 22px 0 24px; }
+.wiz-step { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.wiz-step .num {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center; flex-shrink: 0;
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+  background: var(--surface-2); color: var(--ink-muted);
+  border: 1px solid var(--border-strong); transition: all var(--d-fast);
+}
+.wiz-step .lbl { font-size: 12.5px; font-weight: 500; color: var(--ink-muted); white-space: nowrap; }
+/* --on-accent, not #fff: in dark mode the accent is a light 72% fill and the
+   readable text on it is dark ink (design-review 2026-07 T5 / gremion-instance.css). */
+.wiz-step.active .num { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.wiz-step.active .lbl { color: var(--ink); }
+.wiz-step.done .num { background: var(--pine); color: var(--on-pine); border-color: var(--pine); }
+.wiz-step.done .lbl { color: var(--ink-2); }
+.wiz-step-line { flex: 1; height: 1px; background: var(--border-strong); margin: 0 12px; min-width: 16px; }
+.wiz-step.done + .wiz-step-line { background: var(--pine); }
+
+/* Body card + Helios trust rail */
+.wiz-grid { display: grid; grid-template-columns: 1fr 248px; gap: 20px; align-items: start; }
+.wiz-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--sh-1); padding: 24px; }
+.wiz-card h2 { font-family: var(--font-display); font-size: 18px; font-weight: 600; margin-bottom: 18px; }
+.wiz-rail {
+  background: var(--accent-faint); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 16px 16px 18px; position: sticky; top: 16px;
+}
+.wiz-rail-h { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-ink); font-weight: 600; margin-bottom: 12px; }
+.wiz-rail-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-top: 1px solid var(--border); }
+.wiz-rail-row:first-of-type { border-top: none; }
+.wiz-rail-row .ic { color: var(--accent); flex-shrink: 0; margin-top: 1px; }
+.wiz-rail-row .t { font-size: 11.5px; font-weight: 600; color: var(--ink); }
+.wiz-rail-row .d { font-size: 10.5px; color: var(--ink-muted); margin-top: 1px; font-family: var(--font-mono); }
+.wiz-rail-foot { font-size: 10.5px; color: var(--ink-muted); line-height: 1.5; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+.wiz-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
+.wiz-field > label { font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
+.wiz-field .hint { font-size: 11px; color: var(--ink-muted); }
+.wiz-input, .wiz-select, .wiz-textarea {
+  width: 100%; padding: 9px 11px; font-size: 13.5px;
+  font-family: var(--font-body); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+.wiz-input.mono { font-family: var(--font-mono); font-size: 12.5px; }
+.wiz-textarea { resize: vertical; min-height: 72px; }
+.wiz-input:focus, .wiz-select:focus, .wiz-textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-faint); }
+.wiz-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.wiz-ans-label { font-size: 12.5px; font-weight: 500; color: var(--ink-2); display: block; margin-bottom: 8px; }
+
+/* Questions */
+.wiz-q { border: 1px solid var(--border); border-radius: var(--r-md); padding: 16px; margin-bottom: 14px; }
+.wiz-q-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.wiz-q-head .qn { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--ink-muted); letter-spacing: 0.06em; text-transform: uppercase; }
+.wiz-ans-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.wiz-ans-row .dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border-strong); flex-shrink: 0; }
+.wiz-iconbtn { width: 30px; height: 30px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink-muted); cursor: pointer; display: grid; place-items: center; flex-shrink: 0; }
+.wiz-iconbtn:hover { background: var(--surface-2); color: var(--ink); }
+
+/* Voter list */
+.wiz-voter { display: flex; align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 1px solid var(--border); }
+.wiz-voter:last-child { border-bottom: none; }
+.wiz-voter input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.wiz-voter .nm { font-size: 13px; font-weight: 500; color: var(--ink); }
+.wiz-voter .em { font-size: 11.5px; color: var(--ink-muted); font-family: var(--font-mono); }
+.wiz-voterbox { max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 12px; }
+/* Schedule checkbox cards reuse .wiz-voter but want a full box border; the
+   compound selector (declared after .wiz-voter:last-child) keeps the bottom
+   border on the last card too. */
+.wiz-voter.wiz-checkbox-card { border: 1px solid var(--border); border-radius: var(--r-sm); padding: 12px; margin-bottom: 10px; }
+.wiz-voter.wiz-checkbox-card:last-child { margin-bottom: 0; }
+
+/* Summary */
+.wiz-sum-row { display: flex; justify-content: space-between; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.wiz-sum-row:last-child { border-bottom: none; }
+.wiz-sum-row dt { color: var(--ink-muted); }
+.wiz-sum-row dd { font-weight: 500; color: var(--ink); text-align: right; }
+
+.wiz-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 24px; }
+
+@media (max-width: 820px) { .wiz-grid { grid-template-columns: 1fr; } .wiz-rail { position: static; } }
