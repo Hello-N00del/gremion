@@ -7,16 +7,8 @@ import { getTenant } from '$lib/server/tenant/context'
 import { getTenantBySlug } from '$lib/server/tenant/registry'
 import { constantTimeEqual } from '$lib/server/internal-fetch'
 import { requireSetupRateLimit } from '$lib/server/rate-limit'
+import { clientIpWithReason } from '$lib/server/client-ip'
 import type { RequestHandler } from './$types'
-
-// Best-effort IP extraction — mirrors routes/api/setup/config/+server.ts.
-function clientIp(event: { getClientAddress?: () => string }): string {
-  try {
-    return event.getClientAddress?.() ?? 'unknown'
-  } catch {
-    return 'unknown'
-  }
-}
 
 /**
  * One-shot seed endpoint. Guarded by a static token AND an empty-database
@@ -32,7 +24,7 @@ export const POST: RequestHandler = async (event) => {
   // #257-4: cap brute-force against this unauthenticated, static-token gate,
   // matching the other setup-token routes. Rate-limit BEFORE the token compare
   // so wrong-token attempts still count.
-  const limited = requireSetupRateLimit(clientIp(event))
+  const limited = requireSetupRateLimit(clientIpWithReason(event))
   if (limited) return limited
   const token = request.headers.get('x-seed-token')
   // #257-4: constant-time compare (the project standard — internal-fetch.ts,

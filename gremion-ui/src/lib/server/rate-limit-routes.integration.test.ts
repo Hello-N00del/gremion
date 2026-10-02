@@ -31,6 +31,7 @@ import {
   requireUnsubscribeRateLimit,
   requireNewsletterSendNowRateLimit,
 } from './rate-limit'
+import type { ClientAddress } from '$lib/server/client-ip'
 // The vi.mock above replaces runWithTenant with a string-keyed test double
 // `(id: string, fn) => T`; the real export is `(ctx: TenantContext, fn) => T`.
 // Type the local binding to the mock's shape so the tenant-isolation cases
@@ -39,6 +40,16 @@ import { runWithTenant as _runWithTenant } from '$lib/server/tenant/context'
 const runWithTenant = _runWithTenant as unknown as <T>(id: string, fn: () => T) => T
 
 beforeEach(() => __resetRateLimits())
+
+// ── TASK-205a Q6 — this suite speaks ClientAddress, like the routes do ───────
+//
+// `requireSetupRateLimit` / `requireUnsubscribeRateLimit` take a `ClientAddress` ({ ip, reason }), not a bare
+// IP string: a bare string has no `.ip`, so every address would collapse into the single key `setup:undefined`
+// and the suite that proves per-IP isolation would measure one shared bucket (the T04 round-4 lesson).
+// `addr` builds the shape a real handler passes for an addressable caller; the no-address shape is a
+// DIFFERENT bucket by design and is asserted separately below.
+const addr = (ip: string): ClientAddress => ({ ip, reason: 'ok' })
+const NO_ADDRESS: ClientAddress = { ip: null, reason: 'threw' }
 
 // Drain `n` calls and return the responses (null = allowed). Used to assert
 // both "first N succeed" and "(N+1)th fails" in one helper.
@@ -68,7 +79,7 @@ describe('T3.1 rate-limit tiers', () => {
 
   describe('Tier 1 — setup (5/hour, IP-keyed)', () => {
     it('allows the first 5 calls from one IP, then 429s the 6th', async () => {
-      const ip = '10.0.0.1'
+      const ip = addr('10.0.0.1')
       const results = drain(() => requireSetupRateLimit(ip), 5)
       for (const r of results) expect(r).toBeNull()
       const blocked = requireSetupRateLimit(ip)
@@ -80,18 +91,27 @@ describe('T3.1 rate-limit tiers', () => {
     })
 
     it('tracks IPs independently', () => {
-      const a = '10.0.0.1'
-      const b = '10.0.0.2'
+      const a = addr('10.0.0.1')
+      const b = addr('10.0.0.2')
       drain(() => requireSetupRateLimit(a), 5)
       // A is now exhausted, but B should still be fresh.
       expect(requireSetupRateLimit(a)).not.toBeNull()
       expect(requireSetupRateLimit(b)).toBeNull()
     })
+
+    // The no-address tier keeps an un-addressable caller (the runbook's own container-local seed step) from
+    // spending a real client's allowance, and it is bounded so it cannot be an unlimited bypass either.
+    it('gives an un-addressable caller its OWN bounded bucket, not a real client one', () => {
+      const spent = addr('10.0.0.9')
+      drain(() => requireSetupRateLimit(NO_ADDRESS), RATE_LIMITS.setupNoAddress.limit)
+      expect(requireSetupRateLimit(NO_ADDRESS)).not.toBeNull() // bounded: the dedicated bucket runs out
+      expect(requireSetupRateLimit(spent)).toBeNull() // isolated: an addressable client is untouched
+    })
   })
 
   describe('Tier 2 — public unsubscribe (10/hour, IP-keyed)', () => {
     it('allows 10 calls from one IP, then 429s the 11th', async () => {
-      const ip = '10.0.0.3'
+      const ip = addr('10.0.0.3')
       const results = drain(() => requireUnsubscribeRateLimit(ip), 10)
       for (const r of results) expect(r).toBeNull()
       const blocked = requireUnsubscribeRateLimit(ip)
@@ -103,10 +123,27 @@ describe('T3.1 rate-limit tiers', () => {
       // Each tier has its own namespace prefix in the key; exhausting one
       // must not affect the other (a single corporate IP that already used
       // 5 setup calls in one hour should still be able to unsubscribe).
-      const ip = '10.0.0.4'
+      const ip = addr('10.0.0.4')
       drain(() => requireSetupRateLimit(ip), 5)
       expect(requireSetupRateLimit(ip)).not.toBeNull()
       expect(requireUnsubscribeRateLimit(ip)).toBeNull()
+    })
+
+    // Q6: the unsubscribe route passes a ClientAddress; a request with no address must not become the shared
+    // key 'unknown' (one bucket for the whole internet) and must not spend a real client's allowance.
+    it('tracks client addresses independently (RED while the signature is (ip: string): every address becomes one key)', () => {
+      const a = addr('10.0.0.5')
+      const b = addr('10.0.0.6')
+      drain(() => requireUnsubscribeRateLimit(a), 10)
+      expect(requireUnsubscribeRateLimit(a)).not.toBeNull()
+      expect(requireUnsubscribeRateLimit(b)).toBeNull()
+    })
+
+    it('keys per client address and gives an un-addressable caller its own bounded bucket', () => {
+      drain(() => requireUnsubscribeRateLimit(NO_ADDRESS), RATE_LIMITS.unsubscribeNoAddress.limit)
+      expect(requireUnsubscribeRateLimit(NO_ADDRESS)).not.toBeNull()
+      expect(requireUnsubscribeRateLimit(addr('10.0.0.8'))).toBeNull()
+      expect(requireUnsubscribeRateLimit(addr('10.0.0.8'))).toBeNull()
     })
   })
 
@@ -126,7 +163,7 @@ describe('T3.1 rate-limit tiers', () => {
       const id = 'admin-2'
       drain(() => requireNewsletterSendNowRateLimit(id), 3)
       expect(requireNewsletterSendNowRateLimit(id)).not.toBeNull()
-      expect(requireSetupRateLimit(id)).toBeNull()
+      expect(requireSetupRateLimit(addr(id))).toBeNull()
     })
   })
 
@@ -154,13 +191,13 @@ describe('per-tenant bucket isolation', () => {
   beforeEach(() => __resetRateLimits())
 
   it('does not share the IP-keyed setup bucket across tenants', () => {
-    const ip = '203.0.113.7'
+    const ip = addr('203.0.113.7')
     runWithTenant('a', () => drain(() => requireSetupRateLimit(ip), 5))
     runWithTenant('a', () => expect(requireSetupRateLimit(ip)).not.toBeNull())
     runWithTenant('b', () => expect(requireSetupRateLimit(ip)).toBeNull())
   })
   it('does not share the PUBLIC unsubscribe bucket across tenants (pre-auth path)', () => {
-    const ip = '203.0.113.8'
+    const ip = addr('203.0.113.8')
     runWithTenant('a', () => drain(() => requireUnsubscribeRateLimit(ip), 10))
     runWithTenant('a', () => expect(requireUnsubscribeRateLimit(ip)).not.toBeNull())
     runWithTenant('b', () => expect(requireUnsubscribeRateLimit(ip)).toBeNull())

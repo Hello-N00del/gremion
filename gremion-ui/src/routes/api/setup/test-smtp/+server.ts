@@ -8,6 +8,7 @@ import { isIP } from 'node:net'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { requireSetupRateLimit, checkAndIncrement, RATE_LIMITS } from '$lib/server/rate-limit'
+import { clientIpWithReason } from '$lib/server/client-ip'
 import { currentTenantId } from '$lib/server/tenant/context'
 
 // TASK-042 R28 (Q1 follow-up; decision in docs/security/test-smtp-guard.md):
@@ -351,16 +352,6 @@ async function resolveSmtpTarget(host: string): Promise<SmtpTarget> {
   return { allowed: true, connectHost: preferred.address, servername: name }
 }
 
-// Best-effort IP extraction for the per-IP rate limit.
-// getClientAddress() exists in production; partial test events may omit it.
-function clientIp(event: { getClientAddress?: () => string }): string {
-  try {
-    return event.getClientAddress?.() ?? 'unknown'
-  } catch {
-    return 'unknown'
-  }
-}
-
 const smtpTestSchema = z.object({
   host: z.string().min(1),
   port: z.number().int().min(1).max(65535),
@@ -375,7 +366,7 @@ export const POST: RequestHandler = async (event) => {
   // #257-3: rate-limit BEFORE the auth check so refused attempts still count.
   // This endpoint opens an outbound SMTP connection to a body-supplied
   // host:port, so the cap also bounds its use as an SSRF/port-probe oracle.
-  const limited = requireSetupRateLimit(clientIp(event))
+  const limited = requireSetupRateLimit(clientIpWithReason(event))
   if (limited) return limited
   // TASK-042 Q1 (PRD-IDN-005 [D R18-1]; OWASP 2021 A01/A05): the first-run
   // wizard and its bearer token are gone. The session plus Role.ITAdmin gates
