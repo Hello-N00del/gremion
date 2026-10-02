@@ -129,6 +129,8 @@ test('r1: a pin outside the first-party prefix is refused (the host would treat 
 const STATE_LINES = [
   `legal=${FP}/gremion-legal@sha256:${D('7')}`,
   `vector=${FP}/gremion-vector@sha256:${D('8')}`,
+  // TASK-198: matrix (Synapse) is a state build: service (brief Q1).
+  `matrix=${FP}/gremion-synapse@sha256:${D('d')}`,
   `fallback=${FP}/gremion-fallback@sha256:${D('9')}`,
 ]
 const RELEASE_VALID = join(REPO_ROOT, 'test/host/fixtures/release/valid')
@@ -153,7 +155,7 @@ test('048b: an app service in the state layer is refused, and a state service in
 
 test('048b: selectProject partitions one record by the derived sets; a service in neither project is refused', () => {
   const all = parsePinLines([...LINES, ...STATE_LINES].join('\n'))
-  assert.deepEqual([...selectProject(all, 'state').keys()], ['legal', 'vector', 'fallback'])
+  assert.deepEqual([...selectProject(all, 'state').keys()], ['legal', 'vector', 'matrix', 'fallback'])
   assert.deepEqual([...selectProject(all, 'app').keys()], SERVICES)
   const stray = parsePinLines([...LINES, ...STATE_LINES, `postgres=${FP}/postgres@sha256:${D('a')}`].join('\n'))
   assert.throws(() => selectProject(stray, 'state'), /postgres is in no release project/)

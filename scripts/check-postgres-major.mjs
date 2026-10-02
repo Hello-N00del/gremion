@@ -315,12 +315,13 @@ export function checkFiles(files) {
 // ── the Postgres service set (TASK-019, Q1, D14) ──────────────────────────
 //
 // D14: per-module Postgres. The kernel base compose declares, besides its own
-// `postgres`, one `<id>-postgres` for each of the six extraction-source leaves,
+// `postgres`, one `<id>-postgres` for each of the six extraction-source leaves
+// and for the chat module's Synapse (messaging-postgres, TASK-198),
 // profile-gated under `profiles: [<id>]` and labelled
 // org.gremion.postgres=module:<id>; the kernel server is labelled `kernel`.
 // The label is how the RUNNING check (check-postgres-major-running.mjs) finds
 // containers, so an unlabelled Postgres is a server nobody verifies.
-export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault']
+export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
 export const POSTGRES_LABEL = 'org.gremion.postgres'
 
 // Volume names a module server must never mount: the kernel's own cluster and

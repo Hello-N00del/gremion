@@ -640,9 +640,9 @@ import {
 
 const VAR_IMAGE = '    image: ${CALENDAR_PG_IMAGE}'
 
-test('the module set is the six extraction-source leaves', () => {
+test('the module set is the six extraction-source leaves and the chat module (TASK-198)', () => {
   assert.deepEqual([...MODULE_POSTGRES_IDS].sort(),
-    ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault'])
+    ['board', 'calendar', 'content', 'finance', 'messaging', 'newsletter', 'vault'])
 })
 
 test('composeServices reads name, image, label, profiles and merge key off a compose file', () => {

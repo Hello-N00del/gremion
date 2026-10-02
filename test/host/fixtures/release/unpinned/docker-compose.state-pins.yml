@@ -7,6 +7,9 @@ services:
   vector:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-vector@sha256:8888888888888888888888888888888888888888888888888888888888888888
+  matrix:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-synapse@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
   fallback:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999

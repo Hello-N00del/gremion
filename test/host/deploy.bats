@@ -837,7 +837,7 @@ exit 0
                gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    [[ "$output" == *"7 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"8 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
     # Order: the last verify precedes the first manifest read and the first pull.
     local last_verify first_manifest first_pull
     last_verify="$(grep -n '^cosign verify' "$SHIM_LOG" | tail -1 | cut -d: -f1)"
@@ -916,7 +916,8 @@ exit 0'
     export FIXTURE_RELEASE="$tree"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 7 ]
+    # 8 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer)
+    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 8 ]
     [ "$(grep -c 'releases/dist-v1.2.3/cosign.pub' "$SHIM_LOG")" -eq 0 ]
 }
 
@@ -995,7 +996,8 @@ PINS
         > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 7 ]
+    # 8 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer)
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 8 ]
     [ "$(grep -c 'redis' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*redis' "$SHIM_LOG"
     [[ "$output" == *"1 third-party image(s) on the host list"* ]]
 }
@@ -1090,7 +1092,7 @@ PINS
         : > "$SHIM_LOG"
         run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
         [ "$status" -eq 0 ] || { echo "host list '$listed': $output"; return 1; }
-        [[ "$output" == *"7 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
+        [[ "$output" == *"8 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
         [ "$(grep -c '^cosign verify.*redis' "$SHIM_LOG")" -eq 0 ]
     done
 }
@@ -1120,7 +1122,7 @@ PINS
     export FIXTURE_RELEASE="$tagged"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"7 first-party image(s) verified"* ]]
+    [[ "$output" == *"8 first-party image(s) verified"* ]]
     assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/gremion-ui:dist-v1.2.3@sha256:"
 }
 
@@ -1185,12 +1187,13 @@ state_tree() {
     local img
     for img in gremion-legal@sha256:7777777777777777777777777777777777777777777777777777777777777777 \
                gremion-vector@sha256:8888888888888888888888888888888888888888888888888888888888888888 \
+               gremion-synapse@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
                gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    # release/valid pins 7 first-party images: app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043) + state legal, vector, fallback
-    [[ "$output" == *"7 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
-    [[ "$output" == *"7 pinned image(s)"* ]]
+    # release/valid pins 8 first-party images: app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043) + state legal, vector, synapse (matrix, TASK-198), fallback
+    [[ "$output" == *"8 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"8 pinned image(s)"* ]]
 }
 
 @test "a tag-only, real-build, gremion/ or flow-map image in the STATE layer exits 1 naming the file" {
