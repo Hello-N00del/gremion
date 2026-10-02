@@ -18,7 +18,7 @@
 import { join } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
-import { runMigrations } from '../runner.js'
+import { hasControlChar, runMigrations } from '../runner.js'
 import { execFormatted, sqlState } from './ddl.js'
 import {
   assertLifecycleModuleId,
@@ -148,7 +148,7 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
   const runtime = module.moduleJson.runtime
   const database = runtime.database
   // TASK-075: every ledger row names its release; refused before anything is written.
-  if (database && (typeof deps.releaseRef !== 'string' || deps.releaseRef.length < 1 || deps.releaseRef.length > 64 || /[\u0000-\u001f]/.test(deps.releaseRef))) {
+  if (database && (typeof deps.releaseRef !== 'string' || deps.releaseRef.length < 1 || deps.releaseRef.length > 64 || hasControlChar(deps.releaseRef))) {
     throw new LifecycleError('INVALID_INPUT', 'deps.releaseRef (the release this enable ships, 1-64 printable characters) is required for a module with a database')
   }
   await assertPlatform(deps.platform)

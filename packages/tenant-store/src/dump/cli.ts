@@ -251,5 +251,5 @@ export async function runCli(argv: readonly string[], env: NodeJS.ProcessEnv = p
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  runCli(process.argv.slice(2)).then((code) => (process.exitCode = code))
+  void runCli(process.argv.slice(2)).then((code) => (process.exitCode = code))
 }

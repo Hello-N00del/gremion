@@ -75,7 +75,7 @@ export function dumpHook(o: DumpHookOptions): PreApply {
       customerId,
       moduleId,
       exporter: o.exporter,
-      probe: { serverMajor: async () => Number(row.major), databaseBytes: async () => Number(row.bytes), pgDumpMajor: o.pgDumpMajor },
+      probe: { serverMajor: async () => Number(row.major), databaseBytes: async () => Number(row.bytes), pgDumpMajor: () => o.pgDumpMajor() },
       ...(o.service !== undefined ? { service: o.service } : {}),
       ...(o.fs ? { fs: o.fs } : {}),
       ...(o.byKind ? { byKind: o.byKind } : {}),

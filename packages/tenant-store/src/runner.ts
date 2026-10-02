@@ -234,8 +234,14 @@ async function readLedger(sql: Reserved): Promise<{ rows: LedgerRow[]; legacy: b
   return { rows, legacy }
 }
 
+/** True when `s` holds a C0 control character (U+0000-U+001F). */
+export function hasControlChar(s: string): boolean {
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) < 0x20) return true
+  return false
+}
+
 function assertReleaseRef(ref: unknown): asserts ref is string {
-  if (typeof ref !== 'string' || ref.length < 1 || ref.length > 64 || /[\u0000-\u001f]/.test(ref)) {
+  if (typeof ref !== 'string' || ref.length < 1 || ref.length > 64 || hasControlChar(ref)) {
     throw new TypeError('runMigrations needs releaseRef: the release this run ships, 1-64 printable characters (ledger release_ref)')
   }
 }

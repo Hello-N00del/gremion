@@ -185,7 +185,7 @@ ALTER TABLE t ALTER COLUMN amount TYPE bigint;
 `)
     assert.deepEqual(r.problems, [])
     assert.equal(r.contractAfter, 'dist-v1.2.0')
-    assert.deepEqual(r.dropped.sort(), ['amount', 'kind', 'legacy_flag', 'obsolete_things', 'old_fn', 'old_name', 'other_things'])
+    assert.deepEqual([...r.dropped].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['amount', 'kind', 'legacy_flag', 'obsolete_things', 'old_fn', 'old_name', 'other_things'])
   })
 
   test('a contract still needs lock_timeout', () => {
