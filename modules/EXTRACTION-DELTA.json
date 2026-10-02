@@ -1564,6 +1564,12 @@
       "reason": "added by TASK-205b: the messaging module's contribution to the shell chrome (chips, live call, bell, call picture-in-picture) for the root layout's interim slot composition",
       "owner": "TASK-205",
       "blob": "029d491f439c6520e953ee1ecbc2cab6fc989382"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/internal/push/+server.ts",
+      "reason": "TASK-205b: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205",
+      "blob": "86908ba440fc792016a1db180e8858259ed685e7"
     }
   ]
 }

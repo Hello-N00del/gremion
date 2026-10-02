@@ -2,25 +2,11 @@
 // B4: FCM legacy HTTP API (fcm.googleapis.com/fcm/send + Authorization: key=) is dead since
 // July 2024. This endpoint uses FCM HTTP v1 with a Google service account JSON for OAuth2.
 import { json, error } from '@sveltejs/kit';
-import { timingSafeEqual } from 'crypto';
 import { GoogleAuth } from 'google-auth-library';
+import { constantTimeEqual } from '$lib/server/internal-fetch';
 import type { RequestHandler } from './$types';
-
-function safeCompare(a: string, b: string): boolean {
-  try {
-    // Pad to same length to prevent length-based timing leak
-    const bufA = Buffer.from(a.padEnd(b.length));
-    const bufB = Buffer.from(b.padEnd(a.length));
-    // Use the longer length for both comparisons to be truly constant-time
-    const len = Math.max(bufA.length, bufB.length);
-    return timingSafeEqual(
-      Buffer.concat([bufA], len),
-      Buffer.concat([bufB], len)
-    ) && a.length === b.length;
-  } catch {
-    return false;
-  }
-}
+// TASK-205b: the shared constant-time compare (the kernel's Q4 guard, boot-exempt.test.ts, requires every
+// /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual); it replaces the local copy.
 
 interface PushPayload {
   event: 'calendar_reminder' | 'poll_new' | 'poll_closing' | 'election_open' | 'election_closing';
@@ -35,7 +21,7 @@ export const POST: RequestHandler = async ({ request }) => {
   // Verify shared secret — never expose this endpoint publicly
   const secret = request.headers.get('x-internal-secret');
   const expected = process.env.INTERNAL_PUSH_SECRET;
-  if (!expected || !secret || !safeCompare(secret, expected)) {
+  if (!expected || !secret || !constantTimeEqual(secret, expected)) {
     throw error(403, 'Forbidden');
   }
 
