@@ -23,8 +23,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     // TASK-075 G2: +7 state `ahead`
     'src/schema-gate.test.ts': 15,
     'src/index.test.ts': 2,
-    // TASK-075 G1b: +2 (releaseRef refusal, platform baseline phases)
-    'src/lifecycle/lifecycle.test.ts': 24,
+    // TASK-075 G1b: +2 (releaseRef refusal, platform baseline phases); r2: +2 (module phases, shipped baseline drift)
+    'src/lifecycle/lifecycle.test.ts': 26,
     'src/lifecycle/export.test.ts': 8,
     // TASK-075 G1: phase header / baseline / PHASE_MISSING, the dump module
     'src/phase.test.ts': 7,
@@ -35,7 +35,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
   integration: {
     'test/integration/concurrent.test.ts': 2,
     'test/integration/manifest-before-ddl.test.ts': 6,
-    'test/integration/runner.test.ts': 14,
+    // TASK-075 r2: +2 the in-place upgrade of a pre-TASK-075 ledger
+    'test/integration/runner.test.ts': 16,
     'test/integration/pooler.test.ts': 3,
     'test/integration/service.test.ts': 6,
     // TASK-029: boot verification (TRD-353) and the chain hook under the runner

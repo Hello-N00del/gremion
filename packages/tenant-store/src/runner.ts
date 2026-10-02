@@ -27,7 +27,9 @@
 //   7. per pending file: hooks.preApply (under the lock, before the file's
 //      transaction), then ONE transaction holding the file's body and its
 //      ledger row (G-078). The ledger table itself is created inside the first
-//      file's transaction, so a run that applies nothing executes no DDL.
+//      file's transaction, so a run that applies nothing executes no DDL; a
+//      ledger a pre-TASK-075 runner wrote (no phase/release_ref/contract_after)
+//      is upgraded in that same transaction (upgradeLedger), never refused.
 //   8. finally: pg_advisory_unlock, then release the connection.
 import type { Sql } from '@gremion/db'
 import type postgres from 'postgres'
@@ -138,6 +140,40 @@ const LEDGER_DDL = `CREATE TABLE ${LEDGER} (
 /** The ledger columns TASK-075 added; a ledger without them predates this runner. */
 const LEDGER_COLUMNS = ['phase', 'release_ref', 'contract_after'] as const
 
+/** release_ref of a row a pre-TASK-075 runner applied (backfilled by the ledger upgrade). */
+export const PRE_TASK_075_RELEASE_REF = 'pre-task-075'
+
+/**
+ * TASK-075 r2: brings a pre-TASK-075 ledger to LEDGER_DDL's shape, inside the
+ * first pending file's transaction (so after the chain check and the dump,
+ * and rolled back with that file). Every existing row gets the phase the run
+ * resolved for its file, release_ref PRE_TASK_075_RELEASE_REF, and for a
+ * contract its contract_after; then the NOT NULLs and CHECKs of a fresh
+ * ledger, under the same constraint names.
+ */
+async function upgradeLedger(sql: Reserved, rows: readonly { filename: string; phase: PhaseInfo }[]): Promise<void> {
+  await sql.unsafe(`ALTER TABLE ${LEDGER} ADD COLUMN IF NOT EXISTS phase text, ADD COLUMN IF NOT EXISTS release_ref text, ADD COLUMN IF NOT EXISTS contract_after text`)
+  const files = rows.map((r) => r.filename)
+  const phases = rows.map((r) => r.phase.phase)
+  const afters = rows.map((r) => (r.phase.phase === 'contract' ? (r.phase.contractAfter ?? '') : ''))
+  await sql`
+    UPDATE public.schema_migrations m
+       SET phase = coalesce(m.phase, u.phase),
+           release_ref = coalesce(m.release_ref, ${PRE_TASK_075_RELEASE_REF}),
+           contract_after = CASE WHEN coalesce(m.phase, u.phase) = 'contract' THEN coalesce(m.contract_after, nullif(u.contract_after, '')) END
+      FROM unnest(${files}::text[], ${phases}::text[], ${afters}::text[]) AS u(filename, phase, contract_after)
+     WHERE m.filename = u.filename`
+  await sql.unsafe(`ALTER TABLE ${LEDGER}
+    ALTER COLUMN phase SET NOT NULL,
+    ALTER COLUMN release_ref SET NOT NULL,
+    DROP CONSTRAINT IF EXISTS schema_migrations_phase_check,
+    ADD CONSTRAINT schema_migrations_phase_check CHECK (phase IN ('expand', 'migrate', 'contract')),
+    DROP CONSTRAINT IF EXISTS schema_migrations_release_ref_check,
+    ADD CONSTRAINT schema_migrations_release_ref_check CHECK (char_length(release_ref) BETWEEN 1 AND 64),
+    DROP CONSTRAINT IF EXISTS schema_migrations_contract_after_check,
+    ADD CONSTRAINT schema_migrations_contract_after_check CHECK ((phase = 'contract') = (contract_after IS NOT NULL))`)
+}
+
 /**
  * Q3: a session advisory lock does not survive PgBouncer transaction pooling,
  * so the runner refuses anything but a direct connection. A heuristic, with
@@ -181,7 +217,8 @@ interface LedgerRow {
   sha256: string
 }
 
-async function readLedger(sql: Reserved): Promise<LedgerRow[] | null> {
+/** The ledger's rows; `legacy` when it lacks a TASK-075 column (upgraded with the first pending file). */
+async function readLedger(sql: Reserved): Promise<{ rows: LedgerRow[]; legacy: boolean } | null> {
   const [reg] = await sql<{ present: boolean }[]>`SELECT to_regclass(${LEDGER}) IS NOT NULL AS present`
   if (!reg?.present) return null
   let rows: LedgerRow[]
@@ -193,11 +230,8 @@ async function readLedger(sql: Reserved): Promise<LedgerRow[] | null> {
   const cols = await sql<{ attname: string }[]>`
     SELECT attname FROM pg_catalog.pg_attribute
      WHERE attrelid = ${LEDGER}::regclass AND attnum > 0 AND NOT attisdropped AND attname = ANY(${[...LEDGER_COLUMNS]}::text[])`
-  const missing = LEDGER_COLUMNS.filter((c) => !cols.some((r) => r.attname === c))
-  if (missing.length) {
-    throw new MigrationRunnerError('LEDGER_FORMAT', `${LEDGER} has no ${missing.join(', ')} column(s): it predates the expand/contract ledger (TASK-075); nothing was applied`)
-  }
-  return rows
+  const legacy = LEDGER_COLUMNS.some((c) => !cols.some((r) => r.attname === c))
+  return { rows, legacy }
 }
 
 function assertReleaseRef(ref: unknown): asserts ref is string {
@@ -297,7 +331,8 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
 
     // Everything below this line and above the first BEGIN is read-only.
     const migrations = readVerifiedMigrations(dir)
-    const ledger = await readLedger(reserved)
+    const read = await readLedger(reserved)
+    const ledger = read?.rows ?? null
     const bySha = new Map(migrations.map((m) => [m.file, m.sha256]))
     const unknown = (ledger ?? []).filter((r) => !bySha.has(r.filename)).map((r) => r.filename)
     if (unknown.length) {
@@ -334,6 +369,24 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
     }
     const bodies = pending.map((m) => ({ ...m, body: stripOuterTransaction(m.text), phase: phases.get(m.file)! }))
     if (bodies.length === 0) return { applied: [], alreadyApplied: applied.size }
+    // TASK-075 r2: a pre-TASK-075 ledger is upgraded with the first file
+    // (upgradeLedger); every applied row's phase is resolved here, read-only,
+    // so an applied file with none refuses the run before any hook or DDL.
+    let upgrade: { filename: string; phase: PhaseInfo }[] | null = null
+    if (read?.legacy) {
+      const text = new Map(migrations.map((m) => [m.file, m.text]))
+      upgrade = []
+      for (const r of ledger ?? []) {
+        try {
+          upgrade.push({ filename: r.filename, phase: resolvePhase(r.filename, text.get(r.filename)!, options.phaseFor) })
+        } catch (err) {
+          if (err instanceof PhaseError) {
+            throw new MigrationRunnerError(err.code, `${err.message}: ${LEDGER} predates TASK-075 and its applied row ${r.filename} needs a phase for the ledger upgrade; nothing was applied`, [r.filename], { cause: err })
+          }
+          throw err
+        }
+      }
+    }
 
     const ctx: PreApplyContext = {
       sql: reserved,
@@ -360,6 +413,7 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
           await reserved`SELECT set_config('lock_timeout', ${String(ddlLockTimeoutMs)}, true)`
         }
         if (!ledgerPresent) await reserved.unsafe(LEDGER_DDL)
+        else if (upgrade !== null) await upgradeLedger(reserved, upgrade)
         await reserved.unsafe(m.body)
         // A COMMIT that slipped past stripOuterTransaction would leave the
         // rest of the body, and the ledger row, outside this transaction.
@@ -389,6 +443,8 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
       // ...) survives COMMIT: reset it, so the next file — and the caller's
       // pool this connection goes back to — start from the defaults.
       await reserved.unsafe('RESET ALL; RESET ROLE; RESET SESSION AUTHORIZATION')
+      if (upgrade !== null) log(`upgraded ${LEDGER} to the TASK-075 columns: ${upgrade.length} applied row(s) backfilled, release_ref ${PRE_TASK_075_RELEASE_REF}`)
+      upgrade = null
       ledgerPresent = true
       done.push(m.file)
       log(`applied ${m.file}`)

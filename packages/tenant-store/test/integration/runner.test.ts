@@ -11,7 +11,6 @@ import { openMigrationDb } from '../../src/store.js'
 import { envResolveTarget } from '../../src/names.js'
 import { assertNonProductionDbUrl, connect, ddlAttempts, ddlLog, ledgerFiles, resetWithProbe, serverUrl } from '../harness/db.js'
 import { cleanupFixtures, copyFixture, FIXTURE_MIGRATIONS, FIXTURE_RELEASE, writeManifest } from '../harness/migrations.js'
-
 const quiet = { log: () => {}, ...FIXTURE_RELEASE }
 const DEFAULT_SESSION = { st: '0', sp: '"$user", public', role: 't020_test' }
 
@@ -72,6 +71,70 @@ describe('runMigrations on a real database', () => {
     const before = await ddlAttempts(watcher)
     expect(await runMigrations({ sql, dir: FIXTURE_MIGRATIONS, ...quiet })).toEqual({ applied: [], alreadyApplied: 3 })
     expect(await ddlAttempts(watcher)).toBe(before)
+  })
+
+  // TASK-075 r2 (house review HIGH): a ledger a pre-TASK-075 runner wrote
+  // (filename, sha256, applied_at) -- gremion_platform and the module
+  // databases of every env provisioned since TASK-043b -- is upgraded in
+  // place, never refused: inside the FIRST pending file's transaction (after
+  // the chain check and the dump, rolled back with that file), each existing
+  // row backfilled with its phase (header, else the baseline) and release_ref
+  // 'pre-task-075'. Nothing pending: the old ledger stays as it is, no DDL.
+  const columns = async () =>
+    (
+      await watcher<{ attname: string }[]>`
+        SELECT attname FROM pg_attribute WHERE attrelid = 'public.schema_migrations'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum`
+    ).map((r) => r.attname)
+  const toPreTask075 = async (dir: string) => {
+    await runMigrations({ sql, dir, ...quiet })
+    await watcher.unsafe(
+      'ALTER TABLE public.schema_migrations DROP CONSTRAINT schema_migrations_contract_after_check, DROP COLUMN phase, DROP COLUMN release_ref, DROP COLUMN contract_after',
+    )
+    expect(await columns()).toEqual(['filename', 'sha256', 'applied_at'])
+  }
+  const legacyPhase = (f: string) => (f === '001_init.sql' ? { phase: 'contract' as const, contractAfter: 'dist-v0.0.0' } : { phase: 'expand' as const })
+
+  it('TASK-075 r2: a pre-TASK-075 ledger is upgraded in place with the first pending file; nothing pending leaves it untouched (no DDL)', async () => {
+    await toPreTask075(copyFixture({ only: ['001_init.sql', '002_item_state.sql'] }))
+    const before = await ddlAttempts(watcher)
+    expect(await runMigrations({ sql, dir: copyFixture({ only: ['001_init.sql', '002_item_state.sql'] }), ...quiet, phaseFor: legacyPhase })).toEqual({ applied: [], alreadyApplied: 2 })
+    expect(await ddlAttempts(watcher)).toBe(before)
+    expect(await columns()).toEqual(['filename', 'sha256', 'applied_at'])
+
+    const r = await runMigrations({ sql, dir: FIXTURE_MIGRATIONS, ...quiet, phaseFor: legacyPhase })
+    expect(r).toEqual({ applied: ['003_item_state_idx.sql'], alreadyApplied: 2 })
+    const rows = await watcher<{ filename: string; phase: string; release_ref: string; contract_after: string | null }[]>`
+      SELECT filename, phase, release_ref, contract_after FROM public.schema_migrations ORDER BY filename`
+    expect(rows.map((x) => [x.filename, x.phase, x.release_ref, x.contract_after])).toEqual([
+      ['001_init.sql', 'contract', 'pre-task-075', 'dist-v0.0.0'],
+      ['002_item_state.sql', 'expand', 'pre-task-075', null],
+      ['003_item_state_idx.sql', 'expand', 'dist-v0.0.1', null],
+    ])
+    // the upgraded ledger carries the fresh ledger's NOT NULLs and CHECKs
+    await expect(watcher`INSERT INTO public.schema_migrations (filename, sha256, phase, release_ref) VALUES ('009_x.sql', ${'0'.repeat(64)}, 'contract', 'r')`).rejects.toMatchObject({
+      code: '23514',
+      constraint_name: 'schema_migrations_contract_after_check',
+    })
+    await expect(watcher`INSERT INTO public.schema_migrations (filename, sha256, phase, release_ref) VALUES ('009_x.sql', ${'0'.repeat(64)}, 'shrink', 'r')`).rejects.toMatchObject({ code: '23514' })
+    await expect(watcher`INSERT INTO public.schema_migrations (filename, sha256, phase) VALUES ('009_x.sql', ${'0'.repeat(64)}, 'expand')`).rejects.toMatchObject({ code: '23502' })
+  })
+
+  it('TASK-075 r2: the upgrade rolls back with a failing first file; an applied row with no phase is refused before any DDL', async () => {
+    await toPreTask075(copyFixture({ only: ['001_init.sql', '002_item_state.sql'] }))
+    const broken = copyFixture({ only: ['001_init.sql', '002_item_state.sql'] })
+    writeFileSync(join(broken, '003_broken.sql'), 'CREATE TABLE broken (id int);\nSELECT no_such_function();\n')
+    writeManifest(broken)
+    const err = await rejection(runMigrations({ sql, dir: broken, ...quiet, phaseFor: legacyPhase }))
+    expect(err?.code).toBe('APPLY_FAILED')
+    expect(await columns()).toEqual(['filename', 'sha256', 'applied_at'])
+
+    const before = await ddlAttempts(watcher)
+    const unknown = await rejection(runMigrations({ sql, dir: FIXTURE_MIGRATIONS, ...quiet, phaseFor: (f) => (f === '003_item_state_idx.sql' ? { phase: 'expand' } : undefined) }))
+    expect(unknown?.code).toBe('PHASE_MISSING')
+    expect(unknown?.files).toEqual(['001_init.sql'])
+    expect(await ddlAttempts(watcher)).toBe(before)
+    expect(await columns()).toEqual(['filename', 'sha256', 'applied_at'])
+    expect(await ledger()).toEqual(['001_init.sql', '002_item_state.sql'])
   })
 
   it('G-078: a failing file rolls back with its ledger row; earlier files stay; the lock is released', async () => {
