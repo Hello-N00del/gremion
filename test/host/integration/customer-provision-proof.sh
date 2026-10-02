@@ -55,8 +55,14 @@
 #                    503 through the edge, broker module users evicted, the
 #                    principal revoked, the realm carries no authenticating
 #                    sender; a SECOND suspend exits 0 and changes nothing
-#                    (TASK-043c); proof-y untouched
-#   customer-resume  every one of those restored (a fresh principal)
+#                    (TASK-043c); proof-y untouched. FIRST it records the
+#                    stored-data fingerprint of proof-x (R30 A2, PRD-OPS-004:
+#                    per table of its kernel and module databases a row count
+#                    and an md5 over the ordered rows, plus the realm's user
+#                    count) in ledger/fingerprint-before-suspend.txt
+#   customer-resume  every one of those restored (a fresh principal); right
+#                    after resume the fingerprint again, judged EQUAL by
+#                    fixtures/customer-provision/data-fingerprint.mjs
 #   (create and resume also read Traefik's STATE of both routers of each
 #   customer: enabled, no error -- TASK-043c; presence is not enough)
 #   customer-reconcile reconcile green; a planted platform@ sender fails
@@ -602,6 +608,50 @@ routers_enabled() { # <slug>...
     printf '%s' "$out"
     return "$rc"
 }
+# data_fingerprint <slug> -- TASK-043c R30 addendum A2 (PRD-OPS-004): suspend
+# must not alter stored data. Prints one line per table (relkind r, outside
+# pg_catalog / information_schema / pg_toast) of the customer's kernel database
+# and of every ENABLED module that has a database (module.json
+# runtime.database.postgresService; votes has none): "<scope>:<schema>.<table>
+# TAB <row count> TAB <md5 over the rows ordered by their text form | ->", then
+# "realm-users TAB <n>" (Keycloak users/count). The judge is
+# fixtures/customer-provision/data-fingerprint.mjs (equal is the only pass; an
+# empty fingerprint fails). Every read is checked explicitly (`|| return 1`):
+# a caller runs this inside an `if`, where errexit is off.
+FP_SQL="$(cat <<'SQL'
+SELECT format('SELECT %L || E''\t'' || count(*) || E''\t'' || coalesce(md5(string_agg(t::text, E''\n'' ORDER BY t::text)), ''-'') FROM %I.%I t',
+              n.nspname || '.' || c.relname, n.nspname, c.relname)
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_toast%'
+ ORDER BY n.nspname, c.relname
+SQL
+)"
+fp_db() { # <container> <user> <database> <scope> -- the table lines of one database
+    local cid="$1" user="$2" db="$3" scope="$4" rows
+    [[ -n "$cid" ]] || { info "fingerprint: no container for ${scope}" >&2; return 1; }
+    rows="$(printf '%s \\gexec\n' "$FP_SQL" | docker exec -i "$cid" psql -v ON_ERROR_STOP=1 -tAqU "$user" -d "$db" | tr -d '\r')" \
+        || { info "fingerprint: reading ${scope} (${db}) failed" >&2; return 1; }
+    [[ -n "$rows" ]] || { info "fingerprint: ${scope} (${db}) has no table" >&2; return 1; }
+    sed '/^$/d; s/^/'"${scope}"':/' <<< "$rows"
+}
+data_fingerprint() { # <slug>
+    local slug="$1" id hex mods m psvc sid n
+    id="$(customer_id "$slug")" || return 1
+    [[ -n "$id" ]] || { info "fingerprint: no control row for ${slug}" >&2; return 1; }
+    hex="${id//-/}"
+    printf '# fingerprint %s %s %s\n' "$slug" "$id" "$(now)"
+    fp_db "$(svc state postgres)" postgres "t_${hex}__kernel" kernel || return 1
+    mods="$(q gremion_platform "SELECT m.module_key FROM plt.module_enablement e JOIN plt.module m USING (module_id) WHERE e.customer_id = '${id}' AND e.state = 'enabled' ORDER BY 1")" || return 1
+    for m in $mods; do
+        psvc="$(jq -r '.runtime.database.postgresService // empty' "$ROOT/modules/${m}/module.json")" || return 1
+        if [[ -z "$psvc" ]]; then printf '# %s: no database (module.json runtime.database null)\n' "$m"; continue; fi
+        sid="${psvc%-postgres}"
+        fp_db "$(svc state "$psvc")" "$sid" "t_${hex}__${m}" "$m" || return 1
+    done
+    n="$(skc get users/count -r "$slug" | tr -d '\r[:space:]')" || return 1
+    [[ "$n" =~ ^[0-9]+$ ]] || { info "fingerprint: realm ${slug} user count unreadable (${n:-empty})" >&2; return 1; }
+    printf 'realm-users\t%s\n' "$n"
+}
 trd440() { # the container count and every project's service list
     # every measurement must succeed (review C, r2): a failed render on both
     # sides compared equal; each project renders from its own directory
@@ -770,6 +820,13 @@ phase_customer_rerun() {
 
 phase_customer_suspend() {
     need_pooled
+    # R30 A2 (PRD-OPS-004): the stored-data fingerprint BEFORE suspend; customer-resume
+    # compares it with the one taken right after resume. No fingerprint, no suspend:
+    # without the baseline the "suspend alters no stored data" line cannot be proven.
+    rm -f "$OUT/ledger/fingerprint-before-suspend.txt" "$OUT/ledger/fingerprint-after-resume.txt"
+    if data_fingerprint "$X" > "$OUT/ledger/fingerprint-before-suspend.txt"; then
+        ok "customer-suspend: stored-data fingerprint of ${X} recorded before suspend ($(grep -c $'\t[0-9]*\t' "$OUT/ledger/fingerprint-before-suspend.txt" || true) table(s), $(sed -n 's/^realm-users\t//p' "$OUT/ledger/fingerprint-before-suspend.txt") realm user(s))"
+    else rm -f "$OUT/ledger/fingerprint-before-suspend.txt"; bad "customer-suspend: the stored-data fingerprint of ${X} could not be taken"; return; fi
     tenant suspend "$X" > "$OUT/ledger/suspend-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/suspend-x.log" >&2; bad "customer-suspend: suspend failed"; return; }
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == suspended ]]; then ok "customer-suspend: status suspended"; else bad "customer-suspend: status"; fi
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == false ]]; then ok "customer-suspend: realm ${X} disabled (no sign-in, no token)"; else bad "customer-suspend: realm still enabled"; fi
@@ -797,6 +854,20 @@ phase_customer_suspend() {
 phase_customer_resume() {
     need_pooled
     tenant resume "$X" > "$OUT/ledger/resume-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/resume-x.log" >&2; bad "customer-resume: resume failed"; return; }
+    # R30 A2 (PRD-OPS-004): taken right after resume, before any request reaches
+    # the host; equal to the one customer-suspend took is the only pass.
+    local fpv fprc=0
+    if [[ ! -s "$OUT/ledger/fingerprint-before-suspend.txt" ]]; then
+        bad "customer-resume: no stored-data fingerprint from before suspend (run customer-suspend in the same \${OUT})"
+    elif ! data_fingerprint "$X" > "$OUT/ledger/fingerprint-after-resume.txt"; then
+        bad "customer-resume: the stored-data fingerprint of ${X} could not be taken after resume"
+    else
+        fpv="$(node "$ROOT_H/test/host/fixtures/customer-provision/data-fingerprint.mjs" compare \
+            "$(host_path "$OUT/ledger/fingerprint-before-suspend.txt")" "$(host_path "$OUT/ledger/fingerprint-after-resume.txt")")" || fprc=$?
+        printf '%s rc=%s %s\n' "$(now)" "$fprc" "$(tr '\n' ';' <<< "$fpv")" | ledger fingerprint-compare.txt
+        if (( fprc == 0 )); then ok "customer-resume: the stored data of ${X} is unchanged across suspend and resume (every table's row count and checksum, the realm's user count)"
+        else bad "customer-resume: suspend/resume altered stored data of ${X}: $(tr '\n' ';' <<< "$fpv")"; fi
+    fi
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == active ]]; then ok "customer-resume: status active"; else bad "customer-resume: status"; fi
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == true ]]; then ok "customer-resume: realm enabled"; else bad "customer-resume: realm still disabled"; fi
     if edge_served "$(host_of "$X")"; then ok "customer-resume: $(host_of "$X") is served by gremion-ui again (${EDGE_SHAPE})"
