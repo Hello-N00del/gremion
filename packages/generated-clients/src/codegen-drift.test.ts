@@ -74,7 +74,8 @@ describe('checkCodegenDrift — scratch fixtures', () => {
 describe('checkCodegenDrift — the real tree', () => {
   it('the committed kernel-governance-client.ts matches what the governance spec generates today', () => {
     expect(checkCodegenDrift(REPO_ROOT)).toEqual([])
-  })
+    // 60 s: runs the real codegen; took 6-11 s under whole-tree gate load, over the 5 s default (R29-KHYG-K, gate r29-11).
+  }, 60_000)
 
   it('the generated client carries no `node:` import (T7)', () => {
     const outPath = join(REPO_ROOT, 'packages/generated-clients/src/generated/kernel-governance-client.ts')
