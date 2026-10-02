@@ -410,6 +410,6 @@ test('guard 6: the production traefik labels declare every <name>@docker the ten
       .map((k) => /^traefik\.http\.middlewares\.([^.]+)\./.exec(k)?.[1])
       .filter(Boolean),
   )
-  const missing = [...chained].filter((n) => !declared.has(n)).sort()
+  const missing = [...chained].filter((n) => !declared.has(n)).sort((a, b) => a.localeCompare(b))
   assert.deepEqual(missing, [], `tenant routers chain ${missing.map((n) => `${n}@docker`).join(', ')}, which the production traefik service does not declare: Traefik reports "middleware does not exist", disables the router and the customer host answers 404`)
 })
