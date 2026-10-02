@@ -40,7 +40,7 @@ describe('serviceEnv (service-endpoint fallback for module halves, TASK-205 Q5)'
   it('is the exact complement of platformEnv: no name is served by both', () => {
     for (const name of PLATFORM_ENV_NAMES) {
       expect(isPerTenantEnvName(name)).toBe(false)
-      expect(() => serviceEnv(name)).toThrow()
+      expect(() => serviceEnv(name)).toThrow(/not a service-endpoint variable/)
     }
     for (const name of NAMES) {
       expect(() => platformEnv(name)).toThrow(/per-tenant variable/)

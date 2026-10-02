@@ -52,7 +52,7 @@ export class OverlayError extends Error {
 const posix = (p) => p.split(sep).join('/')
 
 function walk(dir, base = dir, out = []) {
-  for (const name of readdirSync(dir).sort()) {
+  for (const name of readdirSync(dir).toSorted((a, b) => a.localeCompare(b))) {
     const abs = join(dir, name)
     if (statSync(abs).isDirectory()) walk(abs, base, out)
     else out.push(posix(relative(base, abs)))
@@ -75,7 +75,7 @@ export function discoverModules(root) {
   const withApp = readdirSync(modulesDir, { withFileTypes: true })
     .filter((d) => d.isDirectory() && existsSync(join(modulesDir, d.name, 'app')))
     .map((d) => d.name)
-    .sort()
+    .toSorted((a, b) => a.localeCompare(b))
   const disabledFile = join(modulesDir, 'disabled.json')
   const disabled = existsSync(disabledFile) ? (readJson(disabledFile, 'modules/disabled.json').disabled ?? []).map((e) => e.id) : []
   return { withApp, disabled }
@@ -111,7 +111,7 @@ export function runOverlay(opts = {}) {
 
   let ids
   if (opts.modules && opts.modules.length > 0) {
-    ids = [...new Set(opts.modules)].sort()
+    ids = [...new Set(opts.modules)].toSorted((a, b) => a.localeCompare(b))
     for (const id of ids) {
       if (!withApp.includes(id)) problems.push(`module ${id} has no modules/${id}/app/`)
       else if (disabled.includes(id) && !opts.includeDisabled) problems.push(`module ${id} is disabled (modules/disabled.json): build mode refuses it`)
@@ -152,7 +152,7 @@ export function runOverlay(opts = {}) {
 
   // the manifest first: a run interrupted mid-copy leaves files the next run recognises as its own
   mkdirSync(target, { recursive: true })
-  writeFileSync(manifestPath, JSON.stringify({ modules: ids, files: [...plan.keys()].sort() }, null, 2) + '\n')
+  writeFileSync(manifestPath, JSON.stringify({ modules: ids, files: [...plan.keys()].toSorted((a, b) => a.localeCompare(b)) }, null, 2) + '\n')
 
   // stale outputs (a module disabled or a file removed since the last run)
   const removed = []
@@ -181,7 +181,7 @@ export function runOverlay(opts = {}) {
     copyFileSync(source, abs)
     written++
   }
-  return { modules: ids, files: [...plan.keys()].sort(), written, removed }
+  return { modules: ids, files: [...plan.keys()].toSorted((a, b) => a.localeCompare(b)), written, removed }
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])

@@ -367,7 +367,7 @@ export function runParity(opts) {
   const b = tagBlobs(sturaPath, tag, ['services/'])
   const c = tagBlobs(sturaPath, tag, [S])
   problems.push(...b.problems, ...c.problems)
-  for (const p of [...c.blobs.keys()]) if (!inAnyModuleApp(p, table)) c.blobs.delete(p)
+  for (const p of Array.from(c.blobs.keys())) if (!inAnyModuleApp(p, table)) c.blobs.delete(p) // a snapshot: entries are deleted while walking
   // Set C is partitioned by the per-module prefix table: every path is claimed by exactly one module,
   // and every module in the table must claim at least one path (a typo'd prefix would otherwise copy nothing).
   for (const p of c.blobs.keys()) {
