@@ -34,6 +34,15 @@ must still hash to `applied.lock.json`, else `LOCKED_FILE_CHANGED`). A file
 with neither a header nor a baseline entry is `PHASE_MISSING`: the runner
 refuses it before any hook, dump or DDL.
 
+The runtime reads the baseline from `packages/tenant-store/src/phase-baseline.ts`
+(`PINNED_BASELINE`: the baseline joined with the lock's sha256), because the
+tenant-create image that runs `migratePlatform` and `enableModule` (the
+`gremion-ui/Dockerfile` builder stage) carries `packages/*` and the module
+migration dirs but never `scripts/`. It is generated, never edited:
+`node scripts/migrations/runner/baseline.mjs --write-pinned`. The suite
+checks it byte for byte against its rendering from the two files and names
+that command when it drifts.
+
 ## What each phase may contain (`lint.mjs`)
 
 A dependency-free, fail-closed allow-list (Q6, TRD-444). Anything it cannot
