@@ -39,6 +39,15 @@ export function validateManifest(manifest) {
       if (!Array.isArray(suite.testGlobs) || suite.testGlobs.length === 0) {
         problems.push(`repo '${repo}': suite '${suite.id}' has no testGlobs — every suite must name the files that prove it exists`)
       }
+      if (
+        suite.excludeGlobs !== undefined &&
+        !(Array.isArray(suite.excludeGlobs) && suite.excludeGlobs.every((g) => typeof g === 'string' && g.length > 0))
+      ) {
+        problems.push(`repo '${repo}': suite '${suite.id}' excludeGlobs must be an array of non-empty glob strings`)
+      }
+      if (suite.unrunnable !== undefined && !(typeof suite.unrunnable === 'string' && suite.unrunnable.trim().length > 0)) {
+        problems.push(`repo '${repo}': suite '${suite.id}' unrunnable must be a non-empty reason string`)
+      }
     }
     for (const category of CATEGORIES) {
       const count = suites.filter((s) => s.category === category).length
