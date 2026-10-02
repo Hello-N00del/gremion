@@ -1285,9 +1285,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/auto-join.integration.test.ts",
-      "reason": "post-f2 StuRaOS 8928249a: fix(notifications): elections join on org_unit_id, scope elections and published protocols per D-3, log degrad",
+      "reason": "post-f2 StuRaOS 8928249a: fix(notifications): elections join on org_unit_id, scope elections and published protocols per D-3, log degrad; TASK-205b: the kernel database has no finance schema, so the truncate names org_units only (CASCADE reaches the dependents); an afterAll leaves the shared database as found",
       "owner": "TASK-205",
-      "blob": "f58b89496871475381101f0fc300a954c41cb8e1"
+      "blob": "b51d8b7679c5b15d900d85e9930a01cc8a00ae67"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/auto-join.ts",
@@ -1573,9 +1573,9 @@
     },
     {
       "path": "modules/elections/app/lib/server/elections/election-db.integration.test.ts",
-      "reason": "TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections)",
+      "reason": "TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); an afterAll clears the rows it created (a left-behind committee_elections row broke every later file that deletes org_units)",
       "owner": "TASK-205",
-      "blob": "27701832035852dd534dfb575d4d58a3b98d2771"
+      "blob": "a9c2a185829b84358d10a68000c519aa90ce3762"
     }
   ]
 }

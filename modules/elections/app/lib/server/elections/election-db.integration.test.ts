@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { getDb } from '../db'
 import { createOrgUnit, addOrgUnitMember } from '../governance/org-units-db'
 import { ElectionDb } from './election-db'
@@ -8,6 +8,16 @@ const USER_UUID = '00000000-0000-0000-0000-000000000001'
 const ADMIN_UUID = '00000000-0000-0000-0000-000000000002'
 
 describe('ElectionDb', () => {
+  // TASK-205b: leave the shared integration database as found. The suite runs one file at a time against ONE
+  // database, and a committee_elections row left behind makes every later file's `DELETE FROM org_units`
+  // violate committee_elections_committee_id_fkey (the governance suites run after this one).
+  afterAll(async () => {
+    const sql = getDb()
+    await sql`DELETE FROM committee_elections`
+    await sql`DELETE FROM org_unit_members`
+    await sql`DELETE FROM org_units`
+  })
+
   beforeEach(async () => {
     const sql = getDb()
     await sql`TRUNCATE org_units RESTART IDENTITY CASCADE`

@@ -2,15 +2,20 @@
 // provisioning ledger x org_unit_members. This pins the query against the real
 // schema: only the Matrix rooms of the caller's own units, never another
 // unit's room, never a subsystem other than matrix, never a row without a room.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { getDb } from '../db'
 import { createOrgUnit, addOrgUnitMember } from '../governance/org-units-db'
 import { listOwnUnitRoomIds } from './auto-join'
 
 describe('listOwnUnitRoomIds against the real schema', () => {
+  // TASK-205b: leave the shared integration database as found (one database, one file at a time).
+  afterAll(async () => {
+    await getDb()`TRUNCATE org_units RESTART IDENTITY CASCADE`
+  })
+
   beforeEach(async () => {
     const sql = getDb()
-    await sql`TRUNCATE org_units, finance.bank_account, finance.reserve, finance.fiscal_year, finance.finanzordnung_profile, finance.finance_helios_settings RESTART IDENTITY CASCADE`
+    await sql`TRUNCATE org_units RESTART IDENTITY CASCADE`
     const mine = await createOrgUnit({
       name: 'Mein Gremium', description: null, parentId: null, kind: 'committee',
       visibility: 'committee_only', wantsMatrixRoom: true, wantsNextcloudFolder: true,
