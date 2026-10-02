@@ -306,12 +306,12 @@ set_key() {   # <KEY> <value>
     fi
 }
 
-@test "render-ops escapes a dollar in a sink for Grafana's environment expansion" {
+@test "render-ops quotes a sink safely: a single quote doubles, a dollar stays literal" {
     write_ops_env
-    set_key ALERT_WEBHOOK_URL 'http://127.0.0.1:9099/hook?k=$abc'
+    set_key ALERT_WEBHOOK_URL "http://127.0.0.1:9099/hook?k=a'b\$c"
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    grep -qF "url: 'http://127.0.0.1:9099/hook?k=\$\$abc'" "$GREMION_ROOT/$PROV/alerting/contact-points.yaml"
+    grep -qF "url: 'http://127.0.0.1:9099/hook?k=a''b\$c'" "$GREMION_ROOT/$PROV/alerting/contact-points.yaml"
 }
 
 @test "render-ops renders no contact point and no policy while both sinks are sentinels" {

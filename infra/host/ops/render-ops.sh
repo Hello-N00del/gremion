@@ -221,12 +221,12 @@ render_ingest_token() {
 }
 
 # A value for a single-quoted YAML scalar inside a Grafana provisioning file:
-# a quote doubles, and a `$` doubles because Grafana expands environment
-# variables in provisioning files before it parses them.
+# a quote doubles. A `$` stays as it is: the pinned Grafana does not expand
+# environment variables in alerting provisioning files (measured by
+# test/host/integration/observability-proof.sh).
 yaml_value() {
     local v="$1"
     v="${v//\'/\'\'}"
-    v="${v//\$/\$\$}"
     printf "'%s'" "$v"
 }
 

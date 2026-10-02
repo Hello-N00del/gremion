@@ -60,10 +60,15 @@ test('Grafana RED: a rule on no condition, a condition with no rule, NoData=OK, 
   assert.match(grafanaRuleViolations(g4, RULES).join('\n'), /execErrState is OK/)
 })
 
-test('a Grafana annotation template is $$-escaped (Grafana expands $VAR in provisioning files)', () => {
-  const text = readText('compose/observability/grafana/provisioning/alerting/rules.yaml')
-  assert.ok(!/\{\{[^}]*[^$]\$labels/.test(text), 'an unescaped $labels would be expanded to an empty string')
-  assert.match(text, /\{\{ \$\$labels\.component \}\}/)
+test('a Grafana annotation template is written plainly: alerting provisioning is not env-expanded, a $$ breaks it', () => {
+  // Measured on the pinned 12.4.0 (observability-proof.sh): `{{ $$labels... }}`
+  // reached the template engine literally ("Error in expanding template").
+  const body = readText('compose/observability/grafana/provisioning/alerting/rules.yaml')
+    .split('\n')
+    .filter((l) => !l.trimStart().startsWith('#'))
+    .join('\n')
+  assert.ok(!/\$\$/.test(body), 'a $$ outside a comment')
+  assert.equal((body.match(/\{\{ \$labels\.component \}\}/g) ?? []).length, 12)
 })
 
 test('TDD 6: the policy groups by [alertname, component], waits 30s, re-groups at 5m, never repeats an open condition (8760h)', () => {

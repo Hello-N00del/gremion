@@ -4,6 +4,7 @@
 # stack. Every phase is one invocation under 4 minutes; state lives in $OUT.
 #
 # usage: observability-proof.sh <phase>
+#   refresh     re-render the provisioning tree and the override from the existing env
 #   prepare     scratch _state slice (PG18, NATS 2.12 with JetStream, one
 #               <id>-postgres, a vector stand-in), Vector's output volume, the
 #               ops env + render-ops.sh, Mailpit, Keycloak 26.6.1, the collector
@@ -181,6 +182,49 @@ collect() {
 
 natsbox() { docker run --rm --network "$NET_STATE" "$NATSBOX_IMAGE" nats -s "nats://${C_NATS}:4222" "$@"; }
 
+# The rendered half: render-ops.sh for real, then the proof timings.
+render_and_time() {
+    GREMION_ROOT="$SROOT" bash "$ROOT/infra/host/ops/render-ops.sh" --env-file "$ENV_FILE" > "$OUT/render.log" 2>&1 \
+        || { cat "$OUT/render.log" >&2; die "render-ops.sh failed"; }
+    grep -q 'OPS-RENDER: .*email=on webhook=off' "$OUT/render.log" && ok "render-ops.sh: $(grep -o 'OPS-RENDER:.*' "$OUT/render.log")" \
+        || bad "render-ops.sh did not render the e-mail contact point"
+    # The brief's proof timings (TASK-079 reuses them): evaluation, for and
+    # group_wait 10s, group_interval 60s. The committed values are pinned by
+    # compose/observability/alerting.test.mjs.
+    local prov="$SROOT/runtime/ops/grafana-provisioning/alerting"
+    sed -i -E 's/^    interval: 1m$/    interval: 10s/; s/^        for: [0-9]+[smh]$/        for: 10s/' "$prov/rules.yaml"
+    sed -i -E 's/^    group_wait: 30s$/    group_wait: 10s/; s/^    group_interval: 5m$/    group_interval: 60s/' "$prov/policies.yaml"
+    grep -q '^    interval: 10s$' "$prov/rules.yaml" && grep -q '^    group_interval: 60s$' "$prov/policies.yaml" \
+        && ok "proof timings set in the rendered provisioning tree" || bad "proof timings not set"
+
+}
+
+write_override() {
+    # The proof override: ports on fresh loopback numbers, the scratch issuer,
+    # Mailpit without STARTTLS. It changes no network, volume, limit or mount.
+    cat > "$OVERRIDE" <<EOF
+services:
+  grafana:
+    environment:
+      GF_SERVER_ROOT_URL: "http://127.0.0.1:${GRAFANA_PORT}/"
+      GF_SMTP_STARTTLS_POLICY: NoStartTLS
+      # Go's SMTP client refuses PLAIN auth on an unencrypted connection
+      # (measured: "unencrypted connection"); Mailpit takes mail unauthenticated.
+      GF_SMTP_USER: ""
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: "http://127.0.0.1:${KC_PORT}/auth/realms/platform/protocol/openid-connect/auth"
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "http://host.docker.internal:${KC_PORT}/auth/realms/platform/protocol/openid-connect/token"
+      GF_AUTH_GENERIC_OAUTH_API_URL: "http://host.docker.internal:${KC_PORT}/auth/realms/platform/protocol/openid-connect/userinfo"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports: !override
+      - "127.0.0.1:${GRAFANA_PORT}:3000"
+  alloy:
+    ports: !override
+      - "127.0.0.1:${INGEST_GRPC_PORT}:4317"
+      - "127.0.0.1:${INGEST_PORT}:4318"
+EOF
+}
+
 # ---------------------------------------------------------------------------
 phase_prepare() {
     mkdir -p "$OUT" "$SROOT/etc/env" "$SROOT/runtime" "$OUT/kc-import"
@@ -245,18 +289,7 @@ OTLP_INGEST_TOKEN=${token}
 OPS_TENANT_HOSTS_FILE=$SROOT/etc/tenant-hosts.txt
 OPS_THIRD_PARTY_PROBES=nextcloud=http://${STACK}-gone.invalid/status.php
 EOF
-    GREMION_ROOT="$SROOT" bash "$ROOT/infra/host/ops/render-ops.sh" --env-file "$ENV_FILE" > "$OUT/render.log" 2>&1 \
-        || { cat "$OUT/render.log" >&2; die "render-ops.sh failed"; }
-    grep -q 'OPS-RENDER: .*email=on webhook=off' "$OUT/render.log" && ok "render-ops.sh: $(grep -o 'OPS-RENDER:.*' "$OUT/render.log")" \
-        || bad "render-ops.sh did not render the e-mail contact point"
-    # The brief's proof timings (TASK-079 reuses them): evaluation, for and
-    # group_wait 10s, group_interval 60s. The committed values are pinned by
-    # compose/observability/alerting.test.mjs.
-    local prov="$SROOT/runtime/ops/grafana-provisioning/alerting"
-    sed -i -E 's/^    interval: 1m$/    interval: 10s/; s/^        for: [0-9]+[smh]$/        for: 10s/' "$prov/rules.yaml"
-    sed -i -E 's/^    group_wait: 30s$/    group_wait: 10s/; s/^    group_interval: 5m$/    group_interval: 60s/' "$prov/policies.yaml"
-    grep -q '^    interval: 10s$' "$prov/rules.yaml" && grep -q '^    group_interval: 60s$' "$prov/policies.yaml" \
-        && ok "proof timings set in the rendered provisioning tree" || bad "proof timings not set"
+    render_and_time
 
     # Keycloak: the platform realm from docker/keycloak/realm-export.ops.json,
     # secrets generated here (as gremion-tenant's kcadm path does), the grafana
@@ -283,40 +316,21 @@ EOF
             | .attributes |= del(.["default.acr.values"], .["minimum.acr.value"]))]
         | .scopeMappings += [{client: "grafana-weak", roles: ["operator"]}]
         | .users = [user("op-mfa"; ["operator"]; true), user("op-loa1"; ["operator"]; false), user("norole"; []; true)]
-        ' "$ROOT/docker/keycloak/realm-export.ops.json" > "$OUT/kc-import/platform-realm.json" \
+        ' "$(hpf "$ROOT/docker/keycloak/realm-export.ops.json")" > "$OUT/kc-import/platform-realm.json" \
         || die "could not build the proof realm"
     PW="$pw" jq -n '{realm: "council-proof", enabled: true, roles: {realm: [{name: "operator"}]},
         users: [{username: "council-user", enabled: true, email: "council-user@proof.invalid", emailVerified: true,
                  firstName: "Council", lastName: "User", realmRoles: ["operator"],
-                 credentials: [{type: "password", value: $ENV.PW, temporary: false}]}]}' > "$OUT/kc-import/council-realm.json"
+                 credentials: [{type: "password", value: $ENV.PW, temporary: false}]}]}' > "$OUT/kc-import/council-proof-realm.json"
     docker inspect "$C_KC" >/dev/null 2>&1 || docker run -d --name "$C_KC" -p "127.0.0.1:${KC_PORT}:8080" \
         -v "$(hp "$OUT/kc-import"):/opt/keycloak/data/import:ro" \
         -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD="$kcpw" \
         -e KC_HTTP_RELATIVE_PATH=/auth -e KC_HOSTNAME="http://127.0.0.1:${KC_PORT}/auth" \
         -e KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true "$KC_IMAGE" start-dev --import-realm >/dev/null
-    # The proof override: ports on fresh loopback numbers, the scratch issuer,
-    # Mailpit without STARTTLS. It changes no network, volume, limit or mount.
-    cat > "$OVERRIDE" <<EOF
-services:
-  grafana:
-    environment:
-      GF_SERVER_ROOT_URL: "http://127.0.0.1:${GRAFANA_PORT}/"
-      GF_SMTP_STARTTLS_POLICY: NoStartTLS
-      GF_AUTH_GENERIC_OAUTH_AUTH_URL: "http://127.0.0.1:${KC_PORT}/auth/realms/platform/protocol/openid-connect/auth"
-      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "http://host.docker.internal:${KC_PORT}/auth/realms/platform/protocol/openid-connect/token"
-      GF_AUTH_GENERIC_OAUTH_API_URL: "http://host.docker.internal:${KC_PORT}/auth/realms/platform/protocol/openid-connect/userinfo"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports: !override
-      - "127.0.0.1:${GRAFANA_PORT}:3000"
-  alloy:
-    ports: !override
-      - "127.0.0.1:${INGEST_GRPC_PORT}:4317"
-      - "127.0.0.1:${INGEST_PORT}:4318"
-EOF
+    write_override
     ok "Keycloak 26.6.1 starting outside ops on 127.0.0.1:${KC_PORT} with the platform realm and a council realm"
 
-    docker inspect "$C_MAIL" >/dev/null 2>&1 || docker run -d --name "$C_MAIL" -p "127.0.0.1:${MAILPIT_PORT}:8025"         -e MP_SMTP_AUTH_ACCEPT_ANY=1 -e MP_SMTP_AUTH_ALLOW_INSECURE=1 "$MAILPIT_IMAGE" >/dev/null
+    docker inspect "$C_MAIL" >/dev/null 2>&1 || docker run -d --name "$C_MAIL" -p "127.0.0.1:${MAILPIT_PORT}:8025" \n        -e MP_SMTP_AUTH_ACCEPT_ANY=1 -e MP_SMTP_AUTH_ALLOW_INSECURE=1 "$MAILPIT_IMAGE" >/dev/null
     docker inspect "$C_COLL" >/dev/null 2>&1 || docker run -d --name "$C_COLL" --network none \
         -v //var/run/docker.sock:/var/run/docker.sock -v "$(hp "$ROOT"):/src:ro" -v "$(hp "$SROOT"):/g" \
         --tmpfs /disk:size=100m --entrypoint sh "$COLLECTOR_IMAGE" -c \
@@ -326,13 +340,27 @@ EOF
     finish 7
 }
 
+phase_refresh() {
+    [[ -f "$ENV_FILE" ]] || die "run prepare first"
+    render_and_time
+    write_override
+    ok "override rewritten"
+    if docker inspect "$(container_of grafana)" >/dev/null 2>&1; then
+        # A changed provisioning tree is read at start only.
+        compose_ops -- up -d > "$OUT/refresh.log" 2>&1 || die "compose up failed"
+        docker restart "$(container_of grafana)" >/dev/null
+        wait_healthy 150 "$(container_of grafana)" && ok "grafana restarted on the re-rendered tree" || bad "grafana not healthy after refresh"
+    fi
+    finish 3
+}
+
 phase_up() {
     local c svc pub
     compose_ops -- up -d > "$OUT/up.log" 2>&1 || { tail -n 20 "$OUT/up.log" >&2; die "compose up failed"; }
     docker network connect --alias mailpit "${OPS}_ops" "$C_MAIL" 2>/dev/null || true
     local cs=()
     for svc in "${OPS_SERVICES[@]}"; do cs+=("$(container_of "$svc")"); done
-    if wait_healthy 200 "${cs[@]}"; then ok "all six ops services healthy by their own healthchecks"; else
+    if wait_healthy 150 "${cs[@]}"; then ok "all six ops services healthy by their own healthchecks"; else
         for c in "${cs[@]}"; do bad "$c: $(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$c" 2>/dev/null)"; done
     fi
     [[ "$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$(container_of grafana)")" == "$OPS" ]] \
@@ -349,17 +377,19 @@ phase_up() {
         [[ "$nets" == "${OPS}_ops " ]] && ok "$svc is on ${OPS}_ops only" || bad "$svc networks: $nets"
     done
     local mounts
-    mounts="$(docker inspect --format '{{range .Mounts}}{{.Source}}|{{.Destination}}|{{.RW}};{{end}}' "$(container_of alloy)")"
+    # Image mounts (the busybox probe) are skipped: their source is the image's
+    # own read-only layer, not a host path.
+    mounts="$(docker inspect --format '{{range .Mounts}}{{if ne .Type "image"}}{{.Source}}|{{.Destination}}|{{.RW}};{{end}}{{end}}' "$(container_of alloy)")"
     [[ "$mounts" != *"|/rootfs|"* && "$mounts" != *"/var/lib/docker"* && "$mounts" != *"docker.sock"* ]] \
         && [[ "$mounts" == *"|/host/proc|false;"* && "$mounts" == *"|/host/sys|false;"* && "$mounts" == *"|/vector-logs|false;"* ]] \
         && ok "alloy: /proc, /sys, Vector's volume read-only; no /, no Docker data root, no socket" || bad "alloy mounts: $mounts"
     curl -fsS "http://127.0.0.1:${GRAFANA_PORT}/api/health" | grep -q '"database": *"ok"' \
         && ok "grafana /api/health database ok on the loopback port" || bad "grafana /api/health"
     local login_page
-    login_page="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    login_page="$(curl -s -o "$(hpf "$OUT/.curl-body")" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
         -d '{"user":"admin","password":"admin"}' "http://127.0.0.1:${GRAFANA_PORT}/login")"
     [[ "$login_page" != 200 ]] && ok "the login form refuses a local admin (HTTP $login_page)" || bad "a local login answered 200"
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${GRAFANA_PORT}/api/datasources")" == 401 ]] \
+    [[ "$(curl -s -o "$(hpf "$OUT/.curl-body")" -w '%{http_code}' "http://127.0.0.1:${GRAFANA_PORT}/api/datasources")" == 401 ]] \
         && ok "no anonymous access (/api/datasources 401)" || bad "anonymous access to /api/datasources"
     finish 18
 }
@@ -410,7 +440,7 @@ phase_absent() {
         && ok "absence alerts: one SignalAbsent e-mail naming host-collector" || bad "no SignalAbsent e-mail"
     collect || bad "collector restart failed"
     wait_until 60 has_series 'gremion_metrics_textfile_timestamp_seconds' && ok "collector back" || bad "collector not back"
-    finish 5
+    finish 4
 }
 
 phase_red_base() {
@@ -630,6 +660,9 @@ phase_access() {
     wait_until 120 kc_ready || die "Keycloak is not answering"
     grafana_with none || die "grafana not healthy"
     local otp trace r
+    # A fresh sample, so the instant query below is inside Prometheus' lookback.
+    send_otlp /v1/metrics "$(otlp_metric)" "$(cat "$SROOT/etc/secrets/ops/otlp-ingest-token")" || bad "the metric push failed"
+    wait_until 60 has_series 'obs_proof_ingest' || bad "obs_proof_ingest not fresh in Prometheus"
     otp="$(cat "$OUT/otp-secret")"
     trace="$(cat "$TRACE_ID_FILE" 2>/dev/null || echo none)"
     r="$(sso op-mfa "$otp" --get '/api/datasources/proxy/uid/prometheus/api/v1/query?query=obs_proof_ingest' --get "/api/datasources/proxy/uid/tempo/api/traces/${trace}")"
@@ -712,6 +745,7 @@ phase_down() {
 
 case "$PHASE" in
     prepare) phase_prepare ;;
+    refresh) phase_refresh ;;
     up) phase_up ;;
     signals) phase_signals ;;
     absent) phase_absent ;;

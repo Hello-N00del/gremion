@@ -81,6 +81,7 @@ test('RED: a public client, direct grants, a wildcard callback, no minimum ACR, 
   fails((_, c) => { c.secret = 'committed' }, /the template carries a client secret/)
   fails((r) => { r.scopeMappings.find((s) => s.client === 'grafana').roles.push('admin') }, /its scope is not exactly the realm role operator/)
   fails((r) => { r.realm = 'master' }, /belongs to the platform realm only/)
+  fails((_, c) => { c.description = 'x'.repeat(256) }, /grafana: description is 256 characters, Keycloak's column holds 255/)
   assert.match(grafanaClientViolations({ realm: 'platform', clients: [] }).join('\n'), /carries no grafana client/)
 })
 

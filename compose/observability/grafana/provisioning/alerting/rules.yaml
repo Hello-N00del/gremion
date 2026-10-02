@@ -11,9 +11,11 @@
 #
 # No data and an evaluation error both ALERT: a recording rule that stopped
 # producing, or a Prometheus that does not answer, is not a healthy world.
-# `$$` in a template is a literal `$`: Grafana expands environment variables
-# in provisioning files before it reads them. The README carries the rule
-# table; compose/observability/alerting.test.mjs pins every field below.
+# Templates are written plainly (`{{ $labels.component }}`): measured on the
+# pinned Grafana 12.4.0, alerting provisioning files are NOT environment-
+# expanded, and a `$$` stays literal and breaks the template. The README
+# carries the rule table; compose/observability/alerting.test.mjs pins every
+# field below.
 apiVersion: 1
 
 groups:
@@ -57,7 +59,7 @@ groups:
           severity: warning
         annotations:
           summary: "Root filesystem above 70 percent, or its byte counts stopped arriving"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-memory-pressure
         title: MemoryPressure
         condition: B
@@ -93,7 +95,7 @@ groups:
           severity: warning
         annotations:
           summary: "Less than 10 percent memory available, or the procfs reading is blind"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-container-unhealthy
         title: ContainerUnhealthy2m
         condition: B
@@ -129,7 +131,7 @@ groups:
           severity: critical
         annotations:
           summary: "A container is unhealthy, the log pipeline (vector) is not running, or the host collector stopped"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-cert-expiry
         title: CertExpiresUnder20d
         condition: B
@@ -165,7 +167,7 @@ groups:
           severity: critical
         annotations:
           summary: "A served certificate expires in under 20 days, or the probe is blind"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-backup-failed
         title: BackupFailedOrOverdue
         condition: B
@@ -201,7 +203,7 @@ groups:
           severity: critical
         annotations:
           summary: "The last backup failed, or the backup timer is enabled and no backup ran in 26 hours"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-mail-queue
         title: MailQueueOldest1h
         condition: B
@@ -237,7 +239,7 @@ groups:
           severity: warning
         annotations:
           summary: "Oldest queued message older than one hour, or the mail scrape is blind"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-postgres-connections
         title: PostgresConnections80pct
         condition: B
@@ -273,7 +275,7 @@ groups:
           severity: warning
         annotations:
           summary: "Postgres connections above 80 percent of max, or the collector is blind"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-edge-port80
         title: EdgePort80Down
         condition: B
@@ -309,7 +311,7 @@ groups:
           severity: critical
         annotations:
           summary: "Port 80 on the edge address is not answering the ACME challenge probe"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-broker-consumer-stalled
         title: BrokerConsumerStalled
         condition: B
@@ -345,7 +347,7 @@ groups:
           severity: critical
         annotations:
           summary: "A broker consumer has work outstanding and its ack floor has not moved in 10 minutes, or the broker reading is blind"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-storage-above-70
         title: StorageComponentAbove70pct
         condition: B
@@ -381,7 +383,7 @@ groups:
           severity: warning
         annotations:
           summary: "A tracked storage component holds more than 70 percent of the host's provisioned disk (TRD-224)"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-third-party-unreachable
         title: ThirdPartyUnreachable
         condition: B
@@ -417,7 +419,7 @@ groups:
           severity: warning
         annotations:
           summary: "A third-party service a council relies on is not answering (PRD-DEP-002)"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"
       - uid: gremion-signal-absent
         title: SignalAbsent
         condition: B
@@ -453,4 +455,4 @@ groups:
           severity: critical
         annotations:
           summary: "A monitoring signal stopped arriving (TRD-181): the named component is blind"
-          component: "{{ $$labels.component }}"
+          component: "{{ $labels.component }}"

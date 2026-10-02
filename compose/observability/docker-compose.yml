@@ -244,7 +244,10 @@ services:
     command:
       - "run"
       - "/etc/alloy/config.alloy"
-      - "--storage.path=/var/lib/alloy/data"
+      # Not under /var/lib/alloy: the image keeps that directory root-only, and
+      # Alloy runs as the deploy uid (measured: "mkdir /var/lib/alloy/data:
+      # permission denied").
+      - "--storage.path=/alloy-data"
       - "--server.http.listen-addr=0.0.0.0:12345"
       - "--disable-reporting"
     # Q15: receive-only OTLP. Published on the _state bridge's gateway address
@@ -263,7 +266,7 @@ services:
       - "${GREMION_ROOT_DIR}/runtime/ops/grafana-logs:/grafana-logs:ro"
       - "../../docker/alloy/config.alloy:/etc/alloy/config.alloy:ro"
       - "${GREMION_ROOT_DIR}/etc/secrets/ops/otlp-ingest-token:/run/secrets/ops/otlp-ingest-token:ro"
-      - "${GREMION_ROOT_DIR}/runtime/ops/alloy-data:/var/lib/alloy/data"
+      - "${GREMION_ROOT_DIR}/runtime/ops/alloy-data:/alloy-data"
       - *probe-mount
     networks:
       - ops

@@ -57,14 +57,23 @@ def main(argv):
     jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), NoRedirect)
 
+    def unsecure():
+        # The scratch Keycloak speaks http on the loopback but marks its
+        # session cookies Secure (SameSite=None); a browser treats
+        # http://127.0.0.1 as a secure context and sends them, urllib does not.
+        for c in jar:
+            c.secure = False
+
     def req(url, data=None):
         body = urllib.parse.urlencode(data).encode() if data is not None else None
         r = urllib.request.Request(url, data=body, headers={"User-Agent": "obs-proof"})
         try:
             resp = opener.open(r, timeout=20)
-            return resp.status, resp.headers, resp.read().decode("utf-8", "replace")
+            out = resp.status, resp.headers, resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
-            return e.code, e.headers, e.read().decode("utf-8", "replace")
+            out = e.code, e.headers, e.read().decode("utf-8", "replace")
+        unsecure()
+        return out
 
     out = {"session": False, "role": None, "stage": "start", "detail": "", "gets": {}}
 

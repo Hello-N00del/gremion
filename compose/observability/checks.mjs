@@ -209,6 +209,11 @@ export function grafanaClientViolations(realm) {
   if (realm?.realm !== 'platform') out.push(`realm ${realm?.realm}: the grafana client belongs to the platform realm only`)
   const c = (realm?.clients ?? []).find((x) => x.clientId === 'grafana')
   if (!c) return [...out, 'realm-export.ops.json carries no grafana client']
+  // Keycloak stores a client description in VARCHAR(255): a longer one fails
+  // the realm import outright (measured by observability-proof.sh).
+  for (const cl of realm.clients ?? []) {
+    if (String(cl.description ?? '').length > 255) out.push(`${cl.clientId}: description is ${String(cl.description).length} characters, Keycloak's column holds 255`)
+  }
   if (c.publicClient !== false) out.push('grafana: not a confidential client')
   if (c.standardFlowEnabled !== true) out.push('grafana: the code flow is off')
   for (const k of ['implicitFlowEnabled', 'directAccessGrantsEnabled', 'serviceAccountsEnabled']) if (c[k] !== false) out.push(`grafana: ${k} is not false`)
