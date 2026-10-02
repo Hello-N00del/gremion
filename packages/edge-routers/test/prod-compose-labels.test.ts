@@ -27,7 +27,7 @@ describe('docker-compose.prod.yml traefik labels = platformMiddlewareLabels (hos
   const independent = Object.entries(all).filter(([k]) => !k.includes('.edge-hostpin-'))
 
   it('is non-trivial: both HSTS middlewares and the three rate-limit tiers', () => {
-    const names = new Set(independent.map(([k]) => /middlewares\.([a-z-]+)\./.exec(k)![1]))
+    const names = new Set(independent.map(([k]) => String(/middlewares\.([a-z-]+)\./.exec(k)?.[1])))
     expect([...names].sort((a, b) => a.localeCompare(b))).toEqual([
       'edge-hsts-custom',
       'edge-hsts-platform',
