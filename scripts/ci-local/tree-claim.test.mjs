@@ -19,7 +19,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { discoverTestFiles } from './lib/discover.mjs'
 import { loadManifest, validateManifest } from './lib/manifest.mjs'
-import { findUnclaimed, evaluateSuite } from './lib/snapshot-core.mjs'
+import { findUnclaimed, claimedFiles } from './lib/snapshot-core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const KERNEL_ROOT = resolve(HERE, '..', '..')
@@ -42,20 +42,10 @@ test('every kernel test file in the real tree is claimed by a suite', () => {
   assert.equal(unclaimed.length, 0, report(unclaimed))
 })
 
-test('every kernel suite matches at least one real file (no manifest entry for files that do not exist)', () => {
+test('every kernel suite owns at least one real file (no manifest entry for files that do not exist)', () => {
   const discovered = discoverTestFiles(KERNEL_ROOT)
-  const absent = []
-  for (const suite of manifest.kernel) {
-    const row = evaluateSuite(suite, discovered, {
-      stackEnvExists: false,
-      joinRepo: (p) => resolve(KERNEL_ROOT, p),
-      runFn: () => {
-        throw new Error('census must never run a suite')
-      },
-    })
-    if (row.reason && row.reason.startsWith('manifest suite files absent')) absent.push(suite.id)
-  }
-  assert.deepEqual(absent, [], `kernel suites whose testGlobs match no file: ${absent.join(', ')}`)
+  const absent = manifest.kernel.filter((suite) => claimedFiles(suite, discovered).length === 0).map((s) => s.id)
+  assert.deepEqual(absent, [], `kernel suites whose testGlobs (minus excludeGlobs) match no file: ${absent.join(', ')}`)
 })
 
 const VERTICAL_ROOT = process.env.CI_LOCAL_VERTICAL
@@ -67,5 +57,7 @@ test(
     assert.ok(discovered.length > 100, `discovery found only ${discovered.length} vertical test files`)
     const unclaimed = findUnclaimed(discovered, manifest.vertical)
     assert.equal(unclaimed.length, 0, report(unclaimed))
+    const absent = manifest.vertical.filter((suite) => claimedFiles(suite, discovered).length === 0).map((s) => s.id)
+    assert.deepEqual(absent, [], `vertical suites whose testGlobs (minus excludeGlobs) match no file: ${absent.join(', ')}`)
   },
 )

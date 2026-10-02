@@ -213,6 +213,387 @@
       "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["test/f1-defect/guards/**/*.test.ts"]
+    },
+    {
+      "//": "TASK-012-FU2: the manifest had not kept up with the tree (342 of 778 kernel test files claimed by no suite). Everything below is DIRECTORY-LEVEL (one glob per package/module test dir) so a file added later is claimed automatically, and `excludeGlobs` mirrors each package's own vitest `exclude`, so a new integration file stays UNCLAIMED (RED) until a suite that actually runs it exists. scripts/ci-local/tree-claim.test.mjs walks the real tree and fails on any unclaimed file.",
+      "id": "kernel-control-panel-vitest-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "apps/control-panel",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["apps/control-panel/src/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-module-board-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/board",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/board/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/board/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-board-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "modules/board",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["modules/board/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-calendar-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/calendar",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/calendar/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/calendar/test/**/*.integration.test.ts", "modules/calendar/test/relay.test.ts"]
+    },
+    {
+      "id": "kernel-module-calendar-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "modules/calendar",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["modules/calendar/test/**/*.integration.test.ts", "modules/calendar/test/relay.test.ts"]
+    },
+    {
+      "id": "kernel-module-content-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/content",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/content/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/content/test/**/*.integration.test.ts", "modules/content/test/relay.test.ts"]
+    },
+    {
+      "id": "kernel-module-content-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "modules/content",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["modules/content/test/**/*.integration.test.ts", "modules/content/test/relay.test.ts"]
+    },
+    {
+      "id": "kernel-module-content-app-proof-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"modules/content/app/scripts/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["modules/content/app/scripts/*.test.mjs"]
+    },
+    {
+      "id": "kernel-module-content-app-overlay-vitest",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/content/app",
+      "kind": "vitest",
+      "command": "n/a (no runner in the kernel tree)",
+      "unrunnable": "no runner: modules/content/app is the content UI half, parity-copied from the vertical's gremion-ui/src and importing the shell's $lib/$app aliases; the kernel gremion-ui does not collect it and no kernel vitest config resolves it (its vertical twins run under vertical-ui-vitest-unit). Wire it, then replace this field with a command.",
+      "requiresStack": false,
+      "testGlobs": ["modules/content/app/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-module-files-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/files",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/files/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/files/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-finance-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/finance",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/finance/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/finance/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-finance-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "modules/finance",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["modules/finance/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-messaging-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/messaging",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/messaging/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/messaging/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-publishing-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/publishing",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/publishing/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/publishing/test/**/*.integration.test.ts", "modules/publishing/test/relay.test.ts"]
+    },
+    {
+      "id": "kernel-module-publishing-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "modules/publishing",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["modules/publishing/test/**/*.integration.test.ts", "modules/publishing/test/relay.test.ts"]
+    },
+    {
+      "id": "kernel-module-vault-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/vault",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/vault/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/vault/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-vault-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "modules/vault",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["modules/vault/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-votes-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/votes",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/votes/test/**/*.test.ts"],
+      "excludeGlobs": ["modules/votes/test/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-edge-routers-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/edge-routers",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/edge-routers/test/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-fastify-service-template-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/fastify-service-template",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/fastify-service-template/test/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-generated-clients-dart-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/generated-clients-dart",
+      "kind": "vitest",
+      "command": "pnpm run test:unit",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/generated-clients-dart/src/**/*.test.ts"],
+      "excludeGlobs": ["packages/generated-clients-dart/src/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-generated-clients-dart-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "packages/generated-clients-dart",
+      "kind": "vitest",
+      "command": "pnpm exec vitest run --project integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["packages/generated-clients-dart/src/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-catalogue-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/module-catalogue",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/module-catalogue/test/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-nats-auth-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/nats-auth",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/nats-auth/test/**/*.test.ts"],
+      "excludeGlobs": ["packages/nats-auth/test/live/**"]
+    },
+    {
+      "id": "kernel-nats-auth-live",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": ".",
+      "kind": "vitest",
+      "command": "bash packages/nats-auth/scripts/proof.sh",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["packages/nats-auth/test/live/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-provisioning-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/provisioning",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/provisioning/test/**/*.test.ts"],
+      "excludeGlobs": ["packages/provisioning/test/integration/**"]
+    },
+    {
+      "id": "kernel-provisioning-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "packages/provisioning",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["packages/provisioning/test/integration/**/*.int.test.ts"]
+    },
+    {
+      "id": "kernel-tenant-store-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/tenant-store",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/tenant-store/src/**/*.test.ts", "packages/tenant-store/test/unit/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-tenant-store-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "packages/tenant-store",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["packages/tenant-store/test/integration/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-tokens-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/tokens",
+      "kind": "node-test",
+      "command": "node scripts/run-tests.mjs",
+      "requiresStack": false,
+      "testGlobs": ["packages/tokens/test/*.test.mjs"]
+    },
+    {
+      "id": "kernel-ops-vendor-mail-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"ops/vendor-mail/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["ops/vendor-mail/*.test.mjs"]
+    },
+    {
+      "id": "kernel-scripts-migrations-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"scripts/migrations/**/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["scripts/migrations/**/*.test.mjs"]
+    },
+    {
+      "id": "kernel-scripts-release-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"scripts/release/**/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["scripts/release/**/*.test.mjs"]
+    },
+    {
+      "id": "kernel-scripts-verify-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"scripts/verify/**/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["scripts/verify/**/*.test.mjs"]
     }
   ],
   "vertical": [
@@ -295,7 +676,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/board/test/**/*.test.ts"]
+      "testGlobs": ["services/board/test/**/*.test.ts"],
+      "excludeGlobs": ["services/board/test/**/*.integration.test.ts"]
     },
     {
       "id": "vertical-service-board-integration",
@@ -317,7 +699,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/calendar/test/**/*.test.ts"]
+      "testGlobs": ["services/calendar/test/**/*.test.ts"],
+      "excludeGlobs": ["services/calendar/test/**/*.integration.test.ts", "services/calendar/test/relay.test.ts"]
     },
     {
       "id": "vertical-service-calendar-integration",
@@ -339,7 +722,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/content/test/**/*.test.ts"]
+      "testGlobs": ["services/content/test/**/*.test.ts"],
+      "excludeGlobs": ["services/content/test/**/*.integration.test.ts", "services/content/test/relay.test.ts"]
     },
     {
       "id": "vertical-service-content-integration",
@@ -361,18 +745,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/files/test/**/*.test.ts"]
-    },
-    {
-      "id": "vertical-service-files-integration",
-      "repo": "vertical",
-      "category": "integration",
-      "cwd": "services/files",
-      "kind": "vitest",
-      "command": "pnpm run test:integration",
-      "timeoutMs": 600000,
-      "requiresStack": true,
-      "testGlobs": ["services/files/test/**/*.integration.test.ts"]
+      "testGlobs": ["services/files/test/**/*.test.ts"],
+      "excludeGlobs": ["services/files/test/**/*.integration.test.ts"]
     },
     {
       "id": "vertical-service-finance-unit",
@@ -383,7 +757,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/finance/test/**/*.test.ts"]
+      "testGlobs": ["services/finance/test/**/*.test.ts"],
+      "excludeGlobs": ["services/finance/test/**/*.integration.test.ts"]
     },
     {
       "id": "vertical-service-finance-integration",
@@ -405,18 +780,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/messages/test/**/*.test.ts"]
-    },
-    {
-      "id": "vertical-service-messages-integration",
-      "repo": "vertical",
-      "category": "integration",
-      "cwd": "services/messages",
-      "kind": "vitest",
-      "command": "pnpm run test:integration",
-      "timeoutMs": 600000,
-      "requiresStack": true,
-      "testGlobs": ["services/messages/test/**/*.integration.test.ts"]
+      "testGlobs": ["services/messages/test/**/*.test.ts"],
+      "excludeGlobs": ["services/messages/test/**/*.integration.test.ts"]
     },
     {
       "id": "vertical-service-newsletter-unit",
@@ -427,7 +792,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/newsletter/test/**/*.test.ts"]
+      "testGlobs": ["services/newsletter/test/**/*.test.ts"],
+      "excludeGlobs": ["services/newsletter/test/**/*.integration.test.ts", "services/newsletter/test/relay.test.ts"]
     },
     {
       "id": "vertical-service-newsletter-integration",
@@ -449,7 +815,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/vault/test/**/*.test.ts"]
+      "testGlobs": ["services/vault/test/**/*.test.ts"],
+      "excludeGlobs": ["services/vault/test/**/*.integration.test.ts"]
     },
     {
       "id": "vertical-service-vault-integration",
@@ -471,18 +838,8 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["services/votes/test/**/*.test.ts"]
-    },
-    {
-      "id": "vertical-service-votes-integration",
-      "repo": "vertical",
-      "category": "integration",
-      "cwd": "services/votes",
-      "kind": "vitest",
-      "command": "pnpm run test:integration",
-      "timeoutMs": 600000,
-      "requiresStack": true,
-      "testGlobs": ["services/votes/test/**/*.integration.test.ts"]
+      "testGlobs": ["services/votes/test/**/*.test.ts"],
+      "excludeGlobs": ["services/votes/test/**/*.integration.test.ts"]
     },
     {
       "id": "vertical-bats-unit",
@@ -574,6 +931,39 @@
       "timeoutMs": 600000,
       "requiresStack": false,
       "testGlobs": ["mobile/**/*_test.dart"]
+    },
+    {
+      "//": "TASK-012-FU2: the 5 vertical test files no suite claimed. The root scripts suite runs EVERY scripts/*.test.mjs, so a new root guard test is both claimed and run; vertical-root-test-guards stays as the named chain with the live guard scripts.",
+      "id": "vertical-root-scripts-node-test",
+      "repo": "vertical",
+      "category": "tree-guard",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"scripts/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["scripts/*.test.mjs"]
+    },
+    {
+      "id": "vertical-ui-board-shred-pg",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm exec vitest run --config vitest.board-shred.config.ts",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/board-shred/**/*.pg.test.ts"]
+    },
+    {
+      "id": "vertical-ui-leaf-shred-pg",
+      "repo": "vertical",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "pnpm exec vitest run --config vitest.leaf-shred.config.ts",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/leaf-shred/**/*.pg.test.ts"]
     }
   ]
 }
