@@ -11,13 +11,17 @@
 //   A  every services/** path changed between the frozen extraction source
 //      (docs/ops/extraction-source.md) and the tag. Small, and it is the part of
 //      the tag the older freeze does not already cover; it must be byte-equal at
-//      EVERY commit, listed or not — nothing in it is scrubbed.
+//      the copy commit (--copy). At the tip only a BLOB-PINNED delta entry (a
+//      recorded kernel-ahead edit, TASK-205a) excuses a difference: nothing is
+//      scrubbed silently.
 //   B  every services/** path at the tag. Byte-equal alone over A would be
 //      nearly vacuous (A is one service), so B carries the full copy. At the
 //      copy commit (--copy) zero differ; afterwards only the paths
 //      modules/EXTRACTION-DELTA.json lists (path, reason, owner) may differ.
-//   C  the content UI half (gremion-ui/src/<rest> -> modules/content/app/<rest>),
-//      under the same rule as B.
+//   C  the in-process half of every module that has moved (TASK-205): the per-module
+//      prefix table MODULE_APP_PREFIXES maps gremion-ui/src/<rest> to
+//      modules/<id>/app/<rest>, under the same rule as B. A path claimed by two
+//      modules, a module whose prefixes match nothing, and an unmapped path all fail.
 // Plus the reverse direction: a file inside a mapped module directory that no
 // tag path maps to is an EXTRA and fails unless the delta lists it — a copy
 // that picked up a stray file is not a copy.
@@ -82,20 +86,111 @@ export const CONTENT_UI_PREFIXES = Object.freeze([
   'gremion-ui/src/routes/api/news/',
 ])
 
-const CONTENT_APP_ROOT = 'modules/content/app/'
+const S = 'gremion-ui/src/'
 
-function inContentUi(p) {
-  return CONTENT_UI_PREFIXES.some((pre) => (pre.endsWith('/') ? p.startsWith(pre) : p === pre))
+/**
+ * The in-process half of every module (TASK-205): which `gremion-ui/src/**` paths of the StuRa tree
+ * belong to which module's `modules/<id>/app/**`. The carve manifest's product-module-* rules name
+ * the set; the module-id map and the Q3 rulings of the TASK-205 brief decide each directory. One table,
+ * one comparator: every prefix below is matched by plain string prefix (a trailing slash = a directory,
+ * a trailing dot = every file of that stem, anything else = that file or file stem).
+ *
+ * Not in the table on purpose: users/** (TASK-131), vaultwarden.* (TASK-157), the shell files, and the
+ * modules TASK-205c/d move later (publishing, vault, finance, handover); each joins this table in the
+ * commit that moves it.
+ */
+export const MODULE_APP_PREFIXES = Object.freeze({
+  board: [
+    S + 'routes/api/board/',
+    S + 'routes/tasks/',
+    S + 'lib/server/board/',
+    S + 'lib/components/board/',
+    S + 'lib/modules/manifests/board.',
+    S + 'lib/server/seed/seed-board.ts',
+    S + 'lib/test/board-tokens-contract.test.ts',
+  ],
+  calendar: [
+    S + 'routes/calendar/',
+    S + 'routes/api/calendar/',
+    S + 'lib/server/calendar/',
+    S + 'lib/components/calendar/',
+    S + 'lib/stores/calendar.ts',
+    S + 'lib/modules/manifests/calendar.',
+    S + 'lib/server/seed/seed-calendar.ts',
+    S + 'lib/server/events/calendar-audit-consumer.',
+  ],
+  content: CONTENT_UI_PREFIXES,
+  elections: [
+    S + 'routes/elections/',
+    S + 'routes/api/elections/',
+    S + 'lib/server/elections/',
+    S + 'lib/votes/',
+    S + 'lib/modules/manifests/elections.',
+    S + 'lib/server/seed/seed-elections.ts',
+  ],
+  files: [
+    S + 'routes/files/',
+    S + 'routes/api/files/',
+    S + 'lib/server/files/',
+    S + 'lib/files/',
+    S + 'lib/components/files/',
+    S + 'lib/modules/manifests/files.',
+    S + 'lib/server/storage/nextcloud',
+  ],
+  messaging: [
+    S + 'routes/messages/',
+    S + 'routes/element-call/',
+    S + 'routes/livekit/',
+    S + 'routes/api/messages/',
+    S + 'routes/api/video/',
+    S + 'routes/api/auth/matrix-',
+    S + 'routes/api/internal/push/',
+    S + 'lib/server/messages/',
+    S + 'lib/stores/matrix.ts',
+    S + 'lib/stores/call-store.svelte.ts',
+    S + 'lib/components/VideoCallPip.svelte',
+    S + 'lib/modules/manifests/messages.',
+  ],
+  votes: [
+    S + 'routes/polls/',
+    S + 'routes/votes/',
+    S + 'routes/api/polls/',
+    S + 'lib/server/polls/',
+    S + 'lib/components/ballot/',
+    S + 'lib/components/polls/',
+    S + 'lib/client/',
+  ],
+})
+
+/** Module ids that have an in-process half but no StuRa service (TASK-021 created their module.json). */
+export const APP_ONLY_MODULE_IDS = Object.freeze(['elections', 'handover'])
+
+const APP_ROOT = (id) => `modules/${id}/app/`
+
+function matchesPrefix(p, pre) {
+  return p.startsWith(pre)
 }
 
-/** A StuRa path -> its kernel path, or null when it is not in scope. */
-export function mapSourcePath(p) {
+/** Every module whose app table claims the StuRa path `p` (exactly one is the only valid answer). */
+export function appOwners(p, table = MODULE_APP_PREFIXES) {
+  return Object.entries(table)
+    .filter(([, pres]) => pres.some((pre) => matchesPrefix(p, pre)))
+    .map(([id]) => id)
+}
+
+function inAnyModuleApp(p, table = MODULE_APP_PREFIXES) {
+  return appOwners(p, table).length > 0
+}
+
+/** A StuRa path -> its kernel path, or null when it is not in scope (or is doubly mapped: the guard reports that). */
+export function mapSourcePath(p, table = MODULE_APP_PREFIXES) {
   const m = /^services\/([^/]+)\/(.+)$/.exec(p)
   if (m) {
     const id = MODULE_ID_MAP[m[1]]
     return id ? `modules/${id}/${m[2]}` : null
   }
-  if (inContentUi(p)) return CONTENT_APP_ROOT + p.slice('gremion-ui/src/'.length)
+  const owners = appOwners(p, table)
+  if (owners.length === 1 && p.startsWith(S)) return APP_ROOT(owners[0]) + p.slice(S.length)
   return null
 }
 
@@ -234,6 +329,15 @@ function kernelState(kernelRoot, source) {
   return { files, problems }
 }
 
+/**
+ * Kernel-authored metadata inside a module directory: every module's `module.json` (TASK-021) and, for the
+ * ids that have no StuRa service, the placeholder `package.json`. Neither exists at the tag, so neither is
+ * an "extra".
+ */
+function isModuleMetadata(id, rest) {
+  return rest === 'module.json' || (APP_ONLY_MODULE_IDS.includes(id) && rest === 'package.json')
+}
+
 /** Files that may sit directly under modules/ (not in a module directory). */
 export const MODULES_ROOT_FILES = Object.freeze(['modules/EXTRACTION-DELTA.json', 'modules/COUPLED-TESTS.json', 'modules/disabled.json'])
 
@@ -255,11 +359,22 @@ export function runParity(opts) {
   const copy = opts.copy === true
   const tagCommit = assertSource({ sturaPath, tag, base, expectedTagCommit })
   const problems = []
+  const table = opts.appPrefixes ?? MODULE_APP_PREFIXES // injectable so the partition guard's own REDs can be seeded
+  const mapPath = (p) => mapSourcePath(p, table)
 
   const b = tagBlobs(sturaPath, tag, ['services/'])
-  const c = tagBlobs(sturaPath, tag, CONTENT_UI_PREFIXES)
+  const c = tagBlobs(sturaPath, tag, [S])
   problems.push(...b.problems, ...c.problems)
-  for (const p of c.blobs.keys()) if (!inContentUi(p)) c.blobs.delete(p)
+  for (const p of [...c.blobs.keys()]) if (!inAnyModuleApp(p, table)) c.blobs.delete(p)
+  // Set C is partitioned by the per-module prefix table: every path is claimed by exactly one module,
+  // and every module in the table must claim at least one path (a typo'd prefix would otherwise copy nothing).
+  for (const p of c.blobs.keys()) {
+    const owners = appOwners(p, table)
+    if (owners.length > 1) problems.push(`${p}: doubly mapped (${owners.join(', ')}) — a path belongs to exactly one module's app/`)
+  }
+  for (const id of Object.keys(table))
+    if (![...c.blobs.keys()].some((p) => appOwners(p, table).includes(id)))
+      problems.push(`module ${id}: its app prefixes match no path at ${tag} — the module's in-process half would be copied vacuously`)
 
   // Set A — name-status so a deletion at the tag is an expected ABSENCE, not a skip.
   const aRaw = git(sturaPath, ['diff', '--no-renames', '--name-status', '-z', base, `refs/tags/${tag}^{commit}`, '--', 'services/'])
@@ -267,18 +382,18 @@ export function runParity(opts) {
   const setA = []
   for (let i = 0; i + 1 < aTok.length; i += 2) setA.push({ status: aTok[i], path: aTok[i + 1] })
 
-  const unmapped = [...b.blobs.keys(), ...c.blobs.keys()].filter((p) => mapSourcePath(p) === null)
+  const unmapped = [...b.blobs.keys(), ...c.blobs.keys()].filter((p) => mapPath(p) === null)
   for (const p of unmapped) problems.push(`${p}: no module id maps it — add the service to MODULE_ID_MAP or record why it is not carried`)
 
   const { delta, problems: deltaProblems } = readDelta(kernelRoot)
   problems.push(...deltaProblems)
   const listed = new Map((delta?.entries ?? []).map((e) => [e.path, e]))
 
-  const knownIds = new Set(Object.values(MODULE_ID_MAP))
+  const knownIds = new Set([...Object.values(MODULE_ID_MAP), ...APP_ONLY_MODULE_IDS])
   const state = kernelState(kernelRoot, opts.source ?? 'worktree')
   problems.push(...state.problems)
-  const mappedTargets = new Set([...b.blobs.keys(), ...c.blobs.keys()].map(mapSourcePath).filter(Boolean))
-  const setAPaths = setA.map((a) => mapSourcePath(a.path)).filter(Boolean)
+  const mappedTargets = new Set([...b.blobs.keys(), ...c.blobs.keys()].map(mapPath).filter(Boolean))
+  const setAPaths = setA.map((a) => mapPath(a.path)).filter(Boolean)
 
   if ((opts.source ?? 'worktree') === 'worktree')
     for (const p of mappedTargets)
@@ -286,7 +401,7 @@ export function runParity(opts) {
         problems.push(`${p} exists on disk but is ignored by git — it would never be committed, so a clone would lack it`)
 
   const compare = (sourcePath, source) => {
-    const kernelPath = mapSourcePath(sourcePath)
+    const kernelPath = mapPath(sourcePath)
     const k = state.files.get(kernelPath) ?? null
     return {
       sourcePath,
@@ -309,14 +424,19 @@ export function runParity(opts) {
   const sets = {
     A: { label: `services/** changed ${base.slice(0, 8)}..${tag}`, total: setA.length, mismatches: [] },
     B: { label: `services/** at ${tag}`, total: b.blobs.size, mismatches: [] },
-    C: { label: 'content UI half (gremion-ui/src -> modules/content/app)', total: c.blobs.size, mismatches: [] },
+    C: { label: `module in-process halves (gremion-ui/src -> modules/<id>/app; ${Object.keys(table).join(', ')})`, total: c.blobs.size, mismatches: [] },
   }
 
+  // Set A is byte-equal at the copy commit (--copy: nothing excuses it). At the tip the kernel has moved on
+  // (R29 fixes landed in the kernel-side module trees), so a set-A difference is excused ONLY by a
+  // blob-pinned delta entry: the pin is what makes it a recorded kernel-ahead edit and not a silent scrub.
   for (const { status, path } of setA) {
     const r = compare(path, status === 'D' ? null : b.blobs.get(path))
     if (differs(r)) {
       sets.A.mismatches.push(r)
-      problems.push(`set A: ${r.kernelPath} ${why(r)} from ${tag}:${path} (${status}) — set A is never scrubbed, listed or not`)
+      const pinned = typeof listed.get(r.kernelPath)?.blob === 'string' || listed.get(r.kernelPath)?.blob === null
+      if (copy) problems.push(`set A: ${r.kernelPath} ${why(r)} from ${tag}:${path} (${status}) — --copy asserts the byte-equal copy, and a listed delta does not excuse it`)
+      else if (!pinned) problems.push(`set A: ${r.kernelPath} ${why(r)} from ${tag}:${path} (${status}) — set A is never scrubbed silently: only a blob-pinned ${DELTA_PATH} entry (kernel-ahead) excuses it`)
     }
   }
   for (const { key, blobs } of [{ key: 'B', blobs: b.blobs }, { key: 'C', blobs: c.blobs }]) {
@@ -336,9 +456,10 @@ export function runParity(opts) {
   const extras = []
   for (const p of state.files.keys()) {
     if (mappedTargets.has(p) || MODULES_ROOT_FILES.includes(p)) continue
-    const m = /^modules\/([^/]+)\/[\s\S]+$/.exec(p)
+    const m = /^modules\/([^/]+)\/([\s\S]+)$/.exec(p)
     if (!m) problems.push(`${p} sits directly under modules/ — only ${MODULES_ROOT_FILES.join(', ')} may`)
     else if (!knownIds.has(m[1])) problems.push(`${p} is in modules/${m[1]}/, which no StuRa service maps to — an unknown module directory`)
+    else if (isModuleMetadata(m[1], m[2])) continue // TASK-021's module.json (and the app-only ids' package.json): kernel metadata, not source
     else extras.push({ kernelPath: p, listed: listed.has(p), kernelBlob: state.files.get(p).blob })
   }
   for (const e of extras)
@@ -349,8 +470,8 @@ export function runParity(opts) {
     [...sets.B.mismatches, ...sets.C.mismatches, ...extras].map((m) => [m.kernelPath, m.kernelBlob ?? null]),
   )
   for (const [path, e] of listed) {
-    if (setAPaths.includes(path)) {
-      problems.push(`set-A path ${path} is listed in ${DELTA_PATH} — set A stays byte-equal to the tag, so it is never a delta`)
+    if (setAPaths.includes(path) && !differing.has(path)) {
+      problems.push(`set-A path ${path} is listed in ${DELTA_PATH} but is byte-equal to the tag — set A is only ever excused while it differs; delete the entry (stale)`)
       continue
     }
     if (!differing.has(path)) {

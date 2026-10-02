@@ -18,7 +18,9 @@ import { fileURLToPath } from 'node:url'
 import { PATH_EXEMPTIONS, checkFiles, staleExemptions } from './check-postgres-major.mjs'
 import {
   MODULE_ID_MAP,
+  MODULE_APP_PREFIXES,
   CONTENT_UI_PREFIXES,
+  appOwners,
   mapSourcePath,
   validateDelta,
   runParity,
@@ -40,6 +42,16 @@ function git(cwd, ...args) {
     },
   }).trim()
 }
+
+/** One in-process-half file per moved module besides content: [dir under gremion-ui/src/, file, module id]. */
+const APP_FIXTURE = [
+  ['lib/server/board/', 'b.ts', 'board'],
+  ['lib/server/calendar/', 'k.ts', 'calendar'],
+  ['lib/server/elections/', 'e.ts', 'elections'],
+  ['lib/server/files/', 'f.ts', 'files'],
+  ['lib/server/messages/', 'm.ts', 'messaging'],
+  ['lib/server/polls/', 'p.ts', 'votes'],
+]
 
 function blobOf(root, rel) {
   return execFileSync('git', ['hash-object', rel], { cwd: root, encoding: 'utf8' }).trim()
@@ -67,6 +79,7 @@ function fixture() {
   put(stura, 'services/newsletter/src/n.ts', 'export const n = 1\n')
   put(stura, 'services/votes/src/v.ts', 'export const v = 1\n')
   put(stura, 'gremion-ui/src/lib/server/content/c.ts', 'export const c = 1\n')
+  for (const [dir, name] of APP_FIXTURE) put(stura, `gremion-ui/src/${dir}${name}`, `export const x = '${dir}'\n`)
   put(stura, 'gremion-ui/src/lib/server/governance/g.ts', 'not content\n')
   git(stura, 'add', '-A')
   git(stura, 'commit', '-q', '-m', 'base')
@@ -83,6 +96,7 @@ function fixture() {
   put(kernel, 'modules/publishing/src/n.ts', 'export const n = 1\n')
   put(kernel, 'modules/votes/src/v.ts', 'export const v = 1\n')
   put(kernel, 'modules/content/app/lib/server/content/c.ts', 'export const c = 1\n')
+  for (const [dir, name, id] of APP_FIXTURE) put(kernel, `modules/${id}/app/${dir}${name}`, `export const x = '${dir}'\n`)
   put(kernel, 'modules/EXTRACTION-DELTA.json', JSON.stringify({ entries: [] }))
   return {
     stura,
@@ -108,6 +122,14 @@ test('the id map renames exactly messages and newsletter', () => {
   )
   assert.equal(mapSourcePath('gremion-ui/src/lib/server/governance/g.ts'), null)
   assert.ok(CONTENT_UI_PREFIXES.length > 0)
+  // The per-module table (TASK-205): one module per path, the landed layout (no src/ level).
+  assert.equal(mapSourcePath('gremion-ui/src/routes/api/calendar/+server.ts'), 'modules/calendar/app/routes/api/calendar/+server.ts')
+  assert.equal(mapSourcePath('gremion-ui/src/lib/modules/manifests/messages.ts'), 'modules/messaging/app/lib/modules/manifests/messages.ts')
+  assert.equal(mapSourcePath('gremion-ui/src/lib/votes/aggregator.ts'), 'modules/elections/app/lib/votes/aggregator.ts')
+  assert.equal(mapSourcePath('gremion-ui/src/lib/client/cast-service.ts'), 'modules/votes/app/lib/client/cast-service.ts')
+  assert.equal(mapSourcePath('gremion-ui/src/routes/users/+page.svelte'), null, 'users/** is TASK-131, not a module app file')
+  for (const id of ['board', 'calendar', 'content', 'elections', 'files', 'messaging', 'votes']) assert.ok(MODULE_APP_PREFIXES[id].length > 0, id)
+  assert.deepEqual(appOwners('gremion-ui/src/lib/server/board/x.ts'), ['board'])
 })
 
 test('GREEN: a byte-equal copy reports zero mismatches in every set', () => {
@@ -117,7 +139,7 @@ test('GREEN: a byte-equal copy reports zero mismatches in every set', () => {
     assert.deepEqual(r.problems, [])
     assert.equal(r.sets.A.total, 1)
     assert.equal(r.sets.B.total, 4)
-    assert.equal(r.sets.C.total, 1)
+    assert.equal(r.sets.C.total, 1 + APP_FIXTURE.length)
     for (const s of ['A', 'B', 'C']) assert.deepEqual(r.sets[s].mismatches, [])
     assert.match(formatReport(r), /RESULT: OK/)
   } finally {
@@ -125,14 +147,14 @@ test('GREEN: a byte-equal copy reports zero mismatches in every set', () => {
   }
 })
 
-test('RED: a one-byte edit in a set-A file fails, even when the delta lists it', () => {
+test('RED: a one-byte edit in a set-A file fails; only a BLOB-PINNED kernel-ahead entry excuses it, and never at --copy', () => {
   const f = fixture()
   try {
     put(f.kernel, 'modules/finance/src/a.ts', 'export const a = 3\n')
     let r = runParity(f.opts)
     assert.ok(r.sets.A.mismatches.some((m) => m.kernelPath === 'modules/finance/src/a.ts'))
     assert.ok(r.problems.some((p) => /set A/.test(p) && /modules\/finance\/src\/a\.ts/.test(p)))
-    // Set A never differs at the tip: listing it does not excuse it.
+    // An unpinned listing does not excuse set A: the pin is what makes it a recorded kernel-ahead edit.
     put(
       f.kernel,
       'modules/EXTRACTION-DELTA.json',
@@ -140,6 +162,90 @@ test('RED: a one-byte edit in a set-A file fails, even when the delta lists it',
     )
     r = runParity(f.opts)
     assert.ok(r.problems.some((p) => /set A/.test(p)))
+    // Pinned: excused at the tip (R29-style kernel-ahead edit) ...
+    const entry = { path: 'modules/finance/src/a.ts', reason: 'kernel-ahead: later fix', owner: 'TASK-205', blob: blobOf(f.kernel, 'modules/finance/src/a.ts') }
+    put(f.kernel, 'modules/EXTRACTION-DELTA.json', JSON.stringify({ entries: [entry] }))
+    assert.deepEqual(runParity(f.opts).problems, [])
+    // ... but never at the byte-equal copy commit, and a further edit breaks the pin.
+    assert.ok(runParity({ ...f.opts, copy: true }).problems.some((p) => /set A/.test(p) && /--copy/.test(p)))
+    put(f.kernel, 'modules/finance/src/a.ts', 'export const a = 4\n')
+    assert.ok(runParity(f.opts).problems.some((p) => /pins blob/.test(p)))
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a one-byte edit in ANY module\'s app/ file fails unless listed (partition guard, per module)', () => {
+  const f = fixture()
+  try {
+    for (const [dir, name, id] of APP_FIXTURE) {
+      const rel = `modules/${id}/app/${dir}${name}`
+      put(f.kernel, rel, 'export const x = "edited"\n')
+      const r = runParity(f.opts)
+      assert.ok(r.problems.some((p) => /set C/.test(p) && p.includes(rel)), `${id}: ${r.problems.join('\n')}`)
+      put(f.kernel, rel, `export const x = '${dir}'\n`)
+      assert.deepEqual(runParity(f.opts).problems, [], id)
+    }
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a StuRa path claimed by two modules is refused (doubly mapped), and never copied to either', () => {
+  const f = fixture()
+  try {
+    const table = {
+      ...MODULE_APP_PREFIXES,
+      messaging: [...MODULE_APP_PREFIXES.messaging, 'gremion-ui/src/lib/server/polls/'], // overlaps votes
+    }
+    const r = runParity({ ...f.opts, appPrefixes: table })
+    assert.ok(r.problems.some((p) => /doubly mapped/.test(p) && /polls\/p\.ts/.test(p)), r.problems.join('\n'))
+    assert.equal(mapSourcePath('gremion-ui/src/lib/server/polls/p.ts', table), null)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a module whose app prefixes match nothing is refused (zero matches is not a pass)', () => {
+  const f = fixture()
+  try {
+    const table = { ...MODULE_APP_PREFIXES, board: ['gremion-ui/src/lib/server/nonexistent/'] }
+    const r = runParity({ ...f.opts, appPrefixes: table })
+    assert.ok(r.problems.some((p) => /module board: its app prefixes match no path/.test(p)), r.problems.join('\n'))
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a services/<unknown>/ path at the tag is unmapped and refused', () => {
+  const f = fixture()
+  try {
+    put(f.stura, 'services/mystery/src/x.ts', 'x\n')
+    git(f.stura, 'add', '-A')
+    git(f.stura, 'commit', '-q', '-m', 'mystery')
+    git(f.stura, 'tag', '-a', 'extraction-source-f9', '-m', 'freeze')
+    const tagCommit = git(f.stura, 'rev-parse', 'extraction-source-f9^{commit}')
+    const r = runParity({ ...f.opts, tag: 'extraction-source-f9', expectedTagCommit: tagCommit })
+    assert.ok(r.problems.some((p) => /services\/mystery\/src\/x\.ts: no module id maps it/.test(p)), r.problems.join('\n'))
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: an undeclared kernel-side extra inside a moved module\'s app/ fails; module.json is metadata, not an extra', () => {
+  const f = fixture()
+  try {
+    put(f.kernel, 'modules/calendar/module.json', '{}\n')
+    put(f.kernel, 'modules/elections/module.json', '{}\n')
+    put(f.kernel, 'modules/elections/package.json', '{}\n')
+    assert.deepEqual(runParity(f.opts).problems, [])
+    put(f.kernel, 'modules/calendar/app/lib/server/calendar/stray.ts', 'export {}\n')
+    const r = runParity(f.opts)
+    assert.ok(r.problems.some((p) => /extra: modules\/calendar\/app\/lib\/server\/calendar\/stray\.ts/.test(p)), r.problems.join('\n'))
+    // an unrelated module's package.json is NOT metadata
+    rmSync(join(f.kernel, 'modules/calendar/app/lib/server/calendar/stray.ts'))
+    put(f.kernel, 'modules/calendar/package.json', '{}\n')
+    assert.ok(runParity(f.opts).problems.some((p) => /extra: modules\/calendar\/package\.json/.test(p)))
   } finally {
     f.cleanup()
   }
