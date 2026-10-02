@@ -97,7 +97,10 @@ export async function provisionDb(admin: ScratchSql, db: string): Promise<void> 
   await createEmptyDb(admin, db)
   const sql = connectScratchDb(db, { max: 2 })
   try {
-    await runMigrations({ sql, dir: BOARD_MIGRATIONS_DIR, log: () => {} })
+    // TASK-075: every run names its release (ledger release_ref) and the phase
+    // of a headerless file; board's one file, 001_init.sql, is `expand` in the
+    // kernel baseline (scripts/migrations/runner/expand-contract-baseline.json).
+    await runMigrations({ sql, dir: BOARD_MIGRATIONS_DIR, releaseRef: 'dist-v0.0.1', phaseFor: () => ({ phase: 'expand' as const }), log: () => {} })
   } finally {
     await sql.end({ timeout: 5 })
   }
