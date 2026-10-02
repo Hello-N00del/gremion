@@ -1,0 +1,13 @@
+{
+  "smtpServer" : {
+    "password" : "**********",
+    "starttls" : "true",
+    "port" : "587",
+    "auth" : "true",
+    "host" : "mail.example.org",
+    "from" : "kc-probe_x@example.org",
+    "fromDisplayName" : "Gremion",
+    "ssl" : "false",
+    "user" : "kc-probe_x@example.org"
+  }
+}

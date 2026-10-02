@@ -92,10 +92,14 @@ A host reaches a tenant only when BOTH exist:
 
 - a `tenant_domain` row binding it to the tenant (written only by the registry
   call `addTenantDomain`), and
-- a `Host(...)`-literal Traefik router for exactly that host, chaining
-  `gremion-ui-proxytrust` and `gremion-ui-starting` and pinning
-  `X-Forwarded-Host` to that host (rendered per customer host by the edge
-  router emitter, TASK-034).
+- a `Host(...)`-literal Traefik router for exactly that host, pinning
+  `X-Forwarded-Host` to that host FIRST and then chaining `edge-hsts-custom`,
+  `edge-ratelimit-app`, the tenant's per-IP cap and `gremion-ui-proxytrust`
+  (rendered per customer host by the edge router emitter, TASK-034; the
+  `edge-*` middlewares are labels on the production traefik service since
+  TASK-043c, without them Traefik disables the router and the host answers
+  404; the customer's Keycloak router carries the same chain minus
+  `gremion-ui-proxytrust`).
 
 > **A customer's host is bound by `gremion-tenant create` (TASK-043), and by
 > nothing else.** The resolver selects by the whole bound host only
