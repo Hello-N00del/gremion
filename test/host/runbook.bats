@@ -81,7 +81,6 @@ FORBIDDEN_FIXTURES=(vendor-contact compose-f compose-profile compose-p down-v
 PENDING_PATHS=(
     'scripts/migrations/runner/|TASK-075'      # the pre-migration dump (upgrade.md)
     'scripts/backup/|TASK-089'                 # the one-off verification (backup.md)
-    'compose/observability/|TASK-039'          # the operator-only stack (install.md)
     'services/kernel-api/export/|TASK-119'     # tenant export (restore.md)
 )
 PENDING_BINS=()
@@ -904,7 +903,18 @@ check_postcondition_scope() {
     return "$bad"
 }
 
-ALL_CHECKS=(check_files check_version check_sections check_steps check_manual_list
+# TASK-039 (TDD 17): the ops project moved to compose/observability/ and
+# Grafana-managed alerting replaced Alertmanager, whose port (9093) and
+# Prometheus' published port (9090) are gone. A runbook line that still names
+# the old compose file, Alertmanager, amtool or either port sends the operator
+# to something that no longer exists.
+check_old_ops() {
+    local hit
+    hit="$(all_text "$1" | grep -nE 'infra/host/ops/docker-compose|[Aa]lertmanager|amtool|(^|[^0-9])909[03]([^0-9]|$)' || true)"
+    [ -z "$hit" ] || { echo "the runbook names the old ops project (now compose/observability, Grafana alerting): ${hit}" >&2; return 1; }
+}
+
+ALL_CHECKS=(check_old_ops check_files check_version check_sections check_steps check_manual_list
             check_operator_phrase check_commands check_repo_paths check_host_paths
             check_postconditions check_required check_forbidden check_restore_target
             check_install_tail check_run_record check_floor check_artefacts
@@ -1084,6 +1094,17 @@ run_dump_step() {                                # <scratch root>
             return 1
         fi
     done
+}
+
+@test "no runbook line names the old ops compose, Alertmanager, amtool, 9090 or 9093 (TASK-039 TDD 17)" {
+    d="$(real_dir)"; check_old_ops "$d"
+    d="$(fixture valid)"; check_old_ops "$d"
+    # watched RED: one seeded line in a valid runbook
+    d="$(fixture_snippet "${PROJECT_ROOT}/test/host/fixtures/observability/runbook-old-ops.md" install)"
+    run check_old_ops "$d"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"names the old ops project"* ]]
+    [[ "$output" == *"9093"* ]]
 }
 
 @test "gremion-restore-into never targets the production stack or etc/" {
