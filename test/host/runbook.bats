@@ -79,7 +79,6 @@ FORBIDDEN_FIXTURES=(vendor-contact compose-f compose-profile compose-p down-v
 # its reason is the only kind this file accepts (brief Q5: the owning task's own
 # gate goes RED, and the orchestrator grants the line edit).
 PENDING_PATHS=(
-    'scripts/migrations/runner/|TASK-075'      # the pre-migration dump (upgrade.md)
     'scripts/backup/|TASK-089'                 # the one-off verification (backup.md)
     'compose/observability/|TASK-039'          # the operator-only stack (install.md)
     'services/kernel-api/export/|TASK-119'     # tenant export (restore.md)
@@ -1322,16 +1321,21 @@ run_dump_step() {                                # <scratch root>
     [[ "$output" == *'( umask 077; true )'* ]]
 }
 
+# TASK-075 landed (its PENDING_PATHS entry is gone); the R29 vacuity rule is kept
+# for a tree that lists it PENDING again, e.g. a revert of the runner.
+private_dumps_with_075_pending() {               # <dir>
+    local PENDING_PATHS=("${PENDING_PATHS[@]}" 'scripts/migrations/runner/|TASK-075')
+    check_private_dumps "$1"
+}
+
 @test "check_private_dumps is not vacuous while TASK-075 is PENDING, and reads blocks once it landed" {
+    local e
+    for e in "${PENDING_PATHS[@]}"; do [[ "$e" != *'|TASK-075' ]] || { echo "PENDING_PATHS still lists TASK-075, which has landed" >&2; return 1; }; done
     d="$(fixture valid)"
     grep -vF 'pg_dump' "$d/upgrade.md" > "$d/upgrade.tmp" && mv "$d/upgrade.tmp" "$d/upgrade.md"
-    run check_private_dumps "$d"
+    run private_dumps_with_075_pending "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"no pg_dump redirect found in any bash block while TASK-075 is PENDING"* ]]
-    # The same tree with TASK-075's entry gone (it landed): zero hand-written dumps is fine ...
-    local keep=() e
-    for e in "${PENDING_PATHS[@]}"; do [[ "$e" == *'|TASK-075' ]] || keep+=("$e"); done
-    [ "${#keep[@]}" -eq "$(( ${#PENDING_PATHS[@]} - 1 ))" ]
-    local PENDING_PATHS=("${keep[@]}")
+    # The same tree as it is now (TASK-075 landed): zero hand-written dumps is fine ...
     check_private_dumps "$d"
     # ... but a tree with no bash block at all is an extractor reading nothing.
     local f
