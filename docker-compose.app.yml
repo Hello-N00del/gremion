@@ -437,6 +437,9 @@ services:
       # enableModule's export target; tenant-create never disables a module,
       # so nothing is written here (the disable verb brings its volume).
       TENANT_EXPORT_DIR: /var/lib/gremion/exports
+      # TASK-075: the release_ref every ledger row init (gremion_platform) and
+      # phase B (module databases) apply records: this colour's release.
+      GREMION_RELEASE_REF: ${IMAGE_TAG:?IMAGE_TAG required}
       # gremion-ui and migrate hard-code it; the kernel migration tenant-create
       # now runs must never apply a *_seed.sql file (TDD 6).
       GREMION_DISABLE_SEEDS: "true"
