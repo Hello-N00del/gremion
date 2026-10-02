@@ -135,7 +135,9 @@ export const MODULE_APP_PREFIXES = Object.freeze({
     S + 'lib/files/',
     S + 'lib/components/files/',
     S + 'lib/modules/manifests/files.',
-    S + 'lib/server/storage/nextcloud',
+    // NOT lib/server/storage/nextcloud*: that adapter implements the pre-TASK-117 StorageBackend (./types), which
+    // the kernel's tenant-bound @gremion/storage seam replaced; its only consumer is the storage backend switch
+    // for finance receipts. It moves with the finance half (TASK-205d), over the new seam, or not at all.
   ],
   messaging: [
     S + 'routes/messages/',
