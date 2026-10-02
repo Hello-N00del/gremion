@@ -35,7 +35,7 @@ import { DEFAULT_TIMEOUT_MS } from './run.mjs'
  * @param opts.runFn          (command, cwd) => {exitCode, output, timedOut, spawnError}
  */
 export function evaluateSuite(suite, discoveredFiles, opts) {
-  const matchedFiles = filterMatching(suite.testGlobs ?? [], discoveredFiles)
+  const matchedFiles = claimedFiles(suite, discoveredFiles)
   const base = {
     id: suite.id,
     repo: suite.repo,
@@ -55,6 +55,21 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
       status: 'FAIL',
       exitCode: null,
       reason: `manifest suite files absent — none of [${suite.testGlobs.join(', ')}] matched a file on disk`,
+    }
+  }
+
+  // TASK-012-FU2: a suite whose files are claimed but which has no runner in
+  // this tree (e.g. an overlay source tree not yet wired into an app). Always
+  // a FAIL with the manifest's own reason; never skipped, never run.
+  if (suite.unrunnable) {
+    return {
+      ...base,
+      collected: 0,
+      passed: 0,
+      failed: 0,
+      status: 'FAIL',
+      exitCode: null,
+      reason: `could not run: ${suite.unrunnable}`,
     }
   }
 
@@ -170,9 +185,20 @@ export function evaluateSuite(suite, discoveredFiles, opts) {
  * reported here.
  */
 export function findUnclaimed(discoveredFiles, suites) {
-  const allGlobs = suites.flatMap((s) => s.testGlobs ?? [])
-  const claimed = new Set(filterMatching(allGlobs, discoveredFiles))
+  const claimed = new Set(suites.flatMap((s) => claimedFiles(s, discoveredFiles)))
   return discoveredFiles.filter((f) => !claimed.has(f))
+}
+
+/**
+ * The files one suite owns: those its testGlobs reach minus those its
+ * excludeGlobs name (files its command deliberately does not run, e.g. a
+ * vitest `exclude`). A suite's glob alone would also claim an excluded file
+ * for a runner that never executes it.
+ */
+export function claimedFiles(suite, discoveredFiles) {
+  const matched = filterMatching(suite.testGlobs ?? [], discoveredFiles)
+  const excluded = suite.excludeGlobs?.length ? new Set(filterMatching(suite.excludeGlobs, matched)) : null
+  return excluded ? matched.filter((f) => !excluded.has(f)) : matched
 }
 
 /** Build the unclaimed files into result rows shaped like evaluateSuite's output. */
