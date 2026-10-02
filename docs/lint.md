@@ -71,8 +71,8 @@ the flag.
   A task that edits one of these files fixes the finding and deletes the
   path from its override; an override left with no files is deleted.
   TASK-205 (2026-10-02) added the in-process halves it moved (`modules/{board,
-  calendar,elections,files,messaging,votes}/app`): 66 files, 7 rules
-  (`typescript/no-redundant-type-constituents` 56 of the findings - the
+  calendar,elections,files,messaging,votes}/app`): 66 files, 7 rules, 113 findings
+  (`typescript/no-redundant-type-constituents` 72 of them - the
   type-aware pass cannot resolve `./$types` or `$lib` from `modules/*/app`, so
   the route handlers' types read as `any` - plus
   `vitest/no-conditional-expect`, `unicorn/prefer-string-starts-ends-with`,
