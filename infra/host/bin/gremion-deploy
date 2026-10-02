@@ -285,9 +285,19 @@ step_1_login() { # <token>
 # tag names. Every failure is a refusal (exit 1), never a skip. `git clone` and
 # `git verify-tag` only read git objects: no hook of the tree is run.
 authenticate_release_tree() { # <dir>
-    local dir="$1" signers="$ROOT/etc/allowed_signers" out tagc head
+    local dir="$1" signers="$ROOT/etc/allowed_signers" out tagc head sigfmt
     [[ -f "$signers" && ! -L "$signers" && -s "$signers" ]] \
         || die "release-tag trust anchor absent: $signers (create it as docs/ops/host-tooling.md 'Authenticating the release tree' says) - refusing to use an unauthenticated release tree" 1
+    # The signature FORMAT is pinned too. git picks the verifier from the
+    # signature's own header, so an OpenPGP or x509 signature would be checked
+    # against the deploy user's gpg keyring or gpgsm trust store and never reach
+    # $signers. The tag object must carry exactly one signature block, and it
+    # must be an ssh one; none at all (unsigned, lightweight) falls through to
+    # verify-tag below, which refuses it.
+    sigfmt="$(git -C "$dir" cat-file tag "refs/tags/$TAG" 2>/dev/null \
+                  | grep -E '^-----BEGIN (PGP SIGNATURE|PGP MESSAGE|SIGNED MESSAGE|SSH SIGNATURE)-----$' || true)"
+    [[ -z "$sigfmt" || "$sigfmt" == '-----BEGIN SSH SIGNATURE-----' ]] \
+        || die "tag $TAG does not carry exactly one ssh signature (found: $(printf '%s' "$sigfmt" | tr '\n' ' ' | head -c 200)) - only an ssh signature checked against $signers is accepted, refusing to use the release tree" 1
     out="$(git -C "$dir" -c gpg.format=ssh -c "gpg.ssh.allowedSignersFile=$signers" \
                verify-tag "refs/tags/$TAG" 2>&1)" \
         || die "tag $TAG is unsigned, or not signed by a key in $signers - refusing to use the release tree: $(printf '%s' "$out" | tr '\n' ' ' | head -c 300)" 1

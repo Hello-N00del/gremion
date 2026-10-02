@@ -108,6 +108,8 @@ stub_git() {
 while [ "$1" = "-C" ] || [ "$1" = "-c" ]; do shift 2; done
 case "$1" in
   verify-tag) exit 0 ;;
+  # the signature-format pin reads the tag object: the stub tag is ssh-signed
+  cat-file) printf "object aaaa\ntype commit\ntag t\n\nrelease\n-----BEGIN SSH SIGNATURE-----\nstub\n-----END SSH SIGNATURE-----\n"; exit 0 ;;
   clone)
       dest="${*: -1}"
       mkdir -p "$dest"
@@ -424,15 +426,24 @@ pin_key() {
         > "${GREMION_ROOT}/etc/allowed_signers"
 }
 
-# real_git_release <signed:KEY | unsigned | lightweight>
+# real_git_release <signed:KEY | unsigned | lightweight> [ship:KEY]
 # A real source repository holding the valid fixture, tagged dist-v1.2.3, and
 # the program pointed at it. The git shim is removed FIRST so this runs real git.
+# ship:KEY puts an etc/allowed_signers vouching for KEY's public key INSIDE the
+# release tree, committed before the tag is made (so it is part of what the
+# signed tag names, exactly as an attacker who controls the tree would ship it).
 real_git_release() {
-    local mode="$1" src="${BATS_TEST_TMPDIR}/source"
+    local mode="$1" ship="${2:-}" src="${BATS_TEST_TMPDIR}/source"
     rm -f "${SHIM_DIR}/git"
     rm -rf "$src"
     mkdir -p "$src"
     cp -R "${FIXTURES}/valid"/. "$src"/
+    if [[ "$ship" == ship:* ]]; then
+        mkdir -p "$src/etc"
+        printf 'release@example.test namespaces="git" %s\n' \
+            "$(cut -d' ' -f1,2 "${BATS_TEST_TMPDIR}/keys/${ship#ship:}.pub")" \
+            > "$src/etc/allowed_signers"
+    fi
     git -C "$src" init -q
     git -C "$src" add -A
     git -C "$src" -c user.name=t -c user.email=t@example.test -c commit.gpgsign=false commit -q -m release
@@ -446,6 +457,11 @@ real_git_release() {
                 tag -a -m release dist-v1.2.3 ;;
         lightweight)
             git -C "$src" tag dist-v1.2.3 ;;
+        pgp)
+            # an annotated tag whose signature block is OpenPGP-shaped: git would
+            # hand it to gpg and the deploy user's keyring, never to allowed_signers
+            git -C "$src" -c user.name=t -c user.email=t@example.test -c tag.gpgsign=false \
+                tag -a -m "$(printf 'release\n-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEEfake\n-----END PGP SIGNATURE-----')" dist-v1.2.3 ;;
     esac
     export GREMION_SOURCE_URL="$src"
 }
@@ -516,17 +532,45 @@ assert_tree_never_used() {
     assert_tree_never_used
 }
 
+@test "H10: an OpenPGP-signed tag is refused by format, gpg is never consulted" {
+    stub_all
+    gen_key pinned
+    pin_key pinned
+    shim gpg 'exit 1'
+    real_git_release pgp
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"tag dist-v1.2.3 does not carry exactly one ssh signature"* ]]
+    refute_recorded gpg ""
+    assert_tree_never_used
+}
+
+@test "H10: a tag carrying an ssh signature AND an OpenPGP block is refused" {
+    stub_all
+    gen_key pinned
+    pin_key pinned
+    shim gpg 'exit 1'
+    real_git_release signed:pinned
+    # re-tag: the message of the signed tag gains a forged OpenPGP block
+    git -C "${BATS_TEST_TMPDIR}/source" -c user.name=t -c user.email=t@example.test -c gpg.format=ssh \
+        -c "user.signingkey=${BATS_TEST_TMPDIR}/keys/pinned" \
+        tag -f -s -m "$(printf 'release\n-----BEGIN PGP SIGNATURE-----\nfake\n-----END PGP SIGNATURE-----')" dist-v1.2.3 >/dev/null 2>&1
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"does not carry exactly one ssh signature"* ]]
+    refute_recorded gpg ""
+    assert_tree_never_used
+}
+
 @test "H10: an allowed_signers shipped in the release tree is never the anchor" {
     stub_all
     gen_key pinned
     gen_key attacker
     pin_key pinned
-    real_git_release signed:attacker
-    # the attacker's tree vouches for the attacker's key
-    mkdir -p "${BATS_TEST_TMPDIR}/source/etc"
-    printf 'release@example.test namespaces="git" %s\n' \
-        "$(cut -d' ' -f1,2 "${BATS_TEST_TMPDIR}/keys/attacker.pub")" \
-        > "${BATS_TEST_TMPDIR}/source/etc/allowed_signers"
+    # the attacker's tree ships an allowed_signers vouching for the attacker's
+    # key, inside the signed commit the tag names
+    real_git_release signed:attacker ship:attacker
+    git -C "${BATS_TEST_TMPDIR}/source" cat-file -e HEAD:etc/allowed_signers
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 1 ]
     [[ "$output" == *"is unsigned, or not signed by a key in ${GREMION_ROOT}/etc/allowed_signers"* ]]
