@@ -318,6 +318,41 @@ deploy_log_patterns() {
     fi
 }
 
+# TASK-075 split step 12 into 12, 12b (dump-delete) and 12c (soak). A count
+# pattern of the form 'STEP [0-9]+ ' never sees '12b', so the gate's fail count
+# would read 0 on a deploy whose dump deletion failed. One real log_step line
+# per `run_step <n> <name>` of the program, ok and fail, each must be counted.
+@test "the gate's deploy.log counts see every step gremion-deploy runs, sub-steps included" {
+    local body prog="${BIN_DIR}/gremion-deploy" fixture="${BATS_TEST_TMPDIR}/steps.log"
+    body="$(awk '/^log_step\(\) \{/ { inb = 1 }
+                 inb            { print }
+                 inb && /^\}/   { exit }' "$prog")"
+    [ -n "$body" ]
+    # shellcheck disable=SC2034  # read by the eval'd log_step body
+    ( DEPLOY_LOG=""; eval "$body"
+      grep -oE '^[[:space:]]*run_step [0-9]+[a-z]? [a-z-]+' "$prog" \
+          | while read -r _ n name; do log_step "$n" "$name" ok; log_step "$n" "$name" fail; done ) > "$fixture"
+    # vacuity: twelve numbered steps plus 12b and 12c, each ok and fail
+    [ "$(wc -l < "$fixture")" -ge 28 ]
+    grep -qE ' STEP 12b dump-delete fail$' "$fixture"
+
+    local re pats=() line seen missed=()
+    while IFS= read -r re; do
+        [ -n "$re" ] && pats+=("$re")
+    done < <(deploy_log_patterns)
+    [ "${#pats[@]}" -ge 2 ]
+    while IFS= read -r line; do
+        seen=0
+        for re in "${pats[@]}"; do grep -qE -- "$re" <<<"$line" && { seen=1; break; }; done
+        [ "$seen" -eq 1 ] || missed+=("$line")
+    done < "$fixture"
+    if [ "${#missed[@]}" -ne 0 ]; then
+        echo "the gate's deploy.log count pattern(s) miss these real step lines:" >&2
+        printf '  %s\n' "${missed[@]}" >&2
+        return 1
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # The N12 registry-credential step, RUN rather than read.
 #

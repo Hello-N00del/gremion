@@ -291,9 +291,11 @@ gremion-fw-proof --scp-smtp-unblocked
 # "<ISO-8601 timestamp> STEP <n> <name> <ok|fail>", so both patterns below
 # require the leading space and must NOT be anchored at ^. An anchored
 # pattern matches nothing, and the fail-count then reads 0 on a deploy in
-# which every step failed.
-grep -cE ' STEP [0-9]+ [a-z-]+ ok$'   /opt/gremion/runtime/deploy.log   # 12
-grep -cE ' STEP [0-9]+ [a-z-]+ fail$' /opt/gremion/runtime/deploy.log   # 0
+# which every step failed. <n> carries a letter for the sub-steps of step 12
+# (12b dump-delete, 12c soak; TASK-075), so the patterns take [a-z]? after the
+# number: without it a failed dump deletion would not be counted.
+grep -cE ' STEP [0-9]+[a-z]? [a-z-]+ ok$'   /opt/gremion/runtime/deploy.log   # 14 (1-12, 12b, 12c)
+grep -cE ' STEP [0-9]+[a-z]? [a-z-]+ fail$' /opt/gremion/runtime/deploy.log   # 0
 bats test/host                 # from a checkout of the deployed tag: every guard suite green
 ```
 
