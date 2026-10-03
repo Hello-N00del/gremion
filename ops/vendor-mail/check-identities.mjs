@@ -44,7 +44,7 @@ export function identityViolations(mail, ops) {
   const a = mail.ALERT_SMTP_PASSWORD
   const b = ops.ALERT_SMTP_PASSWORD
   if (!a || !b) out.push('ALERT_SMTP_PASSWORD is missing from mail.env or ops.env')
-  else if (sha256(a) !== sha256(b)) out.push('ALERT_SMTP_PASSWORD differs between mail.env and ops.env (alert_smtp drift): Alertmanager would authenticate with a password alerts@ does not hold')
+  else if (sha256(a) !== sha256(b)) out.push('ALERT_SMTP_PASSWORD differs between mail.env and ops.env (alert_smtp drift): Grafana alerting (compose/observability) would authenticate with a password alerts@ does not hold')
   return { unparseable: null, violations: out }
 }
 
