@@ -22,8 +22,10 @@ import slot from '$lib/modules/slots/messaging.slot'
 
 const pageState = vi.hoisted(() => ({ url: new URL('http://localhost/members'), data: {} as Record<string, unknown> }))
 vi.mock('$app/state', () => ({ page: pageState }))
-// the slot also imports the call picture-in-picture, which reads its public Element Call URL at module load
-vi.mock('$env/dynamic/public', () => ({ env: {} }))
+// the slot also imports the call picture-in-picture, a byte-equal copy that still reads `$env/dynamic/public`
+// at module load (K3 conversion deferred to TASK-032, R29-I5); this suite never renders it, so the component is
+// stubbed rather than mocking `$env/dynamic/*` in new code (kit-3 rule K3)
+vi.mock('$lib/components/VideoCallPip.svelte', () => ({ default: function VideoCallPipStub() {} }))
 
 const COUNTS = { approvals: 0, liveVotes: 0, unread: 3 }
 

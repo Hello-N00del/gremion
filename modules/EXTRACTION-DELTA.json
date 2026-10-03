@@ -1561,9 +1561,9 @@
     },
     {
       "path": "modules/messaging/app/lib/components/messaging/messaging-topbar.browser.test.ts",
-      "reason": "added by TASK-205b: the messaging TopBar parts in real Chromium (chips hidden below 768 px, live-call and bell kept, 44 px target, popover width, no marking)",
+      "reason": "added by TASK-205b: the messaging TopBar parts in real Chromium (chips hidden below 768 px, live-call and bell kept, 44 px target, popover width, no marking); stubs VideoCallPip instead of mocking $env/dynamic/public (kit-3 rule K3)",
       "owner": "TASK-205",
-      "blob": "64e927514a3c57824305aff5a38e505505f529aa"
+      "blob": "b7520d6fd155eca4c42c9906fbb66b16a3f58ce9"
     },
     {
       "path": "modules/messaging/app/lib/modules/slots/messaging.slot.ts",

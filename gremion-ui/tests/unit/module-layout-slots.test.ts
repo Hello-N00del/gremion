@@ -9,8 +9,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-// the messaging slot imports the call picture-in-picture, which reads its public Element Call URL at load
-vi.mock('$env/dynamic/public', () => ({ env: {} }))
+// The messaging slot imports the call picture-in-picture, a byte-equal copy that still reads
+// `$env/dynamic/public` at module load (its K3 conversion to load data is deferred to TASK-032 with the rest
+// of the kit-3 edits, R29-I5). Kit-3 rule K3 forbids a `$env/dynamic/*` mock in new code, so the component
+// itself is stubbed here; this file checks the slot's shape (keys, each a component), not the pip.
+vi.mock('$lib/components/VideoCallPip.svelte', () => ({ default: function VideoCallPipStub() {} }))
 
 const UI_ROOT = resolve(process.cwd())
 const SLOTS_DIR = join(UI_ROOT, 'src', 'lib', 'modules', 'slots')
