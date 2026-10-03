@@ -427,8 +427,9 @@ cmd_init() {
     else
         info "WARNING: no mail.env on this host: the ops realm has no sender; add operators with --no-mail (Q23)"
     fi
-    # TASK-039: this path's realm import lets Keycloak generate the grafana
-    # client's secret; the ops project reads it from etc/secrets/grafana.
+    # TASK-039: on this path tenant-create creates the ops realm from the
+    # template, so Keycloak generates the grafana client's secret; the ops
+    # project reads it from etc/secrets/grafana.
     [[ -s "${ROOT}/etc/secrets/grafana/client_secret" ]] \
         || info "NOTE: etc/secrets/grafana/client_secret is absent: Grafana (compose/observability) signs nobody in until the grafana client's secret is read with kcadm and written there, 0600 (compose/observability/README.md)"
     ok "init done"

@@ -183,6 +183,24 @@ collect() {
 
 natsbox() { docker run --rm --network "$NET_STATE" "$NATSBOX_IMAGE" nats -s "nats://${C_NATS}:4222" "$@"; }
 
+# The proof realms, created in the RUNNING scratch Keycloak through its admin
+# REST API (POST /admin/realms). The admin password goes to curl from its file,
+# never on a command line.
+kc_create_realms() {
+    local base="http://127.0.0.1:${KC_PORT}/auth" tok f code
+    wait_until 150 curl -fsS -o /dev/null "${base}/realms/master/.well-known/openid-configuration" || return 1
+    tok="$(curl -fsS -d grant_type=password -d client_id=admin-cli -d username=admin \
+        --data-urlencode "password@$(hpf "$OUT/kc-admin-password")" \
+        "${base}/realms/master/protocol/openid-connect/token" | jq -r '.access_token // empty')"
+    [[ -n "$tok" ]] || return 1
+    for f in platform-realm.json council-proof-realm.json; do
+        code="$(curl -sS -o "$(hpf "$OUT/.kc-body")" -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${tok}" -H 'Content-Type: application/json' \
+            --data-binary "@$(hpf "$OUT/kc-realms/$f")" "${base}/admin/realms")"
+        [[ "$code" == 201 ]] || { printf 'realm %s: HTTP %s %s\n' "$f" "$code" "$(cat "$OUT/.kc-body")" >&2; return 1; }
+    done
+}
+
 # The rendered half: render-ops.sh for real, then the proof timings.
 render_and_time() {
     GREMION_ROOT="$SROOT" bash "$ROOT/infra/host/ops/render-ops.sh" --env-file "$ENV_FILE" > "$OUT/render.log" 2>&1 \
@@ -228,7 +246,7 @@ EOF
 
 # ---------------------------------------------------------------------------
 phase_prepare() {
-    mkdir -p "$OUT" "$SROOT/etc/env" "$SROOT/runtime" "$OUT/kc-import"
+    mkdir -p "$OUT" "$SROOT/etc/env" "$SROOT/runtime" "$OUT/kc-realms"
     local taken
     # shellcheck disable=SC2046  # one argument per network id
     taken="$(docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null \
@@ -317,21 +335,25 @@ EOF
             | .attributes |= del(.["default.acr.values"], .["minimum.acr.value"]))]
         | .scopeMappings += [{client: "grafana-weak", roles: ["operator"]}]
         | .users = [user("op-mfa"; ["operator"]; true), user("op-loa1"; ["operator"]; false), user("norole"; []; true)]
-        ' "$(hpf "$ROOT/docker/keycloak/realm-export.ops.json")" > "$OUT/kc-import/platform-realm.json" \
+        ' "$(hpf "$ROOT/docker/keycloak/realm-export.ops.json")" > "$OUT/kc-realms/platform-realm.json" \
         || die "could not build the proof realm"
     PW="$pw" jq -n '{realm: "council-proof", enabled: true, roles: {realm: [{name: "operator"}]},
         users: [{username: "council-user", enabled: true, email: "council-user@proof.invalid", emailVerified: true,
                  firstName: "Council", lastName: "User", realmRoles: ["operator"],
-                 credentials: [{type: "password", value: $ENV.PW, temporary: false}]}]}' > "$OUT/kc-import/council-proof-realm.json"
+                 credentials: [{type: "password", value: $ENV.PW, temporary: false}]}]}' > "$OUT/kc-realms/council-proof-realm.json"
     # Recreated on every prepare: the realm above carries this run's secrets.
+    # The kernel has no boot-time realm loading (B-01), so neither has the
+    # proof: the two realms are created through the running Keycloak's admin
+    # REST API, as an operator would.
     docker rm -f "$C_KC" >/dev/null 2>&1 || true
     docker run -d --name "$C_KC" -p "127.0.0.1:${KC_PORT}:8080" \
-        -v "$(hp "$OUT/kc-import"):/opt/keycloak/data/import:ro" \
         -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD="$kcpw" \
         -e KC_HTTP_RELATIVE_PATH=/auth -e KC_HOSTNAME="http://127.0.0.1:${KC_PORT}/auth" \
-        -e KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true "$KC_IMAGE" start-dev --import-realm >/dev/null
+        -e KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true "$KC_IMAGE" start-dev >/dev/null
     write_override
-    ok "Keycloak 26.6.1 starting outside ops on 127.0.0.1:${KC_PORT} with the platform realm and a council realm"
+    ok "Keycloak 26.6.1 started outside ops on 127.0.0.1:${KC_PORT}"
+    kc_create_realms && ok "the platform realm and a council realm created through the admin API" \
+        || bad "the proof realms could not be created through the admin API"
 
     docker inspect "$C_MAIL" >/dev/null 2>&1 || docker run -d --name "$C_MAIL" -p "127.0.0.1:${MAILPIT_PORT}:8025" \
         -e MP_SMTP_AUTH_ACCEPT_ANY=1 -e MP_SMTP_AUTH_ALLOW_INSECURE=1 "$MAILPIT_IMAGE" >/dev/null
@@ -341,7 +363,7 @@ EOF
         'printf "#!/bin/sh\ncat /g/proof-timer-state 2>/dev/null || echo disabled\n" > /usr/local/bin/systemctl && chmod +x /usr/local/bin/systemctl && mkdir -p /disk/seeded && exec sleep 86400' >/dev/null
     printf 'enabled\n' > "$SROOT/proof-timer-state"
     ok "Mailpit (127.0.0.1:${MAILPIT_PORT}) and the collector container (100 MiB tmpfs at /disk)"
-    finish 7
+    finish 8
 }
 
 phase_refresh() {
