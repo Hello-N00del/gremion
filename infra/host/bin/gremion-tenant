@@ -431,7 +431,7 @@ cmd_init() {
     # template, so Keycloak generates the grafana client's secret; the ops
     # project reads it from etc/secrets/grafana.
     [[ -s "${ROOT}/etc/secrets/grafana/client_secret" ]] \
-        || info "NOTE: etc/secrets/grafana/client_secret is absent: Grafana (compose/observability) signs nobody in until the grafana client's secret is read with kcadm and written there, 0600 (compose/observability/README.md)"
+        || info "NOTE: etc/secrets/grafana/client_secret is absent: Grafana (compose/observability) signs nobody in until the grafana client's secret is read with kcadm and written there, 0600 (compose/observability/README.md, Access, block A)"
     ok "init done"
 }
 

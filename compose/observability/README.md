@@ -47,31 +47,48 @@ The gate is
 with `role_attribute_strict`: a council realm's token, a user without the
 `operator` role, and an `operator` without the second factor are all refused.
 No network is shared with Keycloak; the public route stays the panel's
-[D R29-I11]. The client secret is `etc/secrets/grafana/client_secret` (0600),
-written by `gremion-tenant init --realm-only --keycloak-container <kc>`; until it
-exists Grafana starts and nobody can sign in (`render-ops.sh` prints
-`grafana-sso=pending`).
+[D R29-I11]. The client secret is `etc/secrets/grafana/client_secret` (0600);
+until it exists Grafana starts and nobody can sign in (`render-ops.sh` prints
+`grafana-sso=pending`). Who writes it depends on how the ops realm was made:
 
-**An ops realm created before TASK-039** has no `grafana` client, and its stored
-template fingerprint no longer matches, so `gremion-tenant init` refuses it (by
-design: an ops realm is never overwritten). Add the client once with kcadm, as
-the deploy user, with the Keycloak admin password handed by name (never on a
-command line):
+| How the `platform` realm was created | Who writes `etc/secrets/grafana/client_secret` |
+|---|---|
+| `gremion-tenant init --realm-only --keycloak-container <kc>` | `gremion-tenant` itself, 0600, after the realm read-back |
+| `gremion-tenant init` on the pooled stack (the default: `tenant-create` creates the realm, Keycloak generates the secret) | nobody yet: read it once, **A** below (`gremion-tenant init` prints a NOTE) |
+| before TASK-039 (no `grafana` client; `gremion-tenant init` refuses the changed template, by design) | add the client, **B** below, then **A** |
+
+Each block runs as the deploy user, with the Keycloak admin password handed to
+kcadm by name (never on a command line); open the session first and close it
+after:
 
     kc="$(cd /opt/gremion/current && docker compose --env-file /opt/gremion/etc/env/state.env ps -q keycloak)"
     KC_CLI_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" docker exec -e KC_CLI_PASSWORD "$kc" /opt/keycloak/bin/kcadm.sh \
       config credentials --server http://127.0.0.1:8080/auth --realm master --user "$KEYCLOAK_ADMIN"
+    # ... B and/or A ...
+    docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config
+
+**B. Add the `grafana` client to an ops realm made before TASK-039** (on a realm
+that already has it, `create clients` answers 409: skip to A):
+
     jq '.clients[] | select(.clientId == "grafana")' /opt/gremion/current/docker/keycloak/realm-export.ops.json \
       | docker exec -i "$kc" /opt/keycloak/bin/kcadm.sh create clients -r platform -f -
     id="$(docker exec "$kc" /opt/keycloak/bin/kcadm.sh get clients -r platform -q clientId=grafana --fields id | jq -r '.[0].id')"
     docker exec "$kc" /opt/keycloak/bin/kcadm.sh get roles/operator -r platform | jq -c '[.]' \
       | docker exec -i "$kc" /opt/keycloak/bin/kcadm.sh create "clients/${id}/scope-mappings/realm" -r platform -f -
+
+**A. Write the secret Keycloak holds for the `grafana` client** (reads it, never
+rotates it; the value goes from kcadm straight into the 0600 file):
+
+    id="$(docker exec "$kc" /opt/keycloak/bin/kcadm.sh get clients -r platform -q clientId=grafana --fields id | jq -r '.[0].id')"
+    [ -n "$id" ] && [ "$id" != null ] || echo "no grafana client in realm platform: run B first"
     install -d -m 700 /opt/gremion/etc/secrets/grafana
     docker exec "$kc" /opt/keycloak/bin/kcadm.sh get "clients/${id}/client-secret" -r platform \
       | jq -r .value | (umask 077; cat > /opt/gremion/etc/secrets/grafana/client_secret)
-    docker exec "$kc" rm -f /opt/keycloak/.keycloak/kcadm.config
+    test -s /opt/gremion/etc/secrets/grafana/client_secret && stat -c '%a' /opt/gremion/etc/secrets/grafana/client_secret   # 600
 
 then re-run `render-ops.sh` (it prints `grafana-sso=ready`) and restart Grafana.
+Writing the file from `tenant-create` on the pooled path is a named residual of
+TASK-039 (TASK-039-FU, with the owner of `gremion-ui/scripts/tenant-provision.ts`).
 
 ## Collection [A, Q3 / Q11 provisional]
 
