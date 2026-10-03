@@ -1471,21 +1471,21 @@
     },
     {
       "path": "modules/elections/app/lib/server/elections/helios-client.ts",
-      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042); post-f2 StuRaOS 10bae9e5 (R30-FOLLOWUPS-S item 8a): isHeliosUuid + encodeURIComponent through one heliosElectionPath helper, a non-UUID election id rejects before any fetch",
       "owner": "TASK-205",
-      "blob": "c6e00d6cb44abfade70c657e589625c11340c763"
+      "blob": "750259dbb166f0662f5c858c03e62903ff3ba028"
     },
     {
       "path": "modules/elections/app/lib/server/elections/helios-client.test.ts",
-      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock; post-f2 StuRaOS 10bae9e5: non-UUID rejection cases per uuid method, slug fixtures moved to UUIDs",
       "owner": "TASK-205",
-      "blob": "4c72f6b6d91f2fc0378012fa4b17ea5c3e868dff"
+      "blob": "cf7431b032ada4d0a79f31b7af93cd86b947e880"
     },
     {
       "path": "modules/elections/app/lib/server/elections/helios-client.tenant.test.ts",
-      "reason": "TASK-205b: the default-tenant pin becomes a tenant-without-services env fallback; seam mock",
+      "reason": "TASK-205b: the default-tenant pin becomes a tenant-without-services env fallback; seam mock; post-f2 StuRaOS 10bae9e5: the election id fixture is a UUID",
       "owner": "TASK-205",
-      "blob": "811737adc50088cb4a383a928613fb858f20b28c"
+      "blob": "0116dcf4d843a555002d767b55b76ed40f3c99f6"
     },
     {
       "path": "modules/elections/app/routes/elections/manage/+page.server.ts",

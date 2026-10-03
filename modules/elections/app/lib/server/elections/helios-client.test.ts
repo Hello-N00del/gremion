@@ -90,23 +90,23 @@ describe('HeliosClient — read methods', () => {
   })
 
   it('getElection fetches the election endpoint', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ uuid: 'abc-123' }) })
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ uuid: '0f8fad5b-d9cb-469f-a165-70867728950e' }) })
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient } = await import('./helios-client')
-    const result = await HeliosClient.getElection('abc-123')
+    const result = await HeliosClient.getElection('0f8fad5b-d9cb-469f-a165-70867728950e')
 
-    expect(mockFetch).toHaveBeenCalledWith(`${BASE}/helios/elections/abc-123`, {
+    expect(mockFetch).toHaveBeenCalledWith(`${BASE}/helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e`, {
       redirect: 'manual',
     })
-    expect(result.uuid).toBe('abc-123')
+    expect(result.uuid).toBe('0f8fad5b-d9cb-469f-a165-70867728950e')
   })
 
   it('getElection throws on a non-200 response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }))
 
     const { HeliosClient } = await import('./helios-client')
-    await expect(HeliosClient.getElection('missing')).rejects.toThrow('Helios')
+    await expect(HeliosClient.getElection('aaaaaaaa-0000-4000-8000-000000000014')).rejects.toThrow('Helios')
   })
 
   it('getResult fetches the result endpoint', async () => {
@@ -114,9 +114,9 @@ describe('HeliosClient — read methods', () => {
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient } = await import('./helios-client')
-    await HeliosClient.getResult('abc-123')
+    await HeliosClient.getResult('0f8fad5b-d9cb-469f-a165-70867728950e')
 
-    expect(mockFetch).toHaveBeenCalledWith(`${BASE}/helios/elections/abc-123/result`, {
+    expect(mockFetch).toHaveBeenCalledWith(`${BASE}/helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e/result`, {
       redirect: 'manual',
     })
   })
@@ -127,10 +127,10 @@ describe('HeliosClient — read methods', () => {
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient } = await import('./helios-client')
-    await HeliosClient.getElection('xyz')
+    await HeliosClient.getElection('aaaaaaaa-0000-4000-8000-000000000001')
 
     const url = mockFetch.mock.calls[0][0] as string
-    expect(url).toBe(`${BASE}/helios/elections/xyz`)
+    expect(url).toBe(`${BASE}/helios/elections/aaaaaaaa-0000-4000-8000-000000000001`)
     expect(url.split('://')[1]).not.toContain('//')
   })
 })
@@ -148,9 +148,9 @@ describe('HeliosClient — service account session', () => {
   it('logs in via the Django form flow before an admin action', async () => {
     const mockFetch = heliosFetchMock({
       'POST /helios/elections/new': () =>
-        res({ status: 302, location: `${BASE}/helios/elections/new-uuid/view` }),
-      'GET /helios/elections/new-uuid': () =>
-        res({ ok: true, json: { uuid: 'new-uuid', name: 'Test Wahl', num_cast_votes: 0 } }),
+        res({ status: 302, location: `${BASE}/helios/elections/aaaaaaaa-0000-4000-8000-000000000002/view` }),
+      'GET /helios/elections/aaaaaaaa-0000-4000-8000-000000000002': () =>
+        res({ ok: true, json: { uuid: 'aaaaaaaa-0000-4000-8000-000000000002', name: 'Test Wahl', num_cast_votes: 0 } }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
@@ -203,9 +203,9 @@ describe('HeliosClient — service account session', () => {
   it('reuses the cached session instead of re-authenticating', async () => {
     const mockFetch = heliosFetchMock({
       'POST /helios/elections/new': () =>
-        res({ status: 302, location: `${BASE}/helios/elections/x/view` }),
-      'GET /helios/elections/x': () =>
-        res({ ok: true, json: { uuid: 'x', name: 'X', num_cast_votes: 0 } }),
+        res({ status: 302, location: `${BASE}/helios/elections/aaaaaaaa-0000-4000-8000-000000000013/view` }),
+      'GET /helios/elections/aaaaaaaa-0000-4000-8000-000000000013': () =>
+        res({ ok: true, json: { uuid: 'aaaaaaaa-0000-4000-8000-000000000013', name: 'X', num_cast_votes: 0 } }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
@@ -241,14 +241,14 @@ describe('HeliosClient — admin methods', () => {
 
   it('setQuestions posts to the save_questions endpoint', async () => {
     const mockFetch = heliosFetchMock({
-      'POST /helios/elections/abc-123/save_questions': () => res({ status: 200, text: 'SUCCESS' }),
+      'POST /helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e/save_questions': () => res({ status: 200, text: 'SUCCESS' }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient, _resetSessionForTest } = await import('./helios-client')
     _resetSessionForTest()
 
-    await HeliosClient.setQuestions('abc-123', [
+    await HeliosClient.setQuestions('0f8fad5b-d9cb-469f-a165-70867728950e', [
       {
         question: 'Ja oder Nein?',
         short_name: 'q1',
@@ -260,7 +260,7 @@ describe('HeliosClient — admin methods', () => {
     ])
 
     const call = mockFetch.mock.calls.find(
-      ([url]) => url === `${BASE}/helios/elections/abc-123/save_questions`,
+      ([url]) => url === `${BASE}/helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e/save_questions`,
     )
     expect(call).toBeDefined()
     expect((call![1] as RequestInit).method).toBe('POST')
@@ -268,24 +268,24 @@ describe('HeliosClient — admin methods', () => {
 
   it('freeze posts to the freeze endpoint', async () => {
     const mockFetch = heliosFetchMock({
-      'POST /helios/elections/abc-123/freeze': () => res({ status: 302 }),
+      'POST /helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e/freeze': () => res({ status: 302 }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient, _resetSessionForTest } = await import('./helios-client')
     _resetSessionForTest()
 
-    await HeliosClient.freeze('abc-123')
+    await HeliosClient.freeze('0f8fad5b-d9cb-469f-a165-70867728950e')
 
-    const call = mockFetch.mock.calls.find(([url]) => url === `${BASE}/helios/elections/abc-123/freeze`)
+    const call = mockFetch.mock.calls.find(([url]) => url === `${BASE}/helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e/freeze`)
     expect(call).toBeDefined()
     expect((call![1] as RequestInit).method).toBe('POST')
   })
 
   it('bulkUploadVoters uploads, confirms, and polls until voters appear', async () => {
     const mockFetch = heliosFetchMock({
-      'POST /helios/elections/abc-123/voters/upload': () => res({ status: 200 }),
-      'GET /helios/elections/abc-123/voters/': () =>
+      'POST /helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e/voters/upload': () => res({ status: 200 }),
+      'GET /helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e/voters/': () =>
         res({ ok: true, json: [{ uuid: 'v1' }, { uuid: 'v2' }] }),
     })
     vi.stubGlobal('fetch', mockFetch)
@@ -293,14 +293,14 @@ describe('HeliosClient — admin methods', () => {
     const { HeliosClient, _resetSessionForTest } = await import('./helios-client')
     _resetSessionForTest()
 
-    const result = await HeliosClient.bulkUploadVoters('abc-123', [
+    const result = await HeliosClient.bulkUploadVoters('0f8fad5b-d9cb-469f-a165-70867728950e', [
       { email: 'a@uni.de', name: 'Anna' },
       { email: 'b@uni.de', name: 'Ben' },
     ])
 
     expect(result.num_voters).toBe(2)
     const uploadCall = mockFetch.mock.calls.find(
-      ([url]) => url === `${BASE}/helios/elections/abc-123/voters/upload`,
+      ([url]) => url === `${BASE}/helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e/voters/upload`,
     )
     expect(uploadCall).toBeDefined()
   })
@@ -424,9 +424,9 @@ describe('HeliosClient — service login redirect is origin-pinned', () => {
       'POST /auth/password/login': () =>
         res({ status: 302, cookies: 'sessionid=sess-1', location: `${BASE}/auth/after` }),
       'POST /helios/elections/new': () =>
-        res({ status: 302, location: `${BASE}/helios/elections/ok-uuid/view` }),
-      'GET /helios/elections/ok-uuid': () =>
-        res({ ok: true, json: { uuid: 'ok-uuid', name: 'OK', num_cast_votes: 0 } }),
+        res({ status: 302, location: `${BASE}/helios/elections/aaaaaaaa-0000-4000-8000-000000000003/view` }),
+      'GET /helios/elections/aaaaaaaa-0000-4000-8000-000000000003': () =>
+        res({ ok: true, json: { uuid: 'aaaaaaaa-0000-4000-8000-000000000003', name: 'OK', num_cast_votes: 0 } }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
@@ -478,7 +478,7 @@ describe('HeliosClient — no cookie-carrying fetch follows a redirect', () => {
 
   it('does not follow an admin-API redirect off-origin with the service cookie', async () => {
     const mockFetch = heliosFetchMock({
-      'GET /helios/elections/e1/voters/': () =>
+      'GET /helios/elections/aaaaaaaa-0000-4000-8000-000000000004/voters/': () =>
         res({ status: 302, location: 'http://169.254.169.254/latest/meta-data/' }),
     })
     vi.stubGlobal('fetch', mockFetch)
@@ -486,14 +486,14 @@ describe('HeliosClient — no cookie-carrying fetch follows a redirect', () => {
     const { HeliosClient, _resetSessionForTest } = await import('./helios-client')
     _resetSessionForTest()
 
-    await expect(HeliosClient.listVoters('e1')).rejects.toThrow(/Helios admin/)
+    await expect(HeliosClient.listVoters('aaaaaaaa-0000-4000-8000-000000000004')).rejects.toThrow(/Helios admin/)
     assertNoFollowedCookieFetch(mockFetch)
   })
 
   it('does not follow a redirect on the 401 re-auth retry either', async () => {
     let seen = 0
     const mockFetch = heliosFetchMock({
-      'GET /helios/elections/e2/voters/': () => {
+      'GET /helios/elections/aaaaaaaa-0000-4000-8000-000000000005/voters/': () => {
         seen += 1
         return seen === 1
           ? res({ status: 401 })
@@ -505,7 +505,7 @@ describe('HeliosClient — no cookie-carrying fetch follows a redirect', () => {
     const { HeliosClient, _resetSessionForTest } = await import('./helios-client')
     _resetSessionForTest()
 
-    await expect(HeliosClient.listVoters('e2')).rejects.toThrow(/Helios admin/)
+    await expect(HeliosClient.listVoters('aaaaaaaa-0000-4000-8000-000000000005')).rejects.toThrow(/Helios admin/)
     expect(seen).toBe(2)
     assertNoFollowedCookieFetch(mockFetch)
   })
@@ -526,7 +526,7 @@ describe('HeliosClient — no cookie-carrying fetch follows a redirect', () => {
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient } = await import('./helios-client')
-    await expect(HeliosClient.getElection('e-redir')).rejects.toThrow(/Helios/)
+    await expect(HeliosClient.getElection('aaaaaaaa-0000-4000-8000-000000000007')).rejects.toThrow(/Helios/)
 
     expect(mockFetch).toHaveBeenCalledTimes(1)
     const [url, init] = mockFetch.mock.calls[0]
@@ -536,14 +536,14 @@ describe('HeliosClient — no cookie-carrying fetch follows a redirect', () => {
 
   it('still returns the body of a normal admin response', async () => {
     const mockFetch = heliosFetchMock({
-      'GET /helios/elections/e3/voters/': () => res({ json: [{ uuid: 'v1' }] }),
+      'GET /helios/elections/aaaaaaaa-0000-4000-8000-000000000006/voters/': () => res({ json: [{ uuid: 'v1' }] }),
     })
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient, _resetSessionForTest } = await import('./helios-client')
     _resetSessionForTest()
 
-    await expect(HeliosClient.listVoters('e3')).resolves.toEqual([{ uuid: 'v1' }])
+    await expect(HeliosClient.listVoters('aaaaaaaa-0000-4000-8000-000000000006')).resolves.toEqual([{ uuid: 'v1' }])
     assertNoFollowedCookieFetch(mockFetch)
   })
 })
@@ -582,15 +582,15 @@ describe('HeliosClient — read path follows bounded same-origin redirects', () 
   it('follows a same-origin 301 (Django APPEND_SLASH) and returns the target body', async () => {
     const mockFetch = vi.fn(async (input: string) => {
       const path = String(input).replace(BASE, '')
-      if (path === '/helios/elections/e-slash')
-        return res({ status: 301, location: '/helios/elections/e-slash/' })
-      if (path === '/helios/elections/e-slash/') return res({ json: { uuid: 'e-slash' } })
+      if (path === '/helios/elections/aaaaaaaa-0000-4000-8000-000000000008')
+        return res({ status: 301, location: '/helios/elections/aaaaaaaa-0000-4000-8000-000000000008/' })
+      if (path === '/helios/elections/aaaaaaaa-0000-4000-8000-000000000008/') return res({ json: { uuid: 'aaaaaaaa-0000-4000-8000-000000000008' } })
       throw new Error(`unmocked Helios call: ${path}`)
     })
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient } = await import('./helios-client')
-    await expect(HeliosClient.getElection('e-slash')).resolves.toEqual({ uuid: 'e-slash' })
+    await expect(HeliosClient.getElection('aaaaaaaa-0000-4000-8000-000000000008')).resolves.toEqual({ uuid: 'aaaaaaaa-0000-4000-8000-000000000008' })
     expect(mockFetch).toHaveBeenCalledTimes(2)
     assertNothingLeftTheOrigin(mockFetch)
   })
@@ -598,15 +598,15 @@ describe('HeliosClient — read path follows bounded same-origin redirects', () 
   it('follows an absolute same-origin 302 as well', async () => {
     const mockFetch = vi.fn(async (input: string) => {
       const path = String(input).replace(BASE, '')
-      if (path === '/helios/elections/e-abs')
-        return res({ status: 302, location: `${BASE}/helios/elections/e-abs/view` })
-      if (path === '/helios/elections/e-abs/view') return res({ json: { uuid: 'e-abs' } })
+      if (path === '/helios/elections/aaaaaaaa-0000-4000-8000-000000000009')
+        return res({ status: 302, location: `${BASE}/helios/elections/aaaaaaaa-0000-4000-8000-000000000009/view` })
+      if (path === '/helios/elections/aaaaaaaa-0000-4000-8000-000000000009/view') return res({ json: { uuid: 'aaaaaaaa-0000-4000-8000-000000000009' } })
       throw new Error(`unmocked Helios call: ${path}`)
     })
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient } = await import('./helios-client')
-    await expect(HeliosClient.getElection('e-abs')).resolves.toEqual({ uuid: 'e-abs' })
+    await expect(HeliosClient.getElection('aaaaaaaa-0000-4000-8000-000000000009')).resolves.toEqual({ uuid: 'aaaaaaaa-0000-4000-8000-000000000009' })
     assertNothingLeftTheOrigin(mockFetch)
   })
 
@@ -623,7 +623,7 @@ describe('HeliosClient — read path follows bounded same-origin redirects', () 
       vi.stubGlobal('fetch', mockFetch)
 
       const { HeliosClient, HeliosUnavailableError } = await import('./helios-client')
-      await expect(HeliosClient.getElection('e-evil')).rejects.toBeInstanceOf(HeliosUnavailableError)
+      await expect(HeliosClient.getElection('aaaaaaaa-0000-4000-8000-000000000010')).rejects.toBeInstanceOf(HeliosUnavailableError)
       // Exactly one call: the redirect target was never requested, so neither
       // the service cookie nor any other header could reach it.
       expect(mockFetch).toHaveBeenCalledTimes(1)
@@ -632,11 +632,11 @@ describe('HeliosClient — read path follows bounded same-origin redirects', () 
   }
 
   it('bounds a same-origin redirect loop at two follows and degrades', async () => {
-    const mockFetch = vi.fn(async () => res({ status: 302, location: '/helios/elections/loop' }))
+    const mockFetch = vi.fn(async () => res({ status: 302, location: '/helios/elections/aaaaaaaa-0000-4000-8000-000000000011' }))
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient, HeliosUnavailableError } = await import('./helios-client')
-    await expect(HeliosClient.getElection('loop')).rejects.toBeInstanceOf(HeliosUnavailableError)
+    await expect(HeliosClient.getElection('aaaaaaaa-0000-4000-8000-000000000011')).rejects.toBeInstanceOf(HeliosUnavailableError)
     expect(mockFetch).toHaveBeenCalledTimes(3) // initial + at most two follows
     assertNothingLeftTheOrigin(mockFetch)
   })
@@ -646,7 +646,105 @@ describe('HeliosClient — read path follows bounded same-origin redirects', () 
     vi.stubGlobal('fetch', mockFetch)
 
     const { HeliosClient, HeliosUnavailableError } = await import('./helios-client')
-    await expect(HeliosClient.getResult('e-noloc')).rejects.toBeInstanceOf(HeliosUnavailableError)
+    await expect(HeliosClient.getResult('aaaaaaaa-0000-4000-8000-000000000012')).rejects.toBeInstanceOf(HeliosUnavailableError)
     expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+// R30-FOLLOWUPS-S item 8a — the in-process client interpolated `helios_uuid`
+// into the Helios path unvalidated and unencoded: `../admin` or `%2e%2e/..`
+// reached an arbitrary Helios path. Mirrors the votes leaf's guard
+// (services/votes/src/helios/helios-client.ts, K5#41): only a UUID is ever
+// interpolated, and it is encodeURIComponent'd. A malformed id is a caller bug,
+// so it is a plain Error, NOT the degradable HeliosUnavailableError.
+describe('HeliosClient — a non-UUID election id is refused with no request (8a)', () => {
+  const GOOD = '0f8fad5b-d9cb-469f-a165-70867728950e'
+  const hostile = ['../admin', '%2e%2e', 'a/b', 'hel-vorstand-26', '', `${GOOD}/../x`, `${GOOD}?x=1`]
+
+  beforeEach(() => {
+    vi.resetModules()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  const reads = ['getElection', 'getElectionFull', 'getResult', 'listVoters'] as const
+  for (const method of reads) {
+    it.each(hostile)(`${method} rejects %j and never calls fetch`, async (id) => {
+      const mockFetch = heliosFetchMock()
+      vi.stubGlobal('fetch', mockFetch)
+      const { HeliosClient, HeliosUnavailableError } = await import('./helios-client')
+
+      const result = HeliosClient[method](id)
+      // Rejects (never throws synchronously) so `await ... catch` behaves as for the leaf.
+      await expect(result).rejects.toThrow(/invalid helios election uuid/i)
+      await expect(HeliosClient[method](id)).rejects.not.toBeInstanceOf(HeliosUnavailableError)
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+  }
+
+  const writes: Array<[string, (c: typeof import('./helios-client').HeliosClient, id: string) => Promise<unknown>]> = [
+    ['setQuestions', (c, id) => c.setQuestions(id, [])],
+    ['bulkUploadVoters', (c, id) => c.bulkUploadVoters(id, [{ email: 'a@uni.de', name: 'Anna' }])],
+    ['freeze', (c, id) => c.freeze(id)],
+  ]
+  for (const [name, call] of writes) {
+    it.each(hostile)(`${name} rejects %j and never calls fetch`, async (id) => {
+      const mockFetch = heliosFetchMock()
+      vi.stubGlobal('fetch', mockFetch)
+      const { HeliosClient } = await import('./helios-client')
+      await expect(call(HeliosClient, id)).rejects.toThrow(/invalid helios election uuid/i)
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+  }
+
+  it('createElection rejects a Location whose id is not a UUID (it is validated by getElection)', async () => {
+    const mockFetch = heliosFetchMock({
+      'POST /helios/elections/new': () =>
+        res({ status: 302, location: `${BASE}/helios/elections/not-a-uuid/view` }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+    const { HeliosClient, _resetSessionForTest } = await import('./helios-client')
+    _resetSessionForTest()
+    await expect(
+      HeliosClient.createElection({
+        short_name: 'w',
+        name: 'W',
+        description: '',
+        voting_starts_at: '2026-05-01T10:00:00Z',
+        voting_ends_at: '2026-05-08T10:00:00Z',
+      }),
+    ).rejects.toThrow(/invalid helios election uuid/i)
+    expect(mockFetch.mock.calls.some(([u]) => String(u).includes('not-a-uuid'))).toBe(false)
+  })
+
+  it('a valid uuid is fetched at exactly the plain Helios paths', async () => {
+    const mockFetch = heliosFetchMock({
+      [`GET /helios/elections/${GOOD}`]: () => res({ json: { uuid: GOOD } }),
+      [`GET /helios/elections/${GOOD}/result`]: () => res({ json: { questions: [] } }),
+      [`GET /helios/elections/${GOOD}/voters/`]: () => res({ json: [] }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+    const { HeliosClient, _resetSessionForTest } = await import('./helios-client')
+    _resetSessionForTest()
+
+    await HeliosClient.getElection(GOOD)
+    await HeliosClient.getElectionFull(GOOD)
+    await HeliosClient.getResult(GOOD)
+    await HeliosClient.listVoters(GOOD)
+
+    const urls = mockFetch.mock.calls.map(([u]) => String(u))
+    expect(urls).toContain(`${BASE}/helios/elections/${GOOD}`)
+    expect(urls).toContain(`${BASE}/helios/elections/${GOOD}/result`)
+    expect(urls).toContain(`${BASE}/helios/elections/${GOOD}/voters/`)
+  })
+
+  it('isHeliosUuid accepts a real uuid and rejects slugs and non-strings', async () => {
+    const { isHeliosUuid } = await import('./helios-client')
+    expect(isHeliosUuid(GOOD)).toBe(true)
+    expect(isHeliosUuid('hel-vorstand-26')).toBe(false)
+    expect(isHeliosUuid(7)).toBe(false)
   })
 })

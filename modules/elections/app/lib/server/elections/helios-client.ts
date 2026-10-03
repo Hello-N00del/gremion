@@ -438,22 +438,50 @@ function toHeliosDateTime(iso: string): string {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+const HELIOS_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Helios election ids are UUIDs. Anything else (`../..`, `?x=`, a seed slug) must
+ * never be interpolated into a Helios path. Mirrors the votes leaf
+ * (services/votes/src/helios/helios-client.ts, K5#41 / S4#25). */
+export function isHeliosUuid(value: unknown): value is string {
+  return typeof value === 'string' && HELIOS_UUID.test(value)
+}
+
+/** The one place an election id becomes a Helios path. Throws a plain Error (a
+ * malformed id is a caller bug, not an outage, so NOT HeliosUnavailableError). */
+function heliosElectionPath(uuid: string, suffix = ''): string {
+  if (!isHeliosUuid(uuid)) throw new Error('invalid Helios election uuid')
+  return `/helios/elections/${encodeURIComponent(uuid)}${suffix}`
+}
+
+/** Run a non-async method body so a synchronous throw becomes a rejection. */
+function guarded<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return fn()
+  } catch (err) {
+    return Promise.reject(err)
+  }
+}
+
 export const HeliosClient = {
-  // Read methods (no session needed)
+  // Read methods (no session needed). Non-async methods wrap the path build in
+  // a try so a bad id REJECTS (like the leaf) instead of throwing synchronously.
   getElection(uuid: string): Promise<HeliosElection> {
-    return heliosFetch<HeliosElection>(`/helios/elections/${uuid}`)
+    return guarded(() => heliosFetch<HeliosElection>(heliosElectionPath(uuid)))
   },
 
   getElectionFull(uuid: string): Promise<HeliosElectionFull> {
-    return heliosFetch<HeliosElectionFull>(`/helios/elections/${uuid}`)
+    return guarded(() => heliosFetch<HeliosElectionFull>(heliosElectionPath(uuid)))
   },
 
   getResult(uuid: string): Promise<HeliosResult> {
-    return heliosFetch<HeliosResult>(`/helios/elections/${uuid}/result`)
+    return guarded(() => heliosFetch<HeliosResult>(heliosElectionPath(uuid, '/result')))
   },
 
   listVoters(uuid: string): Promise<readonly HeliosVoter[]> {
-    return heliosAdminFetch<readonly HeliosVoter[]>(`/helios/elections/${uuid}/voters/`)
+    return guarded(() =>
+      heliosAdminFetch<readonly HeliosVoter[]>(heliosElectionPath(uuid, '/voters/')),
+    )
   },
 
   // Admin methods (service account session required)
@@ -487,6 +515,7 @@ export const HeliosClient = {
   },
 
   async setQuestions(uuid: string, questions: HeliosQuestionInput[]): Promise<void> {
+    const savePath = heliosElectionPath(uuid, '/save_questions')
     // Helios save_questions_safely requires answer_urls, choice_type, tally_type, result_type.
     const heliosQuestions = questions.map((q) => ({
       question: q.question,
@@ -503,7 +532,7 @@ export const HeliosClient = {
     const params = new URLSearchParams({
       questions_json: JSON.stringify(heliosQuestions),
     })
-    const res = await heliosFormPost(`/helios/elections/${uuid}/save_questions`, params)
+    const res = await heliosFormPost(savePath, params)
     if (!res.ok && res.status !== 200) {
       throw new Error(`Helios setQuestions → ${res.status}`)
     }
@@ -514,6 +543,8 @@ export const HeliosClient = {
   },
 
   async bulkUploadVoters(uuid: string, voters: VoterInput[]): Promise<BulkUploadResult> {
+    const uploadPath = heliosElectionPath(uuid, '/voters/upload')
+    const votersPath = heliosElectionPath(uuid, '/voters/')
     // Two-step upload, then poll. Helios's confirm step dispatches an async
     // Celery task (voter_file_process); we MUST wait for it to finish before
     // the caller freezes the election, or freeze() sees 0 voters and 500s
@@ -533,7 +564,7 @@ export const HeliosClient = {
     form.append('voters_file', new Blob([csv], { type: 'text/csv' }), 'voters.csv')
 
     // Step 1: upload — Helios stores the file and puts voter_file_id in the session.
-    const uploadRes = await fetch(`${heliosBase()}/helios/elections/${uuid}/voters/upload`, {
+    const uploadRes = await fetch(`${heliosBase()}${uploadPath}`, {
       method: 'POST',
       headers: { Cookie: session.cookie },
       body: form,
@@ -546,7 +577,7 @@ export const HeliosClient = {
     // Step 2: confirm — same session carries voter_file_id; Helios dispatches
     // the async voter_file_process Celery task.
     const confirmForm = new URLSearchParams({ confirm_p: '1' })
-    const confirmRes = await fetch(`${heliosBase()}/helios/elections/${uuid}/voters/upload`, {
+    const confirmRes = await fetch(`${heliosBase()}${uploadPath}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -566,9 +597,7 @@ export const HeliosClient = {
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 500))
       try {
-        const current = await heliosAdminFetch<readonly unknown[]>(
-          `/helios/elections/${uuid}/voters/`
-        )
+        const current = await heliosAdminFetch<readonly unknown[]>(votersPath)
         if (current.length > 0) {
           processed = current.length
           break
@@ -585,7 +614,7 @@ export const HeliosClient = {
   },
 
   async freeze(uuid: string): Promise<void> {
-    const res = await heliosFormPost(`/helios/elections/${uuid}/freeze`, new URLSearchParams())
+    const res = await heliosFormPost(heliosElectionPath(uuid, '/freeze'), new URLSearchParams())
     // freeze returns 302 (redirect to election view) when logged in as admin
     if (res.status !== 302 && res.status !== 200) {
       throw new Error(`Helios freeze → ${res.status}`)

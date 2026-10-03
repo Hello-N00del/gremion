@@ -97,43 +97,43 @@ describe('HeliosClient — per-tenant session cache + base URL (T7)', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('fail-closed: a read outside any tenant scope throws (NOT a degraded unavailable error)', async () => {
-    await expect(HeliosClient.getElection('u1')).rejects.toThrow(/No tenant context/)
+    await expect(HeliosClient.getElection('0f8fad5b-d9cb-469f-a165-70867728950e')).rejects.toThrow(/No tenant context/)
   })
 
   it('a tenant without services.heliosUrl falls back to env.HELIOS_URL', async () => {
-    await runWithTenant(ENV_CTX, () => HeliosClient.getElection('u1'))
+    await runWithTenant(ENV_CTX, () => HeliosClient.getElection('0f8fad5b-d9cb-469f-a165-70867728950e'))
     const url = fetchMock.mock.calls[0][0] as string
-    expect(url).toBe('http://helios-default:8000/helios/elections/u1')
+    expect(url).toBe('http://helios-default:8000/helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e')
   })
 
   it('non-default tenant reads resolve against its services.heliosUrl', async () => {
-    await runWithTenant(BETA_CTX, () => HeliosClient.getElection('u1'))
+    await runWithTenant(BETA_CTX, () => HeliosClient.getElection('0f8fad5b-d9cb-469f-a165-70867728950e'))
     const url = fetchMock.mock.calls[0][0] as string
-    expect(url).toBe('http://helios-beta:8000/helios/elections/u1')
+    expect(url).toBe('http://helios-beta:8000/helios/elections/0f8fad5b-d9cb-469f-a165-70867728950e')
   })
 
   it('session cache is keyed by tenant: tenant B logs in on ITS base; tenant A session is not reused', async () => {
-    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('u1'))
+    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('0f8fad5b-d9cb-469f-a165-70867728950e'))
     expect(loginOrigins).toEqual(['http://helios-default:8000'])
 
-    await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('u1'))
+    await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('0f8fad5b-d9cb-469f-a165-70867728950e'))
     expect(loginOrigins).toEqual(['http://helios-default:8000', 'http://helios-beta:8000'])
 
     // Back to the first tenant — its session is still cached, no third login.
-    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('u1'))
+    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('0f8fad5b-d9cb-469f-a165-70867728950e'))
     expect(loginOrigins).toHaveLength(2)
   })
 
   it('evictHeliosSession(tenantId) forces a re-login for that tenant only', async () => {
-    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('u1'))
-    await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('u1'))
+    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('0f8fad5b-d9cb-469f-a165-70867728950e'))
+    await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('0f8fad5b-d9cb-469f-a165-70867728950e'))
     expect(loginOrigins).toHaveLength(2)
 
     evictHeliosSession('tid-alpha')
 
-    await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('u1')) // still cached
+    await runWithTenant(BETA_CTX, () => HeliosClient.listVoters('0f8fad5b-d9cb-469f-a165-70867728950e')) // still cached
     expect(loginOrigins).toHaveLength(2)
-    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('u1')) // re-login
+    await runWithTenant(ENV_CTX, () => HeliosClient.listVoters('0f8fad5b-d9cb-469f-a165-70867728950e')) // re-login
     expect(loginOrigins).toHaveLength(3)
     expect(loginOrigins[2]).toBe('http://helios-default:8000')
   })
