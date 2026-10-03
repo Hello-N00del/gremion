@@ -7,6 +7,6 @@
     "database": null,
     "export": null,
     "timedJobs": [],
-    "platformServer": null
+    "platformServer": { "postgresService": "messaging-postgres", "databases": ["synapse"] }
   }
 }

@@ -33,6 +33,8 @@ function fakeRender(p, { env = {} } = {}) {
         legal: { image: `${P}legal:dist`, build },
         vector: { image: `${P}vector:dist`, build },
         fallback: { image: `${P}fallback:dist`, build },
+        // TASK-198: Synapse joins the state project (profiles: [messaging]) with a build: key
+        matrix: { image: `${P}synapse:dist`, build },
       },
     }
   }
@@ -48,7 +50,7 @@ test('the suite is green over a conforming stack, one check per (guard, project)
   // harness 5 + drift 5 + colour 3 (blue, green, template) + build 3 (state, blue, green)
   assert.equal(out.collected, 16)
   assert.equal(evaluateSuite(out).status, 'pass')
-  assert.match(out.detail, /build-absence state: judged 0, allowance 3 \(first-party 3\)/)
+  assert.match(out.detail, /build-absence state: judged 0, allowance 4 \(first-party 4\)/)
   assert.match(out.detail, /build-absence app-blue: judged 3, allowance 1/)
 })
 

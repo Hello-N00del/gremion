@@ -1,0 +1,222 @@
+# Synapse homeserver configuration — Gremion chat module
+# server_name is the Matrix domain identifier; set to your public domain.
+# It cannot be changed after first start without a full data migration.
+server_name: "${SYNAPSE_SERVER_NAME}"
+
+# Signing key is generated automatically on first start.
+signing_key_path: "/data/homeserver.signing.key"
+
+# Database — PostgreSQL only (TASK-198): the chat module's own server,
+# messaging-postgres, database `synapse`, created with LOCALE 'C' from
+# template0 by postgres-init/10-synapse-db.sh. db-preflight.py refuses to
+# start Synapse on any other collation or major. There is no SQLite path:
+# render-homeserver.sh refuses a rendered engine other than psycopg2.
+# SYNAPSE_DB_PORT is judged an integer by the shim before it lands here.
+database:
+  name: psycopg2
+  args:
+    user: "${SYNAPSE_DB_USER}"
+    password: "${SYNAPSE_DB_PASSWORD}"
+    dbname: "${SYNAPSE_DB_NAME}"
+    host: "${SYNAPSE_DB_HOST}"
+    port: ${SYNAPSE_DB_PORT}
+    cp_min: 5
+    cp_max: 10
+
+# Media store
+media_store_path: /data/media_store
+
+# Listener — internal Docker network only, and the client API only: no
+# federation resource (PRD-MSG-002, defence in depth; the network proof is
+# TASK-060).
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    bind_addresses:
+      - "0.0.0.0"
+    resources:
+      - names: [client]
+        compress: false
+
+# Disable federation — a closed, single-organisation deployment
+federation_domain_whitelist: []
+# ... and never ask a notary for another server's keys.
+trusted_key_servers: []
+
+# Registration is disabled post-bootstrap. JWT login with
+# jwt_config.enabled=true still auto-creates Matrix users from valid
+# Keycloak tokens (that flow does NOT require enable_registration=true).
+# Only the one-time bootstrap.sh needs the shared-secret registration
+# endpoint, which stays active as long as registration_shared_secret is set.
+enable_registration: false
+enable_registration_without_verification: false
+# A closed single-org homeserver. Guest
+# access is OFF — tightens the surface in case federation is ever opened.
+allow_guest_access: false
+
+# Present in the template only so bootstrap renders can opt in
+# via BOOTSTRAP_MODE=1. The render shim (render-homeserver.sh)
+# STRIPS this line from /data/homeserver.yaml on every non-bootstrap start,
+# even if SYNAPSE_REGISTRATION_SHARED_SECRET remains set in .env. The
+# shared-secret registration endpoint is therefore closed by default and
+# only reachable during an explicit bootstrap window.
+# Re-bootstrap procedure: bootstrap.sh beside this template.
+registration_shared_secret: "${SYNAPSE_REGISTRATION_SHARED_SECRET}"
+
+# JWT login — allows gremion-ui to exchange a Keycloak JWT for a Matrix token.
+# secret is EMPTY after the render by design: the entrypoint fetches the
+# realm's RS256 public key and injects it as PEM, or disables jwt_config when
+# the fetch fails -- which healthcheck.sh then reports as unhealthy.
+jwt_config:
+  enabled: true
+  secret: ""
+  algorithm: "RS256"
+  subject_claim: "preferred_username"
+  issuer: "${SYNAPSE_KEYCLOAK_ISSUER_URL}"
+  # Do NOT accept the default Keycloak `account` audience — every
+  # authenticated token carries it, which would let other clients' tokens
+  # log in to Matrix as the wrong user. Only accept the audience explicitly
+  # minted for gremion-ui via the audience-mapper protocol mapper on that
+  # client.
+  audiences:
+    - "gremion-ui"
+
+# OIDC SSO — Keycloak provider for element-call authentication.
+# discover: false splits browser-facing auth_endpoint from internal token/userinfo URLs
+# (the pattern the other OIDC clients use). issuer + authorization_endpoint are
+# browser-facing and driven by SYNAPSE_KEYCLOAK_ISSUER_URL (e.g.
+# https://example.org/auth/realms/<realm>); token/userinfo/jwks: see below.
+oidc_providers:
+  - idp_id: keycloak
+    idp_name: "${SYNAPSE_IDP_NAME}"
+    discover: false
+    issuer: "${SYNAPSE_KEYCLOAK_ISSUER_URL}"
+    client_id: "synapse"
+    client_secret: "${SYNAPSE_OIDC_CLIENT_SECRET}"
+    authorization_endpoint: "${SYNAPSE_KEYCLOAK_ISSUER_URL}/protocol/openid-connect/auth"
+    token_endpoint: "${SYNAPSE_KEYCLOAK_ISSUER_URL}/protocol/openid-connect/token"
+    userinfo_endpoint: "${SYNAPSE_KEYCLOAK_ISSUER_URL}/protocol/openid-connect/userinfo"
+    jwks_uri: "${SYNAPSE_KEYCLOAK_ISSUER_URL}/protocol/openid-connect/certs"
+    scopes: ["openid", "profile", "email"]
+    # token/userinfo/jwks MUST be https. Synapse 1.153 (authlib RFC 8414)
+    # validates operator-supplied OIDC metadata even with discover:false and
+    # rejects a plain-http token_endpoint ('"token_endpoint" MUST use "https"
+    # scheme'). A http://keycloak:8080 back-channel therefore makes the provider
+    # fail to PRELOAD at boot ("Error while preloading OIDC provider
+    # 'oidc-keycloak'. Login may be broken!"), and the login/sso/redirect
+    # endpoint then self-loops instead of redirecting to Keycloak — Element Call
+    # SSO silently breaks. So these go through the public https issuer
+    # (${SYNAPSE_KEYCLOAK_ISSUER_URL}); the matrix container reaches it through the
+    # public edge, the same dependency the browser has. The token `iss` still matches `issuer` because Keycloak stamps its
+    # fixed public hostname on tokens regardless of which endpoint minted them.
+    # Keeping the back-channel strictly internal would require KC internal TLS
+    # (keycloak:8443).
+    skip_verification: false
+    user_mapping_provider:
+      config:
+        localpart_template: "{{ user.preferred_username }}"
+        display_name_template: "{{ user.name }}"
+        email_template: "{{ user.email }}"
+    backchannel_logout_supported: true
+
+# public_baseurl is required for Synapse to serve /.well-known/matrix/client.
+# Without it, Synapse returns M_NOT_FOUND for well-known regardless of
+# extra_well_known_client_content. In local dev this is the Matrix port on localhost.
+public_baseurl: "${MATRIX_PUBLIC_URL}/"
+
+# No MatrixRTC focus (rtc_foci) here: Element Call returns with TASK-101.
+
+# MatrixRTC / MSC support — required by element-call latest-ci.
+# MSC3266: room summary endpoint (element-call resolves room aliases via this)
+# MSC4222: send state events to non-members (MatrixRTC call signaling)
+# MSC4140: delayed events with configurable max delay (MatrixRTC call leave events)
+experimental_features:
+  msc3266_enabled: true
+  msc4222_enabled: true
+  msc4140_enabled: true
+
+# Maximum delay for MSC4140 delayed events (MatrixRTC uses 24h for call membership)
+max_event_delay_duration: 24h
+
+# Password authentication is OFF by default — this is an SSO-only
+# closed homeserver (OIDC + JWT login above); a password login path would
+# bypass Keycloak's brute-force protection, the LoA/2FA step-up flow and
+# central audit. render-homeserver.sh defaults SYNAPSE_PASSWORD_AUTH=false
+# and validates it is exactly true|false. Local dev (admin bot, manual
+# testing) opts in with SYNAPSE_PASSWORD_AUTH=true on the synapse service.
+# Admin-bot alternative for prod (no password needed): mint an admin access
+# token via the Synapse Admin API instead of logging in with a password —
+# POST /_synapse/admin/v1/users/<user_id>/login (server-admin auth) returns
+# a token for the bot account; see bootstrap.sh.
+password_config:
+  enabled: ${SYNAPSE_PASSWORD_AUTH}
+
+# Opt out of usage statistics reporting
+report_stats: false
+
+# Log level (use "WARNING" in production)
+# log.config is baked into the image at /etc/synapse/log.config so we don't
+# have to bind-mount a single file into the /data named volume (which on
+# Docker Desktop for Windows creates a root-owned mountpoint and breaks
+# permissions for the synapse user on the rest of /data).
+log_config: /etc/synapse/log.config
+
+# Retention — IT admin configures per-room via Admin API; no global default purge
+# Uncomment and set in production to enable global retention:
+# retention:
+#   enabled: true
+#   default_policy:
+#     min_lifetime: 1d
+#     max_lifetime: 365d
+
+# Media retention — adjust to match your retention policy
+media_retention:
+  local_media_lifetime: 365d
+
+# Login/message rate limits are env-gated. The template defaults
+# (set in render-homeserver.sh) are Synapse's conservative upstream defaults
+# (rc_login address/account 0.003/s burst 5; rc_message 0.2/s burst 10) —
+# the safe internet-facing posture. Local dev raises them via the
+# SYNAPSE_RC_* env vars on the synapse service (all web requests share a
+# single server IP in dev, and the server-side JWT token exchange for
+# multi-user dev sessions trips the 0.003/s address limit; the relaxed dev
+# numbers were address/account 1/s burst 20, rc_message 10/s burst 50).
+# NOTE for ops: in production the gremion-ui JWT login also originates from
+# ONE container IP — if multi-user logins start tripping rc_login.address,
+# raise SYNAPSE_RC_LOGIN_ADDRESS_* deliberately rather than re-baking the
+# template. failed_attempts stays at its protective hardcoded value.
+rc_login:
+  address:
+    per_second: ${SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND}
+    burst_count: ${SYNAPSE_RC_LOGIN_ADDRESS_BURST}
+  account:
+    per_second: ${SYNAPSE_RC_LOGIN_ACCOUNT_PER_SECOND}
+    burst_count: ${SYNAPSE_RC_LOGIN_ACCOUNT_BURST}
+  failed_attempts:
+    per_second: 0.1
+    burst_count: 5
+
+# MatrixRTC sends frequent state events during calls — dev raises the message
+# rate limit (default 0.2/s burst=10) to handle multi-participant signaling.
+rc_message:
+  per_second: ${SYNAPSE_RC_MESSAGE_PER_SECOND}
+  burst_count: ${SYNAPSE_RC_MESSAGE_BURST}
+
+# MSC4140 delayed event management rate limit
+rc_delayed_event_mgmt:
+  per_second: 1
+  burst_count: 5
+
+# Resource limits
+# Synapse will OOM-kill rather than gracefully degrade; keep this conservative.
+# The compose deploy limit (limits-l, docker-compose.yml) is the hard ceiling.
+caches:
+  global_factor: 0.5
+
+# Suppress noisy federation metrics
+enable_metrics: false
+
+# Suppress the Synapse admin UI
+web_client_location: ~

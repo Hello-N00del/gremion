@@ -221,8 +221,10 @@ test('derive: zero derived services, a missing file or a template without COMPOS
   assert.throws(() => derivedServices('ops', { root: nokey }), /unknown project/)
 })
 
-test('derive: the committed tree gives state {legal, vector, fallback} and app {gremion-ui, gremion-public, control-panel, migrate, tenant-create}', () => {
-  assert.deepEqual(derivedServices('state'), ['legal', 'vector', 'fallback'])
+test('derive: the committed tree gives state {legal, vector, matrix, fallback} and app {gremion-ui, gremion-public, control-panel, migrate, tenant-create}', () => {
+  // TASK-198 adds matrix (Synapse, built from modules/messaging/synapse) to the
+  // state set (brief Q1: it joins TASK-048b's state pins).
+  assert.deepEqual(derivedServices('state'), ['legal', 'vector', 'matrix', 'fallback'])
   // TASK-043 adds the control panel to the app tier (docker-compose.app.yml).
   assert.deepEqual(derivedServices('app'), ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create'])
 })

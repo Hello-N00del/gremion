@@ -1,0 +1,7 @@
+# TASK-198: everything under modules/messaging/synapse/ runs inside, or is read
+# by, the Linux Synapse image (python preflight and key injection, the YAML log
+# config, shell scripts) or its tests. The root .gitattributes covers *.sh and
+# *.yaml only, so core.autocrlf=true checked db-preflight.py, inject-jwt-key.py
+# and log.config out with CRLF (git ls-files --eol: w/crlf), and an image
+# built on a Windows box baked those bytes. Measured, R28 round 2.
+* text eol=lf

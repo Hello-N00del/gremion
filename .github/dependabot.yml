@@ -93,6 +93,9 @@ updates:
       - /modules/files
       - /modules/finance
       - /modules/messaging
+      # TASK-198: the chat module's Synapse image (gremion-synapse; the
+      # upstream FROM is digest-pinned, TRD-350/425).
+      - /modules/messaging/synapse
       - /modules/publishing
       - /modules/vault
       - /modules/votes

@@ -3,9 +3,11 @@
 #
 # One pooled stack per host (PRD-PLAT-005, TRD-440): this file (+ the prod
 # overlay and the release pins layer) is the ${STACK}-state project --
-# postgres, the six profile-gated <id>-postgres, nats, keycloak, legal,
-# vector, and in the production profile traefik, docker-socket-proxy,
-# pgbouncer and fallback. mailpit is dev-only (profiles: [dev]).
+# postgres, the seven profile-gated <id>-postgres, nats, keycloak, legal,
+# vector, matrix (Synapse, with messaging-postgres under profiles:
+# [messaging], TASK-198), and in the production profile traefik,
+# docker-socket-proxy, pgbouncer and fallback. mailpit is dev-only
+# (profiles: [dev]).
 #
 # The app tier (gremion-ui, gremion-public, the migrate and tenant-create
 # one-shots) is NOT here: it is docker-compose.app.yml, instantiated twice as
@@ -242,6 +244,38 @@ services:
       POSTGRES_PASSWORD: ${VAULT_PG_PASSWORD}
     volumes:
       - vault-pg-data:/var/lib/postgresql
+
+  # The chat module's server (TASK-198, D14): Synapse's own PostgreSQL 18.
+  # Unlike the six above it carries ONE initdb script, bound read-only:
+  # modules/messaging/synapse/postgres-init/10-synapse-db.sh creates the
+  # synapse role (no superuser) and database (libc LOCALE 'C', template0)
+  # where missing, and aborts the first init when SYNAPSE_DB_PASSWORD is
+  # empty; its healthcheck requires that database. No ${VAR:?} here: it
+  # would bind every profile and verb (see x-required-env).
+  messaging-postgres:
+    <<: *module-postgres
+    profiles: [messaging]
+    labels:
+      org.gremion.postgres: "module:messaging"
+    environment:
+      POSTGRES_USER:       ${MESSAGING_PG_USER:-messaging}
+      POSTGRES_PASSWORD:   ${MESSAGING_PG_PASSWORD}
+      SYNAPSE_DB_PASSWORD: ${SYNAPSE_DB_PASSWORD}
+    volumes:
+      - messaging-pg-data:/var/lib/postgresql
+      - ./modules/messaging/synapse/postgres-init/10-synapse-db.sh:/docker-entrypoint-initdb.d/10-synapse-db.sh:ro
+    healthcheck:
+      # The anchor's TCP pg_isready, AND the synapse database must exist:
+      # initdb.d runs only on the first start, so a first init that failed
+      # (e.g. an empty SYNAPSE_DB_PASSWORD) leaves a server that answers
+      # pg_isready without it -- that must read unhealthy, and matrix
+      # (depends_on: service_healthy) must never start against it. Recovery:
+      # fix the env, re-run the (idempotent) script in the container.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" && [ \"$$(psql -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d postgres -AtXc \"SELECT 1 FROM pg_database WHERE datname = 'synapse'\")\" = 1 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # ============================================================
   # NATS JetStream — the event broker (TASK-024, CAP-NATS-AUTH; D12, TRD-419)
@@ -656,6 +690,73 @@ services:
       - traefik-logs:/logs/traefik:rw
       - vector-processed-logs:/logs/processed
 
+  # ============================================================
+  # Matrix (Synapse) — the chat module's homeserver (TASK-198)
+  # ============================================================
+  # Profile-gated with its database (messaging). Built from
+  # modules/messaging/synapse: the template, the render shim, the probe and
+  # the database preflight are baked into the image (no bind mount), so every
+  # boot renders a PostgreSQL-only config (the shim refuses anything else)
+  # and runs db-preflight.py (C collation, major 18) before Synapse starts.
+  # Fail-closed lives there, not in `${VAR:?}` forms on the chat keys, which
+  # would bind every profile and verb (PLATFORM_DOMAIN's guarded read is the
+  # kernel's own rule and binds nothing new). _state only, no ports: the app tier reaches it as
+  # http://matrix:8008 (modules/messaging). The healthcheck reads the login
+  # flows, not /versions: unhealthy while the JWT arm or the oidc-keycloak
+  # provider is missing. start_period = SYNAPSE_KC_MAX (30) key-fetch attempts
+  # of ~7 s + the measured first boot (scripts/check-synapse-stack.mjs).
+  # Realm, issuer and the OIDC secret file (/run/secrets/...) are TASK-038's.
+  matrix:
+    build:
+      context: modules/messaging/synapse
+    # `:-dev` as legal/vector: lint-image-digests fails a latest default, and
+    # the release pins layer (docker-compose.state-pins.yml) resets build and
+    # pins the digest on a host (TASK-048b's state set).
+    image: ghcr.io/hello-n00del/gremion-synapse:${IMAGE_TAG:-dev}
+    profiles: [messaging]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    depends_on:
+      messaging-postgres:
+        condition: service_healthy
+    environment:
+      # The one guarded read: every PLATFORM_DOMAIN read carries :? (TASK-028,
+      # test/host/validate-env.bats), and every env the kernel renders sets it.
+      SYNAPSE_SERVER_NAME:          ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      MATRIX_PUBLIC_URL:            https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      SYNAPSE_DB_HOST:              messaging-postgres
+      SYNAPSE_DB_PORT:              "5432"
+      SYNAPSE_DB_NAME:              synapse
+      SYNAPSE_DB_USER:              synapse
+      SYNAPSE_DB_PASSWORD:          ${SYNAPSE_DB_PASSWORD}
+      # Blank until the realm exists (TASK-028 contract); the shim refuses a
+      # blank issuer at boot. A blank fetch URL derives the in-network one.
+      SYNAPSE_KEYCLOAK_ISSUER_URL:  ${SYNAPSE_KEYCLOAK_ISSUER_URL:-}
+      SYNAPSE_KEYCLOAK_FETCH_URL:   ${SYNAPSE_KEYCLOAK_FETCH_URL:-}
+      # Scratch only: on a host the secret is the mounted file, which wins.
+      SYNAPSE_OIDC_CLIENT_SECRET:   ${SYNAPSE_OIDC_CLIENT_SECRET:-}
+      # Rendered only in a BOOTSTRAP_MODE=1 boot (bootstrap.sh), else stripped.
+      SYNAPSE_REGISTRATION_SHARED_SECRET: ${SYNAPSE_REGISTRATION_SHARED_SECRET:-}
+      BOOTSTRAP_MODE:               ${SYNAPSE_BOOTSTRAP_MODE:-0}
+      SYNAPSE_KC_MAX:               ${SYNAPSE_KC_MAX:-30}
+    volumes:
+      # Media and the signing key (the homeserver's identity) live only here:
+      # no S3 offload (TASK-198 Q5). Backed up by project label (TASK-089).
+      - synapse-data:/data
+    deploy: *limits-l
+    networks:
+      - state
+    healthcheck:
+      test: ["CMD", "/synapse-healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 240s
+
 # ============================================================
 # Volumes
 # ============================================================
@@ -672,6 +773,8 @@ volumes:
   finance-pg-data:
   newsletter-pg-data:
   vault-pg-data:
+  messaging-pg-data:
+  synapse-data:
   # JetStream's store: project-scoped like pg-data (${STACK}-state_nats-data),
   # backed up by project label with the rest of the state volumes.
   nats-data:

@@ -348,6 +348,114 @@
       "blob": "5302e71fcfe0244c9c151d690e0c640a2110320e"
     },
     {
+      "path": "modules/messaging/synapse/.gitattributes",
+      "reason": "added: not a StuRa services/ file; kernel-only LF pin for the Synapse image sources (a Windows checkout baked CRLF into the image)",
+      "owner": "TASK-198",
+      "blob": "86e0764fe0f8ff053d3326eb451f32ec82980be1"
+    },
+    {
+      "path": "modules/messaging/synapse/Dockerfile",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "d134e5e58cc2d42d3450973ce55466021819751b"
+    },
+    {
+      "path": "modules/messaging/synapse/bootstrap.sh",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "b43119cfab20eb61ec4c2561c308e32d1e2b2137"
+    },
+    {
+      "path": "modules/messaging/synapse/db-preflight.py",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "0a3030d92b5e106259efaf8b26858c53c2a3859f"
+    },
+    {
+      "path": "modules/messaging/synapse/entrypoint.sh",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "bf0d62d25f4bc8a4aa0c1ed39729ebad95925868"
+    },
+    {
+      "path": "modules/messaging/synapse/healthcheck.sh",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "13b383ac4340b0051bbef12b5f43b1a4fd690541"
+    },
+    {
+      "path": "modules/messaging/synapse/homeserver.yaml",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "abc575f20fa036dfd9cc77adf29231de7ac753af"
+    },
+    {
+      "path": "modules/messaging/synapse/inject-jwt-key.py",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "800ea32f4047161e9164e8d3db727c7e002ac278"
+    },
+    {
+      "path": "modules/messaging/synapse/log.config",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "261e8ce6b2df1124ea3280b0a99989691b51d2a3"
+    },
+    {
+      "path": "modules/messaging/synapse/postgres-init/10-synapse-db.sh",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "bf57011395eeafe75a1f047e03b9d47e92532f54"
+    },
+    {
+      "path": "modules/messaging/synapse/render-homeserver.sh",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "2487c36f00f43afdd47e110dadf34754adf62955"
+    },
+    {
+      "path": "modules/messaging/synapse/test/helpers.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "557942107c7c31eab331184b96862bf1c4bf781f"
+    },
+    {
+      "path": "modules/messaging/synapse/test/inject.test.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "f3584afd8a6c36f746aa8135b2cb737745c51683"
+    },
+    {
+      "path": "modules/messaging/synapse/test/preflight.test.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "2cdbb698a42a2a0b13149024697c0921845ca547"
+    },
+    {
+      "path": "modules/messaging/synapse/test/probe.test.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "4361f11f166f6413339de462beaa6c8bb29a8ea7"
+    },
+    {
+      "path": "modules/messaging/synapse/test/refusal.test.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "c65dcc3a82d16593229021d14fdf15c069965c8f"
+    },
+    {
+      "path": "modules/messaging/synapse/test/render.test.mjs",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "09975480d12e49592dcd4ff009d1530a646393ff"
+    },
+    {
+      "path": "modules/messaging/synapse/test/scratch-proof.sh",
+      "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
+      "owner": "TASK-198",
+      "blob": "83b57fe594791ffb0e19a8488a492c13ba90d3b7"
+    },
+    {
       "path": "modules/publishing/src/dispatch.ts",
       "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
       "owner": "TASK-200",

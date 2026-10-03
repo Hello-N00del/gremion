@@ -11,8 +11,8 @@ recorded as one.
 
 | Procedure | What it does | Version | First run |
 |---|---|---|---|
-| [install.md](install.md) | the from-zero bring-up a rebuilt host follows (TRD-042, R15-2) | 3.0.0 | TASK-038, the pilot re-initialisation |
-| [upgrade.md](upgrade.md) | one release onto a running installation through `gremion-deploy` | 5.0.0 (provisional) | the first pilot release after the re-initialisation |
+| [install.md](install.md) | the from-zero bring-up a rebuilt host follows (TRD-042, R15-2) | 4.0.0 | TASK-038, the pilot re-initialisation |
+| [upgrade.md](upgrade.md) | one release onto a running installation through `gremion-deploy` | 6.0.0 (provisional) | the first pilot release after the re-initialisation |
 | [backup.md](backup.md) | the pilot posture: installed, verified once, then disabled (R15-1) | 1.0.0 | TASK-089 |
 | [restore.md](restore.md) | three arms: the provider host-backup drill, the platform restore into a non-production stack, the reboot measurement | 2.0.0 | TASK-089 (arms A, B), TASK-123 (arm C) |
 | [run-record.md](run-record.md) | the record every run of a procedure leaves | — | — |
