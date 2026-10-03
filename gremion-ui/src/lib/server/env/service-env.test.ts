@@ -27,7 +27,7 @@ function calledNames(): Set<string> {
       if (name === 'node_modules' || name.startsWith('.')) continue
       const abs = path.join(dir, name)
       if (statSync(abs).isDirectory()) walk(abs)
-      else if (/\.(ts|svelte)$/.test(name) && !/\.test\.ts$/.test(name)) {
+      else if (/\.(ts|svelte)$/.test(name) && !name.endsWith('.test.ts')) {
         for (const m of readFileSync(abs, 'utf8').matchAll(re)) out.add(m[1])
       }
     }
@@ -76,7 +76,7 @@ describe('serviceEnv (service-endpoint fallback for module halves, TASK-205 Q5)'
 
   it('the service-endpoint list is frozen and a strict subset of the per-tenant class', () => {
     expect(Object.isFrozen(SERVICE_ENDPOINT_NAMES)).toBe(true)
-    expect(() => (SERVICE_ENDPOINT_NAMES as string[]).push('DATABASE_URL')).toThrow()
+    expect(() => (SERVICE_ENDPOINT_NAMES as string[]).push('DATABASE_URL')).toThrow(/object is not extensible/)
     for (const name of SERVICE_ENDPOINT_NAMES) expect(isPerTenantEnvName(name), name).toBe(true)
     expect(SERVICE_ENDPOINT_NAMES).not.toContain('DATABASE_URL')
   })
