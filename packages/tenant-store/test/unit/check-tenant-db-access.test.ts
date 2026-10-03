@@ -183,6 +183,7 @@ describe('check-tenant-db-access (TRD-426)', () => {
     const dropped = allowList(real.rows.slice(1))
     const p = check({ root: fileURLToPath(new URL('../../../../', import.meta.url)), allowList: dropped }).problems
     expect(p).toEqual([expect.stringMatching(new RegExp(`^${real.rows[0]!.path.replaceAll('.', '\\.')}: opens a database connection`))])
-  })
+    // 60 s: scans the real tree; took 6-11 s under whole-tree gate load, over the 5 s default (R29-KHYG-K, gate r29-11).
+  }, 60_000)
 })
 

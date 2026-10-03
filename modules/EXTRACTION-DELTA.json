@@ -276,6 +276,12 @@
       "blob": "39e7783915eccb5690dd0409b5d42aff42ae7008"
     },
     {
+      "path": "modules/content/test/route-parity.test.ts",
+      "reason": "added: collected guard for the route seam; the app/ copy only runs after overlay (it scans nothing in the module tree). Non-vacuous: refuses a missing root and fewer than 10 route files. Not a StuRa file",
+      "owner": "TASK-200",
+      "blob": "96722d54b80630c5ddb2945ffcae1771799a8410"
+    },
+    {
       "path": "modules/content/test/support/pg-test-guard.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
       "owner": "TASK-200",

@@ -10,6 +10,7 @@
 import { error, json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role, type SessionUser } from '$lib/auth'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import {
   fileChallenge,
   DuplicateOpenChallengeError,
@@ -31,6 +32,7 @@ function requireMember(event: RequestEvent): SessionUser {
 
 export async function POST(event: RequestEvent) {
   const user = requireMember(event)
+  requireUuidParams(event, 'resId')
   const body = await event.request.json()
 
   const grounds = typeof body?.grounds === 'string' ? body.grounds.trim() : ''

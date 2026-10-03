@@ -39,7 +39,7 @@ describe('POST /api/protocols/[id]/submit', () => {
     mockSetProtocolStatus.mockResolvedValue({ ...draftProtocol, status: 'submitted' })
 
     // @ts-expect-error partial mock
-    const res = await POST({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: 'p1' } })
+    const res = await POST({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: '123e4567-e89b-12d3-a456-426614174001' } })
     expect(res.status).toBe(200)
     expect(mockSetProtocolStatus).toHaveBeenCalledWith('p1', 'submitted')
   })
@@ -47,7 +47,7 @@ describe('POST /api/protocols/[id]/submit', () => {
   it('returns 400 if protocol is not in draft status', async () => {
     mockGetProtocol.mockResolvedValue({ ...draftProtocol, status: 'submitted' })
     // @ts-expect-error partial mock
-    const res = await POST({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: 'p1' } })
+    const res = await POST({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: '123e4567-e89b-12d3-a456-426614174001' } })
     expect(res.status).toBe(400)
   })
 })

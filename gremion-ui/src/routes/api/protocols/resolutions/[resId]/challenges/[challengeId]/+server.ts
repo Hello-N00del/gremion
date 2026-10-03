@@ -7,6 +7,7 @@ import { error, json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import {
   decideChallenge,
   ChallengeNotOpenError,
@@ -23,6 +24,7 @@ function requireAdmin(event: RequestEvent): SessionUser {
 
 export async function PATCH(event: RequestEvent) {
   const admin = requireAdmin(event)
+  requireUuidParams(event, 'resId', 'challengeId')
   const body = await event.request.json()
 
   const status = body?.status as ChallengeDisposition

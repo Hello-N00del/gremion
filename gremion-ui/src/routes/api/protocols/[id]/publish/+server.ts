@@ -6,6 +6,7 @@ import {
   getProtocol, setProtocolStatus, updateProtocol,
   listResolutions, assignGlobalNrs, recordResolutionAdoptions,
 } from '$lib/server/protocols/protocol-db'
+import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { convertOdtToHtml, convertOdtToPdf } from '$lib/server/documents/collabora-convert'
 import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { getDb } from '$lib/server/db'
@@ -27,6 +28,7 @@ function requireAuth(event: RequestEvent): SessionUser {
 export async function POST(event: RequestEvent) {
   const user = requireAuth(event)
   if (!hasRole(user.roles, Role.CouncilAdmin)) throw error(403, 'Nur Admins können veröffentlichen')
+  requireUuidParams(event, 'id')
 
   const protocol = await getProtocol(event.params.id!)
   if (!protocol) throw error(404, 'Protokoll nicht gefunden')

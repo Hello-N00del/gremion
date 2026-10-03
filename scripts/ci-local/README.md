@@ -148,6 +148,25 @@ selects the output parser in `lib/parse-output.mjs`; the `guard` kind
 composes a suite's own `node --test` TAP summary with its trailing guard
 script's exit code (see `lib/snapshot-core.mjs`).
 
+Two optional fields keep the manifest honest as the tree grows (TASK-012-FU2):
+
+- `excludeGlobs` names files a suite's `testGlobs` reach but its command does
+  not run (a vitest `exclude`). Prefer directory-level `testGlobs`
+  (`modules/x/test/**/*.test.ts`) plus the runner's own excludes: a new file
+  is then claimed automatically, and a new integration file stays UNCLAIMED
+  (RED) until a suite that really runs it exists, instead of being claimed by
+  a unit runner that skips it.
+- `unrunnable: "<reason>"` marks a suite whose files are real and claimed but
+  for which no runner exists in this tree. It is recorded FAIL
+  (`could not run: <reason>`) on every reading, never skipped.
+
+`scripts/ci-local/tree-claim.test.mjs` walks the real kernel tree against
+this manifest and fails on any unclaimed test file (and on any suite that
+owns no file), so a lane that adds a test file without a suite goes RED in the
+ordinary `node --test scripts/ci-local/*.test.mjs` run. Set
+`CI_LOCAL_VERTICAL=<path to the vertical checkout>` to run the same census on
+the vertical; `snapshot.mjs --vertical` does it on every reading.
+
 Every `node --test` invocation in this package's own commands passes
 `--test-reporter=tap` explicitly (the installed Node's `node --test` with no
 reporter flag defaults to the human "spec" reporter, which has no `# tests`
