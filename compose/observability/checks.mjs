@@ -71,7 +71,7 @@ export function renderShapeViolations(render, label = 'ops') {
       if (v.type === 'image' && v.read_only !== true) out.push(`${label}/${name}: image mount ${v.source} is not read-only`)
     }
   }
-  if (render?.name !== undefined && !/-ops$/.test(String(render.name))) out.push(`${label}: project name ${render.name} is not <STACK>-ops`)
+  if (render?.name !== undefined && !String(render.name).endsWith('-ops')) out.push(`${label}: project name ${render.name} is not <STACK>-ops`)
   return out
 }
 
@@ -108,10 +108,10 @@ export function mountViolations(render, label = 'ops') {
       if (!m || m.source !== host || m.read_only !== true) out.push(`${label}/alloy: ${host} is not mounted read-only at ${target}`)
     }
     const textfile = (alloy.volumes ?? []).find((v) => v.target === '/textfile')
-    if (!textfile || textfile.read_only !== true || !/\/runtime\/textfile$/.test(String(textfile.source))) out.push(`${label}/alloy: the host collector's runtime/textfile is not mounted read-only at /textfile`)
+    if (!textfile || textfile.read_only !== true || !String(textfile.source).endsWith('/runtime/textfile')) out.push(`${label}/alloy: the host collector's runtime/textfile is not mounted read-only at /textfile`)
     const vector = (alloy.volumes ?? []).find((v) => v.target === '/vector-logs')
     const vdef = vector ? render.volumes?.[vector.source] ?? {} : {}
-    if (!vector || vector.type !== 'volume' || vector.read_only !== true || !/-state_vector-processed-logs$/.test(String(vdef.name ?? '')) || vdef.external !== true) {
+    if (!vector || vector.type !== 'volume' || vector.read_only !== true || !String(vdef.name ?? '').endsWith('-state_vector-processed-logs') || vdef.external !== true) {
       out.push(`${label}/alloy: Vector's output volume is not mounted read-only (external <STACK>-state_vector-processed-logs)`)
     }
     // Every other host bind of Alloy lives under the host root's runtime/ops or
