@@ -17,8 +17,8 @@
 // agent tool call. A part run is always a partial record; only a full
 // `verify` (every required suite, `unit` whole) satisfies check-record.
 import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
-import { coupledExcludes } from '../../check-module-source-scan.mjs'
 import { headSha } from '../lib/git.mjs'
 import { combineParts } from '../lib/guard.mjs'
 import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary } from '../lib/parsers.mjs'
@@ -285,9 +285,18 @@ export const UNIT_PARTS = {
   // `check-module-source-scan.mjs --coupled-excludes <id>` (a test modules/COUPLED-TESTS.json allows to reach
   // outside its module is excluded from the per-package run); an absent, invalid or stale list refuses the
   // part (unparseable, named) instead of running the module unexcluded.
+  // The scan module lives outside scripts/verify/, so it is loaded lazily (synchronous require of ESM) only
+  // when this part runs: the verify CLI must still start from a copy of scripts/verify/ alone (the space-path
+  // tests in verify.test.mjs / check-record.test.mjs). A scan that cannot load refuses the part, named.
   modules: (root) => {
     const ids = moduleDirsWithTestScript(root)
     if (ids.length === 0) return [{ label: 'modules vitest (no modules/*/package.json defines a test script)', collected: 0, passed: 0, failed: 0, skipped: 0 }]
+    let coupledExcludes
+    try {
+      ;({ coupledExcludes } = loadModuleSourceScan())
+    } catch (err) {
+      return ids.map((id) => ({ label: `module ${id} vitest (test)`, unparseable: true, detail: `--coupled-excludes ${id} refused: check-module-source-scan.mjs did not load: ${err.message}` }))
+    }
     return ids.map((id) => {
       const label = `module ${id} vitest (test)`
       let excludes
@@ -301,6 +310,12 @@ export const UNIT_PARTS = {
   },
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
+}
+
+/** scripts/check-module-source-scan.mjs, loaded on first use by the `modules` part only (never at import
+ * time of this suite). Exported so the lazy-load guard can assert the module surface it relies on. */
+export function loadModuleSourceScan() {
+  return createRequire(import.meta.url)('../../check-module-source-scan.mjs')
 }
 
 /** Every packages/* directory whose package.json defines a `test` script --
