@@ -629,6 +629,24 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     grep -q '^gremion_storage_component_bytes{component="staging-state_pg-data"} 1500000000$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
 }
 
+@test "metrics-textfile reuses the last per-container disk reading inside GREMION_STORAGE_INTERVAL (docker ps --size walks every layer)" {
+    shim_docker_world
+    shim_timer enabled
+    GREMION_STORAGE_INTERVAL=0 STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    : > "$SHIM_LOG"
+    GREMION_STORAGE_INTERVAL=900 STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -c 'ps --all --size' "$SHIM_LOG"
+    [ "$output" = "0" ]
+    grep -q '^gremion_container_disk_bytes{name="staging-state-postgres-1"} 1500$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # the reading is taken again once the interval has passed
+    : > "$SHIM_LOG"
+    GREMION_STORAGE_INTERVAL=0 STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    grep -q 'ps --all --size' "$SHIM_LOG"
+}
+
 @test "metrics-textfile always stamps its own timestamp last" {
     shim_docker_world
     shim_timer enabled

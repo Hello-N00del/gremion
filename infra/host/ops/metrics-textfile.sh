@@ -25,8 +25,9 @@
 # root), GREMION_STORAGE_COMPONENTS (space-separated <component>=<path>,
 # measured with du; default every Postgres volume and the Vector volume of the
 # state project, measured by the daemon), GREMION_STORAGE_INTERVAL (seconds
-# between two component measurements, default 900; the last reading is reused
-# in between, because a volume walk every minute is IO the host does not owe).
+# between two component measurements and two per-container disk readings,
+# default 900; the last reading is reused in between, because a volume or
+# writable-layer walk every minute is IO the host does not owe).
 #
 # exit 0 wrote the file · 2 missing runtime directory or tool
 set -euo pipefail
@@ -65,6 +66,7 @@ COMPONENTS="$(ops_key GREMION_STORAGE_COMPONENTS)"
 STORAGE_INTERVAL="$(ops_key GREMION_STORAGE_INTERVAL)"; STORAGE_INTERVAL="${STORAGE_INTERVAL:-900}"
 [[ "$STORAGE_INTERVAL" =~ ^[0-9]+$ ]] || STORAGE_INTERVAL=900
 STORAGE_CACHE="$RUNTIME/ops/storage-components.prom"
+CONTAINER_DISK_CACHE="$RUNTIME/ops/container-disk.prom"
 
 to_epoch() {
     local ts="$1"
@@ -166,16 +168,41 @@ emit_containers() {
         printf '%s' "$cpu"
     fi
     # Per-container disk: the writable layer (volumes are TRD-224's components).
-    while IFS=$'\t' read -r name size; do
-        [[ -n "$name" ]] || continue
-        bytes="$(to_bytes "${size%% *}")"
-        [[ -n "$bytes" ]] && disk+="gremion_container_disk_bytes{name=\"$(esc "$name")\"} ${bytes}"$'\n'
-    done < <(docker ps --all --size --filter "label=com.docker.compose.project" --format '{{.Names}}	{{.Size}}' 2>/dev/null || true)
+    # `docker ps --size` makes the daemon walk every writable layer, so it runs
+    # at most once per GREMION_STORAGE_INTERVAL, like the component walk.
+    disk="$(cached_reading "$CONTAINER_DISK_CACHE" measure_container_disk | grep '^gremion_container_disk_bytes{' || true)"
     if [[ -n "$disk" ]]; then
         printf '# HELP gremion_container_disk_bytes Bytes in the container writable layer (docker ps --size).\n'
         printf '# TYPE gremion_container_disk_bytes gauge\n'
-        printf '%s' "$disk"
+        printf '%s\n' "$disk"
     fi
+}
+
+measure_container_disk() {
+    local name size bytes
+    while IFS=$'\t' read -r name size; do
+        [[ -n "$name" ]] || continue
+        bytes="$(to_bytes "${size%% *}")"
+        [[ -z "$bytes" ]] || printf 'gremion_container_disk_bytes{name="%s"} %s\n' "$(esc "$name")" "$bytes"
+    done < <(docker ps --all --size --filter "label=com.docker.compose.project" --format '{{.Names}}	{{.Size}}' 2>/dev/null || true)
+    return 0
+}
+
+# cached_reading <cache file> <function> -- prints the function's output,
+# measured afresh only when the cache is older than GREMION_STORAGE_INTERVAL;
+# the last reading is reused in between.
+cached_reading() {
+    local cache="$1" fn="$2" now age=-1 body
+    now="$(date -u +%s)"
+    if [[ -s "$cache" ]]; then
+        age=$(( now - $(date -u -r "$cache" +%s) ))
+    fi
+    if (( age < 0 || age >= STORAGE_INTERVAL )); then
+        body="$("$fn")"
+        mkdir -p "$(dirname "$cache")"
+        printf '%s\n' "$body" | atomic_write "$cache" 0644
+    fi
+    cat "$cache" 2>/dev/null || true
 }
 
 state_container() {   # <compose service> -- the first running container of it in ${STACK}-state
@@ -310,17 +337,8 @@ measure_components() {
 }
 
 emit_storage_components() {
-    local now age=-1 body
-    now="$(date -u +%s)"
-    if [[ -s "$STORAGE_CACHE" ]]; then
-        age=$(( now - $(date -u -r "$STORAGE_CACHE" +%s) ))
-    fi
-    if (( age < 0 || age >= STORAGE_INTERVAL )); then
-        body="$(measure_components)"
-        mkdir -p "$(dirname "$STORAGE_CACHE")"
-        printf '%s\n' "$body" | atomic_write "$STORAGE_CACHE" 0644
-    fi
-    body="$(grep '^gremion_storage_component_bytes{' "$STORAGE_CACHE" 2>/dev/null || true)"
+    local body
+    body="$(cached_reading "$STORAGE_CACHE" measure_components | grep '^gremion_storage_component_bytes{' || true)"
     [[ -n "$body" ]] || return 0
     printf '# HELP gremion_storage_component_bytes Bytes a tracked storage component holds (TRD-224).\n'
     printf '# TYPE gremion_storage_component_bytes gauge\n'
