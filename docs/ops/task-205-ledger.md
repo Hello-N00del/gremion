@@ -78,3 +78,27 @@ Finance (`helios/wiring.test.ts`) is 205d.
   absent from the barrel, one test reading an undefined `stadt`), all of which land with 205c. The lane is
   not yet a verify part. 205c wires it in once those 7 files are green. Until then the 7 red files are
   known, and residual (a) is **not** counted as closed.
+
+## 6. For the security review (verifier r2 LOW)
+
+- **Shared-backend credential fallback through `serviceEnv`.** `gremion-ui/src/lib/server/env/service-endpoint-names.js`
+  is a frozen list of 15 names. It still includes credentials, read process-wide: `HELIOS_SERVICE_PASSWORD`,
+  `LIVEKIT_API_SECRET`, `NEXTCLOUD_ADMIN_PASSWORD`, and the token maps `NEXTCLOUD_USER_TOKENS` and
+  `NEXTCLOUD_CALDAV_USER_TOKENS`. The kernel copy of
+  `modules/elections/app/lib/server/elections/helios-client.ts` honours `ctx.services` for every tenant (f2
+  had `ctx.slug === 'default' ? undefined : ctx.services`; the kernel has no `default` slug after TASK-042-b,
+  delta entry reason "no default-tenant branch"). So a pooled tenant **without** a per-tenant `services`
+  block falls back to the deployment's shared backend and its shared credentials. That is f2's
+  default-tenant semantics extended to every tenant. It is not exploited today (one tenant per test env), but
+  it is a deployment-wide fallback. Proposed follow-up: once TASK-125 lands, require an explicit per-tenant
+  `services` block for pooled tenants and refuse the env fallback for them. The comment above `heliosBase()`
+  still describes the f2 default-tenant branch. It is left byte-equal to the blob-pinned delta entry, and
+  this note supersedes it.
+- **Not re-run in round 3 (no round-3 change touches them):** the integration suites (`auto-join.integration`,
+  `election-db`, messaging/elections). Round 1 covered them. The live e2e specs (`module-landing-routes.spec.ts`,
+  `room-admin.spec.ts`) need the Keycloak scratch stack plus an image build, and those do not fit a 4-minute
+  call on this box. The orchestrator runs them against the redeployed test env (R30-I4) with the JSON reporter:
+  `expected >= 1`, `skipped == 0`, `unexpected == 0`.
+- **Pre-existing, not this unit:** `scripts/ci-local/tree-claim.test.mjs` fails on plain `origin/main` (5
+  unclaimed `modules/messaging/synapse/test/*.test.mjs` files from TASK-198). After the merge, the
+  orchestrator claims them as TASK-198's follow-up. Every TASK-205 file is claimed.
