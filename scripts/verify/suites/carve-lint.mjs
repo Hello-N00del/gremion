@@ -67,6 +67,10 @@ export const CARVE_LINT_TARGETS = [
   // TASK-048 (TRD-350/066/354): every deployed image pinned by digest, no
   // object storage. Brief G4 fixes tool 'docker' (the release toolchain).
   { name: 'lint-image-digests', kind: 'make', target: 'lint-image-digests', tool: 'docker' },
+  // TASK-198: the chat module's Synapse (module suites + the compose render of
+  // messaging-postgres and matrix): docker. The scratch proof (synapse-proof)
+  // is deliberately NOT here.
+  { name: 'lint-synapse', kind: 'make', target: 'lint-synapse', tool: 'docker' },
   {
     name: 'lockfile-frozen',
     kind: 'cmd',

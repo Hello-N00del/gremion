@@ -1,6 +1,6 @@
 # Release-1 delta record
 
-Date: 2026-09-24
+Date: 2026-09-24 (amended 2026-10-02: §7, the StuRaOS harvest checklist)
 Requirement basis: PRD-REC-002, PRD-REC-006, PRD-REC-007, PRD-REC-008 (PRD §17.5); verdicts carried
 from PRD §17.1; unit table from PLAN §7.
 Owning task: TASK-011.
@@ -195,3 +195,67 @@ changes. Summary:
   commit message records), reviewed, and merged on 2026-09-25. The repository README now carries a
   "superseded" banner, and the repository is archived. The module sources move into this repository's
   `modules/` directory under TASK-205; nothing is taken from the archived snapshot.
+
+## 7. StuRaOS harvest checklist — dated 2026-10-02 [D R23-17]
+
+This is the checklist that D11's un-pause (§3) must satisfy before the StuRa tree is tagged
+`stura-final` and archived. It is the second dated record R23-17 adds to TASK-011; the first is the
+`gremion-modules` archive record in §6. The items are the drift map's harvest list of 2026-09-24
+(its §4, twelve items) grouped as TASK-011's acceptance groups them; the T07 grants, the NATS wire
+root and the governance, SSRF and custom-domain items are TASK-206's list (R23-15), and the drift
+map's items 6 (T08) and 7 (module contracts) are the ones R23-15 left to this checklist.
+
+**How to read it.** Each row names what holds the item: a kernel path, a task, or a dated drop.
+Status values: **HELD** (a kernel path holds it, checked by name against the kernel tree),
+**PARTIAL** (some of it is held; the rest has a named task or none), **OPEN** (nothing holds it and
+no drop is recorded). No row below is a drop: a drop is a decision, and none has been recorded for
+any item except where a row cites one. Every row is a reading of 2026-10-02 against kernel `main`
+`660a3215` and StuRaOS `master` `87c004a8`. "Not diffed" means the path exists on both sides and the
+contents were not compared. At D11's un-pause the whole table is re-read against the trees as they
+are then (PRD-REC-008), not carried forward from this one.
+
+### 7.1 Checklist
+
+| # | Item (R23-17) | Holder (kernel path, task or dated drop) | Status 2026-10-02 |
+|---|---|---|---|
+| 1a | Module sources, service halves | `modules/<id>/` for messaging, votes, files, calendar, publishing, board, vault, finance and content; elections and handover are placeholder packages (manifest and package file only). TASK-200 is merged (`c2a2cd76`); parity against the `extraction-source-f2` tag is recorded in `docs/ops/module-source-parity.txt`. | HELD |
+| 1b | Module UI halves | `modules/content/app/` is in the tree. The halves for messaging, votes, files, calendar, publishing, board, finance and vault are TASK-205, not merged. | PARTIAL |
+| 2a | Governance Phase 2/3 (acclamation, contestability, recall) | `docs/ops/shell-port-list.md` items 1a, 1b, 1c; `contracts/kernel/openapi.governance.json` at 1.1.0. TASK-206-0 and TASK-206-A merged (`f2c1730c`, `5455ec21`). | HELD |
+| 2b | SSRF and security hardening | `docs/ops/shell-port-list.md` item 2: the portal and test-smtp parts are ported or present. The `gremion-ui` response-header hunk is TASK-206-B (after TASK-205). The messages service-client and the element-call and helios-client halves are via TASK-205. The portal image model is an open decision: `docs/security/portal-image-model-open-decision.md`. | PARTIAL |
+| 2c | Tenancy custom domains | `docs/ops/shell-port-list.md` item 3: present, guards re-broken. | HELD |
+| 2d | The T07 grant fixes | `docs/ops/shell-port-list.md` item 4: the 055 and 058 part is settled by TASK-018 (kernel bytes win, R23-16a); the rest is adapted or marked not applicable there. | HELD |
+| 2e | The NATS wire root and the consumer-state work | `gremion-ui/src/lib/server/events/consumer-state.ts` (item 0 of the port list) and `docs/playbooks/nats-root-cutover.md`. The health report, the relay and the topology wiring tests are TASK-206-B, not merged. | PARTIAL |
+| 3 | Module contracts: `contracts/{files,messages,newsletter,votes}` and `openapi.finance.json` | None. `contracts/registry.json` lists six specs and none of these. StuRaOS holds `contracts/files/openapi.files-internal.json`, `contracts/messages/openapi.messages-internal.json`, `contracts/newsletter/{asyncapi.newsletter.json,openapi.newsletter-internal.json,openapi.newsletter.json}`, `contracts/votes/openapi.votes-internal.json` and `contracts/kernel/openapi.finance.json`. No task owns them: TASK-206's list leaves them to this checklist (R23-15). A ported spec has to be registered (TASK-030's registry rule: discovery must find no unregistered spec). | OPEN |
+| 4 | The T08 pre-commit boundary lint | `gremion-ui/scripts/hooks/pre-commit`, `gremion-ui/scripts/install-git-hooks.mjs`, `gremion-ui/scripts/boundary-lint.ts` and the guard `gremion-ui/scripts/install-git-hooks.test.ts`. The kernel hook is fail-closed: every condition under which it cannot run blocks the commit with an instruction. Kernel-native; the StuRaOS commit range `e7076a15` to `1c262ae1` was not diffed against it. | HELD |
+| 5a | The finance-cutover runbook | None. Not in `docs/runbooks/` (kernel holds `email-smtp`, `pgbouncer`, `tenant-edge`, `tenant-lifecycle`). Kernel code already points at it: `modules/finance/Dockerfile`, `modules/finance/src/http/routes.ts`, `modules/finance/src/kernel-client.ts`. | OPEN |
+| 5b | The pilot-host cutover runbook (StuRaOS `docs/runbooks/`, the file named for the host provider) | None. Four module entry points point at its section "Migrating the wire-subject root" (`modules/{calendar,content,finance,publishing}/src/index.ts`); the kernel's `docs/playbooks/nats-root-cutover.md` covers the same migration but is a different document. | OPEN |
+| 6a | `docs/audit`, `docs/external-reviews`, `docs/design-handover`, `docs/planning` (incl. `2026-07-25-carve-drift-baseline.md`), `docs/specs` | None. The kernel has no directory of these names. Its `docs/superpowers/specs/` is a different set. | OPEN |
+| 6b | `SECURITY_REVIEW_2026-04-24.md`, `SECURITY_REVIEW_2026-05-23.md` | None. | OPEN |
+| 6c | `GO-LIVE-GATE.md` | `docs/ops/go-live-gate.md`, with its bats guard `test/host/go-live-gate.bats`. Kernel-native; not diffed. | HELD |
+| 7 | The carve tooling as an archived audit record | Not moved, by decision: the StuRa tree is archived with `scripts/carve/**` (eight files) frozen intact (spec D, row D11). The kernel keeps its own, non-overlapping guards: `scripts/port-back/` and `scripts/verify/suites/carve-lint.mjs`. | HELD in the archive. At un-pause, check the eight files are intact at the tag. |
+| 8 | `mobile/` (the Flutter app) | None. The kernel has no `apps/mobile`. The P2 mobile tasks (TASK-166 onward) own `apps/mobile/**`, and TASK-166 assumes an existing app (it removes FCM, adds the iOS scaffold) with no `depends_on`. No task is recorded as making the first copy from StuRaOS `mobile/`. | OPEN |
+| 9a | `docker/` | Kernel `docker/` holds cloudflared, fallback, keycloak, legal, nats, pgbouncer, postgres, traefik, vector (present by name; not diffed). StuRaOS-only: `element-call`, `helios`, `livekit`, `nextcloud`, `synapse`, `vaultwarden` and `kustomization.yaml`. The plan names the components (LiveKit, TRD-242 and `docs/ops/topology.md` §2; the Vaultwarden option, TASK-034; the Synapse database, TASK-198) but no task is recorded as moving the build contexts. | PARTIAL |
+| 9b | `k8s/` and the overlays (aks, eks, gke) | `k8s/base`, `k8s/traefik` and `k8s/overlays/{aks,dev,eks,gke,production}` (present by name; not diffed). StuRaOS-only: `k8s/overlays/newsletter-accept`. TASK-126 owns `k8s/**` for the P3 smoke deploy. | HELD, except the one StuRaOS-only overlay (OPEN) |
+
+### 7.2 Further findings the checklist picks up
+
+- **From `docs/ops/shell-port-list.md` ("found -> TASK-011 harvest").** The dashboard hunk of
+  `routes/+page.server.ts` and the `financeRoleLabels` hunk of `routes/api/notifications/+server.ts`
+  (source commit `87797e42`): the kernel has no notifications route. Holder: none. OPEN. The other
+  "found" item there, the missing publish lock on resolution PATCH and DELETE, was closed by the
+  house review fixes on that unit and is not carried here.
+- **StuRaOS runbooks outside TASK-011's list.** `docs/runbooks/` in StuRaOS also holds the
+  board, calendar, content, messages and newsletter cutover runbooks, `helios-image-update`,
+  `helios-service-account`, `nextcloud-theming`, `object-storage`, `satellite-theming`,
+  `synapse-bootstrap`, `vault-native` and `vaultwarden`. None is in the kernel. They are listed so
+  the un-pause decides each one (hold or drop) instead of leaving it unmentioned. `object-storage`
+  is likely a drop under TRD-066, but no drop is recorded.
+
+### 7.3 Summary and what the un-pause needs
+
+Of the 18 rows in 7.1: 8 are HELD (1a, 2a, 2c, 2d, 4, 6c, 7 in the archive, and 9b apart from one
+overlay), 4 are PARTIAL (1b, 2b, 2e, 9a) and 6 are OPEN (3, 5a, 5b, 6a, 6b, 8). The 7.2 findings
+and the one StuRaOS-only overlay in 9b are further open items outside those counts. Each open item
+needs a holder or a dated drop before the un-pause; the decisions on 6a, 6b, 8 and the 9a build
+contexts are the operator's. Nothing here changes D11's status: it stays paused, and this record
+does not tag or archive anything.

@@ -62,9 +62,10 @@ and that code is the authoritative copy.
 
 | Service | Class | Project | Networks |
 |---|---|---|---|
-| postgres, 6 × `<id>-postgres`, pgbouncer | council store | state | `_state` |
+| postgres, 7 × `<id>-postgres`, pgbouncer | council store | state | `_state` |
 | nats (TASK-024: nkey auth, one account per tenant) | council store | state | `_state` |
 | keycloak | council | state | `_state`, `_edge` |
+| matrix (Synapse, `profiles: [messaging]`, TASK-198) | council | state | `_state` only, no ports |
 | legal, fallback | council (edge) | state | `_edge` |
 | traefik | council (edge) | state | `_edge`, `socket` |
 | docker-socket-proxy | council (edge) | state | `socket` only (internal) |
@@ -101,7 +102,8 @@ limit.
 | Project | Service | Memory | CPUs | Per tenant |
 |---|---|---|---|---|
 | state | postgres | 1G | 1.0 | 0 |
-| state | 6 × `<id>-postgres` (profile-gated, only enabled modules start) | 6 × 256M | 6 × 0.25 | 0 |
+| state | 7 × `<id>-postgres` (profile-gated, only enabled modules start) | 7 × 256M | 7 × 0.25 | 0 |
+| state | matrix (profile-gated with messaging-postgres, TASK-198) | 1G | 1.0 | 0 |
 | state | pgbouncer | 256M | 0.25 | 0 |
 | state | nats | 512M | 0.5 | 0 |
 | state | keycloak | 1.5G | 1.0 | 0 |
@@ -126,12 +128,12 @@ limit.
 | Situation | Memory ceiling | CPU ceiling |
 |---|---|---|
 | state, no module Postgres | 5.0G | 4.5 |
-| state, all six module Postgres | 6.5G | 6.0 |
+| state, all seven module Postgres + matrix (messaging profile, TASK-198) | 7.75G | 7.25 |
 | one app colour (steady state, with the control panel since TASK-043) | 2.0G | 2.0 |
 | ops (TASK-039) | 3.75G | 3.25 |
 | mail | 0.5G | 0.5 |
-| **steady state** (state with all modules + one colour + ops + mail) | **12.75G** | **11.75** |
-| **deploy window** (+ the second colour + migrate) | **15.75G** | **14.75** |
+| **steady state** (state with all modules + one colour + ops + mail) | **14.0G** | **13.0** |
+| **deploy window** (+ the second colour + migrate) | **17.0G** | **16.0** |
 
 These are ceilings, not usage. A CPU limit caps each container and reserves
 nothing, so a CPU sum above the host's core count means contention under load,

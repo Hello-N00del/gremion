@@ -390,8 +390,13 @@ create() {
             || { echo "state.env carries no ${up}_PG_USER=${id}"; return 1; }
         [ -s "${GREMION_ROOT}/etc/secrets/tenant-create/module_pg_admin_${id}" ] || { echo "no module_pg_admin_${id}"; return 1; }
     done
-    # Six DISTINCT generated passwords: one server's credential never opens another.
-    [ "$(grep -E '^[A-Z]+_PG_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env" | cut -d= -f2 | sort -u | wc -l)" -eq 6 ]
+    # TASK-198: Synapse's own PostgreSQL server adds MESSAGING_PG_PASSWORD (generated, no tenant-create admin file).
+    grep -qE '^MESSAGING_PG_PASSWORD=[A-Za-z0-9]{32}$' "${GREMION_ROOT}/etc/env/state.env" \n        || { echo "state.env carries no generated MESSAGING_PG_PASSWORD"; return 1; }
+    # Every <ID>_PG_PASSWORD DISTINCT: one server's credential never opens another (7 servers since TASK-198).
+    local keys distinct
+    keys="$(grep -cE '^[A-Z]+_PG_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env")"
+    distinct="$(grep -E '^[A-Z]+_PG_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env" | cut -d= -f2 | sort -u | wc -l)"
+    [ "$keys" -ge 7 ] && [ "$distinct" -eq "$keys" ] || { echo "keys=$keys distinct=$distinct"; return 1; }
 }
 
 @test "init fails loudly when the ops client secret never arrives (review C, r2)" {

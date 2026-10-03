@@ -71,12 +71,16 @@ tag, and since D16 froze `k8s/**` it is held to the tag only (by
 D14 fixed one Postgres **per module** at the rebuild. The kernel base compose
 therefore declares, next to its own `postgres` (labelled
 `org.gremion.postgres: "kernel"`), one `<id>-postgres` per extraction-source
-leaf — board, calendar, content, finance, newsletter, vault — built from one
+leaf — board, calendar, content, finance, newsletter, vault — and, since
+TASK-198, `messaging-postgres` for the chat module's Synapse — built from one
 `x-module-postgres` anchor (the pinned image, restart, logging, network,
 `pg_isready` healthcheck), each under `profiles: [<id>]`, labelled
 `org.gremion.postgres: "module:<id>"`, mounted at `/var/lib/postgresql`, and
 **empty**: the per-(tenant, module) databases (D13) are the provisioner's
-(TASK-021). TASK-040 re-sizes them and moves them to the state project.
+(TASK-021). The one exception is `messaging-postgres`: its only database,
+`synapse`, is created at initdb by
+`modules/messaging/synapse/postgres-init/10-synapse-db.sh` (bound read-only),
+C-collated from template0 and owned by a non-superuser role. TASK-040 re-sizes them and moves them to the state project.
 
 Their volumes are `gremion_module_<id>_pg_data`. They must **never** be
 `gremion_<id>_pg_data`: that is the name the extraction source's running stack
@@ -252,5 +256,8 @@ contradicts this unit's own body and the plan's resolved question; and the same
 row's "Guards owned: none" is wrong — this unit owns `make lint-postgres-major`
 and the `--tree` half.
 
-The C-collation requirement for Synapse's database is `B31-postgres-c-collation`
-and is unaffected by the major.
+The C-collation requirement for Synapse's database (`B31-postgres-c-collation`)
+is owned by TASK-198 and is unaffected by the major: `messaging-postgres` creates
+the `synapse` database with `LOCALE 'C'` from template0, and
+`modules/messaging/synapse/db-preflight.py` refuses to start Synapse unless
+`datcollate`/`datctype` are C and the major is 18.

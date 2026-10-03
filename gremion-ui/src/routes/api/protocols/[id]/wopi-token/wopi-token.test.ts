@@ -46,7 +46,7 @@ const draftProtocol = {
 function makeEvent(opts: { roles?: string[] } = {}) {
   return {
     locals: { user: { id: 'u1', roles: opts.roles ?? ['member'] } },
-    params: { id: 'p1' },
+    params: { id: '123e4567-e89b-12d3-a456-426614174001' },
   } as unknown as Parameters<typeof GET>[0]
 }
 

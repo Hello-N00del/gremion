@@ -92,7 +92,7 @@ test('an allowance row whose service is absent fails', () => {
 
 test('allowances.json: every row valid, dated, naming TASK-048b; malformed rows refused', () => {
   const rows = loadAllowances()
-  assert.deepEqual(rows.map((r) => `${r.project}/${r.service}`).sort(), ['app/tenant-create', 'state/fallback', 'state/legal', 'state/vector'])
+  assert.deepEqual(rows.map((r) => `${r.project}/${r.service}`).sort(), ['app/tenant-create', 'state/fallback', 'state/legal', 'state/matrix', 'state/vector'])
   for (const r of rows) assert.equal(r.retiresWith, 'TASK-048b')
   assert.throws(() => validateAllowances({ rows: [{ project: 'app', service: 'x', retiresWith: 'TASK-048b', reason: 'long enough reason' }] }), /date/)
   assert.throws(() => validateAllowances({}), /rows/)
