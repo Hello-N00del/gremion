@@ -57,6 +57,35 @@ describe('check-tenant-env-guard — CLI exit codes', () => {
   })
 })
 
+// TASK-205 (verifier r1 MEDIUM): serviceEnv (lib/server/env/service-env.ts) reads process.env[name] with a
+// computed key READ_RE cannot see, so a module half could read any name through it invisibly. The guard now
+// reads every serviceEnv(...) call site: a literal outside the frozen service-endpoint list and a computed
+// (non-literal) name are violations; the seam's own definition file is allowlisted by name.
+describe('check-tenant-env-guard — serviceEnv call sites (TASK-205)', () => {
+  it('flags serviceEnv with a non-endpoint literal and with a computed name, not with an endpoint literal', async () => {
+    const violations = await scanForEnvViolations(FIXTURES, { allowlist: ALLOWLIST })
+    const calls = violations.filter((v) => v.file.endsWith('service-env-calls.ts'))
+    expect(calls.map((v) => `${v.kind}:${v.varName}`).sort()).toEqual([
+      'serviceEnv:<computed>',
+      'serviceEnv:AUTH_KEYCLOAK_SECRET',
+      'serviceEnv:DATABASE_URL',
+    ])
+  })
+  it('the CLI names a serviceEnv violation as a serviceEnv call', () => {
+    const SCRIPT = path.resolve(__dirname, '../../scripts/check-tenant-env-guard.mjs')
+    const res = spawnSync(process.execPath, [SCRIPT, '--enforce', '--root', FIXTURES], { encoding: 'utf-8' })
+    expect(res.status).toBe(1)
+    expect(res.stderr).toContain("serviceEnv('DATABASE_URL')")
+  })
+  it('the default allowlist names the seam file explicitly, and the real src tree scans clean', async () => {
+    const SRC = path.resolve(__dirname, '../../src')
+    const violations = await scanForEnvViolations(SRC)
+    expect(violations).toEqual([])
+    const res = spawnSync(process.execPath, [path.resolve(__dirname, '../../scripts/check-tenant-env-guard.mjs'), '--list-allowlist'], { encoding: 'utf-8' })
+    expect(res.stdout.split(/\r?\n/)).toContain('lib/server/env/service-env.ts')
+  })
+})
+
 // #256-7: walk() used to swallow readdir failures (`catch { return }`) and
 // report the unreadable subtree as CLEAN — a fail-OPEN guard slated to gate
 // builds via --enforce at P2.1c. A readdir failure must now be a hard error

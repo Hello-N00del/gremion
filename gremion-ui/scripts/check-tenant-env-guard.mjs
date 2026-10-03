@@ -24,6 +24,7 @@ import {
   PER_TENANT_PREFIX_VARS,
   isPerTenantEnvName,
 } from '../src/lib/server/env/per-tenant-env-names.js'
+import { isServiceEndpointName } from '../src/lib/server/env/service-endpoint-names.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -39,17 +40,23 @@ const SCANNABLE = /\.(ts|svelte)$/
 // — and the `.svelte` analogues for symmetry with SCANNABLE.
 const SKIP_FILE = /\.(test|integration\.test)\.(ts|svelte)$/
 const READ_RE = /\benv(?:\.([A-Z0-9_]+)\b|\[\s*['"]([A-Z0-9_]+)['"]\s*\])/g
+// TASK-205 (verifier r1 MEDIUM): serviceEnv (lib/server/env/service-env.ts) reads process.env[name] with a
+// computed key READ_RE cannot see. Its CALL SITES are read instead: `serviceEnv('X')` must name a
+// service endpoint (service-endpoint-names.js); a non-endpoint literal or a computed / template name is a
+// violation, so the seam can never become an invisible general per-tenant reader.
+const SERVICE_ENV_RE = /\bserviceEnv\(\s*(?:(['"])([A-Z0-9_]+)\1)?/g
 
 const isPerTenant = isPerTenantEnvName
 
+// Allowlist segments are matched against paths RELATIVE to the scan root. The CLI roots the scan at
+// gremion-ui/src, so the tenant-resolver module is `lib/server/tenant/...` (NOT `src/lib/server/tenant/...`):
+// the resolver is the one place that legitimately reads the per-tenant env (registry.ts
+// resolveTenantBySlug, control-db.ts). `lib/server/env/service-env.ts` is the serviceEnv seam itself
+// (its definition is a computed-name call shape); it is named here so the exemption is visible, not implicit.
+export const DEFAULT_ALLOWLIST = Object.freeze(['lib/server/tenant', 'lib/server/env/service-env.ts'])
+
 export async function scanForEnvViolations(rootDir, opts = {}) {
-  // Allowlist segments are matched against paths RELATIVE to rootDir. The CLI
-  // roots the scan at gremion-ui/src, so the tenant-resolver module is
-  // `lib/server/tenant/...` (NOT `src/lib/server/tenant/...`). Using the
-  // src-relative segment so the resolver — the one place that legitimately
-  // reads the per-tenant env (registry.ts resolveTenantBySlug, default-tenant.ts,
-  // control-db.ts) — is correctly exempted before the P2.1c `--enforce` flip.
-  const allowlist = opts.allowlist ?? ['lib/server/tenant']
+  const allowlist = opts.allowlist ?? DEFAULT_ALLOWLIST
   const violations = []
   async function walk(dir) {
     let entries
@@ -78,7 +85,13 @@ export async function scanForEnvViolations(rootDir, opts = {}) {
         let m
         while ((m = READ_RE.exec(lines[i])) !== null) {
           const name = m[1] ?? m[2]
-          if (name && isPerTenant(name)) violations.push({ file: full, line: i + 1, varName: name })
+          if (name && isPerTenant(name)) violations.push({ file: full, line: i + 1, varName: name, kind: 'env' })
+        }
+        SERVICE_ENV_RE.lastIndex = 0
+        while ((m = SERVICE_ENV_RE.exec(lines[i])) !== null) {
+          const name = m[2]
+          if (!name) violations.push({ file: full, line: i + 1, varName: '<computed>', kind: 'serviceEnv' })
+          else if (!isServiceEndpointName(name)) violations.push({ file: full, line: i + 1, varName: name, kind: 'serviceEnv' })
         }
       }
     }
@@ -87,7 +100,16 @@ export async function scanForEnvViolations(rootDir, opts = {}) {
   return violations
 }
 
+function describeViolation(v) {
+  if (v.kind === 'serviceEnv') return v.varName === '<computed>' ? 'serviceEnv(<computed name>)' : `serviceEnv('${v.varName}')`
+  return `env.${v.varName}`
+}
+
 async function main() {
+  if (process.argv.includes('--list-allowlist')) {
+    console.info(DEFAULT_ALLOWLIST.join('\n'))
+    process.exit(0)
+  }
   const enforce = process.argv.includes('--enforce')
   const rootArgIdx = process.argv.indexOf('--root')
   const root = rootArgIdx !== -1 && process.argv[rootArgIdx + 1]
@@ -99,7 +121,7 @@ async function main() {
     process.exit(0)
   }
   console.error(`[env-guard] ${violations.length} per-tenant env read(s) outside the resolver allowlist:`)
-  for (const v of violations) console.error(`  ${path.relative(process.cwd(), v.file)}:${v.line}  env.${v.varName}`)
+  for (const v of violations) console.error(`  ${path.relative(process.cwd(), v.file)}:${v.line}  ${describeViolation(v)}`)
   if (enforce) {
     console.error('[env-guard] FAIL (--enforce): convert these to per-tenant resolver reads.')
     process.exit(1)
