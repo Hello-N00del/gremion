@@ -186,9 +186,12 @@ natsbox() { docker run --rm --network "$NET_STATE" "$NATSBOX_IMAGE" nats -s "nat
 # The proof realms, created in the RUNNING scratch Keycloak through its admin
 # REST API (POST /admin/realms). The admin password goes to curl from its file,
 # never on a command line.
+kc_master_ready() { curl -fsS "http://127.0.0.1:${KC_PORT}/auth/realms/master/.well-known/openid-configuration" >/dev/null 2>&1; }
 kc_create_realms() {
     local base="http://127.0.0.1:${KC_PORT}/auth" tok f code
-    wait_until 150 curl -fsS -o /dev/null "${base}/realms/master/.well-known/openid-configuration" || return 1
+    # curl's own -o /dev/null fails under MSYS_NO_PATHCONV (Git for Windows'
+    # curl cannot open that path); the shell's redirect works everywhere.
+    wait_until 150 kc_master_ready || return 1
     tok="$(curl -fsS -d grant_type=password -d client_id=admin-cli -d username=admin \
         --data-urlencode "password@$(hpf "$OUT/kc-admin-password")" \
         "${base}/realms/master/protocol/openid-connect/token" | jq -r '.access_token // empty')"
