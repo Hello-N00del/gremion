@@ -109,11 +109,13 @@ hook (TASK-077/084); `init` and phase B record `release_ref` from
   DB-OPS-MIGRATION-DUMP; TASK-086 imports it. Both writers (node and
   `infra/host/bin/gremion-migration-dump`) take `ledger.lock` with O_EXCL; a
   stale lock refuses and is never broken automatically.
-- `gremion-migration-dump switched --release R` (gremion-deploy, after step 11
-  passes, before the soak; Q2) deletes every live dump of R: unlink, fsync the
+- `gremion-migration-dump switched --release R` (gremion-deploy step 12b: after
+  step 11 passes and step 12 records R as the current release, before the soak;
+  Q2) deletes every live dump of R: unlink, fsync the
   directory, re-stat, then one `deleted` line, one stdout audit line and one
   `logger -t premigration-dump` line. An unwritable ledger exits non-zero and
-  keeps the file. A failure makes gremion-deploy exit 1 with `DUMP-NOT-DELETED`.
+  keeps the file. A failure makes gremion-deploy exit 1 with `DUMP-NOT-DELETED`
+  and `STEP 12b dump-delete fail`; R stays recorded, the soak does not run.
 - A release that fails before its switch: `restore --release R --db D
   --accept-loss-since <time>` then `discard --release R --reason <text>` (Q9),
   both logged. `gremion-rollback` refuses a class (b) redeploy while a dump is

@@ -22,7 +22,8 @@
 # has succeeded (`switched`, after step 11). So:
 #   - after a SUCCEEDED switch no dump exists: this program says so (NO-DUMP)
 #     and does not pretend a restore point exists;
-#   - a LIVE dump means a release stopped before its switch succeeded. A class
+#   - a LIVE dump means a release stopped before its switch succeeded, or its
+#     step 12b deletion failed after the switch (DUMP-NOT-DELETED). A class
 #     (b) redeploy would be refused by the next preflight anyway (never a
 #     series), so it is refused HERE first, exit 3, naming the operator's
 #     three commands: status, restore (--accept-loss-since), discard (--reason).
@@ -125,7 +126,7 @@ refuse_live_dump() {
     n="$(live_dump_count "$out")"
     [[ "$n" -gt 0 ]] || return 0
     printf '%s\n' "$out" | grep '^LIVE ' >&2 || true
-    printf 'BLOCKED: %s live pre-migration dump(s) — a release stopped before its switch succeeded. Decide first:\n' "$n" >&2
+    printf 'BLOCKED: %s live pre-migration dump(s) — a release stopped before its switch succeeded, or its post-switch deletion failed (DUMP-NOT-DELETED). Decide first:\n' "$n" >&2
     printf '  gremion-migration-dump status\n' >&2
     printf '  gremion-migration-dump restore --release <R> --db <D> --accept-loss-since <time>\n' >&2
     printf '  gremion-migration-dump discard --release <R> --reason <text>\n' >&2

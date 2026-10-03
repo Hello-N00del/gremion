@@ -467,7 +467,7 @@ exit 0
     [ -f "${BATS_TEST_TMPDIR}/up-blue" ]
 }
 
-@test "the dump is deleted after step 11 passes and before step 12: switched --release <tag>" {
+@test "the dump is deleted after step 11 passes and step 12 has recorded the release, before the soak: switched --release <tag>" {
     stub_all
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
@@ -477,6 +477,17 @@ exit 0
     run bash -c "grep -n '^gremion-migration-dump switched' '$SHIM_LOG' | cut -d: -f1"
     [ "$output" -gt "$v11" ]
     [ "$(cat "${GREMION_ROOT}/runtime/current-tag")" = "dist-v1.2.3" ]
+    # deploy.log order: the record, then the logged deletion, then the soak
+    local log="${GREMION_ROOT}/runtime/deploy.log"
+    local rec del soak
+    rec="$(grep -nE ' STEP 12 record ok$' "$log" | cut -d: -f1)"
+    del="$(grep -nE ' STEP 12b dump-delete ok$' "$log" | cut -d: -f1)"
+    soak="$(grep -nE ' STEP 12c soak ok$' "$log" | cut -d: -f1)"
+    [ -n "$rec" ]
+    [ -n "$del" ]
+    [ -n "$soak" ]
+    [ "$rec" -lt "$del" ]
+    [ "$del" -lt "$soak" ]
 }
 
 @test "step 11 failing: no switched call, the dump stays live" {
@@ -497,13 +508,32 @@ exit 0
     assert_absent '^gremion-migration-dump switched' "$SHIM_LOG" '--no-switch deleted the dump'
 }
 
-@test "a failing switched exits 1 with DUMP-NOT-DELETED and records nothing further" {
+# The switch has succeeded by then, so the new release IS recorded (current-tag,
+# previous-tag, the current symlink) before the deletion runs: a failing
+# deletion must not leave rollback, tenant tooling and the next deploy reading
+# the previous release. It exits 1 with DUMP-NOT-DELETED and a logged 12b fail,
+# and stops before the soak, so the old colour keeps running (rollback stays a
+# class (a) switch back to it).
+@test "a failing switched exits 1 with DUMP-NOT-DELETED after the new release is recorded; the old colour is left running" {
     stub_all
     export DUMP_EXIT_switched=1
-    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/current-tag"
+    printf 'blue\n'        > "${GREMION_ROOT}/runtime/active-colour"
+    printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/colour-blue-tag"
+    : > "${BATS_TEST_TMPDIR}/up-blue"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3 --soak-minutes 0"
     [ "$status" -eq 1 ]
     [[ "$output" == *"DUMP-NOT-DELETED: release=dist-v1.2.3"* ]]
-    [ ! -f "${GREMION_ROOT}/runtime/current-tag" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/current-tag")"  = "dist-v1.2.3" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/previous-tag")" = "dist-v1.0.0" ]
+    [ "$(readlink "${GREMION_ROOT}/current")" = "${GREMION_ROOT}/releases/dist-v1.2.3" ]
+    local log="${GREMION_ROOT}/runtime/deploy.log"
+    grep -qE ' STEP 12 record ok$'       "$log"
+    grep -qE ' STEP 12b dump-delete fail$' "$log"
+    assert_absent ' STEP 12c ' "$log" 'the soak ran after a failed dump deletion'
+    [[ "$output" != *"SOAK-START"* ]]
+    [ -f "${BATS_TEST_TMPDIR}/up-blue" ]
+    [ "$(cat "${GREMION_ROOT}/runtime/colour-blue-tag")" = "dist-v1.0.0" ]
 }
 
 @test "the REAL gremion-migration-dump accepts the argv deploy passes (preflight, then switched)" {
