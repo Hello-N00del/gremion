@@ -456,17 +456,32 @@ phase_signals() {
 }
 
 phase_absent() {
+    # The e-mail must be caused by THIS phase: a SignalAbsent{host-collector}
+    # notice from the start-up window (before the first collector run) would
+    # satisfy a plain count. So the phase starts from a collected, healthy
+    # state with every earlier notice resolved, and counts only new FIRING mail.
+    local f0 r0
+    collect || bad "the collector run failed"
+    wait_until 60 value_is 'max(gremion:cond:signal_absent{component="host-collector"})' 0 \
+        || die "signal_absent{component=host-collector} is not 0 before the phase: the start state is not healthy"
+    f0="$(mail_count FIRING SignalAbsent host-collector)"
+    r0="$(mail_count RESOLVED SignalAbsent host-collector)"
+    if (( f0 > r0 )); then
+        wait_until 100 mail_at_least RESOLVED SignalAbsent host-collector "$f0" \
+            || die "an earlier SignalAbsent{host-collector} notice is still open (${f0} FIRING, ${r0} RESOLVED); re-run once it resolved"
+    fi
+    ok "start: collector healthy, ${f0} earlier SignalAbsent{host-collector} notice(s), all resolved"
     # The collector stops and its file goes: every textfile signal is absent.
     rm -f "$SROOT/runtime/textfile/gremion.prom"
     wait_until 90 value_is 'absent(gremion_metrics_textfile_timestamp_seconds)' 1 \
         && ok "a stopped collector: its signals are ABSENT, not 0" || bad "textfile series still present"
     wait_until 60 value_is 'max(gremion:cond:signal_absent{component="host-collector"})' 1 \
         && ok "signal_absent{component=host-collector} is 1" || bad "signal_absent did not turn 1"
-    wait_until 120 mail_at_least FIRING SignalAbsent host-collector 1 \
-        && ok "absence alerts: one SignalAbsent e-mail naming host-collector" || bad "no SignalAbsent e-mail"
+    wait_until 120 mail_at_least FIRING SignalAbsent host-collector $(( f0 + 1 )) \
+        && ok "absence alerts: one NEW SignalAbsent e-mail naming host-collector (was ${f0})" || bad "no new SignalAbsent e-mail (still ${f0})"
     collect || bad "collector restart failed"
     wait_until 60 has_series 'gremion_metrics_textfile_timestamp_seconds' && ok "collector back" || bad "collector not back"
-    finish 4
+    finish 5
 }
 
 phase_red_base() {
