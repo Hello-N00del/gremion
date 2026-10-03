@@ -334,7 +334,7 @@ EOF
     grep -qE ' STEP 2 checkout fail$' "${GREMION_ROOT}/runtime/deploy.log"
     # Nothing past step 2 may have run: no stop, no migrate, no start, no
     # verify. A count, not a `! grep`, so a renamed step cannot pass vacuously.
-    run bash -c "grep -cE ' STEP (6|7|8|9|10|11|12) ' '${GREMION_ROOT}/runtime/deploy.log'"
+    run bash -c "grep -cE ' STEP (6|7|8|9|10|11|12)[a-z]? ' '${GREMION_ROOT}/runtime/deploy.log'"
     [ "$output" = "0" ]
     # ... and the step that DID run is in the same log, so the grep above was
     # reading a real file and not an empty one.
@@ -1184,7 +1184,7 @@ exit 0
     [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -ge 1 ]
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
     [ "$(grep -c '^docker manifest' "$SHIM_LOG")" -eq 0 ]
-    [ "$(grep -cE ' STEP (3|4|5|6|7|8|9|10|11|12) ' "${GREMION_ROOT}/runtime/deploy.log")" -eq 0 ]
+    [ "$(grep -cE ' STEP (3|4|5|6|7|8|9|10|11|12)[a-z]? ' "${GREMION_ROOT}/runtime/deploy.log")" -eq 0 ]
 }
 
 @test "a cosign that exits 0 but vouches for another digest is refused" {
